@@ -15,6 +15,11 @@ describe("control-plane HTTP boundary", () => {
     expect(response.status).toBe(404);
     expect(response.headers.get("content-type")).toContain("application/json");
   });
+  test("protects bootstrap rotation behind global-admin authentication", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps()).request("/api/workers/bootstrap/rotate", { method: "POST", headers: { "Idempotency-Key": "test" } });
+    expect(response.status).toBe(401);
+    expect(response.headers.get("cache-control")).not.toBe("public");
+  });
 
   test("serves run list and detail deep links", async () => {
     expect((await app.request("/runs")).status).toBe(200);
