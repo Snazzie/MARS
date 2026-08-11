@@ -83,12 +83,6 @@ export async function mutateWorker(organizationId: string, workerId: string, act
   });
 }
 
-export const enrollWorker = (audience: string, profile: Record<string, number>) =>
-  request("/api/workers/enroll", z.object({ code: z.string().min(1), expiresAt: z.string().datetime({ offset: true }), installer: z.string().url() }), {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
-    body: JSON.stringify({ audience, profile }),
-  });
 const WorkerBootstrapStatus = z.object({ initialized: z.boolean(), generation: z.number().nullable(), createdAt: z.string().nullable(), rotatedAt: z.string().nullable() });
 const WorkerBootstrapReveal = z.object({ code: z.string().min(1), generation: z.number(), createdAt: z.string() });
 export const getWorkerBootstrapStatus = () => request("/api/workers/bootstrap", WorkerBootstrapStatus, { cache: "no-store" });
