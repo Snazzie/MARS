@@ -9,3 +9,4 @@ Verification:
 - `bun run --filter '@whitesmith/control-plane' typecheck` — passed.
 - Restored the canonical installer URL in worker enrollment responses and covered it with a focused route assertion.
 - Settings PUT now validates the payload before consuming `Idempotency-Key`, preserving corrected retries after malformed requests.
+- Settings PUT now checks missing idempotency before body parsing, then validates, consumes, and updates in that order.
