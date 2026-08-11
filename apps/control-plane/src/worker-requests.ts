@@ -12,6 +12,7 @@ export function createRequestLimiter(max = 5, windowMs = 60_000): RequestLimiter
   const buckets = new Map<string, { count: number; resetAt: number }>();
   return { allow(source) { const now = Date.now(); for (const [key, bucket] of buckets) if (bucket.resetAt <= now) buckets.delete(key); const bucket = buckets.get(source); if (!bucket) { buckets.set(source, { count: 1, resetAt: now + windowMs }); return true; } if (bucket.count >= max) return false; bucket.count++; return true; }, clear(source) { buckets.delete(source); } };
 }
+export function matchesWorkerIdentity(row: { vmUuid: string | null; machineUuid: string | null; fingerprint: string | null }, input: Pick<WorkerBootstrapRequest, "vmUuid" | "machineUuid">, fingerprintValue: string): boolean { return row.vmUuid === input.vmUuid && row.machineUuid === input.machineUuid && row.fingerprint === fingerprintValue; }
 export function parseWorkerBootstrapRequest(input: unknown): WorkerBootstrapRequest { return WorkerBootstrapRequest.parse(input); }
 export function parsePendingWorkerRequest(input: unknown): PendingWorkerRequest { return PendingWorkerRequest.parse(input); }
 export function parseApproveWorkerRequest(input: unknown): ApproveWorkerRequest { return ApproveWorkerRequest.parse(input); }
@@ -26,8 +27,8 @@ export async function requestPendingWorker(db: Sql<{}>, input: WorkerBootstrapRe
     const [credential] = await tx<{ codeHash: Buffer }[]>`select code_hash as "codeHash" from worker_bootstrap_credentials where singleton=true for update`;
     const candidate = createHash("sha256").update(Buffer.from(parsed.code, "base64url")).digest();
     if (!credential || credential.codeHash.length !== candidate.length || !timingSafeEqual(credential.codeHash, candidate)) return { conflict: false as const, invalid: true as const };
-    const rows = await tx<{ id: string; vmUuid: string | null; fingerprint: string | null }[]>`select id, vm_uuid as "vmUuid", fingerprint from workers where admission_state in ('pending','adopted') and (vm_uuid=${parsed.vmUuid} or fingerprint=${fp}) for update`;
-    const exact = rows.find(row => row.vmUuid === parsed.vmUuid && row.fingerprint === fp);
+    const rows = await tx<{ id: string; vmUuid: string | null; machineUuid: string | null; fingerprint: string | null }[]>`select id, vm_uuid as "vmUuid", machine_uuid as "machineUuid", fingerprint from workers where admission_state in ('pending','adopted') and (vm_uuid=${parsed.vmUuid} or fingerprint=${fp}) for update`;
+    const exact = rows.find(row => matchesWorkerIdentity(row, parsed, fp));
     if (exact) {
       await tx`update workers set last_requested_at=now(), connection_state='online', machine_uuid=${parsed.machineUuid}, doctor=${JSON.stringify({ doctor: parsed.doctor, capacity: parsed.capacity })}::jsonb where id=${exact.id}`;
       return { status: "existing" as const, workerId: exact.id };

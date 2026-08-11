@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ApproveWorkerRequest, PendingWorkerRequest, WorkerBootstrapRequest } from "@whitesmith/contracts";
-import { createRequestLimiter, WorkerRequestError } from "./worker-requests.ts";
+import { createRequestLimiter, matchesWorkerIdentity, WorkerRequestError } from "./worker-requests.ts";
 
 describe("pending worker request contracts", () => {
   const valid = { code: "A".repeat(43), platform: "linux-x64", publicKey: "ed25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 1024, maxStorageBytesPerPod: 2048, maxConcurrentPods: 1 }, doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
@@ -15,6 +15,12 @@ describe("pending worker request contracts", () => {
     expect(ApproveWorkerRequest.safeParse({ organizationId: valid.vmUuid, limits: valid.limits }).success).toBe(true);
     expect(ApproveWorkerRequest.safeParse({ organizationId: valid.vmUuid, limits: { ...valid.limits, maxVcpuPerPod: 0 } }).success).toBe(false);
   });
+});
+
+test("machine identity changes are not an exact reconnect", () => {
+  const row = { vmUuid: "vm", machineUuid: "machine-original", fingerprint: "fp" };
+  expect(matchesWorkerIdentity(row, { vmUuid: "vm", machineUuid: "machine-original" }, "fp")).toBe(true);
+  expect(matchesWorkerIdentity(row, { vmUuid: "vm", machineUuid: "machine-different" }, "fp")).toBe(false);
 });
 
 test("invalid bootstrap attempts are limited per trusted source and successful requests clear the bucket", () => {
