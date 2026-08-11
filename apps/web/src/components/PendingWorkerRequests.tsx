@@ -7,8 +7,9 @@ import { QueryState } from "./StateView.tsx";
 type Props = { organizationId: string };
 type PendingRequest = PendingWorkerRequestData & { id: string; fingerprint: string };
 type Limits = ApproveWorkerRequestData["limits"];
-function limitFields(limits: Limits) {
-  return Object.entries(limits).map(([name, value]) => <label key={name}>{name}<input name={name} type="number" min="1" step="1" defaultValue={value} required /></label>);
+const limitNames = ["maxVcpuPerPod", "maxMemoryBytesPerPod", "maxStorageBytesPerPod", "maxConcurrentPods"] as const;
+function limitFields(limits: Limits | null) {
+  return limitNames.map((name) => <label key={name}>{name}<input name={name} type="number" min="1" step="1" defaultValue={limits?.[name]} required /></label>);
 }
 
 export function PendingWorkerRequests({ organizationId }: Props) {

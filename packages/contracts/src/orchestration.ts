@@ -33,7 +33,7 @@ export const WorkerBootstrapRequest = z.object({
   capacity: WorkerCapacityData,
 }).strict();
 export type WorkerBootstrapRequest = z.infer<typeof WorkerBootstrapRequest>;
-export const PendingWorkerRequest = WorkerBootstrapRequest.omit({ code: true });
+export const PendingWorkerRequest = WorkerBootstrapRequest.omit({ code: true }).extend({ limits: WorkerLimits.nullable() });
 export type PendingWorkerRequest = z.infer<typeof PendingWorkerRequest>;
 export const ApproveWorkerRequest = z.object({ organizationId: z.string().uuid(), limits: WorkerLimits }).strict();
 export type ApproveWorkerRequest = z.infer<typeof ApproveWorkerRequest>;
