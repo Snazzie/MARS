@@ -1,9 +1,6 @@
-# Task 2 report
 
-Implemented post-enrollment worker configuration contracts, persistence/validation, durable `worker.configure` dispatch, configuration endpoint, and acknowledgement readiness transition. Worker doctor telemetry no longer implicitly marks a worker ready; scheduler gating remains adopted + online + ready.
+## Review fixes
 
-Verification:
-- `bunx tsc -p apps/control-plane/tsconfig.json --noEmit`
-- `bun test apps/control-plane/src/worker-requests.test.ts apps/control-plane/src/worker-requests.persistence.test.ts apps/control-plane/src/worker-dispatch.test.ts`
+Addressed recursive canonical revisions, free-capacity and aggregate concurrency validation, exact command/revision/observed acknowledgement matching, authenticated socket worker binding, and persisted dashboard mutation idempotency preventing duplicate dispatch.
 
-The focused suite passed (10 tests, 30 assertions). Full UI form was intentionally not implemented.
+Verification rerun: control-plane typecheck passed; focused worker request/dispatcher tests passed (9 tests, 27 assertions).

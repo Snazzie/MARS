@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { PendingWorkerRequest } from "@whitesmith/contracts";
+import { dashboardMutation } from "@whitesmith/db";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { verifyWorkerBootstrap, initializeWorkerBootstrap, rotateWorkerBootstrap, getWorkerBootstrapStatus } from "../worker-bootstrap.ts";
 import { approvePendingWorker, configurePendingWorker, createRequestLimiter, hasMachineIdentity, parseApproveWorkerRequest, requestPendingWorker, rejectPendingWorker } from "../worker-requests.ts";
@@ -37,10 +38,11 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   app.post("/api/workers/pending/:workerId/approve", async (c) => { const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401); if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403); if (!idempotency(c)) return c.json({ error: "Idempotency-Key required" }, 400); const body = await approvalBody(c); if (!body) return c.json({ error: "invalid approval request" }, 400); await approvePendingWorker(deps.db, c.req.param("workerId"), body, user.id); deps.onWorkerAdopted(c.req.param("workerId")); return c.json({ ok: true }); });
   app.post("/api/workers/pending/:workerId/configure", async (c) => {
     const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401);
-    if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403);
     if (!idempotency(c)) return c.json({ error: "Idempotency-Key required" }, 400);
     try {
       const body = await c.req.json();
+      const key = c.req.header("Idempotency-Key")!.trim();
+      if (!(await dashboardMutation(deps.db, String(body.organizationId), key))) return c.json({ ok: true });
       const result = await configurePendingWorker(deps.db, c.req.param("workerId"), String(body.organizationId), { appliance: body.appliance, runtime: body.runtime }, user.id, deps.workerDispatcher);
       return c.json(result, { status: 202, headers: noStore() });
     } catch (error) {

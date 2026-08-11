@@ -94,7 +94,7 @@ server = Bun.serve<SocketData>({
           } else if (frame.type === "pong" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch) {
             ws.send(JSON.stringify({ version: 1, type: "ping" }));
           } else if (ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch) {
-            if (frame.type === "worker.configured") await applyWorkerConfigurationAcknowledgement(db, frame);
+            if (frame.type === "worker.configured" && frame.workerId === ws.data.workerId) await applyWorkerConfigurationAcknowledgement(db, { workerId: ws.data.workerId, payload: frame.payload });
             dispatcher.handleEvent(frame, ws);
           }
         } catch {

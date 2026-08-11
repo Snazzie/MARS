@@ -58,7 +58,7 @@ export async function approvePendingWorker(db: Sql<{}>, workerId: string, input:
   });
 }
 export type WorkerConfigurationInput = { appliance: { vcpu: number; memoryBytes: number; storageBytes: number }; runtime: { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number } };
-function canonical(value: unknown): string { return JSON.stringify(value, Object.keys(value as object).sort()); }
+function canonical(value: unknown): string { if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`; if (value && typeof value === "object") return `{${Object.entries(value).sort(([a],[b]) => a.localeCompare(b)).map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`).join(",")}}`; return JSON.stringify(value); }
 export async function configurePendingWorker(db: Sql<{}>, workerId: string, organizationId: string, configuration: WorkerConfigurationInput, adminId: string, dispatcher?: WorkerCommandDispatcher): Promise<{ revision: string; fingerprint: string; commandId?: string }> {
   const parsed = WorkerConfiguration.parse(configuration);
   const revision = createHash("sha256").update(canonical(parsed)).digest("hex");
@@ -68,8 +68,8 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, orga
     const row = rows[0]; if (!row || row.admissionState !== "adopted" || row.organizationId !== organizationId) throw new Error("worker configuration conflict");
     const telemetry = row.doctor && typeof row.doctor === "object" ? row.doctor as Record<string, unknown> : {};
     const capacity = telemetry.capacity && typeof telemetry.capacity === "object" ? telemetry.capacity as Record<string, number> : {};
-    if (parsed.appliance.vcpu > (capacity.actualVcpu ?? 0) || parsed.appliance.memoryBytes > (capacity.actualMemoryBytes ?? 0) || parsed.appliance.storageBytes > (capacity.actualStorageBytes ?? 0)) throw new Error("worker configuration exceeds capacity");
-    if (parsed.runtime.maxVcpuPerPod > parsed.appliance.vcpu || parsed.runtime.maxMemoryBytesPerPod > parsed.appliance.memoryBytes || parsed.runtime.maxStorageBytesPerPod > parsed.appliance.storageBytes || parsed.runtime.maxConcurrentPods > (capacity.actualVcpu ?? 0)) throw new Error("worker configuration exceeds capacity");
+    if (parsed.appliance.vcpu > (capacity.freeVcpu ?? 0) || parsed.appliance.memoryBytes > (capacity.freeMemoryBytes ?? 0) || parsed.appliance.storageBytes > (capacity.freeStorageBytes ?? 0)) throw new Error("worker configuration exceeds capacity");
+    if (parsed.runtime.maxVcpuPerPod * parsed.runtime.maxConcurrentPods > parsed.appliance.vcpu || parsed.runtime.maxMemoryBytesPerPod * parsed.runtime.maxConcurrentPods > parsed.appliance.memoryBytes || parsed.runtime.maxStorageBytesPerPod * parsed.runtime.maxConcurrentPods > parsed.appliance.storageBytes) throw new Error("worker configuration exceeds capacity");
     await tx`update workers set limits=${JSON.stringify(parsed.runtime)}::jsonb, configuration_state='unconfigured' where id=${workerId}`;
     await tx`insert into audit_events (organization_id,actor,type,payload) values (${organizationId},${adminId},'worker.configured',${JSON.stringify({ workerId, revision, fingerprint: fp })}::jsonb)`;
   });
@@ -79,11 +79,14 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, orga
   return { revision, fingerprint: fp, commandId: event.payload.commandId as string };
 }
 export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event: { workerId: string; payload: unknown }): Promise<boolean> {
-  const observed = WorkerConfiguration.safeParse((event.payload as Record<string, unknown>)?.observed);
-  if (!observed.success) { await db`update workers set configuration_state='error' where id=${event.workerId}`; return false; }
-  const payload = observed.data;
-  const row = await db<{ id: string }[]>`select id from workers where id=${event.workerId} and configuration_state='unconfigured' and limits=${JSON.stringify(payload.runtime)}::jsonb`;
-  if (row.length !== 1) { await db`update workers set configuration_state='error' where id=${event.workerId}`; return false; }
+  const input = event.payload as Record<string, unknown>;
+  const observed = WorkerConfiguration.safeParse(input?.observed);
+  const commandId = typeof input?.commandId === "string" ? input.commandId : "";
+  const revision = typeof input?.revision === "string" ? input.revision : "";
+  const [command] = await db<{ payload: unknown }[]>`select payload from commands where id=${commandId} and worker_id=${event.workerId} and type='worker.configure'`;
+  const expected = command?.payload as Record<string, unknown> | undefined;
+  const exact = observed.success && expected && revision === expected.revision && canonical(observed.data) === canonical({ appliance: expected.appliance, runtime: expected.runtime });
+  if (!exact) { await db`update workers set configuration_state='error' where id=${event.workerId}`; return false; }
   await db`update workers set configuration_state='ready' where id=${event.workerId}`;
   return true;
 }
