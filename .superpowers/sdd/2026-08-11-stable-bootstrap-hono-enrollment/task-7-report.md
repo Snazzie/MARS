@@ -30,3 +30,8 @@ Implemented pending worker approval UI and focused tests.
 
 - Pending DTO conversion now omits legacy rows with null/blank machine identity instead of allowing one malformed row to fail the global-admin list.
 - Added quarantine predicate regression coverage; changed-machine reconnect remains a conflict and never overwrites identity.
+
+## Machine uniqueness follow-up
+
+- Pending enrollment lookup now locks rows sharing VM, machine, or fingerprint identity.
+- Added an active-worker machine UUID unique index and regression for reused machine identity conflicts.
