@@ -28,7 +28,7 @@ try {
     [void]$process.Start()
     $process.StandardInput.WriteLine($Code)
     $process.StandardInput.Close()
-    $process.WaitForExit()
+    if (-not $process.WaitForExit(30000)) { $process.Kill(); throw 'worker join timed out' }
     if ($process.ExitCode -ne 0) { throw "worker join failed with exit code $($process.ExitCode)" }
     Write-Host "Started $Audience worker; adoption remains pending until fingerprint approval."
 }

@@ -52,3 +52,9 @@ test("orchestrator entrypoint dispatches join stdin", async () => {
   expect(source).toContain('Bun.argv[2] === "join"');
   expect(source).toContain("runWorkerJoin");
 });
+test("join enforces HTTPS policy and bounded waits", async () => {
+  const source = await Bun.file(join(root, "apps/orchestrator/src/mac-agent.ts")).text();
+  expect(source).toContain('url.protocol !== "https:"');
+  expect(source).toContain("AbortSignal.timeout(30_000)");
+  expect(await Bun.file(powershell).text()).toContain("WaitForExit(30000)");
+});
