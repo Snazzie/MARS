@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ApproveWorkerRequest, PendingWorkerRequest, WorkerBootstrapRequest } from "@whitesmith/contracts";
-import { createRequestLimiter, matchesWorkerIdentity, WorkerRequestError } from "./worker-requests.ts";
+import { createRequestLimiter, hasMachineIdentity, matchesWorkerIdentity, WorkerRequestError } from "./worker-requests.ts";
 
 describe("pending worker request contracts", () => {
   const valid = { code: "A".repeat(43), platform: "linux-x64", publicKey: "ed25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 1024, maxStorageBytesPerPod: 2048, maxConcurrentPods: 1 }, doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
@@ -23,6 +23,11 @@ test("machine identity changes are not an exact reconnect", () => {
   expect(matchesWorkerIdentity(row, { vmUuid: "vm", machineUuid: "machine-different" }, "fp")).toBe(false);
 });
 
+
+test("legacy rows without machine identity are quarantined from approval", () => {
+  expect(hasMachineIdentity({ machineUuid: null })).toBe(false);
+  expect(hasMachineIdentity({ machineUuid: "machine-1" })).toBe(true);
+});
 test("invalid bootstrap attempts are limited per trusted source and successful requests clear the bucket", () => {
   const limiter = createRequestLimiter();
   expect(Array.from({ length: 5 }, () => limiter.allow("source-a")).every(Boolean)).toBe(true);
