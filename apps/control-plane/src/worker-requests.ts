@@ -20,8 +20,9 @@ export async function requestPendingWorker(db: Sql<{}>, input: WorkerBootstrapRe
   const parsed = WorkerBootstrapRequest.parse(input);
   if (source && limiter && !limiter.allow(source)) throw new WorkerRequestError("invalid_bootstrap");
   const fp = fingerprint(parsed.publicKey);
+  const lockKeys = [`machine:${parsed.machineUuid}`, `vm:${parsed.vmUuid}`, `fingerprint:${fp}`].sort();
   const outcome = await db.begin(async tx => {
-    await tx`select pg_advisory_xact_lock(hashtext(${`whitesmith:worker:${parsed.machineUuid}`}))`;
+    for (const key of lockKeys) await tx`select pg_advisory_xact_lock(hashtext(${`whitesmith:worker:${key}`}))`;
     const [credential] = await tx<{ codeHash: Buffer }[]>`select code_hash as "codeHash" from worker_bootstrap_credentials where singleton=true for update`;
     const candidate = createHash("sha256").update(Buffer.from(parsed.code, "base64url")).digest();
     if (!credential || credential.codeHash.length !== candidate.length || !timingSafeEqual(credential.codeHash, candidate)) return { conflict: false as const, invalid: true as const };
