@@ -1,0 +1,22 @@
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: whitesmith-kata
+handler: kata-qemu-runtime-rs
+overhead:
+  podFixed:
+    cpu: 250m
+    memory: 256Mi
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: whitesmith-require-kata
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: require-whitesmith-kata
+      match: {any: [{resources: {kinds: [Pod], namespaces: [whitesmith-jobs]}}]}
+      validate:
+        message: Whitesmith jobs must use whitesmith-kata
+        pattern: {spec: {runtimeClassName: whitesmith-kata}}

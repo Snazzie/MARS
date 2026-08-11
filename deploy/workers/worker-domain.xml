@@ -1,0 +1,13 @@
+<domain type='kvm'>
+  <name>whitesmith-worker</name>
+  <memory unit='MiB'>4096</memory><vcpu placement='static'>4</vcpu>
+  <os><type arch='x86_64' machine='q35'>hvm</type><boot dev='hd'/></os>
+  <features><acpi/><apic/><vmport state='off'/></features>
+  <devices>
+    <disk type='file' device='disk'><driver name='qemu' type='qcow2'/><source file='/var/lib/whitesmith/worker.qcow2'/><target dev='vda' bus='virtio'/></disk>
+    <disk type='file' device='cdrom'><driver name='qemu' type='raw'/><source file='/var/lib/whitesmith/cidata.iso'/><target dev='sda' bus='sata'/><readonly/></disk>
+    <interface type='network'><source network='default'/><model type='virtio'/></interface>
+    <channel type='unix'><target type='virtio' name='org.whitesmith.agent'/></channel>
+    <memballoon model='none'/>
+  </devices>
+</domain>

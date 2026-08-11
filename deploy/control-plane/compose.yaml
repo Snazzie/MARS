@@ -1,0 +1,41 @@
+services:
+  control-plane:
+    image: ghcr.io/whitesmith/control-plane:latest
+    restart: unless-stopped
+    environment:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}
+      DATABASE_URL: postgres://whitesmith:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/whitesmith
+      DATA_ROOT: /var/lib/whitesmith
+      APP_MASTER_KEY_FILE: /run/secrets/app_master_key
+      BOOTSTRAP_GITHUB_LOGIN: ${BOOTSTRAP_GITHUB_LOGIN:?set BOOTSTRAP_GITHUB_LOGIN}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:?set GITHUB_OAUTH_CLIENT_ID}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:?set GITHUB_OAUTH_CLIENT_SECRET}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?set GITHUB_WEBHOOK_SECRET}
+    volumes: [whitesmith-data:/var/lib/whitesmith]
+    secrets: [app_master_key]
+    depends_on: [postgres]
+    ports: ["3000:3000"]
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: whitesmith
+      POSTGRES_USER: whitesmith
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+  cloudflared:
+    image: cloudflare/cloudflared:2025.7.0
+    profiles: [tunnel]
+    entrypoint: [/bin/sh, /run/whitesmith/cloudflared-wrapper.sh]
+    environment: {TUNNEL_TOKEN_FILE: /run/secrets/tunnel_token}
+    volumes: [./cloudflared-wrapper.sh:/run/whitesmith/cloudflared-wrapper.sh:ro]
+    secrets: [tunnel_token]
+    depends_on: [control-plane]
+volumes:
+  whitesmith-data:
+  postgres-data:
+secrets:
+  app_master_key:
+    file: ./app_master_key
+  tunnel_token:
+    file: ./tunnel_token

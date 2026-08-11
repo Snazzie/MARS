@@ -1,0 +1,1 @@
+{"name":"@whitesmith/orchestrator","version":"0.1.0","type":"module","scripts":{"build":"bun build src/index.ts --compile --outfile dist/whitesmith-orchestrator","typecheck":"tsc -p tsconfig.json --noEmit","lint":"tsc -p tsconfig.json --noEmit"},"dependencies":{"@whitesmith/contracts":"workspace:*","zod":"^3.25.0"}}

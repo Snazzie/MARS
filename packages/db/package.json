@@ -1,0 +1,1 @@
+{"name":"@whitesmith/db","version":"0.1.0","type":"module","exports":"./src/index.ts","scripts":{"typecheck":"tsc -p tsconfig.json --noEmit","lint":"tsc -p tsconfig.json --noEmit"},"dependencies":{"@whitesmith/contracts":"workspace:*","postgres":"^3.4.5"}}

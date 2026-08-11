@@ -1,0 +1,11 @@
+import { describe, expect, test } from "bun:test";
+import { PoolResources, WorkerLimits } from "../packages/contracts/src/index.ts";
+import { fits, reason } from "../apps/control-plane/src/scheduler.ts";
+import { validSignature } from "../apps/control-plane/src/webhook.ts";
+import { beginWorkerHandshake, authenticateWorker } from "../apps/control-plane/src/socket.ts";
+import { generateKeyPairSync, sign } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
+
+describe("resource contracts",()=>{test("rejects fractional and zero resources",()=>{expect(PoolResources.safeParse({vcpu:0,memoryBytes:1,storageBytes:1,concurrency:1}).success).toBe(false);expect(WorkerLimits.safeParse({maxVcpuPerPod:1.5,maxMemoryBytesPerPod:1,maxStorageBytesPerPod:1,maxConcurrentPods:1}).success).toBe(false)});test("admission requires adopted ready online worker and all ceilings",()=>{const candidate={worker:{admissionState:"adopted",connectionState:"online",configurationState:"ready",limits:{maxVcpuPerPod:2,maxMemoryBytesPerPod:100,maxStorageBytesPerPod:100,maxConcurrentPods:2}},pool:{enabled:true,resources:{vcpu:2,memoryBytes:100,storageBytes:100,concurrency:1},concurrency:2,active:0}};expect(fits(candidate)).toBe(true);candidate.pool.resources={vcpu:3,memoryBytes:100,storageBytes:100,concurrency:1};expect(fits(candidate)).toBe(false);expect(reason(candidate)).toBe("resource_ceiling")})});
+describe("webhook authenticity",()=>{test("verifies strict sha256 HMAC",()=>{const body=Buffer.from('{"ok":true}');const secret="test";const signature="sha256="+createHmac("sha256",secret).update(body).digest("hex");expect(validSignature(body,signature,secret)).toBe(true);expect(validSignature(body,"sha1="+createHash("sha256").update(body).digest("hex"),secret)).toBe(false);expect(validSignature(body,signature.slice(0,-1),secret)).toBe(false)})});
+describe("worker handshake",()=>{test("requires Ed25519 proof of server nonce",()=>{const key=generateKeyPairSync("ed25519");const publicKey=key.publicKey.export({format:"pem",type:"spki"}).toString();const session=beginWorkerHandshake();expect(()=>authenticateWorker(session,publicKey,sign(null,session.nonce,key.privateKey))).not.toThrow();expect(session.authenticated).toBe(true)})});
