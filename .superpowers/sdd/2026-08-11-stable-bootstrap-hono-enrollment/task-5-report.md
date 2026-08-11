@@ -12,3 +12,6 @@ Linux CIDATA generation reads the enrollment code from stdin rather than exposin
 
 ## Windows failure hardening
 Commit `091ab0e` checks the native orchestrator process exit code and removes/stops the newly created VM on join failure; temporary code material is removed in `finally`, and success is not printed after a failed join. Static coverage was added.
+
+## Final review hardening
+Commit `8675641` adds join dispatch to the actual orchestrator index entrypoint and replaces Windows temporary-file stdin redirection with in-memory `ProcessStartInfo` stdin. Focused tests now cover entrypoint dispatch and secret-safe failure cleanup.
