@@ -69,6 +69,22 @@ export const getRepositories = (organizationId: string) =>
   request(`/api/organizations/${organizationId}/repositories`, CursorPage(RepositorySummary));
 export const getWorkers = (organizationId: string) =>
   request(`/api/organizations/${organizationId}/workers`, CursorPage(WorkerDetail));
+
+export async function mutateWorker(organizationId: string, workerId: string, action: "adopt" | "reject" | "drain" | "rotate-key" | "remove"): Promise<{ ok: boolean }> {
+  const idempotencyKey = crypto.randomUUID();
+  return request(`/api/organizations/${organizationId}/workers/${workerId}/${action}`, z.object({ ok: z.boolean() }), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify({}),
+  });
+}
+
+export const enrollWorker = (audience: string, profile: Record<string, number>) =>
+  request("/api/workers/enroll", z.object({ code: z.string().min(1), expiresAt: z.string().datetime({ offset: true }), installer: z.string().url() }), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ audience, profile }),
+  });
 export const getPools = (organizationId: string) =>
   request(`/api/organizations/${organizationId}/pools`, z.unknown());
 export const getSettings = (organizationId: string) =>
