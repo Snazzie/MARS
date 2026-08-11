@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS sessions (id uuid PRIMARY KEY DEFAULT gen_random_uuid
 DROP TABLE IF EXISTS worker_join_codes;
 CREATE TABLE IF NOT EXISTS workers (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid REFERENCES organizations(id), name text NOT NULL, platform text NOT NULL, admission_state text NOT NULL, connection_state text NOT NULL DEFAULT 'offline', configuration_state text NOT NULL DEFAULT 'unconfigured', public_key text, fingerprint text, limits jsonb, doctor jsonb, vm_uuid text, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE (organization_id, id));
 CREATE TABLE IF NOT EXISTS worker_bootstrap_credentials (singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), code_hash bytea NOT NULL, generation integer NOT NULL CHECK (generation > 0), created_by uuid NOT NULL REFERENCES users(id), rotated_by uuid REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now(), rotated_at timestamptz);
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS machine_uuid text;
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_requested_at timestamptz;
 CREATE UNIQUE INDEX IF NOT EXISTS workers_active_vm_uuid_idx ON workers(vm_uuid) WHERE vm_uuid IS NOT NULL AND admission_state IN ('pending','adopted');
 CREATE UNIQUE INDEX IF NOT EXISTS workers_active_fingerprint_idx ON workers(fingerprint) WHERE fingerprint IS NOT NULL AND admission_state IN ('pending','adopted');
