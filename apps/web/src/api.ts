@@ -1,10 +1,12 @@
 import {
   ApiError,
+  ApproveWorkerRequest,
   CursorPage,
   LogChunk,
   OrganizationSettings,
   OrganizationSummary,
   OverviewDto,
+  PendingWorkerRequest,
   PoolSummary,
   RepositorySummary,
   RunDetail,
@@ -90,6 +92,22 @@ export const enrollWorker = (audience: string, profile: Record<string, number>) 
 const WorkerBootstrapStatus = z.object({ initialized: z.boolean(), generation: z.number().nullable(), createdAt: z.string().nullable(), rotatedAt: z.string().nullable() });
 const WorkerBootstrapReveal = z.object({ code: z.string().min(1), generation: z.number(), createdAt: z.string() });
 export const getWorkerBootstrapStatus = () => request("/api/workers/bootstrap", WorkerBootstrapStatus, { cache: "no-store" });
+const pendingWorkersResponse = z.array(z.object({ id: z.string().uuid() }).merge(PendingWorkerRequest));
+export const getPendingWorkerRequests = () => request("/api/workers/pending", pendingWorkersResponse, { cache: "no-store" });
+export async function approvePendingWorker(workerId: string, input: ApproveWorkerRequest) {
+  return request(`/api/workers/pending/${workerId}/approve`, z.object({ ok: z.boolean() }), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(ApproveWorkerRequest.parse(input)),
+  });
+}
+export async function rejectPendingWorker(workerId: string) {
+  return request(`/api/workers/pending/${workerId}/reject`, z.object({ ok: z.boolean() }), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: "{}",
+  });
+}
 export const initializeWorkerBootstrap = () => request("/api/workers/bootstrap/initialize", WorkerBootstrapReveal, { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: "{}" });
 export const rotateWorkerBootstrap = () => request("/api/workers/bootstrap/rotate", WorkerBootstrapReveal, { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: "{}" });
 export const getPools = (organizationId: string) =>
