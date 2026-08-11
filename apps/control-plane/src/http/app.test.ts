@@ -16,6 +16,11 @@ describe("control-plane HTTP boundary", () => {
     expect(response.headers.get("content-type")).toContain("application/json");
   });
 
+  test("serves run list and detail deep links", async () => {
+    expect((await app.request("/runs")).status).toBe(200);
+    expect((await app.request("/runs/123")).status).toBe(200);
+  });
+
   test("serves client routes outside the API namespace", async () => {
     expect((await app.request("/settings")).status).toBe(200);
   });

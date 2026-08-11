@@ -2,18 +2,19 @@
 
 Status: DONE
 
-## Commit
-- `feat: add typed hono application boundary` (implementation and report committed together; final hash is reported in the task result)
+## Commits
+- `3148c49` — `feat: add typed hono application boundary`
+- Follow-up route fix committed after review (see task result for final hash).
 
 ## Focused verification
-- `bun test apps/control-plane/src/http/app.test.ts` — PASS (3 tests, 5 expectations)
-- `bun run --filter '@whitesmith/control-plane' typecheck` — PASS (exit 0)
+- `bun test apps/control-plane/src/http/app.test.ts` — PASS (4 tests, 7 expectations)
+- `bun run --filter '@whitesmith/control-plane' typecheck` — PASS (previously verified; unchanged by route-only fix)
 
 ## Scope
-- Added Hono 4.13.1 to the control-plane package and lockfile.
-- Added typed Hono environment/dependency contracts, deterministic test dependencies, static asset/client route boundary, session middleware, and standalone Hono app.
-- Added deterministic boundary tests for API health routing, JSON API 404s, and SPA client routes.
-- Production `apps/control-plane/src/index.ts` was not modified by this task.
+- Added Hono 4.13.1, typed application/dependency boundaries, deterministic test dependencies, static routes, session middleware, and standalone Hono app.
+- Static SPA routes now match the actual TanStack router: `/`, `/settings`, `/runs`, `/runs/:runId`, `/repositories`, `/workers`, and `/pools`.
+- Added deep-link tests for run list and run detail.
+- Production `apps/control-plane/src/index.ts` remains unchanged.
 
 ## Concerns
 - Static assets fall back to deterministic minimal responses when the configured web root has no built assets; production asset packaging remains a later task.
