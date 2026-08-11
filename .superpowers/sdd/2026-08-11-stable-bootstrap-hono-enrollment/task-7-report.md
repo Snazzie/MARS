@@ -25,3 +25,8 @@ Implemented pending worker approval UI and focused tests.
 
 - Reconnect exactness now requires VM UUID, machine UUID, and fingerprint together; changed machine identity takes the existing conflict path and cannot overwrite stored identity.
 - Added regression coverage for distinct machine identity and verified four control-plane tests plus control-plane typecheck.
+
+## Legacy-row quarantine follow-up
+
+- Pending DTO conversion now omits legacy rows with null/blank machine identity instead of allowing one malformed row to fail the global-admin list.
+- Added quarantine predicate regression coverage; changed-machine reconnect remains a conflict and never overwrites identity.
