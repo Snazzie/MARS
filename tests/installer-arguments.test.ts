@@ -71,3 +71,7 @@ test("Linux URL parser rejects empty-host HTTPS and accepts loopback IPv6 HTTP",
   const accepted = await invoke(linux, ["--code", valid], { PUBLIC_BASE_URL: "http://[::1]:8080" });
   expect(accepted.exitCode).not.toBe(2);
 });
+test("Linux URL parser rejects malformed ports", async () => {
+  const rejected = await invoke(linux, ["--code", valid], { PUBLIC_BASE_URL: "https://host:notaport" });
+  expect(rejected.exitCode).toBe(1);
+});
