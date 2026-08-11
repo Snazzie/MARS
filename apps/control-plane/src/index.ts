@@ -119,7 +119,8 @@ server = Bun.serve<SocketData>({
   async fetch(request): Promise<Response | undefined> {
   const url=new URL(request.url); try {
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket" && url.pathname === "/api/v1/workers/connect") { const workerId = url.searchParams.get("workerId"); if (!workerId) return json({ error: "workerId required" }, 400); const previousEpoch = workerConnectionEpochs.get(workerId); const connectionEpoch = ++nextWorkerConnectionEpoch; workerConnectionEpochs.set(workerId, connectionEpoch); if (server.upgrade(request, { data: { actor: "worker", workerId, authenticated: false, connectionEpoch } })) return undefined; if (workerConnectionEpochs.get(workerId) === connectionEpoch) { if (previousEpoch === undefined) workerConnectionEpochs.delete(workerId); else workerConnectionEpochs.set(workerId, previousEpoch); } return json({ error: "websocket upgrade failed" }, 400); }
-    if(request.method === "GET" && ["/","/index.html"].includes(url.pathname)) return new Response(Bun.file(new URL("../../web/index.html", import.meta.url)));
+    const dashboardPath = /^\/(?:runs(?:\/[^/]+)?|repositories|workers|pools|settings)$/.test(url.pathname);
+    if(request.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html" || dashboardPath)) return new Response(Bun.file(new URL("../../web/index.html", import.meta.url)));
     if(request.method === "GET" && url.pathname === "/index.js") return new Response(Bun.file(new URL("../../web/dist/index.js", import.meta.url)));
     if(request.method === "GET" && url.pathname === "/styles.css") return new Response(Bun.file(new URL("../../web/src/styles.css", import.meta.url)));
     if(request.method === "GET" && url.pathname === "/healthz") return json({ok:true});
