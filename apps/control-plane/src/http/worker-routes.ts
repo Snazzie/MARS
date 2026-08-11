@@ -45,6 +45,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       const key = c.req.header("Idempotency-Key")!.trim();
       const [prior] = await deps.db<{ response: Record<string, unknown> | null }[]>`select response from dashboard_mutations where organization_id=${body.organizationId} and idempotency_key=${key}`;
       if (prior?.response) return c.json(prior.response, { status: 202, headers: noStore() });
+      deps.onWorkerAdopted(c.req.param("workerId"));
       const result = await configurePendingWorker(deps.db, c.req.param("workerId"), body.organizationId, parsed.data, user.id, deps.workerDispatcher, key);
       return c.json(result, { status: 202, headers: noStore() });
     } catch (error) {
