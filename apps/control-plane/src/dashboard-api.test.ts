@@ -14,6 +14,11 @@ const admin = { id: "u2", githubUserId: 2, login: "admin", isGlobalAdmin: true }
 function appFor(user = member, db = fakeDb()) { return createControlPlaneApp({ db, baseUrl: "https://x", githubClientId: "id", githubClientSecret: "secret", bootstrapGithubLogin: "admin", githubWebhookSecret: "webhook", requestId: () => "req", requestSource: () => "test", webRoot: new URL("file:///tmp/"), workerInstallerRoot: new URL("file:///tmp/"), onWorkerAdopted: () => {}, currentUser: async () => user }); }
 const sessionHeaders = { Cookie: "whitesmith_session=test" };
 
+  test("returns canonical installer URL when enrolling a worker", async () => {
+    const response = await appFor(admin).request("/api/workers/enroll", { method: "POST", headers: { ...sessionHeaders, "Content-Type": "application/json" }, body: JSON.stringify({ audience: "macos-arm64", profile: {} }) });
+    expect(response.status).toBe(201);
+    expect((await response.json()).installer).toBe("https://x/api/workers/installer?audience=macos-arm64");
+  });
 describe("dashboard API", () => {
   test("returns the authenticated operator for the dashboard session probe", async () => {
     const response = await appFor().request("/api/me", { headers: sessionHeaders });
