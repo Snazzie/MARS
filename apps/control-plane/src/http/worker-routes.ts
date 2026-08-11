@@ -2,7 +2,6 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { PendingWorkerRequest, WorkerConfiguration } from "@whitesmith/contracts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { dashboardMutation } from "@whitesmith/db";
 import { verifyWorkerBootstrap, initializeWorkerBootstrap, rotateWorkerBootstrap, getWorkerBootstrapStatus } from "../worker-bootstrap.ts";
 import { approvePendingWorker, configurePendingWorker, createRequestLimiter, hasMachineIdentity, parseApproveWorkerRequest, requestPendingWorker, rejectPendingWorker } from "../worker-requests.ts";
 
@@ -13,7 +12,6 @@ export function pendingWorkerDto(row: Record<string, unknown>) {
   return PendingWorkerRequest.parse({ ...row, publicKey: row.publicKey, machineUuid: row.machineUuid, doctor: telemetry.doctor ?? {}, capacity: telemetry.capacity ?? {} });
 }
 function idempotency(c: Context<ControlPlaneEnv>): boolean { return Boolean(c.req.header("Idempotency-Key")?.trim()); }
-const configurationResults = new Map<string, Record<string, unknown>>();
 export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
   const approvalBody = async (c: Context<ControlPlaneEnv>) => { try { return parseApproveWorkerRequest(await c.req.json()); } catch { return null; } };
   const limiter = deps.workerRequestLimiter ?? createRequestLimiter();
@@ -44,11 +42,11 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       const body = await c.req.json();
       const parsed = WorkerConfiguration.safeParse({ appliance: body.appliance, runtime: body.runtime });
       if (!parsed.success || typeof body.organizationId !== "string") return c.json({ error: "invalid worker configuration" }, 400);
-      const key = `${body.organizationId}:${c.req.header("Idempotency-Key")!.trim()}`;
-      const prior = configurationResults.get(key); if (prior) return c.json(prior, { status: 202, headers: noStore() });
-      if (!(await dashboardMutation(deps.db, String(body.organizationId), c.req.header("Idempotency-Key")!.trim()))) return c.json({ ok: true });
+      const key = c.req.header("Idempotency-Key")!.trim();
+      const [prior] = await deps.db<{ response: Record<string, unknown> | null }[]>`select response from dashboard_mutations where organization_id=${body.organizationId} and idempotency_key=${key}`;
+      if (prior?.response) return c.json(prior.response, { status: 202, headers: noStore() });
       const result = await configurePendingWorker(deps.db, c.req.param("workerId"), body.organizationId, parsed.data, user.id, deps.workerDispatcher);
-      configurationResults.set(key, result);
+      await deps.db`insert into dashboard_mutations (organization_id,idempotency_key,response) values (${body.organizationId},${key},${JSON.stringify(result)}::jsonb) on conflict (organization_id,idempotency_key) do update set response=excluded.response`;
       return c.json(result, { status: 202, headers: noStore() });
     } catch (error) {
       if (error instanceof SyntaxError || (error && typeof error === "object" && "issues" in error)) return c.json({ error: "invalid worker configuration" }, 400);

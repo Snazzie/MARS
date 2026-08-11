@@ -1,4 +1,4 @@
 
-## Scoped re-review fixes
+## Durable idempotency fix
 
-Restored global-admin authorization on configure and moved idempotency after request validation, with successful response replay to avoid duplicate dispatch. Typecheck passed; focused HTTP/request/dispatcher tests passed (15 tests, 41 assertions).
+Configuration mutation responses now persist in `dashboard_mutations.response`; retries after process restart replay the durable response without dispatch. Keys are written only after configuration and dispatch succeed, leaving failed attempts retryable. Focused typecheck and HTTP/request/dispatcher tests passed (15 tests, 41 assertions).
