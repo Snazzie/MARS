@@ -34,6 +34,24 @@ describe("WorkerCommandDispatcher registration", () => {
   });
 });
 
+test("replays a command committed after socket authentication", async () => {
+  const sent: string[] = [];
+  let commands: WorkerCommand[] = [];
+  const store = {
+    async save() {},
+    async listUnacknowledged() { return commands; },
+    async markSent() {},
+    async acknowledge() {},
+  };
+  const socket = { send(data: string) { sent.push(data); } };
+  const dispatcher = new WorkerCommandDispatcher(100, store);
+  dispatcher.register(workerId, socket);
+  await Promise.resolve();
+  commands = [{ ...command, id: "00000000-0000-4000-8000-000000000004" }];
+  await dispatcher.replayConnected(workerId);
+  expect(sent.map(data => JSON.parse(data).id)).toContain(commands[0]!.id);
+});
+
 describe("WorkerCommandDispatcher frame and payload hardening", () => {
   test("rejects events from a superseded socket", async () => {
     let commandId = "";

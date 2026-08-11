@@ -65,11 +65,11 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, orga
   const fp = createHash("sha256").update(`${workerId}:${organizationId}:${revision}`).digest("hex");
   const commandId = randomUUID();
   const payload = { workerId, appliance: parsed.appliance, runtime: parsed.runtime, revision, fingerprint: fp };
-  await db.begin(async tx => {
+  const response = await db.begin(async tx => {
     if (idempotencyKey) {
       await tx`select pg_advisory_xact_lock(hashtext(${`whitesmith:configure:${organizationId}:${idempotencyKey}`}))`;
-      const prior = await tx`select response from dashboard_mutations where organization_id=${organizationId} and idempotency_key=${idempotencyKey}`;
-      if (prior.length) throw new Error("configuration already completed");
+      const prior = await tx<{ response: { revision: string; fingerprint: string; commandId?: string } | null }[]>`select response from dashboard_mutations where organization_id=${organizationId} and idempotency_key=${idempotencyKey}`;
+      if (prior[0]?.response) return prior[0].response;
     }
     const rows = await tx<{ id: string; doctor: unknown; admissionState: string; organizationId: string | null }[]>`select id, doctor, admission_state as "admissionState", organization_id as "organizationId" from workers where id=${workerId} for update`;
     const row = rows[0]; if (!row || row.admissionState !== "adopted" || row.organizationId !== organizationId) throw new Error("worker configuration conflict");
@@ -80,11 +80,13 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, orga
     await tx`update workers set limits=${JSON.stringify(parsed.runtime)}::jsonb, configuration_state='unconfigured' where id=${workerId}`;
     await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,'worker.configure',${workerId},null,now(),${JSON.stringify(payload)}::jsonb)`;
     await tx`insert into audit_events (organization_id,actor,type,payload) values (${organizationId},${adminId},'worker.configured',${JSON.stringify({ workerId, revision, fingerprint: fp })}::jsonb)`;
-    if (idempotencyKey) await tx`insert into dashboard_mutations (organization_id,idempotency_key,response) values (${organizationId},${idempotencyKey},${JSON.stringify({ revision, fingerprint: fp, commandId })}::jsonb)`;
+    const result = { revision, fingerprint: fp, commandId };
+    if (idempotencyKey) await tx`insert into dashboard_mutations (organization_id,idempotency_key,response) values (${organizationId},${idempotencyKey},${JSON.stringify(result)}::jsonb)`;
+    return result;
   });
-  if (!dispatcher) return { revision, fingerprint: fp, commandId };
-  const event = await dispatcher.dispatch({ type: "worker.configure", workerId, leaseId: null, payload });
-  return { revision, fingerprint: fp, commandId: event.payload.commandId as string };
+  if (response.commandId !== commandId) return response;
+  dispatcher?.replayConnected(workerId);
+  return response;
 }
 export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event: { workerId: string; payload: unknown }): Promise<boolean> {
   const input = event.payload as Record<string, unknown>;

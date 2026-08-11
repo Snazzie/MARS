@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 import type { Sql } from "postgres";
-import { requestPendingWorker } from "./worker-requests.ts";
+import { configurePendingWorker, requestPendingWorker } from "./worker-requests.ts";
+import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 
 describe("pending worker persistence", () => {
   test("stores telemetry while leaving policy limits NULL", async () => {
@@ -17,4 +18,22 @@ describe("pending worker persistence", () => {
     expect(queries[insertIndex]).toContain(",null,");
     expect(insertValues).toContain(JSON.stringify({ doctor: input.doctor, capacity: input.capacity }));
   });
+});
+
+test("replays completed configuration idempotency response without mutating", async () => {
+  const result = { revision: "r", fingerprint: "f", commandId: "c" };
+  const queries: string[] = [];
+  const tx = (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const sql = strings.join(" ");
+    queries.push(sql);
+    if (sql.includes("select response from dashboard_mutations")) return [{ response: result }];
+    return [];
+  };
+  const db = Object.assign(((strings: TemplateStringsArray, ...values: unknown[]) => []) as unknown as Sql<{}>, {
+    begin: async (fn: (transaction: unknown) => unknown) => fn(tx),
+  });
+  const dispatcher = { replayConnected() { throw new Error("must not dispatch replay for duplicate"); } } as unknown as WorkerCommandDispatcher;
+  const configuration = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 } };
+  await expect(configurePendingWorker(db, "worker", "org", configuration, "admin", dispatcher, "same-key")).resolves.toEqual(result);
+  expect(queries.some(query => query.includes("update workers"))).toBe(false);
 });
