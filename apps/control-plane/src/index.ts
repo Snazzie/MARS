@@ -6,7 +6,7 @@ import { createSession, getSession, SecretBox } from "./auth.ts";
 import { createPkce, githubAuthorizeUrl, exchangeOAuth, ensureBootstrapAdmin, syncGithubOrganizations } from "./github.ts";
 import { applyWorkflowJobWebhook, configureRunLifecycle } from "./runs.ts";
 import { readBody, validSignature, acceptDelivery } from "./webhook.ts";
-import { createEnrollmentCode, consumeJoin, fingerprint, adoptWorker, verifyWorkerSignature } from "./workers.ts";
+import { verifyWorkerSignature } from "./workers.ts";
 import { createWorkerChallenge, decodeWorkerSignature } from "./worker-socket.ts";
 import { WorkerCommandDispatcher, containsSecret } from "./worker-dispatch.ts";
 import { createControlPlaneApp } from "./http/app.ts";
