@@ -40,10 +40,15 @@ test("PowerShell requires and validates Code without interactive prompt", async 
 });
 test("PowerShell checks join exit status and cleans up a failed VM", async () => {
   const source = await Bun.file(powershell).text();
-  expect(source).toContain("Start-Process");
+  expect(source).toContain("ProcessStartInfo");
   expect(source).toContain("$process.ExitCode -ne 0");
   expect(source).toContain("Stop-VM");
   expect(source).toContain("Remove-VM");
   expect(source).toContain("catch");
   expect(source).toContain("Write-Host");
+});
+test("orchestrator entrypoint dispatches join stdin", async () => {
+  const source = await Bun.file(join(root, "apps/orchestrator/src/index.ts")).text();
+  expect(source).toContain('Bun.argv[2] === "join"');
+  expect(source).toContain("runWorkerJoin");
 });
