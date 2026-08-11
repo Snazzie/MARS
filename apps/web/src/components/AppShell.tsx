@@ -19,7 +19,11 @@ export function AppShell() {
   const organizations = useQuery({ queryKey: ["organizations"], queryFn: getOrganizations, enabled: !me.isLoading && !me.error });
   const { organizationId, setOrganizationId } = useOrganization(organizations.data ?? []);
   const currentOrg = organizations.data?.find((organization) => organization.id === organizationId);
-  const state = <QueryState error={me.error ?? organizations.error} isLoading={me.isLoading || organizations.isLoading} isEmpty={organizations.data?.length === 0} retry={() => { void me.refetch(); void organizations.refetch(); }} />;
+  const state = me.isLoading || organizations.isLoading || me.error || organizations.error
+    ? <QueryState error={me.error ?? organizations.error} isLoading={me.isLoading || organizations.isLoading} retry={() => { void me.refetch(); void organizations.refetch(); }} />
+    : organizations.data?.length === 0
+      ? <QueryState error={undefined} isLoading={false} isEmpty />
+      : null;
 
   return (
     <div className="console-frame">
