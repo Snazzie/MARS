@@ -41,7 +41,8 @@ const commandStore = {
   },
 };
 const dispatcher = new WorkerCommandDispatcher(15_000, commandStore);
-const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, githubWebhookSecret: env.WEBHOOK_SECRET, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: () => "unknown", webRoot: new URL("../../web/", import.meta.url), workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), onWorkerAdopted: (workerId) => { const socket = workerSockets.get(workerId); if (socket?.data.authenticated) dispatcher.register(workerId, socket); } });
+const requestSources = new WeakMap<Request, string>();
+const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, githubWebhookSecret: env.WEBHOOK_SECRET, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot: new URL("../../web/", import.meta.url), workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), onWorkerAdopted: () => {} });
 let server: Server<SocketData>;
 server = Bun.serve<SocketData>({
   port: Number(Bun.env.PORT ?? 3000),
@@ -118,6 +119,7 @@ server = Bun.serve<SocketData>({
   },
   async fetch(request): Promise<Response | undefined> {
   const url=new URL(request.url);
+    requestSources.set(request, server.requestIP(request)?.address ?? "unknown");
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket" && url.pathname === "/api/v1/workers/connect") { const workerId = url.searchParams.get("workerId"); if (!workerId) return json({ error: "workerId required" }, 400); const previousEpoch = workerConnectionEpochs.get(workerId); const connectionEpoch = ++nextWorkerConnectionEpoch; workerConnectionEpochs.set(workerId, connectionEpoch); if (server.upgrade(request, { data: { actor: "worker", workerId, authenticated: false, connectionEpoch } })) return undefined; if (workerConnectionEpochs.get(workerId) === connectionEpoch) { if (previousEpoch === undefined) workerConnectionEpochs.delete(workerId); else workerConnectionEpochs.set(workerId, previousEpoch); } return json({ error: "websocket upgrade failed" }, 400); }
     return httpApp.fetch(request);
   },

@@ -33,8 +33,9 @@ export function createDashboardApi(deps: DashboardHandlerDeps) {
   return async function dashboardApi(request: Request, user: SessionUser): Promise<HandlerResult> {
     const url = new URL(request.url); const path = url.pathname;
     try {
-      if (request.method === "GET" && (path === "/api/organizations" || path === "/api/v1/organizations")) return Response.json(OrganizationSummary.array().parse(await listOrganizations(deps.db, user.id)));
-      const orgMatch = path.match(/^\/api(?:\/v1)?\/organizations\/([^/]+)(?:\/(.*))?$/); if (!orgMatch) return null;
+      if (request.method === "GET" && path === "/api/me") return Response.json(user);
+      if (request.method === "GET" && path === "/api/organizations") return Response.json(OrganizationSummary.array().parse(await listOrganizations(deps.db, user.id)));
+      const orgMatch = path.match(/^\/api\/organizations\/([^/]+)(?:\/(.*))?$/); if (!orgMatch) return null;
       const organizationId = decodeURIComponent(orgMatch[1]); const tail = orgMatch[2] ?? "";
       const denied = await orgResource(deps.db, user, organizationId, request, deps); if (denied) return denied;
       if (request.method === "GET" && tail === "overview") { const period = periodSchema.safeParse(url.searchParams.get("period") ?? "24h"); if (!period.success) return error(request, deps, 400, "invalid_period", "Invalid overview period", { issues: period.error.issues }); return Response.json(OverviewDto.parse(await getOverview(deps.db, organizationId, period.data))); }
