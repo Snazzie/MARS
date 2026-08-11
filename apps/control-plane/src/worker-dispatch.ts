@@ -83,7 +83,7 @@ export class WorkerCommandDispatcher {
   }
 }
 const SECRET_KEY_PATTERN = /(?:code|secret|token|privatekey|jobclaim|jitconfig|enrollment)/;
-function containsSecret(value: unknown): boolean {
+export function containsSecret(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   if (Array.isArray(value)) return value.some(containsSecret);
   return Object.entries(value).some(([key, child]) => SECRET_KEY_PATTERN.test(key.toLowerCase().replace(/[^a-z0-9]/g, "")) || containsSecret(child));

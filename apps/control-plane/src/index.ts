@@ -7,7 +7,7 @@ import { createPkce, githubAuthorizeUrl, exchangeOAuth, ensureBootstrapAdmin } f
 import { readBody, validSignature, acceptDelivery } from "./webhook.ts";
 import { createEnrollmentCode, consumeJoin, fingerprint, adoptWorker, verifyWorkerSignature } from "./workers.ts";
 import { createWorkerChallenge, decodeWorkerSignature } from "./worker-socket.ts";
-import { WorkerCommandDispatcher } from "./worker-dispatch.ts";
+import { WorkerCommandDispatcher, containsSecret } from "./worker-dispatch.ts";
 const required = (name:string):string => { const value=Bun.env[name]; if(!value) throw new Error(`${name} is required`); return value; };
 const env = { BASE: required("PUBLIC_BASE_URL"), DATABASE: required("DATABASE_URL"), WEBHOOK_SECRET: required("GITHUB_WEBHOOK_SECRET"), CLIENT_ID: required("GITHUB_OAUTH_CLIENT_ID"), CLIENT_SECRET: required("GITHUB_OAUTH_CLIENT_SECRET"), BOOTSTRAP: required("BOOTSTRAP_GITHUB_LOGIN"), MASTER: required("APP_MASTER_KEY") };
 const db = createDb(env.DATABASE); await migrate(db); new SecretBox(env.MASTER);
@@ -78,10 +78,10 @@ server = Bun.serve<SocketData>({
               dispatcher.register(ws.data.workerId, ws);
             }
             ws.send(JSON.stringify({ version: 1, type: "authenticated", workerId: ws.data.workerId, admissionState: worker.admission_state }));
-          } else if (frame.type === "doctor" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && frame.workerId === ws.data.workerId && frame.payload) {
+          } else if (frame.type === "doctor" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && frame.workerId === ws.data.workerId && frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload) && !containsSecret(frame.payload)) {
             const epoch = ws.data.connectionEpoch;
             if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
-            await db`update workers set doctor=${JSON.stringify(frame.payload)}, configuration_state='ready' where id=${ws.data.workerId} and admission_state='adopted'`;
+            await db`update workers set doctor=${JSON.stringify(frame.payload)}, configuration_state=case when admission_state='adopted' then 'ready' else 'unconfigured' end where id=${ws.data.workerId}`;
             if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
             ws.send(JSON.stringify({ version: 1, type: "doctor_ack", workerId: ws.data.workerId }));
           } else if (frame.type === "pong" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch) {
