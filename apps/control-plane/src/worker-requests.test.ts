@@ -9,6 +9,7 @@ describe("pending worker request contracts", () => {
     const { code: _code, ...pending } = valid;
     expect(PendingWorkerRequest.parse(pending).publicKey).toBe(valid.publicKey);
     expect(PendingWorkerRequest.safeParse(valid).success).toBe(false);
+    expect(WorkerBootstrapRequest.safeParse({ ...valid, capacity: { ...valid.capacity, actualVcpu: 1.5 } }).success).toBe(false);
   });
   test("requires an organization and positive admin limits", () => {
     expect(ApproveWorkerRequest.safeParse({ organizationId: valid.vmUuid, limits: valid.limits }).success).toBe(true);

@@ -28,7 +28,7 @@ export async function requestPendingWorker(db: Sql<{}>, input: WorkerBootstrapRe
     const rows = await tx<{ id: string; vmUuid: string | null; fingerprint: string | null }[]>`select id, vm_uuid as "vmUuid", fingerprint from workers where admission_state in ('pending','adopted') and (vm_uuid=${parsed.vmUuid} or fingerprint=${fp}) for update`;
     const exact = rows.find(row => row.vmUuid === parsed.vmUuid && row.fingerprint === fp);
     if (exact) {
-      await tx`update workers set last_requested_at=now(), connection_state='online', doctor=${JSON.stringify(parsed.doctor)}::jsonb where id=${exact.id}`;
+      await tx`update workers set last_requested_at=now(), connection_state='online', doctor=${JSON.stringify({ doctor: parsed.doctor, capacity: parsed.capacity })}::jsonb where id=${exact.id}`;
       return { status: "existing" as const, workerId: exact.id };
     }
     if (rows.length) return { conflict: true as const, invalid: false as const };

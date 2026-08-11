@@ -20,9 +20,9 @@ export type WorkerCommand = z.infer<typeof WorkerCommand>;
 export type WorkerEvent = z.infer<typeof WorkerEvent>;
 export type BrowserInvalidation = z.infer<typeof BrowserInvalidation>;
 export { positiveSafe };
-const boundedNonNegative = z.number().finite().min(0).max(Number.MAX_SAFE_INTEGER);
-export const WorkerDoctorData = z.object({ nestedKvm: z.boolean().optional(), kvmModules: z.boolean().optional(), probe: z.boolean().optional(), egress: z.boolean().optional(), imageSignatures: z.boolean().optional(), blockVolume: z.boolean().optional(), actualVcpu: boundedNonNegative.optional(), actualMemoryBytes: boundedNonNegative.optional(), actualStorageBytes: boundedNonNegative.optional(), freeVcpu: boundedNonNegative.optional(), freeMemoryBytes: boundedNonNegative.optional(), freeStorageBytes: boundedNonNegative.optional() }).strict();
-export const WorkerCapacityData = z.object({ actualVcpu: boundedNonNegative, actualMemoryBytes: boundedNonNegative, actualStorageBytes: boundedNonNegative, freeVcpu: boundedNonNegative, freeMemoryBytes: boundedNonNegative, freeStorageBytes: boundedNonNegative }).strict();
+const boundedResource = z.number().int().finite().min(0).max(Number.MAX_SAFE_INTEGER);
+export const WorkerDoctorData = z.object({ nestedKvm: z.boolean().optional(), kvmModules: z.boolean().optional(), probe: z.boolean().optional(), egress: z.boolean().optional(), imageSignatures: z.boolean().optional(), blockVolume: z.boolean().optional(), actualVcpu: boundedResource.optional(), actualMemoryBytes: boundedResource.optional(), actualStorageBytes: boundedResource.optional(), freeVcpu: boundedResource.optional(), freeMemoryBytes: boundedResource.optional(), freeStorageBytes: boundedResource.optional() }).strict();
+export const WorkerCapacityData = z.object({ actualVcpu: boundedResource, actualMemoryBytes: boundedResource, actualStorageBytes: boundedResource, freeVcpu: boundedResource, freeMemoryBytes: boundedResource, freeStorageBytes: boundedResource }).strict();
 export const WorkerBootstrapRequest = z.object({
   code: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   platform: RuntimePlatform,
