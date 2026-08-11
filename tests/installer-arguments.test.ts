@@ -58,3 +58,10 @@ test("join enforces HTTPS policy and bounded waits", async () => {
   expect(source).toContain("AbortSignal.timeout(30_000)");
   expect(await Bun.file(powershell).text()).toContain("WaitForExit(30000)");
 });
+test("Linux installer validates public URL scheme", async () => {
+  const source = await Bun.file(linux).text();
+  expect(source).toContain("validate_control_plane_url");
+  expect(source).toContain("https://");
+  expect(source).toContain("http://localhost");
+  expect(source).toContain("PUBLIC_BASE_URL must use HTTPS");
+});

@@ -14,11 +14,19 @@ parse_args() {
   done
   [[ "$JOIN_CODE" =~ ^[A-Za-z0-9_-]{43}$ ]] || usage
 }
+validate_control_plane_url() {
+  case "$PUBLIC_BASE_URL" in
+    https://*) ;;
+    http://localhost:*|http://localhost|http://127.0.0.1:*|http://127.0.0.1|http://[::1]:*|http://[::1]) ;;
+    *) echo 'PUBLIC_BASE_URL must use HTTPS except explicit localhost development' >&2; exit 1 ;;
+  esac
+}
 parse_args "$@"
 trap 'unset JOIN_CODE' EXIT
 
 umask 077
 : "${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}"
+validate_control_plane_url
 command -v cosign >/dev/null || { echo 'cosign required' >&2; exit 1; }
 command -v virsh >/dev/null || { echo 'libvirt required' >&2; exit 1; }
 [[ "$(uname -m)" == x86_64 ]] || { echo 'linux-x64 only' >&2; exit 1; }
