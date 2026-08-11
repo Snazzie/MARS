@@ -9,3 +9,6 @@ Implemented strict `--code <43-character-base64url>` parsing for Linux/macOS ins
 
 ## Notes
 Linux CIDATA generation reads the enrollment code from stdin rather than exposing it as a Python argument. macOS invokes the existing orchestrator `--code-stdin` handoff. Windows invokes the orchestrator with piped code and clears `$Code` in `finally`; no `Read-Host` prompt remains.
+
+## Windows failure hardening
+Commit `091ab0e` checks the native orchestrator process exit code and removes/stops the newly created VM on join failure; temporary code material is removed in `finally`, and success is not printed after a failed join. Static coverage was added.
