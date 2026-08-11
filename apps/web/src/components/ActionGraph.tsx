@@ -1,0 +1,6 @@
+import type { ActionGraph as ActionGraphDto } from "@whitesmith/contracts";
+
+export function ActionGraph({ graph }: { graph: ActionGraphDto }) {
+  const columns = Math.max(1, Math.ceil(Math.sqrt(graph.nodes.length)));
+  return <section className="graph-panel" aria-labelledby="graph-title"><div className="panel-kicker" id="graph-title">Action dependency graph</div><div className="action-graph" style={{ "--graph-columns": columns } as React.CSSProperties}>{graph.nodes.map((node, index) => <div className="graph-node" key={node.id} tabIndex={0}><span className={`status-dot status-${node.status}`} aria-hidden="true" /><strong>{node.name}</strong><small>{node.status.replaceAll("_", " ")}</small>{index < graph.nodes.length - 1 && <span className="graph-arrow" aria-hidden="true">→</span>}</div>)}</div><details className="graph-fallback"><summary>View dependency table</summary><table><caption className="sr-only">Action dependencies</caption><thead><tr><th>Action</th><th>Depends on</th></tr></thead><tbody>{graph.nodes.map((node) => <tr key={node.id}><th>{node.name}</th><td>{graph.edges.filter((edge) => edge.to === node.id).map((edge) => graph.nodes.find((candidate) => candidate.id === edge.from)?.name ?? edge.from).join(", ") || "—"}</td></tr>)}</tbody></table></details></section>;
+}
