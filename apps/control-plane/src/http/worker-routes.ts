@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { PendingWorkerRequest } from "@whitesmith/contracts";
-import { dashboardMutation } from "@whitesmith/db";
+import { PendingWorkerRequest, WorkerConfiguration } from "@whitesmith/contracts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
+import { dashboardMutation } from "@whitesmith/db";
 import { verifyWorkerBootstrap, initializeWorkerBootstrap, rotateWorkerBootstrap, getWorkerBootstrapStatus } from "../worker-bootstrap.ts";
 import { approvePendingWorker, configurePendingWorker, createRequestLimiter, hasMachineIdentity, parseApproveWorkerRequest, requestPendingWorker, rejectPendingWorker } from "../worker-requests.ts";
 
@@ -12,8 +12,8 @@ export function pendingWorkerDto(row: Record<string, unknown>) {
   const telemetry = (row.doctor && typeof row.doctor === "object" ? row.doctor : {}) as Record<string, unknown>;
   return PendingWorkerRequest.parse({ ...row, publicKey: row.publicKey, machineUuid: row.machineUuid, doctor: telemetry.doctor ?? {}, capacity: telemetry.capacity ?? {} });
 }
-function admin(c: Context<ControlPlaneEnv>): boolean { return c.get("user")?.isGlobalAdmin === true; }
 function idempotency(c: Context<ControlPlaneEnv>): boolean { return Boolean(c.req.header("Idempotency-Key")?.trim()); }
+const configurationResults = new Map<string, Record<string, unknown>>();
 export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
   const approvalBody = async (c: Context<ControlPlaneEnv>) => { try { return parseApproveWorkerRequest(await c.req.json()); } catch { return null; } };
   const limiter = deps.workerRequestLimiter ?? createRequestLimiter();
@@ -38,12 +38,17 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   app.post("/api/workers/pending/:workerId/approve", async (c) => { const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401); if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403); if (!idempotency(c)) return c.json({ error: "Idempotency-Key required" }, 400); const body = await approvalBody(c); if (!body) return c.json({ error: "invalid approval request" }, 400); await approvePendingWorker(deps.db, c.req.param("workerId"), body, user.id); deps.onWorkerAdopted(c.req.param("workerId")); return c.json({ ok: true }); });
   app.post("/api/workers/pending/:workerId/configure", async (c) => {
     const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401);
+    if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403);
     if (!idempotency(c)) return c.json({ error: "Idempotency-Key required" }, 400);
     try {
       const body = await c.req.json();
-      const key = c.req.header("Idempotency-Key")!.trim();
-      if (!(await dashboardMutation(deps.db, String(body.organizationId), key))) return c.json({ ok: true });
-      const result = await configurePendingWorker(deps.db, c.req.param("workerId"), String(body.organizationId), { appliance: body.appliance, runtime: body.runtime }, user.id, deps.workerDispatcher);
+      const parsed = WorkerConfiguration.safeParse({ appliance: body.appliance, runtime: body.runtime });
+      if (!parsed.success || typeof body.organizationId !== "string") return c.json({ error: "invalid worker configuration" }, 400);
+      const key = `${body.organizationId}:${c.req.header("Idempotency-Key")!.trim()}`;
+      const prior = configurationResults.get(key); if (prior) return c.json(prior, { status: 202, headers: noStore() });
+      if (!(await dashboardMutation(deps.db, String(body.organizationId), c.req.header("Idempotency-Key")!.trim()))) return c.json({ ok: true });
+      const result = await configurePendingWorker(deps.db, c.req.param("workerId"), body.organizationId, parsed.data, user.id, deps.workerDispatcher);
+      configurationResults.set(key, result);
       return c.json(result, { status: 202, headers: noStore() });
     } catch (error) {
       if (error instanceof SyntaxError || (error && typeof error === "object" && "issues" in error)) return c.json({ error: "invalid worker configuration" }, 400);
