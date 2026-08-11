@@ -54,3 +54,5 @@ export const CursorPage = <T extends z.ZodTypeAny>(item: T) => dto(strict({ item
 export type CursorPage<T> = { items: T[]; nextCursor: string | null };
 export const ApiError = dto(strict({ code: z.string().min(1), message: z.string().min(1), requestId: id, details: z.record(z.unknown()).optional() }));
 export type ApiError = z.infer<typeof ApiError>;
+export { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest } from "./orchestration.ts";
+export type { WorkerBootstrapRequest as WorkerBootstrapRequestData, PendingWorkerRequest as PendingWorkerRequestData, ApproveWorkerRequest as ApproveWorkerRequestData } from "./orchestration.ts";

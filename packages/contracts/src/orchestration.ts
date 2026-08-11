@@ -20,3 +20,21 @@ export type WorkerCommand = z.infer<typeof WorkerCommand>;
 export type WorkerEvent = z.infer<typeof WorkerEvent>;
 export type BrowserInvalidation = z.infer<typeof BrowserInvalidation>;
 export { positiveSafe };
+export const WorkerBootstrapRequest = z.object({
+  code: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  platform: RuntimePlatform,
+  publicKey: z.string().min(1),
+  vmUuid: z.string().uuid(),
+  machineUuid: z.string().uuid(),
+  limits: WorkerLimits,
+  doctor: z.record(z.unknown()),
+  capacity: z.record(z.unknown()),
+}).strict();
+export type WorkerBootstrapRequest = z.infer<typeof WorkerBootstrapRequest>;
+export const PendingWorkerRequest = WorkerBootstrapRequest.omit({ code: true });
+export type PendingWorkerRequest = z.infer<typeof PendingWorkerRequest>;
+export const ApproveWorkerRequest = z.object({
+  organizationId: z.string().uuid(),
+  limits: WorkerLimits,
+}).strict();
+export type ApproveWorkerRequest = z.infer<typeof ApproveWorkerRequest>;
