@@ -1,8 +1,12 @@
 param(
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory=$false)]
     [string]$Code
 )
 $ErrorActionPreference = 'Stop'
+if (-not $Code) {
+    $secure = Read-Host 'Whitesmith enrollment code' -AsSecureString
+    $Code = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+}
 if ($Code -notmatch '^[A-Za-z0-9_-]{43}$') { throw 'Code must be a 43-character base64url value' }
 $VmName = 'whitesmith-worker'
 $VmCreated = $false
