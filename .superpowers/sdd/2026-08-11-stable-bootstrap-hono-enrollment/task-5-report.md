@@ -24,3 +24,6 @@ Commit `d701557` validates Linux `PUBLIC_BASE_URL` before host checks/VM creatio
 
 ## Precise Linux URL parsing
 Commit `dcfa90e` replaces shell URL globs with Python `urlsplit` validation, rejecting empty hosts, credentials, malformed schemes, and remote HTTP while accepting bracketed loopback IPv6 development URLs. Tests cover `https://` rejection and `http://[::1]:port` acceptance.
+
+## Port validation
+Commit `5a2e900` forces parsed port evaluation so malformed, non-numeric, and out-of-range ports raise validation errors; focused coverage includes `https://host:notaport`.
