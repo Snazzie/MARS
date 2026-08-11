@@ -21,3 +21,6 @@ Commit `af694a9` rejects non-HTTPS remote control-plane URLs (only explicit loca
 
 ## Linux TLS validation
 Commit `d701557` validates Linux `PUBLIC_BASE_URL` before host checks/VM creation: remote URLs must be HTTPS, with only explicit localhost HTTP development exceptions. Static focused coverage added.
+
+## Precise Linux URL parsing
+Commit `dcfa90e` replaces shell URL globs with Python `urlsplit` validation, rejecting empty hosts, credentials, malformed schemes, and remote HTTP while accepting bracketed loopback IPv6 development URLs. Tests cover `https://` rejection and `http://[::1]:port` acceptance.
