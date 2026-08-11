@@ -1,6 +1,8 @@
 import type { DashboardDb } from "@whitesmith/db";
 import type { SessionUser } from "../auth.ts";
 import type { RequestLimiter } from "../worker-requests.ts";
+import type { WorkerCommandDispatcher } from "../worker-dispatch.ts";
+
 export type ControlPlaneEnv = { Variables: { user: SessionUser } };
 
 export type ControlPlaneHttpDeps = {
@@ -16,5 +18,6 @@ export type ControlPlaneHttpDeps = {
   webRoot: URL;
   workerInstallerRoot: URL;
   workerRequestLimiter?: RequestLimiter;
+  workerDispatcher?: WorkerCommandDispatcher;
   onWorkerAdopted(workerId: string): void;
 };

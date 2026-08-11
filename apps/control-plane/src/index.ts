@@ -9,6 +9,7 @@ import { readBody, validSignature, acceptDelivery } from "./webhook.ts";
 import { verifyWorkerSignature } from "./workers.ts";
 import { createWorkerChallenge, decodeWorkerSignature } from "./worker-socket.ts";
 import { WorkerCommandDispatcher, containsSecret } from "./worker-dispatch.ts";
+import { applyWorkerConfigurationAcknowledgement } from "./worker-requests.ts";
 import { createControlPlaneApp } from "./http/app.ts";
 const required = (name:string):string => { const value=Bun.env[name]; if(!value) throw new Error(`${name} is required`); return value; };
 const env = { BASE: required("PUBLIC_BASE_URL"), DATABASE: required("DATABASE_URL"), WEBHOOK_SECRET: required("GITHUB_WEBHOOK_SECRET"), CLIENT_ID: required("GITHUB_OAUTH_CLIENT_ID"), CLIENT_SECRET: required("GITHUB_OAUTH_CLIENT_SECRET"), BOOTSTRAP: required("BOOTSTRAP_GITHUB_LOGIN"), MASTER: required("APP_MASTER_KEY") };
@@ -42,7 +43,8 @@ const commandStore = {
 };
 const dispatcher = new WorkerCommandDispatcher(15_000, commandStore);
 const requestSources = new WeakMap<Request, string>();
-const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, githubWebhookSecret: env.WEBHOOK_SECRET, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot: new URL("../../web/", import.meta.url), workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), onWorkerAdopted: (workerId) => { const socket = workerSockets.get(workerId); if (socket?.data.authenticated) dispatcher.register(workerId, socket); } });
+const webRoot = Bun.env.WEB_ROOT ? new URL(Bun.env.WEB_ROOT) : new URL("../../web/dist/", import.meta.url);
+const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, githubWebhookSecret: env.WEBHOOK_SECRET, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => { const socket = workerSockets.get(workerId); if (socket?.data.authenticated) dispatcher.register(workerId, socket); } });
 let server: Server<SocketData>;
 server = Bun.serve<SocketData>({
   port: Number(Bun.env.PORT ?? 3000),
@@ -86,12 +88,13 @@ server = Bun.serve<SocketData>({
           } else if (frame.type === "doctor" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && frame.workerId === ws.data.workerId && frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload) && !containsSecret(frame.payload)) {
             const epoch = ws.data.connectionEpoch;
             if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
-            await db`update workers set doctor=${JSON.stringify(frame.payload)}, configuration_state=case when admission_state='adopted' then 'ready' else 'unconfigured' end where id=${ws.data.workerId}`;
+            await db`update workers set doctor=${JSON.stringify(frame.payload)} where id=${ws.data.workerId}`;
             if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
             ws.send(JSON.stringify({ version: 1, type: "doctor_ack", workerId: ws.data.workerId }));
           } else if (frame.type === "pong" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch) {
             ws.send(JSON.stringify({ version: 1, type: "ping" }));
           } else if (ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch) {
+            if (frame.type === "worker.configured") await applyWorkerConfigurationAcknowledgement(db, frame);
             dispatcher.handleEvent(frame, ws);
           }
         } catch {
