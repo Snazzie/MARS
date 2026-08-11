@@ -1,6 +1,10 @@
 import { createMiddleware } from "hono/factory";
 import { Hono } from "hono";
 import { registerStaticRoutes } from "./static-routes.ts";
+import { registerAuthRoutes } from "./auth-routes.ts";
+import { registerGithubRoutes } from "./github-routes.ts";
+import { registerDashboardRoutes } from "./dashboard-routes.ts";
+import { registerWorkerRoutes } from "./worker-routes.ts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 
 export function requireSession(deps: ControlPlaneHttpDeps) {
@@ -14,18 +18,20 @@ export function requireSession(deps: ControlPlaneHttpDeps) {
 
 export function createControlPlaneApp(deps: ControlPlaneHttpDeps) {
   const app = new Hono<ControlPlaneEnv>();
-  const api = new Hono<ControlPlaneEnv>().basePath("/api");
-  api.get("/healthz", (c) => c.json({ ok: true }));
-  app.route("/", api);
+  app.get("/api/healthz", (c) => c.json({ ok: true }));
+  registerAuthRoutes(app, deps);
+  registerGithubRoutes(app, deps);
   registerStaticRoutes(app, deps);
-  app.notFound((c) => c.req.path.startsWith("/api/")
-    ? c.json({ code: "not_found", message: "Resource not found", requestId: deps.requestId() }, 404)
-    : c.text("Not found", 404));
+  const protectedApi = new Hono<ControlPlaneEnv>();
+  protectedApi.use("/api/organizations/*", requireSession(deps));
+  protectedApi.use("/api/organizations", requireSession(deps));
+  protectedApi.use("/api/me", requireSession(deps));
+  registerDashboardRoutes(protectedApi, deps);
+  app.route("/", protectedApi);
+  app.notFound((c) => c.req.path.startsWith("/api/") ? c.json({ code: "not_found", message: "Resource not found", requestId: deps.requestId() }, 404) : c.text("Not found", 404));
   app.onError((cause, c) => {
     console.error(cause);
-    return c.req.path.startsWith("/api/")
-      ? c.json({ code: "internal_error", message: "Internal server error", requestId: deps.requestId() }, 500)
-      : c.text("Internal server error", 500);
+    return c.req.path.startsWith("/api/") ? c.json({ code: "internal_error", message: "Internal server error", requestId: deps.requestId() }, 500) : c.text("Internal server error", 500);
   });
   return app;
 }
