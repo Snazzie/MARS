@@ -1,7 +1,7 @@
 import type { Sql } from "postgres";
-import { verifyWorkerBootstrap } from "./worker-bootstrap.ts";
-import { fingerprint } from "./workers.ts";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest } from "@whitesmith/contracts";
+import { fingerprint } from "./workers.ts";
 
 export class WorkerRequestError extends Error {
   constructor(public readonly code: "invalid_bootstrap" | "identity_conflict", public readonly status = code === "identity_conflict" ? 409 : 401) { super(code); }
@@ -19,25 +19,30 @@ export function parseApproveWorkerRequest(input: unknown): ApproveWorkerRequest 
 export async function requestPendingWorker(db: Sql<{}>, input: WorkerBootstrapRequest, source?: string, limiter?: RequestLimiter): Promise<WorkerRequestResult> {
   const parsed = WorkerBootstrapRequest.parse(input);
   if (source && limiter && !limiter.allow(source)) throw new WorkerRequestError("invalid_bootstrap");
-  if (!await verifyWorkerBootstrap(db, parsed.code)) throw new WorkerRequestError("invalid_bootstrap");
-  if (source && limiter) limiter.clear(source);
   const fp = fingerprint(parsed.publicKey);
-  return db.begin(async tx => {
+  const outcome = await db.begin(async tx => {
     await tx`select pg_advisory_xact_lock(hashtext(${`whitesmith:worker:${parsed.machineUuid}`}))`;
+    const [credential] = await tx<{ codeHash: Buffer }[]>`select code_hash as "codeHash" from worker_bootstrap_credentials where singleton=true for update`;
+    const candidate = createHash("sha256").update(Buffer.from(parsed.code, "base64url")).digest();
+    if (!credential || credential.codeHash.length !== candidate.length || !timingSafeEqual(credential.codeHash, candidate)) return { conflict: false as const, invalid: true as const };
     const rows = await tx<{ id: string; vmUuid: string | null; fingerprint: string | null }[]>`select id, vm_uuid as "vmUuid", fingerprint from workers where admission_state in ('pending','adopted') and (vm_uuid=${parsed.vmUuid} or fingerprint=${fp}) for update`;
     const exact = rows.find(row => row.vmUuid === parsed.vmUuid && row.fingerprint === fp);
     if (exact) {
-      await tx`update workers set last_requested_at=now(), connection_state='online', doctor=${JSON.stringify(parsed.doctor)}::jsonb, limits=${JSON.stringify(parsed.limits)}::jsonb where id=${exact.id}`;
-      return { status: "existing", workerId: exact.id };
+      await tx`update workers set last_requested_at=now(), connection_state='online', doctor=${JSON.stringify(parsed.doctor)}::jsonb where id=${exact.id}`;
+      return { status: "existing" as const, workerId: exact.id };
     }
-    if (rows.length) {
-      await tx`insert into audit_events (actor,type,payload) values ('worker','worker.request.identity_conflict',${JSON.stringify({ vmUuid: parsed.vmUuid, fingerprint: fp })}::jsonb)`;
-      throw new WorkerRequestError("identity_conflict");
-    }
-    const [created] = await tx<{ id: string }[]>`insert into workers (name,platform,admission_state,public_key,fingerprint,vm_uuid,limits,doctor,last_requested_at) values (${parsed.vmUuid},${parsed.platform},'pending',${parsed.publicKey},${fp},${parsed.vmUuid},${JSON.stringify(parsed.limits)}::jsonb,${JSON.stringify({ ...parsed.doctor, capacity: parsed.capacity })}::jsonb,now()) returning id`;
+    if (rows.length) return { conflict: true as const, invalid: false as const };
+    const [created] = await tx<{ id: string }[]>`insert into workers (name,platform,admission_state,public_key,fingerprint,vm_uuid,limits,doctor,last_requested_at) values (${parsed.vmUuid},${parsed.platform},'pending',${parsed.publicKey},${fp},${parsed.vmUuid},${JSON.stringify(parsed.limits)}::jsonb,${JSON.stringify({ doctor: parsed.doctor, capacity: parsed.capacity })}::jsonb,now()) returning id`;
     await tx`insert into audit_events (actor,type,payload) values ('worker','worker.requested',${JSON.stringify({ workerId: created.id, vmUuid: parsed.vmUuid, fingerprint: fp })}::jsonb)`;
-    return { status: "created", workerId: created.id };
+    return { status: "created" as const, workerId: created.id };
   });
+  if ("invalid" in outcome && outcome.invalid) throw new WorkerRequestError("invalid_bootstrap");
+  if ("conflict" in outcome && outcome.conflict) {
+    await db`insert into audit_events (actor,type,payload) values ('worker','worker.request.identity_conflict',${JSON.stringify({ vmUuid: parsed.vmUuid, fingerprint: fp })}::jsonb)`;
+    throw new WorkerRequestError("identity_conflict");
+  }
+  if (source && limiter) limiter.clear(source);
+  return outcome;
 }
 
 export async function approvePendingWorker(db: Sql<{}>, workerId: string, input: ApproveWorkerRequest, adminId: string): Promise<void> {

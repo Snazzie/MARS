@@ -3,7 +3,7 @@ import { ApproveWorkerRequest, PendingWorkerRequest, WorkerBootstrapRequest } fr
 import { createRequestLimiter, WorkerRequestError } from "./worker-requests.ts";
 
 describe("pending worker request contracts", () => {
-  const valid = { code: "A".repeat(43), platform: "linux-x64", publicKey: "ed25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 1024, maxStorageBytesPerPod: 2048, maxConcurrentPods: 1 }, doctor: { probe: true }, capacity: { vcpu: 4 } };
+  const valid = { code: "A".repeat(43), platform: "linux-x64", publicKey: "ed25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 1024, maxStorageBytesPerPod: 2048, maxConcurrentPods: 1 }, doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
   test("requires stable identity and excludes code from pending DTO", () => {
     expect(WorkerBootstrapRequest.parse(valid).machineUuid).toBe(valid.machineUuid);
     const { code: _code, ...pending } = valid;
