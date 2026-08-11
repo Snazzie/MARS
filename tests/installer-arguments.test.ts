@@ -14,11 +14,14 @@ async function invoke(script: string, args: string[], env: Record<string, string
   return { exitCode: await proc.exited, stdout: await new Response(proc.stdout).text(), stderr: await new Response(proc.stderr).text() };
 }
 
-test.each([linux, mac])("%s rejects missing, unknown, empty, duplicate, and malformed code before host checks", async (script) => {
-  for (const args of [[], ["--unknown"], ["--code"], ["--code", ""], ["--code", valid, "--code", valid], ["--code", "short"]]) {
+test.each([linux, mac])("%s rejects noninteractive invocation and malformed code before host checks", async (script) => {
+  const missing = await invoke(script, []);
+  expect(missing.exitCode).toBe(2);
+  expect(missing.stderr).toContain("interactive terminal required");
+  for (const args of [["--unknown"], ["--code"], ["--code", ""], ["--code", valid, "--code", valid], ["--code", "short"]]) {
     const result = await invoke(script, args);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("--code");
+    expect(result.stderr.includes("usage:") || result.stderr.includes("interactive terminal required")).toBe(true);
   }
 });
 
@@ -29,15 +32,17 @@ test("POSIX installers expose strict parser and stdin handoff", async () => {
   expect(await Bun.file(mac).text()).toContain("--code-stdin");
 });
 
-test("PowerShell requires and validates Code without interactive prompt", async () => {
+test("PowerShell prompts securely when Code is omitted", async () => {
   const source = await Bun.file(powershell).text();
-  expect(source).toContain("[Parameter(Mandatory=$true)]");
+  expect(source).toContain("[Parameter(Mandatory=$false)]");
   expect(source).toContain("[string]$Code");
   expect(source).toContain("43}$");
   expect(source).toContain("finally");
-  expect(source).not.toContain("Read-Host");
+  expect(source).toContain("Read-Host");
+  expect(source).toContain("-AsSecureString");
   expect(source).toContain("--code-stdin");
 });
+
 test("PowerShell checks join exit status and cleans up a failed VM", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).toContain("ProcessStartInfo");
