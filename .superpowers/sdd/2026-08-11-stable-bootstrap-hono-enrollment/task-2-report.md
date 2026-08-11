@@ -10,3 +10,4 @@ Verification:
 - Restored the canonical installer URL in worker enrollment responses and covered it with a focused route assertion.
 - Settings PUT now validates the payload before consuming `Idempotency-Key`, preserving corrected retries after malformed requests.
 - Settings PUT now checks missing idempotency before body parsing, then validates, consumes, and updates in that order; focused tests cover missing-key precedence and same-key corrected retry.
+- Settings regression uses a stateful DB double to prove malformed requests do not consume the key and the corrected retry consumes once and updates once with expected values.
