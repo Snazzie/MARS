@@ -2,7 +2,7 @@
 
 Status: DONE
 
-Removed the legacy `createDashboardApi` Request dispatcher and migrated dashboard query validation, typed errors, tenant guards, settings, worker, run, repository, pool, and log handlers to direct canonical Hono routes. Rewrote focused dashboard coverage to use `createControlPlaneApp(...).request()`; no `/api/v1` dashboard aliases remain.
+Removed the legacy `createDashboardApi` Request dispatcher and migrated dashboard query validation, typed errors, tenant guards, settings, worker, run, repository, pool, and log handlers to direct canonical Hono routes. Added direct repository/pool mutation routes, registered worker routes in the app, restored the adopted-socket dispatcher callback, and rejected unknown worker actions. Rewrote focused dashboard coverage to use `createControlPlaneApp(...).request()`; no `/api/v1` dashboard aliases remain.
 
 Verification:
 - `bun test apps/control-plane/src/http/app.test.ts apps/control-plane/src/dashboard-api.test.ts` — 9 passed, 0 failed.

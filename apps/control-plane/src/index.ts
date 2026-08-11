@@ -42,7 +42,7 @@ const commandStore = {
 };
 const dispatcher = new WorkerCommandDispatcher(15_000, commandStore);
 const requestSources = new WeakMap<Request, string>();
-const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, githubWebhookSecret: env.WEBHOOK_SECRET, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot: new URL("../../web/", import.meta.url), workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), onWorkerAdopted: () => {} });
+const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, githubWebhookSecret: env.WEBHOOK_SECRET, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot: new URL("../../web/", import.meta.url), workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), onWorkerAdopted: (workerId) => { const socket = workerSockets.get(workerId); if (socket?.data.authenticated) dispatcher.register(workerId, socket); } });
 let server: Server<SocketData>;
 server = Bun.serve<SocketData>({
   port: Number(Bun.env.PORT ?? 3000),

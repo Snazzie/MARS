@@ -27,6 +27,7 @@ export function createControlPlaneApp(deps: ControlPlaneHttpDeps) {
   protectedApi.use("/api/organizations", requireSession(deps));
   protectedApi.use("/api/me", requireSession(deps));
   registerDashboardRoutes(protectedApi, deps);
+  registerWorkerRoutes(app, deps);
   app.route("/", protectedApi);
   app.notFound((c) => c.req.path.startsWith("/api/") ? c.json({ code: "not_found", message: "Resource not found", requestId: deps.requestId() }, 404) : c.text("Not found", 404));
   app.onError((cause, c) => {
