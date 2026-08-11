@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { PendingWorkerRequests } from "./PendingWorkerRequests.tsx";
 
 const request = {
-  id: "11111111-1111-4111-8111-111111111111",
+  fingerprint: "SHA256:pending-fingerprint",
   platform: "linux-x64" as const,
   publicKey: "ssh-ed25519 AAAA fingerprint",
   vmUuid: "22222222-2222-4222-8222-222222222222",

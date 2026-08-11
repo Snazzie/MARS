@@ -92,7 +92,7 @@ export const enrollWorker = (audience: string, profile: Record<string, number>) 
 const WorkerBootstrapStatus = z.object({ initialized: z.boolean(), generation: z.number().nullable(), createdAt: z.string().nullable(), rotatedAt: z.string().nullable() });
 const WorkerBootstrapReveal = z.object({ code: z.string().min(1), generation: z.number(), createdAt: z.string() });
 export const getWorkerBootstrapStatus = () => request("/api/workers/bootstrap", WorkerBootstrapStatus, { cache: "no-store" });
-const pendingWorkersResponse = z.array(z.object({ id: z.string().uuid() }).merge(PendingWorkerRequest));
+const pendingWorkersResponse = z.array(z.object({ id: z.string().uuid(), fingerprint: z.string().min(1) }).merge(PendingWorkerRequest));
 export const getPendingWorkerRequests = () => request("/api/workers/pending", pendingWorkersResponse, { cache: "no-store" });
 export async function approvePendingWorker(workerId: string, input: ApproveWorkerRequest) {
   return request(`/api/workers/pending/${workerId}/approve`, z.object({ ok: z.boolean() }), {
