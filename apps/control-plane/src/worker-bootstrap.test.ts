@@ -32,4 +32,8 @@ describe("stable worker bootstrap credential", () => {
     expect(await verifyWorkerBootstrap(db, reveal.code)).toBe(false);
     expect(await verifyWorkerBootstrap(db, rotated.code)).toBe(true);
   });
+
+  test("rejects rotation before initialization", async () => {
+    await expect(rotateWorkerBootstrap(fakeDb(), "admin-1")).rejects.toThrow("bootstrap credential is not initialized");
+  });
 });

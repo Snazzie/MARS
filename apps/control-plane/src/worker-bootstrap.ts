@@ -21,6 +21,7 @@ export async function rotateWorkerBootstrap(db: Sql<{}>, actorId: string): Promi
   const code = randomBytes(32).toString("base64url");
   return db.begin(async (tx) => {
     const [current] = await tx<{ generation: number }[]>`select generation from worker_bootstrap_credentials where singleton=true for update`;
+    if (!current) throw new Error("bootstrap credential is not initialized");
     const [row] = await tx<BootstrapRow[]>`update worker_bootstrap_credentials set code_hash=${hash(code)}, generation=generation+1, rotated_by=${actorId}, rotated_at=now() where singleton=true returning generation, created_at as "createdAt", rotated_at as "rotatedAt"`;
     await tx`insert into audit_events (actor,type,payload) values (${actorId},'worker.bootstrap.rotated',${JSON.stringify({ generation: row.generation })})`;
     return result({ ...row, createdAt: new Date(row.createdAt).toISOString(), rotatedAt: row.rotatedAt ? new Date(row.rotatedAt).toISOString() : null, codeHash: hash(code) }, code);
