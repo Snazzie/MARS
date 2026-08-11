@@ -15,3 +15,5 @@ Invalid/rotated bootstrap credentials use generic 401 responses; limiter exhaust
 - Commit `e23aa9c` refreshes parsed doctor/capacity telemetry on exact reconnect without changing admin-approved limits, enforces integer bounded resource fields, and tests fractional rejection. `/api/workers/enroll` remains as a compatibility route for the existing web client.
 ## Compatibility follow-up
 - The enrollment compatibility route now parses and validates the body/audience before singleton initialization, so malformed requests cannot consume the bootstrap credential. Focused verification remains 14 passing tests and both package typechecks.
+## Identity race follow-up
+- Commit `dd46ba9` acquires sorted transaction-scoped advisory locks for machine UUID, VM UUID, and public-key fingerprint before credential verification and identity lookup, serializing all uniqueness dimensions.
