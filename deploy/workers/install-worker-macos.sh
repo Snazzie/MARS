@@ -1,20 +1,12 @@
 #!/bin/zsh
 set -euo pipefail
 
-usage() { echo "usage: $0 [--code <43-character-base64url>]" >&2; exit 2; }
+usage() { echo "usage: $0" >&2; exit 2; }
 parse_args() {
+  [ "$#" -eq 0 ] || usage
   JOIN_CODE=""
-  CODE_SEEN=0
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --code) [ "$CODE_SEEN" -eq 0 ] && [ "$#" -ge 2 ] || usage; CODE_SEEN=1; JOIN_CODE=$2; shift 2 ;;
-      *) usage ;;
-    esac
-  done
-  if [ -z "$JOIN_CODE" ]; then
-    [ -t 0 ] || { echo "interactive terminal required for enrollment code" >&2; exit 2; }
-    read -r -s 'JOIN_CODE?Whitesmith enrollment code: '; printf '\n' >&2
-  fi
+  [ -t 0 ] || { echo "interactive terminal required for enrollment code" >&2; exit 2; }
+  read -r -s 'JOIN_CODE?Whitesmith enrollment code: '; printf '\n' >&2
   [[ "$JOIN_CODE" =~ ^[A-Za-z0-9_-]{43}$ ]] || usage
 }
 parse_args "$@"

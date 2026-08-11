@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS workers (id uuid PRIMARY KEY DEFAULT gen_random_uuid(
 CREATE TABLE IF NOT EXISTS worker_bootstrap_credentials (singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), code_hash bytea NOT NULL, generation integer NOT NULL CHECK (generation > 0), created_by uuid NOT NULL REFERENCES users(id), rotated_by uuid REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now(), rotated_at timestamptz);
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS machine_uuid text;
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_requested_at timestamptz;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS configuration_revision text;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS configuration_command_id uuid;
 CREATE UNIQUE INDEX IF NOT EXISTS workers_active_vm_uuid_idx ON workers(vm_uuid) WHERE vm_uuid IS NOT NULL AND admission_state IN ('pending','adopted');
 CREATE UNIQUE INDEX IF NOT EXISTS workers_active_fingerprint_idx ON workers(fingerprint) WHERE fingerprint IS NOT NULL AND admission_state IN ('pending','adopted');
 CREATE UNIQUE INDEX IF NOT EXISTS workers_active_machine_uuid_idx ON workers(machine_uuid) WHERE machine_uuid IS NOT NULL AND admission_state IN ('pending','adopted');

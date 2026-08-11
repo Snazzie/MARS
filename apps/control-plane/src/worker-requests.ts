@@ -72,12 +72,12 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, orga
       if (prior[0]?.response) return prior[0].response;
     }
     const rows = await tx<{ id: string; doctor: unknown; admissionState: string; organizationId: string | null }[]>`select id, doctor, admission_state as "admissionState", organization_id as "organizationId" from workers where id=${workerId} for update`;
-    const row = rows[0]; if (!row || row.admissionState !== "adopted" || row.organizationId !== organizationId) throw new Error("worker configuration conflict");
+    const row = rows[0]; if (!row || !["pending", "adopted"].includes(row.admissionState) || (row.organizationId !== null && row.organizationId !== organizationId)) throw new Error("worker configuration conflict");
     const telemetry = row.doctor && typeof row.doctor === "object" ? row.doctor as Record<string, unknown> : {};
     const capacity = telemetry.capacity && typeof telemetry.capacity === "object" ? telemetry.capacity as Record<string, number> : {};
     if (parsed.appliance.vcpu > (capacity.freeVcpu ?? 0) || parsed.appliance.memoryBytes > (capacity.freeMemoryBytes ?? 0) || parsed.appliance.storageBytes > (capacity.freeStorageBytes ?? 0)) throw new Error("worker configuration exceeds capacity");
     if (parsed.runtime.maxVcpuPerPod * parsed.runtime.maxConcurrentPods > parsed.appliance.vcpu || parsed.runtime.maxMemoryBytesPerPod * parsed.runtime.maxConcurrentPods > parsed.appliance.memoryBytes || parsed.runtime.maxStorageBytesPerPod * parsed.runtime.maxConcurrentPods > parsed.appliance.storageBytes) throw new Error("worker configuration exceeds capacity");
-    await tx`update workers set limits=${JSON.stringify(parsed.runtime)}::jsonb, configuration_state='unconfigured' where id=${workerId}`;
+    await tx`update workers set organization_id=${organizationId}, admission_state='adopted', limits=${JSON.stringify(parsed.runtime)}::jsonb, configuration_state='unconfigured', configuration_revision=${revision}, configuration_command_id=${commandId} where id=${workerId}`;
     await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,'worker.configure',${workerId},null,now(),${JSON.stringify(payload)}::jsonb)`;
     await tx`insert into audit_events (organization_id,actor,type,payload) values (${organizationId},${adminId},'worker.configured',${JSON.stringify({ workerId, revision, fingerprint: fp })}::jsonb)`;
     const result = { revision, fingerprint: fp, commandId };
@@ -93,11 +93,15 @@ export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event
   const observed = WorkerConfiguration.safeParse(input?.observed);
   const commandId = typeof input?.commandId === "string" ? input.commandId : "";
   const revision = typeof input?.revision === "string" ? input.revision : "";
+  const [worker] = await db<{ configurationRevision: string | null; configurationCommandId: string | null }[]>`select configuration_revision as "configurationRevision", configuration_command_id as "configurationCommandId" from workers where id=${event.workerId}`;
   const [command] = await db<{ payload: unknown }[]>`select payload from commands where id=${commandId} and worker_id=${event.workerId} and type='worker.configure'`;
   const expected = command?.payload as Record<string, unknown> | undefined;
-  const exact = observed.success && expected && revision === expected.revision && canonical(observed.data) === canonical({ appliance: expected.appliance, runtime: expected.runtime });
-  if (!exact) { await db`update workers set configuration_state='error' where id=${event.workerId}`; return false; }
-  await db`update workers set configuration_state='ready' where id=${event.workerId}`;
+  const exact = observed.success && expected && worker?.configurationCommandId === commandId && worker.configurationRevision === revision && revision === expected.revision && canonical(observed.data) === canonical({ appliance: expected.appliance, runtime: expected.runtime });
+  if (!exact) {
+    if (worker?.configurationCommandId === commandId || worker?.configurationRevision === revision) await db`update workers set configuration_state='error' where id=${event.workerId}`;
+    return false;
+  }
+  await db`update workers set configuration_state='ready' where id=${event.workerId} and configuration_command_id=${commandId} and configuration_revision=${revision}`;
   return true;
 }
 export async function rejectPendingWorker(db: Sql<{}>, workerId: string, adminId: string): Promise<void> { await db.begin(async tx => { const rows = await tx`update workers set admission_state='rejected' where id=${workerId} and admission_state='pending' returning id`; if (rows.length !== 1) throw new Error("worker rejection conflict"); await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.rejected',${JSON.stringify({ workerId })}::jsonb)`; }); }

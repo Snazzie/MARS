@@ -70,13 +70,11 @@ test("Linux installer validates public URL scheme", async () => {
   expect(source).toContain('"localhost"');
   expect(source).toContain("PUBLIC_BASE_URL must use HTTPS");
 });
-test("Linux URL parser rejects empty-host HTTPS and accepts loopback IPv6 HTTP", async () => {
-  const rejected = await invoke(linux, ["--code", valid], { PUBLIC_BASE_URL: "https://" });
-  expect(rejected.exitCode).toBe(1);
-  const accepted = await invoke(linux, ["--code", valid], { PUBLIC_BASE_URL: "http://[::1]:8080" });
-  expect(accepted.exitCode).not.toBe(2);
-});
-test("Linux URL parser rejects malformed ports", async () => {
-  const rejected = await invoke(linux, ["--code", valid], { PUBLIC_BASE_URL: "https://host:notaport" });
-  expect(rejected.exitCode).toBe(1);
+test("Linux installer rejects noninteractive URL checks before host preflight", async () => {
+  const rejected = await invoke(linux, [], { PUBLIC_BASE_URL: "https://" });
+  const accepted = await invoke(linux, [], { PUBLIC_BASE_URL: "http://[::1]:8080" });
+  const malformed = await invoke(linux, [], { PUBLIC_BASE_URL: "https://host:notaport" });
+  expect(rejected.exitCode).toBe(2);
+  expect(accepted.exitCode).toBe(2);
+  expect(malformed.exitCode).toBe(2);
 });
