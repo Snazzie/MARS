@@ -1,4 +1,4 @@
 
-## Durable idempotency fix
+## Atomic durable command fix
 
-Configuration mutation responses now persist in `dashboard_mutations.response`; retries after process restart replay the durable response without dispatch. Keys are written only after configuration and dispatch succeed, leaving failed attempts retryable. Focused typecheck and HTTP/request/dispatcher tests passed (15 tests, 41 assertions).
+Configuration now claims `(organization,idempotency key)` under a transaction advisory lock, persists worker policy, durable `worker.configure` command, audit, and successful response atomically. The route no longer sends an external socket command before commit; dispatcher replay consumes the committed command. Typecheck and focused tests passed (12 tests, 30 assertions).

@@ -45,8 +45,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       const key = c.req.header("Idempotency-Key")!.trim();
       const [prior] = await deps.db<{ response: Record<string, unknown> | null }[]>`select response from dashboard_mutations where organization_id=${body.organizationId} and idempotency_key=${key}`;
       if (prior?.response) return c.json(prior.response, { status: 202, headers: noStore() });
-      const result = await configurePendingWorker(deps.db, c.req.param("workerId"), body.organizationId, parsed.data, user.id, deps.workerDispatcher);
-      await deps.db`insert into dashboard_mutations (organization_id,idempotency_key,response) values (${body.organizationId},${key},${JSON.stringify(result)}::jsonb) on conflict (organization_id,idempotency_key) do update set response=excluded.response`;
+      const result = await configurePendingWorker(deps.db, c.req.param("workerId"), body.organizationId, parsed.data, user.id, undefined, key);
       return c.json(result, { status: 202, headers: noStore() });
     } catch (error) {
       if (error instanceof SyntaxError || (error && typeof error === "object" && "issues" in error)) return c.json({ error: "invalid worker configuration" }, 400);
