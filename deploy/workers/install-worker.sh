@@ -5,9 +5,10 @@ umask 077
 usage() { echo "usage: $0 --code <43-character-base64url>" >&2; exit 2; }
 parse_args() {
   JOIN_CODE=""
+  CODE_SEEN=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --code) [ -z "$JOIN_CODE" ] && [ "$#" -ge 2 ] || usage; JOIN_CODE=$2; shift 2 ;;
+      --code) [ "$CODE_SEEN" -eq 0 ] && [ "$#" -ge 2 ] || usage; CODE_SEEN=1; JOIN_CODE=$2; shift 2 ;;
       *) usage ;;
     esac
   done
