@@ -14,3 +14,9 @@ Implemented pending worker approval UI and focused tests.
 - `bun test apps/web/src/components/PendingWorkerRequests.test.tsx` — 2 passed.
 - `bun run --filter '@whitesmith/web' typecheck` — passed.
 - `bun run --filter '@whitesmith/control-plane' typecheck` — passed.
+
+## Machine identity follow-up
+
+- Added persisted `workers.machine_uuid`, wrote parsed machine identity on enrollment create/reconnect, and selected it in the global pending DTO.
+- Distinct machine and VM UUIDs now survive enrollment and render through the strict client schema.
+- Verification: focused control-plane and UI tests passed (5 total); web and control-plane typechecks passed.
