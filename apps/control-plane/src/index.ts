@@ -1,8 +1,10 @@
 import { createDb, migrate } from "@whitesmith/db";
+import type { Server, ServerWebSocket } from "bun";
 import { createSession, getSession, SecretBox } from "./auth.ts";
 import { createPkce, githubAuthorizeUrl, exchangeOAuth, ensureBootstrapAdmin } from "./github.ts";
 import { readBody, validSignature, acceptDelivery } from "./webhook.ts";
-import { createEnrollmentCode, consumeJoin, fingerprint, adoptWorker } from "./workers.ts";
+import { createEnrollmentCode, consumeJoin, fingerprint, adoptWorker, verifyWorkerSignature } from "./workers.ts";
+import { createWorkerChallenge, decodeWorkerSignature } from "./worker-socket.ts";
 
 const required = (name:string):string => { const value=Bun.env[name]; if(!value) throw new Error(`${name} is required`); return value; };
 const env = { BASE: required("PUBLIC_BASE_URL"), DATABASE: required("DATABASE_URL"), WEBHOOK_SECRET: required("GITHUB_WEBHOOK_SECRET"), CLIENT_ID: required("GITHUB_OAUTH_CLIENT_ID"), CLIENT_SECRET: required("GITHUB_OAUTH_CLIENT_SECRET"), BOOTSTRAP: required("BOOTSTRAP_GITHUB_LOGIN"), MASTER: required("APP_MASTER_KEY") };
@@ -11,8 +13,12 @@ const json = (data: unknown, status=200) => Response.json(data,{status,headers:{
 const cookie = (value:string, maxAge:number) => `whitesmith_session=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
 const sessions = new Map<string, {state:string; verifier:string; createdAt:number}>();
 async function current(request: Request) { return getSession(db, request.headers.get("cookie")?.match(/whitesmith_session=([^;]+)/)?.[1]); }
-const server = Bun.serve({ port: Number(Bun.env.PORT ?? 3000), websocket: { open(ws){ ws.subscribe("browser"); }, message(ws,message){ if(message === "ping") ws.send("pong"); }, close(ws){ ws.unsubscribe("browser"); } }, async fetch(request) {
+type SocketData = { actor: "browser" | "worker"; workerId: string; challenge?: Buffer; authenticated: boolean };
+const workerSockets = new Map<string, ServerWebSocket<SocketData>>();
+let server: Server<SocketData>;
+server = Bun.serve<SocketData>({ port: Number(Bun.env.PORT ?? 3000), websocket: { open(ws) { if (ws.data.actor === "worker") { const challenge = createWorkerChallenge(ws.data.workerId); ws.data.challenge = challenge.nonce; workerSockets.set(ws.data.workerId, ws); ws.send(JSON.stringify({ version: 1, type: "challenge", nonce: challenge.nonce.toString("base64url") })); } else ws.subscribe("browser"); }, async message(ws, message) { if (ws.data.actor === "worker") { try { const frame = JSON.parse(String(message)) as { type?: string; signature?: string; workerId?: string; payload?: Record<string, unknown> }; if (frame.type === "authenticate" && frame.workerId === ws.data.workerId && ws.data.challenge && frame.signature) { const [worker] = await db`select public_key,admission_state from workers where id=${ws.data.workerId} and platform='macos-arm64'`; if (!worker || !verifyWorkerSignature(worker.public_key, ws.data.challenge, decodeWorkerSignature(frame.signature))) return ws.close(1008, "worker authentication failed"); await db`update workers set connection_state='online' where id=${ws.data.workerId}`; ws.data.authenticated = true; ws.send(JSON.stringify({ version: 1, type: "authenticated", workerId: ws.data.workerId, admissionState: worker.admission_state })); } else if (frame.type === "doctor" && ws.data.authenticated && frame.workerId === ws.data.workerId && frame.payload) { await db`update workers set doctor=${JSON.stringify(frame.payload)}, configuration_state='ready' where id=${ws.data.workerId} and admission_state='adopted'`; ws.send(JSON.stringify({ version: 1, type: "doctor_ack", workerId: ws.data.workerId })); } else if (frame.type === "pong" && ws.data.authenticated) ws.send(JSON.stringify({ version: 1, type: "ping" })); } catch { ws.close(1008, "invalid worker frame"); } } else if (message === "ping") ws.send("pong"); }, close(ws) { if (ws.data.actor === "worker") { workerSockets.delete(ws.data.workerId); void db`update workers set connection_state='offline' where id=${ws.data.workerId}`; } else ws.unsubscribe("browser"); } }, async fetch(request): Promise<Response | undefined> {
   const url=new URL(request.url); try {
+    if (request.headers.get("upgrade")?.toLowerCase() === "websocket" && url.pathname === "/api/v1/workers/connect") { const workerId = url.searchParams.get("workerId"); if (!workerId) return json({ error: "workerId required" }, 400); return server.upgrade(request, { data: { actor: "worker", workerId, authenticated: false } }) ? undefined : json({ error: "websocket upgrade failed" }, 400); }
     if(request.method === "GET" && ["/","/index.html"].includes(url.pathname)) return new Response(Bun.file(new URL("../../web/index.html", import.meta.url)));
     if(request.method === "GET" && url.pathname === "/index.js") return new Response(Bun.file(new URL("../../web/dist/index.js", import.meta.url)));
     if(request.method === "GET" && url.pathname === "/styles.css") return new Response(Bun.file(new URL("../../web/src/styles.css", import.meta.url)));
