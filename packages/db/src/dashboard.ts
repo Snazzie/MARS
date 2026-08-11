@@ -1,5 +1,5 @@
+import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail, PoolSummary, OrganizationSettings } from "@whitesmith/contracts";
 import type { Sql } from "postgres";
-import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail } from "@whitesmith/contracts";
 export type DashboardDb = Sql<{}>;
 export type RunTransition = { status: RunSummary["status"]; conclusion: RunSummary["conclusion"]; startedAt?: string | null; completedAt?: string | null };
 const statusOrder: Record<RunSummary["status"], number> = { queued: 0, in_progress: 1, completed: 2 };
@@ -34,3 +34,19 @@ export async function listWorkers(db: DashboardDb, organizationId: string, limit
 export async function getWorkerDetail(db: DashboardDb, organizationId: string, workerId: string): Promise<WorkerDetail | null> { const page = await listWorkers(db, organizationId, 1000); return page.items.find(worker => worker.id === workerId) ?? null; }
 export async function recordRunTransition(db: DashboardDb, organizationId: string, runId: string, transition: RunTransition): Promise<void> { await db`UPDATE dashboard_runs SET status=${transition.status}, conclusion=${transition.conclusion}, started_at=COALESCE(${transition.startedAt ?? null}, started_at), completed_at=COALESCE(${transition.completedAt ?? null}, completed_at) WHERE organization_id=${organizationId} AND id=${runId} AND status <> 'completed' AND (status='queued' OR ${transition.status} <> 'queued')`; }
 export async function recordRunStage(db: DashboardDb, organizationId: string, runId: string, stage: RunStage): Promise<void> { await db`INSERT INTO dashboard_run_stages (organization_id,run_id,stage) VALUES (${organizationId},${runId},${stage}) ON CONFLICT DO NOTHING`; }
+export async function listPools(db: DashboardDb, organizationId: string, limit = 50): Promise<CursorPage<PoolSummary>> {
+  const rows = await db<PoolSummary[]>`SELECT p.id,p.organization_id AS "organizationId",p.worker_id AS "workerId",w.name AS "workerName",p.name,p.platform,p.driver,p.image_digest AS "imageDigest",p.resources,p.labels,p.enabled,0::int AS active FROM runner_pools p JOIN workers w ON w.organization_id=p.organization_id AND w.id=p.worker_id WHERE p.organization_id=${organizationId} ORDER BY p.name LIMIT ${limit + 1}`;
+  return { items: rows.slice(0, limit), nextCursor: rows.length > limit ? rows[limit - 1].id : null };
+}
+export async function getOrganizationSettings(db: DashboardDb, organizationId: string): Promise<OrganizationSettings> {
+  const [row] = await db<OrganizationSettings[]>`INSERT INTO organization_settings (organization_id) VALUES (${organizationId}) ON CONFLICT (organization_id) DO NOTHING RETURNING organization_id AS "organizationId",max_vcpu_per_pod AS "maxVcpuPerPod",max_memory_bytes_per_pod AS "maxMemoryBytesPerPod",max_storage_bytes_per_pod AS "maxStorageBytesPerPod",max_concurrent_pods AS "maxConcurrentPods"`;
+  if (row) return row;
+  const [existing] = await db<OrganizationSettings[]>`SELECT organization_id AS "organizationId",max_vcpu_per_pod AS "maxVcpuPerPod",max_memory_bytes_per_pod AS "maxMemoryBytesPerPod",max_storage_bytes_per_pod AS "maxStorageBytesPerPod",max_concurrent_pods AS "maxConcurrentPods" FROM organization_settings WHERE organization_id=${organizationId}`;
+  return existing;
+}
+export async function updateOrganizationSettings(db: DashboardDb, value: OrganizationSettings): Promise<OrganizationSettings> {
+  const [row] = await db<OrganizationSettings[]>`INSERT INTO organization_settings (organization_id,max_vcpu_per_pod,max_memory_bytes_per_pod,max_storage_bytes_per_pod,max_concurrent_pods) VALUES (${value.organizationId},${value.maxVcpuPerPod},${value.maxMemoryBytesPerPod},${value.maxStorageBytesPerPod},${value.maxConcurrentPods}) ON CONFLICT (organization_id) DO UPDATE SET max_vcpu_per_pod=excluded.max_vcpu_per_pod,max_memory_bytes_per_pod=excluded.max_memory_bytes_per_pod,max_storage_bytes_per_pod=excluded.max_storage_bytes_per_pod,max_concurrent_pods=excluded.max_concurrent_pods,updated_at=now() RETURNING organization_id AS "organizationId",max_vcpu_per_pod AS "maxVcpuPerPod",max_memory_bytes_per_pod AS "maxMemoryBytesPerPod",max_storage_bytes_per_pod AS "maxStorageBytesPerPod",max_concurrent_pods AS "maxConcurrentPods"`;
+  return row;
+}
+export async function dashboardMutation(db: DashboardDb, organizationId: string, key: string): Promise<boolean> { const rows = await db`INSERT INTO dashboard_mutations (organization_id,idempotency_key) VALUES (${organizationId},${key}) ON CONFLICT DO NOTHING RETURNING idempotency_key`; return rows.length > 0; }
+export async function invalidateDashboard(db: DashboardDb, organizationId: string, keys: string[]): Promise<void> { await db`INSERT INTO dashboard_outbox_invalidations (organization_id,sequence,keys) SELECT ${organizationId},COALESCE(MAX(sequence),0)+1,${JSON.stringify(keys)}::jsonb FROM dashboard_outbox_invalidations WHERE organization_id=${organizationId}`; }

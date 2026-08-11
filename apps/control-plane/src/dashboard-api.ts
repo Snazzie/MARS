@@ -1,9 +1,9 @@
 import { z } from "zod";
 import type { DashboardDb } from "@whitesmith/db";
-import { listOrganizations, getOverview, listRepositories, listRuns, getRunDetail, listLogChunks, listWorkers, getWorkerDetail } from "@whitesmith/db";
+import { listOrganizations, getOverview, listRepositories, listRuns, getRunDetail, listLogChunks, listWorkers, getWorkerDetail, listPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard } from "@whitesmith/db";
 import { adoptWorker } from "./workers.ts";
 import type { SessionUser } from "./auth.ts";
-import { ApiError, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail } from "@whitesmith/contracts";
+import { ApiError, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings } from "@whitesmith/contracts";
 
 const querySchema = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50), cursor: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional() }).strict();
 const periodSchema = z.enum(["24h", "7d", "30d"]);
@@ -42,6 +42,34 @@ export function createDashboardApi(deps: DashboardHandlerDeps) {
       if (request.method === "GET" && tail === "runs") { const q = parseQuery(request, deps); if (q instanceof Response) return q; return Response.json(CursorPage(RunSummary).parse(await listRuns(deps.db, organizationId, q.limit))); }
       const run = tail.match(/^runs\/([^/]+)$/); if (request.method === "GET" && run) { const value = await getRunDetail(deps.db, organizationId, run[1]); return value ? Response.json(RunDetail.parse(value)) : error(request, deps, 404, "not_found", "Resource not found"); }
       const logs = tail.match(/^runs\/([^/]+)\/jobs\/([^/]+)\/logs$/); if (request.method === "GET" && logs) { const q = logSchema.safeParse(Object.fromEntries(url.searchParams)); if (!q.success) return error(request, deps, 400, "invalid_log_bounds", "Invalid log bounds", { issues: q.error.issues }); return Response.json(CursorPage(LogChunk).parse(await listLogChunks(deps.db, organizationId, logs[1], logs[2], q.data.after, q.data.limit))); }
+      if (request.method === "GET" && tail === "pools") { const q = parseQuery(request, deps); if (q instanceof Response) return q; return Response.json(CursorPage(PoolSummary).parse(await listPools(deps.db, organizationId, q.limit))); }
+      if (tail === "settings") {
+        if (request.method === "GET") return Response.json(OrganizationSettings.parse(await getOrganizationSettings(deps.db, organizationId)));
+        if (request.method !== "PUT") return error(request, deps, 405, "method_not_allowed", "Method not allowed");
+        const idem = requireMutation(request, deps); if (idem) return idem;
+        const body = OrganizationSettings.parse({ ...(await request.json()), organizationId });
+        if (!user.isGlobalAdmin) return error(request, deps, 403, "forbidden", "Global administrator authorization required");
+        if (!(await dashboardMutation(deps.db, organizationId, request.headers.get("idempotency-key")!))) return Response.json(OrganizationSettings.parse(await getOrganizationSettings(deps.db, organizationId)));
+        const value = await updateOrganizationSettings(deps.db, body); await invalidateDashboard(deps.db, organizationId, ["settings"]); return Response.json(OrganizationSettings.parse(value));
+      }
+      const pool = tail.match(/^pools\/([^/]+)\/(enable|disable|rotate-key)$/);
+      if (pool) {
+        if (request.method !== "POST") return error(request, deps, 405, "method_not_allowed", "Method not allowed");
+        if (!user.isGlobalAdmin) return error(request, deps, 403, "forbidden", "Global administrator authorization required");
+        const idem = requireMutation(request, deps); if (idem) return idem;
+        if (!(await dashboardMutation(deps.db, organizationId, request.headers.get("idempotency-key")!))) return Response.json({ ok: true });
+        const enabled = pool[2] === "enable"; await deps.db`UPDATE runner_pools SET enabled=${enabled} WHERE organization_id=${organizationId} AND id=${pool[1]}`;
+        await invalidateDashboard(deps.db, organizationId, ["pools"]); return Response.json({ ok: true });
+      }
+      const repo = tail.match(/^repositories\/([^/]+)\/(approve|reject)$/);
+      if (repo) {
+        if (request.method !== "POST") return error(request, deps, 405, "method_not_allowed", "Method not allowed");
+        if (!user.isGlobalAdmin) return error(request, deps, 403, "forbidden", "Global administrator authorization required");
+        const idem = requireMutation(request, deps); if (idem) return idem;
+        if (!(await dashboardMutation(deps.db, organizationId, request.headers.get("idempotency-key")!))) return Response.json({ ok: true });
+        await deps.db`UPDATE dashboard_installations i SET approved=${repo[2] === "approve"} FROM dashboard_repositories r WHERE r.organization_id=${organizationId} AND r.id=${repo[1]} AND i.organization_id=r.organization_id AND i.id=r.installation_id`;
+        await invalidateDashboard(deps.db, organizationId, ["repositories"]); return Response.json({ ok: true });
+      }
       if (request.method === "GET" && tail === "workers") { const q = parseQuery(request, deps); if (q instanceof Response) return q; return Response.json(CursorPage(WorkerDetail).parse(await listWorkers(deps.db, organizationId, q.limit))); }
       const worker = tail.match(/^workers\/([^/]+)(?:\/(adopt|reject|drain|remove))?$/); if (worker) {
         const workerId = worker[1]; const action = worker[2];
