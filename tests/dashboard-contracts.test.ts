@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ApiError, CursorPage, OverviewDto, RepositorySummary, RunDetail } from "../packages/contracts/src/index.ts";
 
-const resources = { vcpu: 2, memoryBytes: 4_000_000_000, storageBytes: 20_000_000_000, concurrency: 1 };
-const run = { id: "run-1", organizationId: "org-1", repositoryId: "repo-1", repositoryName: "acme/app", runNumber: 4, workflowName: "CI", status: "completed" as const, conclusion: "success" as const, queuedAt: "2026-08-11T10:00:00Z", startedAt: "2026-08-11T10:01:00Z", completedAt: "2026-08-11T10:02:00Z" };
+const run = { id: "run-1", organizationId: "org-1", repositoryId: "repo-1", repositoryName: "acme/app", runNumber: 4, workflowName: "CI", event: "workflow_dispatch", branch: "main", commitSha: "0123456789abcdef", actorLogin: "octocat", status: "completed" as const, conclusion: "success" as const, queuedAt: "2026-08-11T10:00:00Z", startedAt: "2026-08-11T10:01:00Z", completedAt: "2026-08-11T10:02:00Z", durationMs: 60_000, runtimeBoundary: "Kata VM-backed container" as const };
 
 describe("dashboard contracts", () => {
   test("parses valid overview, repository, run detail, and cursor page", () => {
