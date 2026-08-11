@@ -18,3 +18,6 @@ Commit `8675641` adds join dispatch to the actual orchestrator index entrypoint 
 
 ## TLS and timeout hardening
 Commit `af694a9` rejects non-HTTPS remote control-plane URLs (only explicit localhost HTTP is allowed), bounds join HTTP/process waits to 30 seconds, and preserves VM cleanup on timeout. Focused tests cover policy and timeout contracts.
+
+## Linux TLS validation
+Commit `d701557` validates Linux `PUBLIC_BASE_URL` before host checks/VM creation: remote URLs must be HTTPS, with only explicit localhost HTTP development exceptions. Static focused coverage added.
