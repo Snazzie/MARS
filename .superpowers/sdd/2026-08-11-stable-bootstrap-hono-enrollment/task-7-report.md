@@ -20,3 +20,8 @@ Implemented pending worker approval UI and focused tests.
 - Added persisted `workers.machine_uuid`, wrote parsed machine identity on enrollment create/reconnect, and selected it in the global pending DTO.
 - Distinct machine and VM UUIDs now survive enrollment and render through the strict client schema.
 - Verification: focused control-plane and UI tests passed (5 total); web and control-plane typechecks passed.
+
+## Reconnect identity follow-up
+
+- Reconnect exactness now requires VM UUID, machine UUID, and fingerprint together; changed machine identity takes the existing conflict path and cannot overwrite stored identity.
+- Added regression coverage for distinct machine identity and verified four control-plane tests plus control-plane typecheck.
