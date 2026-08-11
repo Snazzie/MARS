@@ -7,7 +7,8 @@ function fakeDb(rows: unknown[] = [], memberAllowed = true) {
     if (query.includes("FROM organizations")) return rows;
     if (query.includes("dashboard_mutations")) return [{ idempotency_key: "key" }];
     if (query.includes("organization_settings")) return [{ organizationId: "org", maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }];
-    return [];
+    if (query.includes("FROM workers")) return [];
+    if (query.includes("insert into worker_bootstrap_credentials")) return [{ generation: 1, createdAt: new Date().toISOString(), rotatedAt: null }];
   }, {}) as never;
 }
 function statefulDb() {

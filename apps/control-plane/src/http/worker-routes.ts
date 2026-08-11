@@ -5,7 +5,7 @@ import { verifyWorkerBootstrap, initializeWorkerBootstrap } from "../worker-boot
 import { fingerprint, adoptWorker as adoptPendingWorker } from "../workers.ts";
 
 const attempts = new Map<string, { count: number; resetAt: number }>();
-const limit = (source: string): boolean => { const now = Date.now(); const bucket = attempts.get(source); if (!bucket || bucket.resetAt <= now) { attempts.set(source, { count: 1, resetAt: now + 60_000 }); return true; } if (bucket.count >= 5) return false; bucket.count++; return true; };
+const limit = (source: string): boolean => { const now = Date.now(); for (const [key, bucket] of attempts) if (bucket.resetAt <= now) attempts.delete(key); if (!attempts.has(source) && attempts.size >= 1024) attempts.delete(attempts.keys().next().value ?? source); const bucket = attempts.get(source); if (!bucket) { attempts.set(source, { count: 1, resetAt: now + 60_000 }); return true; } if (bucket.count >= 5) return false; bucket.count++; return true; };
 export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
   const auth = async (c: Context<ControlPlaneEnv>) => deps.currentUser(c.req.raw);
   app.get("/api/workers/installer", async (c) => { const audience = c.req.query("audience"); const file = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : audience === "macos-arm64" ? "install-worker-macos.sh" : null; if (!file) return c.json({ error: "unsupported installer audience" }, 400); return new Response(Bun.file(new URL(file, deps.workerInstallerRoot)), { headers: { "cache-control": "no-store" } }); });
