@@ -3,7 +3,7 @@ import type { WorkerCommand } from "@whitesmith/contracts";
 import { WorkerCommand as WorkerCommandSchema } from "@whitesmith/contracts";
 import type { Server, ServerWebSocket } from "bun";
 import { createSession, getSession, SecretBox } from "./auth.ts";
-import { createPkce, githubAuthorizeUrl, exchangeOAuth, ensureBootstrapAdmin } from "./github.ts";
+import { createPkce, githubAuthorizeUrl, exchangeOAuth, ensureBootstrapAdmin, syncGithubOrganizations } from "./github.ts";
 import { applyWorkflowJobWebhook, configureRunLifecycle } from "./runs.ts";
 import { readBody, validSignature, acceptDelivery } from "./webhook.ts";
 import { createEnrollmentCode, consumeJoin, fingerprint, adoptWorker, verifyWorkerSignature } from "./workers.ts";
@@ -125,7 +125,15 @@ server = Bun.serve<SocketData>({
     if(request.method === "GET" && url.pathname === "/styles.css") return new Response(Bun.file(new URL("../../web/src/styles.css", import.meta.url)));
     if(request.method === "GET" && url.pathname === "/healthz") return json({ok:true});
     if(request.method === "GET" && url.pathname === "/api/auth/github") { const flow=createPkce(); sessions.set(flow.state,flow); return new Response(null,{status:302,headers:{location:githubAuthorizeUrl(env.BASE,env.CLIENT_ID,flow),"set-cookie":`oauth_state=${flow.state}; HttpOnly; Secure; SameSite=Lax; Path=/api/auth; Max-Age=600`}}); }
-    if(request.method === "GET" && url.pathname === "/api/auth/github/callback") { const state=url.searchParams.get("state") ?? ""; const flow=sessions.get(state); sessions.delete(state); if(!flow || request.headers.get("cookie")?.includes(`oauth_state=${state}`) !== true) return json({error:"invalid oauth state"},400); const user=await exchangeOAuth(url.searchParams.get("code") ?? "",flow,env.CLIENT_ID,env.CLIENT_SECRET,env.BASE); const [row]=await db`insert into users (github_user_id,login) values (${user.id},${user.login}) on conflict (github_user_id) do update set login=excluded.login returning id,is_global_admin`; if(user.login.toLowerCase()===env.BOOTSTRAP.toLowerCase() && !row.is_global_admin) await ensureBootstrapAdmin(db,user.id,user.login,env.BOOTSTRAP); const token=await createSession(db,String(row.id)); return new Response(null,{status:302,headers:{location:"/", "set-cookie":cookie(token,604800)}}); }
+    if(request.method === "GET" && url.pathname === "/api/auth/github/callback") {
+      const state=url.searchParams.get("state") ?? ""; const flow=sessions.get(state); sessions.delete(state);
+      if(!flow || request.headers.get("cookie")?.includes(`oauth_state=${state}`) !== true) return json({error:"invalid oauth state"},400);
+      const user=await exchangeOAuth(url.searchParams.get("code") ?? "",flow,env.CLIENT_ID,env.CLIENT_SECRET,env.BASE);
+      const [row]=await db`insert into users (github_user_id,login) values (${user.id},${user.login}) on conflict (github_user_id) do update set login=excluded.login returning id,is_global_admin`;
+      if(user.login.toLowerCase()===env.BOOTSTRAP.toLowerCase() && !row.is_global_admin) await ensureBootstrapAdmin(db,user.id,user.login,env.BOOTSTRAP);
+      await syncGithubOrganizations(db,String(row.id),user.accessToken);
+      const token=await createSession(db,String(row.id)); return new Response(null,{status:302,headers:{location:"/", "set-cookie":cookie(token,604800)}});
+    }
     if(request.method === "POST" && url.pathname === "/api/github/webhooks") { const body=await readBody(request); if(!validSignature(body,request.headers.get("x-hub-signature-256"),env.WEBHOOK_SECRET)) return json({error:"invalid signature"},401); const payload=JSON.parse(body.toString()); const installationId=Number(payload.installation?.id ?? 0); const accepted=await acceptDelivery(db,request.headers.get("x-github-delivery") ?? crypto.randomUUID(),installationId,payload); if(accepted && payload.action && payload.workflow_job) await applyWorkflowJobWebhook(payload); return json({accepted},202); }
     if(request.method === "POST" && url.pathname === "/api/workers/join") { const body=await request.json() as {code:string;publicKey:string;platform:string;vmUuid:string;limits:Record<string,number>}; if(!await consumeJoin(db,Buffer.from(body.code,"base64url"))) return json({error:"invalid or expired join"},401); const [worker]=await db`insert into workers (name,platform,admission_state,public_key,fingerprint,vm_uuid,limits) values (${body.vmUuid},${body.platform},'pending',${body.publicKey},${fingerprint(body.publicKey)},${body.vmUuid},${JSON.stringify(body.limits)}) returning id,fingerprint`; return json({workerId:worker.id,fingerprint:worker.fingerprint},201); }
     const user=await current(request); if(!user) return json({error:"unauthorized"},401);
