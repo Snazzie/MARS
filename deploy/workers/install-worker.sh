@@ -15,11 +15,20 @@ parse_args() {
   [[ "$JOIN_CODE" =~ ^[A-Za-z0-9_-]{43}$ ]] || usage
 }
 validate_control_plane_url() {
-  case "$PUBLIC_BASE_URL" in
-    https://*) ;;
-    http://localhost:*|http://localhost|http://127.0.0.1:*|http://127.0.0.1|http://[::1]:*|http://[::1]) ;;
-    *) echo 'PUBLIC_BASE_URL must use HTTPS except explicit localhost development' >&2; exit 1 ;;
-  esac
+  python3 - "$PUBLIC_BASE_URL" <<'PY'
+import sys
+from urllib.parse import urlsplit
+raw = sys.argv[1]
+try:
+    parsed = urlsplit(raw)
+    host = parsed.hostname
+except ValueError:
+    parsed = None
+    host = None
+loopback = host in {"localhost", "127.0.0.1", "::1"}
+if not parsed or parsed.scheme not in {"https", "http"} or not host or parsed.username or parsed.password or (parsed.scheme == "http" and not loopback):
+    raise SystemExit("PUBLIC_BASE_URL must use HTTPS with a non-empty host and no credentials")
+PY
 }
 parse_args "$@"
 trap 'unset JOIN_CODE' EXIT

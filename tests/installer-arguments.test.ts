@@ -7,9 +7,9 @@ const mac = join(root, "deploy/workers/install-worker-macos.sh");
 const powershell = join(root, "deploy/workers/install-worker.ps1");
 const valid = "A".repeat(43);
 
-async function invoke(script: string, args: string[]) {
+async function invoke(script: string, args: string[], env: Record<string, string> = {}) {
   const proc = Bun.spawn(script.endsWith(".sh") ? [script, ...args] : ["zsh", script, ...args], {
-    cwd: root, stdout: "pipe", stderr: "pipe",
+    cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, ...env },
   });
   return { exitCode: await proc.exited, stdout: await new Response(proc.stdout).text(), stderr: await new Response(proc.stderr).text() };
 }
@@ -62,6 +62,12 @@ test("Linux installer validates public URL scheme", async () => {
   const source = await Bun.file(linux).text();
   expect(source).toContain("validate_control_plane_url");
   expect(source).toContain("https://");
-  expect(source).toContain("http://localhost");
+  expect(source).toContain('"localhost"');
   expect(source).toContain("PUBLIC_BASE_URL must use HTTPS");
+});
+test("Linux URL parser rejects empty-host HTTPS and accepts loopback IPv6 HTTP", async () => {
+  const rejected = await invoke(linux, ["--code", valid], { PUBLIC_BASE_URL: "https://" });
+  expect(rejected.exitCode).toBe(1);
+  const accepted = await invoke(linux, ["--code", valid], { PUBLIC_BASE_URL: "http://[::1]:8080" });
+  expect(accepted.exitCode).not.toBe(2);
 });
