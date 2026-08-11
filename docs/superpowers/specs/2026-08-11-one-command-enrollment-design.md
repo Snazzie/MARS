@@ -4,11 +4,11 @@
 
 Worker enrollment uses one deployment-wide bootstrap code as first-stage request authentication. The same code can submit multiple worker requests. Every request remains inert until a global administrator explicitly approves it.
 
-The setup flow displays the code and complete platform-specific commands exactly once. If they are lost, rotation is the only recovery path.
+The Workers enrollment dialog is the setup and rotation surface. It displays the code and complete platform-specific commands exactly once. If they are lost, rotation is the only recovery path.
 
 ## Hono HTTP architecture
 
-Hono 4.13.1 owns every ordinary control-plane HTTP request. `createApiApp(deps)` uses a Hono app rooted at `/api` for health, OAuth, GitHub webhooks, dashboard resources, worker bootstrap and requests, approval, and installer downloads.
+Hono 4.13.1 owns every ordinary control-plane HTTP request. `createControlPlaneApp(deps)` composes a Hono API app rooted at `/api` for health, OAuth, GitHub webhooks, dashboard resources, worker bootstrap and requests, approval, and installer downloads.
 
 All backend endpoints live below `/api`; the existing root health endpoint moves cleanly from `/healthz` to `/api/healthz`. API routes return JSON or explicit artifact responses, and API not-found responses never fall through to the SPA.
 
@@ -40,7 +40,7 @@ Rotation generates and displays a replacement once and atomically invalidates th
 During setup or rotation, Whitesmith emits Linux, Windows, and macOS command blocks containing the same bootstrap code:
 
 - `macos-arm64`: download to a temporary file, then run `zsh <file> --code <code>`.
-- `linux-x64`: download to a temporary file, then run `sh <file> --code <code>`.
+- `linux-x64`: download to a temporary file, then run `bash <file> --code <code>`.
 - `windows-x64`: download to a temporary `.ps1`, then run PowerShell with `-Code <code>`.
 
 The URL and code are quoted for the target shell. Loopback HTTP uses curl `--proto '=http'`; public installers require HTTPS and TLS 1.3. Temporary installer files are removed after execution.
