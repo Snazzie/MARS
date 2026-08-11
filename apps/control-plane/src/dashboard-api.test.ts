@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { createControlPlaneApp } from "./http/app.ts";
-
 function fakeDb(rows: unknown[] = [], memberAllowed = true) {
   return Object.assign(async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
     if (query.includes("FROM memberships")) return memberAllowed ? [{ ok: true }] : [];
     if (query.includes("FROM organizations")) return rows;
+    if (query.includes("dashboard_mutations")) return [{ idempotency_key: "key" }];
+    if (query.includes("organization_settings")) return [{ organizationId: "org", maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }];
     return [];
   }, {}) as never;
 }
@@ -19,6 +20,16 @@ const sessionHeaders = { Cookie: "whitesmith_session=test" };
     expect(response.status).toBe(201);
     expect((await response.json()).installer).toBe("https://x/api/workers/installer?audience=macos-arm64");
   });
+test("settings idempotency validates presence before malformed body", async () => {
+  const missing = await appFor(admin).request("/api/organizations/org/settings", { method: "PUT", headers: { ...sessionHeaders, "Content-Type": "application/json" }, body: "{}" });
+  expect(missing.status).toBe(400);
+  expect(await missing.json()).toMatchObject({ code: "missing_idempotency_key" });
+  const malformed = await appFor(admin).request("/api/organizations/org/settings", { method: "PUT", headers: { ...sessionHeaders, "Content-Type": "application/json", "Idempotency-Key": "key" }, body: "{}" });
+  expect(malformed.status).toBe(400);
+  expect(await malformed.json()).toMatchObject({ code: "invalid_request" });
+  const corrected = await appFor(admin).request("/api/organizations/org/settings", { method: "PUT", headers: { ...sessionHeaders, "Content-Type": "application/json", "Idempotency-Key": "key" }, body: JSON.stringify({ maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }) });
+  expect(corrected.status).toBe(200);
+});
 describe("dashboard API", () => {
   test("returns the authenticated operator for the dashboard session probe", async () => {
     const response = await appFor().request("/api/me", { headers: sessionHeaders });
