@@ -29,7 +29,6 @@ export const WorkerBootstrapRequest = z.object({
   publicKey: z.string().min(1),
   vmUuid: z.string().uuid(),
   machineUuid: z.string().uuid(),
-  limits: WorkerLimits,
   doctor: WorkerDoctorData,
   capacity: WorkerCapacityData,
 }).strict();

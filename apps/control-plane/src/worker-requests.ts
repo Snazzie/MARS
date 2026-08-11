@@ -35,7 +35,7 @@ export async function requestPendingWorker(db: Sql<{}>, input: WorkerBootstrapRe
       return { status: "existing" as const, workerId: exact.id };
     }
     if (rows.length) return { conflict: true as const, invalid: false as const };
-    const [created] = await tx<{ id: string }[]>`insert into workers (name,platform,admission_state,public_key,fingerprint,vm_uuid,machine_uuid,limits,doctor,last_requested_at) values (${parsed.vmUuid},${parsed.platform},'pending',${parsed.publicKey},${fp},${parsed.vmUuid},${parsed.machineUuid},${JSON.stringify(parsed.limits)}::jsonb,${JSON.stringify({ doctor: parsed.doctor, capacity: parsed.capacity })}::jsonb,now()) returning id`;
+    const [created] = await tx<{ id: string }[]>`insert into workers (name,platform,admission_state,public_key,fingerprint,vm_uuid,machine_uuid,limits,doctor,last_requested_at) values (${parsed.vmUuid},${parsed.platform},'pending',${parsed.publicKey},${fp},${parsed.vmUuid},${parsed.machineUuid},null,${JSON.stringify({ doctor: parsed.doctor, capacity: parsed.capacity })}::jsonb,now()) returning id`;
     await tx`insert into audit_events (actor,type,payload) values ('worker','worker.requested',${JSON.stringify({ workerId: created.id, vmUuid: parsed.vmUuid, fingerprint: fp })}::jsonb)`;
     return { status: "created" as const, workerId: created.id };
   });

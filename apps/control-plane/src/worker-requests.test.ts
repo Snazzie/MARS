@@ -3,7 +3,7 @@ import { ApproveWorkerRequest, PendingWorkerRequest, WorkerBootstrapRequest } fr
 import { createRequestLimiter, hasMachineIdentity, matchesWorkerIdentity, WorkerRequestError } from "./worker-requests.ts";
 
 describe("pending worker request contracts", () => {
-  const valid = { code: "A".repeat(43), platform: "linux-x64", publicKey: "ed25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 1024, maxStorageBytesPerPod: 2048, maxConcurrentPods: 1 }, doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
+  const valid = { code: "A".repeat(43), platform: "linux-x64", publicKey: "ed25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
   test("requires stable identity and excludes code from pending DTO", () => {
     expect(WorkerBootstrapRequest.parse(valid).machineUuid).toBe(valid.machineUuid);
     const { code: _code, ...pending } = valid;
@@ -11,9 +11,13 @@ describe("pending worker request contracts", () => {
     expect(PendingWorkerRequest.safeParse(valid).success).toBe(false);
     expect(WorkerBootstrapRequest.safeParse({ ...valid, capacity: { ...valid.capacity, actualVcpu: 1.5 } }).success).toBe(false);
   });
+  test("rejects administrator policy during bootstrap", () => {
+    expect(WorkerBootstrapRequest.safeParse({ ...valid, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 1024, maxStorageBytesPerPod: 2048, maxConcurrentPods: 1 } }).success).toBe(false);
+  });
   test("requires an organization and positive admin limits", () => {
-    expect(ApproveWorkerRequest.safeParse({ organizationId: valid.vmUuid, limits: valid.limits }).success).toBe(true);
-    expect(ApproveWorkerRequest.safeParse({ organizationId: valid.vmUuid, limits: { ...valid.limits, maxVcpuPerPod: 0 } }).success).toBe(false);
+    const limits = { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 1024, maxStorageBytesPerPod: 2048, maxConcurrentPods: 1 };
+    expect(ApproveWorkerRequest.safeParse({ organizationId: valid.vmUuid, limits }).success).toBe(true);
+    expect(ApproveWorkerRequest.safeParse({ organizationId: valid.vmUuid, limits: { ...limits, maxVcpuPerPod: 0 } }).success).toBe(false);
   });
 });
 
