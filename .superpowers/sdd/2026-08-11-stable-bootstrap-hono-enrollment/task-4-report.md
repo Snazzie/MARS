@@ -9,3 +9,5 @@ Implemented pending worker request contracts, bootstrap-code authentication, sou
 
 ## Notes
 Invalid/rotated bootstrap credentials use generic 401 responses; limiter exhaustion returns 429. Approval requires a global-admin session, idempotency key, organization UUID, and positive worker limits. Bootstrap reveal responses are `no-store`; status and pending responses do not reveal codes.
+## Hardening follow-up
+- Commit `5e87d8f` preserves admin-approved limits on reconnect, verifies bootstrap credentials under the worker advisory lock, audits identity conflicts after rollback, restores `/api/workers/enroll`, returns 400 for malformed approval payloads, and validates bounded doctor/capacity data.
