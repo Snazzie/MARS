@@ -13,7 +13,7 @@ parse_args() {
   done
   if [ -z "$JOIN_CODE" ]; then
     [ -t 0 ] || { echo "interactive terminal required for enrollment code" >&2; exit 2; }
-    read -r -s -p "Whitesmith enrollment code: " JOIN_CODE; printf '\n' >&2
+    read -r -s 'JOIN_CODE?Whitesmith enrollment code: '; printf '\n' >&2
   fi
   [[ "$JOIN_CODE" =~ ^[A-Za-z0-9_-]{43}$ ]] || usage
 }
