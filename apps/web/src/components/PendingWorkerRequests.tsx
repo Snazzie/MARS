@@ -1,41 +1,16 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApproveWorkerRequest, type ApproveWorkerRequestData, type PendingWorkerRequestData } from "@whitesmith/contracts";
-import { approvePendingWorker, ApiRequestError, getPendingWorkerRequests, isUnauthorized, rejectPendingWorker } from "../api.ts";
+import { WorkerConfiguration, type PendingWorkerRequestData } from "@whitesmith/contracts";
+import { ApiRequestError, configurePendingWorker, getPendingWorkerRequests, isUnauthorized, rejectPendingWorker } from "../api.ts";
 import { QueryState } from "./StateView.tsx";
-
 type Props = { organizationId: string };
 type PendingRequest = PendingWorkerRequestData & { id: string; fingerprint: string };
-type Limits = ApproveWorkerRequestData["limits"];
-const limitNames = ["maxVcpuPerPod", "maxMemoryBytesPerPod", "maxStorageBytesPerPod", "maxConcurrentPods"] as const;
-function limitFields(limits: Limits | null) {
-  return limitNames.map((name) => <label key={name}>{name}<input name={name} type="number" min="1" step="1" defaultValue={limits?.[name]} required /></label>);
-}
-
+const fields = ["vcpu", "memoryBytes", "storageBytes", "maxVcpuPerPod", "maxMemoryBytesPerPod", "maxStorageBytesPerPod", "maxConcurrentPods"] as const;
 export function PendingWorkerRequests({ organizationId }: Props) {
-  const client = useQueryClient();
-  const query = useQuery({ queryKey: ["pending-workers"], queryFn: getPendingWorkerRequests, staleTime: 5_000 });
-  const [actionError, setActionError] = useState<string | null>(null);
-  const refresh = () => { void client.invalidateQueries({ queryKey: ["pending-workers"] }); void client.invalidateQueries({ queryKey: ["org", organizationId, "workers"] }); };
-  const approve = useMutation({ mutationFn: ({ workerId, limits }: { workerId: string; limits: Limits }) => approvePendingWorker(workerId, { organizationId, limits }), onSuccess: refresh, onError: (error) => setActionError(error instanceof Error ? error.message : "Approval failed") });
-  const reject = useMutation({ mutationFn: rejectPendingWorker, onSuccess: refresh, onError: (error) => setActionError(error instanceof Error ? error.message : "Rejection failed") });
-  if (query.error && isUnauthorized(query.error)) return <QueryState error={query.error} isLoading={false} />;
-  if (query.error && query.error instanceof ApiRequestError && query.error.status === 403) return <section className="pending-workers state-view state-error"><h2>Authorization required</h2><p>Only global administrators can review pending workers.</p></section>;
-  if (query.isLoading) return <QueryState error={null} isLoading />;
-  if (query.error) return <QueryState error={query.error} isLoading={false} retry={() => void query.refetch()} />;
-  const requests = query.data ?? [];
-  return <section className="pending-workers" aria-labelledby="pending-workers-title">
-    <h2 id="pending-workers-title">Pending worker requests</h2>
-    {actionError && <p className="form-error" role="alert">{actionError}</p>}
-    {requests.length === 0 ? <p className="pending-empty">No pending worker requests</p> : requests.map((worker: PendingRequest) => <article className="pending-worker-card" key={worker.id}>
-      <header><h3>{worker.platform}</h3><p>Fingerprint <code>{worker.fingerprint}</code> <button type="button" onClick={() => void navigator.clipboard?.writeText(worker.fingerprint)}>Copy</button></p></header>
-      <dl><div key="public-key"><dt>Public key</dt><dd><code>{worker.publicKey}</code></dd></div><div key="vm-uuid"><dt>VM UUID</dt><dd>{worker.vmUuid}</dd></div><div key="machine-uuid"><dt>Machine UUID</dt><dd>{worker.machineUuid}</dd></div><div key="capacity"><dt>Reported capacity</dt><dd>{worker.capacity.actualVcpu} vCPU · {worker.capacity.actualMemoryBytes} bytes RAM · {worker.capacity.actualStorageBytes} bytes storage</dd></div></dl>
-      <form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const limits = Object.fromEntries(["maxVcpuPerPod", "maxMemoryBytesPerPod", "maxStorageBytesPerPod", "maxConcurrentPods"].map((name) => [name, Number(form.get(name))])) as Limits; const parsed = ApproveWorkerRequest.safeParse({ organizationId, limits }); if (!parsed.success || Object.values(limits).some((value) => !Number.isSafeInteger(value) || value <= 0)) { setActionError("Limits must be positive safe integers."); return; } if (limits.maxVcpuPerPod > worker.capacity.actualVcpu || limits.maxMemoryBytesPerPod > worker.capacity.actualMemoryBytes || limits.maxStorageBytesPerPod > worker.capacity.actualStorageBytes) { setActionError("Limits cannot exceed reported worker capacity."); return; } setActionError(null); approve.mutate({ workerId: worker.id, limits }); }}>
-        <p className="form-help">Organization target: <code>{organizationId}</code></p>
-        <div className="limit-grid">{limitFields(worker.limits)}</div>
-        <button type="submit" disabled={approve.isPending}>Approve</button>
-        <button type="button" disabled={reject.isPending} onClick={() => reject.mutate(worker.id)}>Reject</button>
-</form>
-    </article>)}
-  </section>;
+ const client = useQueryClient(); const query = useQuery({ queryKey: ["pending-workers"], queryFn: getPendingWorkerRequests, staleTime: 5000 }); const [error,setError]=useState<string|null>(null);
+ const refresh=()=>{void client.invalidateQueries({queryKey:["pending-workers"]});void client.invalidateQueries({queryKey:["org",organizationId,"workers"]});};
+ const configure=useMutation({mutationFn:({id,input}:{id:string;input:Parameters<typeof configurePendingWorker>[1]})=>configurePendingWorker(id,input),onSuccess:refresh,onError:e=>setError(e instanceof Error?e.message:"Configuration failed")});
+ const reject=useMutation({mutationFn:rejectPendingWorker,onSuccess:refresh,onError:e=>setError(e instanceof Error?e.message:"Rejection failed")});
+ if(query.error&&isUnauthorized(query.error))return <QueryState error={query.error} isLoading={false}/>; if(query.error&&query.error instanceof ApiRequestError&&query.error.status===403)return <section className="pending-workers state-view state-error"><h2>Authorization required</h2><p>Only global administrators can review pending workers.</p></section>; if(query.isLoading)return <QueryState error={null} isLoading/>; if(query.error)return <QueryState error={query.error} isLoading={false} retry={()=>void query.refetch()}/>;
+ return <section className="pending-workers" aria-labelledby="pending-workers-title"><h2 id="pending-workers-title">Pending worker requests</h2>{error&&<p className="form-error" role="alert">{error}</p>}{(query.data??[]).length===0?<p className="pending-empty">No pending worker requests</p>:(query.data??[]).map((worker:PendingRequest)=>{const c=worker.capacity;const d={vcpu:c.actualVcpu,memoryBytes:c.actualMemoryBytes,storageBytes:c.actualStorageBytes,maxVcpuPerPod:worker.limits?.maxVcpuPerPod??c.actualVcpu,maxMemoryBytesPerPod:worker.limits?.maxMemoryBytesPerPod??c.actualMemoryBytes,maxStorageBytesPerPod:worker.limits?.maxStorageBytesPerPod??c.actualStorageBytes,maxConcurrentPods:worker.limits?.maxConcurrentPods??1};return <article className="pending-worker-card" key={worker.id}><h3>{worker.platform}</h3><p>Fingerprint <code>{worker.fingerprint}</code></p><p>Public key <code>{worker.publicKey}</code></p><p>Doctor: {worker.doctor?.probe===false?"error":"reported"}</p><p>Reported capacity: {c.actualVcpu} vCPU · {c.actualMemoryBytes} bytes RAM · {c.actualStorageBytes} bytes storage</p><form onSubmit={e=>{e.preventDefault();setError(null);const data=new FormData(e.currentTarget);const v=Object.fromEntries(fields.map(n=>[n,Number(data.get(n))])) as Record<string,number>;if(fields.some(n=>!Number.isSafeInteger(v[n])||v[n]<=0))return setError("All resources must be positive safe integers.");if(v.vcpu>c.actualVcpu||v.memoryBytes>c.actualMemoryBytes||v.storageBytes>c.actualStorageBytes||v.maxVcpuPerPod>v.vcpu||v.maxMemoryBytesPerPod>v.memoryBytes||v.maxStorageBytesPerPod>v.storageBytes)return setError("Resources and ceilings cannot exceed reported capacity.");const input={organizationId,appliance:{vcpu:v.vcpu,memoryBytes:v.memoryBytes,storageBytes:v.storageBytes},runtime:{maxVcpuPerPod:v.maxVcpuPerPod,maxMemoryBytesPerPod:v.maxMemoryBytesPerPod,maxStorageBytesPerPod:v.maxStorageBytesPerPod,maxConcurrentPods:v.maxConcurrentPods}};if(!WorkerConfiguration.safeParse(input).success)return setError("Invalid worker configuration.");configure.mutate({id:worker.id,input});}}><p>Configure and adopt for <code>{organizationId}</code>.</p><div className="limit-grid">{fields.map(n=><label key={n}>{n}<input aria-label={n} name={n} type="number" min="1" step="1" defaultValue={d[n]} required/></label>)}</div><button type="submit" disabled={configure.isPending}>Adopt and configure</button><button type="button" disabled={reject.isPending} onClick={()=>reject.mutate(worker.id)}>Reject</button></form></article>})}</section>;
 }

@@ -7,11 +7,12 @@ import {
   OrganizationSummary,
   OverviewDto,
   PendingWorkerRequest,
+  WorkerConfiguration,
+  WorkerDetail,
   PoolSummary,
   RepositorySummary,
   RunDetail,
   RunSummary,
-  WorkerDetail,
 } from "@whitesmith/contracts";
 import { z } from "zod";
 
@@ -93,6 +94,18 @@ export async function approvePendingWorker(workerId: string, input: ApproveWorke
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify(ApproveWorkerRequest.parse(input)),
+  });
+}
+export type WorkerConfigurationInput = {
+  organizationId: string;
+  appliance: z.infer<typeof WorkerConfiguration>["appliance"];
+  runtime: z.infer<typeof WorkerConfiguration>["runtime"];
+};
+export async function configurePendingWorker(workerId: string, input: WorkerConfigurationInput) {
+  return request(`/api/workers/pending/${workerId}/configure`, z.object({ revision: z.string(), fingerprint: z.string(), commandId: z.string().uuid().optional() }), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(input),
   });
 }
 export async function rejectPendingWorker(workerId: string) {

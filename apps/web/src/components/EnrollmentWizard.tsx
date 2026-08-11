@@ -8,8 +8,7 @@ type Reveal = { code: string; generation: number; createdAt: string };
 function quoteShell(value: string): string { return `'${value.replaceAll("'", "'\"'\"'")}'`; }
 function quotePowerShell(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
 
-export function buildInstallerCommand(installer: string, audience: RuntimePlatform, code: string): string {
-  if (!code) throw new Error("Enrollment code is required");
+export function buildInstallerCommand(installer: string, audience: RuntimePlatform, _code?: string): string {
   if (!["linux-x64", "windows-x64", "macos-arm64"].includes(audience)) throw new Error("Unsupported installer audience");
   const url = new URL(installer);
   const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
@@ -17,10 +16,10 @@ export function buildInstallerCommand(installer: string, audience: RuntimePlatfo
   const protocol = url.protocol.slice(0, -1);
   const tls = protocol === "https" ? " --tlsv1.3" : "";
   if (audience === "windows-x64") {
-    return `$whitesmithInstaller = Join-Path $env:TEMP (\"whitesmith-installer-\" + [guid]::NewGuid() + \".ps1\")\ntry {\n  curl.exe --fail --proto '=${protocol}'${tls} --output $whitesmithInstaller ${quotePowerShell(installer)}\n  if ($LASTEXITCODE -ne 0) { throw \"Installer download failed with exit code $LASTEXITCODE\" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $whitesmithInstaller -Code ${quotePowerShell(code)}\n  if ($LASTEXITCODE -ne 0) { throw \"Installer failed with exit code $LASTEXITCODE\" }\n} finally {\n  Remove-Item -Force -ErrorAction SilentlyContinue $whitesmithInstaller\n}`;
+    return `$whitesmithInstaller = Join-Path $env:TEMP ("whitesmith-installer-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${protocol}'${tls} --output $whitesmithInstaller '${installer}'\n  if ($LASTEXITCODE -ne 0) { throw "Installer download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $whitesmithInstaller\n} finally {\n  Remove-Item -Force -ErrorAction SilentlyContinue $whitesmithInstaller\n}`;
   }
   const shell = audience === "macos-arm64" ? "zsh" : "bash";
-  return `whitesmith_installer=\"$(mktemp)\" &&\ncurl --fail --proto '=${protocol}'${tls} --output \"$whitesmith_installer\" ${quoteShell(installer)}\nwhitesmith_status=$?\nif [ \"$whitesmith_status\" -eq 0 ]; then\n  ${shell} \"$whitesmith_installer\" --code ${quoteShell(code)}\n  whitesmith_status=$?\nfi\nrm -f \"\${whitesmith_installer:-}\"\n(exit \"$whitesmith_status\")`;
+  return `whitesmith_installer="$(mktemp)" &&\ncurl --fail --proto '=${protocol}'${tls} --output "$whitesmith_installer" '${installer}'\nwhitesmith_status=$?\nif [ "$whitesmith_status" -eq 0 ]; then\n  ${shell} "$whitesmith_installer"\n  whitesmith_status=$?\nfi\nrm -f "\${whitesmith_installer:-}"\n(exit "$whitesmith_status")`;
 }
 
 export function EnrollmentWizard({ onCreated }: { onCreated: () => void }) {
