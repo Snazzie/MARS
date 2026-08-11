@@ -2,8 +2,10 @@ import {
   ApiError,
   CursorPage,
   LogChunk,
+  OrganizationSettings,
   OrganizationSummary,
   OverviewDto,
+  PoolSummary,
   RepositorySummary,
   RunDetail,
   RunSummary,
@@ -86,9 +88,30 @@ export const enrollWorker = (audience: string, profile: Record<string, number>) 
     body: JSON.stringify({ audience, profile }),
   });
 export const getPools = (organizationId: string) =>
-  request(`/api/organizations/${organizationId}/pools`, z.unknown());
+  request(`/api/organizations/${organizationId}/pools`, CursorPage(PoolSummary));
 export const getSettings = (organizationId: string) =>
-  request(`/api/organizations/${organizationId}/settings`, z.unknown());
+  request(`/api/organizations/${organizationId}/settings`, OrganizationSettings);
+export async function setRepositoryApproval(organizationId: string, repositoryId: string, approved: boolean) {
+  return request(`/api/organizations/${organizationId}/repositories/${repositoryId}/${approved ? "approve" : "reject"}`, z.object({ ok: z.boolean() }), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({}),
+  });
+}
+export async function mutatePool(organizationId: string, poolId: string, action: "enable" | "disable" | "rotate-key") {
+  return request(`/api/organizations/${organizationId}/pools/${poolId}/${action}`, z.object({ ok: z.boolean() }), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({}),
+  });
+}
+export async function updateSettings(organizationId: string, settings: Omit<z.infer<typeof OrganizationSettings>, "organizationId">) {
+  return request(`/api/organizations/${organizationId}/settings`, OrganizationSettings, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(settings),
+  });
+}
 
 export function isUnauthorized(error: unknown): boolean {
   return error instanceof ApiRequestError && error.code === "unauthorized";

@@ -46,6 +46,10 @@ export const CapacitySnapshot = dto(strict({ vcpu: strict({ actual: positiveSafe
 export type CapacitySnapshot = z.infer<typeof CapacitySnapshot>;
 export const WorkerDetail = dto(strict({ id, organizationId: organizationId.nullable(), name: z.string().min(1), platform: RuntimePlatform, driver: RuntimeDriverName, admissionState: z.enum(["pending", "adopted", "rejected", "revoked"]), connectionState: z.enum(["offline", "online"]), configurationState: z.enum(["unconfigured", "ready", "error"]), fingerprint: z.string().min(1), limits: WorkerLimits.nullable(), doctor: WorkerDoctor.nullable(), capacity: CapacitySnapshot, activeSandboxes: positiveSafe.or(z.literal(0)), draining: z.boolean() }));
 export type WorkerDetail = z.infer<typeof WorkerDetail>;
+export const PoolSummary = dto(strict({ id, organizationId, workerId: id, workerName: z.string().min(1), name: z.string().min(1), platform: RuntimePlatform, driver: RuntimeDriverName, imageDigest: z.string().min(1), resources, labels: z.array(z.string().min(1)), enabled: z.boolean(), active: positiveSafe.or(z.literal(0)) }));
+export type PoolSummary = z.infer<typeof PoolSummary>;
+export const OrganizationSettings = dto(strict({ organizationId, maxVcpuPerPod: positiveSafe, maxMemoryBytesPerPod: positiveSafe, maxStorageBytesPerPod: positiveSafe, maxConcurrentPods: positiveSafe }));
+export type OrganizationSettings = z.infer<typeof OrganizationSettings>;
 export const CursorPage = <T extends z.ZodTypeAny>(item: T) => dto(strict({ items: z.array(item), nextCursor: cursor.nullable() }));
 export type CursorPage<T> = { items: T[]; nextCursor: string | null };
 export const ApiError = dto(strict({ code: z.string().min(1), message: z.string().min(1), requestId: id, details: z.record(z.unknown()).optional() }));
