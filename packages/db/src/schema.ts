@@ -11,6 +11,7 @@ ALTER TABLE workers ADD COLUMN IF NOT EXISTS machine_uuid text;
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_requested_at timestamptz;
 CREATE UNIQUE INDEX IF NOT EXISTS workers_active_vm_uuid_idx ON workers(vm_uuid) WHERE vm_uuid IS NOT NULL AND admission_state IN ('pending','adopted');
 CREATE UNIQUE INDEX IF NOT EXISTS workers_active_fingerprint_idx ON workers(fingerprint) WHERE fingerprint IS NOT NULL AND admission_state IN ('pending','adopted');
+CREATE UNIQUE INDEX IF NOT EXISTS workers_active_machine_uuid_idx ON workers(machine_uuid) WHERE machine_uuid IS NOT NULL AND admission_state IN ('pending','adopted');
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS draining boolean NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS runner_pools (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id), worker_id uuid NOT NULL REFERENCES workers(id), name text NOT NULL, platform text NOT NULL, driver text NOT NULL, image_digest text NOT NULL, resources jsonb NOT NULL, labels jsonb NOT NULL, enabled boolean NOT NULL DEFAULT false);
 CREATE TABLE IF NOT EXISTS runner_leases (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id), pool_id uuid NOT NULL REFERENCES runner_pools(id), github_job_id bigint UNIQUE NOT NULL, state text NOT NULL, requested jsonb NOT NULL, runtime_instance_id text, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());

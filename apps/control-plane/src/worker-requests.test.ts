@@ -17,10 +17,9 @@ describe("pending worker request contracts", () => {
   });
 });
 
-test("machine identity changes are not an exact reconnect", () => {
-  const row = { vmUuid: "vm", machineUuid: "machine-original", fingerprint: "fp" };
-  expect(matchesWorkerIdentity(row, { vmUuid: "vm", machineUuid: "machine-original" }, "fp")).toBe(true);
-  expect(matchesWorkerIdentity(row, { vmUuid: "vm", machineUuid: "machine-different" }, "fp")).toBe(false);
+test("reused machine identity is not an exact reconnect", () => {
+  const row = { vmUuid: "vm-original", machineUuid: "machine-original", fingerprint: "fp-original" };
+  expect(matchesWorkerIdentity(row, { vmUuid: "vm-new", machineUuid: "machine-original" }, "fp-new")).toBe(false);
 });
 
 

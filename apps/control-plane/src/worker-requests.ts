@@ -28,7 +28,7 @@ export async function requestPendingWorker(db: Sql<{}>, input: WorkerBootstrapRe
     const [credential] = await tx<{ codeHash: Buffer }[]>`select code_hash as "codeHash" from worker_bootstrap_credentials where singleton=true for update`;
     const candidate = createHash("sha256").update(Buffer.from(parsed.code, "base64url")).digest();
     if (!credential || credential.codeHash.length !== candidate.length || !timingSafeEqual(credential.codeHash, candidate)) return { conflict: false as const, invalid: true as const };
-    const rows = await tx<{ id: string; vmUuid: string | null; machineUuid: string | null; fingerprint: string | null }[]>`select id, vm_uuid as "vmUuid", machine_uuid as "machineUuid", fingerprint from workers where admission_state in ('pending','adopted') and (vm_uuid=${parsed.vmUuid} or fingerprint=${fp}) for update`;
+    const rows = await tx<{ id: string; vmUuid: string | null; machineUuid: string | null; fingerprint: string | null }[]>`select id, vm_uuid as "vmUuid", machine_uuid as "machineUuid", fingerprint from workers where admission_state in ('pending','adopted') and (vm_uuid=${parsed.vmUuid} or machine_uuid=${parsed.machineUuid} or fingerprint=${fp}) for update`;
     const exact = rows.find(row => matchesWorkerIdentity(row, parsed, fp));
     if (exact) {
       await tx`update workers set last_requested_at=now(), connection_state='online', machine_uuid=${parsed.machineUuid}, doctor=${JSON.stringify({ doctor: parsed.doctor, capacity: parsed.capacity })}::jsonb where id=${exact.id}`;
