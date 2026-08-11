@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { createDashboardApi } from "./dashboard-api.ts";
+import { createControlPlaneApp } from "./http/app.ts";
 
 function fakeDb(rows: unknown[] = [], memberAllowed = true) {
-  return Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+  return Object.assign(async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
     if (query.includes("FROM memberships")) return memberAllowed ? [{ ok: true }] : [];
     if (query.includes("FROM organizations")) return rows;
@@ -11,31 +11,34 @@ function fakeDb(rows: unknown[] = [], memberAllowed = true) {
 }
 const member = { id: "u1", githubUserId: 1, login: "member", isGlobalAdmin: false };
 const admin = { id: "u2", githubUserId: 2, login: "admin", isGlobalAdmin: true };
+function appFor(user = member, db = fakeDb()) { return createControlPlaneApp({ db, baseUrl: "https://x", githubClientId: "id", githubClientSecret: "secret", bootstrapGithubLogin: "admin", githubWebhookSecret: "webhook", requestId: () => "req", requestSource: () => "test", webRoot: new URL("file:///tmp/"), workerInstallerRoot: new URL("file:///tmp/"), onWorkerAdopted: () => {}, currentUser: async () => user }); }
+const sessionHeaders = { Cookie: "whitesmith_session=test" };
 
 describe("dashboard API", () => {
+  test("returns the authenticated operator for the dashboard session probe", async () => {
+    const response = await appFor().request("/api/me", { headers: sessionHeaders });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(member);
+  });
   test("denies foreign organization as not found", async () => {
-    const api = createDashboardApi({ db: fakeDb([], false) });
-    const response = await api(new Request("http://x/api/v1/organizations/foreign/overview"), member);
-    expect(response?.status).toBe(404);
-    expect(await response?.json()).toMatchObject({ code: "not_found" });
+    const response = await appFor(member, fakeDb([], false)).request("/api/organizations/foreign/overview", { headers: sessionHeaders });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ code: "not_found" });
   });
   test("rejects malformed cursors", async () => {
-    const api = createDashboardApi({ db: fakeDb() });
-    const response = await api(new Request("http://x/api/v1/organizations/org/runs?cursor=bad.cursor"), member);
-    expect(response?.status).toBe(400);
-    expect(await response?.json()).toMatchObject({ code: "invalid_query" });
+    const response = await appFor().request("/api/organizations/org/runs?cursor=bad.cursor", { headers: sessionHeaders });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "invalid_query" });
   });
   test("uses typed errors and requires idempotency key", async () => {
-    const api = createDashboardApi({ db: fakeDb() });
-    const response = await api(new Request("http://x/api/v1/organizations/org/workers/w1/drain", { method: "POST" }), member);
-    expect(response?.status).toBe(400);
-    expect(await response?.json()).toMatchObject({ code: "missing_idempotency_key", requestId: expect.any(String) });
+    const response = await appFor().request("/api/organizations/org/workers/w1/drain", { method: "POST", headers: sessionHeaders });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "missing_idempotency_key", requestId: expect.any(String) });
   });
   test("restricts worker adopt to global administrators", async () => {
-    const api = createDashboardApi({ db: fakeDb() });
-    const response = await api(new Request("http://x/api/v1/organizations/org/workers/w1/adopt", { method: "POST", headers: { "Idempotency-Key": "one" } }), member);
-    expect(response?.status).toBe(404);
-    const adminResponse = await api(new Request("http://x/api/v1/organizations/org/workers/w1/adopt", { method: "POST", headers: { "Idempotency-Key": "two" } }), admin);
-    expect(adminResponse?.status).toBe(404);
+    const response = await appFor().request("/api/organizations/org/workers/w1/adopt", { method: "POST", headers: { ...sessionHeaders, "Idempotency-Key": "one" } });
+    expect(response.status).toBe(404);
+    const adminResponse = await appFor(admin).request("/api/organizations/org/workers/w1/adopt", { method: "POST", headers: { ...sessionHeaders, "Idempotency-Key": "two" } });
+    expect(adminResponse.status).toBe(404);
   });
 });
