@@ -15,3 +15,6 @@ Commit `091ab0e` checks the native orchestrator process exit code and removes/st
 
 ## Final review hardening
 Commit `8675641` adds join dispatch to the actual orchestrator index entrypoint and replaces Windows temporary-file stdin redirection with in-memory `ProcessStartInfo` stdin. Focused tests now cover entrypoint dispatch and secret-safe failure cleanup.
+
+## TLS and timeout hardening
+Commit `af694a9` rejects non-HTTPS remote control-plane URLs (only explicit localhost HTTP is allowed), bounds join HTTP/process waits to 30 seconds, and preserves VM cleanup on timeout. Focused tests cover policy and timeout contracts.
