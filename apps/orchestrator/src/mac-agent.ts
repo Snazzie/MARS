@@ -79,7 +79,8 @@ async function currentMacWorkerJoinPayload(code: string, publicKey: string): Pro
 function validateControlPlaneUrl(baseUrl: string): URL {
   const url = new URL(baseUrl);
   const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
-  if (url.protocol !== "https:" && !(loopback && url.protocol === "http:")) throw new Error("control plane must use HTTPS (TLS 1.3) except explicit localhost development");
+  const allowInsecureHttp = Bun.env.WHITESMITH_ALLOW_INSECURE_HTTP === "true";
+  if (url.protocol !== "https:" && !(loopback && url.protocol === "http:") && !allowInsecureHttp) throw new Error("control plane must use HTTPS (TLS 1.3) except explicit localhost development");
   return url;
 }
 export async function runWorkerJoin(platform: "macos-arm64" | "windows-x64", baseUrl: string): Promise<void> {
