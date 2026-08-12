@@ -1,1 +1,22 @@
-{"name":"@whitesmith/web","version":"0.1.0","type":"module","scripts":{"build":"bun build src/index.tsx --outdir dist --target browser","typecheck":"tsc -p tsconfig.json --noEmit","lint":"tsc -p tsconfig.json --noEmit"},"dependencies":{"@tanstack/react-query":"^5.83.0","@tanstack/react-router":"^1.130.0","@tanstack/react-table":"^8.21.0","@tanstack/charts":"0.11.0","react":"^19.1.0","react-dom":"^19.1.0"}}
+{
+  "name": "@whitesmith/web",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/index.tsx --outdir dist --target browser",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@astryxdesign/core": "^0.3.0",
+    "@astryxdesign/theme-neutral": "^0.3.0",
+    "@tanstack/charts": "0.11.0",
+    "@tanstack/react-query": "^5.83.0",
+    "@tanstack/react-router": "^1.130.0",
+    "@tanstack/react-table": "^8.21.0",
+    "@whitesmith/contracts": "workspace:*",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^3.25.0"
+  }
+}

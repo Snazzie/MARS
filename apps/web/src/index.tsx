@@ -1,13 +1,13 @@
-import React from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { RouterProvider } from "@tanstack/react-router";
 import { createRoot } from "react-dom/client";
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { displayCell } from "./format.ts";
+import { router } from "./router.tsx";
+import "./styles.css";
 
-type User = { login: string; isGlobalAdmin: boolean };
-type Worker = { id: string; name: string; platform: string; admissionState: string; connectionState: string; configurationState: string; fingerprint?: string };
-const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 10_000 } } });
-async function getJson<T>(path: string): Promise<T | null> { const response = await fetch(path, { credentials: "same-origin" }); if (response.status === 401) return null; if (!response.ok) throw new Error(`Unable to load ${path}`); return response.json() as Promise<T>; }
-function Workers() { const user = useQuery({ queryKey: ["me"], queryFn: () => getJson<User>("/api/me") }); const workers = useQuery({ queryKey: ["workers"], queryFn: () => getJson<Worker[]>("/api/workers"), enabled: Boolean(user.data) }); const columns: ColumnDef<Worker>[] = [{ accessorKey: "name", header: "Worker" }, { accessorKey: "platform", header: "Platform" }, { accessorKey: "admissionState", header: "Admission" }, { accessorKey: "connectionState", header: "Connection" }, { accessorKey: "configurationState", header: "Configuration" }, { accessorKey: "fingerprint", header: "Fingerprint" }]; const table = useReactTable({ data: workers.data ?? [], columns, getCoreRowModel: getCoreRowModel() }); return <main><header><div><p className="eyebrow">WHITESMITH CONTROL PLANE</p><h1>Runner operations</h1><p>Ephemeral GitHub Actions capacity with explicit VM boundaries.</p></div>{user.data ? <span>Signed in as <strong>{user.data.login}</strong></span> : <a className="button" href="/api/auth/github">Sign in with GitHub</a>}</header><section className="panel"><div className="section-title"><h2>Workers</h2><span>{workers.data?.length ?? 0} enrolled</span></div>{user.isLoading ? <p>Checking session…</p> : !user.data ? <p>Sign in to view workers.</p> : workers.isLoading ? <p>Loading workers…</p> : workers.isError ? <p role="alert">{workers.error.message}</p> : <table><caption className="sr-only">Workers and their runtime admission state</caption><thead>{table.getHeaderGroups().map(group => <tr key={group.id}>{group.headers.map(header => <th key={header.id}>{flexRender(header.column.columnDef.header, header.getContext())}</th>)}</tr>)}</thead><tbody>{table.getRowModel().rows.map(row => <tr key={row.id}>{row.getVisibleCells().map(cell => <td key={cell.id}>{displayCell(cell.getValue())}</td>)}</tr>)}</tbody></table>}</section></main>; }
-function App() { return <QueryClientProvider client={queryClient}><Workers /></QueryClientProvider>; }
-createRoot(document.getElementById("root")!).render(<App />);
+const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 10_000, retry: 1 } } });
+
+createRoot(document.getElementById("root")!).render(
+  <QueryClientProvider client={queryClient}>
+    <RouterProvider router={router} />
+  </QueryClientProvider>,
+);

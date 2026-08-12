@@ -15,8 +15,29 @@ export const ConfigurationState = z.enum(["unconfigured", "ready", "error"]);
 export const LeaseState = z.enum(["requested", "dispatched", "provisioning", "sandbox_ready", "online", "busy", "completed", "reaping", "reaped", "failed"]);
 export const WorkerCommand = z.object({ version: z.literal(1), id: z.string().uuid(), type: z.string().min(1), workerId: z.string().uuid(), leaseId: z.string().uuid().nullable(), occurredAt: z.string().datetime(), payload: z.record(z.unknown()) });
 export const WorkerEvent = z.object({ version: z.literal(1), id: z.string().uuid(), workerId: z.string().uuid(), type: z.string().min(1), occurredAt: z.string().datetime(), payload: z.record(z.unknown()) });
+export const WorkerApplianceConfiguration = z.object({ vcpu: positiveSafe, memoryBytes: positiveSafe, storageBytes: positiveSafe }).strict();
+export const WorkerConfiguration = z.object({ appliance: WorkerApplianceConfiguration, runtime: WorkerLimits }).strict();
+export const WorkerConfigurePayload = z.object({ workerId: z.string().uuid(), appliance: WorkerApplianceConfiguration, runtime: WorkerLimits, revision: z.string().regex(/^[a-f0-9]{64}$/), fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export const WorkerConfiguredPayload = z.object({ commandId: z.string().uuid(), workerId: z.string().uuid(), revision: z.string().regex(/^[a-f0-9]{64}$/), observed: WorkerConfiguration }).strict();
 export const BrowserInvalidation = z.object({ version: z.literal(1), sequence: positiveSafe, organizationId: z.string(), type: z.literal("invalidate"), keys: z.array(z.array(z.unknown())), occurredAt: z.string().datetime() });
 export type WorkerCommand = z.infer<typeof WorkerCommand>;
 export type WorkerEvent = z.infer<typeof WorkerEvent>;
 export type BrowserInvalidation = z.infer<typeof BrowserInvalidation>;
 export { positiveSafe };
+const boundedResource = z.number().int().finite().min(0).max(Number.MAX_SAFE_INTEGER);
+export const WorkerDoctorData = z.object({ nestedKvm: z.boolean().optional(), kvmModules: z.boolean().optional(), probe: z.boolean().optional(), egress: z.boolean().optional(), imageSignatures: z.boolean().optional(), blockVolume: z.boolean().optional(), actualVcpu: boundedResource.optional(), actualMemoryBytes: boundedResource.optional(), actualStorageBytes: boundedResource.optional(), freeVcpu: boundedResource.optional(), freeMemoryBytes: boundedResource.optional(), freeStorageBytes: boundedResource.optional() }).strict();
+export const WorkerCapacityData = z.object({ actualVcpu: boundedResource, actualMemoryBytes: boundedResource, actualStorageBytes: boundedResource, freeVcpu: boundedResource, freeMemoryBytes: boundedResource, freeStorageBytes: boundedResource }).strict();
+export const WorkerBootstrapRequest = z.object({
+  code: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  platform: RuntimePlatform,
+  publicKey: z.string().min(1),
+  vmUuid: z.string().uuid(),
+  machineUuid: z.string().uuid(),
+  doctor: WorkerDoctorData,
+  capacity: WorkerCapacityData,
+}).strict();
+export type WorkerBootstrapRequest = z.infer<typeof WorkerBootstrapRequest>;
+export const PendingWorkerRequest = WorkerBootstrapRequest.omit({ code: true }).extend({ limits: WorkerLimits.nullable() });
+export type PendingWorkerRequest = z.infer<typeof PendingWorkerRequest>;
+export const ApproveWorkerRequest = z.object({ organizationId: z.string().uuid(), limits: WorkerLimits }).strict();
+export type ApproveWorkerRequest = z.infer<typeof ApproveWorkerRequest>;

@@ -1,0 +1,10 @@
+import type { WorkerDoctor as WorkerDoctorDto } from "@whitesmith/contracts";
+
+const checks: Array<[keyof Pick<WorkerDoctorDto, "nestedKvm" | "kvmModules" | "probe" | "egress" | "imageSignatures" | "blockVolume">, string]> = [["nestedKvm", "Nested KVM"], ["kvmModules", "KVM and vhost modules"], ["probe", "Disposable Kata probe"], ["egress", "Public egress"], ["imageSignatures", "Image signatures"], ["blockVolume", "Block volume support"]];
+export function WorkerDoctor({ doctor }: { doctor: WorkerDoctorDto | null }) {
+  if (!doctor) return <section className="doctor-panel"><div className="panel-kicker">Runtime doctor</div><p className="muted">No doctor report yet. Save limits after adoption to enable dispatch.</p></section>;
+  const failedChecks = checks.filter(([key]) => !doctor[key]).length;
+  const handlerFailed = doctor.runtimeHandler !== "kata-qemu-runtime-rs";
+  const failed = failedChecks + (handlerFailed ? 1 : 0);
+  return <section className="doctor-panel" aria-labelledby="doctor-title"><div className="panel-heading"><div><div className="panel-kicker">Runtime doctor</div><h3 id="doctor-title">{failed ? "Remediation required" : "Ready for dispatch"}</h3></div><span className={`status-pill ${failed ? "status-bad" : "status-good"}`}>{failed ? `${failed} checks need attention` : "All hard checks pass"}</span></div><ul className="doctor-checks">{checks.map(([key, label]) => <li key={key} className={doctor[key] ? "check-pass" : "check-fail"}><span aria-hidden="true">{doctor[key] ? "✓" : "×"}</span><span>{label}</span><strong>{doctor[key] ? "Pass" : "Fix"}</strong></li>)}<li className={handlerFailed ? "check-fail" : "check-pass"}><span aria-hidden="true">{handlerFailed ? "×" : "✓"}</span><span>Runtime handler</span><strong>{doctor.runtimeHandler}</strong></li></ul><dl className="doctor-versions"><div><dt>K3s</dt><dd>{doctor.versions.k3s}</dd></div><div><dt>Kata</dt><dd>{doctor.versions.kata}</dd></div><div><dt>containerd</dt><dd>{doctor.versions.containerd}</dd></div></dl>{failed > 0 && doctor.remediation && <p className="remediation" role="note"><strong>Next step</strong>{doctor.remediation}</p>}</section>;
+}

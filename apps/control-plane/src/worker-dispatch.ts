@@ -34,6 +34,13 @@ export class WorkerCommandDispatcher {
     const epoch = this.epochs.get(workerId)!;
     if (this.store) void this.serialized(workerId, () => this.replay(workerId, socket, epoch));
   }
+  /** Replay committed durable commands to the currently authenticated socket. */
+  replayConnected(workerId: string): Promise<void> {
+    const socket = this.sockets.get(workerId);
+    const epoch = this.epochs.get(workerId);
+    if (!socket || epoch === undefined || !this.store) return Promise.resolve();
+    return this.serialized(workerId, () => this.replay(workerId, socket, epoch));
+  }
   private async replay(workerId: string, socket: AuthenticatedWorkerSocket, epoch: number): Promise<void> {
     const valid = () => this.sockets.get(workerId) === socket && this.epochs.get(workerId) === epoch;
     const seen = new Set<string>();

@@ -1,9 +1,17 @@
 #!/bin/zsh
 set -euo pipefail
-[[ "$(uname -m)" == arm64 ]] || { echo 'macos-arm64 required' >&2; exit 1; }
-[[ -t 0 && -t 1 ]] || { echo 'interactive controlling TTY required' >&2; exit 1; }
-read -r -s 'JOIN_CODE?Whitesmith one-use enrollment code: '; print
+
+usage() { echo "usage: $0" >&2; exit 2; }
+parse_args() {
+  [ "$#" -eq 0 ] || usage
+  JOIN_CODE=""
+  [ -t 0 ] || { echo "interactive terminal required for enrollment code" >&2; exit 2; }
+  read -r -s 'JOIN_CODE?Whitesmith enrollment code: '; printf '\n' >&2
+  [[ "$JOIN_CODE" =~ ^[A-Za-z0-9_-]{43}$ ]] || usage
+}
+parse_args "$@"
 trap 'unset JOIN_CODE' EXIT
+[[ "$(uname -m)" == arm64 ]] || { echo 'macos-arm64 required' >&2; exit 1; }
 command -v tart >/dev/null || { echo 'Tart required' >&2; exit 1; }
 command -v codesign >/dev/null || { echo 'codesign required' >&2; exit 1; }
 IMAGE="${TART_IMAGE:-whitesmith-macos-worker}"
