@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getOnboardingStatus, selectOnboardingWorker, completeOnboardingIfReady } from "./onboarding.ts";
+import { approveOnboardingRepositories, getOnboardingStatus, selectOnboardingWorker, completeOnboardingIfReady } from "./onboarding.ts";
 
 const sql = (rows: unknown[] = []) => {
   const db = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -37,5 +37,22 @@ describe("onboarding state derivation", () => {
   test("selection rejects foreign and inactive workers", async () => {
     await expect(selectOnboardingWorker(sql([]), "w-foreign", "admin-1")).rejects.toThrow();
     await expect(selectOnboardingWorker(sql([{ id: "w1", admissionState: "rejected" }]), "w1", "admin-1")).rejects.toThrow();
+  });
+  test("approves selected private repositories and records selected GitHub access", async () => {
+    const queries: string[] = [];
+    const db = Object.assign(((strings: TemplateStringsArray, ...values: unknown[]) => {
+      queries.push(Array.from(strings).join(" "));
+      return [];
+    }) as never, {
+      begin: async (fn: (tx: unknown) => unknown) => fn(((strings: TemplateStringsArray) => {
+        const query = Array.from(strings).join(" ").toLowerCase();
+        queries.push(query);
+        if (query.includes("select r.id")) return [{ id: "repo-1", installationId: "install-1", visibility: "private", available: true, state: "pending" }];
+        return [];
+      }) as never),
+    });
+    await approveOnboardingRepositories(db, ["repo-1"], "admin-1");
+    expect(queries.some((query) => query.includes("repository_selection='selected'"))).toBe(true);
+    expect(queries.some((query) => query.includes("update dashboard_repositories"))).toBe(true);
   });
 });

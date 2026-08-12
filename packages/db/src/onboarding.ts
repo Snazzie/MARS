@@ -154,10 +154,12 @@ export async function approveOnboardingRepositories(db: OnboardingDb, repository
       FOR UPDATE
     `;
     const installationIds = new Set(rows.map((row) => String(row.installationId)));
-    if (rows.length !== repositoryIds.length || installationIds.size !== 1 || rows.some((row) => !["private", "internal"].includes(String(row.visibility)) || row.available !== true || row.state !== "approved")) {
+    if (rows.length !== repositoryIds.length || installationIds.size !== 1 || rows.some((row) => !["private", "internal"].includes(String(row.visibility)) || row.available !== true || !["approved", "pending"].includes(String(row.state)))) {
       throw new Error("repositories_not_selectable");
     }
-    await tx`UPDATE dashboard_repositories SET approved=(id=ANY(${repositoryIds})) WHERE installation_id=${String(rows[0].installationId)} AND visibility IN ('private','internal')`;
+    const installationId = String(rows[0].installationId);
+    await tx`UPDATE dashboard_installations SET state='approved', repository_selection='selected' WHERE id=${installationId} AND state IN ('pending','approved')`;
+    await tx`UPDATE dashboard_repositories SET approved=(id=ANY(${repositoryIds})) WHERE installation_id=${installationId} AND visibility IN ('private','internal')`;
   });
 }
 
