@@ -10,3 +10,11 @@ function markup(data = [request]) { const client = new QueryClient(); client.set
 test("renders identity, capacity, adoption fields, and null limits safely", () => { const html = markup(); expect(html).toContain(request.publicKey); expect(html).toContain("Adopt and configure"); expect(html.match(/name=\"vcpu\"/g)?.length).toBe(1); expect(html.match(/name=\"maxConcurrentPods\"/g)?.length).toBe(1); });
 test("shows empty pending state", () => { expect(markup([])).toContain("No pending worker requests"); });
 test("reusable resource form accepts worker capacity and organization props", () => { const html = renderToStaticMarkup(<WorkerConfigurationForm worker={worker} organizationId={org} onConfigured={() => {}} />); expect(html).toContain("vCPU"); expect(html).toContain("GiB"); expect(html).toContain("Configure worker"); });
+test("does not offer an invalid zero-GiB default for insufficient capacity", () => {
+  const lowCapacity = { ...worker, capacity: { ...worker.capacity, freeMemoryBytes: 90 * 1024 ** 2 } };
+  const html = renderToStaticMarkup(<WorkerConfigurationForm worker={lowCapacity} organizationId={org} onConfigured={() => {}} />);
+  expect(html).toContain("less than 1 GiB of free RAM");
+  expect(html).toContain('name="memoryGiB"');
+  expect(html).toContain('value=""');
+  expect(html).toContain('disabled=""');
+});
