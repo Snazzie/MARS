@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { WorkerBootstrapRequest } from "@whitesmith/contracts";
+import { availableMacMemoryBytes } from "./mac-agent.ts";
 import { buildMacWorkerJoinPayload } from "./mac-agent.ts";
+
+describe("macOS memory availability", () => {
+  test("converts the OS-reported free percentage to available bytes", () => {
+    expect(availableMacMemoryBytes("System-wide memory free percentage: 50%", 32 * 1024 ** 3)).toBe(16 * 1024 ** 3);
+  });
+});
 
 describe("worker join payload", () => {
   test("allowlists identity fields and strips caller-supplied limits", () => {

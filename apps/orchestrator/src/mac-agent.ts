@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { statfsSync } from "node:fs";
-import { cpus, freemem, totalmem } from "node:os";
+import { cpus, totalmem } from "node:os";
 import type { WorkerCapacityData, WorkerCommand, WorkerDoctorData } from "@whitesmith/contracts";
 import { WorkerBootstrapRequest, WorkerConfigurePayload, WorkerConfiguration } from "@whitesmith/contracts";
 import type { Lease } from "./runtime.ts";
@@ -29,6 +29,20 @@ export function buildMacWorkerSocketUrl(base: string, workerId: string): string 
 export async function handleMacWorkerCommand(command: WorkerCommand, driver: TartVmDriver, limits?: MacWorkerLimits): Promise<{ version: 1; type: string; workerId: string; leaseId: string | null; payload: Record<string, unknown> }> { if (command.type === "worker.configure") { if (!limits) throw new Error("worker limits unavailable"); return applyWorkerConfigure(command, limits); } if (command.type === "tart.create_lease") { const lease = command.payload as unknown as Lease; const runtime = await driver.createLease(lease); return { version: 1, type: "sandbox_attested", workerId: command.workerId, leaseId: command.leaseId, payload: runtime as unknown as Record<string, unknown> }; } if (command.type === "tart.stop_lease" && command.leaseId) { await driver.stopLease(command.leaseId); return { version: 1, type: "lease_stopped", workerId: command.workerId, leaseId: command.leaseId, payload: {} }; } if (command.type === "tart.remove_lease" && command.leaseId) { await driver.removeLease(command.leaseId); return { version: 1, type: "lease_removed", workerId: command.workerId, leaseId: command.leaseId, payload: {} }; } throw new Error(`unsupported worker command ${command.type}`); }
 function createKeyPair(): { privateKey: string; publicKey: string } { const pair = generateKeyPairSync("ed25519"); return { privateKey: pair.privateKey.export({ format: "pem", type: "pkcs8" }).toString(), publicKey: pair.publicKey.export({ format: "pem", type: "spki" }).toString() }; }
 async function readJoinCode(): Promise<Buffer> { const reader = Bun.stdin.stream().getReader(); const { value } = await reader.read(); reader.releaseLock(); const code = Buffer.from(value ?? []); if (!code.toString("utf8").trim()) throw new Error("join code required on stdin"); return code; }
+export function availableMacMemoryBytes(output: string, totalMemoryBytes: number): number {
+  const percentage = output.match(/System-wide memory free percentage:\s*(\d+(?:\.\d+)?)%/)?.[1];
+  if (percentage === undefined) throw new Error("macOS memory availability is unavailable");
+  const value = Number(percentage);
+  if (!Number.isFinite(value) || value < 0 || value > 100) throw new Error("macOS memory availability is invalid");
+  return Math.floor(totalMemoryBytes * value / 100);
+}
+
+function currentMacMemoryBytes(): number {
+  const result = Bun.spawnSync(["memory_pressure", "-Q"]);
+  if (result.exitCode !== 0) throw new Error("macOS memory availability is unavailable");
+  return availableMacMemoryBytes(new TextDecoder().decode(result.stdout), totalmem());
+}
+
 function capacity(): WorkerCapacityData {
   const disk = statfsSync("/", { bigint: true });
   const actualVcpu = cpus().length;
@@ -37,7 +51,7 @@ function capacity(): WorkerCapacityData {
     actualMemoryBytes: totalmem(),
     actualStorageBytes: Number(disk.blocks * disk.bsize),
     freeVcpu: actualVcpu,
-    freeMemoryBytes: freemem(),
+    freeMemoryBytes: currentMacMemoryBytes(),
     freeStorageBytes: Number(disk.bavail * disk.bsize),
   };
 }
