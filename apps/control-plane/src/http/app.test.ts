@@ -20,13 +20,20 @@ describe("control-plane HTTP boundary", () => {
     expect(response.status).toBe(401);
     expect(response.headers.get("cache-control")).not.toBe("public");
   });
+  test("registers bootstrap initialization behind global-admin authentication", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps()).request("/api/workers/bootstrap/initialize", { method: "POST", headers: { "Idempotency-Key": "test" } });
+    expect(response.status).toBe(401);
+  });
+
 
   test("serves run list and detail deep links", async () => {
     expect((await app.request("/runs")).status).toBe(200);
     expect((await app.request("/runs/123")).status).toBe(200);
   });
 
-  test("serves client routes outside the API namespace", async () => {
-    expect((await app.request("/settings")).status).toBe(200);
+  test("serves all dashboard client routes including workers", async () => {
+    for (const path of ["/settings", "/workers", "/pools", "/repositories", "/runs"]) {
+      expect((await app.request(path)).status).toBe(200);
+    }
   });
 });

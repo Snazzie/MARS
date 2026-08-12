@@ -29,7 +29,7 @@ export function StateView({ kind, title, message, action }: StateViewProps) {
  
 export function QueryState({ error, isLoading, isEmpty, retry }: { error: unknown; isLoading: boolean; isEmpty?: boolean; retry?: () => void }) {
   if (isLoading) return <StateView kind="loading" />;
-  if (error && isUnauthorized(error)) return <StateView kind="error" title="Sign-in required" message="Your operator session is no longer valid. Sign in again to continue." action={<Button label="Sign in with GitHub" variant="secondary" href="/auth/github" />} />;
+  if (error && isUnauthorized(error)) return <StateView kind="error" title="Sign-in required" message="Your operator session is no longer valid. Sign in again to continue." action={<Button label="Sign in with GitHub" variant="secondary" href="/api/auth/github" />} />;
   if (error && isOffline(error)) return <StateView kind="error" title="Control plane unreachable" message="Whitesmith could not reach the server. Check your network, then retry." action={<Button label="Retry connection" variant="secondary" clickAction={retry} />} />;
   if (error) return <StateView kind="error" title="Unable to load this view" message={error instanceof Error ? error.message : undefined} action={<Button label="Retry" variant="secondary" clickAction={retry} />} />;
   if (isEmpty) return <StateView kind="empty" />;

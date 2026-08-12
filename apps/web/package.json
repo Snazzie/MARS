@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "bun build src/index.tsx --outdir dist --target browser",
+    "build": "rm -rf dist && mkdir -p dist && cp index.html dist/index.html && bun build src/index.tsx --outdir dist --target browser",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "tsc -p tsconfig.json --noEmit"
   },

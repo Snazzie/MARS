@@ -1,0 +1,28 @@
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = 'whitesmith-orchestrator'
+    $startInfo.ArgumentList.Add('join')
+    $startInfo.ArgumentList.Add('--platform')
+    $startInfo.ArgumentList.Add($Audience)
+    $startInfo.ArgumentList.Add('--code-stdin')
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.UseShellExecute = $false
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    [void]$process.Start()
+    $process.StandardInput.WriteLine($Code)
+    $process.StandardInput.Close()
+    $process.WaitForExit()
+    if ($process.ExitCode -ne 0) { throw "worker join failed with exit code $($process.ExitCode)" }
+    Write-Host "Started $Audience worker; adoption remains pending until fingerprint approval."
+}
+catch {
+    if ($VmCreated) {
+        Stop-VM -Name $VmName -TurnOff -Force -ErrorAction SilentlyContinue
+        Remove-VM -Name $VmName -Force -ErrorAction SilentlyContinue
+    }
+    throw
+}
+finally {
+    if ($process) { $process.Dispose() }
+    $Code = $null
+}

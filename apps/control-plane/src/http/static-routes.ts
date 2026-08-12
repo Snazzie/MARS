@@ -14,7 +14,7 @@ async function assetResponse(deps: ControlPlaneHttpDeps, name: string, fallback 
 export function registerStaticRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps): void {
   app.get("/index.html", async () => assetResponse(deps, "index.html", "<!doctype html><title>Whitesmith</title>"));
   app.get("/index.js", async () => assetResponse(deps, "index.js"));
-  app.get("/styles.css", async () => assetResponse(deps, "styles.css", ""));
+  app.get("/index.css", async () => assetResponse(deps, "index.css", ""));
   for (const path of Object.keys(clientRoutes)) {
     app.get(path, async () => assetResponse(deps, "index.html", "<!doctype html><title>Whitesmith</title>"));
   }
