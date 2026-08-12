@@ -18,6 +18,7 @@ export function fakeHttpDeps(overrides: Partial<ControlPlaneHttpDeps> = {}): Con
     requestSource: () => "test",
     webRoot: new URL("file:///tmp/whitesmith-web/"),
     workerInstallerRoot: new URL("file:///tmp/whitesmith-installers/"),
+    workerOrchestratorExecutable: new URL("file:///tmp/whitesmith-orchestrator"),
     onWorkerAdopted: () => undefined,
     ...overrides,
   };

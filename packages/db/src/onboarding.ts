@@ -22,7 +22,17 @@ export async function getOnboardingStatus(db: OnboardingDb, auth: { authenticate
     SELECT so.admin_user_id AS "adminUserId", so.worker_id AS "workerId",
       so.organization_id AS "organizationId", so.completed_at AS "completedAt",
       w.admission_state AS "workerAdmissionState",
-      w.configuration_state AS "workerConfigurationState"
+      w.configuration_state AS "workerConfigurationState",
+      EXISTS (
+        SELECT 1
+        FROM dashboard_installations i
+        JOIN dashboard_repositories r ON r.installation_id=i.id AND r.organization_id=i.organization_id
+        WHERE i.organization_id=so.organization_id
+          AND i.state='approved'
+          AND i.repository_selection='selected'
+          AND r.available=true AND r.approved=true
+          AND r.visibility IN ('private','internal')
+      ) AS "githubReady"
     FROM system_onboarding so
     LEFT JOIN workers w ON w.id=so.worker_id
     WHERE so.singleton=true
@@ -33,13 +43,14 @@ export async function getOnboardingStatus(db: OnboardingDb, auth: { authenticate
   const completed = row.completedAt != null;
   const admission = stringValue(row.workerAdmissionState);
   const configuration = stringValue(row.workerConfigurationState);
+  const githubReady = row.githubReady === true;
   const authenticated = auth.authenticated ?? false;
   const canManage = auth.canManage ?? false;
   if (completed) return { version: 1, onboardingRequired: false, adminCreated: Boolean(adminUserId), authenticated, canManage, step: "complete" };
   let step: OnboardingStatus["step"] = "admin";
   if (adminUserId) {
     if (!workerId || !["pending", "adopted"].includes(admission ?? "")) step = "worker";
-    else if (!organizationId) step = "github";
+    else if (!organizationId || !githubReady) step = "github";
     else if (admission !== "adopted" || configuration !== "ready") step = "resources";
     else step = "labels";
   }

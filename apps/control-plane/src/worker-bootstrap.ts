@@ -22,7 +22,7 @@ export async function rotateWorkerBootstrap(db: Sql<{}>, actorId: string): Promi
   return db.begin(async (tx) => {
     const [current] = await tx<{ generation: number }[]>`select generation from worker_bootstrap_credentials where singleton=true for update`;
     if (!current) throw new Error("bootstrap credential is not initialized");
-    const [row] = await tx<BootstrapRow[]>`update worker_bootstrap_credentials set code_hash=${hash(code)}, generation=generation+1, rotated_by=${actorId}, rotated_at=now() where singleton=true returning generation, created_at as "createdAt", rotated_at as "rotatedAt"`;
+    const [row] = await tx<BootstrapRow[]>`update worker_bootstrap_credentials set code_hash=${hash(code)}, generation=generation+1, rotated_by=${actorId}, rotated_at=now(), consumed_at=null where singleton=true returning generation, created_at as "createdAt", rotated_at as "rotatedAt"`;
     await tx`insert into audit_events (actor,type,payload) values (${actorId},'worker.bootstrap.rotated',${JSON.stringify({ generation: row.generation })})`;
     return result({ ...row, createdAt: new Date(row.createdAt).toISOString(), rotatedAt: row.rotatedAt ? new Date(row.rotatedAt).toISOString() : null, codeHash: hash(code) }, code);
   });
@@ -35,7 +35,7 @@ export async function getWorkerBootstrapStatus(db: Sql<{}>): Promise<BootstrapSt
 
 export async function verifyWorkerBootstrap(db: Sql<{}>, code: string): Promise<boolean> {
   if (!/^[A-Za-z0-9_-]{43}$/.test(code)) return false;
-  const [row] = await db<{ codeHash: Buffer }[]>`select code_hash as "codeHash" from worker_bootstrap_credentials where singleton=true`;
+  const [row] = await db<{ codeHash: Buffer }[]>`select code_hash as "codeHash" from worker_bootstrap_credentials where singleton=true and consumed_at is null`;
   if (!row) return false;
   const candidate = hash(code);
   return row.codeHash.length === candidate.length && timingSafeEqual(row.codeHash, candidate);

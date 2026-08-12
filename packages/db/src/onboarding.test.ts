@@ -21,6 +21,12 @@ describe("onboarding state derivation", () => {
     expect(status.step).toBe("worker");
   });
 
+  test("does not enter resources before an approved available private repository exists", async () => {
+    const pending = sql([{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: null, workerAdmissionState: "adopted", workerConfigurationState: "unconfigured", githubReady: false }]);
+    expect((await getOnboardingStatus(pending)).step).toBe("github");
+    const ready = sql([{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: null, workerAdmissionState: "adopted", workerConfigurationState: "unconfigured", githubReady: true }]);
+    expect((await getOnboardingStatus(ready)).step).toBe("resources");
+  });
   test("completion is sticky after later resource failures", async () => {
     const db = sql([{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: "2026-08-12T00:00:00Z", workerAdmissionState: "revoked" }]);
     const status = await getOnboardingStatus(db);

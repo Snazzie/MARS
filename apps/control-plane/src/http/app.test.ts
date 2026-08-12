@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { createControlPlaneApp } from "./app.ts";
 import { fakeHttpDeps } from "./test-deps.ts";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const app = createControlPlaneApp(fakeHttpDeps());
 
@@ -24,6 +28,41 @@ describe("control-plane HTTP boundary", () => {
     const response = await createControlPlaneApp(fakeHttpDeps()).request("/api/workers/bootstrap/initialize", { method: "POST", headers: { "Idempotency-Key": "test" } });
     expect(response.status).toBe(401);
   });
+  test("injects the download origin into the Linux installer", async () => {
+    const root = await mkdtemp(join(tmpdir(), "whitesmith-installers-"));
+    try {
+      await Bun.write(join(root, "install-worker.sh"), '#!/usr/bin/env bash\n: "${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}"\n');
+      const response = await createControlPlaneApp(fakeHttpDeps({
+        baseUrl: "http://localhost:3000",
+        workerInstallerRoot: pathToFileURL(`${root}/`),
+      })).request("/api/workers/installer?audience=linux-x64");
+      const installer = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(installer).toStartWith("#!/usr/bin/env bash\n");
+      expect(installer).toContain("PUBLIC_BASE_URL='http://localhost:3000'");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  test("serves the configured macOS orchestrator executable", async () => {
+    const root = await mkdtemp(join(tmpdir(), "whitesmith-orchestrator-"));
+    try {
+      const executable = join(root, "whitesmith-orchestrator");
+      await Bun.write(executable, "macos-arm64-binary");
+      const response = await createControlPlaneApp(fakeHttpDeps({
+        workerOrchestratorExecutable: pathToFileURL(executable),
+      })).request("/api/workers/orchestrator?audience=macos-arm64");
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("macos-arm64-binary");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+
 
   test("allows OAuth cookies on local HTTP but secures them on HTTPS", async () => {
     const local = await createControlPlaneApp(fakeHttpDeps({ baseUrl: "http://localhost:3000" })).request("/api/auth/github");
@@ -75,6 +114,28 @@ describe("control-plane HTTP boundary", () => {
     expect(first.status).toBe(401);
     expect(replay.status).toBe(401);
   });
+  test("maps replayed GitHub setup callbacks to a conflict response", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+      githubApp: { completeInstallation: async () => { throw new Error("setup_state_expired"); } } as never,
+    })).request("/api/github/app/setup?installation_id=42&setup_action=install", {
+      headers: { Cookie: "github_install_state=expired" },
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ code: "setup_state_expired" });
+  });
+  test("returns repository selection failures to resumable onboarding", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+      githubApp: { completeInstallation: async () => { throw new Error("repository_selection_required"); } } as never,
+    })).request("/api/github/app/setup?installation_id=42&setup_action=install", {
+      headers: { Cookie: "github_install_state=selected" },
+    });
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/onboarding?github=repository-selection-required");
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+  });
+
 
   test("webhook validation uses the configured app secret and never accepts a static fallback", async () => {
     const response = await createControlPlaneApp(fakeHttpDeps({ githubWebhookSecret: "database-secret" })).request(

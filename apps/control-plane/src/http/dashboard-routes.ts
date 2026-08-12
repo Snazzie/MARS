@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { listOrganizations, getOverview, listRepositories, listRuns, getRunDetail, listLogChunks, listWorkers, getWorkerDetail, listPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard } from "@whitesmith/db";
+import { listOrganizations, getOverview, listRepositories, listRuns, getRunDetail, listLogChunks, listWorkers, getWorkerDetail, listPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady } from "@whitesmith/db";
 import { adoptWorker } from "../workers.ts";
 import { ApiError, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest } from "@whitesmith/contracts";
 
@@ -48,6 +48,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!(await dashboardMutation(deps.db, org, key))) return c.json({ ok: true });
     const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) VALUES (${org},${body.workerId},${body.name},${w.platform},${w.driver},${body.imageDigest},${JSON.stringify(body.resources)},${JSON.stringify(labels)},${body.triggerLabel},true) RETURNING id`;
     await deps.db`INSERT INTO audit_events (organization_id,actor,type,payload) VALUES (${org},${c.get("user").id},"pool.created",${JSON.stringify({ poolId: pool.id, workerId: body.workerId, triggerLabel: body.triggerLabel })})`;
+    await completeOnboardingIfReady(deps.db);
     await invalidateDashboard(deps.db, org, ["pools", "onboarding"]);
     return c.json({ id: pool.id, labels });
   }));

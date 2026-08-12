@@ -21,6 +21,7 @@ export type ControlPlaneHttpDeps = {
   requestSource(request: Request): string;
   webRoot: URL;
   workerInstallerRoot: URL;
+  workerOrchestratorExecutable: URL;
   workerRequestLimiter?: RequestLimiter;
   workerDispatcher?: WorkerCommandDispatcher;
   onWorkerAdopted(workerId: string): void;

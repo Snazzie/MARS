@@ -6,17 +6,34 @@ import { verifyWorkerBootstrap, initializeWorkerBootstrap, rotateWorkerBootstrap
 import { approvePendingWorker, configurePendingWorker, createRequestLimiter, hasMachineIdentity, parseApproveWorkerRequest, requestPendingWorker, rejectPendingWorker } from "../worker-requests.ts";
 
 function noStore(headers = new Headers()): Headers { headers.set("cache-control", "no-store"); return headers; }
+function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\"'\"'")}'`; }
+function injectInstallerOrigin(source: string, baseUrl: string): string {
+  const origin = new URL(baseUrl).origin;
+  const newline = source.indexOf("\n");
+  const insertAt = source.startsWith("#!") && newline >= 0 ? newline + 1 : 0;
+  return `${source.slice(0, insertAt)}PUBLIC_BASE_URL=${shellQuote(origin)}\nexport PUBLIC_BASE_URL\n${source.slice(insertAt)}`;
+}
 export function pendingWorkerDto(row: Record<string, unknown>) {
-  if (!hasMachineIdentity(row)) return null;
+  if (!hasMachineIdentity(row) || typeof row.id !== "string" || typeof row.fingerprint !== "string") return null;
   const telemetry = (row.doctor && typeof row.doctor === "object" ? row.doctor : {}) as Record<string, unknown>;
-  return PendingWorkerRequest.parse({ ...row, publicKey: row.publicKey, machineUuid: row.machineUuid, doctor: telemetry.doctor ?? {}, capacity: telemetry.capacity ?? {} });
+  const pending = PendingWorkerRequest.parse({
+    platform: row.platform,
+    publicKey: row.publicKey,
+    vmUuid: row.vmUuid,
+    machineUuid: row.machineUuid,
+    limits: row.limits,
+    doctor: telemetry.doctor ?? {},
+    capacity: telemetry.capacity ?? {},
+  });
+  return { id: row.id, fingerprint: row.fingerprint, ...pending };
 }
 function idempotency(c: Context<ControlPlaneEnv>): boolean { return Boolean(c.req.header("Idempotency-Key")?.trim()); }
 export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
   const approvalBody = async (c: Context<ControlPlaneEnv>) => { try { return parseApproveWorkerRequest(await c.req.json()); } catch { return null; } };
   const limiter = deps.workerRequestLimiter ?? createRequestLimiter();
   const auth = async (c: Context<ControlPlaneEnv>) => deps.currentUser(c.req.raw);
-  app.get("/api/workers/installer", async (c) => { const audience = c.req.query("audience"); const file = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : audience === "macos-arm64" ? "install-worker-macos.sh" : null; if (!file) return c.json({ error: "unsupported installer audience" }, 400); return new Response(Bun.file(new URL(file, deps.workerInstallerRoot)), { headers: noStore() }); });
+  app.get("/api/workers/installer", async (c) => { const audience = c.req.query("audience"); const file = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : audience === "macos-arm64" ? "install-worker-macos.sh" : null; if (!file) return c.json({ error: "unsupported installer audience" }, 400); const installer = Bun.file(new URL(file, deps.workerInstallerRoot)); const body = audience === "windows-x64" ? installer : injectInstallerOrigin(await installer.text(), deps.baseUrl); return new Response(body, { headers: noStore() }); });
+  app.get("/api/workers/orchestrator", (c) => { if (c.req.query("audience") !== "macos-arm64") return c.json({ error: "unsupported orchestrator audience" }, 400); const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", 'attachment; filename="whitesmith-orchestrator"'); return new Response(Bun.file(deps.workerOrchestratorExecutable), { headers }); });
   app.post("/api/workers/join", async (c) => {
     const source = deps.requestSource(c.req.raw);
     if (!limiter.allow(source)) return c.json({ error: "invalid or rotated bootstrap credential" }, 429);

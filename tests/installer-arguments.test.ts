@@ -29,8 +29,15 @@ test("POSIX installers expose strict parser and stdin handoff", async () => {
   expect(await Bun.file(linux).text()).toContain("parse_args");
   expect(await Bun.file(mac).text()).toContain("--code");
   expect(await Bun.file(linux).text()).toContain("code=sys.stdin.readline()");
-  expect(await Bun.file(mac).text()).toContain("--code-stdin");
 });
+test("macOS installer provisions the user-scoped orchestrator before requesting enrollment", async () => {
+  const source = await Bun.file(mac).text();
+  expect(source).toContain("/api/workers/orchestrator?audience=macos-arm64");
+  expect(source).toContain("WHITESMITH_CONTROL_PLANE_URL");
+  expect(source).toContain("join macos-arm64");
+  expect(source).not.toContain("launchctl bootstrap system");
+});
+
 
 test("PowerShell prompts securely when Code is omitted", async () => {
   const source = await Bun.file(powershell).text();

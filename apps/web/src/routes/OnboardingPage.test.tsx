@@ -86,6 +86,8 @@ test("worker step exposes enrollment wizard before pending workers exist", () =>
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "worker", worker: null, organizations: [], github: { appConfigured: false, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: null });
   expect(html).toContain("Enroll worker");
   expect(html).toContain("Worker enrollment");
+  expect(html).toContain("Generate bootstrap code");
+  expect(html).not.toContain("Rotate bootstrap code");
 });
 
 test("exposes explicit worker selection and selected private/internal repository controls", () => {
@@ -95,6 +97,18 @@ test("exposes explicit worker selection and selected private/internal repository
   expect(html).not.toContain('name="repo-2"');
   expect(html).toContain("Approve repositories");
 });
+test("repository selection remediation explains the GitHub setting and permits reconnect", () => {
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { search: "?github=repository-selection-required" } } });
+  try {
+    const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "github", worker: null, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 0, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: { id: "inst-1", githubInstallationId: 42, state: "pending", repositorySelection: "all" }, repositories: [] }, pool: null, defaultImageDigest: null });
+    expect(html).toContain("Only select repositories");
+    expect(html).toContain("private or internal repository");
+    expect(html).toContain("Connect organization");
+  } finally {
+    Reflect.deleteProperty(globalThis, "window");
+  }
+});
+
 
 test("renders GiB resource inputs, configuring acknowledgement state, and trigger labels", () => {
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "labels", worker, organizations: [], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "b".repeat(64) });

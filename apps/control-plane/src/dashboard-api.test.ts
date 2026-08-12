@@ -26,7 +26,7 @@ function statefulDb() {
 }
 const member = { id: "u1", githubUserId: 1, login: "member", isGlobalAdmin: false };
 const admin = { id: "u2", githubUserId: 2, login: "admin", isGlobalAdmin: true };
-function appFor(user = member, db = fakeDb()) { return createControlPlaneApp({ db, baseUrl: "https://x", githubClientId: "id", githubClientSecret: "secret", bootstrapGithubLogin: "admin", secretBox: new SecretBox(Buffer.alloc(32, 7).toString("base64")), defaultJobImages: {}, githubWebhookSecret: "webhook", requestId: () => "req", requestSource: () => "test", webRoot: new URL("file:///tmp/"), workerInstallerRoot: new URL("file:///tmp/"), onWorkerAdopted: () => {}, currentUser: async () => user }); }
+function appFor(user = member, db = fakeDb()) { return createControlPlaneApp({ db, baseUrl: "https://x", githubClientId: "id", githubClientSecret: "secret", bootstrapGithubLogin: "admin", secretBox: new SecretBox(Buffer.alloc(32, 7).toString("base64")), defaultJobImages: {}, githubWebhookSecret: "webhook", requestId: () => "req", requestSource: () => "test", webRoot: new URL("file:///tmp/"), workerInstallerRoot: new URL("file:///tmp/"), workerOrchestratorExecutable: new URL("file:///tmp/whitesmith-orchestrator"), onWorkerAdopted: () => {}, currentUser: async () => user }); }
 const sessionHeaders = { Cookie: "whitesmith_session=test" };
 test("authenticated global admins can read worker bootstrap status", async () => {
   const response = await appFor(admin).request("/api/workers/bootstrap", { headers: sessionHeaders });

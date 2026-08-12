@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ApproveWorkerRequest, PendingWorkerRequest, WorkerBootstrapRequest, WorkerConfiguration } from "@whitesmith/contracts";
 import { createRequestLimiter, hasMachineIdentity, matchesWorkerIdentity, WorkerRequestError } from "./worker-requests.ts";
+import { pendingWorkerDto } from "./http/worker-routes.ts";
 
 test("post-enrollment configuration is strict and excludes organization binding", () => {
   const configuration = {
@@ -28,6 +29,38 @@ describe("pending worker request contracts", () => {
     const limits = { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 1024, maxStorageBytesPerPod: 2048, maxConcurrentPods: 1 };
     expect(ApproveWorkerRequest.safeParse({ organizationId: valid.vmUuid, limits }).success).toBe(true);
     expect(ApproveWorkerRequest.safeParse({ organizationId: valid.vmUuid, limits: { ...limits, maxVcpuPerPod: 0 } }).success).toBe(false);
+  });
+});
+
+test("pending worker DTO ignores database-only columns", () => {
+  const row = {
+    id: "00000000-0000-4000-8000-000000000003",
+    name: "worker",
+    platform: "macos-arm64" as const,
+    admissionState: "pending",
+    connectionState: "offline",
+    configurationState: "unconfigured",
+    publicKey: "ed25519-public",
+    fingerprint: "fingerprint",
+    vmUuid: "00000000-0000-4000-8000-000000000001",
+    machineUuid: "00000000-0000-4000-8000-000000000002",
+    limits: null,
+    doctor: {
+      doctor: { probe: true },
+      capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 },
+    },
+    lastRequestedAt: new Date(),
+  };
+  expect(pendingWorkerDto(row)).toEqual({
+    id: row.id,
+    fingerprint: row.fingerprint,
+    platform: row.platform,
+    publicKey: row.publicKey,
+    vmUuid: row.vmUuid,
+    machineUuid: row.machineUuid,
+    limits: null,
+    doctor: row.doctor.doctor,
+    capacity: row.doctor.capacity,
   });
 });
 
