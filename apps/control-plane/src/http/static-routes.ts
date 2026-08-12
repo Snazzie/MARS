@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 
-const clientRoutes: Record<string, true> = { "/": true, "/settings": true, "/runs": true, "/repositories": true, "/workers": true, "/pools": true };
+const clientRoutes: Record<string, true> = { "/": true, "/onboarding": true, "/settings": true, "/runs": true, "/repositories": true, "/workers": true, "/pools": true };
 
 async function assetResponse(deps: ControlPlaneHttpDeps, name: string, fallback = ""): Promise<Response> {
   const file = Bun.file(new URL(name, deps.webRoot));

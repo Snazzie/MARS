@@ -1,20 +1,20 @@
 import { Hono } from "hono";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { createPkce, githubAuthorizeUrl, exchangeOAuth, ensureBootstrapAdmin, syncGithubOrganizations, type OAuthState } from "../github.ts";
-import { createSession } from "../auth.ts";
+import { createPkce, githubAuthorizeUrl, exchangeOAuth, ensureBootstrapAdmin, syncGithubOrganizations } from "../github.ts";
+import { createSession, SecretBox, sha256 } from "../auth.ts";
 
-const flows = new Map<string, OAuthState>();
-
-const cookie = (value: string) => `whitesmith_session=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800`;
+const cookieAttributes = (baseUrl: string, path: string, maxAge: number): string => { const secure = new URL(baseUrl).protocol === "https:" ? "; Secure" : ""; return `HttpOnly${secure}; SameSite=Lax; Path=${path}; Max-Age=${maxAge}`; };
+function cookieValue(header: string | undefined, name: string): string | null { const value = header?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`)); return value ? value.slice(name.length + 1) : null; }
 export function registerAuthRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
-  app.get("/api/auth/github", (c) => { const flow = createPkce(); flows.set(flow.state, flow); c.header("Set-Cookie", `oauth_state=${flow.state}; HttpOnly; Secure; SameSite=Lax; Path=/api/auth; Max-Age=600`); return c.redirect(githubAuthorizeUrl(deps.baseUrl, deps.githubClientId, flow), 302); });
+  app.get("/api/auth/github", async (c) => { const flow = createPkce(); const encrypted = deps.secretBox.encrypt(flow.verifier); await deps.db`insert into github_setup_states(state_hash,purpose,encrypted_pkce_verifier,expires_at) values (${sha256(flow.state)},'oauth',${encrypted},now()+interval '10 minutes')`; c.header("Set-Cookie", `oauth_state=${flow.state}; ${cookieAttributes(deps.baseUrl, "/api/auth", 600)}`); return c.redirect(githubAuthorizeUrl(deps.baseUrl, deps.githubClientId, flow), 302); });
   app.get("/api/auth/github/callback", async (c) => {
-    const state = c.req.query("state") ?? ""; const flow = flows.get(state); flows.delete(state);
-    if (!flow || c.req.header("Cookie")?.includes(`oauth_state=${state}`) !== true) return c.json({ error: "invalid oauth state" }, 400);
-    const user = await exchangeOAuth(c.req.query("code") ?? "", flow, deps.githubClientId, deps.githubClientSecret, deps.baseUrl);
-    const [row] = await deps.db`insert into users (github_user_id,login) values (${user.id},${user.login}) on conflict (github_user_id) do update set login=excluded.login returning id,is_global_admin`;
-    if (user.login.toLowerCase() === deps.bootstrapGithubLogin.toLowerCase() && !row.is_global_admin) await ensureBootstrapAdmin(deps.db, user.id, user.login, deps.bootstrapGithubLogin);
-    await syncGithubOrganizations(deps.db, String(row.id), user.accessToken);
-    c.header("Set-Cookie", cookie(await createSession(deps.db, String(row.id)))); return c.redirect("/", 302);
+    const state = c.req.query("state") ?? ""; if (!state || cookieValue(c.req.header("Cookie"), "oauth_state") !== state) return c.json({ error:"invalid oauth state" },400);
+    const rows = await deps.db`update github_setup_states set consumed_at=now() where state_hash=${sha256(state)} and purpose='oauth' and consumed_at is null and expires_at>now() returning encrypted_pkce_verifier`;
+    const row = rows[0] as { encrypted_pkce_verifier?: string } | undefined; if (!row?.encrypted_pkce_verifier) return c.json({ error:"invalid oauth state" },400);
+    const flow = { state, verifier:deps.secretBox.decrypt(row.encrypted_pkce_verifier), createdAt:Date.now() }; const user = await exchangeOAuth(c.req.query("code") ?? "", flow, deps.githubClientId, deps.githubClientSecret, deps.baseUrl);
+    const [dbUser] = await deps.db`insert into users (github_user_id,login) values (${user.id},${user.login}) on conflict (github_user_id) do update set login=excluded.login returning id,is_global_admin`;
+    if (user.login.toLowerCase() !== deps.bootstrapGithubLogin.trim().toLowerCase() && !dbUser.is_global_admin) return c.json({ error:"forbidden" },403);
+    if (user.login.toLowerCase() === deps.bootstrapGithubLogin.trim().toLowerCase() && !dbUser.is_global_admin) { try { await ensureBootstrapAdmin(deps.db, user.id, user.login, deps.bootstrapGithubLogin); } catch (error) { if (error instanceof Error && error.message === "bootstrap admin already consumed") return c.json({ error:"forbidden" },403); throw error; } }
+    const firstAdmin = user.login.toLowerCase() === deps.bootstrapGithubLogin.trim().toLowerCase(); await syncGithubOrganizations(deps.db, String(dbUser.id), user.accessToken); c.header("Set-Cookie", `whitesmith_session=${await createSession(deps.db, String(dbUser.id))}; ${cookieAttributes(deps.baseUrl, "/", 604800)}`); return c.redirect(firstAdmin || dbUser.is_global_admin ? "/onboarding" : "/",302);
   });
 }

@@ -41,3 +41,9 @@ export const PendingWorkerRequest = WorkerBootstrapRequest.omit({ code: true }).
 export type PendingWorkerRequest = z.infer<typeof PendingWorkerRequest>;
 export const ApproveWorkerRequest = z.object({ organizationId: z.string().uuid(), limits: WorkerLimits }).strict();
 export type ApproveWorkerRequest = z.infer<typeof ApproveWorkerRequest>;
+
+export type WorkerState = z.infer<typeof WorkerState>;
+export type ConnectionState = z.infer<typeof ConnectionState>;
+export type ConfigurationState = z.infer<typeof ConfigurationState>;
+export type WorkerDoctorData = z.infer<typeof WorkerDoctorData>;
+export type WorkerCapacityData = z.infer<typeof WorkerCapacityData>;

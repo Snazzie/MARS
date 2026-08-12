@@ -48,11 +48,10 @@ export async function applyWorkflowJobWebhook(payload: WorkflowJobPayload): Prom
   const occurred = job.completed_at ?? job.started_at ?? new Date().toISOString();
   const queuedAt = job.started_at ?? occurred;
   const [run] = await sql.begin(async tx => {
-    const [installation] = await tx`SELECT id, organization_id FROM dashboard_installations WHERE github_installation_id=${installationId} AND approved=true FOR UPDATE`;
+    const [installation] = await tx`SELECT id, organization_id FROM dashboard_installations WHERE github_installation_id=${installationId} AND state='approved' FOR UPDATE`;
     if (!installation) return [];
-    const [repository] = await tx`INSERT INTO dashboard_repositories (organization_id, installation_id, github_repository_id, name, full_name, is_private)
-      VALUES (${installation.organization_id},${installation.id},${repoId},${repo.name ?? repo.full_name?.split("/").at(-1) ?? String(repoId)},${repo.full_name ?? String(repoId)},${repo.private ?? false})
-      ON CONFLICT (organization_id, github_repository_id) DO UPDATE SET name=EXCLUDED.name, full_name=EXCLUDED.full_name, is_private=EXCLUDED.is_private RETURNING id`;
+    const [repository] = await tx`SELECT id FROM dashboard_repositories WHERE organization_id=${installation.organization_id} AND installation_id=${installation.id} AND github_repository_id=${repoId} AND available=true AND approved=true`;
+    if (!repository) return [];
     const [runRow] = await tx`INSERT INTO dashboard_runs (organization_id, repository_id, github_run_id, run_number, workflow_name, event, branch, commit_sha, actor_login, status, conclusion, queued_at, started_at, completed_at)
       VALUES (${installation.organization_id},${repository.id},${workflowRunId},${job.run_number ?? workflowRunId},${job.workflow_name ?? "workflow"},${payload.action ?? "workflow_job"},${job.head_branch ?? ""},${job.head_sha ?? "0000000"},${payload.sender?.login ?? "github"},${job.status === "completed" ? "completed" : job.status === "in_progress" ? "in_progress" : "queued"},${job.conclusion ?? null},${queuedAt},${job.started_at ?? null},${job.completed_at ?? null})
       ON CONFLICT (organization_id, github_run_id) DO UPDATE SET
@@ -60,10 +59,10 @@ export async function applyWorkflowJobWebhook(payload: WorkflowJobPayload): Prom
         conclusion=CASE WHEN dashboard_runs.status='completed' THEN dashboard_runs.conclusion WHEN EXCLUDED.status='completed' THEN EXCLUDED.conclusion ELSE dashboard_runs.conclusion END,
         started_at=COALESCE(dashboard_runs.started_at, EXCLUDED.started_at), completed_at=COALESCE(dashboard_runs.completed_at, EXCLUDED.completed_at)
       RETURNING id, status, conclusion`;
-    const [jobRow] = await tx`INSERT INTO dashboard_jobs (organization_id, run_id, github_job_id, name, status, conclusion, stage, runner_name, requested)
-      VALUES (${installation.organization_id},${runRow.id},${workflowJobId},${job.name ?? "job"},${job.status === "completed" ? "completed" : job.status === "in_progress" ? "in_progress" : "queued"},${job.conclusion ?? null},${action},NULL,'{"vcpu":1,"memoryBytes":1,"storageBytes":1,"concurrency":1}')
-      ON CONFLICT (organization_id, github_job_id) DO UPDATE SET status=EXCLUDED.status, conclusion=CASE WHEN dashboard_jobs.status='completed' THEN dashboard_jobs.conclusion ELSE EXCLUDED.conclusion END, stage=EXCLUDED.stage RETURNING id`;
-    await tx`INSERT INTO dashboard_run_stages (organization_id,run_id,stage,started_at,completed_at) VALUES (${installation.organization_id},${runRow.id},${action},${occurred},${job.completed_at ?? null}) ON CONFLICT (organization_id,run_id,stage) DO UPDATE SET completed_at=COALESCE(dashboard_run_stages.completed_at,EXCLUDED.completed_at)`;
+    const requestedLabels = (job.labels ?? []).map((label) => label.trim().toLowerCase()).filter(Boolean);
+    const [jobRow] = await tx`INSERT INTO dashboard_jobs (organization_id, run_id, github_job_id, name, status, conclusion, stage, runner_name, requested, requested_labels)
+      VALUES (${installation.organization_id},${runRow.id},${workflowJobId},${job.name ?? "job"},${job.status === "completed" ? "completed" : job.status === "in_progress" ? "in_progress" : "queued"},${job.conclusion ?? null},${action},NULL,'{"vcpu":1,"memoryBytes":1,"storageBytes":1,"concurrency":1}',${JSON.stringify(requestedLabels)})
+      ON CONFLICT (organization_id, github_job_id) DO UPDATE SET status=EXCLUDED.status, conclusion=CASE WHEN dashboard_jobs.status='completed' THEN dashboard_jobs.conclusion ELSE EXCLUDED.conclusion END, stage=EXCLUDED.stage, requested_labels=EXCLUDED.requested_labels RETURNING id`;
     return [{ ...runRow, jobId: jobRow.id }];
   });
   return Boolean(run);

@@ -13,6 +13,11 @@ import {
   RepositorySummary,
   RunDetail,
   RunSummary,
+  OnboardingDetail,
+  OnboardingStatus,
+  SelectOnboardingWorkerRequest,
+  ApproveOnboardingRepositoriesRequest,
+  CreatePoolRequest,
 } from "@whitesmith/contracts";
 import { z } from "zod";
 
@@ -149,4 +154,43 @@ export function isUnauthorized(error: unknown): boolean {
 
 export function isOffline(error: unknown): boolean {
   return error instanceof ApiRequestError && error.code === "offline";
+}
+const onboardingStatusResponse = z.custom<OnboardingStatus>();
+const onboardingDetailResponse = z.custom<OnboardingDetail>();
+export const getOnboardingStatus = () => request("/api/onboarding/status", onboardingStatusResponse, { cache: "no-store" });
+export const getOnboardingDetail = () => request("/api/onboarding", onboardingDetailResponse, { cache: "no-store" });
+export async function selectOnboardingWorker(input: SelectOnboardingWorkerRequest) {
+  return request("/api/onboarding/worker", z.object({ ok: z.boolean() }), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(input),
+  });
+}
+export async function approveOnboardingRepositories(input: ApproveOnboardingRepositoriesRequest) {
+  return request("/api/onboarding/repositories", z.object({ ok: z.boolean() }), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(input),
+  });
+}
+export async function beginOnboardingGithubInstall(input: { organizationId: string }) {
+  return request("/api/github/app/install", z.object({ location: z.string().url() }), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(input),
+  });
+}
+export async function beginOnboardingGithubManifest(input: { organizationId: string }) {
+  return request("/api/github/app/manifest", z.object({ action: z.string().url(), manifest: z.string() }), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(input),
+  });
+}
+export async function createOnboardingPool(input: CreatePoolRequest & { organizationId: string }) {
+  return request("/api/organizations/" + input.organizationId + "/pools", z.object({ id: z.string().uuid().optional() }).passthrough(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ workerId: input.workerId, name: input.name, resources: input.resources, triggerLabel: input.triggerLabel, imageDigest: input.imageDigest }),
+  });
 }

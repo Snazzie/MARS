@@ -1,7 +1,8 @@
 import type { DashboardDb } from "@whitesmith/db";
-import type { SessionUser } from "../auth.ts";
+import type { SessionUser, SecretBox } from "../auth.ts";
 import type { RequestLimiter } from "../worker-requests.ts";
 import type { WorkerCommandDispatcher } from "../worker-dispatch.ts";
+import type { GitHubAppService } from "../github-app.ts";
 
 export type ControlPlaneEnv = { Variables: { user: SessionUser } };
 
@@ -11,7 +12,10 @@ export type ControlPlaneHttpDeps = {
   githubClientId: string;
   githubClientSecret: string;
   bootstrapGithubLogin: string;
-  githubWebhookSecret: string;
+  secretBox: SecretBox;
+  githubWebhookSecret?: string;
+  githubApp?: GitHubAppService;
+  defaultJobImages: Partial<Record<"linux-x64" | "windows-x64" | "macos-arm64", string>>;
   currentUser(request: Request): Promise<SessionUser | null>;
   requestId(): string;
   requestSource(request: Request): string;

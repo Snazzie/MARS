@@ -7,3 +7,4 @@ export async function migrate(sql: Sql<{}>): Promise<void> {
 }
 export { schemaSql };
 export * from "./dashboard.ts";
+export * from "./onboarding.ts";

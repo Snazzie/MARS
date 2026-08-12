@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, Outlet } from "@tanstack/react-router";
+import { OnboardingGate } from "./components/OnboardingGate.tsx";
 import { AppShell } from "./components/AppShell.tsx";
+import { OnboardingPage } from "./routes/OnboardingPage.tsx";
 import { OverviewPage } from "./routes/OverviewPage.tsx";
 import { WorkersPage } from "./routes/WorkersPage.tsx";
 import { RunsPage } from "./routes/RunsPage.tsx";
@@ -17,14 +19,17 @@ export function useOrganization(organizations: OrganizationSummary[]) {
   function setOrganizationId(value: string) { setOrganizationIdState(value); try { localStorage.setItem("whitesmith.organization", value); } catch { /* storage can be disabled */ } window.dispatchEvent(new Event("whitesmith-org-change")); }
   return { organizationId, setOrganizationId };
 }
-const rootRoute = createRootRoute({ component: () => <AppShell /> });
-const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: OverviewPage });
-const runsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/runs", component: RunsPage });
-const runDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: "/runs/$runId", component: RunDetailPage });
-const repositoriesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/repositories", component: RepositoriesPage });
-const workersRoute = createRoute({ getParentRoute: () => rootRoute, path: "/workers", component: WorkersPage });
-const poolsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/pools", component: PoolsPage });
-const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage });
-const routeTree = rootRoute.addChildren([indexRoute, runsRoute, runDetailRoute, repositoriesRoute, workersRoute, poolsRoute, settingsRoute]);
+const rootRoute = createRootRoute({ component: () => <Outlet /> });
+const onboardingRoute = createRoute({ getParentRoute: () => rootRoute, path: "/onboarding", component: OnboardingPage });
+const dashboardGateRoute = createRoute({ getParentRoute: () => rootRoute, id: "dashboard-gate", component: OnboardingGate });
+const dashboardRoute = createRoute({ getParentRoute: () => dashboardGateRoute, id: "dashboard", component: AppShell });
+const indexRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/", component: OverviewPage });
+const runsRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/runs", component: RunsPage });
+const runDetailRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/runs/$runId", component: RunDetailPage });
+const repositoriesRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/repositories", component: RepositoriesPage });
+const workersRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/workers", component: WorkersPage });
+const poolsRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/pools", component: PoolsPage });
+const settingsRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/settings", component: SettingsPage });
+const routeTree = rootRoute.addChildren([onboardingRoute, dashboardGateRoute.addChildren([dashboardRoute.addChildren([indexRoute, runsRoute, runDetailRoute, repositoriesRoute, workersRoute, poolsRoute, settingsRoute])])]);
 export const router = createRouter({ routeTree });
 declare module "@tanstack/react-router" { interface Register { router: typeof router } }

@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { listOrganizations, getOverview, listRepositories, listRuns, getRunDetail, listLogChunks, listWorkers, getWorkerDetail, listPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard } from "@whitesmith/db";
 import { adoptWorker } from "../workers.ts";
-import { ApiError, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings } from "@whitesmith/contracts";
+import { ApiError, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest } from "@whitesmith/contracts";
 
 const querySchema = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50), cursor: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional() }).strict();
 const periodSchema = z.enum(["24h", "7d", "30d"]);
@@ -30,6 +30,27 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   app.put("/api/organizations/:organizationId/settings", safe(async(c)=>{const org=c.req.param("organizationId");const denied=await guard(c,deps,org);if(denied)return denied;if(!c.get("user").isGlobalAdmin)return error(c,403,"forbidden","Global administrator authorization required");const idem=requireMutation(c);if(idem)return idem;const body=OrganizationSettings.parse({...await c.req.json(),organizationId:org});const key=c.req.header("idempotency-key")!;if(!(await dashboardMutation(deps.db,org,key)))return c.json(OrganizationSettings.parse(await getOrganizationSettings(deps.db,org)));const value=await updateOrganizationSettings(deps.db,body);await invalidateDashboard(deps.db,org,["settings"]);return c.json(OrganizationSettings.parse(value));}));
   app.get("/api/organizations/:organizationId/workers/:workerId", safe(async(c)=>{const org=c.req.param("organizationId");const denied=await guard(c,deps,org);if(denied)return denied;const value=await getWorkerDetail(deps.db,org,c.req.param("workerId"));return value?c.json(WorkerDetail.parse(value)):error(c,404,"not_found","Resource not found");}));
   app.post("/api/organizations/:organizationId/workers/:workerId/:action", safe(async(c)=>{const org=c.req.param("organizationId"), action=c.req.param("action"), id=c.req.param("workerId");const denied=await guard(c,deps,org);if(denied)return denied;if(!["adopt","reject","drain","remove"].includes(action))return error(c,404,"not_found","Resource not found");const idem=requireMutation(c);if(idem)return idem;const value=await getWorkerDetail(deps.db,org,id);if(!value)return error(c,404,"not_found","Resource not found");if(["adopt","reject","remove"].includes(action)&&!c.get("user").isGlobalAdmin)return error(c,403,"forbidden","Global administrator authorization required");mutationSchema.parse(await c.req.json().catch(()=>({})));if(action==="adopt")await adoptWorker(deps.db,id,c.get("user").id);else if(action==="reject")await deps.db`UPDATE workers SET admission_state='rejected' WHERE id=${id} AND organization_id=${org} AND admission_state='pending'`;else if(action==="drain")await deps.db`UPDATE workers SET draining=true WHERE id=${id} AND organization_id=${org}`;else await deps.db`UPDATE workers SET admission_state='revoked' WHERE id=${id} AND organization_id=${org}`;return c.json({ok:true});}));
+  app.post("/api/organizations/:organizationId/pools", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const denied = await guard(c, deps, org); if (denied) return denied;
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    const idem = requireMutation(c); if (idem) return idem;
+    const body = CreatePoolRequest.parse(await c.req.json());
+    if (body.triggerLabel === "self-hosted" || ["linux", "windows", "macos", "x64", "arm64"].includes(body.triggerLabel)) return error(c, 400, "reserved_trigger_label", "Trigger label is reserved");
+    const worker = await deps.db`SELECT platform,driver,admission_state AS "admissionState",connection_state AS "connectionState",configuration_state AS "configurationState",draining,limits FROM workers WHERE organization_id=${org} AND id=${body.workerId}`;
+    if (!worker[0]) return error(c, 404, "not_found", "Resource not found");
+    const w = worker[0];
+    if (w.admissionState !== "adopted" || w.connectionState !== "online" || w.configurationState !== "ready" || w.draining) return error(c, 422, "worker_not_ready", "Worker is not ready");
+    const labels = w.platform === "linux-x64" ? ["self-hosted", "linux", "x64", body.triggerLabel] : w.platform === "windows-x64" ? ["self-hosted", "windows", "x64", body.triggerLabel] : ["self-hosted", "macos", "arm64", body.triggerLabel];
+    const duplicate = await deps.db`SELECT 1 FROM runner_pools WHERE organization_id=${org} AND (name=${body.name} OR trigger_label=${body.triggerLabel})`;
+    if (duplicate[0]) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
+    const key = c.req.header("idempotency-key")!;
+    if (!(await dashboardMutation(deps.db, org, key))) return c.json({ ok: true });
+    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) VALUES (${org},${body.workerId},${body.name},${w.platform},${w.driver},${body.imageDigest},${JSON.stringify(body.resources)},${JSON.stringify(labels)},${body.triggerLabel},true) RETURNING id`;
+    await deps.db`INSERT INTO audit_events (organization_id,actor,type,payload) VALUES (${org},${c.get("user").id},"pool.created",${JSON.stringify({ poolId: pool.id, workerId: body.workerId, triggerLabel: body.triggerLabel })})`;
+    await invalidateDashboard(deps.db, org, ["pools", "onboarding"]);
+    return c.json({ id: pool.id, labels });
+  }));
   app.post("/api/organizations/:organizationId/pools/:poolId/:action", safe(async (c) => {
     const org = c.req.param("organizationId"), action = c.req.param("action");
     const denied = await guard(c, deps, org); if (denied) return denied;
@@ -48,8 +69,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const idem = requireMutation(c); if (idem) return idem;
     const key = c.req.header("idempotency-key")!;
-    if (!(await dashboardMutation(deps.db, org, key))) return c.json({ ok: true });
-    await deps.db`UPDATE dashboard_installations i SET approved=${action === "approve"} FROM dashboard_repositories r WHERE r.organization_id=${org} AND r.id=${c.req.param("repositoryId")} AND i.organization_id=r.organization_id AND i.id=r.installation_id`;
+    await deps.db`UPDATE dashboard_repositories SET approved=${action === "approve"} WHERE organization_id=${org} AND id=${c.req.param("repositoryId")} AND visibility IN ('private','internal') AND available=true`;
     await invalidateDashboard(deps.db, org, ["repositories"]); return c.json({ ok: true });
   }));
 }

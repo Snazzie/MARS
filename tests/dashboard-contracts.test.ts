@@ -6,7 +6,8 @@ const run = { id: "run-1", organizationId: "org-1", repositoryId: "repo-1", repo
 describe("dashboard contracts", () => {
   test("parses valid overview, repository, run detail, and cursor page", () => {
     expect(OverviewDto.safeParse({ organizationId: "org-1", period: "24h", queued: 0, running: 1, completed: 2, failed: 0, queueP50Ms: 1, queueP95Ms: 2, durationP50Ms: 3, durationP95Ms: 4, concurrency: 1, utilization: { vcpu: .5, memory: .25, storage: 0, pods: 1 } }).success).toBe(true);
-    expect(RepositorySummary.safeParse({ id: "repo-1", organizationId: "org-1", name: "app", fullName: "acme/app", private: true, installationId: "inst-1", approved: true }).success).toBe(true);
+    expect(RepositorySummary.safeParse({ id: "repo-1", organizationId: "org-1", name: "app", fullName: "acme/app", visibility: "private", available: true, approved: true, installationId: "inst-1" }).success).toBe(true);
+    expect(RepositorySummary.safeParse({ id: "repo-1", organizationId: "org-1", name: "app", fullName: "acme/app", private: true, installationId: "inst-1", approved: true }).success).toBe(false);
     const detail = { ...run, jobs: [], stages: [{ stage: "queued" as const, startedAt: run.queuedAt, completedAt: run.startedAt, durationMs: 60_000 }], actionGraph: { nodes: [], edges: [] } };
     expect(RunDetail.safeParse(detail).success).toBe(true);
     expect(RunDetail.safeParse({ ...detail, stages: [{ ...detail.stages[0], startedAt: "bad" }] }).success).toBe(false);

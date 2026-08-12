@@ -4,6 +4,7 @@ import { registerStaticRoutes } from "./static-routes.ts";
 import { registerAuthRoutes } from "./auth-routes.ts";
 import { registerGithubRoutes } from "./github-routes.ts";
 import { registerDashboardRoutes } from "./dashboard-routes.ts";
+import { registerOnboardingRoutes } from "./onboarding-routes.ts";
 import { registerWorkerRoutes } from "./worker-routes.ts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 
@@ -21,6 +22,7 @@ export function createControlPlaneApp(deps: ControlPlaneHttpDeps) {
   app.get("/api/healthz", (c) => c.json({ ok: true }));
   registerAuthRoutes(app, deps);
   registerGithubRoutes(app, deps);
+  registerOnboardingRoutes(app, deps);
   registerStaticRoutes(app, deps);
   const protectedApi = new Hono<ControlPlaneEnv>();
   protectedApi.use("/api/organizations/*", requireSession(deps));
