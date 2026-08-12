@@ -1,5 +1,6 @@
-import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail, PoolSummary, OrganizationSettings } from "@whitesmith/contracts";
 import type { Sql } from "postgres";
+import { CapacitySnapshot, RuntimeDriverName, RuntimePlatform, WorkerDoctor, WorkerLimits } from "@whitesmith/contracts";
+import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail, PoolSummary, OrganizationSettings } from "@whitesmith/contracts";
 export type DashboardDb = Sql<{}>;
 export type RunTransition = { status: RunSummary["status"]; conclusion: RunSummary["conclusion"]; startedAt?: string | null; completedAt?: string | null };
 const statusOrder: Record<RunSummary["status"], number> = { queued: 0, in_progress: 1, completed: 2 };
@@ -30,7 +31,62 @@ export async function listRepositories(db: DashboardDb, organizationId: string, 
 export async function listRuns(db: DashboardDb, organizationId: string, limit = 50): Promise<CursorPage<RunSummary>> { const rows = await db<RunSummary[]>`SELECT r.id, r.organization_id AS "organizationId", r.repository_id AS "repositoryId", p.name AS "repositoryName", r.run_number AS "runNumber", r.workflow_name AS "workflowName", r.event, r.branch, r.commit_sha AS "commitSha", r.actor_login AS "actorLogin", r.status, r.conclusion, r.queued_at AS "queuedAt", r.started_at AS "startedAt", r.completed_at AS "completedAt", 0::bigint AS "durationMs", r.runtime_boundary AS "runtimeBoundary" FROM dashboard_runs r JOIN dashboard_repositories p ON p.organization_id=r.organization_id AND p.id=r.repository_id WHERE r.organization_id=${organizationId} ORDER BY r.queued_at DESC, r.id DESC LIMIT ${limit + 1}`; return { items: rows.slice(0, limit), nextCursor: rows.length > limit ? rows[limit - 1].id : null }; }
 export async function getRunDetail(db: DashboardDb, organizationId: string, runId: string): Promise<RunDetail | null> { const [run] = await listRuns(db, organizationId, 1000).then(page => page.items.filter(x => x.id === runId)); if (!run) return null; const jobs = await db<RunJob[]>`SELECT id,name,status,conclusion,stage,runner_name AS "runnerName",requested,observed FROM dashboard_jobs WHERE organization_id=${organizationId} AND run_id=${runId} ORDER BY id`; const edges = await db<{from:string;to:string}[]>`SELECT from_job_id AS from,to_job_id AS to FROM dashboard_action_edges WHERE organization_id=${organizationId} AND run_id=${runId}`; const stages = await db<RunStageRecord[]>`SELECT stage, started_at AS "startedAt", completed_at AS "completedAt", COALESCE(EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000, 0)::bigint AS "durationMs" FROM dashboard_run_stages WHERE organization_id=${organizationId} AND run_id=${runId} ORDER BY started_at`; return { ...run, jobs, stages, actionGraph: { nodes: jobs.map(job => ({ id: job.id, name: job.name, status: job.stage })), edges } as ActionGraph }; }
 export async function listLogChunks(db: DashboardDb, organizationId: string, runId: string, jobId: string, after = -1, limit = 100): Promise<CursorPage<LogChunk>> { const rows = await db<LogChunk[]>`SELECT organization_id AS "organizationId", run_id AS "runId", job_id AS "jobId", sequence, content, false AS "hasMore", occurred_at AS "occurredAt" FROM dashboard_log_chunks WHERE organization_id=${organizationId} AND run_id=${runId} AND job_id=${jobId} AND sequence>${after} ORDER BY sequence LIMIT ${limit + 1}`; return { items: rows.slice(0, limit).map(x => ({ ...x, hasMore: rows.length > limit })), nextCursor: rows.length > limit ? String(rows[limit - 1].sequence) : null }; }
-export async function listWorkers(db: DashboardDb, organizationId: string, limit = 50): Promise<CursorPage<WorkerDetail>> { const rows = await db<WorkerDetail[]>`SELECT id, organization_id AS "organizationId", name, platform, 'kata-k3s' AS driver, admission_state AS "admissionState", connection_state AS "connectionState", configuration_state AS "configurationState", fingerprint, limits, doctor, jsonb_build_object('vcpu',jsonb_build_object('actual',1,'reserved',0,'free',1),'memoryBytes',jsonb_build_object('actual',1,'reserved',0,'free',1),'storageBytes',jsonb_build_object('actual',1,'reserved',0,'free',1),'pods',jsonb_build_object('actual',1,'reserved',0,'free',1)) AS capacity, 0 AS "activeSandboxes", false AS draining FROM workers WHERE organization_id=${organizationId} ORDER BY name LIMIT ${limit + 1}`; return { items: rows.slice(0, limit), nextCursor: rows.length > limit ? rows[limit - 1].id : null }; }
+function jsonValue(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try { return JSON.parse(value); } catch { return value; }
+}
+function numberValue(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+function workerCapacity(value: unknown): WorkerDetail["capacity"] {
+  const parsed = jsonValue(value);
+  const wrapper = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+  const source = wrapper.capacity && typeof wrapper.capacity === "object" ? wrapper.capacity as Record<string, unknown> : wrapper;
+  const metric = (name: string, fallbackActual: number) => {
+    const raw = source[name];
+    const object = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+    const actual = Math.max(1, numberValue(object.actual, fallbackActual));
+    return { actual, reserved: Math.max(0, numberValue(object.reserved, 0)), free: Math.max(0, numberValue(object.free, actual)) };
+  };
+  const flat = (name: string, fallback: number) => numberValue(source[name], fallback);
+  return CapacitySnapshot.parse({
+    vcpu: source.vcpu ? metric("vcpu", 1) : { actual: Math.max(1, flat("actualVcpu", 1)), reserved: 0, free: Math.max(0, flat("freeVcpu", flat("actualVcpu", 1))) },
+    memoryBytes: source.memoryBytes ? metric("memoryBytes", 1) : { actual: Math.max(1, flat("actualMemoryBytes", 1)), reserved: 0, free: Math.max(0, flat("freeMemoryBytes", flat("actualMemoryBytes", 1))) },
+    storageBytes: source.storageBytes ? metric("storageBytes", 1) : { actual: Math.max(1, flat("actualStorageBytes", 1)), reserved: 0, free: Math.max(0, flat("freeStorageBytes", flat("actualStorageBytes", 1))) },
+    pods: source.pods ? metric("pods", 1) : { actual: 1, reserved: 0, free: 1 },
+  });
+}
+function workerDoctor(value: unknown): WorkerDetail["doctor"] {
+  const parsed = jsonValue(value);
+  const wrapper = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+  const source = wrapper.doctor && typeof wrapper.doctor === "object" ? wrapper.doctor as Record<string, unknown> : null;
+  if (!source) return null;
+  const candidate: Record<string, unknown> = {};
+  for (const key of ["nestedKvm", "kvmModules", "probe", "egress", "imageSignatures", "blockVolume"]) {
+    if (typeof source[key] === "boolean") candidate[key] = source[key];
+  }
+  if (typeof source.runtimeHandler === "string") candidate.runtimeHandler = source.runtimeHandler;
+  if (typeof source.remediation === "string" || source.remediation === null) candidate.remediation = source.remediation;
+  if (source.versions && typeof source.versions === "object") candidate.versions = source.versions;
+  const result = WorkerDoctor.safeParse(candidate);
+  return result.success ? result.data : null;
+}
+function normalizeWorker(row: Record<string, unknown>): WorkerDetail {
+  const platform = RuntimePlatform.parse(row.platform);
+  const driver = RuntimeDriverName.parse(platform === "linux-x64" ? "kata-k3s" : platform === "windows-x64" ? "windows-hyperv" : "tart-vm");
+  const limitsValue = WorkerLimits.safeParse(jsonValue(row.limits));
+  return {
+    ...row,
+    platform,
+    driver,
+    limits: limitsValue.success ? limitsValue.data : null,
+    doctor: workerDoctor(row.doctor),
+    capacity: workerCapacity(row.doctor),
+    activeSandboxes: numberValue(row.activeSandboxes, 0),
+    draining: row.draining === true,
+  } as WorkerDetail;
+}
+export async function listWorkers(db: DashboardDb, organizationId: string, limit = 50): Promise<CursorPage<WorkerDetail>> { const rows = await db<Record<string, unknown>[]>`SELECT id, organization_id AS "organizationId", name, platform, admission_state AS "admissionState", connection_state AS "connectionState", configuration_state AS "configurationState", fingerprint, limits, doctor, 0 AS "activeSandboxes", false AS draining FROM workers WHERE organization_id=${organizationId} ORDER BY name LIMIT ${limit + 1}`; const items = rows.slice(0, limit).map(normalizeWorker); return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null }; }
 export async function getWorkerDetail(db: DashboardDb, organizationId: string, workerId: string): Promise<WorkerDetail | null> { const page = await listWorkers(db, organizationId, 1000); return page.items.find(worker => worker.id === workerId) ?? null; }
 export async function recordRunTransition(db: DashboardDb, organizationId: string, runId: string, transition: RunTransition): Promise<void> { await db`UPDATE dashboard_runs SET status=${transition.status}, conclusion=${transition.conclusion}, started_at=COALESCE(${transition.startedAt ?? null}, started_at), completed_at=COALESCE(${transition.completedAt ?? null}, completed_at) WHERE organization_id=${organizationId} AND id=${runId} AND status <> 'completed' AND (status='queued' OR ${transition.status} <> 'queued')`; }
 export async function recordRunStage(db: DashboardDb, organizationId: string, runId: string, stage: RunStage): Promise<void> { await db`INSERT INTO dashboard_run_stages (organization_id,run_id,stage) VALUES (${organizationId},${runId},${stage}) ON CONFLICT DO NOTHING`; }
