@@ -4,10 +4,14 @@ umask 077
 
 usage() { echo "usage: $0" >&2; exit 2; }
 parse_args() {
-  [ "$#" -eq 0 ] || usage
   JOIN_CODE=""
-  [ -t 0 ] || { echo "interactive terminal required for enrollment code" >&2; exit 2; }
-  read -r -s -p "Whitesmith enrollment code: " JOIN_CODE; printf '\n' >&2
+  if [ "$#" -eq 2 ] && [ "$1" = "--code" ]; then
+    JOIN_CODE="$2"
+  elif [ "$#" -eq 0 ] && [ -t 0 ]; then
+    read -r -s -p "Whitesmith enrollment code: " JOIN_CODE; printf '\n' >&2
+  else
+    usage
+  fi
   [[ "$JOIN_CODE" =~ ^[A-Za-z0-9_-]{43}$ ]] || usage
 }
 validate_control_plane_url() {

@@ -14,14 +14,14 @@ async function invoke(script: string, args: string[], env: Record<string, string
   return { exitCode: await proc.exited, stdout: await new Response(proc.stdout).text(), stderr: await new Response(proc.stderr).text() };
 }
 
-test.each([linux, mac])("%s rejects noninteractive invocation and malformed code before host checks", async (script) => {
+test.each([linux, mac])("%s rejects missing or malformed code before host checks", async (script) => {
   const missing = await invoke(script, []);
   expect(missing.exitCode).toBe(2);
-  expect(missing.stderr).toContain("interactive terminal required");
+  expect(missing.stderr).toContain("usage:");
   for (const args of [["--unknown"], ["--code"], ["--code", ""], ["--code", valid, "--code", valid], ["--code", "short"]]) {
     const result = await invoke(script, args);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr.includes("usage:") || result.stderr.includes("interactive terminal required")).toBe(true);
+    expect(result.stderr).toContain("usage:");
   }
 });
 
