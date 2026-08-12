@@ -6,10 +6,11 @@ import { GitHubAppService } from "./github-app.ts";
 const masterKey = Buffer.alloc(32, 7).toString("base64");
 const organizationId = "11111111-1111-4111-8111-111111111111";
 const testPem = generateKeyPairSync("rsa", { modulusLength: 2048, privateKeyEncoding: { type: "pkcs8", format: "pem" }, publicKeyEncoding: { type: "spki", format: "pem" } }).privateKey;
-const fakeDb: { setupStates: Map<string, unknown>; installations: Map<number, unknown>; repositories: Map<string, unknown>; appConfig?: { id: number; slug: string; pem: string; clientSecret: string; webhookSecret: string } } = {
+const fakeDb: { setupStates: Map<string, unknown>; installations: Map<number, unknown>; repositories: Map<string, unknown>; organizations?: Map<string, { githubOrgId: number }>; appConfig?: { id: number; slug: string; pem: string; clientSecret: string; webhookSecret: string } } = {
   setupStates: new Map(),
   installations: new Map(),
   repositories: new Map(),
+  organizations: new Map(),
 };
 
 function resetDb() {
@@ -84,22 +85,70 @@ describe("GitHub App onboarding", () => {
     expect(fakeDb.appConfig?.webhookSecret).not.toContain("webhook-secret");
   });
 
-  test("rejects expired, replayed, wrong-user, wrong-organization, all, and public-only installation callbacks", async () => {
-    const github = service(async () => Response.json({ account: { type: "User", login: "someone" } }));
-    await expect(github.completeInstallation("missing-cookie", "not-a-cookie", 1)).rejects.toThrow();
-    await expect(github.completeInstallation("admin-1", "expired-cookie", 1)).rejects.toThrow();
-    await expect(github.completeInstallation("admin-1", "wrong-org-cookie", 1)).rejects.toThrow();
-    await expect(github.completeInstallation("admin-1", "all-public-cookie", 1)).rejects.toThrow();
-    await expect(github.completeInstallation("admin-1", "public-only-cookie", 1)).rejects.toThrow();
+  test("keeps all-repository organization installations pending and unbound", async () => {
+    const github = service(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/app/installations/42")) return Response.json({ account: { type: "Organization", id: 99 }, repository_selection: "all" });
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/installation/repositories")) return Response.json({ repository_selection: "all", repositories: [{ id: 7, full_name: "acme/private", visibility: "private" }, { id: 8, full_name: "acme/public", visibility: "public" }] });
+      return Response.json({});
+    });
+    fakeDb.appConfig = { id: 9, slug: "whitesmith", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "y" };
+    fakeDb.organizations = new Map([[organizationId, { githubOrgId: 99 }]]);
+    const launch = await github.beginInstallation("admin-1", organizationId, "key");
+    await expect(github.completeInstallation("admin-1", launch.installCookie!, 42)).rejects.toThrow("repository_selection_required");
+    expect(fakeDb.installations.get(42)).toMatchObject({ state: "pending", repositorySelection: "all" });
+    expect(fakeDb.repositories.get("7")).toMatchObject({ approved: false, available: true });
   });
 
-  test("persists the installation organization before reporting repository selection remediation", async () => {
+  test("rejects public-only all-repository installations", async () => {
+    const github = service(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/app/installations/42")) return Response.json({ account: { type: "Organization", id: 99 }, repository_selection: "all" });
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/installation/repositories")) return Response.json({ repository_selection: "all", repositories: [{ id: 8, full_name: "acme/public", visibility: "public" }] });
+      return Response.json({});
+    });
+    fakeDb.appConfig = { id: 9, slug: "whitesmith", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "y" };
+    fakeDb.organizations = new Map([[organizationId, { githubOrgId: 99 }]]);
+    fakeDb.setupStates.set("cookie", { purpose: "install", userId: "admin-1", organizationId, idempotencyKey: "key", encryptedState: new SecretBox(masterKey).encrypt("cookie"), expiresAt: Date.now() + 60_000 });
+    const launch = await github.beginInstallation("admin-1", organizationId, "key");
+    await expect(github.completeInstallation("admin-1", launch.installCookie!, 42)).rejects.toThrow("repository_selection_required");
+  });
+
+  test("wrong-organization callback leaves install state unconsumed", async () => {
+    const github = service(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/app/installations/42")) return Response.json({ account: { type: "Organization", id: 100 }, repository_selection: "selected" });
+      return Response.json({});
+    });
+    fakeDb.appConfig = { id: 9, slug: "whitesmith", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "y" };
+    fakeDb.organizations = new Map([[organizationId, { githubOrgId: 99 }]]);
+    const launch = await github.beginInstallation("admin-1", organizationId, "wrong-org-key");
+    await expect(github.completeInstallation("admin-1", launch.installCookie!, 42)).rejects.toThrow("wrong_organization");
+    const states = [...fakeDb.setupStates.values()] as Array<{ consumedAt?: number }>;
+    expect(states).toHaveLength(1);
+    expect(states[0]?.consumedAt).toBeUndefined();
+    expect(fakeDb.installations.size).toBe(0);
+  });
+  test("preserves explicit approvals across full repository snapshots", async () => {
+    const github = service(async () => Response.json({}));
+    fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "selected", githubAccountId: 99 });
+    fakeDb.repositories.set("1", { id: "1", installationId: 42, fullName: "acme/private", visibility: "private", available: true, approved: true });
+    fakeDb.repositories.set("2", { id: "2", installationId: 42, fullName: "acme/removed", visibility: "private", available: true, approved: true });
+    await github.reconcileInstallationRepositories({ installation: { id: 42 }, repository_selection: "selected", repositories: [{ id: 1, full_name: "acme/private", visibility: "private" }, { id: 3, full_name: "acme/new", visibility: "internal" }] });
+    expect(fakeDb.repositories.get("1")).toMatchObject({ available: true, approved: true });
+    expect(fakeDb.repositories.get("2")).toMatchObject({ available: false, approved: false });
+    expect(fakeDb.repositories.get("3")).toMatchObject({ available: true, approved: false });
+  });
+  test("leaves all-repository installation unbound before remediation", async () => {
     const calls: string[] = [];
     const sql = ((strings: TemplateStringsArray, ...values: unknown[]) => {
       const query = strings.join("?");
       calls.push(query);
-      if (query.includes("UPDATE github_setup_states")) return [{ purpose: "install", user_id: "admin-1", organization_id: organizationId, idempotency_key: "key", encrypted_state: null, encrypted_pkce_verifier: null, expires_at: new Date(Date.now() + 60_000), consumed_at: new Date() }];
+      if (query.includes("SELECT purpose,user_id")) return [{ purpose: "install", user_id: "admin-1", organization_id: organizationId, idempotency_key: "key", encrypted_state: null, encrypted_pkce_verifier: null, expires_at: new Date(Date.now() + 60_000), consumed_at: null }];
       if (query.includes("SELECT app_id,slug")) return [{ app_id: 9, slug: "whitesmith", client_id: null, encrypted_pem: new SecretBox(masterKey).encrypt(testPem), encrypted_client_secret: "x", encrypted_webhook_secret: "y" }];
+      if (query.includes("UPDATE github_setup_states")) return [{ purpose: "install", user_id: "admin-1", organization_id: organizationId, idempotency_key: "key", encrypted_state: null, encrypted_pkce_verifier: null, expires_at: new Date(Date.now() + 60_000), consumed_at: new Date() }];
       if (query.includes("SELECT github_org_id")) return [{ github_org_id: 99 }];
       if (query.includes("INSERT INTO dashboard_installations")) return [{ id: "22222222-2222-4222-8222-222222222222" }];
       if (query.includes("UPDATE system_onboarding SET organization_id")) return [];
@@ -113,7 +162,7 @@ describe("GitHub App onboarding", () => {
       return Response.json({});
     }, secretBox: new SecretBox(masterKey), baseUrl: "https://control-plane.test" } as never);
     await expect(github.completeInstallation("admin-1", "cookie", 42)).rejects.toThrow("repository_selection_required");
-    expect(calls.some((query) => query.includes("UPDATE system_onboarding SET organization_id"))).toBe(true);
+    expect(calls.some((query) => query.includes("UPDATE system_onboarding SET organization_id"))).toBe(false);
   });
 
   test("resumes onboarding when a signed webhook already recorded an approved installation", async () => {
@@ -154,11 +203,11 @@ describe("GitHub App onboarding", () => {
       ],
     });
     expect(fakeDb.installations.get(42)).toMatchObject({ state: "approved", repositorySelection: "selected" });
-    expect(fakeDb.repositories.get("4")).toMatchObject({ available: false });
+    expect(fakeDb.repositories.get("4")).toMatchObject({ available: true, approved: false });
     await github.reconcileInstallationRepositories({ installation: { id: 42 }, repositories_removed: [{ id: 1 }, { id: 2 }] });
     expect(fakeDb.repositories.get("1")).toMatchObject({ available: false });
     expect(fakeDb.repositories.has("1")).toBe(true);
-    expect(fakeDb.installations.get(42)).toMatchObject({ state: "pending" });
+    expect(fakeDb.installations.get(42)).toMatchObject({ state: "approved" });
   });
 
   test("validates each webhook against the current decrypted secret and dispatches installation removal", async () => {

@@ -14,7 +14,14 @@ type Row = Record<string, unknown>;
 
 const first = (rows: readonly unknown[]): Row | undefined => rows[0] && typeof rows[0] === "object" ? rows[0] as Row : undefined;
 const stringValue = (value: unknown): string | null => typeof value === "string" ? value : value instanceof Date ? value.toISOString() : null;
-const objectValue = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+const objectValue = (value: unknown): Record<string, unknown> => {
+ const parsed = typeof value === "string" ? (() => { try { return JSON.parse(value) as unknown; } catch { return value; } })() : value;
+ return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+};
+const nullableObjectValue = (value: unknown): Record<string, unknown> | null => {
+ if (value === null || value === undefined) return null;
+ return objectValue(value);
+};
 const numberValue = (value: unknown): number => typeof value === "number" ? value : Number(value ?? 0);
 
 export async function getOnboardingStatus(db: OnboardingDb, auth: { authenticated?: boolean; canManage?: boolean } = {}): Promise<OnboardingStatus> {
@@ -29,7 +36,7 @@ export async function getOnboardingStatus(db: OnboardingDb, auth: { authenticate
         JOIN dashboard_repositories r ON r.installation_id=i.id AND r.organization_id=i.organization_id
         WHERE i.organization_id=so.organization_id
           AND i.state='approved'
-          AND i.repository_selection='selected'
+          AND i.repository_selection IN ('all','selected')
           AND r.available=true AND r.approved=true
           AND r.visibility IN ('private','internal')
       ) AS "githubReady"
@@ -84,7 +91,7 @@ export async function getOnboardingDetail(
       vmUuid: String(selectedRow.vmUuid ?? ""), machineUuid: String(selectedRow.machineUuid ?? ""),
       doctor: objectValue(telemetry.doctor) as OnboardingWorker["doctor"],
       capacity: objectValue(telemetry.capacity) as OnboardingWorker["capacity"],
-      limits: selectedRow.limits as OnboardingWorker["limits"],
+      limits: nullableObjectValue(selectedRow.limits) as OnboardingWorker["limits"],
       configurationRevision: stringValue(selectedRow.configurationRevision),
     };
   }

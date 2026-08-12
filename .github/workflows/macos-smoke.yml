@@ -1,12 +1,19 @@
 name: macOS runner smoke
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 jobs:
   smoke:
     runs-on: [self-hosted, macOS, ARM64, whitesmith-macos]
+    timeout-minutes: 10
     steps:
+      - name: Check out project
+        uses: actions/checkout@v4
       - name: Inspect runner
         run: |
           sw_vers
           uname -a
           sysctl -n hw.ncpu
+          test -f package.json
+          test -d .github/workflows

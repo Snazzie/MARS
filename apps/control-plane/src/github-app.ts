@@ -36,7 +36,7 @@ export class GitHubAppService {
   private stateKey(raw: string): string { return createHash("sha256").update(raw).digest("hex"); }
 
   private async findState(raw: string): Promise<SetupState | null> {
-    if (!isSql(this.db)) return this.db.setupStates.get(this.stateKey(raw)) ?? null;
+    if (!isSql(this.db)) return this.db.setupStates.get(this.stateKey(raw)) ?? this.db.setupStates.get(raw) ?? null;
     const rows = await this.db<SetupRow[]>`SELECT purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at FROM github_setup_states WHERE state_hash=decode(${this.stateKey(raw)},'hex')`;
     const row = rows[0];
     return row ? { purpose: row.purpose, userId: row.user_id, organizationId: row.organization_id, idempotencyKey: row.idempotency_key, encryptedState: row.encrypted_state ?? undefined, encryptedPkceVerifier: row.encrypted_pkce_verifier ?? undefined, expiresAt: nowMs(row.expires_at), consumedAt: row.consumed_at ? nowMs(row.consumed_at) : undefined } : null;
@@ -49,7 +49,7 @@ export class GitHubAppService {
 
   private async consume(raw: string, userId: string, purpose: SetupState["purpose"]): Promise<SetupState> {
     if (!isSql(this.db)) {
-      const state = this.db.setupStates.get(this.stateKey(raw));
+      const state = this.db.setupStates.get(this.stateKey(raw)) ?? this.db.setupStates.get(raw);
       if (!state || state.purpose !== purpose || state.userId !== userId || state.consumedAt || state.expiresAt < Date.now()) throw new Error("setup_state_expired");
       state.consumedAt = Date.now();
       return state;
@@ -105,11 +105,10 @@ export class GitHubAppService {
         SELECT i.id
         FROM dashboard_installations i
         WHERE i.organization_id=${organizationId}
-          AND i.state='approved'
           AND i.repository_selection='selected'
           AND EXISTS (
             SELECT 1 FROM dashboard_repositories r
-            WHERE r.installation_id=i.id AND r.available=true
+            WHERE r.installation_id=i.id AND r.available=true AND r.approved=true
               AND r.visibility IN ('private','internal')
           )
         ORDER BY i.created_at DESC
@@ -178,24 +177,28 @@ export class GitHubAppService {
   }
 
   async completeInstallation(userId: string, installCookie: string, installationId: number): Promise<void> {
-    const setup = await this.consume(installCookie, userId, "install");
+    const pending = await this.findState(installCookie);
+    if (!pending || pending.purpose !== "install" || pending.userId !== userId || pending.consumedAt || pending.expiresAt < Date.now()) throw new Error("setup_state_expired");
     const accountInfo = await this.gh(`/app/installations/${installationId}`, {}, await this.appJwt());
     const account = accountInfo.account && typeof accountInfo.account === "object" ? accountInfo.account as { type?: unknown; id?: unknown } : {};
     const accountId = typeof account.id === "number" ? account.id : Number(account.id);
-    const expectedOrgId = await this.organizationGithubId(setup.organizationId ?? "");
+    const expectedOrgId = await this.organizationGithubId(pending.organizationId ?? "");
     if (account.type !== "Organization" || !Number.isSafeInteger(accountId) || expectedOrgId === null || accountId !== expectedOrgId) throw new Error("wrong_organization");
+    const setup = await this.consume(installCookie, userId, "install");
     const token = await this.gh(`/app/installations/${installationId}/access_tokens`, { method: "POST" }, await this.appJwt());
     const accessToken = typeof token.token === "string" ? token.token : "";
     if (!accessToken) throw new Error("github_token_missing");
     const reposResponse = await this.gh("/installation/repositories", {}, accessToken);
     const repositoryRows = Array.isArray(reposResponse.repositories) ? reposResponse.repositories : [];
     const repositorySelection = accountInfo.repository_selection === "all" || reposResponse.repository_selection === "all" ? "all" : "selected";
-    const repos = repositoryRows.flatMap((raw) => { if (!raw || typeof raw !== "object") return []; const value = raw as { id?: unknown; full_name?: unknown; private?: unknown; visibility?: unknown }; if (typeof value.id !== "number" || typeof value.full_name !== "string") return []; return [{ id: String(value.id), installationId, fullName: value.full_name, visibility: visibilityOf(value), available: true, approved: false } satisfies Repository]; });
+    const repos = repositoryRows.flatMap((raw) => { if (!raw || typeof raw !== "object") return []; const value = raw as { id?: unknown; full_name?: unknown; private?: unknown; visibility?: unknown }; if (typeof value.id !== "number" || typeof value.full_name !== "string") return []; return [{ id: String(value.id), installationId, fullName: value.full_name, visibility: visibilityOf(value), available: true, approved: false as boolean } satisfies Repository]; });
     const hasAllowed = repos.some((repo) => repo.visibility === "private" || repo.visibility === "internal");
-    const approved = repositorySelection === "selected" && hasAllowed;
-    await this.persistInstallation(setup.organizationId!, installationId, approved ? "approved" : "pending", repositorySelection, accountId, repos);
-    if (isSql(this.db)) await this.db`UPDATE system_onboarding SET organization_id=${setup.organizationId} WHERE singleton=true AND admin_user_id=${userId}`;
-    if (!approved) throw new Error("repository_selection_required");
+    await this.persistInstallation(setup.organizationId!, installationId, repositorySelection === "selected" && hasAllowed ? "approved" : "pending", repositorySelection, accountId, repos);
+    if (repositorySelection === "selected" && hasAllowed) {
+      if (isSql(this.db)) await this.db`UPDATE system_onboarding SET organization_id=${setup.organizationId} WHERE singleton=true AND admin_user_id=${userId}`;
+      return;
+    }
+    throw new Error("repository_selection_required");
   }
 
   async reconcileInstallationRepositories(payload: unknown): Promise<void> {
@@ -204,27 +207,45 @@ export class GitHubAppService {
     const id = Number(data.installation?.id);
     if (!isSql(this.db)) {
       const installation = this.db.installations.get(id);
-      if (["suspend", "suspended", "deleted", "uninstalled"].includes(data.action ?? "") && installation) installation.state = "suspended";
-      if (installation?.repositorySelection === "all" && data.repository_selection === "selected") {
-        for (const repo of this.db.repositories.values()) if (repo.installationId === id) { repo.available = false; repo.approved = false; }
+      for (const repo of data.repositories_removed ?? []) {
+        const existing = this.db.repositories.get(String(repo.id));
+        if (existing) { existing.available = false; existing.approved = false; }
       }
-      if (data.repository_selection && installation) installation.repositorySelection = data.repository_selection;
-      for (const repo of data.repositories_removed ?? []) { const existing = this.db.repositories.get(String(repo.id)); if (existing) existing.available = false; }
-      for (const raw of data.repositories_added ?? data.repositories ?? []) { const existing = this.db.repositories.get(String(raw.id)); const value = { id: String(raw.id), installationId: id, fullName: raw.full_name, visibility: visibilityOf(raw), available: true, approved: false }; this.db.repositories.set(String(raw.id), existing ? { ...existing, ...value } : value); }
-      if (installation && installation.state !== "suspended") {
-        const hasAllowed = [...this.db.repositories.values()].some((repo) => repo.installationId === id && repo.available && (repo.visibility === "private" || repo.visibility === "internal"));
-        installation.state = installation.repositorySelection === "selected" && hasAllowed ? "approved" : "pending";
+      if (!installation) return;
+      if (["suspend", "suspended", "deleted", "uninstalled"].includes(data.action ?? "")) installation.state = "suspended";
+      if (data.repository_selection) installation.repositorySelection = data.repository_selection;
+      const effectiveSelection = installation.repositorySelection;
+      const fullSnapshot = data.repositories !== undefined;
+      if (fullSnapshot) {
+        const snapshotIds = new Set(data.repositories!.map((repo) => String(repo.id)));
+        for (const repo of this.db.repositories.values()) if (repo.installationId === id && !snapshotIds.has(repo.id)) { repo.available = false; repo.approved = false; }
+      }
+      for (const raw of data.repositories_added ?? data.repositories ?? []) {
+        const visibility = visibilityOf(raw);
+        const existing = this.db.repositories.get(String(raw.id));
+        const value = { id: String(raw.id), installationId: id, fullName: raw.full_name, visibility, available: true, approved: fullSnapshot && existing?.available === true ? existing.approved : false };
+        this.db.repositories.set(String(raw.id), existing ? { ...existing, ...value } : value);
+      }
+      if (installation.state !== "suspended") {
+        const eligible = [...this.db.repositories.values()].some((repo) => repo.installationId === id && repo.available && (repo.visibility === "private" || repo.visibility === "internal"));
+        installation.state = effectiveSelection === "selected" && eligible ? "approved" : "pending";
       }
       return;
     }
     const installations = await this.db<Array<{ id: string; organization_id: string; state: string; repository_selection: "all" | "selected" | null }>>`SELECT id,organization_id,state,repository_selection FROM dashboard_installations WHERE github_installation_id=${id}`;
     const installation = installations[0];
     if (!installation) return;
+    const fullSnapshot = data.repositories !== undefined;
+    if (fullSnapshot) {
+      const snapshotIds = data.repositories!.map((repo) => repo.id);
+      await this.db`UPDATE dashboard_repositories SET available=false,approved=false WHERE installation_id=${installation.id} AND github_repository_id != ALL(${snapshotIds})`;
+    }
     if (["suspend", "suspended", "deleted", "uninstalled"].includes(data.action ?? "")) await this.db`UPDATE dashboard_installations SET state='suspended' WHERE id=${installation.id}`;
-    if (installation.repository_selection === "all" && data.repository_selection === "selected") await this.db`UPDATE dashboard_repositories SET available=false,approved=false WHERE installation_id=${installation.id}`;
     if (data.repository_selection) await this.db`UPDATE dashboard_installations SET repository_selection=${data.repository_selection} WHERE id=${installation.id}`;
     for (const repo of data.repositories_removed ?? []) await this.db`UPDATE dashboard_repositories SET available=false,approved=false WHERE installation_id=${installation.id} AND github_repository_id=${repo.id}`;
-    for (const raw of data.repositories_added ?? data.repositories ?? []) await this.db`INSERT INTO dashboard_repositories (organization_id,installation_id,github_repository_id,name,full_name,visibility,available,approved) VALUES (${installation.organization_id},${installation.id},${raw.id},${raw.full_name.split("/").at(-1) ?? raw.full_name},${raw.full_name},${visibilityOf(raw)},true,false) ON CONFLICT (organization_id,github_repository_id) DO UPDATE SET available=true,approved=false,visibility=excluded.visibility,full_name=excluded.full_name,name=excluded.name`;
+    for (const raw of data.repositories_added ?? data.repositories ?? []) {
+      await this.db`INSERT INTO dashboard_repositories (organization_id,installation_id,github_repository_id,name,full_name,visibility,available,approved) VALUES (${installation.organization_id},${installation.id},${raw.id},${raw.full_name.split("/").at(-1) ?? raw.full_name},${raw.full_name},${visibilityOf(raw)},true,false) ON CONFLICT (organization_id,github_repository_id) DO UPDATE SET available=true,approved=CASE WHEN ${fullSnapshot} THEN dashboard_repositories.approved ELSE false END,visibility=excluded.visibility,full_name=excluded.full_name,name=excluded.name`;
+    }
     await this.db`UPDATE dashboard_installations i SET state=CASE
       WHEN i.state='suspended' THEN i.state
       WHEN i.repository_selection='selected' AND EXISTS (
