@@ -1,4 +1,6 @@
 import { generateKeyPairSync, sign as signMessage } from "node:crypto";
+import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { statfsSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
 import type { WorkerCapacityData, WorkerDoctorData } from "@whitesmith/contracts";
@@ -87,6 +89,70 @@ function validateControlPlaneUrl(baseUrl: string): URL {
   if (url.protocol !== "https:" && !(loopback && url.protocol === "http:") && !allowInsecureHttp) throw new Error("control plane must use HTTPS (TLS 1.3) except explicit localhost development");
   return url;
 }
+type MacWorkerIdentity = { workerId: string; publicKey: string; privateKey: string };
+
+function identityFilePath(): string {
+  return Bun.env.WHITESMITH_WORKER_IDENTITY_FILE ?? `${Bun.env.HOME ?? "."}/Library/Application Support/Whitesmith/worker-identity.json`;
+}
+export function parseMacWorkerIdentity(value: unknown): MacWorkerIdentity {
+  if (!value || typeof value !== "object") throw new Error("worker identity is invalid");
+  const record = value as Record<string, unknown>;
+  if (typeof record.workerId !== "string" || typeof record.publicKey !== "string" || typeof record.privateKey !== "string") throw new Error("worker identity is invalid");
+  return { workerId: record.workerId, publicKey: record.publicKey, privateKey: record.privateKey };
+}
+
+async function loadMacWorkerIdentity(): Promise<MacWorkerIdentity | null> {
+  const path = identityFilePath();
+  try { return parseMacWorkerIdentity(JSON.parse(await readFile(path, "utf8"))); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function saveMacWorkerIdentity(identity: MacWorkerIdentity): Promise<void> {
+  const path = identityFilePath();
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await writeFile(path, `${JSON.stringify(identity)}\n`, { mode: 0o600 });
+  await chmod(path, 0o600);
+}
+
+async function enrollMacWorker(controlPlane: URL, identity: MacWorkerIdentity): Promise<MacWorkerIdentity> {
+  const codeBytes = await readJoinCode();
+  try {
+    const payload = await currentMacWorkerJoinPayload(codeBytes.toString("utf8").trim(), identity.publicKey);
+    const response = await fetch(new URL("/api/workers/join", controlPlane), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) throw new Error(`worker join failed: ${response.status} ${await response.text()}`);
+    const joined = await response.json() as { workerId?: string };
+    if (typeof joined.workerId !== "string" || !joined.workerId) throw new Error("worker join response missing workerId");
+    const enrolled = { ...identity, workerId: joined.workerId };
+    await saveMacWorkerIdentity(enrolled);
+    if (Bun.env.WHITESMITH_JOIN_CODE_FILE) await unlink(Bun.env.WHITESMITH_JOIN_CODE_FILE).catch(() => {});
+    return enrolled;
+  } finally { codeBytes.fill(0); }
+}
+
+async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, driver: TartVmDriver, limits: MacWorkerLimits): Promise<never> {
+  for (;;) {
+    const ws = new WebSocket(buildMacWorkerSocketUrl(controlPlane.toString(), identity.workerId));
+    const closed = Promise.withResolvers<void>();
+    ws.onclose = () => closed.resolve();
+    ws.onerror = () => ws.close();
+    ws.onmessage = async event => {
+      try {
+        const frame = JSON.parse(String(event.data)) as { type?: string; nonce?: string } & Partial<WorkerCommand>;
+        if (frame.type === "challenge" && typeof frame.nonce === "string") {
+          ws.send(JSON.stringify(buildMacWorkerAuthentication(frame.nonce, identity.workerId, identity.privateKey)));
+          return;
+        }
+        if (frame.type === "authenticated" || frame.type === "doctor_ack" || frame.type === "ping") return;
+        const command = WorkerCommand.parse(frame);
+        ws.send(JSON.stringify(await handleMacWorkerCommand(command, driver, limits)));
+      } catch { ws.close(1011, "worker command failed"); }
+    };
+    await closed.promise;
+    await Bun.sleep(1_000);
+  }
+}
 export async function runWorkerJoin(platform: "macos-arm64" | "windows-x64", baseUrl: string): Promise<void> {
   if (platform !== "macos-arm64") throw new Error("Windows worker enrollment is not implemented");
   const controlPlane = validateControlPlaneUrl(baseUrl);
@@ -105,31 +171,10 @@ export async function runWorkerJoin(platform: "macos-arm64" | "windows-x64", bas
 }
 export async function runMacWorker(baseUrl: string, limits: MacWorkerLimits): Promise<never> {
   const controlPlane = validateControlPlaneUrl(baseUrl);
-  const key = createKeyPair();
   const driver = new TartVmDriver(createTartVmRuntime(), Bun.env.WHITESMITH_TART_BASE_IMAGE ?? "whitesmith-macos-worker", "whitesmith-job", limits);
-  const codeBytes = await readJoinCode();
-  try {
-    const payload = await currentMacWorkerJoinPayload(codeBytes.toString("utf8").trim(), key.publicKey);
-    const response = await fetch(new URL("/api/workers/join", controlPlane), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) });
-    if (!response.ok) throw new Error(`worker join failed: ${response.status} ${await response.text()}`);
-    const joined = await response.json() as { workerId?: string };
-    if (typeof joined.workerId !== "string" || !joined.workerId) throw new Error("worker join response missing workerId");
-    const workerId = joined.workerId;
-    const ws = new WebSocket(buildMacWorkerSocketUrl(controlPlane.toString(), workerId));
-    ws.onmessage = async event => {
-      const frame = JSON.parse(String(event.data)) as { type?: string; nonce?: string } & Partial<WorkerCommand>;
-      if (frame.type === "challenge" && typeof frame.nonce === "string") {
-        ws.send(JSON.stringify(buildMacWorkerAuthentication(frame.nonce, workerId, key.privateKey)));
-        return;
-      }
-      if (frame.type === "authenticated" || frame.type === "doctor_ack" || frame.type === "ping") return;
-      const command = WorkerCommand.parse(frame);
-      const result = await handleMacWorkerCommand(command, driver, limits);
-      ws.send(JSON.stringify(result));
-    };
-    const { promise } = Promise.withResolvers<never>();
-    return await promise;
-  } finally { codeBytes.fill(0); }
+  const existing = await loadMacWorkerIdentity();
+  const identity = existing ?? await enrollMacWorker(controlPlane, { workerId: "", ...createKeyPair() });
+  return connectMacWorker(controlPlane, identity, driver, limits);
 }
 if (import.meta.main && Bun.argv[2] === "mac-worker") { const baseUrl = Bun.env.WHITESMITH_CONTROL_PLANE_URL; if (!baseUrl) throw new Error("WHITESMITH_CONTROL_PLANE_URL is required"); await runMacWorker(baseUrl, { maxVcpuPerPod: Number(Bun.env.MAX_VCPU_PER_POD ?? 2), maxMemoryBytesPerPod: Number(Bun.env.MAX_MEMORY_BYTES_PER_POD ?? 4 * 1024 ** 3), maxStorageBytesPerPod: Number(Bun.env.MAX_STORAGE_BYTES_PER_POD ?? 20 * 1024 ** 3), maxConcurrentPods: Number(Bun.env.MAX_CONCURRENT_PODS ?? 1) }); }
 if (import.meta.main && Bun.argv[2] === "join") { const platform = Bun.argv[3]; if (platform !== "macos-arm64" && platform !== "windows-x64") throw new Error("unsupported join platform"); const baseUrl = Bun.env.WHITESMITH_CONTROL_PLANE_URL; if (!baseUrl) throw new Error("WHITESMITH_CONTROL_PLANE_URL is required"); await runWorkerJoin(platform, baseUrl); }

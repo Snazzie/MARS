@@ -30,11 +30,13 @@ test("POSIX installers expose strict parser and stdin handoff", async () => {
   expect(await Bun.file(mac).text()).toContain("--code");
   expect(await Bun.file(linux).text()).toContain("code=sys.stdin.readline()");
 });
-test("macOS installer provisions the user-scoped orchestrator before requesting enrollment", async () => {
+test("macOS installer provisions a persistent user-scoped worker service", async () => {
   const source = await Bun.file(mac).text();
   expect(source).toContain("/api/workers/orchestrator?audience=macos-arm64");
   expect(source).toContain("WHITESMITH_CONTROL_PLANE_URL");
-  expect(source).toContain("join macos-arm64");
+  expect(source).toContain("mac-worker");
+  expect(source).toContain("worker-identity.json");
+  expect(source).toContain("launchctl bootstrap");
   expect(source).not.toContain("launchctl bootstrap system");
 });
 

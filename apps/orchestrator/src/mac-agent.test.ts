@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { WorkerBootstrapRequest } from "@whitesmith/contracts";
 import { generateKeyPairSync, verify as verifySignature } from "node:crypto";
-import { availableMacMemoryBytes, buildMacWorkerAuthentication, buildMacWorkerJoinPayload } from "./mac-agent.ts";
+import { availableMacMemoryBytes, buildMacWorkerAuthentication, buildMacWorkerJoinPayload, parseMacWorkerIdentity } from "./mac-agent.ts";
 
 describe("macOS memory availability", () => {
   test("converts the OS-reported free percentage to available bytes", () => {
@@ -66,4 +66,12 @@ test("signs worker websocket challenges with the enrolled key", () => {
   const frame = buildMacWorkerAuthentication(challenge, "worker-1", privateKey);
   expect(frame.workerId).toBe("worker-1");
   expect(verifySignature(null, Buffer.from(challenge, "base64url"), publicKey, Buffer.from(frame.signature, "base64url"))).toBe(true);
+});
+describe("worker identity persistence", () => {
+  test("accepts the persisted worker key and id shape", () => {
+    expect(parseMacWorkerIdentity({ workerId: "worker-1", publicKey: "public", privateKey: "private" })).toEqual({ workerId: "worker-1", publicKey: "public", privateKey: "private" });
+  });
+  test("rejects incomplete persisted identity", () => {
+    expect(() => parseMacWorkerIdentity({ workerId: "worker-1" })).toThrow("worker identity is invalid");
+  });
 });
