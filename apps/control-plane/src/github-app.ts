@@ -2,7 +2,7 @@ import { createHash, createPrivateKey, createSign, randomBytes } from "node:cryp
 import type { Sql } from "postgres";
 import type { SecretBox } from "./auth.ts";
 
-type SetupState = { purpose: "oauth" | "manifest" | "install"; userId: string | null; organizationId: string | null; idempotencyKey: string | null; encryptedState?: string; encryptedPkceVerifier?: string; expiresAt: number; consumedAt?: number };
+type SetupState = { purpose: "oauth" | "manifest" | "install" | "organization_install"; userId: string | null; organizationId: string | null; idempotencyKey: string | null; encryptedState?: string; encryptedPkceVerifier?: string; expiresAt: number; consumedAt?: number };
 type Installation = { organizationId: string; githubInstallationId: number; state: "pending" | "approved" | "suspended"; repositorySelection: "all" | "selected" | null; githubAccountId?: number };
 type Repository = { id: string; installationId: number; fullName: string; visibility: "private" | "internal" | "public"; available: boolean; approved: boolean };
 type AppConfig = { id: number; slug: string; clientId?: string; pem: string; clientSecret: string; webhookSecret: string };
@@ -79,6 +79,7 @@ export class GitHubAppService {
     if (jwt) headers.set("authorization", `Bearer ${jwt}`);
     const response = await this.fetcher(`${API}${path}`, { ...init, headers });
     if (!response.ok) throw new Error(`github_${response.status}`);
+    if (response.status === 204) return {};
     const value: unknown = await response.json();
     return value && typeof value === "object" ? value as Record<string, unknown> : {};
   }
@@ -97,7 +98,24 @@ export class GitHubAppService {
     return { action: `https://github.com/settings/apps/new?state=${rawState}`, manifest };
   }
 
-  async beginInstallation(userId: string, organizationId: string, idempotencyKey: string): Promise<{ location: string; installCookie?: string }> {
+  async beginOrganizationInstallation(userId: string, organizationId: string, idempotencyKey: string): Promise<{ location: string; installCookie?: string }> {
+    return this.beginInstallation(userId, organizationId, idempotencyKey, false, "organization_install");
+  }
+  async uninstallOrganization(organizationId: string): Promise<void> {
+    let installationId: number | null = null;
+    if (isSql(this.db)) {
+      const rows = await this.db<Array<{ github_installation_id: number }>>`SELECT github_installation_id FROM dashboard_installations WHERE organization_id=${organizationId} AND state <> 'suspended' ORDER BY created_at DESC LIMIT 1`;
+      installationId = rows[0] ? Number(rows[0].github_installation_id) : null;
+    } else {
+      const installation = [...this.db.installations.values()].find((value) => value.organizationId === organizationId && value.state !== "suspended");
+      installationId = installation?.githubInstallationId ?? null;
+    }
+    if (!installationId) throw new Error("github_installation_not_found");
+    await this.gh(`/app/installations/${installationId}`, { method: "DELETE" }, await this.appJwt());
+    await this.reconcileInstallationRepositories({ installation: { id: installationId }, action: "uninstalled" });
+  }
+
+  async beginInstallation(userId: string, organizationId: string, idempotencyKey: string, bindOnboarding = true, purpose: SetupState["purpose"] = "install"): Promise<{ location: string; installCookie?: string }> {
     const config = await this.getConfig();
     const slug = config?.slug ?? "whitesmith";
     if (isSql(this.db)) {
@@ -115,17 +133,18 @@ export class GitHubAppService {
         LIMIT 1
       `;
       if (installations[0]) {
+        if (!bindOnboarding) throw new Error("github_organization_already_connected");
         const linked = await this.db`UPDATE system_onboarding SET organization_id=${organizationId} WHERE singleton=true AND admin_user_id=${userId} RETURNING organization_id`;
         if (linked[0]) return { location: `${this.baseUrl}/onboarding` };
       }
-      const rows = await this.db<SetupRow[]>`SELECT purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at FROM github_setup_states WHERE purpose='install' AND user_id=${userId} AND organization_id=${organizationId} AND idempotency_key=${idempotencyKey} AND consumed_at IS NULL AND expires_at>now()`;
+      const rows = await this.db<SetupRow[]>`SELECT purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at FROM github_setup_states WHERE purpose=${purpose} AND user_id=${userId} AND organization_id=${organizationId} AND idempotency_key=${idempotencyKey} AND consumed_at IS NULL AND expires_at>now()`;
       const state = rows[0];
       if (state?.encrypted_state) return { location: `https://github.com/apps/${slug}/installations/new`, installCookie: this.box.decrypt(state.encrypted_state) };
     } else {
-      for (const state of this.db.setupStates.values()) if (state.purpose === "install" && state.userId === userId && state.organizationId === organizationId && state.idempotencyKey === idempotencyKey && !state.consumedAt && state.expiresAt > Date.now()) return { location: `https://github.com/apps/${slug}/installations/new`, installCookie: this.box.decrypt(state.encryptedState!) };
+      for (const state of this.db.setupStates.values()) if (state.purpose === purpose && state.userId === userId && state.organizationId === organizationId && state.idempotencyKey === idempotencyKey && !state.consumedAt && state.expiresAt > Date.now()) return { location: `https://github.com/apps/${slug}/installations/new`, installCookie: this.box.decrypt(state.encryptedState!) };
     }
     const cookie = randomBytes(32).toString("base64url");
-    await this.saveState(cookie, { purpose: "install", userId, organizationId, idempotencyKey, encryptedState: this.box.encrypt(cookie), expiresAt: Date.now() + 600_000 });
+    await this.saveState(cookie, { purpose, userId, organizationId, idempotencyKey, encryptedState: this.box.encrypt(cookie), expiresAt: Date.now() + 600_000 });
     return { location: `https://github.com/apps/${slug}/installations/new`, installCookie: cookie };
   }
 
@@ -176,15 +195,15 @@ export class GitHubAppService {
     return installationRow.id;
   }
 
-  async completeInstallation(userId: string, installCookie: string, installationId: number): Promise<void> {
+  async completeInstallation(userId: string, installCookie: string, installationId: number): Promise<boolean> {
     const pending = await this.findState(installCookie);
-    if (!pending || pending.purpose !== "install" || pending.userId !== userId || pending.consumedAt || pending.expiresAt < Date.now()) throw new Error("setup_state_expired");
+    if (!pending || !["install", "organization_install"].includes(pending.purpose) || pending.userId !== userId || pending.consumedAt || pending.expiresAt < Date.now()) throw new Error("setup_state_expired");
     const accountInfo = await this.gh(`/app/installations/${installationId}`, {}, await this.appJwt());
     const account = accountInfo.account && typeof accountInfo.account === "object" ? accountInfo.account as { type?: unknown; id?: unknown } : {};
     const accountId = typeof account.id === "number" ? account.id : Number(account.id);
     const expectedOrgId = await this.organizationGithubId(pending.organizationId ?? "");
     if (account.type !== "Organization" || !Number.isSafeInteger(accountId) || expectedOrgId === null || accountId !== expectedOrgId) throw new Error("wrong_organization");
-    const setup = await this.consume(installCookie, userId, "install");
+    const setup = await this.consume(installCookie, userId, pending.purpose);
     const token = await this.gh(`/app/installations/${installationId}/access_tokens`, { method: "POST" }, await this.appJwt());
     const accessToken = typeof token.token === "string" ? token.token : "";
     if (!accessToken) throw new Error("github_token_missing");
@@ -195,8 +214,8 @@ export class GitHubAppService {
     const hasAllowed = repos.some((repo) => repo.visibility === "private" || repo.visibility === "internal");
     await this.persistInstallation(setup.organizationId!, installationId, repositorySelection === "selected" && hasAllowed ? "approved" : "pending", repositorySelection, accountId, repos);
     if (repositorySelection === "selected" && hasAllowed) {
-      if (isSql(this.db)) await this.db`UPDATE system_onboarding SET organization_id=${setup.organizationId} WHERE singleton=true AND admin_user_id=${userId}`;
-      return;
+      if (setup.purpose === "install" && isSql(this.db)) await this.db`UPDATE system_onboarding SET organization_id=${setup.organizationId} WHERE singleton=true AND admin_user_id=${userId}`;
+      return setup.purpose === "install";
     }
     throw new Error("repository_selection_required");
   }
@@ -212,7 +231,12 @@ export class GitHubAppService {
         if (existing) { existing.available = false; existing.approved = false; }
       }
       if (!installation) return;
-      if (["suspend", "suspended", "deleted", "uninstalled"].includes(data.action ?? "")) installation.state = "suspended";
+      if (["suspend", "suspended", "deleted", "uninstalled"].includes(data.action ?? "")) {
+        installation.state = "suspended";
+        if (["deleted", "uninstalled"].includes(data.action ?? "")) {
+          for (const repo of this.db.repositories.values()) if (repo.installationId === id) { repo.available = false; repo.approved = false; }
+        }
+      }
       if (data.repository_selection) installation.repositorySelection = data.repository_selection;
       const effectiveSelection = installation.repositorySelection;
       const fullSnapshot = data.repositories !== undefined;
@@ -240,7 +264,10 @@ export class GitHubAppService {
       const snapshotIds = data.repositories!.map((repo) => repo.id);
       await this.db`UPDATE dashboard_repositories SET available=false,approved=false WHERE installation_id=${installation.id} AND github_repository_id != ALL(${snapshotIds})`;
     }
-    if (["suspend", "suspended", "deleted", "uninstalled"].includes(data.action ?? "")) await this.db`UPDATE dashboard_installations SET state='suspended' WHERE id=${installation.id}`;
+    if (["suspend", "suspended", "deleted", "uninstalled"].includes(data.action ?? "")) {
+      await this.db`UPDATE dashboard_installations SET state='suspended' WHERE id=${installation.id}`;
+      if (["deleted", "uninstalled"].includes(data.action ?? "")) await this.db`UPDATE dashboard_repositories SET available=false,approved=false WHERE installation_id=${installation.id}`;
+    }
     if (data.repository_selection) await this.db`UPDATE dashboard_installations SET repository_selection=${data.repository_selection} WHERE id=${installation.id}`;
     for (const repo of data.repositories_removed ?? []) await this.db`UPDATE dashboard_repositories SET available=false,approved=false WHERE installation_id=${installation.id} AND github_repository_id=${repo.id}`;
     for (const raw of data.repositories_added ?? data.repositories ?? []) {

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { listOrganizations, getOverview, listRepositories, listRuns, getRunDetail, listLogChunks, listWorkers, getWorkerDetail, listPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady } from "@whitesmith/db";
+import { listOrganizations, getOverview, getAllOverview, listRepositories, listRuns, getRunDetail, listLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady } from "@whitesmith/db";
 import { adoptWorker } from "../workers.ts";
 import { ApiError, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest } from "@whitesmith/contracts";
 
@@ -17,13 +17,17 @@ function parseQuery(c: any) { const parsed = querySchema.safeParse(c.req.query()
 function requireMutation(c: any) { return c.req.header("idempotency-key")?.trim() ? null : error(c, 400, "missing_idempotency_key", "Idempotency-Key is required"); }
 async function member(db: any, user: any, organizationId: string) { if (user.isGlobalAdmin) return true; const [row] = await db`SELECT 1 FROM memberships WHERE user_id=${user.id} AND organization_id=${organizationId}`; return Boolean(row); }
 async function guard(c: any, deps: ControlPlaneHttpDeps, organizationId: string) { return await member(deps.db, c.get("user"), organizationId) ? null : error(c, 404, "not_found", "Resource not found"); }
+function githubInstallationLocation(row: { login?: unknown; githubInstallationId?: unknown }) {
+  if (typeof row.login !== "string" || !row.login || !Number.isSafeInteger(Number(row.githubInstallationId))) return null;
+  return `https://github.com/organizations/${encodeURIComponent(row.login)}/settings/installations/${Number(row.githubInstallationId)}`;
+}
 
 export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
   const safe = (fn: (c: any) => Promise<Response> | Response) => async (c: any) => { try { return await fn(c); } catch (cause) { if (cause instanceof z.ZodError) return error(c, 400, "invalid_request", "Invalid request", { issues: cause.issues }); console.error(cause); return error(c, 500, "internal_error", "Internal server error"); } };
   app.get("/api/me", (c) => c.json(c.get("user")));
   app.get("/api/organizations", safe(async (c) => c.json(OrganizationSummary.array().parse(await listOrganizations(deps.db, c.get("user").id)))));
-  app.get("/api/organizations/:organizationId/overview", safe(async (c) => { const denied = await guard(c, deps, c.req.param("organizationId")); if (denied) return denied; const period = periodSchema.safeParse(c.req.query("period") || "24h"); if (!period.success) return error(c, 400, "invalid_period", "Invalid overview period", { issues: period.error.issues }); return c.json(OverviewDto.parse(await getOverview(deps.db, c.req.param("organizationId"), period.data))); }));
-  for (const [path, fn, schema] of [["repositories", listRepositories, RepositorySummary], ["runs", listRuns, RunSummary], ["pools", listPools, PoolSummary], ["workers", listWorkers, WorkerDetail]] as const) app.get(`/api/organizations/:organizationId/${path}`, safe(async (c) => { const org = c.req.param("organizationId"); const denied = await guard(c, deps, org); if (denied) return denied; const q = parseQuery(c); if (q instanceof Response) return q; return c.json(CursorPage(schema).parse(await fn(deps.db, org, q.limit))); }));
+  app.get("/api/organizations/:organizationId/overview", safe(async (c) => { const org = c.req.param("organizationId"); const period = periodSchema.safeParse(c.req.query("period") || "24h"); if (!period.success) return error(c, 400, "invalid_period", "Invalid period", { issues: period.error.issues }); if (org === "all") return c.json(OverviewDto.parse(await getAllOverview(deps.db, c.get("user").id, period.data))); const denied = await guard(c, deps, org); if (denied) return denied; return c.json(OverviewDto.parse(await getOverview(deps.db, org, period.data))); }));
+  for (const [path, fn, schema] of [["repositories", listRepositories, RepositorySummary], ["runs", listRuns, RunSummary], ["pools", listPools, PoolSummary], ["workers", listWorkers, WorkerDetail]] as const) app.get(`/api/organizations/:organizationId/${path}`, safe(async (c) => { const org = c.req.param("organizationId"); if (org === "all" && path === "workers") { const q = parseQuery(c); if (q instanceof Response) return q; return c.json(CursorPage(schema).parse(await listAllWorkers(deps.db, c.get("user").id, q.limit))); } const denied = await guard(c, deps, org); if (denied) return denied; const q = parseQuery(c); if (q instanceof Response) return q; return c.json(CursorPage(schema).parse(await fn(deps.db, org, q.limit))); }));
   app.get("/api/organizations/:organizationId/runs/:runId", safe(async (c) => { const org=c.req.param("organizationId"); const denied=await guard(c,deps,org); if(denied)return denied; const value=await getRunDetail(deps.db,org,c.req.param("runId")); return value?c.json(RunDetail.parse(value)):error(c,404,"not_found","Resource not found"); }));
   app.get("/api/organizations/:organizationId/runs/:runId/jobs/:jobId/logs", safe(async (c) => { const org=c.req.param("organizationId"); const denied=await guard(c,deps,org); if(denied)return denied; const q=logSchema.safeParse(c.req.query()); if(!q.success)return error(c,400,"invalid_log_bounds","Invalid log bounds",{issues:q.error.issues}); return c.json(CursorPage(LogChunk).parse(await listLogChunks(deps.db,org,c.req.param("runId"),c.req.param("jobId"),q.data.after,q.data.limit))); }));
   app.get("/api/organizations/:organizationId/settings", safe(async(c)=>{const org=c.req.param("organizationId");const denied=await guard(c,deps,org);if(denied)return denied;return c.json(OrganizationSettings.parse(await getOrganizationSettings(deps.db,org)));}));
@@ -63,6 +67,52 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!(await dashboardMutation(deps.db, org, key))) return c.json({ ok: true });
     if (action !== "rotate-key") await deps.db`UPDATE runner_pools SET enabled=${action === "enable"} WHERE organization_id=${org} AND id=${c.req.param("poolId")}`;
     await invalidateDashboard(deps.db, org, ["pools"]); return c.json({ ok: true });
+  }));
+  app.get("/api/organizations/:organizationId/github/settings", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const denied = await guard(c, deps, org); if (denied) return denied;
+    const [installation] = await deps.db`SELECT o.login, i.github_installation_id AS "githubInstallationId" FROM organizations o JOIN dashboard_installations i ON i.organization_id=o.id WHERE o.id=${org} ORDER BY i.created_at DESC LIMIT 1`;
+    const location = githubInstallationLocation(installation ?? {});
+    return location ? c.json({ location }) : error(c, 404, "not_found", "GitHub installation not found");
+  }));
+  app.post("/api/organizations/:organizationId/github/uninstall", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const denied = await guard(c, deps, org); if (denied) return denied;
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    const idem = requireMutation(c); if (idem) return idem;
+    if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
+    try {
+      await deps.githubApp.uninstallOrganization(org);
+      await deps.db`DELETE FROM memberships WHERE organization_id=${org} AND user_id=${c.get("user").id}`;
+      await invalidateDashboard(deps.db, org, ["repositories", "organizations"]);
+      return c.json({ ok: true });
+    } catch (cause) {
+      if (cause instanceof Error && cause.message === "github_installation_not_found") return error(c, 404, "not_found", "GitHub installation not found");
+      throw cause;
+    }
+  }));
+  app.get("/api/organizations/:organizationId/repositories/:repositoryId/github/settings", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const denied = await guard(c, deps, org); if (denied) return denied;
+    const [installation] = await deps.db`SELECT o.login, i.github_installation_id AS "githubInstallationId" FROM organizations o JOIN dashboard_repositories r ON r.organization_id=o.id JOIN dashboard_installations i ON i.id=r.installation_id WHERE o.id=${org} AND r.id=${c.req.param("repositoryId")}`;
+    const location = githubInstallationLocation(installation ?? {});
+    return location ? c.json({ location }) : error(c, 404, "not_found", "GitHub repository installation not found");
+  }));
+  app.post("/api/organizations/:organizationId/github/install", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const denied = await guard(c, deps, org); if (denied) return denied;
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    const idem = requireMutation(c); if (idem) return idem;
+    if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
+    try {
+      const result = await deps.githubApp.beginOrganizationInstallation(c.get("user").id, org, c.req.header("idempotency-key")!);
+      if (result.installCookie) c.header("Set-Cookie", `github_install_state=${result.installCookie}; HttpOnly; Secure; SameSite=Lax; Path=/api/github/app; Max-Age=600`);
+      return c.json({ location: result.location });
+    } catch (cause) {
+      const code = cause instanceof Error ? cause.message : "";
+      if (code === "github_organization_already_connected") return error(c, 409, code, "This organization is already connected");
+      throw cause;
+    }
   }));
   app.post("/api/organizations/:organizationId/repositories/:repositoryId/:action", safe(async (c) => {
     const org = c.req.param("organizationId"), action = c.req.param("action");

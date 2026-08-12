@@ -21,9 +21,7 @@ export function AppShell() {
   const currentOrg = organizations.data?.find((organization) => organization.id === organizationId);
   const state = me.isLoading || organizations.isLoading || me.error || organizations.error
     ? <QueryState error={me.error ?? organizations.error} isLoading={me.isLoading || organizations.isLoading} retry={() => { void me.refetch(); void organizations.refetch(); }} />
-    : organizations.data?.length === 0
-      ? <QueryState error={undefined} isLoading={false} isEmpty />
-      : null;
+    : null;
 
   return (
     <div className="console-frame">
@@ -42,13 +40,14 @@ export function AppShell() {
       </aside>
       <div className="console-body">
         <header className="topbar">
-          <div><span className="crumb">Workspace</span><span className="slash">/</span><span className="crumb-current">{currentOrg?.name ?? "Select an organization"}</span></div>
+          <div><span className="crumb">Workspace</span><span className="slash">/</span><span className="crumb-current">{organizationId === "all" ? "All workspaces" : currentOrg?.name ?? "Select an organization"}</span></div>
           <label className="org-picker">Organization
-            <select aria-label="Select organization" value={organizationId ?? ""} onChange={(event) => setOrganizationId(event.target.value)} disabled={!organizations.data?.length}>
-              {!organizations.data?.length && <option value="">No organizations</option>}
+            <select aria-label="Select organization" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
+              <option value="all">All workspaces</option>
               {organizations.data?.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
             </select>
           </label>
+          <a className="button secondary" href="/api/auth/github?returnTo=%2Frepositories">Refresh organizations</a>
           <div className="operator-chip" title="Authenticated operator"><span className="operator-avatar">{typeof me.data === "object" && me.data && "login" in me.data && typeof me.data.login === "string" ? me.data.login.slice(0, 1).toUpperCase() : "W"}</span><span>Operator</span></div>
         </header>
         <main className="workspace" data-path={location}>

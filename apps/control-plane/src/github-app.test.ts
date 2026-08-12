@@ -209,6 +209,49 @@ describe("GitHub App onboarding", () => {
     expect(fakeDb.repositories.has("1")).toBe(true);
     expect(fakeDb.installations.get(42)).toMatchObject({ state: "approved" });
   });
+  test("uninstall suspends installation and disables every historical repository", async () => {
+    const github = service(async () => Response.json({}));
+    fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "selected", githubAccountId: 99 });
+    fakeDb.repositories.set("1", { id: "1", installationId: 42, fullName: "acme/private", visibility: "private", available: true, approved: true });
+    fakeDb.repositories.set("2", { id: "2", installationId: 42, fullName: "acme/internal", visibility: "internal", available: true, approved: true });
+
+    await github.reconcileInstallationRepositories({ installation: { id: 42 }, action: "uninstalled" });
+
+    expect(fakeDb.installations.get(42)).toMatchObject({ state: "suspended" });
+    expect(fakeDb.repositories.get("1")).toMatchObject({ available: false, approved: false });
+    expect(fakeDb.repositories.get("2")).toMatchObject({ available: false, approved: false });
+  });
+  test("uninstalls an organization through the GitHub App API", async () => {
+    const requests: Request[] = [];
+    const github = service(async (input, init) => {
+      requests.push(new Request(input, init));
+      return new Response(null, { status: 204 });
+    });
+    fakeDb.appConfig = { id: 9, slug: "whitesmith", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "y" };
+    fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "selected", githubAccountId: 99 });
+    fakeDb.repositories.set("1", { id: "1", installationId: 42, fullName: "acme/private", visibility: "private", available: true, approved: true });
+
+    await github.uninstallOrganization(organizationId);
+
+    expect(requests[0]?.method).toBe("DELETE");
+    expect(requests[0]?.url).toContain("/app/installations/42");
+    expect(fakeDb.installations.get(42)).toMatchObject({ state: "suspended" });
+    expect(fakeDb.repositories.get("1")).toMatchObject({ available: false, approved: false });
+  });
+
+  test("starts a second organization installation without rebinding onboarding", async () => {
+    const github = service(async () => Response.json({}));
+    fakeDb.organizations = new Map([
+      [organizationId, { githubOrgId: 99 }],
+      ["22222222-2222-4222-8222-222222222222", { githubOrgId: 100 }],
+    ]);
+
+    const launch = await github.beginOrganizationInstallation("admin-1", "22222222-2222-4222-8222-222222222222", "org-2-key");
+
+    expect(launch.location).toContain("github.com/apps/");
+    expect(launch.installCookie).toBeDefined();
+    expect([...fakeDb.setupStates.values()]).toHaveLength(1);
+  });
 
   test("validates each webhook against the current decrypted secret and dispatches installation removal", async () => {
     const github = service(async () => Response.json({}));

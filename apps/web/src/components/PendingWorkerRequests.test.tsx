@@ -9,6 +9,12 @@ const request = { fingerprint: "SHA256:pending-fingerprint", platform: "linux-x6
 function markup(data = [request]) { const client = new QueryClient(); client.setQueryData(["pending-workers"], data); return renderToStaticMarkup(<QueryClientProvider client={client}><PendingWorkerRequests organizationId={org} /></QueryClientProvider>); }
 test("renders identity, capacity, adoption fields, and null limits safely", () => { const html = markup(); expect(html).toContain(request.publicKey); expect(html).toContain("Adopt and configure"); expect(html.match(/name=\"vcpu\"/g)?.length).toBe(1); expect(html.match(/name=\"maxConcurrentPods\"/g)?.length).toBe(1); });
 test("shows empty pending state", () => { expect(markup([])).toContain("No pending worker requests"); });
+test("hides adoption controls when no concrete organization is selected", () => {
+  const client = new QueryClient();
+  client.setQueryData(["pending-workers"], [request]);
+  const html = renderToStaticMarkup(<QueryClientProvider client={client}><PendingWorkerRequests organizationId="all" /></QueryClientProvider>);
+  expect(html).toBe("");
+});
 test("reusable resource form accepts worker capacity and organization props", () => { const html = renderToStaticMarkup(<WorkerConfigurationForm worker={worker} organizationId={org} onConfigured={() => {}} />); expect(html).toContain("vCPU"); expect(html).toContain("GiB"); expect(html).toContain("Configure worker"); });
 test("does not offer an invalid zero-GiB default for insufficient capacity", () => {
   const lowCapacity = { ...worker, capacity: { ...worker.capacity, freeMemoryBytes: 90 * 1024 ** 2 } };

@@ -62,5 +62,7 @@ CREATE INDEX IF NOT EXISTS dashboard_logs_org_run_job_idx ON dashboard_log_chunk
 CREATE INDEX IF NOT EXISTS dashboard_resources_org_worker_idx ON dashboard_resource_observations(organization_id, worker_id, observed_at DESC);
 CREATE INDEX IF NOT EXISTS dashboard_outbox_org_sequence_idx ON dashboard_outbox_invalidations(organization_id, sequence);
 CREATE TABLE IF NOT EXISTS system_onboarding (singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), admin_user_id uuid REFERENCES users(id), worker_id uuid REFERENCES workers(id), organization_id uuid REFERENCES organizations(id), completed_at timestamptz);
-CREATE TABLE IF NOT EXISTS github_setup_states (state_hash bytea PRIMARY KEY, purpose text NOT NULL CHECK (purpose IN ('oauth','manifest','install')), user_id uuid REFERENCES users(id), organization_id uuid REFERENCES organizations(id), idempotency_key text, encrypted_state text, encrypted_pkce_verifier text, expires_at timestamptz NOT NULL, consumed_at timestamptz);
+CREATE TABLE IF NOT EXISTS github_setup_states (state_hash bytea PRIMARY KEY, purpose text NOT NULL CHECK (purpose IN ('oauth','manifest','install','organization_install')), user_id uuid REFERENCES users(id), organization_id uuid REFERENCES organizations(id), idempotency_key text, encrypted_state text, encrypted_pkce_verifier text, expires_at timestamptz NOT NULL, consumed_at timestamptz);
+ALTER TABLE github_setup_states DROP CONSTRAINT IF EXISTS github_setup_states_purpose_check;
+ALTER TABLE github_setup_states ADD CONSTRAINT github_setup_states_purpose_check CHECK (purpose IN ('oauth','manifest','install','organization_install'));
 `;

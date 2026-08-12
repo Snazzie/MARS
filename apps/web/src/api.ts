@@ -181,6 +181,24 @@ export async function beginOnboardingGithubInstall(input: { organizationId: stri
     body: JSON.stringify(input),
   });
 }
+export async function beginOrganizationGithubInstall(organizationId: string) {
+  return request(`/api/organizations/${organizationId}/github/install`, z.object({ location: z.string().url() }), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: "{}",
+  });
+}
+export const getGithubOrganizationSettings = (organizationId: string) =>
+  request(`/api/organizations/${organizationId}/github/settings`, z.object({ location: z.string().url() }));
+export const getGithubRepositorySettings = (organizationId: string, repositoryId: string) =>
+  request(`/api/organizations/${organizationId}/repositories/${repositoryId}/github/settings`, z.object({ location: z.string().url() }));
+export async function uninstallOrganizationGithub(organizationId: string) {
+  return request(`/api/organizations/${organizationId}/github/uninstall`, z.object({ ok: z.boolean() }), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: "{}",
+  });
+}
 export async function beginOnboardingGithubManifest(input: { organizationId: string }) {
   return request("/api/github/app/manifest", z.object({ action: z.string().url(), manifest: z.string() }), {
     method: "POST",

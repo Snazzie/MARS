@@ -5,7 +5,7 @@ import { applyWorkflowJobWebhook, type WorkflowJobPayload } from "../runs.ts";
 
 const setupFailure = (cause: unknown): string | null => {
   const code = cause instanceof Error ? cause.message : "";
-  return ["setup_state_expired", "github_manifest_invalid", "github_app_unconfigured", "wrong_organization", "github_token_missing", "repository_selection_required", "github_installation_persist_failed"].includes(code) ? code : null;
+  return ["setup_state_expired", "github_manifest_invalid", "github_app_unconfigured", "wrong_organization", "github_token_missing", "repository_selection_required", "github_installation_persist_failed", "github_organization_already_connected"].includes(code) ? code : null;
 };
 
 export function registerGithubRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
@@ -44,9 +44,9 @@ export function registerGithubRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     if (c.req.query("setup_action") !== "install") return c.json({ code: "invalid_request" }, 400);
     if (!cookie || !installationId || !deps.githubApp) return c.json({ code: "invalid_request" }, 400);
     try {
-      await deps.githubApp.completeInstallation(user.id, cookie, installationId);
+      const onboarding = await deps.githubApp.completeInstallation(user.id, cookie, installationId);
       c.header("Set-Cookie", "github_install_state=; HttpOnly; Secure; SameSite=Lax; Path=/api/github/app; Max-Age=0");
-      return c.redirect("/onboarding", 302);
+      return c.redirect(onboarding ? "/onboarding" : "/", 302);
     } catch (cause) {
       const setupCode = setupFailure(cause);
       if (setupCode === "repository_selection_required") {

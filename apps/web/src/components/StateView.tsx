@@ -27,6 +27,9 @@ export function StateView({ kind, title, message, action }: StateViewProps) {
   );
 }
  
+export function WorkspaceRequired() {
+  return <StateView kind="empty" title="Select a workspace" message="This view operates on one workspace at a time. Choose a concrete organization from the selector above." />;
+}
 export function QueryState({ error, isLoading, isEmpty, retry }: { error: unknown; isLoading: boolean; isEmpty?: boolean; retry?: () => void }) {
   if (isLoading) return <StateView kind="loading" />;
   if (error && isUnauthorized(error)) return <StateView kind="error" title="Sign-in required" message="Your operator session is no longer valid. Sign in again to continue." action={<Button label="Sign in with GitHub" variant="secondary" href="/api/auth/github" />} />;

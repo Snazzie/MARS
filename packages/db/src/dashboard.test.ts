@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { WorkerDetail } from "@whitesmith/contracts";
-import { getOrganizationSettings, listWorkers } from "./dashboard.ts";
+import { getOrganizationSettings, listAllWorkers, listWorkers } from "./dashboard.ts";
 
 test("worker listing normalizes persisted telemetry into the WorkerDetail contract", async () => {
   const db = (async () => [{
@@ -43,4 +43,13 @@ test("organization settings convert PostgreSQL numeric values to numbers", async
     maxStorageBytesPerPod: 107374182400,
     maxConcurrentPods: 2,
   });
+});
+test("all-workspace worker listing includes workers across organizations", async () => {
+  const db = (async () => [
+    { id: "w-1", organizationId: "org-1", name: "linux-one", platform: "linux-x64", admissionState: "adopted", connectionState: "online", configurationState: "ready", fingerprint: "sha256:one", limits: null, doctor: null, activeSandboxes: 0, draining: false },
+    { id: "w-2", organizationId: "org-2", name: "mac-two", platform: "macos-arm64", admissionState: "pending", connectionState: "offline", configurationState: "unconfigured", fingerprint: "sha256:two", limits: null, doctor: null, activeSandboxes: 0, draining: false },
+  ]) as never;
+
+  const page = await listAllWorkers(db, "user-1");
+  expect(page.items.map((worker) => worker.organizationId)).toEqual(["org-1", "org-2"]);
 });

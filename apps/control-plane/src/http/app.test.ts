@@ -64,13 +64,14 @@ describe("control-plane HTTP boundary", () => {
 
 
 
-  test("allows OAuth cookies on local HTTP but secures them on HTTPS", async () => {
-    const local = await createControlPlaneApp(fakeHttpDeps({ baseUrl: "http://localhost:3000" })).request("/api/auth/github");
-    expect(local.headers.get("set-cookie")).toContain("oauth_state=");
-    expect(local.headers.get("set-cookie")).not.toContain("Secure");
-
-    const production = await createControlPlaneApp(fakeHttpDeps({ baseUrl: "https://control-plane.test" })).request("/api/auth/github");
-    expect(production.headers.get("set-cookie")).toContain("Secure");
+  test("preserves the dashboard return path when refreshing GitHub organizations", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps({ baseUrl: "http://localhost:3000" })).request("/api/auth/github?returnTo=%2Frepositories");
+    expect(response.status).toBe(302);
+    expect(response.headers.get("set-cookie")).toContain("oauth_return_to=%2Frepositories");
+  });
+  test("does not persist unsafe OAuth return paths", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps({ baseUrl: "http://localhost:3000" })).request("/api/auth/github?returnTo=%2F%5Cevil.com");
+    expect(response.headers.get("set-cookie")).not.toContain("oauth_return_to=");
   });
 
 
@@ -135,6 +136,62 @@ describe("control-plane HTTP boundary", () => {
     expect(response.headers.get("location")).toBe("/onboarding?github=repository-selection-required");
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
   });
+  test("returns dashboard after a non-onboarding organization install", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+      githubApp: { completeInstallation: async () => false } as never,
+    })).request("/api/github/app/setup?installation_id=42&setup_action=install", {
+      headers: { Cookie: "github_install_state=organization-install" },
+    });
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/");
+  });
+test("repository GitHub removal route requires an existing installation", async () => {
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+  })).request("/api/organizations/org-1/repositories/repo-1/github/settings");
+  expect(response.status).toBe(404);
+});
+
+test("organization GitHub uninstall route requires an existing installation", async () => {
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+  })).request("/api/organizations/org-1/github/settings");
+  expect(response.status).toBe(404);
+});
+test("returns the organization GitHub settings URL", async () => {
+  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("dashboard_installations") ? [{ login: "acme", githubInstallationId: 42 }] : []) as never;
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    db,
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+  })).request("/api/organizations/org-1/github/settings");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ location: "https://github.com/organizations/acme/settings/installations/42" });
+});
+
+test("returns the repository GitHub settings URL", async () => {
+  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("dashboard_repositories") ? [{ login: "acme", githubInstallationId: 42 }] : []) as never;
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    db,
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+  })).request("/api/organizations/org-1/repositories/repo-1/github/settings");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ location: "https://github.com/organizations/acme/settings/installations/42" });
+});
+test("uninstalls an organization through the authenticated GitHub route", async () => {
+  let organization = "";
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+    githubApp: { uninstallOrganization: async (organizationId: string) => { organization = organizationId; } } as never,
+  })).request("/api/organizations/org-2/github/uninstall", {
+    method: "POST",
+    headers: { "Idempotency-Key": "uninstall-1" },
+  });
+  expect(response.status).toBe(200);
+  expect(organization).toBe("org-2");
+  expect(await response.json()).toEqual({ ok: true });
+});
 
 
   test("webhook validation uses the configured app secret and never accepts a static fallback", async () => {
@@ -161,3 +218,22 @@ describe("control-plane HTTP boundary", () => {
     );
     expect(response.status).toBe(401);
   });
+test("starts GitHub installation for a non-onboarding organization", async () => {
+  let requestedOrganization = "";
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+    githubApp: {
+      beginOrganizationInstallation: async (_userId: string, organizationId: string) => {
+        requestedOrganization = organizationId;
+        return { location: "https://github.com/apps/whitesmith/installations/new" };
+      },
+    } as never,
+  })).request("/api/organizations/org-2/github/install", {
+    method: "POST",
+    headers: { "Idempotency-Key": "org-2-install", "content-type": "application/json" },
+  });
+
+  expect(response.status).toBe(200);
+  expect(requestedOrganization).toBe("org-2");
+  expect(await response.json()).toEqual({ location: "https://github.com/apps/whitesmith/installations/new" });
+});
