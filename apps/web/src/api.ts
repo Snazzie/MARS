@@ -92,6 +92,7 @@ export async function mutateWorker(organizationId: string, workerId: string, act
 const WorkerBootstrapStatus = z.object({ initialized: z.boolean(), generation: z.number().nullable(), createdAt: z.string().nullable(), rotatedAt: z.string().nullable() });
 const WorkerBootstrapReveal = z.object({ code: z.string().min(1), generation: z.number(), createdAt: z.string() });
 export const getWorkerBootstrapStatus = () => request("/api/workers/bootstrap", WorkerBootstrapStatus, { cache: "no-store" });
+export const getWorkerControlPlaneUrls = () => request("/api/workers/control-plane-urls", z.array(z.string().url()), { cache: "no-store" });
 const pendingWorkersResponse = z.array(z.object({ id: z.string().uuid(), fingerprint: z.string().min(1) }).merge(PendingWorkerRequest));
 export const getPendingWorkerRequests = () => request("/api/workers/pending", pendingWorkersResponse, { cache: "no-store" });
 export async function approvePendingWorker(workerId: string, input: ApproveWorkerRequest) {

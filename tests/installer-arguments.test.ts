@@ -70,12 +70,11 @@ test("join enforces HTTPS policy and bounded waits", async () => {
   expect(source).toContain("AbortSignal.timeout(30_000)");
   expect(await Bun.file(powershell).text()).toContain("WaitForExit(30000)");
 });
-test("Linux installer validates public URL scheme", async () => {
+test("Linux installer accepts configured HTTP or HTTPS control-plane URLs", async () => {
   const source = await Bun.file(linux).text();
   expect(source).toContain("validate_control_plane_url");
-  expect(source).toContain("https://");
-  expect(source).toContain('"localhost"');
-  expect(source).toContain("PUBLIC_BASE_URL must use HTTPS");
+  expect(source).toContain('parsed.scheme not in {"https", "http"}');
+  expect(source).toContain("PUBLIC_BASE_URL must use HTTP or HTTPS");
 });
 test("Linux installer rejects noninteractive URL checks before host preflight", async () => {
   const rejected = await invoke(linux, [], { PUBLIC_BASE_URL: "https://" });

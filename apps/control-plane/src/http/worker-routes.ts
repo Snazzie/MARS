@@ -30,8 +30,15 @@ export function pendingWorkerDto(row: Record<string, unknown>) {
 function idempotency(c: Context<ControlPlaneEnv>): boolean { return Boolean(c.req.header("Idempotency-Key")?.trim()); }
 export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
   const approvalBody = async (c: Context<ControlPlaneEnv>) => { try { return parseApproveWorkerRequest(await c.req.json()); } catch { return null; } };
-  const limiter = deps.workerRequestLimiter ?? createRequestLimiter();
   const auth = async (c: Context<ControlPlaneEnv>) => deps.currentUser(c.req.raw);
+  const limiter = deps.workerRequestLimiter ?? createRequestLimiter();
+  app.get("/api/workers/control-plane-urls", async (c) => {
+    const user = await auth(c);
+    if (!user) return c.json({ error: "unauthorized" }, 401);
+    if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403);
+    const values = (deps.workerControlPlaneUrls ?? []).map((value) => new URL(value).origin);
+    return c.json([...new Set(values)], { headers: noStore() });
+  });
   app.get("/api/workers/installer", async (c) => { const audience = c.req.query("audience"); const file = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : audience === "macos-arm64" ? "install-worker-macos.sh" : null; if (!file) return c.json({ error: "unsupported installer audience" }, 400); const installer = Bun.file(new URL(file, deps.workerInstallerRoot)); const body = audience === "windows-x64" ? installer : injectInstallerOrigin(await installer.text(), deps.baseUrl); return new Response(body, { headers: noStore() }); });
   app.get("/api/workers/orchestrator", (c) => { if (c.req.query("audience") !== "macos-arm64") return c.json({ error: "unsupported orchestrator audience" }, 400); const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", 'attachment; filename="whitesmith-orchestrator"'); return new Response(Bun.file(deps.workerOrchestratorExecutable), { headers }); });
   app.post("/api/workers/join", async (c) => {

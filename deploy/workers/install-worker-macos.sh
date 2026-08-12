@@ -24,9 +24,8 @@ IMAGE="${TART_IMAGE:-whitesmith-macos-worker}"
 tart list | grep -q "$IMAGE" || { echo "Tart image '$IMAGE' is missing for user $USER" >&2; exit 1; }
 
 case "$PUBLIC_BASE_URL" in
-  http://localhost:*|http://127.0.0.1:*) CURL_SECURITY=(--proto '=http') ;;
-  https://*) CURL_SECURITY=(--proto '=https' --tlsv1.3) ;;
-  *) echo 'Control-plane URL must use HTTPS unless it targets loopback' >&2; exit 1 ;;
+  http://*|https://*) CURL_SECURITY=(--proto "=${PUBLIC_BASE_URL%%:*}") ;;
+  *) echo 'Control-plane URL must use HTTP or HTTPS' >&2; exit 1 ;;
 esac
 
 APP_DIR="$HOME/Library/Application Support/Whitesmith"

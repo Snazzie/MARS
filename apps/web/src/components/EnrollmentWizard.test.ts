@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { getWorkerBootstrapStatus } from "../api.ts";
-import { buildInstallerCommand, buildInstallerCommands, openEnrollmentDialog } from "./EnrollmentWizard.tsx";
+import { buildInstallerCommand, buildInstallerCommands, normalizeControlPlaneUrls, openEnrollmentDialog } from "./EnrollmentWizard.tsx";
 const url = "https://runner.example.com/api/workers/installer?audience=linux-x64";
 test("bootstrap status contract includes initialization generation and timestamps", () => {
   const status = {
@@ -43,4 +43,5 @@ test("builds only the selected platform installer command", () => {
   expect(commands[0]?.command).toContain("-Code");
   expect(commands[0]?.command).toContain("one-use-code");
 });
-test("rejects unsupported and insecure installers", () => { expect(() => buildInstallerCommand(url, "sol-x64" as never)).toThrow(); expect(() => buildInstallerCommand("http://runner.example.com/install", "linux-x64")).toThrow(); });
+test("accepts adapter IP and custom HTTP URLs", () => { expect(buildInstallerCommand("http://192.168.64.1:3000/api/workers/installer?audience=linux-x64", "linux-x64")).toContain("--proto '=http'"); expect(normalizeControlPlaneUrls(["http://192.168.64.1:3000", "https://runner.example.com/", "bad", "http://192.168.64.1:3000"])).toEqual(["http://192.168.64.1:3000", "https://runner.example.com"]); });
+test("rejects unsupported installers", () => { expect(() => buildInstallerCommand(url, "sol-x64" as never)).toThrow(); });

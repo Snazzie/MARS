@@ -4,6 +4,7 @@ services:
     restart: unless-stopped
     environment:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}
+      CONTROL_PLANE_ADAPTER_URLS: ${CONTROL_PLANE_ADAPTER_URLS:-}
       GITHUB_WEBHOOK_URL: ${GITHUB_WEBHOOK_URL:-}
       DATABASE_URL: postgres://whitesmith:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/whitesmith
       DATA_ROOT: /var/lib/whitesmith

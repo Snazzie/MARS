@@ -16,6 +16,7 @@ export type ControlPlaneHttpDeps = {
   githubWebhookSecret?: string;
   githubApp?: GitHubAppService;
   defaultJobImages: Partial<Record<"linux-x64" | "windows-x64" | "macos-arm64", string>>;
+  workerControlPlaneUrls?: string[];
   currentUser(request: Request): Promise<SessionUser | null>;
   requestId(): string;
   requestSource(request: Request): string;

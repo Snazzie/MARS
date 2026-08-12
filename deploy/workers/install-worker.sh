@@ -27,9 +27,8 @@ except ValueError:
     parsed = None
     host = None
     port = None
-loopback = host in {"localhost", "127.0.0.1", "::1"}
-if not parsed or parsed.scheme not in {"https", "http"} or not host or parsed.username or parsed.password or (parsed.scheme == "http" and not loopback):
-    raise SystemExit("PUBLIC_BASE_URL must use HTTPS with a non-empty host and no credentials")
+if not parsed or parsed.scheme not in {"https", "http"} or not host or parsed.username or parsed.password:
+    raise SystemExit("PUBLIC_BASE_URL must use HTTP or HTTPS with a non-empty host and no credentials")
 PY
 }
 parse_args "$@"
