@@ -1,8 +1,8 @@
-import { generateKeyPairSync } from "node:crypto";
+import { generateKeyPairSync, sign as signMessage } from "node:crypto";
 import { statfsSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
-import type { WorkerCapacityData, WorkerCommand, WorkerDoctorData } from "@whitesmith/contracts";
-import { WorkerBootstrapRequest, WorkerConfigurePayload, WorkerConfiguration } from "@whitesmith/contracts";
+import type { WorkerCapacityData, WorkerDoctorData } from "@whitesmith/contracts";
+import { WorkerBootstrapRequest, WorkerCommand, WorkerConfigurePayload, WorkerConfiguration } from "@whitesmith/contracts";
 import type { Lease } from "./runtime.ts";
 import { createTartVmRuntime, TartVmDriver } from "./tart.ts";
 
@@ -24,6 +24,10 @@ export function applyWorkerConfigure(command: WorkerCommand, limits: MacWorkerLi
 }
 export function buildMacWorkerJoinPayload(input: MacWorkerJoinInput): MacWorkerJoinPayload {
   return { code: input.code, publicKey: input.publicKey, vmUuid: input.vmUuid, machineUuid: input.machineUuid, doctor: input.doctor, capacity: input.capacity, platform: "macos-arm64" };
+}
+export function buildMacWorkerAuthentication(challenge: string, workerId: string, privateKey: string): { type: "authenticate"; workerId: string; signature: string } {
+ const signature = signMessage(null, Buffer.from(challenge, "base64url"), privateKey).toString("base64url");
+ return { type: "authenticate", workerId, signature };
 }
 export function buildMacWorkerSocketUrl(base: string, workerId: string): string { const url = new URL(base); url.protocol = url.protocol === "https:" ? "wss:" : "ws:"; url.pathname = "/api/v1/workers/connect"; url.search = new URLSearchParams({ workerId }).toString(); return url.toString(); }
 export async function handleMacWorkerCommand(command: WorkerCommand, driver: TartVmDriver, limits?: MacWorkerLimits): Promise<{ version: 1; type: string; workerId: string; leaseId: string | null; payload: Record<string, unknown> }> { if (command.type === "worker.configure") { if (!limits) throw new Error("worker limits unavailable"); return applyWorkerConfigure(command, limits); } if (command.type === "tart.create_lease") { const lease = command.payload as unknown as Lease; const runtime = await driver.createLease(lease); return { version: 1, type: "sandbox_attested", workerId: command.workerId, leaseId: command.leaseId, payload: runtime as unknown as Record<string, unknown> }; } if (command.type === "tart.stop_lease" && command.leaseId) { await driver.stopLease(command.leaseId); return { version: 1, type: "lease_stopped", workerId: command.workerId, leaseId: command.leaseId, payload: {} }; } if (command.type === "tart.remove_lease" && command.leaseId) { await driver.removeLease(command.leaseId); return { version: 1, type: "lease_removed", workerId: command.workerId, leaseId: command.leaseId, payload: {} }; } throw new Error(`unsupported worker command ${command.type}`); }
@@ -106,11 +110,23 @@ export async function runMacWorker(baseUrl: string, limits: MacWorkerLimits): Pr
   const codeBytes = await readJoinCode();
   try {
     const payload = await currentMacWorkerJoinPayload(codeBytes.toString("utf8").trim(), key.publicKey);
-    const vmUuid = payload.vmUuid;
     const response = await fetch(new URL("/api/workers/join", controlPlane), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) });
     if (!response.ok) throw new Error(`worker join failed: ${response.status} ${await response.text()}`);
-    const ws = new WebSocket(buildMacWorkerSocketUrl(controlPlane.toString(), vmUuid));
-    ws.onmessage = async event => { const command = JSON.parse(String(event.data)) as WorkerCommand; const result = await handleMacWorkerCommand(command, driver, limits); ws.send(JSON.stringify(result)); };
+    const joined = await response.json() as { workerId?: string };
+    if (typeof joined.workerId !== "string" || !joined.workerId) throw new Error("worker join response missing workerId");
+    const workerId = joined.workerId;
+    const ws = new WebSocket(buildMacWorkerSocketUrl(controlPlane.toString(), workerId));
+    ws.onmessage = async event => {
+      const frame = JSON.parse(String(event.data)) as { type?: string; nonce?: string } & Partial<WorkerCommand>;
+      if (frame.type === "challenge" && typeof frame.nonce === "string") {
+        ws.send(JSON.stringify(buildMacWorkerAuthentication(frame.nonce, workerId, key.privateKey)));
+        return;
+      }
+      if (frame.type === "authenticated" || frame.type === "doctor_ack" || frame.type === "ping") return;
+      const command = WorkerCommand.parse(frame);
+      const result = await handleMacWorkerCommand(command, driver, limits);
+      ws.send(JSON.stringify(result));
+    };
     const { promise } = Promise.withResolvers<never>();
     return await promise;
   } finally { codeBytes.fill(0); }

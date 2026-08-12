@@ -31,10 +31,11 @@ const commandStore = {
   },
   async listUnacknowledged(workerId: string): Promise<WorkerCommand[]> {
     const rows = await db`select id,version,type,worker_id as "workerId",lease_id as "leaseId",occurred_at as "occurredAt",payload from commands where worker_id=${workerId} and state in ('pending','sent') order by occurred_at asc,id asc`;
-    return rows.map(row => WorkerCommandSchema.parse({
-      ...row,
-      occurredAt: row.occurredAt instanceof Date ? row.occurredAt.toISOString() : row.occurredAt,
-    }));
+      return rows.map(row => WorkerCommandSchema.parse({
+        ...row,
+        payload: typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload,
+        occurredAt: row.occurredAt instanceof Date ? row.occurredAt.toISOString() : row.occurredAt,
+      }));
   },
   async markSent(commandId: string): Promise<void> {
     await db`update commands set state='sent' where id=${commandId} and state='pending'`;
@@ -47,7 +48,7 @@ const dispatcher = new WorkerCommandDispatcher(15_000, commandStore);
 const requestSources = new WeakMap<Request, string>();
 const webRoot = Bun.env.WEB_ROOT ? new URL(Bun.env.WEB_ROOT) : new URL("../../web/dist/", import.meta.url);
 const githubApp = new GitHubAppService({ db, secretBox, baseUrl: env.BASE, webhookUrl: env.WEBHOOK_URL });
-const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), workerOrchestratorExecutable: new URL("../../orchestrator/dist/whitesmith-orchestrator", import.meta.url), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => { const socket = workerSockets.get(workerId); if (socket) void dispatcher.replayConnected(workerId); } });
+const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), workerOrchestratorExecutable: new URL("../../orchestrator/dist/whitesmith-orchestrator", import.meta.url), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => { const socket = workerSockets.get(workerId); if (socket) { dispatcher.register(workerId, socket); void dispatcher.replayConnected(workerId); } } });
 let server: Server<SocketData>;
 server = Bun.serve<SocketData>({
   port: Number(Bun.env.PORT ?? 3000),
@@ -83,10 +84,8 @@ server = Bun.serve<SocketData>({
             workerSockets.set(ws.data.workerId, ws);
             if (previousSocket && previousSocket !== ws) previousSocket.close?.(4001, "superseded");
             ws.data.authenticated = true;
-            if (worker.admission_state === "adopted") {
-              if (workerConnectionEpochs.get(ws.data.workerId) !== epoch) return ws.close(4001, "superseded");
-              dispatcher.register(ws.data.workerId, ws);
-            }
+            if (workerConnectionEpochs.get(ws.data.workerId) !== epoch) return ws.close(4001, "superseded");
+            dispatcher.register(ws.data.workerId, ws);
             ws.send(JSON.stringify({ version: 1, type: "authenticated", workerId: ws.data.workerId, admissionState: worker.admission_state }));
           } else if (frame.type === "doctor" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && frame.workerId === ws.data.workerId && frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload) && !containsSecret(frame.payload)) {
             const epoch = ws.data.connectionEpoch;

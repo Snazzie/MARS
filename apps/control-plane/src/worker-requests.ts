@@ -97,7 +97,8 @@ export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event
   const revision = typeof input?.revision === "string" ? input.revision : "";
   const [worker] = await db<{ configurationRevision: string | null; configurationCommandId: string | null }[]>`select configuration_revision as "configurationRevision", configuration_command_id as "configurationCommandId" from workers where id=${event.workerId}`;
   const [command] = await db<{ payload: unknown }[]>`select payload from commands where id=${commandId} and worker_id=${event.workerId} and type='worker.configure'`;
-  const expected = command?.payload as Record<string, unknown> | undefined;
+  const rawExpected = command?.payload;
+  const expected = typeof rawExpected === "string" ? JSON.parse(rawExpected) as Record<string, unknown> : rawExpected as Record<string, unknown> | undefined;
   const exact = observed.success && expected && worker?.configurationCommandId === commandId && worker.configurationRevision === revision && revision === expected.revision && canonical(observed.data) === canonical({ appliance: expected.appliance, runtime: expected.runtime });
   if (!exact) {
     if (worker?.configurationCommandId === commandId && worker.configurationRevision === revision) await db`update workers set configuration_state='error' where id=${event.workerId} and configuration_command_id=${commandId} and configuration_revision=${revision}`;

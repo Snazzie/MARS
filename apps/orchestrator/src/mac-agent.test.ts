@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { WorkerBootstrapRequest } from "@whitesmith/contracts";
-import { availableMacMemoryBytes } from "./mac-agent.ts";
-import { buildMacWorkerJoinPayload } from "./mac-agent.ts";
+import { generateKeyPairSync, verify as verifySignature } from "node:crypto";
+import { availableMacMemoryBytes, buildMacWorkerAuthentication, buildMacWorkerJoinPayload } from "./mac-agent.ts";
 
 describe("macOS memory availability", () => {
   test("converts the OS-reported free percentage to available bytes", () => {
@@ -57,4 +57,13 @@ describe("worker join payload", () => {
       capacity,
     });
   });
+});
+test("signs worker websocket challenges with the enrolled key", () => {
+  const pair = generateKeyPairSync("ed25519");
+  const privateKey = pair.privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+  const publicKey = pair.publicKey.export({ format: "pem", type: "spki" }).toString();
+  const challenge = Buffer.from("challenge").toString("base64url");
+  const frame = buildMacWorkerAuthentication(challenge, "worker-1", privateKey);
+  expect(frame.workerId).toBe("worker-1");
+  expect(verifySignature(null, Buffer.from(challenge, "base64url"), publicKey, Buffer.from(frame.signature, "base64url"))).toBe(true);
 });
