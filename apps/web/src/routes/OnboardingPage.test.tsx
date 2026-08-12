@@ -82,6 +82,12 @@ test("renders five-step progress with only the server current step enabled", () 
   expect(html).toContain("GitHub organization");
 });
 
+test("worker step exposes enrollment wizard before pending workers exist", () => {
+  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "worker", worker: null, organizations: [], github: { appConfigured: false, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: null });
+  expect(html).toContain("Enroll worker");
+  expect(html).toContain("Worker enrollment");
+});
+
 test("exposes explicit worker selection and selected private/internal repository controls", () => {
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "github", worker: null, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 2, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: { id: "inst-1", githubInstallationId: 42, state: "approved", repositorySelection: "selected" }, repositories: [{ id: "repo-1", name: "private", visibility: "private", available: true, approved: false }, { id: "repo-2", name: "public", visibility: "public", available: true, approved: false }] }, pool: null, defaultImageDigest: null });
   expect(html).toContain("Use this worker");
