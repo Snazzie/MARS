@@ -138,7 +138,7 @@ export async function getOnboardingDetail(
   const pool = poolRow ? {
     id: String(poolRow.id), organizationId: String(poolRow.organizationId), workerId: String(poolRow.workerId), workerName: String(poolRow.workerName),
     name: String(poolRow.name), platform: poolRow.platform, driver: poolRow.driver, imageDigest: String(poolRow.imageDigest),
-    resources: poolRow.resources, labels: poolRow.labels, triggerLabel: poolRow.triggerLabel, enabled: poolRow.enabled, active: numberValue(poolRow.active),
+    resources: objectValue(poolRow.resources), labels: Array.isArray(poolRow.labels) ? poolRow.labels : (() => { try { return JSON.parse(String(poolRow.labels)); } catch { return []; } })(), triggerLabel: poolRow.triggerLabel, enabled: poolRow.enabled, active: numberValue(poolRow.active),
   } as PoolSummary : null;
   const appConfigured = (await db`SELECT 1 FROM github_app_config WHERE singleton=true`).length > 0;
   return OnboardingDetail.parse({ ...status, worker, organizations, github: { appConfigured, organizationId, installation, repositories }, pool, defaultImageDigest: extras.defaultImageDigest ?? null });
