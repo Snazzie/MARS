@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { listOrganizations, getOverview, getAllOverview, listRepositories, listRuns, getRunDetail, listLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady } from "@whitesmith/db";
+import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady } from "@whitesmith/db";
 import { adoptWorker } from "../workers.ts";
 import { ApiError, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest } from "@whitesmith/contracts";
 
@@ -27,7 +27,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   app.get("/api/me", (c) => c.json(c.get("user")));
   app.get("/api/organizations", safe(async (c) => c.json(OrganizationSummary.array().parse(await listOrganizations(deps.db, c.get("user").id)))));
   app.get("/api/organizations/:organizationId/overview", safe(async (c) => { const org = c.req.param("organizationId"); const period = periodSchema.safeParse(c.req.query("period") || "24h"); if (!period.success) return error(c, 400, "invalid_period", "Invalid period", { issues: period.error.issues }); if (org === "all") return c.json(OverviewDto.parse(await getAllOverview(deps.db, c.get("user").id, period.data))); const denied = await guard(c, deps, org); if (denied) return denied; return c.json(OverviewDto.parse(await getOverview(deps.db, org, period.data))); }));
-  for (const [path, fn, schema] of [["repositories", listRepositories, RepositorySummary], ["runs", listRuns, RunSummary], ["pools", listPools, PoolSummary], ["workers", listWorkers, WorkerDetail]] as const) app.get(`/api/organizations/:organizationId/${path}`, safe(async (c) => { const org = c.req.param("organizationId"); if (org === "all" && path === "workers") { const q = parseQuery(c); if (q instanceof Response) return q; return c.json(CursorPage(schema).parse(await listAllWorkers(deps.db, c.get("user").id, q.limit))); } const denied = await guard(c, deps, org); if (denied) return denied; const q = parseQuery(c); if (q instanceof Response) return q; return c.json(CursorPage(schema).parse(await fn(deps.db, org, q.limit))); }));
+  for (const [path, fn, allFn, schema] of [["repositories", listRepositories, listAllRepositories, RepositorySummary], ["runs", listRuns, listAllRuns, RunSummary], ["pools", listPools, listAllPools, PoolSummary], ["workers", listWorkers, listAllWorkers, WorkerDetail]] as const) app.get(`/api/organizations/:organizationId/${path}`, safe(async (c) => { const org = c.req.param("organizationId"); const q = parseQuery(c); if (q instanceof Response) return q; if (org === "all") return c.json(CursorPage(schema).parse(await allFn(deps.db, c.get("user").id, q.limit))); const denied = await guard(c, deps, org); if (denied) return denied; return c.json(CursorPage(schema).parse(await fn(deps.db, org, q.limit))); }));
   app.get("/api/organizations/:organizationId/runs/:runId", safe(async (c) => { const org=c.req.param("organizationId"); const denied=await guard(c,deps,org); if(denied)return denied; const value=await getRunDetail(deps.db,org,c.req.param("runId")); return value?c.json(RunDetail.parse(value)):error(c,404,"not_found","Resource not found"); }));
   app.get("/api/organizations/:organizationId/runs/:runId/jobs/:jobId/logs", safe(async (c) => { const org=c.req.param("organizationId"); const denied=await guard(c,deps,org); if(denied)return denied; const q=logSchema.safeParse(c.req.query()); if(!q.success)return error(c,400,"invalid_log_bounds","Invalid log bounds",{issues:q.error.issues}); return c.json(CursorPage(LogChunk).parse(await listLogChunks(deps.db,org,c.req.param("runId"),c.req.param("jobId"),q.data.after,q.data.limit))); }));
   app.get("/api/organizations/:organizationId/settings", safe(async(c)=>{const org=c.req.param("organizationId");const denied=await guard(c,deps,org);if(denied)return denied;return c.json(OrganizationSettings.parse(await getOrganizationSettings(deps.db,org)));}));
@@ -121,7 +121,8 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const idem = requireMutation(c); if (idem) return idem;
     const key = c.req.header("idempotency-key")!;
-    await deps.db`UPDATE dashboard_repositories SET approved=${action === "approve"} WHERE organization_id=${org} AND id=${c.req.param("repositoryId")} AND visibility IN ('private','internal') AND available=true`;
+    const [updated] = await deps.db`UPDATE dashboard_repositories SET approved=${action === "approve"} WHERE organization_id=${org} AND id=${c.req.param("repositoryId")} AND available=true RETURNING id`;
+    if (!updated) return error(c, 409, "repository_not_approvable", "Repository is unavailable or not eligible for Whitesmith approval");
     await invalidateDashboard(deps.db, org, ["repositories"]); return c.json({ ok: true });
   }));
 }

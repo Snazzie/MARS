@@ -47,7 +47,7 @@ export function AppShell() {
               {organizations.data?.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
             </select>
           </label>
-          <a className="button secondary" href="/api/auth/github?returnTo=%2Frepositories">Refresh organizations</a>
+          <a className="button secondary" href="/api/auth/github?returnTo=%2Frepositories">Refresh GitHub connection</a>
           <div className="operator-chip" title="Authenticated operator"><span className="operator-avatar">{typeof me.data === "object" && me.data && "login" in me.data && typeof me.data.login === "string" ? me.data.login.slice(0, 1).toUpperCase() : "W"}</span><span>Operator</span></div>
         </header>
         <main className="workspace" data-path={location}>

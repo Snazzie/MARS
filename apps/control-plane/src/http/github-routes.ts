@@ -5,7 +5,7 @@ import { applyWorkflowJobWebhook, type WorkflowJobPayload } from "../runs.ts";
 
 const setupFailure = (cause: unknown): string | null => {
   const code = cause instanceof Error ? cause.message : "";
-  return ["setup_state_expired", "github_manifest_invalid", "github_app_unconfigured", "wrong_organization", "github_token_missing", "repository_selection_required", "github_installation_persist_failed", "github_organization_already_connected"].includes(code) ? code : null;
+  return ["setup_state_expired", "github_manifest_invalid", "github_app_unconfigured", "wrong_github_account", "wrong_organization", "github_token_missing", "repository_selection_required", "github_installation_persist_failed", "github_organization_already_connected"].includes(code) ? code : null;
 };
 
 export function registerGithubRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {

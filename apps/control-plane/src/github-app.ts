@@ -6,7 +6,7 @@ type SetupState = { purpose: "oauth" | "manifest" | "install" | "organization_in
 type Installation = { organizationId: string; githubInstallationId: number; state: "pending" | "approved" | "suspended"; repositorySelection: "all" | "selected" | null; githubAccountId?: number };
 type Repository = { id: string; installationId: number; fullName: string; visibility: "private" | "internal" | "public"; available: boolean; approved: boolean };
 type AppConfig = { id: number; slug: string; clientId?: string; pem: string; clientSecret: string; webhookSecret: string };
-type Organization = { githubOrgId: number };
+type Organization = { githubOrgId: number; githubAccountType?: "User" | "Organization" };
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type SqlDatabase = Sql<{}>;
 type MemoryDatabase = { setupStates: Map<string, SetupState>; installations: Map<number, Installation>; repositories: Map<string, Repository>; appConfig?: AppConfig; organizations?: Map<string, Organization> };
@@ -123,11 +123,10 @@ export class GitHubAppService {
         SELECT i.id
         FROM dashboard_installations i
         WHERE i.organization_id=${organizationId}
-          AND i.repository_selection='selected'
+          AND i.repository_selection IN ('all','selected')
           AND EXISTS (
             SELECT 1 FROM dashboard_repositories r
             WHERE r.installation_id=i.id AND r.available=true AND r.approved=true
-              AND r.visibility IN ('private','internal')
           )
         ORDER BY i.created_at DESC
         LIMIT 1
@@ -176,10 +175,13 @@ export class GitHubAppService {
     return `${input}.${sign.sign(key).toString("base64url")}`;
   }
 
-  private async organizationGithubId(organizationId: string): Promise<number | null> {
-    if (!isSql(this.db)) return this.db.organizations?.get(organizationId)?.githubOrgId ?? null;
-    const rows = await this.db<Array<{ github_org_id: number }>>`SELECT github_org_id FROM organizations WHERE id=${organizationId}`;
-    return rows[0] ? Number(rows[0].github_org_id) : null;
+  private async organizationGithubAccount(organizationId: string): Promise<{ id: number; type: "User" | "Organization" } | null> {
+    if (!isSql(this.db)) {
+      const organization = this.db.organizations?.get(organizationId);
+      return organization ? { id: organization.githubOrgId, type: organization.githubAccountType ?? "Organization" } : null;
+    }
+    const rows = await this.db<Array<{ github_org_id: number; github_account_type?: "User" | "Organization" }>>`SELECT github_org_id, github_account_type FROM organizations WHERE id=${organizationId}`;
+    return rows[0] ? { id: Number(rows[0].github_org_id), type: rows[0].github_account_type ?? "Organization" } : null;
   }
 
   private async persistInstallation(organizationId: string, installationId: number, state: Installation["state"], repositorySelection: Installation["repositorySelection"], githubAccountId: number, repos: Repository[]): Promise<string> {
@@ -201,8 +203,9 @@ export class GitHubAppService {
     const accountInfo = await this.gh(`/app/installations/${installationId}`, {}, await this.appJwt());
     const account = accountInfo.account && typeof accountInfo.account === "object" ? accountInfo.account as { type?: unknown; id?: unknown } : {};
     const accountId = typeof account.id === "number" ? account.id : Number(account.id);
-    const expectedOrgId = await this.organizationGithubId(pending.organizationId ?? "");
-    if (account.type !== "Organization" || !Number.isSafeInteger(accountId) || expectedOrgId === null || accountId !== expectedOrgId) throw new Error("wrong_organization");
+    const expected = await this.organizationGithubAccount(pending.organizationId ?? "");
+    const accountType = account.type === "User" || account.type === "Organization" ? account.type : "Organization";
+    if (!expected || !Number.isSafeInteger(accountId) || accountType !== expected.type || accountId !== expected.id) throw new Error(accountType === "Organization" ? "wrong_organization" : "wrong_github_account");
     const setup = await this.consume(installCookie, userId, pending.purpose);
     const token = await this.gh(`/app/installations/${installationId}/access_tokens`, { method: "POST" }, await this.appJwt());
     const accessToken = typeof token.token === "string" ? token.token : "";
@@ -211,9 +214,9 @@ export class GitHubAppService {
     const repositoryRows = Array.isArray(reposResponse.repositories) ? reposResponse.repositories : [];
     const repositorySelection = accountInfo.repository_selection === "all" || reposResponse.repository_selection === "all" ? "all" : "selected";
     const repos = repositoryRows.flatMap((raw) => { if (!raw || typeof raw !== "object") return []; const value = raw as { id?: unknown; full_name?: unknown; private?: unknown; visibility?: unknown }; if (typeof value.id !== "number" || typeof value.full_name !== "string") return []; return [{ id: String(value.id), installationId, fullName: value.full_name, visibility: visibilityOf(value), available: true, approved: false as boolean } satisfies Repository]; });
-    const hasAllowed = repos.some((repo) => repo.visibility === "private" || repo.visibility === "internal");
-    await this.persistInstallation(setup.organizationId!, installationId, repositorySelection === "selected" && hasAllowed ? "approved" : "pending", repositorySelection, accountId, repos);
-    if (repositorySelection === "selected" && hasAllowed) {
+    const hasAllowed = repos.length > 0;
+    await this.persistInstallation(setup.organizationId!, installationId, hasAllowed ? "approved" : "pending", repositorySelection, accountId, repos);
+    if (hasAllowed) {
       if (setup.purpose === "install" && isSql(this.db)) await this.db`UPDATE system_onboarding SET organization_id=${setup.organizationId} WHERE singleton=true AND admin_user_id=${userId}`;
       return setup.purpose === "install";
     }
@@ -221,6 +224,39 @@ export class GitHubAppService {
   }
 
   async reconcileInstallationRepositories(payload: unknown): Promise<void> {
+  async refreshInstallationRepositories(organizationId: string): Promise<void> {
+    let installationId: number | null = null;
+    if (isSql(this.db)) {
+      const rows = await this.db<Array<{ github_installation_id: number }>>`
+        SELECT github_installation_id
+        FROM dashboard_installations
+        WHERE organization_id=${organizationId} AND state <> 'suspended'
+        ORDER BY created_at DESC
+        LIMIT 1
+      `;
+      installationId = rows[0] ? Number(rows[0].github_installation_id) : null;
+    } else {
+      const row = [...this.db.installations.entries()].find(([, installation]) => installation.organizationId === organizationId && installation.state !== "suspended");
+      installationId = row?.[0] ?? null;
+    }
+    if (!installationId) throw new Error("github_installation_not_found");
+    const tokenResponse = await this.gh(`/app/installations/${installationId}/access_tokens`, { method: "POST" }, await this.appJwt());
+    const token = typeof tokenResponse.token === "string" ? tokenResponse.token : "";
+    if (!token) throw new Error("github_token_missing");
+    const repositories = await this.gh("/installation/repositories", {}, token);
+    const repositoryRows = Array.isArray(repositories.repositories) ? repositories.repositories : [];
+    const normalized = repositoryRows.flatMap((raw) => {
+      if (!raw || typeof raw !== "object") return [];
+      const value = raw as { id?: unknown; full_name?: unknown; private?: unknown; visibility?: unknown };
+      return typeof value.id === "number" && typeof value.full_name === "string" ? [{ id: value.id, full_name: value.full_name, private: value.private, visibility: value.visibility }] : [];
+    });
+    await this.reconcileInstallationRepositories({
+      installation: { id: installationId },
+      repository_selection: repositories.repository_selection === "all" ? "all" : "selected",
+      repositories: normalized,
+    });
+  }
+
     if (!payload || typeof payload !== "object") return;
     const data = payload as { installation?: { id?: number }; repository_selection?: "all" | "selected"; action?: string; repositories_removed?: Array<{ id: number }>; repositories_added?: Array<{ id: number; full_name: string; private?: boolean; visibility?: string }>; repositories?: Array<{ id: number; full_name: string; private?: boolean; visibility?: string }> };
     const id = Number(data.installation?.id);
@@ -251,8 +287,7 @@ export class GitHubAppService {
         this.db.repositories.set(String(raw.id), existing ? { ...existing, ...value } : value);
       }
       if (installation.state !== "suspended") {
-        const eligible = [...this.db.repositories.values()].some((repo) => repo.installationId === id && repo.available && (repo.visibility === "private" || repo.visibility === "internal"));
-        installation.state = effectiveSelection === "selected" && eligible ? "approved" : "pending";
+        installation.state = effectiveSelection === "selected" || effectiveSelection === "all" ? "approved" : "pending";
       }
       return;
     }
@@ -275,9 +310,9 @@ export class GitHubAppService {
     }
     await this.db`UPDATE dashboard_installations i SET state=CASE
       WHEN i.state='suspended' THEN i.state
-      WHEN i.repository_selection='selected' AND EXISTS (
+      WHEN i.repository_selection IN ('all','selected') AND EXISTS (
         SELECT 1 FROM dashboard_repositories r
-        WHERE r.installation_id=i.id AND r.available=true AND r.visibility IN ('private','internal')
+        WHERE r.installation_id=i.id AND r.available=true
       ) THEN 'approved'
       ELSE 'pending'
     END WHERE i.id=${installation.id}`;

@@ -1,8 +1,12 @@
 export const schemaSql = `
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE IF NOT EXISTS users (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), github_user_id bigint UNIQUE NOT NULL, login text NOT NULL, is_global_admin boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now());
-CREATE TABLE IF NOT EXISTS organizations (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), github_org_id bigint UNIQUE NOT NULL, login text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
-CREATE TABLE IF NOT EXISTS memberships (organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, role text NOT NULL CHECK(role IN ('owner','member')), PRIMARY KEY (organization_id,user_id));
+CREATE TABLE IF NOT EXISTS organizations (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), github_org_id bigint UNIQUE NOT NULL, login text NOT NULL, github_account_type text NOT NULL DEFAULT 'Organization' CHECK(github_account_type IN ('User','Organization')), created_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS github_account_type text NOT NULL DEFAULT 'Organization';
+UPDATE organizations SET github_account_type='Organization' WHERE github_account_type IS NULL;
+ALTER TABLE organizations DROP CONSTRAINT IF EXISTS organizations_github_account_type_check;
+ALTER TABLE organizations ADD CONSTRAINT organizations_github_account_type_check CHECK(github_account_type IN ('User','Organization'));
+CREATE UNIQUE INDEX IF NOT EXISTS organizations_github_account_idx ON organizations(github_account_type, github_org_id);
 CREATE TABLE IF NOT EXISTS sessions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), token_hash bytea UNIQUE NOT NULL, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
 DROP TABLE IF EXISTS worker_join_codes;
 CREATE TABLE IF NOT EXISTS workers (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid REFERENCES organizations(id), name text NOT NULL, platform text NOT NULL, admission_state text NOT NULL, connection_state text NOT NULL DEFAULT 'offline', configuration_state text NOT NULL DEFAULT 'unconfigured', public_key text, fingerprint text, limits jsonb, doctor jsonb, vm_uuid text, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE (organization_id, id));

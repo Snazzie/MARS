@@ -38,7 +38,6 @@ export async function getOnboardingStatus(db: OnboardingDb, auth: { authenticate
           AND i.state='approved'
           AND i.repository_selection IN ('all','selected')
           AND r.available=true AND r.approved=true
-          AND r.visibility IN ('private','internal')
       ) AS "githubReady"
     FROM system_onboarding so
     LEFT JOIN workers w ON w.id=so.worker_id
@@ -161,12 +160,12 @@ export async function approveOnboardingRepositories(db: OnboardingDb, repository
       FOR UPDATE
     `;
     const installationIds = new Set(rows.map((row) => String(row.installationId)));
-    if (rows.length !== repositoryIds.length || installationIds.size !== 1 || rows.some((row) => !["private", "internal"].includes(String(row.visibility)) || row.available !== true || !["approved", "pending"].includes(String(row.state)))) {
+    if (rows.length !== repositoryIds.length || installationIds.size !== 1 || rows.some((row) => row.available !== true || !["approved", "pending"].includes(String(row.state)))) {
       throw new Error("repositories_not_selectable");
     }
     const installationId = String(rows[0].installationId);
     await tx`UPDATE dashboard_installations SET state='approved', repository_selection='selected' WHERE id=${installationId} AND state IN ('pending','approved')`;
-    await tx`UPDATE dashboard_repositories SET approved=(id=ANY(${repositoryIds})) WHERE installation_id=${installationId} AND visibility IN ('private','internal')`;
+    await tx`UPDATE dashboard_repositories SET approved=(id=ANY(${repositoryIds})) WHERE installation_id=${installationId}`;
   });
 }
 

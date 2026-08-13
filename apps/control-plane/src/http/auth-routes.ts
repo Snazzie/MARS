@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { createPkce, githubAuthorizeUrl, exchangeOAuth, ensureBootstrapAdmin, syncGithubOrganizations } from "../github.ts";
+import { createPkce, githubAuthorizeUrl, exchangeOAuth, ensureBootstrapAdmin, syncGithubOrganizations, syncGithubPersonalWorkspace } from "../github.ts";
 import { createSession, SecretBox, sha256 } from "../auth.ts";
 
 const cookieAttributes = (baseUrl: string, path: string, maxAge: number): string => { const secure = new URL(baseUrl).protocol === "https:" ? "; Secure" : ""; return `HttpOnly${secure}; SameSite=Lax; Path=${path}; Max-Age=${maxAge}`; };
@@ -29,6 +29,7 @@ export function registerAuthRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlan
     if (user.login.toLowerCase() !== deps.bootstrapGithubLogin.trim().toLowerCase() && !dbUser.is_global_admin) return c.json({ error:"forbidden" },403);
     if (user.login.toLowerCase() === deps.bootstrapGithubLogin.trim().toLowerCase() && !dbUser.is_global_admin) { try { await ensureBootstrapAdmin(deps.db, user.id, user.login, deps.bootstrapGithubLogin); } catch (error) { if (error instanceof Error && error.message === "bootstrap admin already consumed") return c.json({ error:"forbidden" },403); throw error; } }
     await syncGithubOrganizations(deps.db, String(dbUser.id), user.accessToken);
+    await syncGithubPersonalWorkspace(deps.db, String(dbUser.id), user);
     const [onboarding] = await deps.db`SELECT completed_at FROM system_onboarding WHERE singleton=true`;
     c.header("Set-Cookie", `whitesmith_session=${await createSession(deps.db, String(dbUser.id))}; ${cookieAttributes(deps.baseUrl, "/", 604800)}`);
     if (encodedReturnTo) c.header("Set-Cookie", `oauth_return_to=; ${cookieAttributes(deps.baseUrl, "/api/auth", 0)}`, { append: true });

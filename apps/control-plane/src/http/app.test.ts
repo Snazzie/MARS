@@ -218,6 +218,28 @@ test("uninstalls an organization through the authenticated GitHub route", async 
     );
     expect(response.status).toBe(401);
   });
+
+  test("approves an eligible repository and persists the approval", async () => {
+    let approved = false;
+    const db = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+      if (strings.join("?").includes("UPDATE dashboard_repositories SET approved=")) {
+        approved = values[0] === true;
+        return [{ id: "repo-1" }];
+      }
+      return [];
+    }) as never;
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      db,
+      currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+    })).request("/api/organizations/org-1/repositories/repo-1/approve", {
+      method: "POST",
+      headers: { "Idempotency-Key": "approval-eligible-1" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(approved).toBe(true);
+  });
 test("starts GitHub installation for a non-onboarding organization", async () => {
   let requestedOrganization = "";
   const response = await createControlPlaneApp(fakeHttpDeps({
