@@ -303,3 +303,19 @@ describe("GitHub App onboarding", () => {
   });
 
 });
+test("workflow discovery authenticates every private repository read", async () => {
+  const calls: Request[] = [];
+  const github = service(async (input, init) => {
+    const request = new Request(input, init); calls.push(request);
+    const url = String(input);
+    if (url.endsWith("/access_tokens")) return Response.json({ token: "secret-installation-token" });
+    if (url.includes("/git/trees/")) return Response.json({ tree: [{ type: "blob", path: ".github/workflows/ci.yml", sha: "blob-sha" }] });
+    if (url.includes("/git/blobs/")) return Response.json({ content: Buffer.from("jobs:\n  test:\n    runs-on: ubuntu-latest\n").toString("base64") });
+    return Response.json({ default_branch: "main" });
+  });
+  fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "all" });
+  fakeDb.appConfig = { id: 9, slug: "whitesmith", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "x" };
+  const result = await github.listRepositoryWorkflows("acme", "private", 42);
+  expect(result.files).toHaveLength(1);
+  expect(calls.filter((request) => !String(request.url).endsWith("/access_tokens")).every((request) => request.headers.get("authorization") === "Bearer secret-installation-token")).toBe(true);
+});
