@@ -44,4 +44,5 @@ test("builds only the selected platform installer command", () => {
   expect(commands[0]?.command).toContain("one-use-code");
 });
 test("accepts adapter IP and custom HTTP URLs", () => { expect(buildInstallerCommand("http://192.168.64.1:3000/api/workers/installer?audience=linux-x64", "linux-x64")).toContain("--proto '=http'"); expect(normalizeControlPlaneUrls(["http://192.168.64.1:3000", "https://runner.example.com/", "bad", "http://192.168.64.1:3000"])).toEqual(["http://192.168.64.1:3000", "https://runner.example.com"]); });
+test("adds the insecure opt-in to copied Windows commands over HTTP", () => { const command = buildInstallerCommand("http://localhost:3000/api/workers/installer?audience=windows-x64", "windows-x64", "Abc_-9"); expect(command).toContain("-AllowInsecureHttp"); });
 test("rejects unsupported installers", () => { expect(() => buildInstallerCommand(url, "sol-x64" as never)).toThrow(); });

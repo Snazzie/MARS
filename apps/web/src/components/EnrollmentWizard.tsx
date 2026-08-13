@@ -16,7 +16,8 @@ export function buildInstallerCommand(installer: string, audience: RuntimePlatfo
   const tls = protocol === "https" ? " --tlsv1.3" : "";
   if (audience === "windows-x64") {
     const codeArg = code ? ` -Code ${quotePowerShell(code)}` : "";
-    return `$whitesmithInstaller = Join-Path $env:TEMP ("whitesmith-installer-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${protocol}'${tls} --output $whitesmithInstaller '${installer}'\n  if ($LASTEXITCODE -ne 0) { throw "Installer download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $whitesmithInstaller${codeArg}\n} finally {\n  Remove-Item -Force -ErrorAction SilentlyContinue $whitesmithInstaller\n}`;
+    const insecureArg = protocol === "http" ? " -AllowInsecureHttp" : "";
+    return `$whitesmithInstaller = Join-Path $env:TEMP ("whitesmith-installer-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${protocol}'${tls} --output $whitesmithInstaller '${installer}'\n  if ($LASTEXITCODE -ne 0) { throw "Installer download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $whitesmithInstaller${codeArg}${insecureArg}\n} finally {\n  Remove-Item -Force -ErrorAction SilentlyContinue $whitesmithInstaller\n}`;
   }
   const shell = audience === "macos-arm64" ? "zsh" : "bash";
   const codeArg = code ? ` -- --code ${quoteShell(code)}` : "";
