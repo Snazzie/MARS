@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { RunStep } from "@whitesmith/contracts";
+import type { RunJob, RunStep } from "@whitesmith/contracts";
 import { getLogs, getStepLogs } from "../api.ts";
 import { QueryState } from "./StateView.tsx";
 
@@ -12,6 +12,7 @@ type LogViewerProps = {
   runId: string;
   jobId: string;
   steps?: readonly RunStep[];
+  logsState: RunJob["logsState"];
 };
 
 export function normalizeStepResult(step: Pick<RunStep, "status" | "conclusion">): string {
@@ -42,8 +43,14 @@ function orderedLogText(items: readonly { sequence: number; content: string }[])
     .map((chunk) => `${chunk.content}\n`)
     .join("");
 }
+export function stepLogEmptyMessage(logsState: RunJob["logsState"]): string {
+  if (logsState === "pending") return "Logs are being synchronized from the runner and GitHub.";
+  if (logsState === "unavailable") return "GitHub no longer provides logs for this job.";
+  return "No log lines were attributed to this step. Review the unattributed job logs below.";
+}
 
-function StepLogRow({ organizationId, runId, jobId, step }: { organizationId: string; runId: string; jobId: string; step: RunStep }) {
+
+function StepLogRow({ organizationId, runId, jobId, logsState, step }: { organizationId: string; runId: string; jobId: string; logsState: RunJob["logsState"]; step: RunStep }) {
   const [expanded, setExpanded] = useState(false);
   const query = useQuery({
     queryKey: ["org", organizationId, "run", runId, "job", jobId, "step", step.id, "logs"],
@@ -61,14 +68,34 @@ function StepLogRow({ organizationId, runId, jobId, step }: { organizationId: st
         <span className="step-log-duration">{formatDuration(duration)}</span>
       </summary>
       <div className="step-log-body">
-        <QueryState error={query.error} isLoading={query.isLoading} isEmpty={!query.isLoading && !query.error && items.length === 0} retry={() => void query.refetch()} operationLabel="step logs" />
+        <QueryState error={query.error} isLoading={query.isLoading} isEmpty={false} retry={() => void query.refetch()} operationLabel="step logs" />
+        {!query.isLoading && !query.error && items.length === 0 && <p className="log-meta">{stepLogEmptyMessage(logsState)}</p>}
         {items.length > 0 && <><pre className="log-viewer" tabIndex={0} aria-label={`${step.name} log output`}>{orderedLogText(items)}</pre><p className="log-meta">Showing up to {DISPLAY_LOG_LIMIT} ordered chunks{query.data?.nextCursor ? "; more logs are available from search." : "."}</p></>}
       </div>
     </details>
   );
 }
 
-export function LogViewer({ organizationId, runId, jobId, steps = [] }: LogViewerProps) {
+export function LogViewer({ organizationId, runId, jobId, logsState, steps = [] }: LogViewerProps) {
   const query = useQuery({ queryKey: ["org", organizationId, "run", runId, "job", jobId, "logs"], queryFn: () => getLogs(organizationId, runId, jobId), enabled: Boolean(organizationId && runId && jobId), staleTime: 15_000 });
-  return <section className="log-panel" aria-labelledby={`logs-title-${jobId}`}><div className="panel-kicker" id={`logs-title-${jobId}`}>Job logs</div><section className="step-log-list" aria-label="Job steps">{steps.length === 0 ? <p className="log-meta">No attributed steps recorded.</p> : steps.map((step) => <StepLogRow key={step.id} organizationId={organizationId} runId={runId} jobId={jobId} step={step} />)}</section><section className="unattributed-log-panel" aria-labelledby={`unattributed-logs-title-${jobId}`}><div className="panel-kicker" id={`unattributed-logs-title-${jobId}`}>Unattributed job logs</div><QueryState error={query.error} isLoading={query.isLoading} isEmpty={!query.isLoading && !query.error && query.data?.items.length === 0} retry={() => void query.refetch()} operationLabel="job logs" />{query.data && query.data.items.length > 0 && <><pre className="log-viewer" tabIndex={0} aria-label="Unattributed bounded job log output">{orderedLogText(query.data.items)}</pre><p className="log-meta">Showing up to {DISPLAY_LOG_LIMIT} ordered chunks{query.data.nextCursor ? "; more logs are available from search." : "."}</p></>}</section></section>;
+  const items = query.data?.items ?? [];
+  const emptyJobMessage = logsState === "pending"
+    ? "Waiting for runner output or GitHub log synchronization."
+    : logsState === "unavailable"
+      ? "GitHub no longer provides logs for this job."
+      : "No unattributed job output remains.";
+  return (
+    <section className="log-panel" aria-labelledby={`logs-title-${jobId}`}>
+      <div className="panel-kicker" id={`logs-title-${jobId}`}>Job logs</div>
+      <section className="step-log-list" aria-label="Job steps">
+        {steps.length === 0 ? <p className="log-meta">No attributed steps recorded.</p> : steps.map((step) => <StepLogRow key={step.id} organizationId={organizationId} runId={runId} jobId={jobId} logsState={logsState} step={step} />)}
+      </section>
+      <section className="unattributed-log-panel" aria-labelledby={`unattributed-logs-title-${jobId}`}>
+        <div className="panel-kicker" id={`unattributed-logs-title-${jobId}`}>Unattributed job logs</div>
+        <QueryState error={query.error} isLoading={query.isLoading} isEmpty={false} retry={() => void query.refetch()} operationLabel="logs" />
+        {!query.isLoading && !query.error && items.length === 0 && <p className="log-meta">{emptyJobMessage}</p>}
+        {items.length > 0 && <><pre className="log-viewer" tabIndex={0}>{orderedLogText(items)}</pre><p className="log-meta">Showing up to {DISPLAY_LOG_LIMIT} chunks.</p></>}
+      </section>
+    </section>
+  );
 }

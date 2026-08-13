@@ -11,6 +11,7 @@ import { RepositoriesPage } from "./routes/RepositoriesPage.tsx";
 import { PoolsPage } from "./routes/PoolsPage.tsx";
 import { SettingsPage } from "./routes/SettingsPage.tsx";
 import type { OrganizationSummary } from "@whitesmith/contracts";
+import { z } from "zod";
 
 export function useOrganization(organizations: OrganizationSummary[]) {
   const [organizationId, setOrganizationIdState] = useState<string>(() => { try { return localStorage.getItem("whitesmith.organization") ?? "all"; } catch { return "all"; } });
@@ -25,7 +26,7 @@ const dashboardGateRoute = createRoute({ getParentRoute: () => rootRoute, id: "d
 const dashboardRoute = createRoute({ getParentRoute: () => dashboardGateRoute, id: "dashboard", component: AppShell });
 const indexRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/", component: OverviewPage });
 const runsRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/runs", component: RunsPage });
-const runDetailRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/runs/$runId", component: RunDetailPage });
+const runDetailRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/runs/$runId", validateSearch: z.object({ organizationId: z.string().optional() }), component: RunDetailPage });
 const repositoriesRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/repositories", component: RepositoriesPage });
 const workersRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/workers", component: WorkersPage });
 const poolsRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/pools", component: PoolsPage });

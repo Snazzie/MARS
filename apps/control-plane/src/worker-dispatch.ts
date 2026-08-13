@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { WorkerCommand, WorkerEvent } from "@whitesmith/contracts";
+import type { DatabaseClient } from "@whitesmith/db";
 
 export interface AuthenticatedWorkerSocket { send(data: string): void; close?(code?: number, reason?: string): void; }
 export interface WorkerCommandStore {
@@ -10,6 +11,18 @@ export interface WorkerCommandStore {
 }
 export class WorkerDispatchError extends Error { constructor(message: string) { super(message); this.name = "WorkerDispatchError"; } }
 type Pending = { command: WorkerCommand; resolve: (event: WorkerEvent) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
+export async function listReplayableWorkerCommands(db: DatabaseClient, workerId: string): Promise<WorkerCommand[]> {
+  const rows = await db`SELECT c.id,c.version,c.type,c.worker_id AS "workerId",c.lease_id AS "leaseId",c.occurred_at AS "occurredAt",c.payload
+    FROM commands c LEFT JOIN runner_leases l ON l.id=c.lease_id
+    WHERE c.worker_id=${workerId} AND c.state IN ('pending','sent')
+      AND (c.lease_id IS NULL OR c.type='tart.stop_lease' OR l.state NOT IN ('failed','reaped'))
+    ORDER BY c.occurred_at ASC,c.id ASC`;
+  return rows.map(row => WorkerCommand.parse({
+    ...row,
+    payload: typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload,
+    occurredAt: row.occurredAt instanceof Date ? row.occurredAt.toISOString() : row.occurredAt,
+  }));
+}
 
 export class WorkerCommandDispatcher {
   private readonly sockets = new Map<string, AuthenticatedWorkerSocket>();

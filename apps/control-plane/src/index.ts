@@ -9,12 +9,14 @@ import { discoverApprovedRepositoryJobs } from "./job-discovery.ts";
 import { readBody, validSignature, acceptDelivery } from "./webhook.ts";
 import { verifyWorkerSignature } from "./workers.ts";
 import { createWorkerChallenge, decodeWorkerSignature } from "./worker-socket.ts";
-import { WorkerCommandDispatcher, containsSecret } from "./worker-dispatch.ts";
+import { WorkerCommandDispatcher, containsSecret, listReplayableWorkerCommands } from "./worker-dispatch.ts";
 import { applyWorkerConfigurationAcknowledgement } from "./worker-requests.ts";
 import { handleAuthenticatedWorkerEvent } from "./worker-lifecycle.ts";
 import { GitHubAppService } from "./github-app.ts";
 import { runQueuedJobReconciliation } from "./job-reconciler.ts";
 import { startReconciliationScheduler } from "./reconcile-loop.ts";
+import { reapPendingLeases } from "./lease-cleanup.ts";
+import { DiscoveryHealthMonitor, isDiscoveryCycleSuccessful } from "./discovery-health.ts";
 import { createControlPlaneApp } from "./http/app.ts";
 const required = (name: string): string => { const value = Bun.env[name]; if (!value) throw new Error(`${name} is required`); return value; };
 const controlPlaneAdapterUrls = (Bun.env.CONTROL_PLANE_ADAPTER_URLS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
@@ -23,6 +25,10 @@ const masterFile = Bun.env.APP_MASTER_KEY_FILE;
 const masterKey = masterFile ? (await Bun.file(masterFile).text()).trim() : developmentMasterKey;
 if (!masterKey) throw new Error("APP_MASTER_KEY_FILE is required (or APP_MASTER_KEY in development)");
 const env = { BASE: required("PUBLIC_BASE_URL"), WEBHOOK_URL: Bun.env.GITHUB_WEBHOOK_URL, DATABASE: required("DATABASE_URL"), WEBHOOK_SECRET: required("GITHUB_WEBHOOK_SECRET"), CLIENT_ID: required("GITHUB_OAUTH_CLIENT_ID"), CLIENT_SECRET: required("GITHUB_OAUTH_CLIENT_SECRET"), BOOTSTRAP: required("BOOTSTRAP_GITHUB_LOGIN"), MACOS_TART_BASE_IMAGE: Bun.env.WHITESMITH_TART_BASE_IMAGE, DEFAULT_IMAGES: { "linux-x64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_X64, "windows-x64": Bun.env.DEFAULT_JOB_IMAGE_WINDOWS_X64, "macos-arm64": Bun.env.DEFAULT_JOB_IMAGE_MACOS_ARM64 } };
+const processStartedAt = new Date().toISOString();
+const buildId = Bun.env.WHITESMITH_BUILD_ID ?? (Bun.env.NODE_ENV === "production" ? required("WHITESMITH_BUILD_ID") : "development");
+const discoveryIntervalMs = Number(Bun.env.JOB_DISCOVERY_INTERVAL_MS ?? 30_000);
+const discoveryHealth = new DiscoveryHealthMonitor(discoveryIntervalMs);
 const db = createDb(env.DATABASE); await migrate(db); const secretBox = new SecretBox(masterKey);
 configureRunLifecycle(db);
 const json = (data: unknown, status=200) => Response.json(data,{status,headers:{"cache-control":"no-store"}});
@@ -38,12 +44,7 @@ const commandStore = {
     await db`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${command.id},${command.version},${command.type},${command.workerId},${command.leaseId},${command.occurredAt},${JSON.stringify(command.payload)}) on conflict (id) do nothing`;
   },
   async listUnacknowledged(workerId: string): Promise<WorkerCommand[]> {
-    const rows = await db`select c.id,c.version,c.type,c.worker_id as "workerId",c.lease_id as "leaseId",c.occurred_at as "occurredAt",c.payload from commands c left join runner_leases l on l.id=c.lease_id where c.worker_id=${workerId} and c.state in ('pending','sent') and (c.lease_id is null or l.state not in ('failed','reaped')) order by c.occurred_at asc,c.id asc`;
-      return rows.map(row => WorkerCommandSchema.parse({
-        ...row,
-        payload: typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload,
-        occurredAt: row.occurredAt instanceof Date ? row.occurredAt.toISOString() : row.occurredAt,
-      }));
+    return listReplayableWorkerCommands(db, workerId);
   },
   async markSent(commandId: string): Promise<void> {
     await db`update commands set state='sent' where id=${commandId} and state='pending'`;
@@ -56,23 +57,29 @@ const dispatcher = new WorkerCommandDispatcher(15_000, commandStore);
 const requestSources = new WeakMap<Request, string>();
 const webRoot = Bun.env.WEB_ROOT ? new URL(Bun.env.WEB_ROOT) : new URL("../../web/dist/", import.meta.url);
 const githubApp = new GitHubAppService({ db, secretBox, baseUrl: env.BASE, webhookUrl: env.WEBHOOK_URL });
-const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), workerOrchestratorExecutable: new URL("../../orchestrator/dist/whitesmith-orchestrator", import.meta.url), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => { const socket = workerSockets.get(workerId); if (socket) { dispatcher.register(workerId, socket); void dispatcher.replayConnected(workerId); } } });
+const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), workerOrchestratorExecutable: new URL("../../orchestrator/dist/whitesmith-orchestrator", import.meta.url), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => { const socket = workerSockets.get(workerId); if (socket) dispatcher.register(workerId, socket); }, health: () => ({ buildId, startedAt: processStartedAt, discovery: discoveryHealth.snapshot() }) });
 const reconciliationIntervalMs = Number(Bun.env.JOB_RECONCILIATION_INTERVAL_MS ?? 5_000);
-const discoveryIntervalMs = Number(Bun.env.JOB_DISCOVERY_INTERVAL_MS ?? 30_000);
 let nextDiscoveryAt = 0;
 startReconciliationScheduler(async () => {
   try {
     if (Date.now() >= nextDiscoveryAt) {
+      discoveryHealth.markAttempt();
       try {
         const report = await discoverApprovedRepositoryJobs({ db, installationToken: (installationId) => githubApp.getInstallationToken(installationId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY });
         if (report.discovered || report.failed) console.log(`GitHub job discovery: repositories=${report.repositories} discovered=${report.discovered} updated=${report.updated} failed=${report.failed}`);
+        if (isDiscoveryCycleSuccessful(report)) discoveryHealth.markSuccess();
       } catch (error) {
         console.error("GitHub job discovery failed", error);
       } finally {
         nextDiscoveryAt = Date.now() + discoveryIntervalMs;
       }
     }
+    if (discoveryHealth.consumeStaleAlert()) {
+      console.error(`GitHub job discovery stale: no fully successful cycle within ${discoveryHealth.snapshot().staleAfterMs}ms`);
+    }
     await expireLeases(db);
+    const cleanup = await reapPendingLeases({ db, dispatch: command => dispatcher.dispatch(command), workerConnected: workerId => dispatcher.isConnected(workerId) });
+    if (cleanup.dispatched || cleanup.failed) console.log(`Lease cleanup tick: dispatched=${cleanup.dispatched} failed=${cleanup.failed} skipped=${cleanup.skipped}`);
     const report = await runQueuedJobReconciliation({ db, installationToken: (installationId) => githubApp.getInstallationToken(installationId), dispatcher, workerConnected: (workerId) => dispatcher.isConnected(workerId) });
     console.log(`Job reconciliation tick: reserved=${report.reserved} failed=${report.failed} skipped=${report.skipped}`);
   } catch (error) {

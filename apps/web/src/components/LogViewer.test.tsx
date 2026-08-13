@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { RunStep } from "@whitesmith/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { LogViewer, deriveStepDuration, normalizeStepResult } from "./LogViewer.tsx";
+import { LogViewer, deriveStepDuration, normalizeStepResult, stepLogEmptyMessage } from "./LogViewer.tsx";
 
 const step = (overrides: Partial<RunStep> = {}): RunStep => ({
   id: "step-1",
@@ -26,6 +26,12 @@ test("normalizes step result and derives duration from timestamps", () => {
   expect(deriveStepDuration(step({ completedAt: null }))).toBeNull();
 });
 
+test("describes step log synchronization state instead of showing a workspace empty state", () => {
+  expect(stepLogEmptyMessage("pending")).toContain("synchronized");
+  expect(stepLogEmptyMessage("ingested")).toContain("attributed");
+  expect(stepLogEmptyMessage("unavailable")).toContain("no longer provides");
+});
+
 test("renders steps collapsed and keeps unattributed job logs as a fallback", () => {
   const client = new QueryClient();
   const markup = renderToStaticMarkup(
@@ -34,6 +40,7 @@ test("renders steps collapsed and keeps unattributed job logs as a fallback", ()
         organizationId="org-1"
         runId="run-1"
         jobId="job-1"
+        logsState="pending"
         steps={[step()]}
       />
     </QueryClientProvider>,
@@ -43,4 +50,6 @@ test("renders steps collapsed and keeps unattributed job logs as a fallback", ()
   expect(markup).toContain('aria-expanded="false"');
   expect(markup).toContain("Unattributed job logs");
   expect(markup).not.toContain("/steps/step-1/logs");
+  expect(markup).toContain("Logs are being synchronized");
+  expect(markup).not.toContain("No records yet");
 });

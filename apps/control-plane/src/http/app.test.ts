@@ -9,9 +9,38 @@ import { pathToFileURL } from "node:url";
 const app = createControlPlaneApp(fakeHttpDeps());
 
 describe("control-plane HTTP boundary", () => {
-  test("serves health only below /api", async () => {
-    expect((await app.request("/api/healthz")).status).toBe(200);
+  test("serves build and discovery health only below /api", async () => {
+    const response = await app.request("/api/healthz");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      buildId: "test-build",
+      startedAt: "2026-08-13T00:00:00.000Z",
+      discovery: {
+        lastAttemptAt: "2026-08-13T00:00:30.000Z",
+        lastSuccessAt: "2026-08-13T00:00:31.000Z",
+        stale: false,
+        staleAfterMs: 60_000,
+      },
+    });
     expect((await app.request("/healthz")).status).toBe(404);
+  });
+  test("reports stale discovery as unhealthy", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      health: () => ({
+        buildId: "test-build",
+        startedAt: "2026-08-13T00:00:00.000Z",
+        discovery: {
+          lastAttemptAt: "2026-08-13T00:01:00.000Z",
+          lastSuccessAt: "2026-08-13T00:00:00.000Z",
+          stale: true,
+          staleAfterMs: 60_000,
+        },
+      }),
+    })).request("/api/healthz");
+
+    expect(response.status).toBe(503);
+    expect((await response.json()).ok).toBe(false);
   });
 
   test("never serves the SPA for an unknown API route", async () => {

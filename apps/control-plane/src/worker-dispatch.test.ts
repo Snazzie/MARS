@@ -72,6 +72,24 @@ test("accepts the first acknowledgement for a newly persisted command", async ()
   expect(acknowledged).toEqual([dispatched.id]);
 });
 
+test("replays terminal-lease stop commands until their cleanup event is acknowledged", async () => {
+  const modulePath = "./worker-dispatch.ts";
+  const module = await import(modulePath) as typeof import("./worker-dispatch.ts") & {
+    listReplayableWorkerCommands?: (db: unknown, workerId: string) => Promise<WorkerCommand[]>;
+  };
+  expect(module.listReplayableWorkerCommands).toBeFunction();
+  if (!module.listReplayableWorkerCommands) return;
+  const queries: string[] = [];
+  const stopCommand = { ...command, type: "tart.stop_lease", leaseId: "22222222-2222-4222-8222-222222222222", occurredAt: new Date() };
+  const db = Object.assign(async (strings: TemplateStringsArray) => {
+    queries.push(strings.join(" "));
+    return [stopCommand];
+  }, {});
+  const result = await module.listReplayableWorkerCommands(db, workerId);
+  expect(queries[0]).toContain("c.type='tart.stop_lease'");
+  expect(result).toEqual([{ ...stopCommand, occurredAt: stopCommand.occurredAt.toISOString() }]);
+});
+
 describe("WorkerCommandDispatcher frame and payload hardening", () => {
   test("rejects events from a superseded socket", async () => {
     let commandId = "";

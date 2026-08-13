@@ -48,13 +48,14 @@ describe("Tart VM lifecycle", () => {
       clone: async (base, name) => { calls.push(["clone", base, name]); },
       setResources: async (name, resources) => { calls.push(["set", name, String(resources.vcpu), String(resources.memoryBytes), String(resources.storageBytes)]); },
       startWithBootstrap: async (name, config) => { calls.push(["start-with-bootstrap", name, config]); },
-      startRunner: async (name) => { calls.push(["runner", name]); },
+      startRunner: (name) => { calls.push(["runner", name]); return { completion: Promise.resolve(0), logs: (async function* () {})() }; },
       stop: async (name) => { calls.push(["stop", name]); },
       remove: async (name) => { calls.push(["remove", name]); },
     };
     const driver = new TartVmDriver(runtime, "base-image", "whitesmith-job");
     const lease = await driver.createLease({
       id: "11111111-1111-4111-8111-111111111111",
+      jobId: "22222222-2222-4222-8222-222222222222",
       imageDigest: "base-image",
       nonce: "nonce",
       encodedJitConfig: "jit-config",

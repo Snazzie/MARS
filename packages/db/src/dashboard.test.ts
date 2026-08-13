@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { OverviewDto, RunSummary, WorkerDetail } from "@whitesmith/contracts";
-import { getOverview, getOrganizationSettings, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRuns, listWorkers, listPools } from "./dashboard.ts";
+import { LogChunk, OverviewDto, RunSummary, WorkerDetail } from "@whitesmith/contracts";
+import { getOverview, getOrganizationSettings, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks } from "./dashboard.ts";
 
 test("overview returns point-in-time pending and running buckets", async () => {
   const db = (async (strings: TemplateStringsArray) => {
@@ -90,6 +90,14 @@ test("run listing derives runtime from run timestamps when duration is unset", a
     runtimeBoundary: null,
   }]) as never;
   expect((await listRuns(db, "org-1")).items[0].durationMs).toBe(60_000);
+});
+
+test("log listings normalize PostgreSQL bigint sequences", async () => {
+  const db = (async () => [{ organizationId: "11111111-1111-4111-8111-111111111111", runId: "22222222-2222-4222-8222-222222222222", jobId: "33333333-3333-4333-8333-333333333333", sequence: "0", content: "output", hasMore: false, occurredAt: "2026-08-13T00:00:00.000Z" }]) as never;
+  const job = await listLogChunks(db, "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333");
+  const step = await listStepLogChunks(db, "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444");
+  expect(LogChunk.parse(job.items[0]).sequence).toBe(0);
+  expect(LogChunk.parse(step.items[0]).sequence).toBe(0);
 });
 
 test("organization settings convert PostgreSQL numeric values to numbers", async () => {

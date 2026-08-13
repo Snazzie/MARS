@@ -41,6 +41,18 @@ export type FreshRunMilestones = {
   reaped: boolean;
   pendingZero: boolean;
 };
+type ControlPlaneHealthResponse = {
+  ok: boolean;
+  buildId: string;
+  startedAt: string;
+  discovery: {
+    lastAttemptAt: string | null;
+    lastSuccessAt: string | null;
+    stale: boolean;
+    staleAfterMs: number;
+  };
+};
+
 
 type LiveOptions = {
   repository: string;
@@ -48,6 +60,8 @@ type LiveOptions = {
   ref: string;
   databaseUrl: string;
   tartExecutable: string;
+  controlPlaneUrl: string;
+  expectedBuildId: string;
 };
 
 type DatabaseRunState = {
@@ -66,6 +80,26 @@ type DatabaseRunState = {
 export function isWhitesmithRunnerName(value: string | null): boolean {
   return typeof value === "string" && /^whitesmith-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 }
+export function assertExpectedControlPlaneBuild(value: unknown, expectedBuildId: string): asserts value is ControlPlaneHealthResponse {
+  if (!value || typeof value !== "object") throw new Error("control_plane_health_invalid");
+  const health = value as Partial<ControlPlaneHealthResponse>;
+  if (!health.discovery || typeof health.discovery !== "object") throw new Error("control_plane_health_invalid");
+  if (health.discovery.stale || health.ok !== true) throw new Error("control_plane_discovery_stale");
+  if (health.buildId !== expectedBuildId) throw new Error(`control_plane_build_mismatch: expected ${expectedBuildId}, received ${health.buildId ?? "unknown"}`);
+}
+
+async function verifyControlPlaneBuild(baseUrl: string, expectedBuildId: string): Promise<void> {
+  const origin = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+  const response = await fetch(`${origin}/api/healthz`, { headers: { accept: "application/json" } });
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new Error("control_plane_health_invalid");
+  }
+  assertExpectedControlPlaneBuild(body, expectedBuildId);
+}
+
 
 export function selectFreshWorkflowRun(runs: GithubRunSummary[], baselineIds: ReadonlySet<number>): GithubRunSummary | undefined {
   return runs
@@ -294,9 +328,14 @@ async function runLiveSmoke(): Promise<void> {
     ref: Bun.env.WHITESMITH_SMOKE_REF ?? DEFAULT_REF,
     databaseUrl: Bun.env.DATABASE_URL ?? "",
     tartExecutable: Bun.env.WHITESMITH_TART_EXECUTABLE ?? "tart",
+    controlPlaneUrl: Bun.env.WHITESMITH_CONTROL_PLANE_URL ?? Bun.env.PUBLIC_BASE_URL ?? "",
+    expectedBuildId: Bun.env.WHITESMITH_EXPECTED_BUILD_ID ?? "",
   };
   if (!options.databaseUrl) throw new Error("DATABASE_URL is required");
   if (options.repository.split("/").length !== 2) throw new Error("WHITESMITH_SMOKE_REPOSITORY must be owner/repo");
+  if (!options.controlPlaneUrl) throw new Error("WHITESMITH_CONTROL_PLANE_URL or PUBLIC_BASE_URL is required");
+  if (!options.expectedBuildId) throw new Error("WHITESMITH_EXPECTED_BUILD_ID is required");
+  await verifyControlPlaneBuild(options.controlPlaneUrl, options.expectedBuildId);
   await runCommand("gh", ["auth", "status", "--hostname", "github.com"]);
   const db = createDb(options.databaseUrl);
   try {

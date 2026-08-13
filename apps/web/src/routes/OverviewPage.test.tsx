@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { OverviewPeriodControl, overviewPeriodLabels } from "./OverviewPage.tsx";
+import { OverviewPeriodControl, overviewPeriodLabels, overviewQueryOptions } from "./OverviewPage.tsx";
 
 test("period control exposes all supported overview windows", () => {
   const markup = renderToStaticMarkup(<OverviewPeriodControl value="24h" onChange={() => {}} />);
@@ -10,4 +10,8 @@ test("period control exposes all supported overview windows", () => {
   expect(markup).toContain('value="30d"');
   expect(markup).toContain('checked=""');
   expect(overviewPeriodLabels["30d"]).toBe("30 days");
+});
+
+test("overview query polls live fleet state", () => {
+  expect(overviewQueryOptions("org-1", "24h").refetchInterval).toBe(2_000);
 });

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { RunSummary } from "@whitesmith/contracts";
-import { RunTable } from "./RunTable.tsx";
+import { RunTable, runDetailLink } from "./RunTable.tsx";
 
 const run: RunSummary = {
   id: "run-1",
@@ -25,7 +25,6 @@ const run: RunSummary = {
 
 test("renders run number, short commit, and branch in separate columns", () => {
   const html = renderToStaticMarkup(<RunTable runs={[run]} allowDetails={false} />);
-
   expect(html).toContain("<th>Run #</th>");
   expect(html).toContain("<th>Commit</th>");
   expect(html).toContain("<th>Branch</th>");
@@ -35,4 +34,14 @@ test("renders run number, short commit, and branch in separate columns", () => {
   expect(html).toContain("Snazzie");
   expect(html).toContain(`title="${run.commitSha}"`);
   expect(html).toContain(`aria-label="Commit ${run.commitSha}"`);
+});
+
+test("links failed runs to their detail page with organization context", () => {
+  const failed = { ...run, status: "completed" as const, conclusion: "failure" as const };
+
+  expect(runDetailLink(failed)).toEqual({
+    to: "/runs/$runId",
+    params: { runId: "run-1" },
+    search: { organizationId: "org-1" },
+  });
 });

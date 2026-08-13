@@ -11,3 +11,35 @@ test("runs immediately, prevents overlap, and stops future ticks", async () => {
   release();
   expect(calls).toBe(1);
 });
+
+test("dispatches durable cleanup for terminal leases without an outstanding stop command", async () => {
+  const modulePath = "./lease-cleanup.ts";
+  const cleanup = await import(modulePath).catch(() => null) as null | {
+    reapPendingLeases: (input: {
+      db: unknown;
+      dispatch: (command: unknown) => Promise<unknown>;
+      workerConnected: (workerId: string) => boolean;
+    }) => Promise<{ dispatched: number; skipped: number; failed: number }>;
+  };
+  expect(cleanup?.reapPendingLeases).toBeFunction();
+  if (!cleanup) return;
+  const queries: string[] = [];
+  const db = Object.assign(async (strings: TemplateStringsArray) => {
+    queries.push(strings.join(" "));
+    return [{ leaseId: "22222222-2222-4222-8222-222222222222", workerId: "11111111-1111-4111-8111-111111111111", nonce: "n".repeat(32) }];
+  }, {});
+  const commands: unknown[] = [];
+  const report = await cleanup.reapPendingLeases({
+    db,
+    workerConnected: () => true,
+    dispatch: async command => { commands.push(command); return {}; },
+  });
+  expect(report).toEqual({ dispatched: 1, skipped: 0, failed: 0 });
+  expect(queries[0]).toContain("NOT EXISTS");
+  expect(commands).toEqual([{
+    type: "tart.stop_lease",
+    workerId: "11111111-1111-4111-8111-111111111111",
+    leaseId: "22222222-2222-4222-8222-222222222222",
+    payload: { nonce: "n".repeat(32) },
+  }]);
+});

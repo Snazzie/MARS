@@ -43,6 +43,35 @@ export class GithubJobsClient {
     const value: unknown = response.status === 204 ? {} : await response.json();
     return value && typeof value === "object" ? value as Record<string, unknown> : {};
   }
+  private async requestText(path: string, maxBytes: number): Promise<string> {
+    const headers = new Headers();
+    headers.set("accept", "application/vnd.github+json");
+    headers.set("x-github-api-version", "2026-03-10");
+    headers.set("authorization", `Bearer ${await this.token()}`);
+    const response = await this.fetcher(`${this.apiBase}${path}`, { headers, signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) {
+      console.error(`GitHub jobs request failed: ${response.status} ${path}`);
+      throw new Error(`github_${response.status}`);
+    }
+    const contentLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(contentLength) && contentLength > maxBytes) throw new Error("github_job_log_too_large");
+    if (!response.body) return "";
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let total = 0;
+    let text = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error("github_job_log_too_large");
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  }
   private parseRun(value: Record<string, unknown>): GithubRunSnapshot {
     const id = Number(value.id); if (!Number.isSafeInteger(id) || id <= 0) throw new Error("github_payload_invalid");
     return { id, runNumber: Number(value.run_number) || id, workflowName: stringValue(value.name, stringValue(value.display_title, "workflow")), event: stringValue(value.event), branch: stringValue(value.head_branch), commitSha: stringValue(value.head_sha), actorLogin: stringValue((value.actor as Record<string, unknown> | undefined)?.login, "github"), status: runStatus(value.status), conclusion: nullableString(value.conclusion), queuedAt: stringValue(value.created_at, new Date().toISOString()), startedAt: nullableString(value.run_started_at), completedAt: nullableString(value.status === "completed" ? value.updated_at : null) };
@@ -52,7 +81,7 @@ export class GithubJobsClient {
     const status = jobStatus(value.status);
     return { id, runId, name: stringValue(value.name, "job"), status, conclusion: nullableString(value.conclusion), labels: labelsValue(value.labels), runnerName: nullableString(value.runner_name), queuedAt: stringValue(value.created_at, new Date().toISOString()), startedAt: status === "queued" ? null : nullableString(value.started_at), completedAt: status === "completed" ? nullableString(value.completed_at) : null, steps: parseSteps(value.steps, stringValue(value.created_at, new Date().toISOString())) };
   }
-  async listRuns(owner: string, repo: string, status: "queued" | "in_progress", page: number): Promise<{ totalCount: number; runs: GithubRunSnapshot[] }> {
+  async listRuns(owner: string, repo: string, status: "queued" | "in_progress" | "completed", page: number): Promise<{ totalCount: number; runs: GithubRunSnapshot[] }> {
     const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?status=${status}&per_page=100&page=${page}`);
     const runs = Array.isArray(value.workflow_runs) ? value.workflow_runs.filter((x): x is Record<string, unknown> => Boolean(x && typeof x === "object")).map(x => this.parseRun(x)) : [];
     return { totalCount: Number(value.total_count) || runs.length, runs };
@@ -62,6 +91,9 @@ export class GithubJobsClient {
     const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/jobs?filter=latest&per_page=100&page=${page}`);
     const jobs = Array.isArray(value.jobs) ? value.jobs.filter((x): x is Record<string, unknown> => Boolean(x && typeof x === "object")).map(x => this.parseJob(x)) : [];
     return { totalCount: Number(value.total_count) || jobs.length, jobs };
+  }
+  async getJobLogs(owner: string, repo: string, jobId: number, maxBytes = 10 * 1024 * 1024): Promise<string> {
+    return this.requestText(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/jobs/${jobId}/logs`, maxBytes);
   }
   async generateJitConfig(input: GenerateJitConfigInput): Promise<RunnerJitConfig> {
     if (!input.labels.length) throw new Error("github_jit_labels_missing");

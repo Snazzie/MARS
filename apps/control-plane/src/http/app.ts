@@ -19,7 +19,10 @@ export function requireSession(deps: ControlPlaneHttpDeps) {
 
 export function createControlPlaneApp(deps: ControlPlaneHttpDeps) {
   const app = new Hono<ControlPlaneEnv>();
-  app.get("/api/healthz", (c) => c.json({ ok: true }));
+  app.get("/api/healthz", (c) => {
+    const health = deps.health();
+    return c.json({ ok: !health.discovery.stale, ...health }, health.discovery.stale ? 503 : 200);
+  });
   registerAuthRoutes(app, deps);
   registerGithubRoutes(app, deps);
   registerOnboardingRoutes(app, deps);

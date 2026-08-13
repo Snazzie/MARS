@@ -72,6 +72,15 @@ test("accepts a valid stale lifecycle event without closing the authenticated so
   const accepted = await handleAuthenticatedWorkerEvent(db, { handleEvent() { return false; } }, event("lease.failed", { leaseId, nonce, reason: "provisioning_failed" }), { send() {} });
   expect(accepted).toBe(true);
 });
+test("acknowledges a durable stop command when its reaped event arrives", async () => {
+  const { db } = acceptingDb();
+  const commandId = crypto.randomUUID();
+  const dispatched: unknown[] = [];
+  const socket = { send() {} };
+  const accepted = await handleAuthenticatedWorkerEvent(db, { handleEvent(input, receivedSocket) { dispatched.push(input, receivedSocket); return true; } }, event("lease.reaped", { commandId, leaseId, nonce }), socket);
+  expect(accepted).toBe(true);
+  expect(dispatched).toEqual([expect.objectContaining({ type: "lease.reaped", payload: expect.objectContaining({ commandId }) }), socket]);
+});
 test("rejects malformed or unauthenticated lifecycle events without touching storage", async () => {
   const { db, calls } = acceptingDb();
   expect(await applyWorkerLeaseEvent(db, event("sandbox_attested", { leaseId, nonce: "short", runtimeInstanceId: "vm", observed: { vcpu: 1, memoryBytes: 1, storageBytes: 1 } }))).toBe(false);

@@ -1,6 +1,7 @@
 import type { DatabaseClient } from "@whitesmith/db";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { applyGithubJobSnapshot, type GithubRunSnapshot } from "./runs.ts";
+import { GITHUB_LOG_FORMAT_VERSION, syncCompletedGithubJobLogs } from "./github-job-log-sync.ts";
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 export type DiscoveryDeps = { db: DatabaseClient; installationToken: (installationId: number) => Promise<string>; githubFetch?: Fetcher; repositoryConcurrency?: number; repositoryFullName?: string };
@@ -15,6 +16,29 @@ async function pages<T>(load: (page: number) => Promise<{ totalCount: number; it
   }
   return result;
 }
+export async function listCompletedRunsSince(
+  load: (page: number) => Promise<{ totalCount: number; runs: GithubRunSnapshot[] }>,
+  checkpointRunId: number | null,
+): Promise<{ runs: GithubRunSnapshot[]; newestRunId: number | null }> {
+  const runs: GithubRunSnapshot[] = [];
+  let newestRunId: number | null = null;
+  let totalCount = 0;
+  for (let page = 1; page <= 10; page += 1) {
+    const response = await load(page);
+    totalCount = response.totalCount;
+    newestRunId ??= response.runs[0]?.id ?? null;
+    for (const run of response.runs) {
+      if (run.id === checkpointRunId) return { runs, newestRunId };
+      runs.push(run);
+    }
+    if (checkpointRunId === null || runs.length >= Math.min(response.totalCount, 1000) || response.runs.length === 0) break;
+  }
+  if (checkpointRunId !== null && totalCount > 1000 && runs.length >= 1000) {
+    throw new Error("completed_run_checkpoint_unreachable");
+  }
+  return { runs, newestRunId };
+}
+
 
 async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unknown>): Promise<{ discovered: number; updated: number }> {
   const fullName = String(row.fullName ?? "");
@@ -27,12 +51,29 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
     const active = await pages(async page => { const value = await client.listRuns(owner, repo, status, page); return { totalCount: value.totalCount, items: value.runs }; });
     for (const run of active) runs.set(run.id, run);
   }
-  const local = await deps.db`SELECT DISTINCT r.github_run_id AS "runId" FROM dashboard_runs r JOIN dashboard_repositories repo ON repo.id=r.repository_id WHERE repo.id=${String(row.repositoryId)} AND r.status <> 'completed'`;
-  for (const item of local) { const runId = Number(item.runId); if (runId > 0 && !runs.has(runId)) runs.set(runId, await client.getRun(owner, repo, runId)); }
+  const [checkpoint] = await deps.db`SELECT completed_run_id AS "completedRunId" FROM github_discovery_checkpoints WHERE repository_id=${String(row.repositoryId)}`;
+  console.error(`GitHub discovery list ${fullName} completed`);
+  const completed = await listCompletedRunsSince(
+    page => client.listRuns(owner, repo, "completed", page),
+    checkpoint?.completedRunId == null ? null : Number(checkpoint.completedRunId),
+  );
+  for (const run of completed.runs) runs.set(run.id, run);
+  await deps.db`UPDATE dashboard_jobs j SET logs_state='unavailable',logs_synced_at=now(),logs_error='github_logs_expired',logs_version=${GITHUB_LOG_FORMAT_VERSION} FROM dashboard_runs r WHERE j.run_id=r.id AND r.repository_id=${String(row.repositoryId)} AND j.status='completed' AND j.completed_at<now()-interval '90 days' AND j.logs_version<${GITHUB_LOG_FORMAT_VERSION}`;
+  const activeLocal = await deps.db`SELECT DISTINCT r.github_run_id AS "runId" FROM dashboard_runs r WHERE r.repository_id=${String(row.repositoryId)} AND r.status<>'completed'`;
+  const logBackfill = await deps.db`SELECT DISTINCT r.github_run_id AS "runId" FROM dashboard_runs r JOIN dashboard_jobs j ON j.run_id=r.id WHERE r.repository_id=${String(row.repositoryId)} AND j.status='completed' AND j.completed_at>=now()-interval '90 days' AND (j.logs_state='pending' OR j.logs_version<${GITHUB_LOG_FORMAT_VERSION}) ORDER BY r.github_run_id DESC LIMIT 2`;
+  for (const item of [...activeLocal, ...logBackfill]) { const runId = Number(item.runId); if (runId > 0 && !runs.has(runId)) runs.set(runId, await client.getRun(owner, repo, runId)); }
   let discovered = 0, updated = 0;
   for (const run of runs.values()) {
     const jobs = await pages(async page => { const value = await client.listJobs(owner, repo, run.id, page); return { totalCount: value.totalCount, items: value.jobs }; });
-    for (const job of jobs) { discovered += 1; if (await applyGithubJobSnapshot({ installationId: Number(row.installationId), repository: { id: Number(row.githubRepositoryId), name: String(row.name), fullName }, run, job })) updated += 1; }
+    for (const job of jobs) {
+      discovered += 1;
+      const applied = await applyGithubJobSnapshot({ installationId: Number(row.installationId), repository: { id: Number(row.githubRepositoryId), name: String(row.name), fullName }, run, job });
+      if (applied) updated += 1;
+      if (applied && job.status === "completed") await syncCompletedGithubJobLogs({ db: deps.db, client, owner, repo, job });
+    }
+  }
+  if (completed.newestRunId !== null) {
+    await deps.db`INSERT INTO github_discovery_checkpoints (repository_id,completed_run_id,updated_at) VALUES (${String(row.repositoryId)},${completed.newestRunId},now()) ON CONFLICT (repository_id) DO UPDATE SET completed_run_id=excluded.completed_run_id,updated_at=excluded.updated_at`;
   }
   return { discovered, updated };
 }

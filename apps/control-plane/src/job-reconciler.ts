@@ -29,7 +29,7 @@ function stringArray(value: unknown): string[] {
 
 export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): Promise<ReconcileReport> {
   const queuedRows = await deps.db`
-    SELECT j.github_job_id AS "jobId", r.id AS "runId", r.repository_id AS "repositoryId",
+    SELECT j.id AS "dashboardJobId", j.github_job_id AS "jobId", r.id AS "runId", r.repository_id AS "repositoryId",
       r.organization_id AS "organizationId", i.github_installation_id AS "installationId",
       repo.full_name AS repository, j.requested_labels AS labels
     FROM dashboard_jobs j
@@ -56,6 +56,8 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
 
   const organizationByJob = new Map<number, string>();
   const installationByJob = new Map<number, number>();
+  const dashboardJobByGithubJob = new Map<number, string>();
+  const dashboardJobByLease = new Map<string, string>();
   const githubByInstallation = new Map<number, GithubJobsClient>();
   const workerByPool = new Map<string, { workerId: string; encryptionPublicKey: string; imageDigest: string; resources: ReturnType<typeof PoolResourcesSchema.parse> }>();
 
@@ -79,10 +81,16 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       const jobId = Number(row.jobId);
       organizationByJob.set(jobId, String(row.organizationId));
       installationByJob.set(jobId, Number(row.installationId));
+      dashboardJobByGithubJob.set(jobId, String(row.dashboardJobId));
       return { installationId: Number(row.installationId), repositoryId: String(row.repositoryId), repository: String(row.repository), runId: String(row.runId), jobId, labels: stringArray(row.labels) };
     }),
     candidates,
-    reserve: (input) => reserveRoutingSlot(deps.db, { organizationId: organizationByJob.get(input.githubJobId)!, ...input, ttlMs: LEASE_STARTUP_TTL_MS }),
+    reserve: async (input) => {
+      const reservation = await reserveRoutingSlot(deps.db, { organizationId: organizationByJob.get(input.githubJobId)!, ...input, ttlMs: LEASE_STARTUP_TTL_MS });
+      const jobId = dashboardJobByGithubJob.get(input.githubJobId);
+      if (reservation && jobId) dashboardJobByLease.set(reservation.id, jobId);
+      return reservation;
+    },
     jit: async (input) => {
       const installationId = installationByJob.get(input.githubJobId);
       if (!installationId) throw new Error("github_installation_not_found");
@@ -96,7 +104,9 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     dispatch: async (reservation, jit) => {
       const target = workerByPool.get(`${reservation.poolId}:${reservation.workerId}`);
       if (!target?.encryptionPublicKey) throw new Error("worker_encryption_key_missing");
-      const envelope: LeaseBootstrapEnvelope = { leaseId: reservation.id, nonce: reservation.nonce, encodedJitConfig: jit.encodedJitConfig, expiresAt: reservation.expiresAt, imageDigest: target.imageDigest, resources: target.resources };
+      const jobId = dashboardJobByLease.get(reservation.id);
+      if (!jobId) throw new Error("dashboard_job_not_found");
+      const envelope: LeaseBootstrapEnvelope = { leaseId: reservation.id, jobId, nonce: reservation.nonce, encodedJitConfig: jit.encodedJitConfig, expiresAt: reservation.expiresAt, imageDigest: target.imageDigest, resources: target.resources };
       await dispatchLeaseBootstrap(deps.dispatcher, { ...envelope, workerId: target.workerId, workerEncryptionPublicKey: target.encryptionPublicKey });
       await deps.db`UPDATE runner_leases SET state='dispatched', updated_at=now() WHERE id=${reservation.id} AND state='reserved'`;
     },

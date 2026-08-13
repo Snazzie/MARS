@@ -10,6 +10,7 @@ test("parses a GitHub JIT config with a one-time lease binding", () => {
   })).toMatchObject({ runnerName: "whitesmith-lease-1" });
   expect(LeaseBootstrapEnvelope.safeParse({
     leaseId: "11111111-1111-4111-8111-111111111111",
+    jobId: "22222222-2222-4222-8222-222222222222",
     nonce: "n".repeat(32),
     encodedJitConfig: "encoded",
     expiresAt: "2026-08-12T12:00:00.000Z",

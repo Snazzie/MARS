@@ -36,6 +36,19 @@ export function buildMacWorkerAuthentication(challenge: string, workerId: string
   return { type: "authenticate", workerId, ...(encryptionPublicKey ? { encryptionPublicKey } : {}), signature };
 }
 export function buildMacWorkerSocketUrl(base: string, workerId: string): string { const url = new URL(base); url.protocol = url.protocol === "https:" ? "wss:" : "ws:"; url.pathname = "/api/v1/workers/connect"; url.search = new URLSearchParams({ workerId }).toString(); return url.toString(); }
+async function emitRuntimeLogs(workerId: string, jobId: string, logs: AsyncIterable<string> | undefined, send: (event: WorkerEvent) => void): Promise<void> {
+  if (!logs) return;
+  let sequence = 0;
+  for await (const output of logs) {
+    for (let offset = 0; offset < output.length; offset += 256 * 1024) {
+      const content = output.slice(offset, offset + 256 * 1024);
+      if (!content) continue;
+      send(workerEvent(workerId, "job.log", { jobId, stepId: null, sequence, content, occurredAt: new Date().toISOString() }));
+      sequence += 1;
+    }
+  }
+}
+
 export async function runMacLeaseLifecycle(
   command: WorkerCommand,
   driver: TartVmDriver,
@@ -44,16 +57,20 @@ export async function runMacLeaseLifecycle(
 ): Promise<void> {
   let runtime: Awaited<ReturnType<TartVmDriver["createLease"]>>;
   try {
-    runtime = await driver.createLease({ id: bootstrap.leaseId, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
+    runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
   } catch (error) {
     console.error("macOS lease provisioning failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
     send(workerEvent(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "provisioning_failed" }));
     return;
   }
   send(workerEvent(command.workerId, "sandbox_attested", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed }));
+  const logPump = emitRuntimeLogs(command.workerId, bootstrap.jobId, runtime.logs, send).catch(error => {
+    console.error("macOS runner log streaming failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
+  });
   try {
     if (!runtime.completion) throw new Error("runner completion unavailable");
     const exitCode = await runtime.completion;
+    await logPump;
     send(workerEvent(command.workerId, "runner.finished", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, exitCode }));
   } catch (error) {
     console.error("macOS runner failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
@@ -92,11 +109,12 @@ export async function handleMacWorkerCommand(command: WorkerCommand, driver: Tar
     if (!payload.bootstrapCiphertext) throw new Error("lease bootstrap payload invalid");
     const bootstrap = openLeaseBootstrap(payload.bootstrapCiphertext, encryptionPrivateKey);
     if (bootstrap.leaseId !== command.leaseId) throw new Error("lease bootstrap mismatch");
-    const runtime = await driver.createLease({ id: bootstrap.leaseId, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
+    const runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
     return workerEvent(command.workerId, "sandbox_attested", { commandId: command.id, leaseId: command.leaseId, nonce: bootstrap.nonce, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed });
   }
   if (command.type === "tart.stop_lease" && command.leaseId) {
-    await driver.stopLease(command.leaseId);
+    await driver.stopLease(command.leaseId).catch(() => undefined);
+    await driver.removeLease(command.leaseId);
     return workerEvent(command.workerId, "lease.reaped", { commandId: command.id, leaseId: command.leaseId, nonce: String((command.payload as Record<string, unknown>).nonce ?? "") });
   }
   throw new Error("unsupported worker command");

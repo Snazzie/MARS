@@ -15,6 +15,7 @@ export async function handleAuthenticatedWorkerEvent(
   if (payload.data.type === "command.accepted") return dispatcher.handleEvent(event.data, socket);
   if (payload.data.type === "job.log") return await persistWorkerLogEvent(db, event.data.workerId, payload.data.payload);
   await applyWorkerLeaseEvent(db, event.data);
+  if (typeof event.data.payload.commandId === "string") dispatcher.handleEvent(event.data, socket);
   return true;
 }
 

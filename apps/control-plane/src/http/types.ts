@@ -3,8 +3,15 @@ import type { SessionUser, SecretBox } from "../auth.ts";
 import type { RequestLimiter } from "../worker-requests.ts";
 import type { WorkerCommandDispatcher } from "../worker-dispatch.ts";
 import type { GitHubAppService } from "../github-app.ts";
+import type { DiscoveryHealthSnapshot } from "../discovery-health.ts";
 
 export type ControlPlaneEnv = { Variables: { user: SessionUser } };
+
+export type ControlPlaneHealth = {
+  buildId: string;
+  startedAt: string;
+  discovery: DiscoveryHealthSnapshot;
+};
 
 export type ControlPlaneHttpDeps = {
   db: DashboardDb;
@@ -27,4 +34,5 @@ export type ControlPlaneHttpDeps = {
   workerRequestLimiter?: RequestLimiter;
   workerDispatcher?: WorkerCommandDispatcher;
   onWorkerAdopted(workerId: string): void;
+  health(): ControlPlaneHealth;
 };

@@ -38,11 +38,48 @@ export function buildTartSetArguments(vmName: string, resources: PoolResources, 
   return args;
 }
 
+export type TartRunnerExecution = { completion: Promise<number>; logs: AsyncIterable<string> };
+
+class AsyncTextQueue implements AsyncIterable<string> {
+  private readonly values: string[] = [];
+  private readonly readers: Array<(result: IteratorResult<string>) => void> = [];
+  private closed = false;
+
+  push(value: string): void {
+    if (!value || this.closed) return;
+    const reader = this.readers.shift();
+    if (reader) reader({ value, done: false });
+    else this.values.push(value);
+  }
+
+  close(): void {
+    this.closed = true;
+    for (const reader of this.readers.splice(0)) reader({ value: undefined, done: true });
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<string> {
+    return {
+      next: async () => {
+        const value = this.values.shift();
+        if (value !== undefined) return { value, done: false };
+        if (this.closed) return { value: undefined, done: true };
+        return new Promise<IteratorResult<string>>(resolve => this.readers.push(resolve));
+      },
+    };
+  }
+}
+
+async function pumpText(stream: ReadableStream<Uint8Array>, queue: AsyncTextQueue): Promise<void> {
+  const decoder = new TextDecoder();
+  for await (const chunk of stream) queue.push(decoder.decode(chunk, { stream: true }));
+  queue.push(decoder.decode());
+}
+
 export interface TartVmRuntime {
   clone(baseImage: string, vmName: string): Promise<void>;
   setResources(vmName: string, resources: PoolResources): Promise<void>;
   startWithBootstrap(vmName: string, encodedJitConfig: string): Promise<void>;
-  startRunner(vmName: string): Promise<number>;
+  startRunner(vmName: string): TartRunnerExecution;
   stop(vmName: string): Promise<void>;
   remove(vmName: string): Promise<void>;
 }
@@ -76,9 +113,11 @@ export function createTartVmRuntime(tartExecutable = resolveTartExecutable(Bun.e
   return {
     clone: (baseImage, vmName) => run(["clone", baseImage, vmName]),
     setResources: async (vmName, resources) => run(buildTartSetArguments(vmName, resources, await diskSizeGb(vmName))),
-    startRunner: async vmName => {
-      const process = Bun.spawn([tartExecutable, ...buildTartRunnerArguments(vmName)], { stdout: "ignore", stderr: "pipe" });
-      return process.exited;
+    startRunner: vmName => {
+      const process = Bun.spawn([tartExecutable, ...buildTartRunnerArguments(vmName)], { stdout: "pipe", stderr: "pipe" });
+      const queue = new AsyncTextQueue();
+      void Promise.all([pumpText(process.stdout, queue), pumpText(process.stderr, queue)]).finally(() => queue.close());
+      return { completion: process.exited, logs: queue };
     },
     async startWithBootstrap(vmName, encodedJitConfig) {
       if (processes.has(vmName)) throw new Error(`Tart VM already running: ${vmName}`);
@@ -124,8 +163,8 @@ export class TartVmDriver implements RuntimeDriver {
     try {
       await this.tart.setResources(vmName, lease.resources);
       await this.tart.startWithBootstrap(vmName, lease.encodedJitConfig);
-      const completion = this.tart.startRunner(vmName);
-      const runtime: RuntimeLease = { runtimeInstanceId: vmName, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion };
+      const execution = this.tart.startRunner(vmName);
+      const runtime: RuntimeLease = { runtimeInstanceId: vmName, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: execution.completion, logs: execution.logs };
       this.leases.set(lease.id, { vmName, runtime });
       return runtime;
     } catch (error) {
@@ -135,7 +174,8 @@ export class TartVmDriver implements RuntimeDriver {
     }
   }
   async inspectLease(leaseId: string): Promise<RuntimeLease> { const lease = this.leases.get(leaseId); if (!lease) throw new Error("sandbox not found"); return lease.runtime; }
-  async stopLease(leaseId: string): Promise<void> { const lease = this.leases.get(leaseId); if (!lease) throw new Error("sandbox not found"); await this.tart.stop(lease.vmName); }
-  async removeLease(leaseId: string): Promise<void> { const lease = this.leases.get(leaseId); if (!lease) return; await this.tart.remove(lease.vmName); this.leases.delete(leaseId); }
+  private vmName(leaseId: string): string { return this.leases.get(leaseId)?.vmName ?? `${this.namePrefix}-${leaseId.slice(0, 8)}`; }
+  async stopLease(leaseId: string): Promise<void> { await this.tart.stop(this.vmName(leaseId)); }
+  async removeLease(leaseId: string): Promise<void> { try { await this.tart.remove(this.vmName(leaseId)); } catch (error) { if (!(error instanceof Error && /specified VM .* does not exist/.test(error.message))) throw error; } finally { this.leases.delete(leaseId); } }
   async collectDiagnostics(leaseId: string): Promise<Record<string, unknown>> { const runtime = await this.inspectLease(leaseId); return { driver: this.name, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed }; }
 }

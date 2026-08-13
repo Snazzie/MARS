@@ -22,6 +22,7 @@ export const RunnerJitConfig = z.object({
 export type RunnerJitConfig = z.infer<typeof RunnerJitConfig>;
 export const LeaseBootstrapEnvelope = z.object({
   leaseId: z.string().uuid(),
+  jobId: z.string().uuid(),
   nonce: z.string().min(32),
   encodedJitConfig: z.string().min(1),
   expiresAt: z.string().datetime(),

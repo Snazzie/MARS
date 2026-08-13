@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   advanceFreshRunMilestones,
+  assertExpectedControlPlaneBuild,
   initialFreshRunMilestones,
   isWhitesmithRunnerName,
   selectFreshWorkflowRun,
@@ -24,6 +25,24 @@ describe("live job pickup smoke helpers", () => {
 
     expect(run?.id).toBe(901);
   });
+  test("requires the live control plane to report the expected healthy build", () => {
+    const health = {
+      ok: true,
+      buildId: "build-20260813",
+      startedAt: "2026-08-13T18:00:00.000Z",
+      discovery: {
+        lastAttemptAt: "2026-08-13T18:00:30.000Z",
+        lastSuccessAt: "2026-08-13T18:00:31.000Z",
+        stale: false,
+        staleAfterMs: 60_000,
+      },
+    };
+
+    expect(() => assertExpectedControlPlaneBuild(health, "build-20260813")).not.toThrow();
+    expect(() => assertExpectedControlPlaneBuild(health, "old-build")).toThrow("control_plane_build_mismatch");
+    expect(() => assertExpectedControlPlaneBuild({ ...health, ok: false, discovery: { ...health.discovery, stale: true } }, "build-20260813")).toThrow("control_plane_discovery_stale");
+  });
+
 
   test("records fresh-run proof only in the required lifecycle order", () => {
     const base: FreshRunSnapshot = {

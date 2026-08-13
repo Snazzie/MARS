@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { buildTartBootstrapArguments, buildTartRunnerArguments, buildTartSetArguments, resolveTartExecutable, TART_JIT_CONFIG_PATH } from "./tart.ts";
+import { buildTartBootstrapArguments, buildTartRunnerArguments, buildTartSetArguments, resolveTartExecutable, TART_JIT_CONFIG_PATH, TartVmDriver } from "./tart.ts";
 import * as tartModule from "./tart.ts";
 
 const resources = (storageBytes: number) => ({ vcpu: 4, memoryBytes: 4 * 1024 ** 3, storageBytes, concurrency: 1 });
@@ -57,4 +57,37 @@ test("passes the Actions Runner root explicitly to the guest job agent", () => {
 test("uses the installer-provided absolute Tart executable under launchd", () => {
   expect(resolveTartExecutable("/opt/homebrew/bin/tart")).toBe("/opt/homebrew/bin/tart");
   expect(resolveTartExecutable("")).toBe("tart");
+});
+
+test("stops and deletes an orphan lease by its deterministic VM name", async () => {
+  const calls: string[][] = [];
+  const runtime = {
+    clone: async () => {},
+    setResources: async () => {},
+    startWithBootstrap: async () => {},
+    startRunner: () => ({ completion: Promise.resolve(0), logs: (async function* () {})() }),
+    stop: async (name: string) => { calls.push(["stop", name]); },
+    remove: async (name: string) => { calls.push(["remove", name]); },
+  };
+  const driver = new TartVmDriver(runtime, "base", "whitesmith-job");
+  const leaseId = "22222222-2222-4222-8222-222222222222";
+  await driver.stopLease(leaseId);
+  await driver.removeLease(leaseId);
+  expect(calls).toEqual([
+    ["stop", "whitesmith-job-22222222"],
+    ["remove", "whitesmith-job-22222222"],
+  ]);
+});
+
+test("treats an already deleted orphan VM as reaped", async () => {
+  const runtime = {
+    clone: async () => {},
+    setResources: async () => {},
+    startWithBootstrap: async () => {},
+    startRunner: () => ({ completion: Promise.resolve(0), logs: (async function* () {})() }),
+    stop: async () => {},
+    remove: async () => { throw new Error('tart delete failed: the specified VM "whitesmith-job-22222222" does not exist'); },
+  };
+  const driver = new TartVmDriver(runtime, "base", "whitesmith-job");
+  await expect(driver.removeLease("22222222-2222-4222-8222-222222222222")).resolves.toBeUndefined();
 });
