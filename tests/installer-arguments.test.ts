@@ -94,6 +94,10 @@ test("PowerShell installer exposes guided checklist remediation", async () => {
   expect(source).toContain("Write-ChecklistAction");
   expect(source).toContain("Write-ChecklistPass");
 });
+test("PowerShell installer accepts the documented Code alias", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).toContain("[Alias('Code')][string]$JoinCode");
+});
 
 test("PowerShell installer validates immutable templates before service setup", async () => {
   const source = await Bun.file(powershell).text();

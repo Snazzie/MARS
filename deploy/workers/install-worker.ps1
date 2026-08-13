@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$ControlPlaneUrl = '__PUBLIC_BASE_URL__',
-  [string]$JoinCode = '__JOIN_CODE__',
+  [Alias('Code')][string]$JoinCode = '__JOIN_CODE__',
   [string]$WindowsVhdx = 'C:\ProgramData\Whitesmith\images\windows-job.vhdx',
   [string]$LinuxVhdx = '',
   [string]$HyperVSwitch = 'Default Switch',
