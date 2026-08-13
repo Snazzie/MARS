@@ -25,6 +25,8 @@ export type ControlPlaneHttpDeps = {
   defaultJobImages: Partial<Record<"linux-x64" | "windows-x64" | "macos-arm64", string>>;
   templateManifestPaths?: Partial<Record<"windows-x64" | "linux-x64", string>>;
   templateArtifactPaths?: Partial<Record<"windows-x64" | "linux-x64", string>>;
+  workerTemplatePaths?: Partial<Record<"windows-x64" | "linux-x64", string>>;
+  workerTemplateDigests?: Partial<Record<"windows-x64" | "linux-x64", string>>;
   macosTartBaseImage?: string;
   workerControlPlaneUrls?: string[];
   currentUser(request: Request): Promise<SessionUser | null>;
