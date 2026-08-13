@@ -9,7 +9,14 @@ export function RunnerWorkflowPrModal({ organizationId, repositoryId, repository
   const dialogRef = useRef<HTMLElement>(null); const previousFocus = useRef<HTMLElement | null>(null);
   const files = useQuery({ queryKey: ["runner-workflows", organizationId, repositoryId], queryFn: () => getRunnerWorkflowFiles(organizationId, repositoryId), enabled: open && Boolean(organizationId && repositoryId) });
   const [selected, setSelected] = useState<string[]>([]); const [title, setTitle] = useState(""); const [body, setBody] = useState(""); const [result, setResult] = useState<string | null>(null);
-  useEffect(() => { if (!open) return; const onKeyDown = (event: KeyboardEvent) => handleRunnerWorkflowEscape(event, onClose); document.addEventListener("keydown", onKeyDown); return () => document.removeEventListener("keydown", onKeyDown); }, [open, onClose]);
+  useEffect(() => {
+    if (!open) return;
+    previousFocus.current = document.activeElement as HTMLElement | null;
+    const onKeyDown = (event: KeyboardEvent) => handleRunnerWorkflowEscape(event, onClose);
+    document.addEventListener("keydown", onKeyDown);
+    requestAnimationFrame(() => dialogRef.current?.focus());
+    return () => { document.removeEventListener("keydown", onKeyDown); previousFocus.current?.focus(); };
+  }, [open, onClose]);
   useEffect(() => { if (files.data) setSelected(files.data.map((f) => f.path)); }, [files.data]);
   const preview = useQuery({ queryKey: ["runner-workflow-preview", organizationId, repositoryId, selected], queryFn: () => previewRunnerWorkflowPr(organizationId, repositoryId, selected), enabled: open && Boolean(files.data) && selected.length > 0 });
   const create = useMutation({ mutationFn: (input: { expectedHeadSha: string }) => createRunnerWorkflowPr(organizationId, repositoryId, { selectedPaths: selected, expectedHeadSha: input.expectedHeadSha, ...(title.trim() ? { title: title.trim() } : {}), ...(body.trim() ? { body: body.trim() } : {}) }), onSuccess: (value) => { setResult(value.url); onCreated?.(value.url); } });

@@ -1,4 +1,5 @@
 
-## Rendered DOM smoke
-- Added happy-dom dev dependency and ReactDOM rendered smoke test covering dialog rendering and Escape close dispatch.
-- Verification: modal contract + rendered DOM + onboarding tests pass 17 total / 62 assertions; web typecheck passes.
+## Focus lifecycle review fix
+- Merged Escape listener into the open lifecycle effect: captures prior focus, focuses dialog, removes listener, and restores focus on cleanup.
+- DOM smoke now rerenders closed and asserts prior trigger focus restoration.
+- Verification: 17 tests / 63 assertions pass; web typecheck passes.
