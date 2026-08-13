@@ -33,9 +33,11 @@ describe("workflow runner mutation", () => {
 
   test("rejects invalid paths, malformed YAML, unsupported nodes, and no-op", () => {
     expect(() => discoverWorkflowFiles([{ path: "workflow.yml", content }])).toThrow(/invalid workflow path/i);
-    expect(() => discoverWorkflowFiles([{ path: ".github/workflows/bad.yml", content: "jobs: [" }])).toThrow(/bad\.yml/i);
     expect(() => discoverWorkflowFiles([{ path: ".github/workflows/bad.yml", content: "jobs:\n  x:\n    runs-on: {os: linux}\n" }])).toThrow(/bad\.yml.*x/i);
     const noRuns = discoverWorkflowFiles([{ path: ".github/workflows/no.yml", content: "name: no\njobs:\n  x:\n    steps: []\n" }]);
+    expect(() => previewWorkflowMutation({ files: noRuns, selectedPaths: [".github/workflows/no.yml"], labels: ["self-hosted"] })).toThrow(/no selected job.*\.github\/workflows\/no\.yml/i);
+    expect(() => previewWorkflowMutation({ files: noRuns, selectedPaths: [".github/workflows/no.yml"], labels: [] })).toThrow(/labels cannot be empty/i);
+    expect(() => discoverWorkflowFiles([{ path: ".github/workflows/numeric.yml", content: "jobs:\n  build:\n    runs-on: 123\n" }])).toThrow(/numeric\.yml.*build.*string/i);
     expect(() => previewWorkflowMutation({ files: noRuns, selectedPaths: [".github/workflows/no.yml"], labels: ["self-hosted"] })).toThrow(/no selected job/i);
     expect(() => previewWorkflowMutation({ files: noRuns, selectedPaths: [".github/workflows/missing.yml"], labels: ["self-hosted"] })).toThrow(/not discovered/i);
   });

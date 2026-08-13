@@ -46,12 +46,12 @@ function parseWorkflow(path: string, content: string): { document: Document; job
     if (!isMap(pair.value)) throw new Error(`Unsupported workflow ${path}, job ${id}: job must be an object`);
     const runsOn = pair.value.get("runs-on", true);
     if (runsOn === undefined) continue;
-    if (isScalar(runsOn) && (typeof runsOn.value === "string" || typeof runsOn.value === "number")) {
-      jobs.push({ id, runsOn: String(runsOn.value), path: ["jobs", id, "runs-on"] });
+    if (isScalar(runsOn) && typeof runsOn.value === "string") {
+      jobs.push({ id, runsOn: runsOn.value, path: ["jobs", id, "runs-on"] });
     } else if (isSeq(runsOn) && runsOn.items.every((item) => isScalar(item) && typeof item.value === "string")) {
       jobs.push({ id, runsOn: runsOn.items.map((item) => String((item as { value: unknown }).value)), path: ["jobs", id, "runs-on"] });
     } else {
-      throw new Error(`Unsupported workflow ${path}, job ${id}: runs-on must be a scalar or string sequence`);
+      throw new Error(`Unsupported workflow ${path}, job ${id}: runs-on must be a string scalar or string sequence`);
     }
   }
   return { document, jobs };
@@ -71,8 +71,11 @@ export function previewWorkflowMutation(input: { files: readonly WorkflowFilePre
     if (!workflowPath.test(path)) throw new Error(`Invalid selected workflow path: ${path}`);
     if (!known.has(path)) throw new Error(`Selected workflow path not discovered: ${path}`);
   }
+  if (!input.labels.length) throw new Error(`Cannot replace selected workflows (${selected.join(", ")}): labels cannot be empty`);
   const jobs = input.files.filter((file) => selected.includes(file.path)).flatMap((file) => file.jobs.map((job) => ({ ...job, path: file.path, proposedRunsOn: [...input.labels] })));
-  if (!jobs.length) throw new Error("No selected job has runs-on; mutation would be a no-op");
+  if (!jobs.length) {
+    throw new Error(`No selected job has runs-on in ${selected.join(", ")}; mutation would be a no-op`);
+  }
   return { changedFiles: [...new Set(jobs.map((job) => job.path))], jobs, replacementCount: jobs.length, noOp: false };
 }
 
