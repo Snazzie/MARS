@@ -4,15 +4,16 @@ import type { RepositorySummary } from "@whitesmith/contracts";
 import { beginOrganizationGithubInstall, getGithubRepositorySettings, getRepositories, refreshGithubConnection, setRepositoryApproval, uninstallOrganizationGithub } from "../api.ts";
 import { Disclosure } from "../components/Disclosure.tsx";
 import { QueryState } from "../components/StateView.tsx";
+import { RunnerWorkflowPrModal } from "../components/RunnerWorkflowPrModal.tsx";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
 export function RepositoriesPage() {
   const { organizationId, organizations } = useOrganizationFromRoute();
   const client = useQueryClient();
+  const [connectOrganizationId, setConnectOrganizationId] = useState("");
+  const [runnerRepository, setRunnerRepository] = useState<RepositorySummary | null>(null);
   const [search, setSearch] = useState("");
   const [availability, setAvailability] = useState<"available" | "unavailable">("available");
   const [visibility, setVisibility] = useState<"all" | "private" | "internal">("all");
-  const [connectOrganizationId, setConnectOrganizationId] = useState("");
-
   useEffect(() => {
     const next = organizations[0]?.id ?? "";
     if (
@@ -192,6 +193,7 @@ export function RepositoriesPage() {
                       >
                         Manage GitHub
                       </button>
+                      <button type="button" className="control-button" onClick={() => setRunnerRepository(repository)} disabled={!repository.available || !repository.approved}>Use Whitesmith runners</button>
                     </div>
                   </td>
                 </tr>
@@ -200,6 +202,7 @@ export function RepositoriesPage() {
           </table>
         </section>
       )}
+      {runnerRepository && <RunnerWorkflowPrModal organizationId={runnerRepository.organizationId} repositoryId={runnerRepository.id} repositoryName={runnerRepository.fullName} open onClose={() => setRunnerRepository(null)} />}
     </>
   );
 }

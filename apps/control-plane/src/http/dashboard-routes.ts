@@ -4,7 +4,8 @@ import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady } from "@whitesmith/db";
 import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker } from "../worker-requests.ts";
-import { ApiError, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration } from "@whitesmith/contracts";
+import { discoverWorkflowFiles } from "../workflow-pr.ts";
+import { ApiError, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult } from "@whitesmith/contracts";
 const querySchema = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50), cursor: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional(), includeRevoked: z.enum(["true", "false"]).default("false").transform((value) => value === "true") }).strict();
 const periodSchema = z.enum(["24h", "7d", "30d"]);
 const logSchema = z.object({ after: z.coerce.number().int().min(-1).default(-1), limit: z.coerce.number().int().min(1).max(100).default(100) }).strict();
@@ -162,6 +163,47 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     await deps.githubApp.refreshInstallationRepositories(org);
     await invalidateDashboard(deps.db, org, ["repositories"]);
     return c.json({ ok: true });
+  }));
+  app.get("/api/organizations/:organizationId/repositories/:repositoryId/runner-workflows", safe(async (c) => {
+    const org = c.req.param("organizationId"); const denied = await guard(c, deps, org); if (denied) return denied;
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
+    const [row] = await deps.db`SELECT full_name AS "fullName", installation_id AS "installationId" FROM dashboard_repositories WHERE organization_id=${org} AND id=${c.req.param("repositoryId")} AND available=true AND approved=true`;
+    if (!row) return error(c, 404, "repository_not_approved", "Repository is not approved");
+    const [owner, repo] = String(row.fullName).split("/", 2); const result = await deps.githubApp.listRepositoryWorkflows(owner, repo, Number(row.installationId));
+    try {
+      return c.json(RunnerWorkflowFile.array().parse(discoverWorkflowFiles(result.files)));
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Invalid workflow file";
+      return error(c, 422, "workflow_invalid", message, { repositoryId: c.req.param("repositoryId"), organizationId: org });
+    }
+  }));
+  app.post("/api/organizations/:organizationId/repositories/:repositoryId/runner-workflows/preview", safe(async (c) => {
+    const org = c.req.param("organizationId"); const denied = await guard(c, deps, org); if (denied) return denied;
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
+    const body = z.object({ selectedPaths: z.array(z.string()).default([]) }).strict().parse(await c.req.json());
+    try { return c.json(RunnerWorkflowPreview.parse(await deps.githubApp.previewRepositoryRunnerPr({ organizationId: org, repositoryId: c.req.param("repositoryId"), selectedPaths: body.selectedPaths }))); }
+    catch (cause) { const code = cause instanceof Error ? cause.message : ""; if (code === "github_repository_not_approved") return error(c, 404, "repository_not_approved", "Repository is not approved"); if (code === "github_runner_pool_missing") return error(c, 422, "runner_pool_missing", "Runner pool is not configured"); if (/Invalid|Malformed|Unsupported|not discovered|no-op/i.test(code)) return error(c, 422, "workflow_invalid", code); throw cause; }
+  }));
+  app.post("/api/organizations/:organizationId/repositories/:repositoryId/runner-workflows/pr", safe(async (c) => {
+    const org = c.req.param("organizationId"); const denied = await guard(c, deps, org); if (denied) return denied;
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    const idem = requireMutation(c); if (idem) return idem; if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
+    const body = RunnerWorkflowPrRequest.parse(await c.req.json()); const key = c.req.header("idempotency-key")!;
+    const inserted = await deps.db`INSERT INTO dashboard_mutations (organization_id,idempotency_key) VALUES (${org},${key}) ON CONFLICT DO NOTHING RETURNING idempotency_key`;
+    if (!inserted.length) { const [prior] = await deps.db`SELECT response FROM dashboard_mutations WHERE organization_id=${org} AND idempotency_key=${key}`; if (prior?.response) return c.json(RunnerWorkflowPrResult.parse(prior.response)); return error(c, 409, "mutation_in_progress", "Mutation is already in progress"); }
+    try {
+      const result = RunnerWorkflowPrResult.parse(await deps.githubApp.createRepositoryRunnerPr({ ...body, organizationId: org, repositoryId: c.req.param("repositoryId") }));
+      await deps.db`UPDATE dashboard_mutations SET response=${JSON.stringify(result)}::jsonb WHERE organization_id=${org} AND idempotency_key=${key}`;
+      return c.json(result);
+    } catch (cause) {
+      const code = cause instanceof Error ? cause.message : "";
+      if (/github_workflow_head_stale/.test(code)) return error(c, 409, "workflow_head_stale", "Workflow files changed; refresh preview");
+      if (code === "github_repository_not_approved") return error(c, 404, "repository_not_approved", "Repository is not approved");
+      if (/Invalid|Malformed|Unsupported|not discovered|no-op/i.test(code)) return error(c, 422, "workflow_invalid", code);
+      throw cause;
+    }
   }));
   app.post("/api/organizations/:organizationId/repositories/:repositoryId/:action", safe(async (c) => {
     const org = c.req.param("organizationId"), action = c.req.param("action");

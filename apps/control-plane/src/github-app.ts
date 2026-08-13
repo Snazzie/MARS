@@ -1,10 +1,10 @@
 import { createHash, createPrivateKey, createSign, randomBytes } from "node:crypto";
 import type { Sql } from "postgres";
 import type { SecretBox } from "./auth.ts";
-
+import { applyWorkflowMutation, discoverWorkflowFiles, previewWorkflowMutation, type WorkflowFilePreview, type WorkflowMutation } from "./workflow-pr.ts";
 type SetupState = { purpose: "oauth" | "manifest" | "install" | "organization_install"; userId: string | null; organizationId: string | null; idempotencyKey: string | null; encryptedState?: string; encryptedPkceVerifier?: string; expiresAt: number; consumedAt?: number };
 type Installation = { organizationId: string; githubInstallationId: number; state: "pending" | "approved" | "suspended"; repositorySelection: "all" | "selected" | null; githubAccountId?: number };
-type Repository = { id: string; installationId: number; fullName: string; visibility: "private" | "internal" | "public"; available: boolean; approved: boolean };
+type Repository = { id: string; installationId: number; organizationId?: string; fullName: string; visibility: "private" | "internal" | "public"; available: boolean; approved: boolean };
 type AppConfig = { id: number; slug: string; clientId?: string; pem: string; clientSecret: string; webhookSecret: string };
 type Organization = { githubOrgId: number; githubAccountType?: "User" | "Organization" };
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -18,6 +18,7 @@ const isSql = (db: Database): db is SqlDatabase => typeof db === "function";
 const nowMs = (value: Date | string | number) => value instanceof Date ? value.getTime() : typeof value === "string" ? Date.parse(value) : value;
 const visibilityOf = (repo: { private?: unknown; visibility?: unknown }): Repository["visibility"] => repo.visibility === "private" || repo.visibility === "internal" || repo.visibility === "public" ? repo.visibility : repo.private === true ? "private" : "public";
 
+type WorkflowRepo = { installationId: number; fullName: string; defaultBranch: string; headSha: string; labels: string[] };
 export class GitHubAppService {
   private readonly db: Database;
   private readonly fetcher: Fetcher;
@@ -210,7 +211,7 @@ export class GitHubAppService {
   private async persistInstallation(organizationId: string, installationId: number, state: Installation["state"], repositorySelection: Installation["repositorySelection"], githubAccountId: number, repos: Repository[]): Promise<string> {
     if (!isSql(this.db)) {
       this.db.installations.set(installationId, { organizationId, githubInstallationId: installationId, state, repositorySelection, githubAccountId });
-      for (const repo of repos) this.db.repositories.set(repo.id, repo);
+      for (const repo of repos) this.db.repositories.set(repo.id, { ...repo, organizationId });
       return String(installationId);
     }
     const rows = await this.db<Array<{ id: string }>>`INSERT INTO dashboard_installations (organization_id,github_installation_id,state,repository_selection,github_account_id) VALUES (${organizationId},${installationId},${state},${repositorySelection},${githubAccountId}) ON CONFLICT (organization_id,github_installation_id) DO UPDATE SET state=excluded.state,repository_selection=excluded.repository_selection,github_account_id=excluded.github_account_id RETURNING id`;
@@ -344,5 +345,76 @@ export class GitHubAppService {
   async getWebhookSecret(): Promise<string | null> {
     const config = await this.getConfig();
     return config?.webhookSecret ? this.box.decrypt(config.webhookSecret) : null;
+  }
+  private async workflowRepo(organizationId: string, repositoryId: string): Promise<WorkflowRepo> {
+    if (!isSql(this.db)) {
+      const repo = this.db.repositories.get(repositoryId);
+      const installation = repo && this.db.installations.get(repo.installationId);
+      if (!repo || !installation || repo.organizationId !== organizationId || !repo.available || !repo.approved || installation.state !== "approved") throw new Error("github_repository_not_approved");
+      return { installationId: installation.githubInstallationId, fullName: repo.fullName, defaultBranch: "main", headSha: "", labels: [] };
+    }
+    const rows = await this.db<Array<{ installation_id: number; full_name: string; labels: unknown; default_branch?: string; head_sha?: string }>>`
+      SELECT i.github_installation_id AS installation_id, r.full_name,
+        (SELECT p.labels FROM runner_pools p WHERE p.organization_id IS NULL AND p.enabled=true ORDER BY p.created_at DESC LIMIT 1) AS labels
+      FROM dashboard_repositories r JOIN dashboard_installations i ON i.id=r.installation_id
+      WHERE r.organization_id=${organizationId} AND r.id=${repositoryId} AND r.available=true AND r.approved=true AND i.state='approved' LIMIT 1`;
+    const row = rows[0];
+    if (!row) throw new Error("github_repository_not_approved");
+    const labels = Array.isArray(row.labels) ? row.labels.filter((label): label is string => typeof label === "string") : typeof row.labels === "string" ? (JSON.parse(row.labels) as unknown[]).filter((label): label is string => typeof label === "string") : [];
+    if (!labels.length) throw new Error("github_runner_pool_missing");
+    return { installationId: Number(row.installation_id), fullName: row.full_name, defaultBranch: row.default_branch ?? "", headSha: row.head_sha ?? "", labels };
+  }
+
+  async listRepositoryWorkflows(owner: string, repo: string, installationId: number): Promise<{ defaultBranch: string; files: Array<{ path: string; sha: string; content: string }> }> {
+    const token = await this.getInstallationToken(installationId);
+    const metadata = await this.gh(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, {}, token);
+    const defaultBranch = typeof metadata.default_branch === "string" ? metadata.default_branch : "";
+    if (!defaultBranch) throw new Error("github_default_branch_missing");
+    const tree = await this.gh(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(defaultBranch)}?recursive=1`, {}, token);
+    const entries = Array.isArray(tree.tree) ? tree.tree : [];
+    const files: Array<{ path: string; sha: string; content: string }> = [];
+    for (const entry of entries) {
+      const value = entry as { path?: unknown; type?: unknown; sha?: unknown; url?: unknown };
+      if (value.type !== "blob" || typeof value.path !== "string" || !/^\.github\/workflows\/[^/]+\.(?:yml|yaml)$/.test(value.path) || typeof value.sha !== "string") continue;
+      const blob = await this.gh(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/blobs/${value.sha}`, {}, token);
+      const encoded = typeof blob.content === "string" ? blob.content.replace(/\s/g, "") : "";
+      files.push({ path: value.path, sha: value.sha, content: Buffer.from(encoded, "base64").toString("utf8") });
+    }
+    return { defaultBranch, files };
+  }
+
+  private async workflowContext(organizationId: string, repositoryId: string): Promise<{ repo: WorkflowRepo; owner: string; name: string; token: string; listing: Awaited<ReturnType<GitHubAppService["listRepositoryWorkflows"]>> }> {
+    const repo = await this.workflowRepo(organizationId, repositoryId);
+    const [owner, name] = repo.fullName.split("/", 2);
+    if (!owner || !name) throw new Error("github_repository_invalid");
+    const listing = await this.listRepositoryWorkflows(owner, name, repo.installationId);
+    const token = await this.getInstallationToken(repo.installationId);
+    return { repo, owner, name, token, listing };
+  }
+
+  async previewRepositoryRunnerPr(input: { organizationId: string; repositoryId: string; selectedPaths: string[] }): Promise<WorkflowMutation & { defaultBranch: string; headSha: string; labels: string[] }> {
+    const ctx = await this.workflowContext(input.organizationId, input.repositoryId);
+    const files = discoverWorkflowFiles(ctx.listing.files);
+    const mutation = previewWorkflowMutation({ files, selectedPaths: input.selectedPaths, labels: ctx.repo.labels });
+    const ref = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/ref/heads/${encodeURIComponent(ctx.listing.defaultBranch)}`, {}, ctx.token);
+    const headSha = ref.object && typeof ref.object === "object" && typeof (ref.object as { sha?: unknown }).sha === "string" ? (ref.object as { sha: string }).sha : "";
+    return { ...mutation, defaultBranch: ctx.listing.defaultBranch, headSha, labels: ctx.repo.labels };
+  }
+
+  async createRepositoryRunnerPr(input: { organizationId: string; repositoryId: string; selectedPaths: string[]; expectedHeadSha: string; title?: string; body?: string }): Promise<{ url: string; number: number; branch: string; changedFiles: string[]; replacementCount: number }> {
+    const ctx = await this.workflowContext(input.organizationId, input.repositoryId);
+    const ref = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/ref/heads/${encodeURIComponent(ctx.listing.defaultBranch)}`, {}, ctx.token);
+    const headSha = ref.object && typeof ref.object === "object" && typeof (ref.object as { sha?: unknown }).sha === "string" ? (ref.object as { sha: string }).sha : "";
+    if (headSha !== input.expectedHeadSha) throw new Error("github_workflow_head_stale");
+    const files = discoverWorkflowFiles(ctx.listing.files);
+    const mutation = previewWorkflowMutation({ files, selectedPaths: input.selectedPaths, labels: ctx.repo.labels });
+    const changed = ctx.listing.files.filter((file) => mutation.changedFiles.includes(file.path)).map((file) => ({ ...file, content: applyWorkflowMutation(file.content, ctx.repo.labels) }));
+    const branch = `whitesmith/use-runners-${randomBytes(6).toString("hex")}`;
+    const blobs = await Promise.all(changed.map(async (file) => ({ path: file.path, mode: "100644", type: "blob", sha: (await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/blobs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: file.content, encoding: "utf-8" }) }, ctx.token)).sha as string })));
+    const tree = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/trees`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ base_tree: headSha, tree: blobs }) }, ctx.token);
+    const commit = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/commits`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: "Configure Whitesmith runners", tree: tree.sha, parents: [headSha] }) }, ctx.token);
+    await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/refs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: commit.sha }) }, ctx.token);
+    const pr = await this.gh(`/repos/${ctx.owner}/${ctx.name}/pulls`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: input.title?.trim() || "Use Whitesmith runners", body: input.body?.trim() || "Configure GitHub Actions workflows to use Whitesmith runners.", head: branch, base: ctx.listing.defaultBranch }) }, ctx.token);
+    return { url: String(pr.html_url ?? ""), number: Number(pr.number ?? 0), branch, changedFiles: mutation.changedFiles, replacementCount: mutation.replacementCount };
   }
 }
