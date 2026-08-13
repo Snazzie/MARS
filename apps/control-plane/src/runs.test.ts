@@ -51,9 +51,11 @@ function makeStatefulSql() {
         if (current.status !== "completed" && (incoming.status === "completed" || (current.status === "queued" && incoming.status === "in_progress"))) current.status = incoming.status;
         current.conclusion ??= incoming.conclusion;
         current.queued_at = [current.queued_at, incoming.queued_at].sort()[0];
-        current.started_at = current.started_at && incoming.started_at ? [current.started_at, incoming.started_at].sort()[0] : current.started_at ?? incoming.started_at;
-        current.completed_at ??= incoming.completed_at;
-        current.duration_ms = Math.max(Number(current.duration_ms ?? 0), Number(incoming.duration_ms ?? 0), current.started_at && current.completed_at ? Date.parse(String(current.completed_at)) - Date.parse(String(current.started_at)) : 0);
+        const preservedStarted = current.started_at && incoming.started_at ? [current.started_at, incoming.started_at].sort()[0] : current.started_at ?? incoming.started_at;
+        const preservedCompleted = current.completed_at ?? incoming.completed_at;
+        current.duration_ms = Math.max(Number(current.duration_ms ?? 0), Number(incoming.duration_ms ?? 0), preservedStarted && preservedCompleted ? Date.parse(String(preservedCompleted)) - Date.parse(String(preservedStarted)) : 0);
+        current.started_at = preservedStarted;
+        current.completed_at = preservedCompleted;
       }
       return [steps.get(key)!];
     }
