@@ -1,8 +1,11 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { RunStep } from "@whitesmith/contracts";
+import { Window } from "happy-dom";
+import React, { act } from "react";
+import { createRoot } from "react-dom/client";
+import type { RunJob, RunStep } from "@whitesmith/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { LogViewer, deriveStepDuration, normalizeStepResult, stepLogEmptyMessage } from "./LogViewer.tsx";
+import { LogViewer, countLogLines, deriveStepDuration, normalizeStepResult, stepLogEmptyMessage, stepMatchesSearch } from "./LogViewer.tsx";
 
 const step = (overrides: Partial<RunStep> = {}): RunStep => ({
   id: "step-1",
@@ -24,6 +27,14 @@ test("normalizes step result and derives duration from timestamps", () => {
   expect(normalizeStepResult(step({ status: "in_progress", conclusion: null }))).toBe("in progress");
   expect(deriveStepDuration(step())).toBe(5000);
   expect(deriveStepDuration(step({ completedAt: null }))).toBeNull();
+});
+
+test("counts lines and searches only the step name plus loaded text", () => {
+  expect(countLogLines("one\ntwo\n")).toBe(2);
+  expect(countLogLines("")).toBe(0);
+  expect(stepMatchesSearch(step({ name: "Install dependencies" }), "bun install", "DEPENDENCIES")).toBe(true);
+  expect(stepMatchesSearch(step({ name: "Build" }), "bun test\npass", "PASS")).toBe(true);
+  expect(stepMatchesSearch(step({ name: "Build" }), "bun test", "network")).toBe(false);
 });
 
 test("describes step log synchronization state instead of showing a workspace empty state", () => {
@@ -52,4 +63,41 @@ test("renders steps collapsed and keeps unattributed job logs as a fallback", ()
   expect(markup).not.toContain("/steps/step-1/logs");
   expect(markup).toContain("Logs are being synchronized");
   expect(markup).not.toContain("No records yet");
+});
+
+
+test("controls visible step disclosures and reports loaded line count", async () => {
+  const window = new Window();
+  // @ts-expect-error test DOM globals
+  globalThis.document = window.document;
+  // @ts-expect-error test DOM globals
+  globalThis.window = window;
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const second = step({ id: "step-2", name: "Test" });
+  client.setQueryData(["org", "org-1", "run", "run-1", "job", "job-1", "step", "step-1", "logs"], { items: [{ sequence: 1, content: "bun install" }, { sequence: 2, content: "pass" }] });
+  await act(async () => {
+    root.render(<QueryClientProvider client={client}><LogViewer organizationId="org-1" runId="run-1" jobId="job-1" logsState="ingested" steps={[step(), second]} /></QueryClientProvider>);
+  });
+  const summaries = () => [...container.querySelectorAll<HTMLElement>("summary")];
+  expect([...container.querySelectorAll("details")].every((detail) => !detail.open)).toBe(true);
+  await act(async () => { container.querySelector<HTMLButtonElement>("button")?.click(); });
+  expect([...container.querySelectorAll("details")].every((detail) => detail.open)).toBe(true);
+  const search = container.querySelector<HTMLInputElement>('input[aria-label="Search job steps and loaded logs"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(search, "Test");
+    search.dispatchEvent(new window.Event("input", { bubbles: true }));
+    search.dispatchEvent(new window.Event("change", { bubbles: true }));
+  });
+  expect(summaries()).toHaveLength(1);
+  expect(summaries()[0]?.textContent).toContain("Test");
+  await act(async () => { container.querySelector<HTMLButtonElement>("button:last-of-type")?.click(); });
+  expect([...container.querySelectorAll("details")].filter((detail) => detail.open)).toHaveLength(0);
+  await act(async () => { search.value = ""; search.dispatchEvent(new window.Event("input", { bubbles: true })); });
+  expect(container.textContent).toContain("2 lines");
+  root.unmount();
+  container.remove();
 });
