@@ -2,6 +2,7 @@ export const schemaSql = `
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE IF NOT EXISTS users (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), github_user_id bigint UNIQUE NOT NULL, login text NOT NULL, is_global_admin boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS organizations (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), github_org_id bigint UNIQUE NOT NULL, login text NOT NULL, github_account_type text NOT NULL DEFAULT 'Organization' CHECK(github_account_type IN ('User','Organization')), created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS memberships (organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, role text NOT NULL CHECK(role IN ('owner','member')), created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (organization_id, user_id));
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS github_account_type text NOT NULL DEFAULT 'Organization';
 UPDATE organizations SET github_account_type='Organization' WHERE github_account_type IS NULL;
 ALTER TABLE organizations DROP CONSTRAINT IF EXISTS organizations_github_account_type_check;
