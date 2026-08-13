@@ -223,7 +223,6 @@ export class GitHubAppService {
     throw new Error("repository_selection_required");
   }
 
-  async reconcileInstallationRepositories(payload: unknown): Promise<void> {
   async refreshInstallationRepositories(organizationId: string): Promise<void> {
     let installationId: number | null = null;
     if (isSql(this.db)) {
@@ -257,6 +256,7 @@ export class GitHubAppService {
     });
   }
 
+  async reconcileInstallationRepositories(payload: unknown): Promise<void> {
     if (!payload || typeof payload !== "object") return;
     const data = payload as { installation?: { id?: number }; repository_selection?: "all" | "selected"; action?: string; repositories_removed?: Array<{ id: number }>; repositories_added?: Array<{ id: number; full_name: string; private?: boolean; visibility?: string }>; repositories?: Array<{ id: number; full_name: string; private?: boolean; visibility?: string }> };
     const id = Number(data.installation?.id);
