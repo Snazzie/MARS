@@ -18,3 +18,9 @@ test("workspace-specific state explains that all workspaces is unsupported", () 
   expect(markup).toContain("Select a workspace");
   expect(markup).toContain("one workspace at a time");
 });
+test("labels retry with the affected operation", () => {
+  const markup = renderToStaticMarkup(
+    <QueryState error={new Error("sync failed")} isLoading={false} operationLabel="repository sync" />,
+  );
+  expect(markup).toContain("Retry repository sync");
+});

@@ -15,7 +15,7 @@ export function RunDetailPage() {
   const { runId } = useParams({ from: "/dashboard-gate/dashboard/runs/$runId" });
   const { organizationId } = useOrganizationFromRoute();
   const query = useQuery({ queryKey: ["org", organizationId, "run", runId], queryFn: () => getRun(organizationId, runId), enabled: Boolean(organizationId && runId) });
-  return <><Link className="back-link" to="/runs">← Back to runs</Link><header className="page-header"><div><p className="eyebrow">Run detail</p><h1>{query.data ? `#${query.data.runNumber} · ${query.data.workflowName}` : "Loading run detail"}</h1><p className="page-description">A single run, including the execution boundary and job lifecycle.</p></div></header><QueryState error={query.error} isLoading={query.isLoading} retry={() => void query.refetch()} />{query.data && <RunDetailContent data={query.data} organizationId={organizationId} />}</>;
+  return <><Link className="back-link" to="/runs">← Back to runs</Link><header className="page-header"><div><p className="eyebrow">Run detail</p><h1>{query.data ? `#${query.data.runNumber} · ${query.data.workflowName}` : "Loading run detail"}</h1><p className="page-description">A single run, including the execution boundary and job lifecycle.</p></div></header><QueryState error={query.error} isLoading={query.isLoading} retry={() => void query.refetch()} operationLabel="run detail" />{query.data && <RunDetailContent data={query.data} organizationId={organizationId} />}</>;
 }
 
 function RunDetailContent({ data, organizationId }: { data: RunDetail; organizationId: string }) {

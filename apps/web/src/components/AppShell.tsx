@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { getMe, getOrganizations } from "../api.ts";
@@ -18,16 +19,30 @@ export function AppShell() {
   const me = useQuery({ queryKey: ["me"], queryFn: getMe });
   const organizations = useQuery({ queryKey: ["organizations"], queryFn: getOrganizations, enabled: !me.isLoading && !me.error });
   const { organizationId, setOrganizationId } = useOrganization(organizations.data ?? []);
-  const currentOrg = organizations.data?.find((organization) => organization.id === organizationId);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const state = me.isLoading || organizations.isLoading || me.error || organizations.error
-    ? <QueryState error={me.error ?? organizations.error} isLoading={me.isLoading || organizations.isLoading} retry={() => { void me.refetch(); void organizations.refetch(); }} />
+    ? <QueryState error={me.error ?? organizations.error} isLoading={me.isLoading || organizations.isLoading} retry={() => { void me.refetch(); void organizations.refetch(); }} operationLabel="workspace data" />
     : null;
+  const currentLink = links.find(([to]) => to === location) ?? links.find(([to]) => location.startsWith(`${to}/`)) ?? links[0];
+  useEffect(() => { setMobileMenuOpen(false); }, [location]);
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setMobileMenuOpen(false); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [mobileMenuOpen]);
 
   return (
     <div className="console-frame">
       <aside className="rail">
         <div className="brand-lockup"><span className="brand-pip" aria-hidden="true" /><span>WHITESMITH</span></div>
         <p className="rail-caption">Runner operations / 01</p>
+        <label className="rail-org-picker">Workspace
+          <select aria-label="Select workspace" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
+            <option value="all">All workspaces</option>
+            {organizations.data?.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
+          </select>
+        </label>
         <nav aria-label="Primary navigation">
           <p className="nav-label">Navigate</p>
           {links.map(([to, label, number]) => (
@@ -39,16 +54,25 @@ export function AppShell() {
         <div className="rail-footer"><span className="online-dot" />Control plane <strong>connected</strong></div>
       </aside>
       <div className="console-body">
-        <header className="topbar">
-          <div><span className="crumb">Workspace</span><span className="slash">/</span><span className="crumb-current">{organizationId === "all" ? "All workspaces" : currentOrg?.name ?? "Select an organization"}</span></div>
-          <label className="org-picker">Organization
-            <select aria-label="Select organization" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
-              <option value="all">All workspaces</option>
-              {organizations.data?.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
-            </select>
-          </label>
-          <a className="button secondary" href="/api/auth/github?returnTo=%2Frepositories">Refresh GitHub connection</a>
-          <div className="operator-chip" title="Authenticated operator"><span className="operator-avatar">{typeof me.data === "object" && me.data && "login" in me.data && typeof me.data.login === "string" ? me.data.login.slice(0, 1).toUpperCase() : "W"}</span><span>Operator</span></div>
+        <header className="mobile-header">
+          <div className="mobile-header-top">
+            <div className="brand-lockup"><span className="brand-pip" aria-hidden="true" /><span>WHITESMITH</span></div>
+            <button type="button" className="mobile-menu-button" aria-expanded={mobileMenuOpen} aria-controls="mobile-navigation" onClick={() => setMobileMenuOpen((open) => !open)}>
+              {mobileMenuOpen ? "Close" : "Menu"}
+            </button>
+          </div>
+          <div className="mobile-header-context">
+            <span>{currentLink[1]}</span>
+            <label className="mobile-org-picker">Workspace
+              <select aria-label="Select workspace" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
+                <option value="all">All workspaces</option>
+                {organizations.data?.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
+              </select>
+            </label>
+          </div>
+          {mobileMenuOpen && <nav id="mobile-navigation" className="mobile-navigation" aria-label="Mobile navigation">
+            {links.map(([to, label, number]) => <Link key={to} to={to} className="nav-link" activeProps={{ className: "nav-link is-active" }}><span className="nav-number">{number}</span><span>{label}</span></Link>)}
+          </nav>}
         </header>
         <main className="workspace" data-path={location}>
           {state ?? (organizationId ? <Outlet /> : <QueryState error={undefined} isLoading={false} isEmpty />)}

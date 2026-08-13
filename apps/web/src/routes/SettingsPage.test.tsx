@@ -18,3 +18,9 @@ test("settings route renders its organization controls", () => {
   expect(markup).toContain("Maximum concurrent pods");
   Reflect.deleteProperty(globalThis, "localStorage");
 });
+import { bytesToGiB, gibToBytes } from "./SettingsPage.tsx";
+
+test("converts human GiB values at the settings boundary", () => {
+  expect(bytesToGiB(8589934592)).toBe(8);
+  expect(gibToBytes(100.5)).toBe(107911053312);
+});
