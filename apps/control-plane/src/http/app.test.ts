@@ -179,6 +179,33 @@ test("returns the repository GitHub settings URL", async () => {
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ location: "https://github.com/organizations/acme/settings/installations/42" });
 });
+
+test("returns the user-account GitHub settings URL", async () => {
+  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("dashboard_installations")
+    ? [{ login: "Snazzie", githubInstallationId: 153311365, githubAccountType: "User" }]
+    : []) as never;
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    db,
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+  })).request("/api/organizations/org-1/github/settings");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ location: "https://github.com/settings/installations/153311365" });
+});
+
+test("does not return GitHub settings for unavailable repositories", async () => {
+  const db = ((strings: TemplateStringsArray) => {
+    const query = strings.join("?");
+    if (!query.includes("dashboard_repositories")) return [];
+    return query.includes("r.available=true") && query.includes("i.state <> 'suspended'")
+      ? []
+      : [{ login: "acme", githubInstallationId: 42, available: false, state: "suspended" }];
+  }) as never;
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    db,
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+  })).request("/api/organizations/org-1/repositories/repo-1/github/settings");
+  expect(response.status).toBe(404);
+});
 test("uninstalls an organization through the authenticated GitHub route", async () => {
   let organization = "";
   const response = await createControlPlaneApp(fakeHttpDeps({
@@ -239,6 +266,23 @@ test("uninstalls an organization through the authenticated GitHub route", async 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
     expect(approved).toBe(true);
+  });
+
+  test("refreshes repositories from an existing GitHub installation", async () => {
+    let refreshedOrganization = "";
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+      githubApp: {
+        refreshInstallationRepositories: async (organizationId: string) => { refreshedOrganization = organizationId; },
+      } as never,
+    })).request("/api/organizations/org-1/github/refresh", {
+      method: "POST",
+      headers: { "Idempotency-Key": "github-refresh-1" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(refreshedOrganization).toBe("org-1");
+    expect(await response.json()).toEqual({ ok: true });
   });
 test("starts GitHub installation for a non-onboarding organization", async () => {
   let requestedOrganization = "";

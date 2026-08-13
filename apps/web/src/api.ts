@@ -35,7 +35,7 @@ export class ApiRequestError extends Error {
   }
 }
 
-async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
+async function request<S extends z.ZodTypeAny>(path: string, schema: S, init?: RequestInit): Promise<z.output<S>> {
   let response: Response;
   try {
     response = await fetch(path, {
@@ -67,7 +67,7 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
 const meResponse = z.unknown();
 export const getMe = () => request("/api/me", meResponse);
 export const getOrganizations = () => request("/api/organizations", z.array(OrganizationSummary));
-export const getOverview = (organizationId: string, period = "24h" as const) =>
+export const getOverview = (organizationId: string, period: OverviewDto["period"] = "24h") =>
   request(`/api/organizations/${organizationId}/overview?period=${period}`, OverviewDto);
 export const getRuns = (organizationId: string) =>
   request(`/api/organizations/${organizationId}/runs`, CursorPage(RunSummary));
@@ -80,7 +80,7 @@ export const getRepositories = (organizationId: string) =>
 export const getWorkers = (organizationId: string) =>
   request(`/api/organizations/${organizationId}/workers`, CursorPage(WorkerDetail));
 
-export async function mutateWorker(organizationId: string, workerId: string, action: "adopt" | "reject" | "drain" | "rotate-key" | "remove"): Promise<{ ok: boolean }> {
+export async function mutateWorker(organizationId: string, workerId: string, action: "reject" | "drain" | "remove"): Promise<{ ok: boolean }> {
   const idempotencyKey = crypto.randomUUID();
   return request(`/api/organizations/${organizationId}/workers/${workerId}/${action}`, z.object({ ok: z.boolean() }), {
     method: "POST",
@@ -103,7 +103,6 @@ export async function approvePendingWorker(workerId: string, input: ApproveWorke
   });
 }
 export type WorkerConfigurationInput = {
-  organizationId: string;
   appliance: z.infer<typeof WorkerConfiguration>["appliance"];
   runtime: z.infer<typeof WorkerConfiguration>["runtime"];
 };
@@ -192,6 +191,13 @@ export const getGithubOrganizationSettings = (organizationId: string) =>
   request(`/api/organizations/${organizationId}/github/settings`, z.object({ location: z.string().url() }));
 export const getGithubRepositorySettings = (organizationId: string, repositoryId: string) =>
   request(`/api/organizations/${organizationId}/repositories/${repositoryId}/github/settings`, z.object({ location: z.string().url() }));
+export async function refreshGithubConnection(organizationId: string) {
+  return request(`/api/organizations/${organizationId}/github/refresh`, z.object({ ok: z.boolean() }), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: "{}",
+  });
+}
 export async function uninstallOrganizationGithub(organizationId: string) {
   return request(`/api/organizations/${organizationId}/github/uninstall`, z.object({ ok: z.boolean() }), {
     method: "POST",

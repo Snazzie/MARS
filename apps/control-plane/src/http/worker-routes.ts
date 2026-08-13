@@ -66,11 +66,11 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     try {
       const body = await c.req.json();
       const parsed = WorkerConfiguration.safeParse({ appliance: body.appliance, runtime: body.runtime });
-      if (!parsed.success || typeof body.organizationId !== "string") return c.json({ error: "invalid worker configuration" }, 400);
+      if (!parsed.success) return c.json({ error: "invalid worker configuration" }, 400);
       const key = c.req.header("Idempotency-Key")!.trim();
-      const [prior] = await deps.db<{ response: Record<string, unknown> | null }[]>`select response from dashboard_mutations where organization_id=${body.organizationId} and idempotency_key=${key}`;
+      const [prior] = await deps.db<{ response: Record<string, unknown> | null }[]>`select response from worker_mutations where worker_id=${c.req.param("workerId")} and idempotency_key=${key}`;
       if (prior?.response) return c.json(prior.response, { status: 202, headers: noStore() });
-      const result = await configurePendingWorker(deps.db, c.req.param("workerId"), body.organizationId, parsed.data, user.id, deps.workerDispatcher, key);
+      const result = await configurePendingWorker(deps.db, c.req.param("workerId"), parsed.data, user.id, deps.workerDispatcher, key);
       deps.onWorkerAdopted(c.req.param("workerId"));
       return c.json(result, { status: 202, headers: noStore() });
     } catch (error) {

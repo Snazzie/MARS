@@ -1,0 +1,66 @@
+import type { RunnerJitConfig, PoolResources } from "@whitesmith/contracts";
+import { PoolResources as PoolResourcesSchema } from "@whitesmith/contracts";
+import type { Candidate } from "./scheduler.ts";
+import { fits } from "./scheduler.ts";
+import type { LeaseReservation } from "@whitesmith/db";
+
+export type QueuedRoutingJob = {
+  installationId: number;
+  repositoryId: string | number;
+  repository: string;
+  runId: string | number;
+  jobId: number;
+  labels: string[];
+};
+export type ReconcileDeps = {
+  queued: QueuedRoutingJob[];
+  candidates: Array<Candidate & { worker: Candidate["worker"] & { id: string }; pool: Candidate["pool"] & { id: string } }>;
+  upsert?: (job: QueuedRoutingJob) => Promise<void>;
+  reserve: (input: { workerId: string; poolId: string; githubJobId: number; routingKey: string; requested: { vcpu: number; memoryBytes: number; storageBytes: number; concurrency: number } }) => Promise<LeaseReservation>;
+  jit: (input: { owner: string; repo: string; runnerName: string; labels: string[]; githubJobId: number }) => Promise<RunnerJitConfig>;
+  dispatch: (reservation: LeaseReservation, jit: RunnerJitConfig) => Promise<void>;
+  release?: (reservation: LeaseReservation) => Promise<void>;
+};
+export type ReconcileReport = { reserved: number; skipped: number; failed: number };
+
+export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<ReconcileReport> {
+  const report: ReconcileReport = { reserved: 0, skipped: 0, failed: 0 };
+  const seen = new Set<number>();
+  const reservedByPool = new Map<string, number>();
+  for (const queued of deps.queued) {
+    if (seen.has(queued.jobId)) { report.skipped += 1; continue; }
+    seen.add(queued.jobId);
+    await deps.upsert?.(queued);
+    const requestedLabels = queued.labels.map((label) => label.trim()).filter(Boolean);
+    const candidate = deps.candidates.find((value) => {
+      const reserved = reservedByPool.get(value.pool.id) ?? 0;
+      return reserved + value.pool.active < value.pool.concurrency && fits({ ...value, requestedLabels });
+    });
+    if (!candidate) { report.skipped += 1; continue; }
+    const [owner, repo] = queued.repository.split("/", 2);
+    if (!owner || !repo) { report.failed += 1; continue; }
+    let reservation: LeaseReservation | undefined;
+    try {
+      const resources = PoolResourcesSchema.parse(candidate.pool.resources);
+      const claimed = await deps.reserve({
+        workerId: candidate.worker.id,
+        poolId: candidate.pool.id,
+        githubJobId: queued.jobId,
+        requested: resources,
+        routingKey: `${queued.repository}:${requestedLabels.map((label) => label.toLowerCase()).sort().join(",")}`,
+      });
+      reservation = claimed;
+      reservedByPool.set(candidate.pool.id, (reservedByPool.get(candidate.pool.id) ?? 0) + 1);
+      const jit = await deps.jit({ owner, repo, runnerName: `whitesmith-${claimed.id}`, labels: requestedLabels, githubJobId: queued.jobId });
+      await deps.dispatch(claimed, jit);
+      report.reserved += 1;
+    } catch {
+      report.failed += 1;
+      if (reservation) {
+        reservedByPool.set(candidate.pool.id, Math.max(0, (reservedByPool.get(candidate.pool.id) ?? 1) - 1));
+        await deps.release?.(reservation);
+      }
+    }
+  }
+  return report;
+}

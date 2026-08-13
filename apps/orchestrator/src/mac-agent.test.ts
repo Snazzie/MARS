@@ -11,7 +11,7 @@ describe("macOS memory availability", () => {
 
 describe("worker join payload", () => {
   test("allowlists identity fields and strips caller-supplied limits", () => {
-    const payload = buildMacWorkerJoinPayload({ code: "A".repeat(43), publicKey: "ed25519", vmUuid: "vm-1", limits: { maxVcpuPerPod: 2 } } as never);
+    const payload = buildMacWorkerJoinPayload({ code: "A".repeat(43), publicKey: "ed25519", encryptionPublicKey: "x25519", vmUuid: "vm-1", limits: { maxVcpuPerPod: 2 } } as never);
     expect("limits" in payload).toBe(false);
   });
   test("emits limit-free identity payload", () => {
@@ -19,6 +19,7 @@ describe("worker join payload", () => {
     const payload = buildMacWorkerJoinPayload({
       code: "A".repeat(43),
       publicKey: "ed25519",
+      encryptionPublicKey: "x25519",
       vmUuid,
       machineUuid: "00000000-0000-4000-8000-000000000002",
       doctor: {},
@@ -41,6 +42,7 @@ describe("worker join payload", () => {
     const payload = buildMacWorkerJoinPayload({
       code: "A".repeat(43),
       publicKey: "ed25519",
+      encryptionPublicKey: "x25519",
       vmUuid,
       machineUuid,
       doctor: { probe: true, egress: true },
@@ -51,6 +53,7 @@ describe("worker join payload", () => {
       code: "A".repeat(43),
       platform: "macos-arm64",
       publicKey: "ed25519",
+      encryptionPublicKey: "x25519",
       vmUuid,
       machineUuid,
       doctor: { probe: true, egress: true },
@@ -69,7 +72,7 @@ test("signs worker websocket challenges with the enrolled key", () => {
 });
 describe("worker identity persistence", () => {
   test("accepts the persisted worker key and id shape", () => {
-    expect(parseMacWorkerIdentity({ workerId: "worker-1", publicKey: "public", privateKey: "private" })).toEqual({ workerId: "worker-1", publicKey: "public", privateKey: "private" });
+    expect(parseMacWorkerIdentity({ workerId: "worker-1", publicKey: "public", privateKey: "private", encryptionPublicKey: "encryption-public", encryptionPrivateKey: "encryption-private" })).toEqual({ workerId: "worker-1", publicKey: "public", privateKey: "private", encryptionPublicKey: "encryption-public", encryptionPrivateKey: "encryption-private" });
   });
   test("rejects incomplete persisted identity", () => {
     expect(() => parseMacWorkerIdentity({ workerId: "worker-1" })).toThrow("worker identity is invalid");

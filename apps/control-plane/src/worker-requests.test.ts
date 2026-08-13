@@ -14,10 +14,10 @@ test("post-enrollment configuration is strict and excludes organization binding"
 });
 
 describe("pending worker request contracts", () => {
-  const valid = { code: "A".repeat(43), platform: "linux-x64", publicKey: "ed25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
+  const valid = { code: "A".repeat(43), platform: "linux-x64", publicKey: "ed25519-public", encryptionPublicKey: "x25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
   test("requires stable identity and excludes code from pending DTO", () => {
     expect(WorkerBootstrapRequest.parse(valid).machineUuid).toBe(valid.machineUuid);
-    const { code: _code, ...pending } = { ...valid, limits: null };
+    const { code: _code, encryptionPublicKey: _encryptionPublicKey, ...pending } = { ...valid, limits: null };
     expect(PendingWorkerRequest.parse(pending).publicKey).toBe(valid.publicKey);
     expect(PendingWorkerRequest.safeParse(valid).success).toBe(false);
     expect(WorkerBootstrapRequest.safeParse({ ...valid, capacity: { ...valid.capacity, actualVcpu: 1.5 } }).success).toBe(false);
@@ -25,10 +25,10 @@ describe("pending worker request contracts", () => {
   test("rejects administrator policy during bootstrap", () => {
     expect(WorkerBootstrapRequest.safeParse({ ...valid, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 1024, maxStorageBytesPerPod: 2048, maxConcurrentPods: 1 } }).success).toBe(false);
   });
-  test("requires an organization and positive admin limits", () => {
+  test("accepts positive global worker limits without organization ownership", () => {
     const limits = { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 1024, maxStorageBytesPerPod: 2048, maxConcurrentPods: 1 };
-    expect(ApproveWorkerRequest.safeParse({ organizationId: valid.vmUuid, limits }).success).toBe(true);
-    expect(ApproveWorkerRequest.safeParse({ organizationId: valid.vmUuid, limits: { ...limits, maxVcpuPerPod: 0 } }).success).toBe(false);
+    expect(ApproveWorkerRequest.safeParse({ limits }).success).toBe(true);
+    expect(ApproveWorkerRequest.safeParse({ limits: { ...limits, maxVcpuPerPod: 0 } }).success).toBe(false);
   });
 });
 
@@ -41,6 +41,7 @@ test("pending worker DTO ignores database-only columns", () => {
     connectionState: "offline",
     configurationState: "unconfigured",
     publicKey: "ed25519-public",
+    encryptionPublicKey: "x25519-public",
     fingerprint: "fingerprint",
     vmUuid: "00000000-0000-4000-8000-000000000001",
     machineUuid: "00000000-0000-4000-8000-000000000002",

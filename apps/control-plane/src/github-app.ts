@@ -174,6 +174,29 @@ export class GitHubAppService {
     sign.update(input);
     return `${input}.${sign.sign(key).toString("base64url")}`;
   }
+  private async installationRepositories(accessToken: string): Promise<{ repositorySelection: "all" | "selected"; repositories: Array<{ id: number; full_name: string; private?: boolean; visibility?: string }> }> {
+    const repositories: Array<{ id: number; full_name: string; private?: boolean; visibility?: string }> = [];
+    let repositorySelection: "all" | "selected" = "selected";
+    for (let page = 1; page <= 100; page += 1) {
+      const response = await this.gh(`/installation/repositories?per_page=100&page=${page}`, {}, accessToken);
+      if (response.repository_selection === "all") repositorySelection = "all";
+      const rows = Array.isArray(response.repositories) ? response.repositories : [];
+      for (const raw of rows) {
+        if (!raw || typeof raw !== "object") continue;
+        const value = raw as { id?: unknown; full_name?: unknown; private?: unknown; visibility?: unknown };
+        if (typeof value.id === "number" && typeof value.full_name === "string") {
+          repositories.push({
+            id: value.id,
+            full_name: value.full_name,
+            private: typeof value.private === "boolean" ? value.private : undefined,
+            visibility: typeof value.visibility === "string" ? value.visibility : undefined,
+          });
+        }
+      }
+      if (rows.length < 100) break;
+    }
+    return { repositorySelection, repositories };
+  }
 
   private async organizationGithubAccount(organizationId: string): Promise<{ id: number; type: "User" | "Organization" } | null> {
     if (!isSql(this.db)) {
@@ -210,10 +233,9 @@ export class GitHubAppService {
     const token = await this.gh(`/app/installations/${installationId}/access_tokens`, { method: "POST" }, await this.appJwt());
     const accessToken = typeof token.token === "string" ? token.token : "";
     if (!accessToken) throw new Error("github_token_missing");
-    const reposResponse = await this.gh("/installation/repositories", {}, accessToken);
-    const repositoryRows = Array.isArray(reposResponse.repositories) ? reposResponse.repositories : [];
-    const repositorySelection = accountInfo.repository_selection === "all" || reposResponse.repository_selection === "all" ? "all" : "selected";
-    const repos = repositoryRows.flatMap((raw) => { if (!raw || typeof raw !== "object") return []; const value = raw as { id?: unknown; full_name?: unknown; private?: unknown; visibility?: unknown }; if (typeof value.id !== "number" || typeof value.full_name !== "string") return []; return [{ id: String(value.id), installationId, fullName: value.full_name, visibility: visibilityOf(value), available: true, approved: false as boolean } satisfies Repository]; });
+    const reposResponse = await this.installationRepositories(accessToken);
+    const repositorySelection = accountInfo.repository_selection === "all" || reposResponse.repositorySelection === "all" ? "all" : "selected";
+    const repos = reposResponse.repositories.map((value) => ({ id: String(value.id), installationId, fullName: value.full_name, visibility: visibilityOf(value), available: true, approved: false as boolean } satisfies Repository));
     const hasAllowed = repos.length > 0;
     await this.persistInstallation(setup.organizationId!, installationId, hasAllowed ? "approved" : "pending", repositorySelection, accountId, repos);
     if (hasAllowed) {
@@ -242,17 +264,11 @@ export class GitHubAppService {
     const tokenResponse = await this.gh(`/app/installations/${installationId}/access_tokens`, { method: "POST" }, await this.appJwt());
     const token = typeof tokenResponse.token === "string" ? tokenResponse.token : "";
     if (!token) throw new Error("github_token_missing");
-    const repositories = await this.gh("/installation/repositories", {}, token);
-    const repositoryRows = Array.isArray(repositories.repositories) ? repositories.repositories : [];
-    const normalized = repositoryRows.flatMap((raw) => {
-      if (!raw || typeof raw !== "object") return [];
-      const value = raw as { id?: unknown; full_name?: unknown; private?: unknown; visibility?: unknown };
-      return typeof value.id === "number" && typeof value.full_name === "string" ? [{ id: value.id, full_name: value.full_name, private: value.private, visibility: value.visibility }] : [];
-    });
+    const reposResponse = await this.installationRepositories(token);
     await this.reconcileInstallationRepositories({
       installation: { id: installationId },
-      repository_selection: repositories.repository_selection === "all" ? "all" : "selected",
-      repositories: normalized,
+      repository_selection: reposResponse.repositorySelection,
+      repositories: reposResponse.repositories,
     });
   }
 
@@ -316,6 +332,13 @@ export class GitHubAppService {
       ) THEN 'approved'
       ELSE 'pending'
     END WHERE i.id=${installation.id}`;
+  }
+
+  async getInstallationToken(installationId: number): Promise<string> {
+    const response = await this.gh(`/app/installations/${installationId}/access_tokens`, { method: "POST" }, await this.appJwt());
+    const token = typeof response.token === "string" ? response.token : "";
+    if (!token) throw new Error("github_token_missing");
+    return token;
   }
 
   async getWebhookSecret(): Promise<string | null> {

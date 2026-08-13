@@ -90,7 +90,7 @@ describe("GitHub App onboarding", () => {
       const url = String(input);
       if (url.endsWith("/app/installations/42")) return Response.json({ account: { type: "Organization", id: 99 }, repository_selection: "all" });
       if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
-      if (url.endsWith("/installation/repositories")) return Response.json({ repository_selection: "all", repositories: [{ id: 7, full_name: "acme/private", visibility: "private" }, { id: 8, full_name: "acme/public", visibility: "public" }] });
+      if (url.includes("/installation/repositories")) return Response.json({ repository_selection: "all", repositories: [{ id: 7, full_name: "acme/private", visibility: "private" }, { id: 8, full_name: "acme/public", visibility: "public" }] });
       return Response.json({});
     });
     fakeDb.appConfig = { id: 9, slug: "whitesmith", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "y" };
@@ -106,7 +106,7 @@ describe("GitHub App onboarding", () => {
       const url = String(input);
       if (url.endsWith("/app/installations/42")) return Response.json({ account: { type: "Organization", id: 99 }, repository_selection: "all" });
       if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
-      if (url.endsWith("/installation/repositories")) return Response.json({ repository_selection: "all", repositories: [{ id: 8, full_name: "acme/public", visibility: "public" }] });
+      if (url.includes("/installation/repositories")) return Response.json({ repository_selection: "all", repositories: [{ id: 8, full_name: "acme/public", visibility: "public" }] });
       return Response.json({});
     });
     fakeDb.appConfig = { id: 9, slug: "whitesmith", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "y" };
@@ -114,6 +114,32 @@ describe("GitHub App onboarding", () => {
     fakeDb.setupStates.set("cookie", { purpose: "install", userId: "admin-1", organizationId, idempotencyKey: "key", encryptedState: new SecretBox(masterKey).encrypt("cookie"), expiresAt: Date.now() + 60_000 });
     await expect(github.completeInstallation("admin-1", "cookie", 42)).resolves.toBe(true);
     expect(fakeDb.installations.get(42)).toMatchObject({ state: "approved", repositorySelection: "all" });
+  });
+
+  test("fetches every repository page during installation refresh", async () => {
+    const pages: number[] = [];
+    const github = service(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/app/installations/42")) return Response.json({ account: { type: "Organization", id: 99 }, repository_selection: "all" });
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/installation/repositories")) {
+        const page = Number(new URL(url).searchParams.get("page"));
+        pages.push(page);
+        const repositories = page === 1
+          ? Array.from({ length: 100 }, (_, index) => ({ id: index + 1, full_name: `acme/repo-${index + 1}`, visibility: "private" }))
+          : [{ id: 101, full_name: "acme/whitesmith", visibility: "public" }];
+        return Response.json({ repository_selection: "all", repositories });
+      }
+      return Response.json({});
+    });
+    fakeDb.appConfig = { id: 9, slug: "whitesmith", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "y" };
+    fakeDb.organizations = new Map([[organizationId, { githubOrgId: 99 }]]);
+    fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "all", githubAccountId: 99 });
+
+    await github.refreshInstallationRepositories(organizationId);
+
+    expect(pages).toEqual([1, 2]);
+    expect(fakeDb.repositories.get("101")).toMatchObject({ fullName: "acme/whitesmith", available: true });
   });
 
 
@@ -159,7 +185,7 @@ describe("GitHub App onboarding", () => {
       const url = String(input);
       if (url.endsWith("/app/installations/42")) return Response.json({ account: { type: "Organization", id: 99 }, repository_selection: "all" });
       if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
-      if (url.endsWith("/installation/repositories")) return Response.json({ repository_selection: "all", repositories: [] });
+      if (url.includes("/installation/repositories")) return Response.json({ repository_selection: "all", repositories: [] });
       return Response.json({});
     }, secretBox: new SecretBox(masterKey), baseUrl: "https://control-plane.test" } as never);
     await expect(github.completeInstallation("admin-1", "cookie", 42)).rejects.toThrow("repository_selection_required");
@@ -266,7 +292,7 @@ describe("GitHub App onboarding", () => {
       const url = String(input);
       if (url.endsWith("/app/installations/42")) return Response.json({ account: { type: "User", id: 77 }, repository_selection: "selected" });
       if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
-      if (url.endsWith("/installation/repositories")) return Response.json({ repository_selection: "selected", repositories: [{ id: 8, full_name: "snazzie/private", visibility: "private" }] });
+      if (url.includes("/installation/repositories")) return Response.json({ repository_selection: "selected", repositories: [{ id: 8, full_name: "snazzie/private", visibility: "private" }] });
       return Response.json({});
     });
     fakeDb.appConfig = { id: 9, slug: "whitesmith", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "y" };

@@ -64,14 +64,10 @@ describe("dashboard API", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ code: "invalid_query" });
   });
-  test("uses typed errors and requires idempotency key", async () => {
+  test("requires global administrator access for worker mutations", async () => {
     const response = await appFor().request("/api/organizations/org/workers/w1/drain", { method: "POST", headers: sessionHeaders });
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ code: "missing_idempotency_key", requestId: expect.any(String) });
-  });
-  test("restricts worker adopt to global administrators", async () => {
-    const response = await appFor().request("/api/organizations/org/workers/w1/adopt", { method: "POST", headers: { ...sessionHeaders, "Idempotency-Key": "one" } });
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "forbidden", requestId: expect.any(String) });
     const adminResponse = await appFor(admin).request("/api/organizations/org/workers/w1/adopt", { method: "POST", headers: { ...sessionHeaders, "Idempotency-Key": "two" } });
     expect(adminResponse.status).toBe(404);
   });

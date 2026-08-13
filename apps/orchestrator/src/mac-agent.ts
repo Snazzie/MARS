@@ -7,11 +7,13 @@ import type { WorkerCapacityData, WorkerDoctorData } from "@whitesmith/contracts
 import { WorkerBootstrapRequest, WorkerCommand, WorkerConfigurePayload, WorkerConfiguration } from "@whitesmith/contracts";
 import type { Lease } from "./runtime.ts";
 import { createTartVmRuntime, TartVmDriver } from "./tart.ts";
+import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 
 export interface MacWorkerLimits { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number }
 export interface MacWorkerJoinInput {
   code: string;
   publicKey: string;
+  encryptionPublicKey: string;
   vmUuid: string;
   machineUuid: string;
   doctor: WorkerDoctorData;
@@ -25,15 +27,54 @@ export function applyWorkerConfigure(command: WorkerCommand, limits: MacWorkerLi
   return { version: 1, type: "worker.configured", workerId: command.workerId, leaseId: null, payload: { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed } };
 }
 export function buildMacWorkerJoinPayload(input: MacWorkerJoinInput): MacWorkerJoinPayload {
-  return { code: input.code, publicKey: input.publicKey, vmUuid: input.vmUuid, machineUuid: input.machineUuid, doctor: input.doctor, capacity: input.capacity, platform: "macos-arm64" };
+  return { code: input.code, publicKey: input.publicKey, encryptionPublicKey: input.encryptionPublicKey, vmUuid: input.vmUuid, machineUuid: input.machineUuid, doctor: input.doctor, capacity: input.capacity, platform: "macos-arm64" };
 }
 export function buildMacWorkerAuthentication(challenge: string, workerId: string, privateKey: string): { type: "authenticate"; workerId: string; signature: string } {
  const signature = signMessage(null, Buffer.from(challenge, "base64url"), privateKey).toString("base64url");
  return { type: "authenticate", workerId, signature };
 }
 export function buildMacWorkerSocketUrl(base: string, workerId: string): string { const url = new URL(base); url.protocol = url.protocol === "https:" ? "wss:" : "ws:"; url.pathname = "/api/v1/workers/connect"; url.search = new URLSearchParams({ workerId }).toString(); return url.toString(); }
-export async function handleMacWorkerCommand(command: WorkerCommand, driver: TartVmDriver, limits?: MacWorkerLimits): Promise<{ version: 1; type: string; workerId: string; leaseId: string | null; payload: Record<string, unknown> }> { if (command.type === "worker.configure") { if (!limits) throw new Error("worker limits unavailable"); return applyWorkerConfigure(command, limits); } if (command.type === "tart.create_lease") { const lease = command.payload as unknown as Lease; const runtime = await driver.createLease(lease); return { version: 1, type: "sandbox_attested", workerId: command.workerId, leaseId: command.leaseId, payload: runtime as unknown as Record<string, unknown> }; } if (command.type === "tart.stop_lease" && command.leaseId) { await driver.stopLease(command.leaseId); return { version: 1, type: "lease_stopped", workerId: command.workerId, leaseId: command.leaseId, payload: {} }; } if (command.type === "tart.remove_lease" && command.leaseId) { await driver.removeLease(command.leaseId); return { version: 1, type: "lease_removed", workerId: command.workerId, leaseId: command.leaseId, payload: {} }; } throw new Error(`unsupported worker command ${command.type}`); }
-function createKeyPair(): { privateKey: string; publicKey: string } { const pair = generateKeyPairSync("ed25519"); return { privateKey: pair.privateKey.export({ format: "pem", type: "pkcs8" }).toString(), publicKey: pair.publicKey.export({ format: "pem", type: "spki" }).toString() }; }
+export async function handleMacWorkerCommand(command: WorkerCommand, driver: TartVmDriver, limits?: MacWorkerLimits, encryptionPrivateKey?: string): Promise<{ version: 1; type: string; workerId: string; leaseId: string | null; payload: Record<string, unknown> }> {
+  if (command.type === "worker.configure") {
+    if (!limits) throw new Error("worker limits unavailable");
+    return applyWorkerConfigure(command, limits);
+  }
+  if (command.type === "tart.create_lease") {
+    if (!command.leaseId || !encryptionPrivateKey) throw new Error("lease encryption key required");
+    const payload = command.payload as { bootstrapCiphertext?: Parameters<typeof openLeaseBootstrap>[0] };
+    if (!payload.bootstrapCiphertext) throw new Error("lease bootstrap payload invalid");
+    const bootstrap = openLeaseBootstrap(payload.bootstrapCiphertext, encryptionPrivateKey);
+    if (bootstrap.leaseId !== command.leaseId) throw new Error("lease bootstrap mismatch");
+    const lease: Lease = {
+      id: bootstrap.leaseId,
+      imageDigest: bootstrap.imageDigest,
+      resources: bootstrap.resources,
+      nonce: bootstrap.nonce,
+      encodedJitConfig: bootstrap.encodedJitConfig,
+    };
+    const runtime = await driver.createLease(lease);
+    return { version: 1, type: "sandbox_attested", workerId: command.workerId, leaseId: command.leaseId, payload: { commandId: command.id, ...(runtime as unknown as Record<string, unknown>) } };
+  }
+  if (command.type === "tart.stop_lease" && command.leaseId) {
+    await driver.stopLease(command.leaseId);
+    return { version: 1, type: "lease_stopped", workerId: command.workerId, leaseId: command.leaseId, payload: { commandId: command.id } };
+  }
+  if (command.type === "tart.remove_lease" && command.leaseId) {
+    await driver.removeLease(command.leaseId);
+    return { version: 1, type: "lease_removed", workerId: command.workerId, leaseId: command.leaseId, payload: { commandId: command.id } };
+  }
+  throw new Error("unsupported worker command");
+}
+function createKeyPair(): { privateKey: string; publicKey: string; encryptionPrivateKey: string; encryptionPublicKey: string } {
+ const signing = generateKeyPairSync("ed25519");
+ const encryption = generateKeyPairSync("x25519");
+ return {
+  privateKey: signing.privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+  publicKey: signing.publicKey.export({ format: "pem", type: "spki" }).toString(),
+  encryptionPrivateKey: encryption.privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+  encryptionPublicKey: encryption.publicKey.export({ format: "pem", type: "spki" }).toString(),
+ };
+}
 async function readJoinCode(): Promise<Buffer> { const reader = Bun.stdin.stream().getReader(); const { value } = await reader.read(); reader.releaseLock(); const code = Buffer.from(value ?? []); if (!code.toString("utf8").trim()) throw new Error("join code required on stdin"); return code; }
 export function availableMacMemoryBytes(output: string, totalMemoryBytes: number): number {
   const percentage = output.match(/System-wide memory free percentage:\s*(\d+(?:\.\d+)?)%/)?.[1];
@@ -70,12 +111,13 @@ async function macMachineUuid(): Promise<string> {
   if (!uuid) throw new Error("macOS machine UUID is unavailable");
   return uuid.toLowerCase();
 }
-async function currentMacWorkerJoinPayload(code: string, publicKey: string): Promise<MacWorkerJoinPayload> {
+async function currentMacWorkerJoinPayload(code: string, publicKey: string, encryptionPublicKey: string): Promise<MacWorkerJoinPayload> {
   const machineUuid = await macMachineUuid();
   const resources = capacity();
   return WorkerBootstrapRequest.parse(buildMacWorkerJoinPayload({
     code,
     publicKey,
+    encryptionPublicKey,
     machineUuid,
     vmUuid: (Bun.env.WHITESMITH_VM_UUID ?? machineUuid).toLowerCase(),
     doctor: { probe: true, egress: true, ...resources },
@@ -89,7 +131,7 @@ function validateControlPlaneUrl(baseUrl: string): URL {
   if (url.protocol !== "https:" && !(loopback && url.protocol === "http:") && !allowInsecureHttp) throw new Error("control plane must use HTTPS (TLS 1.3) except explicit localhost development");
   return url;
 }
-type MacWorkerIdentity = { workerId: string; publicKey: string; privateKey: string };
+type MacWorkerIdentity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string };
 
 function identityFilePath(): string {
   return Bun.env.WHITESMITH_WORKER_IDENTITY_FILE ?? `${Bun.env.HOME ?? "."}/Library/Application Support/Whitesmith/worker-identity.json`;
@@ -97,8 +139,8 @@ function identityFilePath(): string {
 export function parseMacWorkerIdentity(value: unknown): MacWorkerIdentity {
   if (!value || typeof value !== "object") throw new Error("worker identity is invalid");
   const record = value as Record<string, unknown>;
-  if (typeof record.workerId !== "string" || typeof record.publicKey !== "string" || typeof record.privateKey !== "string") throw new Error("worker identity is invalid");
-  return { workerId: record.workerId, publicKey: record.publicKey, privateKey: record.privateKey };
+  if (typeof record.workerId !== "string" || typeof record.publicKey !== "string" || typeof record.privateKey !== "string" || typeof record.encryptionPublicKey !== "string" || typeof record.encryptionPrivateKey !== "string") throw new Error("worker identity is invalid");
+  return { workerId: record.workerId, publicKey: record.publicKey, privateKey: record.privateKey, encryptionPublicKey: record.encryptionPublicKey, encryptionPrivateKey: record.encryptionPrivateKey };
 }
 
 async function loadMacWorkerIdentity(): Promise<MacWorkerIdentity | null> {
@@ -119,7 +161,7 @@ async function saveMacWorkerIdentity(identity: MacWorkerIdentity): Promise<void>
 async function enrollMacWorker(controlPlane: URL, identity: MacWorkerIdentity): Promise<MacWorkerIdentity> {
   const codeBytes = await readJoinCode();
   try {
-    const payload = await currentMacWorkerJoinPayload(codeBytes.toString("utf8").trim(), identity.publicKey);
+    const payload = await currentMacWorkerJoinPayload(codeBytes.toString("utf8").trim(), identity.publicKey, identity.encryptionPublicKey);
     const response = await fetch(new URL("/api/workers/join", controlPlane), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) });
     if (!response.ok) throw new Error(`worker join failed: ${response.status} ${await response.text()}`);
     const joined = await response.json() as { workerId?: string };
@@ -146,7 +188,7 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
         }
         if (frame.type === "authenticated" || frame.type === "doctor_ack" || frame.type === "ping") return;
         const command = WorkerCommand.parse(frame);
-        ws.send(JSON.stringify(await handleMacWorkerCommand(command, driver, limits)));
+        ws.send(JSON.stringify(await handleMacWorkerCommand(command, driver, limits, identity.encryptionPrivateKey)));
       } catch { ws.close(1011, "worker command failed"); }
     };
     await closed.promise;
@@ -159,7 +201,7 @@ export async function runWorkerJoin(platform: "macos-arm64" | "windows-x64", bas
   const key = createKeyPair();
   const codeBytes = await readJoinCode();
   try {
-    const payload = await currentMacWorkerJoinPayload(codeBytes.toString("utf8").trim(), key.publicKey);
+    const payload = await currentMacWorkerJoinPayload(codeBytes.toString("utf8").trim(), key.publicKey, key.encryptionPublicKey);
     const response = await fetch(new URL("/api/workers/join", controlPlane), {
       method: "POST",
       headers: { "content-type": "application/json" },

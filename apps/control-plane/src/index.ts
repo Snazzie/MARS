@@ -11,8 +11,10 @@ import { createWorkerChallenge, decodeWorkerSignature } from "./worker-socket.ts
 import { WorkerCommandDispatcher, containsSecret } from "./worker-dispatch.ts";
 import { applyWorkerConfigurationAcknowledgement } from "./worker-requests.ts";
 import { GitHubAppService } from "./github-app.ts";
+import { runQueuedJobReconciliation } from "./job-reconciler.ts";
+import { startReconciliationScheduler } from "./reconcile-loop.ts";
 import { createControlPlaneApp } from "./http/app.ts";
-const required = (name:string):string => { const value=Bun.env[name]; if(!value) throw new Error(`${name} is required`); return value; };
+const required = (name: string): string => { const value = Bun.env[name]; if (!value) throw new Error(`${name} is required`); return value; };
 const controlPlaneAdapterUrls = (Bun.env.CONTROL_PLANE_ADAPTER_URLS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
 const env = { BASE: required("PUBLIC_BASE_URL"), WEBHOOK_URL: Bun.env.GITHUB_WEBHOOK_URL, DATABASE: required("DATABASE_URL"), WEBHOOK_SECRET: required("GITHUB_WEBHOOK_SECRET"), CLIENT_ID: required("GITHUB_OAUTH_CLIENT_ID"), CLIENT_SECRET: required("GITHUB_OAUTH_CLIENT_SECRET"), BOOTSTRAP: required("BOOTSTRAP_GITHUB_LOGIN"), MASTER_FILE: required("APP_MASTER_KEY_FILE"), DEFAULT_IMAGES: { "linux-x64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_X64, "windows-x64": Bun.env.DEFAULT_JOB_IMAGE_WINDOWS_X64, "macos-arm64": Bun.env.DEFAULT_JOB_IMAGE_MACOS_ARM64 } };
 const db = createDb(env.DATABASE); await migrate(db); const secretBox = new SecretBox((await Bun.file(env.MASTER_FILE).text()).trim());
@@ -49,6 +51,20 @@ const requestSources = new WeakMap<Request, string>();
 const webRoot = Bun.env.WEB_ROOT ? new URL(Bun.env.WEB_ROOT) : new URL("../../web/dist/", import.meta.url);
 const githubApp = new GitHubAppService({ db, secretBox, baseUrl: env.BASE, webhookUrl: env.WEBHOOK_URL });
 const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), workerOrchestratorExecutable: new URL("../../orchestrator/dist/whitesmith-orchestrator", import.meta.url), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => { const socket = workerSockets.get(workerId); if (socket) { dispatcher.register(workerId, socket); void dispatcher.replayConnected(workerId); } } });
+const reconciliationIntervalMs = Number(Bun.env.JOB_RECONCILIATION_INTERVAL_MS ?? 5_000);
+startReconciliationScheduler(async () => {
+  try {
+    const report = await runQueuedJobReconciliation({
+      db,
+      installationToken: (installationId) => githubApp.getInstallationToken(installationId),
+      dispatcher,
+      workerConnected: (workerId) => dispatcher.isConnected(workerId),
+    });
+    if (report.reserved || report.failed) console.log(`Job reconciliation: reserved=${report.reserved} failed=${report.failed} skipped=${report.skipped}`);
+  } catch (error) {
+    console.error("Job reconciliation failed", error);
+  }
+}, reconciliationIntervalMs);
 let server: Server<SocketData>;
 server = Bun.serve<SocketData>({
   port: Number(Bun.env.PORT ?? 3000),

@@ -13,6 +13,30 @@ export const WorkerState = z.enum(["pending", "adopted", "rejected", "revoked"])
 export const ConnectionState = z.enum(["offline", "online"]);
 export const ConfigurationState = z.enum(["unconfigured", "ready", "error"]);
 export const LeaseState = z.enum(["requested", "dispatched", "provisioning", "sandbox_ready", "online", "busy", "completed", "reaping", "reaped", "failed"]);
+export const RunnerJitConfig = z.object({
+  encodedJitConfig: z.string().min(1),
+  runnerName: z.string().min(1).max(128),
+  labels: z.array(z.string().min(1)).min(1),
+  expiresAt: z.string().datetime(),
+}).strict();
+export type RunnerJitConfig = z.infer<typeof RunnerJitConfig>;
+export const LeaseBootstrapEnvelope = z.object({
+  leaseId: z.string().uuid(),
+  nonce: z.string().min(32),
+  encodedJitConfig: z.string().min(1),
+  expiresAt: z.string().datetime(),
+  imageDigest: z.string().min(1),
+  resources: PoolResources,
+}).strict();
+export type LeaseBootstrapEnvelope = z.infer<typeof LeaseBootstrapEnvelope>;
+export const LeaseLifecycleEvent = z.object({
+  leaseId: z.string().uuid(),
+  nonce: z.string().min(32),
+  state: z.enum(["runner_started", "job_started", "job_completed", "job_failed", "reaped"]),
+  conclusion: z.string().nullable().optional(),
+  occurredAt: z.string().datetime(),
+}).strict();
+export type LeaseLifecycleEvent = z.infer<typeof LeaseLifecycleEvent>;
 export const WorkerCommand = z.object({ version: z.literal(1), id: z.string().uuid(), type: z.string().min(1), workerId: z.string().uuid(), leaseId: z.string().uuid().nullable(), occurredAt: z.string().datetime(), payload: z.record(z.unknown()) });
 export const WorkerEvent = z.object({ version: z.literal(1), id: z.string().uuid(), workerId: z.string().uuid(), type: z.string().min(1), occurredAt: z.string().datetime(), payload: z.record(z.unknown()) });
 export const WorkerApplianceConfiguration = z.object({ vcpu: positiveSafe, memoryBytes: positiveSafe, storageBytes: positiveSafe }).strict();
@@ -31,15 +55,16 @@ export const WorkerBootstrapRequest = z.object({
   code: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   platform: RuntimePlatform,
   publicKey: z.string().min(1),
+  encryptionPublicKey: z.string().min(1),
   vmUuid: z.string().uuid(),
   machineUuid: z.string().uuid(),
   doctor: WorkerDoctorData,
   capacity: WorkerCapacityData,
 }).strict();
 export type WorkerBootstrapRequest = z.infer<typeof WorkerBootstrapRequest>;
-export const PendingWorkerRequest = WorkerBootstrapRequest.omit({ code: true }).extend({ limits: WorkerLimits.nullable() });
+export const PendingWorkerRequest = WorkerBootstrapRequest.omit({ code: true, encryptionPublicKey: true }).extend({ limits: WorkerLimits.nullable() });
 export type PendingWorkerRequest = z.infer<typeof PendingWorkerRequest>;
-export const ApproveWorkerRequest = z.object({ organizationId: z.string().uuid(), limits: WorkerLimits }).strict();
+export const ApproveWorkerRequest = z.object({ limits: WorkerLimits }).strict();
 export type ApproveWorkerRequest = z.infer<typeof ApproveWorkerRequest>;
 
 export type WorkerState = z.infer<typeof WorkerState>;

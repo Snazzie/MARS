@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RepositorySummary } from "@whitesmith/contracts";
-import { beginOrganizationGithubInstall, getGithubRepositorySettings, getRepositories, setRepositoryApproval, uninstallOrganizationGithub } from "../api.ts";
+import { beginOrganizationGithubInstall, getGithubRepositorySettings, getRepositories, refreshGithubConnection, setRepositoryApproval, uninstallOrganizationGithub } from "../api.ts";
 import { QueryState } from "../components/StateView.tsx";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
 export function RepositoriesPage() {
   const { organizationId, organizations } = useOrganizationFromRoute();
   const client = useQueryClient();
   const [search, setSearch] = useState("");
+  const [availability, setAvailability] = useState<"available" | "unavailable">("available");
   const [visibility, setVisibility] = useState<"all" | "private" | "internal">("all");
   const [connectOrganizationId, setConnectOrganizationId] = useState("");
 
@@ -35,6 +36,10 @@ export function RepositoriesPage() {
     mutationFn: () => beginOrganizationGithubInstall(connectOrganizationId),
     onSuccess: ({ location }) => window.location.assign(location),
   });
+  const refreshConnection = useMutation({
+    mutationFn: () => refreshGithubConnection(organizationId),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["org", organizationId, "repositories"] }),
+  });
   const manageOrganization = useMutation({
     mutationFn: () => uninstallOrganizationGithub(organizationId),
     onSuccess: () => {
@@ -58,16 +63,16 @@ export function RepositoriesPage() {
       (query.data?.items ?? []).filter((repository) => {
         const text = search.trim().toLowerCase();
         return (
+          repository.available === (availability === "available") &&
           (!text || repository.fullName.toLowerCase().includes(text)) &&
           (visibility === "all" || repository.visibility === visibility)
         );
       }),
-    [query.data, search, visibility],
+    [query.data, search, visibility, availability],
   );
   const allWorkspaces = organizationId === "all";
   const canConnect = organizations.length > 0;
-  const updateError = connect.error ?? manageOrganization.error ?? approval.error ?? manageRepository.error;
-
+  const updateError = connect.error ?? refreshConnection.error ?? manageOrganization.error ?? approval.error ?? manageRepository.error;
   return (
     <>
       <header className="page-header repositories-header">
@@ -82,6 +87,14 @@ export function RepositoriesPage() {
           <a className="button secondary" href="/api/auth/github?returnTo=%2Frepositories">
             Refresh GitHub connection
           </a>
+          <button
+            type="button"
+            className="button secondary"
+            onClick={() => refreshConnection.mutate()}
+            disabled={allWorkspaces || !organizationId || refreshConnection.isPending}
+          >
+            {refreshConnection.isPending ? "Syncing…" : "Sync installed repositories"}
+          </button>
           <label>
             Connect workspace
             <select
@@ -131,6 +144,19 @@ export function RepositoriesPage() {
           <span>{repositories.length === 1 ? "repository" : "repositories"} shown</span>
         </div>
         <div className="toolbar">
+          <div className="repository-availability-toggle" role="group" aria-label="Repository availability">
+            {(["available", "unavailable"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={`control-button ${availability === option ? "" : "control-button-secondary"}`}
+                aria-pressed={availability === option}
+                onClick={() => setAvailability(option)}
+              >
+                {option === "available" ? "Available" : "Unavailable"}
+              </button>
+            ))}
+          </div>
           <label>
             Search
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="org / repository" />
@@ -208,7 +234,7 @@ export function RepositoriesPage() {
                             workspaceId: repository.organizationId,
                           })
                         }
-                        disabled={manageRepository.isPending}
+                        disabled={!repository.available || manageRepository.isPending}
                       >
                         Manage GitHub
                       </button>

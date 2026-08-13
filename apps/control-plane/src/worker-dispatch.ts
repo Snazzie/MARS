@@ -25,6 +25,7 @@ export class WorkerCommandDispatcher {
     this.chains.set(workerId, result.then(() => undefined, () => undefined));
     return result;
   }
+  isConnected(workerId: string): boolean { return this.sockets.has(workerId); }
   register(workerId: string, socket: AuthenticatedWorkerSocket): void {
     const old = this.sockets.get(workerId);
     if (old === socket) return;

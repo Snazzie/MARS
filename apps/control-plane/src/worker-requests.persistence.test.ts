@@ -9,7 +9,7 @@ describe("pending worker persistence", () => {
     const queries: string[] = [];
     const queryValues: unknown[][] = [];
     const tx = Object.assign((strings: TemplateStringsArray, ...values: unknown[]) => { const sql = strings.join(" "); queries.push(sql); queryValues.push(values); if (sql.includes("select code_hash")) return [{ codeHash: createHash("sha256").update(Buffer.from("A".repeat(43), "base64url")).digest() }]; if (sql.includes("select id,")) return []; if (sql.includes("returning id")) return [{ id: "00000000-0000-4000-8000-000000000003" }]; return []; }, { json: (value: unknown) => value });
-    const input = { code: "A".repeat(43), platform: "linux-x64" as const, publicKey: "ed25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
+    const input = { code: "A".repeat(43), platform: "linux-x64" as const, publicKey: "ed25519-public", encryptionPublicKey: "x25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
     const telemetry = { doctor: input.doctor, capacity: input.capacity };
     const db = Object.assign(((strings: TemplateStringsArray, ...values: unknown[]) => { queries.push(strings.join(" ")); queryValues.push(values); return []; }) as unknown as Sql<{}>, { begin: async (fn: (tx: unknown) => unknown) => fn(tx) });
     const result = await requestPendingWorker(db, input);
@@ -29,7 +29,7 @@ test("replays completed configuration idempotency response without mutating", as
   const tx = (strings: TemplateStringsArray, ...values: unknown[]) => {
     const sql = strings.join(" ");
     queries.push(sql);
-    if (sql.includes("select response from dashboard_mutations")) return [{ response: result }];
+    if (sql.includes("select response from worker_mutations")) return [{ response: result }];
     return [];
   };
   const db = Object.assign(((strings: TemplateStringsArray, ...values: unknown[]) => []) as unknown as Sql<{}>, {
@@ -37,6 +37,6 @@ test("replays completed configuration idempotency response without mutating", as
   });
   const dispatcher = { replayConnected() { throw new Error("must not dispatch replay for duplicate"); } } as unknown as WorkerCommandDispatcher;
   const configuration = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 } };
-  await expect(configurePendingWorker(db, "worker", "org", configuration, "admin", dispatcher, "same-key")).resolves.toEqual(result);
+  await expect(configurePendingWorker(db, "worker", configuration, "admin", dispatcher, "same-key")).resolves.toEqual(result);
   expect(queries.some(query => query.includes("update workers"))).toBe(false);
 });

@@ -41,4 +41,39 @@ describe("macOS worker agent",()=>{test("builds audience-bound join and websocke
 import { displayCell } from "../apps/web/src/format.ts";
 describe("worker table values",()=>{test("renders primitive values instead of renderer objects",()=>{expect(displayCell("macos-arm64")).toBe("macos-arm64");expect(displayCell(undefined)).toBe("—");expect(displayCell({value:"x"})).toBe("{\"value\":\"x\"}")})});
 import { TartVmDriver, type TartVmRuntime } from "../apps/orchestrator/src/tart.ts";
-describe("Tart VM lifecycle",()=>{test("clones, sizes, starts, stops, and removes one VM lease",async()=>{const calls:string[][]=[];const runtime:TartVmRuntime={clone:async(base,name)=>{calls.push(["clone",base,name])},setResources:async(name,resources)=>{calls.push(["set",name,String(resources.vcpu),String(resources.memoryBytes),String(resources.storageBytes)])},start:async name=>{calls.push(["start",name])},stop:async name=>{calls.push(["stop",name])},remove:async name=>{calls.push(["remove",name])}};const driver=new TartVmDriver(runtime,"base-image","whitesmith-job");const lease=await driver.createLease({id:"11111111-1111-4111-8111-111111111111",imageDigest:"sha256:test",nonce:"nonce",resources:{vcpu:2,memoryBytes:4294967296,storageBytes:21474836480,concurrency:1}});expect(lease.state).toBe("sandbox_attested");expect(calls).toEqual([["clone","base-image","whitesmith-job-11111111"],["set","whitesmith-job-11111111","2","4294967296","21474836480"],["start","whitesmith-job-11111111"]]);await driver.stopLease("11111111-1111-4111-8111-111111111111");await driver.removeLease("11111111-1111-4111-8111-111111111111");expect(calls.slice(-2)).toEqual([["stop","whitesmith-job-11111111"],["remove","whitesmith-job-11111111"]])})});
+describe("Tart VM lifecycle", () => {
+  test("clones, sizes, starts, bootstraps, stops, and removes one VM lease", async () => {
+    const calls: string[][] = [];
+    const runtime: TartVmRuntime = {
+      clone: async (base, name) => { calls.push(["clone", base, name]); },
+      setResources: async (name, resources) => { calls.push(["set", name, String(resources.vcpu), String(resources.memoryBytes), String(resources.storageBytes)]); },
+      injectBootstrap: async (name, config) => { calls.push(["inject", name, config]); },
+      startRunner: async (name) => { calls.push(["runner", name]); },
+      start: async (name) => { calls.push(["start", name]); },
+      stop: async (name) => { calls.push(["stop", name]); },
+      remove: async (name) => { calls.push(["remove", name]); },
+    };
+    const driver = new TartVmDriver(runtime, "base-image", "whitesmith-job");
+    const lease = await driver.createLease({
+      id: "11111111-1111-4111-8111-111111111111",
+      imageDigest: "base-image",
+      nonce: "nonce",
+      encodedJitConfig: "jit-config",
+      resources: { vcpu: 2, memoryBytes: 4294967296, storageBytes: 21474836480, concurrency: 1 },
+    });
+    expect(lease.state).toBe("sandbox_attested");
+    expect(calls).toEqual([
+      ["clone", "base-image", "whitesmith-job-11111111"],
+      ["set", "whitesmith-job-11111111", "2", "4294967296", "21474836480"],
+      ["start", "whitesmith-job-11111111"],
+      ["inject", "whitesmith-job-11111111", "jit-config"],
+      ["runner", "whitesmith-job-11111111"],
+    ]);
+    await driver.stopLease("11111111-1111-4111-8111-111111111111");
+    await driver.removeLease("11111111-1111-4111-8111-111111111111");
+    expect(calls.slice(-2)).toEqual([
+      ["stop", "whitesmith-job-11111111"],
+      ["remove", "whitesmith-job-11111111"],
+    ]);
+  });
+});

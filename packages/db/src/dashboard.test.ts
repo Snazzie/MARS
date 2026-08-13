@@ -1,6 +1,28 @@
 import { expect, test } from "bun:test";
-import { WorkerDetail } from "@whitesmith/contracts";
-import { getOrganizationSettings, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listWorkers, listPools } from "./dashboard.ts";
+import { OverviewDto, WorkerDetail } from "@whitesmith/contracts";
+import { getOverview, getOrganizationSettings, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listWorkers, listPools } from "./dashboard.ts";
+
+test("overview returns point-in-time pending and running buckets", async () => {
+  const db = (async (strings: TemplateStringsArray) => {
+    if (strings.join(" ").includes("generate_series")) return [{ bucket: new Date("2026-08-12T10:00:00.000Z"), pending: 2, running: 1 }];
+    return [{
+      organizationId: "org-1",
+      period: "24h",
+      queued: 1,
+      running: 2,
+      completed: 3,
+      failed: 4,
+      queueP50Ms: 0,
+      queueP95Ms: 0,
+      durationP50Ms: 0,
+      durationP95Ms: 0,
+      concurrency: 2,
+      utilization: 0,
+    }];
+  }) as never;
+  const result = await getOverview(db, "org-1", "24h");
+  expect(OverviewDto.parse(result).timeseries).toEqual([{ bucket: "2026-08-12T10:00:00.000Z", pending: 2, running: 1 }]);
+});
 
 test("worker listing normalizes persisted telemetry into the WorkerDetail contract", async () => {
   const db = (async () => [{ id: "86afd915-add3-407c-a6c1-1b46803ef713", organizationId: "c432f22a-16e2-44f8-9a6b-bc00e5de1a7d", name: "mac-worker", platform: "macos-arm64", driver: "tart-vm", admissionState: "adopted", connectionState: "online", configurationState: "ready", fingerprint: "sha256:worker", limits: "{\"maxVcpuPerPod\":2,\"maxMemoryBytesPerPod\":3221225472,\"maxStorageBytesPerPod\":10737418240,\"maxConcurrentPods\":1}", doctor: { doctor: { probe: true, egress: true }, capacity: { freeVcpu: 10, actualVcpu: 10, freeMemoryBytes: 16149077032, actualMemoryBytes: 34359738368, freeStorageBytes: 103244165120, actualStorageBytes: 994610155520 } }, activeSandboxes: 0, draining: false }]) as never;

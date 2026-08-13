@@ -97,7 +97,7 @@ export async function getOnboardingDetail(
   const organizationRows = await db`
     SELECT o.id,o.login AS name,o.login,m.role,
       (SELECT count(*)::int FROM dashboard_repositories r WHERE r.organization_id=o.id) AS "repositoryCount",
-      (SELECT count(*)::int FROM workers w WHERE w.organization_id=o.id) AS "workerCount"
+      (SELECT count(DISTINCT p.worker_id)::int FROM runner_pools p WHERE p.organization_id=o.id) AS "workerCount"
     FROM organizations o JOIN memberships m ON m.organization_id=o.id
     WHERE m.user_id=(SELECT admin_user_id FROM system_onboarding WHERE singleton=true)
     ORDER BY o.login
@@ -132,7 +132,7 @@ export async function getOnboardingDetail(
       p.name,p.platform,p.driver,p.image_digest AS "imageDigest",p.resources,p.labels,p.trigger_label AS "triggerLabel",
       p.enabled,(SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.state NOT IN ('completed','reaped','failed')) AS active
     FROM runner_pools p JOIN workers w ON w.id=p.worker_id
-    WHERE p.worker_id=${worker.id} ORDER BY p.enabled DESC,p.id LIMIT 1
+    WHERE p.worker_id=${worker.id} AND p.organization_id=${organizationId} ORDER BY p.enabled DESC,p.id LIMIT 1
   `) : undefined;
   const pool = poolRow ? {
     id: String(poolRow.id), organizationId: String(poolRow.organizationId), workerId: String(poolRow.workerId), workerName: String(poolRow.workerName),
@@ -173,8 +173,8 @@ export async function completeOnboardingIfReady(db: OnboardingDb): Promise<boole
   const row = first(await db`SELECT completed_at AS "completedAt",admin_user_id AS "adminUserId",worker_id AS "workerId",organization_id AS "organizationId" FROM system_onboarding WHERE singleton=true`);
   if (!row || row.completedAt != null || !row.adminUserId || !row.workerId || !row.organizationId) return false;
   const ready = await db`
-    SELECT 1 FROM workers w JOIN runner_pools p ON p.worker_id=w.id AND p.organization_id=w.organization_id
-    WHERE w.id=${String(row.workerId)} AND w.admission_state='adopted' AND w.connection_state='online'
+    SELECT 1 FROM workers w JOIN runner_pools p ON p.worker_id=w.id
+    WHERE w.id=${String(row.workerId)} AND p.organization_id=${String(row.organizationId)} AND w.admission_state='adopted' AND w.connection_state='online'
       AND w.configuration_state='ready' AND p.enabled=true AND p.trigger_label IS NOT NULL LIMIT 1
   `;
   if (!ready.length) return false;

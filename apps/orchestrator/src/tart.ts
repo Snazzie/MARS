@@ -5,6 +5,8 @@ import { validateResources } from "./runtime.ts";
 export interface TartVmRuntime {
   clone(baseImage: string, vmName: string): Promise<void>;
   setResources(vmName: string, resources: PoolResources): Promise<void>;
+  injectBootstrap(vmName: string, encodedJitConfig: string): Promise<void>;
+  startRunner(vmName: string): Promise<void>;
   start(vmName: string): Promise<void>;
   stop(vmName: string): Promise<void>;
   remove(vmName: string): Promise<void>;
@@ -12,27 +14,24 @@ export interface TartVmRuntime {
 
 export function createTartVmRuntime(): TartVmRuntime {
   const processes = new Map<string, Bun.Subprocess>();
-  async function run(args: string[]): Promise<void> {
-    const process = Bun.spawn(["tart", ...args], { stdout: "ignore", stderr: "pipe" });
+  async function run(args: string[], stdin?: string): Promise<void> {
+    const process = Bun.spawn(["tart", ...args], { stdin: stdin === undefined ? undefined : "pipe", stdout: "ignore", stderr: "pipe" });
+    if (stdin !== undefined) { process.stdin.write(stdin); process.stdin.end(); }
     if (await process.exited !== 0) throw new Error(`tart ${args[0]} failed`);
   }
   return {
     clone: (baseImage, vmName) => run(["clone", baseImage, vmName]),
     setResources: (vmName, resources) => run(["set", vmName, "--cpu", String(resources.vcpu), "--memory", String(resources.memoryBytes / 1024 ** 2), "--disk-size", String(resources.storageBytes / 1024 ** 3)]),
+    injectBootstrap: (vmName, encodedJitConfig) => run(["exec", vmName, "--", "sh", "-c", "install -d -m 700 /run/whitesmith && install -m 600 /dev/stdin /run/whitesmith/jit-config"], encodedJitConfig),
+    startRunner: vmName => run(["exec", vmName, "--", "/usr/local/bin/whitesmith-job-agent", "bootstrap", "--config-file", "/run/whitesmith/jit-config"]),
     async start(vmName) {
       if (processes.has(vmName)) throw new Error(`Tart VM already running: ${vmName}`);
       const process = Bun.spawn(["tart", "run", "--no-graphics", "--net-softnet", vmName], { stdout: "ignore", stderr: "ignore" });
       processes.set(vmName, process);
       void process.exited.then(() => processes.delete(vmName));
     },
-    async stop(vmName) {
-      await run(["stop", vmName]);
-      processes.delete(vmName);
-    },
-    async remove(vmName) {
-      await run(["delete", vmName]);
-      processes.delete(vmName);
-    },
+    stop: async vmName => { await run(["stop", vmName]); processes.delete(vmName); },
+    remove: async vmName => { await run(["delete", vmName]); processes.delete(vmName); },
   };
 }
 
@@ -51,13 +50,17 @@ export class TartVmDriver implements RuntimeDriver {
   async reserveCapacity(resources: PoolResources): Promise<void> { this.validatePool(resources); }
 
   async createLease(lease: Lease): Promise<RuntimeLease> {
+    if (lease.imageDigest !== this.baseImage) throw new Error("image digest is not allowed on this worker");
     this.validatePool(lease.resources);
     const vmName = `${this.namePrefix}-${lease.id.slice(0, 8)}`;
     await this.tart.clone(this.baseImage, vmName);
-    await this.tart.setResources(vmName, lease.resources);
     try {
+      await this.tart.setResources(vmName, lease.resources);
       await this.tart.start(vmName);
+      await this.tart.injectBootstrap(vmName, lease.encodedJitConfig);
+      await this.tart.startRunner(vmName);
     } catch (error) {
+      await this.tart.stop(vmName).catch(() => undefined);
       await this.tart.remove(vmName).catch(() => undefined);
       throw error;
     }
@@ -65,7 +68,6 @@ export class TartVmDriver implements RuntimeDriver {
     this.leases.set(lease.id, { vmName, runtime });
     return runtime;
   }
-
   async inspectLease(leaseId: string): Promise<RuntimeLease> { const lease = this.leases.get(leaseId); if (!lease) throw new Error("sandbox not found"); return lease.runtime; }
   async stopLease(leaseId: string): Promise<void> { const lease = this.leases.get(leaseId); if (!lease) throw new Error("sandbox not found"); await this.tart.stop(lease.vmName); }
   async removeLease(leaseId: string): Promise<void> { const lease = this.leases.get(leaseId); if (!lease) return; await this.tart.remove(lease.vmName); this.leases.delete(leaseId); }
