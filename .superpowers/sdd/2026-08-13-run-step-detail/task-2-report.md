@@ -20,3 +20,12 @@ Strict positive integer step numbers; malformed webhook `steps` containers fail 
 
 ## Concerns
 Full PostgreSQL convergence requires integration fixtures; focused control-plane tests/typecheck pass. Worker log event wiring untouched.
+
+
+## Final persistence-boundary coverage
+- `apps/control-plane/src/runs.test.ts` now uses a deterministic tagged-SQL recorder to invoke both `applyGithubJobSnapshot` and `applyWorkflowJobWebhook` through the same transaction path.
+- The focused regression asserts equivalent run/job/step writes, conflict-based duplicate prevention, queued status/timestamp behavior, monotonic `LEAST`/`COALESCE` clauses, and synthetic step-ID promotion to a stable GitHub ID.
+
+## Final verification
+- `bun test apps/control-plane/src/runs.test.ts` — 3 passed, 23 assertions.
+- `bunx tsc --noEmit -p apps/control-plane/tsconfig.json` — passed.
