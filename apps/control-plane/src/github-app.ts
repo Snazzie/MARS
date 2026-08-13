@@ -211,7 +211,7 @@ export class GitHubAppService {
   private async persistInstallation(organizationId: string, installationId: number, state: Installation["state"], repositorySelection: Installation["repositorySelection"], githubAccountId: number, repos: Repository[]): Promise<string> {
     if (!isSql(this.db)) {
       this.db.installations.set(installationId, { organizationId, githubInstallationId: installationId, state, repositorySelection, githubAccountId });
-      for (const repo of repos) this.db.repositories.set(repo.id, repo);
+      for (const repo of repos) this.db.repositories.set(repo.id, { ...repo, organizationId });
       return String(installationId);
     }
     const rows = await this.db<Array<{ id: string }>>`INSERT INTO dashboard_installations (organization_id,github_installation_id,state,repository_selection,github_account_id) VALUES (${organizationId},${installationId},${state},${repositorySelection},${githubAccountId}) ON CONFLICT (organization_id,github_installation_id) DO UPDATE SET state=excluded.state,repository_selection=excluded.repository_selection,github_account_id=excluded.github_account_id RETURNING id`;
@@ -365,11 +365,11 @@ export class GitHubAppService {
     return { installationId: Number(row.installation_id), fullName: row.full_name, defaultBranch: row.default_branch ?? "", headSha: row.head_sha ?? "", labels };
   }
 
-  async listRepositoryWorkflows(owner: string, repo: string): Promise<{ defaultBranch: string; files: Array<{ path: string; sha: string; content: string }> }> {
-    const metadata = await this.gh(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+  async listRepositoryWorkflows(owner: string, repo: string, installationId: number): Promise<{ defaultBranch: string; files: Array<{ path: string; sha: string; content: string }> }> {
+    const token = await this.getInstallationToken(installationId);
+    const metadata = await this.gh(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, {}, token);
     const defaultBranch = typeof metadata.default_branch === "string" ? metadata.default_branch : "";
     if (!defaultBranch) throw new Error("github_default_branch_missing");
-    const token = await this.getInstallationToken(Number(metadata.installation_id ?? 0));
     const tree = await this.gh(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(defaultBranch)}?recursive=1`, {}, token);
     const entries = Array.isArray(tree.tree) ? tree.tree : [];
     const files: Array<{ path: string; sha: string; content: string }> = [];
@@ -387,7 +387,7 @@ export class GitHubAppService {
     const repo = await this.workflowRepo(organizationId, repositoryId);
     const [owner, name] = repo.fullName.split("/", 2);
     if (!owner || !name) throw new Error("github_repository_invalid");
-    const listing = await this.listRepositoryWorkflows(owner, name);
+    const listing = await this.listRepositoryWorkflows(owner, name, repo.installationId);
     const token = await this.getInstallationToken(repo.installationId);
     return { repo, owner, name, token, listing };
   }
