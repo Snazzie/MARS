@@ -72,7 +72,7 @@ test("controls visible step disclosures and reports loaded line count", async ()
   globalThis.document = window.document;
   // @ts-expect-error test DOM globals
   globalThis.window = window;
-  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -91,8 +91,8 @@ test("controls visible step disclosures and reports loaded line count", async ()
   const search = container.querySelector<HTMLInputElement>('input[aria-label="Search job steps and loaded logs"]')!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(search, "Test");
-    search.dispatchEvent(new window.Event("input", { bubbles: true }));
-    search.dispatchEvent(new window.Event("change", { bubbles: true }));
+    search.dispatchEvent(new window.Event("input", { bubbles: true }) as unknown as Event);
+    search.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event);
   });
   expect(summaries()).toHaveLength(1);
   expect(summaries()[0]?.textContent).toContain("Test");
@@ -103,7 +103,7 @@ test("controls visible step disclosures and reports loaded line count", async ()
     setTimeout(resolve, 30);
     await promise;
   });
-  await act(async () => { search.value = ""; search.dispatchEvent(new window.Event("input", { bubbles: true })); });
+  await act(async () => { search.value = ""; search.dispatchEvent(new window.Event("input", { bubbles: true }) as unknown as Event); });
   expect(container.textContent).toContain("2 lines");
   await act(async () => { root.unmount(); });
   container.remove();
