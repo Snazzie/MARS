@@ -30,7 +30,8 @@ function Ensure-HyperV {
   if (-not (Get-VMHost -ErrorAction SilentlyContinue)) { throw 'Hyper-V host is unavailable.' }
 }
 function Ensure-ControlPlane {
-  if ($ControlPlaneUrl -notmatch '^https://' -and -not ($AllowInsecureHttp -and $ControlPlaneUrl -match '^http://(localhost|127\.0\.0\.1)(:\d+)?$')) { throw 'Control-plane URL must use HTTPS.' }
+  $localHttp = $ControlPlaneUrl -match '^http://(localhost|127\.0\.0\.1)(:\d+)?$'
+  if ($ControlPlaneUrl -notmatch '^https://' -and -not $localHttp -and -not $AllowInsecureHttp) { throw 'Control-plane URL must use HTTPS.' }
   Invoke-WebRequest -Uri $ControlPlaneUrl -Method Get -UseBasicParsing -TimeoutSec 30 | Out-Null
 }
 Require-Administrator
