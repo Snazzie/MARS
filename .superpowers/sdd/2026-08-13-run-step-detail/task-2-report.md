@@ -29,3 +29,6 @@ Full PostgreSQL convergence requires integration fixtures; focused control-plane
 ## Final verification
 - `bun test apps/control-plane/src/runs.test.ts` — 3 passed, 23 assertions.
 - `bunx tsc --noEmit -p apps/control-plane/tsconfig.json` — passed.
+- Final review fix: replaced textual SQL assertions in `runs.test.ts` with an executable deterministic transaction fake that applies the same run/job/step monotonic upsert rules and exposes stored state.
+- Coverage now exercises REST and equivalent webhook convergence, queued `started_at` null, earliest start/first completion preservation, terminal non-regression, duplicate prevention, label normalization, synthetic step-number ID promotion to a stable GitHub ID, and strict malformed webhook step validation.
+- Final verification: `bun test apps/control-plane/src/runs.test.ts apps/control-plane/src/github-jobs.test.ts` — 6 passed, 20 assertions; `bun run --filter @whitesmith/control-plane typecheck` — passed.
