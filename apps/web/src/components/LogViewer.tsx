@@ -32,9 +32,9 @@ export function countLogLines(text: string): number {
 }
 
 export function stepMatchesSearch(step: Pick<RunStep, "name">, loadedText: string, search: string): boolean {
-  const query = search.trim().toLocaleLowerCase();
+  const query = search.trim().toLowerCase();
   if (!query) return true;
-  return `${step.name}\n${loadedText}`.toLocaleLowerCase().includes(query);
+  return `${step.name}\n${loadedText}`.toLowerCase().includes(query);
 }
 
 function formatDuration(durationMs: number | null): string {

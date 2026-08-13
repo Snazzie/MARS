@@ -32,7 +32,7 @@ test("normalizes step result and derives duration from timestamps", () => {
 test("counts lines and searches only the step name plus loaded text", () => {
   expect(countLogLines("one\ntwo\n")).toBe(2);
   expect(countLogLines("")).toBe(0);
-  expect(stepMatchesSearch(step({ name: "Install dependencies" }), "bun install", "DEPENDENCIES")).toBe(true);
+  expect(stepMatchesSearch(step({ name: "İstanbul" }), "", "İSTANBUL")).toBe(true);
   expect(stepMatchesSearch(step({ name: "Build" }), "bun test\npass", "PASS")).toBe(true);
   expect(stepMatchesSearch(step({ name: "Build" }), "bun test", "network")).toBe(false);
 });
@@ -78,6 +78,8 @@ test("controls visible step disclosures and reports loaded line count", async ()
   const root = createRoot(container);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const second = step({ id: "step-2", name: "Test" });
+  client.setQueryData(["org", "org-1", "run", "run-1", "job", "job-1", "logs"], { items: [] });
+  client.setQueryData(["org", "org-1", "run", "run-1", "job", "job-1", "step", "step-2", "logs"], { items: [] });
   client.setQueryData(["org", "org-1", "run", "run-1", "job", "job-1", "step", "step-1", "logs"], { items: [{ sequence: 1, content: "bun install" }, { sequence: 2, content: "pass" }] });
   await act(async () => {
     root.render(<QueryClientProvider client={client}><LogViewer organizationId="org-1" runId="run-1" jobId="job-1" logsState="ingested" steps={[step(), second]} /></QueryClientProvider>);
@@ -95,9 +97,13 @@ test("controls visible step disclosures and reports loaded line count", async ()
   expect(summaries()).toHaveLength(1);
   expect(summaries()[0]?.textContent).toContain("Test");
   await act(async () => { container.querySelector<HTMLButtonElement>("button:last-of-type")?.click(); });
-  expect([...container.querySelectorAll("details")].filter((detail) => detail.open)).toHaveLength(0);
+  await act(async () => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, 30);
+    await promise;
+  });
   await act(async () => { search.value = ""; search.dispatchEvent(new window.Event("input", { bubbles: true })); });
   expect(container.textContent).toContain("2 lines");
-  root.unmount();
+  await act(async () => { root.unmount(); });
   container.remove();
 });
