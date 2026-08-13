@@ -11,7 +11,8 @@ describe("RunnerWorkflowPrModal behavior contracts", () => {
     expect(isRunnerWorkflowPrDisabled({ result: null, hasPreview: true, noOp: true, replacementCount: 0 })).toBe(true);
     expect(isRunnerWorkflowPrDisabled({ result: null, hasPreview: true, replacementCount: 1, previewLoading: true })).toBe(true);
     expect(isRunnerWorkflowPrDisabled({ result: "https://github.com/pr/1", hasPreview: true, replacementCount: 1 })).toBe(true);
-    expect(isRunnerWorkflowPrDisabled({ result: null, hasPreview: true, replacementCount: 2 })).toBe(false);
+    expect(isRunnerWorkflowPrDisabled({ result: null, hasPreview: true, replacementCount: 2 })).toBe(true);
+    expect(isRunnerWorkflowPrDisabled({ result: null, hasPreview: true, replacementCount: 2, confirmed: true })).toBe(false);
   });
   test("server preview contract supplies expected head SHA and labels remain display-only", () => {
     const preview = { headSha: "abc1234", labels: ["self-hosted", "macos", "arm64"], jobs: [{ currentRunsOn: "ubuntu-latest", proposedRunsOn: ["self-hosted", "macos", "arm64"] }] };

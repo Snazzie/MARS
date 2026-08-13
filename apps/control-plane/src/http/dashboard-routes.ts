@@ -166,11 +166,17 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   }));
   app.get("/api/organizations/:organizationId/repositories/:repositoryId/runner-workflows", safe(async (c) => {
     const org = c.req.param("organizationId"); const denied = await guard(c, deps, org); if (denied) return denied;
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
     const [row] = await deps.db`SELECT full_name AS "fullName", installation_id AS "installationId" FROM dashboard_repositories WHERE organization_id=${org} AND id=${c.req.param("repositoryId")} AND available=true AND approved=true`;
     if (!row) return error(c, 404, "repository_not_approved", "Repository is not approved");
     const [owner, repo] = String(row.fullName).split("/", 2); const result = await deps.githubApp.listRepositoryWorkflows(owner, repo, Number(row.installationId));
-    return c.json(RunnerWorkflowFile.array().parse(discoverWorkflowFiles(result.files)));
+    try {
+      return c.json(RunnerWorkflowFile.array().parse(discoverWorkflowFiles(result.files)));
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Invalid workflow file";
+      return error(c, 422, "workflow_invalid", message, { repositoryId: c.req.param("repositoryId"), organizationId: org });
+    }
   }));
   app.post("/api/organizations/:organizationId/repositories/:repositoryId/runner-workflows/preview", safe(async (c) => {
     const org = c.req.param("organizationId"); const denied = await guard(c, deps, org); if (denied) return denied;
