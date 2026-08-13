@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { RunJob, RunStep } from "@whitesmith/contracts";
 import { getLogs, getStepLogs } from "../api.ts";
@@ -24,6 +24,12 @@ export function deriveStepDuration(step: Pick<RunStep, "durationMs" | "startedAt
   if (!step.startedAt || !step.completedAt) return null;
   const duration = Date.parse(step.completedAt) - Date.parse(step.startedAt);
   return Number.isFinite(duration) && duration >= 0 ? duration : null;
+}
+
+export function stepDurationPercent(step: Pick<RunStep, "durationMs" | "startedAt" | "completedAt">, maxDurationMs: number): number {
+  const duration = deriveStepDuration(step) ?? 0;
+  if (duration <= 0 || maxDurationMs <= 0) return 0;
+  return Math.min(100, (duration / maxDurationMs) * 100);
 }
 
 export function countLogLines(text: string): number {
@@ -63,7 +69,7 @@ export function stepLogEmptyMessage(logsState: RunJob["logsState"]): string {
   return "No log lines were attributed to this step. Review the unattributed job logs below.";
 }
 
-function StepLogRow({ organizationId, runId, jobId, logsState, step, open, onOpenChange, onLoadedTextChange }: { organizationId: string; runId: string; jobId: string; logsState: RunJob["logsState"]; step: RunStep; open: boolean; onOpenChange: (open: boolean) => void; onLoadedTextChange: (text: string) => void }) {
+function StepLogRow({ organizationId, runId, jobId, logsState, step, open, maxDurationMs, onOpenChange, onLoadedTextChange }: { organizationId: string; runId: string; jobId: string; logsState: RunJob["logsState"]; step: RunStep; open: boolean; maxDurationMs: number; onOpenChange: (open: boolean) => void; onLoadedTextChange: (text: string) => void }) {
   const query = useQuery({
     queryKey: ["org", organizationId, "run", runId, "job", jobId, "step", step.id, "logs"],
     queryFn: () => getStepLogs(organizationId, runId, jobId, step.id, -1, STEP_LOG_LIMIT),
@@ -75,13 +81,16 @@ function StepLogRow({ organizationId, runId, jobId, logsState, step, open, onOpe
   useEffect(() => { if (query.data) onLoadedTextChange(text); }, [query.data, text, onLoadedTextChange]);
   const duration = deriveStepDuration(step);
   const status = normalizeStepResult(step);
+  const tone = step.conclusion === "failure" ? "failure" : step.conclusion === "success" ? "success" : step.status === "in_progress" ? "running" : "muted";
+  const durationPercent = stepDurationPercent(step, maxDurationMs);
+  const summaryStyle = { "--step-duration": `${durationPercent}%` } as CSSProperties;
   return (
     <details className="step-log-row" open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
-      <summary className="step-log-summary" aria-expanded={open}>
+      <summary className={`step-log-summary step-tone-${tone}`} aria-expanded={open} style={summaryStyle}>
         <span className="step-log-chevron" aria-hidden="true">{open ? "⌄" : "›"}</span>
         <span className={`status status-${step.conclusion ?? step.status}`}><span aria-hidden="true">{step.conclusion === "success" ? "✓" : step.conclusion === "failure" ? "×" : "•"}</span> <span>{status}</span></span>
-        <span className="step-log-name"><span className="step-number">{step.number}</span>{step.name}</span>
         <span className="step-log-lines">{query.data ? `${countLogLines(text)} lines` : "— lines"}</span>
+        <span className="step-log-name"><span className="step-number">{step.number}</span>{step.name}</span>
         <span className="step-log-duration">{formatDuration(duration)}</span>
       </summary>
       <div className="step-log-body">
@@ -99,6 +108,7 @@ export function LogViewer({ organizationId, runId, jobId, logsState, steps = [] 
   const [search, setSearch] = useState("");
   const [loadedTextByStep, setLoadedTextByStep] = useState<Record<string, string>>({});
   const visibleSteps = useMemo(() => steps.filter((step) => stepMatchesSearch(step, loadedTextByStep[step.id] ?? "", search)), [steps, loadedTextByStep, search]);
+  const maxStepDurationMs = Math.max(0, ...visibleSteps.map((step) => deriveStepDuration(step) ?? 0));
   const setStepExpanded = (stepId: string, expanded: boolean) => setExpandedStepIds((current) => { const next = new Set(current); expanded ? next.add(stepId) : next.delete(stepId); return next; });
   const setLoadedText = (stepId: string, text: string) => setLoadedTextByStep((current) => current[stepId] === text ? current : { ...current, [stepId]: text });
   const expandVisible = (expanded: boolean) => setExpandedStepIds((current) => { const next = new Set(current); visibleSteps.forEach((step) => expanded ? next.add(step.id) : next.delete(step.id)); return next; });
@@ -110,7 +120,7 @@ export function LogViewer({ organizationId, runId, jobId, logsState, steps = [] 
     <div className="panel-kicker" id={`logs-title-${jobId}`}>Job logs</div>
     <div className="step-log-toolbar"><label>Search job steps and loaded logs<input aria-label="Search job steps and loaded logs" value={search} onInput={(event) => setSearch(event.currentTarget.value)} /></label><button type="button" onClick={() => expandVisible(true)}>Expand all</button><button type="button" onClick={() => expandVisible(false)}>Collapse all</button></div>
     <section className="step-log-list" aria-label="Job steps">
-      {steps.length === 0 ? <p className="log-meta">No attributed steps recorded.</p> : visibleSteps.length === 0 ? <p className="log-meta">No steps match this search.</p> : visibleSteps.map((step) => <StepLogRow key={step.id} organizationId={organizationId} runId={runId} jobId={jobId} logsState={logsState} step={step} open={expandedStepIds.has(step.id)} onOpenChange={(open) => setStepExpanded(step.id, open)} onLoadedTextChange={(text) => setLoadedText(step.id, text)} />)}
+      {steps.length === 0 ? <p className="log-meta">No attributed steps recorded.</p> : visibleSteps.length === 0 ? <p className="log-meta">No steps match this search.</p> : visibleSteps.map((step) => <StepLogRow key={step.id} organizationId={organizationId} runId={runId} jobId={jobId} logsState={logsState} step={step} open={expandedStepIds.has(step.id)} maxDurationMs={maxStepDurationMs} onOpenChange={(open) => setStepExpanded(step.id, open)} onLoadedTextChange={(text) => setLoadedText(step.id, text)} />)}
     </section>
     <section className="unattributed-log-panel" aria-labelledby={`unattributed-logs-title-${jobId}`}><div className="panel-kicker" id={`unattributed-logs-title-${jobId}`}>Unattributed job logs</div><QueryState error={query.error} isLoading={query.isLoading} isEmpty={false} retry={() => void query.refetch()} operationLabel="logs" />{!query.isLoading && !query.error && visibleItems.length === 0 && <p className="log-meta">{search.trim() ? noMatchingJobMessage : items.length === 0 ? emptyJobMessage : noMatchingJobMessage}</p>}{visibleItems.length > 0 && <><pre className="log-viewer" tabIndex={0}>{orderedLogText(visibleItems)}</pre><p className="log-meta">Showing up to {DISPLAY_LOG_LIMIT} chunks.</p></>}</section>
   </section>;

@@ -5,7 +5,7 @@ import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { RunJob, RunStep } from "@whitesmith/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { LogViewer, countLogLines, deriveStepDuration, filterLoadedLogChunks, normalizeStepResult, stepLogEmptyMessage, stepMatchesSearch } from "./LogViewer.tsx";
+import { LogViewer, countLogLines, deriveStepDuration, filterLoadedLogChunks, normalizeStepResult, stepDurationPercent, stepLogEmptyMessage, stepMatchesSearch } from "./LogViewer.tsx";
 
 const step = (overrides: Partial<RunStep> = {}): RunStep => ({
   id: "step-1",
@@ -27,6 +27,12 @@ test("normalizes step result and derives duration from timestamps", () => {
   expect(normalizeStepResult(step({ status: "in_progress", conclusion: null }))).toBe("in progress");
   expect(deriveStepDuration(step())).toBe(5000);
   expect(deriveStepDuration(step({ completedAt: null }))).toBeNull();
+});
+
+test("scales each step duration against the slowest visible step", () => {
+  expect(stepDurationPercent(step({ durationMs: 5_000 }), 5_000)).toBe(100);
+  expect(stepDurationPercent(step({ durationMs: 1_000 }), 5_000)).toBe(20);
+  expect(stepDurationPercent(step({ durationMs: 0, startedAt: null, completedAt: null }), 5_000)).toBe(0);
 });
 
 test("counts lines and searches only the step name plus loaded text", () => {
