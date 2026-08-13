@@ -97,6 +97,7 @@ test("controls visible step disclosures and reports loaded line count", async ()
   expect(summaries()).toHaveLength(1);
   expect(summaries()[0]?.textContent).toContain("Test");
   await act(async () => { container.querySelector<HTMLButtonElement>("button:last-of-type")?.click(); });
+  expect(container.querySelector<HTMLDetailsElement>("details")?.open).toBe(false);
   await act(async () => {
     const { promise, resolve } = Promise.withResolvers<void>();
     setTimeout(resolve, 30);
