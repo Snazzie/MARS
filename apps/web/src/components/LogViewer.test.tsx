@@ -5,7 +5,7 @@ import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { RunJob, RunStep } from "@whitesmith/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { LogViewer, countLogLines, deriveStepDuration, normalizeStepResult, stepLogEmptyMessage, stepMatchesSearch } from "./LogViewer.tsx";
+import { LogViewer, countLogLines, deriveStepDuration, filterLoadedLogChunks, normalizeStepResult, stepLogEmptyMessage, stepMatchesSearch } from "./LogViewer.tsx";
 
 const step = (overrides: Partial<RunStep> = {}): RunStep => ({
   id: "step-1",
@@ -35,6 +35,13 @@ test("counts lines and searches only the step name plus loaded text", () => {
   expect(stepMatchesSearch(step({ name: "İstanbul" }), "", "İSTANBUL")).toBe(true);
   expect(stepMatchesSearch(step({ name: "Build" }), "bun test\npass", "PASS")).toBe(true);
   expect(stepMatchesSearch(step({ name: "Build" }), "bun test", "network")).toBe(false);
+});
+
+test("filters already-loaded unattributed chunks by output without fetching", () => {
+  const chunks = [{ sequence: 1, content: "compile complete" }, { sequence: 2, content: "deploy failed" }];
+  expect(filterLoadedLogChunks(chunks, "DEPLOY")).toEqual([chunks[1]]);
+  expect(filterLoadedLogChunks(chunks, "missing")).toEqual([]);
+  expect(filterLoadedLogChunks(chunks, "")).toEqual(chunks);
 });
 
 test("describes step log synchronization state instead of showing a workspace empty state", () => {

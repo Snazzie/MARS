@@ -37,6 +37,12 @@ export function stepMatchesSearch(step: Pick<RunStep, "name">, loadedText: strin
   return `${step.name}\n${loadedText}`.toLowerCase().includes(query);
 }
 
+export function filterLoadedLogChunks<T extends { content: string }>(items: readonly T[], search: string): T[] {
+  const query = search.trim().toLowerCase();
+  if (!query) return [...items];
+  return items.filter((item) => item.content.toLowerCase().includes(query));
+}
+
 function formatDuration(durationMs: number | null): string {
   if (durationMs === null) return "—";
   if (durationMs < 1000) return `${durationMs}ms`;
@@ -97,13 +103,15 @@ export function LogViewer({ organizationId, runId, jobId, logsState, steps = [] 
   const setLoadedText = (stepId: string, text: string) => setLoadedTextByStep((current) => current[stepId] === text ? current : { ...current, [stepId]: text });
   const expandVisible = (expanded: boolean) => setExpandedStepIds((current) => { const next = new Set(current); visibleSteps.forEach((step) => expanded ? next.add(step.id) : next.delete(step.id)); return next; });
   const items = query.data?.items ?? [];
+  const visibleItems = useMemo(() => filterLoadedLogChunks(items, search), [items, search]);
   const emptyJobMessage = logsState === "pending" ? "Waiting for runner output or GitHub log synchronization." : logsState === "unavailable" ? "GitHub no longer provides logs for this job." : "No unattributed job output remains.";
+  const noMatchingJobMessage = "No matching loaded log output in unattributed job logs.";
   return <section className="log-panel" aria-labelledby={`logs-title-${jobId}`}>
     <div className="panel-kicker" id={`logs-title-${jobId}`}>Job logs</div>
     <div className="step-log-toolbar"><label>Search job steps and loaded logs<input aria-label="Search job steps and loaded logs" value={search} onInput={(event) => setSearch(event.currentTarget.value)} /></label><button type="button" onClick={() => expandVisible(true)}>Expand all</button><button type="button" onClick={() => expandVisible(false)}>Collapse all</button></div>
     <section className="step-log-list" aria-label="Job steps">
       {steps.length === 0 ? <p className="log-meta">No attributed steps recorded.</p> : visibleSteps.length === 0 ? <p className="log-meta">No steps match this search.</p> : visibleSteps.map((step) => <StepLogRow key={step.id} organizationId={organizationId} runId={runId} jobId={jobId} logsState={logsState} step={step} open={expandedStepIds.has(step.id)} onOpenChange={(open) => setStepExpanded(step.id, open)} onLoadedTextChange={(text) => setLoadedText(step.id, text)} />)}
     </section>
-    <section className="unattributed-log-panel" aria-labelledby={`unattributed-logs-title-${jobId}`}><div className="panel-kicker" id={`unattributed-logs-title-${jobId}`}>Unattributed job logs</div><QueryState error={query.error} isLoading={query.isLoading} isEmpty={false} retry={() => void query.refetch()} operationLabel="logs" />{!query.isLoading && !query.error && items.length === 0 && <p className="log-meta">{emptyJobMessage}</p>}{items.length > 0 && <><pre className="log-viewer" tabIndex={0}>{orderedLogText(items)}</pre><p className="log-meta">Showing up to {DISPLAY_LOG_LIMIT} chunks.</p></>}</section>
+    <section className="unattributed-log-panel" aria-labelledby={`unattributed-logs-title-${jobId}`}><div className="panel-kicker" id={`unattributed-logs-title-${jobId}`}>Unattributed job logs</div><QueryState error={query.error} isLoading={query.isLoading} isEmpty={false} retry={() => void query.refetch()} operationLabel="logs" />{!query.isLoading && !query.error && visibleItems.length === 0 && <p className="log-meta">{search.trim() ? noMatchingJobMessage : items.length === 0 ? emptyJobMessage : noMatchingJobMessage}</p>}{visibleItems.length > 0 && <><pre className="log-viewer" tabIndex={0}>{orderedLogText(visibleItems)}</pre><p className="log-meta">Showing up to {DISPLAY_LOG_LIMIT} chunks.</p></>}</section>
   </section>;
 }

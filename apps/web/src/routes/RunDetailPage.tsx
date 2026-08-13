@@ -18,11 +18,7 @@ export function RunDetailPage() {
 
   return <>
     <Link className="back-link" to="/runs">← Back to runs</Link>
-    <header className="page-header"><div>
-      <p className="eyebrow">Run detail</p>
-      <h1>{query.data ? `#${query.data.runNumber} · ${query.data.workflowName}` : "Loading run detail"}</h1>
-      <p className="page-description">A single run, including the execution boundary and job lifecycle.</p>
-    </div></header>
+    {!query.data && <h1 className="sr-only">Loading run detail</h1>}
     <QueryState error={query.error} isLoading={query.isLoading} retry={() => void query.refetch()} operationLabel="run detail" />
     {query.data && <RunDetailView data={query.data} organizationId={detailOrganizationId} />}
   </>;

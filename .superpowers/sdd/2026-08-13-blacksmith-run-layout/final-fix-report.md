@@ -18,3 +18,20 @@
 ## Commit
 
 Changes are present in the worktree at final-fix verification. Git reported the affected files clean after the preceding integration commit (`85e5352 fix(web): scope run visual tokens`); no unrelated files were changed in this wave.
+
+
+## Final recovery verification
+
+- `bun test apps/web/src/components/RunDetailView.test.tsx apps/web/src/components/LogViewer.test.tsx apps/web/src/routes/RunsPage.test.tsx apps/web/src/routes/RunDetailPage.test.tsx`
+  ```
+   10 pass
+   0 fail
+   48 expect() calls
+  Ran 10 tests across 4 files.
+  ```
+- `bun run --filter @whitesmith/web typecheck`
+  ```
+  @whitesmith/web typecheck: Exited with code 0
+  ```
+- Added `filterLoadedLogChunks` regression coverage for matching, no-match, and empty-query behavior; the unattributed panel now explicitly reports `No matching loaded log output in unattributed job logs.` when filtered loaded chunks are absent.
+- Added `RunDetailPage.test.tsx` static route regression coverage proving the legacy `page-header` is absent while back navigation and the loading heading remain.
