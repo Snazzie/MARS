@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { OverviewDto, WorkerDetail } from "@whitesmith/contracts";
-import { getOverview, getOrganizationSettings, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listWorkers, listPools } from "./dashboard.ts";
+import { OverviewDto, RunSummary, WorkerDetail } from "@whitesmith/contracts";
+import { getOverview, getOrganizationSettings, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRuns, listWorkers, listPools } from "./dashboard.ts";
 
 test("overview returns point-in-time pending and running buckets", async () => {
   const db = (async (strings: TemplateStringsArray) => {
@@ -36,6 +36,60 @@ test("pool listing normalizes PostgreSQL JSONB resources and labels", async () =
   const page = await listPools(db, "org-1");
   expect(page.items[0].resources.memoryBytes).toBe(4294967296);
   expect(page.items[0].labels).toEqual(["self-hosted", "linux", "x64", "whitesmith-default"]);
+});
+
+test("run listing normalizes PostgreSQL bigint and timestamp values", async () => {
+  const db = (async () => [{
+    id: "run-1",
+    organizationId: "org-1",
+    repositoryId: "repo-1",
+    repositoryName: "repo",
+    runNumber: "42",
+    workflowName: "ci",
+    event: "push",
+    branch: "main",
+    commitSha: "abcdef1",
+    actorLogin: "acme",
+    status: "completed",
+    conclusion: "success",
+    queuedAt: new Date("2026-08-13T10:00:00.000Z"),
+    startedAt: new Date("2026-08-13T10:00:01.000Z"),
+    completedAt: new Date("2026-08-13T10:00:02.000Z"),
+    durationMs: "1000",
+    runtimeBoundary: null,
+  }]) as never;
+  const run = (await listRuns(db, "org-1")).items[0];
+  expect(() => RunSummary.parse(run)).not.toThrow();
+  expect(run).toMatchObject({
+    runNumber: 42,
+    queuedAt: "2026-08-13T10:00:00.000Z",
+    startedAt: "2026-08-13T10:00:01.000Z",
+    completedAt: "2026-08-13T10:00:02.000Z",
+    durationMs: 1000,
+  });
+});
+
+test("run listing derives runtime from run timestamps when duration is unset", async () => {
+  const db = (async () => [{
+    id: "run-1",
+    organizationId: "org-1",
+    repositoryId: "repo-1",
+    repositoryName: "repo",
+    runNumber: "42",
+    workflowName: "ci",
+    event: "push",
+    branch: "main",
+    commitSha: "abcdef1",
+    actorLogin: "acme",
+    status: "completed",
+    conclusion: "success",
+    queuedAt: new Date("2026-08-13T10:00:00.000Z"),
+    startedAt: new Date("2026-08-13T10:00:01.000Z"),
+    completedAt: new Date("2026-08-13T10:01:01.000Z"),
+    durationMs: "0",
+    runtimeBoundary: null,
+  }]) as never;
+  expect((await listRuns(db, "org-1")).items[0].durationMs).toBe(60_000);
 });
 
 test("organization settings convert PostgreSQL numeric values to numbers", async () => {
