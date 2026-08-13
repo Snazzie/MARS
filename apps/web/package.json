@@ -18,5 +18,8 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "happy-dom": "^20.11.2"
   }
 }
