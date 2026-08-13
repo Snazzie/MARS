@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatRunnerWorkflowRunsOn, isRunnerWorkflowPrDisabled } from "./RunnerWorkflowPrModal.tsx";
+import { formatRunnerWorkflowRunsOn, handleRunnerWorkflowEscape, isRunnerWorkflowPrDisabled } from "./RunnerWorkflowPrModal.tsx";
 
 describe("RunnerWorkflowPrModal behavior contracts", () => {
   test("formats current and proposed runs-on values", () => {
@@ -17,5 +17,11 @@ describe("RunnerWorkflowPrModal behavior contracts", () => {
     const preview = { headSha: "abc1234", labels: ["self-hosted", "macos", "arm64"], jobs: [{ currentRunsOn: "ubuntu-latest", proposedRunsOn: ["self-hosted", "macos", "arm64"] }] };
     expect(preview.headSha).toBe("abc1234");
     expect(preview.jobs[0].proposedRunsOn).not.toContain("editable");
+  });
+
+  test("Escape closes an open dialog", () => {
+    let closed = false;
+    handleRunnerWorkflowEscape({ key: "Escape" } as KeyboardEvent, () => { closed = true; });
+    expect(closed).toBe(true);
   });
 });

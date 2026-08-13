@@ -2,13 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { createRunnerWorkflowPr, getRunnerWorkflowFiles, previewRunnerWorkflowPr } from "../api.ts";
 export const isRunnerWorkflowPrDisabled = (input: { result: string | null; hasPreview: boolean; noOp?: boolean; replacementCount?: number; previewLoading?: boolean; filesLoading?: boolean; submitting?: boolean }) => Boolean(input.result) || !input.hasPreview || Boolean(input.noOp) || input.replacementCount === 0 || Boolean(input.previewLoading || input.filesLoading || input.submitting);
+export const handleRunnerWorkflowEscape = (event: KeyboardEvent, onClose: () => void) => { if (event.key === "Escape") onClose(); };
 export const formatRunnerWorkflowRunsOn = (value: string | string[]) => Array.isArray(value) ? value.join(", ") : value;
 type Props = { organizationId: string; repositoryId: string; repositoryName: string; open: boolean; onClose: () => void; onCreated?: (url: string) => void };
 export function RunnerWorkflowPrModal({ organizationId, repositoryId, repositoryName, open, onClose, onCreated }: Props) {
   const dialogRef = useRef<HTMLElement>(null); const previousFocus = useRef<HTMLElement | null>(null);
   const files = useQuery({ queryKey: ["runner-workflows", organizationId, repositoryId], queryFn: () => getRunnerWorkflowFiles(organizationId, repositoryId), enabled: open && Boolean(organizationId && repositoryId) });
   const [selected, setSelected] = useState<string[]>([]); const [title, setTitle] = useState(""); const [body, setBody] = useState(""); const [result, setResult] = useState<string | null>(null);
-  useEffect(() => { if (!open) return; previousFocus.current = document.activeElement as HTMLElement | null; requestAnimationFrame(() => dialogRef.current?.focus()); return () => { previousFocus.current?.focus(); }; }, [open]);
+  useEffect(() => { if (!open) return; const onKeyDown = (event: KeyboardEvent) => handleRunnerWorkflowEscape(event, onClose); document.addEventListener("keydown", onKeyDown); return () => document.removeEventListener("keydown", onKeyDown); }, [open, onClose]);
   useEffect(() => { if (files.data) setSelected(files.data.map((f) => f.path)); }, [files.data]);
   const preview = useQuery({ queryKey: ["runner-workflow-preview", organizationId, repositoryId, selected], queryFn: () => previewRunnerWorkflowPr(organizationId, repositoryId, selected), enabled: open && Boolean(files.data) && selected.length > 0 });
   const create = useMutation({ mutationFn: (input: { expectedHeadSha: string }) => createRunnerWorkflowPr(organizationId, repositoryId, { selectedPaths: selected, expectedHeadSha: input.expectedHeadSha, ...(title.trim() ? { title: title.trim() } : {}), ...(body.trim() ? { body: body.trim() } : {}) }), onSuccess: (value) => { setResult(value.url); onCreated?.(value.url); } });
