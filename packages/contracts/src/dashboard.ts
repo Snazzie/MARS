@@ -60,8 +60,7 @@ export const CursorPage = <T extends z.ZodTypeAny>(item: T) => dto(strict({ item
 export type CursorPage<T> = { items: T[]; nextCursor: string | null };
 export const ApiError = dto(strict({ code: z.string().min(1), message: z.string().min(1), requestId: id, details: z.record(z.unknown()).optional() }));
 export type ApiError = z.infer<typeof ApiError>;
-export const RunnerWorkflowJobPreview = dto(strict({ id: z.string().min(1), currentRunsOn: z.union([z.string().min(1), z.array(z.string().min(1))]), proposedRunsOn: z.array(z.string().min(1)).optional(), path: z.string().regex(/^\.github\/workflows\/[^/]+\.(?:yml|yaml)$/).optional() }));
-export type RunnerWorkflowJobPreview = z.infer<typeof RunnerWorkflowJobPreview>;
+export const RunnerWorkflowJobPreview = dto(strict({ id: z.string().min(1), currentRunsOn: z.union([z.string().min(1), z.array(z.string().min(1))]), proposedRunsOn: z.array(z.string().min(1)), path: z.string().regex(/^\.github\/workflows\/[^/]+\.(?:yml|yaml)$/) }));
 export const RunnerWorkflowFile = dto(strict({ path: z.string().regex(/^\.github\/workflows\/[^/]+\.(?:yml|yaml)$/), jobs: z.array(strict({ id: z.string().min(1), currentRunsOn: z.union([z.string().min(1), z.array(z.string().min(1))]) })) }));
 export type RunnerWorkflowFile = z.infer<typeof RunnerWorkflowFile>;
 export const RunnerWorkflowPreview = dto(strict({ files: z.array(RunnerWorkflowFile).optional(), labels: z.array(z.string().min(1)), defaultBranch: z.string().min(1), headSha: z.string().min(1), changedFiles: z.array(z.string()), jobs: z.array(RunnerWorkflowJobPreview), replacementCount: z.number().int().nonnegative(), noOp: z.boolean() }));

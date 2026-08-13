@@ -178,15 +178,26 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
     const body = z.object({ selectedPaths: z.array(z.string()).default([]) }).strict().parse(await c.req.json());
     try { return c.json(RunnerWorkflowPreview.parse(await deps.githubApp.previewRepositoryRunnerPr({ organizationId: org, repositoryId: c.req.param("repositoryId"), selectedPaths: body.selectedPaths }))); }
-    catch (cause) { const code = cause instanceof Error ? cause.message : ""; if (code === "github_repository_not_approved") return error(c, 404, "repository_not_approved", "Repository is not approved"); if (code === "github_runner_pool_missing") return error(c, 422, "runner_pool_missing", "Runner pool is not configured"); throw cause; }
+    catch (cause) { const code = cause instanceof Error ? cause.message : ""; if (code === "github_repository_not_approved") return error(c, 404, "repository_not_approved", "Repository is not approved"); if (code === "github_runner_pool_missing") return error(c, 422, "runner_pool_missing", "Runner pool is not configured"); if (/Invalid|Malformed|Unsupported|not discovered|no-op/i.test(code)) return error(c, 422, "workflow_invalid", code); throw cause; }
   }));
   app.post("/api/organizations/:organizationId/repositories/:repositoryId/runner-workflows/pr", safe(async (c) => {
     const org = c.req.param("organizationId"); const denied = await guard(c, deps, org); if (denied) return denied;
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const idem = requireMutation(c); if (idem) return idem; if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
-    const body = RunnerWorkflowPrRequest.parse(await c.req.json());
-    try { return c.json(RunnerWorkflowPrResult.parse(await deps.githubApp.createRepositoryRunnerPr({ ...body, organizationId: org, repositoryId: c.req.param("repositoryId") }))); }
-    catch (cause) { const code = cause instanceof Error ? cause.message : ""; if (code === "github_workflow_head_stale") return error(c, 409, "workflow_head_stale", "Workflow files changed; refresh preview"); if (code.includes("no-op")) return error(c, 422, "workflow_noop", "No selected workflow jobs require changes"); if (code === "github_repository_not_approved") return error(c, 404, "repository_not_approved", "Repository is not approved"); throw cause; }
+    const body = RunnerWorkflowPrRequest.parse(await c.req.json()); const key = c.req.header("idempotency-key")!;
+    const inserted = await deps.db`INSERT INTO dashboard_mutations (organization_id,idempotency_key) VALUES (${org},${key}) ON CONFLICT DO NOTHING RETURNING idempotency_key`;
+    if (!inserted.length) { const [prior] = await deps.db`SELECT response FROM dashboard_mutations WHERE organization_id=${org} AND idempotency_key=${key}`; if (prior?.response) return c.json(RunnerWorkflowPrResult.parse(prior.response)); return error(c, 409, "mutation_in_progress", "Mutation is already in progress"); }
+    try {
+      const result = RunnerWorkflowPrResult.parse(await deps.githubApp.createRepositoryRunnerPr({ ...body, organizationId: org, repositoryId: c.req.param("repositoryId") }));
+      await deps.db`UPDATE dashboard_mutations SET response=${JSON.stringify(result)}::jsonb WHERE organization_id=${org} AND idempotency_key=${key}`;
+      return c.json(result);
+    } catch (cause) {
+      const code = cause instanceof Error ? cause.message : "";
+      if (/github_workflow_head_stale/.test(code)) return error(c, 409, "workflow_head_stale", "Workflow files changed; refresh preview");
+      if (code === "github_repository_not_approved") return error(c, 404, "repository_not_approved", "Repository is not approved");
+      if (/Invalid|Malformed|Unsupported|not discovered|no-op/i.test(code)) return error(c, 422, "workflow_invalid", code);
+      throw cause;
+    }
   }));
   app.post("/api/organizations/:organizationId/repositories/:repositoryId/:action", safe(async (c) => {
     const org = c.req.param("organizationId"), action = c.req.param("action");
