@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RepositorySummary } from "@whitesmith/contracts";
 import { beginOrganizationGithubInstall, getGithubRepositorySettings, getRepositories, refreshGithubConnection, setRepositoryApproval, uninstallOrganizationGithub } from "../api.ts";
+import { Disclosure } from "../components/Disclosure.tsx";
 import { QueryState } from "../components/StateView.tsx";
 import { RunnerWorkflowPrModal } from "../components/RunnerWorkflowPrModal.tsx";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
@@ -84,101 +85,54 @@ export function RepositoriesPage() {
             Control which GitHub repositories can send work to this runner fleet.
           </p>
         </div>
-        <div className="page-actions">
-          <a className="button secondary" href="/api/auth/github?returnTo=%2Frepositories">
-            Refresh GitHub connection
-          </a>
-          <button
-            type="button"
-            className="button secondary"
-            onClick={() => refreshConnection.mutate()}
-            disabled={allWorkspaces || !organizationId || refreshConnection.isPending}
-          >
-            {refreshConnection.isPending ? "Syncing…" : "Sync installed repositories"}
-          </button>
-          <label>
-            Connect workspace
-            <select
-              aria-label="Workspace to connect"
-              value={connectOrganizationId}
-              onChange={(event) => setConnectOrganizationId(event.target.value)}
-              disabled={!canConnect}
-            >
-              <option value="">Select workspace</option>
-              {organizations.map((organization) => (
-                <option key={organization.id} value={organization.id}>
-                  {organization.login}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            className="button"
-            onClick={() => connect.mutate()}
-            disabled={!canConnect || !connectOrganizationId || connect.isPending}
-          >
-            {connect.isPending ? "Connecting…" : "Connect workspace"}
-          </button>
-          <button
-            type="button"
-            className="button secondary"
-            onClick={() => {
-              if (window.confirm("Uninstall Whitesmith from this GitHub organization?")) manageOrganization.mutate();
-            }}
-            disabled={allWorkspaces || !organizationId || manageOrganization.isPending}
-          >
-            Uninstall
-          </button>
+        <div className="repositories-actions">
+          <div className="repositories-action-group repositories-connect-group">
+            <label>
+              Connect workspace
+              <select aria-label="Workspace to connect" value={connectOrganizationId} onChange={(event) => setConnectOrganizationId(event.target.value)} disabled={!canConnect}>
+                <option value="">Select workspace</option>
+                {organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
+              </select>
+            </label>
+            <button type="button" className="button" onClick={() => connect.mutate()} disabled={!canConnect || !connectOrganizationId || connect.isPending}>
+              {connect.isPending ? "Connecting…" : "Connect workspace"}
+            </button>
+          </div>
+          <Disclosure label="GitHub connection" tone="danger">
+            <div className="repositories-action-group">
+              <a className="button secondary" href="/api/auth/github?returnTo=%2Frepositories">Refresh GitHub connection</a>
+              <button type="button" className="button secondary" onClick={() => refreshConnection.mutate()} disabled={allWorkspaces || !organizationId || refreshConnection.isPending}>
+                {refreshConnection.isPending ? "Syncing…" : "Sync installed repositories"}
+              </button>
+              <button type="button" className="button secondary" onClick={() => { if (window.confirm("Uninstall Whitesmith from this GitHub organization?")) manageOrganization.mutate(); }} disabled={allWorkspaces || !organizationId || manageOrganization.isPending}>
+                Uninstall
+              </button>
+            </div>
+            {allWorkspaces && <p className="muted">Select one workspace to manage its GitHub connection.</p>}
+          </Disclosure>
         </div>
       </header>
 
-      {updateError && (
-        <p role="alert" className="form-error">
-          {updateError instanceof Error ? updateError.message : "Could not update GitHub access."}
-        </p>
-      )}
+      {updateError && <p role="alert" className="form-error">{updateError instanceof Error ? updateError.message : "Could not update GitHub access."}</p>}
 
       <section className="repository-toolbar" aria-label="Repository filters">
-        <div>
-          <strong>{repositories.length}</strong>
-          <span>{repositories.length === 1 ? "repository" : "repositories"} shown</span>
-        </div>
+        <div><strong>{repositories.length}</strong><span>{repositories.length === 1 ? "repository" : "repositories"} shown</span></div>
         <div className="toolbar">
           <div className="repository-availability-toggle" role="group" aria-label="Repository availability">
-            {(["available", "unavailable"] as const).map((option) => (
-              <button
-                key={option}
-                type="button"
-                className={`control-button ${availability === option ? "" : "control-button-secondary"}`}
-                aria-pressed={availability === option}
-                onClick={() => setAvailability(option)}
-              >
-                {option === "available" ? "Available" : "Unavailable"}
-              </button>
-            ))}
+            {(["available", "unavailable"] as const).map((option) => <button key={option} type="button" className={`control-button ${availability === option ? "" : "control-button-secondary"}`} aria-pressed={availability === option} onClick={() => setAvailability(option)}>{option === "available" ? "Available" : "Unavailable"}</button>)}
           </div>
-          <label>
-            Search
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="org / repository" />
-          </label>
-          <label>
-            Visibility
-            <select value={visibility} onChange={(event) => setVisibility(event.target.value as typeof visibility)}>
-              <option value="all">All visibility</option>
-              <option value="private">Private</option>
-              <option value="internal">Internal</option>
-            </select>
-          </label>
+          <label>Search<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="org / repository" /></label>
+          <Disclosure label="More filters"><label>Visibility<select value={visibility} onChange={(event) => setVisibility(event.target.value as typeof visibility)}><option value="all">All visibility</option><option value="private">Private</option><option value="internal">Internal</option></select></label></Disclosure>
         </div>
       </section>
-
       <QueryState
         error={query.error}
         isLoading={query.isLoading}
         isEmpty={!query.isLoading && !query.error && repositories.length === 0}
         retry={() => void query.refetch()}
+        operationLabel="repository list"
       />
+
       {query.data && repositories.length > 0 && (
         <section className="table-panel repository-table-panel" aria-label="Repositories">
           <table>

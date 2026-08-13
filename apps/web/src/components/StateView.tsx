@@ -30,11 +30,12 @@ export function StateView({ kind, title, message, action }: StateViewProps) {
 export function WorkspaceRequired() {
   return <StateView kind="empty" title="Select a workspace" message="This view operates on one workspace at a time. Choose a concrete organization from the selector above." />;
 }
-export function QueryState({ error, isLoading, isEmpty, retry }: { error: unknown; isLoading: boolean; isEmpty?: boolean; retry?: () => void }) {
+export function QueryState({ error, isLoading, isEmpty, retry, operationLabel }: { error: unknown; isLoading: boolean; isEmpty?: boolean; retry?: () => void; operationLabel?: string }) {
+  const retryLabel = operationLabel ? `Retry ${operationLabel}` : "Retry";
   if (isLoading) return <StateView kind="loading" />;
   if (error && isUnauthorized(error)) return <StateView kind="error" title="Sign-in required" message="Your operator session is no longer valid. Sign in again to continue." action={<Button label="Sign in with GitHub" variant="secondary" href="/api/auth/github" />} />;
-  if (error && isOffline(error)) return <StateView kind="error" title="Control plane unreachable" message="Whitesmith could not reach the server. Check your network, then retry." action={<Button label="Retry connection" variant="secondary" clickAction={retry} />} />;
-  if (error) return <StateView kind="error" title="Unable to load this view" message={error instanceof Error ? error.message : undefined} action={<Button label="Retry" variant="secondary" clickAction={retry} />} />;
+  if (error && isOffline(error)) return <StateView kind="error" title="Control plane unreachable" message="Whitesmith could not reach the server. Check your network, then retry." action={<Button label={operationLabel ? `Retry ${operationLabel}` : "Retry connection"} variant="secondary" clickAction={retry} />} />;
+  if (error) return <StateView kind="error" title="Unable to load this view" message={error instanceof Error ? error.message : undefined} action={<Button label={retryLabel} variant="secondary" clickAction={retry} />} />;
   if (isEmpty) return <StateView kind="empty" />;
   return null;
 }

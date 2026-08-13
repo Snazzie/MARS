@@ -3,7 +3,7 @@
   "private": true,
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "bun run --filter '@whitesmith/control-plane' dev",
+    "dev": "concurrently --kill-others --names control-plane,web \"NODE_ENV=development bun --env-file=.env run --filter @whitesmith/control-plane dev\" \"bun run --filter @whitesmith/web dev\"",
     "typecheck": "bun run --filter '*' typecheck",
     "lint": "bun run --filter '*' lint",
     "test": "bun test",
@@ -15,6 +15,7 @@
     "@types/bun": "latest",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
+    "concurrently": "^10.0.4",
     "typescript": "latest"
   }
 }

@@ -22,7 +22,7 @@ export function OverviewPage() {
   const { organizationId } = useOrganizationFromRoute();
   const [period, setPeriod] = useState<OverviewPeriod>("24h");
   const query = useQuery({ queryKey: ["org", organizationId, "overview", period], queryFn: () => getOverview(organizationId, period), enabled: Boolean(organizationId) });
-  return <><PageHeader eyebrow={`Signal / ${overviewPeriodLabels[period]}`} title="The fleet, at a glance." description="A quiet read on demand, capacity, and the jobs that matter now." action={<div className="overview-actions"><OverviewPeriodControl value={period} onChange={setPeriod} /><Link className="button" to="/runs">Open run ledger <span>↗</span></Link></div>} /><QueryState error={query.error} isLoading={query.isLoading} retry={() => void query.refetch()} />{query.data && <OverviewContent data={query.data} />}</>;
+  return <><PageHeader eyebrow={`Signal / ${overviewPeriodLabels[period]}`} title="The fleet, at a glance." description="A quiet read on demand, capacity, and the jobs that matter now." action={<div className="overview-actions"><OverviewPeriodControl value={period} onChange={setPeriod} /><Link className="button" to="/runs">Open run ledger <span>↗</span></Link></div>} /><QueryState error={query.error} isLoading={query.isLoading} retry={() => void query.refetch()} operationLabel="overview telemetry" />{query.data && <OverviewContent data={query.data} />}</>;
 }
 
 function OverviewContent({ data }: { data: OverviewDto }) {
