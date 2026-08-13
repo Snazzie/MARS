@@ -114,6 +114,16 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
       throw cause;
     }
   }));
+  app.post("/api/organizations/:organizationId/github/refresh", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const denied = await guard(c, deps, org); if (denied) return denied;
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    const idem = requireMutation(c); if (idem) return idem;
+    if (!deps.githubApp) return error(c, 503, "github_unconfigured", "GitHub App is not configured");
+    await deps.githubApp.refreshInstallationRepositories(org);
+    await invalidateDashboard(deps.db, org, ["repositories"]);
+    return c.json({ ok: true });
+  }));
   app.post("/api/organizations/:organizationId/repositories/:repositoryId/:action", safe(async (c) => {
     const org = c.req.param("organizationId"), action = c.req.param("action");
     const denied = await guard(c, deps, org); if (denied) return denied;
