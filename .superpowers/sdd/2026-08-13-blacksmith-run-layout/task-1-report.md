@@ -28,11 +28,21 @@ Command:
 bun test apps/web/src/components/RunHistory.test.tsx apps/web/src/routes/RunsPage.test.tsx
 ```
 
-Result: **6 pass, 0 fail; 10 expect() calls.**
+Result: **7 pass, 0 fail; 11 expect() calls.**
+
+The follow-up stability fix was verified with the same exact command:
+
+```bash
+bun test apps/web/src/components/RunHistory.test.tsx apps/web/src/routes/RunsPage.test.tsx
+```
+
+Result: **7 pass, 0 fail; 11 expect() calls.**
 
 ## Commits
 
 - `d967c96` — `feat(web): add Blacksmith run history`
+- `939d2ca` — `docs: report run history task`
+- `4646587` — `fix(web): use stable run history casing`
 
 ## Self-review concerns
 
