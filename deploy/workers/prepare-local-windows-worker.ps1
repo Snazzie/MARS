@@ -40,7 +40,7 @@ $sourceDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath $source).Hash
 $credential = Get-Credential -UserName '.\WhitesmithAdmin' -Message 'Enter the local administrator credentials for the developer VM'
 $outputVhdx = Join-Path $TemplateDirectory 'windows.vhdx'
 $outputManifest = Join-Path $TemplateDirectory 'windows-manifest.json'
-$prepare = Join-Path $PSScriptRoot 'prepare-windows-hyperv-template.ps1'
+$credential = Get-Credential -UserName 'WhitesmithAdmin' -Message 'Enter the local administrator credentials for the developer VM'
 & $prepare -SourceVhdx $source -SourceSha256 $sourceDigest -JobAgentPath $AgentPath -OutputVhdx $outputVhdx -OutputManifest $outputManifest -GuestCredential $credential -SourceUrl 'https://developer.microsoft.com/en-us/windows/downloads/virtual-machines/'
 if ($LASTEXITCODE -ne 0) { throw "Template preparation failed with exit code $LASTEXITCODE" }
 $sealedDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath $outputVhdx).Hash.ToLowerInvariant()
