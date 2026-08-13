@@ -7,6 +7,7 @@
     "typecheck": "bun run --filter '*' typecheck",
     "lint": "bun run --filter '*' lint",
     "test": "bun test",
+    "test:live-job-pickup": "bun run tests/live-job-pickup-smoke.ts",
     "build": "bun run --filter '*' build"
   },
   "packageManager": "bun@1.2.20",

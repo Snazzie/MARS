@@ -33,10 +33,11 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
     await deps.upsert?.(queued);
     const requestedLabels = queued.labels.map((label) => label.trim()).filter(Boolean);
     const candidate = deps.candidates.find((value) => {
-      const reserved = reservedByPool.get(value.pool.id) ?? 0;
+      const capacityKey = `${value.pool.id}:${value.worker.id}`;
+      const reserved = reservedByPool.get(capacityKey) ?? 0;
       return reserved + value.pool.active < value.pool.concurrency && fits({ ...value, requestedLabels });
     });
-    if (!candidate) { report.skipped += 1; continue; }
+    if (!candidate) { console.log(`No routing candidate for job ${queued.jobId}: ${requestedLabels.join(",")}`); report.skipped += 1; continue; }
     const [owner, repo] = queued.repository.split("/", 2);
     if (!owner || !repo) { report.failed += 1; continue; }
     let reservation: LeaseReservation | undefined;
@@ -49,15 +50,18 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
         requested: resources,
         routingKey: `${queued.repository}:${requestedLabels.map((label) => label.toLowerCase()).sort().join(",")}`,
       });
+      const capacityKey = `${candidate.pool.id}:${candidate.worker.id}`;
+      reservedByPool.set(capacityKey, (reservedByPool.get(capacityKey) ?? 0) + 1);
       reservation = claimed;
-      reservedByPool.set(candidate.pool.id, (reservedByPool.get(candidate.pool.id) ?? 0) + 1);
       const jit = await deps.jit({ owner, repo, runnerName: `whitesmith-${claimed.id}`, labels: requestedLabels, githubJobId: queued.jobId });
       await deps.dispatch(claimed, jit);
       report.reserved += 1;
-    } catch {
+    } catch (error) {
+      console.error(`Reconcile job ${queued.jobId} failed: ${error instanceof Error ? error.message : "unknown"}`);
       report.failed += 1;
       if (reservation) {
-        reservedByPool.set(candidate.pool.id, Math.max(0, (reservedByPool.get(candidate.pool.id) ?? 1) - 1));
+        const capacityKey = `${candidate.pool.id}:${candidate.worker.id}`;
+        reservedByPool.set(capacityKey, Math.max(0, (reservedByPool.get(capacityKey) ?? 1) - 1));
         await deps.release?.(reservation);
       }
     }

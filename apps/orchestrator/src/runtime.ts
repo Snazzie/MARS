@@ -1,5 +1,5 @@
 import { PoolResources } from "@whitesmith/contracts";
 export interface Lease { id:string; imageDigest:string; resources:PoolResources; nonce:string; encodedJitConfig:string; }
-export interface RuntimeLease { runtimeInstanceId:string; observed:{vcpu:number;memoryBytes:number;storageBytes:number}; state:"sandbox_attested"|"failed"; }
+export interface RuntimeLease { runtimeInstanceId:string; observed:{vcpu:number;memoryBytes:number;storageBytes:number}; state:"sandbox_attested"|"failed"; completion?: Promise<number>; }
 export interface RuntimeDriver { readonly name:string; validatePool(resources:PoolResources):void; reserveCapacity(resources:PoolResources):Promise<void>; createLease(lease:Lease):Promise<RuntimeLease>; inspectLease(leaseId:string):Promise<RuntimeLease>; stopLease(leaseId:string):Promise<void>; removeLease(leaseId:string):Promise<void>; collectDiagnostics(leaseId:string):Promise<Record<string,unknown>>; }
 export function validateResources(resources:PoolResources, limits:{maxVcpuPerPod:number;maxMemoryBytesPerPod:number;maxStorageBytesPerPod:number;maxConcurrentPods:number}):void { if(resources.vcpu>limits.maxVcpuPerPod||resources.memoryBytes>limits.maxMemoryBytesPerPod||resources.storageBytes>limits.maxStorageBytesPerPod||resources.concurrency>limits.maxConcurrentPods) throw new Error("resource ceiling exceeded"); }

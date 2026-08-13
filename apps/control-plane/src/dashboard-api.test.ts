@@ -72,3 +72,49 @@ describe("dashboard API", () => {
     expect(adminResponse.status).toBe(404);
   });
 });
+test("global admins can create the control-plane default pool without an organization", async () => {
+  const queries: string[] = [];
+  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const query = strings.join(" ");
+    queries.push(query);
+    if (query.includes("FROM workers")) return [{ platform: "macos-arm64", admissionState: "adopted", connectionState: "online", configurationState: "ready", draining: false, limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8, maxStorageBytesPerPod: 20, maxConcurrentPods: 2 } }];
+    if (query.includes("runner_pools") && query.includes("RETURNING id")) return [{ id: "00000000-0000-4000-8000-000000000003" }];
+    if (query.includes("dashboard_mutations")) return [{ idempotency_key: "global-pool" }];
+    return [];
+  }, {}) as never;
+  const response = await appFor(admin, db).request("/api/pools", {
+    method: "POST",
+    headers: { ...sessionHeaders, "Content-Type": "application/json", "Idempotency-Key": "global-pool" },
+    body: JSON.stringify({ workerId: "00000000-0000-4000-8000-000000000004", name: "default", resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, triggerLabel: "whitesmith-macos", imageDigest: `macos@sha256:${"a".repeat(64)}` }),
+  });
+  expect(response.status).toBe(200);
+  expect(queries.some((query) => query.includes("INSERT INTO runner_pools"))).toBe(true);
+});
+test("global pool creation converges a matching legacy pool to shared capacity", async () => {
+  const queries: string[] = [];
+  const db = Object.assign(async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ");
+    queries.push(query);
+    if (query.includes("FROM workers")) return [{ platform: "macos-arm64", admissionState: "adopted", connectionState: "online", configurationState: "ready", draining: false }];
+    if (query.includes("FROM runner_pools")) return [{ id: "00000000-0000-4000-8000-000000000003", name: "macos-smoke", triggerLabel: "whitesmith-macos" }];
+    if (query.includes("UPDATE runner_pools")) return [{ id: "00000000-0000-4000-8000-000000000003" }];
+    return [];
+  }, {}) as never;
+  const response = await appFor(admin, db).request("/api/pools", {
+    method: "POST",
+    headers: { ...sessionHeaders, "Content-Type": "application/json", "Idempotency-Key": "repair-global-pool" },
+    body: JSON.stringify({ workerId: "00000000-0000-4000-8000-000000000004", name: "macos-smoke", resources: { vcpu: 4, memoryBytes: 8_589_934_592, storageBytes: 85_899_345_920, concurrency: 1 }, triggerLabel: "whitesmith-macos", imageDigest: `whitesmith-macos-job@sha256:${"a".repeat(64)}` }),
+  });
+  expect(response.status).toBe(200);
+  expect(queries.some((query) => query.includes("UPDATE runner_pools") && query.includes("worker_id=NULL"))).toBe(true);
+  expect(queries.some((query) => query.includes("INSERT INTO runner_pools"))).toBe(false);
+});
+test("global admins can list the control-plane pool without selecting a workspace", async () => {
+  const db = Object.assign(async (strings: TemplateStringsArray) => {
+    if (strings.join(" ").includes("runner_pools")) return [{ id: "pool-1", organizationId: null, workerId: null, workerName: "Shared fleet", name: "default", platform: "macos-arm64", driver: "tart-vm", imageDigest: `macos@sha256:${"a".repeat(64)}`, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, labels: ["self-hosted", "macos", "arm64", "whitesmith-macos"], triggerLabel: "whitesmith-macos", enabled: true, active: 0 }];
+    return [];
+  }, {}) as never;
+  const response = await appFor(admin, db).request("/api/pools", { headers: sessionHeaders });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ items: [{ name: "default", workerName: "Shared fleet" }] });
+});

@@ -5,8 +5,9 @@ import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { dispatchLeaseBootstrap } from "./lease-dispatch.ts";
 import { reconcileQueuedJobs, type ReconcileReport } from "./reconcile.ts";
-
+import { reason } from "./scheduler.ts";
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+const LEASE_STARTUP_TTL_MS = 10 * 60_000;
 type Dispatch = Pick<WorkerCommandDispatcher, "dispatch">;
 
 export interface JobReconciliationDeps {
@@ -43,14 +44,14 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
   if (!queuedRows.length) return { reserved: 0, skipped: 0, failed: 0 };
 
   const candidateRows = await deps.db`
-    SELECT p.id AS "poolId", p.organization_id AS "organizationId", p.worker_id AS "workerId",
-      p.enabled, p.image_digest AS "imageDigest", p.resources, p.labels, p.trigger_label AS "triggerLabel",
+    SELECT p.id AS "poolId", p.organization_id AS "organizationId", p.worker_id AS "poolWorkerId",
+      w.id AS "workerId", p.enabled, p.image_digest AS "imageDigest", p.resources, p.labels, p.trigger_label AS "triggerLabel",
       w.admission_state AS "admissionState", w.connection_state AS "connectionState", w.configuration_state AS "configurationState",
       w.limits, w.encryption_public_key AS "encryptionPublicKey",
-      (SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id
+      (SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.worker_id=w.id
         AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')) AS active
     FROM runner_pools p
-    JOIN workers w ON w.id=p.worker_id
+    JOIN workers w ON (p.worker_id IS NULL OR p.worker_id=w.id) AND w.platform=p.platform
     WHERE p.enabled=true AND w.draining=false`;
 
   const organizationByJob = new Map<number, string>();
@@ -61,14 +62,17 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
   const candidates = candidateRows.filter((row) => !deps.workerConnected || deps.workerConnected(String(row.workerId))).map((row) => {
     const resources = PoolResourcesSchema.parse(jsonValue(row.resources));
     const poolId = String(row.poolId);
+    const workerId = String(row.workerId);
     const concurrency = Number(resources.concurrency);
-    workerByPool.set(poolId, { workerId: String(row.workerId), encryptionPublicKey: String(row.encryptionPublicKey ?? ""), imageDigest: String(row.imageDigest), resources });
+    workerByPool.set(`${poolId}:${workerId}`, { workerId, encryptionPublicKey: String(row.encryptionPublicKey ?? ""), imageDigest: String(row.imageDigest), resources });
     return {
       requestedLabels: [],
-      worker: { id: String(row.workerId), admissionState: String(row.admissionState), connectionState: String(row.connectionState), configurationState: String(row.configurationState), limits: jsonValue(row.limits) },
+      worker: { id: workerId, admissionState: String(row.admissionState), connectionState: String(row.connectionState), configurationState: String(row.configurationState), limits: jsonValue(row.limits) },
       pool: { id: poolId, enabled: Boolean(row.enabled), resources, concurrency, active: Number(row.active ?? 0), labels: stringArray(row.labels), triggerLabel: row.triggerLabel ? String(row.triggerLabel) : null },
     };
   });
+  console.log(`Routing candidates=${candidates.length} queued=${queuedRows.length}`);
+  for (const candidate of candidates) console.log(`Routing candidate ${candidate.pool.id}: ${reason({ ...candidate, requestedLabels: queuedRows[0] ? stringArray(queuedRows[0].labels) : [] })}`);
 
   return reconcileQueuedJobs({
     queued: queuedRows.map((row) => {
@@ -78,7 +82,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       return { installationId: Number(row.installationId), repositoryId: String(row.repositoryId), repository: String(row.repository), runId: String(row.runId), jobId, labels: stringArray(row.labels) };
     }),
     candidates,
-    reserve: (input) => reserveRoutingSlot(deps.db, { organizationId: organizationByJob.get(input.githubJobId)!, ...input, ttlMs: 60_000 }),
+    reserve: (input) => reserveRoutingSlot(deps.db, { organizationId: organizationByJob.get(input.githubJobId)!, ...input, ttlMs: LEASE_STARTUP_TTL_MS }),
     jit: async (input) => {
       const installationId = installationByJob.get(input.githubJobId);
       if (!installationId) throw new Error("github_installation_not_found");
@@ -90,7 +94,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       return client.generateJitConfig({ owner: input.owner, repo: input.repo, runnerName: input.runnerName, workFolder: "_work", labels: input.labels });
     },
     dispatch: async (reservation, jit) => {
-      const target = workerByPool.get(reservation.poolId);
+      const target = workerByPool.get(`${reservation.poolId}:${reservation.workerId}`);
       if (!target?.encryptionPublicKey) throw new Error("worker_encryption_key_missing");
       const envelope: LeaseBootstrapEnvelope = { leaseId: reservation.id, nonce: reservation.nonce, encodedJitConfig: jit.encodedJitConfig, expiresAt: reservation.expiresAt, imageDigest: target.imageDigest, resources: target.resources };
       await dispatchLeaseBootstrap(deps.dispatcher, { ...envelope, workerId: target.workerId, workerEncryptionPublicKey: target.encryptionPublicKey });

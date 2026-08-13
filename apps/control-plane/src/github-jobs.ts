@@ -1,39 +1,53 @@
 import { RunnerJitConfig } from "@whitesmith/contracts";
+import type { GithubJobSnapshot, GithubRunSnapshot } from "./runs.ts";
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 export type GithubJobsClientOptions = { token: () => Promise<string>; fetch?: Fetcher; apiBase?: string };
 export type GenerateJitConfigInput = { owner: string; repo: string; runnerName: string; runnerGroupId?: number; workFolder: string; labels: string[] };
 export type QueuedGithubJob = { id: number; runId: number; name: string; labels: string[]; status: "queued" | "in_progress" | "completed"; repository: string };
 
+const runStatus = (value: unknown): GithubRunSnapshot["status"] => value === "completed" ? "completed" : value === "in_progress" ? "in_progress" : "queued";
+const jobStatus = (value: unknown): GithubJobSnapshot["status"] => value === "completed" ? "completed" : value === "in_progress" ? "in_progress" : "queued";
+const stringValue = (value: unknown, fallback = "") => typeof value === "string" ? value : fallback;
+const nullableString = (value: unknown) => typeof value === "string" ? value : null;
+const labelsValue = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+
 export class GithubJobsClient {
   private readonly token: () => Promise<string>;
   private readonly fetcher: Fetcher;
   private readonly apiBase: string;
-  constructor(options: GithubJobsClientOptions) {
-    this.token = options.token;
-    this.fetcher = options.fetch ?? fetch;
-    this.apiBase = options.apiBase ?? "https://api.github.com";
-  }
+  constructor(options: GithubJobsClientOptions) { this.token = options.token; this.fetcher = options.fetch ?? fetch; this.apiBase = options.apiBase ?? "https://api.github.com"; }
   private async request(path: string, init: RequestInit = {}): Promise<Record<string, unknown>> {
     const headers = new Headers(init.headers);
-    headers.set("accept", "application/vnd.github+json");
-    headers.set("content-type", "application/json");
-    headers.set("x-github-api-version", "2026-03-10");
-    headers.set("authorization", `Bearer ${await this.token()}`);
+    headers.set("accept", "application/vnd.github+json"); headers.set("content-type", "application/json"); headers.set("x-github-api-version", "2026-03-10"); headers.set("authorization", `Bearer ${await this.token()}`);
     const response = await this.fetcher(`${this.apiBase}${path}`, { ...init, headers });
-    if (!response.ok) {
-      if (response.status === 401 || response.status === 403) throw new Error("github_installation_token_lacks_administration_write");
-      throw new Error(`github_${response.status}`);
-    }
+    if (!response.ok) { console.error(`GitHub jobs request failed: ${response.status} ${path}`); throw new Error(`github_${response.status}`); }
     const value: unknown = response.status === 204 ? {} : await response.json();
     return value && typeof value === "object" ? value as Record<string, unknown> : {};
   }
+  private parseRun(value: Record<string, unknown>): GithubRunSnapshot {
+    const id = Number(value.id); if (!Number.isSafeInteger(id) || id <= 0) throw new Error("github_payload_invalid");
+    return { id, runNumber: Number(value.run_number) || id, workflowName: stringValue(value.name, stringValue(value.display_title, "workflow")), event: stringValue(value.event), branch: stringValue(value.head_branch), commitSha: stringValue(value.head_sha), actorLogin: stringValue((value.actor as Record<string, unknown> | undefined)?.login, "github"), status: runStatus(value.status), conclusion: nullableString(value.conclusion), queuedAt: stringValue(value.created_at, new Date().toISOString()), startedAt: nullableString(value.run_started_at), completedAt: nullableString(value.status === "completed" ? value.updated_at : null) };
+  }
+  private parseJob(value: Record<string, unknown>): GithubJobSnapshot {
+    const id = Number(value.id), runId = Number(value.run_id); if (!Number.isSafeInteger(id) || !Number.isSafeInteger(runId) || id <= 0 || runId <= 0) throw new Error("github_payload_invalid");
+    const status = jobStatus(value.status);
+    return { id, runId, name: stringValue(value.name, "job"), status, conclusion: nullableString(value.conclusion), labels: labelsValue(value.labels), runnerName: nullableString(value.runner_name), queuedAt: stringValue(value.created_at, new Date().toISOString()), startedAt: status === "queued" ? null : nullableString(value.started_at), completedAt: status === "completed" ? nullableString(value.completed_at) : null };
+  }
+  async listRuns(owner: string, repo: string, status: "queued" | "in_progress", page: number): Promise<{ totalCount: number; runs: GithubRunSnapshot[] }> {
+    const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?status=${status}&per_page=100&page=${page}`);
+    const runs = Array.isArray(value.workflow_runs) ? value.workflow_runs.filter((x): x is Record<string, unknown> => Boolean(x && typeof x === "object")).map(x => this.parseRun(x)) : [];
+    return { totalCount: Number(value.total_count) || runs.length, runs };
+  }
+  async getRun(owner: string, repo: string, runId: number): Promise<GithubRunSnapshot> { return this.parseRun(await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}`)); }
+  async listJobs(owner: string, repo: string, runId: number, page: number): Promise<{ totalCount: number; jobs: GithubJobSnapshot[] }> {
+    const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/jobs?filter=latest&per_page=100&page=${page}`);
+    const jobs = Array.isArray(value.jobs) ? value.jobs.filter((x): x is Record<string, unknown> => Boolean(x && typeof x === "object")).map(x => this.parseJob(x)) : [];
+    return { totalCount: Number(value.total_count) || jobs.length, jobs };
+  }
   async generateJitConfig(input: GenerateJitConfigInput): Promise<RunnerJitConfig> {
     if (!input.labels.length) throw new Error("github_jit_labels_missing");
-    const result = await this.request(`/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/actions/runners/generate-jitconfig`, {
-      method: "POST",
-      body: JSON.stringify({ name: input.runnerName, runner_group_id: input.runnerGroupId ?? 1, work_folder: input.workFolder, labels: input.labels }),
-    });
+    const result = await this.request(`/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/actions/runners/generate-jitconfig`, { method: "POST", body: JSON.stringify({ name: input.runnerName, runner_group_id: input.runnerGroupId ?? 1, work_folder: input.workFolder, labels: input.labels }) });
     const config = RunnerJitConfig.safeParse({ encodedJitConfig: result.encoded_jit_config, runnerName: input.runnerName, labels: input.labels, expiresAt: new Date(Date.now() + 55 * 60_000).toISOString() });
     if (!config.success) throw new Error("github_jit_config_missing");
     return config.data;

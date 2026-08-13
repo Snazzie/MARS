@@ -18,8 +18,8 @@ export async function reserveRoutingSlot(sql: Sql<{}>, input: LeaseReservationIn
   const expiresAt = new Date(Date.now() + input.ttlMs).toISOString();
   const rows = await sql.begin(async (tx) => {
     const eligible = await tx`SELECT p.id, p.resources, w.id AS "workerId", w.limits
-      FROM runner_pools p JOIN workers w ON w.id=p.worker_id
-      WHERE p.id=${input.poolId} AND p.organization_id=${input.organizationId} AND p.worker_id=${input.workerId}
+      FROM runner_pools p JOIN workers w ON w.id=${input.workerId}
+      WHERE p.id=${input.poolId}
         AND p.enabled=true AND w.admission_state='adopted' AND w.connection_state='online'
         AND w.configuration_state='ready' AND w.draining=false FOR UPDATE OF p, w`;
     if (!eligible[0]) throw new Error("worker_not_ready");
@@ -31,7 +31,8 @@ export async function reserveRoutingSlot(sql: Sql<{}>, input: LeaseReservationIn
     if (Number(active[0]?.count ?? 0) >= input.requested.concurrency) throw new Error("pool_capacity_exhausted");
     const inserted = await tx`INSERT INTO runner_leases (id,organization_id,pool_id,worker_id,routing_key,github_job_id,state,requested,nonce,expires_at)
       VALUES (${id},${input.organizationId},${input.poolId},${input.workerId},${input.routingKey},${input.githubJobId ?? null},'reserved',${JSON.stringify(input.requested)},${nonce},${expiresAt})
-      ON CONFLICT (github_job_id) DO NOTHING
+      ON CONFLICT (github_job_id) DO UPDATE SET id=EXCLUDED.id,organization_id=EXCLUDED.organization_id,pool_id=EXCLUDED.pool_id,worker_id=EXCLUDED.worker_id,routing_key=EXCLUDED.routing_key,state='reserved',requested=EXCLUDED.requested,nonce=EXCLUDED.nonce,expires_at=EXCLUDED.expires_at,cleanup_state='none',terminal_result=null,updated_at=now()
+      WHERE runner_leases.state IN ('failed','reaped')
       RETURNING id,nonce,worker_id AS "workerId",pool_id AS "poolId",expires_at AS "expiresAt"`;
     if (!inserted[0]) throw new Error("job_already_claimed");
     return inserted;

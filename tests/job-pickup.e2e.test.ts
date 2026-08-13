@@ -44,6 +44,7 @@ test.skipIf(!databaseUrl)("queued webhook becomes a real lease and encrypted wor
   });
   expect(result).toEqual({ reserved: 1, skipped: 0, failed: 0 });
   expect(dispatched).toHaveLength(1);
-  const [lease] = await db`select state, github_job_id from runner_leases where github_job_id=987654321`;
+  const [lease] = await db`select state, github_job_id, expires_at from runner_leases where github_job_id=987654321`;
   expect(lease.state).toBe('dispatched');
+  expect(new Date(lease.expires_at).getTime() - Date.now()).toBeGreaterThan(5 * 60_000);
 });

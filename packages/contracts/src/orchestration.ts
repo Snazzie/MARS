@@ -39,6 +39,13 @@ export const LeaseLifecycleEvent = z.object({
 export type LeaseLifecycleEvent = z.infer<typeof LeaseLifecycleEvent>;
 export const WorkerCommand = z.object({ version: z.literal(1), id: z.string().uuid(), type: z.string().min(1), workerId: z.string().uuid(), leaseId: z.string().uuid().nullable(), occurredAt: z.string().datetime(), payload: z.record(z.unknown()) });
 export const WorkerEvent = z.object({ version: z.literal(1), id: z.string().uuid(), workerId: z.string().uuid(), type: z.string().min(1), occurredAt: z.string().datetime(), payload: z.record(z.unknown()) });
+export const WorkerEventPayload = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("command.accepted"), payload: z.object({ commandId: z.string().uuid(), leaseId: z.string().uuid().nullable() }).strict() }),
+  z.object({ type: z.literal("sandbox_attested"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32), runtimeInstanceId: z.string().min(1), observed: z.object({ vcpu: positiveSafe, memoryBytes: positiveSafe, storageBytes: positiveSafe }).strict() }).strict() }),
+  z.object({ type: z.literal("runner.finished"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32), exitCode: z.number().int().nonnegative() }).strict() }),
+  z.object({ type: z.literal("lease.reaped"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32) }).strict() }),
+  z.object({ type: z.literal("lease.failed"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32), reason: z.enum(["provisioning_failed","runner_failed","cleanup_failed"]) }).strict() }),
+]);
 export const WorkerApplianceConfiguration = z.object({ vcpu: positiveSafe, memoryBytes: positiveSafe, storageBytes: positiveSafe }).strict();
 export const WorkerConfiguration = z.object({ appliance: WorkerApplianceConfiguration, runtime: WorkerLimits }).strict();
 export const WorkerConfigurePayload = z.object({ workerId: z.string().uuid(), appliance: WorkerApplianceConfiguration, runtime: WorkerLimits, revision: z.string().regex(/^[a-f0-9]{64}$/), fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict();

@@ -27,6 +27,8 @@ export function createControlPlaneApp(deps: ControlPlaneHttpDeps) {
   const protectedApi = new Hono<ControlPlaneEnv>();
   protectedApi.use("/api/organizations/*", requireSession(deps));
   protectedApi.use("/api/organizations", requireSession(deps));
+  protectedApi.use("/api/pools", requireSession(deps));
+  protectedApi.use("/api/pools/*", requireSession(deps));
   protectedApi.use("/api/me", requireSession(deps));
   registerDashboardRoutes(protectedApi, deps);
   registerWorkerRoutes(app, deps);

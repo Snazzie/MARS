@@ -65,7 +65,8 @@ export class WorkerCommandDispatcher {
   handleEvent(input: unknown, socket?: AuthenticatedWorkerSocket): boolean {
     const parsed = WorkerEvent.safeParse(input); if (!parsed.success) return false;
     const event = parsed.data; const commandId = typeof event.payload.commandId === "string" ? event.payload.commandId : undefined;
-    if (!commandId || (socket && this.sockets.get(event.workerId) !== socket)) return false;
+    if (socket && this.sockets.get(event.workerId) !== socket) return false;
+    if (!commandId) return true;
     const pending = this.pending.get(commandId);
     if (pending) {
       if (pending.command.workerId !== event.workerId) return false;
@@ -80,13 +81,16 @@ export class WorkerCommandDispatcher {
       const initialSocket = this.sockets.get(input.workerId); if (!initialSocket) throw new WorkerDispatchError("worker is not authenticated");
       const command = WorkerCommand.parse({ ...input, version: 1, id: randomUUID(), occurredAt: new Date().toISOString(), leaseId: input.leaseId ?? null });
       if (containsSecret(command.payload)) throw new WorkerDispatchError("worker command payload contains secret material");
-      if (this.store) await this.store.save(command);
+      if (this.store) {
+        await this.store.save(command);
+        this.durableWorkers.set(command.id, command.workerId);
+      }
       if (this.sockets.get(input.workerId) !== initialSocket) throw new WorkerDispatchError("worker socket changed before send");
-      const { promise, resolve, reject } = Promise.withResolvers<WorkerEvent>();
-      const timer = setTimeout(() => { this.pending.delete(command.id); reject(new WorkerDispatchError("worker command timed out")); }, this.timeoutMs);
-      this.pending.set(command.id, { command, resolve, reject, timer });
-      try { initialSocket.send(JSON.stringify(command)); await this.store?.markSent?.(command.id); } catch { clearTimeout(timer); this.pending.delete(command.id); reject(new WorkerDispatchError("worker socket send failed")); }
-      return promise;
+      try {
+        initialSocket.send(JSON.stringify(command));
+        await this.store?.markSent?.(command.id);
+        return WorkerEvent.parse({ version: 1, id: randomUUID(), workerId: input.workerId, type: "command.accepted", occurredAt: new Date().toISOString(), payload: { commandId: command.id, leaseId: command.leaseId } });
+      } catch { throw new WorkerDispatchError("worker socket send failed"); }
     });
   }
 }

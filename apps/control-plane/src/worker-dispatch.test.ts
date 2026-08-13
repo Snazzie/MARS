@@ -52,6 +52,26 @@ test("replays a command committed after socket authentication", async () => {
   expect(sent.map(data => JSON.parse(data).id)).toContain(commands[0]!.id);
 });
 
+test("accepts the first acknowledgement for a newly persisted command", async () => {
+  const sent: string[] = [];
+  const acknowledged: string[] = [];
+  const store = {
+    async save() {},
+    async listUnacknowledged() { return []; },
+    async markSent() {},
+    async acknowledge(id: string) { acknowledged.push(id); },
+  };
+  const socket = { send(data: string) { sent.push(data); } };
+  const dispatcher = new WorkerCommandDispatcher(100, store);
+  dispatcher.register(workerId, socket);
+  await Promise.resolve();
+  await dispatcher.dispatch({ type: "doctor", workerId, leaseId: null, payload: {} });
+  const dispatched = JSON.parse(sent[0]!);
+  expect(dispatcher.handleEvent({ version: 1, id: crypto.randomUUID(), workerId, type: "command.accepted", occurredAt: new Date().toISOString(), payload: { commandId: dispatched.id, leaseId: null } }, socket)).toBe(true);
+  await Promise.resolve();
+  expect(acknowledged).toEqual([dispatched.id]);
+});
+
 describe("WorkerCommandDispatcher frame and payload hardening", () => {
   test("rejects events from a superseded socket", async () => {
     let commandId = "";

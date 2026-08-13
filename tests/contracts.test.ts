@@ -42,14 +42,13 @@ import { displayCell } from "../apps/web/src/format.ts";
 describe("worker table values",()=>{test("renders primitive values instead of renderer objects",()=>{expect(displayCell("macos-arm64")).toBe("macos-arm64");expect(displayCell(undefined)).toBe("—");expect(displayCell({value:"x"})).toBe("{\"value\":\"x\"}")})});
 import { TartVmDriver, type TartVmRuntime } from "../apps/orchestrator/src/tart.ts";
 describe("Tart VM lifecycle", () => {
-  test("clones, sizes, starts, bootstraps, stops, and removes one VM lease", async () => {
+  test("clones, sizes, starts with bootstrap, runs, stops, and removes one VM lease", async () => {
     const calls: string[][] = [];
     const runtime: TartVmRuntime = {
       clone: async (base, name) => { calls.push(["clone", base, name]); },
       setResources: async (name, resources) => { calls.push(["set", name, String(resources.vcpu), String(resources.memoryBytes), String(resources.storageBytes)]); },
-      injectBootstrap: async (name, config) => { calls.push(["inject", name, config]); },
+      startWithBootstrap: async (name, config) => { calls.push(["start-with-bootstrap", name, config]); },
       startRunner: async (name) => { calls.push(["runner", name]); },
-      start: async (name) => { calls.push(["start", name]); },
       stop: async (name) => { calls.push(["stop", name]); },
       remove: async (name) => { calls.push(["remove", name]); },
     };
@@ -65,8 +64,7 @@ describe("Tart VM lifecycle", () => {
     expect(calls).toEqual([
       ["clone", "base-image", "whitesmith-job-11111111"],
       ["set", "whitesmith-job-11111111", "2", "4294967296", "21474836480"],
-      ["start", "whitesmith-job-11111111"],
-      ["inject", "whitesmith-job-11111111", "jit-config"],
+      ["start-with-bootstrap", "whitesmith-job-11111111", "jit-config"],
       ["runner", "whitesmith-job-11111111"],
     ]);
     await driver.stopLease("11111111-1111-4111-8111-111111111111");

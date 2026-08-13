@@ -1,16 +1,33 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { PoolSummary } from "@whitesmith/contracts";
-import { getPools, mutatePool } from "../api.ts";
-import { QueryState, WorkspaceRequired } from "../components/StateView.tsx";
-import { useOrganizationFromRoute } from "./useOrganization.ts";
+import type { PoolSummary, WorkerDetail } from "@whitesmith/contracts";
+import { getGlobalPools, getWorkers, mutateGlobalPool } from "../api.ts";
+import { QueryState } from "../components/StateView.tsx";
+import { workerOperationalLabel, workerReadinessLabel } from "../components/WorkerCard.tsx";
+
+type PoolWorker = Pick<WorkerDetail, "id" | "platform" | "driver" | "connectionState" | "configurationState" | "draining">;
+type PoolIdentity = Pick<PoolSummary, "platform" | "driver" | "workerId">;
+export type PoolWorkerCoverage = { online: number; ready: number; warning: string | null; operational: string | null; readiness: string | null };
+export function poolWorkerCoverage(pool: PoolIdentity, workers: PoolWorker[] | undefined): PoolWorkerCoverage {
+  if (!workers) return { online: 0, ready: 0, warning: "Worker status unavailable", operational: null, readiness: null };
+  const matching = pool.workerId ? workers.filter((worker) => worker.id === pool.workerId) : workers.filter((worker) => worker.platform === pool.platform && worker.driver === pool.driver);
+  if (pool.workerId) {
+    const worker = matching[0];
+    if (!worker) return { online: 0, ready: 0, warning: "Worker status unavailable", operational: null, readiness: null };
+    const online = worker.connectionState === "online" ? 1 : 0;
+    const ready = online === 1 && worker.configurationState === "ready" && !worker.draining ? 1 : 0;
+    return { online, ready, warning: ready === 0 ? "No ready workers" : null, operational: workerOperationalLabel(worker), readiness: workerReadinessLabel(worker.configurationState) };
+  }
+  const online = matching.filter((worker) => worker.connectionState === "online").length;
+  const ready = matching.filter((worker) => worker.connectionState === "online" && worker.configurationState === "ready" && !worker.draining).length;
+  return { online, ready, warning: ready === 0 ? "No ready workers" : null, operational: null, readiness: null };
+}
 
 function bytes(value: number) { if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GiB`; if (value >= 1024 ** 2) return `${Math.round(value / 1024 ** 2)} MiB`; return `${value} B`; }
 
 export function PoolsPage() {
-  const { organizationId } = useOrganizationFromRoute();
   const client = useQueryClient();
-  const query = useQuery({ queryKey: ["org", organizationId, "pools"], queryFn: () => getPools(organizationId), enabled: organizationId !== "all" });
-  const action = useMutation({ mutationFn: ({ poolId, type, workspaceId }: { poolId: string; type: "enable" | "disable" | "rotate-key"; workspaceId: string }) => mutatePool(workspaceId, poolId, type), onSuccess: () => client.invalidateQueries({ queryKey: ["org", organizationId, "pools"] }) });
-  if (organizationId === "all") return <WorkspaceRequired />;
-  return <><header className="page-header"><div><p className="eyebrow">Runner pools</p><h1>Shape capacity with intent.</h1><p className="page-description">Labels route jobs; ceilings keep every sandbox inside its worker budget.</p></div></header><QueryState error={query.error} isLoading={query.isLoading} isEmpty={!query.isLoading && !query.error && query.data?.items.length === 0} retry={() => void query.refetch()} />{query.data && <section className="pool-grid" aria-label="Runner pools">{query.data.items.map((pool: PoolSummary) => <article className="pool-card" key={pool.id}><header className="panel-heading"><div><h2>{pool.name}</h2><p className="muted">{pool.workerName} · {pool.platform} · {pool.driver}</p></div><span className={`status-pill ${pool.enabled ? "status-online" : "status-offline"}`}>{pool.enabled ? "Enabled" : "Disabled"}</span></header><dl><div><dt>Storage</dt><dd>{bytes(pool.resources.storageBytes)}</dd></div><div><dt>Concurrency</dt><dd>{pool.resources.concurrency}</dd></div></dl><p className="muted">Labels: {pool.labels.join(", ")}</p><div className="card-actions"><button type="button" onClick={() => action.mutate({ poolId: pool.id, workspaceId: organizationId, type: pool.enabled ? "disable" : "enable" })}>{pool.enabled ? "Disable pool" : "Enable pool"}</button></div></article>)}</section>}</>;
+  const query = useQuery({ queryKey: ["pools", "global"], queryFn: getGlobalPools });
+  const workers = useQuery({ queryKey: ["workers", "global", false], queryFn: () => getWorkers("all", false) });
+  const action = useMutation({ mutationFn: ({ poolId, enabled }: { poolId: string; enabled: boolean }) => mutateGlobalPool(poolId, enabled ? "enable" : "disable"), onSuccess: () => client.invalidateQueries({ queryKey: ["pools", "global"] }) });
+  return <><header className="page-header"><div><p className="eyebrow">Runner pools</p><h1>Shape capacity with intent.</h1><p className="page-description">Shared control-plane capacity across every connected workspace.</p></div></header><QueryState error={query.error} isLoading={query.isLoading} isEmpty={!query.isLoading && !query.error && query.data?.items.length === 0} retry={() => void query.refetch()} />{query.data && <section className="pool-grid" aria-label="Runner pools">{query.data.items.map((pool: PoolSummary) => { const coverage = poolWorkerCoverage(pool, workers.data?.items); return <article className="pool-card" key={pool.id}><header className="panel-heading"><div><h2>{pool.name}</h2><p className="muted">{pool.workerName ?? "Shared fleet"} · {pool.platform} · {pool.driver}</p></div><span className={`status-pill ${pool.enabled ? "status-online" : "status-offline"}`}>{pool.enabled ? "Enabled" : "Disabled"}</span></header><dl><div><dt>Storage</dt><dd>{bytes(pool.resources.storageBytes)}</dd></div><div><dt>Concurrency</dt><dd>{pool.resources.concurrency}</dd></div></dl><section className="pool-worker-status" aria-label={`Worker status for ${pool.name}`}><p className="panel-kicker">Worker status</p>{coverage.operational ? <p><span className="status-pill">{coverage.operational}</span> · <span className="status-pill">{coverage.readiness}</span></p> : <p>{workers.isLoading ? "Loading worker status" : `${coverage.online} online · ${coverage.ready} ready`}</p>}{coverage.warning && <p className="pending-note">{coverage.warning}</p>}</section><p className="muted">Labels: {pool.labels.join(", ")}</p><div className="card-actions"><button type="button" onClick={() => action.mutate({ poolId: pool.id, enabled: !pool.enabled })}>{pool.enabled ? "Disable pool" : "Enable pool"}</button></div></article>; })}</section>}</>;
 }

@@ -45,6 +45,25 @@ describe("control-plane HTTP boundary", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  test("injects split Tart runtime identity into the macOS installer", async () => {
+    const root = await mkdtemp(join(tmpdir(), "whitesmith-macos-installers-"));
+    try {
+      await Bun.write(join(root, "install-worker-macos.sh"), "#!/bin/zsh\nprint ready\n");
+      const digest = `whitesmith-macos-job@sha256:${"b".repeat(64)}`;
+      const response = await createControlPlaneApp(fakeHttpDeps({
+        baseUrl: "http://localhost:3000",
+        workerInstallerRoot: pathToFileURL(`${root}/`),
+        macosTartBaseImage: "whitesmith-macos-smoke-v3",
+        defaultJobImages: { "macos-arm64": digest },
+      })).request("/api/workers/installer?audience=macos-arm64");
+      const installer = await response.text();
+      expect(response.status).toBe(200);
+      expect(installer).toContain("TART_IMAGE='whitesmith-macos-smoke-v3'");
+      expect(installer).toContain(`TART_IMAGE_DIGEST='${digest}'`);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   test("serves the configured macOS orchestrator executable", async () => {
     const root = await mkdtemp(join(tmpdir(), "whitesmith-orchestrator-"));
     try {

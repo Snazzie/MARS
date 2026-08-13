@@ -1,9 +1,9 @@
-import { generateKeyPairSync, sign as signMessage } from "node:crypto";
+import { generateKeyPairSync, randomUUID, sign as signMessage } from "node:crypto";
 import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { statfsSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
-import type { WorkerCapacityData, WorkerDoctorData } from "@whitesmith/contracts";
+import { WorkerEvent, type LeaseBootstrapEnvelope, type WorkerCapacityData, type WorkerDoctorData } from "@whitesmith/contracts";
 import { WorkerBootstrapRequest, WorkerCommand, WorkerConfigurePayload, WorkerConfiguration } from "@whitesmith/contracts";
 import type { Lease } from "./runtime.ts";
 import { createTartVmRuntime, TartVmDriver } from "./tart.ts";
@@ -20,21 +20,68 @@ export interface MacWorkerJoinInput {
   capacity: WorkerCapacityData;
 }
 export type MacWorkerJoinPayload = MacWorkerJoinInput & { platform: "macos-arm64" };
-export function applyWorkerConfigure(command: WorkerCommand, limits: MacWorkerLimits): { version: 1; type: "worker.configured"; workerId: string; leaseId: null; payload: Record<string, unknown> } {
+export function workerEvent(workerId: string, type: string, payload: Record<string, unknown>): WorkerEvent {
+  return WorkerEvent.parse({ version: 1, id: randomUUID(), workerId, type, occurredAt: new Date().toISOString(), payload });
+}
+export function applyWorkerConfigure(command: WorkerCommand, limits: MacWorkerLimits): WorkerEvent {
   const payload = WorkerConfigurePayload.parse(command.payload);
   const observed = WorkerConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime });
   Object.assign(limits, payload.runtime);
-  return { version: 1, type: "worker.configured", workerId: command.workerId, leaseId: null, payload: { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed } };
+  return workerEvent(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed });
 }
-export function buildMacWorkerJoinPayload(input: MacWorkerJoinInput): MacWorkerJoinPayload {
-  return { code: input.code, publicKey: input.publicKey, encryptionPublicKey: input.encryptionPublicKey, vmUuid: input.vmUuid, machineUuid: input.machineUuid, doctor: input.doctor, capacity: input.capacity, platform: "macos-arm64" };
-}
-export function buildMacWorkerAuthentication(challenge: string, workerId: string, privateKey: string): { type: "authenticate"; workerId: string; signature: string } {
- const signature = signMessage(null, Buffer.from(challenge, "base64url"), privateKey).toString("base64url");
- return { type: "authenticate", workerId, signature };
+export function buildMacWorkerJoinPayload(input: MacWorkerJoinInput): MacWorkerJoinPayload { return { code: input.code, publicKey: input.publicKey, encryptionPublicKey: input.encryptionPublicKey, vmUuid: input.vmUuid, machineUuid: input.machineUuid, doctor: input.doctor, capacity: input.capacity, platform: "macos-arm64" }; }
+export function buildMacWorkerAuthentication(challenge: string, workerId: string, privateKey: string, encryptionPublicKey?: string): { type: "authenticate"; workerId: string; encryptionPublicKey?: string; signature: string } {
+  const canonical = encryptionPublicKey ? `${challenge}\n${workerId}\n${encryptionPublicKey}` : challenge;
+  const signature = signMessage(null, encryptionPublicKey ? Buffer.from(canonical) : Buffer.from(challenge, "base64url"), privateKey).toString("base64url");
+  return { type: "authenticate", workerId, ...(encryptionPublicKey ? { encryptionPublicKey } : {}), signature };
 }
 export function buildMacWorkerSocketUrl(base: string, workerId: string): string { const url = new URL(base); url.protocol = url.protocol === "https:" ? "wss:" : "ws:"; url.pathname = "/api/v1/workers/connect"; url.search = new URLSearchParams({ workerId }).toString(); return url.toString(); }
-export async function handleMacWorkerCommand(command: WorkerCommand, driver: TartVmDriver, limits?: MacWorkerLimits, encryptionPrivateKey?: string): Promise<{ version: 1; type: string; workerId: string; leaseId: string | null; payload: Record<string, unknown> }> {
+export async function runMacLeaseLifecycle(
+  command: WorkerCommand,
+  driver: TartVmDriver,
+  bootstrap: LeaseBootstrapEnvelope,
+  send: (event: WorkerEvent) => void,
+): Promise<void> {
+  let runtime: Awaited<ReturnType<TartVmDriver["createLease"]>>;
+  try {
+    runtime = await driver.createLease({ id: bootstrap.leaseId, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
+  } catch (error) {
+    console.error("macOS lease provisioning failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
+    send(workerEvent(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "provisioning_failed" }));
+    return;
+  }
+  send(workerEvent(command.workerId, "sandbox_attested", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed }));
+  try {
+    if (!runtime.completion) throw new Error("runner completion unavailable");
+    const exitCode = await runtime.completion;
+    send(workerEvent(command.workerId, "runner.finished", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, exitCode }));
+  } catch (error) {
+    console.error("macOS runner failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
+    send(workerEvent(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "runner_failed" }));
+  }
+  let cleanupFailed = false;
+  try { await driver.stopLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("macOS lease stop failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) }); }
+  try { await driver.removeLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("macOS lease removal failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) }); }
+  send(workerEvent(command.workerId, cleanupFailed ? "lease.failed" : "lease.reaped", cleanupFailed
+    ? { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "cleanup_failed" }
+    : { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce }));
+}
+export function startMacLeaseLifecycle(
+  command: WorkerCommand,
+  driver: TartVmDriver,
+  bootstrap: LeaseBootstrapEnvelope,
+  send: (event: WorkerEvent) => void,
+  active: Map<string, Promise<void>>,
+): Promise<void> {
+  const existing = active.get(bootstrap.leaseId);
+  if (existing) return existing;
+  const lifecycle = runMacLeaseLifecycle(command, driver, bootstrap, send).finally(() => {
+    if (active.get(bootstrap.leaseId) === lifecycle) active.delete(bootstrap.leaseId);
+  });
+  active.set(bootstrap.leaseId, lifecycle);
+  return lifecycle;
+}
+export async function handleMacWorkerCommand(command: WorkerCommand, driver: TartVmDriver, limits?: MacWorkerLimits, encryptionPrivateKey?: string): Promise<WorkerEvent> {
   if (command.type === "worker.configure") {
     if (!limits) throw new Error("worker limits unavailable");
     return applyWorkerConfigure(command, limits);
@@ -45,23 +92,12 @@ export async function handleMacWorkerCommand(command: WorkerCommand, driver: Tar
     if (!payload.bootstrapCiphertext) throw new Error("lease bootstrap payload invalid");
     const bootstrap = openLeaseBootstrap(payload.bootstrapCiphertext, encryptionPrivateKey);
     if (bootstrap.leaseId !== command.leaseId) throw new Error("lease bootstrap mismatch");
-    const lease: Lease = {
-      id: bootstrap.leaseId,
-      imageDigest: bootstrap.imageDigest,
-      resources: bootstrap.resources,
-      nonce: bootstrap.nonce,
-      encodedJitConfig: bootstrap.encodedJitConfig,
-    };
-    const runtime = await driver.createLease(lease);
-    return { version: 1, type: "sandbox_attested", workerId: command.workerId, leaseId: command.leaseId, payload: { commandId: command.id, ...(runtime as unknown as Record<string, unknown>) } };
+    const runtime = await driver.createLease({ id: bootstrap.leaseId, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
+    return workerEvent(command.workerId, "sandbox_attested", { commandId: command.id, leaseId: command.leaseId, nonce: bootstrap.nonce, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed });
   }
   if (command.type === "tart.stop_lease" && command.leaseId) {
     await driver.stopLease(command.leaseId);
-    return { version: 1, type: "lease_stopped", workerId: command.workerId, leaseId: command.leaseId, payload: { commandId: command.id } };
-  }
-  if (command.type === "tart.remove_lease" && command.leaseId) {
-    await driver.removeLease(command.leaseId);
-    return { version: 1, type: "lease_removed", workerId: command.workerId, leaseId: command.leaseId, payload: { commandId: command.id } };
+    return workerEvent(command.workerId, "lease.reaped", { commandId: command.id, leaseId: command.leaseId, nonce: String((command.payload as Record<string, unknown>).nonce ?? "") });
   }
   throw new Error("unsupported worker command");
 }
@@ -174,6 +210,7 @@ async function enrollMacWorker(controlPlane: URL, identity: MacWorkerIdentity): 
 }
 
 async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, driver: TartVmDriver, limits: MacWorkerLimits): Promise<never> {
+  const activeLeases = new Map<string, Promise<void>>();
   for (;;) {
     const ws = new WebSocket(buildMacWorkerSocketUrl(controlPlane.toString(), identity.workerId));
     const closed = Promise.withResolvers<void>();
@@ -183,11 +220,23 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
       try {
         const frame = JSON.parse(String(event.data)) as { type?: string; nonce?: string } & Partial<WorkerCommand>;
         if (frame.type === "challenge" && typeof frame.nonce === "string") {
-          ws.send(JSON.stringify(buildMacWorkerAuthentication(frame.nonce, identity.workerId, identity.privateKey)));
+          ws.send(JSON.stringify(buildMacWorkerAuthentication(frame.nonce, identity.workerId, identity.privateKey, identity.encryptionPublicKey)));
           return;
         }
         if (frame.type === "authenticated" || frame.type === "doctor_ack" || frame.type === "ping") return;
         const command = WorkerCommand.parse(frame);
+        if (command.type === "tart.create_lease") {
+          if (!command.leaseId) throw new Error("lease id required");
+          const payload = command.payload as { bootstrapCiphertext?: Parameters<typeof openLeaseBootstrap>[0] };
+          if (!payload.bootstrapCiphertext) throw new Error("lease bootstrap payload invalid");
+          const bootstrap = openLeaseBootstrap(payload.bootstrapCiphertext, identity.encryptionPrivateKey);
+          if (bootstrap.leaseId !== command.leaseId) throw new Error("lease bootstrap mismatch");
+          ws.send(JSON.stringify(workerEvent(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
+          void startMacLeaseLifecycle(command, driver, bootstrap, lifecycleEvent => {
+            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(lifecycleEvent));
+          }, activeLeases);
+          return;
+        }
         ws.send(JSON.stringify(await handleMacWorkerCommand(command, driver, limits, identity.encryptionPrivateKey)));
       } catch { ws.close(1011, "worker command failed"); }
     };
@@ -213,7 +262,7 @@ export async function runWorkerJoin(platform: "macos-arm64" | "windows-x64", bas
 }
 export async function runMacWorker(baseUrl: string, limits: MacWorkerLimits): Promise<never> {
   const controlPlane = validateControlPlaneUrl(baseUrl);
-  const driver = new TartVmDriver(createTartVmRuntime(), Bun.env.WHITESMITH_TART_BASE_IMAGE ?? "whitesmith-macos-worker", "whitesmith-job", limits);
+  const driver = new TartVmDriver(createTartVmRuntime(), Bun.env.WHITESMITH_TART_BASE_IMAGE ?? "whitesmith-macos-worker", "whitesmith-job", limits, Bun.env.WHITESMITH_TART_IMAGE_DIGEST ?? Bun.env.WHITESMITH_TART_BASE_IMAGE ?? "whitesmith-macos-worker");
   const existing = await loadMacWorkerIdentity();
   const identity = existing ?? await enrollMacWorker(controlPlane, { workerId: "", ...createKeyPair() });
   return connectMacWorker(controlPlane, identity, driver, limits);

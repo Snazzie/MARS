@@ -1,8 +1,7 @@
 import { useMemo, useState, type FormEvent } from "react";
 import type { WorkerCapacityData, WorkerLimits } from "@whitesmith/contracts";
-import { configurePendingWorker, type WorkerConfigurationInput } from "../api.ts";
-
-type Props = { worker: { id: string; capacity: WorkerCapacityData; limits: WorkerLimits | null }; onConfigured(): void };
+import { configurePendingWorker, configureWorker, type WorkerConfigurationInput } from "../api.ts";
+type Props = { worker: { id: string; capacity: WorkerCapacityData; limits: WorkerLimits | null }; organizationId?: string; onConfigured(): void };
 const GIB = 1024 ** 3;
 const initialGiB = (bytes: number) => {
   const value = Math.floor(bytes / GIB);
@@ -20,7 +19,7 @@ const toBytes = (value: string) => {
   return Number.isSafeInteger(bytes) ? bytes : null;
 };
 
-export function WorkerConfigurationForm({ worker, onConfigured }: Props) {
+export function WorkerConfigurationForm({ worker, organizationId, onConfigured }: Props) {
   const c = worker.capacity;
   const [vcpu, setVcpu] = useState(String(c.freeVcpu));
   const [ram, setRam] = useState(initialGiB(c.freeMemoryBytes));
@@ -51,7 +50,7 @@ export function WorkerConfigurationForm({ worker, onConfigured }: Props) {
     const input: WorkerConfigurationInput = { appliance: { vcpu: applianceVcpu, memoryBytes: applianceMemory, storageBytes: applianceStorage }, runtime: { maxVcpuPerPod: podVcpu, maxMemoryBytesPerPod: podMemory, maxStorageBytesPerPod: podStorage, maxConcurrentPods } };
     setError(null);
     setPending(true);
-    void configurePendingWorker(worker.id, input).then(onConfigured).catch((reason) => setError(reason instanceof Error ? reason.message : "Worker configuration failed.")).finally(() => setPending(false));
+    void (organizationId ? configureWorker(organizationId, worker.id, input) : configurePendingWorker(worker.id, input)).then(onConfigured).catch((reason) => setError(reason instanceof Error ? reason.message : "Worker configuration failed.")).finally(() => setPending(false));
   };
   return <form className="worker-configuration-form" onSubmit={submit}><header className="worker-configuration-header"><div><p className="eyebrow">Approval and capacity</p><h3>Approve and configure worker</h3><p>Review the worker's reported capacity, then apply the limits it may use. Approval and configuration happen together.</p></div><span className="worker-status-badge">Pending approval</span></header>{capacityError && <p role="alert" className="form-error">{capacityError}</p>}{error && <p role="alert" className="form-error">{error}</p>}<fieldset><legend>Worker capacity</legend><p className="field-help">Reported free capacity: {c.freeVcpu} vCPU · {initialGiB(c.freeMemoryBytes)} GiB RAM · {initialGiB(c.freeStorageBytes)} GiB disk</p><div className="limit-grid"><label>vCPU<input name="vcpu" type="number" min="1" max={c.freeVcpu} step="1" value={vcpu} onChange={(e) => setVcpu(e.target.value)} required /><small>Maximum appliance allocation</small></label><label>RAM (GiB)<input name="memoryGiB" type="number" min="1" max={initialGiB(c.freeMemoryBytes)} step="1" value={ram} onChange={(e) => setRam(e.target.value)} required /><small>Maximum appliance allocation</small></label><label>Disk (GiB)<input name="storageGiB" type="number" min="1" max={initialGiB(c.freeStorageBytes)} step="1" value={disk} onChange={(e) => setDisk(e.target.value)} required /><small>Maximum appliance allocation</small></label></div></fieldset><fieldset><legend>Per-job limits</legend><p className="field-help">Each job is isolated. Limits are multiplied by concurrency and must fit within the worker capacity above.</p><div className="limit-grid"><label>Max vCPU per job<input name="maxVcpuPerPod" type="number" min="1" step="1" value={maxVcpu} onChange={(e) => setMaxVcpu(e.target.value)} required /></label><label>Max RAM per job (GiB)<input name="maxMemoryGiBPerPod" type="number" min="1" step="1" value={maxRam} onChange={(e) => setMaxRam(e.target.value)} required /></label><label>Max disk per job (GiB)<input name="maxStorageGiBPerPod" type="number" min="1" step="1" value={maxDisk} onChange={(e) => setMaxDisk(e.target.value)} required /></label><label>Max concurrent jobs<input name="maxConcurrentPods" type="number" min="1" step="1" value={concurrency} onChange={(e) => setConcurrency(e.target.value)} required /></label></div></fieldset><div className="worker-configuration-actions"><button className="control-button" type="submit" disabled={pending || Boolean(capacityError)}>{pending ? "Approving and configuring…" : "Approve and configure worker"}</button></div></form>;
 }

@@ -4,6 +4,7 @@ import { join } from "node:path";
 const root = join(import.meta.dir, "..");
 const linux = join(root, "deploy/workers/install-worker.sh");
 const mac = join(root, "deploy/workers/install-worker-macos.sh");
+const prepareMacImage = join(root, "deploy/workers/prepare-macos-job-image.sh");
 const powershell = join(root, "deploy/workers/install-worker.ps1");
 const valid = "A".repeat(43);
 
@@ -30,6 +31,19 @@ test("POSIX installers expose strict parser and stdin handoff", async () => {
   expect(await Bun.file(mac).text()).toContain("--code");
   expect(await Bun.file(linux).text()).toContain("code=sys.stdin.readline()");
 });
+test("macOS installer configures Tart sudo capability without switching to root", async () => {
+  const source = await Bun.file(mac).text();
+  expect(source).toContain("sudo -n \"$TART_BIN\" --version");
+  expect(source).toContain("sudo -v");
+  expect(source).toContain("/etc/sudoers.d/whitesmith-tart-");
+  expect(source).toContain("visudo -cf");
+  expect(source).toContain('PLIST="$HOME/Library/LaunchAgents/com.whitesmith.worker.plist"');
+  expect(source).not.toContain("sudo zsh");
+  expect(source).toContain('[[ "$EUID" -ne 0 ]]');
+  expect(source).toContain("check 'Checking macOS host and Tart'");
+  expect(source).toContain("pass()");
+  expect(source).toContain("[✓]");
+});
 test("macOS installer provisions a persistent user-scoped worker service", async () => {
   const source = await Bun.file(mac).text();
   expect(source).toContain("/api/workers/orchestrator?audience=macos-arm64");
@@ -38,6 +52,32 @@ test("macOS installer provisions a persistent user-scoped worker service", async
   expect(source).toContain("worker-identity.json");
   expect(source).toContain("launchctl bootstrap");
   expect(source).not.toContain("launchctl bootstrap system");
+  expect(source).toContain('export WHITESMITH_TART_BASE_IMAGE=$(printf');
+  expect(source).toContain('export WHITESMITH_TART_IMAGE_DIGEST=$(printf');
+  expect(source).toContain('export WHITESMITH_TART_EXECUTABLE=$(printf');
+  expect(source).not.toContain('if [[ -n "\\${TART_IMAGE_DIGEST:-}" ]]');
+});
+test("macOS job image preparation is immutable, pinned, and emits split runtime identity", async () => {
+  expect(await Bun.file(prepareMacImage).exists()).toBe(true);
+  const source = await Bun.file(prepareMacImage).text();
+  expect(source).toContain("2.336.0");
+  expect(source).toContain("8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2239ee3dfce28b079");
+  expect(source).toContain("target already exists");
+  expect(source).toContain("image-manifest.json");
+  expect(source).toContain("WHITESMITH_TART_BASE_IMAGE=");
+  expect(source).toContain("WHITESMITH_TART_IMAGE_DIGEST=");
+  expect(source).toContain('tart delete "$TARGET"');
+});
+test("macOS job image preparation accepts immutable OCI digest sources", async () => {
+  const result = await invoke(prepareMacImage, ["--source", `ghcr.io/cirruslabs/macos-tahoe-base@sha256:${"a".repeat(64)}`, "--target", "invalid/target", "--job-agent", process.execPath]);
+  expect(result.exitCode).toBe(2);
+  expect(result.stderr).toContain("invalid target image");
+  expect(result.stderr).not.toContain("invalid source image");
+});
+test("macOS job image preparation preserves the original failure during cleanup", async () => {
+  const result = await invoke(prepareMacImage, ["--source", "source", "--target", "new-target", "--job-agent", process.execPath], { TART_BIN: "/usr/bin/true", CURL_BIN: "/usr/bin/false" });
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr).not.toContain("read-only variable");
 });
 
 

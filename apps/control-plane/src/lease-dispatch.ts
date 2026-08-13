@@ -33,5 +33,5 @@ export function openLeaseBootstrap(value: Ciphertext, workerPrivateKeyPem: strin
 export async function dispatchLeaseBootstrap(dispatcher: Dispatcher, input: LeaseDispatchInput): Promise<void> {
   const { workerId, workerEncryptionPublicKey, imageDigest, resources, ...envelope } = input;
   const sealed = sealLeaseBootstrap({ ...envelope, imageDigest, resources }, workerEncryptionPublicKey);
-  await dispatcher.dispatch({ workerId, leaseId: envelope.leaseId, type: "tart.create_lease", payload: { bootstrapCiphertext: sealed } });
+  void dispatcher.dispatch({ workerId, leaseId: envelope.leaseId, type: "tart.create_lease", payload: { bootstrapCiphertext: sealed } }).catch(() => undefined);
 }
