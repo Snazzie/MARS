@@ -7,11 +7,12 @@ import { approvePendingWorker, configurePendingWorker, createRequestLimiter, has
 
 function noStore(headers = new Headers()): Headers { headers.set("cache-control", "no-store"); return headers; }
 function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\"'\"'")}'`; }
-function injectInstallerOrigin(source: string, baseUrl: string, extra: Record<string, string> = {}): string {
+function powerShellQuote(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
+function injectInstallerOrigin(source: string, baseUrl: string, extra: Record<string, string> = {}, powershell = false): string {
   const values = { PUBLIC_BASE_URL: new URL(baseUrl).origin, ...extra };
+  if (powershell) return Object.entries(values).reduce((result, [key, value]) => result.replaceAll(`'__${key}__'`, powerShellQuote(value)), source);
   const injected = Object.entries(values).flatMap(([key, value]) => [`${key}=${shellQuote(value)}`, `export ${key}`]).join("\n");
-  const newline = source.indexOf("\n");
-  const insertAt = source.startsWith("#!") && newline >= 0 ? newline + 1 : 0;
+  const newline = source.indexOf("\n"); const insertAt = source.startsWith("#!") && newline >= 0 ? newline + 1 : 0;
   return `${source.slice(0, insertAt)}${injected}\n${source.slice(insertAt)}`;
 }
 export function pendingWorkerDto(row: Record<string, unknown>) {
@@ -19,6 +20,7 @@ export function pendingWorkerDto(row: Record<string, unknown>) {
   const telemetry = (row.doctor && typeof row.doctor === "object" ? row.doctor : {}) as Record<string, unknown>;
   const pending = PendingWorkerRequest.parse({
     platform: row.platform,
+    guestPlatforms: row.guestPlatforms ?? (row.platform === "windows-x64" ? ["windows-x64"] : [row.platform]),
     publicKey: row.publicKey,
     vmUuid: row.vmUuid,
     machineUuid: row.machineUuid,
@@ -45,14 +47,16 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const file = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : audience === "macos-arm64" ? "install-worker-macos.sh" : null;
     if (!file) return c.json({ error: "unsupported installer audience" }, 400);
     const installer = Bun.file(new URL(file, deps.workerInstallerRoot));
-    if (audience === "windows-x64") return new Response(installer, { headers: noStore() });
-    const extra: Record<string, string> = audience === "macos-arm64"
-      ? { TART_IMAGE: deps.macosTartBaseImage ?? "", TART_IMAGE_DIGEST: deps.defaultJobImages["macos-arm64"] ?? "" }
-      : {};
+    if (audience === "windows-x64") {
+      const extra = { WINDOWS_CONTAINER_IMAGE: deps.defaultJobImages["windows-x64"] ?? "" };
+      if (!extra.WINDOWS_CONTAINER_IMAGE) return c.json({ error: "Windows container image is not configured" }, 503, { "cache-control": "no-store" });
+      return new Response(injectInstallerOrigin(await installer.text(), deps.baseUrl, extra, true), { headers: noStore() });
+    }
+    const extra: Record<string, string> = audience === "macos-arm64" ? { TART_IMAGE: deps.macosTartBaseImage ?? "", TART_IMAGE_DIGEST: deps.defaultJobImages["macos-arm64"] ?? "" } : {};
     if (audience === "macos-arm64" && (!extra.TART_IMAGE || !extra.TART_IMAGE_DIGEST)) return c.json({ error: "macOS job image is not configured" }, 503, { "cache-control": "no-store" });
     return new Response(injectInstallerOrigin(await installer.text(), deps.baseUrl, extra), { headers: noStore() });
   });
-  app.get("/api/workers/orchestrator", (c) => { if (c.req.query("audience") !== "macos-arm64") return c.json({ error: "unsupported orchestrator audience" }, 400); const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", 'attachment; filename="whitesmith-orchestrator"'); return new Response(Bun.file(deps.workerOrchestratorExecutable), { headers }); });
+  app.get("/api/workers/orchestrator", (c) => { const audience = c.req.query("audience") as keyof NonNullable<typeof deps.workerOrchestratorExecutables>; const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined); if (!executable) return c.json({ error: "unsupported orchestrator audience" }, 400); const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", 'attachment; filename="whitesmith-orchestrator"'); return new Response(Bun.file(executable), { headers }); });
   app.post("/api/workers/join", async (c) => {
     const source = deps.requestSource(c.req.raw);
     if (!limiter.allow(source)) return c.json({ error: "invalid or rotated bootstrap credential" }, 429);
@@ -77,7 +81,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     if (!idempotency(c)) return c.json({ error: "Idempotency-Key required" }, 400);
     try {
       const body = await c.req.json();
-      const parsed = WorkerConfiguration.safeParse({ appliance: body.appliance, runtime: body.runtime });
+      const parsed = WorkerConfiguration.safeParse({ appliance: body.appliance, runtime: body.runtime, guestPlatforms: body.guestPlatforms });
       if (!parsed.success) return c.json({ error: "invalid worker configuration" }, 400);
       const key = c.req.header("Idempotency-Key")!.trim();
       const [prior] = await deps.db<{ response: Record<string, unknown> | null }[]>`select response from worker_mutations where worker_id=${c.req.param("workerId")} and idempotency_key=${key}`;
@@ -92,6 +96,6 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       throw error;
     }
   });
-  app.get("/api/workers/pending", async (c) => { const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401); if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403); const rows = await deps.db`select id,name,platform,admission_state as "admissionState",connection_state as "connectionState",configuration_state as "configurationState",public_key as "publicKey",fingerprint,vm_uuid as "vmUuid",machine_uuid as "machineUuid",limits,doctor,last_requested_at as "lastRequestedAt" from workers where admission_state='pending' order by created_at desc`; return c.json(rows.map((row) => pendingWorkerDto(row)).filter((row): row is NonNullable<typeof row> => row !== null)); });
+  app.get("/api/workers/pending", async (c) => { const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401); if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403); const rows = await deps.db`select id,name,platform,guest_platforms as "guestPlatforms",admission_state as "admissionState",connection_state as "connectionState",configuration_state as "configurationState",public_key as "publicKey",fingerprint,vm_uuid as "vmUuid",machine_uuid as "machineUuid",limits,doctor,last_requested_at as "lastRequestedAt" from workers where admission_state='pending' order by created_at desc`; return c.json(rows.map((row) => pendingWorkerDto(row)).filter((row): row is NonNullable<typeof row> => row !== null)); });
   app.post("/api/workers/pending/:workerId/reject", async (c) => { const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401); if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403); if (!idempotency(c)) return c.json({ error: "Idempotency-Key required" }, 400); await rejectPendingWorker(deps.db, c.req.param("workerId"), user.id); return c.json({ ok: true }); });
 }

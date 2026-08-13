@@ -51,19 +51,20 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const idem = requireMutation(c); if (idem) return idem;
     const body = CreatePoolRequest.parse(await c.req.json());
     if (body.triggerLabel === "self-hosted" || ["linux", "windows", "macos", "x64", "arm64"].includes(body.triggerLabel)) return error(c, 400, "reserved_trigger_label", "Trigger label is reserved");
-    const [worker] = await deps.db`SELECT platform,admission_state AS "admissionState",connection_state AS "connectionState",configuration_state AS "configurationState",draining FROM workers WHERE id=${body.workerId}`;
+    const [worker] = await deps.db`SELECT platform,guest_platforms AS "guestPlatforms",admission_state AS "admissionState",connection_state AS "connectionState",configuration_state AS "configurationState",draining FROM workers WHERE id=${body.workerId}`;
     if (!worker) return error(c, 404, "not_found", "Resource not found");
     if (worker.admissionState !== "adopted" || worker.connectionState !== "online" || worker.configurationState !== "ready" || worker.draining) return error(c, 422, "worker_not_ready", "Worker is not ready");
-    const driver = worker.platform === "linux-x64" ? "kata-k3s" : worker.platform === "windows-x64" ? "windows-hyperv" : "tart-vm";
-    const labels = worker.platform === "linux-x64" ? ["self-hosted", "linux", "x64", body.triggerLabel] : worker.platform === "windows-x64" ? ["self-hosted", "windows", "x64", body.triggerLabel] : ["self-hosted", "macos", "arm64", body.triggerLabel];
+    if (!(Array.isArray(worker.guestPlatforms) ? worker.guestPlatforms : [worker.platform]).includes(body.guestPlatform)) return error(c, 422, "worker_guest_platform_unsupported", "Worker does not support the requested guest platform");
+    const driver = worker.platform === "linux-x64" ? "kata-k3s" : worker.platform === "windows-x64" ? "windows-containers" : "tart-vm";
+    const labels = body.guestPlatform === "linux-x64" ? ["self-hosted", "linux", "x64", body.triggerLabel] : body.guestPlatform === "windows-x64" ? ["self-hosted", "windows", "x64", body.triggerLabel] : ["self-hosted", "macos", "arm64", body.triggerLabel];
     const [duplicate] = await deps.db`SELECT id,name,trigger_label AS "triggerLabel" FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel}) LIMIT 1`;
     if (duplicate) {
       if (duplicate.name !== body.name || duplicate.triggerLabel !== body.triggerLabel) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
-      await deps.db`UPDATE runner_pools SET worker_id=NULL,platform=${worker.platform},driver=${driver},image_digest=${body.imageDigest},resources=${JSON.stringify(body.resources)},labels=${JSON.stringify(labels)},enabled=true WHERE id=${duplicate.id}`;
+      await deps.db`UPDATE runner_pools SET worker_id=NULL,platform=${body.guestPlatform},driver=${driver},image_digest=${body.imageDigest},resources=${JSON.stringify(body.resources)},labels=${JSON.stringify(labels)},enabled=true WHERE id=${duplicate.id}`;
       return c.json({ id: String(duplicate.id), labels });
     }
-    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${worker.platform},${driver},${body.imageDigest},${JSON.stringify(body.resources)},${JSON.stringify(labels)},${body.triggerLabel},true) RETURNING id`;
-    await deps.db`INSERT INTO audit_events (organization_id,actor,type,payload) VALUES (NULL,${c.get("user").id},'pool.created',${JSON.stringify({ poolId: pool.id, workerId: body.workerId, triggerLabel: body.triggerLabel, scope: "control-plane" })})`;
+    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${body.guestPlatform},${driver},${body.imageDigest},${JSON.stringify(body.resources)},${JSON.stringify(labels)},${body.triggerLabel},true) RETURNING id`;
+    await deps.db`INSERT INTO audit_events (organization_id,actor,type,payload) VALUES (NULL,${c.get("user").id},'pool.created',${JSON.stringify({ poolId: pool.id, workerId: body.workerId, guestPlatform: body.guestPlatform, triggerLabel: body.triggerLabel, scope: "control-plane" })})`;
     return c.json({ id: String(pool.id), labels });
   }));
   app.post("/api/pools/:poolId/:action", safe(async (c) => {
@@ -82,18 +83,18 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const idem = requireMutation(c); if (idem) return idem;
     const body = CreatePoolRequest.parse(await c.req.json());
     if (body.triggerLabel === "self-hosted" || ["linux", "windows", "macos", "x64", "arm64"].includes(body.triggerLabel)) return error(c, 400, "reserved_trigger_label", "Trigger label is reserved");
-    const worker = await deps.db`SELECT platform,admission_state AS "admissionState",connection_state AS "connectionState",configuration_state AS "configurationState",draining,limits FROM workers WHERE id=${body.workerId}`;
-    if (!worker[0]) return error(c, 404, "not_found", "Resource not found");
-    const w = worker[0];
+    const [w] = await deps.db`SELECT platform,guest_platforms AS "guestPlatforms",admission_state AS "admissionState",connection_state AS "connectionState",configuration_state AS "configurationState",draining,limits FROM workers WHERE id=${body.workerId}`;
+    if (!w) return error(c, 404, "not_found", "Resource not found");
     if (w.admissionState !== "adopted" || w.connectionState !== "online" || w.configurationState !== "ready" || w.draining) return error(c, 422, "worker_not_ready", "Worker is not ready");
-    const driver = w.platform === "linux-x64" ? "kata-k3s" : w.platform === "windows-x64" ? "windows-hyperv" : "tart-vm";
-    const labels = w.platform === "linux-x64" ? ["self-hosted", "linux", "x64", body.triggerLabel] : w.platform === "windows-x64" ? ["self-hosted", "windows", "x64", body.triggerLabel] : ["self-hosted", "macos", "arm64", body.triggerLabel];
-    const duplicate = await deps.db`SELECT 1 FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel})`;
-    if (duplicate[0]) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
+    if (!(Array.isArray(w.guestPlatforms) ? w.guestPlatforms : [w.platform]).includes(body.guestPlatform)) return error(c, 422, "worker_guest_platform_unsupported", "Worker does not support the requested guest platform");
+    const driver = w.platform === "linux-x64" ? "kata-k3s" : w.platform === "windows-x64" ? "windows-containers" : "tart-vm";
+    const labels = body.guestPlatform === "linux-x64" ? ["self-hosted", "linux", "x64", body.triggerLabel] : body.guestPlatform === "windows-x64" ? ["self-hosted", "windows", "x64", body.triggerLabel] : ["self-hosted", "macos", "arm64", body.triggerLabel];
+    const [duplicate] = await deps.db`SELECT 1 FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel})`;
+    if (duplicate) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
     const key = c.req.header("idempotency-key")!;
     if (!(await dashboardMutation(deps.db, org, key))) return c.json({ ok: true });
-    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${w.platform},${driver},${body.imageDigest},${JSON.stringify(body.resources)},${JSON.stringify(labels)},${body.triggerLabel},true) RETURNING id`;
-    await deps.db`INSERT INTO audit_events (organization_id,actor,type,payload) VALUES (NULL,${c.get("user").id},'pool.created',${JSON.stringify({ poolId: pool.id, workerId: body.workerId, triggerLabel: body.triggerLabel, scope: "control-plane" })})`;
+    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${body.guestPlatform},${driver},${body.imageDigest},${JSON.stringify(body.resources)},${JSON.stringify(labels)},${body.triggerLabel},true) RETURNING id`;
+    await deps.db`INSERT INTO audit_events (organization_id,actor,type,payload) VALUES (NULL,${c.get("user").id},'pool.created',${JSON.stringify({ poolId: pool.id, workerId: body.workerId, guestPlatform: body.guestPlatform, triggerLabel: body.triggerLabel, scope: "control-plane" })})`;
     await completeOnboardingIfReady(deps.db);
     await invalidateDashboard(deps.db, org, ["pools", "onboarding"]);
     return c.json({ id: pool.id, labels });

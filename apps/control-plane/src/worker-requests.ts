@@ -1,6 +1,6 @@
 import type { Sql } from "postgres";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload } from "@whitesmith/contracts";
+import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, validateWorkerGuestPlatforms, type GuestPlatform } from "@whitesmith/contracts";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { fingerprint } from "./workers.ts";
 
@@ -23,6 +23,7 @@ export async function requestPendingWorker(db: Sql<{}>, input: WorkerBootstrapRe
   const parsed = WorkerBootstrapRequest.parse(input);
   if (source && limiter && !limiter.allow(source)) throw new WorkerRequestError("invalid_bootstrap");
   const fp = fingerprint(parsed.publicKey);
+  const guestPlatforms: GuestPlatform[] = parsed.platform === "windows-x64" ? ["windows-x64"] : [parsed.platform];
   const lockKeys = [`machine:${parsed.machineUuid}`, `vm:${parsed.vmUuid}`, `fingerprint:${fp}`].sort();
   const outcome = await db.begin(async tx => {
     const telemetry = tx.json({ doctor: parsed.doctor, capacity: parsed.capacity });
@@ -40,8 +41,8 @@ export async function requestPendingWorker(db: Sql<{}>, input: WorkerBootstrapRe
     }
     if (rows.length) return { conflict: true as const, invalid: false as const };
     await tx`update worker_bootstrap_credentials set consumed_at=now() where singleton=true and consumed_at is null`;
-    const [created] = await tx<{ id: string }[]>`insert into workers (name,platform,admission_state,public_key,encryption_public_key,fingerprint,vm_uuid,machine_uuid,limits,doctor,last_requested_at) values (${parsed.vmUuid},${parsed.platform},'pending',${parsed.publicKey},${parsed.encryptionPublicKey},${fp},${parsed.vmUuid},${parsed.machineUuid},null,${telemetry},now()) returning id`;
-    await tx`insert into audit_events (actor,type,payload) values ('worker','worker.requested',${JSON.stringify({ workerId: created.id, vmUuid: parsed.vmUuid, fingerprint: fp })}::jsonb)`;
+    const [created] = await tx<{ id: string }[]>`insert into workers (name,platform,guest_platforms,admission_state,public_key,encryption_public_key,fingerprint,vm_uuid,machine_uuid,limits,doctor,last_requested_at) values (${parsed.vmUuid},${parsed.platform},${JSON.stringify(guestPlatforms)}::jsonb,'pending',${parsed.publicKey},${parsed.encryptionPublicKey},${fp},${parsed.vmUuid},${parsed.machineUuid},null,${telemetry},now()) returning id`;
+    await tx`insert into audit_events (actor,type,payload) values ('worker','worker.requested',${JSON.stringify({ workerId: created.id, vmUuid: parsed.vmUuid, fingerprint: fp, guestPlatforms })}::jsonb)`;
     return { status: "created" as const, workerId: created.id };
   });
   if ("invalid" in outcome && outcome.invalid) throw new WorkerRequestError("invalid_bootstrap");
@@ -61,29 +62,35 @@ export async function approvePendingWorker(db: Sql<{}>, workerId: string, input:
     await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.approved',${JSON.stringify({ workerId, limits: parsed.limits })}::jsonb)`;
   });
 }
-export type WorkerConfigurationInput = { appliance: { vcpu: number; memoryBytes: number; storageBytes: number }; runtime: { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number } };
+export type WorkerConfigurationInput = { appliance: { vcpu: number; memoryBytes: number; storageBytes: number }; runtime: { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number }; guestPlatforms?: GuestPlatform[] };
 function canonical(value: unknown): string { if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`; if (value && typeof value === "object") return `{${Object.entries(value).sort(([a],[b]) => a.localeCompare(b)).map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`).join(",")}}`; return JSON.stringify(value); }
 export async function configurePendingWorker(db: Sql<{}>, workerId: string, configuration: WorkerConfigurationInput, adminId: string, dispatcher?: WorkerCommandDispatcher, idempotencyKey?: string): Promise<{ revision: string; fingerprint: string; commandId?: string }> {
-  const parsed = WorkerConfiguration.parse(configuration);
+  const parsed = WorkerConfiguration.parse({ ...configuration, guestPlatforms: configuration.guestPlatforms ?? ["macos-arm64"] });
   const revision = createHash("sha256").update(canonical(parsed)).digest("hex");
   const fp = createHash("sha256").update(`${workerId}:${revision}`).digest("hex");
   const commandId = randomUUID();
-  const payload = { workerId, appliance: parsed.appliance, runtime: parsed.runtime, revision, fingerprint: fp };
+  const payload = { workerId, appliance: parsed.appliance, runtime: parsed.runtime, guestPlatforms: parsed.guestPlatforms, revision, fingerprint: fp };
   const response = await db.begin(async tx => {
     if (idempotencyKey) {
       await tx`select pg_advisory_xact_lock(hashtext(${`whitesmith:configure:${workerId}:${idempotencyKey}`}))`;
       const prior = await tx<{ response: { revision: string; fingerprint: string; commandId?: string } | null }[]>`select response from worker_mutations where worker_id=${workerId} and idempotency_key=${idempotencyKey}`;
       if (prior[0]?.response) return prior[0].response;
     }
-    const rows = await tx<{ id: string; doctor: unknown; admissionState: string }[]>`select id, doctor, admission_state as "admissionState" from workers where id=${workerId} for update`;
+    const rows = await tx<{ id: string; doctor: unknown; admissionState: string; platform: GuestPlatform; guestPlatforms: GuestPlatform[]; draining: boolean }[]>`select id, doctor, admission_state as "admissionState", platform, guest_platforms as "guestPlatforms", draining from workers where id=${workerId} for update`;
     const row = rows[0]; if (!row || !["pending", "adopted"].includes(row.admissionState)) throw new Error("worker configuration conflict");
+    if (!validateWorkerGuestPlatforms(row.platform, parsed.guestPlatforms)) throw new Error("worker guest platform configuration conflict");
+    const priorPlatforms = Array.isArray(row.guestPlatforms) ? row.guestPlatforms : [row.platform];
+    if (row.admissionState === "adopted" && canonical(priorPlatforms) !== canonical(parsed.guestPlatforms)) {
+      const [{ count }] = await tx<{ count: number }[]>`select count(*)::int as count from runner_leases where worker_id=${workerId} and state not in ('completed','reaped','failed')`;
+      if (!row.draining || Number(count) !== 0) throw new Error("worker guest platform configuration requires drained worker");
+    }
     const telemetry = row.doctor && typeof row.doctor === "object" ? row.doctor as Record<string, unknown> : {};
     const capacity = telemetry.capacity && typeof telemetry.capacity === "object" ? telemetry.capacity as Record<string, number> : {};
     if (parsed.appliance.vcpu > (capacity.freeVcpu ?? 0) || parsed.appliance.memoryBytes > (capacity.freeMemoryBytes ?? 0) || parsed.appliance.storageBytes > (capacity.freeStorageBytes ?? 0)) throw new Error("worker configuration exceeds capacity");
     if (parsed.runtime.maxVcpuPerPod * parsed.runtime.maxConcurrentPods > parsed.appliance.vcpu || parsed.runtime.maxMemoryBytesPerPod * parsed.runtime.maxConcurrentPods > parsed.appliance.memoryBytes || parsed.runtime.maxStorageBytesPerPod * parsed.runtime.maxConcurrentPods > parsed.appliance.storageBytes) throw new Error("worker configuration exceeds capacity");
-    await tx`update workers set limits=${JSON.stringify(parsed.runtime)}::jsonb, admission_state='adopted', configuration_state='unconfigured', configuration_revision=${revision}, configuration_command_id=${commandId} where id=${workerId}`;
+    await tx`update workers set limits=${JSON.stringify(parsed.runtime)}::jsonb, guest_platforms=${JSON.stringify(parsed.guestPlatforms)}::jsonb, admission_state='adopted', configuration_state='unconfigured', configuration_revision=${revision}, configuration_command_id=${commandId} where id=${workerId}`;
     await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,'worker.configure',${workerId},null,now(),${JSON.stringify(payload)}::jsonb)`;
-    await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.configured',${JSON.stringify({ workerId, revision, fingerprint: fp })}::jsonb)`;
+    await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.configured',${JSON.stringify({ workerId, revision, fingerprint: fp, guestPlatforms: parsed.guestPlatforms })}::jsonb)`;
     const result = { revision, fingerprint: fp, commandId };
     if (idempotencyKey) await tx`insert into worker_mutations (worker_id,idempotency_key,response) values (${workerId},${idempotencyKey},${JSON.stringify(result)}::jsonb)`;
     return result;
@@ -101,7 +108,7 @@ export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event
   const [command] = await db<{ payload: unknown }[]>`select payload from commands where id=${commandId} and worker_id=${event.workerId} and type='worker.configure'`;
   const rawExpected = command?.payload;
   const expected = typeof rawExpected === "string" ? JSON.parse(rawExpected) as Record<string, unknown> : rawExpected as Record<string, unknown> | undefined;
-  const exact = observed.success && expected && worker?.configurationCommandId === commandId && worker.configurationRevision === revision && revision === expected.revision && canonical(observed.data) === canonical({ appliance: expected.appliance, runtime: expected.runtime });
+  const exact = observed.success && expected && worker?.configurationCommandId === commandId && worker.configurationRevision === revision && revision === expected.revision && canonical(observed.data) === canonical({ appliance: expected.appliance, runtime: expected.runtime, guestPlatforms: expected.guestPlatforms });
   if (!exact) {
     if (worker?.configurationCommandId === commandId && worker.configurationRevision === revision) await db`update workers set configuration_state='error' where id=${event.workerId} and configuration_command_id=${commandId} and configuration_revision=${revision}`;
     return false;

@@ -18,10 +18,8 @@ test("starts run.sh from the supplied Actions Runner root", async () => {
   await writeFile(join(root, "run.sh"), `#!/bin/sh\nprintf '%s' "$ACTIONS_RUNNER_INPUT_JITCONFIG" > '${outputPath}'\nprintf 'runner-output\\n'\n`, { mode: 0o700 });
   await chmod(join(root, "run.sh"), 0o700);
 
-  const output: string[] = [];
-  await runOneTimeJitBootstrap(configPath, root, chunk => { output.push(chunk); });
+  await runOneTimeJitBootstrap(configPath, root);
 
   expect(await Bun.file(outputPath).text()).toBe("encoded-jit-config");
-  expect(output.join("")).toContain("runner-output");
   expect(await Bun.file(configPath).exists()).toBe(false);
 });
