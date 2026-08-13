@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { positiveSafe, PoolResources, RuntimeDriverName, RuntimePlatform, WorkerLimits } from "./orchestration.ts";
+import { positiveSafe, PoolResources, RuntimeDriverName, RuntimePlatform, WorkerLimits, GuestPlatform } from "./orchestration.ts";
 
 const id = z.string().min(1);
 const timestamp = z.string().datetime({ offset: true });
@@ -34,7 +34,7 @@ export const RunSummary = dto(strict(runSummaryShape));
 export type RunSummary = z.infer<typeof RunSummary>;
 export const RunnerTriggerLabel = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,62}$/).refine((label) => !["self-hosted", "linux", "windows", "macos", "x64", "arm64"].includes(label));
 export type RunnerTriggerLabel = z.infer<typeof RunnerTriggerLabel>;
-export const CreatePoolRequest = dto(strict({ workerId: id, name: z.string().min(1), resources, triggerLabel: RunnerTriggerLabel, imageDigest: z.string().regex(/^[^@\s]+@sha256:[0-9a-f]{64}$/) }));
+export const CreatePoolRequest = dto(strict({ workerId: id, name: z.string().min(1), guestPlatform: GuestPlatform.default("macos-arm64"), resources, triggerLabel: RunnerTriggerLabel, imageDigest: z.string().regex(/^[^@\s]+@sha256:[0-9a-f]{64}$/) }));
 export type CreatePoolRequest = z.infer<typeof CreatePoolRequest>;
 export const RunStep = dto(strict({ id, name: z.string().min(1), number: z.number().int().nonnegative(), status: z.enum(["queued", "in_progress", "completed"]), conclusion: z.string().nullable(), queuedAt: timestamp, startedAt: timestamp.nullable(), completedAt: timestamp.nullable(), durationMs: positiveSafe.or(z.literal(0)) }));
 export type RunStep = z.infer<typeof RunStep>;
@@ -52,7 +52,7 @@ export const WorkerDoctor = dto(strict({ nestedKvm: z.boolean().optional(), kvmM
 export type WorkerDoctor = z.infer<typeof WorkerDoctor>;
 export const CapacitySnapshot = dto(strict({ vcpu: strict({ actual: positiveSafe, reserved: positiveSafe.or(z.literal(0)), free: positiveSafe.or(z.literal(0)) }), memoryBytes: strict({ actual: positiveSafe, reserved: positiveSafe.or(z.literal(0)), free: positiveSafe.or(z.literal(0)) }), storageBytes: strict({ actual: positiveSafe, reserved: positiveSafe.or(z.literal(0)), free: positiveSafe.or(z.literal(0)) }), pods: strict({ actual: positiveSafe, reserved: positiveSafe.or(z.literal(0)), free: positiveSafe.or(z.literal(0)) }) }));
 export type CapacitySnapshot = z.infer<typeof CapacitySnapshot>;
-export const WorkerDetail = dto(strict({ id, organizationId: organizationId.nullable(), name: z.string().min(1), platform: RuntimePlatform, driver: RuntimeDriverName, admissionState: z.enum(["pending", "adopted", "rejected", "revoked"]), connectionState: z.enum(["offline", "online"]), configurationState: z.enum(["unconfigured", "ready", "error"]), fingerprint: z.string().min(1), limits: WorkerLimits.nullable(), doctor: WorkerDoctor.nullable(), capacity: CapacitySnapshot, activeSandboxes: positiveSafe.or(z.literal(0)), draining: z.boolean() }));
+export const WorkerDetail = dto(strict({ id, organizationId: organizationId.nullable(), name: z.string().min(1), platform: RuntimePlatform, guestPlatforms: z.array(GuestPlatform).min(1), driver: RuntimeDriverName, admissionState: z.enum(["pending", "adopted", "rejected", "revoked"]), connectionState: z.enum(["offline", "online"]), configurationState: z.enum(["unconfigured", "ready", "error"]), fingerprint: z.string().min(1), limits: WorkerLimits.nullable(), doctor: WorkerDoctor.nullable(), capacity: CapacitySnapshot, activeSandboxes: positiveSafe.or(z.literal(0)), draining: z.boolean() }));
 export type WorkerDetail = z.infer<typeof WorkerDetail>;
 export const PoolSummary = dto(strict({ id, organizationId: id.nullable(), workerId: id.nullable(), workerName: z.string().min(1).nullable(), name: z.string().min(1), platform: RuntimePlatform, driver: RuntimeDriverName, imageDigest: z.string().min(1), resources, labels: z.array(z.string().min(1)), triggerLabel: RunnerTriggerLabel.nullable(), enabled: z.boolean(), active: positiveSafe.or(z.literal(0)) }));
 export type PoolSummary = z.infer<typeof PoolSummary>;

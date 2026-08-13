@@ -5,12 +5,12 @@ import { Disclosure } from "../components/Disclosure.tsx";
 import { QueryState } from "../components/StateView.tsx";
 import { workerOperationalLabel, workerReadinessLabel } from "../components/WorkerCard.tsx";
 
-type PoolWorker = Pick<WorkerDetail, "id" | "platform" | "driver" | "connectionState" | "configurationState" | "draining">;
+type PoolWorker = Pick<WorkerDetail, "id" | "platform" | "driver" | "connectionState" | "configurationState" | "draining"> & { guestPlatforms?: WorkerDetail["guestPlatforms"] };
 type PoolIdentity = Pick<PoolSummary, "platform" | "driver" | "workerId">;
 export type PoolWorkerCoverage = { online: number; ready: number; warning: string | null; operational: string | null; readiness: string | null };
 export function poolWorkerCoverage(pool: PoolIdentity, workers: PoolWorker[] | undefined): PoolWorkerCoverage {
   if (!workers) return { online: 0, ready: 0, warning: "Worker status unavailable", operational: null, readiness: null };
-  const matching = pool.workerId ? workers.filter((worker) => worker.id === pool.workerId) : workers.filter((worker) => worker.platform === pool.platform && worker.driver === pool.driver);
+  const matching = pool.workerId ? workers.filter((worker) => worker.id === pool.workerId) : workers.filter((worker) => (worker.guestPlatforms?.includes(pool.platform) ?? worker.platform === pool.platform) && worker.driver === pool.driver);
   if (pool.workerId) {
     const worker = matching[0];
     if (!worker) return { online: 0, ready: 0, warning: "Worker status unavailable", operational: null, readiness: null };
