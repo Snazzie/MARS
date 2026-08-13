@@ -42,6 +42,19 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const values = (deps.workerControlPlaneUrls ?? []).map((value) => new URL(value).origin);
     return c.json([...new Set(values)], { headers: noStore() });
   });
+  app.get("/api/workers/templates/:platform/manifest", async (c) => {
+    const platform = c.req.param("platform") as "windows-x64" | "linux-x64";
+    const path = deps.templateManifestPaths?.[platform];
+    if (!path || !await Bun.file(path).exists()) return c.json({ error: "template manifest unavailable" }, 503, { "cache-control": "no-store" });
+    return new Response(Bun.file(path), { headers: noStore() });
+  });
+  app.get("/api/workers/templates/:platform/artifact", async (c) => {
+    const platform = c.req.param("platform") as "windows-x64" | "linux-x64";
+    const path = deps.templateArtifactPaths?.[platform];
+    if (!path || !await Bun.file(path).exists()) return c.json({ error: "template artifact unavailable" }, 503, { "cache-control": "no-store" });
+    const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", `attachment; filename="${platform}.vhdx"`);
+    return new Response(Bun.file(path), { headers });
+  });
   app.get("/api/workers/installer", async (c) => {
     const audience = c.req.query("audience");
     const file = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : audience === "macos-arm64" ? "install-worker-macos.sh" : null;
