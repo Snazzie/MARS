@@ -1,5 +1,5 @@
 import { RunnerJitConfig } from "@whitesmith/contracts";
-import type { GithubJobSnapshot, GithubRunSnapshot } from "./runs.ts";
+import type { GithubJobSnapshot, GithubRunSnapshot, GithubStepSnapshot } from "./runs.ts";
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 export type GithubJobsClientOptions = { token: () => Promise<string>; fetch?: Fetcher; apiBase?: string };
@@ -11,6 +11,24 @@ const jobStatus = (value: unknown): GithubJobSnapshot["status"] => value === "co
 const stringValue = (value: unknown, fallback = "") => typeof value === "string" ? value : fallback;
 const nullableString = (value: unknown) => typeof value === "string" ? value : null;
 const labelsValue = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+const parseSteps = (value: unknown, fallbackQueuedAt: string): GithubStepSnapshot[] => {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("github_payload_invalid");
+  return value.map((raw): GithubStepSnapshot => {
+    if (!raw || typeof raw !== "object") throw new Error("github_payload_invalid");
+    const item = raw as Record<string, unknown>;
+    if (typeof item.number !== "number" || !Number.isSafeInteger(item.number) || item.number <= 0) throw new Error("github_payload_invalid");
+    const number = item.number;
+    const rawStatus = item.status;
+    const status = rawStatus === "queued" || rawStatus === "requested" || rawStatus === "waiting" || rawStatus === "pending" ? "queued" : rawStatus === "in_progress" ? "in_progress" : rawStatus === "completed" ? "completed" : null;
+    if (!status) throw new Error("github_payload_invalid");
+    const queuedAt = nullableString(item.created_at) ?? fallbackQueuedAt;
+    const startedAt = status === "queued" ? null : nullableString(item.started_at);
+    const completedAt = status === "completed" ? nullableString(item.completed_at) : null;
+    const startMs = startedAt ? Date.parse(startedAt) : NaN, endMs = completedAt ? Date.parse(completedAt) : NaN;
+    return { id: item.id === undefined || item.id === null ? null : String(item.id), number, name: stringValue(item.name, `step-${number}`), status, conclusion: nullableString(item.conclusion), queuedAt, startedAt, completedAt, durationMs: Number.isFinite(startMs) && Number.isFinite(endMs) ? Math.max(0, endMs - startMs) : 0 };
+  });
+};
 
 export class GithubJobsClient {
   private readonly token: () => Promise<string>;
@@ -32,7 +50,7 @@ export class GithubJobsClient {
   private parseJob(value: Record<string, unknown>): GithubJobSnapshot {
     const id = Number(value.id), runId = Number(value.run_id); if (!Number.isSafeInteger(id) || !Number.isSafeInteger(runId) || id <= 0 || runId <= 0) throw new Error("github_payload_invalid");
     const status = jobStatus(value.status);
-    return { id, runId, name: stringValue(value.name, "job"), status, conclusion: nullableString(value.conclusion), labels: labelsValue(value.labels), runnerName: nullableString(value.runner_name), queuedAt: stringValue(value.created_at, new Date().toISOString()), startedAt: status === "queued" ? null : nullableString(value.started_at), completedAt: status === "completed" ? nullableString(value.completed_at) : null };
+    return { id, runId, name: stringValue(value.name, "job"), status, conclusion: nullableString(value.conclusion), labels: labelsValue(value.labels), runnerName: nullableString(value.runner_name), queuedAt: stringValue(value.created_at, new Date().toISOString()), startedAt: status === "queued" ? null : nullableString(value.started_at), completedAt: status === "completed" ? nullableString(value.completed_at) : null, steps: parseSteps(value.steps, stringValue(value.created_at, new Date().toISOString())) };
   }
   async listRuns(owner: string, repo: string, status: "queued" | "in_progress", page: number): Promise<{ totalCount: number; runs: GithubRunSnapshot[] }> {
     const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?status=${status}&per_page=100&page=${page}`);
