@@ -319,3 +319,36 @@ test("workflow discovery authenticates every private repository read", async () 
   expect(result.files).toHaveLength(1);
   expect(calls.filter((request) => !String(request.url).endsWith("/access_tokens")).every((request) => request.headers.get("authorization") === "Bearer secret-installation-token")).toBe(true);
 });
+
+test("workflow preview uses the current runner pool schema", async () => {
+  const box = new SecretBox(masterKey);
+  const sql = (async (strings: TemplateStringsArray) => {
+    const query = strings.join("?");
+    if (query.includes("p.created_at")) throw new Error('column "created_at" does not exist');
+    if (query.includes("FROM github_app_config")) {
+      return [{ app_id: 9, slug: "whitesmith", client_id: null, encrypted_pem: box.encrypt(testPem), encrypted_client_secret: "x", encrypted_webhook_secret: "x" }];
+    }
+    if (query.includes("FROM dashboard_repositories r")) {
+      return [{ installation_id: 42, full_name: "acme/private", labels: ["self-hosted", "macos"] }];
+    }
+    return [];
+  }) as never;
+  const github = new GitHubAppService({
+    db: sql,
+    secretBox: box,
+    baseUrl: "https://control-plane.test",
+    fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/git/trees/")) return Response.json({ tree: [{ type: "blob", path: ".github/workflows/ci.yml", sha: "blob-sha" }] });
+      if (url.includes("/git/blobs/")) return Response.json({ content: Buffer.from("jobs:\n  test:\n    runs-on: ubuntu-latest\n").toString("base64") });
+      if (url.includes("/git/ref/heads/")) return Response.json({ object: { sha: "head-sha" } });
+      return Response.json({ default_branch: "main" });
+    },
+  } as never);
+
+  const preview = await github.previewRepositoryRunnerPr({ organizationId, repositoryId: "repo-1", selectedPaths: [".github/workflows/ci.yml"] });
+
+  expect(preview.replacementCount).toBe(1);
+  expect(preview.labels).toEqual(["self-hosted", "macos"]);
+});

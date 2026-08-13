@@ -355,7 +355,7 @@ export class GitHubAppService {
     }
     const rows = await this.db<Array<{ installation_id: number; full_name: string; labels: unknown; default_branch?: string; head_sha?: string }>>`
       SELECT i.github_installation_id AS installation_id, r.full_name,
-        (SELECT p.labels FROM runner_pools p WHERE p.organization_id IS NULL AND p.enabled=true ORDER BY p.created_at DESC LIMIT 1) AS labels
+        (SELECT p.labels FROM runner_pools p WHERE p.organization_id IS NULL AND p.enabled=true ORDER BY p.name LIMIT 1) AS labels
       FROM dashboard_repositories r JOIN dashboard_installations i ON i.id=r.installation_id
       WHERE r.organization_id=${organizationId} AND r.id=${repositoryId} AND r.available=true AND r.approved=true AND i.state='approved' LIMIT 1`;
     const row = rows[0];
