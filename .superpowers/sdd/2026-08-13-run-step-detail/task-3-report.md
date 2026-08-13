@@ -1,0 +1,2 @@
+
+Correction after review: normalized GitHub numeric/fallback step IDs now receive generated UUID dashboard identities (existing UUID identities are preserved; legacy non-UUID rows are promoted on update), so strict worker `stepId` values resolve end to end. Updated the lifecycle persistence test expectation. Reverified runs and worker lifecycle tests: 11 passed; both focused TypeScript checks passed.

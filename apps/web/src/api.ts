@@ -79,6 +79,8 @@ export const getRun = (organizationId: string, runId: string) =>
   request(`/api/organizations/${organizationId}/runs/${runId}`, RunDetail);
 export const getLogs = (organizationId: string, runId: string, jobId: string) =>
   request(`/api/organizations/${organizationId}/runs/${runId}/jobs/${jobId}/logs`, CursorPage(LogChunk));
+export const getStepLogs = (organizationId: string, runId: string, jobId: string, stepId: string, after = -1, limit = 100) =>
+  request(`/api/organizations/${organizationId}/runs/${runId}/jobs/${jobId}/steps/${stepId}/logs?after=${after}&limit=${limit}`, CursorPage(LogChunk));
 export const getRepositories = (organizationId: string) =>
   request(`/api/organizations/${organizationId}/repositories`, CursorPage(RepositorySummary));
 export const getWorkers = (organizationId: string, includeRevoked = false) =>

@@ -45,6 +45,7 @@ export const WorkerEventPayload = z.discriminatedUnion("type", [
   z.object({ type: z.literal("runner.finished"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32), exitCode: z.number().int().nonnegative() }).strict() }),
   z.object({ type: z.literal("lease.reaped"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32) }).strict() }),
   z.object({ type: z.literal("lease.failed"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32), reason: z.enum(["provisioning_failed","runner_failed","cleanup_failed"]) }).strict() }),
+  z.object({ type: z.literal("job.log"), payload: z.object({ jobId: z.string().uuid(), stepId: z.string().uuid().nullable(), sequence: z.number().int().nonnegative(), content: z.string().max(256 * 1024), occurredAt: z.string().datetime() }).strict() }),
 ]);
 export const WorkerApplianceConfiguration = z.object({ vcpu: positiveSafe, memoryBytes: positiveSafe, storageBytes: positiveSafe }).strict();
 export const WorkerConfiguration = z.object({ appliance: WorkerApplianceConfiguration, runtime: WorkerLimits }).strict();

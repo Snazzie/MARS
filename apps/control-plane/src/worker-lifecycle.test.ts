@@ -78,3 +78,23 @@ test("rejects malformed or unauthenticated lifecycle events without touching sto
   expect(await applyWorkerLeaseEvent(db, { ...event("sandbox_attested", { leaseId, nonce, runtimeInstanceId: "vm", observed: { vcpu: 1, memoryBytes: 1, storageBytes: 1 } }), workerId: "not-a-uuid" })).toBe(false);
   expect(calls).toHaveLength(0);
 });
+
+test("persists attributed and unattributed log chunks idempotently and rejects unknown steps", async () => {
+  const stepId = "33333333-3333-4333-8333-333333333333";
+  const jobId = "44444444-4444-4444-8444-444444444444";
+  const calls: string[] = [];
+  let lookup = 0;
+  const db = Object.assign(async (strings: TemplateStringsArray) => {
+    calls.push(strings.join(" "));
+    lookup += 1;
+    return lookup === 1 ? [{ organizationId: "org", runId: "run", jobId }] : [{ id: stepId }];
+  }, {}) as never;
+  const attributed = event("job.log", { jobId, stepId, sequence: 0, content: "safe", occurredAt: new Date().toISOString() });
+  expect(await handleAuthenticatedWorkerEvent(db, { handleEvent() { return false; } }, attributed, { send() {} })).toBe(true);
+  expect(calls.at(-1)).toContain("dashboard_step_log_chunks");
+  const unattributed = event("job.log", { jobId, stepId: null, sequence: 1, content: "fallback", occurredAt: new Date().toISOString() });
+  expect(await handleAuthenticatedWorkerEvent(db, { handleEvent() { return false; } }, unattributed, { send() {} })).toBe(true);
+  expect(calls.at(-1)).toContain("dashboard_log_chunks");
+  const unknownDb = Object.assign(async (_strings: TemplateStringsArray, ..._values: unknown[]) => (calls.length < 0 ? [{ organizationId: "org", runId: "run", jobId }] : []), {}) as never;
+  expect(await handleAuthenticatedWorkerEvent(unknownDb, { handleEvent() { return false; } }, attributed, { send() {} })).toBe(false);
+});
