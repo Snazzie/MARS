@@ -10,7 +10,7 @@ export function validateWorkerGuestPlatforms(hostPlatform: RuntimePlatform, gues
   const expected = hostPlatform === "windows-x64" ? [["windows-x64"], ["windows-x64", "linux-x64"]] : [[hostPlatform]];
   return expected.some((candidate) => candidate.length === guestPlatforms.length && candidate.every((platform, index) => guestPlatforms[index] === platform));
 }
-export const RuntimeDriverName = z.enum(["kata-k3s", "windows-containers", "windows-hyperv", "tart-vm"]);
+export const RuntimeDriverName = z.enum(["kata-k3s", "windows-hyperv", "tart-vm"]);
 export type RuntimeDriverName = z.infer<typeof RuntimeDriverName>;
 const positiveSafe = z.number().int().positive().safe();
 export const WorkerLimits = z.object({ maxVcpuPerPod: positiveSafe, maxMemoryBytesPerPod: positiveSafe, maxStorageBytesPerPod: positiveSafe, maxConcurrentPods: positiveSafe });

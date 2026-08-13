@@ -55,7 +55,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!worker) return error(c, 404, "not_found", "Resource not found");
     if (worker.admissionState !== "adopted" || worker.connectionState !== "online" || worker.configurationState !== "ready" || worker.draining) return error(c, 422, "worker_not_ready", "Worker is not ready");
     if (!(Array.isArray(worker.guestPlatforms) ? worker.guestPlatforms : [worker.platform]).includes(body.guestPlatform)) return error(c, 422, "worker_guest_platform_unsupported", "Worker does not support the requested guest platform");
-    const driver = worker.platform === "linux-x64" ? "kata-k3s" : worker.platform === "windows-x64" ? "windows-containers" : "tart-vm";
+    const driver = worker.platform === "linux-x64" ? "kata-k3s" : worker.platform === "windows-x64" ? "windows-hyperv" : "tart-vm";
     const labels = body.guestPlatform === "linux-x64" ? ["self-hosted", "linux", "x64", body.triggerLabel] : body.guestPlatform === "windows-x64" ? ["self-hosted", "windows", "x64", body.triggerLabel] : ["self-hosted", "macos", "arm64", body.triggerLabel];
     const [duplicate] = await deps.db`SELECT id,name,trigger_label AS "triggerLabel" FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel}) LIMIT 1`;
     if (duplicate) {
@@ -87,7 +87,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!w) return error(c, 404, "not_found", "Resource not found");
     if (w.admissionState !== "adopted" || w.connectionState !== "online" || w.configurationState !== "ready" || w.draining) return error(c, 422, "worker_not_ready", "Worker is not ready");
     if (!(Array.isArray(w.guestPlatforms) ? w.guestPlatforms : [w.platform]).includes(body.guestPlatform)) return error(c, 422, "worker_guest_platform_unsupported", "Worker does not support the requested guest platform");
-    const driver = w.platform === "linux-x64" ? "kata-k3s" : w.platform === "windows-x64" ? "windows-containers" : "tart-vm";
+    const driver = w.platform === "linux-x64" ? "kata-k3s" : w.platform === "windows-x64" ? "windows-hyperv" : "tart-vm";
     const labels = body.guestPlatform === "linux-x64" ? ["self-hosted", "linux", "x64", body.triggerLabel] : body.guestPlatform === "windows-x64" ? ["self-hosted", "windows", "x64", body.triggerLabel] : ["self-hosted", "macos", "arm64", body.triggerLabel];
     const [duplicate] = await deps.db`SELECT 1 FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel})`;
     if (duplicate) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");

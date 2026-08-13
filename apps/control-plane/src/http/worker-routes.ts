@@ -47,14 +47,9 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const file = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : audience === "macos-arm64" ? "install-worker-macos.sh" : null;
     if (!file) return c.json({ error: "unsupported installer audience" }, 400);
     const installer = Bun.file(new URL(file, deps.workerInstallerRoot));
-    if (audience === "windows-x64") {
-      const extra = { WINDOWS_CONTAINER_IMAGE: deps.defaultJobImages["windows-x64"] ?? "" };
-      if (!extra.WINDOWS_CONTAINER_IMAGE) return c.json({ error: "Windows container image is not configured" }, 503, { "cache-control": "no-store" });
-      return new Response(injectInstallerOrigin(await installer.text(), deps.baseUrl, extra, true), { headers: noStore() });
-    }
     const extra: Record<string, string> = audience === "macos-arm64" ? { TART_IMAGE: deps.macosTartBaseImage ?? "", TART_IMAGE_DIGEST: deps.defaultJobImages["macos-arm64"] ?? "" } : {};
     if (audience === "macos-arm64" && (!extra.TART_IMAGE || !extra.TART_IMAGE_DIGEST)) return c.json({ error: "macOS job image is not configured" }, 503, { "cache-control": "no-store" });
-    return new Response(injectInstallerOrigin(await installer.text(), deps.baseUrl, extra), { headers: noStore() });
+    return new Response(injectInstallerOrigin(await installer.text(), deps.baseUrl, extra, audience === "windows-x64"), { headers: noStore() });
   });
   app.get("/api/workers/orchestrator", (c) => { const audience = c.req.query("audience") as keyof NonNullable<typeof deps.workerOrchestratorExecutables>; const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined); if (!executable) return c.json({ error: "unsupported orchestrator audience" }, 400); const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", 'attachment; filename="whitesmith-orchestrator"'); return new Response(Bun.file(executable), { headers }); });
   app.post("/api/workers/join", async (c) => {

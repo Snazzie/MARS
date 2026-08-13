@@ -22,10 +22,10 @@ test("dispatches ciphertext under a non-secret command field", async () => {
   expect(JSON.stringify(calls[0])).not.toContain("secret");
 });
 
-test("dispatches Windows leases to the Hyper-V-isolated container command", async () => {
+test("dispatches Windows leases to the Hyper-V VM command", async () => {
   const calls: unknown[] = [];
   const keys = generateKeyPairSync("x25519");
   const publicKey = keys.publicKey.export({ format: "pem", type: "spki" }).toString();
-  await dispatchLeaseBootstrap({ dispatch: async (input: unknown) => { calls.push(input); } }, { driver: "windows-containers", leaseId: "11111111-1111-4111-8111-111111111111", jobId: "22222222-2222-4222-8222-222222222222", workerId: "33333333-3333-4333-8333-333333333333", workerEncryptionPublicKey: publicKey, guestPlatform: "windows-x64", imageDigest: "registry.example/windows@sha256:" + "a".repeat(64), resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "secret", expiresAt: new Date(Date.now() + 60_000).toISOString() });
-  expect((calls[0] as { type: string }).type).toBe("windows_container.create_lease");
+  await dispatchLeaseBootstrap({ dispatch: async (input: unknown) => { calls.push(input); } }, { driver: "windows-hyperv", leaseId: "11111111-1111-4111-8111-111111111111", jobId: "22222222-2222-4222-8222-222222222222", workerId: "33333333-3333-4333-8333-333333333333", workerEncryptionPublicKey: publicKey, guestPlatform: "windows-x64", imageDigest: "sha256:" + "a".repeat(64), resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "secret", expiresAt: new Date(Date.now() + 60_000).toISOString() });
+  expect((calls[0] as { type: string }).type).toBe("hyperv.create_lease");
 });

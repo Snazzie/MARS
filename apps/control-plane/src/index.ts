@@ -10,7 +10,7 @@ import { readBody, validSignature, acceptDelivery } from "./webhook.ts";
 import { verifyWorkerSignature } from "./workers.ts";
 import { createWorkerChallenge, decodeWorkerSignature } from "./worker-socket.ts";
 import { WorkerCommandDispatcher, containsSecret } from "./worker-dispatch.ts";
-import { applyWorkerConfigurationAcknowledgement } from "./worker-requests.ts";
+import { applyWorkerConfigurationAcknowledgement, createRequestLimiter } from "./worker-requests.ts";
 import { handleAuthenticatedWorkerEvent } from "./worker-lifecycle.ts";
 import { GitHubAppService } from "./github-app.ts";
 import { runQueuedJobReconciliation } from "./job-reconciler.ts";
@@ -61,7 +61,7 @@ const discoveryIntervalMs = Number(Bun.env.JOB_DISCOVERY_INTERVAL_MS ?? 30_000);
 const startedAt = new Date().toISOString();
 const discoveryHealth = new DiscoveryHealthMonitor(discoveryIntervalMs, Date.parse(startedAt));
 const githubApp = new GitHubAppService({ db, secretBox, baseUrl: env.BASE, webhookUrl: env.WEBHOOK_URL });
-const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), workerOrchestratorExecutables: { "windows-x64": new URL("../../workers/whitesmith-orchestrator.exe", import.meta.url), "macos-arm64": new URL("../../orchestrator/dist/whitesmith-orchestrator", import.meta.url) }, workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => { const socket = workerSockets.get(workerId); if (socket) dispatcher.replayConnected(workerId); }, health: () => ({ buildId: Bun.env.WHITESMITH_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
+const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), workerOrchestratorExecutables: { "linux-x64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator", import.meta.url), "windows-x64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator.exe", import.meta.url), "macos-arm64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator-macos-arm64", import.meta.url) }, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => dispatcher.replayConnected(workerId), health: () => ({ buildId: Bun.env.WHITESMITH_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
 let nextDiscoveryAt = 0;
 startReconciliationScheduler(async () => {
   try {

@@ -81,27 +81,21 @@ test("macOS job image preparation preserves the original failure during cleanup"
 });
 
 
-test("PowerShell installer enforces Windows-container Hyper-V isolation", async () => {
+test("PowerShell installer enforces native Hyper-V templates", async () => {
   const source = await Bun.file(powershell).text();
-  expect(source).toContain("Write-ChecklistStep");
-  expect(source).toContain("Ensure-WindowsFeatures");
+  expect(source).toContain("Ensure-HyperV");
   expect(source).toContain("Get-WindowsOptionalFeature");
-  expect(source).toContain("docker info");
-  expect(source).toContain("OSType");
-  expect(source).toContain("--isolation=hyperv");
-  expect(source).toContain("Assert-ImmutableImage");
-  expect(source).toContain("WHITESMITH_WINDOWS_CONTAINER_IMAGE");
-  expect(source).not.toContain("WHITESMITH_WINDOWS_VHDX");
+  expect(source).toContain("Get-VMHost");
+  expect(source).toContain("Assert-Digest");
+  expect(source).toContain("WHITESMITH_WINDOWS_TEMPLATE_PATH");
+  expect(source).not.toContain("WHITESMITH_WINDOWS_CONTAINER_IMAGE");
   expect(source).toContain("sc.exe create WhitesmithWorker");
   expect(source).toContain("obj= LocalSystem");
 });
-test("Windows container image preparation is pinned and emits a manifest", async () => {
-  const script = await Bun.file(join(root, "deploy/workers/prepare-windows-container-image.ps1")).text();
-  expect(script).toContain("Assert-Image");
-  expect(script).toContain("docker build");
-  expect(script).toContain("docker image inspect");
-  expect(script).toContain("whitesmith-job-agent.exe");
-  expect(script).toContain("ConvertTo-Json");
+test("Hyper-V worker preparation is not Docker-based", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).not.toContain("docker");
+  expect(source).not.toContain("Windows Containers");
 });
 test("orchestrator entrypoint dispatches platform worker commands", async () => {
   const source = await Bun.file(join(root, "apps/orchestrator/src/index.ts")).text();
