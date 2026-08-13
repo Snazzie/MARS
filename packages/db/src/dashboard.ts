@@ -129,7 +129,7 @@ function workerDoctor(value: unknown): WorkerDetail["doctor"] {
 }
 function normalizeWorker(row: Record<string, unknown>): WorkerDetail {
   const platform = RuntimePlatform.parse(row.platform);
-  const driver = RuntimeDriverName.parse(platform === "linux-x64" ? "kata-k3s" : platform === "windows-x64" ? "windows-hyperv" : "tart-vm");
+  const driver = RuntimeDriverName.parse(platform === "linux-x64" ? "kata-k3s" : platform === "windows-x64" ? "windows-containers" : "tart-vm");
   const rawGuestPlatforms = jsonValue(row.guestPlatforms);
   const guestPlatforms = Array.isArray(rawGuestPlatforms) && rawGuestPlatforms.length > 0 ? rawGuestPlatforms.map((value) => GuestPlatform.parse(value)) : [platform];
   const limitsValue = WorkerLimits.safeParse(jsonValue(row.limits));

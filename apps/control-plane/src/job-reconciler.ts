@@ -57,7 +57,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
   const organizationByJob = new Map<number, string>();
   const installationByJob = new Map<number, number>();
   const githubByInstallation = new Map<number, GithubJobsClient>();
-  const workerByPool = new Map<string, { workerId: string; encryptionPublicKey: string; imageDigest: string; guestPlatform: string; driver: "kata-k3s" | "windows-hyperv" | "tart-vm"; resources: ReturnType<typeof PoolResourcesSchema.parse> }>();
+  const workerByPool = new Map<string, { workerId: string; encryptionPublicKey: string; imageDigest: string; guestPlatform: string; driver: "kata-k3s" | "windows-containers" | "windows-hyperv" | "tart-vm"; resources: ReturnType<typeof PoolResourcesSchema.parse> }>();
 
   const candidates = candidateRows.filter((row) => !deps.workerConnected || deps.workerConnected(String(row.workerId))).map((row) => {
     const resources = PoolResourcesSchema.parse(jsonValue(row.resources));
@@ -96,7 +96,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     dispatch: async (reservation, jit) => {
       const target = workerByPool.get(`${reservation.poolId}:${reservation.workerId}`);
       if (!target?.encryptionPublicKey) throw new Error("worker_encryption_key_missing");
-      const envelope: LeaseBootstrapEnvelope = { leaseId: reservation.id, nonce: reservation.nonce, guestPlatform: target.guestPlatform as LeaseBootstrapEnvelope["guestPlatform"], encodedJitConfig: jit.encodedJitConfig, expiresAt: reservation.expiresAt, imageDigest: target.imageDigest, resources: target.resources };
+      const envelope: LeaseBootstrapEnvelope = { leaseId: reservation.id, jobId: reservation.id, nonce: reservation.nonce, guestPlatform: target.guestPlatform as LeaseBootstrapEnvelope["guestPlatform"], encodedJitConfig: jit.encodedJitConfig, expiresAt: reservation.expiresAt, imageDigest: target.imageDigest, resources: target.resources };
       await dispatchLeaseBootstrap(deps.dispatcher, { ...envelope, driver: target.driver, workerId: target.workerId, workerEncryptionPublicKey: target.encryptionPublicKey });
       await deps.db`UPDATE runner_leases SET state='dispatched', updated_at=now() WHERE id=${reservation.id} AND state='reserved'`;
     },

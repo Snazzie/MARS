@@ -81,32 +81,27 @@ test("macOS job image preparation preserves the original failure during cleanup"
 });
 
 
-test("PowerShell installer exposes guided checklist remediation", async () => {
+test("PowerShell installer enforces Windows-container Hyper-V isolation", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).toContain("Write-ChecklistStep");
-  expect(source).toContain("Ensure-HyperV");
-  expect(source).toContain("Enable-WindowsOptionalFeature");
-  expect(source).toContain("Restart-Computer");
-  expect(source).toContain("Ensure-HyperVSwitch");
-  expect(source).toContain("New-VMSwitch");
-  expect(source).toContain("Get-NetAdapter -Physical");
-  expect(source).toContain("Ensure-Template");
-  expect(source).toContain("Write-ChecklistAction");
-  expect(source).toContain("Write-ChecklistPass");
-});
-test("PowerShell installer accepts the documented Code alias", async () => {
-  const source = await Bun.file(powershell).text();
-  expect(source).toContain("[Alias('Code')][string]$JoinCode");
-});
-
-test("PowerShell installer validates immutable templates before service setup", async () => {
-  const source = await Bun.file(powershell).text();
-  expect(source).toContain("Assert-Digest");
-  expect(source).toContain("Get-FileHash");
-  expect(source).toContain("WHITESMITH_WINDOWS_IMAGE_DIGEST");
-  expect(source).toContain("WHITESMITH_LINUX_IMAGE_DIGEST");
+  expect(source).toContain("Ensure-WindowsFeatures");
+  expect(source).toContain("Get-WindowsOptionalFeature");
+  expect(source).toContain("docker info");
+  expect(source).toContain("OSType");
+  expect(source).toContain("--isolation=hyperv");
+  expect(source).toContain("Assert-ImmutableImage");
+  expect(source).toContain("WHITESMITH_WINDOWS_CONTAINER_IMAGE");
+  expect(source).not.toContain("WHITESMITH_WINDOWS_VHDX");
   expect(source).toContain("sc.exe create WhitesmithWorker");
   expect(source).toContain("obj= LocalSystem");
+});
+test("Windows container image preparation is pinned and emits a manifest", async () => {
+  const script = await Bun.file(join(root, "deploy/workers/prepare-windows-container-image.ps1")).text();
+  expect(script).toContain("Assert-Image");
+  expect(script).toContain("docker build");
+  expect(script).toContain("docker image inspect");
+  expect(script).toContain("whitesmith-job-agent.exe");
+  expect(script).toContain("ConvertTo-Json");
 });
 test("orchestrator entrypoint dispatches platform worker commands", async () => {
   const source = await Bun.file(join(root, "apps/orchestrator/src/index.ts")).text();

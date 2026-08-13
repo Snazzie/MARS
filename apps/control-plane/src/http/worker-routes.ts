@@ -48,8 +48,8 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     if (!file) return c.json({ error: "unsupported installer audience" }, 400);
     const installer = Bun.file(new URL(file, deps.workerInstallerRoot));
     if (audience === "windows-x64") {
-      const extra = { WINDOWS_IMAGE_DIGEST: deps.defaultJobImages["windows-x64"] ?? "", LINUX_IMAGE_DIGEST: deps.defaultJobImages["linux-x64"] ?? "" };
-      if (!extra.WINDOWS_IMAGE_DIGEST) return c.json({ error: "Windows job image is not configured" }, 503, { "cache-control": "no-store" });
+      const extra = { WINDOWS_CONTAINER_IMAGE: deps.defaultJobImages["windows-x64"] ?? "" };
+      if (!extra.WINDOWS_CONTAINER_IMAGE) return c.json({ error: "Windows container image is not configured" }, 503, { "cache-control": "no-store" });
       return new Response(injectInstallerOrigin(await installer.text(), deps.baseUrl, extra, true), { headers: noStore() });
     }
     const extra: Record<string, string> = audience === "macos-arm64" ? { TART_IMAGE: deps.macosTartBaseImage ?? "", TART_IMAGE_DIGEST: deps.defaultJobImages["macos-arm64"] ?? "" } : {};

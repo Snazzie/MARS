@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, createPublicKey, createPrivateKey, di
 import { LeaseBootstrapEnvelope } from "@whitesmith/contracts";
 
 type Ciphertext = { version: 1; algorithm: "x25519-aes-256-gcm"; ephemeralPublicKey: string; iv: string; tag: string; ciphertext: string };
-export type LeaseDispatchInput = LeaseBootstrapEnvelope & { driver: "kata-k3s" | "windows-hyperv" | "tart-vm"; workerId: string; workerEncryptionPublicKey: string };
+export type LeaseDispatchInput = LeaseBootstrapEnvelope & { driver: "kata-k3s" | "windows-containers" | "windows-hyperv" | "tart-vm"; workerId: string; workerEncryptionPublicKey: string };
 type Dispatcher = { dispatch(input: { workerId: string; leaseId: string; type: string; payload: Record<string, unknown> }): Promise<unknown> };
 
 function derive(shared: Buffer): Buffer { return shared.subarray(0, 32); }
@@ -34,6 +34,6 @@ export async function dispatchLeaseBootstrap(dispatcher: Dispatcher, input: Leas
   const { workerId, workerEncryptionPublicKey, driver, ...envelope } = input;
   if (driver === "kata-k3s") throw new Error("unsupported lease driver: kata-k3s");
   const sealed = sealLeaseBootstrap(envelope, workerEncryptionPublicKey);
-  const type = driver === "windows-hyperv" ? "hyperv.create_lease" : "tart.create_lease";
+  const type = driver === "windows-containers" ? "windows_container.create_lease" : driver === "windows-hyperv" ? "hyperv.create_lease" : "tart.create_lease";
   void dispatcher.dispatch({ workerId, leaseId: envelope.leaseId, type, payload: { bootstrapCiphertext: sealed } }).catch(() => undefined);
 }
