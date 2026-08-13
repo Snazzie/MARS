@@ -21,7 +21,7 @@ function makeStatefulSql() {
         if (current.status !== "completed" && (incoming.status === "completed" || (current.status === "queued" && incoming.status === "in_progress"))) current.status = incoming.status;
         current.conclusion ??= incoming.conclusion;
         current.queued_at = [current.queued_at, incoming.queued_at].sort()[0];
-        current.started_at ??= incoming.started_at;
+        current.started_at = current.started_at && incoming.started_at ? [current.started_at, incoming.started_at].sort()[0] : current.started_at ?? incoming.started_at;
         current.completed_at ??= incoming.completed_at;
       }
       return [runs.get(key)!];
@@ -36,7 +36,7 @@ function makeStatefulSql() {
         current.conclusion ??= incoming.conclusion;
         current.runner_name = incoming.runner_name ?? current.runner_name;
         current.queued_at = [current.queued_at, incoming.queued_at].sort()[0];
-        current.started_at ??= incoming.started_at;
+        current.started_at = current.started_at && incoming.started_at ? [current.started_at, incoming.started_at].sort()[0] : current.started_at ?? incoming.started_at;
         current.completed_at ??= incoming.completed_at;
       }
       return [jobs.get(key)!];
@@ -71,12 +71,16 @@ const job: GithubJobSnapshot = { id: 99, runId: run.id, name: "macos", status: "
   const fake = makeStatefulSql(); configureRunLifecycle(fake.sql as never);
   const repository = { id: 123, name: "repo", fullName: "acme/repo" };
   expect(await applyGithubJobSnapshot({ installationId: 5, repository, run, job })).toBe(true);
+  expect(fake.runs.get("org:42")?.status).toBe("queued");
   expect(await applyWorkflowJobWebhook({ installation: { id: 5 }, repository: { id: 123, name: "repo", full_name: "acme/repo" }, sender: { login: "octocat" }, action: "queued", workflow_job: { id: 99, run_id: 42, run_number: 7, name: "macos", status: "queued", created_at: queuedAt, workflow_name: "CI", head_branch: "main", head_sha: "abc", event: "push", labels: job.labels, steps: [{ number: 1, name: "build", status: "queued" }] } })).toBe(true);
-  const key = "org:99"; expect(fake.jobs.get(key)?.status).toBe("queued"); expect(fake.jobs.get(key)?.started_at).toBeNull(); expect(fake.jobs.get(key)?.requested_labels).toBe('["self-hosted","macos"]'); expect(fake.steps.size).toBe(1);
-  const started = { ...run, status: "in_progress" as const, startedAt: "2026-08-13T00:01:00Z" }; const runningJob = { ...job, status: "in_progress" as const, startedAt: started.startedAt, runnerName: "runner" }; await applyGithubJobSnapshot({ installationId: 5, repository, run: started, job: runningJob });
-  const completed = { ...started, status: "completed" as const, conclusion: "success", completedAt: "2026-08-13T00:02:00Z" }; const doneJob = { ...runningJob, status: "completed" as const, conclusion: "success", completedAt: completed.completedAt, steps: [{ ...step, id: null, status: "completed" as const, conclusion: "success", startedAt: started.startedAt, completedAt: completed.completedAt, durationMs: 60_000 }] }; await applyGithubJobSnapshot({ installationId: 5, repository, run: completed, job: doneJob });
-  await applyGithubJobSnapshot({ installationId: 5, repository, run: started, job: runningJob });
-  expect(fake.jobs.get(key)?.status).toBe("completed"); expect(fake.jobs.get(key)?.started_at).toBe(started.startedAt); expect(fake.jobs.get(key)?.completed_at).toBe(completed.completedAt); expect(fake.steps.get("org:run-42:job-99:1")?.status).toBe("completed");
+  const key = "org:99"; expect(fake.runs.get("org:42")?.status).toBe("queued"); expect(fake.jobs.get(key)?.status).toBe("queued"); expect(fake.jobs.get(key)?.started_at).toBeNull(); expect(fake.jobs.get(key)?.requested_labels).toBe('["self-hosted","macos"]'); expect(fake.steps.size).toBe(1);
+  const started = { ...run, status: "in_progress" as const, startedAt: "2026-08-13T00:02:00Z" }; const runningJob = { ...job, status: "in_progress" as const, startedAt: started.startedAt, runnerName: "runner" }; await applyGithubJobSnapshot({ installationId: 5, repository, run: started, job: runningJob });
+  expect(fake.runs.get("org:42")?.status).toBe("in_progress"); expect(fake.runs.get("org:42")?.started_at).toBe(started.startedAt);
+  const completed = { ...started, status: "completed" as const, conclusion: "success", completedAt: "2026-08-13T00:04:00Z" }; const doneJob = { ...runningJob, status: "completed" as const, conclusion: "success", completedAt: completed.completedAt, steps: [{ ...step, id: null, status: "completed" as const, conclusion: "success", startedAt: started.startedAt, completedAt: completed.completedAt, durationMs: 120_000 }] }; await applyGithubJobSnapshot({ installationId: 5, repository, run: completed, job: doneJob });
+  expect(fake.runs.get("org:42")?.status).toBe("completed"); expect(fake.runs.get("org:42")?.completed_at).toBe(completed.completedAt);
+  const stale = { ...completed, startedAt: "2026-08-13T00:01:00Z", completedAt: "2026-08-13T00:03:00Z" }; await applyGithubJobSnapshot({ installationId: 5, repository, run: stale, job: { ...doneJob, startedAt: stale.startedAt, completedAt: stale.completedAt } });
+  expect(fake.runs.get("org:42")?.status).toBe("completed"); expect(fake.runs.get("org:42")?.started_at).toBe(stale.startedAt); expect(fake.runs.get("org:42")?.completed_at).toBe(completed.completedAt);
+  expect(fake.jobs.get(key)?.status).toBe("completed"); expect(fake.jobs.get(key)?.started_at).toBe(stale.startedAt); expect(fake.jobs.get(key)?.completed_at).toBe(completed.completedAt); expect(fake.steps.get("org:run-42:job-99:1")?.status).toBe("completed");
   const stable = { ...doneJob, steps: [{ ...doneJob.steps[0], id: "gh-step-1" }] }; await applyGithubJobSnapshot({ installationId: 5, repository, run: completed, job: stable }); expect(fake.steps.get("org:run-42:job-99:1")?.id).toBe("gh-step-1");
  });
 
