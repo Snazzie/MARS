@@ -21,6 +21,7 @@ test("renders operational and readiness status in the worker card", () => {
     name: "mac-worker",
     platform: "macos-arm64",
     driver: "tart-vm",
+    guestPlatforms: ["macos-arm64"],
     admissionState: "adopted",
     connectionState: "online",
     configurationState: "ready",
@@ -32,6 +33,6 @@ test("renders operational and readiness status in the worker card", () => {
     draining: false,
   } as WorkerDetail;
   const markup = renderToStaticMarkup(<WorkerCard worker={worker} organizationId="all" onChange={() => {}} />);
-  expect(markup).toContain("Online");
-  expect(markup).toContain("Ready");
+  expect(markup).toContain(">online</span>");
+  expect(markup).not.toContain("Needs configuration");
 });

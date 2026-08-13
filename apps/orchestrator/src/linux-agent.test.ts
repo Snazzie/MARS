@@ -14,6 +14,7 @@ const command: WorkerCommand = {
     workerId,
     appliance: { vcpu: 8, memoryBytes: 16_000, storageBytes: 64_000 },
     runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_000, maxStorageBytesPerPod: 16_000, maxConcurrentPods: 4 },
+    guestPlatforms: ["linux-x64"],
     revision: "a".repeat(64),
     fingerprint: "b".repeat(64),
   },
@@ -26,7 +27,7 @@ describe("Linux worker.configure", () => {
     expect(resources).toEqual({ appliance: { vcpu: 8, memoryBytes: 16_000, storageBytes: 64_000 }, runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_000, maxStorageBytesPerPod: 16_000, maxConcurrentPods: 4 } });
     expect(event.type).toBe("worker.configured");
     expect(event.workerId).toBe(workerId);
-    expect(event.payload).toEqual({ commandId: command.id, workerId, revision: "a".repeat(64), observed: { appliance: resources.appliance, runtime: resources.runtime } });
+    expect(event.payload).toEqual({ commandId: command.id, workerId, revision: "a".repeat(64), observed: { appliance: resources.appliance, runtime: resources.runtime, guestPlatforms: ["linux-x64"] } });
   });
 
   test("consumes only worker.configure", () => {

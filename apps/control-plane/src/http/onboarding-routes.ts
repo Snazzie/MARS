@@ -11,6 +11,7 @@ export function registerOnboardingRoutes(app: Hono<ControlPlaneEnv>, deps: Contr
     return c.json(OnboardingStatus.parse(status), { headers:{ "cache-control":"no-store" } });
   });
   app.get("/api/onboarding", async (c) => {
+    const user = await deps.currentUser(c.req.raw); if (!user) return c.json({ error:"unauthorized" },401); if (!user.isGlobalAdmin) return c.json({ error:"forbidden" },403);
     const detail=await getOnboardingDetail(deps.db, { authenticated:true, canManage:true }); const defaultImageDigests=Object.fromEntries(Object.entries(deps.defaultJobImages).map(([platform,digest])=>[platform,digest])); return c.json(OnboardingDetail.parse({...detail,defaultImageDigests}), { headers:{ "cache-control":"no-store" } });
   });
   app.put("/api/onboarding/worker", async (c) => {
