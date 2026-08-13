@@ -31,6 +31,11 @@ test("filters run history across Blacksmith metadata", () => {
   expect(filterRuns(runs, "tart vm", "all", NOW).map((item) => item.id)).toEqual(["run-1", "run-2"]);
 });
 
+test("uses locale-independent casing for metadata search", () => {
+  const istanbul = run({ id: "istanbul", workflowName: "Istanbul release" });
+  expect(filterRuns([istanbul], "istanbul", "all", NOW).map((item) => item.id)).toEqual(["istanbul"]);
+});
+
 test("filters the current API page by queued time with an exact boundary", () => {
   const edge = run({ id: "edge", queuedAt: "2026-08-13T15:00:00.000Z" });
   const old = run({ id: "old", queuedAt: "2026-08-13T14:59:59.999Z" });

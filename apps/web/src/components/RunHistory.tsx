@@ -22,7 +22,7 @@ export function filterRuns(
   range: RunHistoryRange,
   nowMs: number,
 ): RunSummary[] {
-  const query = search.trim().toLocaleLowerCase();
+  const query = search.trim().toLowerCase();
   const cutoff = range === "all" ? Number.NEGATIVE_INFINITY : nowMs - RANGE_MS[range];
   return runs.filter((run) => {
     const inRange = Date.parse(run.queuedAt) >= cutoff;
@@ -35,7 +35,7 @@ export function filterRuns(
       run.commitSha,
       result,
       run.runtimeBoundary ?? "",
-    ].join(" ").toLocaleLowerCase();
+    ].join(" ").toLowerCase();
     return inRange && (!query || searchable.includes(query));
   });
 }
