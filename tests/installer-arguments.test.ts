@@ -81,36 +81,41 @@ test("macOS job image preparation preserves the original failure during cleanup"
 });
 
 
-test("PowerShell prompts securely when Code is omitted", async () => {
+test("PowerShell installer exposes guided checklist remediation", async () => {
   const source = await Bun.file(powershell).text();
-  expect(source).toContain("[Parameter(Mandatory=$false)]");
-  expect(source).toContain("[string]$Code");
-  expect(source).toContain("43}$");
-  expect(source).toContain("finally");
-  expect(source).toContain("Read-Host");
-  expect(source).toContain("-AsSecureString");
-  expect(source).toContain("--code-stdin");
+  expect(source).toContain("Write-ChecklistStep");
+  expect(source).toContain("Ensure-HyperV");
+  expect(source).toContain("Enable-WindowsOptionalFeature");
+  expect(source).toContain("Restart-Computer");
+  expect(source).toContain("Ensure-HyperVSwitch");
+  expect(source).toContain("New-VMSwitch");
+  expect(source).toContain("Get-NetAdapter -Physical");
+  expect(source).toContain("Ensure-Template");
+  expect(source).toContain("Write-ChecklistAction");
+  expect(source).toContain("Write-ChecklistPass");
 });
 
-test("PowerShell checks join exit status and cleans up a failed VM", async () => {
+test("PowerShell installer validates immutable templates before service setup", async () => {
   const source = await Bun.file(powershell).text();
-  expect(source).toContain("ProcessStartInfo");
-  expect(source).toContain("$process.ExitCode -ne 0");
-  expect(source).toContain("Stop-VM");
-  expect(source).toContain("Remove-VM");
-  expect(source).toContain("catch");
-  expect(source).toContain("Write-Host");
+  expect(source).toContain("Assert-Digest");
+  expect(source).toContain("Get-FileHash");
+  expect(source).toContain("WHITESMITH_WINDOWS_IMAGE_DIGEST");
+  expect(source).toContain("WHITESMITH_LINUX_IMAGE_DIGEST");
+  expect(source).toContain("sc.exe create WhitesmithWorker");
+  expect(source).toContain("obj= LocalSystem");
 });
-test("orchestrator entrypoint dispatches join stdin", async () => {
+test("orchestrator entrypoint dispatches platform worker commands", async () => {
   const source = await Bun.file(join(root, "apps/orchestrator/src/index.ts")).text();
-  expect(source).toContain('Bun.argv[2] === "join"');
-  expect(source).toContain("runWorkerJoin");
+  expect(source).toContain('Bun.argv[2] === "mac-worker"');
+  expect(source).toContain('Bun.argv[2] === "windows-worker"');
+  expect(source).toContain("runWindowsWorkerService");
 });
-test("join enforces HTTPS policy and bounded waits", async () => {
-  const source = await Bun.file(join(root, "apps/orchestrator/src/mac-agent.ts")).text();
-  expect(source).toContain('url.protocol !== "https:"');
-  expect(source).toContain("AbortSignal.timeout(30_000)");
-  expect(await Bun.file(powershell).text()).toContain("WaitForExit(30000)");
+
+test("Windows installer enforces HTTPS control-plane access", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).toContain("$ControlPlaneUrl -notmatch '^https://'");
+  expect(source).toContain("Invoke-WebRequest");
+  expect(source).toContain("-TimeoutSec 30");
 });
 test("Linux installer accepts configured HTTP or HTTPS control-plane URLs", async () => {
   const source = await Bun.file(linux).text();

@@ -116,6 +116,7 @@ export async function approvePendingWorker(workerId: string, input: ApproveWorke
 export type WorkerConfigurationInput = {
   appliance: z.infer<typeof WorkerConfiguration>["appliance"];
   runtime: z.infer<typeof WorkerConfiguration>["runtime"];
+  guestPlatforms: z.infer<typeof WorkerConfiguration>["guestPlatforms"];
 };
 export async function configurePendingWorker(workerId: string, input: WorkerConfigurationInput) {
   return request(`/api/workers/pending/${workerId}/configure`, z.object({ revision: z.string(), fingerprint: z.string(), commandId: z.string().uuid().optional() }), {

@@ -56,7 +56,7 @@ const dispatcher = new WorkerCommandDispatcher(15_000, commandStore);
 const requestSources = new WeakMap<Request, string>();
 const webRoot = Bun.env.WEB_ROOT ? new URL(Bun.env.WEB_ROOT) : new URL("../../web/dist/", import.meta.url);
 const githubApp = new GitHubAppService({ db, secretBox, baseUrl: env.BASE, webhookUrl: env.WEBHOOK_URL });
-const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), workerOrchestratorExecutable: new URL("../../orchestrator/dist/whitesmith-orchestrator", import.meta.url), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => { const socket = workerSockets.get(workerId); if (socket) { dispatcher.register(workerId, socket); void dispatcher.replayConnected(workerId); } } });
+const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), workerOrchestratorExecutables: { "windows-x64": new URL("../../workers/whitesmith-orchestrator.exe", import.meta.url), "macos-arm64": new URL("../../orchestrator/dist/whitesmith-orchestrator", import.meta.url) }, workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => { const socket = workerSockets.get(workerId); if (socket) dispatcher.replayConnected(workerId); } });
 const reconciliationIntervalMs = Number(Bun.env.JOB_RECONCILIATION_INTERVAL_MS ?? 5_000);
 const discoveryIntervalMs = Number(Bun.env.JOB_DISCOVERY_INTERVAL_MS ?? 30_000);
 let nextDiscoveryAt = 0;
@@ -100,7 +100,7 @@ server = Bun.serve<SocketData>({
             const epoch = ws.data.connectionEpoch;
             if (!epoch || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return ws.close(4001, "superseded");
             if (!ws.data.challenge) return ws.close(1008, "worker authentication failed");
-            const [worker] = await db`select public_key,encryption_public_key,admission_state from workers where id=${ws.data.workerId} and platform='macos-arm64'`;
+            const [worker] = await db`select public_key,encryption_public_key,admission_state from workers where id=${ws.data.workerId}`;
             const canonical = Buffer.from(`${ws.data.challenge.toString("base64url")}\n${ws.data.workerId}\n${frame.encryptionPublicKey}`);
             if (!worker || !verifyWorkerSignature(worker.public_key, canonical, decodeWorkerSignature(frame.signature))) return ws.close(1008, "worker authentication failed");
             if (worker.encryption_public_key && worker.encryption_public_key !== frame.encryptionPublicKey) return ws.close(1008, "worker encryption key mismatch");

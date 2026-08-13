@@ -9,7 +9,7 @@ export type LinuxWorkerResources = {
 /** Apply the durable worker.configure command and report the exact observed values. */
 export function applyLinuxWorkerConfigure(command: WorkerCommand, resources: LinuxWorkerResources): WorkerEvent {
   const payload = WorkerConfigurePayload.parse(command.payload);
-  const observed = WorkerConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime });
+  const observed = WorkerConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms });
   resources.appliance = observed.appliance;
   resources.runtime = observed.runtime;
   return {

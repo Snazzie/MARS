@@ -11,6 +11,7 @@ test("parses a GitHub JIT config with a one-time lease binding", () => {
   expect(LeaseBootstrapEnvelope.safeParse({
     leaseId: "11111111-1111-4111-8111-111111111111",
     nonce: "n".repeat(32),
+    guestPlatform: "macos-arm64",
     encodedJitConfig: "encoded",
     expiresAt: "2026-08-12T12:00:00.000Z",
     imageDigest: "sha256:test",

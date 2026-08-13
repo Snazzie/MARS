@@ -23,7 +23,8 @@ export type ControlPlaneHttpDeps = {
   requestSource(request: Request): string;
   webRoot: URL;
   workerInstallerRoot: URL;
-  workerOrchestratorExecutable: URL;
+  workerOrchestratorExecutables?: Partial<Record<"linux-x64" | "windows-x64" | "macos-arm64", URL>>;
+  workerOrchestratorExecutable?: URL;
   workerRequestLimiter?: RequestLimiter;
   workerDispatcher?: WorkerCommandDispatcher;
   onWorkerAdopted(workerId: string): void;

@@ -1,6 +1,6 @@
 import type { DatabaseClient } from "@whitesmith/db";
 import { reserveRoutingSlot } from "@whitesmith/db";
-import { PoolResources as PoolResourcesSchema, type RunnerJitConfig, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
+import { PoolResources as PoolResourcesSchema, RuntimeDriverName, type RunnerJitConfig, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { dispatchLeaseBootstrap } from "./lease-dispatch.ts";
@@ -45,30 +45,30 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
 
   const candidateRows = await deps.db`
     SELECT p.id AS "poolId", p.organization_id AS "organizationId", p.worker_id AS "poolWorkerId",
-      w.id AS "workerId", p.enabled, p.image_digest AS "imageDigest", p.resources, p.labels, p.trigger_label AS "triggerLabel",
+      w.id AS "workerId", p.enabled, p.platform, p.driver, p.image_digest AS "imageDigest", p.resources, p.labels, p.trigger_label AS "triggerLabel",
       w.admission_state AS "admissionState", w.connection_state AS "connectionState", w.configuration_state AS "configurationState",
       w.limits, w.encryption_public_key AS "encryptionPublicKey",
       (SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.worker_id=w.id
         AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')) AS active
     FROM runner_pools p
-    JOIN workers w ON (p.worker_id IS NULL OR p.worker_id=w.id) AND w.platform=p.platform
+    JOIN workers w ON (p.worker_id IS NULL OR p.worker_id=w.id) AND p.platform = ANY(SELECT jsonb_array_elements_text(w.guest_platforms))
     WHERE p.enabled=true AND w.draining=false`;
 
   const organizationByJob = new Map<number, string>();
   const installationByJob = new Map<number, number>();
   const githubByInstallation = new Map<number, GithubJobsClient>();
-  const workerByPool = new Map<string, { workerId: string; encryptionPublicKey: string; imageDigest: string; resources: ReturnType<typeof PoolResourcesSchema.parse> }>();
+  const workerByPool = new Map<string, { workerId: string; encryptionPublicKey: string; imageDigest: string; guestPlatform: string; driver: "kata-k3s" | "windows-hyperv" | "tart-vm"; resources: ReturnType<typeof PoolResourcesSchema.parse> }>();
 
   const candidates = candidateRows.filter((row) => !deps.workerConnected || deps.workerConnected(String(row.workerId))).map((row) => {
     const resources = PoolResourcesSchema.parse(jsonValue(row.resources));
     const poolId = String(row.poolId);
     const workerId = String(row.workerId);
     const concurrency = Number(resources.concurrency);
-    workerByPool.set(`${poolId}:${workerId}`, { workerId, encryptionPublicKey: String(row.encryptionPublicKey ?? ""), imageDigest: String(row.imageDigest), resources });
+    workerByPool.set(`${poolId}:${workerId}`, { workerId, encryptionPublicKey: String(row.encryptionPublicKey ?? ""), imageDigest: String(row.imageDigest), guestPlatform: String(row.platform), driver: RuntimeDriverName.parse(String(row.driver)), resources });
     return {
       requestedLabels: [],
       worker: { id: workerId, admissionState: String(row.admissionState), connectionState: String(row.connectionState), configurationState: String(row.configurationState), limits: jsonValue(row.limits) },
-      pool: { id: poolId, enabled: Boolean(row.enabled), resources, concurrency, active: Number(row.active ?? 0), labels: stringArray(row.labels), triggerLabel: row.triggerLabel ? String(row.triggerLabel) : null },
+      pool: { id: poolId, enabled: Boolean(row.enabled), platform: String(row.platform), driver: String(row.driver), resources, concurrency, active: Number(row.active ?? 0), labels: stringArray(row.labels), triggerLabel: row.triggerLabel ? String(row.triggerLabel) : null },
     };
   });
   console.log(`Routing candidates=${candidates.length} queued=${queuedRows.length}`);
@@ -96,8 +96,8 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     dispatch: async (reservation, jit) => {
       const target = workerByPool.get(`${reservation.poolId}:${reservation.workerId}`);
       if (!target?.encryptionPublicKey) throw new Error("worker_encryption_key_missing");
-      const envelope: LeaseBootstrapEnvelope = { leaseId: reservation.id, nonce: reservation.nonce, encodedJitConfig: jit.encodedJitConfig, expiresAt: reservation.expiresAt, imageDigest: target.imageDigest, resources: target.resources };
-      await dispatchLeaseBootstrap(deps.dispatcher, { ...envelope, workerId: target.workerId, workerEncryptionPublicKey: target.encryptionPublicKey });
+      const envelope: LeaseBootstrapEnvelope = { leaseId: reservation.id, nonce: reservation.nonce, guestPlatform: target.guestPlatform as LeaseBootstrapEnvelope["guestPlatform"], encodedJitConfig: jit.encodedJitConfig, expiresAt: reservation.expiresAt, imageDigest: target.imageDigest, resources: target.resources };
+      await dispatchLeaseBootstrap(deps.dispatcher, { ...envelope, driver: target.driver, workerId: target.workerId, workerEncryptionPublicKey: target.encryptionPublicKey });
       await deps.db`UPDATE runner_leases SET state='dispatched', updated_at=now() WHERE id=${reservation.id} AND state='reserved'`;
     },
     release: async (reservation) => { await deps.db`UPDATE runner_leases SET state='failed', cleanup_state='pending', updated_at=now() WHERE id=${reservation.id} AND state='reserved'`; },

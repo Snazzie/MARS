@@ -10,6 +10,7 @@ describe("resource contracts",()=>{test("rejects fractional and zero resources",
 describe("pool creation contracts", () => {
   const valid = {
     workerId: "11111111-1111-4111-8111-111111111111",
+    guestPlatform: "linux-x64",
     name: "default",
     resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 2048, concurrency: 1 },
     triggerLabel: "whitesmith-default",

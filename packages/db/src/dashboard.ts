@@ -1,5 +1,5 @@
 import type { Sql } from "postgres";
-import { CapacitySnapshot, PoolSummary, RuntimeDriverName, RuntimePlatform, WorkerDoctor, WorkerLimits } from "@whitesmith/contracts";
+import { CapacitySnapshot, PoolSummary, RuntimeDriverName, RuntimePlatform, WorkerDoctor, WorkerLimits, GuestPlatform } from "@whitesmith/contracts";
 import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, OverviewTimeseriesPoint, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail, OrganizationSettings } from "@whitesmith/contracts";
 export type DashboardDb = Sql<{}>;
 export type RunTransition = { status: RunSummary["status"]; conclusion: RunSummary["conclusion"]; startedAt?: string | null; completedAt?: string | null };
@@ -124,21 +124,14 @@ function workerDoctor(value: unknown): WorkerDetail["doctor"] {
 function normalizeWorker(row: Record<string, unknown>): WorkerDetail {
   const platform = RuntimePlatform.parse(row.platform);
   const driver = RuntimeDriverName.parse(platform === "linux-x64" ? "kata-k3s" : platform === "windows-x64" ? "windows-hyperv" : "tart-vm");
+  const rawGuestPlatforms = jsonValue(row.guestPlatforms);
+  const guestPlatforms = Array.isArray(rawGuestPlatforms) && rawGuestPlatforms.length > 0 ? rawGuestPlatforms.map((value) => GuestPlatform.parse(value)) : [platform];
   const limitsValue = WorkerLimits.safeParse(jsonValue(row.limits));
-  return {
-    ...row,
-    platform,
-    driver,
-    limits: limitsValue.success ? limitsValue.data : null,
-    doctor: workerDoctor(row.doctor),
-    capacity: workerCapacity(row.doctor),
-    activeSandboxes: numberValue(row.activeSandboxes, 0),
-    draining: row.draining === true,
-  } as WorkerDetail;
+  return { ...row, platform, guestPlatforms, driver, limits: limitsValue.success ? limitsValue.data : null, doctor: workerDoctor(row.doctor), capacity: workerCapacity(row.doctor), activeSandboxes: numberValue(row.activeSandboxes, 0), draining: row.draining === true } as WorkerDetail;
 }
-export async function listWorkers(db: DashboardDb, organizationId: string, limit = 50): Promise<CursorPage<WorkerDetail>> { const rows = await db<Record<string, unknown>[]>`SELECT id, NULL::uuid AS "organizationId", name, platform, admission_state AS "admissionState", connection_state AS "connectionState", configuration_state AS "configurationState", fingerprint, limits, doctor, 0 AS "activeSandboxes", false AS draining FROM workers ORDER BY name LIMIT ${limit + 1}`; const items = rows.slice(0, limit).map(normalizeWorker); return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null }; }
+export async function listWorkers(db: DashboardDb, organizationId: string, limit = 50): Promise<CursorPage<WorkerDetail>> { const rows = await db<Record<string, unknown>[]>`SELECT id, NULL::uuid AS "organizationId", name, platform, guest_platforms AS "guestPlatforms", admission_state AS "admissionState", connection_state AS "connectionState", configuration_state AS "configurationState", fingerprint, limits, doctor, 0 AS "activeSandboxes", false AS draining FROM workers ORDER BY name LIMIT ${limit + 1}`; const items = rows.slice(0, limit).map(normalizeWorker); return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null }; }
 export async function listAllWorkers(db: DashboardDb, userId: string, limit = 50, includeRevoked = false): Promise<CursorPage<WorkerDetail>> {
-  const rows = await db<Record<string, unknown>[]>`SELECT w.id, NULL::uuid AS "organizationId", w.name, w.platform, w.admission_state AS "admissionState", w.connection_state AS "connectionState", w.configuration_state AS "configurationState", w.fingerprint, w.limits, w.doctor, 0 AS "activeSandboxes", false AS draining FROM workers w WHERE ${includeRevoked} OR w.admission_state <> 'revoked' ORDER BY w.name LIMIT ${limit + 1}`;
+  const rows = await db<Record<string, unknown>[]>`SELECT w.id, NULL::uuid AS "organizationId", w.name, w.platform, w.guest_platforms AS "guestPlatforms", w.admission_state AS "admissionState", w.connection_state AS "connectionState", w.configuration_state AS "configurationState", w.fingerprint, w.limits, w.doctor, 0 AS "activeSandboxes", false AS draining FROM workers w WHERE ${includeRevoked} OR w.admission_state <> 'revoked' ORDER BY w.name LIMIT ${limit + 1}`;
   const items = rows.slice(0, limit).map(normalizeWorker);
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }

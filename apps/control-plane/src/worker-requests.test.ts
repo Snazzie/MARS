@@ -56,6 +56,7 @@ test("pending worker DTO ignores database-only columns", () => {
     id: row.id,
     fingerprint: row.fingerprint,
     platform: row.platform,
+    guestPlatforms: ["macos-arm64"],
     publicKey: row.publicKey,
     vmUuid: row.vmUuid,
     machineUuid: row.machineUuid,

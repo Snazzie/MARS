@@ -2,6 +2,14 @@ import { z } from "zod";
 
 export const RuntimePlatform = z.enum(["linux-x64", "windows-x64", "macos-arm64"]);
 export type RuntimePlatform = z.infer<typeof RuntimePlatform>;
+export const GuestPlatform = RuntimePlatform;
+export type GuestPlatform = RuntimePlatform;
+export const WorkerGuestPlatforms = z.array(GuestPlatform).min(1).refine((platforms) => new Set(platforms).size === platforms.length, "Guest platforms must be unique");
+export type WorkerGuestPlatforms = z.infer<typeof WorkerGuestPlatforms>;
+export function validateWorkerGuestPlatforms(hostPlatform: RuntimePlatform, guestPlatforms: WorkerGuestPlatforms): boolean {
+  const expected = hostPlatform === "windows-x64" ? [["windows-x64"], ["windows-x64", "linux-x64"]] : [[hostPlatform]];
+  return expected.some((candidate) => candidate.length === guestPlatforms.length && candidate.every((platform, index) => guestPlatforms[index] === platform));
+}
 export const RuntimeDriverName = z.enum(["kata-k3s", "windows-hyperv", "tart-vm"]);
 export type RuntimeDriverName = z.infer<typeof RuntimeDriverName>;
 const positiveSafe = z.number().int().positive().safe();
@@ -9,10 +17,6 @@ export const WorkerLimits = z.object({ maxVcpuPerPod: positiveSafe, maxMemoryByt
 export type WorkerLimits = z.infer<typeof WorkerLimits>;
 export const PoolResources = z.object({ vcpu: positiveSafe, memoryBytes: positiveSafe, storageBytes: positiveSafe, concurrency: positiveSafe });
 export type PoolResources = z.infer<typeof PoolResources>;
-export const WorkerState = z.enum(["pending", "adopted", "rejected", "revoked"]);
-export const ConnectionState = z.enum(["offline", "online"]);
-export const ConfigurationState = z.enum(["unconfigured", "ready", "error"]);
-export const LeaseState = z.enum(["requested", "dispatched", "provisioning", "sandbox_ready", "online", "busy", "completed", "reaping", "reaped", "failed"]);
 export const RunnerJitConfig = z.object({
   encodedJitConfig: z.string().min(1),
   runnerName: z.string().min(1).max(128),
@@ -20,9 +24,13 @@ export const RunnerJitConfig = z.object({
   expiresAt: z.string().datetime(),
 }).strict();
 export type RunnerJitConfig = z.infer<typeof RunnerJitConfig>;
+export const WorkerState = z.enum(["pending", "adopted", "rejected", "revoked"]);
+export const ConnectionState = z.enum(["offline", "online"]);
+export const ConfigurationState = z.enum(["unconfigured", "ready", "error"]);
 export const LeaseBootstrapEnvelope = z.object({
   leaseId: z.string().uuid(),
   nonce: z.string().min(32),
+  guestPlatform: GuestPlatform,
   encodedJitConfig: z.string().min(1),
   expiresAt: z.string().datetime(),
   imageDigest: z.string().min(1),
@@ -47,14 +55,9 @@ export const WorkerEventPayload = z.discriminatedUnion("type", [
   z.object({ type: z.literal("lease.failed"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32), reason: z.enum(["provisioning_failed","runner_failed","cleanup_failed"]) }).strict() }),
 ]);
 export const WorkerApplianceConfiguration = z.object({ vcpu: positiveSafe, memoryBytes: positiveSafe, storageBytes: positiveSafe }).strict();
-export const WorkerConfiguration = z.object({ appliance: WorkerApplianceConfiguration, runtime: WorkerLimits }).strict();
-export const WorkerConfigurePayload = z.object({ workerId: z.string().uuid(), appliance: WorkerApplianceConfiguration, runtime: WorkerLimits, revision: z.string().regex(/^[a-f0-9]{64}$/), fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export const WorkerConfiguration = z.object({ appliance: WorkerApplianceConfiguration, runtime: WorkerLimits, guestPlatforms: WorkerGuestPlatforms.default(["macos-arm64"]) }).strict();
+export const WorkerConfigurePayload = z.object({ workerId: z.string().uuid(), appliance: WorkerApplianceConfiguration, runtime: WorkerLimits, guestPlatforms: WorkerGuestPlatforms, revision: z.string().regex(/^[a-f0-9]{64}$/), fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 export const WorkerConfiguredPayload = z.object({ commandId: z.string().uuid(), workerId: z.string().uuid(), revision: z.string().regex(/^[a-f0-9]{64}$/), observed: WorkerConfiguration }).strict();
-export const BrowserInvalidation = z.object({ version: z.literal(1), sequence: positiveSafe, organizationId: z.string(), type: z.literal("invalidate"), keys: z.array(z.array(z.unknown())), occurredAt: z.string().datetime() });
-export type WorkerCommand = z.infer<typeof WorkerCommand>;
-export type WorkerEvent = z.infer<typeof WorkerEvent>;
-export type BrowserInvalidation = z.infer<typeof BrowserInvalidation>;
-export { positiveSafe };
 const boundedResource = z.number().int().finite().min(0).max(Number.MAX_SAFE_INTEGER);
 export const WorkerDoctorData = z.object({ nestedKvm: z.boolean().optional(), kvmModules: z.boolean().optional(), probe: z.boolean().optional(), egress: z.boolean().optional(), imageSignatures: z.boolean().optional(), blockVolume: z.boolean().optional(), actualVcpu: boundedResource.optional(), actualMemoryBytes: boundedResource.optional(), actualStorageBytes: boundedResource.optional(), freeVcpu: boundedResource.optional(), freeMemoryBytes: boundedResource.optional(), freeStorageBytes: boundedResource.optional() }).strict();
 export const WorkerCapacityData = z.object({ actualVcpu: boundedResource, actualMemoryBytes: boundedResource, actualStorageBytes: boundedResource, freeVcpu: boundedResource, freeMemoryBytes: boundedResource, freeStorageBytes: boundedResource }).strict();
@@ -69,13 +72,17 @@ export const WorkerBootstrapRequest = z.object({
   capacity: WorkerCapacityData,
 }).strict();
 export type WorkerBootstrapRequest = z.infer<typeof WorkerBootstrapRequest>;
-export const PendingWorkerRequest = WorkerBootstrapRequest.omit({ code: true, encryptionPublicKey: true }).extend({ limits: WorkerLimits.nullable() });
+export const PendingWorkerRequest = WorkerBootstrapRequest.omit({ code: true, encryptionPublicKey: true }).extend({ limits: WorkerLimits.nullable(), guestPlatforms: WorkerGuestPlatforms.optional() });
 export type PendingWorkerRequest = z.infer<typeof PendingWorkerRequest>;
 export const ApproveWorkerRequest = z.object({ limits: WorkerLimits }).strict();
 export type ApproveWorkerRequest = z.infer<typeof ApproveWorkerRequest>;
 
-export type WorkerState = z.infer<typeof WorkerState>;
+export const BrowserInvalidation = z.object({ version: z.literal(1), sequence: positiveSafe, organizationId: z.string(), type: z.literal("invalidate"), keys: z.array(z.array(z.unknown())), occurredAt: z.string().datetime() });
 export type ConnectionState = z.infer<typeof ConnectionState>;
 export type ConfigurationState = z.infer<typeof ConfigurationState>;
 export type WorkerDoctorData = z.infer<typeof WorkerDoctorData>;
 export type WorkerCapacityData = z.infer<typeof WorkerCapacityData>;
+export { positiveSafe };
+export type WorkerCommand = z.infer<typeof WorkerCommand>;
+export type WorkerEvent = z.infer<typeof WorkerEvent>;
+export type BrowserInvalidation = z.infer<typeof BrowserInvalidation>;

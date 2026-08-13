@@ -66,11 +66,11 @@ export async function getOnboardingStatus(db: OnboardingDb, auth: { authenticate
 export async function getOnboardingDetail(
   db: OnboardingDb,
   auth: { authenticated?: boolean; canManage?: boolean } = {},
-  extras: Partial<Pick<OnboardingDetail, "defaultImageDigest">> = {},
+  extras: Partial<Pick<OnboardingDetail, "defaultImageDigests">> = {},
 ): Promise<OnboardingDetail> {
   const status = await getOnboardingStatus(db, auth);
   const selectedRow = first(await db`
-    SELECT w.id,w.name,w.platform,w.admission_state AS "admissionState",
+    SELECT w.id,w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",
       w.connection_state AS "connectionState",w.configuration_state AS "configurationState",
       w.public_key AS "publicKey",w.fingerprint,w.vm_uuid AS "vmUuid",
       w.machine_uuid AS "machineUuid",w.doctor,w.limits,
@@ -83,6 +83,7 @@ export async function getOnboardingDetail(
     const telemetry = objectValue(selectedRow.doctor);
     worker = {
       id: String(selectedRow.id), name: String(selectedRow.name), platform: selectedRow.platform as OnboardingWorker["platform"],
+      guestPlatforms: Array.isArray(selectedRow.guestPlatforms) ? selectedRow.guestPlatforms as OnboardingWorker["guestPlatforms"] : [selectedRow.platform as OnboardingWorker["platform"]],
       admissionState: selectedRow.admissionState as OnboardingWorker["admissionState"],
       connectionState: selectedRow.connectionState as OnboardingWorker["connectionState"],
       configurationState: selectedRow.configurationState as OnboardingWorker["configurationState"],
@@ -140,7 +141,7 @@ export async function getOnboardingDetail(
     resources: objectValue(poolRow.resources), labels: Array.isArray(poolRow.labels) ? poolRow.labels : (() => { try { return JSON.parse(String(poolRow.labels)); } catch { return []; } })(), triggerLabel: poolRow.triggerLabel, enabled: poolRow.enabled, active: numberValue(poolRow.active),
   } as PoolSummary : null;
   const appConfigured = (await db`SELECT 1 FROM github_app_config WHERE singleton=true`).length > 0;
-  return OnboardingDetail.parse({ ...status, worker, organizations, github: { appConfigured, organizationId, installation, repositories }, pool, defaultImageDigest: extras.defaultImageDigest ?? null });
+  return OnboardingDetail.parse({ ...status, worker, organizations, github: { appConfigured, organizationId, installation, repositories }, pool, defaultImageDigests: extras.defaultImageDigests ?? {} });
 }
 
 export async function selectOnboardingWorker(db: OnboardingDb, workerId: string, adminUserId: string): Promise<void> {

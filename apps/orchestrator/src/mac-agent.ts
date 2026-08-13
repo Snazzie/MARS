@@ -25,7 +25,7 @@ export function workerEvent(workerId: string, type: string, payload: Record<stri
 }
 export function applyWorkerConfigure(command: WorkerCommand, limits: MacWorkerLimits): WorkerEvent {
   const payload = WorkerConfigurePayload.parse(command.payload);
-  const observed = WorkerConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime });
+  const observed = WorkerConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms });
   Object.assign(limits, payload.runtime);
   return workerEvent(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed });
 }
