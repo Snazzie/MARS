@@ -42,7 +42,7 @@ $outputVhdx = Join-Path $TemplateDirectory 'windows.vhdx'
 $outputManifest = Join-Path $TemplateDirectory 'windows-manifest.json'
 $credential = Get-Credential -UserName 'WhitesmithAdmin' -Message 'Enter the local administrator credentials for the developer VM'
 & $prepare -SourceVhdx $source -SourceSha256 $sourceDigest -JobAgentPath $AgentPath -OutputVhdx $outputVhdx -OutputManifest $outputManifest -GuestCredential $credential -SourceUrl 'https://developer.microsoft.com/en-us/windows/downloads/virtual-machines/'
-if ($LASTEXITCODE -ne 0) { throw "Template preparation failed with exit code $LASTEXITCODE" }
+if (-not $? -or -not (Test-Path -LiteralPath $outputVhdx -PathType Leaf) -or -not (Test-Path -LiteralPath $outputManifest -PathType Leaf)) { throw 'Template preparation did not produce the sealed VHDX and manifest.' }
 $sealedDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath $outputVhdx).Hash.ToLowerInvariant()
 Write-Output "Template: $outputVhdx"
 Write-Output "Manifest: $outputManifest"
