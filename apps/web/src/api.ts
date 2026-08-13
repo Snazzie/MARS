@@ -18,6 +18,10 @@ import {
   SelectOnboardingWorkerRequest,
   ApproveOnboardingRepositoriesRequest,
   CreatePoolRequest,
+  RunnerWorkflowFile,
+  RunnerWorkflowPreview,
+  RunnerWorkflowPrRequest,
+  RunnerWorkflowPrResult,
 } from "@whitesmith/contracts";
 import { z } from "zod";
 
@@ -232,3 +236,9 @@ export async function createOnboardingPool(input: CreatePoolRequest & { organiza
     body: JSON.stringify({ workerId: input.workerId, name: input.name, resources: input.resources, triggerLabel: input.triggerLabel, imageDigest: input.imageDigest }),
   });
 }
+export const getRunnerWorkflowFiles = (organizationId: string, repositoryId: string) =>
+  request(`/api/organizations/${organizationId}/repositories/${repositoryId}/runner-workflows`, RunnerWorkflowFile.array());
+export const previewRunnerWorkflowPr = (organizationId: string, repositoryId: string, selectedPaths: string[]) =>
+  request(`/api/organizations/${organizationId}/repositories/${repositoryId}/runner-workflows/preview`, RunnerWorkflowPreview, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selectedPaths }) });
+export const createRunnerWorkflowPr = (organizationId: string, repositoryId: string, input: RunnerWorkflowPrRequest) =>
+  request(`/api/organizations/${organizationId}/repositories/${repositoryId}/runner-workflows/pr`, RunnerWorkflowPrResult, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify(input) });

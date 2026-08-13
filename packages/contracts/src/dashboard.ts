@@ -60,5 +60,15 @@ export const CursorPage = <T extends z.ZodTypeAny>(item: T) => dto(strict({ item
 export type CursorPage<T> = { items: T[]; nextCursor: string | null };
 export const ApiError = dto(strict({ code: z.string().min(1), message: z.string().min(1), requestId: id, details: z.record(z.unknown()).optional() }));
 export type ApiError = z.infer<typeof ApiError>;
+export const RunnerWorkflowJobPreview = dto(strict({ id: z.string().min(1), currentRunsOn: z.union([z.string().min(1), z.array(z.string().min(1))]), proposedRunsOn: z.array(z.string().min(1)).optional(), path: z.string().regex(/^\.github\/workflows\/[^/]+\.(?:yml|yaml)$/).optional() }));
+export type RunnerWorkflowJobPreview = z.infer<typeof RunnerWorkflowJobPreview>;
+export const RunnerWorkflowFile = dto(strict({ path: z.string().regex(/^\.github\/workflows\/[^/]+\.(?:yml|yaml)$/), jobs: z.array(strict({ id: z.string().min(1), currentRunsOn: z.union([z.string().min(1), z.array(z.string().min(1))]) })) }));
+export type RunnerWorkflowFile = z.infer<typeof RunnerWorkflowFile>;
+export const RunnerWorkflowPreview = dto(strict({ files: z.array(RunnerWorkflowFile).optional(), labels: z.array(z.string().min(1)), defaultBranch: z.string().min(1), headSha: z.string().min(1), changedFiles: z.array(z.string()), jobs: z.array(RunnerWorkflowJobPreview), replacementCount: z.number().int().nonnegative(), noOp: z.boolean() }));
+export type RunnerWorkflowPreview = z.infer<typeof RunnerWorkflowPreview>;
+export const RunnerWorkflowPrRequest = dto(strict({ selectedPaths: z.array(z.string().regex(/^\.github\/workflows\/[^/]+\.(?:yml|yaml)$/)), expectedHeadSha: z.string().regex(/^[0-9a-f]{7,64}$/i), title: z.string().trim().min(1).max(200).optional(), body: z.string().trim().min(1).max(10000).optional() }));
+export type RunnerWorkflowPrRequest = z.infer<typeof RunnerWorkflowPrRequest>;
+export const RunnerWorkflowPrResult = dto(strict({ url: z.string().url(), number: z.number().int().positive(), branch: z.string().min(1), changedFiles: z.array(z.string()), replacementCount: z.number().int().nonnegative() }));
+export type RunnerWorkflowPrResult = z.infer<typeof RunnerWorkflowPrResult>;
 export { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest } from "./orchestration.ts";
 export type { WorkerBootstrapRequest as WorkerBootstrapRequestData, PendingWorkerRequest as PendingWorkerRequestData, ApproveWorkerRequest as ApproveWorkerRequestData } from "./orchestration.ts";
