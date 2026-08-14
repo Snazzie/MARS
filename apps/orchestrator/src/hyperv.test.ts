@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, test } from "bun:test";
 import { HyperVDriver, powerShellCommand, type HyperVRuntime } from "./hyperv.ts";
 const limits = { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 20 * 1024 ** 3, maxConcurrentPods: 2 };
@@ -8,6 +9,14 @@ describe("HyperVDriver", () => {
   test("rejects a lease whose image digest is not the sealed template", async () => { const driver = new HyperVDriver(fake([]), "template.vhdx", lease.imageDigest, "whitesmith", limits); await expect(driver.createLease({ ...lease, imageDigest: "sha256:" + "b".repeat(64) })).rejects.toThrow("does not match"); });
 });
 test("copies bootstrap to the guest service path", async () => { const calls: string[] = []; const driver = new HyperVDriver(fake(calls), "C:\\templates\\windows.vhdx", lease.imageDigest, "whitesmith", limits, "C:\\temp"); await driver.createLease(lease); expect(calls.some(call => call.endsWith(":C:\\ProgramData\\Whitesmith\\bootstrap.json"))).toBe(true); });
+test("writes the guest service bootstrap envelope", async () => {
+  const copied: string[] = [];
+  const runtime = fake([]);
+  runtime.copyBootstrap = async (_name, source) => { copied.push(await readFile(source, "utf8")); };
+  const driver = new HyperVDriver(runtime, "C:\\templates\\windows.vhdx", lease.imageDigest, "whitesmith", limits, "C:\\temp");
+  await driver.createLease(lease);
+  expect(JSON.parse(copied[0])).toEqual({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig });
+});
 test("wraps Hyper-V scripts so native command arguments populate PowerShell args", () => {
   expect(powerShellCommand("Write-Output $args[0]")).toBe("& { Write-Output $args[0] }");
 });
