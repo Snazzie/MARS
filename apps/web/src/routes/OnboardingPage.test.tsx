@@ -71,7 +71,8 @@ test("current step includes read-only summaries of completed worker and GitHub s
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "labels", worker, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 1, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: { id: "inst-1", githubInstallationId: 42, state: "approved", repositorySelection: "selected" }, repositories: [{ id: "repo-1", name: "private", fullName: "acme/private", visibility: "private", available: true }] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "a".repeat(64) });
   expect(html).toContain("linux-builder");
   expect(html).toContain("Acme");
-  expect(html).toContain("private");
+  expect(html).toContain("Available repositories: 1");
+  expect(html).not.toContain("Repositories: private");
 });
 
 test("admin and sign-in states expose the appropriate GitHub action", () => {

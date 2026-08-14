@@ -39,7 +39,7 @@ function ReviewSummary({ detail, through, onClose }: { detail: OnboardingDetail;
     {onClose && <button type="button" onClick={onClose}>Back to current step</button>}
     <h3>Completed setup</h3>
     {through >= 2 && detail.worker && <p>Worker enrollment<br />Worker: {detail.worker.name ?? detail.worker.vmUuid}</p>}
-    {through >= 3 && detail.github.organizationId && <p>GitHub account: {org?.name ?? detail.github.organizationId}<br />Repositories: {detail.github.repositories.filter((repository) => repository.available).map((repository) => repository.name).join(", ") || "No available repositories"}</p>}
+    {through >= 3 && detail.github.organizationId && <p>GitHub account: {org?.name ?? detail.github.organizationId}<br />Available repositories: {detail.github.repositories.filter((repository) => repository.available).length}</p>}
   </aside>;
 }
 function WorkerStep({ onSelect }: { onSelect: (id: string) => void }) { const q = useQuery(pendingWorkerQueryOptions()); return <div><EnrollmentPanel workers={q.data ?? []} onConnected={() => void q.refetch()} showRotation={false} /><p>Choose the worker you verified. It remains unschedulable until resources are configured.</p>{q.error && <p role="alert">{q.error instanceof Error ? q.error.message : "Could not load workers."} <button type="button" onClick={() => void q.refetch()}>Retry</button></p>}{(q.data ?? []).map((w) => <article className="worker-choice" key={w.id}><h3>{w.vmUuid}</h3><p>{w.platform} · {w.connectionState}</p><p>Fingerprint: <code>{w.fingerprint}</code></p><button type="button" onClick={() => onSelect(w.id)}>Use this worker</button></article>)}</div>; }
