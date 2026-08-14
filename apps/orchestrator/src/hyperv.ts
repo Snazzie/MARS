@@ -7,8 +7,9 @@ import { validateResources } from "./runtime.ts";
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
 type HyperVResult = { code: number; stdout: string; stderr: string };
 export type HyperVRunner = (script: string, args: string[]) => Promise<HyperVResult>;
+export function powerShellCommand(script: string): string { return `& { ${script} }`; }
 const defaultRunner: HyperVRunner = async (script, args) => {
-  const process = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, ...args], { stdout: "pipe", stderr: "pipe" });
+  const process = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", powerShellCommand(script), ...args], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
   return { code, stdout, stderr };
 };

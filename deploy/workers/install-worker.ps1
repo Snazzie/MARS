@@ -69,6 +69,9 @@ if (Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) {
   while ((Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
   if (Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) { throw 'Timed out removing existing WhitesmithWorker service.' }
 }
+$workerLogPath = Join-Path $root 'logs\worker.log'
+$previousWorkerLogPath = Join-Path $root 'logs\worker.previous.log'
+if (Test-Path -LiteralPath $workerLogPath) { Move-Item -LiteralPath $workerLogPath -Destination $previousWorkerLogPath -Force }
 $service = New-Service -Name WhitesmithWorker -BinaryPathName "`"$serviceHost`" `"$exe`" windows-worker" -StartupType Automatic -ErrorAction Stop
 $serviceFailure = & sc.exe failure WhitesmithWorker "reset= 86400" "actions= restart/5000/restart/30000/none/0" 2>&1
 if ($LASTEXITCODE -ne 0) { throw "Failed to configure WhitesmithWorker recovery: $($serviceFailure -join ' ')" }

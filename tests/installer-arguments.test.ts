@@ -103,6 +103,10 @@ test("Windows installer fails when service registration fails", async () => {
   expect(source).toContain('"reset= 86400"');
   expect(source).toContain('"actions= restart/5000/restart/30000/none/0"');
 });
+test("Windows installer rotates the previous worker log before startup", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).toContain("Move-Item -LiteralPath $workerLogPath -Destination $previousWorkerLogPath -Force");
+});
 test("Windows installer downloads and registers the native SCM host", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).toContain("/api/workers/service-host?audience=windows-x64");
