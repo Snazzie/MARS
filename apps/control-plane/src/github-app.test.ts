@@ -27,6 +27,7 @@ function service(fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Pr
     fetch: fetchImpl,
     secretBox: new SecretBox(masterKey),
     baseUrl: "https://control-plane.test",
+    browserBaseUrl: "https://control-plane.test",
   } as never);
 }
 
@@ -61,6 +62,7 @@ describe("GitHub App onboarding", () => {
       fetch: async () => Response.json({}),
       secretBox: new SecretBox(masterKey),
       baseUrl: "http://localhost:3000",
+      browserBaseUrl: "http://localhost:5173",
       webhookUrl: "https://whitesmith-dev.example/api/github/webhooks",
     } as never);
     const launch = await github.createManifestLaunch("admin-1", organizationId, "tunnel-key");
@@ -192,7 +194,7 @@ describe("GitHub App onboarding", () => {
       if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
       if (url.includes("/installation/repositories")) return Response.json({ repository_selection: "all", repositories: [] });
       return Response.json({});
-    }, secretBox: new SecretBox(masterKey), baseUrl: "https://control-plane.test" } as never);
+    }, secretBox: new SecretBox(masterKey), baseUrl: "https://control-plane.test", browserBaseUrl: "https://control-plane.test" } as never);
     await expect(github.completeInstallation("admin-1", "cookie", 42)).rejects.toThrow("repository_selection_required");
     expect(calls.some((query) => query.includes("UPDATE system_onboarding SET organization_id"))).toBe(false);
   });
@@ -212,11 +214,12 @@ describe("GitHub App onboarding", () => {
       fetch: async () => { throw new Error("GitHub should not be called"); },
       secretBox: new SecretBox(masterKey),
       baseUrl: "https://control-plane.test",
+      browserBaseUrl: "http://localhost:5173",
     } as never);
 
     const launch = await github.beginInstallation("admin-1", organizationId, "resume-key");
 
-    expect(launch).toEqual({ location: "https://control-plane.test/onboarding" });
+    expect(launch).toEqual({ location: "http://localhost:5173/onboarding" });
     expect(calls.some((query) => query.includes("UPDATE system_onboarding SET organization_id"))).toBe(true);
     expect(calls.some((query) => query.includes("INSERT INTO github_setup_states"))).toBe(false);
   });
@@ -343,6 +346,7 @@ test("workflow preview uses the current runner pool schema", async () => {
     db: sql,
     secretBox: box,
     baseUrl: "https://control-plane.test",
+    browserBaseUrl: "https://control-plane.test",
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });

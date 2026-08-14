@@ -2,6 +2,7 @@ import { createHash, createPrivateKey, createSign, randomBytes } from "node:cryp
 import type { Sql } from "postgres";
 import type { SecretBox } from "./auth.ts";
 import { applyWorkflowMutation, discoverWorkflowFiles, previewWorkflowMutation, type WorkflowFilePreview, type WorkflowMutation } from "./workflow-pr.ts";
+import { browserLocation } from "./http-origin.ts";
 type SetupState = { purpose: "oauth" | "manifest" | "install" | "organization_install"; userId: string | null; organizationId: string | null; idempotencyKey: string | null; encryptedState?: string; encryptedPkceVerifier?: string; expiresAt: number; consumedAt?: number };
 type Installation = { organizationId: string; githubInstallationId: number; state: "pending" | "approved" | "suspended"; repositorySelection: "all" | "selected" | null; githubAccountId?: number };
 type Repository = { id: string; installationId: number; organizationId?: string; fullName: string; visibility: "private" | "internal" | "public"; available: boolean; approved: boolean };
@@ -24,13 +25,15 @@ export class GitHubAppService {
   private readonly fetcher: Fetcher;
   private readonly box: SecretBox;
   private readonly baseUrl: string;
+  private readonly browserBaseUrl: string;
   private readonly webhookUrl: string;
 
-  constructor(opts: { db: Database; fetch?: Fetcher; secretBox: SecretBox; baseUrl: string; webhookUrl?: string }) {
+  constructor(opts: { db: Database; fetch?: Fetcher; secretBox: SecretBox; baseUrl: string; browserBaseUrl: string; webhookUrl?: string }) {
     this.db = opts.db;
     this.fetcher = opts.fetch ?? fetch;
     this.box = opts.secretBox;
     this.baseUrl = opts.baseUrl;
+    this.browserBaseUrl = opts.browserBaseUrl;
     this.webhookUrl = opts.webhookUrl ?? `${opts.baseUrl}/api/github/webhooks`;
   }
 
@@ -136,7 +139,7 @@ export class GitHubAppService {
       if (installations[0]) {
         if (!bindOnboarding) throw new Error("github_organization_already_connected");
         const linked = await this.db`UPDATE system_onboarding SET organization_id=${organizationId} WHERE singleton=true AND admin_user_id=${userId} RETURNING organization_id`;
-        if (linked[0]) return { location: `${this.baseUrl}/onboarding` };
+        if (linked[0]) return { location: browserLocation(this.browserBaseUrl, "/onboarding") };
       }
       const rows = await this.db<SetupRow[]>`SELECT purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at FROM github_setup_states WHERE purpose=${purpose} AND user_id=${userId} AND organization_id=${organizationId} AND idempotency_key=${idempotencyKey} AND consumed_at IS NULL AND expires_at>now()`;
       const state = rows[0];

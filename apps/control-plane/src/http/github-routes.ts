@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { readBody, validSignature, acceptDelivery } from "../webhook.ts";
 import { applyWorkflowJobWebhook, type WorkflowJobPayload } from "../runs.ts";
+import { browserLocation } from "../http-origin.ts";
 
 const setupFailure = (cause: unknown): string | null => {
   const code = cause instanceof Error ? cause.message : "";
@@ -46,12 +47,12 @@ export function registerGithubRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     try {
       const onboarding = await deps.githubApp.completeInstallation(user.id, cookie, installationId);
       c.header("Set-Cookie", "github_install_state=; HttpOnly; Secure; SameSite=Lax; Path=/api/github/app; Max-Age=0");
-      return c.redirect(onboarding ? "/onboarding" : "/", 302);
+      return c.redirect(browserLocation(deps.browserBaseUrl, onboarding ? "/onboarding" : "/"), 302);
     } catch (cause) {
       const setupCode = setupFailure(cause);
       if (setupCode === "repository_selection_required") {
         c.header("Set-Cookie", "github_install_state=; HttpOnly; Secure; SameSite=Lax; Path=/api/github/app; Max-Age=0");
-        return c.redirect("/onboarding?github=repository-selection-required", 302);
+        return c.redirect(browserLocation(deps.browserBaseUrl, "/onboarding?github=repository-selection-required"), 302);
       }
       if (setupCode) return c.json({ code: setupCode }, 409);
       throw cause;

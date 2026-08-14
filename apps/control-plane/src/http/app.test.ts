@@ -239,19 +239,33 @@ describe("control-plane HTTP boundary", () => {
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ code: "setup_state_expired" });
   });
+  test("returns completed GitHub setup to the browser onboarding origin", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      browserBaseUrl: "http://localhost:5173",
+      currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+      githubApp: { completeInstallation: async () => true } as never,
+    })).request("/api/github/app/setup?installation_id=42&setup_action=install", {
+      headers: { Cookie: "github_install_state=onboarding" },
+    });
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("http://localhost:5173/onboarding");
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+  });
   test("returns repository selection failures to resumable onboarding", async () => {
     const response = await createControlPlaneApp(fakeHttpDeps({
+      browserBaseUrl: "http://localhost:5173",
       currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
       githubApp: { completeInstallation: async () => { throw new Error("repository_selection_required"); } } as never,
     })).request("/api/github/app/setup?installation_id=42&setup_action=install", {
       headers: { Cookie: "github_install_state=selected" },
     });
     expect(response.status).toBe(302);
-    expect(response.headers.get("location")).toBe("/onboarding?github=repository-selection-required");
+    expect(response.headers.get("location")).toBe("http://localhost:5173/onboarding?github=repository-selection-required");
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
   });
   test("returns dashboard after a non-onboarding organization install", async () => {
     const response = await createControlPlaneApp(fakeHttpDeps({
+      browserBaseUrl: "http://localhost:5173",
       currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
       githubApp: { completeInstallation: async () => false } as never,
     })).request("/api/github/app/setup?installation_id=42&setup_action=install", {
@@ -259,7 +273,7 @@ describe("control-plane HTTP boundary", () => {
     });
 
     expect(response.status).toBe(302);
-    expect(response.headers.get("location")).toBe("/");
+    expect(response.headers.get("location")).toBe("http://localhost:5173/");
   });
 test("repository GitHub removal route requires an existing installation", async () => {
   const response = await createControlPlaneApp(fakeHttpDeps({
