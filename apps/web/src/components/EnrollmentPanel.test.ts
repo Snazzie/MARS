@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
-import { getWorkerBootstrapStatus } from "../api.ts";
-import { buildInstallerCommand, buildInstallerCommands, normalizeControlPlaneUrls, openEnrollmentDialog, shouldCloseEnrollmentDialog } from "./EnrollmentWizard.tsx";
+import { buildInstallerCommand, buildInstallerCommands, connectedEnrollmentWorker, connectionSnapshot, normalizeControlPlaneUrls } from "./EnrollmentPanel.tsx";
 const url = "https://runner.example.com/api/workers/installer?audience=linux-x64";
 test("bootstrap status contract includes initialization generation and timestamps", () => {
   const status = {
@@ -11,19 +10,6 @@ test("bootstrap status contract includes initialization generation and timestamp
   };
   expect(status.initialized).toBe(true);
   expect(status.generation).toBe(3);
-});
-test("loads bootstrap status before opening the enrollment dialog", async () => {
-  const events: string[] = [];
-  const status = await openEnrollmentDialog(
-    async () => {
-      events.push("status");
-      return { initialized: true };
-    },
-    () => events.push("dialog"),
-  );
-
-  expect(status).toEqual({ initialized: true });
-  expect(events).toEqual(["status", "dialog"]);
 });
 
 test("installer commands include the one-use enrollment code", () => { const command = buildInstallerCommand(url, "linux-x64", "Abc_-9"); expect(command).toContain("--code"); expect(command).toContain("Abc_-9"); expect(command).not.toContain("vcpu"); });
@@ -45,5 +31,30 @@ test("builds only the selected platform installer command", () => {
 });
 test("accepts adapter IP and custom HTTP URLs", () => { expect(buildInstallerCommand("http://192.168.64.1:3000/api/workers/installer?audience=linux-x64", "linux-x64")).toContain("--proto '=http'"); expect(normalizeControlPlaneUrls(["http://192.168.64.1:3000", "https://runner.example.com/", "bad", "http://192.168.64.1:3000"])).toEqual(["http://192.168.64.1:3000", "https://runner.example.com"]); });
 test("adds the insecure opt-in to copied Windows commands over HTTP", () => { const command = buildInstallerCommand("http://localhost:3000/api/workers/installer?audience=windows-x64", "windows-x64", "Abc_-9"); expect(command).toContain("-AllowInsecureHttp"); });
-test("closes enrollment when a revealed code receives a connected worker", () => { expect(shouldCloseEnrollmentDialog({ code: "x", generation: 1, createdAt: "2026-01-01T00:00:00.000Z" }, true)).toBe(true); expect(shouldCloseEnrollmentDialog(null, true)).toBe(false); expect(shouldCloseEnrollmentDialog({ code: "x", generation: 1, createdAt: "2026-01-01T00:00:00.000Z" }, false)).toBe(false); });
 test("rejects unsupported installers", () => { expect(() => buildInstallerCommand(url, "sol-x64" as never)).toThrow(); });
+test("detects only workers that became online after enrollment started", () => {
+  const before = connectionSnapshot([
+    { id: "existing-online", connectionState: "online" },
+    { id: "existing-offline", connectionState: "offline" },
+  ]);
+  expect(connectedEnrollmentWorker(before, [
+    { id: "existing-online", connectionState: "online" },
+    { id: "existing-offline", connectionState: "online" },
+  ])).toBe("existing-offline");
+  expect(connectedEnrollmentWorker(before, [
+    { id: "existing-online", connectionState: "online" },
+    { id: "existing-offline", connectionState: "offline" },
+    { id: "new-worker", connectionState: "online" },
+  ])).toBe("new-worker");
+  expect(connectedEnrollmentWorker(before, [
+    { id: "existing-online", connectionState: "online" },
+  ])).toBeNull();
+});
+test("renders enrollment inline without dialog lifecycle", async () => {
+  const source = await Bun.file(new URL("./EnrollmentPanel.tsx", import.meta.url)).text();
+  expect(source).not.toContain("<dialog");
+  expect(source).not.toContain("showModal");
+  expect(source).toContain("Worker connected");
+  expect(source).toContain("Enroll another worker");
+  expect(source).toContain('label="Retry"');
+});

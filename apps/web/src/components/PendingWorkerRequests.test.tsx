@@ -5,14 +5,13 @@ import { PendingWorkerRequests, pendingWorkerQueryOptions } from "./PendingWorke
 import { WorkerConfigurationForm } from "./WorkerConfigurationForm.tsx";
 const org = "44444444-4444-4444-8444-444444444444";
 const worker = { id: "11111111-1111-4111-8111-111111111111", capacity: { actualVcpu: 8, actualMemoryBytes: 17179869184, actualStorageBytes: 214748364800, freeVcpu: 8, freeMemoryBytes: 17179869184, freeStorageBytes: 214748364800 }, limits: null };
-const request = { fingerprint: "SHA256:pending-fingerprint", platform: "linux-x64" as const, publicKey: "ssh-ed25519 AAAA fingerprint", vmUuid: "22222222-2222-4222-8222-222222222222", machineUuid: "33333333-3333-4333-8333-333333333333", limits: null, doctor: { nestedKvm: true, probe: true }, capacity: worker.capacity };
-function markup(data = [request]) { const client = new QueryClient(); client.setQueryData(["pending-workers"], data); return renderToStaticMarkup(<QueryClientProvider client={client}><PendingWorkerRequests organizationId={org} /></QueryClientProvider>); }
+const request = { id: "11111111-1111-4111-8111-111111111111", fingerprint: "SHA256:pending-fingerprint", platform: "linux-x64" as const, guestPlatforms: ["linux-x64" as const], admissionState: "pending" as const, connectionState: "online" as const, configurationState: "unconfigured" as const, publicKey: "ssh-ed25519 AAAA fingerprint", vmUuid: "22222222-2222-4222-8222-222222222222", machineUuid: "33333333-3333-4333-8333-333333333333", limits: null, doctor: { nestedKvm: true, probe: true }, capacity: worker.capacity };
+function markup(data = [request]) { const client = new QueryClient(); return renderToStaticMarkup(<QueryClientProvider client={client}><PendingWorkerRequests organizationId={org} workers={data} error={null} isLoading={false} retry={() => {}} /></QueryClientProvider>); }
 test("renders explicit approval, capacity, and per-job limits", () => { const html = markup(); expect(html).toContain(request.publicKey); expect(html).toContain("Approve and configure worker"); expect(html).toContain("Worker capacity"); expect(html).toContain("Per-job limits"); expect(html.match(/name=\"vcpu\"/g)?.length).toBe(1); expect(html.match(/name=\"maxConcurrentPods\"/g)?.length).toBe(1); });
 test("shows empty pending state", () => { expect(markup([])).toContain("No workers are waiting for approval."); });
 test("shows globally configurable workers without an organization filter", () => {
   const client = new QueryClient();
-  client.setQueryData(["pending-workers"], [request]);
-  const html = renderToStaticMarkup(<QueryClientProvider client={client}><PendingWorkerRequests organizationId="all" /></QueryClientProvider>);
+  const html = renderToStaticMarkup(<QueryClientProvider client={client}><PendingWorkerRequests organizationId="all" workers={[request]} error={null} isLoading={false} retry={() => {}} /></QueryClientProvider>);
   expect(html).toContain("Review and configure workers from");
   expect(html).toContain("Approve and configure worker");
   expect(html).not.toContain("Select an organization to adopt and configure this worker.");

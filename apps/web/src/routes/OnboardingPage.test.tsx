@@ -20,10 +20,11 @@ const worker = {
   configurationRevision: "rev-1",
 };
 
-function markup(detail: Record<string, unknown>) {
+function markup(detail: Record<string, unknown>, pendingWorkers?: readonly unknown[]) {
   const client = new QueryClient();
   client.setQueryData(["onboarding-status"], detail);
   client.setQueryData(["onboarding"], detail);
+  if (pendingWorkers) client.setQueryData(["pending-workers"], pendingWorkers);
   return renderToStaticMarkup(<QueryClientProvider client={client}><OnboardingPage /></QueryClientProvider>);
 }
 
@@ -82,17 +83,35 @@ test("renders five-step progress with only the server current step enabled", () 
   expect(html).toContain("GitHub organization");
 });
 
-test("worker step exposes enrollment wizard before pending workers exist", () => {
-  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "worker", worker: null, organizations: [], github: { appConfigured: false, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: null });
-  expect(html).toContain("Enroll worker");
+test("worker step renders enrollment inline and requires explicit selection", () => {
+  const detail = { version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "worker", worker: null, organizations: [], github: { appConfigured: false, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: null };
+  const html = markup(detail, [{ ...worker, admissionState: "pending" }]);
   expect(html).toContain("Worker enrollment");
   expect(html).toContain("Generate bootstrap code");
+  expect(html).toContain("Use this worker");
+  expect(html).not.toContain("<dialog");
   expect(html).not.toContain("Rotate bootstrap code");
 });
 
-test("exposes explicit worker selection and selected private/internal repository controls", () => {
-  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "github", worker: null, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 2, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: { id: "inst-1", githubInstallationId: 42, state: "approved", repositorySelection: "selected" }, repositories: [{ id: "repo-1", name: "private", visibility: "private", available: true, approved: false }, { id: "repo-2", name: "public", visibility: "public", available: true, approved: false }] }, pool: null, defaultImageDigest: null });
+test("completed review does not invent a selected worker", () => {
+  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "resources", worker: null, organizations: [], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [] }, pool: null, defaultImageDigest: null });
+  expect(html).not.toContain("Worker: Selected");
+});
+test("worker loading errors preserve choices and expose retry", async () => {
+  const detail = { version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "worker", worker: null, organizations: [], github: { appConfigured: false, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: null };
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client.setQueryData(["onboarding-status"], detail);
+  client.setQueryData(["onboarding"], detail);
+  client.setQueryData(["pending-workers"], [{ ...worker, admissionState: "pending" }]);
+  await expect(client.fetchQuery({ queryKey: ["pending-workers"], queryFn: async () => { throw new Error("pending endpoint unavailable"); } })).rejects.toThrow("pending endpoint unavailable");
+  const html = renderToStaticMarkup(<QueryClientProvider client={client}><OnboardingPage /></QueryClientProvider>);
+  expect(html).toContain("pending endpoint unavailable");
+  expect(html).toContain("Retry");
   expect(html).toContain("Use this worker");
+});
+
+test("exposes selected private and internal repository controls", () => {
+  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "github", worker: null, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 2, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: { id: "inst-1", githubInstallationId: 42, state: "approved", repositorySelection: "selected" }, repositories: [{ id: "repo-1", name: "private", visibility: "private", available: true, approved: false }, { id: "repo-2", name: "public", visibility: "public", available: true, approved: false }] }, pool: null, defaultImageDigest: null });
   expect(html).toContain("private");
   expect(html).not.toContain('name="repo-2"');
   expect(html).toContain("Approve repositories");
