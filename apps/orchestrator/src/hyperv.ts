@@ -66,7 +66,7 @@ export class HyperVDriver implements RuntimeDriver {
     try {
       await this.hyperv.createDifferencingDisk(this.templatePath, diskPath);
       await this.hyperv.createVm({ name: vmName, diskPath, resources: lease.resources });
-      await this.hyperv.copyBootstrap(vmName, bootstrapPath, "C:\\Whitesmith\\bootstrap");
+      await this.hyperv.copyBootstrap(vmName, bootstrapPath, "C:\\ProgramData\\Whitesmith\\bootstrap.json");
       await this.hyperv.start(vmName);
       await this.hyperv.waitForGuestReady(vmName, Number(Bun.env.WHITESMITH_HYPERV_READY_TIMEOUT_MS ?? 120_000));
       const completion = this.hyperv.waitForStop(vmName, Number(Bun.env.WHITESMITH_HYPERV_JOB_TIMEOUT_MS ?? 3_600_000)).then(() => 0);
