@@ -224,6 +224,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy/workers/prove-win
 ```
 
 Expected: every inspected sandbox reports `hyperv`, every cleanup check passes, and every pre-pulled runner-ready measurement is below 15000 ms.
+Blocked: `docker info --format '{{.OSType}}'` returned `linux` on 2026-08-15; Windows Docker engine switch and Hyper-V host gate were not available.
 
 - [ ] **Step 7: Run one real GitHub JIT smoke inside the image**
 
