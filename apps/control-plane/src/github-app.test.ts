@@ -49,6 +49,11 @@ describe("GitHub App onboarding", () => {
     await expect(github.completeManifestRegistration("wrong-user", "missing", "code")).rejects.toThrow();
     expect(calls).toHaveLength(0);
   });
+  test("refuses installation until this control plane has registered its GitHub App", async () => {
+    const github = service(async () => Response.json({}));
+    await expect(github.beginInstallation("admin-1", organizationId, "install-key")).rejects.toThrow("github_app_unconfigured");
+  });
+
 
   test("uses a public webhook tunnel without changing browser callback URLs", async () => {
     const github = new GitHubAppService({
@@ -268,6 +273,7 @@ describe("GitHub App onboarding", () => {
 
   test("starts a second organization installation without rebinding onboarding", async () => {
     const github = service(async () => Response.json({}));
+    fakeDb.appConfig = { id: 9, slug: "whitesmith-test", pem: "encrypted", clientSecret: "encrypted", webhookSecret: "encrypted" };
     fakeDb.organizations = new Map([
       [organizationId, { githubOrgId: 99 }],
       ["22222222-2222-4222-8222-222222222222", { githubOrgId: 100 }],

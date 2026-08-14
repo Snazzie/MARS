@@ -118,7 +118,8 @@ export class GitHubAppService {
 
   async beginInstallation(userId: string, organizationId: string, idempotencyKey: string, bindOnboarding = true, purpose: SetupState["purpose"] = "install"): Promise<{ location: string; installCookie?: string }> {
     const config = await this.getConfig();
-    const slug = config?.slug ?? "whitesmith";
+    if (!config) throw new Error("github_app_unconfigured");
+    const slug = config.slug;
     if (isSql(this.db)) {
       const installations = await this.db<Array<{ id: string }>>`
         SELECT i.id
