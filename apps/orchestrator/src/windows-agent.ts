@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { WorkerBootstrapRequest, WorkerCommand, WorkerConfigurePayload, WorkerConfiguration, WorkerEvent, type WorkerCapacityData, type WorkerDoctorData, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
-import { createHyperVRuntime, HyperVDriver } from "./hyperv.ts";
+import { WindowsContainerDriver } from "./windows-container.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
@@ -19,17 +19,14 @@ const save = async (identity: Identity) => { const path = identityPath(); await 
 const load = async () => { try { return JSON.parse(await readFile(identityPath(), "utf8")) as Identity; } catch { return null; } };
 const auth = (nonce: string, identity: Identity) => ({ type: "authenticate", workerId: identity.workerId, encryptionPublicKey: identity.encryptionPublicKey, signature: signMessage(null, Buffer.from(`${nonce}\n${identity.workerId}\n${identity.encryptionPublicKey}`), identity.privateKey).toString("base64url") });
 async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> { const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), platform: "windows-x64", publicKey: identity.publicKey, encryptionPublicKey: identity.encryptionPublicKey, vmUuid: crypto.randomUUID(), machineUuid: await machineUuid(), doctor: doctor(), capacity: await capacity() }); const response = await fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); if (!response.ok) throw new Error(`worker join failed: ${response.status}`); const joined = await response.json() as { workerId: string }; const result = { ...identity, workerId: joined.workerId }; await save(result); return result; }
-type WindowsLeaseDriver = Pick<HyperVDriver, "createLease" | "stopLease" | "removeLease">;
 
 export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise<never> {
   const controlPlane = new URL(baseUrl);
   const identity = (await load()) ?? await enroll(controlPlane, keys());
-  const templatePath = Bun.env.WHITESMITH_WINDOWS_TEMPLATE_PATH;
-  const templateDigest = Bun.env.WHITESMITH_WINDOWS_TEMPLATE_DIGEST;
-  if (!templatePath || !templateDigest) throw new Error("Windows Hyper-V template path and digest are required");
-  const driver = new HyperVDriver(createHyperVRuntime(), templatePath, templateDigest, Bun.env.WHITESMITH_HYPERV_VM_PREFIX ?? "whitesmith", limits);
+  const image = Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE;
+  if (!image) throw new Error("WHITESMITH_WINDOWS_CONTAINER_IMAGE is required");
+  const driver = new WindowsContainerDriver({ image, prefix: Bun.env.WHITESMITH_WINDOWS_CONTAINER_PREFIX ?? "whitesmith", bootstrapRoot: Bun.env.ProgramData ? `${Bun.env.ProgramData}\\Whitesmith\\leases` : "C:\\ProgramData\\Whitesmith\\leases", limits, readyTimeoutMs: Number(Bun.env.WHITESMITH_WINDOWS_CONTAINER_READY_TIMEOUT_MS ?? 15_000), jobTimeoutMs: Number(Bun.env.WHITESMITH_WINDOWS_CONTAINER_JOB_TIMEOUT_MS ?? 900_000) });
   await driver.reserveCapacity({ vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 });
-  await driver.reconcileOrphans();
   const loop = async (signal?: AbortSignal): Promise<never> => {
     for (;;) {
       if (signal?.aborted) throw new Error("worker stopped");
