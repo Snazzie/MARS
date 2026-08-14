@@ -119,14 +119,21 @@ export async function getOnboardingDetail(
     repositorySelection: installationRow.repositorySelection as OnboardingInstallation["repositorySelection"],
   } : null;
   const repositoryRows = organizationId && installation ? await db`
-    SELECT id,organization_id AS "organizationId",name,full_name AS "fullName",visibility,available,installation_id AS "installationId"
+    SELECT id,organization_id AS "organizationId",name,full_name AS "fullName",visibility,available,installation_id AS "installationId",
+      discovery_error AS "discoveryError",discovery_retry_at AS "discoveryRetryAt"
     FROM dashboard_repositories WHERE organization_id=${organizationId} AND installation_id=${installation.id}
     ORDER BY full_name
   ` : [];
-  const repositories = repositoryRows.map((row) => ({
-    id: String(row.id), organizationId: String(row.organizationId), name: String(row.name), fullName: String(row.fullName),
-    visibility: row.visibility, available: row.available, installationId: String(row.installationId),
-  })) as RepositorySummary[];
+  const repositories = repositoryRows.map((row) => {
+    const discoveryRetryAt = stringValue(row.discoveryRetryAt);
+    const discoveryState = row.discoveryError === "github_403"
+      ? discoveryRetryAt && Date.parse(discoveryRetryAt) > Date.now() ? "paused" : "queued"
+      : "active";
+    return {
+      id: String(row.id), organizationId: String(row.organizationId), name: String(row.name), fullName: String(row.fullName),
+      visibility: row.visibility, available: row.available, installationId: String(row.installationId), discoveryState, discoveryRetryAt,
+    } as RepositorySummary;
+  });
   const workerDriver = worker?.platform === "linux-x64" ? "kata-k3s" : worker?.platform === "windows-x64" ? "windows-hyperv" : worker?.platform === "macos-arm64" ? "tart-vm" : null;
   const workerGuestPlatforms = worker?.guestPlatforms ?? (worker ? [worker.platform] : []);
   const poolRows = worker ? await db`

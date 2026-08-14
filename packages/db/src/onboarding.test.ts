@@ -70,6 +70,34 @@ describe("onboarding state derivation", () => {
     expect((await getOnboardingDetail(db)).pool).toMatchObject({ id: poolId, platform: "windows-x64", driver: "windows-hyperv" });
     expect(await completeOnboardingIfReady(db)).toBe(true);
   });
+  test("normalizes repository discovery state in onboarding detail", async () => {
+    const organizationId = "00000000-0000-4000-8000-000000000002";
+    const installationId = "00000000-0000-4000-8000-000000000003";
+    const repositoryId = "00000000-0000-4000-8000-000000000004";
+    const retryAt = new Date("2026-08-15T12:00:00.000Z");
+    const db = (async (strings: TemplateStringsArray) => {
+      const query = strings.join(" ");
+      if (query.includes('so.admin_user_id AS "adminUserId"')) return [{ adminUserId: "admin", workerId: null, organizationId, completedAt: null }];
+      if (query.includes("FROM organizations")) return [];
+      if (query.includes('SELECT organization_id AS "organizationId"')) return [{ organizationId }];
+      if (query.includes("FROM dashboard_installations")) return [{ id: installationId, githubInstallationId: 42, state: "approved", repositorySelection: "all" }];
+      if (query.includes("FROM dashboard_repositories WHERE")) return [{ id: repositoryId, organizationId, name: "repo", fullName: "acme/repo", visibility: "private", available: true, installationId, discoveryError: "github_403", discoveryRetryAt: retryAt }];
+      if (query.includes("FROM github_app_config")) return [{ configured: true }];
+      return [];
+    }) as never;
+
+    expect((await getOnboardingDetail(db)).github.repositories).toEqual([{
+      id: repositoryId,
+      organizationId,
+      name: "repo",
+      fullName: "acme/repo",
+      visibility: "private",
+      available: true,
+      installationId,
+      discoveryState: "paused",
+      discoveryRetryAt: retryAt.toISOString(),
+    }]);
+  });
   test("completion is sticky after later resource failures", async () => {
     const db = sql([{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: "2026-08-12T00:00:00Z", workerAdmissionState: "revoked" }]);
     const status = await getOnboardingStatus(db);
