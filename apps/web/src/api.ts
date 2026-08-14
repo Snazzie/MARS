@@ -67,7 +67,7 @@ async function request<S extends z.ZodTypeAny>(path: string, schema: S, init?: R
   return schema.parse(await response.json());
 }
 
-const meResponse = z.unknown();
+const meResponse = z.object({ id: z.string(), githubUserId: z.number().int(), login: z.string().min(1), isGlobalAdmin: z.boolean() });
 export const getMe = () => request("/api/me", meResponse);
 export const getOrganizations = () => request("/api/organizations", z.array(OrganizationSummary));
 export const getOverview = (organizationId: string, period: OverviewDto["period"] = "24h") =>
@@ -202,6 +202,17 @@ export async function refreshGithubConnection(organizationId: string) {
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: "{}",
   });
+}
+export function recheckRepositoryDiscovery(organizationId: string, repositoryId: string) {
+  return request(
+    `/api/organizations/${organizationId}/repositories/${repositoryId}/discovery/recheck`,
+    z.object({ queued: z.literal(true) }),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+      body: "{}",
+    },
+  );
 }
 export async function uninstallOrganizationGithub(organizationId: string) {
   return request(`/api/organizations/${organizationId}/github/uninstall`, z.object({ ok: z.boolean() }), {

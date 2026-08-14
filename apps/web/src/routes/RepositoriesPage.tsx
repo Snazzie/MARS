@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RepositorySummary } from "@whitesmith/contracts";
-import { beginOrganizationGithubInstall, getGithubRepositorySettings, getRepositories, refreshGithubConnection, uninstallOrganizationGithub } from "../api.ts";
+import { beginOrganizationGithubInstall, getGithubRepositorySettings, getMe, getRepositories, recheckRepositoryDiscovery, refreshGithubConnection, uninstallOrganizationGithub } from "../api.ts";
 import { Disclosure } from "../components/Disclosure.tsx";
 import { QueryState } from "../components/StateView.tsx";
 import { RunnerWorkflowPrModal } from "../components/RunnerWorkflowPrModal.tsx";
@@ -29,6 +29,7 @@ export function RepositoriesPage() {
     queryFn: () => getRepositories(organizationId),
     enabled: Boolean(organizationId),
   });
+  const me = useQuery({ queryKey: ["me"], queryFn: getMe });
   const connect = useMutation({
     mutationFn: () => beginOrganizationGithubInstall(connectOrganizationId),
     onSuccess: ({ location }) => window.location.assign(location),
@@ -55,6 +56,11 @@ export function RepositoriesPage() {
       getGithubRepositorySettings(workspaceId, repositoryId),
     onSuccess: ({ location }) => window.location.assign(location),
   });
+  const recheckDiscovery = useMutation({
+    mutationFn: (repository: RepositorySummary) =>
+      recheckRepositoryDiscovery(repository.organizationId, repository.id),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["org", organizationId, "repositories"] }),
+  });
   const repositories = useMemo(
     () =>
       (query.data?.items ?? []).filter((repository) => {
@@ -69,7 +75,7 @@ export function RepositoriesPage() {
   );
   const allWorkspaces = organizationId === "all";
   const canConnect = organizations.length > 0;
-  const updateError = connect.error ?? refreshConnection.error ?? manageOrganization.error ?? manageRepository.error;
+  const updateError = connect.error ?? refreshConnection.error ?? manageOrganization.error ?? manageRepository.error ?? recheckDiscovery.error;
   return (
     <>
       <header className="page-header repositories-header">
@@ -152,9 +158,27 @@ export function RepositoriesPage() {
                     <span className={`status ${repository.available ? "status-success" : "status-failure"}`}>
                       {repository.available ? "Available" : "Unavailable"}
                     </span>
+                    {repository.discoveryState === "paused" && (
+                      <small className="repository-discovery repository-discovery-paused">
+                        Discovery paused until {new Date(repository.discoveryRetryAt!).toLocaleString()}
+                      </small>
+                    )}
+                    {repository.discoveryState === "queued" && (
+                      <small className="repository-discovery">Recheck queued</small>
+                    )}
                   </td>
                   <td>
                     <div className="repository-actions">
+                      {me.data?.isGlobalAdmin && repository.discoveryState !== "active" && (
+                        <button
+                          type="button"
+                          className="control-button control-button-secondary"
+                          onClick={() => recheckDiscovery.mutate(repository)}
+                          disabled={repository.discoveryState === "queued" || recheckDiscovery.isPending}
+                        >
+                          Recheck now
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="control-button control-button-secondary"

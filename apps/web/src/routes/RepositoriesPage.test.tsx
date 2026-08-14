@@ -3,13 +3,22 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { RepositoriesPage } from "./RepositoriesPage.tsx";
 
-function markup() {
+function markup({
+  isGlobalAdmin = true,
+  discoveryState = "paused",
+  discoveryRetryAt = "2026-08-15T12:00:00.000Z",
+}: {
+  isGlobalAdmin?: boolean;
+  discoveryState?: "active" | "paused" | "queued";
+  discoveryRetryAt?: string | null;
+} = {}) {
   const client = new QueryClient();
+  client.setQueryData(["me"], { id: "user-1", githubUserId: 1, login: "admin", isGlobalAdmin });
   client.setQueryData(["organizations"], [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 2, workerCount: 1 }]);
   client.setQueryData(["org", "all", "repositories"], {
     items: [
-      { id: "repo-1", organizationId: "org-1", name: "private", fullName: "acme/private", visibility: "private", available: true, installationId: "inst-1" },
-      { id: "repo-2", organizationId: "org-1", name: "removed", fullName: "acme/removed", visibility: "internal", available: false, installationId: "inst-1" },
+      { id: "repo-1", organizationId: "org-1", name: "private", fullName: "acme/private", visibility: "private", available: true, installationId: "inst-1", discoveryState, discoveryRetryAt },
+      { id: "repo-2", organizationId: "org-1", name: "removed", fullName: "acme/removed", visibility: "internal", available: false, installationId: "inst-1", discoveryState: "active", discoveryRetryAt: null },
     ],
     nextCursor: null,
   });
@@ -34,4 +43,23 @@ test("available repositories enable workflow setup without a second authorizatio
   const action = html.match(/<button[^>]*>Use Whitesmith runners<\/button>/)?.[0] ?? "";
   expect(action).not.toContain("disabled");
   expect(html).not.toContain("acme/removed");
+});
+
+test("global admins can queue a paused repository recheck", () => {
+  const html = markup();
+  expect(html).toContain("Discovery paused until");
+  expect(html).toContain(">Recheck now<");
+  expect(html.match(/<button[^>]*>Recheck now<\/button>/)?.[0]).not.toContain("disabled");
+});
+
+test("queued repository rechecks cannot be submitted repeatedly", () => {
+  const html = markup({ discoveryState: "queued", discoveryRetryAt: "2026-08-14T12:00:00.000Z" });
+  expect(html).toContain("Recheck queued");
+  expect(html.match(/<button[^>]*>Recheck now<\/button>/)?.[0]).toContain("disabled");
+});
+
+test("workspace members see the pause without an administrator action", () => {
+  const html = markup({ isGlobalAdmin: false });
+  expect(html).toContain("Discovery paused until");
+  expect(html).not.toContain(">Recheck now<");
 });
