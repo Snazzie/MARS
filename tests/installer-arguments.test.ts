@@ -96,6 +96,12 @@ test("Windows installer skips optional Linux validation when Linux templates are
   const source = await Bun.file(powershell).text();
   expect(source).toContain("if ($LinuxTemplatePath -and $LinuxTemplateDigest)");
 });
+test("Windows installer fails when service registration fails", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).toContain('$serviceCreate = & sc.exe create WhitesmithWorker');
+  expect(source).toContain('$LASTEXITCODE -ne 0');
+  expect(source).toContain('Get-Service WhitesmithWorker -ErrorAction Stop');
+});
 test("Hyper-V worker preparation is not Docker-based", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).not.toContain("docker");
