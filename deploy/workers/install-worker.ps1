@@ -47,8 +47,10 @@ if ($LinuxTemplatePath -and $LinuxTemplateDigest) { Assert-Template $LinuxTempla
 $root = 'C:\ProgramData\Whitesmith'; $bin = 'C:\Program Files\Whitesmith'
 Write-Host '[5/8] Preparing worker directories'
 New-Item -ItemType Directory -Force -Path $root,$bin | Out-Null
-[IO.File]::WriteAllText((Join-Path $root 'join-code'), $JoinCode)
-$acl = Get-Acl $root; $acl.SetAccessRuleProtection($true,$false); Set-Acl $root $acl
+$joinCodePath = Join-Path $root 'join-code'
+[IO.File]::WriteAllText($joinCodePath, $JoinCode)
+$joinCodeAcl = & icacls.exe $joinCodePath /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' 2>&1
+if ($LASTEXITCODE -ne 0) { throw "Failed to secure worker join credential: $($joinCodeAcl -join ' ')" }
 $exe = Join-Path $bin 'whitesmith-orchestrator.exe'
 Write-Host '[6/8] Downloading Windows worker runtime'
 Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/orchestrator?audience=windows-x64" -OutFile $exe -TimeoutSec 120

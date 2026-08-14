@@ -102,6 +102,12 @@ test("Windows installer fails when service registration fails", async () => {
   expect(source).toContain('$LASTEXITCODE -ne 0');
   expect(source).toContain('Get-Service WhitesmithWorker -ErrorAction Stop');
 });
+test("Windows installer restricts only the join credential, not the template root", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).not.toContain("$acl.SetAccessRuleProtection");
+  expect(source).toContain("icacls.exe $joinCodePath /inheritance:r");
+  expect(source).toContain("Failed to secure worker join credential");
+});
 test("Hyper-V worker preparation is not Docker-based", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).not.toContain("docker");
