@@ -158,9 +158,10 @@ test("global admins can create the control-plane default pool without an organiz
   const response = await appFor(admin, db).request("/api/pools", {
     method: "POST",
     headers: { ...sessionHeaders, "Content-Type": "application/json", "Idempotency-Key": "global-pool" },
-    body: JSON.stringify({ workerId: "00000000-0000-4000-8000-000000000004", name: "default", resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, triggerLabel: "whitesmith-macos", imageDigest: `macos@sha256:${"a".repeat(64)}` }),
+    body: JSON.stringify({ workerId: "00000000-0000-4000-8000-000000000004", name: "default", resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, triggerLabel: "whitesmith-macos-arm64", imageDigest: `macos@sha256:${"a".repeat(64)}` }),
   });
   expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ labels: ["whitesmith-macos-arm64"] });
   expect(queries.some((query) => query.includes("INSERT INTO runner_pools"))).toBe(true);
 });
 test("global pool creation converges a matching legacy pool to shared capacity", async () => {

@@ -20,3 +20,10 @@ test("repository discovery cooldown is durable and nullable for existing rows", 
   expect(schemaSql).toContain("ALTER TABLE dashboard_repositories ADD COLUMN IF NOT EXISTS discovery_retry_at timestamptz;");
   expect(schemaSql).not.toContain("discovery_retry_at timestamptz NOT NULL");
 });
+
+test("migrates legacy split runner labels to one composite trigger", () => {
+  expect(schemaSql).toContain("WHEN platform='windows-x64' AND trigger_label='whitesmith-default' THEN 'whitesmith-windows-x64'");
+  expect(schemaSql).toContain("WHEN platform='linux-x64' AND trigger_label='whitesmith-default' THEN 'whitesmith-linux-x64'");
+  expect(schemaSql).toContain("WHEN platform='macos-arm64' AND trigger_label IN ('whitesmith-default','whitesmith-macos') THEN 'whitesmith-macos-arm64'");
+  expect(schemaSql).toContain("UPDATE runner_pools SET labels=jsonb_build_array(trigger_label)");
+});

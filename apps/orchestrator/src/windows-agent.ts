@@ -18,4 +18,91 @@ const save = async (identity: Identity) => { const path = identityPath(); await 
 const load = async () => { try { return JSON.parse(await readFile(identityPath(), "utf8")) as Identity; } catch { return null; } };
 const auth = (nonce: string, identity: Identity) => ({ type: "authenticate", workerId: identity.workerId, encryptionPublicKey: identity.encryptionPublicKey, signature: signMessage(null, Buffer.from(`${nonce}\n${identity.workerId}\n${identity.encryptionPublicKey}`), identity.privateKey).toString("base64url") });
 async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> { const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), platform: "windows-x64", publicKey: identity.publicKey, encryptionPublicKey: identity.encryptionPublicKey, vmUuid: crypto.randomUUID(), machineUuid: await machineUuid(), doctor: doctor(), capacity: await capacity() }); const response = await fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); if (!response.ok) throw new Error(`worker join failed: ${response.status}`); const joined = await response.json() as { workerId: string }; const result = { ...identity, workerId: joined.workerId }; await save(result); return result; }
-export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise<never> { const controlPlane = new URL(baseUrl); const identity = (await load()) ?? await enroll(controlPlane, keys()); const templatePath = Bun.env.WHITESMITH_WINDOWS_TEMPLATE_PATH; const templateDigest = Bun.env.WHITESMITH_WINDOWS_TEMPLATE_DIGEST; if (!templatePath || !templateDigest) throw new Error("Windows Hyper-V template path and digest are required"); const driver = new HyperVDriver(createHyperVRuntime(), templatePath, templateDigest, Bun.env.WHITESMITH_HYPERV_VM_PREFIX ?? "whitesmith", limits); await driver.reserveCapacity({ vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }); await driver.reconcileOrphans(); const loop = async (signal?: AbortSignal): Promise<never> => { for (;;) { if (signal?.aborted) throw new Error("worker stopped"); const url = new URL("/api/v1/workers/connect", controlPlane); url.protocol = url.protocol === "https:" ? "wss:" : "ws:"; url.searchParams.set("workerId", identity.workerId); const ws = new WebSocket(url); const closed = Promise.withResolvers<void>(); ws.onclose = () => closed.resolve(); ws.onerror = () => ws.close(); ws.onmessage = async (message) => { try { const frame = JSON.parse(String(message.data)) as Record<string, unknown>; if (frame.type === "challenge") return ws.send(JSON.stringify(auth(String(frame.nonce), identity))); if (["authenticated", "doctor_ack", "ping"].includes(String(frame.type))) return; const command = WorkerCommand.parse(frame); if (command.type === "worker.configure") { const p = WorkerConfigurePayload.parse(command.payload); const observed = WorkerConfiguration.parse({ appliance: p.appliance, runtime: p.runtime, guestPlatforms: p.guestPlatforms }); return ws.send(JSON.stringify(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: p.revision, observed }))); } if (command.type === "hyperv.create_lease") { const cipher = (command.payload as { bootstrapCiphertext?: Parameters<typeof openLeaseBootstrap>[0] }).bootstrapCiphertext; if (!cipher || !command.leaseId) throw new Error("lease bootstrap payload invalid"); const bootstrap: LeaseBootstrapEnvelope = openLeaseBootstrap(cipher, identity.encryptionPrivateKey); if (bootstrap.leaseId !== command.leaseId || !["windows-x64", "linux-x64"].includes(bootstrap.guestPlatform)) throw new Error("Hyper-V lease bootstrap mismatch"); ws.send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId }))); const runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig }); ws.send(JSON.stringify(event(command.workerId, "sandbox_attested", { commandId: command.id, leaseId: command.leaseId, nonce: bootstrap.nonce, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed }))); void (async () => { const exitCode = await runtime.completion; ws.send(JSON.stringify(event(command.workerId, "runner.finished", { commandId: command.id, leaseId: command.leaseId, nonce: bootstrap.nonce, exitCode }))); try { await driver.stopLease(bootstrap.leaseId); await driver.removeLease(bootstrap.leaseId); ws.send(JSON.stringify(event(command.workerId, "lease.reaped", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce }))); } catch (error) { ws.send(JSON.stringify(event(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "cleanup_failed", error: error instanceof Error ? error.message : String(error) }))); } })(); } } catch { ws.close(1011, "worker command failed"); } }; await closed.promise; await Bun.sleep(1000); } }; return loop(); }
+type WindowsLeaseDriver = Pick<HyperVDriver, "createLease" | "stopLease" | "removeLease">;
+
+export async function runWindowsLeaseLifecycle(
+  command: WorkerCommand,
+  driver: WindowsLeaseDriver,
+  bootstrap: LeaseBootstrapEnvelope,
+  send: (event: WorkerEvent) => void,
+): Promise<void> {
+  let runtime;
+  try {
+    runtime = await driver.createLease({
+      id: bootstrap.leaseId,
+      jobId: bootstrap.jobId,
+      imageDigest: bootstrap.imageDigest,
+      resources: bootstrap.resources,
+      nonce: bootstrap.nonce,
+      encodedJitConfig: bootstrap.encodedJitConfig,
+    });
+  } catch (error) {
+    console.error("Windows lease provisioning failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
+    send(event(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "provisioning_failed" }));
+    return;
+  }
+  send(event(command.workerId, "sandbox_attested", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed }));
+  try {
+    const exitCode = await runtime.completion;
+    send(event(command.workerId, "runner.finished", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, exitCode }));
+  } catch (error) {
+    console.error("Windows runner failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
+    send(event(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "runner_failed" }));
+  }
+  let cleanupFailed = false;
+  try { await driver.stopLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("Windows lease stop failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) }); }
+  try { await driver.removeLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("Windows lease removal failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) }); }
+  send(event(command.workerId, cleanupFailed ? "lease.failed" : "lease.reaped", cleanupFailed
+    ? { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "cleanup_failed" }
+    : { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce }));
+}
+
+export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise<never> {
+  const controlPlane = new URL(baseUrl);
+  const identity = (await load()) ?? await enroll(controlPlane, keys());
+  const templatePath = Bun.env.WHITESMITH_WINDOWS_TEMPLATE_PATH;
+  const templateDigest = Bun.env.WHITESMITH_WINDOWS_TEMPLATE_DIGEST;
+  if (!templatePath || !templateDigest) throw new Error("Windows Hyper-V template path and digest are required");
+  const driver = new HyperVDriver(createHyperVRuntime(), templatePath, templateDigest, Bun.env.WHITESMITH_HYPERV_VM_PREFIX ?? "whitesmith", limits);
+  await driver.reserveCapacity({ vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 });
+  await driver.reconcileOrphans();
+  const loop = async (signal?: AbortSignal): Promise<never> => {
+    for (;;) {
+      if (signal?.aborted) throw new Error("worker stopped");
+      const url = new URL("/api/v1/workers/connect", controlPlane);
+      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+      url.searchParams.set("workerId", identity.workerId);
+      const ws = new WebSocket(url);
+      const closed = Promise.withResolvers<void>();
+      ws.onclose = () => closed.resolve();
+      ws.onerror = () => ws.close();
+      ws.onmessage = async (message) => {
+        try {
+          const frame = JSON.parse(String(message.data)) as Record<string, unknown>;
+          if (frame.type === "challenge") return ws.send(JSON.stringify(auth(String(frame.nonce), identity)));
+          if (["authenticated", "doctor_ack", "ping"].includes(String(frame.type))) return;
+          const command = WorkerCommand.parse(frame);
+          if (command.type === "worker.configure") {
+            const payload = WorkerConfigurePayload.parse(command.payload);
+            const observed = WorkerConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms });
+            return ws.send(JSON.stringify(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed })));
+          }
+          if (command.type === "hyperv.create_lease") {
+            const cipher = (command.payload as { bootstrapCiphertext?: Parameters<typeof openLeaseBootstrap>[0] }).bootstrapCiphertext;
+            if (!cipher || !command.leaseId) throw new Error("lease bootstrap payload invalid");
+            const bootstrap: LeaseBootstrapEnvelope = openLeaseBootstrap(cipher, identity.encryptionPrivateKey);
+            if (bootstrap.leaseId !== command.leaseId || !["windows-x64", "linux-x64"].includes(bootstrap.guestPlatform)) throw new Error("Hyper-V lease bootstrap mismatch");
+            ws.send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
+            void runWindowsLeaseLifecycle(command, driver, bootstrap, workerEvent => ws.send(JSON.stringify(workerEvent)));
+          }
+        } catch (error) {
+          console.error("Windows worker command failed", error);
+          ws.close(1011, "worker command failed");
+        }
+      };
+      await closed.promise;
+      await Bun.sleep(1000);
+    }
+  };
+  return loop();
+}

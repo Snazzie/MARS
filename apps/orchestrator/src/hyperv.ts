@@ -7,7 +7,7 @@ import { validateResources } from "./runtime.ts";
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
 type HyperVResult = { code: number; stdout: string; stderr: string };
 export type HyperVRunner = (script: string, args: string[]) => Promise<HyperVResult>;
-export function powerShellCommand(script: string): string { return `& { ${script} }`; }
+export function powerShellCommand(script: string): string { return `$ErrorActionPreference = 'Stop'; & { ${script} }`; }
 const defaultRunner: HyperVRunner = async (script, args) => {
   const process = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", powerShellCommand(script), ...args], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
@@ -37,7 +37,7 @@ export function createHyperVRuntime(run: HyperVRunner = defaultRunner): HyperVRu
   return {
     verifyHost: async () => { await invoke("if ((Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All).State -ne 'Enabled') { exit 1 }; if (-not (Get-VMHost)) { exit 1 }"); },
     createDifferencingDisk: async (parent, child) => { await invoke("New-VHD -Path $args[1] -ParentPath $args[0] -Differencing | Out-Null", [parent, child]); },
-    createVm: async ({ name, diskPath, resources }) => { await invoke("$vm=New-VM -Name $args[0] -Generation 2 -MemoryStartupBytes ($args[2]*1MB) -VHDPath $args[1]; Set-VMProcessor -VM $vm -Count $args[3]; Set-VMMemory -VM $vm -DynamicMemoryEnabled $false -StartupBytes ($args[2]*1MB); Set-VM -VM $vm -AutomaticStopAction ShutDown | Out-Null", [name, diskPath, String(bytesToMegabytes(resources.memoryBytes)), String(resources.vcpu)]); },
+    createVm: async ({ name, diskPath, resources }) => { await invoke("$vm=New-VM -Name $args[0] -Generation 2 -MemoryStartupBytes ($args[2]*1MB) -VHDPath $args[1]; Set-VMProcessor -VM $vm -Count $args[3]; Set-VMMemory -VM $vm -DynamicMemoryEnabled $false -StartupBytes ($args[2]*1MB); Set-VM -VM $vm -AutomaticStopAction ShutDown | Out-Null; Set-VM -VM $vm -AutomaticCheckpointsEnabled $false | Out-Null", [name, diskPath, String(bytesToMegabytes(resources.memoryBytes)), String(resources.vcpu)]); },
     copyBootstrap: async (vmName, sourcePath, guestPath) => { await invoke("Copy-VMFile -Name $args[0] -SourcePath $args[1] -DestinationPath $args[2] -FileSource Host -CreateFullPath", [vmName, sourcePath, guestPath]); },
     start: async vmName => { await invoke("Start-VM -Name $args[0] | Out-Null", [vmName]); },
     waitForGuestReady: async (vmName, timeoutMs) => { await invoke("$deadline=(Get-Date).AddMilliseconds($args[1]); do { $heartbeat=Get-VMIntegrationService -VMName $args[0] -Name 'Heartbeat' -ErrorAction SilentlyContinue; if ($heartbeat -and $heartbeat.PrimaryStatusDescription -eq 'OK') { exit 0 }; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $deadline); exit 1", [vmName, String(timeoutMs)]); },
@@ -60,7 +60,7 @@ export class HyperVDriver implements RuntimeDriver {
     this.validatePool(lease.resources);
     await mkdir(this.bootstrapRoot, { recursive: true });
     const vmName = `${this.prefix}-${lease.id.slice(0, 8)}`;
-    const diskPath = join(this.bootstrapRoot, `${vmName}.avhdx`);
+    const diskPath = join(this.bootstrapRoot, `${vmName}.vhdx`);
     const bootstrapPath = join(this.bootstrapRoot, `${vmName}.json`);
     await writeFile(bootstrapPath, JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig }), { flag: "wx", mode: 0o600 });
     try {

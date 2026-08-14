@@ -33,6 +33,8 @@ ALTER TABLE runner_pools ADD COLUMN IF NOT EXISTS trigger_label text;
 ALTER TABLE runner_pools ALTER COLUMN organization_id DROP NOT NULL;
 UPDATE runner_pools SET organization_id=NULL WHERE organization_id IS NOT NULL;
 ALTER TABLE runner_pools ADD COLUMN IF NOT EXISTS trigger_label text;
+UPDATE runner_pools SET trigger_label=CASE WHEN platform='windows-x64' AND trigger_label='whitesmith-default' THEN 'whitesmith-windows-x64' WHEN platform='linux-x64' AND trigger_label='whitesmith-default' THEN 'whitesmith-linux-x64' WHEN platform='macos-arm64' AND trigger_label IN ('whitesmith-default','whitesmith-macos') THEN 'whitesmith-macos-arm64' ELSE trigger_label END;
+UPDATE runner_pools SET labels=jsonb_build_array(trigger_label) WHERE trigger_label IS NOT NULL;
 CREATE TABLE IF NOT EXISTS runner_leases (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id), pool_id uuid NOT NULL REFERENCES runner_pools(id), worker_id uuid NOT NULL REFERENCES workers(id), routing_key text NOT NULL, github_job_id bigint UNIQUE, state text NOT NULL, requested jsonb NOT NULL, nonce text NOT NULL, expires_at timestamptz NOT NULL, runtime_instance_id text, terminal_result jsonb, cleanup_state text NOT NULL DEFAULT 'none', dispatch_attempts integer NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
 ALTER TABLE runner_leases ADD COLUMN IF NOT EXISTS worker_id uuid REFERENCES workers(id);
 ALTER TABLE runner_leases ADD COLUMN IF NOT EXISTS routing_key text;

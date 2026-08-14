@@ -6,6 +6,7 @@ const linux = join(root, "deploy/workers/install-worker.sh");
 const mac = join(root, "deploy/workers/install-worker-macos.sh");
 const prepareMacImage = join(root, "deploy/workers/prepare-macos-job-image.sh");
 const powershell = join(root, "deploy/workers/install-worker.ps1");
+const prepareWindowsTemplate = join(root, "deploy/workers/prepare-windows-hyperv-template.ps1");
 const valid = "A".repeat(43);
 
 async function invoke(script: string, args: string[], env: Record<string, string> = {}) {
@@ -134,6 +135,14 @@ test("Windows installer downloads and registers the native SCM host", async () =
   expect(source).toContain('-BinaryPathName "`"$serviceHost`"');
   expect(source).not.toContain("windows-worker --service");
 });
+test("Windows installer gives the service a fresh environment without rebooting", async () => {
+  const source = await Bun.file(powershell).text();
+  const serviceEnvironment = source.indexOf("$serviceEnvironment = @(");
+  expect(serviceEnvironment).toBeGreaterThan(source.indexOf("$service = New-Service"));
+  expect(serviceEnvironment).toBeLessThan(source.indexOf("Start-Service WhitesmithWorker"));
+  expect(source).toContain("HKLM:\\SYSTEM\\CurrentControlSet\\Services\\WhitesmithWorker");
+  expect(source).toContain("-Name Environment -PropertyType MultiString");
+});
 test("Windows installer restricts only the join credential, not the template root", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).not.toContain("$acl.SetAccessRuleProtection");
@@ -144,6 +153,12 @@ test("Hyper-V worker preparation is not Docker-based", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).not.toContain("docker");
   expect(source).not.toContain("Windows Containers");
+});
+test("Windows template preparation disables automatic checkpoints before boot", async () => {
+  const source = await Bun.file(prepareWindowsTemplate).text();
+  const disableCheckpoints = source.indexOf("Set-VM -VMName $name -AutomaticCheckpointsEnabled $false");
+  expect(disableCheckpoints).toBeGreaterThan(-1);
+  expect(disableCheckpoints).toBeLessThan(source.indexOf("Start-VM -Name $name"));
 });
 test("orchestrator entrypoint uses the native host instead of a JavaScript service shim", async () => {
   const source = await Bun.file(join(root, "apps/orchestrator/src/index.ts")).text();

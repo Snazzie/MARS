@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 jobs:
   smoke:
-    runs-on: [self-hosted, macOS, ARM64, whitesmith-macos]
+    runs-on: whitesmith-macos-arm64
     timeout-minutes: 10
     steps:
       - name: Check out project

@@ -58,10 +58,6 @@ $stagedServiceHost = Join-Path $root 'whitesmith-service-host.download'
 Write-Host '[6/8] Downloading Windows worker runtime and service host'
 Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/orchestrator?audience=windows-x64" -OutFile $stagedExe -TimeoutSec 120
 Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/service-host?audience=windows-x64" -OutFile $stagedServiceHost -TimeoutSec 120
-[Environment]::SetEnvironmentVariable('WHITESMITH_CONTROL_PLANE_URL', $ControlPlaneUrl, 'Machine')
-[Environment]::SetEnvironmentVariable('WHITESMITH_JOIN_CODE_FILE', (Join-Path $root 'join-code'), 'Machine')
-[Environment]::SetEnvironmentVariable('WHITESMITH_WINDOWS_TEMPLATE_PATH', $WindowsTemplatePath, 'Machine')
-[Environment]::SetEnvironmentVariable('WHITESMITH_WINDOWS_TEMPLATE_DIGEST', $WindowsTemplateDigest, 'Machine')
 Write-Host '[7/8] Registering LocalSystem worker service'
 if (Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) {
   Stop-Service WhitesmithWorker -Force -ErrorAction SilentlyContinue
@@ -77,6 +73,14 @@ $workerLogPath = Join-Path $root 'logs\worker.log'
 $previousWorkerLogPath = Join-Path $root 'logs\worker.previous.log'
 if (Test-Path -LiteralPath $workerLogPath) { Move-Item -LiteralPath $workerLogPath -Destination $previousWorkerLogPath -Force }
 $service = New-Service -Name WhitesmithWorker -BinaryPathName "`"$serviceHost`" `"$exe`" windows-worker" -StartupType Automatic -ErrorAction Stop
+$serviceEnvironment = @(
+  "WHITESMITH_CONTROL_PLANE_URL=$ControlPlaneUrl"
+  "WHITESMITH_JOIN_CODE_FILE=$joinCodePath"
+  "WHITESMITH_WINDOWS_TEMPLATE_PATH=$WindowsTemplatePath"
+  "WHITESMITH_WINDOWS_TEMPLATE_DIGEST=$WindowsTemplateDigest"
+)
+$serviceRegistryPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\WhitesmithWorker'
+New-ItemProperty -Path $serviceRegistryPath -Name Environment -PropertyType MultiString -Value $serviceEnvironment -Force | Out-Null
 $serviceFailure = & sc.exe failure WhitesmithWorker "reset= 86400" "actions= restart/5000/restart/30000/none/0" 2>&1
 if ($LASTEXITCODE -ne 0) { throw "Failed to configure WhitesmithWorker recovery: $($serviceFailure -join ' ')" }
 Get-Service WhitesmithWorker -ErrorAction Stop | Out-Null

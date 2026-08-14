@@ -24,6 +24,7 @@ try {
   New-VM -Name $name -Generation 2 -MemoryStartupBytes 4GB -VHDPath $working | Out-Null
   Set-VMProcessor -VMName $name -Count 2
   Set-VM -VMName $name -AutomaticStopAction ShutDown -StaticMemory
+  Set-VM -VMName $name -AutomaticCheckpointsEnabled $false
   Enable-VMIntegrationService -VMName $name -Name 'Guest Service Interface'
   Start-VM -Name $name | Out-Null
   $deadline = (Get-Date).AddMinutes(10)

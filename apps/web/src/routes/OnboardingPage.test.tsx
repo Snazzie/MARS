@@ -198,7 +198,29 @@ test("renders capacity configuration in Worker and pool labels in Trigger labels
   const labels = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "labels", worker, organizations: [], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "b".repeat(64) });
   expect(labels).toContain("Trigger label");
   expect(labels).toContain("runs-on:");
-  expect(labels).toContain("whitesmith-default");
+  expect(labels).toContain("whitesmith-linux-x64");
+  expect(labels).not.toContain("self-hosted");
+});
+
+test("defaults each pool to one canonical platform architecture label", () => {
+  for (const platform of ["linux-x64", "windows-x64", "macos-arm64"] as const) {
+    const html = markup({
+      version: 1,
+      onboardingRequired: true,
+      adminCreated: true,
+      authenticated: true,
+      canManage: true,
+      step: "labels",
+      worker: { ...worker, platform, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_294_967_296, maxStorageBytesPerPod: 10_737_418_240, maxConcurrentPods: 1 } },
+      organizations: [],
+      github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [] },
+      pool: null,
+      defaultImageDigests: { [platform]: `job@sha256:${"b".repeat(64)}` },
+      defaultImageDigest: null,
+    });
+    expect(html).toContain(`runs-on: ${`whitesmith-${platform}`}`);
+    expect(html).not.toContain("self-hosted");
+  }
 });
 
 test("complete state summarizes available repositories and offers workflow setup", () => {
