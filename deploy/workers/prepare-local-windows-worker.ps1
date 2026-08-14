@@ -16,8 +16,8 @@ function Require-Administrator {
 
 Require-Administrator
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-if (-not $AgentPath) { $AgentPath = Join-Path $repoRoot 'apps\job-agent\dist\whitesmith-job-agent.exe' }
-if (-not (Test-Path -LiteralPath $AgentPath -PathType Leaf)) { throw "Job agent not found: $AgentPath" }
+$prepare = Join-Path $PSScriptRoot 'prepare-windows-hyperv-template.ps1'
+if (-not (Test-Path -LiteralPath $prepare -PathType Leaf)) { throw "Template preparation script not found: $prepare" }
 
 $vm = Get-VM -Name $VmName -ErrorAction Stop
 $diskPath = Get-VMHardDiskDrive -VMName $VmName | Select-Object -First 1 -ExpandProperty Path
@@ -37,7 +37,6 @@ if ($disk.VhdType -eq 'Differencing' -or $disk.Path -like '*.avhdx') {
   Copy-Item -LiteralPath $diskPath -Destination $source -Force
 }
 $sourceDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath $source).Hash
-$credential = Get-Credential -UserName '.\WhitesmithAdmin' -Message 'Enter the local administrator credentials for the developer VM'
 $outputVhdx = Join-Path $TemplateDirectory 'windows.vhdx'
 $outputManifest = Join-Path $TemplateDirectory 'windows-manifest.json'
 $credential = Get-Credential -UserName 'WhitesmithAdmin' -Message 'Enter the local administrator credentials for the developer VM'

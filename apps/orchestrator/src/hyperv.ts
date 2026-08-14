@@ -1,4 +1,4 @@
-import { appendFile, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PoolResources } from "@whitesmith/contracts";
 import type { Lease, RuntimeDriver, RuntimeLease } from "./runtime.ts";
@@ -15,9 +15,6 @@ const defaultRunner: HyperVRunner = async (script, args) => {
 };
 function bytesToMegabytes(value: number): number { return Math.max(1, Math.floor(value / 1024 ** 2)); }
 function bytesToGigabytes(value: number): number { return Math.max(1, Math.ceil(value / 1024 ** 3)); }
-const lifecycleLog = async (message: string): Promise<void> => {
-  try { await appendFile(join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "logs", "hyperv.log"), `${new Date().toISOString()} ${message}\n`); } catch {}
-};
 export interface HyperVRuntime {
   verifyHost(): Promise<void>;
   createDifferencingDisk(parent: string, child: string): Promise<void>;
@@ -43,7 +40,7 @@ export function createHyperVRuntime(run: HyperVRunner = defaultRunner): HyperVRu
     createVm: async ({ name, diskPath, resources }) => { await invoke("$vm=New-VM -Name $args[0] -Generation 2 -MemoryStartupBytes ($args[2]*1MB) -VHDPath $args[1]; Set-VMProcessor -VM $vm -Count $args[3]; Set-VMMemory -VM $vm -DynamicMemoryEnabled $false -StartupBytes ($args[2]*1MB); Set-VM -VM $vm -AutomaticStopAction ShutDown | Out-Null", [name, diskPath, String(bytesToMegabytes(resources.memoryBytes)), String(resources.vcpu)]); },
     copyBootstrap: async (vmName, sourcePath, guestPath) => { await invoke("Copy-VMFile -Name $args[0] -SourcePath $args[1] -DestinationPath $args[2] -FileSource Host -CreateFullPath", [vmName, sourcePath, guestPath]); },
     start: async vmName => { await invoke("Start-VM -Name $args[0] | Out-Null", [vmName]); },
-    waitForGuestReady: async (_vmName, timeoutMs) => { await invoke("Start-Sleep -Milliseconds ([Math]::Min($args[0], 5000)); exit 0", [String(timeoutMs)]); },
+    waitForGuestReady: async (vmName, timeoutMs) => { await invoke("$deadline=(Get-Date).AddMilliseconds($args[1]); do { $heartbeat=Get-VMIntegrationService -VMName $args[0] -Name 'Heartbeat' -ErrorAction SilentlyContinue; if ($heartbeat -and $heartbeat.PrimaryStatusDescription -eq 'OK') { exit 0 }; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $deadline); exit 1", [vmName, String(timeoutMs)]); },
     waitForStop: async (vmName, timeoutMs) => { await invoke("$deadline=(Get-Date).AddMilliseconds($args[1]); do { $state=(Get-VM -Name $args[0] -ErrorAction SilentlyContinue).State; if ($state -eq 'Off') { exit 0 }; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $deadline); exit 1", [vmName, String(timeoutMs)]); },
     stop: async vmName => { await invoke("Stop-VM -Name $args[0] -TurnOff -Force -ErrorAction SilentlyContinue", [vmName]); },
     remove: async vmName => { await invoke("Remove-VM -Name $args[0] -Force -ErrorAction SilentlyContinue", [vmName]); },
@@ -59,7 +56,6 @@ export class HyperVDriver implements RuntimeDriver {
   async reserveCapacity(resources: PoolResources): Promise<void> { this.validatePool(resources); await this.hyperv.verifyHost(); }
   async reconcileOrphans(): Promise<void> { await this.hyperv.reconcileOrphans(this.prefix); }
   async createLease(lease: Lease): Promise<RuntimeLease> {
-    await lifecycleLog(`lease ${lease.id} begin`);
     if (lease.imageDigest !== this.templateDigest) throw new Error("lease image digest does not match Hyper-V template");
     this.validatePool(lease.resources);
     await mkdir(this.bootstrapRoot, { recursive: true });
@@ -68,24 +64,16 @@ export class HyperVDriver implements RuntimeDriver {
     const bootstrapPath = join(this.bootstrapRoot, `${vmName}.json`);
     await writeFile(bootstrapPath, JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig }), { flag: "wx", mode: 0o600 });
     try {
-      await lifecycleLog(`lease ${lease.id} createDifferencingDisk`);
       await this.hyperv.createDifferencingDisk(this.templatePath, diskPath);
-      await lifecycleLog(`lease ${lease.id} createVm`);
       await this.hyperv.createVm({ name: vmName, diskPath, resources: lease.resources });
-      await lifecycleLog(`lease ${lease.id} start`);
       await this.hyperv.start(vmName);
-      await lifecycleLog(`lease ${lease.id} copyBootstrap`);
       await this.hyperv.copyBootstrap(vmName, bootstrapPath, "C:\\ProgramData\\Whitesmith\\bootstrap.json");
-      await lifecycleLog(`lease ${lease.id} waitForGuestReady`);
       await this.hyperv.waitForGuestReady(vmName, Number(Bun.env.WHITESMITH_HYPERV_READY_TIMEOUT_MS ?? 120_000));
-      await lifecycleLog(`lease ${lease.id} guestReady`);
       const completion = this.hyperv.waitForStop(vmName, Number(Bun.env.WHITESMITH_HYPERV_JOB_TIMEOUT_MS ?? 3_600_000)).then(() => 0);
       const runtime: RuntimeLease = { runtimeInstanceId: vmName, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: bytesToGigabytes(lease.resources.storageBytes) * 1024 ** 3 }, state: "sandbox_attested", completion };
       this.leases.set(lease.id, { vmName, diskPath, runtime });
-      await lifecycleLog(`lease ${lease.id} sandboxAttested`);
       return runtime;
     } catch (error) {
-      await lifecycleLog(`lease ${lease.id} failed ${error instanceof Error ? error.message : String(error)}`);
       await this.hyperv.stop(vmName).catch(() => undefined); await this.hyperv.remove(vmName).catch(() => undefined); await this.hyperv.removeDisk(diskPath).catch(() => undefined); throw error;
     } finally { await rm(bootstrapPath, { force: true }); }
   }
