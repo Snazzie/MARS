@@ -3,13 +3,13 @@
   "private": true,
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "bun run build:windows-service-host && concurrently --kill-others --names control-plane,web \"bun --env-file=.env run --filter @whitesmith/control-plane dev\" \"bun run --filter @whitesmith/web dev\"",
+    "dev": "bun run build:windows-worker && concurrently --kill-others --names control-plane,web \"bun --env-file=.env run --filter @whitesmith/control-plane dev\" \"bun run --filter @whitesmith/web dev\"",
     "typecheck": "bun run --filter '*' typecheck",
     "lint": "bun run --filter '*' lint",
     "test": "bun test",
     "test:live-job-pickup": "bun run tests/live-job-pickup-smoke.ts",
     "build": "bun run --filter '*' build",
-    "build:windows-service-host": "bun run scripts/build-windows-service-host.ts"
+    "build:windows-worker": "bun run scripts/build-windows-worker.ts"
   },
   "packageManager": "bun@1.2.20",
   "devDependencies": {

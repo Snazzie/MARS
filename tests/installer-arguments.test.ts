@@ -127,6 +127,11 @@ test("orchestrator entrypoint uses the native host instead of a JavaScript servi
   expect(source).not.toContain("--service");
   expect(source).not.toContain("runWindowsWorkerService");
 });
+test("Windows development preparation rebuilds the orchestrator artifact", async () => {
+  const source = await Bun.file(join(root, "scripts/build-windows-worker.ts")).text();
+  expect(source).toContain('"bun", "run", "--filter", "@whitesmith/orchestrator", "build"');
+  expect(source).toContain('"cargo", "build", "--release"');
+});
 
 test("Windows installer enforces HTTPS control-plane access", async () => {
   const source = await Bun.file(powershell).text();
