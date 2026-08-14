@@ -3,7 +3,7 @@
   "private": true,
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "bun run build:windows-worker && concurrently --kill-others --names control-plane,web \"bun --env-file=.env run --filter @whitesmith/control-plane dev\" \"bun run --filter @whitesmith/web dev\"",
+    "dev": "bun run scripts/dev.ts",
     "typecheck": "bun run --filter '*' typecheck",
     "lint": "bun run --filter '*' lint",
     "test": "bun test",
