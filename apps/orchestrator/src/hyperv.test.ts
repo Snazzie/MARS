@@ -17,6 +17,16 @@ test("uses the VHDX extension required for a differencing disk", async () => {
   expect(child).not.toEndWith(".avhdx");
 });
 test("copies bootstrap to the guest service path", async () => { const calls: string[] = []; const driver = new HyperVDriver(fake(calls), "C:\\templates\\windows.vhdx", lease.imageDigest, "whitesmith", limits, "C:\\temp"); await driver.createLease(lease); expect(calls.some(call => call.endsWith(":C:\\ProgramData\\Whitesmith\\bootstrap.json"))).toBe(true); });
+test("waits for the guest before copying bootstrap", async () => {
+  const calls: string[] = [];
+  const driver = new HyperVDriver(fake(calls), "C:\\templates\\windows.vhdx", lease.imageDigest, "whitesmith", limits, "C:\\temp");
+  await driver.createLease(lease);
+  const start = calls.findIndex(call => call.startsWith("start:"));
+  const ready = calls.findIndex(call => call.startsWith("ready:"));
+  const copy = calls.findIndex(call => call.startsWith("copy:"));
+  expect(start).toBeLessThan(ready);
+  expect(ready).toBeLessThan(copy);
+});
 test("writes the guest service bootstrap envelope", async () => {
   const copied: string[] = [];
   const runtime = fake([]);
