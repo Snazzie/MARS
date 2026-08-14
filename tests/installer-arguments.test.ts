@@ -92,6 +92,10 @@ test("PowerShell installer enforces native Hyper-V templates", async () => {
   expect(source).toContain("sc.exe create WhitesmithWorker");
   expect(source).toContain("obj= LocalSystem");
 });
+test("Windows installer skips optional Linux validation when Linux templates are unset", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).toContain("if ($LinuxTemplatePath -and $LinuxTemplateDigest)");
+});
 test("Hyper-V worker preparation is not Docker-based", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).not.toContain("docker");

@@ -43,7 +43,7 @@ Write-Host '[3/8] Checking control-plane connectivity'
 Ensure-ControlPlane
 Write-Host '[4/8] Verifying Windows template and checksum'
 Assert-Template $WindowsTemplatePath $WindowsTemplateDigest 'Windows'
-if ($LinuxTemplatePath -notmatch '^__' -or $LinuxTemplateDigest -notmatch '^__') { Assert-Template $LinuxTemplatePath $LinuxTemplateDigest 'Linux' }
+if ($LinuxTemplatePath -and $LinuxTemplateDigest) { Assert-Template $LinuxTemplatePath $LinuxTemplateDigest 'Linux' }
 $root = 'C:\ProgramData\Whitesmith'; $bin = 'C:\Program Files\Whitesmith'
 Write-Host '[5/8] Preparing worker directories'
 New-Item -ItemType Directory -Force -Path $root,$bin | Out-Null
