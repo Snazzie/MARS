@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { SecretBox } from "./auth.ts";
+import { getSession, SecretBox } from "./auth.ts";
 import { createControlPlaneApp } from "./http/app.ts";
 function fakeDb(rows: unknown[] = [], memberAllowed = true) {
   return Object.assign(async (strings: TemplateStringsArray) => {
@@ -45,6 +45,16 @@ const member = { id: "u1", githubUserId: 1, login: "member", isGlobalAdmin: fals
 const admin = { id: "u2", githubUserId: 2, login: "admin", isGlobalAdmin: true };
 function appFor(user = member, db = fakeDb()) { return createControlPlaneApp({ db, baseUrl: "https://x", browserBaseUrl: "https://x", githubClientId: "id", githubClientSecret: "secret", bootstrapGithubLogin: "admin", secretBox: new SecretBox(Buffer.alloc(32, 7).toString("base64")), defaultJobImages: {}, githubWebhookSecret: "webhook", requestId: () => "req", requestSource: () => "test", webRoot: new URL("file:///tmp/"), workerInstallerRoot: new URL("file:///tmp/"), workerOrchestratorExecutable: new URL("file:///tmp/whitesmith-orchestrator"), onWorkerAdopted: () => {}, health: () => ({ buildId: "test-build", startedAt: "2026-08-13T00:00:00.000Z", discovery: { lastAttemptAt: null, lastSuccessAt: null, stale: false, staleAfterMs: 60_000 } }), currentUser: async () => user }); }
 const sessionHeaders = { Cookie: "whitesmith_session=test" };
+
+test("session lookup normalizes PostgreSQL bigint GitHub IDs", async () => {
+  const db = (async () => [{ id: "user-1", githubUserId: "153311365", login: "admin", isGlobalAdmin: true }]) as never;
+  expect(await getSession(db, Buffer.alloc(32, 1).toString("base64url"))).toEqual({
+    id: "user-1",
+    githubUserId: 153311365,
+    login: "admin",
+    isGlobalAdmin: true,
+  });
+});
 test("authenticated global admins can read worker bootstrap status", async () => {
   const response = await appFor(admin).request("/api/workers/bootstrap", { headers: sessionHeaders });
   expect(await response.json()).toMatchObject({ initialized: false, generation: null, createdAt: null, rotatedAt: null });
