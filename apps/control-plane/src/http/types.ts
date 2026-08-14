@@ -16,6 +16,7 @@ export type ControlPlaneHealth = {
 export type ControlPlaneHttpDeps = {
   db: DashboardDb;
   baseUrl: string;
+  browserBaseUrl: string;
   githubClientId: string;
   githubClientSecret: string;
   bootstrapGithubLogin: string;

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { createPkce, githubAuthorizeUrl, exchangeOAuth, ensureBootstrapAdmin, syncGithubOrganizations, syncGithubPersonalWorkspace } from "../github.ts";
 import { createSession, SecretBox, sha256 } from "../auth.ts";
+import { browserLocation } from "../http-origin.ts";
 
 const cookieAttributes = (baseUrl: string, path: string, maxAge: number): string => { const secure = new URL(baseUrl).protocol === "https:" ? "; Secure" : ""; return `HttpOnly${secure}; SameSite=Lax; Path=${path}; Max-Age=${maxAge}`; };
 function cookieValue(header: string | undefined, name: string): string | null { const value = header?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`)); return value ? value.slice(name.length + 1) : null; }
@@ -20,7 +21,7 @@ export function registerAuthRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlan
     const cookie = c.req.header("Cookie");
     if (!state || cookieValue(cookie, "oauth_state") !== state) return c.json({ error:"invalid oauth state" },400);
     const encodedReturnTo = cookieValue(cookie, "oauth_return_to");
-    let returnTo: string | null = null;
+    let returnTo: "/repositories" | null = null;
     try { const decoded = encodedReturnTo ? decodeURIComponent(encodedReturnTo) : ""; if (decoded === "/repositories") returnTo = decoded; } catch { /* malformed return paths fall back to server routing */ }
     const rows = await deps.db`update github_setup_states set consumed_at=now() where state_hash=${sha256(state)} and purpose='oauth' and consumed_at is null and expires_at>now() returning encrypted_pkce_verifier`;
     const row = rows[0] as { encrypted_pkce_verifier?: string } | undefined; if (!row?.encrypted_pkce_verifier) return c.json({ error:"invalid oauth state" },400);
@@ -33,6 +34,7 @@ export function registerAuthRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlan
     const [onboarding] = await deps.db`SELECT completed_at FROM system_onboarding WHERE singleton=true`;
     c.header("Set-Cookie", `whitesmith_session=${await createSession(deps.db, String(dbUser.id))}; ${cookieAttributes(deps.baseUrl, "/", 604800)}`);
     if (encodedReturnTo) c.header("Set-Cookie", `oauth_return_to=; ${cookieAttributes(deps.baseUrl, "/api/auth", 0)}`, { append: true });
-    return c.redirect(returnTo ?? (onboarding?.completed_at ? "/" : "/onboarding"), 302);
+    const path = returnTo ?? (onboarding?.completed_at ? "/" : "/onboarding");
+    return c.redirect(browserLocation(deps.browserBaseUrl, path), 302);
   });
 }

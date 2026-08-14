@@ -4,9 +4,12 @@ import type { ControlPlaneHttpDeps } from "./types.ts";
 const fakeDb = (() => []) as unknown as ControlPlaneHttpDeps["db"];
 
 export function fakeHttpDeps(overrides: Partial<ControlPlaneHttpDeps> = {}): ControlPlaneHttpDeps {
+  const baseUrl = overrides.baseUrl ?? "https://control-plane.test";
+  const browserBaseUrl = overrides.browserBaseUrl ?? baseUrl;
   return {
     db: fakeDb,
-    baseUrl: "https://control-plane.test",
+    baseUrl,
+    browserBaseUrl,
     githubClientId: "github-client",
     githubClientSecret: "github-secret",
     bootstrapGithubLogin: "bootstrap",

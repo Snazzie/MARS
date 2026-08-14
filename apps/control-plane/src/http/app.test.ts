@@ -144,6 +144,49 @@ describe("control-plane HTTP boundary", () => {
     const response = await createControlPlaneApp(fakeHttpDeps({ baseUrl: "http://localhost:3000" })).request("/api/auth/github?returnTo=%2F%5Cevil.com");
     expect(response.headers.get("set-cookie")).not.toContain("oauth_return_to=");
   });
+  test("uses the public callback and browser origin for OAuth returns", async () => {
+    const secretBox = fakeHttpDeps().secretBox;
+    const sql = (async (strings: TemplateStringsArray) => {
+      const query = strings.join("?");
+      if (query.includes("update github_setup_states")) return [{ encrypted_pkce_verifier: secretBox.encrypt("verifier") }];
+      if (query.includes("insert into users")) return [{ id: "user-1", is_global_admin: true }];
+      if (query.includes("insert into organizations")) return [{ id: "personal-org" }];
+      if (query.includes("SELECT completed_at FROM system_onboarding")) return [{ completed_at: null }];
+      return [];
+    }) as unknown as ReturnType<typeof fakeHttpDeps>["db"];
+    Object.assign(sql, { begin: async (callback: (transaction: typeof sql) => Promise<unknown>) => callback(sql) });
+    const deps = fakeHttpDeps({
+      db: sql,
+      baseUrl: "http://localhost:3000",
+      browserBaseUrl: "http://localhost:5173",
+    });
+    const oauthStart = await createControlPlaneApp(deps).request("/api/auth/github");
+    expect(new URL(oauthStart.headers.get("location") ?? "").searchParams.get("redirect_uri"))
+      .toBe("http://localhost:3000/api/auth/github/callback");
+
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = Object.assign(async (input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url.includes("/login/oauth/access_token")) return Response.json({ access_token: "github-token" });
+      if (url.includes("/user/orgs")) return Response.json([]);
+      if (url.endsWith("/user")) return Response.json({ id: 7, login: "bootstrap" });
+      return new Response(null, { status: 404 });
+    }, { preconnect: previousFetch.preconnect });
+    try {
+      const callback = await createControlPlaneApp(deps).request("/api/auth/github/callback?state=state&code=code", {
+        headers: { Cookie: "oauth_state=state" },
+      });
+      expect(callback.headers.get("location")).toBe("http://localhost:5173/onboarding");
+      expect(callback.headers.get("set-cookie")).toContain("whitesmith_session=");
+
+      const repositoryCallback = await createControlPlaneApp(deps).request("/api/auth/github/callback?state=state&code=code", {
+        headers: { Cookie: "oauth_state=state; oauth_return_to=%2Frepositories" },
+      });
+      expect(repositoryCallback.headers.get("location")).toBe("http://localhost:5173/repositories");
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
 
 
   test("serves run list and detail deep links", async () => {
