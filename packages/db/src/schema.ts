@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS sessions (id uuid PRIMARY KEY DEFAULT gen_random_uuid
 DROP TABLE IF EXISTS worker_join_codes;
 CREATE TABLE IF NOT EXISTS workers (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text NOT NULL, platform text NOT NULL, guest_platforms jsonb NOT NULL DEFAULT '[]'::jsonb, admission_state text NOT NULL, connection_state text NOT NULL DEFAULT 'offline', configuration_state text NOT NULL DEFAULT 'unconfigured', public_key text, encryption_public_key text, fingerprint text, limits jsonb, doctor jsonb, vm_uuid text, created_at timestamptz NOT NULL DEFAULT now());
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS guest_platforms jsonb;
-UPDATE workers SET guest_platforms=CASE WHEN platform='windows-x64' THEN '["windows-x64"]'::jsonb ELSE jsonb_build_array(platform) END WHERE guest_platforms IS NULL OR jsonb_array_length(guest_platforms)=0;
+UPDATE workers SET guest_platforms=CASE WHEN platform='windows-x64' THEN '["windows-x64"]'::jsonb ELSE jsonb_build_array(platform) END WHERE guest_platforms IS NULL OR CASE WHEN jsonb_typeof(guest_platforms)='array' THEN jsonb_array_length(guest_platforms)=0 ELSE true END;
 ALTER TABLE workers ALTER COLUMN guest_platforms SET NOT NULL;
 CREATE TABLE IF NOT EXISTS worker_bootstrap_credentials (singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), code_hash bytea NOT NULL, generation integer NOT NULL CHECK (generation > 0), created_by uuid NOT NULL REFERENCES users(id), rotated_by uuid REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now(), rotated_at timestamptz);
 ALTER TABLE worker_bootstrap_credentials ADD COLUMN IF NOT EXISTS consumed_at timestamptz;
