@@ -16,6 +16,8 @@ function Require-Administrator {
 
 Require-Administrator
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$AgentPath = if ($AgentPath) { $AgentPath } else { Join-Path $repoRoot 'apps\job-agent\dist\whitesmith-job-agent.exe' }
+if (-not (Test-Path -LiteralPath $AgentPath -PathType Leaf)) { throw "Job agent not found: $AgentPath" }
 $prepare = Join-Path $PSScriptRoot 'prepare-windows-hyperv-template.ps1'
 if (-not (Test-Path -LiteralPath $prepare -PathType Leaf)) { throw "Template preparation script not found: $prepare" }
 
