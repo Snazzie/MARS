@@ -107,6 +107,13 @@ test("Windows installer rotates the previous worker log before startup", async (
   const source = await Bun.file(powershell).text();
   expect(source).toContain("Move-Item -LiteralPath $workerLogPath -Destination $previousWorkerLogPath -Force");
 });
+test("Windows installer accepts a successful SCM recovery restart", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).toContain("$recoveryDeadline = (Get-Date).AddSeconds(15)");
+  expect(source).toContain("$currentService.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running");
+  expect(source).toContain("recovered after initial startup failure");
+  expect(source).toContain("Startup error: $startupError");
+});
 test("Windows installer downloads and registers the native SCM host", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).toContain("/api/workers/service-host?audience=windows-x64");

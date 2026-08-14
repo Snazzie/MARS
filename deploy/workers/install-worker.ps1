@@ -84,10 +84,19 @@ try {
   $service.Refresh()
   if ($service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running) { throw "WhitesmithWorker stopped immediately with status $($service.Status)." }
 } catch {
-  $events = Get-WinEvent -FilterHashtable @{ LogName='System'; ProviderName='Service Control Manager'; StartTime=(Get-Date).AddMinutes(-5) } -ErrorAction SilentlyContinue |
-    Where-Object Message -Match 'WhitesmithWorker' | Select-Object -First 5 | ForEach-Object { "[$($_.Id)] $($_.Message)" }
-  $logPath = Join-Path $root 'logs\worker.log'
-  $workerLog = if (Test-Path -LiteralPath $logPath) { (Get-Content -LiteralPath $logPath -Tail 50 -ErrorAction SilentlyContinue) -join [Environment]::NewLine } else { 'Worker log not created.' }
-  throw "WhitesmithWorker failed to reach Running.`nSCM events:`n$($events -join [Environment]::NewLine)`nWorker log:`n$workerLog"
+  $startupError = $_.Exception.Message
+  $recoveryDeadline = (Get-Date).AddSeconds(15)
+  do {
+    Start-Sleep -Milliseconds 500
+    $currentService = Get-Service WhitesmithWorker -ErrorAction SilentlyContinue
+  } while ($currentService -and $currentService.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running -and (Get-Date) -lt $recoveryDeadline)
+  if ($currentService -and $currentService.Status -eq [System.ServiceProcess.ServiceControllerStatus]::Running) {
+    Write-Warning "WhitesmithWorker recovered after initial startup failure: $startupError"
+  } else {
+    $events = Get-WinEvent -FilterHashtable @{ LogName='System'; ProviderName='Service Control Manager'; StartTime=(Get-Date).AddMinutes(-5) } -ErrorAction SilentlyContinue |
+      Where-Object Message -Match 'WhitesmithWorker' | Select-Object -First 5 | ForEach-Object { "[$($_.Id)] $($_.Message)" }
+    $workerLog = if (Test-Path -LiteralPath $workerLogPath) { (Get-Content -LiteralPath $workerLogPath -Tail 50 -ErrorAction SilentlyContinue) -join [Environment]::NewLine } else { 'Worker log not created.' }
+    throw "WhitesmithWorker failed to reach Running.`nStartup error: $startupError`nSCM events:`n$($events -join [Environment]::NewLine)`nWorker log:`n$workerLog"
+  }
 }
 Write-Output 'Windows Hyper-V worker setup complete.'
