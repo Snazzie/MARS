@@ -42,14 +42,34 @@ async function getOverviewTimeseries(db: DashboardDb, period: OverviewDto["perio
   const currentIsReal = current && (current.bucket instanceof Date || (typeof current.bucket === "string" && !Number.isNaN(Date.parse(current.bucket))));
   return normalizeOverviewTimeseries([...rows, ...(currentIsReal ? [current] : [])]);
 }
+type OverviewJobOutcome = NonNullable<OverviewDto["jobOutcomes"]>[number];
+const overviewOutcomeOrder: OverviewJobOutcome["outcome"][] = ["queued", "running", "completed", "failed"];
+const overviewPlatformOrder: (keyof OverviewJobOutcome["platforms"])[] = ["macos", "ubuntu", "windows", "other"];
+function normalizeOverviewJobOutcomes(rows: Array<Record<string, unknown>>): OverviewJobOutcome[] {
+  const cells = new Map<string, OverviewJobOutcome["platforms"]>();
+  for (const outcome of overviewOutcomeOrder) cells.set(outcome, { macos: 0, ubuntu: 0, windows: 0, other: 0 });
+  for (const row of rows) {
+    const outcome = String(row.outcome) as OverviewJobOutcome["outcome"];
+    const platform = String(row.platform) as keyof OverviewJobOutcome["platforms"];
+    if (!cells.has(outcome) || !overviewPlatformOrder.includes(platform)) continue;
+    cells.get(outcome)![platform] = Number(row.count ?? 0);
+  }
+  return overviewOutcomeOrder.map((outcome) => ({ outcome, platforms: cells.get(outcome)! }));
+}
+async function getOverviewJobOutcomes(db: DashboardDb, organizationId: string, period: OverviewDto["period"], userId?: string): Promise<OverviewJobOutcome[]> {
+  const rows = userId
+    ? await db<Record<string, unknown>[]>`SELECT CASE WHEN j.status='queued' THEN 'queued' WHEN j.status='in_progress' THEN 'running' ELSE CASE WHEN j.conclusion='success' THEN 'completed' ELSE 'failed' END END AS outcome, CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(j.requested_labels) label WHERE lower(label) LIKE '%macos%') THEN 'macos' WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(j.requested_labels) label WHERE lower(label) LIKE '%ubuntu%' OR lower(label) LIKE '%linux%') THEN 'ubuntu' WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(j.requested_labels) label WHERE lower(label) LIKE '%windows%') THEN 'windows' ELSE 'other' END AS platform, count(*)::int AS count FROM dashboard_jobs j JOIN memberships m ON m.organization_id=j.organization_id AND m.user_id=${userId} WHERE (j.status IN ('queued','in_progress') OR j.queued_at >= now() - ${periodSql(period)}::interval) GROUP BY outcome, platform`
+    : await db<Record<string, unknown>[]>`SELECT CASE WHEN status='queued' THEN 'queued' WHEN status='in_progress' THEN 'running' ELSE CASE WHEN conclusion='success' THEN 'completed' ELSE 'failed' END END AS outcome, CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(requested_labels) label WHERE lower(label) LIKE '%macos%') THEN 'macos' WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(requested_labels) label WHERE lower(label) LIKE '%ubuntu%' OR lower(label) LIKE '%linux%') THEN 'ubuntu' WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(requested_labels) label WHERE lower(label) LIKE '%windows%') THEN 'windows' ELSE 'other' END AS platform, count(*)::int AS count FROM dashboard_jobs WHERE organization_id=${organizationId} AND (status IN ('queued','in_progress') OR queued_at >= now() - ${periodSql(period)}::interval) GROUP BY outcome, platform`;
+  return normalizeOverviewJobOutcomes(rows);
+}
 const periodSql = (period: OverviewDto["period"]) => period === "24h" ? "24 hours" : period === "7d" ? "7 days" : "30 days";
 export async function getOverview(db: DashboardDb, organizationId: string, period: OverviewDto["period"]): Promise<OverviewDto> {
   const [row] = await db<OverviewDto[]>`SELECT ${organizationId}::text AS "organizationId", ${period}::text AS period, count(*) FILTER (WHERE status='queued')::int AS queued, count(*) FILTER (WHERE status='in_progress')::int AS running, count(*) FILTER (WHERE status='completed' AND conclusion='success')::int AS completed, count(*) FILTER (WHERE status='completed' AND conclusion <> 'success')::int AS failed, 0::int AS "queueP50Ms", 0::int AS "queueP95Ms", 0::int AS "durationP50Ms", 0::int AS "durationP95Ms", 0::int AS concurrency, 0::float AS utilization FROM dashboard_jobs WHERE organization_id=${organizationId} AND queued_at >= now() - ${periodSql(period)}::interval`;
-  return { ...row, utilization: { vcpu: 0, memory: 0, storage: 0, pods: 0 }, timeseries: await getOverviewTimeseries(db, period, organizationId) };
+  return { ...row, utilization: { vcpu: 0, memory: 0, storage: 0, pods: 0 }, timeseries: await getOverviewTimeseries(db, period, organizationId), jobOutcomes: await getOverviewJobOutcomes(db, organizationId, period) };
 }
 export async function getAllOverview(db: DashboardDb, userId: string, period: OverviewDto["period"]): Promise<OverviewDto> {
   const [row] = await db<OverviewDto[]>`SELECT 'all' AS "organizationId", ${period}::text AS period, count(*) FILTER (WHERE j.status='queued')::int AS queued, count(*) FILTER (WHERE j.status='in_progress')::int AS running, count(*) FILTER (WHERE j.status='completed' AND j.conclusion='success')::int AS completed, count(*) FILTER (WHERE j.status='completed' AND j.conclusion <> 'success')::int AS failed, 0::int AS "queueP50Ms", 0::int AS "queueP95Ms", 0::int AS "durationP50Ms", 0::int AS "durationP95Ms", 0::int AS concurrency, 0::float AS utilization FROM dashboard_jobs j JOIN memberships m ON m.organization_id=j.organization_id AND m.user_id=${userId} WHERE j.queued_at >= now() - ${periodSql(period)}::interval`;
-  return { ...row, organizationId: "all", utilization: { vcpu: 0, memory: 0, storage: 0, pods: 0 }, timeseries: await getOverviewTimeseries(db, period, "all", userId) };
+  return { ...row, organizationId: "all", utilization: { vcpu: 0, memory: 0, storage: 0, pods: 0 }, timeseries: await getOverviewTimeseries(db, period, "all", userId), jobOutcomes: await getOverviewJobOutcomes(db, "all", period, userId) };
 }
 export async function listRepositories(db: DashboardDb, organizationId: string, limit = 50): Promise<CursorPage<RepositorySummary>> { const rows = await db<Record<string, unknown>[]>`SELECT r.id, r.organization_id AS "organizationId", r.name, r.full_name AS "fullName", r.visibility, r.available, r.installation_id AS "installationId", CASE WHEN r.discovery_error='github_403' AND r.discovery_retry_at>now() THEN 'paused' WHEN r.discovery_error='github_403' AND r.discovery_retry_at<=now() THEN 'queued' ELSE 'active' END AS "discoveryState", r.discovery_retry_at AS "discoveryRetryAt" FROM dashboard_repositories r JOIN dashboard_installations i ON i.organization_id=r.organization_id AND i.id=r.installation_id WHERE r.organization_id=${organizationId} ORDER BY r.full_name LIMIT ${limit + 1}`; const items = rows.slice(0, limit).map(normalizeRepository); return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null }; }
 function normalizeTimestamp(value: unknown): string | null {
