@@ -1,37 +1,40 @@
+import { useMemo } from "react";
+import { barY, colorLegend, defineChart, stack } from "@tanstack/charts";
+import { Chart } from "@tanstack/charts/react";
+import { scaleBand } from "@tanstack/charts/scales/band";
+import { scaleLinear } from "@tanstack/charts/scales/linear";
+import { scaleOrdinal } from "@tanstack/charts/scales/ordinal";
 import type { OverviewDto } from "@whitesmith/contracts";
 
 type JobOutcome = NonNullable<OverviewDto["jobOutcomes"]>[number];
 type Platform = keyof JobOutcome["platforms"];
+type OutcomeName = JobOutcome["outcome"];
+type ChartRow = { outcome: OutcomeName; platform: Platform; count: number };
 
-const outcomes = ["queued", "running", "completed", "failed"] as const;
-const platforms: readonly { key: Platform; label: string }[] = [
+const outcomeOrder: readonly OutcomeName[] = ["queued", "running", "completed", "failed"];
+const platformOrder: readonly { key: Platform; label: string }[] = [
   { key: "macos", label: "macOS" },
   { key: "ubuntu", label: "Ubuntu" },
   { key: "windows", label: "Windows" },
   { key: "other", label: "Other" },
 ];
-const platformClass: Record<Platform, string> = { macos: "outcome-platform-macos", ubuntu: "outcome-platform-ubuntu", windows: "outcome-platform-windows", other: "outcome-platform-other" };
-const outcomeLabels: Record<(typeof outcomes)[number], string> = { queued: "Queued", running: "Running", completed: "Completed", failed: "Failed" };
+const outcomeLabels: Record<OutcomeName, string> = { queued: "Queued", running: "Running", completed: "Completed", failed: "Failed" };
+const platformLabels = Object.fromEntries(platformOrder.map(({ key, label }) => [key, label])) as Record<Platform, string>;
 
-export function OutcomeBars({ outcomes: values, label = "Job outcomes" }: { outcomes: readonly JobOutcome[]; label?: string }) {
-  const byOutcome = new Map(values.map((value) => [value.outcome, value]));
-  const total = values.reduce((sum, value) => sum + Object.values(value.platforms).reduce((platformTotal, count) => platformTotal + count, 0), 0);
+export function OutcomeBars({ outcomes, label = "Job outcomes" }: { outcomes: readonly JobOutcome[]; label?: string }) {
+  const rows = useMemo<ChartRow[]>(() => outcomeOrder.flatMap((outcome) => {
+    const value = outcomes.find((item) => item.outcome === outcome);
+    return platformOrder.map(({ key }) => ({ outcome, platform: key, count: value?.platforms[key] ?? 0 }));
+  }), [outcomes]);
+  const total = rows.reduce((sum, row) => sum + row.count, 0);
+  const definition = useMemo(() => defineChart({
+    marks: [barY(rows, { x: "outcome", y: "count", z: "platform", color: "platform", layout: stack({ order: platformOrder.map(({ key }) => key) }), radius: 2 })],
+    x: { scale: () => scaleBand<OutcomeName>().padding(0.3), axis: { label: "Job outcome", format: (value: string) => outcomeLabels[value as OutcomeName] ?? value } },
+    y: { scale: scaleLinear, nice: true, grid: true, axis: { label: "Jobs" } },
+    color: { scale: () => scaleOrdinal<Platform, string>().domain(platformOrder.map(({ key }) => key)).range(["#c9f47b", "#8bc9dc", "#e7835d", "#59635f"]), legend: colorLegend({ label: "Platform" }) },
+    svgAnimation: true,
+  }), [rows]);
   if (!total) return <p className="chart-empty">No outcomes recorded yet.</p>;
-  const summary = outcomes.flatMap((outcome) => platforms.map(({ key, label: platformLabel }) => `${outcomeLabels[outcome]} ${platformLabel}: ${byOutcome.get(outcome)?.platforms[key] ?? 0}`)).join(", ");
-  return <div className="outcome-chart" role="img" aria-label={`${label}. ${summary}`}>
-    <div className="outcome-bars" aria-hidden="true">
-      {outcomes.map((outcome) => {
-        const value = byOutcome.get(outcome);
-        const outcomeTotal = platforms.reduce((sum, { key }) => sum + (value?.platforms[key] ?? 0), 0);
-        return <div className="outcome-bar-column" key={outcome}>
-          <div className="outcome-bar" title={`${outcomeLabels[outcome]}: ${outcomeTotal}`}>
-            {platforms.map(({ key, label: platformLabel }) => { const count = value?.platforms[key] ?? 0; return count ? <span className={`outcome-bar-segment ${platformClass[key]}`} key={key} style={{ flexGrow: count }} title={`${platformLabel}: ${count}`} /> : null; })}
-          </div>
-          <span className="outcome-bar-value">{outcomeTotal}</span>
-          <span className="outcome-bar-label">{outcomeLabels[outcome]}</span>
-        </div>;
-      })}
-    </div>
-    <div className="outcome-legend">{platforms.map(({ key, label: platformLabel }) => <span key={key}><i className={`outcome-legend-swatch ${platformClass[key]}`} />{platformLabel}</span>)}</div>
-  </div>;
+  const summary = outcomeOrder.flatMap((outcome) => platformOrder.map(({ key }) => `${outcomeLabels[outcome]} ${platformLabels[key]}: ${outcomes.find((item) => item.outcome === outcome)?.platforms[key] ?? 0}`)).join(", ");
+  return <div className="chart-frame outcome-chart" role="img" aria-label={`${label}. ${summary}`}><Chart definition={definition} height={260} ariaLabel={label} /></div>;
 }

@@ -8,10 +8,10 @@ const outcomes = [
   { outcome: "completed" as const, platforms: { macos: 0, ubuntu: 3, windows: 0, other: 1 } },
   { outcome: "failed" as const, platforms: { macos: 0, ubuntu: 0, windows: 0, other: 0 } },
 ];
-
-test("renders vertical outcome bars with platform legend and accessible counts", () => {
+test("renders TanStack's SVG stacked chart with platform legend", () => {
   const html = renderToStaticMarkup(<OutcomeBars outcomes={outcomes} />);
-  expect(html).toContain('aria-label="Job outcomes.');
+  expect(html).toContain("<svg");
+  expect(html).toContain("Platform");
   expect(html).toContain("Queued");
   expect(html).toContain("Completed");
   expect(html).toContain("macOS");
