@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { barY, colorLegend, defineChart, stack } from "@tanstack/charts";
+import { tooltip } from "@tanstack/charts/tooltip";
 import { Chart } from "@tanstack/charts/react";
 import { scaleBand } from "@tanstack/charts/scales/band";
 import { scaleLinear } from "@tanstack/charts/scales/linear";
@@ -32,7 +33,8 @@ export function OutcomeBars({ outcomes, label = "Job outcomes" }: { outcomes: re
     x: { scale: () => scaleBand<OutcomeName>().padding(0.3), axis: { label: "Job outcome", format: (value: string) => outcomeLabels[value as OutcomeName] ?? value } },
     y: { scale: scaleLinear, nice: true, grid: true, axis: { label: "Jobs" } },
     color: { scale: () => scaleOrdinal<Platform, string>().domain(platformOrder.map(({ key }) => key)).range(["#c9f47b", "#8bc9dc", "#e7835d", "#59635f"]), legend: colorLegend({ label: "Platform" }) },
-    svgAnimation: true,
+    focus: "group-x",
+    tooltip: { use: tooltip, anchor: "group-center", placement: ["top", "right", "left", "bottom"], sort: "color-domain" },
   }), [rows]);
   if (!total) return <p className="chart-empty">No outcomes recorded yet.</p>;
   const summary = outcomeOrder.flatMap((outcome) => platformOrder.map(({ key }) => `${outcomeLabels[outcome]} ${platformLabels[key]}: ${outcomes.find((item) => item.outcome === outcome)?.platforms[key] ?? 0}`)).join(", ");
