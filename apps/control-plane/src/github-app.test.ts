@@ -44,6 +44,8 @@ describe("GitHub App onboarding", () => {
     expect(launch.manifest).not.toContain("installation_repositories");
     const manifest = JSON.parse(launch.manifest);
     expect(manifest.default_events).toEqual(["workflow_job", "membership"]);
+    expect(manifest.default_permissions.contents).toBe("write");
+    expect(manifest.default_permissions.pull_requests).toBe("write");
     expect(manifest.hook_attributes.url).toBe("https://control-plane.test/api/github/webhooks");
     const replay = await github.createManifestLaunch("admin-1", organizationId, "manifest-key");
     expect(replay).toEqual(launch);

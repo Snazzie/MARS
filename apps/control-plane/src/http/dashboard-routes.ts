@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck } from "@whitesmith/db";
@@ -14,6 +14,7 @@ const mutationSchema = z.object({}).strict();
 function error(c: any, status: number, code: string, message: string, details?: Record<string, unknown>) {
   return c.json(ApiError.parse({ code, message, requestId: c.req.header("x-request-id") || crypto.randomUUID(), ...(details ? { details } : {}) }), status, { "cache-control": "no-store" });
 }
+function githubWorkflowPermissionError(c: Context<ControlPlaneEnv>) { return error(c, 409, "github_app_permissions_missing", "GitHub App needs Contents and Pull requests write permissions. Update and approve the app permissions, then refresh."); }
 function parseQuery(c: any) { const parsed = querySchema.safeParse(c.req.query()); return parsed.success ? parsed.data : error(c, 400, "invalid_query", "Invalid query parameters", { issues: parsed.error.issues }); }
 function requireMutation(c: any) { return c.req.header("idempotency-key")?.trim() ? null : error(c, 400, "missing_idempotency_key", "Idempotency-Key is required"); }
 async function member(db: any, user: any, organizationId: string) { if (user.isGlobalAdmin) return true; const [row] = await db`SELECT 1 FROM memberships WHERE user_id=${user.id} AND organization_id=${organizationId}`; return Boolean(row); }
@@ -189,6 +190,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     } catch (cause) {
       const code = cause instanceof Error ? cause.message : "Invalid workflow file";
       if (code === "github_repository_unavailable") return error(c, 404, "repository_unavailable", "Repository is unavailable");
+      if (code === "github_403") return githubWorkflowPermissionError(c);
       if (/Invalid|Malformed|Unsupported/i.test(code)) return error(c, 422, "workflow_invalid", code, { repositoryId: c.req.param("repositoryId"), organizationId: org });
       throw cause;
     }
@@ -199,7 +201,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
     const body = z.object({ selectedPaths: z.array(z.string()).default([]) }).strict().parse(await c.req.json());
     try { return c.json(RunnerWorkflowPreview.parse(await deps.githubApp.previewRepositoryRunnerPr({ organizationId: org, repositoryId: c.req.param("repositoryId"), selectedPaths: body.selectedPaths }))); }
-    catch (cause) { const code = cause instanceof Error ? cause.message : ""; if (code === "github_repository_unavailable") return error(c, 404, "repository_unavailable", "Repository is unavailable"); if (code === "github_runner_pool_missing") return error(c, 422, "runner_pool_missing", "Runner pool is not configured"); if (/Invalid|Malformed|Unsupported|not discovered|no-op/i.test(code)) return error(c, 422, "workflow_invalid", code); throw cause; }
+    catch (cause) { const code = cause instanceof Error ? cause.message : ""; if (code === "github_repository_unavailable") return error(c, 404, "repository_unavailable", "Repository is unavailable"); if (code === "github_403") return githubWorkflowPermissionError(c); if (code === "github_runner_pool_missing") return error(c, 422, "runner_pool_missing", "Runner pool is not configured"); if (/Invalid|Malformed|Unsupported|not discovered|no-op/i.test(code)) return error(c, 422, "workflow_invalid", code); throw cause; }
   }));
   app.post("/api/organizations/:organizationId/repositories/:repositoryId/runner-workflows/pr", safe(async (c) => {
     const org = c.req.param("organizationId"); const denied = await guard(c, deps, org); if (denied) return denied;
@@ -216,6 +218,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
       const code = cause instanceof Error ? cause.message : "";
       if (/github_workflow_head_stale/.test(code)) return error(c, 409, "workflow_head_stale", "Workflow files changed; refresh preview");
       if (code === "github_repository_unavailable") return error(c, 404, "repository_unavailable", "Repository is unavailable");
+      if (code === "github_403") return githubWorkflowPermissionError(c);
       if (/Invalid|Malformed|Unsupported|not discovered|no-op/i.test(code)) return error(c, 422, "workflow_invalid", code);
       throw cause;
     }

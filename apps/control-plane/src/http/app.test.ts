@@ -402,6 +402,18 @@ test("uninstalls an organization through the authenticated GitHub route", async 
     })).request("/api/organizations/org-1/repositories/repo-1/runner-workflows");
     expect(unavailable.status).toBe(404);
     expect(await unavailable.json()).toMatchObject({ code: "repository_unavailable" });
+
+    const missingPermissions = await createControlPlaneApp(fakeHttpDeps({
+      currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+      githubApp: {
+        listRepositoryRunnerWorkflows: async () => { throw new Error("github_403"); },
+      } as never,
+    })).request("/api/organizations/org-1/repositories/repo-1/runner-workflows");
+    expect(missingPermissions.status).toBe(409);
+    expect(await missingPermissions.json()).toMatchObject({
+      code: "github_app_permissions_missing",
+      message: "GitHub App needs Contents and Pull requests write permissions. Update and approve the app permissions, then refresh.",
+    });
   });
 
   test("refreshes repositories from an existing GitHub installation", async () => {
