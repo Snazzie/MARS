@@ -35,6 +35,7 @@ export type ControlPlaneHttpDeps = {
   webRoot: URL;
   workerInstallerRoot: URL;
   workerOrchestratorExecutables?: Partial<Record<"linux-x64" | "windows-x64" | "macos-arm64", URL>>;
+  workerServiceHostExecutable?: URL;
   workerOrchestratorExecutable?: URL;
   workerRequestLimiter?: RequestLimiter;
   workerDispatcher?: WorkerCommandDispatcher;

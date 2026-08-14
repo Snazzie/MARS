@@ -70,6 +70,15 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     return new Response(injectInstallerOrigin(await installer.text(), deps.baseUrl, extra, audience === "windows-x64"), { headers: noStore() });
   });
   app.get("/api/workers/orchestrator", (c) => { const audience = c.req.query("audience") as keyof NonNullable<typeof deps.workerOrchestratorExecutables>; const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined); if (!executable) return c.json({ error: "unsupported orchestrator audience" }, 400); const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", 'attachment; filename="whitesmith-orchestrator"'); return new Response(Bun.file(executable), { headers }); });
+  app.get("/api/workers/service-host", async (c) => {
+    const executable = deps.workerServiceHostExecutable;
+    if (c.req.query("audience") !== "windows-x64" || !executable) return c.json({ error: "unsupported service host audience" }, 400);
+    if (!await Bun.file(executable).exists()) return c.json({ error: "Windows service host is unavailable" }, 503, { "cache-control": "no-store" });
+    const headers = noStore();
+    headers.set("content-type", "application/octet-stream");
+    headers.set("content-disposition", 'attachment; filename="whitesmith-service-host.exe"');
+    return new Response(Bun.file(executable), { headers });
+  });
   app.post("/api/workers/join", async (c) => {
     const source = deps.requestSource(c.req.raw);
     if (!limiter.allow(source)) return c.json({ error: "invalid or rotated bootstrap credential" }, 429);

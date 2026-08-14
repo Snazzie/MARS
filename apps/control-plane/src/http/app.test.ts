@@ -109,6 +109,29 @@ describe("control-plane HTTP boundary", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  test("serves the configured Windows service host executable", async () => {
+    const root = await mkdtemp(join(tmpdir(), "whitesmith-service-host-"));
+    try {
+      const executable = join(root, "whitesmith-service-host.exe");
+      await Bun.write(executable, "windows-service-host-binary");
+      const response = await createControlPlaneApp(fakeHttpDeps({
+        workerServiceHostExecutable: pathToFileURL(executable),
+      })).request("/api/workers/service-host?audience=windows-x64");
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("windows-service-host-binary");
+      expect(response.headers.get("content-disposition")).toContain("whitesmith-service-host.exe");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  test("reports a missing Windows service host artifact", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      workerServiceHostExecutable: pathToFileURL(join(tmpdir(), crypto.randomUUID(), "missing.exe")),
+    })).request("/api/workers/service-host?audience=windows-x64");
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+  });
 
 
 

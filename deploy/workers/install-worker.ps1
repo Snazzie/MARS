@@ -52,18 +52,39 @@ $joinCodePath = Join-Path $root 'join-code'
 $joinCodeAcl = & icacls.exe $joinCodePath /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' 2>&1
 if ($LASTEXITCODE -ne 0) { throw "Failed to secure worker join credential: $($joinCodeAcl -join ' ')" }
 $exe = Join-Path $bin 'whitesmith-orchestrator.exe'
-Write-Host '[6/8] Downloading Windows worker runtime'
+$serviceHost = Join-Path $bin 'whitesmith-service-host.exe'
+Write-Host '[6/8] Downloading Windows worker runtime and service host'
 Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/orchestrator?audience=windows-x64" -OutFile $exe -TimeoutSec 120
+Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/service-host?audience=windows-x64" -OutFile $serviceHost -TimeoutSec 120
 [Environment]::SetEnvironmentVariable('WHITESMITH_CONTROL_PLANE_URL', $ControlPlaneUrl, 'Machine')
 [Environment]::SetEnvironmentVariable('WHITESMITH_JOIN_CODE_FILE', (Join-Path $root 'join-code'), 'Machine')
 [Environment]::SetEnvironmentVariable('WHITESMITH_WINDOWS_TEMPLATE_PATH', $WindowsTemplatePath, 'Machine')
 [Environment]::SetEnvironmentVariable('WHITESMITH_WINDOWS_TEMPLATE_DIGEST', $WindowsTemplateDigest, 'Machine')
 Write-Host '[7/8] Registering LocalSystem worker service'
-if (Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) { Stop-Service WhitesmithWorker -Force -ErrorAction SilentlyContinue; & sc.exe delete WhitesmithWorker | Out-Null; if ($LASTEXITCODE -ne 0) { throw "Failed to remove existing WhitesmithWorker service." } }
-$service = New-Service -Name WhitesmithWorker -BinaryPathName "`"$exe`" windows-worker --service" -StartupType Automatic -ErrorAction Stop
+if (Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) {
+  Stop-Service WhitesmithWorker -Force -ErrorAction SilentlyContinue
+  $serviceDelete = & sc.exe delete WhitesmithWorker 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to remove existing WhitesmithWorker service: $($serviceDelete -join ' ')" }
+  $deadline = (Get-Date).AddSeconds(15)
+  while ((Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+  if (Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) { throw 'Timed out removing existing WhitesmithWorker service.' }
+}
+$service = New-Service -Name WhitesmithWorker -BinaryPathName "`"$serviceHost`" `"$exe`" windows-worker" -StartupType Automatic -ErrorAction Stop
 $serviceFailure = & sc.exe failure WhitesmithWorker "reset= 86400" "actions= restart/5000/restart/30000/none/0" 2>&1
 if ($LASTEXITCODE -ne 0) { throw "Failed to configure WhitesmithWorker recovery: $($serviceFailure -join ' ')" }
 Get-Service WhitesmithWorker -ErrorAction Stop | Out-Null
 Write-Host '[8/8] Starting Whitesmith worker service'
-Start-Service WhitesmithWorker
+try {
+  Start-Service WhitesmithWorker -ErrorAction Stop
+  $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(30))
+  Start-Sleep -Seconds 2
+  $service.Refresh()
+  if ($service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running) { throw "WhitesmithWorker stopped immediately with status $($service.Status)." }
+} catch {
+  $events = Get-WinEvent -FilterHashtable @{ LogName='System'; ProviderName='Service Control Manager'; StartTime=(Get-Date).AddMinutes(-5) } -ErrorAction SilentlyContinue |
+    Where-Object Message -Match 'WhitesmithWorker' | Select-Object -First 5 | ForEach-Object { "[$($_.Id)] $($_.Message)" }
+  $logPath = Join-Path $root 'logs\worker.log'
+  $workerLog = if (Test-Path -LiteralPath $logPath) { (Get-Content -LiteralPath $logPath -Tail 50 -ErrorAction SilentlyContinue) -join [Environment]::NewLine } else { 'Worker log not created.' }
+  throw "WhitesmithWorker failed to reach Running.`nSCM events:`n$($events -join [Environment]::NewLine)`nWorker log:`n$workerLog"
+}
 Write-Output 'Windows Hyper-V worker setup complete.'

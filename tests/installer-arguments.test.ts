@@ -103,6 +103,13 @@ test("Windows installer fails when service registration fails", async () => {
   expect(source).toContain('"reset= 86400"');
   expect(source).toContain('"actions= restart/5000/restart/30000/none/0"');
 });
+test("Windows installer downloads and registers the native SCM host", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).toContain("/api/workers/service-host?audience=windows-x64");
+  expect(source).toContain("whitesmith-service-host.exe");
+  expect(source).toContain('-BinaryPathName "`"$serviceHost`"');
+  expect(source).not.toContain("windows-worker --service");
+});
 test("Windows installer restricts only the join credential, not the template root", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).not.toContain("$acl.SetAccessRuleProtection");
@@ -114,11 +121,11 @@ test("Hyper-V worker preparation is not Docker-based", async () => {
   expect(source).not.toContain("docker");
   expect(source).not.toContain("Windows Containers");
 });
-test("orchestrator entrypoint dispatches platform worker commands", async () => {
+test("orchestrator entrypoint uses the native host instead of a JavaScript service shim", async () => {
   const source = await Bun.file(join(root, "apps/orchestrator/src/index.ts")).text();
-  expect(source).toContain('Bun.argv[2] === "mac-worker"');
   expect(source).toContain('Bun.argv[2] === "windows-worker"');
-  expect(source).toContain("runWindowsWorkerService");
+  expect(source).not.toContain("--service");
+  expect(source).not.toContain("runWindowsWorkerService");
 });
 
 test("Windows installer enforces HTTPS control-plane access", async () => {
