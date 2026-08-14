@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { LogChunk, OverviewDto, RepositorySummary, RunDetail, RunSummary, WorkerDetail } from "@whitesmith/contracts";
-import { getOverview, getOrganizationSettings, getRunDetail, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRepositories, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks } from "./dashboard.ts";
+import { getOverview, getOrganizationSettings, getRunDetail, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRepositories, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks, queueRepositoryDiscoveryRecheck } from "./dashboard.ts";
 
 test("overview returns point-in-time pending and running buckets", async () => {
   const db = (async (strings: TemplateStringsArray) => {
@@ -184,4 +184,56 @@ test("all-workspace listings preserve tenant membership and workspace IDs", asyn
   expect((await listAllRuns(db, "user-1")).items[0]).toMatchObject({ organizationId: "org-1" });
   expect((await listAllPools(db, "user-1")).items[0]).toMatchObject({ organizationId: "org-1" });
   expect(queries.every((query) => !query.includes("r.approved"))).toBe(true);
+});
+
+const discoveryOrganizationId = "11111111-1111-4111-8111-111111111111";
+const discoveryRepositoryId = "22222222-2222-4222-8222-222222222222";
+
+function discoveryRecheckDb(options: { paused?: boolean; missing?: boolean } = {}) {
+  const state = { paused: options.paused ?? true, keys: new Set<string>(), updates: 0 };
+  const sql = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const query = strings.join(" ");
+    if (query.includes("FROM dashboard_repositories r")) return options.missing ? [] : [{ paused: state.paused }];
+    if (query.includes("SELECT 1 FROM dashboard_mutations")) return state.keys.has(String(values[1])) ? [{ exists: 1 }] : [];
+    if (query.includes("INSERT INTO dashboard_mutations")) {
+      const key = String(values[1]);
+      if (state.keys.has(key)) return [];
+      state.keys.add(key);
+      return [{ idempotency_key: key }];
+    }
+    if (query.includes("SET discovery_retry_at=now()")) {
+      state.updates += 1;
+      state.paused = false;
+    }
+    return [];
+  }, {
+    begin: async (transaction: (tx: unknown) => Promise<unknown>) => transaction(sql),
+  }) as never;
+  return { db: sql, state };
+}
+
+test("queues one paused repository discovery recheck", async () => {
+  const setup = discoveryRecheckDb();
+  expect(await queueRepositoryDiscoveryRecheck(setup.db, discoveryOrganizationId, discoveryRepositoryId, "retry-1")).toBe("queued");
+  expect(setup.state.updates).toBe(1);
+  expect(setup.state.keys).toEqual(new Set([`repository-discovery-recheck:${discoveryRepositoryId}:retry-1`]));
+});
+
+test("converges an idempotent repository discovery replay", async () => {
+  const setup = discoveryRecheckDb();
+  await queueRepositoryDiscoveryRecheck(setup.db, discoveryOrganizationId, discoveryRepositoryId, "retry-1");
+  expect(await queueRepositoryDiscoveryRecheck(setup.db, discoveryOrganizationId, discoveryRepositoryId, "retry-1")).toBe("queued");
+  expect(setup.state.updates).toBe(1);
+});
+
+test("rejects an active repository without consuming the idempotency key", async () => {
+  const setup = discoveryRecheckDb({ paused: false });
+  expect(await queueRepositoryDiscoveryRecheck(setup.db, discoveryOrganizationId, discoveryRepositoryId, "retry-active")).toBe("not_paused");
+  expect(setup.state.keys.size).toBe(0);
+});
+
+test("rejects a missing repository without consuming the idempotency key", async () => {
+  const setup = discoveryRecheckDb({ missing: true });
+  expect(await queueRepositoryDiscoveryRecheck(setup.db, discoveryOrganizationId, discoveryRepositoryId, "retry-missing")).toBe("not_found");
+  expect(setup.state.keys.size).toBe(0);
 });

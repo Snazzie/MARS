@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady } from "@whitesmith/db";
+import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck } from "@whitesmith/db";
 import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
@@ -32,6 +32,19 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   app.get("/api/organizations", safe(async (c) => c.json(OrganizationSummary.array().parse(await listOrganizations(deps.db, c.get("user").id)))));
   app.get("/api/organizations/:organizationId/overview", safe(async (c) => { const org = c.req.param("organizationId"); const period = periodSchema.safeParse(c.req.query("period") || "24h"); if (!period.success) return error(c, 400, "invalid_period", "Invalid period", { issues: period.error.issues }); if (org === "all") return c.json(OverviewDto.parse(await getAllOverview(deps.db, c.get("user").id, period.data))); const denied = await guard(c, deps, org); if (denied) return denied; return c.json(OverviewDto.parse(await getOverview(deps.db, org, period.data))); }));
   for (const [path, fn, allFn, schema] of [["repositories", listRepositories, listAllRepositories, RepositorySummary], ["runs", listRuns, listAllRuns, RunSummary], ["pools", listPools, listAllPools, PoolSummary]] as const) app.get(`/api/organizations/:organizationId/${path}`, safe(async (c) => { const org = c.req.param("organizationId"); const q = parseQuery(c); if (q instanceof Response) return q; if (org === "all") return c.json(CursorPage(schema).parse(await allFn(deps.db, c.get("user").id, q.limit))); const denied = await guard(c, deps, org); if (denied) return denied; return c.json(CursorPage(schema).parse(await fn(deps.db, org, q.limit))); }));
+  app.post("/api/organizations/:organizationId/repositories/:repositoryId/discovery/recheck", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const denied = await guard(c, deps, org);
+    if (denied) return denied;
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    const idem = requireMutation(c);
+    if (idem) return idem;
+    const result = await queueRepositoryDiscoveryRecheck(deps.db, org, c.req.param("repositoryId"), c.req.header("idempotency-key")!.trim());
+    if (result === "not_found") return error(c, 404, "not_found", "Resource not found");
+    if (result === "not_paused") return error(c, 409, "repository_discovery_not_paused", "Repository discovery is not paused");
+    await invalidateDashboard(deps.db, org, ["repositories"]);
+    return c.json({ queued: true }, 202);
+  }));
   app.get("/api/organizations/:organizationId/workers", safe(async (c) => { if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required"); const q = parseQuery(c); if (q instanceof Response) return q; return c.json(CursorPage(WorkerDetail).parse(await listAllWorkers(deps.db, c.get("user").id, q.limit, q.includeRevoked))); }));
   app.post("/api/organizations/:organizationId/workers/:workerId/configure", safe(async (c) => { const org = c.req.param("organizationId"); const denied = await guard(c, deps, org); if (denied) return denied; if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required"); const idem = requireMutation(c); if (idem) return idem; const body = WorkerConfiguration.parse(await c.req.json()); const worker = await getWorkerDetail(deps.db, org, c.req.param("workerId")); if (!worker) return error(c, 404, "not_found", "Resource not found"); const result = await configurePendingWorker(deps.db, c.req.param("workerId"), body, c.get("user").id, deps.workerDispatcher, c.req.header("idempotency-key")!); if (org !== "all") await invalidateDashboard(deps.db, org, ["workers", "onboarding"]); return c.json(result, 202); }));
   app.get("/api/organizations/:organizationId/runs/:runId", safe(async (c) => { const org=c.req.param("organizationId"); const denied=await guard(c,deps,org); if(denied)return denied; const value=await getRunDetail(deps.db,org,c.req.param("runId")); return value?c.json(RunDetail.parse(value)):error(c,404,"not_found","Resource not found"); }));

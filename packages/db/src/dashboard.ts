@@ -242,3 +242,45 @@ export async function updateOrganizationSettings(db: DashboardDb, value: Organiz
 }
 export async function dashboardMutation(db: DashboardDb, organizationId: string, key: string): Promise<boolean> { const rows = await db`INSERT INTO dashboard_mutations (organization_id,idempotency_key) VALUES (${organizationId},${key}) ON CONFLICT DO NOTHING RETURNING idempotency_key`; return rows.length > 0; }
 export async function invalidateDashboard(db: DashboardDb, organizationId: string, keys: string[]): Promise<void> { await db`INSERT INTO dashboard_outbox_invalidations (organization_id,sequence,keys) SELECT ${organizationId},COALESCE(MAX(sequence),0)+1,${JSON.stringify(keys)}::jsonb FROM dashboard_outbox_invalidations WHERE organization_id=${organizationId}`; }
+
+export type QueueRepositoryDiscoveryRecheckResult = "queued" | "not_found" | "not_paused";
+
+export async function queueRepositoryDiscoveryRecheck(
+  db: DashboardDb,
+  organizationId: string,
+  repositoryId: string,
+  idempotencyKey: string,
+): Promise<QueueRepositoryDiscoveryRecheckResult> {
+  const mutationKey = `repository-discovery-recheck:${repositoryId}:${idempotencyKey}`;
+  return db.begin(async (tx) => {
+    const [repository] = await tx`
+      SELECT r.discovery_error='github_403' AND r.discovery_retry_at>now() AS paused
+      FROM dashboard_repositories r
+      JOIN dashboard_installations i
+        ON i.id=r.installation_id AND i.organization_id=r.organization_id
+      WHERE r.organization_id=${organizationId} AND r.id=${repositoryId}
+        AND r.available=true AND i.state='approved'
+      FOR UPDATE OF r
+    `;
+    const [prior] = await tx`
+      SELECT 1 FROM dashboard_mutations
+      WHERE organization_id=${organizationId} AND idempotency_key=${mutationKey}
+    `;
+    if (prior) return "queued";
+    if (!repository) return "not_found";
+    if (repository.paused !== true) return "not_paused";
+
+    const inserted = await tx`
+      INSERT INTO dashboard_mutations (organization_id,idempotency_key)
+      VALUES (${organizationId},${mutationKey})
+      ON CONFLICT DO NOTHING RETURNING idempotency_key
+    `;
+    if (!inserted.length) return "queued";
+
+    await tx`
+      UPDATE dashboard_repositories SET discovery_retry_at=now()
+      WHERE organization_id=${organizationId} AND id=${repositoryId}
+    `;
+    return "queued";
+  });
+}

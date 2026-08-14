@@ -24,6 +24,23 @@ function statefulDb() {
   }, {}) as never;
   return { db, state };
 }
+function discoveryRecheckApiDb(result: "queued" | "not_found" | "not_paused" = "queued") {
+  const state = { updates: 0, invalidations: 0, queries: [] as string[] };
+  const sql = Object.assign(async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ");
+    state.queries.push(query);
+    if (query.includes("FROM memberships")) return [{ ok: true }];
+    if (query.includes("FROM dashboard_repositories r")) return result === "not_found" ? [] : [{ paused: result !== "not_paused" }];
+    if (query.includes("SELECT 1 FROM dashboard_mutations")) return [];
+    if (query.includes("INSERT INTO dashboard_mutations")) return [{ idempotency_key: "recheck" }];
+    if (query.includes("SET discovery_retry_at=now()")) state.updates += 1;
+    if (query.includes("dashboard_outbox_invalidations")) state.invalidations += 1;
+    return [];
+  }, {
+    begin: async (transaction: (tx: unknown) => Promise<unknown>) => transaction(sql),
+  }) as never;
+  return { db: sql, state };
+}
 const member = { id: "u1", githubUserId: 1, login: "member", isGlobalAdmin: false };
 const admin = { id: "u2", githubUserId: 2, login: "admin", isGlobalAdmin: true };
 function appFor(user = member, db = fakeDb()) { return createControlPlaneApp({ db, baseUrl: "https://x", browserBaseUrl: "https://x", githubClientId: "id", githubClientSecret: "secret", bootstrapGithubLogin: "admin", secretBox: new SecretBox(Buffer.alloc(32, 7).toString("base64")), defaultJobImages: {}, githubWebhookSecret: "webhook", requestId: () => "req", requestSource: () => "test", webRoot: new URL("file:///tmp/"), workerInstallerRoot: new URL("file:///tmp/"), workerOrchestratorExecutable: new URL("file:///tmp/whitesmith-orchestrator"), onWorkerAdopted: () => {}, health: () => ({ buildId: "test-build", startedAt: "2026-08-13T00:00:00.000Z", discovery: { lastAttemptAt: null, lastSuccessAt: null, stale: false, staleAfterMs: 60_000 } }), currentUser: async () => user }); }
@@ -70,6 +87,52 @@ describe("dashboard API", () => {
     expect(await response.json()).toMatchObject({ code: "forbidden", requestId: expect.any(String) });
     const adminResponse = await appFor(admin).request("/api/organizations/org/workers/w1/adopt", { method: "POST", headers: { ...sessionHeaders, "Idempotency-Key": "two" } });
     expect(adminResponse.status).toBe(404);
+  });
+});
+
+describe("repository discovery recheck", () => {
+  const path = "/api/organizations/11111111-1111-4111-8111-111111111111/repositories/22222222-2222-4222-8222-222222222222/discovery/recheck";
+
+  test("requires global administrator authorization", async () => {
+    const response = await appFor(member, discoveryRecheckApiDb().db).request(path, {
+      method: "POST",
+      headers: { ...sessionHeaders, "Idempotency-Key": "recheck-1" },
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "forbidden" });
+  });
+
+  test("requires an idempotency key", async () => {
+    const response = await appFor(admin, discoveryRecheckApiDb().db).request(path, { method: "POST", headers: sessionHeaders });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "missing_idempotency_key" });
+  });
+
+  test("queues a paused repository without calling GitHub", async () => {
+    const setup = discoveryRecheckApiDb();
+    const response = await appFor(admin, setup.db).request(path, {
+      method: "POST",
+      headers: { ...sessionHeaders, "Idempotency-Key": "recheck-1" },
+    });
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ queued: true });
+    expect(setup.state.updates).toBe(1);
+    expect(setup.state.invalidations).toBe(1);
+    expect(setup.state.queries.some((query) => query.toLowerCase().includes("github.com") || query.includes("actions/runs"))).toBe(false);
+  });
+
+  test.each([
+    ["not_found", 404, "not_found"],
+    ["not_paused", 409, "repository_discovery_not_paused"],
+  ] as const)("maps %s repository state to HTTP %i", async (result, status, code) => {
+    const setup = discoveryRecheckApiDb(result);
+    const response = await appFor(admin, setup.db).request(path, {
+      method: "POST",
+      headers: { ...sessionHeaders, "Idempotency-Key": `recheck-${result}` },
+    });
+    expect(response.status).toBe(status);
+    expect(await response.json()).toMatchObject({ code });
+    expect(setup.state.queries.some((query) => query.includes("FROM dashboard_repositories r"))).toBe(true);
   });
 });
 test("global admins can create the control-plane default pool without an organization", async () => {
