@@ -24,9 +24,20 @@
 - The existing Tart macOS path remains unchanged.
 - Work directly on `main`; commit and push each completed, verified task.
 
+## Execution Checklist Rules
+
+- This file is the canonical progress tracker; do not create a second checklist.
+- The executing AI changes a step from `[ ]` to `[x]` only after running its stated verification and observing the expected result.
+- Verification evidence is added directly below the checked step as `Evidence: <command or run ID> — <result>`.
+- A task heading changes from `[ ]` to `[x]` only after every step in that task is checked and its commit is pushed to `main`.
+- Failed or blocked steps remain unchecked and receive `Blocked: <exact reason and evidence>` below the step.
+- Task 2 is a hard gate. Tasks 3–11 remain unchecked until Task 2 passes every host-level acceptance criterion.
+- The executing AI updates and commits this checklist in the same commit as the implementation it records.
+- Existing checked boxes are trusted only when their evidence still identifies an accessible command result, workflow run, or commit.
+
 ---
 
-### Task 1: Add container completion and build the Windows runner image
+### - [ ] Task 1: Add container completion and build the Windows runner image
 
 **Files:**
 - Modify: `apps/job-agent/src/bootstrap.ts`
@@ -150,7 +161,7 @@ Commit: `feat: build Windows runner container image`
 
 ---
 
-### Task 2: Prove Windows Hyper-V-container feasibility
+### - [ ] Task 2: Prove Windows Hyper-V-container feasibility
 
 **Files:**
 - Create: `deploy/workers/prove-windows-container.ps1`
@@ -228,7 +239,7 @@ Commit: `test: prove Hyper-V isolated Windows containers`
 
 ---
 
-### Task 3: Cut over runtime contracts to native container workers
+### - [ ] Task 3: Cut over runtime contracts to native container workers
 
 **Files:**
 - Modify: `packages/contracts/src/orchestration.ts`
@@ -292,7 +303,7 @@ Commit: `refactor: route native container workers`
 
 ---
 
-### Task 4: Add a shared lease lifecycle executor
+### - [ ] Task 4: Add a shared lease lifecycle executor
 
 **Files:**
 - Create: `apps/orchestrator/src/lease-lifecycle.ts`
@@ -340,7 +351,7 @@ Commit: `refactor: share worker lease lifecycle`
 
 ---
 
-### Task 5: Implement the Windows Hyper-V-container driver
+### - [ ] Task 5: Implement the Windows Hyper-V-container driver
 
 **Files:**
 - Create: `apps/orchestrator/src/windows-container.ts`
@@ -411,7 +422,7 @@ Commit: `feat: run Windows leases in Hyper-V containers`
 
 ---
 
-### Task 6: Wire and install the Windows container worker
+### - [ ] Task 6: Wire and install the Windows container worker
 
 **Files:**
 - Modify: `apps/orchestrator/src/windows-agent.ts`
@@ -463,7 +474,7 @@ Commit: `feat: cut Windows workers over to containers`
 
 ---
 
-### Task 7: Implement the real Kata K3s driver
+### - [ ] Task 7: Implement the real Kata K3s driver
 
 **Files:**
 - Replace: `apps/orchestrator/src/kata-k3s.ts`
@@ -538,7 +549,7 @@ Commit: `feat: run Linux leases with Kata`
 
 ---
 
-### Task 8: Implement the Linux worker lease loop and installer
+### - [ ] Task 8: Implement the Linux worker lease loop and installer
 
 **Files:**
 - Modify: `apps/orchestrator/src/linux-agent.ts`
@@ -589,7 +600,7 @@ Commit: `feat: connect Kata Linux workers`
 
 ---
 
-### Task 9: Verify real Linux isolation and one-job execution
+### - [ ] Task 9: Verify real Linux isolation and one-job execution
 
 **Files:**
 - Create: `deploy/workers/prove-linux-kata.sh`
@@ -620,7 +631,7 @@ Commit: `test: prove Kata Linux job isolation`
 
 ---
 
-### Task 10: Verify concurrent Linux and Windows actions
+### - [ ] Task 10: Verify concurrent Linux and Windows actions
 
 **Files:**
 - Create: `tests/live-cross-platform-smoke.ts`
@@ -680,7 +691,7 @@ Commit: `test: verify parallel Linux and Windows actions`
 
 ---
 
-### Task 11: Deploy the clean cutover
+### - [ ] Task 11: Deploy the clean cutover
 
 **Files:**
 - Modify only deployment configuration and status files required by the verified binaries and image digests.
