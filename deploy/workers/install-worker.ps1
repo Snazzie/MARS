@@ -34,24 +34,32 @@ function Ensure-ControlPlane {
   if ($ControlPlaneUrl -notmatch '^https://' -and -not $localHttp -and -not $AllowInsecureHttp) { throw 'Control-plane URL must use HTTPS.' }
   Invoke-WebRequest -Uri $ControlPlaneUrl -Method Get -UseBasicParsing -TimeoutSec 30 | Out-Null
 }
+Write-Host '[1/8] Checking administrator privileges'
 Require-Administrator
+Write-Host '[2/8] Checking Windows and Hyper-V'
 if (-not [Environment]::Is64BitOperatingSystem) { throw 'Windows x64 is required.' }
 Ensure-HyperV
+Write-Host '[3/8] Checking control-plane connectivity'
 Ensure-ControlPlane
+Write-Host '[4/8] Verifying Windows template and checksum'
 Assert-Template $WindowsTemplatePath $WindowsTemplateDigest 'Windows'
 if ($LinuxTemplatePath -notmatch '^__' -or $LinuxTemplateDigest -notmatch '^__') { Assert-Template $LinuxTemplatePath $LinuxTemplateDigest 'Linux' }
 $root = 'C:\ProgramData\Whitesmith'; $bin = 'C:\Program Files\Whitesmith'
+Write-Host '[5/8] Preparing worker directories'
 New-Item -ItemType Directory -Force -Path $root,$bin | Out-Null
 [IO.File]::WriteAllText((Join-Path $root 'join-code'), $JoinCode)
 $acl = Get-Acl $root; $acl.SetAccessRuleProtection($true,$false); Set-Acl $root $acl
 $exe = Join-Path $bin 'whitesmith-orchestrator.exe'
-Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/orchestrator?audience=windows-x64" -OutFile $exe
+Write-Host '[6/8] Downloading Windows worker runtime'
+Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/orchestrator?audience=windows-x64" -OutFile $exe -TimeoutSec 120
 [Environment]::SetEnvironmentVariable('WHITESMITH_CONTROL_PLANE_URL', $ControlPlaneUrl, 'Machine')
 [Environment]::SetEnvironmentVariable('WHITESMITH_JOIN_CODE_FILE', (Join-Path $root 'join-code'), 'Machine')
 [Environment]::SetEnvironmentVariable('WHITESMITH_WINDOWS_TEMPLATE_PATH', $WindowsTemplatePath, 'Machine')
 [Environment]::SetEnvironmentVariable('WHITESMITH_WINDOWS_TEMPLATE_DIGEST', $WindowsTemplateDigest, 'Machine')
+Write-Host '[7/8] Registering LocalSystem worker service'
 if (Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) { Stop-Service WhitesmithWorker -Force -ErrorAction SilentlyContinue; sc.exe delete WhitesmithWorker | Out-Null }
 sc.exe create WhitesmithWorker binPath= "`"$exe`" windows-worker --service" start= auto obj= LocalSystem | Out-Null
 sc.exe failure WhitesmithWorker reset= 86400 actions= restart/5000/restart/30000/none/0 | Out-Null
+Write-Host '[8/8] Starting Whitesmith worker service'
 Start-Service WhitesmithWorker
 Write-Output 'Windows Hyper-V worker setup complete.'
