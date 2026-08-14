@@ -40,11 +40,11 @@ export async function runGuestService(
   completionMode: "shutdown" | "exit" = "shutdown",
   shutdown: (platform: "windows-x64" | "linux-x64") => Promise<void> | void = defaultGuestShutdown,
 ): Promise<void> {
-  if (completionMode !== "shutdown" && completionMode !== "exit") throw new Error("invalid completion mode");
   const raw = await waitForGuestBootstrap(bootstrapPath, Number.POSITIVE_INFINITY);
-  await unlink(bootstrapPath);
+  await unlink(bootstrapPath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "EPERM" && error.code !== "EROFS" && error.code !== "EACCES") throw error;
+  });
   const bootstrap = JSON.parse(raw) as GuestBootstrap;
-  if (bootstrap.version !== 1 || !bootstrap.leaseId || !bootstrap.nonce || !bootstrap.encodedJitConfig) throw new Error("guest bootstrap invalid");
   const exitCode = await consumeGuestJitConfig(bootstrap.encodedJitConfig, runnerRoot, platform);
   if (bootstrap.callbackUrl || bootstrap.callbackToken) {
     if (!bootstrap.callbackUrl || !bootstrap.callbackToken) throw new Error("guest bootstrap callback invalid");
