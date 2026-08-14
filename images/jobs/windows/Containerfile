@@ -1,0 +1,9 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+SHELL ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue';"]
+WORKDIR C:/actions-runner
+COPY runner.zip C:/temp/runner.zip
+RUN Expand-Archive C:/temp/runner.zip C:/actions-runner; Remove-Item C:/temp/runner.zip
+COPY whitesmith-job-agent.exe C:/Whitesmith/whitesmith-job-agent.exe
+COPY entrypoint.ps1 C:/Whitesmith/entrypoint.ps1
+ENTRYPOINT ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", "C:\\Whitesmith\\entrypoint.ps1"]

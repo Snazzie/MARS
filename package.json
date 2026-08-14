@@ -8,6 +8,7 @@
     "lint": "bun run --filter '*' lint",
     "test": "bun test",
     "test:live-job-pickup": "bun run tests/live-job-pickup-smoke.ts",
+    "test:windows-container-image": "bun test tests/windows-container-image-contract.test.ts",
     "build": "bun run --filter '*' build",
     "build:windows-worker": "bun run scripts/build-windows-worker.ts"
   },

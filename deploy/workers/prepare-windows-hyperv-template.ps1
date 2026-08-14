@@ -37,7 +37,9 @@ try {
     New-Item -ItemType File -Force -Path 'C:\ProgramData\Whitesmith\guest-service.ready' | Out-Null
     $action = New-ScheduledTaskAction -Execute 'C:\ProgramData\Whitesmith\whitesmith-job-agent.exe' -Argument 'guest-service --platform windows-x64 --bootstrap-file C:\ProgramData\Whitesmith\bootstrap.json'
     $trigger = New-ScheduledTaskTrigger -AtStartup
-    Register-ScheduledTask -TaskName 'WhitesmithGuestService' -Action $action -Trigger $trigger -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
+    Register-ScheduledTask -TaskName 'WhitesmithGuestService' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
     Remove-Item 'C:\Windows\Temp\whitesmith-job-agent.exe' -Force
     Remove-Item 'C:\Users\*\AppData\Local\Temp\*' -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item 'C:\ProgramData\Whitesmith\worker-identity.json' -Force -ErrorAction SilentlyContinue

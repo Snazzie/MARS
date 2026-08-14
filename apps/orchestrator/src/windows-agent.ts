@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { WorkerBootstrapRequest, WorkerCommand, WorkerConfigurePayload, WorkerConfiguration, WorkerEvent, type WorkerCapacityData, type WorkerDoctorData, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { createHyperVRuntime, HyperVDriver } from "./hyperv.ts";
+import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
 type Identity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string };
@@ -19,43 +20,6 @@ const load = async () => { try { return JSON.parse(await readFile(identityPath()
 const auth = (nonce: string, identity: Identity) => ({ type: "authenticate", workerId: identity.workerId, encryptionPublicKey: identity.encryptionPublicKey, signature: signMessage(null, Buffer.from(`${nonce}\n${identity.workerId}\n${identity.encryptionPublicKey}`), identity.privateKey).toString("base64url") });
 async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> { const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), platform: "windows-x64", publicKey: identity.publicKey, encryptionPublicKey: identity.encryptionPublicKey, vmUuid: crypto.randomUUID(), machineUuid: await machineUuid(), doctor: doctor(), capacity: await capacity() }); const response = await fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); if (!response.ok) throw new Error(`worker join failed: ${response.status}`); const joined = await response.json() as { workerId: string }; const result = { ...identity, workerId: joined.workerId }; await save(result); return result; }
 type WindowsLeaseDriver = Pick<HyperVDriver, "createLease" | "stopLease" | "removeLease">;
-
-export async function runWindowsLeaseLifecycle(
-  command: WorkerCommand,
-  driver: WindowsLeaseDriver,
-  bootstrap: LeaseBootstrapEnvelope,
-  send: (event: WorkerEvent) => void,
-): Promise<void> {
-  let runtime;
-  try {
-    runtime = await driver.createLease({
-      id: bootstrap.leaseId,
-      jobId: bootstrap.jobId,
-      imageDigest: bootstrap.imageDigest,
-      resources: bootstrap.resources,
-      nonce: bootstrap.nonce,
-      encodedJitConfig: bootstrap.encodedJitConfig,
-    });
-  } catch (error) {
-    console.error("Windows lease provisioning failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
-    send(event(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "provisioning_failed" }));
-    return;
-  }
-  send(event(command.workerId, "sandbox_attested", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed }));
-  try {
-    const exitCode = await runtime.completion;
-    send(event(command.workerId, "runner.finished", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, exitCode }));
-  } catch (error) {
-    console.error("Windows runner failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
-    send(event(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "runner_failed" }));
-  }
-  let cleanupFailed = false;
-  try { await driver.stopLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("Windows lease stop failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) }); }
-  try { await driver.removeLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("Windows lease removal failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) }); }
-  send(event(command.workerId, cleanupFailed ? "lease.failed" : "lease.reaped", cleanupFailed
-    ? { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "cleanup_failed" }
-    : { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce }));
-}
 
 export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise<never> {
   const controlPlane = new URL(baseUrl);
@@ -87,13 +51,13 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
             const observed = WorkerConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms });
             return ws.send(JSON.stringify(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed })));
           }
-          if (command.type === "hyperv.create_lease") {
+          if (command.type === "windows-container.create_lease") {
             const cipher = (command.payload as { bootstrapCiphertext?: Parameters<typeof openLeaseBootstrap>[0] }).bootstrapCiphertext;
             if (!cipher || !command.leaseId) throw new Error("lease bootstrap payload invalid");
             const bootstrap: LeaseBootstrapEnvelope = openLeaseBootstrap(cipher, identity.encryptionPrivateKey);
-            if (bootstrap.leaseId !== command.leaseId || !["windows-x64", "linux-x64"].includes(bootstrap.guestPlatform)) throw new Error("Hyper-V lease bootstrap mismatch");
+            if (bootstrap.leaseId !== command.leaseId || bootstrap.guestPlatform !== "windows-x64") throw new Error("Windows container lease bootstrap mismatch");
             ws.send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
-            void runWindowsLeaseLifecycle(command, driver, bootstrap, workerEvent => ws.send(JSON.stringify(workerEvent)));
+            void runLeaseLifecycle(command, driver, bootstrap, workerEvent => ws.send(JSON.stringify(workerEvent)));
           }
         } catch (error) {
           console.error("Windows worker command failed", error);

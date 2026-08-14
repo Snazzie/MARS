@@ -1,6 +1,6 @@
 import type { DatabaseClient } from "@whitesmith/db";
 import { reserveRoutingSlot } from "@whitesmith/db";
-import { PoolResources as PoolResourcesSchema, RuntimeDriverName, type RunnerJitConfig, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
+import { PoolResources as PoolResourcesSchema, RuntimeDriverName, type RuntimeDriverName as RuntimeDriverNameValue, type RunnerJitConfig, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { dispatchLeaseBootstrap } from "./lease-dispatch.ts";
@@ -57,7 +57,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
   const organizationByJob = new Map<number, string>();
   const installationByJob = new Map<number, number>();
   const githubByInstallation = new Map<number, GithubJobsClient>();
-  const workerByPool = new Map<string, { workerId: string; encryptionPublicKey: string; imageDigest: string; guestPlatform: string; driver: "kata-k3s" | "windows-hyperv" | "tart-vm"; resources: ReturnType<typeof PoolResourcesSchema.parse> }>();
+  const workerByPool = new Map<string, { workerId: string; encryptionPublicKey: string; imageDigest: string; guestPlatform: string; driver: RuntimeDriverNameValue; resources: ReturnType<typeof PoolResourcesSchema.parse> }>();
 
   const candidates = candidateRows.filter((row) => !deps.workerConnected || deps.workerConnected(String(row.workerId))).map((row) => {
     const resources = PoolResourcesSchema.parse(jsonValue(row.resources));

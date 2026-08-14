@@ -1,0 +1,33 @@
+[CmdletBinding()]
+param(
+  [Parameter(Mandatory = $true)][string]$BaseImage,
+  [Parameter(Mandatory = $true)][string]$RunnerArchive,
+  [Parameter(Mandatory = $true)][string]$RunnerSha256,
+  [Parameter(Mandatory = $true)][string]$JobAgent,
+  [Parameter(Mandatory = $true)][string]$Image
+)
+$ErrorActionPreference = 'Stop'
+if ($BaseImage -notmatch '^[^@\s]+@sha256:[0-9a-f]{64}$') { throw 'BaseImage must be a lowercase digest-pinned reference' }
+if ($RunnerSha256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'RunnerSha256 must be a SHA-256 hex digest' }
+foreach ($path in @($RunnerArchive, $JobAgent)) { if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Input not found: $path" } }
+$actual = (Get-FileHash -LiteralPath $RunnerArchive -Algorithm SHA256).Hash
+if ($actual -ine $RunnerSha256) { throw "Runner archive hash mismatch: expected $RunnerSha256, got $actual" }
+$temp = Join-Path ([System.IO.Path]::GetTempPath()) ("whitesmith-windows-image-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $temp | Out-Null
+try {
+  Copy-Item -LiteralPath $RunnerArchive -Destination (Join-Path $temp 'runner.zip')
+  Copy-Item -LiteralPath $JobAgent -Destination (Join-Path $temp 'whitesmith-job-agent.exe')
+  Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\..\images\jobs\windows\Containerfile') -Destination (Join-Path $temp 'Containerfile')
+  Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\..\images\jobs\windows\entrypoint.ps1') -Destination (Join-Path $temp 'entrypoint.ps1')
+  & docker build --build-arg "BASE_IMAGE=$BaseImage" --tag $Image $temp
+  if ($LASTEXITCODE -ne 0) { throw "docker build failed with exit code $LASTEXITCODE" }
+  & docker push $Image
+  if ($LASTEXITCODE -ne 0) { throw "docker push failed with exit code $LASTEXITCODE" }
+  $inspect = & docker image inspect --format '{{json .RepoDigests}}' $Image
+  if ($LASTEXITCODE -ne 0) { throw "docker image inspect failed with exit code $LASTEXITCODE" }
+  $digests = @($inspect | ConvertFrom-Json | Where-Object { $_ -like "$Image@sha256:*" })
+  if ($digests.Count -ne 1) { throw "expected exactly one pushed digest for $Image, found $($digests.Count)" }
+  Write-Output $digests[0]
+} finally {
+  Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+}

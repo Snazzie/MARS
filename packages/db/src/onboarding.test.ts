@@ -60,14 +60,14 @@ describe("onboarding state derivation", () => {
       if (query.includes('so.admin_user_id AS "adminUserId"')) return [{ adminUserId: "admin", workerId, organizationId, completedAt: null, workerAdmissionState: "adopted", workerConfigurationState: "ready", githubReady: true }];
       if (query.includes("FROM workers w JOIN system_onboarding")) return [{ id: workerId, name: "windows-worker", platform: "windows-x64", guestPlatforms: ["windows-x64"], admissionState: "adopted", connectionState: "online", configurationState: "ready", publicKey: "public", fingerprint: "fingerprint", vmUuid: workerId, machineUuid: workerId, doctor: { doctor: {}, capacity: { actualVcpu: 4, actualMemoryBytes: 8_589_934_592, actualStorageBytes: 42_949_672_960, freeVcpu: 4, freeMemoryBytes: 8_589_934_592, freeStorageBytes: 42_949_672_960 } }, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_294_967_296, maxStorageBytesPerPod: 21_474_836_480, maxConcurrentPods: 1 }, configurationRevision: "a".repeat(64) }];
       if (query.includes("SELECT organization_id AS")) return [{ organizationId }];
-      if (query.includes("FROM runner_pools") && normalized.includes("p.organization_id is null")) return [{ id: poolId, organizationId: null, workerId: null, workerName: "Shared fleet", name: "default", platform: "windows-x64", driver: "windows-hyperv", imageDigest: `sha256:${"a".repeat(64)}`, resources: { vcpu: 2, memoryBytes: 2_147_483_648, storageBytes: 10_737_418_240, concurrency: 1 }, labels: ["self-hosted", "windows", "x64", "whitesmith-default"], triggerLabel: "whitesmith-default", enabled: true, active: 0 }];
+      if (query.includes("FROM runner_pools") && normalized.includes("p.organization_id is null")) return [{ id: poolId, organizationId: null, workerId: null, workerName: "Shared fleet", name: "default", platform: "windows-x64", driver: "windows-hyperv-container", imageDigest: `sha256:${"a".repeat(64)}`, resources: { vcpu: 2, memoryBytes: 2_147_483_648, storageBytes: 10_737_418_240, concurrency: 1 }, labels: ["self-hosted", "windows", "x64", "whitesmith-default"], triggerLabel: "whitesmith-default", enabled: true, active: 0 }];
       if (query.includes("FROM workers w JOIN runner_pools") && normalized.includes("p.organization_id is null")) return [{ ready: 1 }];
       if (query.includes("UPDATE system_onboarding SET completed_at")) return [{ completed_at: new Date() }];
       if (query.includes("FROM organizations")) return [];
       if (query.includes("FROM system_onboarding")) return [{ completedAt: null, adminUserId: "admin", workerId, organizationId }];
       return [];
     }) as never;
-    expect((await getOnboardingDetail(db)).pool).toMatchObject({ id: poolId, platform: "windows-x64", driver: "windows-hyperv" });
+    expect((await getOnboardingDetail(db)).pool).toMatchObject({ id: poolId, platform: "windows-x64", driver: "windows-hyperv-container" });
     expect(await completeOnboardingIfReady(db)).toBe(true);
   });
   test("normalizes repository discovery state in onboarding detail", async () => {

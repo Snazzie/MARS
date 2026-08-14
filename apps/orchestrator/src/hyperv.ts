@@ -49,7 +49,7 @@ export function createHyperVRuntime(run: HyperVRunner = defaultRunner): HyperVRu
   };
 }
 export class HyperVDriver implements RuntimeDriver {
-  readonly name = "windows-hyperv" as const;
+  readonly name = "windows-hyperv-container" as const;
   private readonly leases = new Map<string, { vmName: string; diskPath: string; runtime: RuntimeLease }>();
   constructor(private readonly hyperv: HyperVRuntime, private readonly templatePath: string, private readonly templateDigest: string, private readonly prefix: string, private readonly limits: Limits, private readonly bootstrapRoot = join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "leases")) {}
   validatePool(resources: PoolResources): void { validateResources(resources, this.limits); }

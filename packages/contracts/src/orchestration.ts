@@ -7,10 +7,9 @@ export type GuestPlatform = RuntimePlatform;
 export const WorkerGuestPlatforms = z.array(GuestPlatform).min(1).refine((platforms) => new Set(platforms).size === platforms.length, "Guest platforms must be unique");
 export type WorkerGuestPlatforms = z.infer<typeof WorkerGuestPlatforms>;
 export function validateWorkerGuestPlatforms(hostPlatform: RuntimePlatform, guestPlatforms: WorkerGuestPlatforms): boolean {
-  const expected = hostPlatform === "windows-x64" ? [["windows-x64"], ["windows-x64", "linux-x64"]] : [[hostPlatform]];
-  return expected.some((candidate) => candidate.length === guestPlatforms.length && candidate.every((platform, index) => guestPlatforms[index] === platform));
+  return guestPlatforms.length === 1 && guestPlatforms[0] === hostPlatform;
 }
-export const RuntimeDriverName = z.enum(["kata-k3s", "windows-hyperv", "tart-vm"]);
+export const RuntimeDriverName = z.enum(["kata-k3s", "windows-hyperv-container", "tart-vm"]);
 export type RuntimeDriverName = z.infer<typeof RuntimeDriverName>;
 const positiveSafe = z.number().int().positive().safe();
 export const WorkerLimits = z.object({ maxVcpuPerPod: positiveSafe, maxMemoryBytesPerPod: positiveSafe, maxStorageBytesPerPod: positiveSafe, maxConcurrentPods: positiveSafe });

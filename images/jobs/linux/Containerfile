@@ -1,0 +1,9 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+WORKDIR /opt/actions-runner
+COPY runner.tar.gz /tmp/runner.tar.gz
+RUN tar -xzf /tmp/runner.tar.gz -C /opt/actions-runner && rm /tmp/runner.tar.gz
+COPY whitesmith-job-agent /usr/local/bin/whitesmith-job-agent
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 0755 /usr/local/bin/whitesmith-job-agent /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -134,7 +134,7 @@ export async function getOnboardingDetail(
       visibility: row.visibility, available: row.available, installationId: String(row.installationId), discoveryState, discoveryRetryAt,
     } as RepositorySummary;
   });
-  const workerDriver = worker?.platform === "linux-x64" ? "kata-k3s" : worker?.platform === "windows-x64" ? "windows-hyperv" : worker?.platform === "macos-arm64" ? "tart-vm" : null;
+  const workerDriver = worker?.platform === "linux-x64" ? "kata-k3s" : worker?.platform === "windows-x64" ? "windows-hyperv-container" : worker?.platform === "macos-arm64" ? "tart-vm" : null;
   const workerGuestPlatforms = worker?.guestPlatforms ?? (worker ? [worker.platform] : []);
   const poolRows = worker ? await db`
     SELECT p.id,p.organization_id AS "organizationId",p.worker_id AS "workerId",'Shared fleet' AS "workerName",
@@ -171,7 +171,7 @@ export async function completeOnboardingIfReady(db: OnboardingDb): Promise<boole
         SELECT 1 FROM runner_pools p
         WHERE p.organization_id IS NULL AND p.enabled=true AND p.trigger_label IS NOT NULL
           AND p.platform IN (SELECT jsonb_array_elements_text(w.guest_platforms))
-          AND p.driver=CASE w.platform WHEN 'linux-x64' THEN 'kata-k3s' WHEN 'windows-x64' THEN 'windows-hyperv' ELSE 'tart-vm' END
+          AND p.driver=CASE w.platform WHEN 'linux-x64' THEN 'kata-k3s' WHEN 'windows-x64' THEN 'windows-hyperv-container' ELSE 'tart-vm' END
       )
     LIMIT 1
   `;

@@ -160,6 +160,12 @@ test("Windows template preparation disables automatic checkpoints before boot", 
   expect(disableCheckpoints).toBeGreaterThan(-1);
   expect(disableCheckpoints).toBeLessThan(source.indexOf("Start-VM -Name $name"));
 });
+test("Windows guest service runs as a startup-available system service account task", async () => {
+  const source = await Bun.file(prepareWindowsTemplate).text();
+  expect(source).toContain("New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount");
+  expect(source).toContain("New-ScheduledTaskSettingsSet -StartWhenAvailable");
+  expect(source).toContain("Register-ScheduledTask -TaskName 'WhitesmithGuestService' -Action $action -Trigger $trigger -Principal $principal -Settings $settings");
+});
 test("orchestrator entrypoint uses the native host instead of a JavaScript service shim", async () => {
   const source = await Bun.file(join(root, "apps/orchestrator/src/index.ts")).text();
   expect(source).toContain('Bun.argv[2] === "windows-worker"');
