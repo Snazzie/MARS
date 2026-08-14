@@ -63,6 +63,9 @@ test("pending worker DTO ignores database-only columns", () => {
     limits: null,
     doctor: row.doctor.doctor,
     capacity: row.doctor.capacity,
+    admissionState: "pending",
+    connectionState: "offline",
+    configurationState: "unconfigured",
   });
 });
 

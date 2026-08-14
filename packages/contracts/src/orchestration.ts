@@ -74,7 +74,7 @@ export const WorkerBootstrapRequest = z.object({
   capacity: WorkerCapacityData,
 }).strict();
 export type WorkerBootstrapRequest = z.infer<typeof WorkerBootstrapRequest>;
-export const PendingWorkerRequest = WorkerBootstrapRequest.omit({ code: true, encryptionPublicKey: true }).extend({ limits: WorkerLimits.nullable(), guestPlatforms: WorkerGuestPlatforms.optional() });
+export const PendingWorkerRequest = WorkerBootstrapRequest.omit({ code: true, encryptionPublicKey: true }).extend({ limits: WorkerLimits.nullable(), guestPlatforms: WorkerGuestPlatforms.optional(), admissionState: WorkerState.default("pending"), connectionState: ConnectionState.default("offline"), configurationState: ConfigurationState.default("unconfigured") });
 export type PendingWorkerRequest = z.infer<typeof PendingWorkerRequest>;
 export const ApproveWorkerRequest = z.object({ limits: WorkerLimits }).strict();
 export type ApproveWorkerRequest = z.infer<typeof ApproveWorkerRequest>;

@@ -21,6 +21,9 @@ export function pendingWorkerDto(row: Record<string, unknown>) {
   const pending = PendingWorkerRequest.parse({
     platform: row.platform,
     guestPlatforms: row.guestPlatforms ?? (row.platform === "windows-x64" ? ["windows-x64"] : [row.platform]),
+    admissionState: row.admissionState,
+    connectionState: row.connectionState,
+    configurationState: row.configurationState,
     publicKey: row.publicKey,
     vmUuid: row.vmUuid,
     machineUuid: row.machineUuid,

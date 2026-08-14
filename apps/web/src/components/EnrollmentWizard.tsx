@@ -1,6 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
-import { ApiRequestError, getWorkerBootstrapStatus, getWorkerControlPlaneUrls, initializeWorkerBootstrap, rotateWorkerBootstrap } from "../api.ts";
+import { ApiRequestError, getPendingWorkerRequests, getWorkerBootstrapStatus, getWorkerControlPlaneUrls, initializeWorkerBootstrap, rotateWorkerBootstrap } from "../api.ts";
 
 type RuntimePlatform = "linux-x64" | "windows-x64" | "macos-arm64";
 type Reveal = { code: string; generation: number; createdAt: string };
@@ -40,6 +40,10 @@ export function normalizeControlPlaneUrls(values: readonly string[]): string[] {
   });
   return [...new Set(valid)];
 }
+export function shouldCloseEnrollmentDialog(reveal: Reveal | null, connected: boolean): boolean { return reveal !== null && connected; }
+
+function workerConnected(worker: { connectionState?: string }): boolean { return worker.connectionState === "online"; }
+
 export async function openEnrollmentDialog<T>(loadStatus: () => Promise<T>, showModal: () => void): Promise<T> {
   const status = await loadStatus();
   showModal();
@@ -55,6 +59,21 @@ export function EnrollmentWizard({ onCreated, showRotation = true }: { onCreated
   const [controlPlaneUrl, setControlPlaneUrl] = useState("custom");
   const [customUrl, setCustomUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!reveal) return;
+    let active = true;
+    const check = async () => {
+      try {
+        const workers = await getPendingWorkerRequests();
+        if (active && workers.some(workerConnected) && shouldCloseEnrollmentDialog(reveal, true)) close();
+      } catch {
+        // Enrollment polling is best effort; the modal remains usable on transient failures.
+      }
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), 2000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [reveal]);
   const [pending, setPending] = useState(false);
   const defaultControlPlaneUrl = typeof window === "undefined" ? "" : window.location.origin;
   const selectedUrl = controlPlaneUrl === "custom" ? (customUrl.trim() || controlPlaneUrls[0] || defaultControlPlaneUrl) : controlPlaneUrl;
