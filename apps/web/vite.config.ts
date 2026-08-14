@@ -3,8 +3,11 @@ import react from "@vitejs/plugin-react";
 
 const devEntry: Plugin = {
   name: "whitesmith-dev-entry",
-  transformIndexHtml(html) {
-    return html.replace('src="/index.js"', 'src="/src/index.tsx"');
+  transformIndexHtml: {
+    order: "pre",
+    handler(html) {
+      return html.replace('src="/index.js"', 'src="/src/index.tsx"');
+    },
   },
 };
 
