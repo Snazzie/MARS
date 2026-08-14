@@ -80,12 +80,37 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
 
 export async function discoverAvailableRepositoryJobs(deps: DiscoveryDeps): Promise<DiscoveryReport> {
   const rows = deps.repositoryFullName
-    ? await deps.db`SELECT repo.id AS "repositoryId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' AND repo.full_name=${deps.repositoryFullName} ORDER BY repo.full_name`
-    : await deps.db`SELECT repo.id AS "repositoryId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' ORDER BY repo.full_name`;
+    ? await deps.db`SELECT repo.id AS "repositoryId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",repo.discovery_error AS "discoveryError",repo.discovery_retry_at AS "discoveryRetryAt",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' AND (repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()) AND repo.full_name=${deps.repositoryFullName} ORDER BY repo.full_name`
+    : await deps.db`SELECT repo.id AS "repositoryId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",repo.discovery_error AS "discoveryError",repo.discovery_retry_at AS "discoveryRetryAt",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' AND (repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()) ORDER BY repo.full_name`;
   const report: DiscoveryReport = { repositories: rows.length, discovered: 0, updated: 0, failed: 0 };
   const concurrency = Math.max(1, Math.min(4, deps.repositoryConcurrency ?? 4));
   let cursor = 0;
-  const worker = async () => { for (;;) { const index = cursor++; if (index >= rows.length) return; try { const value = await discoverRepository(deps, rows[index] as Record<string, unknown>); report.discovered += value.discovered; report.updated += value.updated; } catch (error) { if (error instanceof Error && error.message === "github_404") { await deps.db`UPDATE dashboard_repositories SET available=false WHERE id=${String(rows[index].repositoryId)}`; continue; } report.failed += 1; console.error(`GitHub job discovery failed for ${String(rows[index].fullName)}: ${error instanceof Error ? error.message : "unknown"}`); } } };
+  const worker = async () => {
+    for (;;) {
+      const index = cursor++;
+      if (index >= rows.length) return;
+      const row = rows[index] as Record<string, unknown>;
+      try {
+        const value = await discoverRepository(deps, row);
+        report.discovered += value.discovered;
+        report.updated += value.updated;
+        if (row.discoveryError != null || row.discoveryRetryAt != null) {
+          await deps.db`UPDATE dashboard_repositories SET discovery_error=NULL,discovery_retry_at=NULL WHERE id=${String(row.repositoryId)} AND (discovery_error IS NOT NULL OR discovery_retry_at IS NOT NULL)`;
+        }
+      } catch (error) {
+        const code = error instanceof Error ? error.message : "unknown";
+        if (code === "github_404") {
+          await deps.db`UPDATE dashboard_repositories SET available=false WHERE id=${String(row.repositoryId)}`;
+          continue;
+        }
+        if (code === "github_403") {
+          await deps.db`UPDATE dashboard_repositories SET discovery_error='github_403',discovery_retry_at=now()+interval '24 hours' WHERE id=${String(row.repositoryId)}`;
+        }
+        report.failed += 1;
+        console.error(`GitHub job discovery failed for ${String(row.fullName)}: ${code}`);
+      }
+    }
+  };
   await Promise.all(Array.from({ length: Math.min(concurrency, rows.length) }, worker));
   return report;
 }

@@ -66,6 +66,7 @@ describe("repository authorization lifecycle", () => {
     expect(selection).toContain("repo.available=true");
     expect(selection).toContain("i.state='approved'");
     expect(selection).not.toContain("repo.approved");
+    expect(selection).toContain("repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()");
   });
 
   test("retires only a repository that GitHub reports missing", async () => {
@@ -89,11 +90,54 @@ describe("repository authorization lifecycle", () => {
     expect(updates).toEqual([[repository.repositoryId]]);
   });
 
-  test.each([403, 429, 500])("keeps repository availability on GitHub %i", async (status) => {
+  test("pauses a repository for 24 hours after GitHub 403", async () => {
     let selected = false;
-    let retired = false;
+    const queries: string[] = [];
     const db = (async (strings: TemplateStringsArray) => {
       const query = strings.join(" ");
+      queries.push(query);
+      if (!selected && query.includes("FROM dashboard_repositories repo")) {
+        selected = true;
+        return [{ ...repository, discoveryError: null, discoveryRetryAt: null }];
+      }
+      return [];
+    }) as never;
+
+    const report = await discoverAvailableRepositoryJobs({
+      db,
+      installationToken: async () => "token",
+      githubFetch: async () => new Response(null, { status: 403 }),
+    });
+
+    expect(report).toMatchObject({ repositories: 1, failed: 1 });
+    expect(queries.some((query) => query.includes("discovery_error='github_403'") && query.includes("interval '24 hours'"))).toBe(true);
+  });
+
+  test("clears a queued 403 cooldown after successful discovery", async () => {
+    let selected = false;
+    const queries: string[] = [];
+    const db = (async (strings: TemplateStringsArray) => {
+      const query = strings.join(" ");
+      queries.push(query);
+      if (!selected && query.includes("FROM dashboard_repositories repo")) {
+        selected = true;
+        return [{ ...repository, discoveryError: "github_403", discoveryRetryAt: new Date("2026-08-14T12:00:00.000Z") }];
+      }
+      return [];
+    }) as never;
+    const githubFetch = async () => Response.json({ total_count: 0, workflow_runs: [] });
+
+    expect(await discoverAvailableRepositoryJobs({ db, installationToken: async () => "token", githubFetch })).toMatchObject({ repositories: 1, failed: 0 });
+    expect(queries.some((query) => query.includes("SET discovery_error=NULL,discovery_retry_at=NULL"))).toBe(true);
+  });
+
+  test.each([429, 500])("keeps normal-cycle retry behavior on GitHub %i", async (status) => {
+    let selected = false;
+    let retired = false;
+    const queries: string[] = [];
+    const db = (async (strings: TemplateStringsArray) => {
+      const query = strings.join(" ");
+      queries.push(query);
       if (!selected && query.includes("FROM dashboard_repositories repo")) {
         selected = true;
         return [repository];
@@ -108,5 +152,6 @@ describe("repository authorization lifecycle", () => {
     });
     expect(report.failed).toBe(1);
     expect(retired).toBe(false);
+    expect(queries.some((query) => query.includes("SET discovery_error="))).toBe(false);
   });
 });
