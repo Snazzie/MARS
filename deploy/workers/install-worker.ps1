@@ -53,9 +53,11 @@ $joinCodeAcl = & icacls.exe $joinCodePath /inheritance:r /grant:r '*S-1-5-18:F' 
 if ($LASTEXITCODE -ne 0) { throw "Failed to secure worker join credential: $($joinCodeAcl -join ' ')" }
 $exe = Join-Path $bin 'whitesmith-orchestrator.exe'
 $serviceHost = Join-Path $bin 'whitesmith-service-host.exe'
+$stagedExe = Join-Path $root 'whitesmith-orchestrator.download'
+$stagedServiceHost = Join-Path $root 'whitesmith-service-host.download'
 Write-Host '[6/8] Downloading Windows worker runtime and service host'
-Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/orchestrator?audience=windows-x64" -OutFile $exe -TimeoutSec 120
-Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/service-host?audience=windows-x64" -OutFile $serviceHost -TimeoutSec 120
+Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/orchestrator?audience=windows-x64" -OutFile $stagedExe -TimeoutSec 120
+Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/service-host?audience=windows-x64" -OutFile $stagedServiceHost -TimeoutSec 120
 [Environment]::SetEnvironmentVariable('WHITESMITH_CONTROL_PLANE_URL', $ControlPlaneUrl, 'Machine')
 [Environment]::SetEnvironmentVariable('WHITESMITH_JOIN_CODE_FILE', (Join-Path $root 'join-code'), 'Machine')
 [Environment]::SetEnvironmentVariable('WHITESMITH_WINDOWS_TEMPLATE_PATH', $WindowsTemplatePath, 'Machine')
@@ -69,6 +71,8 @@ if (Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) {
   while ((Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
   if (Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) { throw 'Timed out removing existing WhitesmithWorker service.' }
 }
+Move-Item -LiteralPath $stagedExe -Destination $exe -Force
+Move-Item -LiteralPath $stagedServiceHost -Destination $serviceHost -Force
 $workerLogPath = Join-Path $root 'logs\worker.log'
 $previousWorkerLogPath = Join-Path $root 'logs\worker.previous.log'
 if (Test-Path -LiteralPath $workerLogPath) { Move-Item -LiteralPath $workerLogPath -Destination $previousWorkerLogPath -Force }

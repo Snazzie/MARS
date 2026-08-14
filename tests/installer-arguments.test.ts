@@ -114,6 +114,15 @@ test("Windows installer accepts a successful SCM recovery restart", async () => 
   expect(source).toContain("recovered after initial startup failure");
   expect(source).toContain("Startup error: $startupError");
 });
+test("Windows installer stages runtime downloads before replacing a running service", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).toContain("$stagedExe = Join-Path $root 'whitesmith-orchestrator.download'");
+  expect(source).toContain("$stagedServiceHost = Join-Path $root 'whitesmith-service-host.download'");
+  expect(source).toContain('OutFile $stagedExe');
+  expect(source).toContain('OutFile $stagedServiceHost');
+  expect(source).toContain("Move-Item -LiteralPath $stagedExe -Destination $exe -Force");
+  expect(source.indexOf("Stop-Service WhitesmithWorker")).toBeLessThan(source.indexOf("Move-Item -LiteralPath $stagedExe"));
+});
 test("Windows installer downloads and registers the native SCM host", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).toContain("/api/workers/service-host?audience=windows-x64");
