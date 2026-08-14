@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ApiError, CursorPage, OnboardingStep, OverviewDto, RepositorySummary, RunDetail } from "../packages/contracts/src/index.ts";
+import { ApiError, CreatePoolRequest, CursorPage, OnboardingStep, OverviewDto, RepositorySummary, RunDetail } from "../packages/contracts/src/index.ts";
 
 const run = { id: "run-1", organizationId: "org-1", repositoryId: "repo-1", repositoryName: "acme/app", runNumber: 4, workflowName: "CI", event: "workflow_dispatch", branch: "main", commitSha: "0123456789abcdef", actorLogin: "octocat", status: "completed" as const, conclusion: "success" as const, queuedAt: "2026-08-11T10:00:00Z", startedAt: "2026-08-11T10:01:00Z", completedAt: "2026-08-11T10:02:00Z", durationMs: 60_000, runtimeBoundary: "Kata VM-backed container" as const };
 
@@ -17,6 +17,18 @@ describe("dashboard contracts", () => {
     const detail = { ...run, jobs: [], stages: [{ stage: "queued" as const, startedAt: run.queuedAt, completedAt: run.startedAt, durationMs: 60_000 }], actionGraph: { nodes: [], edges: [] } };
     expect(RunDetail.safeParse(detail).success).toBe(true);
     expect(RunDetail.safeParse({ ...detail, stages: [{ ...detail.stages[0], startedAt: "bad" }] }).success).toBe(false);
+  });
+  test("accepts immutable VM template and OCI image digests", () => {
+    const request = {
+      workerId: "00000000-0000-4000-8000-000000000001",
+      name: "default",
+      guestPlatform: "windows-x64",
+      resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 },
+      triggerLabel: "whitesmith-default",
+    };
+    expect(CreatePoolRequest.safeParse({ ...request, imageDigest: `sha256:${"a".repeat(64)}` }).success).toBe(true);
+    expect(CreatePoolRequest.safeParse({ ...request, imageDigest: `windows-template@sha256:${"a".repeat(64)}` }).success).toBe(true);
+    expect(CreatePoolRequest.safeParse({ ...request, imageDigest: "sha256:not-a-digest" }).success).toBe(false);
   });
   test("rejects malformed timestamps and cursors", () => {
     expect(RunDetail.safeParse({ ...run, queuedAt: "not-a-time", jobs: [], actionGraph: { nodes: [], edges: [] } }).success).toBe(false);

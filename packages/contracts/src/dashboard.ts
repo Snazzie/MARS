@@ -34,7 +34,7 @@ export const RunSummary = dto(strict(runSummaryShape));
 export type RunSummary = z.infer<typeof RunSummary>;
 export const RunnerTriggerLabel = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,62}$/).refine((label) => !["self-hosted", "linux", "windows", "macos", "x64", "arm64"].includes(label));
 export type RunnerTriggerLabel = z.infer<typeof RunnerTriggerLabel>;
-export const CreatePoolRequest = dto(strict({ workerId: id, name: z.string().min(1), guestPlatform: GuestPlatform.default("macos-arm64"), resources, triggerLabel: RunnerTriggerLabel, imageDigest: z.string().regex(/^[^@\s]+@sha256:[0-9a-f]{64}$/) }));
+export const CreatePoolRequest = dto(strict({ workerId: id, name: z.string().min(1), guestPlatform: GuestPlatform.default("macos-arm64"), resources, triggerLabel: RunnerTriggerLabel, imageDigest: z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/) }));
 export type CreatePoolRequest = z.infer<typeof CreatePoolRequest>;
 export const RunStep = dto(strict({ id, name: z.string().min(1), number: z.number().int().nonnegative(), status: z.enum(["queued", "in_progress", "completed"]), conclusion: z.string().nullable(), queuedAt: timestamp, startedAt: timestamp.nullable(), completedAt: timestamp.nullable(), durationMs: positiveSafe.or(z.literal(0)) }));
 export type RunStep = z.infer<typeof RunStep>;

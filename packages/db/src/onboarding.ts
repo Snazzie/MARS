@@ -127,15 +127,19 @@ export async function getOnboardingDetail(
     id: String(row.id), organizationId: String(row.organizationId), name: String(row.name), fullName: String(row.fullName),
     visibility: row.visibility, available: row.available, installationId: String(row.installationId),
   })) as RepositorySummary[];
-  const poolRow = worker ? first(await db`
-    SELECT p.id,p.organization_id AS "organizationId",p.worker_id AS "workerId",w.name AS "workerName",
+  const workerDriver = worker?.platform === "linux-x64" ? "kata-k3s" : worker?.platform === "windows-x64" ? "windows-hyperv" : worker?.platform === "macos-arm64" ? "tart-vm" : null;
+  const workerGuestPlatforms = worker?.guestPlatforms ?? (worker ? [worker.platform] : []);
+  const poolRows = worker ? await db`
+    SELECT p.id,p.organization_id AS "organizationId",p.worker_id AS "workerId",'Shared fleet' AS "workerName",
       p.name,p.platform,p.driver,p.image_digest AS "imageDigest",p.resources,p.labels,p.trigger_label AS "triggerLabel",
       p.enabled,(SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.state NOT IN ('completed','reaped','failed')) AS active
-    FROM runner_pools p JOIN workers w ON w.id=p.worker_id
-    WHERE p.worker_id=${worker.id} AND p.organization_id=${organizationId} ORDER BY p.enabled DESC,p.id LIMIT 1
-  `) : undefined;
+    FROM runner_pools p
+    WHERE p.organization_id IS NULL AND p.enabled=true
+    ORDER BY p.name,p.id
+  ` : [];
+  const poolRow = poolRows.find((candidate) => candidate.driver === workerDriver && workerGuestPlatforms.includes(candidate.platform as OnboardingWorker["platform"]));
   const pool = poolRow ? {
-    id: String(poolRow.id), organizationId: String(poolRow.organizationId), workerId: String(poolRow.workerId), workerName: String(poolRow.workerName),
+    id: String(poolRow.id), organizationId: poolRow.organizationId == null ? null : String(poolRow.organizationId), workerId: poolRow.workerId == null ? null : String(poolRow.workerId), workerName: String(poolRow.workerName),
     name: String(poolRow.name), platform: poolRow.platform, driver: poolRow.driver, imageDigest: String(poolRow.imageDigest),
     resources: objectValue(poolRow.resources), labels: Array.isArray(poolRow.labels) ? poolRow.labels : (() => { try { return JSON.parse(String(poolRow.labels)); } catch { return []; } })(), triggerLabel: poolRow.triggerLabel, enabled: poolRow.enabled, active: numberValue(poolRow.active),
   } as PoolSummary : null;
@@ -154,9 +158,15 @@ export async function completeOnboardingIfReady(db: OnboardingDb): Promise<boole
   const row = first(await db`SELECT completed_at AS "completedAt",admin_user_id AS "adminUserId",worker_id AS "workerId",organization_id AS "organizationId" FROM system_onboarding WHERE singleton=true`);
   if (!row || row.completedAt != null || !row.adminUserId || !row.workerId || !row.organizationId) return false;
   const ready = await db`
-    SELECT 1 FROM workers w JOIN runner_pools p ON p.worker_id=w.id
-    WHERE w.id=${String(row.workerId)} AND p.organization_id=${String(row.organizationId)} AND w.admission_state='adopted' AND w.connection_state='online'
-      AND w.configuration_state='ready' AND p.enabled=true AND p.trigger_label IS NOT NULL LIMIT 1
+    SELECT 1 FROM workers w
+    WHERE w.id=${String(row.workerId)} AND w.admission_state='adopted' AND w.connection_state='online' AND w.configuration_state='ready'
+      AND EXISTS (
+        SELECT 1 FROM runner_pools p
+        WHERE p.organization_id IS NULL AND p.enabled=true AND p.trigger_label IS NOT NULL
+          AND p.platform IN (SELECT jsonb_array_elements_text(w.guest_platforms))
+          AND p.driver=CASE w.platform WHEN 'linux-x64' THEN 'kata-k3s' WHEN 'windows-x64' THEN 'windows-hyperv' ELSE 'tart-vm' END
+      )
+    LIMIT 1
   `;
   if (!ready.length) return false;
   const updated = await db`UPDATE system_onboarding SET completed_at=now() WHERE singleton=true AND completed_at IS NULL RETURNING completed_at`;
