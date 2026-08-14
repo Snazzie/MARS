@@ -9,8 +9,11 @@ describe("dashboard contracts", () => {
     const legacyOverview = OverviewDto.safeParse({ organizationId: "org-1", period: "24h", queued: 0, running: 0, completed: 0, failed: 0, queueP50Ms: 0, queueP95Ms: 0, durationP50Ms: 0, durationP95Ms: 0, concurrency: 0, utilization: { vcpu: 0, memory: 0, storage: 0, pods: 0 } });
     expect(legacyOverview.success).toBe(true);
     if (legacyOverview.success) expect(legacyOverview.data.timeseries).toEqual([]);
-    const repository = { id: "repo-1", organizationId: "org-1", name: "app", fullName: "acme/app", visibility: "private", available: true, installationId: "inst-1" };
+    const repository = { id: "repo-1", organizationId: "org-1", name: "app", fullName: "acme/app", visibility: "private", available: true, installationId: "inst-1", discoveryState: "active" as const, discoveryRetryAt: null };
     expect(RepositorySummary.safeParse(repository).success).toBe(true);
+    expect(RepositorySummary.safeParse({ ...repository, discoveryState: "paused", discoveryRetryAt: "2026-08-15T12:00:00.000Z" }).success).toBe(true);
+    expect(RepositorySummary.safeParse({ ...repository, discoveryState: "queued" }).success).toBe(true);
+    expect(RepositorySummary.safeParse({ ...repository, discoveryState: "blocked" }).success).toBe(false);
     expect(RepositorySummary.safeParse({ ...repository, approved: true }).success).toBe(false);
     expect(RepositorySummary.safeParse({ id: "repo-1", organizationId: "org-1", name: "app", fullName: "acme/app", private: true, installationId: "inst-1" }).success).toBe(false);
     expect(OnboardingStep.safeParse("resources").success).toBe(false);

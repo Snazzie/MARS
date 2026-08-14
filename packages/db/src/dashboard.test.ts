@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { LogChunk, OverviewDto, RunDetail, RunSummary, WorkerDetail } from "@whitesmith/contracts";
-import { getOverview, getOrganizationSettings, getRunDetail, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks } from "./dashboard.ts";
+import { LogChunk, OverviewDto, RepositorySummary, RunDetail, RunSummary, WorkerDetail } from "@whitesmith/contracts";
+import { getOverview, getOrganizationSettings, getRunDetail, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRepositories, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks } from "./dashboard.ts";
 
 test("overview returns point-in-time pending and running buckets", async () => {
   const db = (async (strings: TemplateStringsArray) => {
@@ -36,6 +36,29 @@ test("pool listing normalizes PostgreSQL JSONB resources and labels", async () =
   const page = await listPools(db, "org-1");
   expect(page.items[0].resources.memoryBytes).toBe(4294967296);
   expect(page.items[0].labels).toEqual(["self-hosted", "linux", "x64", "whitesmith-default"]);
+});
+
+test("repository listings normalize active paused and queued discovery states", async () => {
+  const future = new Date("2026-08-15T12:00:00.000Z");
+  const past = new Date("2026-08-14T12:00:00.000Z");
+  const organizationId = "11111111-1111-4111-8111-111111111111";
+  const queries: string[] = [];
+  const rows = [
+    { id: "22222222-2222-4222-8222-222222222221", organizationId, name: "active", fullName: "acme/active", visibility: "public", available: true, installationId: "33333333-3333-4333-8333-333333333331", discoveryState: "active", discoveryRetryAt: null },
+    { id: "22222222-2222-4222-8222-222222222222", organizationId, name: "paused", fullName: "acme/paused", visibility: "private", available: true, installationId: "33333333-3333-4333-8333-333333333332", discoveryState: "paused", discoveryRetryAt: future },
+    { id: "22222222-2222-4222-8222-222222222223", organizationId, name: "queued", fullName: "acme/queued", visibility: "internal", available: true, installationId: "33333333-3333-4333-8333-333333333333", discoveryState: "queued", discoveryRetryAt: past },
+  ];
+  const db = (async (strings: TemplateStringsArray) => {
+    queries.push(strings.join(" "));
+    return rows;
+  }) as never;
+
+  const scoped = await listRepositories(db, organizationId);
+  const all = await listAllRepositories(db, "user-1");
+
+  expect(scoped.items.map((item) => RepositorySummary.parse(item).discoveryState)).toEqual(["active", "paused", "queued"]);
+  expect(all.items[1]?.discoveryRetryAt).toBe(future.toISOString());
+  expect(queries.every((query) => query.includes("discovery_retry_at") && query.includes('"discoveryState"'))).toBe(true);
 });
 
 test("run listing normalizes PostgreSQL bigint and timestamp values", async () => {

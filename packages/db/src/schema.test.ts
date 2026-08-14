@@ -14,3 +14,9 @@ test("drops the legacy approval column after legacy repository normalization", (
   expect(normalization).toBeGreaterThan(-1);
   expect(drop).toBeGreaterThan(normalization);
 });
+
+test("repository discovery cooldown is durable and nullable for existing rows", () => {
+  expect(schemaSql).toContain("ALTER TABLE dashboard_repositories ADD COLUMN IF NOT EXISTS discovery_error text;");
+  expect(schemaSql).toContain("ALTER TABLE dashboard_repositories ADD COLUMN IF NOT EXISTS discovery_retry_at timestamptz;");
+  expect(schemaSql).not.toContain("discovery_retry_at timestamptz NOT NULL");
+});
