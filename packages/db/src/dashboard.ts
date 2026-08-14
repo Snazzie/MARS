@@ -79,7 +79,70 @@ export async function listRuns(db: DashboardDb, organizationId: string, limit = 
 export async function listAllRepositories(db: DashboardDb, userId: string, limit = 50): Promise<CursorPage<RepositorySummary>> { const rows = await db<RepositorySummary[]>`SELECT r.id, r.organization_id AS "organizationId", r.name, r.full_name AS "fullName", r.visibility, r.available, r.installation_id AS "installationId" FROM dashboard_repositories r JOIN memberships m ON m.organization_id=r.organization_id AND m.user_id=${userId} JOIN dashboard_installations i ON i.organization_id=r.organization_id AND i.id=r.installation_id ORDER BY r.full_name LIMIT ${limit + 1}`; return { items: rows.slice(0, limit), nextCursor: rows.length > limit ? rows[limit - 1].id : null }; }
 export async function listAllRuns(db: DashboardDb, userId: string, limit = 50): Promise<CursorPage<RunSummary>> { const rows = await db<Record<string, unknown>[]>`SELECT r.id, r.organization_id AS "organizationId", r.repository_id AS "repositoryId", p.name AS "repositoryName", r.run_number AS "runNumber", r.workflow_name AS "workflowName", r.event, r.branch, r.commit_sha AS "commitSha", r.actor_login AS "actorLogin", r.status, r.conclusion, r.queued_at AS "queuedAt", r.started_at AS "startedAt", r.completed_at AS "completedAt", 0::bigint AS "durationMs", COALESCE(r.runtime_boundary, (SELECT CASE pool.driver WHEN 'tart-vm' THEN 'Tart VM' WHEN 'kata-k3s' THEN 'Kata VM-backed container' WHEN 'windows-hyperv' THEN 'Hyper-V isolated container' END FROM dashboard_jobs j JOIN runner_leases l ON l.github_job_id=j.github_job_id JOIN runner_pools pool ON pool.id=l.pool_id WHERE j.run_id=r.id ORDER BY l.created_at DESC LIMIT 1)) AS "runtimeBoundary" FROM dashboard_runs r JOIN memberships m ON m.organization_id=r.organization_id AND m.user_id=${userId} JOIN dashboard_repositories p ON p.organization_id=r.organization_id AND p.id=r.repository_id ORDER BY r.queued_at DESC LIMIT ${limit + 1}`; const items = rows.slice(0, limit).map(normalizeRunSummary); return { items, nextCursor: rows.length > limit ? items.at(-1)!.id : null }; }
 export async function listAllPools(db: DashboardDb, userId: string, limit = 50): Promise<CursorPage<PoolSummary>> { const rows = await db<Record<string, unknown>[]>`SELECT p.id,p.organization_id AS "organizationId",p.worker_id AS "workerId",w.name AS "workerName",p.name,p.platform,p.driver,p.image_digest AS "imageDigest",p.resources,p.labels,p.trigger_label AS "triggerLabel",p.enabled,0::int AS active FROM runner_pools p JOIN memberships m ON m.organization_id=p.organization_id AND m.user_id=${userId} JOIN workers w ON w.id=p.worker_id ORDER BY p.name LIMIT ${limit + 1}`; const items = rows.slice(0, limit).map(normalizePool); return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null }; }
-export async function getRunDetail(db: DashboardDb, organizationId: string, runId: string): Promise<RunDetail | null> { const [run] = await listRuns(db, organizationId, 1000).then(page => page.items.filter(x => x.id === runId)); if (!run) return null; const jobs = await db<RunJob[]>`SELECT id,name,status,conclusion,stage,runner_name AS "runnerName",requested,observed FROM dashboard_jobs WHERE organization_id=${organizationId} AND run_id=${runId} ORDER BY id`; const edges = await db<{from:string;to:string}[]>`SELECT from_job_id AS from,to_job_id AS to FROM dashboard_action_edges WHERE organization_id=${organizationId} AND run_id=${runId}`; const stages = await db<RunStageRecord[]>`SELECT stage, started_at AS "startedAt", completed_at AS "completedAt", COALESCE(EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000, 0)::bigint AS "durationMs" FROM dashboard_run_stages WHERE organization_id=${organizationId} AND run_id=${runId} ORDER BY started_at`; return { ...run, jobs, stages, actionGraph: { nodes: jobs.map(job => ({ id: job.id, name: job.name, status: job.stage })), edges } as ActionGraph }; }
+export async function getRunDetail(db: DashboardDb, organizationId: string, runId: string): Promise<RunDetail | null> {
+  const run = (await listRuns(db, organizationId, 1000)).items.find((item) => item.id === runId);
+  if (!run) return null;
+  const jobRows = await db<Record<string, unknown>[]>`
+    SELECT id,name,status,conclusion,stage,runner_name AS "runnerName",logs_state AS "logsState",
+      requested,requested_labels AS "requestedLabels",observed
+    FROM dashboard_jobs WHERE organization_id=${organizationId} AND run_id=${runId} ORDER BY id
+  `;
+  const stepRows = await db<Record<string, unknown>[]>`
+    SELECT id,job_id AS "jobId",name,number,status,conclusion,queued_at AS "queuedAt",
+      started_at AS "startedAt",completed_at AS "completedAt",duration_ms AS "durationMs"
+    FROM dashboard_job_steps
+    WHERE organization_id=${organizationId} AND run_id=${runId}
+    ORDER BY job_id,number,id
+  `;
+  const stepsByJob = new Map<string, RunJob["steps"]>();
+  for (const row of stepRows) {
+    const jobId = String(row.jobId);
+    const durationMs = Number(row.durationMs);
+    const step: RunJob["steps"][number] = {
+      id: String(row.id),
+      name: String(row.name),
+      number: Number(row.number),
+      status: row.status as RunJob["steps"][number]["status"],
+      conclusion: row.conclusion == null ? null : String(row.conclusion),
+      queuedAt: normalizeTimestamp(row.queuedAt)!,
+      startedAt: normalizeTimestamp(row.startedAt),
+      completedAt: normalizeTimestamp(row.completedAt),
+      durationMs: Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 0,
+    };
+    const steps = stepsByJob.get(jobId);
+    if (steps) steps.push(step);
+    else stepsByJob.set(jobId, [step]);
+  }
+  const jobs = jobRows.map((row): RunJob => {
+    const requestedLabels = jsonValue(row.requestedLabels);
+    return {
+      id: String(row.id),
+      name: String(row.name),
+      status: row.status as RunJob["status"],
+      conclusion: row.conclusion == null ? null : String(row.conclusion),
+      stage: row.stage as RunJob["stage"],
+      runnerName: row.runnerName == null ? null : String(row.runnerName),
+      logsState: row.logsState as RunJob["logsState"],
+      requested: jsonValue(row.requested) as RunJob["requested"],
+      requestedLabels: Array.isArray(requestedLabels) ? requestedLabels.filter((label): label is string => typeof label === "string") : [],
+      observed: row.observed == null ? null : jsonValue(row.observed) as RunJob["observed"],
+      steps: stepsByJob.get(String(row.id)) ?? [],
+    };
+  });
+  const edges: ActionGraph["edges"] = [];
+  const stageRows = await db<Record<string, unknown>[]>`
+    SELECT stage,started_at AS "startedAt",completed_at AS "completedAt",
+      COALESCE(EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000,0)::bigint AS "durationMs"
+    FROM dashboard_run_stages WHERE organization_id=${organizationId} AND run_id=${runId} ORDER BY started_at
+  `;
+  const stages = stageRows.map((row): RunStageRecord => ({
+    stage: row.stage as RunStageRecord["stage"],
+    startedAt: normalizeTimestamp(row.startedAt)!,
+    completedAt: normalizeTimestamp(row.completedAt),
+    durationMs: Math.max(0, Number(row.durationMs) || 0),
+  }));
+  return { ...run, jobs, stages, actionGraph: { nodes: jobs.map((job) => ({ id: job.id, name: job.name, status: job.stage })), edges } as ActionGraph };
+}
 export async function listStepLogChunks(db: DashboardDb, organizationId: string, runId: string, jobId: string, stepId: string, after = -1, limit = 100): Promise<CursorPage<LogChunk>> {
   const safeLimit = Math.max(0, Math.min(1000, Math.floor(limit)));
   if (safeLimit === 0) return { items: [], nextCursor: null };

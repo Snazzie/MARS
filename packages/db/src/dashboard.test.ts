@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { LogChunk, OverviewDto, RunSummary, WorkerDetail } from "@whitesmith/contracts";
-import { getOverview, getOrganizationSettings, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks } from "./dashboard.ts";
+import { LogChunk, OverviewDto, RunDetail, RunSummary, WorkerDetail } from "@whitesmith/contracts";
+import { getOverview, getOrganizationSettings, getRunDetail, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks } from "./dashboard.ts";
 
 test("overview returns point-in-time pending and running buckets", async () => {
   const db = (async (strings: TemplateStringsArray) => {
@@ -91,6 +91,47 @@ test("run listing derives runtime from run timestamps when duration is unset", a
   }]) as never;
   expect((await listRuns(db, "org-1")).items[0].durationMs).toBe(60_000);
 });
+test("run detail returns complete jobs and ordered steps", async () => {
+  const organizationId = "11111111-1111-4111-8111-111111111111";
+  const repositoryId = "22222222-2222-4222-8222-222222222222";
+  const runId = "33333333-3333-4333-8333-333333333333";
+  const jobId = "44444444-4444-4444-8444-444444444444";
+  const stepId = "55555555-5555-4555-8555-555555555555";
+  const queries: string[] = [];
+  const db = (async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ");
+    queries.push(query);
+    if (query.includes("FROM dashboard_jobs WHERE")) {
+      return [{
+        id: jobId,
+        name: "build",
+        status: "completed",
+        conclusion: "success",
+        stage: "completed",
+        runnerName: "runner",
+        requested: { vcpu: 2, memoryBytes: 4_294_967_296, storageBytes: 10_737_418_240, concurrency: 1 },
+        observed: null,
+        ...(query.includes('logs_state AS "logsState"') ? { logsState: "pending", requestedLabels: ["self-hosted", "windows", "x64"] } : {}),
+      }];
+    }
+    if (query.includes("FROM dashboard_job_steps")) {
+      return [{ id: stepId, jobId, name: "test", number: 1, status: "completed", conclusion: "success", queuedAt: new Date("2026-08-13T10:00:00.000Z"), startedAt: new Date("2026-08-13T10:00:01.000Z"), completedAt: new Date("2026-08-13T10:00:02.000Z"), durationMs: "1000" }];
+    }
+    if (query.includes("dashboard_action_edges")) return [];
+    if (query.includes("dashboard_run_stages")) return [];
+    return [{ id: runId, organizationId, repositoryId, repositoryName: "repo", runNumber: "42", workflowName: "ci", event: "push", branch: "main", commitSha: "abcdef1", actorLogin: "acme", status: "completed", conclusion: "success", queuedAt: new Date("2026-08-13T10:00:00.000Z"), startedAt: new Date("2026-08-13T10:00:01.000Z"), completedAt: new Date("2026-08-13T10:00:02.000Z"), durationMs: "1000", runtimeBoundary: null }];
+  }) as never;
+
+  const detail = await getRunDetail(db, organizationId, runId);
+  expect(() => RunDetail.parse(detail)).not.toThrow();
+  expect(detail?.jobs[0]).toMatchObject({
+    logsState: "pending",
+    requestedLabels: ["self-hosted", "windows", "x64"],
+    steps: [{ id: stepId, number: 1, durationMs: 1000, startedAt: "2026-08-13T10:00:01.000Z" }],
+  });
+  expect(queries.some((query) => query.includes("dashboard_action_edges"))).toBe(false);
+});
+
 
 test("log listings normalize PostgreSQL bigint sequences", async () => {
   const db = (async () => [{ organizationId: "11111111-1111-4111-8111-111111111111", runId: "22222222-2222-4222-8222-222222222222", jobId: "33333333-3333-4333-8333-333333333333", sequence: "0", content: "output", hasMore: false, occurredAt: "2026-08-13T00:00:00.000Z" }]) as never;
