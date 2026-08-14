@@ -83,6 +83,7 @@ Get-Service WhitesmithWorker -ErrorAction Stop | Out-Null
 Write-Host '[8/8] Starting Whitesmith worker service'
 try {
   Start-Service WhitesmithWorker -ErrorAction Stop
+  $service = Get-Service WhitesmithWorker -ErrorAction Stop
   $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(30))
   Start-Sleep -Seconds 2
   $service.Refresh()

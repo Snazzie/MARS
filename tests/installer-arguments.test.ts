@@ -123,6 +123,10 @@ test("Windows installer stages runtime downloads before replacing a running serv
   expect(source).toContain("Move-Item -LiteralPath $stagedExe -Destination $exe -Force");
   expect(source.indexOf("Stop-Service WhitesmithWorker")).toBeLessThan(source.indexOf("Move-Item -LiteralPath $stagedExe"));
 });
+test("Windows installer waits on a fresh service controller", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source.indexOf("$service = Get-Service WhitesmithWorker -ErrorAction Stop")).toBeLessThan(source.indexOf("$service.WaitForStatus"));
+});
 test("Windows installer downloads and registers the native SCM host", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).toContain("/api/workers/service-host?audience=windows-x64");
