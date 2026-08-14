@@ -60,9 +60,8 @@ Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/orchestrator?audience=windo
 [Environment]::SetEnvironmentVariable('WHITESMITH_WINDOWS_TEMPLATE_DIGEST', $WindowsTemplateDigest, 'Machine')
 Write-Host '[7/8] Registering LocalSystem worker service'
 if (Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) { Stop-Service WhitesmithWorker -Force -ErrorAction SilentlyContinue; & sc.exe delete WhitesmithWorker | Out-Null; if ($LASTEXITCODE -ne 0) { throw "Failed to remove existing WhitesmithWorker service." } }
-$serviceCreate = & sc.exe create WhitesmithWorker binPath= "`"$exe`" windows-worker --service" start= auto obj= LocalSystem 2>&1
-if ($LASTEXITCODE -ne 0) { throw "Failed to create WhitesmithWorker service: $($serviceCreate -join ' ')" }
-$serviceFailure = & sc.exe failure WhitesmithWorker reset= 86400 actions= restart/5000/restart/30000/none/0 2>&1
+$service = New-Service -Name WhitesmithWorker -BinaryPathName "`"$exe`" windows-worker --service" -StartupType Automatic -ErrorAction Stop
+$serviceFailure = & sc.exe failure WhitesmithWorker "reset= 86400" "actions= restart/5000/restart/30000/none/0" 2>&1
 if ($LASTEXITCODE -ne 0) { throw "Failed to configure WhitesmithWorker recovery: $($serviceFailure -join ' ')" }
 Get-Service WhitesmithWorker -ErrorAction Stop | Out-Null
 Write-Host '[8/8] Starting Whitesmith worker service'

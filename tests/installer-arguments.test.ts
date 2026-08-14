@@ -89,8 +89,8 @@ test("PowerShell installer enforces native Hyper-V templates", async () => {
   expect(source).toContain("Assert-Digest");
   expect(source).toContain("WHITESMITH_WINDOWS_TEMPLATE_PATH");
   expect(source).not.toContain("WHITESMITH_WINDOWS_CONTAINER_IMAGE");
-  expect(source).toContain("sc.exe create WhitesmithWorker");
-  expect(source).toContain("obj= LocalSystem");
+  expect(source).toContain("New-Service -Name WhitesmithWorker");
+  expect(source).toContain("-StartupType Automatic");
 });
 test("Windows installer skips optional Linux validation when Linux templates are unset", async () => {
   const source = await Bun.file(powershell).text();
@@ -98,9 +98,10 @@ test("Windows installer skips optional Linux validation when Linux templates are
 });
 test("Windows installer fails when service registration fails", async () => {
   const source = await Bun.file(powershell).text();
-  expect(source).toContain('$serviceCreate = & sc.exe create WhitesmithWorker');
-  expect(source).toContain('$LASTEXITCODE -ne 0');
+  expect(source).toContain('$service = New-Service -Name WhitesmithWorker');
   expect(source).toContain('Get-Service WhitesmithWorker -ErrorAction Stop');
+  expect(source).toContain('"reset= 86400"');
+  expect(source).toContain('"actions= restart/5000/restart/30000/none/0"');
 });
 test("Windows installer restricts only the join credential, not the template root", async () => {
   const source = await Bun.file(powershell).text();
