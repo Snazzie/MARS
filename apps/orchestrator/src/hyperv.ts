@@ -72,10 +72,10 @@ export class HyperVDriver implements RuntimeDriver {
       await this.hyperv.createDifferencingDisk(this.templatePath, diskPath);
       await lifecycleLog(`lease ${lease.id} createVm`);
       await this.hyperv.createVm({ name: vmName, diskPath, resources: lease.resources });
-      await lifecycleLog(`lease ${lease.id} copyBootstrap`);
-      await this.hyperv.copyBootstrap(vmName, bootstrapPath, "C:\\ProgramData\\Whitesmith\\bootstrap.json");
       await lifecycleLog(`lease ${lease.id} start`);
       await this.hyperv.start(vmName);
+      await lifecycleLog(`lease ${lease.id} copyBootstrap`);
+      await this.hyperv.copyBootstrap(vmName, bootstrapPath, "C:\\ProgramData\\Whitesmith\\bootstrap.json");
       await lifecycleLog(`lease ${lease.id} waitForGuestReady`);
       await this.hyperv.waitForGuestReady(vmName, Number(Bun.env.WHITESMITH_HYPERV_READY_TIMEOUT_MS ?? 120_000));
       await lifecycleLog(`lease ${lease.id} guestReady`);
