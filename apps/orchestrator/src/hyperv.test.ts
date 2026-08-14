@@ -41,9 +41,10 @@ test("wraps Hyper-V scripts so native command arguments populate PowerShell args
 test("makes native PowerShell cmdlet errors terminating", () => {
   expect(powerShellCommand("New-VHD")).toContain("$ErrorActionPreference = 'Stop'");
 });
-test("disables automatic checkpoints on disposable runner VMs", async () => {
+test("configures disposable runner VM host settings", async () => {
   const scripts: string[] = [];
   const runtime = createHyperVRuntime(async script => { scripts.push(script); return { code: 0, stdout: "", stderr: "" }; });
   await runtime.createVm({ name: "runner", diskPath: "runner.vhdx", resources: lease.resources });
   expect(scripts[0]).toContain("Set-VM -VM $vm -AutomaticCheckpointsEnabled $false");
+  expect(scripts[0]).toContain("Enable-VMIntegrationService -VM $vm -Name 'Guest Service Interface'");
 });
