@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RepositorySummary } from "@whitesmith/contracts";
-import { beginOrganizationGithubInstall, getGithubRepositorySettings, getRepositories, refreshGithubConnection, setRepositoryApproval, uninstallOrganizationGithub } from "../api.ts";
+import { beginOrganizationGithubInstall, getGithubRepositorySettings, getRepositories, refreshGithubConnection, uninstallOrganizationGithub } from "../api.ts";
 import { Disclosure } from "../components/Disclosure.tsx";
 import { QueryState } from "../components/StateView.tsx";
 import { RunnerWorkflowPrModal } from "../components/RunnerWorkflowPrModal.tsx";
@@ -28,11 +28,6 @@ export function RepositoriesPage() {
     queryKey: ["org", organizationId, "repositories"],
     queryFn: () => getRepositories(organizationId),
     enabled: Boolean(organizationId),
-  });
-  const approval = useMutation({
-    mutationFn: ({ id, approved, workspaceId }: { id: string; approved: boolean; workspaceId: string }) =>
-      setRepositoryApproval(workspaceId, id, approved),
-    onSuccess: () => client.invalidateQueries({ queryKey: ["org", organizationId, "repositories"] }),
   });
   const connect = useMutation({
     mutationFn: () => beginOrganizationGithubInstall(connectOrganizationId),
@@ -74,7 +69,7 @@ export function RepositoriesPage() {
   );
   const allWorkspaces = organizationId === "all";
   const canConnect = organizations.length > 0;
-  const updateError = connect.error ?? refreshConnection.error ?? manageOrganization.error ?? approval.error ?? manageRepository.error;
+  const updateError = connect.error ?? refreshConnection.error ?? manageOrganization.error ?? manageRepository.error;
   return (
     <>
       <header className="page-header repositories-header">
@@ -82,7 +77,7 @@ export function RepositoriesPage() {
           <p className="eyebrow">Repository registry</p>
           <h1>Repositories</h1>
           <p className="page-description">
-            Control which GitHub repositories can send work to this runner fleet.
+            Access follows the GitHub App installation. Manage repository scope in GitHub.
           </p>
         </div>
         <div className="repositories-actions">
@@ -136,13 +131,12 @@ export function RepositoriesPage() {
       {query.data && repositories.length > 0 && (
         <section className="table-panel repository-table-panel" aria-label="Repositories">
           <table>
-            <caption className="sr-only">GitHub repositories and Whitesmith access status</caption>
+            <caption className="sr-only">GitHub repository availability and actions</caption>
             <thead>
               <tr>
                 <th scope="col">Repository</th>
                 <th scope="col">Visibility</th>
-                <th scope="col">GitHub access</th>
-                <th scope="col">Whitesmith access</th>
+                <th scope="col">Access</th>
                 <th scope="col"><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
@@ -160,26 +154,7 @@ export function RepositoriesPage() {
                     </span>
                   </td>
                   <td>
-                    <span className={`status ${repository.approved ? "status-success" : "status-muted"}`}>
-                      {repository.approved ? "Approved" : "Not approved"}
-                    </span>
-                  </td>
-                  <td>
                     <div className="repository-actions">
-                      <button
-                        type="button"
-                        className="control-button"
-                        onClick={() =>
-                          approval.mutate({
-                            id: repository.id,
-                            approved: !repository.approved,
-                            workspaceId: repository.organizationId,
-                          })
-                        }
-                        disabled={!repository.available || approval.isPending}
-                      >
-                        {approval.isPending ? "Saving…" : repository.approved ? "Remove" : "Approve"}
-                      </button>
                       <button
                         type="button"
                         className="control-button control-button-secondary"
@@ -193,7 +168,7 @@ export function RepositoriesPage() {
                       >
                         Manage GitHub
                       </button>
-                      <button type="button" className="control-button" onClick={() => setRunnerRepository(repository)} disabled={!repository.available || !repository.approved}>Use Whitesmith runners</button>
+                      <button type="button" className="control-button" onClick={() => setRunnerRepository(repository)} disabled={!repository.available}>Use Whitesmith runners</button>
                     </div>
                   </td>
                 </tr>

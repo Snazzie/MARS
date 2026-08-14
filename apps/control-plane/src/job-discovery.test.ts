@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { listCompletedRunsSince } from "./job-discovery.ts";
+import { discoverAvailableRepositoryJobs, listCompletedRunsSince } from "./job-discovery.ts";
 import type { GithubRunSnapshot } from "./runs.ts";
 
 function run(id: number): GithubRunSnapshot {
@@ -50,5 +50,63 @@ describe("completed run recovery", () => {
       totalCount: 2_000,
       runs: Array.from({ length: 100 }, (_, index) => run(2_000 - ((page - 1) * 100) - index)),
     }), 500)).rejects.toThrow("completed_run_checkpoint_unreachable");
+  });
+});
+
+describe("repository authorization lifecycle", () => {
+  const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
+
+  test("discovers every available repository on an active installation", async () => {
+    let selection = "";
+    const db = (async (strings: TemplateStringsArray) => {
+      selection = strings.join(" ");
+      return [];
+    }) as never;
+    expect(await discoverAvailableRepositoryJobs({ db, installationToken: async () => "token" })).toMatchObject({ repositories: 0 });
+    expect(selection).toContain("repo.available=true");
+    expect(selection).toContain("i.state='approved'");
+    expect(selection).not.toContain("repo.approved");
+  });
+
+  test("retires only a repository that GitHub reports missing", async () => {
+    const updates: unknown[][] = [];
+    let selected = false;
+    const db = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      const query = strings.join(" ");
+      if (!selected && query.includes("FROM dashboard_repositories repo")) {
+        selected = true;
+        return [repository];
+      }
+      if (query.includes("UPDATE dashboard_repositories SET available=false")) updates.push(values);
+      return [];
+    }) as never;
+    const report = await discoverAvailableRepositoryJobs({
+      db,
+      installationToken: async () => "token",
+      githubFetch: async () => new Response(null, { status: 404 }),
+    });
+    expect(report).toMatchObject({ repositories: 1, failed: 0 });
+    expect(updates).toEqual([[repository.repositoryId]]);
+  });
+
+  test.each([403, 429, 500])("keeps repository availability on GitHub %i", async (status) => {
+    let selected = false;
+    let retired = false;
+    const db = (async (strings: TemplateStringsArray) => {
+      const query = strings.join(" ");
+      if (!selected && query.includes("FROM dashboard_repositories repo")) {
+        selected = true;
+        return [repository];
+      }
+      if (query.includes("UPDATE dashboard_repositories SET available=false")) retired = true;
+      return [];
+    }) as never;
+    const report = await discoverAvailableRepositoryJobs({
+      db,
+      installationToken: async () => "token",
+      githubFetch: async () => new Response(null, { status }),
+    });
+    expect(report.failed).toBe(1);
+    expect(retired).toBe(false);
   });
 });

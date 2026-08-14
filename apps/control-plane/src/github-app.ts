@@ -5,7 +5,7 @@ import { applyWorkflowMutation, discoverWorkflowFiles, previewWorkflowMutation, 
 import { browserLocation } from "./http-origin.ts";
 type SetupState = { purpose: "oauth" | "manifest" | "install" | "organization_install"; userId: string | null; organizationId: string | null; idempotencyKey: string | null; encryptedState?: string; encryptedPkceVerifier?: string; expiresAt: number; consumedAt?: number };
 type Installation = { organizationId: string; githubInstallationId: number; state: "pending" | "approved" | "suspended"; repositorySelection: "all" | "selected" | null; githubAccountId?: number };
-type Repository = { id: string; installationId: number; organizationId?: string; fullName: string; visibility: "private" | "internal" | "public"; available: boolean; approved: boolean };
+type Repository = { id: string; installationId: number; organizationId?: string; fullName: string; visibility: "private" | "internal" | "public"; available: boolean };
 type AppConfig = { id: number; slug: string; clientId?: string; pem: string; clientSecret: string; webhookSecret: string };
 type Organization = { githubOrgId: number; githubAccountType?: "User" | "Organization" };
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -131,7 +131,7 @@ export class GitHubAppService {
           AND i.repository_selection IN ('all','selected')
           AND EXISTS (
             SELECT 1 FROM dashboard_repositories r
-            WHERE r.installation_id=i.id AND r.available=true AND r.approved=true
+            WHERE r.installation_id=i.id AND r.available=true
           )
         ORDER BY i.created_at DESC
         LIMIT 1
@@ -221,7 +221,7 @@ export class GitHubAppService {
     const rows = await this.db<Array<{ id: string }>>`INSERT INTO dashboard_installations (organization_id,github_installation_id,state,repository_selection,github_account_id) VALUES (${organizationId},${installationId},${state},${repositorySelection},${githubAccountId}) ON CONFLICT (organization_id,github_installation_id) DO UPDATE SET state=excluded.state,repository_selection=excluded.repository_selection,github_account_id=excluded.github_account_id RETURNING id`;
     const installationRow = rows[0];
     if (!installationRow) throw new Error("github_installation_persist_failed");
-    for (const repo of repos) await this.db`INSERT INTO dashboard_repositories (organization_id,installation_id,github_repository_id,name,full_name,visibility,available,approved) VALUES (${organizationId},${installationRow.id},${Number(repo.id)},${repo.fullName.split("/").at(-1) ?? repo.fullName},${repo.fullName},${repo.visibility},${repo.available},${repo.approved}) ON CONFLICT (organization_id,github_repository_id) DO UPDATE SET installation_id=excluded.installation_id,visibility=excluded.visibility,available=excluded.available,approved=excluded.approved,full_name=excluded.full_name,name=excluded.name`;
+    for (const repo of repos) await this.db`INSERT INTO dashboard_repositories (organization_id,installation_id,github_repository_id,name,full_name,visibility,available) VALUES (${organizationId},${installationRow.id},${Number(repo.id)},${repo.fullName.split("/").at(-1) ?? repo.fullName},${repo.fullName},${repo.visibility},${repo.available}) ON CONFLICT (organization_id,github_repository_id) DO UPDATE SET installation_id=excluded.installation_id,visibility=excluded.visibility,available=excluded.available,full_name=excluded.full_name,name=excluded.name`;
     return installationRow.id;
   }
 
@@ -240,7 +240,7 @@ export class GitHubAppService {
     if (!accessToken) throw new Error("github_token_missing");
     const reposResponse = await this.installationRepositories(accessToken);
     const repositorySelection = accountInfo.repository_selection === "all" || reposResponse.repositorySelection === "all" ? "all" : "selected";
-    const repos = reposResponse.repositories.map((value) => ({ id: String(value.id), installationId, fullName: value.full_name, visibility: visibilityOf(value), available: true, approved: false as boolean } satisfies Repository));
+    const repos = reposResponse.repositories.map((value) => ({ id: String(value.id), installationId, fullName: value.full_name, visibility: visibilityOf(value), available: true } satisfies Repository));
     const hasAllowed = repos.length > 0;
     await this.persistInstallation(setup.organizationId!, installationId, hasAllowed ? "approved" : "pending", repositorySelection, accountId, repos);
     if (hasAllowed) {
@@ -285,13 +285,13 @@ export class GitHubAppService {
       const installation = this.db.installations.get(id);
       for (const repo of data.repositories_removed ?? []) {
         const existing = this.db.repositories.get(String(repo.id));
-        if (existing) { existing.available = false; existing.approved = false; }
+        if (existing) existing.available = false;
       }
       if (!installation) return;
       if (["suspend", "suspended", "deleted", "uninstalled"].includes(data.action ?? "")) {
         installation.state = "suspended";
         if (["deleted", "uninstalled"].includes(data.action ?? "")) {
-          for (const repo of this.db.repositories.values()) if (repo.installationId === id) { repo.available = false; repo.approved = false; }
+          for (const repo of this.db.repositories.values()) if (repo.installationId === id) repo.available = false;
         }
       }
       if (data.repository_selection) installation.repositorySelection = data.repository_selection;
@@ -299,12 +299,12 @@ export class GitHubAppService {
       const fullSnapshot = data.repositories !== undefined;
       if (fullSnapshot) {
         const snapshotIds = new Set(data.repositories!.map((repo) => String(repo.id)));
-        for (const repo of this.db.repositories.values()) if (repo.installationId === id && !snapshotIds.has(repo.id)) { repo.available = false; repo.approved = false; }
+        for (const repo of this.db.repositories.values()) if (repo.installationId === id && !snapshotIds.has(repo.id)) repo.available = false;
       }
       for (const raw of data.repositories_added ?? data.repositories ?? []) {
         const visibility = visibilityOf(raw);
         const existing = this.db.repositories.get(String(raw.id));
-        const value = { id: String(raw.id), installationId: id, fullName: raw.full_name, visibility, available: true, approved: fullSnapshot && existing?.available === true ? existing.approved : false };
+        const value = { id: String(raw.id), installationId: id, fullName: raw.full_name, visibility, available: true };
         this.db.repositories.set(String(raw.id), existing ? { ...existing, ...value } : value);
       }
       if (installation.state !== "suspended") {
@@ -318,16 +318,16 @@ export class GitHubAppService {
     const fullSnapshot = data.repositories !== undefined;
     if (fullSnapshot) {
       const snapshotIds = data.repositories!.map((repo) => repo.id);
-      await this.db`UPDATE dashboard_repositories SET available=false,approved=false WHERE installation_id=${installation.id} AND github_repository_id != ALL(${snapshotIds})`;
+      await this.db`UPDATE dashboard_repositories SET available=false WHERE installation_id=${installation.id} AND github_repository_id != ALL(${snapshotIds})`;
     }
     if (["suspend", "suspended", "deleted", "uninstalled"].includes(data.action ?? "")) {
       await this.db`UPDATE dashboard_installations SET state='suspended' WHERE id=${installation.id}`;
-      if (["deleted", "uninstalled"].includes(data.action ?? "")) await this.db`UPDATE dashboard_repositories SET available=false,approved=false WHERE installation_id=${installation.id}`;
+      if (["deleted", "uninstalled"].includes(data.action ?? "")) await this.db`UPDATE dashboard_repositories SET available=false WHERE installation_id=${installation.id}`;
     }
     if (data.repository_selection) await this.db`UPDATE dashboard_installations SET repository_selection=${data.repository_selection} WHERE id=${installation.id}`;
-    for (const repo of data.repositories_removed ?? []) await this.db`UPDATE dashboard_repositories SET available=false,approved=false WHERE installation_id=${installation.id} AND github_repository_id=${repo.id}`;
+    for (const repo of data.repositories_removed ?? []) await this.db`UPDATE dashboard_repositories SET available=false WHERE installation_id=${installation.id} AND github_repository_id=${repo.id}`;
     for (const raw of data.repositories_added ?? data.repositories ?? []) {
-      await this.db`INSERT INTO dashboard_repositories (organization_id,installation_id,github_repository_id,name,full_name,visibility,available,approved) VALUES (${installation.organization_id},${installation.id},${raw.id},${raw.full_name.split("/").at(-1) ?? raw.full_name},${raw.full_name},${visibilityOf(raw)},true,false) ON CONFLICT (organization_id,github_repository_id) DO UPDATE SET available=true,approved=CASE WHEN ${fullSnapshot} THEN dashboard_repositories.approved ELSE false END,visibility=excluded.visibility,full_name=excluded.full_name,name=excluded.name`;
+      await this.db`INSERT INTO dashboard_repositories (organization_id,installation_id,github_repository_id,name,full_name,visibility,available) VALUES (${installation.organization_id},${installation.id},${raw.id},${raw.full_name.split("/").at(-1) ?? raw.full_name},${raw.full_name},${visibilityOf(raw)},true) ON CONFLICT (organization_id,github_repository_id) DO UPDATE SET installation_id=excluded.installation_id,available=true,visibility=excluded.visibility,full_name=excluded.full_name,name=excluded.name`;
     }
     await this.db`UPDATE dashboard_installations i SET state=CASE
       WHEN i.state='suspended' THEN i.state
@@ -354,23 +354,22 @@ export class GitHubAppService {
     if (!isSql(this.db)) {
       const repo = this.db.repositories.get(repositoryId);
       const installation = repo && this.db.installations.get(repo.installationId);
-      if (!repo || !installation || repo.organizationId !== organizationId || !repo.available || !repo.approved || installation.state !== "approved") throw new Error("github_repository_not_approved");
+      if (!repo || !installation || repo.organizationId !== organizationId || !repo.available || installation.state !== "approved") throw new Error("github_repository_unavailable");
       return { installationId: installation.githubInstallationId, fullName: repo.fullName, defaultBranch: "main", headSha: "", labels: [] };
     }
     const rows = await this.db<Array<{ installation_id: number; full_name: string; labels: unknown; default_branch?: string; head_sha?: string }>>`
       SELECT i.github_installation_id AS installation_id, r.full_name,
         (SELECT p.labels FROM runner_pools p WHERE p.organization_id IS NULL AND p.enabled=true ORDER BY p.name LIMIT 1) AS labels
       FROM dashboard_repositories r JOIN dashboard_installations i ON i.id=r.installation_id
-      WHERE r.organization_id=${organizationId} AND r.id=${repositoryId} AND r.available=true AND r.approved=true AND i.state='approved' LIMIT 1`;
+      WHERE r.organization_id=${organizationId} AND r.id=${repositoryId} AND r.available=true AND i.state='approved' LIMIT 1`;
     const row = rows[0];
-    if (!row) throw new Error("github_repository_not_approved");
+    if (!row) throw new Error("github_repository_unavailable");
     const labels = Array.isArray(row.labels) ? row.labels.filter((label): label is string => typeof label === "string") : typeof row.labels === "string" ? (JSON.parse(row.labels) as unknown[]).filter((label): label is string => typeof label === "string") : [];
     if (!labels.length) throw new Error("github_runner_pool_missing");
     return { installationId: Number(row.installation_id), fullName: row.full_name, defaultBranch: row.default_branch ?? "", headSha: row.head_sha ?? "", labels };
   }
 
-  async listRepositoryWorkflows(owner: string, repo: string, installationId: number): Promise<{ defaultBranch: string; files: Array<{ path: string; sha: string; content: string }> }> {
-    const token = await this.getInstallationToken(installationId);
+  private async listRepositoryWorkflowsWithToken(owner: string, repo: string, token: string): Promise<{ defaultBranch: string; files: Array<{ path: string; sha: string; content: string }> }> {
     const metadata = await this.gh(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, {}, token);
     const defaultBranch = typeof metadata.default_branch === "string" ? metadata.default_branch : "";
     if (!defaultBranch) throw new Error("github_default_branch_missing");
@@ -387,38 +386,71 @@ export class GitHubAppService {
     return { defaultBranch, files };
   }
 
-  private async workflowContext(organizationId: string, repositoryId: string): Promise<{ repo: WorkflowRepo; owner: string; name: string; token: string; listing: Awaited<ReturnType<GitHubAppService["listRepositoryWorkflows"]>> }> {
+  async listRepositoryWorkflows(owner: string, repo: string, installationId: number): Promise<{ defaultBranch: string; files: Array<{ path: string; sha: string; content: string }> }> {
+    return this.listRepositoryWorkflowsWithToken(owner, repo, await this.getInstallationToken(installationId));
+  }
+
+  private async workflowContext(organizationId: string, repositoryId: string): Promise<{ repo: WorkflowRepo; owner: string; name: string; token: string }> {
     const repo = await this.workflowRepo(organizationId, repositoryId);
     const [owner, name] = repo.fullName.split("/", 2);
     if (!owner || !name) throw new Error("github_repository_invalid");
-    const listing = await this.listRepositoryWorkflows(owner, name, repo.installationId);
     const token = await this.getInstallationToken(repo.installationId);
-    return { repo, owner, name, token, listing };
+    return { repo, owner, name, token };
+  }
+
+  private async markRepositoryUnavailable(organizationId: string, repositoryId: string): Promise<void> {
+    if (isSql(this.db)) {
+      await this.db`UPDATE dashboard_repositories SET available=false WHERE organization_id=${organizationId} AND id=${repositoryId}`;
+      return;
+    }
+    const repository = this.db.repositories.get(repositoryId);
+    if (repository?.organizationId === organizationId) repository.available = false;
+  }
+
+  private async repositoryOperation<T>(organizationId: string, repositoryId: string, operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "github_404") throw error;
+      await this.markRepositoryUnavailable(organizationId, repositoryId);
+      throw new Error("github_repository_unavailable");
+    }
+  }
+
+  async listRepositoryRunnerWorkflows(input: { organizationId: string; repositoryId: string }): Promise<{ defaultBranch: string; files: Array<{ path: string; sha: string; content: string }> }> {
+    const ctx = await this.workflowContext(input.organizationId, input.repositoryId);
+    return this.repositoryOperation(input.organizationId, input.repositoryId, () => this.listRepositoryWorkflowsWithToken(ctx.owner, ctx.name, ctx.token));
   }
 
   async previewRepositoryRunnerPr(input: { organizationId: string; repositoryId: string; selectedPaths: string[] }): Promise<WorkflowMutation & { defaultBranch: string; headSha: string; labels: string[] }> {
     const ctx = await this.workflowContext(input.organizationId, input.repositoryId);
-    const files = discoverWorkflowFiles(ctx.listing.files);
-    const mutation = previewWorkflowMutation({ files, selectedPaths: input.selectedPaths, labels: ctx.repo.labels });
-    const ref = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/ref/heads/${encodeURIComponent(ctx.listing.defaultBranch)}`, {}, ctx.token);
-    const headSha = ref.object && typeof ref.object === "object" && typeof (ref.object as { sha?: unknown }).sha === "string" ? (ref.object as { sha: string }).sha : "";
-    return { ...mutation, defaultBranch: ctx.listing.defaultBranch, headSha, labels: ctx.repo.labels };
+    return this.repositoryOperation(input.organizationId, input.repositoryId, async () => {
+      const listing = await this.listRepositoryWorkflowsWithToken(ctx.owner, ctx.name, ctx.token);
+      const files = discoverWorkflowFiles(listing.files);
+      const mutation = previewWorkflowMutation({ files, selectedPaths: input.selectedPaths, labels: ctx.repo.labels });
+      const ref = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/ref/heads/${encodeURIComponent(listing.defaultBranch)}`, {}, ctx.token);
+      const headSha = ref.object && typeof ref.object === "object" && typeof (ref.object as { sha?: unknown }).sha === "string" ? (ref.object as { sha: string }).sha : "";
+      return { ...mutation, defaultBranch: listing.defaultBranch, headSha, labels: ctx.repo.labels };
+    });
   }
 
   async createRepositoryRunnerPr(input: { organizationId: string; repositoryId: string; selectedPaths: string[]; expectedHeadSha: string; title?: string; body?: string }): Promise<{ url: string; number: number; branch: string; changedFiles: string[]; replacementCount: number }> {
     const ctx = await this.workflowContext(input.organizationId, input.repositoryId);
-    const ref = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/ref/heads/${encodeURIComponent(ctx.listing.defaultBranch)}`, {}, ctx.token);
-    const headSha = ref.object && typeof ref.object === "object" && typeof (ref.object as { sha?: unknown }).sha === "string" ? (ref.object as { sha: string }).sha : "";
-    if (headSha !== input.expectedHeadSha) throw new Error("github_workflow_head_stale");
-    const files = discoverWorkflowFiles(ctx.listing.files);
-    const mutation = previewWorkflowMutation({ files, selectedPaths: input.selectedPaths, labels: ctx.repo.labels });
-    const changed = ctx.listing.files.filter((file) => mutation.changedFiles.includes(file.path)).map((file) => ({ ...file, content: applyWorkflowMutation(file.content, ctx.repo.labels) }));
-    const branch = `whitesmith/use-runners-${randomBytes(6).toString("hex")}`;
-    const blobs = await Promise.all(changed.map(async (file) => ({ path: file.path, mode: "100644", type: "blob", sha: (await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/blobs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: file.content, encoding: "utf-8" }) }, ctx.token)).sha as string })));
-    const tree = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/trees`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ base_tree: headSha, tree: blobs }) }, ctx.token);
-    const commit = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/commits`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: "Configure Whitesmith runners", tree: tree.sha, parents: [headSha] }) }, ctx.token);
-    await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/refs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: commit.sha }) }, ctx.token);
-    const pr = await this.gh(`/repos/${ctx.owner}/${ctx.name}/pulls`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: input.title?.trim() || "Use Whitesmith runners", body: input.body?.trim() || "Configure GitHub Actions workflows to use Whitesmith runners.", head: branch, base: ctx.listing.defaultBranch }) }, ctx.token);
-    return { url: String(pr.html_url ?? ""), number: Number(pr.number ?? 0), branch, changedFiles: mutation.changedFiles, replacementCount: mutation.replacementCount };
+    return this.repositoryOperation(input.organizationId, input.repositoryId, async () => {
+      const listing = await this.listRepositoryWorkflowsWithToken(ctx.owner, ctx.name, ctx.token);
+      const ref = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/ref/heads/${encodeURIComponent(listing.defaultBranch)}`, {}, ctx.token);
+      const headSha = ref.object && typeof ref.object === "object" && typeof (ref.object as { sha?: unknown }).sha === "string" ? (ref.object as { sha: string }).sha : "";
+      if (headSha !== input.expectedHeadSha) throw new Error("github_workflow_head_stale");
+      const files = discoverWorkflowFiles(listing.files);
+      const mutation = previewWorkflowMutation({ files, selectedPaths: input.selectedPaths, labels: ctx.repo.labels });
+      const changed = listing.files.filter((file) => mutation.changedFiles.includes(file.path)).map((file) => ({ ...file, content: applyWorkflowMutation(file.content, ctx.repo.labels) }));
+      const branch = `whitesmith/use-runners-${randomBytes(6).toString("hex")}`;
+      const blobs = await Promise.all(changed.map(async (file) => ({ path: file.path, mode: "100644", type: "blob", sha: (await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/blobs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: file.content, encoding: "utf-8" }) }, ctx.token)).sha as string })));
+      const tree = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/trees`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ base_tree: headSha, tree: blobs }) }, ctx.token);
+      const commit = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/commits`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: "Configure Whitesmith runners", tree: tree.sha, parents: [headSha] }) }, ctx.token);
+      await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/refs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: commit.sha }) }, ctx.token);
+      const pr = await this.gh(`/repos/${ctx.owner}/${ctx.name}/pulls`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: input.title?.trim() || "Use Whitesmith runners", body: input.body?.trim() || "Configure GitHub Actions workflows to use Whitesmith runners.", head: branch, base: listing.defaultBranch }) }, ctx.token);
+      return { url: String(pr.html_url ?? ""), number: Number(pr.number ?? 0), branch, changedFiles: mutation.changedFiles, replacementCount: mutation.replacementCount };
+    });
   }
 }

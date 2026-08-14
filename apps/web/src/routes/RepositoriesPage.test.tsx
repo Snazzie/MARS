@@ -1,0 +1,37 @@
+import { expect, test } from "bun:test";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { renderToStaticMarkup } from "react-dom/server";
+import { RepositoriesPage } from "./RepositoriesPage.tsx";
+
+function markup() {
+  const client = new QueryClient();
+  client.setQueryData(["organizations"], [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 2, workerCount: 1 }]);
+  client.setQueryData(["org", "all", "repositories"], {
+    items: [
+      { id: "repo-1", organizationId: "org-1", name: "private", fullName: "acme/private", visibility: "private", available: true, installationId: "inst-1" },
+      { id: "repo-2", organizationId: "org-1", name: "removed", fullName: "acme/removed", visibility: "internal", available: false, installationId: "inst-1" },
+    ],
+    nextCursor: null,
+  });
+  return renderToStaticMarkup(<QueryClientProvider client={client}><RepositoriesPage /></QueryClientProvider>);
+}
+
+test("repository table presents GitHub installation access without approval policy", () => {
+  const html = markup();
+  expect(html).toContain("Access follows the GitHub App installation");
+  expect(html).toContain("acme/private");
+  expect(html).toContain("Available");
+  expect(html).toContain("Manage GitHub");
+  expect(html).toContain("Use Whitesmith runners");
+  expect(html).not.toContain("Whitesmith access");
+  expect(html).not.toContain("Approved");
+  expect(html).not.toContain("Not approved");
+  expect(html).not.toContain(">Remove<");
+});
+
+test("available repositories enable workflow setup without a second authorization gate", () => {
+  const html = markup();
+  const action = html.match(/<button[^>]*>Use Whitesmith runners<\/button>/)?.[0] ?? "";
+  expect(action).not.toContain("disabled");
+  expect(html).not.toContain("acme/removed");
+});

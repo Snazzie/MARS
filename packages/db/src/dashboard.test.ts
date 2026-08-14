@@ -111,11 +111,13 @@ test("all-workspace worker listing includes workers across organizations", async
 });
 
 test("all-workspace listings preserve tenant membership and workspace IDs", async () => {
-  const repository = { id: "repo-1", organizationId: "org-1", name: "repo", fullName: "acme/repo", visibility: "private", available: true, approved: true, installationId: "install-1" };
+  const repository = { id: "repo-1", organizationId: "org-1", name: "repo", fullName: "acme/repo", visibility: "private", available: false, installationId: "install-1" };
   const run = { id: "run-1", organizationId: "org-1", repositoryId: "repo-1", repositoryName: "repo", runNumber: 1, workflowName: "ci", event: "push", branch: "main", commitSha: "abcdef1", actorLogin: "acme", status: "completed", conclusion: "success", queuedAt: new Date().toISOString(), startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), durationMs: 0, runtimeBoundary: null };
   const pool = { id: "pool-1", organizationId: "org-1", workerId: "worker-1", workerName: "worker", name: "default", platform: "linux-x64", driver: "kata-k3s", imageDigest: "ubuntu@sha256:" + "a".repeat(64), resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, labels: ["self-hosted"], triggerLabel: "whitesmith", enabled: true, active: 0 };
-  const db = (async (strings: TemplateStringsArray) => { const query = strings.join(" "); if (query.includes("runner_pools")) return [pool]; if (query.includes("dashboard_repositories")) return [repository]; if (query.includes("dashboard_runs")) return [run]; return []; }) as never;
-  expect((await listAllRepositories(db, "user-1")).items[0]).toMatchObject({ organizationId: "org-1" });
+  const queries: string[] = [];
+  const db = (async (strings: TemplateStringsArray) => { const query = strings.join(" "); queries.push(query); if (query.includes("runner_pools")) return [pool]; if (query.includes("dashboard_repositories")) return [repository]; if (query.includes("dashboard_runs")) return [run]; return []; }) as never;
+  expect((await listAllRepositories(db, "user-1")).items[0]).toMatchObject({ organizationId: "org-1", available: false });
   expect((await listAllRuns(db, "user-1")).items[0]).toMatchObject({ organizationId: "org-1" });
   expect((await listAllPools(db, "user-1")).items[0]).toMatchObject({ organizationId: "org-1" });
+  expect(queries.every((query) => !query.includes("r.approved"))).toBe(true);
 });

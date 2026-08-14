@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { approveOnboardingRepositories, getOnboardingStatus, selectOnboardingWorker, completeOnboardingIfReady } from "./onboarding.ts";
+import { getOnboardingStatus, selectOnboardingWorker, completeOnboardingIfReady } from "./onboarding.ts";
 
 const sql = (rows: unknown[] = []) => {
   const db = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -21,11 +21,34 @@ describe("onboarding state derivation", () => {
     expect(status.step).toBe("worker");
   });
 
-  test("does not enter resources before an approved available private repository exists", async () => {
-    const pending = sql([{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: null, workerAdmissionState: "adopted", workerConfigurationState: "unconfigured", githubReady: false }]);
-    expect((await getOnboardingStatus(pending)).step).toBe("github");
-    const ready = sql([{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: null, workerAdmissionState: "adopted", workerConfigurationState: "unconfigured", githubReady: true }]);
-    expect((await getOnboardingStatus(ready)).step).toBe("resources");
+  test("keeps selected workers on Worker until adoption and configuration acknowledgement", async () => {
+    for (const row of [
+      { workerAdmissionState: "pending", workerConfigurationState: "unconfigured" },
+      { workerAdmissionState: "adopted", workerConfigurationState: "unconfigured" },
+    ]) {
+      const db = sql([{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: null, githubReady: true, ...row }]);
+      expect((await getOnboardingStatus(db)).step).toBe("worker");
+    }
+  });
+
+  test("advances a ready adopted worker through GitHub to trigger labels", async () => {
+    const github = sql([{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: null, workerAdmissionState: "adopted", workerConfigurationState: "ready", githubReady: false }]);
+    expect((await getOnboardingStatus(github)).step).toBe("github");
+    const labels = sql([{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: null, workerAdmissionState: "adopted", workerConfigurationState: "ready", githubReady: true }]);
+    expect((await getOnboardingStatus(labels)).step).toBe("labels");
+  });
+
+  test("uses every available repository from an active installation for GitHub readiness", async () => {
+    let query = "";
+    const db = (async (strings: TemplateStringsArray) => {
+      query = strings.join(" ").toLowerCase();
+      return [{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: null, workerAdmissionState: "adopted", workerConfigurationState: "ready", githubReady: true }];
+    }) as never;
+    expect((await getOnboardingStatus(db)).step).toBe("labels");
+    expect(query).toContain("r.available=true");
+    expect(query).toContain("i.state='approved'");
+    expect(query).not.toContain("r.approved");
+    expect(query).not.toContain("visibility");
   });
   test("completion is sticky after later resource failures", async () => {
     const db = sql([{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: "2026-08-12T00:00:00Z", workerAdmissionState: "revoked" }]);
@@ -37,22 +60,5 @@ describe("onboarding state derivation", () => {
   test("selection rejects foreign and inactive workers", async () => {
     await expect(selectOnboardingWorker(sql([]), "w-foreign", "admin-1")).rejects.toThrow();
     await expect(selectOnboardingWorker(sql([{ id: "w1", admissionState: "rejected" }]), "w1", "admin-1")).rejects.toThrow();
-  });
-  test("approves selected private repositories and records selected GitHub access", async () => {
-    const queries: string[] = [];
-    const db = Object.assign(((strings: TemplateStringsArray, ...values: unknown[]) => {
-      queries.push(Array.from(strings).join(" "));
-      return [];
-    }) as never, {
-      begin: async (fn: (tx: unknown) => unknown) => fn(((strings: TemplateStringsArray) => {
-        const query = Array.from(strings).join(" ").toLowerCase();
-        queries.push(query);
-        if (query.includes("select r.id")) return [{ id: "repo-1", installationId: "install-1", visibility: "private", available: true, state: "pending" }];
-        return [];
-      }) as never),
-    });
-    await approveOnboardingRepositories(db, ["repo-1"], "admin-1");
-    expect(queries.some((query) => query.includes("repository_selection='selected'"))).toBe(true);
-    expect(queries.some((query) => query.includes("update dashboard_repositories"))).toBe(true);
   });
 });

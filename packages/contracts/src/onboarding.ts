@@ -2,7 +2,7 @@ import { z } from "zod";
 import { RuntimePlatform, GuestPlatform, WorkerState, ConnectionState, ConfigurationState, WorkerDoctorData, WorkerCapacityData, WorkerLimits } from "./orchestration.ts";
 import { OrganizationSummary, RepositorySummary, PoolSummary } from "./dashboard.ts";
 
-export const OnboardingStep = z.enum(["admin", "worker", "github", "resources", "labels", "complete"]);
+export const OnboardingStep = z.enum(["admin", "worker", "github", "labels", "complete"]);
 export type OnboardingStep = z.infer<typeof OnboardingStep>;
 export const OnboardingStatus = z.object({ version:z.literal(1), onboardingRequired:z.boolean(), adminCreated:z.boolean(), authenticated:z.boolean(), canManage:z.boolean(), step:OnboardingStep }).strict();
 export type OnboardingStatus = z.infer<typeof OnboardingStatus>;
@@ -14,5 +14,3 @@ export const OnboardingDetail = OnboardingStatus.extend({ worker:OnboardingWorke
 export type OnboardingDetail = z.infer<typeof OnboardingDetail>;
 export const SelectOnboardingWorkerRequest = z.object({ workerId:z.string().uuid() }).strict();
 export type SelectOnboardingWorkerRequest = z.infer<typeof SelectOnboardingWorkerRequest>;
-export const ApproveOnboardingRepositoriesRequest = z.object({ repositoryIds:z.array(z.string().uuid()).min(1) }).strict();
-export type ApproveOnboardingRepositoriesRequest = z.infer<typeof ApproveOnboardingRepositoriesRequest>;

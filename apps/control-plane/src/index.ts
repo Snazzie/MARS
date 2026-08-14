@@ -5,7 +5,7 @@ import type { Server, ServerWebSocket } from "bun";
 import { createSession, getSession, SecretBox } from "./auth.ts";
 import { createPkce, githubAuthorizeUrl, exchangeOAuth, ensureBootstrapAdmin, syncGithubOrganizations } from "./github.ts";
 import { applyWorkflowJobWebhook, configureRunLifecycle } from "./runs.ts";
-import { discoverApprovedRepositoryJobs } from "./job-discovery.ts";
+import { discoverAvailableRepositoryJobs } from "./job-discovery.ts";
 import { readBody, validSignature, acceptDelivery } from "./webhook.ts";
 import { verifyWorkerSignature } from "./workers.ts";
 import { createWorkerChallenge, decodeWorkerSignature } from "./worker-socket.ts";
@@ -70,7 +70,7 @@ startReconciliationScheduler(async () => {
   try {
     if (Date.now() >= nextDiscoveryAt) {
       try {
-        const report = await discoverApprovedRepositoryJobs({ db, installationToken: (installationId) => githubApp.getInstallationToken(installationId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY });
+        const report = await discoverAvailableRepositoryJobs({ db, installationToken: (installationId) => githubApp.getInstallationToken(installationId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY });
         if (report.discovered || report.failed) console.log(`GitHub job discovery: repositories=${report.repositories} discovered=${report.discovered} updated=${report.updated} failed=${report.failed}`);
       } catch (error) {
         console.error("GitHub job discovery failed", error);

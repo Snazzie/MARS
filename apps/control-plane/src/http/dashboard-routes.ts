@@ -170,14 +170,14 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const org = c.req.param("organizationId"); const denied = await guard(c, deps, org); if (denied) return denied;
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
-    const [row] = await deps.db`SELECT full_name AS "fullName", installation_id AS "installationId" FROM dashboard_repositories WHERE organization_id=${org} AND id=${c.req.param("repositoryId")} AND available=true AND approved=true`;
-    if (!row) return error(c, 404, "repository_not_approved", "Repository is not approved");
-    const [owner, repo] = String(row.fullName).split("/", 2); const result = await deps.githubApp.listRepositoryWorkflows(owner, repo, Number(row.installationId));
     try {
+      const result = await deps.githubApp.listRepositoryRunnerWorkflows({ organizationId: org, repositoryId: c.req.param("repositoryId") });
       return c.json(RunnerWorkflowFile.array().parse(discoverWorkflowFiles(result.files)));
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : "Invalid workflow file";
-      return error(c, 422, "workflow_invalid", message, { repositoryId: c.req.param("repositoryId"), organizationId: org });
+      const code = cause instanceof Error ? cause.message : "Invalid workflow file";
+      if (code === "github_repository_unavailable") return error(c, 404, "repository_unavailable", "Repository is unavailable");
+      if (/Invalid|Malformed|Unsupported/i.test(code)) return error(c, 422, "workflow_invalid", code, { repositoryId: c.req.param("repositoryId"), organizationId: org });
+      throw cause;
     }
   }));
   app.post("/api/organizations/:organizationId/repositories/:repositoryId/runner-workflows/preview", safe(async (c) => {
@@ -186,7 +186,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
     const body = z.object({ selectedPaths: z.array(z.string()).default([]) }).strict().parse(await c.req.json());
     try { return c.json(RunnerWorkflowPreview.parse(await deps.githubApp.previewRepositoryRunnerPr({ organizationId: org, repositoryId: c.req.param("repositoryId"), selectedPaths: body.selectedPaths }))); }
-    catch (cause) { const code = cause instanceof Error ? cause.message : ""; if (code === "github_repository_not_approved") return error(c, 404, "repository_not_approved", "Repository is not approved"); if (code === "github_runner_pool_missing") return error(c, 422, "runner_pool_missing", "Runner pool is not configured"); if (/Invalid|Malformed|Unsupported|not discovered|no-op/i.test(code)) return error(c, 422, "workflow_invalid", code); throw cause; }
+    catch (cause) { const code = cause instanceof Error ? cause.message : ""; if (code === "github_repository_unavailable") return error(c, 404, "repository_unavailable", "Repository is unavailable"); if (code === "github_runner_pool_missing") return error(c, 422, "runner_pool_missing", "Runner pool is not configured"); if (/Invalid|Malformed|Unsupported|not discovered|no-op/i.test(code)) return error(c, 422, "workflow_invalid", code); throw cause; }
   }));
   app.post("/api/organizations/:organizationId/repositories/:repositoryId/runner-workflows/pr", safe(async (c) => {
     const org = c.req.param("organizationId"); const denied = await guard(c, deps, org); if (denied) return denied;
@@ -202,20 +202,9 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     } catch (cause) {
       const code = cause instanceof Error ? cause.message : "";
       if (/github_workflow_head_stale/.test(code)) return error(c, 409, "workflow_head_stale", "Workflow files changed; refresh preview");
-      if (code === "github_repository_not_approved") return error(c, 404, "repository_not_approved", "Repository is not approved");
+      if (code === "github_repository_unavailable") return error(c, 404, "repository_unavailable", "Repository is unavailable");
       if (/Invalid|Malformed|Unsupported|not discovered|no-op/i.test(code)) return error(c, 422, "workflow_invalid", code);
       throw cause;
     }
-  }));
-  app.post("/api/organizations/:organizationId/repositories/:repositoryId/:action", safe(async (c) => {
-    const org = c.req.param("organizationId"), action = c.req.param("action");
-    const denied = await guard(c, deps, org); if (denied) return denied;
-    if (!["approve", "reject"].includes(action)) return error(c, 404, "not_found", "Resource not found");
-    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
-    const idem = requireMutation(c); if (idem) return idem;
-    const key = c.req.header("idempotency-key")!;
-    const [updated] = await deps.db`UPDATE dashboard_repositories SET approved=${action === "approve"} WHERE organization_id=${org} AND id=${c.req.param("repositoryId")} AND available=true RETURNING id`;
-    if (!updated) return error(c, 409, "repository_not_approvable", "Repository is unavailable or not eligible for Whitesmith approval");
-    await invalidateDashboard(deps.db, org, ["repositories"]); return c.json({ ok: true });
   }));
 }

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { applyGithubJobSnapshot, applyWorkflowJobWebhook, configureRunLifecycle, stageDurationMs, type GithubJobSnapshot, type GithubRunSnapshot, type GithubStepSnapshot } from "./runs.ts";
+import { runQueuedJobReconciliation } from "./job-reconciler.ts";
 
 type Row = Record<string, unknown>;
 function makeStatefulSql() {
@@ -8,8 +9,10 @@ function makeStatefulSql() {
   const runs = new Map<string, Row>();
   const jobs = new Map<string, Row>();
   const steps = new Map<string, Row>();
+  const queries: string[] = [];
   const execute = (strings: TemplateStringsArray, ...values: unknown[]) => {
     const text = strings.join(" ");
+    queries.push(text);
     if (text.includes("SELECT id,organization_id FROM dashboard_installations")) return installations;
     if (text.includes("SELECT id FROM dashboard_repositories")) return repositories;
     if (text.startsWith("INSERT INTO dashboard_runs")) {
@@ -62,7 +65,7 @@ function makeStatefulSql() {
     return [];
   };
   const sql = Object.assign(execute, { begin: async <T>(callback: (tx: typeof execute) => Promise<T>) => callback(execute) });
-  return { sql, runs, jobs, steps };
+  return { sql, runs, jobs, steps, queries };
 }
 
 const queuedAt = "2026-08-13T00:00:00Z";
@@ -88,3 +91,22 @@ const job: GithubJobSnapshot = { id: 99, runId: run.id, name: "macos", status: "
 
 test("step duration is monotonic-compatible for terminal timestamps", () => expect(stageDurationMs({ startedAt: "2026-08-13T00:01:00Z", completedAt: "2026-08-13T00:02:00Z" })).toBe(60_000));
 test("strict webhook step validation remains enforced", async () => { await expect(applyWorkflowJobWebhook({ installation: { id: 5 }, repository: { id: 123 }, workflow_job: { id: 99, run_id: 42, status: "queued", steps: [{ number: 0 }] } })).rejects.toThrow("github_payload_invalid"); });
+
+test("webhook ingestion and reconciliation authorize available repositories on active installations", async () => {
+  const fake = makeStatefulSql();
+  configureRunLifecycle(fake.sql as never);
+  await applyGithubJobSnapshot({ installationId: 5, repository: { id: 123, name: "repo", fullName: "acme/repo" }, run, job });
+  const ingestionQuery = fake.queries.find((query) => query.includes("SELECT id FROM dashboard_repositories")) ?? "";
+  expect(ingestionQuery).toContain("available=true");
+  expect(ingestionQuery).not.toContain("approved=true");
+
+  let reconciliationQuery = "";
+  const db = (async (strings: TemplateStringsArray) => {
+    reconciliationQuery = strings.join(" ");
+    return [];
+  }) as never;
+  await runQueuedJobReconciliation({ db, installationToken: async () => "token", dispatcher: { dispatch: async () => ({}) } as never });
+  expect(reconciliationQuery).toContain("repo.available=true");
+  expect(reconciliationQuery).toContain("i.state='approved'");
+  expect(reconciliationQuery).not.toContain("repo.approved");
+});

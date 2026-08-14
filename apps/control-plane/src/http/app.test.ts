@@ -366,34 +366,42 @@ test("uninstalls an organization through the authenticated GitHub route", async 
     expect(response.status).toBe(401);
   });
 
-  test("repository approval changes one repository without changing installation trust", async () => {
-    const response = await createControlPlaneApp(fakeHttpDeps()).request(
-      `/api/organizations/${crypto.randomUUID()}/repositories/${crypto.randomUUID()}/approve`,
-      { method: "POST", headers: { "Idempotency-Key": "approval-1" } },
-    );
-    expect(response.status).toBe(401);
+  test("repository approval endpoints are retired", async () => {
+    const retired = createControlPlaneApp(fakeHttpDeps({
+      currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+    }));
+    for (const action of ["approve", "reject"]) {
+      const response = await retired.request(`/api/organizations/org-1/repositories/repo-1/${action}`, {
+        method: "POST",
+        headers: { "Idempotency-Key": `repository-${action}` },
+      });
+      expect(response.status).toBe(404);
+    }
   });
 
-  test("approves an eligible repository and persists the approval", async () => {
-    let approved = false;
-    const db = ((strings: TemplateStringsArray, ...values: unknown[]) => {
-      if (strings.join("?").includes("UPDATE dashboard_repositories SET approved=")) {
-        approved = values[0] === true;
-        return [{ id: "repo-1" }];
-      }
-      return [];
-    }) as never;
-    const response = await createControlPlaneApp(fakeHttpDeps({
-      db,
+  test("repository workflow listing uses scoped availability and stable missing-repository errors", async () => {
+    let listed: unknown;
+    const success = await createControlPlaneApp(fakeHttpDeps({
       currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
-    })).request("/api/organizations/org-1/repositories/repo-1/approve", {
-      method: "POST",
-      headers: { "Idempotency-Key": "approval-eligible-1" },
-    });
+      githubApp: {
+        listRepositoryRunnerWorkflows: async (input: unknown) => {
+          listed = input;
+          return { defaultBranch: "main", files: [] };
+        },
+      } as never,
+    })).request("/api/organizations/org-1/repositories/repo-1/runner-workflows");
+    expect(success.status).toBe(200);
+    expect(await success.json()).toEqual([]);
+    expect(listed).toEqual({ organizationId: "org-1", repositoryId: "repo-1" });
 
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true });
-    expect(approved).toBe(true);
+    const unavailable = await createControlPlaneApp(fakeHttpDeps({
+      currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+      githubApp: {
+        listRepositoryRunnerWorkflows: async () => { throw new Error("github_repository_unavailable"); },
+      } as never,
+    })).request("/api/organizations/org-1/repositories/repo-1/runner-workflows");
+    expect(unavailable.status).toBe(404);
+    expect(await unavailable.json()).toMatchObject({ code: "repository_unavailable" });
   });
 
   test("refreshes repositories from an existing GitHub installation", async () => {

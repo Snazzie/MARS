@@ -222,9 +222,9 @@ async function repositoryOrganizationId(db: DatabaseClient, repository: string):
   const rows = await db<Array<{ organizationId: string }>>`
     SELECT organization_id AS "organizationId"
     FROM dashboard_repositories
-    WHERE full_name=${repository} AND available=true AND approved=true
+    WHERE full_name=${repository} AND available=true
   `;
-  if (rows.length !== 1) throw new Error("approved_repository_not_unique");
+  if (rows.length !== 1) throw new Error("available_repository_not_unique");
   return rows[0].organizationId;
 }
 

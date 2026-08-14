@@ -16,7 +16,6 @@ import {
   OnboardingDetail,
   OnboardingStatus,
   SelectOnboardingWorkerRequest,
-  ApproveOnboardingRepositoriesRequest,
   CreatePoolRequest,
   RunnerWorkflowFile,
   RunnerWorkflowPreview,
@@ -146,13 +145,6 @@ export const mutateGlobalPool = (poolId: string, action: "enable" | "disable") =
   });
 export const getSettings = (organizationId: string) =>
   request(`/api/organizations/${organizationId}/settings`, OrganizationSettings);
-export async function setRepositoryApproval(organizationId: string, repositoryId: string, approved: boolean) {
-  return request(`/api/organizations/${organizationId}/repositories/${repositoryId}/${approved ? "approve" : "reject"}`, z.object({ ok: z.boolean() }), {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
-    body: JSON.stringify({}),
-  });
-}
 export async function mutatePool(organizationId: string, poolId: string, action: "enable" | "disable" | "rotate-key") {
   return request(`/api/organizations/${organizationId}/pools/${poolId}/${action}`, z.object({ ok: z.boolean() }), {
     method: "POST",
@@ -182,13 +174,6 @@ export const getOnboardingDetail = () => request("/api/onboarding", onboardingDe
 export async function selectOnboardingWorker(input: SelectOnboardingWorkerRequest) {
   return request("/api/onboarding/worker", z.object({ ok: z.boolean() }), {
     method: "PUT",
-    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
-    body: JSON.stringify(input),
-  });
-}
-export async function approveOnboardingRepositories(input: ApproveOnboardingRepositoriesRequest) {
-  return request("/api/onboarding/repositories", z.object({ ok: z.boolean() }), {
-    method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify(input),
   });
@@ -236,7 +221,7 @@ export async function createOnboardingPool(input: CreatePoolRequest & { organiza
   return request("/api/organizations/" + input.organizationId + "/pools", z.object({ id: z.string().uuid().optional() }).passthrough(), {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
-    body: JSON.stringify({ workerId: input.workerId, name: input.name, resources: input.resources, triggerLabel: input.triggerLabel, imageDigest: input.imageDigest }),
+    body: JSON.stringify({ workerId: input.workerId, guestPlatform: input.guestPlatform, name: input.name, resources: input.resources, triggerLabel: input.triggerLabel, imageDigest: input.imageDigest }),
   });
 }
 export const getRunnerWorkflowFiles = (organizationId: string, repositoryId: string) =>

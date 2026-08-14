@@ -105,7 +105,8 @@ describe("GitHub App onboarding", () => {
     const launch = await github.beginInstallation("admin-1", organizationId, "key");
     await expect(github.completeInstallation("admin-1", launch.installCookie!, 42)).resolves.toBe(true);
     expect(fakeDb.installations.get(42)).toMatchObject({ state: "approved", repositorySelection: "all" });
-    expect(fakeDb.repositories.get("8")).toMatchObject({ approved: false, available: true, visibility: "public" });
+    expect(fakeDb.repositories.get("8")).toMatchObject({ available: true, visibility: "public" });
+    expect(fakeDb.repositories.get("8")).not.toHaveProperty("approved");
   });
 
   test("accepts public-only all-repository installations", async () => {
@@ -165,15 +166,16 @@ describe("GitHub App onboarding", () => {
     expect(states[0]?.consumedAt).toBeUndefined();
     expect(fakeDb.installations.size).toBe(0);
   });
-  test("preserves explicit approvals across full repository snapshots", async () => {
+  test("preserves durable rows across full repository snapshots", async () => {
     const github = service(async () => Response.json({}));
     fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "selected", githubAccountId: 99 });
-    fakeDb.repositories.set("1", { id: "1", installationId: 42, fullName: "acme/private", visibility: "private", available: true, approved: true });
-    fakeDb.repositories.set("2", { id: "2", installationId: 42, fullName: "acme/removed", visibility: "private", available: true, approved: true });
+    fakeDb.repositories.set("1", { id: "1", installationId: 42, fullName: "acme/private", visibility: "private", available: true });
+    fakeDb.repositories.set("2", { id: "2", installationId: 42, fullName: "acme/removed", visibility: "private", available: true });
     await github.reconcileInstallationRepositories({ installation: { id: 42 }, repository_selection: "selected", repositories: [{ id: 1, full_name: "acme/private", visibility: "private" }, { id: 3, full_name: "acme/new", visibility: "internal" }] });
-    expect(fakeDb.repositories.get("1")).toMatchObject({ available: true, approved: true });
-    expect(fakeDb.repositories.get("2")).toMatchObject({ available: false, approved: false });
-    expect(fakeDb.repositories.get("3")).toMatchObject({ available: true, approved: false });
+    expect(fakeDb.repositories.get("1")).toMatchObject({ available: true });
+    expect(fakeDb.repositories.get("2")).toMatchObject({ available: false });
+    expect(fakeDb.repositories.get("3")).toMatchObject({ available: true });
+    expect(fakeDb.repositories.get("3")).not.toHaveProperty("approved");
   });
   test("leaves all-repository installation unbound before remediation", async () => {
     const calls: string[] = [];
@@ -222,12 +224,13 @@ describe("GitHub App onboarding", () => {
     expect(launch).toEqual({ location: "http://localhost:5173/onboarding" });
     expect(calls.some((query) => query.includes("UPDATE system_onboarding SET organization_id"))).toBe(true);
     expect(calls.some((query) => query.includes("INSERT INTO github_setup_states"))).toBe(false);
+    expect(calls.every((query) => !query.includes("r.approved"))).toBe(true);
   });
 
-  test("reconciles selected private/internal repositories, installation readiness, and removal history", async () => {
+  test("reconciles every granted visibility and restores re-added repositories", async () => {
     const github = service(async () => Response.json({}));
     fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "pending", repositorySelection: "all", githubAccountId: 99 });
-    fakeDb.repositories.set("4", { id: "4", installationId: 42, fullName: "acme/stale", visibility: "private", available: true, approved: false });
+    fakeDb.repositories.set("4", { id: "4", installationId: 42, fullName: "acme/stale", visibility: "private", available: true });
     await github.reconcileInstallationRepositories({
       installation: { id: 42 },
       repository_selection: "selected",
@@ -238,23 +241,26 @@ describe("GitHub App onboarding", () => {
       ],
     });
     expect(fakeDb.installations.get(42)).toMatchObject({ state: "approved", repositorySelection: "selected" });
-    expect(fakeDb.repositories.get("4")).toMatchObject({ available: true, approved: false });
+    expect(fakeDb.repositories.get("4")).toMatchObject({ available: true });
+    expect(fakeDb.repositories.get("3")).toMatchObject({ available: true, visibility: "public" });
     await github.reconcileInstallationRepositories({ installation: { id: 42 }, repositories_removed: [{ id: 1 }, { id: 2 }] });
     expect(fakeDb.repositories.get("1")).toMatchObject({ available: false });
     expect(fakeDb.repositories.has("1")).toBe(true);
+    await github.reconcileInstallationRepositories({ installation: { id: 42 }, repositories_added: [{ id: 1, full_name: "acme/private", visibility: "private" }] });
+    expect(fakeDb.repositories.get("1")).toMatchObject({ available: true });
     expect(fakeDb.installations.get(42)).toMatchObject({ state: "approved" });
   });
   test("uninstall suspends installation and disables every historical repository", async () => {
     const github = service(async () => Response.json({}));
     fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "selected", githubAccountId: 99 });
-    fakeDb.repositories.set("1", { id: "1", installationId: 42, fullName: "acme/private", visibility: "private", available: true, approved: true });
-    fakeDb.repositories.set("2", { id: "2", installationId: 42, fullName: "acme/internal", visibility: "internal", available: true, approved: true });
+    fakeDb.repositories.set("1", { id: "1", installationId: 42, fullName: "acme/private", visibility: "private", available: true });
+    fakeDb.repositories.set("2", { id: "2", installationId: 42, fullName: "acme/internal", visibility: "internal", available: true });
 
     await github.reconcileInstallationRepositories({ installation: { id: 42 }, action: "uninstalled" });
 
     expect(fakeDb.installations.get(42)).toMatchObject({ state: "suspended" });
-    expect(fakeDb.repositories.get("1")).toMatchObject({ available: false, approved: false });
-    expect(fakeDb.repositories.get("2")).toMatchObject({ available: false, approved: false });
+    expect(fakeDb.repositories.get("1")).toMatchObject({ available: false });
+    expect(fakeDb.repositories.get("2")).toMatchObject({ available: false });
   });
   test("uninstalls an organization through the GitHub App API", async () => {
     const requests: Request[] = [];
@@ -264,14 +270,14 @@ describe("GitHub App onboarding", () => {
     });
     fakeDb.appConfig = { id: 9, slug: "whitesmith", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "y" };
     fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "selected", githubAccountId: 99 });
-    fakeDb.repositories.set("1", { id: "1", installationId: 42, fullName: "acme/private", visibility: "private", available: true, approved: true });
+    fakeDb.repositories.set("1", { id: "1", installationId: 42, fullName: "acme/private", visibility: "private", available: true });
 
     await github.uninstallOrganization(organizationId);
 
     expect(requests[0]?.method).toBe("DELETE");
     expect(requests[0]?.url).toContain("/app/installations/42");
     expect(fakeDb.installations.get(42)).toMatchObject({ state: "suspended" });
-    expect(fakeDb.repositories.get("1")).toMatchObject({ available: false, approved: false });
+    expect(fakeDb.repositories.get("1")).toMatchObject({ available: false });
   });
 
   test("starts a second organization installation without rebinding onboarding", async () => {
@@ -291,7 +297,7 @@ describe("GitHub App onboarding", () => {
 
   test("validates each webhook against the current decrypted secret and dispatches installation removal", async () => {
     const github = service(async () => Response.json({}));
-    fakeDb.repositories.set("1", { id: "1", installationId: 42, fullName: "acme/private", visibility: "private", available: true, approved: true });
+    fakeDb.repositories.set("1", { id: "1", installationId: 42, fullName: "acme/private", visibility: "private", available: true });
     expect(await github.getWebhookSecret()).toBeNull();
     await github.reconcileInstallationRepositories({ installation: { id: 42 }, action: "removed", repositories_removed: [{ id: 1 }] });
     expect(fakeDb.repositories.get("1")).toMatchObject({ available: false });
@@ -361,4 +367,34 @@ test("workflow preview uses the current runner pool schema", async () => {
 
   expect(preview.replacementCount).toBe(1);
   expect(preview.labels).toEqual(["self-hosted", "macos"]);
+});
+
+test("repository workflow setup retires a repository after GitHub 404", async () => {
+  const github = service(async (input) => {
+    const url = String(input);
+    if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+    if (url.includes("/repos/acme/repo")) return new Response(null, { status: 404 });
+    return Response.json({});
+  });
+  fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "all" });
+  fakeDb.repositories.set("repo-1", { id: "repo-1", installationId: 42, organizationId, fullName: "acme/repo", visibility: "private", available: true });
+  fakeDb.appConfig = { id: 9, slug: "whitesmith", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "x" };
+
+  await expect(github.previewRepositoryRunnerPr({ organizationId, repositoryId: "repo-1", selectedPaths: [] })).rejects.toThrow("github_repository_unavailable");
+  expect(fakeDb.repositories.get("repo-1")).toMatchObject({ available: false });
+});
+
+test.each([403, 429, 500])("repository workflow setup preserves availability after GitHub %i", async (status) => {
+  const github = service(async (input) => {
+    const url = String(input);
+    if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+    if (url.includes("/repos/acme/repo")) return new Response(null, { status });
+    return Response.json({});
+  });
+  fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "all" });
+  fakeDb.repositories.set("repo-1", { id: "repo-1", installationId: 42, organizationId, fullName: "acme/repo", visibility: "private", available: true });
+  fakeDb.appConfig = { id: 9, slug: "whitesmith", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "x" };
+
+  await expect(github.previewRepositoryRunnerPr({ organizationId, repositoryId: "repo-1", selectedPaths: [] })).rejects.toThrow(`github_${status}`);
+  expect(fakeDb.repositories.get("repo-1")).toMatchObject({ available: true });
 });

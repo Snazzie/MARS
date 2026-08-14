@@ -35,7 +35,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     FROM dashboard_jobs j
     JOIN dashboard_runs r ON r.id=j.run_id
     JOIN dashboard_repositories repo ON repo.id=r.repository_id
-      AND repo.organization_id=r.organization_id AND repo.available=true AND repo.approved=true
+      AND repo.organization_id=r.organization_id AND repo.available=true
     JOIN dashboard_installations i ON i.id=repo.installation_id
       AND i.organization_id=r.organization_id AND i.state='approved'
     WHERE j.status='queued' AND r.status='queued'

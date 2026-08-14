@@ -37,7 +37,7 @@ export async function getOnboardingStatus(db: OnboardingDb, auth: { authenticate
         WHERE i.organization_id=so.organization_id
           AND i.state='approved'
           AND i.repository_selection IN ('all','selected')
-          AND r.available=true AND r.approved=true
+          AND r.available=true
       ) AS "githubReady"
     FROM system_onboarding so
     LEFT JOIN workers w ON w.id=so.worker_id
@@ -55,9 +55,8 @@ export async function getOnboardingStatus(db: OnboardingDb, auth: { authenticate
   if (completed) return { version: 1, onboardingRequired: false, adminCreated: Boolean(adminUserId), authenticated, canManage, step: "complete" };
   let step: OnboardingStatus["step"] = "admin";
   if (adminUserId) {
-    if (!workerId || !["pending", "adopted"].includes(admission ?? "")) step = "worker";
+    if (!workerId || admission !== "adopted" || configuration !== "ready") step = "worker";
     else if (!organizationId || !githubReady) step = "github";
-    else if (admission !== "adopted" || configuration !== "ready") step = "resources";
     else step = "labels";
   }
   return { version: 1, onboardingRequired: true, adminCreated: Boolean(adminUserId), authenticated, canManage, step };
@@ -120,13 +119,13 @@ export async function getOnboardingDetail(
     repositorySelection: installationRow.repositorySelection as OnboardingInstallation["repositorySelection"],
   } : null;
   const repositoryRows = organizationId && installation ? await db`
-    SELECT id,organization_id AS "organizationId",name,full_name AS "fullName",visibility,available,approved,installation_id AS "installationId"
+    SELECT id,organization_id AS "organizationId",name,full_name AS "fullName",visibility,available,installation_id AS "installationId"
     FROM dashboard_repositories WHERE organization_id=${organizationId} AND installation_id=${installation.id}
     ORDER BY full_name
   ` : [];
   const repositories = repositoryRows.map((row) => ({
     id: String(row.id), organizationId: String(row.organizationId), name: String(row.name), fullName: String(row.fullName),
-    visibility: row.visibility, available: row.available, approved: row.approved, installationId: String(row.installationId),
+    visibility: row.visibility, available: row.available, installationId: String(row.installationId),
   })) as RepositorySummary[];
   const poolRow = worker ? first(await db`
     SELECT p.id,p.organization_id AS "organizationId",p.worker_id AS "workerId",w.name AS "workerName",
@@ -150,25 +149,6 @@ export async function selectOnboardingWorker(db: OnboardingDb, workerId: string,
   await db`INSERT INTO system_onboarding(singleton,admin_user_id,worker_id) VALUES(true,${adminUserId},${workerId}) ON CONFLICT(singleton) DO UPDATE SET admin_user_id=EXCLUDED.admin_user_id,worker_id=EXCLUDED.worker_id`;
 }
 
-export async function approveOnboardingRepositories(db: OnboardingDb, repositoryIds: string[], adminUserId: string): Promise<void> {
-  await db.begin(async (tx) => {
-    const rows = await tx`
-      SELECT r.id,r.installation_id AS "installationId",r.visibility,r.available,i.state
-      FROM dashboard_repositories r
-      JOIN dashboard_installations i ON i.id=r.installation_id AND i.organization_id=r.organization_id
-      JOIN system_onboarding so ON so.organization_id=r.organization_id
-      WHERE so.singleton=true AND so.admin_user_id=${adminUserId} AND r.id=ANY(${repositoryIds})
-      FOR UPDATE
-    `;
-    const installationIds = new Set(rows.map((row) => String(row.installationId)));
-    if (rows.length !== repositoryIds.length || installationIds.size !== 1 || rows.some((row) => row.available !== true || !["approved", "pending"].includes(String(row.state)))) {
-      throw new Error("repositories_not_selectable");
-    }
-    const installationId = String(rows[0].installationId);
-    await tx`UPDATE dashboard_installations SET state='approved', repository_selection='selected' WHERE id=${installationId} AND state IN ('pending','approved')`;
-    await tx`UPDATE dashboard_repositories SET approved=(id=ANY(${repositoryIds})) WHERE installation_id=${installationId}`;
-  });
-}
 
 export async function completeOnboardingIfReady(db: OnboardingDb): Promise<boolean> {
   const row = first(await db`SELECT completed_at AS "completedAt",admin_user_id AS "adminUserId",worker_id AS "workerId",organization_id AS "organizationId" FROM system_onboarding WHERE singleton=true`);

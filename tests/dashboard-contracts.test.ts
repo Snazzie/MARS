@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ApiError, CursorPage, OverviewDto, RepositorySummary, RunDetail } from "../packages/contracts/src/index.ts";
+import { ApiError, CursorPage, OnboardingStep, OverviewDto, RepositorySummary, RunDetail } from "../packages/contracts/src/index.ts";
 
 const run = { id: "run-1", organizationId: "org-1", repositoryId: "repo-1", repositoryName: "acme/app", runNumber: 4, workflowName: "CI", event: "workflow_dispatch", branch: "main", commitSha: "0123456789abcdef", actorLogin: "octocat", status: "completed" as const, conclusion: "success" as const, queuedAt: "2026-08-11T10:00:00Z", startedAt: "2026-08-11T10:01:00Z", completedAt: "2026-08-11T10:02:00Z", durationMs: 60_000, runtimeBoundary: "Kata VM-backed container" as const };
 
@@ -9,8 +9,11 @@ describe("dashboard contracts", () => {
     const legacyOverview = OverviewDto.safeParse({ organizationId: "org-1", period: "24h", queued: 0, running: 0, completed: 0, failed: 0, queueP50Ms: 0, queueP95Ms: 0, durationP50Ms: 0, durationP95Ms: 0, concurrency: 0, utilization: { vcpu: 0, memory: 0, storage: 0, pods: 0 } });
     expect(legacyOverview.success).toBe(true);
     if (legacyOverview.success) expect(legacyOverview.data.timeseries).toEqual([]);
-    expect(RepositorySummary.safeParse({ id: "repo-1", organizationId: "org-1", name: "app", fullName: "acme/app", visibility: "private", available: true, approved: true, installationId: "inst-1" }).success).toBe(true);
-    expect(RepositorySummary.safeParse({ id: "repo-1", organizationId: "org-1", name: "app", fullName: "acme/app", private: true, installationId: "inst-1", approved: true }).success).toBe(false);
+    const repository = { id: "repo-1", organizationId: "org-1", name: "app", fullName: "acme/app", visibility: "private", available: true, installationId: "inst-1" };
+    expect(RepositorySummary.safeParse(repository).success).toBe(true);
+    expect(RepositorySummary.safeParse({ ...repository, approved: true }).success).toBe(false);
+    expect(RepositorySummary.safeParse({ id: "repo-1", organizationId: "org-1", name: "app", fullName: "acme/app", private: true, installationId: "inst-1" }).success).toBe(false);
+    expect(OnboardingStep.safeParse("resources").success).toBe(false);
     const detail = { ...run, jobs: [], stages: [{ stage: "queued" as const, startedAt: run.queuedAt, completedAt: run.startedAt, durationMs: 60_000 }], actionGraph: { nodes: [], edges: [] } };
     expect(RunDetail.safeParse(detail).success).toBe(true);
     expect(RunDetail.safeParse({ ...detail, stages: [{ ...detail.stages[0], startedAt: "bad" }] }).success).toBe(false);

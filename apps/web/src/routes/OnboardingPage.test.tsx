@@ -53,24 +53,25 @@ test("authenticated non-admin sees authorization terminal state without setup da
   expect(html).not.toContain("Pool");
 });
 
-test("resources step marks completed steps, current resources, locked labels, and saved status", () => {
-  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "resources", worker, organizations: [], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "a".repeat(64) });
-  for (const [label, className] of [["Admin", "is-complete"], ["Worker", "is-complete"], ["GitHub", "is-complete"], ["Resources", "is-current"], ["Trigger labels", "is-locked"]]) {
+test("worker step combines selection, capacity configuration, and four-step progress", () => {
+  const selectedWorker = { ...worker, configurationState: "unconfigured", limits: null };
+  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "worker", worker: selectedWorker, organizations: [], github: { appConfigured: true, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "a".repeat(64) });
+  for (const [label, className] of [["Admin", "is-complete"], ["Worker", "is-current"], ["GitHub", "is-locked"], ["Trigger labels", "is-locked"]]) {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const element = html.match(new RegExp(`<li[^>]*>[^<]*<span>[^<]*</span><strong>${escaped}</strong></li>`))?.[0] ?? "";
     expect(element).toContain(className);
   }
+  expect(html).not.toContain("<strong>Resources</strong>");
   expect(html).toContain("Progress is saved");
   expect(html).toContain("Configure resources");
+  expect(html).toContain("GiB");
 });
 
-test("completed steps render review summaries without mutation controls", () => {
-  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "resources", worker, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 1, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: { id: "inst-1", githubInstallationId: 42, state: "approved", repositorySelection: "selected" }, repositories: [{ id: "repo-1", name: "private", visibility: "private", available: true, approved: true }] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "a".repeat(64) });
+test("current step includes read-only summaries of completed worker and GitHub steps", () => {
+  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "labels", worker, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 1, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: { id: "inst-1", githubInstallationId: 42, state: "approved", repositorySelection: "selected" }, repositories: [{ id: "repo-1", name: "private", fullName: "acme/private", visibility: "private", available: true }] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "a".repeat(64) });
   expect(html).toContain("linux-builder");
   expect(html).toContain("Acme");
   expect(html).toContain("private");
-  expect(html).not.toMatch(/<button\b/);
-  expect(html).not.toMatch(/<form\b/);
 });
 
 test("admin and sign-in states expose the appropriate GitHub action", () => {
@@ -78,10 +79,10 @@ test("admin and sign-in states expose the appropriate GitHub action", () => {
   expect(markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: false, canManage: false, step: "admin" })).toContain("Sign in with GitHub");
 });
 
-test("renders five-step progress with only the server current step enabled", () => {
-  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "resources", worker, organizations: [], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "a".repeat(64) });
-  for (const label of ["Admin", "Worker", "GitHub", "Resources", "Trigger labels"]) expect(html).toContain(label);
-  expect(html).toContain("Configure resources");
+test("renders four-step progress with only the server current step enabled", () => {
+  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "github", worker, organizations: [], github: { appConfigured: true, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "a".repeat(64) });
+  for (const label of ["Admin", "Worker", "GitHub", "Trigger labels"]) expect(html).toContain(label);
+  expect(html).not.toContain("<strong>Resources</strong>");
   expect(html).toContain("Worker enrollment");
   expect(html).toContain("GitHub account");
 });
@@ -97,7 +98,7 @@ test("worker step renders enrollment inline and requires explicit selection", ()
 });
 
 test("completed review does not invent a selected worker", () => {
-  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "resources", worker: null, organizations: [], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [] }, pool: null, defaultImageDigest: null });
+  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "github", worker: null, organizations: [], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [] }, pool: null, defaultImageDigest: null });
   expect(html).not.toContain("Worker: Selected");
 });
 test("worker loading errors preserve choices and expose retry", async () => {
@@ -113,18 +114,19 @@ test("worker loading errors preserve choices and expose retry", async () => {
   expect(html).toContain("Use this worker");
 });
 
-test("exposes selected private and internal repository controls", () => {
-  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "github", worker: null, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 2, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: { id: "inst-1", githubInstallationId: 42, state: "approved", repositorySelection: "selected" }, repositories: [{ id: "repo-1", name: "private", visibility: "private", available: true, approved: false }, { id: "repo-2", name: "public", visibility: "public", available: true, approved: false }] }, pool: null, defaultImageDigest: null });
-  expect(html).toContain("private");
-  expect(html).not.toContain('name="repo-2"');
-  expect(html).toContain("Approve repositories");
+test("uses GitHub installation access without rendering repository approval controls", () => {
+  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "github", worker, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 2, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: { id: "inst-1", githubInstallationId: 42, state: "approved", repositorySelection: "all" }, repositories: [{ id: "repo-1", name: "private", fullName: "acme/private", visibility: "private", available: true }, { id: "repo-2", name: "public", fullName: "acme/public", visibility: "public", available: true }] }, pool: null, defaultImageDigest: null });
+  expect(html).toContain("GitHub installation connected");
+  expect(html).not.toContain('type="checkbox"');
+  expect(html).not.toContain("Approve repositories");
+  expect(html).not.toContain("<form");
 });
 test("repository selection remediation explains the GitHub setting and permits reconnect", () => {
   Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { search: "?github=repository-selection-required" } } });
   try {
     const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "github", worker: null, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 0, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: { id: "inst-1", githubInstallationId: 42, state: "pending", repositorySelection: "all" }, repositories: [] }, pool: null, defaultImageDigest: null });
-    expect(html).toContain("Only select repositories");
-    expect(html).toContain("private or internal repository");
+    expect(html).toContain("No available repositories");
+    expect(html).toContain("installation access");
     expect(html).toContain("Install Whitesmith GitHub App");
   } finally {
     Reflect.deleteProperty(globalThis, "window");
@@ -188,17 +190,20 @@ test("registers an unconfigured GitHub App through the manifest flow", async () 
 
 
 
-test("renders GiB resource inputs, configuring acknowledgement state, and trigger labels", () => {
-  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "labels", worker, organizations: [], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "b".repeat(64) });
-  expect(html).toContain("GiB");
-  expect(html).toContain("Configuring worker");
-  expect(html).toContain("Trigger label");
-  expect(html).toContain("runs-on:");
-  expect(html).toContain("whitesmith-default");
+test("renders capacity configuration in Worker and pool labels in Trigger labels", () => {
+  const configuring = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "worker", worker: { ...worker, configurationState: "unconfigured" }, organizations: [], github: { appConfigured: true, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "b".repeat(64) });
+  expect(configuring).toContain("GiB");
+  expect(configuring).toContain("Configure resources");
+  const labels = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "labels", worker, organizations: [], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "b".repeat(64) });
+  expect(labels).toContain("Trigger label");
+  expect(labels).toContain("runs-on:");
+  expect(labels).toContain("whitesmith-default");
 });
 
-test("complete state summarizes organization, repositories, worker, pool, and dashboard link", () => {
-  const html = markup({ version: 1, onboardingRequired: false, adminCreated: true, authenticated: true, canManage: true, step: "complete", worker, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 1, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [{ id: "repo-1", name: "private", visibility: "private", available: true, approved: true }] }, pool: { id: "pool-1", name: "default", triggerLabel: "whitesmith-default", labels: ["self-hosted", "linux", "x64", "whitesmith-default"] }, defaultImageDigest: "ubuntu@sha256:" + "c".repeat(64) });
+test("complete state summarizes available repositories and offers workflow setup", () => {
+  const html = markup({ version: 1, onboardingRequired: false, adminCreated: true, authenticated: true, canManage: true, step: "complete", worker, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 1, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [{ id: "repo-1", name: "private", fullName: "acme/private", visibility: "private", available: true }] }, pool: { id: "pool-1", name: "default", triggerLabel: "whitesmith-default", labels: ["self-hosted", "linux", "x64", "whitesmith-default"] }, defaultImageDigest: "ubuntu@sha256:" + "c".repeat(64) });
   expect(html).toContain("Onboarding complete");
+  expect(html).toContain("Available repositories: 1");
+  expect(html).toContain("Use Whitesmith runners");
   expect(html).toContain("Open dashboard");
 });
