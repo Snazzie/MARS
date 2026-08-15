@@ -15,6 +15,11 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
     const label = `whitesmith-${platform}`;
     const driver = platform === "linux-x64" ? "kata-k3s" : platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm";
     const name = `default-${platform}`;
-    await db`insert into runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) values (null,null,${name},${platform},${driver},${imageDigest},${JSON.stringify(resources)}::jsonb,${JSON.stringify([label])}::jsonb,${label},true) on conflict (name) where organization_id is null do update set platform=excluded.platform,driver=excluded.driver,image_digest=excluded.image_digest,resources=excluded.resources,labels=excluded.labels,trigger_label=excluded.trigger_label,enabled=true`;
+    const [existing] = await db`select id from runner_pools where organization_id is null and (name=${name} or trigger_label=${label}) limit 1`;
+    if (existing) {
+      await db`update runner_pools set worker_id=null,platform=${platform},driver=${driver},image_digest=${imageDigest},resources=${JSON.stringify(resources)}::jsonb,labels=${JSON.stringify([label])}::jsonb,trigger_label=${label},enabled=true,name=${name} where id=${existing.id}`;
+    } else {
+      await db`insert into runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) values (null,null,${name},${platform},${driver},${imageDigest},${JSON.stringify(resources)}::jsonb,${JSON.stringify([label])}::jsonb,${label},true)`;
+    }
   }
 }
