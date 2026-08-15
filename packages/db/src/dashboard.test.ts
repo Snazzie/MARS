@@ -2,9 +2,12 @@ import { expect, test } from "bun:test";
 import { LogChunk, OverviewDto, RepositorySummary, RunDetail, RunSummary, WorkerDetail } from "@whitesmith/contracts";
 import { getOverview, getOrganizationSettings, getRunDetail, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRepositories, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks, queueRepositoryDiscoveryRecheck } from "./dashboard.ts";
 
-test("overview returns point-in-time pending and running buckets", async () => {
+test("overview counts active leases as running jobs", async () => {
+  const queries: string[] = [];
   const db = (async (strings: TemplateStringsArray) => {
-    if (strings.join(" ").includes("generate_series")) return [{ bucket: new Date("2026-08-12T10:00:00.000Z"), pending: 2, running: 1 }];
+    const query = strings.join(" ");
+    queries.push(query);
+    if (query.includes("generate_series")) return [{ bucket: new Date("2026-08-12T10:00:00.000Z"), pending: 2, running: 1 }];
     return [{
       organizationId: "org-1",
       period: "24h",
@@ -21,7 +24,8 @@ test("overview returns point-in-time pending and running buckets", async () => {
     }];
   }) as never;
   const result = await getOverview(db, "org-1", "24h");
-  expect(OverviewDto.parse(result).timeseries).toEqual([{ bucket: "2026-08-12T10:00:00.000Z", pending: 2, running: 1 }]);
+  expect(queries.some((query) => query.includes("runner_leases"))).toBe(true);
+  expect(OverviewDto.parse(result)).toMatchObject({ running: 2, utilization: { pods: 1 }, timeseries: [{ bucket: "2026-08-12T10:00:00.000Z", pending: 2, running: 1 }] });
 });
 test("overview outcome aggregation guards malformed scalar runner labels", async () => {
   const queries: string[] = [];
