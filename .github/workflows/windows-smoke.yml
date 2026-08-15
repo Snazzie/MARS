@@ -30,7 +30,6 @@ jobs:
           $PSVersionTable
           Get-ComputerInfo -Property WindowsProductName,WindowsVersion,OsArchitecture
           Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,TotalPhysicalMemory
-          Get-VMHost
           test-path package.json
           test-path .github/workflows
       - name: Verify Whitesmith Windows runner
