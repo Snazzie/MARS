@@ -13,3 +13,14 @@ test("cleanup still removes a lease after stop failure", async () => {
   expect(removed).toBe(true);
   expect(events).toEqual(["sandbox_attested", "runner.finished", "lease.failed"]);
 });
+test("reports a nonzero runner exit before cleanup", async () => {
+  const events: Array<{ type: string; exitCode?: unknown }> = [];
+  const driver = { createLease: async () => ({ runtimeInstanceId: "runtime", observed: { vcpu: 1, memoryBytes: 2, storageBytes: 3 }, completion: Promise.resolve(17), state: "sandbox_attested" as const }), stopLease: async () => {}, removeLease: async () => {} };
+  await runLeaseLifecycle(command, driver, bootstrap, event => events.push({ type: event.type, exitCode: event.payload.exitCode }));
+  expect(events).toEqual([
+    { type: "sandbox_attested", exitCode: undefined },
+    { type: "runner.finished", exitCode: 17 },
+    { type: "lease.reaped", exitCode: undefined },
+  ]);
+});
+

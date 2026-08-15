@@ -39,6 +39,13 @@ test("records runner completion and final VM reap monotonically", async () => {
   expect(reaped.calls[0]!.query).toContain("state='reaped'");
   expect(reaped.calls[0]!.query).toContain("cleanup_state='completed'");
 });
+test("maps a nonzero runner exit to a failed terminal lease", async () => {
+  const failed = acceptingDb();
+  expect(await applyWorkerLeaseEvent(failed.db, event("runner.finished", { leaseId, nonce, exitCode: 17 }))).toBe(true);
+  expect(failed.calls[0]!.values).toContain("failed");
+  expect(failed.calls[0]!.values).toContain(JSON.stringify({ exitCode: 17 }));
+});
+
 
 test("marks cleanup failure without erasing the terminal runner result", async () => {
   const { db, calls } = acceptingDb();

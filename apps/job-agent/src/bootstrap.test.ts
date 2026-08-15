@@ -57,6 +57,17 @@ test("container completion exits instead of shutting down a guest", async () => 
   }
   expect(shutdowns).toBe(0);
 });
+test("returns the runner process failure code to the container entrypoint", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whitesmith-job-agent-"));
+  roots.push(root);
+  if (process.platform === "win32") {
+    await writeFile(join(root, "run.cmd"), "@echo off\r\nexit /b 17\r\n");
+  } else {
+    await writeFile(join(root, "run.sh"), "#!/bin/sh\nexit 17\n", { mode: 0o700 });
+  }
+  expect(await consumeGuestJitConfig("synthetic-jit-config", root, process.platform === "win32" ? "windows-x64" : "linux-x64")).toBe(17);
+});
+
 
 test("executes a supplied Windows runner command and passes its JIT config", async () => {
   if (process.platform !== "win32") return;
