@@ -82,20 +82,17 @@ test("macOS job image preparation preserves the original failure during cleanup"
 });
 
 
-test("PowerShell installer enforces native Hyper-V templates", async () => {
+test("PowerShell installer supports VM and container runtime modes", async () => {
   const source = await Bun.file(powershell).text();
+  expect(source).toContain("ValidateSet('vm','container')");
   expect(source).toContain("Ensure-HyperV");
-  expect(source).toContain("Get-WindowsOptionalFeature");
-  expect(source).toContain("Get-VMHost");
-  expect(source).toContain("Assert-Digest");
+  expect(source).toContain("Ensure-ContainerFeatures");
+  expect(source).toContain("Ensure-WindowsContainerRuntime");
+  expect(source).toContain("WHITESMITH_WINDOWS_RUNTIME");
+  expect(source).toContain("WHITESMITH_WINDOWS_CONTAINER_IMAGE");
   expect(source).toContain("WHITESMITH_WINDOWS_TEMPLATE_PATH");
-  expect(source).not.toContain("WHITESMITH_WINDOWS_CONTAINER_IMAGE");
   expect(source).toContain("New-Service -Name WhitesmithWorker");
   expect(source).toContain("-StartupType Automatic");
-});
-test("Windows installer skips optional Linux validation when Linux templates are unset", async () => {
-  const source = await Bun.file(powershell).text();
-  expect(source).toContain("if ($LinuxTemplatePath -and $LinuxTemplateDigest)");
 });
 test("Windows installer fails when service registration fails", async () => {
   const source = await Bun.file(powershell).text();
@@ -149,16 +146,12 @@ test("Windows installer restricts only the join credential, not the template roo
   expect(source).toContain("icacls.exe $joinCodePath /inheritance:r");
   expect(source).toContain("Failed to secure worker join credential");
 });
-test("Hyper-V worker preparation is not Docker-based", async () => {
+test("Windows installer supports Docker container mode alongside VM mode", async () => {
   const source = await Bun.file(powershell).text();
-  expect(source).not.toContain("docker");
-  expect(source).not.toContain("Windows Containers");
-});
-test("Windows template preparation disables automatic checkpoints before boot", async () => {
-  const source = await Bun.file(prepareWindowsTemplate).text();
-  const disableCheckpoints = source.indexOf("Set-VM -VMName $name -AutomaticCheckpointsEnabled $false");
-  expect(disableCheckpoints).toBeGreaterThan(-1);
-  expect(disableCheckpoints).toBeLessThan(source.indexOf("Start-VM -Name $name"));
+  expect(source).toContain("Ensure-WindowsContainerRuntime");
+  expect(source).toContain("--isolation=hyperv");
+  expect(source).toContain("WHITESMITH_WINDOWS_RUNTIME");
+  expect(source).toContain("WHITESMITH_WINDOWS_TEMPLATE_PATH");
 });
 test("Windows guest service runs as a startup-available system service account task", async () => {
   const source = await Bun.file(prepareWindowsTemplate).text();

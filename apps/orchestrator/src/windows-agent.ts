@@ -3,7 +3,9 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { WorkerBootstrapRequest, WorkerCommand, WorkerConfigurePayload, WorkerConfiguration, WorkerEvent, type WorkerCapacityData, type WorkerDoctorData, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
+import { createHyperVRuntime, HyperVDriver } from "./hyperv.ts";
 import { WindowsContainerDriver } from "./windows-container.ts";
+import type { RuntimeDriver } from "./runtime.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
@@ -19,14 +21,27 @@ const save = async (identity: Identity) => { const path = identityPath(); await 
 const load = async () => { try { return JSON.parse(await readFile(identityPath(), "utf8")) as Identity; } catch { return null; } };
 const auth = (nonce: string, identity: Identity) => ({ type: "authenticate", workerId: identity.workerId, encryptionPublicKey: identity.encryptionPublicKey, signature: signMessage(null, Buffer.from(`${nonce}\n${identity.workerId}\n${identity.encryptionPublicKey}`), identity.privateKey).toString("base64url") });
 async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> { const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), platform: "windows-x64", publicKey: identity.publicKey, encryptionPublicKey: identity.encryptionPublicKey, vmUuid: crypto.randomUUID(), machineUuid: await machineUuid(), doctor: doctor(), capacity: await capacity() }); const response = await fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); if (!response.ok) throw new Error(`worker join failed: ${response.status}`); const joined = await response.json() as { workerId: string }; const result = { ...identity, workerId: joined.workerId }; await save(result); return result; }
+type WindowsRuntimeDriver = Pick<RuntimeDriver, "reserveCapacity" | "createLease" | "stopLease" | "removeLease"> & { reconcileOrphans?: () => Promise<void> };
 
 export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise<never> {
   const controlPlane = new URL(baseUrl);
   const identity = (await load()) ?? await enroll(controlPlane, keys());
-  const image = Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE;
-  if (!image) throw new Error("WHITESMITH_WINDOWS_CONTAINER_IMAGE is required");
-  const driver = new WindowsContainerDriver({ image, prefix: Bun.env.WHITESMITH_WINDOWS_CONTAINER_PREFIX ?? "whitesmith", bootstrapRoot: Bun.env.ProgramData ? `${Bun.env.ProgramData}\\Whitesmith\\leases` : "C:\\ProgramData\\Whitesmith\\leases", limits, readyTimeoutMs: Number(Bun.env.WHITESMITH_WINDOWS_CONTAINER_READY_TIMEOUT_MS ?? 15_000), jobTimeoutMs: Number(Bun.env.WHITESMITH_WINDOWS_CONTAINER_JOB_TIMEOUT_MS ?? 900_000) });
+  const mode = Bun.env.WHITESMITH_WINDOWS_RUNTIME ?? "vm";
+  let driver: WindowsRuntimeDriver;
+  if (mode === "container") {
+    const image = Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE;
+    if (!image) throw new Error("WHITESMITH_WINDOWS_CONTAINER_IMAGE is required in container mode");
+    driver = new WindowsContainerDriver({ image, prefix: Bun.env.WHITESMITH_WINDOWS_CONTAINER_PREFIX ?? "whitesmith", bootstrapRoot: Bun.env.ProgramData ? `${Bun.env.ProgramData}\\Whitesmith\\leases` : "C:\\ProgramData\\Whitesmith\\leases", limits, readyTimeoutMs: Number(Bun.env.WHITESMITH_WINDOWS_CONTAINER_READY_TIMEOUT_MS ?? 15_000), jobTimeoutMs: Number(Bun.env.WHITESMITH_WINDOWS_CONTAINER_JOB_TIMEOUT_MS ?? 900_000) });
+  } else if (mode === "vm") {
+    const templatePath = Bun.env.WHITESMITH_WINDOWS_TEMPLATE_PATH;
+    const templateDigest = Bun.env.WHITESMITH_WINDOWS_TEMPLATE_DIGEST;
+    if (!templatePath || !templateDigest) throw new Error("Windows Hyper-V template path and digest are required in VM mode");
+    driver = new HyperVDriver(createHyperVRuntime(), templatePath, templateDigest, Bun.env.WHITESMITH_HYPERV_VM_PREFIX ?? "whitesmith", limits);
+  } else {
+    throw new Error(`Unsupported Windows runtime: ${mode}`);
+  }
   await driver.reserveCapacity({ vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 });
+  await driver.reconcileOrphans?.();
   const loop = async (signal?: AbortSignal): Promise<never> => {
     for (;;) {
       if (signal?.aborted) throw new Error("worker stopped");
@@ -48,11 +63,13 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
             const observed = WorkerConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms });
             return ws.send(JSON.stringify(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed })));
           }
-          if (command.type === "windows-container.create_lease") {
+          if (command.type === "windows-container.create_lease" || command.type === "hyperv.create_lease") {
+            const expectedType = mode === "container" ? "windows-container.create_lease" : "hyperv.create_lease";
+            if (command.type !== expectedType) throw new Error(`Windows runtime mode ${mode} rejects ${command.type}`);
             const cipher = (command.payload as { bootstrapCiphertext?: Parameters<typeof openLeaseBootstrap>[0] }).bootstrapCiphertext;
             if (!cipher || !command.leaseId) throw new Error("lease bootstrap payload invalid");
             const bootstrap: LeaseBootstrapEnvelope = openLeaseBootstrap(cipher, identity.encryptionPrivateKey);
-            if (bootstrap.leaseId !== command.leaseId || bootstrap.guestPlatform !== "windows-x64") throw new Error("Windows container lease bootstrap mismatch");
+            if (bootstrap.leaseId !== command.leaseId || (mode === "container" ? bootstrap.guestPlatform !== "windows-x64" : !["windows-x64", "linux-x64"].includes(bootstrap.guestPlatform))) throw new Error("Windows lease bootstrap mismatch");
             ws.send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
             void runLeaseLifecycle(command, driver, bootstrap, workerEvent => ws.send(JSON.stringify(workerEvent)));
           }

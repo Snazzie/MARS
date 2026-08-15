@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, createPublicKey, createPrivateKey, di
 import { LeaseBootstrapEnvelope } from "@whitesmith/contracts";
 
 type Ciphertext = { version: 1; algorithm: "x25519-aes-256-gcm"; ephemeralPublicKey: string; iv: string; tag: string; ciphertext: string };
-export type LeaseDispatchInput = LeaseBootstrapEnvelope & { driver: "kata-k3s" | "windows-hyperv-container" | "tart-vm"; workerId: string; workerEncryptionPublicKey: string };
+export type LeaseDispatchInput = LeaseBootstrapEnvelope & { driver: "kata-k3s" | "windows-hyperv" | "windows-hyperv-container" | "tart-vm"; workerId: string; workerEncryptionPublicKey: string };
 type Dispatcher = { dispatch(input: { workerId: string; leaseId: string; type: string; payload: Record<string, unknown> }): Promise<unknown> };
 
 function derive(shared: Buffer): Buffer { return shared.subarray(0, 32); }
@@ -35,6 +35,7 @@ export async function dispatchLeaseBootstrap(dispatcher: Dispatcher, input: Leas
   const sealed = sealLeaseBootstrap(envelope, workerEncryptionPublicKey);
   const commandByDriver: Record<LeaseDispatchInput["driver"], string> = {
     "kata-k3s": "kata.create_lease",
+    "windows-hyperv": "hyperv.create_lease",
     "windows-hyperv-container": "windows-container.create_lease",
     "tart-vm": "tart.create_lease",
   };
