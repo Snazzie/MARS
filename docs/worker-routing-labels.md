@@ -29,7 +29,7 @@ This requests a job with 3 vCPUs and 6 GiB of memory from the `whitesmith-linux-
 4. The worker's configured per-job limits are the final ceiling.
 5. The original labels are retained when the just-in-time GitHub runner is registered.
 
-A valid label may exceed the pool's default CPU or memory value when the worker's configured limit allows it. Per-job limits are independent ceilings; the scheduler does not reserve the full per-job limit for every concurrency slot. It admits each queued job only when the resolved request fits currently available resources. Storage and concurrency continue to use the existing pool and worker policies; there is no disk resource-label syntax.
+A valid label may exceed the pool's default CPU or memory value when the worker's configured limit allows it. The worker appliance capacity is the aggregate maximum CPU, memory, and storage Whitesmith may use at one time. Per-job limits are independent ceilings; the scheduler does not reserve the full per-job limit for every concurrency slot. It admits each queued job only when the resolved request fits the worker's remaining capacity. Storage and concurrency continue to use the existing pool and worker policies; there is no disk resource-label syntax.
 
 ## Invalid labels
 

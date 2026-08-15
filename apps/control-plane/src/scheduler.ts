@@ -55,7 +55,7 @@ export function fits(candidate: Candidate): boolean {
   const limits = WorkerLimits.safeParse(candidate.worker.limits);
   const resources = resolveProvisionResources(candidate.pool.resources, provision);
   if (!limits.success || !resources) return false;
-  return resources.vcpu <= limits.data.maxVcpuPerPod && resources.memoryBytes <= limits.data.maxMemoryBytesPerPod && resources.storageBytes <= limits.data.maxStorageBytesPerPod && resources.concurrency <= limits.data.maxConcurrentPods;
+  return resources.vcpu <= limits.data.maxVcpuPerPod && resources.memoryBytes <= limits.data.maxMemoryBytesPerPod && resources.storageBytes <= limits.data.maxStorageBytesPerPod;
 }
 
 export function reason(candidate: Candidate): string {
@@ -69,5 +69,5 @@ export function reason(candidate: Candidate): string {
   if (candidate.pool.active >= candidate.pool.concurrency) return "pool_concurrency";
   const resources = resolveProvisionResources(candidate.pool.resources, provision);
   const limits = WorkerLimits.safeParse(candidate.worker.limits);
-  return resources && limits.success && resources.vcpu <= limits.data.maxVcpuPerPod && resources.memoryBytes <= limits.data.maxMemoryBytesPerPod && resources.storageBytes <= limits.data.maxStorageBytesPerPod && resources.concurrency <= limits.data.maxConcurrentPods ? "admissible" : "resource_ceiling";
+  return resources && limits.success && resources.vcpu <= limits.data.maxVcpuPerPod && resources.memoryBytes <= limits.data.maxMemoryBytesPerPod && resources.storageBytes <= limits.data.maxStorageBytesPerPod ? "admissible" : "resource_ceiling";
 }
