@@ -4,9 +4,7 @@ import type { GuestPlatform } from "@whitesmith/contracts";
 type PoolDefaults = Partial<Record<GuestPlatform, string | undefined>>;
 
 export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Promise<void> {
-  const [onboarding] = await db`select worker_id as "workerId" from system_onboarding where singleton=true and completed_at is null`;
-  if (!onboarding?.workerId) return;
-  const [worker] = await db`select platform, guest_platforms as "guestPlatforms", limits from workers where id=${onboarding.workerId} and admission_state='adopted' and configuration_state='ready'`;
+  const [worker] = await db`select platform, guest_platforms as "guestPlatforms", limits from workers where admission_state='adopted' and configuration_state='ready' order by created_at asc limit 1`;
   if (!worker || !worker.limits) return;
   const guestPlatforms = (Array.isArray(worker.guestPlatforms) ? worker.guestPlatforms : [worker.platform]) as GuestPlatform[];
   const limits = typeof worker.limits === "string" ? JSON.parse(worker.limits) : worker.limits as { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
