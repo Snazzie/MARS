@@ -29,6 +29,9 @@ describe("numeric provision labels", () => {
   test("resolves mixed-case CPU and GiB labels and strips them from routing", () => {
     expect(parseProvisionLabels(["whitesmith-linux-x64", "2VCPU", "6G"])).toEqual({ routingLabels: ["whitesmith-linux-x64"], vcpu: 2, memoryBytes: 6 * 1024 ** 3 });
   });
+  test("resolves a 3VCPU request exactly", () => {
+    expect(parseProvisionLabels(["whitesmith-linux-x64", "3VCPU"])).toEqual({ routingLabels: ["whitesmith-linux-x64"], vcpu: 3 });
+  });
   test("falls back to pool dimensions when absent", () => {
     expect(resolveProvisionResources({ vcpu: 4, memoryBytes: 8, storageBytes: 30, concurrency: 3 }, { routingLabels: [] })).toEqual({ vcpu: 4, memoryBytes: 8, storageBytes: 30, concurrency: 3 });
   });

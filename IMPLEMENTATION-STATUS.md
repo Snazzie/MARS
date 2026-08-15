@@ -33,6 +33,15 @@ The repository is a working baseline, not the full approved platform.
 - Add pools, repositories, jobs, logs, images, settings, drain/remove/key rotation.
 - Add charts, lifecycle details, pagination, tenant isolation, browser WebSocket invalidation, and error/security states.
 
+## Worker routing label pattern
+
+Worker pool trigger labels remain ordinary routing labels. Optional per-job resource labels use positive decimal integers with these case-insensitive suffixes:
+
+- `Nvcpu` sets the exact vCPU request, for example `2vcpu` or `3VCPU`.
+- `Ng` sets the exact memory request in GiB, for example `6g` = `6442450944` bytes.
+
+The parser removes valid resource labels before pool-label matching, then carries the original labels into JIT runner registration. CPU and memory dimensions omitted from the job use the pool defaults. Storage and concurrency retain their existing pool behavior. Duplicate dimensions, zero, non-canonical values such as `01vcpu`, overflow, or malformed resource candidates are rejected; unrelated labels such as `6gb` still require a matching pool label. Worker per-job limits are the final ceiling, including when a valid CPU or memory label exceeds the pool default.
+
 ## Verification/release
 
 - Add end-to-end PostgreSQL/GitHub/Kata/libvirt/Hyper-V/Tart fixtures.
