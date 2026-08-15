@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 jobs:
   smoke:
-    runs-on: whitesmith-default
+    runs-on: whitesmith-windows-x64
     timeout-minutes: 15
     steps:
       - name: Check out project
