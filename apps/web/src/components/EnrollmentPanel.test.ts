@@ -36,6 +36,7 @@ test("builds Windows installer commands for the selected runtime", () => {
   const vm = buildInstallerCommands("https://runner.example.com", "windows-x64", "one-use-code", "vm");
   expect(vm[0]?.command).toContain("audience=windows-x64&runtime=vm");
   expect(vm[0]?.command).toContain("-WindowsRuntime 'vm'");
+  expect(commands[0]?.command).toContain("-AllowLocalContainerImage");
 });
 test("accepts adapter IP and custom HTTP URLs", () => { expect(buildInstallerCommand("http://192.168.64.1:3000/api/workers/installer?audience=linux-x64", "linux-x64")).toContain("--proto '=http'"); expect(normalizeControlPlaneUrls(["http://192.168.64.1:3000", "https://runner.example.com/", "bad", "http://192.168.64.1:3000"])).toEqual(["http://192.168.64.1:3000", "https://runner.example.com"]); });
 test("adds the insecure opt-in to copied Windows commands over HTTP", () => { const command = buildInstallerCommand("http://localhost:3000/api/workers/installer?audience=windows-x64", "windows-x64", "Abc_-9"); expect(command).toContain("-AllowInsecureHttp"); });

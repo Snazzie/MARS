@@ -9,7 +9,8 @@ param(
   [string]$WindowsContainerPrefix = 'whitesmith',
   [int]$WindowsContainerReadyTimeoutMs = 15000,
   [int]$WindowsContainerJobTimeoutMs = 900000,
-  [switch]$AllowInsecureHttp
+  [switch]$AllowInsecureHttp,
+  [switch]$AllowLocalContainerImage
 )
 $ErrorActionPreference = 'Stop'
 function Require-Administrator {
@@ -17,7 +18,9 @@ function Require-Administrator {
   if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Administrator privileges are required.' }
 }
 function Assert-ImageDigest([string]$Image) {
-  if ($Image -notmatch '^[^@\s]+@sha256:[0-9a-f]{64}$') { throw "Windows container image must be a full lowercase digest reference: $Image" }
+  if ($Image -match '^[^@\s]+@sha256:[0-9a-f]{64}$') { return }
+  if ($AllowLocalContainerImage -and $Image -eq 'whitesmith/windows-job:local' -and (docker image inspect $Image 2>$null)) { return }
+  throw "Windows container image must be a full lowercase digest reference: $Image"
 }
 function Assert-Digest([string]$Digest) {
   if ($Digest -notmatch '^sha256:[0-9a-fA-F]{64}$') { throw "Template digest must be sha256:hex: $Digest" }
