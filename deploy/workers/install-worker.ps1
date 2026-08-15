@@ -49,7 +49,7 @@ function Ensure-WindowsContainerRuntime([string]$Image, [string]$Prefix) {
   }
   $name = "$Prefix-install-probe-$([guid]::NewGuid().ToString('N'))"
   try {
-    docker create --name $name --isolation=hyperv --label whitesmith.managed=true --label "whitesmith.lease-id=$([guid]::NewGuid())" $Image cmd /c exit 0 | Out-Null
+    docker create --name $name --entrypoint cmd.exe --isolation=hyperv --label whitesmith.managed=true --label "whitesmith.lease-id=$([guid]::NewGuid())" $Image /c exit 0 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to create the Hyper-V container probe.' }
     docker start $name | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to start the Hyper-V container probe.' }
