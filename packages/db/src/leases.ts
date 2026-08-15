@@ -17,7 +17,7 @@ export async function reserveRoutingSlot(sql: Sql<{}>, input: LeaseReservationIn
   const id = randomUUID();
   const expiresAt = new Date(Date.now() + input.ttlMs).toISOString();
   const rows = await sql.begin(async (tx) => {
-    const eligible = await tx`SELECT p.id, p.resources, p.concurrency AS "poolConcurrency", w.id AS "workerId", w.limits, w.doctor
+    const eligible = await tx`SELECT p.id, p.resources, w.id AS "workerId", w.limits, w.doctor
       FROM runner_pools p JOIN workers w ON w.id=${input.workerId}
       WHERE p.id=${input.poolId}
         AND p.enabled=true AND w.admission_state='adopted' AND w.connection_state='online'
@@ -28,7 +28,7 @@ export async function reserveRoutingSlot(sql: Sql<{}>, input: LeaseReservationIn
     if (!poolResources || input.requested.storageBytes > Number(poolResources.storageBytes) || input.requested.concurrency > Number(poolResources.concurrency)) throw new Error("pool_resource_ceiling_exceeded");
     if (!limits || input.requested.vcpu > Number(limits.maxVcpuPerPod) || input.requested.memoryBytes > Number(limits.maxMemoryBytesPerPod) || input.requested.storageBytes > Number(limits.maxStorageBytesPerPod)) throw new Error("worker_resource_ceiling_exceeded");
     const active = await tx`SELECT count(*)::int AS count FROM runner_leases WHERE pool_id=${input.poolId} AND worker_id=${input.workerId} AND state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')`;
-    if (Number(active[0]?.count ?? 0) >= Number(eligible[0].poolConcurrency)) throw new Error("pool_capacity_exhausted");
+    if (Number(active[0]?.count ?? 0) >= Number(poolResources.concurrency)) throw new Error("pool_capacity_exhausted");
     const workerActive = await tx`SELECT count(*)::int AS count, COALESCE(SUM((requested->>'vcpu')::bigint),0)::bigint AS vcpu, COALESCE(SUM((requested->>'memoryBytes')::bigint),0)::bigint AS "memoryBytes", COALESCE(SUM((requested->>'storageBytes')::bigint),0)::bigint AS "storageBytes" FROM runner_leases WHERE worker_id=${input.workerId} AND state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')`;
     const doctor = typeof eligible[0].doctor === "string" ? JSON.parse(eligible[0].doctor) : eligible[0].doctor;
     const capacity = doctor?.capacity ?? {};
