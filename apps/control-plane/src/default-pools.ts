@@ -7,10 +7,10 @@ const GIB = 1024 ** 3;
 
 export function poolResourcesForLimits(limits: WorkerLimits) {
   return {
-    vcpu: Math.min(2, limits.maxVcpuPerPod),
-    memoryBytes: limits.maxMemoryBytesPerPod,
-    storageBytes: Math.min(10 * GIB, limits.maxStorageBytesPerPod),
-    concurrency: Math.min(1, limits.maxConcurrentPods),
+    vcpu: Math.min(4, limits.maxVcpuPerPod),
+    memoryBytes: Math.min(6 * GIB, limits.maxMemoryBytesPerPod),
+    storageBytes: Math.min(30 * GIB, limits.maxStorageBytesPerPod),
+    concurrency: Math.min(3, limits.maxConcurrentPods),
   };
 }
 

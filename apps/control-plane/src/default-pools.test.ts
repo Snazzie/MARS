@@ -3,12 +3,12 @@ import { poolResourcesForLimits } from "./default-pools.ts";
 
 const GIB = 1024 ** 3;
 
-test("allocates one useful sandbox without exhausting host concurrency", () => {
-  expect(poolResourcesForLimits({ maxVcpuPerPod: 5, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 30 * GIB, maxConcurrentPods: 3 })).toEqual({
-    vcpu: 2,
-    memoryBytes: 8 * GIB,
-    storageBytes: 10 * GIB,
-    concurrency: 1,
+test("allocates three useful sandboxes within the acknowledged worker ceiling", () => {
+  expect(poolResourcesForLimits({ maxVcpuPerPod: 5, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 3 })).toEqual({
+    vcpu: 4,
+    memoryBytes: 6 * GIB,
+    storageBytes: 30 * GIB,
+    concurrency: 3,
   });
 });
 
