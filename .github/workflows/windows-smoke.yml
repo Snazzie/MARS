@@ -33,3 +33,25 @@ jobs:
           Get-VMHost
           test-path package.json
           test-path .github/workflows
+      - name: Verify Whitesmith Windows runner
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_OS -ne 'Windows') { throw "Expected Windows runner, got $env:RUNNER_OS" }
+          if ($env:RUNNER_ARCH -ne 'X64') { throw "Expected x64 runner, got $env:RUNNER_ARCH" }
+          if ($env:RUNNER_NAME -notmatch '^whitesmith-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') {
+            throw "Unexpected Whitesmith runner name: $env:RUNNER_NAME"
+          }
+          Write-Host "Picked up by $env:RUNNER_NAME"
+      - name: Execute Windows smoke workload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $result = [ordered]@{
+            runner = $env:RUNNER_NAME
+            os = $env:RUNNER_OS
+            arch = $env:RUNNER_ARCH
+            powershell = $PSVersionTable.PSVersion.ToString()
+            workspace = (Get-Location).Path
+          }
+          $result | ConvertTo-Json -Compress
+          if (-not (Test-Path -LiteralPath 'package.json')) { throw 'Workspace was not mounted on the Windows runner' }
