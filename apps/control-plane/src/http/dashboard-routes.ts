@@ -103,7 +103,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!(Array.isArray(w.guestPlatforms) ? w.guestPlatforms : [w.platform]).includes(body.guestPlatform)) return error(c, 422, "worker_guest_platform_unsupported", "Worker does not support the requested guest platform");
     const driver = w.platform === "linux-x64" ? "kata-k3s" : w.platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm";
     const labels = [body.triggerLabel];
-    const [duplicate] = await deps.db`SELECT id FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel})`;
+    const [duplicate] = await deps.db`SELECT id,name,trigger_label AS "triggerLabel" FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel})`;
     if (body.poolId) {
       const [existing] = await deps.db`SELECT id FROM runner_pools WHERE id=${body.poolId} AND organization_id IS NULL`;
       if (!existing) return error(c, 404, "not_found", "Resource not found");
@@ -112,7 +112,12 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
       await invalidateDashboard(deps.db, org, ["pools", "onboarding"]);
       return c.json({ id: body.poolId, labels });
     }
-    if (duplicate) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
+    if (duplicate) {
+      if (duplicate.name !== body.name || duplicate.triggerLabel !== body.triggerLabel) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
+      await completeOnboardingIfReady(deps.db);
+      await invalidateDashboard(deps.db, org, ["pools", "onboarding"]);
+      return c.json({ id: String(duplicate.id), labels });
+    }
     const key = c.req.header("idempotency-key")!;
     if (!(await dashboardMutation(deps.db, org, key))) return c.json({ ok: true });
     const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${body.guestPlatform},${driver},${body.imageDigest},${JSON.stringify(body.resources)}::jsonb,${JSON.stringify(labels)}::jsonb,${body.triggerLabel},true) RETURNING id`;
