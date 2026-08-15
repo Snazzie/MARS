@@ -17,9 +17,10 @@ export function OnboardingPage() {
   const detail = useQuery({ queryKey: ["onboarding"], queryFn: getOnboardingDetail, enabled: Boolean(s?.authenticated && s.canManage), refetchInterval: s?.step === "worker" ? 2000 : false });
   const [error, setError] = useState<string | null>(null);
   const [reviewIndex, setReviewIndex] = useState<number | null>(null);
+  const [editingStep, setEditingStep] = useState<number | null>(null);
   const refresh = () => { void client.invalidateQueries({ queryKey: ["onboarding"] }); void client.invalidateQueries({ queryKey: ["onboarding-status"] }); };
-  const select = useMutation({ mutationFn: selectOnboardingWorker, onSuccess: () => { setReviewIndex(null); refresh(); }, onError: (e) => setError(e instanceof Error ? e.message : "Worker selection failed") });
-  const pool = useMutation({ mutationFn: createOnboardingPool, onSuccess: () => { setReviewIndex(null); refresh(); }, onError: (e) => setError(e instanceof Error ? e.message : "Pool creation failed") });
+  const select = useMutation({ mutationFn: selectOnboardingWorker, onSuccess: () => { setReviewIndex(null); setEditingStep(null); refresh(); }, onError: (e) => setError(e instanceof Error ? e.message : "Worker selection failed") });
+  const pool = useMutation({ mutationFn: createOnboardingPool, onSuccess: () => { setReviewIndex(null); setEditingStep(null); refresh(); }, onError: (e) => setError(e instanceof Error ? e.message : "Pool creation failed") });
   if (status.isLoading) return <main className="onboarding"><p>Loading onboarding…</p></main>;
   if (status.error || !s) return <main className="onboarding"><h1>Onboarding unavailable</h1><p role="alert">{status.error instanceof Error ? status.error.message : "Could not load onboarding."}</p><button onClick={() => void status.refetch()}>Retry</button></main>;
   if (!s.authenticated) return <SignIn firstAdmin={!s.adminCreated} />;
@@ -29,7 +30,7 @@ export function OnboardingPage() {
   if (!d) return <main className="onboarding"><p>Loading setup details…</p></main>;
   if (d.step === "complete") return <Complete detail={d} />;
   const currentIndex = steps.findIndex(([id]) => id === d.step);
-  return <main className="onboarding"><header><p className="eyebrow">FIRST-RUN SETUP</p><h1>Get Whitesmith ready</h1><p>Complete each verified step. Progress is saved on the control plane.</p></header>{error && <p role="alert" className="form-error">{error} <button onClick={() => setError(null)}>Dismiss</button></p>}<div className="onboarding-layout"><nav aria-label="Onboarding steps"><ol className="onboarding-steps">{steps.map(([id, label], index) => <li key={id} role={index < currentIndex ? "button" : undefined} tabIndex={index <= currentIndex ? 0 : -1} onClick={() => index < currentIndex && setReviewIndex(index)} onKeyDown={(e) => { if (index < currentIndex && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setReviewIndex(index); } }} className={index === currentIndex ? "is-current" : index < currentIndex ? "is-complete" : "is-locked"}><span>{index + 1}</span><strong>{label}</strong></li>)}</ol></nav><section className="onboarding-task" aria-live="polite"><h2>{reviewIndex !== null ? `${steps[reviewIndex]?.[1]} review` : steps[currentIndex]?.[1]}</h2>{reviewIndex !== null ? <ReviewSummary detail={d} through={reviewIndex + 1} onClose={() => setReviewIndex(null)} /> : <>{currentIndex > 0 && <ReviewSummary detail={d} through={currentIndex} />}{d.step === "worker" && <WorkerSetupStep detail={d} onSelect={(id) => select.mutate({ workerId: id })} onDone={refresh} />}{d.step === "github" && <GithubStep detail={d} />}{d.step === "labels" && <LabelsStep detail={d} onCreate={(input) => pool.mutate({ ...input, organizationId: d.github.organizationId ?? "" })} />}</>}</section></div></main>;
+  return <main className="onboarding"><header><p className="eyebrow">FIRST-RUN SETUP</p><h1>Get Whitesmith ready</h1><p>Complete each verified step. Progress is saved on the control plane.</p></header>{error && <p role="alert" className="form-error">{error} <button onClick={() => setError(null)}>Dismiss</button></p>}<div className="onboarding-layout"><nav aria-label="Onboarding steps"><ol className="onboarding-steps">{steps.map(([id, label], index) => <li key={id} className={index === currentIndex ? "is-current" : index < currentIndex ? "is-complete" : "is-locked"}><span>{index + 1}</span>{index < currentIndex ? <button type="button" aria-label={`Edit ${label} step`} onClick={() => setEditingStep(index)}>{label}</button> : <strong>{label}</strong>}</li>)}</ol></nav><section className="onboarding-task" aria-live="polite"><h2>{steps[currentIndex]?.[1]}</h2>{currentIndex > 0 && <ReviewSummary detail={d} through={currentIndex} />}{d.step === "worker" && <WorkerSetupStep detail={d} onSelect={(id) => select.mutate({ workerId: id })} onDone={refresh} />}{d.step === "github" && <GithubStep detail={d} />}{d.step === "labels" && <LabelsStep detail={d} onCreate={(input) => pool.mutate({ ...input, organizationId: d.github.organizationId ?? "" })} />}</section>{editingStep !== null && <dialog open className="onboarding-edit-dialog" aria-labelledby="onboarding-edit-title"><h2 id="onboarding-edit-title">Edit {steps[editingStep]?.[1]} step</h2>{editingStep === 1 && <WorkerSetupStep detail={d} edit onSelect={(id) => select.mutate({ workerId: id })} onDone={() => { setEditingStep(null); refresh(); }} />}{editingStep === 2 && <GithubStep detail={d} edit />}{editingStep === 3 && <LabelsStep detail={d} edit onCreate={(input) => pool.mutate({ ...input, organizationId: d.github.organizationId ?? "" })} />}{editingStep === 0 && <ReviewSummary detail={d} through={1} /> }<button type="button" onClick={() => setEditingStep(null)}>Cancel</button></dialog>}</div></main>;
 }
 
 function SignIn({ firstAdmin }: { firstAdmin: boolean }) { return <main className="onboarding"><section className="onboarding-card onboarding-sign-in"><p className="eyebrow">{firstAdmin ? "WELCOME TO WHITESMITH" : "WELCOME BACK"}</p><h1>{firstAdmin ? "Create your administrator account" : "Sign in to Whitesmith"}</h1><p>Use GitHub to verify your identity and securely manage this control plane.</p><a className="button" href="/api/auth/github">{firstAdmin ? "Continue with GitHub" : "Continue with GitHub"}</a><p>{firstAdmin ? "Create administrator with GitHub" : "Sign in with GitHub"}</p><p><strong>GitHub identity</strong><br />Only your GitHub identity is used for administrator access.</p><p className="security-note">Security note: setup data is shown only after your session is authorized.</p></section></main>; }
@@ -56,11 +57,11 @@ function submitGithubManifest(launch: { action: string; manifest: string }): voi
   document.body.append(form);
   form.submit();
 }
-function GithubStep({ detail }: { detail: OnboardingDetail }) {
+function GithubStep({ detail, edit = false }: { detail: OnboardingDetail; edit?: boolean }) {
   const [organizationId, setOrganizationId] = useState(detail.github.organizationId ?? "");
   const [connectError, setConnectError] = useState<string | null>(null);
   const availableRepositories = detail.github.repositories.filter((repository) => repository.available);
-  const hasUsableInstallation = Boolean(detail.github.installation && availableRepositories.length > 0);
+  const hasUsableInstallation = !edit && Boolean(detail.github.installation && availableRepositories.length > 0);
   const selectionRemediation = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("github") === "repository-selection-required";
   const connect = async () => {
     if (!organizationId) return;
@@ -94,24 +95,24 @@ function GithubStep({ detail }: { detail: OnboardingDetail }) {
     {hasUsableInstallation && <p role="status">GitHub installation connected. Whitesmith can schedule jobs from {availableRepositories.length} available {availableRepositories.length === 1 ? "repository" : "repositories"}.</p>}
   </div>;
 }
-function WorkerSetupStep({ detail, onSelect, onDone }: { detail: OnboardingDetail; onSelect: (id: string) => void; onDone: () => void }) {
+function WorkerSetupStep({ detail, onSelect, onDone, edit = false }: { detail: OnboardingDetail; onSelect: (id: string) => void; onDone: () => void; edit?: boolean }) {
   if (!detail.worker) return <WorkerStep onSelect={onSelect} />;
-  return <div><h3>Worker enrollment</h3><p>Selected worker: {detail.worker.name ?? detail.worker.vmUuid}</p><ResourceStep detail={detail} onDone={onDone} /></div>;
+  return <div><h3>Worker enrollment</h3><p>Selected worker: {detail.worker.name ?? detail.worker.vmUuid}</p><ResourceStep detail={detail} onDone={onDone} edit={edit} /></div>;
 }
-function ResourceStep({ detail, onDone }: { detail: OnboardingDetail; onDone: () => void }) { const w = detail.worker; if (!w) return <p>Select a worker first.</p>; return <><h3>Configure resources</h3>{w.configurationState === "ready" ? <p role="status">Configuring worker complete. Waiting for server progress…</p> : <WorkerConfigurationForm worker={w} onConfigured={onDone} />}</>; }
+function ResourceStep({ detail, onDone, edit = false }: { detail: OnboardingDetail; onDone: () => void; edit?: boolean }) { const w = detail.worker; if (!w) return <p>Select a worker first.</p>; return <><h3>Configure resources</h3>{w.configurationState === "ready" && !edit ? <p role="status">Configuring worker complete. Waiting for server progress…</p> : <WorkerConfigurationForm worker={w} onConfigured={onDone} />}</>; }
 const canonicalRunnerLabel = (platform: "linux-x64" | "windows-x64" | "macos-arm64") => `whitesmith-${platform}`;
-function LabelsStep({ detail, onCreate }: { detail: OnboardingDetail; onCreate: (input: CreatePoolRequest) => void }) {
+function LabelsStep({ detail, onCreate, edit = false }: { detail: OnboardingDetail; onCreate: (input: CreatePoolRequest) => void; edit?: boolean }) {
   const worker = detail.worker;
   const guestPlatforms = worker?.guestPlatforms ?? (worker ? [worker.platform] : []);
-  const [guestPlatform, setGuestPlatform] = useState<"linux-x64" | "windows-x64" | "macos-arm64" | null>(null);
+  const [guestPlatform, setGuestPlatform] = useState<"linux-x64" | "windows-x64" | "macos-arm64" | null>(detail.pool?.platform ?? null);
   const selectedGuest = guestPlatform ?? guestPlatforms[0] ?? null;
-  const [name, setName] = useState("default");
-  const [label, setLabel] = useState(() => canonicalRunnerLabel(selectedGuest ?? "linux-x64"));
+  const [name, setName] = useState(detail.pool?.name ?? "default");
+  const [label, setLabel] = useState(detail.pool?.triggerLabel ?? canonicalRunnerLabel(selectedGuest ?? "linux-x64"));
   const digest = selectedGuest ? (detail.defaultImageDigests ?? {})[selectedGuest] ?? detail.defaultImageDigest ?? null : null;
   if (!worker || !selectedGuest || !digest) return <p role="alert">No immutable job image is configured for this guest platform.</p>;
   if (!worker.limits) return <div><p role="alert">Worker resource limits are not acknowledged yet. Return to Configure resources before creating a pool.</p><p>Configuring worker · resources in GiB</p><p>Trigger label: {label}</p><pre>runs-on: {label}</pre></div>;
   const resources = { vcpu: worker.limits.maxVcpuPerPod, memoryBytes: worker.limits.maxMemoryBytesPerPod, storageBytes: worker.limits.maxStorageBytesPerPod, concurrency: worker.limits.maxConcurrentPods };
-  return <form onSubmit={(e) => { e.preventDefault(); onCreate({ workerId: worker.id, guestPlatform: selectedGuest, name, triggerLabel: label, imageDigest: digest, resources }); }}>
+  return <form onSubmit={(e) => { e.preventDefault(); onCreate({ poolId: edit ? detail.pool?.id : undefined, workerId: worker.id, guestPlatform: selectedGuest, name, triggerLabel: label, imageDigest: digest, resources }); }}>
     <p>Configuring worker acknowledged. Resources are acknowledged; configure resources in GiB before creating the first enabled pool.</p>
     {guestPlatforms.length > 1 && <label>Guest platform<select value={selectedGuest} onChange={(e) => { const platform = e.target.value as typeof selectedGuest; setGuestPlatform(platform); if (platform) setLabel(canonicalRunnerLabel(platform)); }}>{guestPlatforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}</select></label>}
     <label>Pool name<input value={name} onChange={(e) => setName(e.target.value)} /></label>

@@ -58,7 +58,7 @@ test("worker step combines selection, capacity configuration, and four-step prog
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "worker", worker: selectedWorker, organizations: [], github: { appConfigured: true, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "a".repeat(64) });
   for (const [label, className] of [["Admin", "is-complete"], ["Worker", "is-current"], ["GitHub", "is-locked"], ["Trigger labels", "is-locked"]]) {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const element = html.match(new RegExp(`<li[^>]*>[^<]*<span>[^<]*</span><strong>${escaped}</strong></li>`))?.[0] ?? "";
+    const element = html.match(new RegExp(`<li[^>]*>[^<]*<span>[^<]*</span>(?:<strong>|<button[^>]*>)${escaped}(?:</strong>|</button>)</li>`))?.[0] ?? "";
     expect(element).toContain(className);
   }
   expect(html).not.toContain("<strong>Resources</strong>");
@@ -73,6 +73,10 @@ test("current step includes read-only summaries of completed worker and GitHub s
   expect(html).toContain("Acme");
   expect(html).toContain("Available repositories: 1");
   expect(html).not.toContain("Repositories: private");
+});
+test("completed onboarding steps expose editable controls", () => {
+  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "labels", worker, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 1, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: { id: "inst-1", githubInstallationId: 42, state: "approved", repositorySelection: "selected" }, repositories: [{ id: "repo-1", name: "private", fullName: "acme/private", visibility: "private", available: true }] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "a".repeat(64) });
+  expect(html).toContain('aria-label="Edit Worker step"');
 });
 
 test("admin and sign-in states expose the appropriate GitHub action", () => {
