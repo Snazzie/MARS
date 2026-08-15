@@ -7,8 +7,9 @@ import { validateResources } from "./runtime.ts";
 
 export type DockerResult = { code: number; stdout: string; stderr: string };
 export type DockerRunner = (args: string[]) => Promise<DockerResult>;
-export type WindowsContainerConfig = { image: string; prefix: string; bootstrapRoot: string; limits: WorkerLimits; readyTimeoutMs: number; jobTimeoutMs: number };
+export type WindowsContainerConfig = { image: string; prefix: string; bootstrapRoot: string; limits: WorkerLimits; readyTimeoutMs: number; jobTimeoutMs: number; allowLocalImage?: boolean };
 const digest = /^[^@\s]+@sha256:[0-9a-f]{64}$/;
+const localImage = "whitesmith/windows-job:local";
 
 async function defaultDocker(args: string[]): Promise<DockerResult> { const process = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe" }); return { code: await process.exited, stdout: await new Response(process.stdout).text(), stderr: await new Response(process.stderr).text() }; }
 function checked(result: DockerResult, operation: string): string { if (result.code !== 0) throw new Error(`${operation} failed: ${result.stderr.replaceAll(/\r?\n/g, " ").slice(0, 500)}`); return result.stdout.trim(); }
@@ -17,12 +18,16 @@ export class WindowsContainerDriver implements RuntimeDriver {
   readonly name = "windows-hyperv-container" as const;
   private readonly leases = new Map<string, { name: string; root: string; runtime: RuntimeLease }>();
   constructor(private readonly config: WindowsContainerConfig, private readonly docker: DockerRunner = defaultDocker) {}
-  validatePool(resources: PoolResources): void { validateResources(resources, this.config.limits); if (!digest.test(this.config.image)) throw new Error("Windows container image must be digest pinned"); }
+  validatePool(resources: PoolResources): void { validateResources(resources, this.config.limits); if (!digest.test(this.config.image) && !(this.config.allowLocalImage && this.config.image === localImage)) throw new Error("Windows container image must be digest pinned"); }
   async reserveCapacity(resources: PoolResources): Promise<void> {
     this.validatePool(resources);
     if (checked(await this.docker(["info", "--format", "{{.OSType}}"]), "docker info") !== "windows") throw new Error("Windows Docker engine is required");
-    const digests = JSON.parse(checked(await this.docker(["image", "inspect", "--format", "{{json .RepoDigests}}", this.config.image]), "image inspect")) as string[];
-    if (!digests.includes(this.config.image)) throw new Error("requested image digest is not present");
+    if (this.config.allowLocalImage && this.config.image === localImage) {
+      checked(await this.docker(["image", "inspect", this.config.image]), "image inspect");
+    } else {
+      const digests = JSON.parse(checked(await this.docker(["image", "inspect", "--format", "{{json .RepoDigests}}", this.config.image]), "image inspect")) as string[];
+      if (!digests.includes(this.config.image)) throw new Error("requested image digest is not present");
+    }
   }
   async createLease(lease: Lease): Promise<RuntimeLease> {
     this.validatePool(lease.resources);

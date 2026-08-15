@@ -126,6 +126,7 @@ if ($WindowsRuntime -eq 'container') {
   $serviceEnvironment += "WHITESMITH_WINDOWS_CONTAINER_PREFIX=$WindowsContainerPrefix"
   $serviceEnvironment += "WHITESMITH_WINDOWS_CONTAINER_READY_TIMEOUT_MS=$WindowsContainerReadyTimeoutMs"
   $serviceEnvironment += "WHITESMITH_WINDOWS_CONTAINER_JOB_TIMEOUT_MS=$WindowsContainerJobTimeoutMs"
+  if ($AllowLocalContainerImage) { $serviceEnvironment += "WHITESMITH_ALLOW_LOCAL_CONTAINER_IMAGE=true" }
 } else {
   $serviceEnvironment += "WHITESMITH_WINDOWS_TEMPLATE_PATH=$WindowsTemplatePath"
   $serviceEnvironment += "WHITESMITH_WINDOWS_TEMPLATE_DIGEST=$WindowsTemplateDigest"
