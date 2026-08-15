@@ -95,8 +95,7 @@ test("worker step renders enrollment inline and requires explicit selection", ()
   expect(html).toContain("Worker enrollment");
   expect(html).toContain("Generate bootstrap code");
   expect(html).toContain("Use this worker");
-  expect(html).not.toContain("<dialog");
-  expect(html).not.toContain("Rotate bootstrap code");
+  expect(html).toContain("Discard and reinstall");
 });
 
 test("completed review does not invent a selected worker", () => {

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { beginOnboardingGithubInstall, beginOnboardingGithubManifest, createOnboardingPool, getOnboardingDetail, getOnboardingStatus, selectOnboardingWorker } from "../api.ts";
+import { beginOnboardingGithubInstall, beginOnboardingGithubManifest, createOnboardingPool, getOnboardingDetail, getOnboardingStatus, rejectPendingWorker, selectOnboardingWorker } from "../api.ts";
 import { EnrollmentPanel } from "../components/EnrollmentPanel.tsx";
 import { pendingWorkerQueryOptions } from "../components/PendingWorkerRequests.tsx";
 import { RunnerWorkflowPrModal } from "../components/RunnerWorkflowPrModal.tsx";
@@ -49,7 +49,11 @@ function ReviewSummary({ detail, through, onClose }: { detail: OnboardingDetail;
     {through >= 3 && detail.github.organizationId && <p>GitHub account: {org?.name ?? detail.github.organizationId}<br />Available repositories: {detail.github.repositories.filter((repository) => repository.available).length}</p>}
   </aside>;
 }
-function WorkerStep({ onSelect }: { onSelect: (id: string) => void }) { const q = useQuery(pendingWorkerQueryOptions()); return <div><EnrollmentPanel workers={q.data ?? []} onConnected={() => void q.refetch()} showRotation={false} /><p>Choose the worker you verified. It remains unschedulable until resources are configured.</p>{q.error && <p role="alert">{q.error instanceof Error ? q.error.message : "Could not load workers."} <button type="button" onClick={() => void q.refetch()}>Retry</button></p>}{(q.data ?? []).map((w) => <article className="worker-choice" key={w.id}><h3>{w.vmUuid}</h3><p>{w.platform} · {w.connectionState}</p><p>Fingerprint: <code>{w.fingerprint}</code></p><button type="button" onClick={() => onSelect(w.id)}>Use this worker</button></article>)}</div>; }
+function WorkerStep({ onSelect }: { onSelect: (id: string) => void }) {
+  const q = useQuery(pendingWorkerQueryOptions());
+  const discard = useMutation({ mutationFn: rejectPendingWorker, onSuccess: () => void q.refetch() });
+  return <div><EnrollmentPanel workers={q.data ?? []} onConnected={() => void q.refetch()} showRotation={false} /><p>Choose the worker you verified. It remains unschedulable until resources are configured.</p>{q.error && <p role="alert">{q.error instanceof Error ? q.error.message : "Could not load workers."} <button type="button" onClick={() => void q.refetch()}>Retry</button></p>}{discard.error && <p role="alert">{discard.error instanceof Error ? discard.error.message : "Could not discard the pending worker."}</p>}{(q.data ?? []).map((w) => <article className="worker-choice" key={w.id}><h3>{w.vmUuid}</h3><p>{w.platform} · {w.connectionState}</p><p>Fingerprint: <code>{w.fingerprint}</code></p><button type="button" onClick={() => onSelect(w.id)}>Use this worker</button><button type="button" onClick={() => { if (window.confirm("Discard this pending worker and generate a new installation?")) discard.mutate(w.id); }} disabled={discard.isPending}>Discard and reinstall</button></article>)}</div>;
+}
 function submitGithubManifest(launch: { action: string; manifest: string }): void {
   const form = document.createElement("form");
   form.method = "post";
