@@ -1,10 +1,11 @@
 import type { DatabaseClient } from "@whitesmith/db";
 import { GithubJobsClient } from "./github-jobs.ts";
+import { isGithubRateLimitError } from "./github-rate-limit.ts";
 import { applyGithubJobSnapshot, type GithubRunSnapshot } from "./runs.ts";
 import { GITHUB_LOG_FORMAT_VERSION, syncCompletedGithubJobLogs } from "./github-job-log-sync.ts";
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-export type DiscoveryDeps = { db: DatabaseClient; installationToken: (installationId: number) => Promise<string>; githubFetch?: Fetcher; repositoryConcurrency?: number; repositoryFullName?: string };
+export type DiscoveryDeps = { db: DatabaseClient; installationToken: (installationId: number) => Promise<string>; githubFetchForInstallation: (installationId: number) => Fetcher; repositoryFullName?: string };
 export type DiscoveryReport = { repositories: number; discovered: number; updated: number; failed: number };
 
 async function pages<T>(load: (page: number) => Promise<{ totalCount: number; items: T[] }>): Promise<T[]> {
@@ -44,7 +45,8 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
   const fullName = String(row.fullName ?? "");
   const [owner, repo] = fullName.split("/", 2);
   if (!owner || !repo || fullName.split("/").length !== 2) throw new Error("repository_name_invalid");
-  const client = new GithubJobsClient({ token: () => deps.installationToken(Number(row.installationId)), fetch: deps.githubFetch });
+  const installationId = Number(row.installationId);
+  const client = new GithubJobsClient({ token: () => deps.installationToken(installationId), fetch: deps.githubFetchForInstallation(installationId) });
   const runs = new Map<number, GithubRunSnapshot>();
   for (const status of ["queued", "in_progress"] as const) {
     console.error(`GitHub discovery list ${fullName} ${status}`);
@@ -83,34 +85,44 @@ export async function discoverAvailableRepositoryJobs(deps: DiscoveryDeps): Prom
     ? await deps.db`SELECT repo.id AS "repositoryId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",repo.discovery_error AS "discoveryError",repo.discovery_retry_at AS "discoveryRetryAt",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' AND (repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()) AND repo.full_name=${deps.repositoryFullName} ORDER BY repo.full_name`
     : await deps.db`SELECT repo.id AS "repositoryId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",repo.discovery_error AS "discoveryError",repo.discovery_retry_at AS "discoveryRetryAt",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' AND (repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()) ORDER BY repo.full_name`;
   const report: DiscoveryReport = { repositories: rows.length, discovered: 0, updated: 0, failed: 0 };
-  const concurrency = Math.max(1, Math.min(4, deps.repositoryConcurrency ?? 4));
+  const byInstallation = new Map<number, Record<string, unknown>[]>();
+  for (const row of rows as Record<string, unknown>[]) {
+    const installationId = Number(row.installationId);
+    const group = byInstallation.get(installationId);
+    if (group) group.push(row);
+    else byInstallation.set(installationId, [row]);
+  }
+  const groups = [...byInstallation.values()];
   let cursor = 0;
   const worker = async () => {
     for (;;) {
-      const index = cursor++;
-      if (index >= rows.length) return;
-      const row = rows[index] as Record<string, unknown>;
-      try {
-        const value = await discoverRepository(deps, row);
-        report.discovered += value.discovered;
-        report.updated += value.updated;
-        if (row.discoveryError != null || row.discoveryRetryAt != null) {
-          await deps.db`UPDATE dashboard_repositories SET discovery_error=NULL,discovery_retry_at=NULL WHERE id=${String(row.repositoryId)} AND (discovery_error IS NOT NULL OR discovery_retry_at IS NOT NULL)`;
+      const group = groups[cursor++];
+      if (!group) return;
+      for (const row of group) {
+        try {
+          const value = await discoverRepository(deps, row);
+          report.discovered += value.discovered;
+          report.updated += value.updated;
+          if (row.discoveryError != null || row.discoveryRetryAt != null) {
+            await deps.db`UPDATE dashboard_repositories SET discovery_error=NULL,discovery_retry_at=NULL WHERE id=${String(row.repositoryId)} AND (discovery_error IS NOT NULL OR discovery_retry_at IS NOT NULL)`;
+          }
+        } catch (error) {
+          const code = error instanceof Error ? error.message : "unknown";
+          report.failed += 1;
+          console.error(`GitHub job discovery failed for ${String(row.fullName)}: ${code}`);
+          if (isGithubRateLimitError(error)) break;
+          if (code === "github_404") {
+            await deps.db`UPDATE dashboard_repositories SET available=false WHERE id=${String(row.repositoryId)}`;
+            report.failed -= 1;
+            continue;
+          }
+          if (code === "github_403") {
+            await deps.db`UPDATE dashboard_repositories SET discovery_error='github_403',discovery_retry_at=now()+interval '24 hours' WHERE id=${String(row.repositoryId)}`;
+          }
         }
-      } catch (error) {
-        const code = error instanceof Error ? error.message : "unknown";
-        if (code === "github_404") {
-          await deps.db`UPDATE dashboard_repositories SET available=false WHERE id=${String(row.repositoryId)}`;
-          continue;
-        }
-        if (code === "github_403") {
-          await deps.db`UPDATE dashboard_repositories SET discovery_error='github_403',discovery_retry_at=now()+interval '24 hours' WHERE id=${String(row.repositoryId)}`;
-        }
-        report.failed += 1;
-        console.error(`GitHub job discovery failed for ${String(row.fullName)}: ${code}`);
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(concurrency, rows.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(4, groups.length) }, worker));
   return report;
 }

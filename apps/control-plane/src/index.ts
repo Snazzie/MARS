@@ -18,6 +18,7 @@ import { startReconciliationScheduler } from "./reconcile-loop.ts";
 import { DiscoveryHealthMonitor } from "./discovery-health.ts";
 import { createControlPlaneApp } from "./http/app.ts";
 import { ensureDefaultPools } from "./default-pools.ts";
+import { GithubRateLimitGate } from "./github-rate-limit.ts";
 import { httpOrigin } from "./http-origin.ts";
 const required = (name: string): string => { const value = Bun.env[name]; if (!value) throw new Error(`${name} is required`); return value; };
 const baseUrl = httpOrigin("PUBLIC_BASE_URL", required("PUBLIC_BASE_URL"));
@@ -65,13 +66,14 @@ const discoveryIntervalMs = Number(Bun.env.JOB_DISCOVERY_INTERVAL_MS ?? 30_000);
 const startedAt = new Date().toISOString();
 const discoveryHealth = new DiscoveryHealthMonitor(discoveryIntervalMs, Date.parse(startedAt));
 const githubApp = new GitHubAppService({ db, secretBox, baseUrl: env.BASE, browserBaseUrl: env.BROWSER_BASE, webhookUrl: env.WEBHOOK_URL });
+const githubRateLimits = new GithubRateLimitGate();
 const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, browserBaseUrl: env.BROWSER_BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), workerServiceHostExecutable: new URL("../../../apps/windows-service-host/target/release/whitesmith-service-host.exe", import.meta.url), workerOrchestratorExecutables: { "linux-x64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator", import.meta.url), "windows-x64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator.exe", import.meta.url), "macos-arm64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator-macos-arm64", import.meta.url) }, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => dispatcher.replayConnected(workerId), health: () => ({ buildId: Bun.env.WHITESMITH_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
 let nextDiscoveryAt = 0;
 startReconciliationScheduler(async () => {
   try {
     if (Date.now() >= nextDiscoveryAt) {
       try {
-        const report = await discoverAvailableRepositoryJobs({ db, installationToken: (installationId) => githubApp.getInstallationToken(installationId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY });
+        const report = await discoverAvailableRepositoryJobs({ db, installationToken: (installationId) => githubApp.getInstallationToken(installationId), githubFetchForInstallation: (installationId) => githubRateLimits.scopedFetch(installationId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY });
         if (report.discovered || report.failed) console.log(`GitHub job discovery: repositories=${report.repositories} discovered=${report.discovered} updated=${report.updated} failed=${report.failed}`);
       } catch (error) {
         console.error("GitHub job discovery failed", error);
@@ -80,7 +82,7 @@ startReconciliationScheduler(async () => {
       }
     }
     await expireLeases(db);
-    const report = await runQueuedJobReconciliation({ db, installationToken: (installationId) => githubApp.getInstallationToken(installationId), githubFetchForInstallation: () => fetch, dispatcher, workerConnected: (workerId) => dispatcher.isConnected(workerId) });
+    const report = await runQueuedJobReconciliation({ db, installationToken: (installationId) => githubApp.getInstallationToken(installationId), githubFetchForInstallation: (installationId) => githubRateLimits.scopedFetch(installationId), dispatcher, workerConnected: (workerId) => dispatcher.isConnected(workerId) });
     console.log(`Job reconciliation tick: reserved=${report.reserved} failed=${report.failed} skipped=${report.skipped}`);
   } catch (error) {
     console.error("Job reconciliation failed", error);
