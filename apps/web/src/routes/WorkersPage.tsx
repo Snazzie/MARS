@@ -9,10 +9,17 @@ import { useOrganizationFromRoute } from "./useOrganization.ts";
 
 export function WorkersPage() {
   const { organizationId } = useOrganizationFromRoute();
-  const [includeRevoked, setIncludeRevoked] = useState(false);
+  const [includeInactive, setIncludeInactive] = useState(false);
+  const [enrollmentOpen, setEnrollmentOpen] = useState(false);
   const queryClient = useQueryClient();
-  const query = useQuery({ queryKey: ["org", organizationId, "workers", includeRevoked], queryFn: () => getWorkers(organizationId, includeRevoked), enabled: Boolean(organizationId), staleTime: 10_000 });
+  const query = useQuery({
+    queryKey: ["org", organizationId, "workers", includeInactive],
+    queryFn: () => getWorkers(organizationId, includeInactive),
+    enabled: Boolean(organizationId),
+    staleTime: 10_000,
+    refetchInterval: (current) => current.state.data?.items.some((worker) => worker.admissionState === "adopted" && worker.configurationState === "unconfigured") ? 2_000 : false,
+  });
   const pendingQuery = useQuery(pendingWorkerQueryOptions());
   function invalidate() { void queryClient.invalidateQueries({ queryKey: ["pending-workers"] }); void queryClient.invalidateQueries({ queryKey: ["org", organizationId, "workers"] }); }
-  return <><header className="page-header workers-header"><div><p className="eyebrow">Worker fleet</p><h1>Know where work lands.</h1><p className="page-description">Adoption, runtime health, and hard capacity boundaries in one disciplined view.</p></div></header><EnrollmentPanel workers={pendingQuery.data ?? []} onConnected={invalidate} />{organizationId === "all" && <PendingWorkerRequests organizationId={organizationId} workers={pendingQuery.data ?? []} error={pendingQuery.error} isLoading={pendingQuery.isLoading} retry={() => void pendingQuery.refetch()} />}<div className="worker-list-toolbar"><label><input type="checkbox" checked={includeRevoked} onChange={(event) => setIncludeRevoked(event.target.checked)} /> Show revoked workers</label></div><QueryState error={query.error} isLoading={query.isLoading} isEmpty={!query.isLoading && !query.error && query.data?.items.length === 0} retry={() => void query.refetch()} operationLabel="worker fleet" />{query.data && <div className="worker-list">{query.data.items.map((worker) => <WorkerCard key={worker.id} worker={worker} organizationId={organizationId} onChange={invalidate} />)}</div>}</>;
+  return <><header className="page-header workers-header"><div><p className="eyebrow">Worker fleet</p><h1>Know where work lands.</h1><p className="page-description">Adoption, runtime health, and hard capacity boundaries in one disciplined view.</p></div></header><button type="button" className="control-button" aria-expanded={enrollmentOpen} aria-controls="worker-enrollment" onClick={() => setEnrollmentOpen((open) => !open)}>{enrollmentOpen ? "Close enrollment" : "Enroll worker"}</button>{enrollmentOpen && <div id="worker-enrollment"><EnrollmentPanel workers={pendingQuery.data ?? []} onConnected={invalidate} /></div>}{organizationId === "all" && <PendingWorkerRequests organizationId={organizationId} workers={pendingQuery.data ?? []} error={pendingQuery.error} isLoading={pendingQuery.isLoading} retry={() => void pendingQuery.refetch()} />}<div className="worker-list-toolbar"><label><input type="checkbox" checked={includeInactive} onChange={(event) => setIncludeInactive(event.target.checked)} /> Show rejected and revoked workers</label></div><QueryState error={query.error} isLoading={query.isLoading} isEmpty={!query.isLoading && !query.error && query.data?.items.length === 0} retry={() => void query.refetch()} operationLabel="worker fleet" />{query.data && <div className="worker-list">{query.data.items.map((worker) => <WorkerCard key={worker.id} worker={worker} organizationId={organizationId} onChange={invalidate} />)}</div>}</>;
 }

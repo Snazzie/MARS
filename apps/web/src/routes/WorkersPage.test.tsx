@@ -11,8 +11,7 @@ test("hides global pending approval controls inside a selected workspace", () =>
   expect(markup).not.toContain("Workers awaiting approval");
   Reflect.deleteProperty(globalThis, "localStorage");
 });
-
-test("renders inline enrollment and pending workers from one page query", () => {
+test("keeps enrollment closed until explicitly opened", () => {
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: () => "all", setItem: () => {} } });
   const client = new QueryClient();
   client.setQueryData(["organizations"], []);
@@ -28,9 +27,10 @@ test("renders inline enrollment and pending workers from one page query", () => 
     capacity: { actualVcpu: 8, actualMemoryBytes: 17179869184, actualStorageBytes: 214748364800, freeVcpu: 8, freeMemoryBytes: 17179869184, freeStorageBytes: 214748364800 },
   }]);
   const markup = renderToStaticMarkup(<QueryClientProvider client={client}><WorkersPage /></QueryClientProvider>);
-  expect(markup).toContain("Worker enrollment");
+  expect(markup).toContain("Enroll worker");
+  expect(markup).toContain('aria-expanded="false"');
+  expect(markup).not.toContain("Worker enrollment");
   expect(markup).toContain("ssh-ed25519 AAAA pending");
   expect(markup).not.toContain("<dialog");
-  expect(markup.indexOf("Know where work lands.")).toBeLessThan(markup.indexOf("Worker enrollment"));
   Reflect.deleteProperty(globalThis, "localStorage");
 });

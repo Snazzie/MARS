@@ -95,8 +95,8 @@ export async function getRepositories(organizationId: string) {
   } while (cursor);
   return { items, nextCursor: null };
 }
-export const getWorkers = (organizationId: string, includeRevoked = false) =>
-  request(`/api/organizations/${organizationId}/workers?includeRevoked=${includeRevoked ? "true" : "false"}`, CursorPage(WorkerDetail));
+export const getWorkers = (organizationId: string, includeInactive = false) =>
+  request(`/api/organizations/${organizationId}/workers?includeInactive=${includeInactive ? "true" : "false"}`, CursorPage(WorkerDetail));
 export async function configureWorker(organizationId: string, workerId: string, input: WorkerConfigurationInput) {
   return request(`/api/organizations/${organizationId}/workers/${workerId}/configure`, z.object({ revision: z.string(), fingerprint: z.string(), commandId: z.string().uuid().optional() }), {
     method: "POST",

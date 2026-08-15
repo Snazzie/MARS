@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { labelsMatch, reason, type Candidate } from "./scheduler.ts";
+import { labelsMatch, parseProvisionLabels, reason, resolveProvisionResources, fits, type Candidate } from "./scheduler.ts";
 
 const candidate = (requestedLabels: string[], triggerLabel: string | null = "whitesmith-linux-x64"): Candidate => ({
   worker: { admissionState: "adopted", connectionState: "online", configurationState: "ready", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 } },
@@ -23,5 +23,24 @@ describe("runner label routing", () => {
 
   test("rejects a missing trigger label", () => {
     expect(labelsMatch(["whitesmith-linux-x64"], ["whitesmith-linux-x64"], null)).toBe(false);
+  });
+});
+describe("numeric provision labels", () => {
+  test("resolves mixed-case CPU and GiB labels and strips them from routing", () => {
+    expect(parseProvisionLabels(["whitesmith-linux-x64", "2VCPU", "6G"])).toEqual({ routingLabels: ["whitesmith-linux-x64"], vcpu: 2, memoryBytes: 6 * 1024 ** 3 });
+  });
+  test("falls back to pool dimensions when absent", () => {
+    expect(resolveProvisionResources({ vcpu: 4, memoryBytes: 8, storageBytes: 30, concurrency: 3 }, { routingLabels: [] })).toEqual({ vcpu: 4, memoryBytes: 8, storageBytes: 30, concurrency: 3 });
+  });
+  test("rejects duplicate, zero, malformed, and overflow provision labels", () => {
+    expect(parseProvisionLabels(["1vcpu", "2vcpu"])).toBeNull();
+    expect(parseProvisionLabels(["0g"])).toBeNull();
+    expect(parseProvisionLabels(["01vcpu"])).toBeNull();
+    expect(parseProvisionLabels(["9007199254740991g"])).toBeNull();
+  });
+  test("accepts CPU override above pool default within worker ceiling", () => {
+    const value = candidate(["whitesmith-linux-x64", "2vcpu"]);
+    value.pool.resources = { vcpu: 1, memoryBytes: 4, storageBytes: 8, concurrency: 1 };
+    expect(fits(value)).toBe(true);
   });
 });

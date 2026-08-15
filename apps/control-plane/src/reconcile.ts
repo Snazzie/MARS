@@ -1,8 +1,7 @@
-import type { RunnerJitConfig, PoolResources } from "@whitesmith/contracts";
-import { PoolResources as PoolResourcesSchema } from "@whitesmith/contracts";
-import type { Candidate } from "./scheduler.ts";
-import { fits } from "./scheduler.ts";
+import type { RunnerJitConfig } from "@whitesmith/contracts";
+import { parseProvisionLabels, resolveProvisionResources, fits, type Candidate } from "./scheduler.ts";
 import type { LeaseReservation } from "@whitesmith/db";
+
 
 export type QueuedRoutingJob = {
   installationId: number;
@@ -33,6 +32,8 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
     seen.add(queued.jobId);
     await deps.upsert?.(queued);
     const requestedLabels = queued.labels.map((label) => label.trim()).filter(Boolean);
+    const provision = parseProvisionLabels(requestedLabels);
+    if (!provision) { report.skipped += 1; continue; }
     const candidate = deps.candidates.find((value) => {
       const capacityKey = `${value.pool.id}:${value.worker.id}`;
       const reserved = reservedByPool.get(capacityKey) ?? 0;
@@ -45,7 +46,8 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
     attemptedInstallations.add(queued.installationId);
     let reservation: LeaseReservation | undefined;
     try {
-      const resources = PoolResourcesSchema.parse(candidate.pool.resources);
+      const resources = resolveProvisionResources(candidate.pool.resources, provision);
+      if (!resources) { report.skipped += 1; continue; }
       const claimed = await deps.reserve({
         workerId: candidate.worker.id,
         poolId: candidate.pool.id,
