@@ -2,13 +2,24 @@ import type { Sql } from "postgres";
 import type { GuestPlatform } from "@whitesmith/contracts";
 
 type PoolDefaults = Partial<Record<GuestPlatform, string | undefined>>;
+type WorkerLimits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
+const GIB = 1024 ** 3;
+
+export function poolResourcesForLimits(limits: WorkerLimits) {
+  return {
+    vcpu: Math.min(2, limits.maxVcpuPerPod),
+    memoryBytes: Math.min(2 * GIB, limits.maxMemoryBytesPerPod),
+    storageBytes: Math.min(10 * GIB, limits.maxStorageBytesPerPod),
+    concurrency: Math.min(1, limits.maxConcurrentPods),
+  };
+}
 
 export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Promise<void> {
   const [worker] = await db`select platform, guest_platforms as "guestPlatforms", limits from workers where admission_state='adopted' and configuration_state='ready' order by created_at asc limit 1`;
   if (!worker || !worker.limits) return;
   const guestPlatforms = (Array.isArray(worker.guestPlatforms) ? worker.guestPlatforms : [worker.platform]) as GuestPlatform[];
-  const limits = typeof worker.limits === "string" ? JSON.parse(worker.limits) : worker.limits as { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
-  const resources = { vcpu: limits.maxVcpuPerPod, memoryBytes: limits.maxMemoryBytesPerPod, storageBytes: limits.maxStorageBytesPerPod, concurrency: limits.maxConcurrentPods };
+  const limits = (typeof worker.limits === "string" ? JSON.parse(worker.limits) : worker.limits) as WorkerLimits;
+  const resources = poolResourcesForLimits(limits);
   for (const platform of guestPlatforms) {
     const imageDigest = images[platform];
     if (!imageDigest) continue;
