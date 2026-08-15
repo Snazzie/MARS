@@ -9,7 +9,7 @@ const parsePositiveInteger = (value: string) => { if (!/^\d+$/.test(value)) retu
 const toBytes = (value: string) => { const gib = parsePositiveInteger(value); if (gib === null || gib > Math.floor(Number.MAX_SAFE_INTEGER / GIB)) return null; const bytes = gib * GIB; return Number.isSafeInteger(bytes) ? bytes : null; };
 export function WorkerConfigurationForm({ worker, organizationId, onConfigured, onDiscard }: Props) {
   const c = worker.capacity;
-  const discard = useMutation({ mutationFn: rejectPendingWorker, onSuccess: () => onDiscard?.() });
+  const discard = useMutation({ mutationFn: rejectPendingWorker, onSuccess: () => onDiscard?.(), onError: (reason) => setError(reason instanceof Error ? reason.message : "Could not discard the pending worker.") });
   const platform = worker.platform ?? "linux-x64";
   const canEditGuests = !organizationId || (worker.draining === true && worker.activeSandboxes === 0);
   const [allowLinux, setAllowLinux] = useState(() => worker.guestPlatforms?.includes("linux-x64") ?? false);
