@@ -115,8 +115,8 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (duplicate) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
     const key = c.req.header("idempotency-key")!;
     if (!(await dashboardMutation(deps.db, org, key))) return c.json({ ok: true });
-    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${body.guestPlatform},${driver},${body.imageDigest},${JSON.stringify(body.resources)},${JSON.stringify(labels)},${body.triggerLabel},true) RETURNING id`;
-    await deps.db`INSERT INTO audit_events (organization_id,actor,type,payload) VALUES (NULL,${c.get("user").id},'pool.created',${JSON.stringify({ poolId: pool.id, workerId: body.workerId, guestPlatform: body.guestPlatform, triggerLabel: body.triggerLabel, scope: "control-plane" })}`;
+    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${body.guestPlatform},${driver},${body.imageDigest},${JSON.stringify(body.resources)}::jsonb,${JSON.stringify(labels)}::jsonb,${body.triggerLabel},true) RETURNING id`;
+    await deps.db`INSERT INTO audit_events (organization_id,actor,type,payload) VALUES (NULL,${c.get("user").id},'pool.created',${JSON.stringify({ poolId: pool.id, workerId: body.workerId, guestPlatform: body.guestPlatform, triggerLabel: body.triggerLabel, scope: "control-plane" })}::jsonb)`;
     await completeOnboardingIfReady(deps.db);
     await invalidateDashboard(deps.db, org, ["pools", "onboarding"]);
     return c.json({ id: pool.id, labels });
