@@ -29,7 +29,7 @@ This requests a job with 3 vCPUs and 6 GiB of memory from the `whitesmith-linux-
 4. The worker's configured per-job limits are the final ceiling.
 5. The original labels are retained when the just-in-time GitHub runner is registered.
 
-A valid label may exceed the pool's default CPU or memory value when the worker's configured limit allows it. Storage and concurrency continue to use the existing pool and worker policies; there is no disk resource-label syntax.
+A valid label may exceed the pool's default CPU or memory value when the worker's configured limit allows it. Per-job limits are independent ceilings; the scheduler does not reserve the full per-job limit for every concurrency slot. It admits each queued job only when the resolved request fits currently available resources. Storage and concurrency continue to use the existing pool and worker policies; there is no disk resource-label syntax.
 
 ## Invalid labels
 
@@ -46,4 +46,4 @@ Labels such as `6gb` are not memory resource labels. They are ordinary routing l
 
 ## Worker limits
 
-Resource labels cannot bypass worker policy. For example, a worker with a maximum of 4 vCPUs per job accepts `3VCPU` but does not accept `5vcpu`. The same ceiling applies to memory, storage, and concurrency. Reservations re-check these limits atomically immediately before work is assigned.
+Resource labels cannot bypass worker policy. For example, a worker with a maximum of 4 vCPUs per job accepts `3VCPU` but does not accept `5vcpu`. The same per-job ceiling applies to memory and storage. `maxConcurrentPods` limits the number of active jobs; it is not multiplied by the per-job CPU, memory, or storage ceilings during configuration. Reservations re-check resource and concurrency limits atomically immediately before work is assigned.
