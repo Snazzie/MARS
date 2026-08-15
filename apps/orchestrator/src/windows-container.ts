@@ -45,7 +45,18 @@ export class WindowsContainerDriver implements RuntimeDriver {
       return runtime;
     } catch (error) { await this.removeLease(lease.id).catch(() => undefined); throw error; }
   }
-  private async wait(name: string): Promise<number> { const result = await this.docker(["wait", name]); if (result.code !== 0) throw new Error("container completion failed"); const code = Number(result.stdout.trim()); if (!Number.isInteger(code)) throw new Error("container exit code invalid"); return code; }
+  private async wait(name: string): Promise<number> {
+    const completion = this.docker(["wait", name]).then((result) => {
+      if (result.code !== 0) throw new Error("container completion failed");
+      const code = Number(result.stdout.trim());
+      if (!Number.isInteger(code)) throw new Error("container exit code invalid");
+      return code;
+    });
+    const timeout = Bun.sleep(this.config.jobTimeoutMs).then(() => {
+      throw new Error(`container job timed out after ${this.config.jobTimeoutMs}ms`);
+    });
+    return Promise.race([completion, timeout]);
+  }
   async inspectLease(leaseId: string): Promise<RuntimeLease> { const lease = this.leases.get(leaseId); if (!lease) throw new Error("sandbox not found"); return lease.runtime; }
   async stopLease(leaseId: string): Promise<void> { const lease = this.leases.get(leaseId); if (lease) checked(await this.docker(["stop", "--time", "10", lease.name]), "docker stop"); }
   async removeLease(leaseId: string): Promise<void> { const lease = this.leases.get(leaseId); if (!lease) return; try { await this.docker(["rm", "-f", lease.name]); } finally { this.leases.delete(leaseId); await rm(lease.root, { recursive: true, force: true }); } }

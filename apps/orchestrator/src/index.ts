@@ -2,7 +2,7 @@ import { KataK3sDriver } from "./kata-k3s.ts";
 import { runMacWorker } from "./mac-agent.ts";
 import { runWindowsWorker } from "./windows-agent.ts";
 
-const limits = { maxVcpuPerPod: Number(Bun.env.MAX_VCPU_PER_POD ?? 4), maxMemoryBytesPerPod: Number(Bun.env.MAX_MEMORY_BYTES_PER_POD ?? 4 * 1024 ** 3), maxStorageBytesPerPod: Number(Bun.env.MAX_STORAGE_BYTES_PER_POD ?? 20 * 1024 ** 3), maxConcurrentPods: Number(Bun.env.MAX_CONCURRENT_PODS ?? 2) };
+const limits = { maxVcpuPerPod: Number(Bun.env.MAX_VCPU_PER_POD ?? 4), maxMemoryBytesPerPod: Number(Bun.env.MAX_MEMORY_BYTES_PER_POD ?? 8 * 1024 ** 3), maxStorageBytesPerPod: Number(Bun.env.MAX_STORAGE_BYTES_PER_POD ?? 20 * 1024 ** 3), maxConcurrentPods: Number(Bun.env.MAX_CONCURRENT_PODS ?? 2) };
 const baseUrl = Bun.env.WHITESMITH_CONTROL_PLANE_URL;
 
 if (import.meta.main && Bun.argv[2] === "mac-worker") {

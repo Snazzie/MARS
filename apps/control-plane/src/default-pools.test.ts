@@ -3,10 +3,10 @@ import { poolResourcesForLimits } from "./default-pools.ts";
 
 const GIB = 1024 ** 3;
 
-test("allocates conservative resources instead of every worker ceiling", () => {
-  expect(poolResourcesForLimits({ maxVcpuPerPod: 5, maxMemoryBytesPerPod: 4 * GIB, maxStorageBytesPerPod: 30 * GIB, maxConcurrentPods: 3 })).toEqual({
+test("allocates one useful sandbox without exhausting host concurrency", () => {
+  expect(poolResourcesForLimits({ maxVcpuPerPod: 5, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 30 * GIB, maxConcurrentPods: 3 })).toEqual({
     vcpu: 2,
-    memoryBytes: 2 * GIB,
+    memoryBytes: 8 * GIB,
     storageBytes: 10 * GIB,
     concurrency: 1,
   });
