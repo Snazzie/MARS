@@ -78,6 +78,35 @@ test("repository listings normalize active paused and queued discovery states", 
   expect(queries.every((query) => query.includes("discovery_retry_at") && query.includes('"discoveryState"'))).toBe(true);
 });
 
+test("repository listings continue after the requested cursor", async () => {
+  const cursor = "11111111-1111-4111-8111-111111111111";
+  let query = "";
+  let values: unknown[] = [];
+  const rows = Array.from({ length: 3 }, (_, index) => ({
+    id: `22222222-2222-4222-8222-${String(index).padStart(12, "0")}`,
+    organizationId: "33333333-3333-4333-8333-333333333333",
+    name: `repo-${index}`,
+    fullName: `SpeedHQ/repo-${index}`,
+    visibility: "private",
+    available: true,
+    installationId: "44444444-4444-4444-8444-444444444444",
+    discoveryState: "active",
+    discoveryRetryAt: null,
+  }));
+  const db = (async (strings: TemplateStringsArray, ...parameters: unknown[]) => {
+    query = strings.join(" ");
+    values = parameters;
+    return rows;
+  }) as never;
+
+  const page = await listAllRepositories(db, "user-1", 2, cursor);
+
+  expect(query).toContain("cursor.full_name");
+  expect(values).toContain(cursor);
+  expect(page.items).toHaveLength(2);
+  expect(page.nextCursor).toBe(rows[1]!.id);
+});
+
 test("run listing normalizes PostgreSQL bigint and timestamp values", async () => {
   const db = (async () => [{
     id: "run-1",
@@ -107,6 +136,19 @@ test("run listing normalizes PostgreSQL bigint and timestamp values", async () =
     completedAt: "2026-08-13T10:00:02.000Z",
     durationMs: 1000,
   });
+});
+
+test("run listing distinguishes jobs without a Whitesmith pool label", async () => {
+  let query = "";
+  const db = (async (strings: TemplateStringsArray) => {
+    query = strings.join(" ");
+    return [{ id: "run-1", allocationState: "external", runNumber: 1, queuedAt: new Date("2026-08-15T04:00:00Z"), startedAt: null, completedAt: null, durationMs: 0, status: "queued" }];
+  }) as never;
+
+  const item = (await listRuns(db, "org-1")).items[0];
+
+  expect(query).toContain("lower(allocation_label) LIKE 'whitesmith-%'");
+  expect(item.allocationState).toBe("external");
 });
 
 test("run listing derives runtime from run timestamps when duration is unset", async () => {

@@ -80,6 +80,33 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
   return { discovered, updated };
 }
 
+export async function discoverQueuedRepositoryJobs(deps: DiscoveryDeps): Promise<DiscoveryReport> {
+  if (!deps.repositoryFullName) return { repositories: 0, discovered: 0, updated: 0, failed: 0 };
+  const rows = await deps.db`SELECT repo.id AS "repositoryId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' AND (repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()) AND repo.full_name=${deps.repositoryFullName} ORDER BY repo.full_name`;
+  const report: DiscoveryReport = { repositories: rows.length, discovered: 0, updated: 0, failed: 0 };
+  for (const row of rows as Record<string, unknown>[]) {
+    try {
+      const fullName = String(row.fullName ?? "");
+      const [owner, repo] = fullName.split("/", 2);
+      if (!owner || !repo || fullName.split("/").length !== 2) throw new Error("repository_name_invalid");
+      const installationId = Number(row.installationId);
+      const client = new GithubJobsClient({ token: () => deps.installationToken(installationId), fetch: deps.githubFetchForInstallation(installationId) });
+      const runs = await pages(async page => { const value = await client.listRuns(owner, repo, "queued", page); return { totalCount: value.totalCount, items: value.runs }; });
+      for (const run of runs) {
+        const jobs = await pages(async page => { const value = await client.listJobs(owner, repo, run.id, page); return { totalCount: value.totalCount, items: value.jobs }; });
+        for (const job of jobs) {
+          report.discovered += 1;
+          if (await applyGithubJobSnapshot({ installationId, repository: { id: Number(row.githubRepositoryId), name: String(row.name), fullName }, run, job })) report.updated += 1;
+        }
+      }
+    } catch (error) {
+      report.failed += 1;
+      console.error(`Queued GitHub job discovery failed for ${String(row.fullName)}: ${error instanceof Error ? error.message : "unknown"}`);
+    }
+  }
+  return report;
+}
+
 export async function discoverAvailableRepositoryJobs(deps: DiscoveryDeps): Promise<DiscoveryReport> {
   const rows = deps.repositoryFullName
     ? await deps.db`SELECT repo.id AS "repositoryId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",repo.discovery_error AS "discoveryError",repo.discovery_retry_at AS "discoveryRetryAt",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' AND (repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()) AND repo.full_name=${deps.repositoryFullName} ORDER BY repo.full_name`

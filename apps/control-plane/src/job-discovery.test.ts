@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { discoverAvailableRepositoryJobs, listCompletedRunsSince } from "./job-discovery.ts";
+import { discoverAvailableRepositoryJobs, discoverQueuedRepositoryJobs, listCompletedRunsSince } from "./job-discovery.ts";
 import { GithubRateLimitError } from "./github-rate-limit.ts";
 import type { GithubRunSnapshot } from "./runs.ts";
 
@@ -155,6 +155,46 @@ describe("repository authorization lifecycle", () => {
     expect(retired).toBe(false);
     expect(queries.some((query) => query.includes("SET discovery_error="))).toBe(false);
   });
+});
+
+test("fast pickup polls only queued runs for one configured repository", async () => {
+  const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
+  const requests: string[] = [];
+  const db = (async (strings: TemplateStringsArray) => strings.join(" ").includes("FROM dashboard_repositories repo") ? [repository] : []) as never;
+  const githubFetch = async (input: RequestInfo | URL) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.includes("/actions/runs?")) return Response.json({
+      total_count: 1,
+      workflow_runs: [{
+        id: 77,
+        run_number: 77,
+        name: "CI",
+        event: "push",
+        head_branch: "main",
+        head_sha: "a".repeat(40),
+        actor: { login: "octocat" },
+        status: "queued",
+        conclusion: null,
+        created_at: "2026-08-15T04:00:00Z",
+        run_started_at: null,
+        updated_at: "2026-08-15T04:00:00Z",
+      }],
+    });
+    return Response.json({ total_count: 0, jobs: [] });
+  };
+
+  const report = await discoverQueuedRepositoryJobs({
+    db,
+    installationToken: async () => "token",
+    githubFetchForInstallation: () => githubFetch,
+    repositoryFullName: "acme/repo",
+  });
+
+  expect(report).toMatchObject({ repositories: 1, discovered: 0, failed: 0 });
+  expect(requests).toHaveLength(2);
+  expect(requests[0]).toContain("status=queued");
+  expect(requests.some((url) => url.includes("status=in_progress") || url.includes("status=completed"))).toBe(false);
 });
 
 test("stops only the rate-limited installation's remaining repositories", async () => {

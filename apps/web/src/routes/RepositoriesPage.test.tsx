@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
+import { getRepositories } from "../api.ts";
 import { RepositoriesPage } from "./RepositoriesPage.tsx";
 
 function markup({
@@ -62,4 +63,40 @@ test("workspace members see the pause without an administrator action", () => {
   const html = markup({ isGlobalAdmin: false });
   expect(html).toContain("Discovery paused until");
   expect(html).not.toContain(">Recheck now<");
+});
+
+test("loads every accessible repository page", async () => {
+  const originalFetch = globalThis.fetch;
+  const cursor = "11111111-1111-4111-8111-111111111111";
+  const repository = (index: number, owner: string) => ({
+    id: crypto.randomUUID(),
+    organizationId: "22222222-2222-4222-8222-222222222222",
+    name: `repo-${index}`,
+    fullName: `${owner}/repo-${index}`,
+    visibility: "private",
+    available: true,
+    installationId: "33333333-3333-4333-8333-333333333333",
+    discoveryState: "active",
+    discoveryRetryAt: null,
+  });
+  const calls: string[] = [];
+  try {
+    globalThis.fetch = (async (input) => {
+      calls.push(String(input));
+      return Response.json(calls.length === 1
+        ? { items: Array.from({ length: 50 }, (_, index) => repository(index, "Snazzie")), nextCursor: cursor }
+        : { items: Array.from({ length: 5 }, (_, index) => repository(index, "SpeedHQ")), nextCursor: null });
+    }) as typeof fetch;
+
+    const page = await getRepositories("all");
+
+    expect(page.items).toHaveLength(55);
+    expect(page.items.some((item) => item.fullName.startsWith("SpeedHQ/"))).toBe(true);
+    expect(calls).toEqual([
+      "/api/organizations/all/repositories?limit=100",
+      `/api/organizations/all/repositories?limit=100&cursor=${cursor}`,
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

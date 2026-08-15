@@ -22,6 +22,7 @@ const run = (overrides: Partial<RunSummary> = {}): RunSummary => ({
   completedAt: "2026-08-13T15:31:35.000Z",
   durationMs: 90_000,
   runtimeBoundary: "Tart VM",
+  allocationState: "whitesmith",
   ...overrides,
 });
 
@@ -61,4 +62,17 @@ test("renders dense history rows and an in-panel empty state", () => {
   expect(html).toContain("macOS runner smoke");
   expect(html).toContain("#11");
   expect(renderToStaticMarkup(<RunHistory runs={[]} allowDetails={false} nowMs={NOW} />)).toContain("No runs match these filters.");
+});
+
+test("does not mark externally routed jobs as awaiting Whitesmith allocation", () => {
+  const html = renderToStaticMarkup(<RunHistory runs={[run({
+    status: "queued",
+    conclusion: null,
+    startedAt: null,
+    completedAt: null,
+    runtimeBoundary: null,
+    allocationState: "external",
+  })]} allowDetails={false} nowMs={NOW} />);
+  expect(html).toContain("External runner");
+  expect(html).not.toContain("Awaiting allocation");
 });

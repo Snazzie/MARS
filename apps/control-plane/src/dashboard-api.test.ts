@@ -91,6 +91,18 @@ describe("dashboard API", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ code: "invalid_query" });
   });
+  test("forwards repository cursors to the database query", async () => {
+    const cursor = "11111111-1111-4111-8111-111111111111";
+    const values: unknown[] = [];
+    const db = (async (strings: TemplateStringsArray, ...parameters: unknown[]) => {
+      if (strings.join(" ").includes("FROM memberships")) return [{ ok: true }];
+      values.push(...parameters);
+      return [];
+    }) as never;
+    const response = await appFor(member, db).request(`/api/organizations/org/repositories?cursor=${cursor}`, { headers: sessionHeaders });
+    expect(response.status).toBe(200);
+    expect(values).toContain(cursor);
+  });
   test("requires global administrator access for worker mutations", async () => {
     const response = await appFor().request("/api/organizations/org/workers/w1/drain", { method: "POST", headers: sessionHeaders });
     expect(response.status).toBe(403);

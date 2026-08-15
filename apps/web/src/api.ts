@@ -80,8 +80,21 @@ export const getLogs = (organizationId: string, runId: string, jobId: string) =>
   request(`/api/organizations/${organizationId}/runs/${runId}/jobs/${jobId}/logs`, CursorPage(LogChunk));
 export const getStepLogs = (organizationId: string, runId: string, jobId: string, stepId: string, after = -1, limit = 100) =>
   request(`/api/organizations/${organizationId}/runs/${runId}/jobs/${jobId}/steps/${stepId}/logs?after=${after}&limit=${limit}`, CursorPage(LogChunk));
-export const getRepositories = (organizationId: string) =>
-  request(`/api/organizations/${organizationId}/repositories`, CursorPage(RepositorySummary));
+export async function getRepositories(organizationId: string) {
+  const items: RepositorySummary[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | null = null;
+  do {
+    const query = new URLSearchParams({ limit: "100" });
+    if (cursor) query.set("cursor", cursor);
+    const page = await request(`/api/organizations/${organizationId}/repositories?${query}`, CursorPage(RepositorySummary));
+    items.push(...page.items);
+    cursor = page.nextCursor;
+    if (cursor && seenCursors.has(cursor)) throw new ApiRequestError("Repository pagination returned a repeated cursor.", 502, "invalid_cursor");
+    if (cursor) seenCursors.add(cursor);
+  } while (cursor);
+  return { items, nextCursor: null };
+}
 export const getWorkers = (organizationId: string, includeRevoked = false) =>
   request(`/api/organizations/${organizationId}/workers?includeRevoked=${includeRevoked ? "true" : "false"}`, CursorPage(WorkerDetail));
 export async function configureWorker(organizationId: string, workerId: string, input: WorkerConfigurationInput) {

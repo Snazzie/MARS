@@ -13,4 +13,14 @@ describe("Windows job image contract", () => {
     expect(containerfile).toContain("whitesmith-job-agent.exe");
     expect(containerfile).toContain("entrypoint.ps1");
   });
+
+  test("provisions a hash-verified Git client", () => {
+    expect(script).toContain("$GitArchive");
+    expect(script).toContain("$GitSha256");
+    expect(script).toContain("Git archive hash mismatch");
+    expect(script).toContain("'git.zip'");
+    expect(containerfile).toContain("COPY git.zip C:/temp/git.zip");
+    expect(containerfile).toContain("Expand-Archive C:/temp/git.zip C:/Git");
+    expect(containerfile).toContain('ENV PATH="C:/Git/cmd;C:/Git/bin;${PATH}"');
+  });
 });

@@ -80,7 +80,7 @@ function RunRow({ run, allowDetails, maxDuration }: { run: RunSummary; allowDeta
       </div>
       <div className="run-primary">
         <strong>{run.workflowName} <span>#{run.runNumber}</span></strong>
-        <span className="run-meta">{run.actorLogin} · {run.runtimeBoundary ?? "Awaiting allocation"} · <time dateTime={run.queuedAt}>{queuedTimestamp(run.queuedAt)}</time></span>
+        <span className="run-meta">{run.actorLogin} · {run.runtimeBoundary ?? (run.allocationState === "external" ? "External runner" : "Awaiting allocation")} · <time dateTime={run.queuedAt}>{queuedTimestamp(run.queuedAt)}</time></span>
       </div>
       <div className="run-secondary">
         <span>{run.repositoryName} / {run.branch}</span>

@@ -15,6 +15,14 @@ function makeStatefulSql() {
     queries.push(text);
     if (text.includes("SELECT id,organization_id FROM dashboard_installations")) return installations;
     if (text.includes("SELECT id FROM dashboard_repositories")) return repositories;
+    if (text.startsWith("UPDATE dashboard_runs SET status='queued'")) {
+      const current = runs.get(`${values[0]}:${values[1]}`);
+      const existingJob = jobs.get(`${values[3]}:${values[4]}`);
+      if (current?.status === "completed" && values[2] === "queued" && existingJob?.status !== "completed") {
+        Object.assign(current, { status: "queued", conclusion: null, started_at: null, completed_at: null });
+      }
+      return [];
+    }
     if (text.startsWith("INSERT INTO dashboard_runs")) {
       const key = `${values[0]}:${values[2]}`;
       const incoming = { organization_id: values[0], repository_id: values[1], id: `run-${values[2]}`, github_run_id: values[2], status: values[9], conclusion: values[10], queued_at: values[11], started_at: values[12], completed_at: values[13] };
@@ -80,6 +88,7 @@ const job: GithubJobSnapshot = { id: 99, runId: run.id, name: "macos", status: "
   expect(fake.runs.get("org:42")?.status).toBe("queued");
   expect(await applyWorkflowJobWebhook({ installation: { id: 5 }, repository: { id: 123, name: "repo", full_name: "acme/repo" }, sender: { login: "octocat" }, action: "queued", workflow_job: { id: 99, run_id: 42, run_number: 7, name: "macos", status: "queued", created_at: queuedAt, workflow_name: "CI", head_branch: "main", head_sha: "abc", event: "push", labels: job.labels, steps: [{ number: 1, name: "build", status: "queued" }] } })).toBe(true);
   const key = "org:99"; expect(fake.runs.get("org:42")?.status).toBe("queued"); expect(fake.jobs.get(key)?.status).toBe("queued"); expect(fake.jobs.get(key)?.started_at).toBeNull(); expect(fake.jobs.get(key)?.requested_labels).toBe('["self-hosted","macos"]'); expect(fake.steps.size).toBe(1);
+  expect(fake.queries.find((query) => query.startsWith("INSERT INTO dashboard_jobs"))).toContain("'::jsonb, ::jsonb,");
   const started = { ...run, status: "in_progress" as const, startedAt: "2026-08-13T00:02:00Z" }; const runningJob = { ...job, status: "in_progress" as const, startedAt: started.startedAt, runnerName: "runner" }; await applyGithubJobSnapshot({ installationId: 5, repository, run: started, job: runningJob });
   expect(fake.runs.get("org:42")?.status).toBe("in_progress"); expect(fake.runs.get("org:42")?.started_at).toBe(started.startedAt);
   const completed = { ...started, status: "completed" as const, conclusion: "success", completedAt: "2026-08-13T00:04:00Z" }; const doneJob = { ...runningJob, status: "completed" as const, conclusion: "success", completedAt: completed.completedAt, steps: [{ ...step, id: null, status: "completed" as const, conclusion: "success", startedAt: started.startedAt, completedAt: completed.completedAt, durationMs: 120_000 }] }; await applyGithubJobSnapshot({ installationId: 5, repository, run: completed, job: doneJob });
@@ -88,6 +97,20 @@ const job: GithubJobSnapshot = { id: 99, runId: run.id, name: "macos", status: "
   const storedStep = fake.steps.get("org:run-42:job-99:1"); expect(fake.jobs.get(key)?.status).toBe("completed"); expect(fake.jobs.get(key)?.started_at).toBe("2026-08-13T00:01:00Z"); expect(fake.jobs.get(key)?.completed_at).toBe(completed.completedAt); expect(storedStep?.status).toBe("completed"); expect(storedStep?.started_at).toBe("2026-08-13T00:01:00Z"); expect(storedStep?.completed_at).toBe(completed.completedAt); expect(storedStep?.duration_ms).toBe(180_000);
   const stable = { ...doneJob, steps: [{ ...doneJob.steps[0], id: "gh-step-1" }] }; await applyGithubJobSnapshot({ installationId: 5, repository, run: completed, job: stable }); expect(fake.steps.get("org:run-42:job-99:1")?.id).toMatch(/^[0-9a-f-]{36}$/);
  });
+
+test("a queued rerun reopens its completed workflow run", async () => {
+  const fake = makeStatefulSql();
+  configureRunLifecycle(fake.sql as never);
+  const repository = { id: 123, name: "repo", fullName: "acme/repo" };
+  await applyGithubJobSnapshot({ installationId: 5, repository, run, job });
+  const completedAt = "2026-08-13T00:04:00Z";
+  await applyGithubJobSnapshot({ installationId: 5, repository, run: { ...run, status: "completed", conclusion: "success", completedAt }, job: { ...job, status: "completed", conclusion: "success", completedAt } });
+  expect(fake.runs.get("org:42")?.status).toBe("completed");
+
+  await applyGithubJobSnapshot({ installationId: 5, repository, run, job: { ...job, id: 100 } });
+
+  expect(fake.runs.get("org:42")).toMatchObject({ status: "queued", conclusion: null, started_at: null, completed_at: null });
+});
 
 test("step duration is monotonic-compatible for terminal timestamps", () => expect(stageDurationMs({ startedAt: "2026-08-13T00:01:00Z", completedAt: "2026-08-13T00:02:00Z" })).toBe(60_000));
 test("strict webhook step validation remains enforced", async () => { await expect(applyWorkflowJobWebhook({ installation: { id: 5 }, repository: { id: 123 }, workflow_job: { id: 99, run_id: 42, status: "queued", steps: [{ number: 0 }] } })).rejects.toThrow("github_payload_invalid"); });
