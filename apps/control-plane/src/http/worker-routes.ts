@@ -60,13 +60,16 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   });
   app.get("/api/workers/installer", async (c) => {
     const audience = c.req.query("audience");
+    const runtime = c.req.query("runtime") ?? "container";
     const file = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : audience === "macos-arm64" ? "install-worker-macos.sh" : null;
     if (!file) return c.json({ error: "unsupported installer audience" }, 400);
+    if (audience === "windows-x64" && runtime !== "vm" && runtime !== "container") return c.json({ error: "unsupported Windows runtime" }, 400);
     const installer = Bun.file(new URL(file, deps.workerInstallerRoot));
     const extra: Record<string, string> = audience === "windows-x64"
-      ? { WINDOWS_TEMPLATE_PATH: deps.workerTemplatePaths?.["windows-x64"] ?? "", WINDOWS_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["windows-x64"] ?? "", LINUX_TEMPLATE_PATH: deps.workerTemplatePaths?.["linux-x64"] ?? "", LINUX_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["linux-x64"] ?? "" }
+      ? { WINDOWS_RUNTIME: runtime, WINDOWS_CONTAINER_IMAGE: deps.defaultJobImages["windows-x64"] ?? "", WINDOWS_TEMPLATE_PATH: deps.workerTemplatePaths?.["windows-x64"] ?? "", WINDOWS_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["windows-x64"] ?? "", LINUX_TEMPLATE_PATH: deps.workerTemplatePaths?.["linux-x64"] ?? "", LINUX_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["linux-x64"] ?? "" }
       : audience === "macos-arm64" ? { TART_IMAGE: deps.macosTartBaseImage ?? "", TART_IMAGE_DIGEST: deps.defaultJobImages["macos-arm64"] ?? "" } : {};
-    if (audience === "windows-x64" && (!extra.WINDOWS_TEMPLATE_PATH || !extra.WINDOWS_TEMPLATE_DIGEST)) return c.json({ error: "Windows Hyper-V template is not configured" }, 503, { "cache-control": "no-store" });
+    if (audience === "windows-x64" && runtime === "vm" && (!extra.WINDOWS_TEMPLATE_PATH || !extra.WINDOWS_TEMPLATE_DIGEST)) return c.json({ error: "Windows Hyper-V template is not configured" }, 503, { "cache-control": "no-store" });
+    if (audience === "windows-x64" && runtime === "container" && !extra.WINDOWS_CONTAINER_IMAGE) return c.json({ error: "Windows container image is not configured" }, 503, { "cache-control": "no-store" });
     return new Response(injectInstallerOrigin(await installer.text(), deps.baseUrl, extra, audience === "windows-x64"), { headers: noStore() });
   });
   app.get("/api/workers/orchestrator", (c) => { const audience = c.req.query("audience") as keyof NonNullable<typeof deps.workerOrchestratorExecutables>; const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined); if (!executable) return c.json({ error: "unsupported orchestrator audience" }, 400); const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", 'attachment; filename="whitesmith-orchestrator"'); return new Response(Bun.file(executable), { headers }); });

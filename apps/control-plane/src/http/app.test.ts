@@ -74,6 +74,36 @@ describe("control-plane HTTP boundary", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  test("serves container-mode Windows installer without a VM template", async () => {
+    const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-installers-"));
+    try {
+      await Bun.write(join(root, "install-worker.ps1"), "'__WINDOWS_RUNTIME__' '__WINDOWS_CONTAINER_IMAGE__' '__WINDOWS_TEMPLATE_PATH__'");
+      const image = "registry.example/windows@sha256:" + "a".repeat(64);
+      const response = await createControlPlaneApp(fakeHttpDeps({
+        workerInstallerRoot: pathToFileURL(`${root}/`),
+        defaultJobImages: { "windows-x64": image },
+      })).request("/api/workers/installer?audience=windows-x64&runtime=container");
+      const installer = await response.text();
+      expect(response.status).toBe(200);
+      expect(installer).toContain(`'${image}'`);
+      expect(installer).toContain("'container'");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  test("requires the Windows template only for VM installer mode", async () => {
+    const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-installers-"));
+    try {
+      await Bun.write(join(root, "install-worker.ps1"), "ready");
+      const response = await createControlPlaneApp(fakeHttpDeps({
+        workerInstallerRoot: pathToFileURL(`${root}/`),
+        defaultJobImages: { "windows-x64": "registry.example/windows@sha256:" + "a".repeat(64) },
+      })).request("/api/workers/installer?audience=windows-x64&runtime=vm");
+      expect(response.status).toBe(503);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   test("injects split Tart runtime identity into the macOS installer", async () => {
     const root = await mkdtemp(join(tmpdir(), "whitesmith-macos-installers-"));
     try {
