@@ -18,9 +18,11 @@ function injectInstallerOrigin(source: string, baseUrl: string, extra: Record<st
 export function pendingWorkerDto(row: Record<string, unknown>) {
   if (!hasMachineIdentity(row) || typeof row.id !== "string" || typeof row.fingerprint !== "string") return null;
   const telemetry = (row.doctor && typeof row.doctor === "object" ? row.doctor : {}) as Record<string, unknown>;
+  const rawGuestPlatforms = typeof row.guestPlatforms === "string" ? (() => { try { return JSON.parse(row.guestPlatforms); } catch { return null; } })() : row.guestPlatforms;
+  const guestPlatforms = Array.isArray(rawGuestPlatforms) ? rawGuestPlatforms : row.platform === "windows-x64" ? ["windows-x64"] : [row.platform];
   const pending = PendingWorkerRequest.parse({
     platform: row.platform,
-    guestPlatforms: row.guestPlatforms ?? (row.platform === "windows-x64" ? ["windows-x64"] : [row.platform]),
+    guestPlatforms,
     admissionState: row.admissionState,
     connectionState: row.connectionState,
     configurationState: row.configurationState,

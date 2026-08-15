@@ -91,6 +91,9 @@ test("PowerShell installer supports VM and container runtime modes", async () =>
   expect(source).toContain("WHITESMITH_WINDOWS_RUNTIME");
   expect(source).toContain("WHITESMITH_WINDOWS_CONTAINER_IMAGE");
   expect(source).toContain("WHITESMITH_WINDOWS_TEMPLATE_PATH");
+  expect(source).toContain("Remove-Item -LiteralPath $identityPath -Force");
+  expect(source).toContain("Existing Windows worker installation detected; reinstalling.");
+  expect(source).toContain("Stop-Service WhitesmithWorker");
   expect(source).toContain("New-Service -Name WhitesmithWorker");
   expect(source).toContain("-StartupType Automatic");
 });
