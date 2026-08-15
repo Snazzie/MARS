@@ -114,6 +114,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     }
     if (duplicate) {
       if (duplicate.name !== body.name || duplicate.triggerLabel !== body.triggerLabel) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
+      await deps.db`UPDATE runner_pools SET worker_id=NULL,platform=${body.guestPlatform},driver=${driver},image_digest=${body.imageDigest},resources=${JSON.stringify(body.resources)}::jsonb,labels=${JSON.stringify(labels)}::jsonb,enabled=true WHERE id=${duplicate.id}`;
       await completeOnboardingIfReady(deps.db);
       await invalidateDashboard(deps.db, org, ["pools", "onboarding"]);
       return c.json({ id: String(duplicate.id), labels });
