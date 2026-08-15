@@ -40,8 +40,13 @@ function Ensure-HyperV {
 function Ensure-WindowsContainerRuntime([string]$Image, [string]$Prefix) {
   if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) { throw 'Docker Engine is required.' }
   if ((docker info --format '{{.OSType}}') -ne 'windows') { throw 'Docker must be running the Windows engine.' }
-  $digests = @(docker image inspect --format '{{json .RepoDigests}}' $Image | ConvertFrom-Json)
-  if ($LASTEXITCODE -ne 0 -or -not ($digests -contains $Image)) { throw "Digest-pinned Windows image is not present locally: $Image" }
+  if ($AllowLocalContainerImage -and $Image -eq 'whitesmith/windows-job:local') {
+    docker image inspect $Image | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Local Windows image is not present: $Image" }
+  } else {
+    $digests = @(docker image inspect --format '{{json .RepoDigests}}' $Image | ConvertFrom-Json)
+    if ($LASTEXITCODE -ne 0 -or -not ($digests -contains $Image)) { throw "Digest-pinned Windows image is not present locally: $Image" }
+  }
   $name = "$Prefix-install-probe-$([guid]::NewGuid().ToString('N'))"
   try {
     docker create --name $name --isolation=hyperv --label whitesmith.managed=true --label "whitesmith.lease-id=$([guid]::NewGuid())" $Image cmd /c exit 0 | Out-Null
