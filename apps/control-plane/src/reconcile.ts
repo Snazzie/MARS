@@ -17,7 +17,7 @@ export type ReconcileDeps = {
   candidates: Array<Candidate & { worker: Candidate["worker"] & { id: string }; pool: Candidate["pool"] & { id: string } }>;
   upsert?: (job: QueuedRoutingJob) => Promise<void>;
   reserve: (input: { workerId: string; poolId: string; githubJobId: number; routingKey: string; requested: { vcpu: number; memoryBytes: number; storageBytes: number; concurrency: number } }) => Promise<LeaseReservation>;
-  jit: (input: { owner: string; repo: string; runnerName: string; labels: string[]; githubJobId: number }) => Promise<RunnerJitConfig>;
+  jit: (input: { installationId: number; owner: string; repo: string; runnerName: string; labels: string[]; githubJobId: number }) => Promise<RunnerJitConfig>;
   dispatch: (reservation: LeaseReservation, jit: RunnerJitConfig) => Promise<void>;
   release?: (reservation: LeaseReservation) => Promise<void>;
 };
@@ -27,6 +27,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
   const report: ReconcileReport = { reserved: 0, skipped: 0, failed: 0 };
   const seen = new Set<number>();
   const reservedByPool = new Map<string, number>();
+  const attemptedInstallations = new Set<number>();
   for (const queued of deps.queued) {
     if (seen.has(queued.jobId)) { report.skipped += 1; continue; }
     seen.add(queued.jobId);
@@ -40,6 +41,8 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
     if (!candidate) { console.log(`No routing candidate for job ${queued.jobId}: ${requestedLabels.join(",")}`); report.skipped += 1; continue; }
     const [owner, repo] = queued.repository.split("/", 2);
     if (!owner || !repo) { report.failed += 1; continue; }
+    if (attemptedInstallations.has(queued.installationId)) { report.skipped += 1; continue; }
+    attemptedInstallations.add(queued.installationId);
     let reservation: LeaseReservation | undefined;
     try {
       const resources = PoolResourcesSchema.parse(candidate.pool.resources);
@@ -53,7 +56,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
       const capacityKey = `${candidate.pool.id}:${candidate.worker.id}`;
       reservedByPool.set(capacityKey, (reservedByPool.get(capacityKey) ?? 0) + 1);
       reservation = claimed;
-      const jit = await deps.jit({ owner, repo, runnerName: `whitesmith-${claimed.id}`, labels: requestedLabels, githubJobId: queued.jobId });
+      const jit = await deps.jit({ installationId: queued.installationId, owner, repo, runnerName: `whitesmith-${claimed.id}`, labels: requestedLabels, githubJobId: queued.jobId });
       await deps.dispatch(claimed, jit);
       report.reserved += 1;
     } catch (error) {

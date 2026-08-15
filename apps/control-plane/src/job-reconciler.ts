@@ -14,8 +14,8 @@ export interface JobReconciliationDeps {
   db: DatabaseClient;
   installationToken: (installationId: number) => Promise<string>;
   dispatcher: Dispatch;
+  githubFetchForInstallation: (installationId: number) => Fetcher;
   workerConnected?: (workerId: string) => boolean;
-  githubFetch?: Fetcher;
 }
 function jsonValue(value: unknown): unknown {
   if (typeof value !== "string") return value;
@@ -55,7 +55,6 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     WHERE p.enabled=true AND w.draining=false`;
 
   const organizationByJob = new Map<number, string>();
-  const installationByJob = new Map<number, number>();
   const githubByInstallation = new Map<number, GithubJobsClient>();
   const workerByPool = new Map<string, { workerId: string; encryptionPublicKey: string; imageDigest: string; guestPlatform: string; driver: RuntimeDriverNameValue; resources: ReturnType<typeof PoolResourcesSchema.parse> }>();
 
@@ -78,17 +77,15 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     queued: queuedRows.map((row) => {
       const jobId = Number(row.jobId);
       organizationByJob.set(jobId, String(row.organizationId));
-      installationByJob.set(jobId, Number(row.installationId));
       return { installationId: Number(row.installationId), repositoryId: String(row.repositoryId), repository: String(row.repository), runId: String(row.runId), jobId, labels: stringArray(row.labels) };
     }),
     candidates,
     reserve: (input) => reserveRoutingSlot(deps.db, { organizationId: organizationByJob.get(input.githubJobId)!, ...input, ttlMs: LEASE_STARTUP_TTL_MS }),
     jit: async (input) => {
-      const installationId = installationByJob.get(input.githubJobId);
-      if (!installationId) throw new Error("github_installation_not_found");
+      const installationId = input.installationId;
       let client = githubByInstallation.get(installationId);
       if (!client) {
-        client = new GithubJobsClient({ token: () => deps.installationToken(installationId), fetch: deps.githubFetch });
+        client = new GithubJobsClient({ token: () => deps.installationToken(installationId), fetch: deps.githubFetchForInstallation(installationId) });
         githubByInstallation.set(installationId, client);
       }
       return client.generateJitConfig({ owner: input.owner, repo: input.repo, runnerName: input.runnerName, workFolder: "_work", labels: input.labels });

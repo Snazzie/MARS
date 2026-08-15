@@ -80,7 +80,7 @@ startReconciliationScheduler(async () => {
       }
     }
     await expireLeases(db);
-    const report = await runQueuedJobReconciliation({ db, installationToken: (installationId) => githubApp.getInstallationToken(installationId), dispatcher, workerConnected: (workerId) => dispatcher.isConnected(workerId) });
+    const report = await runQueuedJobReconciliation({ db, installationToken: (installationId) => githubApp.getInstallationToken(installationId), githubFetchForInstallation: () => fetch, dispatcher, workerConnected: (workerId) => dispatcher.isConnected(workerId) });
     console.log(`Job reconciliation tick: reserved=${report.reserved} failed=${report.failed} skipped=${report.skipped}`);
   } catch (error) {
     console.error("Job reconciliation failed", error);

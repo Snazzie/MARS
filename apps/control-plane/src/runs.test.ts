@@ -105,7 +105,7 @@ test("webhook ingestion and reconciliation authorize available repositories on a
     reconciliationQuery = strings.join(" ");
     return [];
   }) as never;
-  await runQueuedJobReconciliation({ db, installationToken: async () => "token", dispatcher: { dispatch: async () => ({}) } as never });
+  await runQueuedJobReconciliation({ db, installationToken: async () => "token", githubFetchForInstallation: () => fetch, dispatcher: { dispatch: async () => ({}) } as never });
   expect(reconciliationQuery).toContain("repo.available=true");
   expect(reconciliationQuery).toContain("i.state='approved'");
   expect(reconciliationQuery).not.toContain("repo.approved");
