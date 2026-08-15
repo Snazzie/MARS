@@ -8,6 +8,7 @@ const prepareMacImage = join(root, "deploy/workers/prepare-macos-job-image.sh");
 const powershell = join(root, "deploy/workers/install-worker.ps1");
 const prepareWindowsTemplate = join(root, "deploy/workers/prepare-windows-hyperv-template.ps1");
 const valid = "A".repeat(43);
+const posixRuntimeTest = process.platform === "win32" ? test.skip : test;
 
 async function invoke(script: string, args: string[], env: Record<string, string> = {}) {
   const proc = Bun.spawn(script.endsWith(".sh") ? [script, ...args] : ["zsh", script, ...args], {
@@ -16,16 +17,18 @@ async function invoke(script: string, args: string[], env: Record<string, string
   return { exitCode: await proc.exited, stdout: await new Response(proc.stdout).text(), stderr: await new Response(proc.stderr).text() };
 }
 
-test.each([linux, mac])("%s rejects missing or malformed code before host checks", async (script) => {
-  const missing = await invoke(script, []);
-  expect(missing.exitCode).toBe(2);
-  expect(missing.stderr).toContain("usage:");
-  for (const args of [["--unknown"], ["--code"], ["--code", ""], ["--code", valid, "--code", valid], ["--code", "short"]]) {
-    const result = await invoke(script, args);
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage:");
-  }
-});
+for (const script of [linux, mac]) {
+  posixRuntimeTest(`${script} rejects missing or malformed code before host checks`, async () => {
+    const missing = await invoke(script, []);
+    expect(missing.exitCode).toBe(2);
+    expect(missing.stderr).toContain("usage:");
+    for (const args of [["--unknown"], ["--code"], ["--code", ""], ["--code", valid, "--code", valid], ["--code", "short"]]) {
+      const result = await invoke(script, args);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("usage:");
+    }
+  });
+}
 
 test("POSIX installers expose strict parser and stdin handoff", async () => {
   expect(await Bun.file(linux).text()).toContain("parse_args");
@@ -69,13 +72,13 @@ test("macOS job image preparation is immutable, pinned, and emits split runtime 
   expect(source).toContain("WHITESMITH_TART_IMAGE_DIGEST=");
   expect(source).toContain('tart delete "$TARGET"');
 });
-test("macOS job image preparation accepts immutable OCI digest sources", async () => {
+posixRuntimeTest("macOS job image preparation accepts immutable OCI digest sources", async () => {
   const result = await invoke(prepareMacImage, ["--source", `ghcr.io/cirruslabs/macos-tahoe-base@sha256:${"a".repeat(64)}`, "--target", "invalid/target", "--job-agent", process.execPath]);
   expect(result.exitCode).toBe(2);
   expect(result.stderr).toContain("invalid target image");
   expect(result.stderr).not.toContain("invalid source image");
 });
-test("macOS job image preparation preserves the original failure during cleanup", async () => {
+posixRuntimeTest("macOS job image preparation preserves the original failure during cleanup", async () => {
   const result = await invoke(prepareMacImage, ["--source", "source", "--target", "new-target", "--job-agent", process.execPath], { TART_BIN: "/usr/bin/true", CURL_BIN: "/usr/bin/false" });
   expect(result.exitCode).not.toBe(0);
   expect(result.stderr).not.toContain("read-only variable");
@@ -186,7 +189,7 @@ test("Linux installer accepts configured HTTP or HTTPS control-plane URLs", asyn
   expect(source).toContain('parsed.scheme not in {"https", "http"}');
   expect(source).toContain("PUBLIC_BASE_URL must use HTTP or HTTPS");
 });
-test("Linux installer rejects noninteractive URL checks before host preflight", async () => {
+posixRuntimeTest("Linux installer rejects noninteractive URL checks before host preflight", async () => {
   const rejected = await invoke(linux, [], { PUBLIC_BASE_URL: "https://" });
   const accepted = await invoke(linux, [], { PUBLIC_BASE_URL: "http://[::1]:8080" });
   const malformed = await invoke(linux, [], { PUBLIC_BASE_URL: "https://host:notaport" });
