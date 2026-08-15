@@ -12,7 +12,9 @@ afterEach(async () => {
 test("fails completion when a containerized job stops making terminal progress", async () => {
   const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-container-"));
   roots.push(root);
+  const calls: string[][] = [];
   const docker: DockerRunner = async (args) => {
+    calls.push(args);
     if (args[0] === "wait") return Promise.withResolvers<Awaited<ReturnType<DockerRunner>>>().promise;
     if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv" } }]), stderr: "" };
     return { code: 0, stdout: "", stderr: "" };
@@ -34,6 +36,7 @@ test("fails completion when a containerized job stops making terminal progress",
     nonce: "n".repeat(32),
     encodedJitConfig: "config",
   });
+  expect(calls.find((args) => args[0] === "create")).toContain("size=10737418240");
 
   await expect(lease.completion!).rejects.toThrow("container job timed out");
   await driver.removeLease("11111111-1111-4111-8111-111111111111");

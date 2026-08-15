@@ -25,7 +25,7 @@ jobs:
       - name: Build
         run: bun run build
       - name: Inspect runner
-        shell: pwsh
+        shell: powershell
         run: |
           $PSVersionTable
           Get-ComputerInfo -Property WindowsProductName,WindowsVersion,OsArchitecture
@@ -34,7 +34,7 @@ jobs:
           test-path package.json
           test-path .github/workflows
       - name: Verify Whitesmith Windows runner
-        shell: pwsh
+        shell: powershell
         run: |
           if ($env:RUNNER_OS -ne 'Windows') { throw "Expected Windows runner, got $env:RUNNER_OS" }
           if ($env:RUNNER_ARCH -ne 'X64') { throw "Expected x64 runner, got $env:RUNNER_ARCH" }
@@ -43,7 +43,7 @@ jobs:
           }
           Write-Host "Picked up by $env:RUNNER_NAME"
       - name: Execute Windows smoke workload
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $result = [ordered]@{
