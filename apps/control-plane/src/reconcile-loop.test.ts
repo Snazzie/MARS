@@ -11,7 +11,14 @@ test("runs immediately, prevents overlap, and stops future ticks", async () => {
   release();
   expect(calls).toBe(1);
 });
-
+test("runs a requested reconciliation immediately after startup", async () => {
+  let calls = 0;
+  const scheduler = startReconciliationScheduler(async () => { calls += 1; }, 60_000);
+  expect(calls).toBe(1);
+  await scheduler.trigger();
+  expect(calls).toBe(2);
+  scheduler.stop();
+});
 test("dispatches durable cleanup for terminal leases without an outstanding stop command", async () => {
   const modulePath = "./lease-cleanup.ts";
   const cleanup = await import(modulePath).catch(() => null) as null | {

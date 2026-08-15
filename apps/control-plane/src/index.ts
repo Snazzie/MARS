@@ -68,7 +68,8 @@ const startedAt = new Date().toISOString();
 const discoveryHealth = new DiscoveryHealthMonitor(discoveryIntervalMs, Date.parse(startedAt));
 const githubApp = new GitHubAppService({ db, secretBox, baseUrl: env.BASE, browserBaseUrl: env.BROWSER_BASE, webhookUrl: env.WEBHOOK_URL });
 const githubRateLimits = new GithubRateLimitGate();
-const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, browserBaseUrl: env.BROWSER_BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), workerServiceHostExecutable: new URL("../../../apps/windows-service-host/target/release/whitesmith-service-host.exe", import.meta.url), workerOrchestratorExecutables: { "linux-x64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator", import.meta.url), "windows-x64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator.exe", import.meta.url), "macos-arm64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator-macos-arm64", import.meta.url) }, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => dispatcher.replayConnected(workerId), health: () => ({ buildId: Bun.env.WHITESMITH_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
+let triggerReconciliation = () => Promise.resolve();
+const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, browserBaseUrl: env.BROWSER_BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), workerServiceHostExecutable: new URL("../../../apps/windows-service-host/target/release/whitesmith-service-host.exe", import.meta.url), workerOrchestratorExecutables: { "linux-x64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator", import.meta.url), "windows-x64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator.exe", import.meta.url), "macos-arm64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator-macos-arm64", import.meta.url) }, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => { dispatcher.replayConnected(workerId); void triggerReconciliation(); }, health: () => ({ buildId: Bun.env.WHITESMITH_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
 const discoveryDeps = { db, installationToken: (installationId: number) => githubApp.getInstallationToken(installationId), githubFetchForInstallation: (installationId: number) => githubRateLimits.scopedFetch(installationId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY };
 startReconciliationScheduler(async () => {
   try {
@@ -78,7 +79,7 @@ startReconciliationScheduler(async () => {
     console.error("GitHub job discovery failed", error);
   }
 }, discoveryIntervalMs);
-startReconciliationScheduler(async () => {
+const reconciliationScheduler = startReconciliationScheduler(async () => {
   try {
     const pickup = await discoverQueuedRepositoryJobs(discoveryDeps);
     if (pickup.discovered || pickup.failed) console.log(`Queued GitHub job pickup: repositories=${pickup.repositories} discovered=${pickup.discovered} updated=${pickup.updated} failed=${pickup.failed}`);
@@ -103,6 +104,7 @@ startReconciliationScheduler(async () => {
     }
   }
 }, reconciliationIntervalMs);
+triggerReconciliation = reconciliationScheduler.trigger;
 let server: Server<SocketData>;
 server = Bun.serve<SocketData>({
   port: Number(Bun.env.PORT ?? 3000),
@@ -148,6 +150,7 @@ server = Bun.serve<SocketData>({
               const acknowledged = await applyWorkerConfigurationAcknowledgement(db, { workerId: ws.data.workerId, payload: frame.payload });
               console.log(`Worker configuration acknowledgement: ${ws.data.workerId} accepted=${acknowledged}`);
               dispatcher.handleEvent(frame, ws);
+              void triggerReconciliation();
             } else {
               const accepted = await handleAuthenticatedWorkerEvent(db, dispatcher, frame, ws);
               if (!accepted) throw new Error("invalid worker event");
