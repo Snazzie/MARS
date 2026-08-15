@@ -51,7 +51,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
         poolId: candidate.pool.id,
         githubJobId: queued.jobId,
         requested: resources,
-        routingKey: `${queued.repository}:${requestedLabels.map((label) => label.toLowerCase()).sort().join(",")}`,
+        routingKey: `${queued.repository}:${queued.jobId}:${requestedLabels.map((label) => label.toLowerCase()).sort().join(",")}`,
       });
       const capacityKey = `${candidate.pool.id}:${candidate.worker.id}`;
       reservedByPool.set(capacityKey, (reservedByPool.get(capacityKey) ?? 0) + 1);

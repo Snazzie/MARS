@@ -18,6 +18,8 @@ export class WindowsContainerDriver implements RuntimeDriver {
   readonly name = "windows-hyperv-container" as const;
   private readonly leases = new Map<string, { name: string; root: string; runtime: RuntimeLease }>();
   constructor(private readonly config: WindowsContainerConfig, private readonly docker: DockerRunner = defaultDocker) {}
+  private containerName(leaseId: string): string { return `${this.config.prefix}-${leaseId}`; }
+  private bootstrapPath(leaseId: string): string { return join(this.config.bootstrapRoot, leaseId); }
   validatePool(resources: PoolResources): void { validateResources(resources, this.config.limits); if (!digest.test(this.config.image) && !(this.config.allowLocalImage && this.config.image === localImage)) throw new Error("Windows container image must be digest pinned"); }
   async reserveCapacity(resources: PoolResources): Promise<void> {
     this.validatePool(resources);
@@ -31,10 +33,10 @@ export class WindowsContainerDriver implements RuntimeDriver {
   }
   async createLease(lease: Lease): Promise<RuntimeLease> {
     this.validatePool(lease.resources);
-    const root = join(this.config.bootstrapRoot, lease.id);
+    const root = this.bootstrapPath(lease.id);
     await mkdir(root, { recursive: true });
     await writeFile(join(root, "bootstrap.json"), JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig }), { mode: 0o600, flag: "wx" });
-    const name = `${this.config.prefix}-${lease.id}`;
+    const name = this.containerName(lease.id);
     try {
       checked(await this.docker(["create", "--name", name, "--isolation=hyperv", "--label", "whitesmith.managed=true", "--label", `whitesmith.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), "--storage-opt", `size=${lease.resources.storageBytes}`, "--mount", `type=bind,source=${root},target=C:\\ProgramData\\Whitesmith\\bootstrap,readonly`, this.config.image]), "docker create");
       checked(await this.docker(["start", name]), "docker start");
@@ -58,7 +60,22 @@ export class WindowsContainerDriver implements RuntimeDriver {
     return Promise.race([completion, timeout]);
   }
   async inspectLease(leaseId: string): Promise<RuntimeLease> { const lease = this.leases.get(leaseId); if (!lease) throw new Error("sandbox not found"); return lease.runtime; }
-  async stopLease(leaseId: string): Promise<void> { const lease = this.leases.get(leaseId); if (lease) checked(await this.docker(["stop", "--time", "10", lease.name]), "docker stop"); }
-  async removeLease(leaseId: string): Promise<void> { const lease = this.leases.get(leaseId); if (!lease) return; try { await this.docker(["rm", "-f", lease.name]); } finally { this.leases.delete(leaseId); await rm(lease.root, { recursive: true, force: true }); } }
+  async stopLease(leaseId: string): Promise<void> {
+    const name = this.leases.get(leaseId)?.name ?? this.containerName(leaseId);
+    const result = await this.docker(["stop", "--time", "10", name]);
+    if (result.code !== 0 && !/no such container/i.test(result.stderr)) checked(result, "docker stop");
+  }
+  async removeLease(leaseId: string): Promise<void> {
+    const lease = this.leases.get(leaseId);
+    const name = lease?.name ?? this.containerName(leaseId);
+    const root = lease?.root ?? this.bootstrapPath(leaseId);
+    try {
+      const result = await this.docker(["rm", "-f", name]);
+      if (result.code !== 0 && !/no such container/i.test(result.stderr)) checked(result, "docker rm");
+    } finally {
+      this.leases.delete(leaseId);
+      await rm(root, { recursive: true, force: true });
+    }
+  }
   async collectDiagnostics(leaseId: string): Promise<Record<string, unknown>> { const lease = await this.inspectLease(leaseId); return { isolation: "hyperv", runtimeInstanceId: lease.runtimeInstanceId, observed: lease.observed }; }
 }

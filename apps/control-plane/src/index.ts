@@ -14,6 +14,7 @@ import { applyWorkerConfigurationAcknowledgement, createRequestLimiter } from ".
 import { handleAuthenticatedWorkerEvent } from "./worker-lifecycle.ts";
 import { GitHubAppService } from "./github-app.ts";
 import { runQueuedJobReconciliation } from "./job-reconciler.ts";
+import { reapPendingLeases } from "./lease-cleanup.ts";
 import { startReconciliationScheduler } from "./reconcile-loop.ts";
 import { DiscoveryHealthMonitor } from "./discovery-health.ts";
 import { createControlPlaneApp } from "./http/app.ts";
@@ -82,10 +83,24 @@ startReconciliationScheduler(async () => {
     const pickup = await discoverQueuedRepositoryJobs(discoveryDeps);
     if (pickup.discovered || pickup.failed) console.log(`Queued GitHub job pickup: repositories=${pickup.repositories} discovered=${pickup.discovered} updated=${pickup.updated} failed=${pickup.failed}`);
     await expireLeases(db);
-    const report = await runQueuedJobReconciliation({ db, installationToken: (installationId) => githubApp.getInstallationToken(installationId), githubFetchForInstallation: (installationId) => githubRateLimits.scopedFetch(installationId), dispatcher, workerConnected: (workerId) => dispatcher.isConnected(workerId) });
+    const report = await runQueuedJobReconciliation({
+      db,
+      installationToken: (installationId) => githubApp.getInstallationToken(installationId),
+      githubFetchForInstallation: (installationId) => githubRateLimits.scopedFetch(installationId),
+      dispatcher,
+      workerConnected: (workerId) => dispatcher.isConnected(workerId),
+      repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY,
+    });
     console.log(`Job reconciliation tick: reserved=${report.reserved} failed=${report.failed} skipped=${report.skipped}`);
   } catch (error) {
     console.error("Job reconciliation failed", error);
+  } finally {
+    try {
+      const cleanup = await reapPendingLeases({ db, dispatch: dispatcher.dispatch.bind(dispatcher), workerConnected: (workerId) => dispatcher.isConnected(workerId) });
+      if (cleanup.dispatched || cleanup.failed) console.log(`Lease cleanup tick: dispatched=${cleanup.dispatched} failed=${cleanup.failed} skipped=${cleanup.skipped}`);
+    } catch (error) {
+      console.error("Lease cleanup failed", error);
+    }
   }
 }, reconciliationIntervalMs);
 let server: Server<SocketData>;

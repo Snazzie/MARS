@@ -15,7 +15,8 @@ export async function reapPendingLeases(input: {
       AND l.cleanup_state IN ('pending','failed')
       AND NOT EXISTS (
         SELECT 1 FROM commands c
-        WHERE c.lease_id=l.id AND c.type='tart.stop_lease' AND c.state IN ('pending','sent')
+        WHERE c.lease_id=l.id AND c.type='tart.stop_lease'
+          AND (c.state='pending' OR (c.state='sent' AND c.occurred_at>now()-interval '1 minute'))
       )
     ORDER BY l.updated_at
     LIMIT 100`;

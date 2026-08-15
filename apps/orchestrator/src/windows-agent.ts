@@ -27,6 +27,23 @@ const auth = (nonce: string, identity: Identity) => ({ type: "authenticate", wor
 async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> { const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), platform: "windows-x64", publicKey: identity.publicKey, encryptionPublicKey: identity.encryptionPublicKey, vmUuid: crypto.randomUUID(), machineUuid: await machineUuid(), doctor: doctor(), capacity: await capacity() }); const response = await fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); if (!response.ok) throw new Error(`worker join failed: ${response.status}`); const joined = await response.json() as { workerId: string }; const result = { ...identity, workerId: joined.workerId }; await save(result); return result; }
 type WindowsRuntimeDriver = Pick<RuntimeDriver, "reserveCapacity" | "createLease" | "stopLease" | "removeLease"> & { reconcileOrphans?: () => Promise<void> };
 
+export async function runWindowsLeaseCleanup(
+  command: WorkerCommand,
+  driver: Pick<RuntimeDriver, "stopLease" | "removeLease">,
+  send: (workerEvent: WorkerEvent) => void,
+): Promise<void> {
+  if (command.type !== "tart.stop_lease" || !command.leaseId) throw new Error("Windows lease cleanup command invalid");
+  const nonce = String((command.payload as Record<string, unknown>).nonce ?? "");
+  const payload = { commandId: command.id, leaseId: command.leaseId, nonce };
+  send(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId }));
+  let cleanupFailed = false;
+  try { await driver.stopLease(command.leaseId); } catch { cleanupFailed = true; }
+  try { await driver.removeLease(command.leaseId); } catch { cleanupFailed = true; }
+  send(event(command.workerId, cleanupFailed ? "lease.failed" : "lease.reaped", cleanupFailed
+    ? { ...payload, reason: "cleanup_failed" }
+    : payload));
+}
+
 export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise<never> {
   const controlPlane = new URL(baseUrl);
   const identity = (await load()) ?? await enroll(controlPlane, keys());
@@ -66,6 +83,10 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
             const payload = WorkerConfigurePayload.parse(command.payload);
             const observed = WorkerConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms });
             return ws.send(JSON.stringify(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed })));
+          }
+          if (command.type === "tart.stop_lease") {
+            await runWindowsLeaseCleanup(command, driver, workerEvent => ws.send(JSON.stringify(workerEvent)));
+            return;
           }
           if (command.type === "windows-container.create_lease" || command.type === "hyperv.create_lease") {
             const expectedType = mode === "container" ? "windows-container.create_lease" : "hyperv.create_lease";

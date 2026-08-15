@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { LeaseBootstrapEnvelope, WorkerCommand, WorkerEvent } from "@whitesmith/contracts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
+import { runWindowsLeaseCleanup } from "./windows-agent.ts";
 
 const workerId = "11111111-1111-4111-8111-111111111111";
 const leaseId = "22222222-2222-4222-8222-222222222222";
@@ -12,4 +13,24 @@ test("reports Windows container provisioning failures instead of leaving the lea
   const driver = { createLease: async () => { throw new Error("provisioning exploded"); } };
   await runLeaseLifecycle(command, driver as never, bootstrap, event => events.push(event));
   expect(events).toEqual([expect.objectContaining({ type: "lease.failed", payload: expect.objectContaining({ commandId: command.id, leaseId, nonce: bootstrap.nonce, reason: "provisioning_failed" }) })]);
+});
+
+test("handles durable stop commands and removes the lease", async () => {
+  const events: WorkerEvent[] = [];
+  const calls: string[] = [];
+  const stopCommand: WorkerCommand = {
+    ...command,
+    type: "tart.stop_lease",
+    payload: { nonce: bootstrap.nonce },
+  };
+  await runWindowsLeaseCleanup(stopCommand, {
+    stopLease: async (id) => { calls.push(`stop:${id}`); },
+    removeLease: async (id) => { calls.push(`remove:${id}`); },
+  }, (workerEvent) => events.push(workerEvent));
+
+  expect(calls).toEqual([`stop:${leaseId}`, `remove:${leaseId}`]);
+  expect(events).toEqual([
+    expect.objectContaining({ type: "command.accepted", payload: expect.objectContaining({ commandId: command.id, leaseId }) }),
+    expect.objectContaining({ type: "lease.reaped", payload: expect.objectContaining({ commandId: command.id, leaseId, nonce: bootstrap.nonce }) }),
+  ]);
 });

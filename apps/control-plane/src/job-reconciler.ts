@@ -16,6 +16,7 @@ export interface JobReconciliationDeps {
   dispatcher: Dispatch;
   githubFetchForInstallation: (installationId: number) => Fetcher;
   workerConnected?: (workerId: string) => boolean;
+  repositoryFullName?: string;
 }
 function jsonValue(value: unknown): unknown {
   if (typeof value !== "string") return value;
@@ -39,7 +40,8 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     JOIN dashboard_installations i ON i.id=repo.installation_id
       AND i.organization_id=r.organization_id AND i.state='approved'
     WHERE j.status='queued' AND r.status='queued'
-    ORDER BY j.github_job_id ASC
+      AND (${deps.repositoryFullName ?? ""}='' OR repo.full_name=${deps.repositoryFullName ?? ""})
+    ORDER BY j.github_job_id DESC
     FOR UPDATE OF j SKIP LOCKED`;
   if (!queuedRows.length) return { reserved: 0, skipped: 0, failed: 0 };
 
