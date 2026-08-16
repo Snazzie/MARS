@@ -1,11 +1,16 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { WorkerDetail } from "@whitesmith/contracts";
 import { getWorkers } from "../api.ts";
 import { EnrollmentPanel } from "../components/EnrollmentPanel.tsx";
 import { PendingWorkerRequests, pendingWorkerQueryOptions } from "../components/PendingWorkerRequests.tsx";
 import { WorkerCard } from "../components/WorkerCard.tsx";
 import { QueryState } from "../components/StateView.tsx";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
+
+export function workerRefetchInterval(workers: Array<Pick<WorkerDetail, "admissionState" | "configurationState">> | undefined): 2000 | false {
+  return workers?.some((worker) => worker.admissionState === "adopted" && worker.configurationState === "applying") ? 2_000 : false;
+}
 
 export function WorkersPage() {
   const { organizationId } = useOrganizationFromRoute();
@@ -17,7 +22,7 @@ export function WorkersPage() {
     queryFn: () => getWorkers(organizationId, includeInactive),
     enabled: Boolean(organizationId),
     staleTime: 10_000,
-    refetchInterval: (current) => current.state.data?.items.some((worker) => worker.admissionState === "adopted" && worker.configurationState === "unconfigured") ? 2_000 : false,
+    refetchInterval: (current) => workerRefetchInterval(current.state.data?.items),
   });
   const pendingQuery = useQuery(pendingWorkerQueryOptions());
   function invalidate() { void queryClient.invalidateQueries({ queryKey: ["pending-workers"] }); void queryClient.invalidateQueries({ queryKey: ["org", organizationId, "workers"] }); }

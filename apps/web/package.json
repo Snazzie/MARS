@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "rm -rf dist && mkdir -p dist && cp index.html dist/index.html && bun build src/index.tsx --outdir dist --target browser",
+    "build": "rm -rf dist && mkdir -p dist && cp index.html dist/index.html && cp src/styles.css dist/index.css && bun build src/index.tsx --outdir dist --target browser",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "tsc -p tsconfig.json --noEmit"
   },

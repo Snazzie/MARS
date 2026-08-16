@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { WorkersPage } from "./WorkersPage.tsx";
+import { WorkersPage, workerRefetchInterval } from "./WorkersPage.tsx";
 
 test("hides global pending approval controls inside a selected workspace", () => {
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: () => "org-1", setItem: () => {} } });
@@ -33,4 +33,9 @@ test("keeps enrollment closed until explicitly opened", () => {
   expect(markup).toContain("ssh-ed25519 AAAA pending");
   expect(markup).not.toContain("<dialog");
   Reflect.deleteProperty(globalThis, "localStorage");
+});
+
+test("polls while an adopted worker is applying configuration", () => {
+  expect(workerRefetchInterval([{ admissionState: "adopted", configurationState: "applying" }])).toBe(2_000);
+  expect(workerRefetchInterval([{ admissionState: "adopted", configurationState: "ready" }])).toBe(false);
 });
