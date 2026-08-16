@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { beginOnboardingGithubInstall, beginOnboardingGithubManifest, createOnboardingPool, getOnboardingDetail, getOnboardingStatus, rejectPendingWorker, selectOnboardingWorker } from "../api.ts";
+import { beginOnboardingGithubInstall, beginOnboardingGithubManifest, createOnboardingPool, getOnboardingDetail, getOnboardingStatus, rejectPendingWorker, selectOnboardingWorker, verifyOnboardingRepositories } from "../api.ts";
 import { EnrollmentPanel } from "../components/EnrollmentPanel.tsx";
 import { pendingWorkerQueryOptions } from "../components/PendingWorkerRequests.tsx";
 import { RunnerWorkflowPrModal } from "../components/RunnerWorkflowPrModal.tsx";
@@ -34,7 +34,7 @@ export function OnboardingPage() {
 }
 function EditableStep({ detail, index, onDone, onDiscard, onSelect, onCreate }: { detail: OnboardingDetail; index: number; onDone: () => void; onDiscard: () => void; onSelect: (id: string) => void; onCreate: (input: CreatePoolRequest) => void }) {
   if (index === 1) return <WorkerSetupStep detail={detail} edit onSelect={onSelect} onDone={onDone} onDiscard={onDiscard} />;
-  if (index === 2) return <GithubStep detail={detail} edit />;
+  if (index === 2) return <GithubStep detail={detail} />;
   if (index === 3) return <LabelsStep detail={detail} edit onCreate={onCreate} />;
   return <p>Administrator account is configured.</p>;
 }
@@ -68,12 +68,22 @@ function submitGithubManifest(launch: { action: string; manifest: string }): voi
   document.body.append(form);
   form.submit();
 }
-function GithubStep({ detail, edit = false }: { detail: OnboardingDetail; edit?: boolean }) {
+function GithubStep({ detail }: { detail: OnboardingDetail }) {
+  const client = useQueryClient();
   const [organizationId, setOrganizationId] = useState(detail.github.organizationId ?? "");
   const [connectError, setConnectError] = useState<string | null>(null);
   const availableRepositories = detail.github.repositories.filter((repository) => repository.available);
-  const hasUsableInstallation = !edit && Boolean(detail.github.installation && availableRepositories.length > 0);
+  const hasInstallation = Boolean(detail.github.installation);
+  const hasUsableInstallation = hasInstallation && availableRepositories.length > 0;
   const selectionRemediation = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("github") === "repository-selection-required";
+  const refresh = () => {
+    void client.invalidateQueries({ queryKey: ["onboarding"] });
+    void client.invalidateQueries({ queryKey: ["onboarding-status"] });
+  };
+  const verify = useMutation({
+    mutationFn: verifyOnboardingRepositories,
+    onSuccess: refresh,
+  });
   const connect = async () => {
     if (!organizationId) return;
     setConnectError(null);
@@ -90,7 +100,7 @@ function GithubStep({ detail, edit = false }: { detail: OnboardingDetail; edit?:
   };
   return <div>
     <h3>Connect GitHub account</h3>
-    {!hasUsableInstallation && <>
+    {!hasInstallation && <>
       <p>Choose the GitHub account where Whitesmith should run jobs. These are accounts available to your signed-in GitHub user, not existing Whitesmith App installations.</p>
       {!detail.github.appConfigured && <p>Whitesmith will create a GitHub App for this control plane before installing it in the selected account.</p>}
       <label>GitHub account
@@ -102,8 +112,16 @@ function GithubStep({ detail, edit = false }: { detail: OnboardingDetail; edit?:
       <button type="button" disabled={!organizationId} onClick={() => void connect()}>{detail.github.appConfigured ? "Install Whitesmith GitHub App" : "Create Whitesmith GitHub App"}</button>
       {connectError && <p role="alert" className="form-error">{connectError}</p>}
     </>}
-    {selectionRemediation && <p role="alert">No available repositories were returned. Update the GitHub App installation access and reconnect.</p>}
-    {hasUsableInstallation && <p role="status">GitHub installation connected. Whitesmith can schedule jobs from {availableRepositories.length} available {availableRepositories.length === 1 ? "repository" : "repositories"}.</p>}
+    {hasInstallation && !hasUsableInstallation && <>
+      <p role="status">GitHub App installed. Repository access is not verified.</p>
+      <p>Select at least one repository in the GitHub App installation, then verify access here.</p>
+      {selectionRemediation && <p role="alert">GitHub returned no available repositories. Update the installation repository access before verifying again.</p>}
+      <button type="button" onClick={() => verify.mutate()} disabled={verify.isPending}>{verify.isPending ? "Verifying repository access…" : "Verify repository access"}</button>
+      <button type="button" onClick={() => void connect()} disabled={!organizationId}>Manage installation access</button>
+      {verify.error && <p role="alert" className="form-error">{verify.error instanceof Error ? verify.error.message : "Repository verification failed"}</p>}
+      {connectError && <p role="alert" className="form-error">{connectError}</p>}
+    </>}
+    {hasUsableInstallation && <p role="status">GitHub installation connected. Whitesmith verified {availableRepositories.length} available {availableRepositories.length === 1 ? "repository" : "repositories"}.</p>}
   </div>;
 }
 function WorkerSetupStep({ detail, onSelect, onDone, onDiscard, edit = false }: { detail: OnboardingDetail; onSelect: (id: string) => void; onDone: () => void; onDiscard?: () => void; edit?: boolean }) {

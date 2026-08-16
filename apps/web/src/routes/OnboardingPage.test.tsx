@@ -121,16 +121,17 @@ test("worker loading errors preserve choices and expose retry", async () => {
 
 test("uses GitHub installation access without rendering repository approval controls", () => {
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "github", worker, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 2, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: { id: "inst-1", githubInstallationId: 42, state: "approved", repositorySelection: "all" }, repositories: [{ id: "repo-1", name: "private", fullName: "acme/private", visibility: "private", available: true }, { id: "repo-2", name: "public", fullName: "acme/public", visibility: "public", available: true }] }, pool: null, defaultImageDigest: null });
-  expect(html).toContain("GitHub account");
-  expect(html).toContain("Install Whitesmith GitHub App");
+  expect(html).toContain("GitHub installation connected");
+  expect(html).toContain("2 available repositories");
 });
 test("repository selection remediation explains the GitHub setting and permits reconnect", () => {
   Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { search: "?github=repository-selection-required" } } });
   try {
     const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "github", worker: null, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 0, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: { id: "inst-1", githubInstallationId: 42, state: "pending", repositorySelection: "all" }, repositories: [] }, pool: null, defaultImageDigest: null });
-    expect(html).toContain("No available repositories");
-    expect(html).toContain("installation access");
-    expect(html).toContain("Install Whitesmith GitHub App");
+    expect(html).toContain("GitHub returned no available repositories");
+    expect(html).toContain("Select at least one repository");
+    expect(html).toContain("Verify repository access");
+    expect(html).toContain("Manage installation access");
   } finally {
     Reflect.deleteProperty(globalThis, "window");
   }

@@ -159,6 +159,34 @@ export async function selectOnboardingWorker(db: OnboardingDb, workerId: string,
   if (!worker) throw new Error("worker_not_selectable");
   await db`INSERT INTO system_onboarding(singleton,admin_user_id,worker_id) VALUES(true,${adminUserId},${workerId}) ON CONFLICT(singleton) DO UPDATE SET admin_user_id=EXCLUDED.admin_user_id,worker_id=EXCLUDED.worker_id`;
 }
+export async function getOnboardingRepositoryOrganization(db: OnboardingDb, adminUserId: string): Promise<string | null> {
+  const row = first(await db`
+    SELECT organization_id AS "organizationId"
+    FROM system_onboarding
+    WHERE singleton=true AND admin_user_id=${adminUserId}
+  `);
+  return stringValue(row?.organizationId);
+}
+
+export async function getVerifiedOnboardingRepositories(
+  db: OnboardingDb,
+  adminUserId: string,
+): Promise<{ organizationId: string; repositoryCount: number } | null> {
+  const row = first(await db`
+    SELECT so.organization_id AS "organizationId",count(DISTINCT r.id)::int AS "repositoryCount"
+    FROM system_onboarding so
+    JOIN dashboard_installations i ON i.organization_id=so.organization_id
+      AND i.state='approved' AND i.repository_selection IN ('all','selected')
+    JOIN dashboard_repositories r ON r.installation_id=i.id
+      AND r.organization_id=i.organization_id AND r.available=true
+    WHERE so.singleton=true AND so.admin_user_id=${adminUserId}
+    GROUP BY so.organization_id
+  `);
+  const organizationId = stringValue(row?.organizationId);
+  const repositoryCount = numberValue(row?.repositoryCount);
+  return organizationId && repositoryCount > 0 ? { organizationId, repositoryCount } : null;
+}
+
 
 
 export async function completeOnboardingIfReady(db: OnboardingDb): Promise<boolean> {

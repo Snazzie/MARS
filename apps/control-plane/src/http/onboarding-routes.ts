@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import { OnboardingDetail, OnboardingStatus, SelectOnboardingWorkerRequest } from "@whitesmith/contracts";
+import { OnboardingDetail, OnboardingStatus, SelectOnboardingWorkerRequest, VerifyOnboardingRepositoriesResult } from "@whitesmith/contracts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { getOnboardingDetail, getOnboardingStatus, selectOnboardingWorker } from "@whitesmith/db";
+import { getOnboardingDetail, getOnboardingRepositoryOrganization, getOnboardingStatus, getVerifiedOnboardingRepositories, invalidateDashboard, selectOnboardingWorker } from "@whitesmith/db";
 
 const hasKey = (c: { req: { header(name:string): string|undefined } }) => Boolean(c.req.header("Idempotency-Key")?.trim());
 export function registerOnboardingRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
@@ -25,5 +25,23 @@ export function registerOnboardingRoutes(app: Hono<ControlPlaneEnv>, deps: Contr
     const user = await deps.currentUser(c.req.raw); if (!user) return c.json({ error:"unauthorized" },401); if (!user.isGlobalAdmin) return c.json({ error:"forbidden" },403); if (!hasKey(c)) return c.json({ error:"Idempotency-Key required" },400);
     const parsed = SelectOnboardingWorkerRequest.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error:"invalid worker selection" },400);
     try { await selectOnboardingWorker(deps.db, parsed.data.workerId, user.id); return c.json({ ok:true }); } catch (error) { if (error instanceof Error && error.message === "worker_not_selectable") return c.json({ error:"worker not selectable" },404); throw error; }
+  });
+  app.post("/api/onboarding/repositories/verify", async (c) => {
+    const user = await deps.currentUser(c.req.raw);
+    if (!user) return c.json({ code: "unauthorized", message: "Authentication required" }, 401);
+    if (!user.isGlobalAdmin) return c.json({ code: "forbidden", message: "Administrator access required" }, 403);
+    if (!hasKey(c)) return c.json({ code: "invalid_request", message: "Idempotency-Key required" }, 400);
+    if (!deps.githubApp) return c.json({ code: "github_app_unavailable", message: "GitHub App service is unavailable" }, 503);
+    const organizationId = await getOnboardingRepositoryOrganization(deps.db, user.id);
+    if (!organizationId) return c.json({ code: "repository_selection_required", message: "Install the GitHub App before verifying repository access" }, 409);
+    try {
+      await deps.githubApp.refreshInstallationRepositories(organizationId);
+    } catch {
+      return c.json({ code: "repository_sync_failed", message: "GitHub repository access could not be refreshed" }, 502);
+    }
+    const verified = await getVerifiedOnboardingRepositories(deps.db, user.id);
+    if (!verified) return c.json({ code: "repository_selection_required", message: "Select at least one repository in the GitHub App installation, then verify again" }, 409);
+    await invalidateDashboard(deps.db, organizationId, ["onboarding", "repositories"]);
+    return c.json(VerifyOnboardingRepositoriesResult.parse({ ok: true, ...verified }));
   });
 }

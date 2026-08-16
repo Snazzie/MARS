@@ -179,7 +179,7 @@ describe("GitHub App onboarding", () => {
     expect(fakeDb.repositories.get("3")).toMatchObject({ available: true });
     expect(fakeDb.repositories.get("3")).not.toHaveProperty("approved");
   });
-  test("leaves all-repository installation unbound before remediation", async () => {
+  test("binds an installed GitHub account before repository remediation", async () => {
     const calls: string[] = [];
     const sql = ((strings: TemplateStringsArray, ...values: unknown[]) => {
       const query = strings.join("?");
@@ -200,7 +200,7 @@ describe("GitHub App onboarding", () => {
       return Response.json({});
     }, secretBox: new SecretBox(masterKey), baseUrl: "https://control-plane.test", browserBaseUrl: "https://control-plane.test" } as never);
     await expect(github.completeInstallation("admin-1", "cookie", 42)).rejects.toThrow("repository_selection_required");
-    expect(calls.some((query) => query.includes("UPDATE system_onboarding SET organization_id"))).toBe(false);
+    expect(calls.some((query) => query.includes("UPDATE system_onboarding SET organization_id"))).toBe(true);
   });
 
   test("resumes onboarding when a signed webhook already recorded an approved installation", async () => {

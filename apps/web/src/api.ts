@@ -16,6 +16,7 @@ import {
   OnboardingDetail,
   OnboardingStatus,
   SelectOnboardingWorkerRequest,
+  VerifyOnboardingRepositoriesResult,
   CreatePoolRequest,
   RunnerWorkflowFile,
   RunnerWorkflowPreview,
@@ -200,6 +201,12 @@ export async function selectOnboardingWorker(input: SelectOnboardingWorkerReques
     method: "PUT",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify(input),
+  });
+}
+export async function verifyOnboardingRepositories() {
+  return request("/api/onboarding/repositories/verify", VerifyOnboardingRepositoriesResult, {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
   });
 }
 export async function beginOnboardingGithubInstall(input: { organizationId: string }) {

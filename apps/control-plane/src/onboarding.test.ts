@@ -25,6 +25,32 @@ describe("onboarding HTTP contract", () => {
     });
     expect(response.status).toBe(401);
   });
+  test("repository verification remains blocked until an imported repository is available", async () => {
+    const organizationId = "00000000-0000-4000-8000-000000000002";
+    let refreshes = 0;
+    const db = (async (strings: TemplateStringsArray) => {
+      const query = strings.join(" ");
+      if (query.includes('organization_id AS "organizationId"') && !query.includes("count(DISTINCT r.id)")) return [{ organizationId }];
+      if (query.includes("count(DISTINCT r.id)")) return refreshes >= 2 ? [{ organizationId, repositoryCount: 1 }] : [];
+      return [];
+    }) as never;
+    const app = createControlPlaneApp(fakeHttpDeps({
+      db,
+      currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+      githubApp: { refreshInstallationRepositories: async () => { refreshes += 1; } } as never,
+    }));
+    const request = () => app.request("/api/onboarding/repositories/verify", {
+      method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+    });
+    const blocked = await request();
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toMatchObject({ code: "repository_selection_required" });
+    const verified = await request();
+    expect(verified.status).toBe(200);
+    expect(await verified.json()).toEqual({ ok: true, organizationId, repositoryCount: 1 });
+  });
+
 
   test("uses the selected Windows worker template digest for pool creation", async () => {
     const workerId = "00000000-0000-4000-8000-000000000001";

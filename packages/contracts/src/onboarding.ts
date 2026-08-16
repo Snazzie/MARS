@@ -14,3 +14,5 @@ export const OnboardingDetail = OnboardingStatus.extend({ worker:OnboardingWorke
 export type OnboardingDetail = z.infer<typeof OnboardingDetail>;
 export const SelectOnboardingWorkerRequest = z.object({ workerId:z.string().uuid() }).strict();
 export type SelectOnboardingWorkerRequest = z.infer<typeof SelectOnboardingWorkerRequest>;
+export const VerifyOnboardingRepositoriesResult = z.object({ ok:z.literal(true), organizationId:z.string().uuid(), repositoryCount:z.number().int().min(1) }).strict();
+export type VerifyOnboardingRepositoriesResult = z.infer<typeof VerifyOnboardingRepositoriesResult>;

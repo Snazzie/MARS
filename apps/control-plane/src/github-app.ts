@@ -243,10 +243,8 @@ export class GitHubAppService {
     const repos = reposResponse.repositories.map((value) => ({ id: String(value.id), installationId, fullName: value.full_name, visibility: visibilityOf(value), available: true } satisfies Repository));
     const hasAllowed = repos.length > 0;
     await this.persistInstallation(setup.organizationId!, installationId, hasAllowed ? "approved" : "pending", repositorySelection, accountId, repos);
-    if (hasAllowed) {
-      if (setup.purpose === "install" && isSql(this.db)) await this.db`UPDATE system_onboarding SET organization_id=${setup.organizationId} WHERE singleton=true AND admin_user_id=${userId}`;
-      return setup.purpose === "install";
-    }
+    if (setup.purpose === "install" && isSql(this.db)) await this.db`UPDATE system_onboarding SET organization_id=${setup.organizationId} WHERE singleton=true AND admin_user_id=${userId}`;
+    if (hasAllowed) return setup.purpose === "install";
     throw new Error("repository_selection_required");
   }
 
