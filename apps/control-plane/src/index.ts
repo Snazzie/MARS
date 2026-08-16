@@ -32,6 +32,32 @@ const masterFile = Bun.env.APP_MASTER_KEY_FILE;
 const masterKey = masterFile ? (await Bun.file(masterFile).text()).trim() : developmentMasterKey;
 if (!masterKey) throw new Error("APP_MASTER_KEY_FILE is required (or APP_MASTER_KEY in development)");
 const env = { BASE: baseUrl, BROWSER_BASE: browserBaseUrl, WEBHOOK_URL: Bun.env.GITHUB_WEBHOOK_URL, DATABASE: required("DATABASE_URL"), WEBHOOK_SECRET: required("GITHUB_WEBHOOK_SECRET"), CLIENT_ID: required("GITHUB_OAUTH_CLIENT_ID"), CLIENT_SECRET: required("GITHUB_OAUTH_CLIENT_SECRET"), BOOTSTRAP: required("BOOTSTRAP_GITHUB_LOGIN"), MACOS_TART_BASE_IMAGE: Bun.env.WHITESMITH_TART_BASE_IMAGE, DEFAULT_IMAGES: { "linux-x64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_X64, "windows-x64": Bun.env.DEFAULT_JOB_IMAGE_WINDOWS_X64, "macos-arm64": Bun.env.DEFAULT_JOB_IMAGE_MACOS_ARM64 }, TEMPLATE_MANIFESTS: { "windows-x64": Bun.env.WHITESMITH_WINDOWS_TEMPLATE_MANIFEST, "linux-x64": Bun.env.WHITESMITH_LINUX_TEMPLATE_MANIFEST }, TEMPLATE_ARTIFACTS: { "windows-x64": Bun.env.WHITESMITH_WINDOWS_TEMPLATE_ARTIFACT, "linux-x64": Bun.env.WHITESMITH_LINUX_TEMPLATE_ARTIFACT }, WORKER_TEMPLATE_PATHS: { "windows-x64": Bun.env.WHITESMITH_WINDOWS_TEMPLATE_PATH, "linux-x64": Bun.env.WHITESMITH_LINUX_TEMPLATE_PATH }, WORKER_TEMPLATE_DIGESTS: { "windows-x64": Bun.env.WHITESMITH_WINDOWS_TEMPLATE_DIGEST, "linux-x64": Bun.env.WHITESMITH_LINUX_TEMPLATE_DIGEST } };
+const production = Bun.env.NODE_ENV === "production";
+const webRoot = new URL(Bun.env.WEB_ROOT ?? "../../web/dist/", import.meta.url);
+const workerInstallerRoot = new URL(production ? required("WORKER_INSTALLER_ROOT") : Bun.env.WORKER_INSTALLER_ROOT ?? "../../../deploy/workers/", import.meta.url);
+const runtimeArtifact = (name: string, fallback: string): URL | undefined => {
+  const configured = Bun.env[name];
+  return configured ? new URL(configured, import.meta.url) : production ? undefined : new URL(fallback, import.meta.url);
+};
+const workerServiceHostExecutable = runtimeArtifact("WORKER_SERVICE_HOST_EXECUTABLE", "../../../apps/windows-service-host/target/release/whitesmith-service-host.exe");
+const workerOrchestratorExecutables = {
+  "linux-x64": runtimeArtifact("WORKER_ORCHESTRATOR_LINUX_X64", "../../../apps/orchestrator/dist/whitesmith-orchestrator"),
+  "windows-x64": runtimeArtifact("WORKER_ORCHESTRATOR_WINDOWS_X64", "../../../apps/orchestrator/dist/whitesmith-orchestrator.exe"),
+  "macos-arm64": runtimeArtifact("WORKER_ORCHESTRATOR_MACOS_ARM64", "../../../apps/orchestrator/dist/whitesmith-orchestrator-macos-arm64"),
+};
+if (production) {
+  const requiredReleaseArtifacts = {
+    webIndex: new URL("index.html", webRoot),
+    webScript: new URL("index.js", webRoot),
+    webStyles: new URL("index.css", webRoot),
+    windowsInstaller: new URL("install-worker.ps1", workerInstallerRoot),
+    windowsServiceHost: workerServiceHostExecutable,
+    windowsOrchestrator: workerOrchestratorExecutables["windows-x64"],
+  };
+  for (const [name, artifact] of Object.entries(requiredReleaseArtifacts)) {
+    if (!artifact || !await Bun.file(artifact).exists()) throw new Error(`release artifact is unavailable: ${name}`);
+  }
+}
 const db = createDb(env.DATABASE); await migrate(db); await ensureDefaultPools(db, env.DEFAULT_IMAGES); const secretBox = new SecretBox(masterKey);
 configureRunLifecycle(db);
 const json = (data: unknown, status=200) => Response.json(data,{status,headers:{"cache-control":"no-store"}});
@@ -63,7 +89,6 @@ const commandStore = {
 };
 const dispatcher = new WorkerCommandDispatcher(15_000, commandStore);
 const requestSources = new WeakMap<Request, string>();
-const webRoot = Bun.env.WEB_ROOT ? new URL(Bun.env.WEB_ROOT) : new URL("../../web/dist/", import.meta.url);
 const reconciliationIntervalMs = Number(Bun.env.JOB_RECONCILIATION_INTERVAL_MS ?? 5_000);
 const discoveryIntervalMs = Number(Bun.env.JOB_DISCOVERY_INTERVAL_MS ?? 30_000);
 const startedAt = new Date().toISOString();
@@ -71,7 +96,7 @@ const discoveryHealth = new DiscoveryHealthMonitor(discoveryIntervalMs, Date.par
 const githubApp = new GitHubAppService({ db, secretBox, baseUrl: env.BASE, browserBaseUrl: env.BROWSER_BASE, webhookUrl: env.WEBHOOK_URL });
 const githubRateLimits = new GithubRateLimitGate();
 let triggerReconciliation = () => Promise.resolve();
-const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, browserBaseUrl: env.BROWSER_BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), workerServiceHostExecutable: new URL("../../../apps/windows-service-host/target/release/whitesmith-service-host.exe", import.meta.url), workerOrchestratorExecutables: { "linux-x64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator", import.meta.url), "windows-x64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator.exe", import.meta.url), "macos-arm64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator-macos-arm64", import.meta.url) }, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => { dispatcher.replayConnected(workerId); void triggerReconciliation(); }, health: () => ({ buildId: Bun.env.WHITESMITH_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
+const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, browserBaseUrl: env.BROWSER_BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerServiceHostExecutable, workerOrchestratorExecutables, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => { dispatcher.replayConnected(workerId); void triggerReconciliation(); }, health: () => ({ buildId: Bun.env.WHITESMITH_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
 const discoveryDeps = { db, installationToken: (installationId: number) => githubApp.getInstallationToken(installationId), githubFetchForInstallation: (installationId: number) => githubRateLimits.scopedFetch(installationId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY };
 startReconciliationScheduler(async () => {
   discoveryHealth.markAttempt();

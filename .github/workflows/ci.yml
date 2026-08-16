@@ -22,6 +22,10 @@ jobs:
       - run: bun run typecheck
       - run: bun test
       - run: bun run build
+      - name: Build immutable control-plane image
+        run: docker build -f deploy/control-plane/Dockerfile -t whitesmith-control-plane:ci .
+      - name: Verify release artifact set
+        run: docker run --rm --entrypoint /bin/sh whitesmith-control-plane:ci -c 'test -f /app/index.js && test -f /app/web/index.html && test -f /app/web/index.js && test -f /app/web/index.css && test -f /app/workers/install-worker.ps1 && test -f /app/workers/whitesmith-orchestrator.exe && test -f /app/workers/whitesmith-service-host.exe'
 
   compose:
     name: Validate production Compose
