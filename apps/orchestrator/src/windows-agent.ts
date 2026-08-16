@@ -50,6 +50,22 @@ export async function runWindowsLeaseCleanup(
     : payload));
 }
 
+export function startWindowsLeaseLifecycle(
+  command: WorkerCommand,
+  driver: Pick<RuntimeDriver, "createLease" | "stopLease" | "removeLease">,
+  bootstrap: LeaseBootstrapEnvelope,
+  send: (workerEvent: WorkerEvent) => void,
+  active: Map<string, Promise<void>>,
+): Promise<void> {
+  const existing = active.get(bootstrap.leaseId);
+  if (existing) return existing;
+  const lifecycle = runLeaseLifecycle(command, driver, bootstrap, send).finally(() => {
+    if (active.get(bootstrap.leaseId) === lifecycle) active.delete(bootstrap.leaseId);
+  });
+  active.set(bootstrap.leaseId, lifecycle);
+  return lifecycle;
+}
+
 export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise<never> {
   const controlPlane = new URL(baseUrl);
   const identity = (await load()) ?? await enroll(controlPlane, keys());
@@ -69,6 +85,7 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
   }
   await driver.reserveCapacity({ vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 });
   await driver.reconcileOrphans?.();
+  const activeLeases = new Map<string, Promise<void>>();
   const loop = async (signal?: AbortSignal): Promise<never> => {
     for (;;) {
       if (signal?.aborted) throw new Error("worker stopped");
@@ -102,7 +119,7 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
             const bootstrap: LeaseBootstrapEnvelope = openLeaseBootstrap(cipher, identity.encryptionPrivateKey);
             if (bootstrap.leaseId !== command.leaseId || (mode === "container" ? bootstrap.guestPlatform !== "windows-x64" : !["windows-x64", "linux-x64"].includes(bootstrap.guestPlatform))) throw new Error("Windows lease bootstrap mismatch");
             ws.send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
-            void runLeaseLifecycle(command, driver, bootstrap, workerEvent => ws.send(JSON.stringify(workerEvent)));
+            void startWindowsLeaseLifecycle(command, driver, bootstrap, workerEvent => ws.send(JSON.stringify(workerEvent)), activeLeases);
           }
         } catch (error) {
           console.error("Windows worker command failed", error);

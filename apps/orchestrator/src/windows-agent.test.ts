@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { WorkerConfigurePayload, type LeaseBootstrapEnvelope, type WorkerCommand, type WorkerEvent } from "@whitesmith/contracts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
-import { applyWindowsWorkerConfiguration, runWindowsLeaseCleanup } from "./windows-agent.ts";
+import { applyWindowsWorkerConfiguration, runWindowsLeaseCleanup, startWindowsLeaseLifecycle } from "./windows-agent.ts";
 
 test("applies worker configuration to the live Windows runtime limits", () => {
   const limits = { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 6 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 };
@@ -27,6 +27,27 @@ test("reports Windows container provisioning failures instead of leaving the lea
   const driver = { createLease: async () => { throw new Error("provisioning exploded"); } };
   await runLeaseLifecycle(command, driver as never, bootstrap, event => events.push(event));
   expect(events).toEqual([expect.objectContaining({ type: "lease.failed", payload: expect.objectContaining({ commandId: command.id, leaseId, nonce: bootstrap.nonce, reason: "provisioning_failed" }) })]);
+});
+
+test("coalesces duplicate Windows lease commands while provisioning", async () => {
+  let creates = 0;
+  const events: WorkerEvent[] = [];
+  const driver = {
+    createLease: async () => {
+      creates += 1;
+      await Bun.sleep(5);
+      return { runtimeInstanceId: "container", observed: { vcpu: 1, memoryBytes: 2, storageBytes: 3 }, state: "sandbox_attested" as const, completion: Promise.resolve(0) };
+    },
+    stopLease: async () => {},
+    removeLease: async () => {},
+  };
+  const active = new Map<string, Promise<void>>();
+  await Promise.all([
+    startWindowsLeaseLifecycle(command, driver, bootstrap, event => events.push(event), active),
+    startWindowsLeaseLifecycle(command, driver, bootstrap, event => events.push(event), active),
+  ]);
+  expect(creates).toBe(1);
+  expect(events.filter(event => event.type === "sandbox_attested")).toHaveLength(1);
 });
 
 test("handles durable stop commands and removes the lease", async () => {
