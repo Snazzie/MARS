@@ -4,6 +4,7 @@ import type { RunSummary } from "@whitesmith/contracts";
 import { formatDuration } from "./RunTelemetry.tsx";
 
 export type RunHistoryRange = "all" | "1h" | "2h" | "4h" | "12h" | "1d" | "2d";
+export type RunHistoryRunnerFilter = "all" | "whitesmith" | "external";
 
 const RANGE_MS: Record<Exclude<RunHistoryRange, "all">, number> = {
   "1h": 3_600_000,
@@ -15,17 +16,24 @@ const RANGE_MS: Record<Exclude<RunHistoryRange, "all">, number> = {
 };
 
 const RANGE_LABELS: readonly RunHistoryRange[] = ["all", "1h", "2h", "4h", "12h", "1d", "2d"];
+const RUNNER_FILTER_LABELS: readonly { value: RunHistoryRunnerFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "whitesmith", label: "Whitesmith" },
+  { value: "external", label: "External" },
+];
 
 export function filterRuns(
   runs: readonly RunSummary[],
   search: string,
   range: RunHistoryRange,
   nowMs: number,
+  runnerFilter: RunHistoryRunnerFilter = "all",
 ): RunSummary[] {
   const query = search.trim().toLowerCase();
   const cutoff = range === "all" ? Number.NEGATIVE_INFINITY : nowMs - RANGE_MS[range];
   return runs.filter((run) => {
     const inRange = Date.parse(run.queuedAt) >= cutoff;
+    const matchesRunner = runnerFilter === "all" || run.allocationState === runnerFilter;
     const result = run.conclusion ?? run.status.replace("_", " ");
     const searchable = [
       run.workflowName,
@@ -36,7 +44,7 @@ export function filterRuns(
       result,
       run.runtimeBoundary ?? "",
     ].join(" ").toLowerCase();
-    return inRange && (!query || searchable.includes(query));
+    return inRange && matchesRunner && (!query || searchable.includes(query));
   });
 }
 
@@ -98,7 +106,8 @@ function RunRow({ run, allowDetails, maxDuration }: { run: RunSummary; allowDeta
 export function RunHistory({ runs, allowDetails = true, nowMs = Date.now() }: { runs: readonly RunSummary[]; allowDetails?: boolean; nowMs?: number }) {
   const [search, setSearch] = useState("");
   const [range, setRange] = useState<RunHistoryRange>("all");
-  const visibleRuns = useMemo(() => filterRuns(runs, search, range, nowMs), [runs, search, range, nowMs]);
+  const [runnerFilter, setRunnerFilter] = useState<RunHistoryRunnerFilter>("all");
+  const visibleRuns = useMemo(() => filterRuns(runs, search, range, nowMs, runnerFilter), [runs, search, range, nowMs, runnerFilter]);
   const maxDuration = Math.max(0, ...visibleRuns.map((run) => run.durationMs ?? 0));
   const chartDescription = visibleRuns.length === 0
     ? "No run durations match these filters."
@@ -110,6 +119,9 @@ export function RunHistory({ runs, allowDetails = true, nowMs = Date.now() }: { 
         <label className="run-history-search"> <span className="sr-only">Search runs</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search workflow, branch, actor…" /></label>
         <div className="run-history-ranges" aria-label="Filter by queued time">
           {RANGE_LABELS.map((item) => <button key={item} type="button" aria-pressed={range === item} onClick={() => setRange(item)}>{item === "all" ? "All" : item}</button>)}
+        </div>
+        <div className="run-history-ranges run-history-runner-filters" aria-label="Filter by runner">
+          {RUNNER_FILTER_LABELS.map((item) => <button key={item.value} type="button" aria-pressed={runnerFilter === item.value} onClick={() => setRunnerFilter(item.value)}>{item.label}</button>)}
         </div>
       </div>
       <div className="run-duration-chart" role="img" aria-label={chartDescription}>

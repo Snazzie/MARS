@@ -31,6 +31,22 @@ test("filters run history across Blacksmith metadata", () => {
   expect(filterRuns(runs, "PINK", "all", NOW).map((item) => item.id)).toEqual(["run-2"]);
   expect(filterRuns(runs, "tart vm", "all", NOW).map((item) => item.id)).toEqual(["run-1", "run-2"]);
 });
+test("filters runs by runner ownership", () => {
+  const runs = [run({ id: "white", allocationState: "whitesmith" }), run({ id: "external", allocationState: "external" })];
+  expect(filterRuns(runs, "", "all", NOW, "all").map((item) => item.id)).toEqual(["white", "external"]);
+  expect(filterRuns(runs, "", "all", NOW, "whitesmith").map((item) => item.id)).toEqual(["white"]);
+  expect(filterRuns(runs, "", "all", NOW, "external").map((item) => item.id)).toEqual(["external"]);
+});
+
+test("renders the runner filter with All selected by default", () => {
+  const html = renderToStaticMarkup(<RunHistory runs={[run()]} allowDetails={false} nowMs={NOW} />);
+  expect(html).toContain(">All</button>");
+  expect(html).toContain(">Whitesmith</button>");
+  expect(html).toContain(">External</button>");
+  expect(html).toContain('aria-pressed="true">All</button>');
+  expect(html).toContain('aria-pressed="false">Whitesmith</button>');
+  expect(html).toContain('aria-pressed="false">External</button>');
+});
 
 test("uses locale-independent casing for metadata search", () => {
   const istanbul = run({ id: "istanbul", workflowName: "Istanbul release" });
