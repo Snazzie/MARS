@@ -1,7 +1,21 @@
 import { expect, test } from "bun:test";
-import type { LeaseBootstrapEnvelope, WorkerCommand, WorkerEvent } from "@whitesmith/contracts";
+import { WorkerConfigurePayload, type LeaseBootstrapEnvelope, type WorkerCommand, type WorkerEvent } from "@whitesmith/contracts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
-import { runWindowsLeaseCleanup } from "./windows-agent.ts";
+import { applyWindowsWorkerConfiguration, runWindowsLeaseCleanup } from "./windows-agent.ts";
+
+test("applies worker configuration to the live Windows runtime limits", () => {
+  const limits = { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 6 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 };
+  const payload = WorkerConfigurePayload.parse({
+    workerId: "11111111-1111-4111-8111-111111111111",
+    revision: "a".repeat(64),
+    fingerprint: "b".repeat(64),
+    appliance: { vcpu: 32, memoryBytes: 64 * 1024 ** 3, storageBytes: 1_000 * 1024 ** 3 },
+    runtime: { maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 },
+    guestPlatforms: ["windows-x64"],
+  });
+  applyWindowsWorkerConfiguration(limits, payload);
+  expect(limits).toEqual({ maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 });
+});
 
 const workerId = "11111111-1111-4111-8111-111111111111";
 const leaseId = "22222222-2222-4222-8222-222222222222";

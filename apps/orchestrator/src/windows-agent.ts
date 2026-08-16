@@ -26,6 +26,12 @@ const load = async () => { try { return JSON.parse(await readFile(identityPath()
 const auth = (nonce: string, identity: Identity) => ({ type: "authenticate", workerId: identity.workerId, encryptionPublicKey: identity.encryptionPublicKey, signature: signMessage(null, Buffer.from(`${nonce}\n${identity.workerId}\n${identity.encryptionPublicKey}`), identity.privateKey).toString("base64url") });
 async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> { const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), platform: "windows-x64", publicKey: identity.publicKey, encryptionPublicKey: identity.encryptionPublicKey, vmUuid: crypto.randomUUID(), machineUuid: await machineUuid(), doctor: doctor(), capacity: await capacity() }); const response = await fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); if (!response.ok) throw new Error(`worker join failed: ${response.status}`); const joined = await response.json() as { workerId: string }; const result = { ...identity, workerId: joined.workerId }; await save(result); return result; }
 type WindowsRuntimeDriver = Pick<RuntimeDriver, "reserveCapacity" | "createLease" | "stopLease" | "removeLease"> & { reconcileOrphans?: () => Promise<void> };
+export function applyWindowsWorkerConfiguration(limits: Limits, payload: ReturnType<typeof WorkerConfigurePayload.parse>): ReturnType<typeof WorkerConfiguration.parse> {
+  const observed = WorkerConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms });
+  Object.assign(limits, observed.runtime);
+  return observed;
+}
+
 
 export async function runWindowsLeaseCleanup(
   command: WorkerCommand,
@@ -81,7 +87,7 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
           const command = WorkerCommand.parse(frame);
           if (command.type === "worker.configure") {
             const payload = WorkerConfigurePayload.parse(command.payload);
-            const observed = WorkerConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms });
+            const observed = applyWindowsWorkerConfiguration(limits, payload);
             return ws.send(JSON.stringify(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed })));
           }
           if (command.type === "tart.stop_lease") {

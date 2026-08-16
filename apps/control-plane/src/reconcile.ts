@@ -43,7 +43,6 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
     const [owner, repo] = queued.repository.split("/", 2);
     if (!owner || !repo) { report.failed += 1; continue; }
     if (attemptedInstallations.has(queued.installationId)) { report.skipped += 1; continue; }
-    attemptedInstallations.add(queued.installationId);
     let reservation: LeaseReservation | undefined;
     try {
       const resources = resolveProvisionResources(candidate.pool.resources, provision);
@@ -55,6 +54,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
         requested: resources,
         routingKey: `${queued.repository}:${queued.jobId}:${requestedLabels.map((label) => label.toLowerCase()).sort().join(",")}`,
       });
+      attemptedInstallations.add(queued.installationId);
       const capacityKey = `${candidate.pool.id}:${candidate.worker.id}`;
       reservedByPool.set(capacityKey, (reservedByPool.get(capacityKey) ?? 0) + 1);
       reservation = claimed;
