@@ -70,6 +70,11 @@ test("renders steps collapsed and keeps unattributed job logs as a fallback", ()
     </QueryClientProvider>,
   );
   expect(markup).toContain("Build");
+  expect(markup).toContain("Search job steps and loaded logs");
+  expect(markup).toContain("step-log-search");
+  expect(markup).toContain("step-log-actions");
+  expect(markup).toContain("Expand all");
+  expect(markup).toContain("Collapse all");
   expect(markup).toContain(">success</span>");
   expect(markup).toContain('aria-expanded="false"');
   expect(markup).toContain("Unattributed job logs");

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { PoolResources, RunDetail, RunJob, RunStage } from "@whitesmith/contracts";
+import { Badge } from "@astryxdesign/core/Badge";
 import { ActionGraph } from "./ActionGraph.tsx";
 import { LogViewer } from "./LogViewer.tsx";
 import { RunTelemetry, formatDuration, lifecycleMetrics } from "./RunTelemetry.tsx";
@@ -39,6 +40,15 @@ function statusLabel(data: RunDetail): string {
 function jobStatusLabel(job: RunJob): string {
   return (job.conclusion ?? job.status).replaceAll("_", " ");
 }
+function DetailBadges({ values }: { values: readonly string[] }) {
+  return <div className="detail-labels">{values.map((value, index) => <Badge key={`${value}-${index}`} label={value} />)}</div>;
+}
+
+function JobBadges({ job }: { job: RunJob }) {
+  const labels = [job.runnerName ?? "Awaiting runner", ...job.requestedLabels];
+  return <div className="detail-labels">{labels.map((label, index) => <Badge key={`${label}-${index}`} label={label} />)}</div>;
+}
+
 
 export function RunDetailView({ data, organizationId }: { data: RunDetail; organizationId: string }) {
   const [selectedTab, setSelectedTab] = useState<"logs" | "metrics">("logs");
@@ -49,7 +59,7 @@ export function RunDetailView({ data, organizationId }: { data: RunDetail; organ
     <section className="detail-panel" aria-labelledby="run-detail-title">
       <nav className="detail-breadcrumb" aria-label="Workflow breadcrumb"><a href="/runs">Runs</a><span aria-hidden="true">/</span><span>{data.workflowName}</span></nav>
       <div className="detail-heading"><span className={`status status-${data.conclusion ?? data.status}`}><span className="status-icon" aria-hidden="true">●</span><span>{status}</span></span><span className="detail-run-number">Run #{data.runNumber}</span><h1 id="run-detail-title">{data.workflowName}</h1></div>
-      <div className="detail-context"><span>{data.repositoryName}</span><span>{data.runtimeBoundary ?? "Runtime boundary pending"}</span><span>{data.branch}</span><span>{data.actorLogin}</span><span>commit <code>{data.commitSha.slice(0, 12)}</code></span></div>
+      <DetailBadges values={[data.repositoryName, data.runtimeBoundary ?? "Runtime boundary pending", data.branch, data.actorLogin, `commit ${data.commitSha.slice(0, 12)}`]} />
       <dl className="detail-facts"><div><dt>Started</dt><dd>{facts.started}</dd></div><div><dt>Repository</dt><dd>{facts.repository}</dd></div><div><dt>Runner</dt><dd>{facts.runner}</dd></div><div><dt>Duration</dt><dd>{facts.duration}</dd></div></dl>
       <p className="detail-meta">{data.event} event</p>
     </section>
@@ -59,12 +69,12 @@ export function RunDetailView({ data, organizationId }: { data: RunDetail; organ
         <button type="button" role="tab" id="run-metrics-tab" aria-selected={selectedTab === "metrics"} aria-controls="run-metrics-panel" tabIndex={selectedTab === "metrics" ? 0 : -1} onClick={() => setSelectedTab("metrics")}>Metrics</button>
       </div>
       {selectedTab === "logs" ? <section id="run-logs-panel" role="tabpanel" aria-labelledby="run-logs-tab" className="run-tab-panel">
-        {data.jobs.map((job) => <section className="run-job-logs" key={job.id}><header className="job-heading"><div><h2>{job.name}</h2><p>{job.runnerName ?? "Awaiting runner"} · {job.requestedLabels.join(", ")}</p></div><span className={`status status-${job.conclusion ?? job.status}`}>{jobStatusLabel(job)}</span></header><LogViewer organizationId={organizationId} runId={data.id} jobId={job.id} logsState={job.logsState} steps={job.steps} /></section>)}
+        {data.jobs.map((job) => <section className="run-job-logs" key={job.id}><header className="job-heading"><div><h2>{job.name}</h2><JobBadges job={job} /></div><span className={`status status-${job.conclusion ?? job.status}`}>{jobStatusLabel(job)}</span></header><LogViewer organizationId={organizationId} runId={data.id} jobId={job.id} logsState={job.logsState} steps={job.steps} /></section>)}
       </section> : <section id="run-metrics-panel" role="tabpanel" aria-labelledby="run-metrics-tab" className="run-tab-panel">
         <RunTelemetry queuedAt={data.queuedAt} startedAt={data.startedAt} completedAt={data.completedAt} />
         <RunTimeline jobs={data.jobs} durations={stageDurations} />
         <ActionGraph graph={data.actionGraph} />
-        {data.jobs.map((job) => <section className="job-panel" key={job.id}><header className="job-heading"><div><h2>{job.name}</h2><p>{job.runnerName ?? "Awaiting runner"}</p></div><span>{job.requestedLabels.join(", ")}</span></header><ResourceTable job={job} /></section>)}
+        {data.jobs.map((job) => <section className="job-panel" key={job.id}><header className="job-heading"><div><h2>{job.name}</h2><JobBadges job={job} /></div><DetailBadges values={job.requestedLabels} /></header><ResourceTable job={job} /></section>)}
       </section>}
     </div>
   </div>;

@@ -71,9 +71,17 @@ test("renders only semantic Logs and Metrics tabs with complete run context", ()
   expect(markup).toContain("Tart VM");
   expect(markup).toContain("main");
   expect(markup).toContain("acoop");
+  expect(markup).toContain("commit abcdef012345");
+  expect(markup).toContain("whitesmith-lease-1");
+  expect(markup).toContain("self-hosted");
+  expect(markup).toContain("macos");
+  expect(markup).toContain("arm64");
   expect(markup).toContain("abcdef012345");
-  expect(markup).toContain("success");
   expect(markup).toContain("status-success");
+});
+test("renders an awaiting-runner badge when no runner is assigned", () => {
+  const markup = renderView({ ...detail, jobs: [{ ...detail.jobs[0], runnerName: null }] });
+  expect(markup).toContain("Awaiting runner");
 });
 
 test("switches to Metrics without rendering log viewers", async () => {

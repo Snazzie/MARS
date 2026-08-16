@@ -118,7 +118,10 @@ export function LogViewer({ organizationId, runId, jobId, logsState, steps = [] 
   const noMatchingJobMessage = "No matching loaded log output in unattributed job logs.";
   return <section className="log-panel" aria-labelledby={`logs-title-${jobId}`}>
     <div className="panel-kicker" id={`logs-title-${jobId}`}>Job logs</div>
-    <div className="step-log-toolbar"><label>Search job steps and loaded logs<input aria-label="Search job steps and loaded logs" value={search} onInput={(event) => setSearch(event.currentTarget.value)} /></label><button type="button" onClick={() => expandVisible(true)}>Expand all</button><button type="button" onClick={() => expandVisible(false)}>Collapse all</button></div>
+    <div className="step-log-toolbar">
+      <label className="step-log-search"><span>Search job steps and loaded logs</span><input aria-label="Search job steps and loaded logs" value={search} onInput={(event) => setSearch(event.currentTarget.value)} /></label>
+      <div className="step-log-actions" aria-label="Step log actions"><button type="button" onClick={() => expandVisible(true)}>Expand all</button><button type="button" onClick={() => expandVisible(false)}>Collapse all</button></div>
+    </div>
     <section className="step-log-list" aria-label="Job steps">
       {steps.length === 0 ? <p className="log-meta">No attributed steps recorded.</p> : visibleSteps.length === 0 ? <p className="log-meta">No steps match this search.</p> : visibleSteps.map((step) => <StepLogRow key={step.id} organizationId={organizationId} runId={runId} jobId={jobId} logsState={logsState} step={step} open={expandedStepIds.has(step.id)} maxDurationMs={maxStepDurationMs} onOpenChange={(open) => setStepExpanded(step.id, open)} onLoadedTextChange={(text) => setLoadedText(step.id, text)} />)}
     </section>
