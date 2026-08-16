@@ -9,6 +9,7 @@ const powershell = join(root, "deploy/workers/install-worker.ps1");
 const prepareWindowsTemplate = join(root, "deploy/workers/prepare-windows-hyperv-template.ps1");
 const valid = "A".repeat(43);
 const posixRuntimeTest = process.platform === "win32" ? test.skip : test;
+const macosRuntimeTest = process.platform === "darwin" ? test : test.skip;
 
 async function invoke(script: string, args: string[], env: Record<string, string> = {}) {
   const proc = Bun.spawn(script.endsWith(".sh") ? [script, ...args] : ["zsh", script, ...args], {
@@ -17,8 +18,8 @@ async function invoke(script: string, args: string[], env: Record<string, string
   return { exitCode: await proc.exited, stdout: await new Response(proc.stdout).text(), stderr: await new Response(proc.stderr).text() };
 }
 
-for (const script of [linux, mac]) {
-  posixRuntimeTest(`${script} rejects missing or malformed code before host checks`, async () => {
+for (const [script, runtimeTest] of [[linux, posixRuntimeTest], [mac, macosRuntimeTest]] as const) {
+  runtimeTest(`${script} rejects missing or malformed code before host checks`, async () => {
     const missing = await invoke(script, []);
     expect(missing.exitCode).toBe(2);
     expect(missing.stderr).toContain("usage:");
@@ -72,13 +73,13 @@ test("macOS job image preparation is immutable, pinned, and emits split runtime 
   expect(source).toContain("WHITESMITH_TART_IMAGE_DIGEST=");
   expect(source).toContain('tart delete "$TARGET"');
 });
-posixRuntimeTest("macOS job image preparation accepts immutable OCI digest sources", async () => {
+macosRuntimeTest("macOS job image preparation accepts immutable OCI digest sources", async () => {
   const result = await invoke(prepareMacImage, ["--source", `ghcr.io/cirruslabs/macos-tahoe-base@sha256:${"a".repeat(64)}`, "--target", "invalid/target", "--job-agent", process.execPath]);
   expect(result.exitCode).toBe(2);
   expect(result.stderr).toContain("invalid target image");
   expect(result.stderr).not.toContain("invalid source image");
 });
-posixRuntimeTest("macOS job image preparation preserves the original failure during cleanup", async () => {
+macosRuntimeTest("macOS job image preparation preserves the original failure during cleanup", async () => {
   const result = await invoke(prepareMacImage, ["--source", "source", "--target", "new-target", "--job-agent", process.execPath], { TART_BIN: "/usr/bin/true", CURL_BIN: "/usr/bin/false" });
   expect(result.exitCode).not.toBe(0);
   expect(result.stderr).not.toContain("read-only variable");
