@@ -87,7 +87,7 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, conf
     const telemetry = row.doctor && typeof row.doctor === "object" ? row.doctor as Record<string, unknown> : {};
     const capacity = telemetry.capacity && typeof telemetry.capacity === "object" ? telemetry.capacity as Record<string, number> : {};
     if (parsed.appliance.vcpu > (capacity.freeVcpu ?? 0) || parsed.appliance.memoryBytes > (capacity.freeMemoryBytes ?? 0) || parsed.appliance.storageBytes > (capacity.freeStorageBytes ?? 0)) throw new Error("worker configuration exceeds capacity");
-    await tx`update workers set limits=${JSON.stringify(parsed.runtime)}::jsonb, guest_platforms=${JSON.stringify(parsed.guestPlatforms)}::jsonb, admission_state='adopted', configuration_state='unconfigured', configuration_revision=${revision}, configuration_command_id=${commandId} where id=${workerId}`;
+    await tx`update workers set limits=${JSON.stringify(parsed.runtime)}::jsonb, guest_platforms=${JSON.stringify(parsed.guestPlatforms)}::jsonb, desired_configuration=${JSON.stringify(parsed)}::jsonb, admission_state='adopted', configuration_state='applying', configuration_revision=${revision}, configuration_command_id=${commandId} where id=${workerId}`;
     await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,'worker.configure',${workerId},null,now(),${JSON.stringify(payload)}::jsonb)`;
     await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.configured',${JSON.stringify({ workerId, revision, fingerprint: fp, guestPlatforms: parsed.guestPlatforms })}::jsonb)`;
     const result = { revision, fingerprint: fp, commandId };
@@ -103,16 +103,22 @@ export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event
   const observed = WorkerConfiguration.safeParse(input?.observed);
   const commandId = typeof input?.commandId === "string" ? input.commandId : "";
   const revision = typeof input?.revision === "string" ? input.revision : "";
-  const [worker] = await db<{ configurationRevision: string | null; configurationCommandId: string | null }[]>`select configuration_revision as "configurationRevision", configuration_command_id as "configurationCommandId" from workers where id=${event.workerId}`;
-  const [command] = await db<{ payload: unknown }[]>`select payload from commands where id=${commandId} and worker_id=${event.workerId} and type='worker.configure'`;
-  const rawExpected = command?.payload;
-  const expected = typeof rawExpected === "string" ? JSON.parse(rawExpected) as Record<string, unknown> : rawExpected as Record<string, unknown> | undefined;
-  const exact = observed.success && expected && worker?.configurationCommandId === commandId && worker.configurationRevision === revision && revision === expected.revision && canonical(observed.data) === canonical({ appliance: expected.appliance, runtime: expected.runtime, guestPlatforms: expected.guestPlatforms });
+  const [worker] = await db<{ configurationRevision: string | null; configurationCommandId: string | null; desiredConfiguration: unknown }[]>`select configuration_revision as "configurationRevision", configuration_command_id as "configurationCommandId", desired_configuration as "desiredConfiguration" from workers where id=${event.workerId}`;
+  let desiredInput = worker?.desiredConfiguration;
+  if (typeof desiredInput === "string") {
+    try { desiredInput = JSON.parse(desiredInput); } catch { desiredInput = null; }
+  }
+  const desired = WorkerConfiguration.safeParse(desiredInput);
+  const exact = observed.success && desired.success && worker?.configurationCommandId === commandId && worker.configurationRevision === revision && canonical(observed.data) === canonical(desired.data);
   if (!exact) {
     if (worker?.configurationCommandId === commandId && worker.configurationRevision === revision) await db`update workers set configuration_state='error' where id=${event.workerId} and configuration_command_id=${commandId} and configuration_revision=${revision}`;
     return false;
   }
-  await db`update workers set configuration_state='ready' where id=${event.workerId} and configuration_command_id=${commandId} and configuration_revision=${revision}`;
-  return true;
+  return db.begin(async tx => {
+    const updated = await tx`update workers set configuration_state='ready',applied_configuration_revision=configuration_revision,configuration_applied_at=now() where id=${event.workerId} and configuration_command_id=${commandId} and configuration_revision=${revision} returning id`;
+    if (!updated[0]) return false;
+    await tx`insert into audit_events (actor,type,payload) values ('worker','worker.configuration_applied',${JSON.stringify({ workerId: event.workerId, commandId, revision })}::jsonb)`;
+    return true;
+  });
 }
 export async function rejectPendingWorker(db: Sql<{}>, workerId: string, adminId: string): Promise<void> { await db.begin(async tx => { const rows = await tx`update workers set admission_state='rejected', configuration_state='unconfigured' where id=${workerId} and admission_state in ('pending','adopted') returning id`; if (rows.length !== 1) throw new Error("worker rejection conflict"); await tx`update system_onboarding set worker_id=null where singleton=true and worker_id=${workerId}`; await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.rejected',${JSON.stringify({ workerId })}::jsonb)`; }); }
