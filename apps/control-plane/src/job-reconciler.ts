@@ -29,6 +29,10 @@ function stringArray(value: unknown): string[] {
 }
 
 function nullableString(value: unknown): string | null { return typeof value === "string" ? value : null; }
+export function isDispatchableRunStatus(status: string): boolean {
+  return status === "queued" || status === "in_progress";
+}
+
 
 export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate["worker"] & { id: string } {
   return {
@@ -53,7 +57,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       AND repo.organization_id=r.organization_id AND repo.available=true
     JOIN dashboard_installations i ON i.id=repo.installation_id
       AND i.organization_id=r.organization_id AND i.state='approved'
-    WHERE j.status='queued' AND r.status='queued'
+    WHERE j.status='queued' AND r.status IN ('queued','in_progress')
       AND (${deps.repositoryFullName ?? ""}='' OR repo.full_name=${deps.repositoryFullName ?? ""})
     ORDER BY j.queued_at ASC, j.github_job_id ASC
     FOR UPDATE OF j SKIP LOCKED`;

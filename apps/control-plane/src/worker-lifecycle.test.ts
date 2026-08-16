@@ -19,13 +19,23 @@ test("attests only the matching dispatched worker lease and nonce", async () => 
   const { db, calls } = acceptingDb();
   const accepted = await applyWorkerLeaseEvent(db, event("sandbox_attested", { leaseId, nonce, runtimeInstanceId: "whitesmith-job-22222222", observed: { vcpu: 4, memoryBytes: 4_294_967_296, storageBytes: 21_474_836_480 } }));
   expect(accepted).toBe(true);
-  expect(calls).toHaveLength(1);
+  expect(calls).toHaveLength(4);
   expect(calls[0]!.query).toContain("state='sandbox_ready'");
   expect(calls[0]!.query).toContain("worker_id=");
   expect(calls[0]!.query).toContain("nonce=");
   expect(calls[0]!.query).toContain("state='dispatched'");
   expect(calls[0]!.values).toContain(workerId);
   expect(calls[0]!.values).toContain(nonce);
+});
+test("promotes the dashboard job and run when the runner is attested", async () => {
+  const calls: string[] = [];
+  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    calls.push(strings.join(" "));
+    return [{ id: leaseId, organizationId: "org-1", runId: "run-1", jobId: "job-1" }];
+  }, {}) as never;
+  await applyWorkerLeaseEvent(db, event("sandbox_attested", { leaseId, nonce, runtimeInstanceId: "vm", observed: { vcpu: 1, memoryBytes: 1, storageBytes: 1 } }));
+  expect(calls.some(query => query.includes("UPDATE dashboard_jobs") && query.includes("status='in_progress'"))).toBe(true);
+  expect(calls.some(query => query.includes("UPDATE dashboard_runs") && query.includes("status='in_progress'"))).toBe(true);
 });
 
 test("records runner completion and final VM reap monotonically", async () => {
@@ -71,7 +81,7 @@ test("persists authenticated lifecycle events independently of command acknowled
   const accepted = await handleAuthenticatedWorkerEvent(db, { handleEvent() { dispatchCalls += 1; return false; } }, event("sandbox_attested", { leaseId, nonce, runtimeInstanceId: "vm", observed: { vcpu: 1, memoryBytes: 1, storageBytes: 1 } }), { send() {} });
   expect(accepted).toBe(true);
   expect(dispatchCalls).toBe(0);
-  expect(calls).toHaveLength(1);
+  expect(calls).toHaveLength(4);
 });
 
 test("accepts a valid stale lifecycle event without closing the authenticated socket", async () => {

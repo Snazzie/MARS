@@ -22,15 +22,16 @@ export function runDetailFacts(data: RunDetail): RunDetailFacts {
   };
 }
 
-function resourceValue(value: number, bytes = false): string {
-  if (!bytes) return `${value} vCPU`;
+export function formatResourceValue(value: number, unit: "bytes" | "vcpu" | "slots" = "vcpu"): string {
+  if (unit === "slots") return `${value} slots`;
+  if (unit === "vcpu") return `${value} vCPU`;
   if (value >= 1_073_741_824) return `${(value / 1_073_741_824).toFixed(1)} GiB`;
   return `${Math.round(value / 1_048_576)} MiB`;
 }
 
 function ResourceTable({ job }: { job: RunJob }) {
   const rows: [string, keyof PoolResources][] = [["vCPU", "vcpu"], ["Memory", "memoryBytes"], ["Storage", "storageBytes"], ["Concurrency", "concurrency"]];
-  return <table className="resource-table"><caption>Requested versus observed resources</caption><thead><tr><th>Resource</th><th>Requested</th><th>Observed</th></tr></thead><tbody>{rows.map(([label, key]) => <tr key={key}><th>{label}</th><td>{resourceValue(job.requested[key], key !== "vcpu" && key !== "concurrency")}</td><td>{job.observed ? resourceValue(job.observed[key], key !== "vcpu" && key !== "concurrency") : "Pending attestation"}</td></tr>)}</tbody></table>;
+  return <table className="resource-table"><caption>Requested versus observed resources</caption><thead><tr><th>Resource</th><th>Requested</th><th>Observed</th></tr></thead><tbody>{rows.map(([label, key]) => { const unit = key === "concurrency" ? "slots" : key === "vcpu" ? "vcpu" : "bytes"; return <tr key={key}><th>{label}</th><td>{formatResourceValue(job.requested[key], unit)}</td><td>{job.observed ? formatResourceValue(job.observed[key], unit) : "Pending attestation"}</td></tr>; })}</tbody></table>;
 }
 
 function statusLabel(data: RunDetail): string {

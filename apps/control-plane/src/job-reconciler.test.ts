@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
-import { candidateWorkerFromRow } from "./job-reconciler.ts";
+import { candidateWorkerFromRow, isDispatchableRunStatus } from "./job-reconciler.ts";
 import { fits, reason, type Candidate } from "./scheduler.ts";
+
+test("keeps queued jobs eligible while their workflow run is in progress", () => {
+  expect(isDispatchableRunStatus("queued")).toBe(true);
+  expect(isDispatchableRunStatus("in_progress")).toBe(true);
+  expect(isDispatchableRunStatus("completed")).toBe(false);
+});
 
 const row = {
   worker_admission_state: "adopted",

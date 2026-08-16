@@ -16,6 +16,17 @@ test("reserves a routing slot before any JIT request", async () => {
   expect(result.id).toBe("00000000-0000-4000-8000-000000000001");
   expect(queries.some((query) => query.toLowerCase().includes("insert into runner_leases"))).toBe(true);
 });
+test("reserves when current free capacity already includes active leases", async () => {
+  const tx = ((strings: TemplateStringsArray) => {
+    const query = strings.join(" ").toLowerCase();
+    if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 10, memoryBytes: 10, storageBytes: 10, concurrency: 10 }, limits: { maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10, maxStorageBytesPerPod: 10, maxConcurrentPods: 10 }, doctor: { capacity: { freeVcpu: 4, freeMemoryBytes: 4, freeStorageBytes: 4 } } }];
+    if (query.includes("from runner_leases")) return [{ count: 1, vcpu: 3, memoryBytes: 3, storageBytes: 3 }];
+    if (query.includes("insert into runner_leases")) return [{ id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date().toISOString() }];
+    return [];
+  }) as unknown as Sql<{}>;
+  const db = Object.assign(((strings: TemplateStringsArray) => []) as unknown as Sql<{}>, { begin: async (fn: (value: Sql<{}>) => unknown) => fn(tx) });
+  await expect(reserveRoutingSlot(db, { organizationId: "org", poolId: "pool", workerId: "worker", routingKey: "org:pool:labels", requested: { vcpu: 2, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, ttlMs: 60_000 })).resolves.toMatchObject({ id: "lease" });
+});
 test("reserves a shared pool slot for a ready worker", async () => {
   const queries: string[] = [];
   const tx = ((strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -40,7 +51,7 @@ test("rejects a job when aggregate worker capacity is exhausted", async () => {
     return [];
   }) as unknown as Sql<{}>;
   const db = Object.assign(((strings: TemplateStringsArray) => []) as unknown as Sql<{}>, { begin: async (fn: (value: Sql<{}>) => unknown) => fn(tx) });
-  await expect(reserveRoutingSlot(db, { organizationId: "org", poolId: "pool", workerId: "worker", routingKey: "org:pool:labels", requested: { vcpu: 2, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, ttlMs: 60_000 })).rejects.toThrow("worker_capacity_exhausted");
+  await expect(reserveRoutingSlot(db, { organizationId: "org", poolId: "pool", workerId: "worker", routingKey: "org:pool:labels", requested: { vcpu: 5, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, ttlMs: 60_000 })).rejects.toThrow("worker_capacity_exhausted");
 });
 
 test("binds a GitHub job only once", async () => {

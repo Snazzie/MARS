@@ -5,7 +5,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { RunDetail } from "@whitesmith/contracts";
-import { RunDetailView, runDetailFacts } from "./RunDetailView.tsx";
+import { RunDetailView, formatResourceValue, runDetailFacts } from "./RunDetailView.tsx";
 
 const detail: RunDetail = {
   id: "run-1",
@@ -33,9 +33,9 @@ const detail: RunDetail = {
     stage: "completed",
     runnerName: "whitesmith-lease-1",
     logsState: "pending",
-    requested: { vcpu: 2, memoryBytes: 4_294_967_296, storageBytes: 10_737_418_240, concurrency: 1 },
+    requested: { vcpu: 2, memoryBytes: 4_294_967_296, storageBytes: 10_737_418_240, concurrency: 3 },
     requestedLabels: ["self-hosted", "macos", "arm64"],
-    observed: { vcpu: 2, memoryBytes: 4_294_967_296, storageBytes: 10_737_418_240, concurrency: 1 },
+    observed: { vcpu: 2, memoryBytes: 4_294_967_296, storageBytes: 10_737_418_240, concurrency: 3 },
     steps: [{
       id: "step-1", name: "Build", number: 1, status: "completed", conclusion: "success",
       queuedAt: "2026-08-13T14:00:05.000Z", startedAt: "2026-08-13T14:00:10.000Z", completedAt: "2026-08-13T14:01:30.000Z", durationMs: 0,
@@ -78,6 +78,10 @@ test("renders only semantic Logs and Metrics tabs with complete run context", ()
   expect(markup).toContain("arm64");
   expect(markup).toContain("abcdef012345");
   expect(markup).toContain("status-success");
+});
+test("labels concurrency as scheduler slots rather than vCPU", () => {
+  expect(formatResourceValue(3, "slots")).toBe("3 slots");
+  expect(formatResourceValue(3, "slots")).not.toBe("3 vCPU");
 });
 test("renders an awaiting-runner badge when no runner is assigned", () => {
   const markup = renderView({ ...detail, jobs: [{ ...detail.jobs[0], runnerName: null }] });

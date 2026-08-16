@@ -27,7 +27,7 @@ test("does not reserve beyond active pool capacity", async () => {
   expect(result.skipped).toBe(1);
 });
 
-test("attempts at most one admissible job per installation", async () => {
+test("uses every available pool slot for one installation", async () => {
   const jitInstallations: number[] = [];
   let lease = 0;
   const result = await reconcileQueuedJobs({
@@ -41,8 +41,8 @@ test("attempts at most one admissible job per installation", async () => {
     jit: async ({ installationId }) => { jitInstallations.push(installationId); return { encodedJitConfig: "config", runnerName: "runner", labels: ["whitesmith-windows-x64"], expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
     dispatch: async () => {},
   });
-  expect(jitInstallations).toEqual([42, 43]);
-  expect(result).toEqual({ reserved: 2, skipped: 1, failed: 0 });
+  expect(jitInstallations).toEqual([42, 42, 43]);
+  expect(result).toEqual({ reserved: 3, skipped: 0, failed: 0 });
 });
 
 test("does not block a later job when an earlier job is already claimed", async () => {
