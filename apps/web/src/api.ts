@@ -119,7 +119,7 @@ export async function configureWorker(organizationId: string, workerId: string, 
   });
 }
 
-export async function mutateWorker(organizationId: string, workerId: string, action: "reject" | "drain" | "remove"): Promise<{ ok: boolean }> {
+export async function mutateWorker(organizationId: string, workerId: string, action: "reject" | "drain" | "resume" | "remove"): Promise<{ ok: boolean }> {
   const idempotencyKey = crypto.randomUUID();
   return request(`/api/organizations/${organizationId}/workers/${workerId}/${action}`, z.object({ ok: z.boolean() }), {
     method: "POST",
@@ -162,8 +162,19 @@ export async function rejectPendingWorker(workerId: string) {
 }
 export const initializeWorkerBootstrap = () => request("/api/workers/bootstrap/initialize", WorkerBootstrapReveal, { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: "{}" });
 export const rotateWorkerBootstrap = () => request("/api/workers/bootstrap/rotate", WorkerBootstrapReveal, { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: "{}" });
-export const getGlobalPools = () =>
-  request("/api/pools", CursorPage(PoolSummary));
+export const getGlobalPools = (cursor?: string | null, limit = 50) => {
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (cursor) query.set("cursor", cursor);
+  return request(`/api/pools?${query}`, CursorPage(PoolSummary));
+};
+export const saveGlobalPool = (input: CreatePoolRequest) =>
+  request(input.poolId ? `/api/pools/${input.poolId}` : "/api/pools", z.object({ id: z.string().uuid(), labels: z.array(z.string()) }), {
+    method: input.poolId ? "PUT" : "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(input),
+  });
+export const deleteGlobalPool = (poolId: string) =>
+  request(`/api/pools/${poolId}`, z.object({ ok: z.boolean() }), { method: "DELETE", headers: { "Idempotency-Key": crypto.randomUUID() } });
 export const mutateGlobalPool = (poolId: string, action: "enable" | "disable") =>
   request(`/api/pools/${poolId}/${action}`, z.object({ ok: z.boolean() }), {
     method: "POST",
@@ -172,7 +183,7 @@ export const mutateGlobalPool = (poolId: string, action: "enable" | "disable") =
   });
 export const getSettings = (organizationId: string) =>
   request(`/api/organizations/${organizationId}/settings`, OrganizationSettings);
-export async function mutatePool(organizationId: string, poolId: string, action: "enable" | "disable" | "rotate-key") {
+export async function mutatePool(organizationId: string, poolId: string, action: "enable" | "disable") {
   return request(`/api/organizations/${organizationId}/pools/${poolId}/${action}`, z.object({ ok: z.boolean() }), {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },

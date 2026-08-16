@@ -5,9 +5,9 @@ type Check = { key: CheckKey; label: string; platforms: RuntimePlatform[] };
 const checks: Check[] = [
   { key: "nestedKvm", label: "Nested KVM", platforms: ["linux-x64"] },
   { key: "kvmModules", label: "KVM and vhost modules", platforms: ["linux-x64"] },
-  { key: "probe", label: "Disposable Kata probe", platforms: ["linux-x64"] },
-  { key: "egress", label: "Public egress", platforms: ["linux-x64", "windows-x64", "macos-arm64"] },
-  { key: "imageSignatures", label: "Image signatures", platforms: ["linux-x64"] },
+  { key: "probe", label: "Runtime host probe", platforms: ["linux-x64", "windows-x64", "macos-arm64"] },
+  { key: "egress", label: "GitHub egress", platforms: ["linux-x64", "windows-x64", "macos-arm64"] },
+  { key: "imageSignatures", label: "Immutable artifact reference", platforms: ["linux-x64", "windows-x64", "macos-arm64"] },
   { key: "blockVolume", label: "Block volume support", platforms: ["linux-x64"] },
 ];
 export function WorkerDoctor({ doctor, platform, dispatchReady }: { doctor: WorkerDoctorDto | null; platform: RuntimePlatform; dispatchReady: boolean }) {

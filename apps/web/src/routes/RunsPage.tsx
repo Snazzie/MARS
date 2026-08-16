@@ -5,7 +5,6 @@ import { QueryState } from "../components/StateView.tsx";
 import { RunHistory } from "../components/RunHistory.tsx";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
 
-export const RUNS_REFRESH_INTERVAL_MS = 2_000;
 
 export function runsQueryOptions(organizationId: string, search = "") {
   return {
@@ -14,7 +13,6 @@ export function runsQueryOptions(organizationId: string, search = "") {
     initialPageParam: null as string | null,
     getNextPageParam: (page: Awaited<ReturnType<typeof getRuns>>) => page.nextCursor ?? undefined,
     enabled: Boolean(organizationId),
-    refetchInterval: RUNS_REFRESH_INTERVAL_MS,
   };
 }
 
@@ -36,4 +34,3 @@ export function RunsPage() {
   </>;
 }
 
-export const runsQueryRefreshInterval = RUNS_REFRESH_INTERVAL_MS;

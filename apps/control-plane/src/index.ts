@@ -21,6 +21,7 @@ import { pruneExpiredData } from "./retention.ts";
 import { DiscoveryHealthMonitor, isDiscoveryCycleSuccessful } from "./discovery-health.ts";
 import { createControlPlaneApp } from "./http/app.ts";
 import { ensureDefaultPools } from "./default-pools.ts";
+import { canSubscribeToOrganization, loadBrowserInvalidations } from "./browser-invalidations.ts";
 import { GithubRateLimitGate } from "./github-rate-limit.ts";
 import { httpOrigin } from "./http-origin.ts";
 const required = (name: string): string => { const value = Bun.env[name]; if (!value) throw new Error(`${name} is required`); return value; };
@@ -63,10 +64,30 @@ configureRunLifecycle(db);
 const json = (data: unknown, status=200) => Response.json(data,{status,headers:{"cache-control":"no-store"}});
 const cookie = (value:string, maxAge:number) => `whitesmith_session=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
 const sessions = new Map<string, {state:string; verifier:string; createdAt:number}>();
-type SocketData = { actor: "browser" | "worker"; workerId: string; challenge?: Buffer; authenticated: boolean; connectionEpoch?: number; authTimer?: ReturnType<typeof setTimeout> };
+type WorkerSocketData = { actor: "worker"; workerId: string; challenge?: Buffer; authenticated: boolean; connectionEpoch?: number; authTimer?: ReturnType<typeof setTimeout> };
+type BrowserSocketData = { actor: "browser"; organizationId: string; cursor: number };
+type SocketData = WorkerSocketData | BrowserSocketData;
 const workerSockets = new Map<string, ServerWebSocket<SocketData>>();
+const browserSockets = new Set<ServerWebSocket<SocketData>>();
+const replayingBrowserSockets = new WeakSet<ServerWebSocket<SocketData>>();
 const workerConnectionEpochs = new Map<string, number>();
 let nextWorkerConnectionEpoch = 0;
+async function replayBrowserInvalidations(ws: ServerWebSocket<SocketData>): Promise<void> {
+  if (ws.data.actor !== "browser" || replayingBrowserSockets.has(ws)) return;
+  replayingBrowserSockets.add(ws);
+  try {
+    for (let page = 0; page < 10; page += 1) {
+      const rows = await loadBrowserInvalidations(db, ws.data.organizationId, ws.data.cursor);
+      for (const row of rows) {
+        ws.send(JSON.stringify({ version: 1, type: "invalidate", ...row }));
+        ws.data.cursor = row.sequence;
+      }
+      if (rows.length < 100) break;
+    }
+  } finally {
+    replayingBrowserSockets.delete(ws);
+  }
+}
 async function current(request: Request) { return getSession(db, request.headers.get("cookie")?.match(/whitesmith_session=([^;]+)/)?.[1]); }
 const commandStore = {
   async save(command: WorkerCommand): Promise<void> {
@@ -145,22 +166,28 @@ const runRetention = async () => {
 void runRetention();
 setInterval(() => { void runRetention(); }, retentionIntervalMs);
 triggerReconciliation = reconciliationScheduler.trigger;
+setInterval(() => {
+  for (const socket of browserSockets) void replayBrowserInvalidations(socket);
+}, 1_000);
 let server: Server<SocketData>;
 server = Bun.serve<SocketData>({
   port: Number(Bun.env.PORT ?? 3000),
   websocket: {
     open(ws) {
       if (ws.data.actor === "worker") {
-        ws.data.authTimer = setTimeout(() => { if (!ws.data.authenticated) ws.close(1008, "worker authentication timeout"); }, 10_000);
-        const challenge = createWorkerChallenge(ws.data.workerId);
-        ws.data.challenge = challenge.nonce;
+        const workerData = ws.data;
+        workerData.authTimer = setTimeout(() => { if (!workerData.authenticated) ws.close(1008, "worker authentication timeout"); }, 10_000);
+        const challenge = createWorkerChallenge(workerData.workerId);
+        workerData.challenge = challenge.nonce;
         ws.send(JSON.stringify({ version: 1, type: "challenge", nonce: challenge.nonce.toString("base64url") }));
       } else {
-        ws.subscribe("browser");
+        browserSockets.add(ws);
+        void replayBrowserInvalidations(ws);
       }
     },
     async message(ws, message) {
       if (ws.data.actor === "worker") {
+        const workerData = ws.data;
         try {
           if (typeof message === "string" ? message.length > 256 * 1024 : message.byteLength > 256 * 1024) return ws.close(1009, "worker frame too large");
           const frame = JSON.parse(String(message)) as { type?: string; signature?: string; workerId?: string; encryptionPublicKey?: string; payload?: Record<string, unknown> };
@@ -180,11 +207,11 @@ server = Bun.serve<SocketData>({
               socket: ws,
               workerSockets,
               dispatcher,
-              isCurrent: () => workerConnectionEpochs.get(ws.data.workerId) === epoch,
+              isCurrent: () => workerConnectionEpochs.get(workerData.workerId) === epoch,
               markAuthenticated: () => {
-                ws.data.authTimer && clearTimeout(ws.data.authTimer);
-                ws.data.authTimer = undefined;
-                ws.data.authenticated = true;
+                workerData.authTimer && clearTimeout(workerData.authTimer);
+                workerData.authTimer = undefined;
+                workerData.authenticated = true;
               },
             });
             if (!activated) return ws.close(4001, "superseded");
@@ -192,10 +219,11 @@ server = Bun.serve<SocketData>({
           } else if (frame.type === "doctor" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && frame.workerId === ws.data.workerId && frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload) && !containsSecret(frame.payload)) {
             const epoch = ws.data.connectionEpoch;
             if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
-            await db`update workers set doctor=${jsonParameter(db, frame.payload)} where id=${ws.data.workerId}`;
+            await db`update workers set doctor=${jsonParameter(db, frame.payload)}, doctor_observed_at=now(), last_heartbeat_at=now() where id=${ws.data.workerId}`;
             if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
             ws.send(JSON.stringify({ version: 1, type: "doctor_ack", workerId: ws.data.workerId }));
           } else if (frame.type === "pong" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch) {
+            await db`update workers set last_heartbeat_at=now() where id=${ws.data.workerId}`;
             ws.send(JSON.stringify({ version: 1, type: "ping" }));
           } else if (ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch && frame.workerId === ws.data.workerId) {
             if (frame.type === "worker.configured") {
@@ -215,7 +243,7 @@ server = Bun.serve<SocketData>({
           console.error("Worker websocket frame failed", { workerId: ws.data.workerId, error: error instanceof Error ? error.message : String(error) });
           ws.close(1008, "invalid worker frame");
         }
-      } else if (message === "ping") {
+      } else if (String(message) === "ping") {
         ws.send("pong");
       }
     },
@@ -235,13 +263,24 @@ server = Bun.serve<SocketData>({
           void db`update workers set connection_state='offline' where id=${ws.data.workerId}`;
         }
       } else {
-        ws.unsubscribe("browser");
+        browserSockets.delete(ws);
       }
     },
   },
   async fetch(request): Promise<Response | undefined> {
   const url=new URL(request.url);
     requestSources.set(request, server.requestIP(request)?.address ?? "unknown");
+    if (request.headers.get("upgrade")?.toLowerCase() === "websocket" && url.pathname === "/api/browser/invalidations") {
+      const user = await current(request);
+      if (!user) return json({ code: "unauthorized", message: "Authentication required" }, 401);
+      const organizationId = url.searchParams.get("organizationId") ?? "";
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(organizationId)) return json({ code: "invalid_request", message: "A concrete organization is required" }, 400);
+      if (!await canSubscribeToOrganization(db, user, organizationId)) return json({ code: "not_found", message: "Organization not found" }, 404);
+      const rawCursor = Number(url.searchParams.get("cursor") ?? 0);
+      const cursor = Number.isSafeInteger(rawCursor) && rawCursor >= 0 ? rawCursor : 0;
+      if (server.upgrade(request, { data: { actor: "browser", organizationId, cursor } })) return undefined;
+      return json({ code: "upgrade_failed", message: "WebSocket upgrade failed" }, 400);
+    }
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket" && url.pathname === "/api/v1/workers/connect") {
       const workerId = url.searchParams.get("workerId");
       if (!workerId) return json({ error: "workerId required" }, 400);

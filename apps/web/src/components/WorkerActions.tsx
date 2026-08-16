@@ -2,10 +2,11 @@ import { useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { ApiRequestError, mutateWorker } from "../api.ts";
 
-type Action = "reject" | "drain" | "remove";
+type Action = "reject" | "drain" | "resume" | "remove";
 const copy: Record<Action, { label: string; confirm: string; variant: "primary" | "secondary" | "destructive" }> = {
   reject: { label: "Reject", confirm: "Reject this worker? Its enrollment will be revoked and it will not receive work.", variant: "destructive" },
   drain: { label: "Drain", confirm: "Drain this worker? New leases will stop while active work completes.", variant: "secondary" },
+  resume: { label: "Resume", confirm: "Resume this worker? It will become eligible for new leases after its configuration and runtime checks are ready.", variant: "primary" },
   remove: { label: "Remove", confirm: "Remove this worker? Pools will be disabled and the worker will be revoked after active leases finish.", variant: "destructive" },
 };
 
@@ -26,7 +27,7 @@ export function WorkerActions({ organizationId, workerId, admissionState, draini
   return <>
     <div className="worker-actions" aria-label="Worker actions">
       {admissionState === "pending" && <Button label="Reject" variant="destructive" clickAction={() => open("reject")} />}
-      {admissionState === "adopted" && <><Button label={draining ? "Draining" : "Drain"} variant="secondary" isDisabled={draining} clickAction={() => open("drain")} /><Button label="Remove" variant="destructive" clickAction={() => open("remove")} /></>}
+      {admissionState === "adopted" && <><Button label={draining ? "Resume" : "Drain"} variant="secondary" clickAction={() => open(draining ? "resume" : "drain")} /><Button label="Remove" variant="destructive" clickAction={() => open("remove")} /></>}
     </div>
     <dialog ref={dialog} className="confirm-dialog" onCancel={close} aria-labelledby="worker-confirm-title">
       <form method="dialog" onSubmit={(event) => { event.preventDefault(); void confirm(); }}>

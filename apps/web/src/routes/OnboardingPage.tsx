@@ -145,12 +145,13 @@ function LabelsStep({ detail, onCreate, edit = false }: { detail: OnboardingDeta
 }
 function PoolSetupStep({ detail, onCreate, edit = false }: { detail: OnboardingDetail; onCreate: (input: CreatePoolRequest) => void; edit?: boolean }) {
   const worker = detail.worker;
-  const guestPlatforms = worker?.guestPlatforms ?? (worker ? [worker.platform] : []);
+  const digestFor = (platform: "linux-x64" | "windows-x64" | "macos-arm64") => (detail.defaultImageDigests ?? {})[platform] ?? (worker?.platform === platform ? detail.defaultImageDigest : null);
+  const guestPlatforms = (worker?.guestPlatforms ?? (worker ? [worker.platform] : [])).filter((platform) => platform !== "linux-x64" && Boolean(digestFor(platform)));
   const [guestPlatform, setGuestPlatform] = useState<"linux-x64" | "windows-x64" | "macos-arm64" | null>(detail.pool?.platform ?? null);
-  const selectedGuest = guestPlatform ?? guestPlatforms[0] ?? null;
+  const selectedGuest = guestPlatform && guestPlatforms.includes(guestPlatform) ? guestPlatform : guestPlatforms[0] ?? null;
   const [name, setName] = useState(detail.pool?.name ?? "default");
   const [label, setLabel] = useState(detail.pool?.triggerLabel ?? canonicalRunnerLabel(selectedGuest ?? "linux-x64"));
-  const digest = selectedGuest ? (detail.defaultImageDigests ?? {})[selectedGuest] ?? detail.defaultImageDigest ?? null : null;
+  const digest = selectedGuest ? digestFor(selectedGuest) : null;
   if (!worker || !selectedGuest || !digest) return <p role="alert">No immutable job image is configured for this guest platform.</p>;
   if (!worker.limits) return <div><p role="alert">Worker resource limits are not acknowledged yet. Return to Configure resources before creating a pool.</p><p>Configuring worker · resources in GiB</p><p>Trigger label: {label}</p><pre>runs-on: {label}</pre></div>;
   const resources = { vcpu: worker.limits.maxVcpuPerPod, memoryBytes: worker.limits.maxMemoryBytesPerPod, storageBytes: worker.limits.maxStorageBytesPerPod, concurrency: worker.limits.maxConcurrentPods };

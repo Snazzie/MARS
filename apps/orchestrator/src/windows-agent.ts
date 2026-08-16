@@ -1,7 +1,7 @@
 import { generateKeyPairSync, sign as signMessage, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { WorkerBootstrapRequest, WorkerCommand, WorkerConfigurePayload, WorkerConfiguration, WorkerEvent, type WorkerCapacityData, type WorkerDoctorData, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
+import { WorkerBootstrapRequest, WorkerCommand, WorkerConfigurePayload, WorkerConfiguration, WorkerDoctorData, WorkerEvent, type WorkerCapacityData, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { createHyperVRuntime, HyperVDriver } from "./hyperv.ts";
 import { WindowsContainerDriver } from "./windows-container.ts";
@@ -19,12 +19,36 @@ const capacity = async (): Promise<WorkerCapacityData> => {
   const value = await runPowerShellJson("$system=Get-CimInstance Win32_ComputerSystem -ErrorAction Stop; $cpu=(Get-CimInstance Win32_Processor -ErrorAction Stop | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum; $os=Get-CimInstance Win32_OperatingSystem -ErrorAction Stop; $disk=Get-CimInstance Win32_LogicalDisk -ErrorAction Stop | Where-Object DeviceID -eq 'C:'; if (-not $disk) { throw 'C: drive not found' }; [pscustomobject]@{vcpu=[double]$cpu; memory=[double]$system.TotalPhysicalMemory; freeMemory=[double]$os.FreePhysicalMemory * 1024; storage=[double]$disk.Size; freeStorage=[double]$disk.FreeSpace} | ConvertTo-Json -Compress");
   return { actualVcpu: value.vcpu, freeVcpu: value.vcpu, actualMemoryBytes: value.memory, freeMemoryBytes: value.freeMemory, actualStorageBytes: value.storage, freeStorageBytes: value.freeStorage };
 };
-const doctor = (): WorkerDoctorData => ({ probe: true, egress: true, imageSignatures: true });
+const commandSucceeds = async (command: string[]): Promise<boolean> => {
+  try {
+    const process = Bun.spawn(command, { stdout: "ignore", stderr: "ignore" });
+    return await process.exited === 0;
+  } catch {
+    return false;
+  }
+};
+export const windowsDoctor = async (): Promise<WorkerDoctorData> => {
+  const runtimeMode = Bun.env.WHITESMITH_WINDOWS_RUNTIME === "container" ? "container" : "vm";
+  const artifactDigest = runtimeMode === "container" ? Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE : Bun.env.WHITESMITH_WINDOWS_TEMPLATE_DIGEST;
+  const immutableArtifact = typeof artifactDigest === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactDigest);
+  const probe = runtimeMode === "container"
+    ? await commandSucceeds(["docker.exe", "info", "--format", "{{.OSType}}"])
+    : await commandSucceeds(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-VMHost -ErrorAction Stop | Out-Null"]);
+  let egress = false;
+  try {
+    const response = await fetch("https://api.github.com/meta", { signal: AbortSignal.timeout(5_000), headers: { "user-agent": "whitesmith-worker-doctor" } });
+    egress = response.ok;
+  } catch {
+    egress = false;
+  }
+  const failures = [!probe && `${runtimeMode === "container" ? "Windows container host" : "Hyper-V host"} probe failed`, !egress && "GitHub egress probe failed", !immutableArtifact && "Immutable runtime artifact digest is missing"].filter(Boolean);
+  return WorkerDoctorData.parse({ runtimeMode, ...(immutableArtifact ? { artifactDigest } : {}), probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
+};
 const joinCode = async () => { const path = Bun.env.WHITESMITH_JOIN_CODE_FILE; if (path) return (await readFile(path, "utf8")).trim(); const reader = Bun.stdin.stream().getReader(); const { value } = await reader.read(); reader.releaseLock(); return Buffer.from(value ?? []).toString("utf8").trim(); };
 const save = async (identity: Identity) => { const path = identityPath(); await mkdir(dirname(path), { recursive: true }); await writeFile(path, JSON.stringify(identity) + "\n"); };
 const load = async () => { try { return JSON.parse(await readFile(identityPath(), "utf8")) as Identity; } catch { return null; } };
 const auth = (nonce: string, identity: Identity) => ({ type: "authenticate", workerId: identity.workerId, encryptionPublicKey: identity.encryptionPublicKey, signature: signMessage(null, Buffer.from(`${nonce}\n${identity.workerId}\n${identity.encryptionPublicKey}`), identity.privateKey).toString("base64url") });
-async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> { const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), platform: "windows-x64", publicKey: identity.publicKey, encryptionPublicKey: identity.encryptionPublicKey, vmUuid: crypto.randomUUID(), machineUuid: await machineUuid(), doctor: doctor(), capacity: await capacity() }); const response = await fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); if (!response.ok) throw new Error(`worker join failed: ${response.status}`); const joined = await response.json() as { workerId: string }; const result = { ...identity, workerId: joined.workerId }; await save(result); return result; }
+async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> { const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), platform: "windows-x64", publicKey: identity.publicKey, encryptionPublicKey: identity.encryptionPublicKey, vmUuid: crypto.randomUUID(), machineUuid: await machineUuid(), doctor: await windowsDoctor(), capacity: await capacity() }); const response = await fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); if (!response.ok) throw new Error(`worker join failed: ${response.status}`); const joined = await response.json() as { workerId: string }; const result = { ...identity, workerId: joined.workerId }; await save(result); return result; }
 type WindowsRuntimeDriver = Pick<RuntimeDriver, "reserveCapacity" | "createLease" | "stopLease" | "removeLease"> & { reconcileOrphans?: () => Promise<void> };
 export function applyWindowsWorkerConfiguration(limits: Limits, payload: ReturnType<typeof WorkerConfigurePayload.parse>): ReturnType<typeof WorkerConfiguration.parse> {
   const observed = WorkerConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms });
@@ -85,6 +109,8 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
   }
   await driver.reserveCapacity({ vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 });
   await driver.reconcileOrphans?.();
+  const doctorReport = await windowsDoctor();
+  const capacityReport = await capacity();
   const activeLeases = new Map<string, Promise<void>>();
   const loop = async (signal?: AbortSignal): Promise<never> => {
     for (;;) {
@@ -100,7 +126,8 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
         try {
           const frame = JSON.parse(String(message.data)) as Record<string, unknown>;
           if (frame.type === "challenge") return ws.send(JSON.stringify(auth(String(frame.nonce), identity)));
-          if (["authenticated", "doctor_ack", "ping"].includes(String(frame.type))) return;
+          if (frame.type === "authenticated") return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: doctorReport, capacity: capacityReport } }));
+          if (["doctor_ack", "ping"].includes(String(frame.type))) return;
           const command = WorkerCommand.parse(frame);
           if (command.type === "worker.configure") {
             const payload = WorkerConfigurePayload.parse(command.payload);

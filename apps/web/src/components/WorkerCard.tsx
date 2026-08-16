@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import type { WorkerDetail } from "@whitesmith/contracts";
 import { Button } from "@astryxdesign/core/Button";
 import { WorkerActions } from "./WorkerActions.tsx";
@@ -9,6 +9,9 @@ function capacity(label: string, value: { actual: number; reserved: number; free
 export function workerOperationalLabel(worker: Pick<WorkerDetail, "connectionState" | "draining">): "Online" | "Offline" | "Draining" { return worker.draining ? "Draining" : worker.connectionState === "online" ? "Online" : "Offline"; }
 export function workerReadinessLabel(state: WorkerDetail["configurationState"]): "Ready" | "Applying configuration" | "Needs configuration" | "Error" { return state === "ready" ? "Ready" : state === "applying" ? "Applying configuration" : state === "error" ? "Error" : "Needs configuration"; }
 function appliedAt(value: string): string { return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(value)); }
+function telemetryAt(value: string | null): ReactNode {
+  return value ? <time dateTime={value}>{appliedAt(value)}</time> : "Never";
+}
 export function WorkerCard({ worker, organizationId, onChange }: { worker: WorkerDetail; organizationId: string; onChange: () => void }) {
   const active = worker.admissionState === "adopted";
   const effectiveConfigurationState = worker.configurationState === "ready" && worker.configurationRevision !== worker.appliedConfigurationRevision ? "applying" : worker.configurationState;
@@ -32,6 +35,14 @@ export function WorkerCard({ worker, organizationId, onChange }: { worker: Worke
     {active && effectiveConfigurationState === "ready" && applied && <p className="pending-note">Configuration updated <time dateTime={worker.configurationAppliedAt!}>{applied.at}</time> · revision <code>{applied.revision}</code></p>}
     {active && effectiveConfigurationState === "error" && <p className="pending-note" role="alert">Configuration update failed.{applied ? <> Last applied <time dateTime={worker.configurationAppliedAt!}>{applied.at}</time> · revision <code>{applied.revision}</code>.</> : " No configuration has been acknowledged."}</p>}
     <div className="fingerprint-block"><span>Public key fingerprint</span><code tabIndex={0}>{worker.fingerprint}</code></div>
+    <dl className="limits-list worker-telemetry">
+      <div><dt>Last heartbeat</dt><dd>{telemetryAt(worker.lastHeartbeatAt)}</dd></div>
+      <div><dt>Last successful doctor</dt><dd>{telemetryAt(worker.lastDoctorAt)}</dd></div>
+      <div><dt>Runtime mode</dt><dd>{worker.runtimeMode ?? "Not reported"}</dd></div>
+      <div><dt>Artifact digest</dt><dd>{worker.artifactDigest ? <code>{worker.artifactDigest}</code> : "Not reported"}</dd></div>
+      <div><dt>Active leases</dt><dd>{worker.activeSandboxes}</dd></div>
+      <div><dt>Reconciliation</dt><dd>{readinessLabel}</dd></div>
+    </dl>
     <div className="worker-grid"><section className="worker-section"><div className="panel-kicker">Capacity / actual · reserved · free</div><div className="capacity-grid">{capacity("vCPU", worker.capacity.vcpu)}{capacity("Memory", worker.capacity.memoryBytes, bytes)}{capacity("Storage", worker.capacity.storageBytes, bytes)}{capacity("Pods", worker.capacity.pods)}</div></section><section className="worker-section"><div className="panel-kicker">Policy ceilings</div>{worker.limits ? <dl className="limits-list"><div><dt>vCPU / pod</dt><dd>{worker.limits.maxVcpuPerPod}</dd></div><div><dt>Memory / pod</dt><dd>{bytes(worker.limits.maxMemoryBytesPerPod)}</dd></div><div><dt>Storage / pod</dt><dd>{bytes(worker.limits.maxStorageBytesPerPod)}</dd></div><div><dt>Concurrency</dt><dd>{worker.limits.maxConcurrentPods}</dd></div></dl> : <p className="pending-note">No runtime limits configured.</p>}</section></div>
     {active && <WorkerDoctor doctor={worker.doctor} platform={worker.platform} dispatchReady={effectiveConfigurationState === "ready"} />}
     <dialog ref={dialog} className="worker-config-dialog" onCancel={closeConfiguration} aria-label="Configure worker">{configuring && <WorkerConfigurationForm worker={{ id: worker.id, admissionState: worker.admissionState, platform: worker.platform, guestPlatforms: worker.guestPlatforms, draining: worker.draining, activeSandboxes: worker.activeSandboxes, capacity: capacityData, limits: worker.limits }} organizationId={organizationId} onConfigured={() => { closeConfiguration(); onChange(); }} />}</dialog>

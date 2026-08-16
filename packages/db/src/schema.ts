@@ -156,10 +156,13 @@ ALTER TABLE system_onboarding ADD COLUMN IF NOT EXISTS verification_workflow_pat
 ALTER TABLE system_onboarding ADD COLUMN IF NOT EXISTS verification_github_run_id bigint;
 ALTER TABLE system_onboarding ADD COLUMN IF NOT EXISTS verification_started_at timestamptz;
 ALTER TABLE system_onboarding ADD COLUMN IF NOT EXISTS verification_error text;`;
+export const workerTelemetryMigrationSql = `ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_heartbeat_at timestamptz;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS doctor_observed_at timestamptz;`;
 
 
 export const schemaSql = `${baselineSchemaSql}
 ${workerConfigurationMigrationSql}
 ${workerJsonNormalizationMigrationSql}
 ${jsonShapeNormalizationMigrationSql}
-${onboardingVerificationMigrationSql}`;
+${onboardingVerificationMigrationSql}
+${workerTelemetryMigrationSql}`;

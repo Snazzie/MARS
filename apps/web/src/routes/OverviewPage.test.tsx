@@ -12,6 +12,6 @@ test("period control exposes all supported overview windows", () => {
   expect(overviewPeriodLabels["30d"]).toBe("30 days");
 });
 
-test("overview query polls live fleet state", () => {
-  expect(overviewQueryOptions("org-1", "24h").refetchInterval).toBe(2_000);
+test("overview query relies on durable invalidations instead of polling", () => {
+  expect(overviewQueryOptions("org-1", "24h")).not.toHaveProperty("refetchInterval");
 });

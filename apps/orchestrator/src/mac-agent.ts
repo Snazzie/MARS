@@ -3,8 +3,7 @@ import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { statfsSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
-import { WorkerEvent, type LeaseBootstrapEnvelope, type WorkerCapacityData, type WorkerDoctorData } from "@whitesmith/contracts";
-import { WorkerBootstrapRequest, WorkerCommand, WorkerConfigurePayload, WorkerConfiguration } from "@whitesmith/contracts";
+import { WorkerBootstrapRequest, WorkerCommand, WorkerConfigurePayload, WorkerConfiguration, WorkerDoctorData, WorkerEvent, type LeaseBootstrapEnvelope, type WorkerCapacityData } from "@whitesmith/contracts";
 import type { Lease } from "./runtime.ts";
 import { createTartVmRuntime, TartVmDriver } from "./tart.ts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
@@ -165,6 +164,21 @@ async function macMachineUuid(): Promise<string> {
   if (!uuid) throw new Error("macOS machine UUID is unavailable");
   return uuid.toLowerCase();
 }
+async function currentMacDoctor(): Promise<WorkerDoctorData> {
+  const tart = Bun.spawnSync(["tart", "--version"]);
+  const probe = tart.exitCode === 0;
+  let egress = false;
+  try {
+    const response = await fetch("https://api.github.com/meta", { signal: AbortSignal.timeout(5_000), headers: { "user-agent": "whitesmith-worker-doctor" } });
+    egress = response.ok;
+  } catch {
+    egress = false;
+  }
+  const artifactDigest = Bun.env.WHITESMITH_TART_IMAGE_DIGEST ?? Bun.env.WHITESMITH_TART_BASE_IMAGE;
+  const immutableArtifact = typeof artifactDigest === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactDigest);
+  const failures = [!probe && "Tart runtime probe failed", !egress && "GitHub egress probe failed", !immutableArtifact && "Immutable Tart image digest is missing"].filter(Boolean);
+  return WorkerDoctorData.parse({ runtimeMode: "tart", ...(immutableArtifact ? { artifactDigest } : {}), probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
+}
 async function currentMacWorkerJoinPayload(code: string, publicKey: string, encryptionPublicKey: string): Promise<MacWorkerJoinPayload> {
   const machineUuid = await macMachineUuid();
   const resources = capacity();
@@ -174,7 +188,7 @@ async function currentMacWorkerJoinPayload(code: string, publicKey: string, encr
     encryptionPublicKey,
     machineUuid,
     vmUuid: (Bun.env.WHITESMITH_VM_UUID ?? machineUuid).toLowerCase(),
-    doctor: { probe: true, egress: true, ...resources },
+    doctor: { ...await currentMacDoctor(), ...resources },
     capacity: resources,
   })) as MacWorkerJoinPayload;
 }
