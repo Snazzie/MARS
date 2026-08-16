@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { Sql } from "postgres";
+import { jsonParameter } from "@whitesmith/db";
 import { sha256 } from "./auth.ts";
 
 export interface BootstrapReveal { code: string; generation: number; createdAt: string }
@@ -23,7 +24,7 @@ export async function rotateWorkerBootstrap(db: Sql<{}>, actorId: string): Promi
     const [current] = await tx<{ generation: number }[]>`select generation from worker_bootstrap_credentials where singleton=true for update`;
     if (!current) throw new Error("bootstrap credential is not initialized");
     const [row] = await tx<BootstrapRow[]>`update worker_bootstrap_credentials set code_hash=${hash(code)}, generation=generation+1, rotated_by=${actorId}, rotated_at=now(), consumed_at=null where singleton=true returning generation, created_at as "createdAt", rotated_at as "rotatedAt"`;
-    await tx`insert into audit_events (actor,type,payload) values (${actorId},'worker.bootstrap.rotated',${JSON.stringify({ generation: row.generation })})`;
+    await tx`insert into audit_events (actor,type,payload) values (${actorId},'worker.bootstrap.rotated',${jsonParameter(tx, { generation: row.generation })})`;
     return result({ ...row, createdAt: new Date(row.createdAt).toISOString(), rotatedAt: row.rotatedAt ? new Date(row.rotatedAt).toISOString() : null, codeHash: hash(code) }, code);
   });
 }

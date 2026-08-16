@@ -1,6 +1,6 @@
 import postgres, { type Sql } from "postgres";
 import { createHash } from "node:crypto";
-import { baselineSchemaSql, schemaSql, workerConfigurationMigrationSql } from "./schema.ts";
+import { baselineSchemaSql, jsonShapeNormalizationMigrationSql, schemaSql, workerConfigurationMigrationSql, workerJsonNormalizationMigrationSql } from "./schema.ts";
 
 export type DatabaseClient = Sql<{}>;
 export function createDb(url: string): DatabaseClient { return postgres(url, { max: 10, prepare: false }); }
@@ -20,6 +20,8 @@ const migrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS webhook_deliveries_state_idx ON webhook_deliveries(state, received_at);`,
   },
   { version: 3, name: "worker-configuration-state", sql: workerConfigurationMigrationSql },
+  { version: 4, name: "worker-json-normalization", sql: workerJsonNormalizationMigrationSql },
+  { version: 5, name: "json-shape-normalization", sql: jsonShapeNormalizationMigrationSql },
 ];
 
 export async function migrate(sql: DatabaseClient): Promise<void> {
@@ -44,6 +46,7 @@ export async function migrate(sql: DatabaseClient): Promise<void> {
   });
 }
 export { schemaSql };
+export * from "./json.ts";
 export * from "./dashboard.ts";
 export * from "./onboarding.ts";
 export * from "./leases.ts";

@@ -1,4 +1,4 @@
-import { createDb, migrate, expireLeases } from "@whitesmith/db";
+import { createDb, migrate, expireLeases, jsonParameter } from "@whitesmith/db";
 import type { WorkerCommand } from "@whitesmith/contracts";
 import { WorkerCommand as WorkerCommandSchema } from "@whitesmith/contracts";
 import type { Server, ServerWebSocket } from "bun";
@@ -44,7 +44,7 @@ let nextWorkerConnectionEpoch = 0;
 async function current(request: Request) { return getSession(db, request.headers.get("cookie")?.match(/whitesmith_session=([^;]+)/)?.[1]); }
 const commandStore = {
   async save(command: WorkerCommand): Promise<void> {
-    await db`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${command.id},${command.version},${command.type},${command.workerId},${command.leaseId},${command.occurredAt},${JSON.stringify(command.payload)}) on conflict (id) do nothing`;
+    await db`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${command.id},${command.version},${command.type},${command.workerId},${command.leaseId},${command.occurredAt},${jsonParameter(db, command.payload)}) on conflict (id) do nothing`;
   },
   async listUnacknowledged(workerId: string): Promise<WorkerCommand[]> {
     const rows = await db`select c.id,c.version,c.type,c.worker_id as "workerId",c.lease_id as "leaseId",c.occurred_at as "occurredAt",c.payload from commands c left join runner_leases l on l.id=c.lease_id where c.worker_id=${workerId} and c.state in ('pending','sent') and (c.lease_id is null or l.state not in ('failed','reaped')) order by c.occurred_at asc,c.id asc`;
@@ -166,7 +166,7 @@ server = Bun.serve<SocketData>({
           } else if (frame.type === "doctor" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && frame.workerId === ws.data.workerId && frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload) && !containsSecret(frame.payload)) {
             const epoch = ws.data.connectionEpoch;
             if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
-            await db`update workers set doctor=${JSON.stringify(frame.payload)} where id=${ws.data.workerId}`;
+            await db`update workers set doctor=${jsonParameter(db, frame.payload)} where id=${ws.data.workerId}`;
             if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
             ws.send(JSON.stringify({ version: 1, type: "doctor_ack", workerId: ws.data.workerId }));
           } else if (frame.type === "pong" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch) {

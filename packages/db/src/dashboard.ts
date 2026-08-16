@@ -1,6 +1,7 @@
 import type { Sql } from "postgres";
 import { CapacitySnapshot, PoolSummary, RuntimeDriverName, RuntimePlatform, WorkerDoctor, WorkerLimits, GuestPlatform } from "@whitesmith/contracts";
 import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, OverviewTimeseriesPoint, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail, OrganizationSettings } from "@whitesmith/contracts";
+import { jsonParameter } from "./json.ts";
 export type DashboardDb = Sql<{}>;
 export type RunTransition = { status: RunSummary["status"]; conclusion: RunSummary["conclusion"]; startedAt?: string | null; completedAt?: string | null };
 const statusOrder: Record<RunSummary["status"], number> = { queued: 0, in_progress: 1, completed: 2 };
@@ -267,7 +268,7 @@ export async function updateOrganizationSettings(db: DashboardDb, value: Organiz
   return normalizeOrganizationSettings(row);
 }
 export async function dashboardMutation(db: DashboardDb, organizationId: string, key: string): Promise<boolean> { const rows = await db`INSERT INTO dashboard_mutations (organization_id,idempotency_key) VALUES (${organizationId},${key}) ON CONFLICT DO NOTHING RETURNING idempotency_key`; return rows.length > 0; }
-export async function invalidateDashboard(db: DashboardDb, organizationId: string, keys: string[]): Promise<void> { await db`INSERT INTO dashboard_outbox_invalidations (organization_id,sequence,keys) SELECT ${organizationId},COALESCE(MAX(sequence),0)+1,${JSON.stringify(keys)}::jsonb FROM dashboard_outbox_invalidations WHERE organization_id=${organizationId}`; }
+export async function invalidateDashboard(db: DashboardDb, organizationId: string, keys: string[]): Promise<void> { await db`INSERT INTO dashboard_outbox_invalidations (organization_id,sequence,keys) SELECT ${organizationId},COALESCE(MAX(sequence),0)+1,${jsonParameter(db, keys)}::jsonb FROM dashboard_outbox_invalidations WHERE organization_id=${organizationId}`; }
 
 export type QueueRepositoryDiscoveryRecheckResult = "queued" | "not_found" | "not_paused";
 

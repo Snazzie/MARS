@@ -43,7 +43,7 @@ test("maps a nonzero runner exit to a failed terminal lease", async () => {
   const failed = acceptingDb();
   expect(await applyWorkerLeaseEvent(failed.db, event("runner.finished", { leaseId, nonce, exitCode: 17 }))).toBe(true);
   expect(failed.calls[0]!.values).toContain("failed");
-  expect(failed.calls[0]!.values).toContain(JSON.stringify({ exitCode: 17 }));
+  expect(failed.calls[0]!.values).toContainEqual({ exitCode: 17 });
 });
 
 

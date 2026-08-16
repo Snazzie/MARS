@@ -1,5 +1,6 @@
 import type { Sql } from "postgres";
 import type { GuestPlatform } from "@whitesmith/contracts";
+import { jsonParameter } from "@whitesmith/db";
 
 type PoolDefaults = Partial<Record<GuestPlatform, string | undefined>>;
 type WorkerLimits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
@@ -28,9 +29,9 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
     const name = `default-${platform}`;
     const [existing] = await db`select id from runner_pools where organization_id is null and (name=${name} or trigger_label=${label}) limit 1`;
     if (existing) {
-      await db`update runner_pools set worker_id=null,platform=${platform},driver=${driver},image_digest=${imageDigest},resources=${JSON.stringify(resources)}::jsonb,labels=${JSON.stringify([label])}::jsonb,trigger_label=${label},enabled=true,name=${name} where id=${existing.id}`;
+      await db`update runner_pools set worker_id=null,platform=${platform},driver=${driver},image_digest=${imageDigest},resources=${jsonParameter(db, resources)}::jsonb,labels=${jsonParameter(db, [label])}::jsonb,trigger_label=${label},enabled=true,name=${name} where id=${existing.id}`;
     } else {
-      await db`insert into runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) values (null,null,${name},${platform},${driver},${imageDigest},${JSON.stringify(resources)}::jsonb,${JSON.stringify([label])}::jsonb,${label},true)`;
+      await db`insert into runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) values (null,null,${name},${platform},${driver},${imageDigest},${jsonParameter(db, resources)}::jsonb,${jsonParameter(db, [label])}::jsonb,${label},true)`;
     }
   }
 }

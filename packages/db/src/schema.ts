@@ -123,5 +123,35 @@ ALTER TABLE workers ADD COLUMN IF NOT EXISTS configuration_applied_at timestampt
 UPDATE workers w SET desired_configuration=jsonb_build_object('appliance',c.payload->'appliance','runtime',c.payload->'runtime','guestPlatforms',c.payload->'guestPlatforms') FROM commands c WHERE w.desired_configuration IS NULL AND c.id=w.configuration_command_id AND c.type='worker.configure' AND c.payload ? 'appliance' AND c.payload ? 'runtime' AND c.payload ? 'guestPlatforms';
 UPDATE workers SET applied_configuration_revision=configuration_revision WHERE configuration_state='ready' AND desired_configuration IS NOT NULL AND applied_configuration_revision IS NULL;`;
 
+
+export const workerJsonNormalizationMigrationSql = `UPDATE workers SET guest_platforms=(guest_platforms #>> '{}')::jsonb WHERE jsonb_typeof(guest_platforms)='string';
+UPDATE workers SET limits=(limits #>> '{}')::jsonb WHERE jsonb_typeof(limits)='string';
+UPDATE workers SET desired_configuration=(desired_configuration #>> '{}')::jsonb WHERE jsonb_typeof(desired_configuration)='string';
+UPDATE commands SET payload=(payload #>> '{}')::jsonb WHERE jsonb_typeof(payload)='string';
+UPDATE audit_events SET payload=(payload #>> '{}')::jsonb WHERE jsonb_typeof(payload)='string';
+UPDATE worker_mutations SET response=(response #>> '{}')::jsonb WHERE jsonb_typeof(response)='string';
+UPDATE workers w SET desired_configuration=jsonb_build_object('appliance',c.payload->'appliance','runtime',c.payload->'runtime','guestPlatforms',c.payload->'guestPlatforms') FROM commands c WHERE w.desired_configuration IS NULL AND c.id=w.configuration_command_id AND c.type='worker.configure' AND c.payload ? 'appliance' AND c.payload ? 'runtime' AND c.payload ? 'guestPlatforms';
+UPDATE workers SET applied_configuration_revision=configuration_revision WHERE configuration_state='ready' AND desired_configuration IS NOT NULL AND applied_configuration_revision IS NULL;`;
+
+export const jsonShapeNormalizationMigrationSql = `UPDATE audit_events SET payload=(payload #>> '{}')::jsonb WHERE jsonb_typeof(payload)='string';
+UPDATE commands SET payload=(payload #>> '{}')::jsonb WHERE jsonb_typeof(payload)='string';
+UPDATE dashboard_jobs SET observed=(observed #>> '{}')::jsonb WHERE jsonb_typeof(observed)='string';
+UPDATE dashboard_jobs SET requested=(requested #>> '{}')::jsonb WHERE jsonb_typeof(requested)='string';
+UPDATE dashboard_jobs SET requested_labels=(requested_labels #>> '{}')::jsonb WHERE jsonb_typeof(requested_labels)='string';
+UPDATE dashboard_mutations SET response=(response #>> '{}')::jsonb WHERE jsonb_typeof(response)='string';
+UPDATE dashboard_outbox_invalidations SET keys=(keys #>> '{}')::jsonb WHERE jsonb_typeof(keys)='string';
+UPDATE runner_leases SET requested=(requested #>> '{}')::jsonb WHERE jsonb_typeof(requested)='string';
+UPDATE runner_leases SET terminal_result=(terminal_result #>> '{}')::jsonb WHERE jsonb_typeof(terminal_result)='string';
+UPDATE runner_pools SET labels=(labels #>> '{}')::jsonb WHERE jsonb_typeof(labels)='string';
+UPDATE runner_pools SET resources=(resources #>> '{}')::jsonb WHERE jsonb_typeof(resources)='string';
+UPDATE webhook_deliveries SET payload=(payload #>> '{}')::jsonb WHERE jsonb_typeof(payload)='string';
+UPDATE worker_mutations SET response=(response #>> '{}')::jsonb WHERE jsonb_typeof(response)='string';
+UPDATE workers SET desired_configuration=(desired_configuration #>> '{}')::jsonb WHERE jsonb_typeof(desired_configuration)='string';
+UPDATE workers SET doctor=(doctor #>> '{}')::jsonb WHERE jsonb_typeof(doctor)='string';
+UPDATE workers SET guest_platforms=(guest_platforms #>> '{}')::jsonb WHERE jsonb_typeof(guest_platforms)='string';
+UPDATE workers SET limits=(limits #>> '{}')::jsonb WHERE jsonb_typeof(limits)='string';`;
+
 export const schemaSql = `${baselineSchemaSql}
-${workerConfigurationMigrationSql}`;
+${workerConfigurationMigrationSql}
+${workerJsonNormalizationMigrationSql}
+${jsonShapeNormalizationMigrationSql}`;

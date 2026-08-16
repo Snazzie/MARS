@@ -1,6 +1,7 @@
 import type { Sql } from "postgres";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, validateWorkerGuestPlatforms, type GuestPlatform } from "@whitesmith/contracts";
+import { jsonParameter } from "@whitesmith/db";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { fingerprint } from "./workers.ts";
 
@@ -41,13 +42,13 @@ export async function requestPendingWorker(db: Sql<{}>, input: WorkerBootstrapRe
     }
     if (rows.length) return { conflict: true as const, invalid: false as const };
     await tx`update worker_bootstrap_credentials set consumed_at=now() where singleton=true and consumed_at is null`;
-    const [created] = await tx<{ id: string }[]>`insert into workers (name,platform,guest_platforms,admission_state,public_key,encryption_public_key,fingerprint,vm_uuid,machine_uuid,limits,doctor,last_requested_at) values (${parsed.vmUuid},${parsed.platform},${JSON.stringify(guestPlatforms)}::jsonb,'pending',${parsed.publicKey},${parsed.encryptionPublicKey},${fp},${parsed.vmUuid},${parsed.machineUuid},null,${telemetry},now()) returning id`;
-    await tx`insert into audit_events (actor,type,payload) values ('worker','worker.requested',${JSON.stringify({ workerId: created.id, vmUuid: parsed.vmUuid, fingerprint: fp, guestPlatforms })}::jsonb)`;
+    const [created] = await tx<{ id: string }[]>`insert into workers (name,platform,guest_platforms,admission_state,public_key,encryption_public_key,fingerprint,vm_uuid,machine_uuid,limits,doctor,last_requested_at) values (${parsed.vmUuid},${parsed.platform},${jsonParameter(tx, guestPlatforms)}::jsonb,'pending',${parsed.publicKey},${parsed.encryptionPublicKey},${fp},${parsed.vmUuid},${parsed.machineUuid},null,${telemetry},now()) returning id`;
+    await tx`insert into audit_events (actor,type,payload) values ('worker','worker.requested',${jsonParameter(tx, { workerId: created.id, vmUuid: parsed.vmUuid, fingerprint: fp, guestPlatforms })}::jsonb)`;
     return { status: "created" as const, workerId: created.id };
   });
   if ("invalid" in outcome && outcome.invalid) throw new WorkerRequestError("invalid_bootstrap");
   if ("conflict" in outcome && outcome.conflict) {
-    await db`insert into audit_events (actor,type,payload) values ('worker','worker.request.identity_conflict',${JSON.stringify({ vmUuid: parsed.vmUuid, fingerprint: fp })}::jsonb)`;
+    await db`insert into audit_events (actor,type,payload) values ('worker','worker.request.identity_conflict',${jsonParameter(db, { vmUuid: parsed.vmUuid, fingerprint: fp })}::jsonb)`;
     throw new WorkerRequestError("identity_conflict");
   }
   if (source && limiter) limiter.clear(source);
@@ -57,9 +58,9 @@ export async function requestPendingWorker(db: Sql<{}>, input: WorkerBootstrapRe
 export async function approvePendingWorker(db: Sql<{}>, workerId: string, input: ApproveWorkerRequest, adminId: string): Promise<void> {
   const parsed = ApproveWorkerRequest.parse(input);
   await db.begin(async tx => {
-    const rows = await tx`update workers set limits=${JSON.stringify(parsed.limits)}::jsonb, admission_state='adopted', configuration_state='unconfigured' where id=${workerId} and admission_state='pending' returning id`;
+    const rows = await tx`update workers set limits=${jsonParameter(tx, parsed.limits)}::jsonb, admission_state='adopted', configuration_state='unconfigured' where id=${workerId} and admission_state='pending' returning id`;
     if (rows.length !== 1) throw new Error("worker approval conflict");
-    await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.approved',${JSON.stringify({ workerId, limits: parsed.limits })}::jsonb)`;
+    await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.approved',${jsonParameter(tx, { workerId, limits: parsed.limits })}::jsonb)`;
   });
 }
 export type WorkerConfigurationInput = { appliance: { vcpu: number; memoryBytes: number; storageBytes: number }; runtime: { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number }; guestPlatforms?: GuestPlatform[] };
@@ -87,11 +88,11 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, conf
     const telemetry = row.doctor && typeof row.doctor === "object" ? row.doctor as Record<string, unknown> : {};
     const capacity = telemetry.capacity && typeof telemetry.capacity === "object" ? telemetry.capacity as Record<string, number> : {};
     if (parsed.appliance.vcpu > (capacity.freeVcpu ?? 0) || parsed.appliance.memoryBytes > (capacity.freeMemoryBytes ?? 0) || parsed.appliance.storageBytes > (capacity.freeStorageBytes ?? 0)) throw new Error("worker configuration exceeds capacity");
-    await tx`update workers set limits=${JSON.stringify(parsed.runtime)}::jsonb, guest_platforms=${JSON.stringify(parsed.guestPlatforms)}::jsonb, desired_configuration=${JSON.stringify(parsed)}::jsonb, admission_state='adopted', configuration_state='applying', configuration_revision=${revision}, configuration_command_id=${commandId} where id=${workerId}`;
-    await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,'worker.configure',${workerId},null,now(),${JSON.stringify(payload)}::jsonb)`;
-    await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.configured',${JSON.stringify({ workerId, revision, fingerprint: fp, guestPlatforms: parsed.guestPlatforms })}::jsonb)`;
+    await tx`update workers set limits=${jsonParameter(tx, parsed.runtime)}::jsonb, guest_platforms=${jsonParameter(tx, parsed.guestPlatforms)}::jsonb, desired_configuration=${jsonParameter(tx, parsed)}::jsonb, admission_state='adopted', configuration_state='applying', configuration_revision=${revision}, configuration_command_id=${commandId} where id=${workerId}`;
+    await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,'worker.configure',${workerId},null,now(),${jsonParameter(tx, payload)}::jsonb)`;
+    await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.configured',${jsonParameter(tx, { workerId, revision, fingerprint: fp, guestPlatforms: parsed.guestPlatforms })}::jsonb)`;
     const result = { revision, fingerprint: fp, commandId };
-    if (idempotencyKey) await tx`insert into worker_mutations (worker_id,idempotency_key,response) values (${workerId},${idempotencyKey},${JSON.stringify(result)}::jsonb)`;
+    if (idempotencyKey) await tx`insert into worker_mutations (worker_id,idempotency_key,response) values (${workerId},${idempotencyKey},${jsonParameter(tx, result)}::jsonb)`;
     return result;
   });
   if (response.commandId !== commandId) return response;
@@ -117,7 +118,7 @@ export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event
   return db.begin(async tx => {
     const updated = await tx`update workers set configuration_state='ready',applied_configuration_revision=configuration_revision,configuration_applied_at=now() where id=${event.workerId} and configuration_command_id=${commandId} and configuration_revision=${revision} returning id`;
     if (!updated[0]) return false;
-    await tx`insert into audit_events (actor,type,payload) values ('worker','worker.configuration_applied',${JSON.stringify({ workerId: event.workerId, commandId, revision })}::jsonb)`;
+    await tx`insert into audit_events (actor,type,payload) values ('worker','worker.configuration_applied',${jsonParameter(tx, { workerId: event.workerId, commandId, revision })}::jsonb)`;
     return true;
   });
 }
@@ -151,9 +152,9 @@ export async function reconcileWorkerConfigurationOnConnect(db: Sql<{}>, workerI
     const fingerprint = createHash("sha256").update(`${workerId}:${revision}`).digest("hex");
     const payload = { workerId, appliance: desired.appliance, runtime: desired.runtime, guestPlatforms: desired.guestPlatforms, revision, fingerprint };
     await tx`update commands set state='failed' where worker_id=${workerId} and type='worker.configure' and state in ('pending','sent')`;
-    await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,${"worker.configure"},${workerId},null,now(),${JSON.stringify(payload)}::jsonb)`;
+    await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,${"worker.configure"},${workerId},null,now(),${jsonParameter(tx, payload)}::jsonb)`;
     await tx`update workers set configuration_state='applying', configuration_revision=${revision}, configuration_command_id=${commandId} where id=${workerId}`;
     return { state: "applying", commandId };
   });
 }
-export async function rejectPendingWorker(db: Sql<{}>, workerId: string, adminId: string): Promise<void> { await db.begin(async tx => { const rows = await tx`update workers set admission_state='rejected', configuration_state='unconfigured' where id=${workerId} and admission_state in ('pending','adopted') returning id`; if (rows.length !== 1) throw new Error("worker rejection conflict"); await tx`update system_onboarding set worker_id=null where singleton=true and worker_id=${workerId}`; await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.rejected',${JSON.stringify({ workerId })}::jsonb)`; }); }
+export async function rejectPendingWorker(db: Sql<{}>, workerId: string, adminId: string): Promise<void> { await db.begin(async tx => { const rows = await tx`update workers set admission_state='rejected', configuration_state='unconfigured' where id=${workerId} and admission_state in ('pending','adopted') returning id`; if (rows.length !== 1) throw new Error("worker rejection conflict"); await tx`update system_onboarding set worker_id=null where singleton=true and worker_id=${workerId}`; await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.rejected',${jsonParameter(tx, { workerId })}::jsonb)`; }); }

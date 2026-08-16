@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { baselineSchemaSql, schemaSql, workerConfigurationMigrationSql } from "./schema.ts";
+import { baselineSchemaSql, jsonShapeNormalizationMigrationSql, schemaSql, workerConfigurationMigrationSql, workerJsonNormalizationMigrationSql } from "./schema.ts";
 
 test("repository authorization is represented only by GitHub availability", () => {
   const repositoryDefinition = schemaSql.match(/CREATE TABLE IF NOT EXISTS dashboard_repositories \(([^;]+)\);/)?.[1];
@@ -39,5 +39,19 @@ test("persists desired and exactly applied worker configuration", () => {
 test("keeps worker configuration changes out of the immutable baseline migration", () => {
   expect(baselineSchemaSql).not.toContain("desired_configuration");
   expect(workerConfigurationMigrationSql).toContain("ADD COLUMN IF NOT EXISTS desired_configuration");
-  expect(schemaSql).toBe(`${baselineSchemaSql}\n${workerConfigurationMigrationSql}`);
+  expect(schemaSql).toBe(`${baselineSchemaSql}\n${workerConfigurationMigrationSql}\n${workerJsonNormalizationMigrationSql}\n${jsonShapeNormalizationMigrationSql}`);
+});
+
+test("normalizes legacy double-encoded worker JSON in a later migration", () => {
+  expect(baselineSchemaSql).not.toContain("#>> '{}'");
+  expect(workerJsonNormalizationMigrationSql).toContain("jsonb_typeof(guest_platforms)='string'");
+  expect(workerJsonNormalizationMigrationSql).toContain("jsonb_typeof(desired_configuration)='string'");
+});
+
+test("normalizes every persisted JSONB shape after legacy string writes", () => {
+  expect(jsonShapeNormalizationMigrationSql).toContain("UPDATE runner_pools SET resources=");
+  expect(jsonShapeNormalizationMigrationSql).toContain("UPDATE runner_leases SET requested=");
+  expect(jsonShapeNormalizationMigrationSql).toContain("UPDATE dashboard_jobs SET requested_labels=");
+  expect(jsonShapeNormalizationMigrationSql).toContain("UPDATE webhook_deliveries SET payload=");
+  expect(jsonShapeNormalizationMigrationSql).toContain("UPDATE workers SET doctor=");
 });

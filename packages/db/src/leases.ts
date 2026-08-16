@@ -1,5 +1,6 @@
 import type { Sql } from "postgres";
 import { randomBytes, randomUUID } from "node:crypto";
+import { jsonParameter } from "./json.ts";
 
 export type LeaseReservationInput = {
   organizationId: string;
@@ -39,11 +40,11 @@ export async function reserveRoutingSlot(sql: Sql<{}>, input: LeaseReservationIn
     const capacity = doctor?.capacity ?? {};
     if (Number(workerActive[0]?.count ?? 0) >= Number(limits.maxConcurrentPods) || (capacity.freeVcpu !== undefined && (Number(workerActive[0]?.vcpu ?? 0) + input.requested.vcpu > Number(capacity.freeVcpu) || Number(workerActive[0]?.memoryBytes ?? 0) + input.requested.memoryBytes > Number(capacity.freeMemoryBytes ?? 0) || Number(workerActive[0]?.storageBytes ?? 0) + input.requested.storageBytes > Number(capacity.freeStorageBytes ?? 0)))) throw new Error("worker_capacity_exhausted");
     const inserted = await tx`INSERT INTO runner_leases (id,organization_id,pool_id,worker_id,routing_key,github_job_id,state,requested,nonce,expires_at)
-      VALUES (${id},${input.organizationId},${input.poolId},${input.workerId},${input.routingKey},${input.githubJobId ?? null},'reserved',${JSON.stringify(input.requested)},${nonce},${expiresAt})
+      VALUES (${id},${input.organizationId},${input.poolId},${input.workerId},${input.routingKey},${input.githubJobId ?? null},'reserved',${jsonParameter(tx, input.requested)},${nonce},${expiresAt})
       ON CONFLICT (github_job_id) DO UPDATE SET id=EXCLUDED.id,organization_id=EXCLUDED.organization_id,pool_id=EXCLUDED.pool_id,worker_id=EXCLUDED.worker_id,routing_key=EXCLUDED.routing_key,state='reserved',requested=EXCLUDED.requested,nonce=EXCLUDED.nonce,expires_at=EXCLUDED.expires_at,cleanup_state='none',terminal_result=null,updated_at=now()
       WHERE runner_leases.state IN ('failed','reaped')
       RETURNING id,github_job_id AS "jobId",nonce,worker_id AS "workerId",pool_id AS "poolId",requested,expires_at AS "expiresAt"`;
-    if (inserted[0] && input.githubJobId !== undefined) await tx`UPDATE dashboard_jobs SET requested=${JSON.stringify(input.requested)}::jsonb WHERE github_job_id=${input.githubJobId}`;
+    if (inserted[0] && input.githubJobId !== undefined) await tx`UPDATE dashboard_jobs SET requested=${jsonParameter(tx, input.requested)}::jsonb WHERE github_job_id=${input.githubJobId}`;
     if (!inserted[0]) throw new Error("job_already_claimed");
     return inserted;
   });
@@ -62,7 +63,7 @@ export async function bindLeaseToJob(sql: Sql<{}>, leaseId: string, githubJobId:
 }
 
 export async function completeLease(sql: Sql<{}>, leaseId: string, result: { state: "completed" | "failed"; conclusion?: string | null }): Promise<void> {
-  await sql`UPDATE runner_leases SET state=${result.state}, terminal_result=${JSON.stringify(result)}, updated_at=now() WHERE id=${leaseId} AND state NOT IN ('completed','failed','reaped')`;
+  await sql`UPDATE runner_leases SET state=${result.state}, terminal_result=${jsonParameter(sql, result)}, updated_at=now() WHERE id=${leaseId} AND state NOT IN ('completed','failed','reaped')`;
 }
 
 export async function expireLeases(sql: Sql<{}>, now = new Date()): Promise<string[]> {

@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck } from "@whitesmith/db";
+import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter } from "@whitesmith/db";
 import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
@@ -76,7 +76,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
         await tx`UPDATE workers SET draining=true WHERE id=${id}`;
         await tx`UPDATE runner_pools SET enabled=false WHERE worker_id=${id}`;
         await tx`UPDATE workers SET admission_state='revoked',connection_state='offline' WHERE id=${id}`;
-        await tx`INSERT INTO audit_events (actor,type,payload) VALUES (${c.get("user").id},'worker.removed',${JSON.stringify({ workerId: id })}::jsonb)`;
+        await tx`INSERT INTO audit_events (actor,type,payload) VALUES (${c.get("user").id},'worker.removed',${jsonParameter(tx, { workerId: id })}::jsonb)`;
       });
     }
     return c.json({ ok: true });
@@ -100,11 +100,11 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const [duplicate] = await deps.db`SELECT id,name,trigger_label AS "triggerLabel" FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel}) LIMIT 1`;
     if (duplicate) {
       if (duplicate.name !== body.name || duplicate.triggerLabel !== body.triggerLabel) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
-      await deps.db`UPDATE runner_pools SET worker_id=NULL,platform=${body.guestPlatform},driver=${driver},image_digest=${body.imageDigest},resources=${JSON.stringify(body.resources)},labels=${JSON.stringify(labels)},enabled=true WHERE id=${duplicate.id}`;
+      await deps.db`UPDATE runner_pools SET worker_id=NULL,platform=${body.guestPlatform},driver=${driver},image_digest=${body.imageDigest},resources=${jsonParameter(deps.db, body.resources)},labels=${jsonParameter(deps.db, labels)},enabled=true WHERE id=${duplicate.id}`;
       return c.json({ id: String(duplicate.id), labels });
     }
-    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${body.guestPlatform},${driver},${body.imageDigest},${JSON.stringify(body.resources)},${JSON.stringify(labels)},${body.triggerLabel},true) RETURNING id`;
-    await deps.db`INSERT INTO audit_events (organization_id,actor,type,payload) VALUES (NULL,${c.get("user").id},'pool.created',${JSON.stringify({ poolId: pool.id, workerId: body.workerId, guestPlatform: body.guestPlatform, triggerLabel: body.triggerLabel, scope: "control-plane" })})`;
+    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${body.guestPlatform},${driver},${body.imageDigest},${jsonParameter(deps.db, body.resources)},${jsonParameter(deps.db, labels)},${body.triggerLabel},true) RETURNING id`;
+    await deps.db`INSERT INTO audit_events (organization_id,actor,type,payload) VALUES (NULL,${c.get("user").id},'pool.created',${jsonParameter(deps.db, { poolId: pool.id, workerId: body.workerId, guestPlatform: body.guestPlatform, triggerLabel: body.triggerLabel, scope: "control-plane" })})`;
     return c.json({ id: String(pool.id), labels });
   }));
   app.post("/api/pools/:poolId/:action", safe(async (c) => {
@@ -134,21 +134,21 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
       const [existing] = await deps.db`SELECT id FROM runner_pools WHERE id=${body.poolId} AND organization_id IS NULL`;
       if (!existing) return error(c, 404, "not_found", "Resource not found");
       if (duplicate && String(duplicate.id) !== body.poolId) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
-      await deps.db`UPDATE runner_pools SET worker_id=NULL,platform=${body.guestPlatform},driver=${driver},image_digest=${body.imageDigest},resources=${JSON.stringify(body.resources)},labels=${JSON.stringify(labels)},name=${body.name},trigger_label=${body.triggerLabel},enabled=true WHERE id=${body.poolId}`;
+      await deps.db`UPDATE runner_pools SET worker_id=NULL,platform=${body.guestPlatform},driver=${driver},image_digest=${body.imageDigest},resources=${jsonParameter(deps.db, body.resources)},labels=${jsonParameter(deps.db, labels)},name=${body.name},trigger_label=${body.triggerLabel},enabled=true WHERE id=${body.poolId}`;
       await invalidateDashboard(deps.db, org, ["pools", "onboarding"]);
       return c.json({ id: body.poolId, labels });
     }
     if (duplicate) {
       if (duplicate.name !== body.name || duplicate.triggerLabel !== body.triggerLabel) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
-      await deps.db`UPDATE runner_pools SET worker_id=NULL,platform=${body.guestPlatform},driver=${driver},image_digest=${body.imageDigest},resources=${JSON.stringify(body.resources)}::jsonb,labels=${JSON.stringify(labels)}::jsonb,enabled=true WHERE id=${duplicate.id}`;
+      await deps.db`UPDATE runner_pools SET worker_id=NULL,platform=${body.guestPlatform},driver=${driver},image_digest=${body.imageDigest},resources=${jsonParameter(deps.db, body.resources)}::jsonb,labels=${jsonParameter(deps.db, labels)}::jsonb,enabled=true WHERE id=${duplicate.id}`;
       await completeOnboardingIfReady(deps.db);
       await invalidateDashboard(deps.db, org, ["pools", "onboarding"]);
       return c.json({ id: String(duplicate.id), labels });
     }
     const key = c.req.header("idempotency-key")!;
     if (!(await dashboardMutation(deps.db, org, key))) return c.json({ ok: true });
-    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${body.guestPlatform},${driver},${body.imageDigest},${JSON.stringify(body.resources)}::jsonb,${JSON.stringify(labels)}::jsonb,${body.triggerLabel},true) RETURNING id`;
-    await deps.db`INSERT INTO audit_events (organization_id,actor,type,payload) VALUES (NULL,${c.get("user").id},'pool.created',${JSON.stringify({ poolId: pool.id, workerId: body.workerId, guestPlatform: body.guestPlatform, triggerLabel: body.triggerLabel, scope: "control-plane" })}::jsonb)`;
+    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${body.guestPlatform},${driver},${body.imageDigest},${jsonParameter(deps.db, body.resources)}::jsonb,${jsonParameter(deps.db, labels)}::jsonb,${body.triggerLabel},true) RETURNING id`;
+    await deps.db`INSERT INTO audit_events (organization_id,actor,type,payload) VALUES (NULL,${c.get("user").id},'pool.created',${jsonParameter(deps.db, { poolId: pool.id, workerId: body.workerId, guestPlatform: body.guestPlatform, triggerLabel: body.triggerLabel, scope: "control-plane" })}::jsonb)`;
     await completeOnboardingIfReady(deps.db);
     await invalidateDashboard(deps.db, org, ["pools", "onboarding"]);
     return c.json({ id: pool.id, labels });
@@ -252,7 +252,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!inserted.length) { const [prior] = await deps.db`SELECT response FROM dashboard_mutations WHERE organization_id=${org} AND idempotency_key=${key}`; if (prior?.response) return c.json(RunnerWorkflowPrResult.parse(prior.response)); return error(c, 409, "mutation_in_progress", "Mutation is already in progress"); }
     try {
       const result = RunnerWorkflowPrResult.parse(await deps.githubApp.createRepositoryRunnerPr({ ...body, organizationId: org, repositoryId: c.req.param("repositoryId") }));
-      await deps.db`UPDATE dashboard_mutations SET response=${JSON.stringify(result)}::jsonb WHERE organization_id=${org} AND idempotency_key=${key}`;
+      await deps.db`UPDATE dashboard_mutations SET response=${jsonParameter(deps.db, result)}::jsonb WHERE organization_id=${org} AND idempotency_key=${key}`;
       return c.json(result);
     } catch (cause) {
       const code = cause instanceof Error ? cause.message : "";

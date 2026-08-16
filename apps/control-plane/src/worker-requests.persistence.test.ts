@@ -53,9 +53,11 @@ test("accepts independent per-job ceilings without multiplying by concurrency", 
 
 test("stores desired configuration and waits for acknowledgement", async () => {
   const queries: string[] = [];
-  const tx = (strings: TemplateStringsArray) => {
+  const parameters: unknown[][] = [];
+  const tx = (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join(" ");
     queries.push(query);
+    parameters.push(values);
     if (query.includes("select id, doctor")) return [{
       id: "worker",
       doctor: { capacity: { freeVcpu: 4, freeMemoryBytes: 4 * 1024 ** 3, freeStorageBytes: 30 * 1024 ** 3 } },
@@ -78,4 +80,8 @@ test("stores desired configuration and waits for acknowledgement", async () => {
   const update = queries.find(query => query.includes("update workers set"));
   expect(update).toContain("desired_configuration=");
   expect(update).toContain("configuration_state='applying'");
+  const updateValues = parameters[queries.indexOf(update!)];
+  expect(updateValues).toContainEqual(configuration.runtime);
+  expect(updateValues).toContainEqual(configuration.guestPlatforms);
+  expect(updateValues.some(value => typeof value === "string" && (value.startsWith("{") || value.startsWith("[")))).toBe(false);
 });

@@ -1,4 +1,4 @@
-import type { DatabaseClient } from "@whitesmith/db";
+import { jsonParameter, type DatabaseClient } from "@whitesmith/db";
 import { WorkerEvent, WorkerEventPayload } from "@whitesmith/contracts";
 import type { AuthenticatedWorkerSocket, WorkerCommandDispatcher } from "./worker-dispatch.ts";
 
@@ -28,13 +28,13 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
 
   if (parsedPayload.data.type === "sandbox_attested") {
     const payload = parsedPayload.data.payload;
-    const rows = await db`UPDATE runner_leases SET state='sandbox_ready',runtime_instance_id=${payload.runtimeInstanceId},terminal_result=${JSON.stringify({ observed: payload.observed })},updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state='dispatched' RETURNING id`;
+    const rows = await db`UPDATE runner_leases SET state='sandbox_ready',runtime_instance_id=${payload.runtimeInstanceId},terminal_result=${jsonParameter(db, { observed: payload.observed })},updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state='dispatched' RETURNING id`;
     return Boolean(rows[0]);
   }
   if (parsedPayload.data.type === "runner.finished") {
     const payload = parsedPayload.data.payload;
     const state = payload.exitCode === 0 ? "completed" : "failed";
-    const rows = await db`UPDATE runner_leases SET state=${state},terminal_result=${JSON.stringify({ exitCode: payload.exitCode })},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('sandbox_ready','online','busy') RETURNING id`;
+    const rows = await db`UPDATE runner_leases SET state=${state},terminal_result=${jsonParameter(db, { exitCode: payload.exitCode })},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('sandbox_ready','online','busy') RETURNING id`;
     return Boolean(rows[0]);
   }
   if (parsedPayload.data.type === "lease.failed") {
@@ -43,7 +43,7 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
       const rows = await db`UPDATE runner_leases SET cleanup_state='failed',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed') RETURNING id`;
       return Boolean(rows[0]);
     }
-    const rows = await db`UPDATE runner_leases SET state='failed',terminal_result=${JSON.stringify({ reason: payload.reason })},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('dispatched','provisioning','sandbox_ready','online','busy') RETURNING id`;
+    const rows = await db`UPDATE runner_leases SET state='failed',terminal_result=${jsonParameter(db, { reason: payload.reason })},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('dispatched','provisioning','sandbox_ready','online','busy') RETURNING id`;
     return Boolean(rows[0]);
   }
   const payload = parsedPayload.data.payload;

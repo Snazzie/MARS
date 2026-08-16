@@ -68,7 +68,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       (SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.worker_id=w.id
         AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')) AS active
     FROM runner_pools p
-    JOIN workers w ON (p.worker_id IS NULL OR p.worker_id=w.id) AND p.platform = ANY(SELECT jsonb_array_elements_text(w.guest_platforms))
+    JOIN workers w ON (p.worker_id IS NULL OR p.worker_id=w.id) AND p.platform = ANY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(w.guest_platforms)='array' THEN w.guest_platforms ELSE (w.guest_platforms #>> '{}')::jsonb END))
     WHERE p.enabled=true AND w.draining=false`;
 
   const organizationByJob = new Map<number, string>();
