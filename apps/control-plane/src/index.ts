@@ -11,6 +11,7 @@ import { verifyWorkerSignature } from "./workers.ts";
 import { createWorkerChallenge, decodeWorkerSignature } from "./worker-socket.ts";
 import { WorkerCommandDispatcher, containsSecret } from "./worker-dispatch.ts";
 import { applyWorkerConfigurationAcknowledgement, createRequestLimiter } from "./worker-requests.ts";
+import { activateAuthenticatedWorkerConnection } from "./worker-connection.ts";
 import { handleAuthenticatedWorkerEvent } from "./worker-lifecycle.ts";
 import { GitHubAppService } from "./github-app.ts";
 import { runQueuedJobReconciliation } from "./job-reconciler.ts";
@@ -146,12 +147,21 @@ server = Bun.serve<SocketData>({
             if (!worker || !verifyWorkerSignature(worker.public_key, canonical, decodeWorkerSignature(frame.signature))) return ws.close(1008, "worker authentication failed");
             if (worker.encryption_public_key && worker.encryption_public_key !== frame.encryptionPublicKey) return ws.close(1008, "worker encryption key mismatch");
             if (workerConnectionEpochs.get(ws.data.workerId) !== epoch) return ws.close(4001, "superseded");
-            await db`update workers set encryption_public_key=COALESCE(encryption_public_key,${frame.encryptionPublicKey}), connection_state='online' where id=${ws.data.workerId}`;
-            ws.data.authTimer && clearTimeout(ws.data.authTimer);
-            ws.data.authTimer = undefined;
-            ws.data.authenticated = true;
-            workerSockets.set(ws.data.workerId, ws);
-            dispatcher.register(ws.data.workerId, ws);
+            const activated = await activateAuthenticatedWorkerConnection({
+              db,
+              workerId: ws.data.workerId,
+              encryptionPublicKey: frame.encryptionPublicKey,
+              socket: ws,
+              workerSockets,
+              dispatcher,
+              isCurrent: () => workerConnectionEpochs.get(ws.data.workerId) === epoch,
+              markAuthenticated: () => {
+                ws.data.authTimer && clearTimeout(ws.data.authTimer);
+                ws.data.authTimer = undefined;
+                ws.data.authenticated = true;
+              },
+            });
+            if (!activated) return ws.close(4001, "superseded");
             ws.send(JSON.stringify({ version: 1, type: "authenticated", workerId: ws.data.workerId, admissionState: worker.admission_state }));
           } else if (frame.type === "doctor" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && frame.workerId === ws.data.workerId && frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload) && !containsSecret(frame.payload)) {
             const epoch = ws.data.connectionEpoch;

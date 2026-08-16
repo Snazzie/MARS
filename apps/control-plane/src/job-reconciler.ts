@@ -5,7 +5,7 @@ import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { dispatchLeaseBootstrap } from "./lease-dispatch.ts";
 import { reconcileQueuedJobs, type ReconcileReport } from "./reconcile.ts";
-import { reason } from "./scheduler.ts";
+import { reason, type Candidate } from "./scheduler.ts";
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 const LEASE_STARTUP_TTL_MS = 10 * 60_000;
 type Dispatch = Pick<WorkerCommandDispatcher, "dispatch">;
@@ -26,6 +26,20 @@ function jsonValue(value: unknown): unknown {
 function stringArray(value: unknown): string[] {
   const parsed = jsonValue(value);
   return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+}
+
+function nullableString(value: unknown): string | null { return typeof value === "string" ? value : null; }
+
+export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate["worker"] & { id: string } {
+  return {
+    id: String(row.workerId ?? row.worker_id ?? ""),
+    admissionState: String(row.admissionState ?? row.worker_admission_state),
+    connectionState: String(row.connectionState ?? row.worker_connection_state),
+    configurationState: String(row.configurationState ?? row.worker_configuration_state),
+    configurationRevision: nullableString(row.configurationRevision ?? row.worker_configuration_revision),
+    appliedConfigurationRevision: nullableString(row.appliedConfigurationRevision ?? row.worker_applied_configuration_revision),
+    limits: jsonValue(row.limits ?? row.worker_limits),
+  };
 }
 
 export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): Promise<ReconcileReport> {
@@ -49,6 +63,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     SELECT p.id AS "poolId", p.organization_id AS "organizationId", p.worker_id AS "poolWorkerId",
       w.id AS "workerId", p.enabled, p.platform, p.driver, p.image_digest AS "imageDigest", p.resources, p.labels, p.trigger_label AS "triggerLabel",
       w.admission_state AS "admissionState", w.connection_state AS "connectionState", w.configuration_state AS "configurationState",
+      w.configuration_revision AS "configurationRevision", w.applied_configuration_revision AS "appliedConfigurationRevision",
       w.limits, w.encryption_public_key AS "encryptionPublicKey",
       (SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.worker_id=w.id
         AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')) AS active
@@ -68,7 +83,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     workerByPool.set(`${poolId}:${workerId}`, { workerId, encryptionPublicKey: String(row.encryptionPublicKey ?? ""), imageDigest: String(row.imageDigest), guestPlatform: String(row.platform), driver: RuntimeDriverName.parse(String(row.driver)), resources });
     return {
       requestedLabels: [],
-      worker: { id: workerId, admissionState: String(row.admissionState), connectionState: String(row.connectionState), configurationState: String(row.configurationState), limits: jsonValue(row.limits) },
+      worker: candidateWorkerFromRow(row),
       pool: { id: poolId, enabled: Boolean(row.enabled), platform: String(row.platform), driver: String(row.driver), resources, concurrency, active: Number(row.active ?? 0), labels: stringArray(row.labels), triggerLabel: row.triggerLabel ? String(row.triggerLabel) : null },
     };
   });

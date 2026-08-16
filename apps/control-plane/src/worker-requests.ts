@@ -121,4 +121,39 @@ export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event
     return true;
   });
 }
+export async function reconcileWorkerConfigurationOnConnect(db: Sql<{}>, workerId: string): Promise<{ state: "unconfigured" | "applying"; commandId: string | null }> {
+  return db.begin(async tx => {
+    const [worker] = await tx<{ desiredConfiguration: unknown; configurationRevision: string | null }[]>`select desired_configuration AS "desiredConfiguration", configuration_revision AS "configurationRevision" from workers where id=${workerId} for update`;
+    if (!worker) throw new Error("worker configuration unavailable");
+    let desiredInput = worker.desiredConfiguration;
+    if (typeof desiredInput === "string") {
+      try { desiredInput = JSON.parse(desiredInput); } catch { desiredInput = null; }
+    }
+    if (desiredInput === null || desiredInput === undefined) {
+      await tx`update workers set configuration_state='unconfigured', configuration_command_id=null where id=${workerId}`;
+      return { state: "unconfigured", commandId: null };
+    }
+    const desired = WorkerConfiguration.parse(desiredInput);
+    const revision = worker.configurationRevision ?? createHash("sha256").update(canonical(desired)).digest("hex");
+    const pending = await tx<{ id: string; payload: unknown }[]>`select id,payload from commands where worker_id=${workerId} and type='worker.configure' and state in ('pending','sent') order by occurred_at desc`;
+    const reusable = pending.find(command => {
+      let payload = command.payload;
+      if (typeof payload === "string") {
+        try { payload = JSON.parse(payload); } catch { return false; }
+      }
+      return Boolean(payload && typeof payload === "object" && (payload as Record<string, unknown>).revision === revision);
+    });
+    if (reusable) {
+      await tx`update workers set configuration_state='applying', configuration_revision=${revision}, configuration_command_id=${reusable.id} where id=${workerId}`;
+      return { state: "applying", commandId: reusable.id };
+    }
+    const commandId = randomUUID();
+    const fingerprint = createHash("sha256").update(`${workerId}:${revision}`).digest("hex");
+    const payload = { workerId, appliance: desired.appliance, runtime: desired.runtime, guestPlatforms: desired.guestPlatforms, revision, fingerprint };
+    await tx`update commands set state='failed' where worker_id=${workerId} and type='worker.configure' and state in ('pending','sent')`;
+    await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,${"worker.configure"},${workerId},null,now(),${JSON.stringify(payload)}::jsonb)`;
+    await tx`update workers set configuration_state='applying', configuration_revision=${revision}, configuration_command_id=${commandId} where id=${workerId}`;
+    return { state: "applying", commandId };
+  });
+}
 export async function rejectPendingWorker(db: Sql<{}>, workerId: string, adminId: string): Promise<void> { await db.begin(async tx => { const rows = await tx`update workers set admission_state='rejected', configuration_state='unconfigured' where id=${workerId} and admission_state in ('pending','adopted') returning id`; if (rows.length !== 1) throw new Error("worker rejection conflict"); await tx`update system_onboarding set worker_id=null where singleton=true and worker_id=${workerId}`; await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.rejected',${JSON.stringify({ workerId })}::jsonb)`; }); }

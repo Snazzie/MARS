@@ -1,7 +1,7 @@
 import { PoolResources, WorkerLimits } from "@whitesmith/contracts";
 
 export interface Candidate {
-  worker: { admissionState:string; connectionState:string; configurationState:string; limits: unknown };
+  worker: { admissionState:string; connectionState:string; configurationState:string; configurationRevision:string|null; appliedConfigurationRevision:string|null; limits: unknown };
   pool: { enabled:boolean; resources:unknown; concurrency:number; active:number; labels:string[]; triggerLabel:string|null };
   requestedLabels:string[];
 }
@@ -51,7 +51,7 @@ export function labelsMatch(requestedLabels: readonly string[], poolLabels: read
 export function fits(candidate: Candidate): boolean {
   const provision = parseProvisionLabels(candidate.requestedLabels);
   if (!provision || !labelsMatch(provision.routingLabels, candidate.pool.labels, candidate.pool.triggerLabel)) return false;
-  if (candidate.worker.admissionState !== "adopted" || candidate.worker.connectionState !== "online" || candidate.worker.configurationState !== "ready" || !candidate.pool.enabled || candidate.pool.active >= candidate.pool.concurrency) return false;
+  if (candidate.worker.admissionState !== "adopted" || candidate.worker.connectionState !== "online" || candidate.worker.configurationState !== "ready" || candidate.worker.configurationRevision !== candidate.worker.appliedConfigurationRevision || !candidate.pool.enabled || candidate.pool.active >= candidate.pool.concurrency) return false;
   const limits = WorkerLimits.safeParse(candidate.worker.limits);
   const resources = resolveProvisionResources(candidate.pool.resources, provision);
   if (!limits.success || !resources) return false;
@@ -64,6 +64,7 @@ export function reason(candidate: Candidate): string {
   if (!labelsMatch(provision.routingLabels, candidate.pool.labels, candidate.pool.triggerLabel)) return "no_matching_labels";
   if (candidate.worker.admissionState !== "adopted") return "worker_pending_adoption";
   if (candidate.worker.connectionState !== "online") return "worker_offline";
+  if (candidate.worker.configurationState === "applying" || (candidate.worker.configurationState === "ready" && candidate.worker.configurationRevision !== candidate.worker.appliedConfigurationRevision)) return "worker_config_applying";
   if (candidate.worker.configurationState !== "ready") return "worker_not_ready";
   if (!candidate.pool.enabled) return "pool_disabled";
   if (candidate.pool.active >= candidate.pool.concurrency) return "pool_concurrency";
