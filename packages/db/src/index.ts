@@ -1,13 +1,13 @@
 import postgres, { type Sql } from "postgres";
 import { createHash } from "node:crypto";
-import { schemaSql } from "./schema.ts";
+import { baselineSchemaSql, schemaSql, workerConfigurationMigrationSql } from "./schema.ts";
 
 export type DatabaseClient = Sql<{}>;
 export function createDb(url: string): DatabaseClient { return postgres(url, { max: 10, prepare: false }); }
 
 type Migration = { version: number; name: string; sql: string };
 const migrations: Migration[] = [
-  { version: 1, name: "baseline", sql: schemaSql },
+  { version: 1, name: "baseline", sql: baselineSchemaSql },
   {
     version: 2,
     name: "webhook-inbox-state",
@@ -19,6 +19,7 @@ const migrations: Migration[] = [
       ADD COLUMN IF NOT EXISTS processed_at timestamptz;
       CREATE INDEX IF NOT EXISTS webhook_deliveries_state_idx ON webhook_deliveries(state, received_at);`,
   },
+  { version: 3, name: "worker-configuration-state", sql: workerConfigurationMigrationSql },
 ];
 
 export async function migrate(sql: DatabaseClient): Promise<void> {

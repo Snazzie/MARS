@@ -1,4 +1,4 @@
-export const schemaSql = `
+export const baselineSchemaSql = `
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE IF NOT EXISTS users (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), github_user_id bigint UNIQUE NOT NULL, login text NOT NULL, is_global_admin boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS organizations (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), github_org_id bigint UNIQUE NOT NULL, login text NOT NULL, github_account_type text NOT NULL DEFAULT 'Organization' CHECK(github_account_type IN ('User','Organization')), created_at timestamptz NOT NULL DEFAULT now());
@@ -21,9 +21,6 @@ ALTER TABLE workers ADD COLUMN IF NOT EXISTS encryption_public_key text;
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_requested_at timestamptz;
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS configuration_revision text;
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS configuration_command_id uuid;
-ALTER TABLE workers ADD COLUMN IF NOT EXISTS desired_configuration jsonb;
-ALTER TABLE workers ADD COLUMN IF NOT EXISTS applied_configuration_revision text;
-ALTER TABLE workers ADD COLUMN IF NOT EXISTS configuration_applied_at timestamptz;
 CREATE UNIQUE INDEX IF NOT EXISTS workers_active_vm_uuid_idx ON workers(vm_uuid) WHERE vm_uuid IS NOT NULL AND admission_state IN ('pending','adopted');
 CREATE UNIQUE INDEX IF NOT EXISTS workers_active_fingerprint_idx ON workers(fingerprint) WHERE fingerprint IS NOT NULL AND admission_state IN ('pending','adopted');
 CREATE UNIQUE INDEX IF NOT EXISTS workers_active_machine_uuid_idx ON workers(machine_uuid) WHERE machine_uuid IS NOT NULL AND admission_state IN ('pending','adopted');
@@ -52,8 +49,6 @@ CREATE TABLE IF NOT EXISTS job_claims (id uuid PRIMARY KEY DEFAULT gen_random_uu
 CREATE TABLE IF NOT EXISTS webhook_deliveries (delivery_id text PRIMARY KEY, installation_id bigint NOT NULL, payload jsonb NOT NULL, received_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS audit_events (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid, actor text NOT NULL, type text NOT NULL, payload jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS commands (id uuid PRIMARY KEY, version integer NOT NULL, type text NOT NULL, worker_id uuid NOT NULL REFERENCES workers(id) ON DELETE CASCADE, lease_id uuid, occurred_at timestamptz NOT NULL, payload jsonb NOT NULL, state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','sent','acknowledged','completed','failed')), UNIQUE(id));
-UPDATE workers w SET desired_configuration=jsonb_build_object('appliance',c.payload->'appliance','runtime',c.payload->'runtime','guestPlatforms',c.payload->'guestPlatforms') FROM commands c WHERE w.desired_configuration IS NULL AND c.id=w.configuration_command_id AND c.type='worker.configure' AND c.payload ? 'appliance' AND c.payload ? 'runtime' AND c.payload ? 'guestPlatforms';
-UPDATE workers SET applied_configuration_revision=configuration_revision WHERE configuration_state='ready' AND desired_configuration IS NOT NULL AND applied_configuration_revision IS NULL;
 CREATE TABLE IF NOT EXISTS worker_mutations (worker_id uuid NOT NULL REFERENCES workers(id) ON DELETE CASCADE, idempotency_key text NOT NULL, response jsonb, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (worker_id, idempotency_key));
 CREATE TABLE IF NOT EXISTS dashboard_installations (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE, github_installation_id bigint NOT NULL, state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','approved','suspended')), repository_selection text CHECK(repository_selection IN ('all','selected')), github_account_id bigint, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(organization_id, id), UNIQUE(organization_id, github_installation_id));
 ALTER TABLE dashboard_installations ADD COLUMN IF NOT EXISTS state text;
@@ -121,3 +116,12 @@ CREATE TABLE IF NOT EXISTS github_setup_states (state_hash bytea PRIMARY KEY, pu
 ALTER TABLE github_setup_states DROP CONSTRAINT IF EXISTS github_setup_states_purpose_check;
 ALTER TABLE github_setup_states ADD CONSTRAINT github_setup_states_purpose_check CHECK (purpose IN ('oauth','manifest','install','organization_install'));
 `;
+
+export const workerConfigurationMigrationSql = `ALTER TABLE workers ADD COLUMN IF NOT EXISTS desired_configuration jsonb;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS applied_configuration_revision text;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS configuration_applied_at timestamptz;
+UPDATE workers w SET desired_configuration=jsonb_build_object('appliance',c.payload->'appliance','runtime',c.payload->'runtime','guestPlatforms',c.payload->'guestPlatforms') FROM commands c WHERE w.desired_configuration IS NULL AND c.id=w.configuration_command_id AND c.type='worker.configure' AND c.payload ? 'appliance' AND c.payload ? 'runtime' AND c.payload ? 'guestPlatforms';
+UPDATE workers SET applied_configuration_revision=configuration_revision WHERE configuration_state='ready' AND desired_configuration IS NOT NULL AND applied_configuration_revision IS NULL;`;
+
+export const schemaSql = `${baselineSchemaSql}
+${workerConfigurationMigrationSql}`;

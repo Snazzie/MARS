@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { schemaSql } from "./schema.ts";
+import { baselineSchemaSql, schemaSql, workerConfigurationMigrationSql } from "./schema.ts";
 
 test("repository authorization is represented only by GitHub availability", () => {
   const repositoryDefinition = schemaSql.match(/CREATE TABLE IF NOT EXISTS dashboard_repositories \(([^;]+)\);/)?.[1];
@@ -34,4 +34,10 @@ test("persists desired and exactly applied worker configuration", () => {
   expect(schemaSql).toContain("ALTER TABLE workers ADD COLUMN IF NOT EXISTS configuration_applied_at timestamptz;");
   expect(schemaSql).toContain("FROM commands c");
   expect(schemaSql).toContain("c.id=w.configuration_command_id");
+});
+
+test("keeps worker configuration changes out of the immutable baseline migration", () => {
+  expect(baselineSchemaSql).not.toContain("desired_configuration");
+  expect(workerConfigurationMigrationSql).toContain("ADD COLUMN IF NOT EXISTS desired_configuration");
+  expect(schemaSql).toBe(`${baselineSchemaSql}\n${workerConfigurationMigrationSql}`);
 });
