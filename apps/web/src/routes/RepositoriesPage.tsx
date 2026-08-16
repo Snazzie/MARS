@@ -11,9 +11,18 @@ export function RepositoriesPage() {
   const client = useQueryClient();
   const [connectOrganizationId, setConnectOrganizationId] = useState("");
   const [runnerRepository, setRunnerRepository] = useState<RepositorySummary | null>(null);
-  const [search, setSearch] = useState("");
-  const [availability, setAvailability] = useState<"available" | "unavailable">("available");
-  const [visibility, setVisibility] = useState<"all" | "private" | "internal">("all");
+   const params = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
+   const [search, setSearch] = useState(params.get("q") ?? "");
+   const [availability, setAvailability] = useState<"available" | "unavailable">((params.get("availability") as "available" | "unavailable") ?? "available");
+   const [visibility, setVisibility] = useState<"all" | "private" | "internal">((params.get("visibility") as "all" | "private" | "internal") ?? "all");
+   useEffect(() => {
+     if (typeof window === "undefined") return;
+     const next = new URLSearchParams(window.location.search);
+     if (search) next.set("q", search); else next.delete("q");
+     if (availability !== "available") next.set("availability", availability); else next.delete("availability");
+     if (visibility !== "all") next.set("visibility", visibility); else next.delete("visibility");
+     window.history.replaceState(null, "", `${window.location.pathname}${next.toString() ? `?${next}` : ""}${window.location.hash}`);
+   }, [search, availability, visibility]);
   useEffect(() => {
     const next = organizations[0]?.id ?? "";
     if (
@@ -126,6 +135,7 @@ export function RepositoriesPage() {
           <Disclosure label="More filters"><label>Visibility<select value={visibility} onChange={(event) => setVisibility(event.target.value as typeof visibility)}><option value="all">All visibility</option><option value="private">Private</option><option value="internal">Internal</option></select></label></Disclosure>
         </div>
       </section>
+      <p className="filter-scope" role="note">Filters apply to the currently loaded repositories.</p>
       <QueryState
         error={query.error}
         isLoading={query.isLoading}

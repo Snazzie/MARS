@@ -96,9 +96,9 @@ test("controls visible step disclosures and reports loaded line count", async ()
   const root = createRoot(container);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const second = step({ id: "step-2", name: "Test" });
-  client.setQueryData(["org", "org-1", "run", "run-1", "job", "job-1", "logs"], { items: [] });
-  client.setQueryData(["org", "org-1", "run", "run-1", "job", "job-1", "step", "step-2", "logs"], { items: [] });
-  client.setQueryData(["org", "org-1", "run", "run-1", "job", "job-1", "step", "step-1", "logs"], { items: [{ sequence: 1, content: "bun install" }, { sequence: 2, content: "pass" }] });
+  client.setQueryData(["org", "org-1", "run", "run-1", "job", "job-1", "logs"], { pages: [{ items: [], nextCursor: null }], pageParams: ["-1"] });
+  client.setQueryData(["org", "org-1", "run", "run-1", "job", "job-1", "step", "step-2", "logs"], { pages: [{ items: [], nextCursor: null }], pageParams: ["-1"] });
+  client.setQueryData(["org", "org-1", "run", "run-1", "job", "job-1", "step", "step-1", "logs"], { pages: [{ items: [{ sequence: 1, content: "bun install" }, { sequence: 2, content: "pass" }], nextCursor: null }], pageParams: ["-1"] });
   await act(async () => {
     root.render(<QueryClientProvider client={client}><LogViewer organizationId="org-1" runId="run-1" jobId="job-1" logsState="ingested" steps={[step(), second]} /></QueryClientProvider>);
   });

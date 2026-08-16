@@ -69,16 +69,32 @@ async function request<S extends z.ZodTypeAny>(path: string, schema: S, init?: R
 
 const meResponse = z.object({ id: z.string(), githubUserId: z.number().int(), login: z.string().min(1), isGlobalAdmin: z.boolean() });
 export const getMe = () => request("/api/me", meResponse);
+export const getHealth = () => request("/api/healthz", z.object({ ok: z.boolean(), discovery: z.object({ stale: z.boolean(), lastSuccessAt: z.string().nullable() }).passthrough() }).passthrough());
+export const logout = () => request("/api/auth/logout", z.object({ ok: z.literal(true) }), { method: "POST" });
 export const getOrganizations = () => request("/api/organizations", z.array(OrganizationSummary));
 export const getOverview = (organizationId: string, period: OverviewDto["period"] = "24h") =>
   request(`/api/organizations/${organizationId}/overview?period=${period}`, OverviewDto);
-export const getRuns = (organizationId: string) =>
-  request(`/api/organizations/${organizationId}/runs`, CursorPage(RunSummary));
+ export async function getRuns(organizationId: string, search = "") {
+   const items: RunSummary[] = [];
+   const seenCursors = new Set<string>();
+   let cursor: string | null = null;
+     const query = new URLSearchParams({ limit: "100" });
+   do {
+     if (search) query.set("search", search);
+     if (cursor) query.set("cursor", cursor);
+     const page = await request(`/api/organizations/${organizationId}/runs?${query}`, CursorPage(RunSummary));
+     items.push(...page.items);
+     cursor = page.nextCursor;
+     if (cursor && seenCursors.has(cursor)) throw new ApiRequestError("Run pagination returned a repeated cursor.", 502, "invalid_cursor");
+     if (cursor) seenCursors.add(cursor);
+   } while (cursor);
+   return { items, nextCursor: null };
+ }
 export const getRun = (organizationId: string, runId: string) =>
   request(`/api/organizations/${organizationId}/runs/${runId}`, RunDetail);
-export const getLogs = (organizationId: string, runId: string, jobId: string) =>
-  request(`/api/organizations/${organizationId}/runs/${runId}/jobs/${jobId}/logs`, CursorPage(LogChunk));
-export const getStepLogs = (organizationId: string, runId: string, jobId: string, stepId: string, after = -1, limit = 100) =>
+export const getLogs = (organizationId: string, runId: string, jobId: string, after: string | number = -1, limit = 100) =>
+  request(`/api/organizations/${organizationId}/runs/${runId}/jobs/${jobId}/logs?after=${after}&limit=${limit}`, CursorPage(LogChunk));
+export const getStepLogs = (organizationId: string, runId: string, jobId: string, stepId: string, after: string | number = -1, limit = 100) =>
   request(`/api/organizations/${organizationId}/runs/${runId}/jobs/${jobId}/steps/${stepId}/logs?after=${after}&limit=${limit}`, CursorPage(LogChunk));
 export async function getRepositories(organizationId: string) {
   const items: RepositorySummary[] = [];

@@ -74,7 +74,7 @@ describe("onboarding state derivation", () => {
     const organizationId = "00000000-0000-4000-8000-000000000002";
     const installationId = "00000000-0000-4000-8000-000000000003";
     const repositoryId = "00000000-0000-4000-8000-000000000004";
-    const retryAt = new Date("2026-08-15T12:00:00.000Z");
+    const retryAt = new Date(Date.now() + 60 * 60 * 1_000);
     const db = (async (strings: TemplateStringsArray) => {
       const query = strings.join(" ");
       if (query.includes('so.admin_user_id AS "adminUserId"')) return [{ adminUserId: "admin", workerId: null, organizationId, completedAt: null }];

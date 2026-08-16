@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import type { RunJob, RunStep } from "@whitesmith/contracts";
 import { getLogs, getStepLogs } from "../api.ts";
 import { QueryState } from "./StateView.tsx";
 
 const STEP_LOG_LIMIT = 100;
 const DISPLAY_LOG_LIMIT = 200;
-
+type JobLogPage = Awaited<ReturnType<typeof getLogs>>;
+type StepLogPage = Awaited<ReturnType<typeof getStepLogs>>;
 type LogViewerProps = {
   organizationId: string;
   runId: string;
@@ -70,13 +71,14 @@ export function stepLogEmptyMessage(logsState: RunJob["logsState"]): string {
 }
 
 function StepLogRow({ organizationId, runId, jobId, logsState, step, open, maxDurationMs, onOpenChange, onLoadedTextChange }: { organizationId: string; runId: string; jobId: string; logsState: RunJob["logsState"]; step: RunStep; open: boolean; maxDurationMs: number; onOpenChange: (open: boolean) => void; onLoadedTextChange: (text: string) => void }) {
-  const query = useQuery({
+  const query = useInfiniteQuery({
     queryKey: ["org", organizationId, "run", runId, "job", jobId, "step", step.id, "logs"],
-    queryFn: () => getStepLogs(organizationId, runId, jobId, step.id, -1, STEP_LOG_LIMIT),
+    queryFn: ({ pageParam }) => getStepLogs(organizationId, runId, jobId, step.id, pageParam, STEP_LOG_LIMIT),
+    initialPageParam: "-1",
     enabled: open && Boolean(organizationId && runId && jobId && step.id),
-    staleTime: 15_000,
+    getNextPageParam: (page: StepLogPage) => page.nextCursor ?? undefined,
   });
-  const items = query.data?.items ?? [];
+  const items = query.data?.pages.flatMap((page) => page.items) ?? [];
   const text = orderedLogText(items);
   useEffect(() => { if (query.data) onLoadedTextChange(text); }, [query.data, text, onLoadedTextChange]);
   const duration = deriveStepDuration(step);
@@ -96,14 +98,19 @@ function StepLogRow({ organizationId, runId, jobId, logsState, step, open, maxDu
       <div className="step-log-body">
         <QueryState error={query.error} isLoading={query.isLoading} isEmpty={false} retry={() => void query.refetch()} operationLabel="step logs" />
         {!query.isLoading && !query.error && items.length === 0 && <p className="log-meta">{stepLogEmptyMessage(logsState)}</p>}
-        {items.length > 0 && <><pre className="log-viewer" tabIndex={0} aria-label={`${step.name} log output`}>{text}</pre><p className="log-meta">Showing up to {DISPLAY_LOG_LIMIT} ordered chunks{query.data?.nextCursor ? "; more logs are available from search." : "."}</p></>}
+        {items.length > 0 && <><pre className="log-viewer" tabIndex={0} aria-label={`${step.name} log output`}>{text}</pre>{query.hasNextPage && <button type="button" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage}>Load older output</button>}<p className="log-meta">Showing {items.length} ordered chunks.</p></>}
       </div>
     </details>
   );
 }
 
 export function LogViewer({ organizationId, runId, jobId, logsState, steps = [] }: LogViewerProps) {
-  const query = useQuery({ queryKey: ["org", organizationId, "run", runId, "job", jobId, "logs"], queryFn: () => getLogs(organizationId, runId, jobId), enabled: Boolean(organizationId && runId && jobId), staleTime: 15_000 });
+  const query = useInfiniteQuery({
+    queryKey: ["org", organizationId, "run", runId, "job", jobId, "logs"],
+    initialPageParam: "-1",
+    getNextPageParam: (page: JobLogPage) => page.nextCursor ?? undefined,
+    staleTime: 15_000,
+  });
   const [expandedStepIds, setExpandedStepIds] = useState<Set<string>>(() => new Set());
   const [search, setSearch] = useState("");
   const [loadedTextByStep, setLoadedTextByStep] = useState<Record<string, string>>({});
@@ -112,7 +119,7 @@ export function LogViewer({ organizationId, runId, jobId, logsState, steps = [] 
   const setStepExpanded = (stepId: string, expanded: boolean) => setExpandedStepIds((current) => { const next = new Set(current); expanded ? next.add(stepId) : next.delete(stepId); return next; });
   const setLoadedText = (stepId: string, text: string) => setLoadedTextByStep((current) => current[stepId] === text ? current : { ...current, [stepId]: text });
   const expandVisible = (expanded: boolean) => setExpandedStepIds((current) => { const next = new Set(current); visibleSteps.forEach((step) => expanded ? next.add(step.id) : next.delete(step.id)); return next; });
-  const items = query.data?.items ?? [];
+  const items = query.data?.pages.flatMap((page) => page.items) ?? [];
   const visibleItems = useMemo(() => filterLoadedLogChunks(items, search), [items, search]);
   const emptyJobMessage = logsState === "pending" ? "Waiting for runner output or GitHub log synchronization." : logsState === "unavailable" ? "GitHub no longer provides logs for this job." : "No unattributed job output remains.";
   const noMatchingJobMessage = "No matching loaded log output in unattributed job logs.";
@@ -125,6 +132,6 @@ export function LogViewer({ organizationId, runId, jobId, logsState, steps = [] 
     <section className="step-log-list" aria-label="Job steps">
       {steps.length === 0 ? <p className="log-meta">No attributed steps recorded.</p> : visibleSteps.length === 0 ? <p className="log-meta">No steps match this search.</p> : visibleSteps.map((step) => <StepLogRow key={step.id} organizationId={organizationId} runId={runId} jobId={jobId} logsState={logsState} step={step} open={expandedStepIds.has(step.id)} maxDurationMs={maxStepDurationMs} onOpenChange={(open) => setStepExpanded(step.id, open)} onLoadedTextChange={(text) => setLoadedText(step.id, text)} />)}
     </section>
-    <section className="unattributed-log-panel" aria-labelledby={`unattributed-logs-title-${jobId}`}><div className="panel-kicker" id={`unattributed-logs-title-${jobId}`}>Unattributed job logs</div><QueryState error={query.error} isLoading={query.isLoading} isEmpty={false} retry={() => void query.refetch()} operationLabel="logs" />{!query.isLoading && !query.error && visibleItems.length === 0 && <p className="log-meta">{search.trim() ? noMatchingJobMessage : items.length === 0 ? emptyJobMessage : noMatchingJobMessage}</p>}{visibleItems.length > 0 && <><pre className="log-viewer" tabIndex={0}>{orderedLogText(visibleItems)}</pre><p className="log-meta">Showing up to {DISPLAY_LOG_LIMIT} chunks.</p></>}</section>
+    <section className="unattributed-log-panel" aria-labelledby={`unattributed-logs-title-${jobId}`}><div className="panel-kicker" id={`unattributed-logs-title-${jobId}`}>Unattributed job logs</div><QueryState error={query.error} isLoading={query.isLoading} isEmpty={false} retry={() => void query.refetch()} operationLabel="logs" />{!query.isLoading && !query.error && visibleItems.length === 0 && <p className="log-meta">{search.trim() ? noMatchingJobMessage : items.length === 0 ? emptyJobMessage : noMatchingJobMessage}</p>}{visibleItems.length > 0 && <><pre className="log-viewer" tabIndex={0}>{orderedLogText(visibleItems)}</pre>{query.hasNextPage && <button type="button" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage}>Load older output</button>}<p className="log-meta">Showing {items.length} loaded chunks.</p></>}</section>
   </section>;
 }

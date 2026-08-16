@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { readBody, validSignature, acceptDelivery } from "../webhook.ts";
+import { readBody, validSignature, acceptDelivery, completeDelivery, failDelivery } from "../webhook.ts";
 import { applyWorkflowJobWebhook, type WorkflowJobPayload } from "../runs.ts";
 import { browserLocation } from "../http-origin.ts";
 
@@ -68,9 +68,17 @@ export function registerGithubRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const eventName = c.req.header("x-github-event") ?? "";
     const event = payload as WorkflowJobPayload;
     const installationId = Number(event.installation?.id ?? 0);
-    const accepted = await acceptDelivery(deps.db, c.req.header("x-github-delivery") ?? crypto.randomUUID(), installationId, payload);
-    if (accepted && deps.githubApp && (eventName === "installation" || eventName === "installation_repositories")) await deps.githubApp.reconcileInstallationRepositories(payload);
-    if (accepted && eventName === "workflow_job" && event.action && event.workflow_job) await applyWorkflowJobWebhook(event);
-    return c.json({ accepted }, 202);
+    const deliveryId = c.req.header("x-github-delivery") ?? crypto.randomUUID();
+    const accepted = await acceptDelivery(deps.db, deliveryId, installationId, payload, eventName);
+    if (!accepted) return c.json({ accepted: false }, 202);
+    try {
+      if (deps.githubApp && (eventName === "installation" || eventName === "installation_repositories")) await deps.githubApp.reconcileInstallationRepositories(payload);
+      if (eventName === "workflow_job" && event.action && event.workflow_job) await applyWorkflowJobWebhook(event);
+      await completeDelivery(deps.db, deliveryId);
+    } catch (error) {
+      await failDelivery(deps.db, deliveryId, error);
+      throw error;
+    }
+    return c.json({ accepted: true }, 202);
   });
 }

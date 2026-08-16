@@ -41,7 +41,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       AND i.organization_id=r.organization_id AND i.state='approved'
     WHERE j.status='queued' AND r.status='queued'
       AND (${deps.repositoryFullName ?? ""}='' OR repo.full_name=${deps.repositoryFullName ?? ""})
-    ORDER BY j.github_job_id DESC
+    ORDER BY j.queued_at ASC, j.github_job_id ASC
     FOR UPDATE OF j SKIP LOCKED`;
   if (!queuedRows.length) return { reserved: 0, skipped: 0, failed: 0 };
 
@@ -95,7 +95,8 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     dispatch: async (reservation, jit) => {
       const target = workerByPool.get(`${reservation.poolId}:${reservation.workerId}`);
       if (!target?.encryptionPublicKey) throw new Error("worker_encryption_key_missing");
-      const envelope: LeaseBootstrapEnvelope = { leaseId: reservation.id, jobId: reservation.id, nonce: reservation.nonce, guestPlatform: target.guestPlatform as LeaseBootstrapEnvelope["guestPlatform"], encodedJitConfig: jit.encodedJitConfig, expiresAt: reservation.expiresAt, imageDigest: target.imageDigest, resources: reservation.requested };
+      const [dashboardJob] = await deps.db`SELECT id FROM dashboard_jobs WHERE github_job_id=${reservation.jobId ?? -1}`;
+      const envelope: LeaseBootstrapEnvelope = { leaseId: reservation.id, jobId: String(dashboardJob?.id ?? reservation.id), nonce: reservation.nonce, guestPlatform: target.guestPlatform as LeaseBootstrapEnvelope["guestPlatform"], encodedJitConfig: jit.encodedJitConfig, expiresAt: reservation.expiresAt, imageDigest: target.imageDigest, resources: reservation.requested };
       await dispatchLeaseBootstrap(deps.dispatcher, { ...envelope, driver: target.driver, workerId: target.workerId, workerEncryptionPublicKey: target.encryptionPublicKey });
       await deps.db`UPDATE runner_leases SET state='dispatched', updated_at=now() WHERE id=${reservation.id} AND state='reserved'`;
     },

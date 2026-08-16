@@ -16,7 +16,8 @@ import { GitHubAppService } from "./github-app.ts";
 import { runQueuedJobReconciliation } from "./job-reconciler.ts";
 import { reapPendingLeases } from "./lease-cleanup.ts";
 import { startReconciliationScheduler } from "./reconcile-loop.ts";
-import { DiscoveryHealthMonitor } from "./discovery-health.ts";
+import { pruneExpiredData } from "./retention.ts";
+import { DiscoveryHealthMonitor, isDiscoveryCycleSuccessful } from "./discovery-health.ts";
 import { createControlPlaneApp } from "./http/app.ts";
 import { ensureDefaultPools } from "./default-pools.ts";
 import { GithubRateLimitGate } from "./github-rate-limit.ts";
@@ -35,7 +36,7 @@ configureRunLifecycle(db);
 const json = (data: unknown, status=200) => Response.json(data,{status,headers:{"cache-control":"no-store"}});
 const cookie = (value:string, maxAge:number) => `whitesmith_session=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
 const sessions = new Map<string, {state:string; verifier:string; createdAt:number}>();
-type SocketData = { actor: "browser" | "worker"; workerId: string; challenge?: Buffer; authenticated: boolean; connectionEpoch?: number };
+type SocketData = { actor: "browser" | "worker"; workerId: string; challenge?: Buffer; authenticated: boolean; connectionEpoch?: number; authTimer?: ReturnType<typeof setTimeout> };
 const workerSockets = new Map<string, ServerWebSocket<SocketData>>();
 const workerConnectionEpochs = new Map<string, number>();
 let nextWorkerConnectionEpoch = 0;
@@ -72,8 +73,10 @@ let triggerReconciliation = () => Promise.resolve();
 const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, browserBaseUrl: env.BROWSER_BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot: new URL("../../../deploy/workers/", import.meta.url), workerServiceHostExecutable: new URL("../../../apps/windows-service-host/target/release/whitesmith-service-host.exe", import.meta.url), workerOrchestratorExecutables: { "linux-x64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator", import.meta.url), "windows-x64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator.exe", import.meta.url), "macos-arm64": new URL("../../../apps/orchestrator/dist/whitesmith-orchestrator-macos-arm64", import.meta.url) }, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => { dispatcher.replayConnected(workerId); void triggerReconciliation(); }, health: () => ({ buildId: Bun.env.WHITESMITH_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
 const discoveryDeps = { db, installationToken: (installationId: number) => githubApp.getInstallationToken(installationId), githubFetchForInstallation: (installationId: number) => githubRateLimits.scopedFetch(installationId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY };
 startReconciliationScheduler(async () => {
+  discoveryHealth.markAttempt();
   try {
     const report = await discoverAvailableRepositoryJobs(discoveryDeps);
+    if (isDiscoveryCycleSuccessful(report)) discoveryHealth.markSuccess();
     if (report.discovered || report.failed) console.log(`GitHub job discovery: repositories=${report.repositories} discovered=${report.discovered} updated=${report.updated} failed=${report.failed}`);
   } catch (error) {
     console.error("GitHub job discovery failed", error);
@@ -104,6 +107,16 @@ const reconciliationScheduler = startReconciliationScheduler(async () => {
     }
   }
 }, reconciliationIntervalMs);
+const retentionIntervalMs = 24 * 60 * 60 * 1_000;
+const runRetention = async () => {
+  try {
+    console.log("Retention pruner", await pruneExpiredData(db));
+  } catch (error) {
+    console.error("Retention pruning failed", error);
+  }
+};
+void runRetention();
+setInterval(() => { void runRetention(); }, retentionIntervalMs);
 triggerReconciliation = reconciliationScheduler.trigger;
 let server: Server<SocketData>;
 server = Bun.serve<SocketData>({
@@ -111,6 +124,7 @@ server = Bun.serve<SocketData>({
   websocket: {
     open(ws) {
       if (ws.data.actor === "worker") {
+        ws.data.authTimer = setTimeout(() => { if (!ws.data.authenticated) ws.close(1008, "worker authentication timeout"); }, 10_000);
         const challenge = createWorkerChallenge(ws.data.workerId);
         ws.data.challenge = challenge.nonce;
         ws.send(JSON.stringify({ version: 1, type: "challenge", nonce: challenge.nonce.toString("base64url") }));
@@ -121,6 +135,7 @@ server = Bun.serve<SocketData>({
     async message(ws, message) {
       if (ws.data.actor === "worker") {
         try {
+          if (typeof message === "string" ? message.length > 256 * 1024 : message.byteLength > 256 * 1024) return ws.close(1009, "worker frame too large");
           const frame = JSON.parse(String(message)) as { type?: string; signature?: string; workerId?: string; encryptionPublicKey?: string; payload?: Record<string, unknown> };
           if (frame.type === "authenticate" && frame.workerId === ws.data.workerId && frame.signature && typeof frame.encryptionPublicKey === "string") {
             const epoch = ws.data.connectionEpoch;
@@ -132,7 +147,8 @@ server = Bun.serve<SocketData>({
             if (worker.encryption_public_key && worker.encryption_public_key !== frame.encryptionPublicKey) return ws.close(1008, "worker encryption key mismatch");
             if (workerConnectionEpochs.get(ws.data.workerId) !== epoch) return ws.close(4001, "superseded");
             await db`update workers set encryption_public_key=COALESCE(encryption_public_key,${frame.encryptionPublicKey}), connection_state='online' where id=${ws.data.workerId}`;
-            console.log(`Worker authenticated: ${ws.data.workerId}`);
+            ws.data.authTimer && clearTimeout(ws.data.authTimer);
+            ws.data.authTimer = undefined;
             ws.data.authenticated = true;
             workerSockets.set(ws.data.workerId, ws);
             dispatcher.register(ws.data.workerId, ws);
@@ -169,6 +185,10 @@ server = Bun.serve<SocketData>({
     },
     close(ws) {
       if (ws.data.actor === "worker") {
+        if (ws.data.authTimer) {
+          clearTimeout(ws.data.authTimer);
+          ws.data.authTimer = undefined;
+        }
         dispatcher.unregister(ws.data.workerId, ws);
         const currentSocket = workerSockets.get(ws.data.workerId);
         if (currentSocket === ws) {
@@ -186,7 +206,20 @@ server = Bun.serve<SocketData>({
   async fetch(request): Promise<Response | undefined> {
   const url=new URL(request.url);
     requestSources.set(request, server.requestIP(request)?.address ?? "unknown");
-    if (request.headers.get("upgrade")?.toLowerCase() === "websocket" && url.pathname === "/api/v1/workers/connect") { const workerId = url.searchParams.get("workerId"); if (!workerId) return json({ error: "workerId required" }, 400); const previousEpoch = workerConnectionEpochs.get(workerId); const connectionEpoch = ++nextWorkerConnectionEpoch; workerConnectionEpochs.set(workerId, connectionEpoch); if (server.upgrade(request, { data: { actor: "worker", workerId, authenticated: false, connectionEpoch } })) return undefined; if (workerConnectionEpochs.get(workerId) === connectionEpoch) { if (previousEpoch === undefined) workerConnectionEpochs.delete(workerId); else workerConnectionEpochs.set(workerId, previousEpoch); } return json({ error: "websocket upgrade failed" }, 400); }
+    if (request.headers.get("upgrade")?.toLowerCase() === "websocket" && url.pathname === "/api/v1/workers/connect") {
+      const workerId = url.searchParams.get("workerId");
+      if (!workerId) return json({ error: "workerId required" }, 400);
+      const [worker] = await db`select admission_state from workers where id=${workerId}`;
+      if (!worker || worker.admission_state === "revoked" || worker.admission_state === "rejected") return json({ code: "worker_unavailable", message: "Worker is unknown or revoked" }, 403);
+      const previousEpoch = workerConnectionEpochs.get(workerId);
+      const connectionEpoch = ++nextWorkerConnectionEpoch;
+      workerConnectionEpochs.set(workerId, connectionEpoch);
+      if (server.upgrade(request, { data: { actor: "worker", workerId, authenticated: false, connectionEpoch } })) return undefined;
+      if (workerConnectionEpochs.get(workerId) === connectionEpoch) {
+        if (previousEpoch === undefined) workerConnectionEpochs.delete(workerId); else workerConnectionEpochs.set(workerId, previousEpoch);
+      }
+      return json({ error: "websocket upgrade failed" }, 400);
+    }
     return httpApp.fetch(request);
   },
 });

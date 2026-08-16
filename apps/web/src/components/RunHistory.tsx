@@ -1,5 +1,5 @@
-import { Link } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+ import { Link } from "@tanstack/react-router";
+ import { useEffect, useMemo, useState } from "react";
 import type { RunSummary } from "@whitesmith/contracts";
 import { formatDuration } from "./RunTelemetry.tsx";
 
@@ -103,10 +103,19 @@ function RunRow({ run, allowDetails, maxDuration }: { run: RunSummary; allowDeta
   return allowDetails ? <Link className="run-history-row" {...runDetailLink(run)}>{content}</Link> : <div className="run-history-row">{content}</div>;
 }
 
-export function RunHistory({ runs, allowDetails = true, nowMs = Date.now() }: { runs: readonly RunSummary[]; allowDetails?: boolean; nowMs?: number }) {
-  const [search, setSearch] = useState("");
-  const [range, setRange] = useState<RunHistoryRange>("all");
-  const [runnerFilter, setRunnerFilter] = useState<RunHistoryRunnerFilter>("all");
+ export function RunHistory({ runs, allowDetails = true, nowMs = Date.now() }: { runs: readonly RunSummary[]; allowDetails?: boolean; nowMs?: number }) {
+   const params = useMemo(() => typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search), []);
+   const [search, setSearch] = useState(params.get("q") ?? "");
+   const [range, setRange] = useState<RunHistoryRange>((params.get("range") as RunHistoryRange) || "all");
+   const [runnerFilter, setRunnerFilter] = useState<RunHistoryRunnerFilter>((params.get("runner") as RunHistoryRunnerFilter) || "all");
+   useEffect(() => {
+     if (typeof window === "undefined") return;
+     const next = new URLSearchParams(window.location.search);
+     if (search) next.set("q", search); else next.delete("q");
+     if (range !== "all") next.set("range", range); else next.delete("range");
+     if (runnerFilter !== "all") next.set("runner", runnerFilter); else next.delete("runner");
+     window.history.replaceState(null, "", `${window.location.pathname}${next.toString() ? `?${next}` : ""}${window.location.hash}`);
+   }, [search, range, runnerFilter]);
   const visibleRuns = useMemo(() => filterRuns(runs, search, range, nowMs, runnerFilter), [runs, search, range, nowMs, runnerFilter]);
   const maxDuration = Math.max(0, ...visibleRuns.map((run) => run.durationMs ?? 0));
   const chartDescription = visibleRuns.length === 0
@@ -124,6 +133,7 @@ export function RunHistory({ runs, allowDetails = true, nowMs = Date.now() }: { 
           {RUNNER_FILTER_LABELS.map((item) => <button key={item.value} type="button" aria-pressed={runnerFilter === item.value} onClick={() => setRunnerFilter(item.value)}>{item.label}</button>)}
         </div>
       </div>
+      <p className="filter-scope" role="note">Filters apply to the currently loaded runs.</p>
       <div className="run-duration-chart" role="img" aria-label={chartDescription}>
         {visibleRuns.map((run) => <span key={run.id} className={`run-duration-bar run-duration-bar-${statusDescriptor(run).tone}`} style={{ height: `${run.durationMs && maxDuration ? Math.max(12, (run.durationMs / maxDuration) * 100) : 12}%` }} />)}
       </div>

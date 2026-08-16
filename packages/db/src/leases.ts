@@ -10,7 +10,7 @@ export type LeaseReservationInput = {
   requested: { vcpu: number; memoryBytes: number; storageBytes: number; concurrency: number };
   ttlMs: number;
 };
-export type LeaseReservation = { id: string; nonce: string; workerId: string; poolId: string; expiresAt: string; requested: { vcpu: number; memoryBytes: number; storageBytes: number; concurrency: number } };
+export type LeaseReservation = { id: string; jobId?: number; nonce: string; workerId: string; poolId: string; expiresAt: string; requested: { vcpu: number; memoryBytes: number; storageBytes: number; concurrency: number } };
 
 export async function reserveRoutingSlot(sql: Sql<{}>, input: LeaseReservationInput): Promise<LeaseReservation> {
   const nonce = randomBytes(32).toString("base64url");
@@ -22,7 +22,12 @@ export async function reserveRoutingSlot(sql: Sql<{}>, input: LeaseReservationIn
       WHERE p.id=${input.poolId}
         AND p.enabled=true AND w.admission_state='adopted' AND w.connection_state='online'
         AND w.configuration_state='ready' AND w.draining=false FOR UPDATE OF p, w`;
-    if (!eligible[0]) throw new Error("worker_not_ready");
+    const [organization] = await tx`SELECT max_vcpu_per_pod AS "maxVcpuPerPod", max_memory_bytes_per_pod AS "maxMemoryBytesPerPod", max_storage_bytes_per_pod AS "maxStorageBytesPerPod", max_concurrent_pods AS "maxConcurrentPods" FROM organization_settings WHERE organization_id=${input.organizationId}`;
+    if (organization && (input.requested.vcpu > Number(organization.maxVcpuPerPod) || input.requested.memoryBytes > Number(organization.maxMemoryBytesPerPod) || input.requested.storageBytes > Number(organization.maxStorageBytesPerPod))) throw new Error("organization_limit");
+    if (organization) {
+      const [activeOrganization] = await tx`SELECT count(*)::int AS count FROM runner_leases WHERE organization_id=${input.organizationId} AND state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')`;
+      if (Number(activeOrganization?.count ?? 0) >= Number(organization.maxConcurrentPods)) throw new Error("organization_limit");
+    }
     const poolResources = typeof eligible[0].resources === "string" ? JSON.parse(eligible[0].resources) : eligible[0].resources;
     const limits = typeof eligible[0].limits === "string" ? JSON.parse(eligible[0].limits) : eligible[0].limits;
     if (!poolResources || input.requested.storageBytes > Number(poolResources.storageBytes) || input.requested.concurrency > Number(poolResources.concurrency)) throw new Error("pool_resource_ceiling_exceeded");
@@ -37,14 +42,14 @@ export async function reserveRoutingSlot(sql: Sql<{}>, input: LeaseReservationIn
       VALUES (${id},${input.organizationId},${input.poolId},${input.workerId},${input.routingKey},${input.githubJobId ?? null},'reserved',${JSON.stringify(input.requested)},${nonce},${expiresAt})
       ON CONFLICT (github_job_id) DO UPDATE SET id=EXCLUDED.id,organization_id=EXCLUDED.organization_id,pool_id=EXCLUDED.pool_id,worker_id=EXCLUDED.worker_id,routing_key=EXCLUDED.routing_key,state='reserved',requested=EXCLUDED.requested,nonce=EXCLUDED.nonce,expires_at=EXCLUDED.expires_at,cleanup_state='none',terminal_result=null,updated_at=now()
       WHERE runner_leases.state IN ('failed','reaped')
-      RETURNING id,nonce,worker_id AS "workerId",pool_id AS "poolId",requested,expires_at AS "expiresAt"`;
+      RETURNING id,github_job_id AS "jobId",nonce,worker_id AS "workerId",pool_id AS "poolId",requested,expires_at AS "expiresAt"`;
     if (inserted[0] && input.githubJobId !== undefined) await tx`UPDATE dashboard_jobs SET requested=${JSON.stringify(input.requested)}::jsonb WHERE github_job_id=${input.githubJobId}`;
     if (!inserted[0]) throw new Error("job_already_claimed");
     return inserted;
   });
   const row = rows[0];
   if (!row) throw new Error("lease_reservation_failed");
-  return { id: String(row.id), nonce: String(row.nonce), workerId: String(row.workerId), poolId: String(row.poolId), expiresAt: row.expiresAt instanceof Date ? row.expiresAt.toISOString() : String(row.expiresAt), requested: typeof row.requested === "string" ? JSON.parse(row.requested) : row.requested };
+  return { id: String(row.id), jobId: row.jobId === null || row.jobId === undefined ? undefined : Number(row.jobId), nonce: String(row.nonce), workerId: String(row.workerId), poolId: String(row.poolId), expiresAt: row.expiresAt instanceof Date ? row.expiresAt.toISOString() : String(row.expiresAt), requested: typeof row.requested === "string" ? JSON.parse(row.requested) : row.requested };
 }
 
 export async function bindLeaseToJob(sql: Sql<{}>, leaseId: string, githubJobId: number): Promise<void> {

@@ -50,18 +50,20 @@ function JobBadges({ job }: { job: RunJob }) {
 }
 
 
-export function RunDetailView({ data, organizationId }: { data: RunDetail; organizationId: string }) {
-  const [selectedTab, setSelectedTab] = useState<"logs" | "metrics">("logs");
-  const facts = runDetailFacts(data);
-  const stageDurations = (data as RunDetail & { stageDurations?: Partial<Record<RunStage, number>> }).stageDurations;
-  const status = statusLabel(data);
-  return <div className="run-detail-grid">
+ export function RunDetailView({ data, organizationId }: { data: RunDetail; organizationId: string }) {
+   const [selectedTab, setSelectedTab] = useState<"logs" | "metrics">("logs");
+   const facts = runDetailFacts(data);
+   const detail = data as RunDetail & { currentStage?: string; schedulerReason?: string; retryCount?: number; leaseCleanupState?: string; htmlUrl?: string; stageDurations?: Partial<Record<RunStage, number>> };
+   const stageDurations = detail.stageDurations;
+   const status = statusLabel(data);
+   return <div className="run-detail-grid">
     <section className="detail-panel" aria-labelledby="run-detail-title">
       <nav className="detail-breadcrumb" aria-label="Workflow breadcrumb"><a href="/runs">Runs</a><span aria-hidden="true">/</span><span>{data.workflowName}</span></nav>
       <div className="detail-heading"><span className={`status status-${data.conclusion ?? data.status}`}><span className="status-icon" aria-hidden="true">●</span><span>{status}</span></span><span className="detail-run-number">Run #{data.runNumber}</span><h1 id="run-detail-title">{data.workflowName}</h1></div>
       <DetailBadges values={[data.repositoryName, data.runtimeBoundary ?? "Runtime boundary pending", data.branch, data.actorLogin, `commit ${data.commitSha.slice(0, 12)}`]} />
-      <dl className="detail-facts"><div><dt>Started</dt><dd>{facts.started}</dd></div><div><dt>Repository</dt><dd>{facts.repository}</dd></div><div><dt>Runner</dt><dd>{facts.runner}</dd></div><div><dt>Duration</dt><dd>{facts.duration}</dd></div></dl>
-      <p className="detail-meta">{data.event} event</p>
+      <dl className="detail-facts"><div><dt>Started</dt><dd>{facts.started}</dd></div><div><dt>Repository</dt><dd>{facts.repository}</dd></div><div><dt>Runner</dt><dd>{facts.runner}</dd></div><div><dt>Duration</dt><dd>{facts.duration}</dd></div><div><dt>Current stage</dt><dd>{detail.currentStage ?? "Not reported"}</dd></div><div><dt>Retry count</dt><dd>{detail.retryCount ?? 0}</dd></div><div><dt>Lease cleanup</dt><dd>{detail.leaseCleanupState ?? "Not reported"}</dd></div></dl>
+      {detail.schedulerReason && <p className="detail-meta">Scheduler block: {detail.schedulerReason}</p>}
+      {detail.htmlUrl && <p className="detail-meta"><a href={detail.htmlUrl} target="_blank" rel="noreferrer">Open GitHub run</a></p>}
     </section>
     <div className="detail-tabs">
       <div className="detail-tab-list" role="tablist" aria-label="Run detail views">

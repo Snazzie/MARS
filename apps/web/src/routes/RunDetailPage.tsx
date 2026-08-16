@@ -14,6 +14,8 @@ export function RunDetailPage() {
     queryKey: ["org", detailOrganizationId, "run", runId],
     queryFn: () => getRun(detailOrganizationId, runId),
     enabled: Boolean(detailOrganizationId && runId && detailOrganizationId !== "all"),
+    refetchInterval: (current) => current.state.data?.status === "completed" ? false : 2_000,
+    refetchIntervalInBackground: false,
   });
 
   return <>

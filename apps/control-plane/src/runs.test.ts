@@ -137,7 +137,7 @@ test("webhook ingestion and reconciliation authorize available repositories on a
   });
   expect(reconciliationQuery).toContain("repo.available=true");
   expect(reconciliationQuery).toContain("repo.full_name=");
-  expect(reconciliationQuery).toContain("ORDER BY j.github_job_id DESC");
+  expect(reconciliationQuery).toContain("ORDER BY j.queued_at ASC, j.github_job_id ASC");
   expect(reconciliationQuery).toContain("i.state='approved'");
   expect(reconciliationQuery).not.toContain("repo.approved");
 });

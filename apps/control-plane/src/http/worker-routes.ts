@@ -50,13 +50,13 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   app.get("/api/workers/templates/:platform/manifest", async (c) => {
     const platform = c.req.param("platform") as "windows-x64" | "linux-x64";
     const path = deps.templateManifestPaths?.[platform];
-    if (!path || !await Bun.file(path).exists()) return c.json({ error: "template manifest unavailable" }, 503, { "cache-control": "no-store" });
+    if (!path || !await Bun.file(path).exists()) return c.json({ code: "artifact_unavailable", message: "Template manifest is unavailable", artifact: `template-manifest:${platform}` }, 503, { "cache-control": "no-store" });
     return new Response(Bun.file(path), { headers: noStore() });
   });
   app.get("/api/workers/templates/:platform/artifact", async (c) => {
     const platform = c.req.param("platform") as "windows-x64" | "linux-x64";
     const path = deps.templateArtifactPaths?.[platform];
-    if (!path || !await Bun.file(path).exists()) return c.json({ error: "template artifact unavailable" }, 503, { "cache-control": "no-store" });
+    if (!path || !await Bun.file(path).exists()) return c.json({ code: "artifact_unavailable", message: "Template artifact is unavailable", artifact: `template:${platform}` }, 503, { "cache-control": "no-store" });
     const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", `attachment; filename="${platform}.vhdx"`);
     return new Response(Bun.file(path), { headers });
   });
@@ -65,16 +65,17 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const runtime = c.req.query("runtime") ?? "container";
     const file = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : audience === "macos-arm64" ? "install-worker-macos.sh" : null;
     if (!file) return c.json({ error: "unsupported installer audience" }, 400);
-    if (audience === "windows-x64" && runtime !== "vm" && runtime !== "container") return c.json({ error: "unsupported Windows runtime" }, 400);
     const installer = Bun.file(new URL(file, deps.workerInstallerRoot));
+    if (audience === "windows-x64" && runtime !== "vm" && runtime !== "container") return c.json({ error: "unsupported Windows runtime" }, 400);
+    if (!await installer.exists()) return c.json({ code: "artifact_unavailable", message: "Worker installer is unavailable", artifact: file }, 503, { "cache-control": "no-store" });
     const extra: Record<string, string> = audience === "windows-x64"
       ? { WINDOWS_RUNTIME: runtime, WINDOWS_CONTAINER_IMAGE: deps.defaultJobImages["windows-x64"] ?? "", WINDOWS_TEMPLATE_PATH: deps.workerTemplatePaths?.["windows-x64"] ?? "", WINDOWS_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["windows-x64"] ?? "", LINUX_TEMPLATE_PATH: deps.workerTemplatePaths?.["linux-x64"] ?? "", LINUX_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["linux-x64"] ?? "" }
       : audience === "macos-arm64" ? { TART_IMAGE: deps.macosTartBaseImage ?? "", TART_IMAGE_DIGEST: deps.defaultJobImages["macos-arm64"] ?? "" } : {};
-    if (audience === "windows-x64" && runtime === "vm" && (!extra.WINDOWS_TEMPLATE_PATH || !extra.WINDOWS_TEMPLATE_DIGEST)) return c.json({ error: "Windows Hyper-V template is not configured" }, 503, { "cache-control": "no-store" });
-    if (audience === "windows-x64" && runtime === "container" && !extra.WINDOWS_CONTAINER_IMAGE) return c.json({ error: "Windows container image is not configured" }, 503, { "cache-control": "no-store" });
+    if (audience === "windows-x64" && runtime === "vm" && (!extra.WINDOWS_TEMPLATE_PATH || !extra.WINDOWS_TEMPLATE_DIGEST)) return c.json({ code: "artifact_unavailable", message: "Windows Hyper-V template is not configured", artifact: "windows-template" }, 503, { "cache-control": "no-store" });
+    if (audience === "windows-x64" && runtime === "container" && !extra.WINDOWS_CONTAINER_IMAGE) return c.json({ code: "artifact_unavailable", message: "Windows container image is not configured", artifact: "windows-container-image" }, 503, { "cache-control": "no-store" });
     return new Response(injectInstallerOrigin(await installer.text(), deps.baseUrl, extra, audience === "windows-x64"), { headers: noStore() });
   });
-  app.get("/api/workers/orchestrator", (c) => { const audience = c.req.query("audience") as keyof NonNullable<typeof deps.workerOrchestratorExecutables>; const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined); if (!executable) return c.json({ error: "unsupported orchestrator audience" }, 400); const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", 'attachment; filename="whitesmith-orchestrator"'); return new Response(Bun.file(executable), { headers }); });
+  app.get("/api/workers/orchestrator", async (c) => { const audience = c.req.query("audience") as keyof NonNullable<typeof deps.workerOrchestratorExecutables>; const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined); if (!executable) return c.json({ code: "artifact_unavailable", message: "Orchestrator is unsupported", artifact: `orchestrator:${audience}` }, 503); if (!await Bun.file(executable).exists()) return c.json({ code: "artifact_unavailable", message: "Orchestrator is unavailable", artifact: `orchestrator:${audience}` }, 503, { "cache-control": "no-store" }); const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", 'attachment; filename="whitesmith-orchestrator"'); return new Response(Bun.file(executable), { headers }); });
   app.get("/api/workers/service-host", async (c) => {
     const executable = deps.workerServiceHostExecutable;
     if (c.req.query("audience") !== "windows-x64" || !executable) return c.json({ error: "unsupported service host audience" }, 400);

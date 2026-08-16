@@ -33,7 +33,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   app.get("/api/organizations", safe(async (c) => c.json(OrganizationSummary.array().parse(await listOrganizations(deps.db, c.get("user").id)))));
   app.get("/api/organizations/:organizationId/overview", safe(async (c) => { const org = c.req.param("organizationId"); const period = periodSchema.safeParse(c.req.query("period") || "24h"); if (!period.success) return error(c, 400, "invalid_period", "Invalid period", { issues: period.error.issues }); if (org === "all") return c.json(OverviewDto.parse(await getAllOverview(deps.db, c.get("user").id, period.data))); const denied = await guard(c, deps, org); if (denied) return denied; return c.json(OverviewDto.parse(await getOverview(deps.db, org, period.data))); }));
   app.get("/api/organizations/:organizationId/repositories", safe(async (c) => { const org = c.req.param("organizationId"); const q = parseQuery(c); if (q instanceof Response) return q; if (org === "all") return c.json(CursorPage(RepositorySummary).parse(await listAllRepositories(deps.db, c.get("user").id, q.limit, q.cursor ?? null))); const denied = await guard(c, deps, org); if (denied) return denied; return c.json(CursorPage(RepositorySummary).parse(await listRepositories(deps.db, org, q.limit, q.cursor ?? null))); }));
-  for (const [path, fn, allFn, schema] of [["runs", listRuns, listAllRuns, RunSummary], ["pools", listPools, listAllPools, PoolSummary]] as const) app.get(`/api/organizations/:organizationId/${path}`, safe(async (c) => { const org = c.req.param("organizationId"); const q = parseQuery(c); if (q instanceof Response) return q; if (org === "all") return c.json(CursorPage(schema).parse(await allFn(deps.db, c.get("user").id, q.limit))); const denied = await guard(c, deps, org); if (denied) return denied; return c.json(CursorPage(schema).parse(await fn(deps.db, org, q.limit))); }));
+  for (const [path, fn, allFn, schema] of [["runs", listRuns, listAllRuns, RunSummary], ["pools", listPools, listAllPools, PoolSummary]] as const) app.get(`/api/organizations/:organizationId/${path}`, safe(async (c) => { const org = c.req.param("organizationId"); const q = parseQuery(c); if (q instanceof Response) return q; const search = c.req.query("search") ?? ""; if (org === "all") return c.json(CursorPage(schema).parse(await allFn(deps.db, c.get("user").id, q.limit))); const denied = await guard(c, deps, org); if (denied) return denied; return c.json(CursorPage(schema).parse(await fn(deps.db, org, q.limit, q.cursor ?? null, search))); }));
   app.post("/api/organizations/:organizationId/repositories/:repositoryId/discovery/recheck", safe(async (c) => {
     const org = c.req.param("organizationId");
     const denied = await guard(c, deps, org);
@@ -55,7 +55,32 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   app.get("/api/organizations/:organizationId/settings", safe(async(c)=>{const org=c.req.param("organizationId");const denied=await guard(c,deps,org);if(denied)return denied;return c.json(OrganizationSettings.parse(await getOrganizationSettings(deps.db,org)));}));
   app.put("/api/organizations/:organizationId/settings", safe(async(c)=>{const org=c.req.param("organizationId");const denied=await guard(c,deps,org);if(denied)return denied;if(!c.get("user").isGlobalAdmin)return error(c,403,"forbidden","Global administrator authorization required");const idem=requireMutation(c);if(idem)return idem;const body=OrganizationSettings.parse({...await c.req.json(),organizationId:org});const key=c.req.header("idempotency-key")!;if(!(await dashboardMutation(deps.db,org,key)))return c.json(OrganizationSettings.parse(await getOrganizationSettings(deps.db,org)));const value=await updateOrganizationSettings(deps.db,body);await invalidateDashboard(deps.db,org,["settings"]);return c.json(OrganizationSettings.parse(value));}));
   app.get("/api/organizations/:organizationId/workers/:workerId", safe(async(c)=>{if(!c.get("user").isGlobalAdmin)return error(c,403,"forbidden","Global administrator authorization required");const value=await getWorkerDetail(deps.db,c.req.param("organizationId"),c.req.param("workerId"));return value?c.json(WorkerDetail.parse(value)):error(c,404,"not_found","Resource not found");}));
-  app.post("/api/organizations/:organizationId/workers/:workerId/:action", safe(async(c)=>{const action=c.req.param("action"), id=c.req.param("workerId");if(!c.get("user").isGlobalAdmin)return error(c,403,"forbidden","Global administrator authorization required");if(!["adopt","reject","drain","remove"].includes(action))return error(c,404,"not_found","Resource not found");const idem=requireMutation(c);if(idem)return idem;const value=await getWorkerDetail(deps.db,c.req.param("organizationId"),id);if(!value)return error(c,404,"not_found","Resource not found");mutationSchema.parse(await c.req.json().catch(()=>({})));if(action==="adopt")await adoptWorker(deps.db,id,c.get("user").id);else if(action==="reject")await deps.db`UPDATE workers SET admission_state='rejected' WHERE id=${id} AND admission_state='pending'`;else if(action==="drain")await deps.db`UPDATE workers SET draining=true WHERE id=${id}`;else await deps.db`UPDATE workers SET admission_state='revoked' WHERE id=${id}`;return c.json({ok:true});}));
+  app.post("/api/organizations/:organizationId/workers/:workerId/:action", safe(async (c) => {
+    const action = c.req.param("action"), id = c.req.param("workerId");
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    if (!["adopt", "reject", "drain", "resume", "remove"].includes(action)) return error(c, 404, "not_found", "Resource not found");
+    const idem = requireMutation(c); if (idem) return idem;
+    const value = await getWorkerDetail(deps.db, c.req.param("organizationId"), id);
+    if (!value) return error(c, 404, "not_found", "Resource not found");
+    mutationSchema.parse(await c.req.json().catch(() => ({})));
+    if (action === "adopt") await adoptWorker(deps.db, id, c.get("user").id);
+    else if (action === "reject") await deps.db`UPDATE workers SET admission_state='rejected' WHERE id=${id} AND admission_state='pending'`;
+    else if (action === "drain") await deps.db`UPDATE workers SET draining=true WHERE id=${id}`;
+    else if (action === "resume") {
+      if (value.admissionState !== "adopted" || value.configurationState !== "ready") return error(c, 409, "worker_not_ready", "Worker must be adopted and configured before resume");
+      await deps.db`UPDATE workers SET draining=false WHERE id=${id} AND admission_state='adopted' AND configuration_state='ready'`;
+    } else {
+      const [active] = await deps.db`SELECT id FROM runner_leases WHERE worker_id=${id} AND state NOT IN ('reaped','failed','expired') LIMIT 1`;
+      if (active) return error(c, 409, "worker_has_active_leases", "Worker has active leases; wait for reaping before removal");
+      await deps.db.begin(async tx => {
+        await tx`UPDATE workers SET draining=true WHERE id=${id}`;
+        await tx`UPDATE runner_pools SET enabled=false WHERE worker_id=${id}`;
+        await tx`UPDATE workers SET admission_state='revoked',connection_state='offline' WHERE id=${id}`;
+        await tx`INSERT INTO audit_events (actor,type,payload) VALUES (${c.get("user").id},'worker.removed',${JSON.stringify({ workerId: id })}::jsonb)`;
+      });
+    }
+    return c.json({ ok: true });
+  }));
   app.get("/api/pools", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const q = parseQuery(c); if (q instanceof Response) return q;
@@ -131,12 +156,12 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   app.post("/api/organizations/:organizationId/pools/:poolId/:action", safe(async (c) => {
     const org = c.req.param("organizationId"), action = c.req.param("action");
     const denied = await guard(c, deps, org); if (denied) return denied;
-    if (!["enable", "disable", "rotate-key"].includes(action)) return error(c, 404, "not_found", "Resource not found");
+    if (!["enable", "disable"].includes(action)) return error(c, 404, "not_found", "Resource not found");
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const idem = requireMutation(c); if (idem) return idem;
     const key = c.req.header("idempotency-key")!;
     if (!(await dashboardMutation(deps.db, org, key))) return c.json({ ok: true });
-    if (action !== "rotate-key") await deps.db`UPDATE runner_pools SET enabled=${action === "enable"} WHERE organization_id=${org} AND id=${c.req.param("poolId")}`;
+    await deps.db`UPDATE runner_pools SET enabled=${action === "enable"} WHERE organization_id=${org} AND id=${c.req.param("poolId")}`;
     await invalidateDashboard(deps.db, org, ["pools"]); return c.json({ ok: true });
   }));
   app.get("/api/organizations/:organizationId/github/settings", safe(async (c) => {

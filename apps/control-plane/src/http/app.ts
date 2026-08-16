@@ -19,6 +19,25 @@ export function requireSession(deps: ControlPlaneHttpDeps) {
 
 export function createControlPlaneApp(deps: ControlPlaneHttpDeps) {
   const app = new Hono<ControlPlaneEnv>();
+  app.use("*", async (c, next) => {
+    await next();
+    c.header("X-Content-Type-Options", "nosniff");
+    c.header("Referrer-Policy", "no-referrer");
+    c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    if (new URL(deps.baseUrl).protocol === "https:") c.header("Strict-Transport-Security", "max-age=31536000");
+    c.header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss:; frame-ancestors 'none'; base-uri 'none'; form-action 'self' https://github.com");
+  });
+  app.get("/api/livez", (c) => c.json({ ok: true }));
+  app.get("/api/readyz", async (c) => {
+    const health = deps.health();
+    try {
+      await deps.db`SELECT 1`;
+    } catch {
+      return c.json({ ok: false, checks: { database: false, discovery: !health.discovery.stale }, ...health }, 503);
+    }
+    const ok = !health.discovery.stale;
+    return c.json({ ok, checks: { database: true, discovery: ok }, ...health }, ok ? 200 : 503);
+  });
   app.get("/api/healthz", (c) => {
     const health = deps.health();
     return c.json({ ok: !health.discovery.stale, ...health }, health.discovery.stale ? 503 : 200);

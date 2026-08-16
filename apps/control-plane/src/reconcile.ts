@@ -34,7 +34,10 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
     const requestedLabels = queued.labels.map((label) => label.trim()).filter(Boolean);
     const provision = parseProvisionLabels(requestedLabels);
     if (!provision) { report.skipped += 1; continue; }
-    const candidate = deps.candidates.find((value) => {
+    const candidateOrder = deps.candidates.length > 1
+      ? deps.candidates.map((_, index) => deps.candidates[(queued.jobId + index) % deps.candidates.length])
+      : deps.candidates;
+    const candidate = candidateOrder.find((value) => {
       const capacityKey = `${value.pool.id}:${value.worker.id}`;
       const reserved = reservedByPool.get(capacityKey) ?? 0;
       return reserved + value.pool.active < value.pool.concurrency && fits({ ...value, requestedLabels });
