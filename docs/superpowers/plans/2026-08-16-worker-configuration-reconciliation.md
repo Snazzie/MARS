@@ -309,9 +309,11 @@ git commit -m "fix: track live worker config apply"
 - Modify: `apps/control-plane/src/worker-requests.ts`
 - Create: `apps/control-plane/src/worker-configuration-reconcile.test.ts`
 - Modify: `apps/control-plane/src/index.ts`
-- Modify: `apps/control-plane/src/index.test.ts`
+- Create: `apps/control-plane/src/worker-connection.ts`
+- Create: `apps/control-plane/src/worker-connection.test.ts`
 - Modify: `apps/control-plane/src/scheduler.ts`
 - Modify: `apps/control-plane/src/scheduler.test.ts`
+- Create: `apps/control-plane/src/job-reconciler.test.ts`
 - Modify: `apps/control-plane/src/job-reconciler.ts`
 
 **Interfaces:**
@@ -366,7 +368,7 @@ test("rejects ready state when applied revision is stale", () => {
 Run:
 
 ```bash
-bun test apps/control-plane/src/worker-configuration-reconcile.test.ts apps/control-plane/src/scheduler.test.ts apps/control-plane/src/index.test.ts
+bun test apps/control-plane/src/worker-configuration-reconcile.test.ts apps/control-plane/src/worker-connection.test.ts apps/control-plane/src/scheduler.test.ts apps/control-plane/src/job-reconciler.test.ts
 ```
 
 Expected: failures because reconnect reconciliation and revision-aware scheduling do not exist.
@@ -398,15 +400,22 @@ Update the worker to `applying` with the reused or new command ID. Return the se
 
 - [ ] **Step 4: Reconcile before registering the authenticated socket**
 
-In `index.ts`, after signature and encryption-key verification but before `workerSockets.set` and `dispatcher.register`, call:
+Extract the post-signature connection transition into `worker-connection.ts`:
 
 ```ts
-await reconcileWorkerConfigurationOnConnect(db, ws.data.workerId);
+export async function activateAuthenticatedWorkerConnection(input: {
+  db: DatabaseClient;
+  workerId: string;
+  socket: AuthenticatedWorkerSocket;
+  dispatcher: WorkerCommandDispatcher;
+  workerSockets: Map<string, AuthenticatedWorkerSocket>;
+  markAuthenticated(): void;
+}): Promise<void>
 ```
 
-Then update connection state, mark the socket authenticated, register it, and send the authenticated frame. Registration replays the committed pending configuration command through the existing durable dispatcher.
+The function must await `reconcileWorkerConfigurationOnConnect`, update the database connection state, invoke `markAuthenticated`, install the socket in `workerSockets`, and only then call `dispatcher.register`. In `index.ts`, call this function after signature and encryption-key verification.
 
-Add an `index.test.ts` source/integration assertion proving the reconciliation call precedes `dispatcher.register`; do not send a configuration command before authentication succeeds.
+Create `worker-connection.test.ts` with fakes that append `reconcile`, `online`, `authenticated`, and `register` to an array. Assert the exact order and assert that a reconciliation rejection leaves the socket unregistered. This proves behavior without inspecting source text and prevents configuration delivery before authentication succeeds.
 
 - [ ] **Step 5: Enforce desired/applied revision equality in scheduling**
 
@@ -426,7 +435,7 @@ Return `worker_config_applying` from `reason` when state is `applying` or revisi
 Run:
 
 ```bash
-bun test apps/control-plane/src/worker-configuration-reconcile.test.ts apps/control-plane/src/worker-requests.ack.test.ts apps/control-plane/src/scheduler.test.ts apps/control-plane/src/index.test.ts apps/control-plane/src/job-reconciler.test.ts
+bun test apps/control-plane/src/worker-configuration-reconcile.test.ts apps/control-plane/src/worker-connection.test.ts apps/control-plane/src/worker-requests.ack.test.ts apps/control-plane/src/scheduler.test.ts apps/control-plane/src/job-reconciler.test.ts
 bun run --filter '@whitesmith/control-plane' typecheck
 ```
 
@@ -435,7 +444,7 @@ Expected: all commands pass.
 - [ ] **Step 7: Commit reconnect reconciliation**
 
 ```bash
-git add apps/control-plane/src/worker-requests.ts apps/control-plane/src/worker-configuration-reconcile.test.ts apps/control-plane/src/index.ts apps/control-plane/src/index.test.ts apps/control-plane/src/scheduler.ts apps/control-plane/src/scheduler.test.ts apps/control-plane/src/job-reconciler.ts
+git add apps/control-plane/src/worker-requests.ts apps/control-plane/src/worker-configuration-reconcile.test.ts apps/control-plane/src/worker-connection.ts apps/control-plane/src/worker-connection.test.ts apps/control-plane/src/index.ts apps/control-plane/src/scheduler.ts apps/control-plane/src/scheduler.test.ts apps/control-plane/src/job-reconciler.ts apps/control-plane/src/job-reconciler.test.ts
 git commit -m "fix: reapply config on worker reconnect"
 ```
 
@@ -591,7 +600,7 @@ git commit -m "feat: show applied worker config state"
 Run:
 
 ```bash
-bun test packages/db/src/schema.test.ts packages/db/src/dashboard.test.ts tests/dashboard-contracts.test.ts apps/control-plane/src/worker-requests.test.ts apps/control-plane/src/worker-requests.persistence.test.ts apps/control-plane/src/worker-requests.ack.test.ts apps/control-plane/src/worker-configuration-reconcile.test.ts apps/control-plane/src/scheduler.test.ts apps/control-plane/src/job-reconciler.test.ts apps/control-plane/src/index.test.ts apps/orchestrator/src/windows-agent.test.ts apps/orchestrator/src/mac-agent.test.ts apps/web/src/components/WorkerCard.test.tsx apps/web/src/routes/WorkersPage.test.tsx apps/web/src/components/PendingWorkerRequests.test.tsx
+bun test packages/db/src/schema.test.ts packages/db/src/dashboard.test.ts tests/dashboard-contracts.test.ts apps/control-plane/src/worker-requests.test.ts apps/control-plane/src/worker-requests.persistence.test.ts apps/control-plane/src/worker-requests.ack.test.ts apps/control-plane/src/worker-configuration-reconcile.test.ts apps/control-plane/src/worker-connection.test.ts apps/control-plane/src/scheduler.test.ts apps/control-plane/src/job-reconciler.test.ts apps/orchestrator/src/windows-agent.test.ts apps/orchestrator/src/mac-agent.test.ts apps/web/src/components/WorkerCard.test.tsx apps/web/src/routes/WorkersPage.test.tsx apps/web/src/components/PendingWorkerRequests.test.tsx
 ```
 
 Expected: all tests pass.
