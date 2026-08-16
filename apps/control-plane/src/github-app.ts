@@ -419,6 +419,35 @@ export class GitHubAppService {
     const ctx = await this.workflowContext(input.organizationId, input.repositoryId);
     return this.repositoryOperation(input.organizationId, input.repositoryId, () => this.listRepositoryWorkflowsWithToken(ctx.owner, ctx.name, ctx.token));
   }
+  async dispatchRepositoryWorkflow(input: { organizationId: string; repositoryId: string; workflowPath: string }): Promise<{ githubRunId: number }> {
+    const ctx = await this.workflowContext(input.organizationId, input.repositoryId);
+    return this.repositoryOperation(input.organizationId, input.repositoryId, async () => {
+      const listing = await this.listRepositoryWorkflowsWithToken(ctx.owner, ctx.name, ctx.token);
+      if (!listing.files.some((file) => file.path === input.workflowPath)) throw new Error("github_workflow_not_found");
+      const workflow = encodeURIComponent(input.workflowPath);
+      const runsPath = `/repos/${encodeURIComponent(ctx.owner)}/${encodeURIComponent(ctx.name)}/actions/workflows/${workflow}/runs?event=workflow_dispatch&per_page=10`;
+      const before = await this.gh(runsPath, {}, ctx.token);
+      const priorIds = new Set((Array.isArray(before.workflow_runs) ? before.workflow_runs : []).map((run) => Number((run as { id?: unknown }).id)).filter(Number.isSafeInteger));
+      await this.gh(`/repos/${encodeURIComponent(ctx.owner)}/${encodeURIComponent(ctx.name)}/actions/workflows/${workflow}/dispatches`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ref: listing.defaultBranch }),
+      }, ctx.token);
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const response = await this.gh(runsPath, {}, ctx.token);
+        const run = (Array.isArray(response.workflow_runs) ? response.workflow_runs : []).find((candidate) => {
+          const value = candidate as { id?: unknown; event?: unknown };
+          const id = Number(value.id);
+          return Number.isSafeInteger(id) && id > 0 && value.event === "workflow_dispatch" && !priorIds.has(id);
+        }) as { id?: unknown } | undefined;
+        const githubRunId = Number(run?.id);
+        if (Number.isSafeInteger(githubRunId) && githubRunId > 0) return { githubRunId };
+        if (attempt < 5) await Bun.sleep(500);
+      }
+      throw new Error("github_workflow_run_not_observed");
+    });
+  }
+
 
   async previewRepositoryRunnerPr(input: { organizationId: string; repositoryId: string; selectedPaths: string[] }): Promise<WorkflowMutation & { defaultBranch: string; headSha: string; labels: string[] }> {
     const ctx = await this.workflowContext(input.organizationId, input.repositoryId);

@@ -150,8 +150,16 @@ UPDATE workers SET desired_configuration=(desired_configuration #>> '{}')::jsonb
 UPDATE workers SET doctor=(doctor #>> '{}')::jsonb WHERE jsonb_typeof(doctor)='string';
 UPDATE workers SET guest_platforms=(guest_platforms #>> '{}')::jsonb WHERE jsonb_typeof(guest_platforms)='string';
 UPDATE workers SET limits=(limits #>> '{}')::jsonb WHERE jsonb_typeof(limits)='string';`;
+export const onboardingVerificationMigrationSql = `ALTER TABLE system_onboarding ADD COLUMN IF NOT EXISTS verification_repository_id uuid REFERENCES dashboard_repositories(id) ON DELETE SET NULL;
+ALTER TABLE system_onboarding ADD COLUMN IF NOT EXISTS verification_pool_id uuid REFERENCES runner_pools(id) ON DELETE SET NULL;
+ALTER TABLE system_onboarding ADD COLUMN IF NOT EXISTS verification_workflow_path text;
+ALTER TABLE system_onboarding ADD COLUMN IF NOT EXISTS verification_github_run_id bigint;
+ALTER TABLE system_onboarding ADD COLUMN IF NOT EXISTS verification_started_at timestamptz;
+ALTER TABLE system_onboarding ADD COLUMN IF NOT EXISTS verification_error text;`;
+
 
 export const schemaSql = `${baselineSchemaSql}
 ${workerConfigurationMigrationSql}
 ${workerJsonNormalizationMigrationSql}
-${jsonShapeNormalizationMigrationSql}`;
+${jsonShapeNormalizationMigrationSql}
+${onboardingVerificationMigrationSql}`;

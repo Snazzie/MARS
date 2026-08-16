@@ -3,6 +3,7 @@ import {
   OnboardingDetail,
   OnboardingStatus,
   type OnboardingInstallation,
+  type OnboardingVerification,
   type OnboardingWorker,
   type OrganizationSummary,
   type PoolSummary,
@@ -106,7 +107,11 @@ export async function getOnboardingDetail(
     id: String(row.id), name: String(row.name), login: String(row.login),
     role: row.role as OrganizationSummary["role"], repositoryCount: numberValue(row.repositoryCount), workerCount: numberValue(row.workerCount),
   }));
-  const stateRow = first(await db`SELECT organization_id AS "organizationId" FROM system_onboarding WHERE singleton=true`);
+  const stateRow = first(await db`SELECT organization_id AS "organizationId",
+    verification_repository_id AS "verificationRepositoryId",verification_pool_id AS "verificationPoolId",
+    verification_workflow_path AS "verificationWorkflowPath",verification_github_run_id AS "verificationGithubRunId",
+    verification_error AS "verificationError"
+    FROM system_onboarding WHERE singleton=true`);
   const organizationId = stringValue(stateRow?.organizationId);
   const installationRow = organizationId ? first(await db`
     SELECT id,github_installation_id AS "githubInstallationId",state,repository_selection AS "repositorySelection"
@@ -150,8 +155,44 @@ export async function getOnboardingDetail(
     name: String(poolRow.name), platform: poolRow.platform, driver: poolRow.driver, imageDigest: String(poolRow.imageDigest),
     resources: objectValue(poolRow.resources), labels: Array.isArray(poolRow.labels) ? poolRow.labels : (() => { try { return JSON.parse(String(poolRow.labels)); } catch { return []; } })(), triggerLabel: poolRow.triggerLabel, enabled: poolRow.enabled, active: numberValue(poolRow.active),
   } as PoolSummary : null;
+  const verificationGithubRunId = stateRow?.verificationGithubRunId == null ? null : numberValue(stateRow.verificationGithubRunId);
+  const verificationRun = organizationId && verificationGithubRunId ? first(await db`
+    SELECT r.id,r.status,r.conclusion,
+      EXISTS (
+        SELECT 1 FROM dashboard_jobs j
+        JOIN runner_leases l ON l.github_job_id=j.github_job_id
+        WHERE j.organization_id=r.organization_id AND j.run_id=r.id
+          AND l.pool_id=${stringValue(stateRow?.verificationPoolId)} AND l.state='reaped'
+      ) AS "leaseReaped"
+    FROM dashboard_runs r
+    WHERE r.organization_id=${organizationId} AND r.github_run_id=${verificationGithubRunId}
+    LIMIT 1
+  `) : undefined;
+  let verificationState: OnboardingVerification["state"] = "not_started";
+  let verificationError = stringValue(stateRow?.verificationError);
+  if (verificationGithubRunId) {
+    if (!verificationRun || verificationRun.status === "queued") verificationState = "queued";
+    else if (verificationRun.status === "in_progress") verificationState = "running";
+    else if (verificationRun.conclusion === "success" && verificationRun.leaseReaped === true) verificationState = "complete";
+    else if (verificationRun.conclusion === "success") verificationState = "reaping";
+    else {
+      verificationState = "failed";
+      verificationError = `Workflow completed with ${stringValue(verificationRun.conclusion) ?? "an unknown result"}`;
+    }
+  } else if (verificationError) {
+    verificationState = "failed";
+  }
+  const verification: OnboardingVerification = {
+    state: verificationState,
+    repositoryId: stringValue(stateRow?.verificationRepositoryId),
+    poolId: stringValue(stateRow?.verificationPoolId),
+    workflowPath: stringValue(stateRow?.verificationWorkflowPath),
+    githubRunId: verificationGithubRunId,
+    runId: stringValue(verificationRun?.id),
+    error: verificationError,
+  };
   const appConfigured = (await db`SELECT 1 FROM github_app_config WHERE singleton=true`).length > 0;
-  return OnboardingDetail.parse({ ...status, worker, organizations, github: { appConfigured, organizationId, installation, repositories }, pool, defaultImageDigests: extras.defaultImageDigests ?? {} });
+  return OnboardingDetail.parse({ ...status, worker, organizations, github: { appConfigured, organizationId, installation, repositories }, pool, verification, defaultImageDigests: extras.defaultImageDigests ?? {} });
 }
 
 export async function selectOnboardingWorker(db: OnboardingDb, workerId: string, adminUserId: string): Promise<void> {
@@ -186,20 +227,42 @@ export async function getVerifiedOnboardingRepositories(
   const repositoryCount = numberValue(row?.repositoryCount);
   return organizationId && repositoryCount > 0 ? { organizationId, repositoryCount } : null;
 }
+export async function recordOnboardingVerification(
+  db: OnboardingDb,
+  adminUserId: string,
+  input: { repositoryId: string; poolId: string; workflowPath: string; githubRunId?: number; error?: string },
+): Promise<boolean> {
+  const rows = await db`
+    UPDATE system_onboarding SET
+      verification_repository_id=${input.repositoryId},
+      verification_pool_id=${input.poolId},
+      verification_workflow_path=${input.workflowPath},
+      verification_github_run_id=${input.githubRunId ?? null},
+      verification_started_at=now(),
+      verification_error=${input.error ?? null}
+    WHERE singleton=true AND admin_user_id=${adminUserId} AND completed_at IS NULL
+    RETURNING singleton
+  `;
+  return rows.length === 1;
+}
+
 
 
 
 export async function completeOnboardingIfReady(db: OnboardingDb): Promise<boolean> {
-  const row = first(await db`SELECT completed_at AS "completedAt",admin_user_id AS "adminUserId",worker_id AS "workerId",organization_id AS "organizationId" FROM system_onboarding WHERE singleton=true`);
-  if (!row || row.completedAt != null || !row.adminUserId || !row.workerId || !row.organizationId) return false;
+  const row = first(await db`SELECT completed_at AS "completedAt",admin_user_id AS "adminUserId",worker_id AS "workerId",organization_id AS "organizationId",verification_pool_id AS "verificationPoolId",verification_github_run_id AS "verificationGithubRunId" FROM system_onboarding WHERE singleton=true`);
+  if (!row || row.completedAt != null || !row.adminUserId || !row.workerId || !row.organizationId || !row.verificationPoolId || !row.verificationGithubRunId) return false;
   const ready = await db`
     SELECT 1 FROM workers w
-    WHERE w.id=${String(row.workerId)} AND w.admission_state='adopted' AND w.connection_state='online' AND w.configuration_state='ready'
+    JOIN dashboard_runs r ON r.organization_id=${String(row.organizationId)}
+      AND r.github_run_id=${numberValue(row.verificationGithubRunId)}
+      AND r.status='completed' AND r.conclusion='success'
+    WHERE w.id=${String(row.workerId)} AND w.admission_state='adopted' AND w.configuration_state='ready'
       AND EXISTS (
-        SELECT 1 FROM runner_pools p
-        WHERE p.organization_id IS NULL AND p.enabled=true AND p.trigger_label IS NOT NULL
-          AND p.platform IN (SELECT jsonb_array_elements_text(w.guest_platforms))
-          AND p.driver=CASE w.platform WHEN 'linux-x64' THEN 'kata-k3s' WHEN 'windows-x64' THEN 'windows-hyperv-container' ELSE 'tart-vm' END
+        SELECT 1 FROM dashboard_jobs j
+        JOIN runner_leases l ON l.github_job_id=j.github_job_id
+        WHERE j.organization_id=r.organization_id AND j.run_id=r.id
+          AND l.pool_id=${String(row.verificationPoolId)} AND l.state='reaped'
       )
     LIMIT 1
   `;

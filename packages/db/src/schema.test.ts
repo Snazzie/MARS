@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { baselineSchemaSql, jsonShapeNormalizationMigrationSql, schemaSql, workerConfigurationMigrationSql, workerJsonNormalizationMigrationSql } from "./schema.ts";
+import { baselineSchemaSql, jsonShapeNormalizationMigrationSql, onboardingVerificationMigrationSql, schemaSql, workerConfigurationMigrationSql, workerJsonNormalizationMigrationSql } from "./schema.ts";
 
 test("repository authorization is represented only by GitHub availability", () => {
   const repositoryDefinition = schemaSql.match(/CREATE TABLE IF NOT EXISTS dashboard_repositories \(([^;]+)\);/)?.[1];
@@ -39,7 +39,7 @@ test("persists desired and exactly applied worker configuration", () => {
 test("keeps worker configuration changes out of the immutable baseline migration", () => {
   expect(baselineSchemaSql).not.toContain("desired_configuration");
   expect(workerConfigurationMigrationSql).toContain("ADD COLUMN IF NOT EXISTS desired_configuration");
-  expect(schemaSql).toBe(`${baselineSchemaSql}\n${workerConfigurationMigrationSql}\n${workerJsonNormalizationMigrationSql}\n${jsonShapeNormalizationMigrationSql}`);
+  expect(schemaSql).toBe(`${baselineSchemaSql}\n${workerConfigurationMigrationSql}\n${workerJsonNormalizationMigrationSql}\n${jsonShapeNormalizationMigrationSql}\n${onboardingVerificationMigrationSql}`);
 });
 
 test("normalizes legacy double-encoded worker JSON in a later migration", () => {
@@ -54,4 +54,11 @@ test("normalizes every persisted JSONB shape after legacy string writes", () => 
   expect(jsonShapeNormalizationMigrationSql).toContain("UPDATE dashboard_jobs SET requested_labels=");
   expect(jsonShapeNormalizationMigrationSql).toContain("UPDATE webhook_deliveries SET payload=");
   expect(jsonShapeNormalizationMigrationSql).toContain("UPDATE workers SET doctor=");
+});
+
+test("adds onboarding verification state in an append-only migration", () => {
+  expect(baselineSchemaSql).not.toContain("verification_github_run_id");
+  expect(onboardingVerificationMigrationSql).toContain("verification_repository_id");
+  expect(onboardingVerificationMigrationSql).toContain("verification_pool_id");
+  expect(onboardingVerificationMigrationSql).toContain("verification_github_run_id");
 });

@@ -225,6 +225,25 @@ test("defaults each pool to one canonical platform architecture label", () => {
     expect(html).not.toContain("self-hosted");
   }
 });
+test("keeps onboarding in Trigger labels while the smoke workflow is active", () => {
+  const html = markup({
+    version: 1,
+    onboardingRequired: true,
+    adminCreated: true,
+    authenticated: true,
+    canManage: true,
+    step: "labels",
+    worker,
+    organizations: [],
+    github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [{ id: "repo-1", name: "private", fullName: "acme/private", visibility: "private", available: true }] },
+    pool: { id: "pool-1", name: "default", triggerLabel: "whitesmith-windows-x64", labels: ["whitesmith-windows-x64"] },
+    verification: { state: "queued", repositoryId: "repo-1", poolId: "pool-1", workflowPath: ".github/workflows/smoke.yml", githubRunId: 41, runId: null, error: null },
+    defaultImageDigest: null,
+  });
+  expect(html).toContain("Smoke workflow queued on GitHub");
+  expect(html).toContain("Verify the runner");
+  expect(html).not.toContain("Onboarding complete");
+});
 
 test("complete state summarizes available repositories and offers workflow setup", () => {
   const html = markup({ version: 1, onboardingRequired: false, adminCreated: true, authenticated: true, canManage: true, step: "complete", worker, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 1, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [{ id: "repo-1", name: "private", fullName: "acme/private", visibility: "private", available: true }] }, pool: { id: "pool-1", name: "default", triggerLabel: "whitesmith-default", labels: ["self-hosted", "linux", "x64", "whitesmith-default"] }, defaultImageDigest: "ubuntu@sha256:" + "c".repeat(64) });

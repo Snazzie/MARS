@@ -16,6 +16,8 @@ import {
   OnboardingDetail,
   OnboardingStatus,
   SelectOnboardingWorkerRequest,
+  StartOnboardingVerificationRequest,
+  StartOnboardingVerificationResult,
   VerifyOnboardingRepositoriesResult,
   CreatePoolRequest,
   RunnerWorkflowFile,
@@ -192,8 +194,8 @@ export function isUnauthorized(error: unknown): boolean {
 export function isOffline(error: unknown): boolean {
   return error instanceof ApiRequestError && error.code === "offline";
 }
-const onboardingStatusResponse = z.custom<OnboardingStatus>();
-const onboardingDetailResponse = z.custom<OnboardingDetail>();
+const onboardingStatusResponse = OnboardingStatus;
+const onboardingDetailResponse = OnboardingDetail;
 export const getOnboardingStatus = () => request("/api/onboarding/status", onboardingStatusResponse, { cache: "no-store" });
 export const getOnboardingDetail = () => request("/api/onboarding", onboardingDetailResponse, { cache: "no-store" });
 export async function selectOnboardingWorker(input: SelectOnboardingWorkerRequest) {
@@ -207,6 +209,13 @@ export async function verifyOnboardingRepositories() {
   return request("/api/onboarding/repositories/verify", VerifyOnboardingRepositoriesResult, {
     method: "POST",
     headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
+}
+export async function startOnboardingVerification(input: StartOnboardingVerificationRequest) {
+  return request("/api/onboarding/verification", StartOnboardingVerificationResult, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(input),
   });
 }
 export async function beginOnboardingGithubInstall(input: { organizationId: string }) {

@@ -336,6 +336,33 @@ test("workflow discovery authenticates every private repository read", async () 
   expect(result.files).toHaveLength(1);
   expect(calls.filter((request) => !String(request.url).endsWith("/access_tokens")).every((request) => request.headers.get("authorization") === "Bearer secret-installation-token")).toBe(true);
 });
+test("workflow dispatch returns the new GitHub workflow run identity", async () => {
+  const calls: Request[] = [];
+  let runsRead = 0;
+  const github = service(async (input, init) => {
+    const request = new Request(input, init);
+    calls.push(request);
+    const url = request.url;
+    if (url.endsWith("/access_tokens")) return Response.json({ token: "secret-installation-token" });
+    if (url.endsWith("/repos/acme/private")) return Response.json({ default_branch: "main" });
+    if (url.includes("/git/trees/")) return Response.json({ tree: [{ type: "blob", path: ".github/workflows/smoke.yml", sha: "blob-sha" }] });
+    if (url.includes("/git/blobs/")) return Response.json({ content: Buffer.from("on: workflow_dispatch\njobs:\n  smoke:\n    runs-on: whitesmith-windows-x64\n").toString("base64") });
+    if (url.endsWith("/dispatches")) return new Response(null, { status: 204 });
+    if (url.includes("/actions/workflows/") && url.includes("/runs?")) {
+      runsRead += 1;
+      return Response.json({ workflow_runs: runsRead === 1 ? [{ id: 40, event: "workflow_dispatch" }] : [{ id: 41, event: "workflow_dispatch" }, { id: 40, event: "workflow_dispatch" }] });
+    }
+    return Response.json({});
+  });
+  fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "all" });
+  fakeDb.repositories.set("repo-1", { id: "repo-1", installationId: 42, organizationId, fullName: "acme/private", available: true });
+  fakeDb.appConfig = { id: 9, slug: "whitesmith", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "x" };
+
+  await expect(github.dispatchRepositoryWorkflow({ organizationId, repositoryId: "repo-1", workflowPath: ".github/workflows/smoke.yml" })).resolves.toEqual({ githubRunId: 41 });
+  const dispatch = calls.find((request) => request.url.endsWith("/dispatches"));
+  expect(dispatch?.method).toBe("POST");
+  expect(await dispatch?.json()).toEqual({ ref: "main" });
+});
 
 test("workflow preview uses the current runner pool schema", async () => {
   const box = new SecretBox(masterKey);

@@ -1,4 +1,4 @@
-import { createDb, migrate, expireLeases, jsonParameter } from "@whitesmith/db";
+import { completeOnboardingIfReady, createDb, migrate, expireLeases, jsonParameter } from "@whitesmith/db";
 import type { WorkerCommand } from "@whitesmith/contracts";
 import { WorkerCommand as WorkerCommandSchema } from "@whitesmith/contracts";
 import type { Server, ServerWebSocket } from "bun";
@@ -128,6 +128,7 @@ const reconciliationScheduler = startReconciliationScheduler(async () => {
     try {
       const cleanup = await reapPendingLeases({ db, dispatch: dispatcher.dispatch.bind(dispatcher), workerConnected: (workerId) => dispatcher.isConnected(workerId) });
       if (cleanup.dispatched || cleanup.failed) console.log(`Lease cleanup tick: dispatched=${cleanup.dispatched} failed=${cleanup.failed} skipped=${cleanup.skipped}`);
+      await completeOnboardingIfReady(db);
     } catch (error) {
       console.error("Lease cleanup failed", error);
     }

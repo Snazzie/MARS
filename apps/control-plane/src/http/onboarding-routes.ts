@@ -1,7 +1,8 @@
 import { Hono } from "hono";
-import { OnboardingDetail, OnboardingStatus, SelectOnboardingWorkerRequest, VerifyOnboardingRepositoriesResult } from "@whitesmith/contracts";
+import { OnboardingDetail, OnboardingStatus, SelectOnboardingWorkerRequest, StartOnboardingVerificationRequest, StartOnboardingVerificationResult, VerifyOnboardingRepositoriesResult } from "@whitesmith/contracts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { getOnboardingDetail, getOnboardingRepositoryOrganization, getOnboardingStatus, getVerifiedOnboardingRepositories, invalidateDashboard, selectOnboardingWorker } from "@whitesmith/db";
+import { dashboardMutation, getOnboardingDetail, getOnboardingRepositoryOrganization, getOnboardingStatus, getVerifiedOnboardingRepositories, invalidateDashboard, recordOnboardingVerification, selectOnboardingWorker } from "@whitesmith/db";
+import { discoverWorkflowFiles } from "../workflow-pr.ts";
 
 const hasKey = (c: { req: { header(name:string): string|undefined } }) => Boolean(c.req.header("Idempotency-Key")?.trim());
 export function registerOnboardingRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
@@ -43,5 +44,40 @@ export function registerOnboardingRoutes(app: Hono<ControlPlaneEnv>, deps: Contr
     if (!verified) return c.json({ code: "repository_selection_required", message: "Select at least one repository in the GitHub App installation, then verify again" }, 409);
     await invalidateDashboard(deps.db, organizationId, ["onboarding", "repositories"]);
     return c.json(VerifyOnboardingRepositoriesResult.parse({ ok: true, ...verified }));
+  });
+  app.post("/api/onboarding/verification", async (c) => {
+    const user = await deps.currentUser(c.req.raw);
+    if (!user) return c.json({ code: "unauthorized", message: "Authentication required" }, 401);
+    if (!user.isGlobalAdmin) return c.json({ code: "forbidden", message: "Administrator access required" }, 403);
+    if (!hasKey(c)) return c.json({ code: "invalid_request", message: "Idempotency-Key required" }, 400);
+    if (!deps.githubApp) return c.json({ code: "github_app_unavailable", message: "GitHub App service is unavailable" }, 503);
+    const parsed = StartOnboardingVerificationRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ code: "invalid_request", message: "Choose a repository workflow to verify" }, 400);
+    const detail = await getOnboardingDetail(deps.db, { authenticated: true, canManage: true });
+    const organizationId = detail.github.organizationId;
+    const pool = detail.pool;
+    const repository = detail.github.repositories.find((candidate) => candidate.id === parsed.data.repositoryId && candidate.available);
+    if (!organizationId || !pool || !repository) return c.json({ code: "onboarding_not_ready", message: "Repository access and an enabled runner pool are required" }, 409);
+    if (pool.platform === "linux-x64") return c.json({ code: "runtime_unsupported", message: "Linux runner verification is not available in this release" }, 422);
+    if (["queued", "running", "reaping"].includes(detail.verification.state)) return c.json({ code: "verification_in_progress", message: "Runner verification is already in progress" }, 409);
+    try {
+      const listing = await deps.githubApp.listRepositoryRunnerWorkflows({ organizationId, repositoryId: repository.id });
+      const workflow = discoverWorkflowFiles(listing.files).find((candidate) => candidate.path === parsed.data.workflowPath);
+      const targetsPool = workflow?.jobs.some((job) => {
+        const labels = typeof job.currentRunsOn === "string" ? [job.currentRunsOn] : job.currentRunsOn;
+        return pool.triggerLabel != null && labels.includes(pool.triggerLabel);
+      });
+      if (!targetsPool) return c.json({ code: "workflow_not_targeting_pool", message: `The workflow must request ${pool.triggerLabel ?? "the selected runner pool"}` }, 422);
+      if (!(await dashboardMutation(deps.db, organizationId, c.req.header("Idempotency-Key")!.trim()))) return c.json({ code: "mutation_in_progress", message: "This verification request is already in progress" }, 409);
+      await recordOnboardingVerification(deps.db, user.id, { ...parsed.data, poolId: pool.id, error: "Dispatch started but the GitHub run has not been identified yet" });
+      const dispatched = await deps.githubApp.dispatchRepositoryWorkflow({ organizationId, ...parsed.data });
+      await recordOnboardingVerification(deps.db, user.id, { ...parsed.data, poolId: pool.id, githubRunId: dispatched.githubRunId });
+      await invalidateDashboard(deps.db, organizationId, ["onboarding", "runs"]);
+      return c.json(StartOnboardingVerificationResult.parse({ state: "queued", githubRunId: dispatched.githubRunId }));
+    } catch (cause) {
+      const code = cause instanceof Error ? cause.message : "verification_dispatch_failed";
+      await recordOnboardingVerification(deps.db, user.id, { ...parsed.data, poolId: pool.id, error: code });
+      return c.json({ code: "verification_dispatch_failed", message: code }, 502);
+    }
   });
 }

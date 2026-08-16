@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { beginOnboardingGithubInstall, beginOnboardingGithubManifest, createOnboardingPool, getOnboardingDetail, getOnboardingStatus, rejectPendingWorker, selectOnboardingWorker, verifyOnboardingRepositories } from "../api.ts";
+import { beginOnboardingGithubInstall, beginOnboardingGithubManifest, createOnboardingPool, getOnboardingDetail, getOnboardingStatus, getRunnerWorkflowFiles, rejectPendingWorker, selectOnboardingWorker, startOnboardingVerification, verifyOnboardingRepositories } from "../api.ts";
 import { EnrollmentPanel } from "../components/EnrollmentPanel.tsx";
 import { pendingWorkerQueryOptions } from "../components/PendingWorkerRequests.tsx";
 import { RunnerWorkflowPrModal } from "../components/RunnerWorkflowPrModal.tsx";
 import { WorkerConfigurationForm } from "../components/WorkerConfigurationForm.tsx";
+import { QueryState } from "../components/StateView.tsx";
 import type { CreatePoolRequest, OnboardingDetail, OnboardingStatus } from "@whitesmith/contracts";
 
 const steps = [["admin", "Admin"], ["worker", "Worker"], ["github", "GitHub"], ["labels", "Trigger labels"]] as const;
@@ -14,7 +15,15 @@ export function OnboardingPage() {
   const client = useQueryClient();
   const status = useQuery({ queryKey: ["onboarding-status"], queryFn: getOnboardingStatus, staleTime: 1000 });
   const s = status.data as OnboardingStatus | undefined;
-  const detail = useQuery({ queryKey: ["onboarding"], queryFn: getOnboardingDetail, enabled: Boolean(s?.authenticated && s.canManage), refetchInterval: s?.step === "worker" ? 2000 : false });
+  const detail = useQuery({
+    queryKey: ["onboarding"],
+    queryFn: getOnboardingDetail,
+    enabled: Boolean(s?.authenticated && s.canManage),
+    refetchInterval: (query) => {
+      const value = query.state.data;
+      return s?.step === "worker" || (value?.step === "labels" && ["queued", "running", "reaping"].includes(value.verification?.state)) ? 2_000 : false;
+    },
+  });
   const [error, setError] = useState<string | null>(null);
   const [viewStep, setViewStep] = useState<number | null>(null);
   const refresh = () => { void client.invalidateQueries({ queryKey: ["onboarding"] }); void client.invalidateQueries({ queryKey: ["onboarding-status"] }); };
@@ -131,6 +140,10 @@ function WorkerSetupStep({ detail, onSelect, onDone, onDiscard, edit = false }: 
 }
 const canonicalRunnerLabel = (platform: "linux-x64" | "windows-x64" | "macos-arm64") => `whitesmith-${platform}`;
 function LabelsStep({ detail, onCreate, edit = false }: { detail: OnboardingDetail; onCreate: (input: CreatePoolRequest) => void; edit?: boolean }) {
+  if (detail.pool) return <OnboardingVerificationStep detail={detail} />;
+  return <PoolSetupStep detail={detail} onCreate={onCreate} edit={edit} />;
+}
+function PoolSetupStep({ detail, onCreate, edit = false }: { detail: OnboardingDetail; onCreate: (input: CreatePoolRequest) => void; edit?: boolean }) {
   const worker = detail.worker;
   const guestPlatforms = worker?.guestPlatforms ?? (worker ? [worker.platform] : []);
   const [guestPlatform, setGuestPlatform] = useState<"linux-x64" | "windows-x64" | "macos-arm64" | null>(detail.pool?.platform ?? null);
@@ -150,5 +163,48 @@ function LabelsStep({ detail, onCreate, edit = false }: { detail: OnboardingDeta
     <pre>runs-on: {label}</pre>
     <button type="submit">Create pool</button>
   </form>;
+}
+function OnboardingVerificationStep({ detail }: { detail: OnboardingDetail }) {
+  const client = useQueryClient();
+  const repositories = detail.github.repositories.filter((repository) => repository.available);
+  const [repositoryId, setRepositoryId] = useState(detail.verification.repositoryId ?? repositories[0]?.id ?? "");
+  const [workflowPath, setWorkflowPath] = useState(detail.verification.workflowPath ?? "");
+  const workflows = useQuery({
+    queryKey: ["onboarding", "verification-workflows", repositoryId],
+    queryFn: () => getRunnerWorkflowFiles(detail.github.organizationId!, repositoryId),
+    enabled: Boolean(detail.github.organizationId && repositoryId),
+  });
+  const triggerLabel = detail.pool?.triggerLabel ?? "";
+  const compatible = (workflows.data ?? []).filter((workflow) => workflow.jobs.some((job) => {
+    const labels = typeof job.currentRunsOn === "string" ? [job.currentRunsOn] : job.currentRunsOn;
+    return labels.includes(triggerLabel);
+  }));
+  const verification = useMutation({
+    mutationFn: startOnboardingVerification,
+    onSuccess: () => void client.invalidateQueries({ queryKey: ["onboarding"] }),
+  });
+  const state = detail.verification.state;
+  if (["queued", "running", "reaping"].includes(state)) return <div>
+    <h3>Verify the runner</h3>
+    <p role="status">{state === "queued" ? "Smoke workflow queued on GitHub." : state === "running" ? "Smoke workflow is running on the selected Whitesmith pool." : "Smoke workflow succeeded. Waiting for lease cleanup."}</p>
+    {detail.verification.runId && <a href={`/runs/${detail.verification.runId}`}>View verification run</a>}
+  </div>;
+  if (state === "complete") return <div><h3>Verify the runner</h3><p role="status">Smoke workflow succeeded and its runner lease was reaped.</p></div>;
+  return <div>
+    <h3>Verify the runner</h3>
+    <p>Dispatch a real workflow that requests <code>{triggerLabel}</code>. Onboarding completes only after the workflow succeeds and its lease is reaped.</p>
+    {state === "failed" && <p role="alert" className="form-error">{detail.verification.error ?? "The previous verification failed."}</p>}
+    <label>Repository<select value={repositoryId} onChange={(event) => { setRepositoryId(event.target.value); setWorkflowPath(""); }}>
+      {repositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.fullName}</option>)}
+    </select></label>
+    <label>Workflow<select value={workflowPath} onChange={(event) => setWorkflowPath(event.target.value)}>
+      <option value="">Select a workflow</option>
+      {compatible.map((workflow) => <option key={workflow.path} value={workflow.path}>{workflow.path}</option>)}
+    </select></label>
+    <QueryState error={workflows.error} isLoading={workflows.isLoading} isEmpty={!workflows.isLoading && !workflows.error && compatible.length === 0} retry={() => void workflows.refetch()} operationLabel="compatible workflows" />
+    {!workflows.isLoading && workflows.data && compatible.length === 0 && <p>No workflow currently requests <code>{triggerLabel}</code>. Configure a repository workflow before verification.</p>}
+    <button type="button" disabled={!repositoryId || !workflowPath || verification.isPending} onClick={() => verification.mutate({ repositoryId, workflowPath })}>{verification.isPending ? "Dispatching smoke workflow…" : state === "failed" ? "Retry smoke workflow" : "Run smoke workflow"}</button>
+    {verification.error && <p role="alert" className="form-error">{verification.error instanceof Error ? verification.error.message : "Smoke workflow dispatch failed"}</p>}
+  </div>;
 }
 function Complete({ detail }: { detail: OnboardingDetail }) { const [runnerRepository, setRunnerRepository] = useState<OnboardingDetail["github"]["repositories"][number] | null>(null); const available = detail.github.repositories.find((repository) => repository.available); const org = detail.organizations.find((o) => o.id === detail.github.organizationId); return <main className="onboarding"><section className="onboarding-card"><h1>Onboarding complete</h1><p>Organization: {org?.name ?? detail.github.organizationId}</p><p>Available repositories: {detail.github.repositories.filter((repository) => repository.available).length}</p><p>Worker: {detail.worker?.name ?? "Ready"}</p><p>Pool: {detail.pool?.name ?? "default"}</p><p>Effective labels: {detail.pool?.labels?.join(", ")}</p><pre>runs-on: [{detail.pool?.labels?.join(", ")}]</pre>{available && <button type="button" className="button" onClick={() => setRunnerRepository(available)}>Use Whitesmith runners</button>}<a className="button secondary" href="/">Open dashboard</a></section>{runnerRepository && detail.github.organizationId && <RunnerWorkflowPrModal organizationId={detail.github.organizationId} repositoryId={runnerRepository.id} repositoryName={runnerRepository.fullName} open onClose={() => setRunnerRepository(null)} />}</main>; }
