@@ -167,6 +167,11 @@ export function RepositoriesPage() {
                         Discovery paused until {new Date(repository.discoveryRetryAt!).toLocaleString()}
                       </small>
                     )}
+                    {repository.discoveryState === "rate_limited" && (
+                      <small className="repository-discovery repository-discovery-paused">
+                        GitHub rate limit resets at {new Date(repository.discoveryRetryAt!).toLocaleString()}
+                      </small>
+                    )}
                     {repository.discoveryState === "queued" && (
                       <small className="repository-discovery">Recheck queued</small>
                     )}

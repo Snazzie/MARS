@@ -155,6 +155,37 @@ describe("repository authorization lifecycle", () => {
     expect(retired).toBe(false);
     expect(queries.some((query) => query.includes("SET discovery_error="))).toBe(false);
   });
+  test("pauses queued pickup during an installation rate-limit cooldown", async () => {
+    const resetAt = Date.parse("2026-08-16T01:00:00.000Z");
+    const queries: string[] = [];
+    const valuesSeen: unknown[][] = [];
+    let selected = false;
+    const db = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      const query = strings.join(" ");
+      queries.push(query);
+      valuesSeen.push(values);
+      if (!selected && query.includes("FROM dashboard_repositories repo")) {
+        selected = true;
+        return [repository];
+      }
+      return [];
+    }) as never;
+    const githubFetch = async () => {
+      throw new GithubRateLimitError(repository.installationId, resetAt);
+    };
+
+    const report = await discoverQueuedRepositoryJobs({
+      db,
+      installationToken: async () => "token",
+      githubFetchForInstallation: () => githubFetch,
+      repositoryFullName: repository.fullName,
+    });
+
+    expect(report).toMatchObject({ repositories: 1, failed: 1 });
+    expect(queries[0]).toContain("repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()");
+    expect(queries.some(query => query.includes("discovery_error='github_rate_limited'"))).toBe(true);
+    expect(valuesSeen.at(-1)).toEqual([new Date(resetAt), repository.repositoryId]);
+  });
 });
 
 test("fast pickup polls only queued runs for one configured repository", async () => {

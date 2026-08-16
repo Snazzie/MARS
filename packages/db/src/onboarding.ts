@@ -133,7 +133,9 @@ export async function getOnboardingDetail(
     const discoveryRetryAt = stringValue(row.discoveryRetryAt);
     const discoveryState = row.discoveryError === "github_403"
       ? discoveryRetryAt && Date.parse(discoveryRetryAt) > Date.now() ? "paused" : "queued"
-      : "active";
+      : row.discoveryError === "github_rate_limited"
+        ? discoveryRetryAt && Date.parse(discoveryRetryAt) > Date.now() ? "rate_limited" : "queued"
+        : "active";
     return {
       id: String(row.id), organizationId: String(row.organizationId), name: String(row.name), fullName: String(row.fullName),
       visibility: row.visibility, available: row.available, installationId: String(row.installationId), discoveryState, discoveryRetryAt,

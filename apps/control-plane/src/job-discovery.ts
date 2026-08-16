@@ -1,6 +1,6 @@
 import type { DatabaseClient } from "@whitesmith/db";
 import { GithubJobsClient } from "./github-jobs.ts";
-import { isGithubRateLimitError } from "./github-rate-limit.ts";
+import { GithubRateLimitError, isGithubRateLimitError } from "./github-rate-limit.ts";
 import { applyGithubJobSnapshot, type GithubRunSnapshot } from "./runs.ts";
 import { GITHUB_LOG_FORMAT_VERSION, syncCompletedGithubJobLogs } from "./github-job-log-sync.ts";
 
@@ -102,9 +102,21 @@ export async function discoverQueuedRepositoryJobs(deps: DiscoveryDeps): Promise
     } catch (error) {
       report.failed += 1;
       console.error(`Queued GitHub job discovery failed for ${String(row.fullName)}: ${error instanceof Error ? error.message : "unknown"}`);
+      if (isGithubRateLimitError(error)) {
+        await deps.db`UPDATE dashboard_repositories SET discovery_error='github_rate_limited',discovery_retry_at=${rateLimitRetryAt(error)} WHERE id=${String(row.repositoryId)}`;
+        break;
+      }
     }
   }
   return report;
+}
+function rateLimitRetryAt(error: unknown): Date {
+  const resetAt = error instanceof GithubRateLimitError
+    ? error.resetAt
+    : error && typeof error === "object" && typeof (error as { resetAt?: unknown }).resetAt === "number"
+      ? (error as { resetAt: number }).resetAt
+      : Date.now() + 60_000;
+  return new Date(resetAt);
 }
 
 export async function discoverAvailableRepositoryJobs(deps: DiscoveryDeps): Promise<DiscoveryReport> {
@@ -137,7 +149,10 @@ export async function discoverAvailableRepositoryJobs(deps: DiscoveryDeps): Prom
           const code = error instanceof Error ? error.message : "unknown";
           report.failed += 1;
           console.error(`GitHub job discovery failed for ${String(row.fullName)}: ${code}`);
-          if (isGithubRateLimitError(error)) break;
+          if (isGithubRateLimitError(error)) {
+            await deps.db`UPDATE dashboard_repositories SET discovery_error='github_rate_limited',discovery_retry_at=${rateLimitRetryAt(error)} WHERE id=${String(row.repositoryId)}`;
+            break;
+          }
           if (code === "github_404") {
             await deps.db`UPDATE dashboard_repositories SET available=false WHERE id=${String(row.repositoryId)}`;
             report.failed -= 1;

@@ -87,7 +87,8 @@ export async function listRepositories(
     SELECT r.id, r.organization_id AS "organizationId", r.name, r.full_name AS "fullName",
       r.visibility, r.available, r.installation_id AS "installationId",
       CASE WHEN r.discovery_error='github_403' AND r.discovery_retry_at>now() THEN 'paused'
-        WHEN r.discovery_error='github_403' AND r.discovery_retry_at<=now() THEN 'queued'
+        WHEN r.discovery_error='github_rate_limited' AND r.discovery_retry_at>now() THEN 'rate_limited'
+        WHEN r.discovery_error IN ('github_403','github_rate_limited') AND r.discovery_retry_at<=now() THEN 'queued'
         ELSE 'active' END AS "discoveryState",
       r.discovery_retry_at AS "discoveryRetryAt"
     FROM dashboard_repositories r
@@ -148,7 +149,8 @@ export async function listAllRepositories(
     SELECT r.id, r.organization_id AS "organizationId", r.name, r.full_name AS "fullName",
       r.visibility, r.available, r.installation_id AS "installationId",
       CASE WHEN r.discovery_error='github_403' AND r.discovery_retry_at>now() THEN 'paused'
-        WHEN r.discovery_error='github_403' AND r.discovery_retry_at<=now() THEN 'queued'
+        WHEN r.discovery_error='github_rate_limited' AND r.discovery_retry_at>now() THEN 'rate_limited'
+        WHEN r.discovery_error IN ('github_403','github_rate_limited') AND r.discovery_retry_at<=now() THEN 'queued'
         ELSE 'active' END AS "discoveryState",
       r.discovery_retry_at AS "discoveryRetryAt"
     FROM dashboard_repositories r
@@ -349,7 +351,7 @@ export async function queueRepositoryDiscoveryRecheck(
   const mutationKey = `repository-discovery-recheck:${repositoryId}:${idempotencyKey}`;
   return db.begin(async (tx) => {
     const [repository] = await tx`
-      SELECT r.discovery_error='github_403' AND r.discovery_retry_at>now() AS paused
+      SELECT r.discovery_error IN ('github_403','github_rate_limited') AND r.discovery_retry_at>now() AS paused
       FROM dashboard_repositories r
       JOIN dashboard_installations i
         ON i.id=r.installation_id AND i.organization_id=r.organization_id
