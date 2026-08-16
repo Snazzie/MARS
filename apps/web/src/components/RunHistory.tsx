@@ -103,7 +103,7 @@ function RunRow({ run, allowDetails, maxDuration }: { run: RunSummary; allowDeta
   return allowDetails ? <Link className="run-history-row" {...runDetailLink(run)}>{content}</Link> : <div className="run-history-row">{content}</div>;
 }
 
- export function RunHistory({ runs, allowDetails = true, nowMs = Date.now() }: { runs: readonly RunSummary[]; allowDetails?: boolean; nowMs?: number }) {
+export function RunHistory({ runs, allowDetails = true, nowMs = Date.now(), onSearchChange }: { runs: readonly RunSummary[]; allowDetails?: boolean; nowMs?: number; onSearchChange?: (value: string) => void }) {
    const params = useMemo(() => typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search), []);
    const [search, setSearch] = useState(params.get("q") ?? "");
    const [range, setRange] = useState<RunHistoryRange>((params.get("range") as RunHistoryRange) || "all");
@@ -125,7 +125,7 @@ function RunRow({ run, allowDetails, maxDuration }: { run: RunSummary; allowDeta
   return (
     <section className="run-history" aria-labelledby="run-history-title">
       <div className="run-history-toolbar">
-        <label className="run-history-search"> <span className="sr-only">Search runs</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search workflow, branch, actor…" /></label>
+        <label className="run-history-search"> <span className="sr-only">Search runs</span><input value={search} onChange={(event) => { setSearch(event.target.value); onSearchChange?.(event.target.value); }} placeholder="Search workflow, branch, actor…" /></label>
         <div className="run-history-ranges" aria-label="Filter by queued time">
           {RANGE_LABELS.map((item) => <button key={item} type="button" aria-pressed={range === item} onClick={() => setRange(item)}>{item === "all" ? "All" : item}</button>)}
         </div>

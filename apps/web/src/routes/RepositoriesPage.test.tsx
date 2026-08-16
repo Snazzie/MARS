@@ -16,12 +16,14 @@ function markup({
   const client = new QueryClient();
   client.setQueryData(["me"], { id: "user-1", githubUserId: 1, login: "admin", isGlobalAdmin });
   client.setQueryData(["organizations"], [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 2, workerCount: 1 }]);
-  client.setQueryData(["org", "all", "repositories"], {
-    items: [
-      { id: "repo-1", organizationId: "org-1", name: "private", fullName: "acme/private", visibility: "private", available: true, installationId: "inst-1", discoveryState, discoveryRetryAt },
-      { id: "repo-2", organizationId: "org-1", name: "removed", fullName: "acme/removed", visibility: "internal", available: false, installationId: "inst-1", discoveryState: "active", discoveryRetryAt: null },
-    ],
-    nextCursor: null,
+  client.setQueryData(["org", "all", "repositories", "", "available", "all"], {
+    pages: [{
+      items: [
+        { id: "repo-1", organizationId: "org-1", name: "private", fullName: "acme/private", visibility: "private", available: true, installationId: "inst-1", discoveryState, discoveryRetryAt },
+      ],
+      nextCursor: null,
+    }],
+    pageParams: [null],
   });
   return renderToStaticMarkup(<QueryClientProvider client={client}><RepositoriesPage /></QueryClientProvider>);
 }
@@ -65,7 +67,7 @@ test("workspace members see the pause without an administrator action", () => {
   expect(html).not.toContain(">Recheck now<");
 });
 
-test("loads every accessible repository page", async () => {
+test("loads one repository page and preserves its cursor", async () => {
   const originalFetch = globalThis.fetch;
   const cursor = "11111111-1111-4111-8111-111111111111";
   const repository = (index: number, owner: string) => ({
@@ -90,11 +92,10 @@ test("loads every accessible repository page", async () => {
 
     const page = await getRepositories("all");
 
-    expect(page.items).toHaveLength(55);
-    expect(page.items.some((item) => item.fullName.startsWith("SpeedHQ/"))).toBe(true);
+    expect(page.items).toHaveLength(50);
+    expect(page.nextCursor).toBe(cursor);
     expect(calls).toEqual([
-      "/api/organizations/all/repositories?limit=100",
-      `/api/organizations/all/repositories?limit=100&cursor=${cursor}`,
+      "/api/organizations/all/repositories?limit=50",
     ]);
   } finally {
     globalThis.fetch = originalFetch;

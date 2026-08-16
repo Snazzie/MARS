@@ -6,7 +6,14 @@ import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 import { ApiError, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult } from "@whitesmith/contracts";
-const querySchema = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50), cursor: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional(), includeInactive: z.enum(["true", "false"]).default("false").transform((value) => value === "true") }).strict();
+const querySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().uuid().optional(),
+  includeInactive: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  search: z.string().max(200).default(""),
+  availability: z.enum(["available", "unavailable"]).optional(),
+  visibility: z.enum(["public", "private", "internal"]).optional(),
+}).strict();
 const periodSchema = z.enum(["24h", "7d", "30d"]);
 const logSchema = z.object({ after: z.coerce.number().int().min(-1).default(-1), limit: z.coerce.number().int().min(1).max(100).default(100) }).strict();
 const mutationSchema = z.object({}).strict();
@@ -32,8 +39,34 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   app.get("/api/me", (c) => c.json(c.get("user")));
   app.get("/api/organizations", safe(async (c) => c.json(OrganizationSummary.array().parse(await listOrganizations(deps.db, c.get("user").id)))));
   app.get("/api/organizations/:organizationId/overview", safe(async (c) => { const org = c.req.param("organizationId"); const period = periodSchema.safeParse(c.req.query("period") || "24h"); if (!period.success) return error(c, 400, "invalid_period", "Invalid period", { issues: period.error.issues }); if (org === "all") return c.json(OverviewDto.parse(await getAllOverview(deps.db, c.get("user").id, period.data))); const denied = await guard(c, deps, org); if (denied) return denied; return c.json(OverviewDto.parse(await getOverview(deps.db, org, period.data))); }));
-  app.get("/api/organizations/:organizationId/repositories", safe(async (c) => { const org = c.req.param("organizationId"); const q = parseQuery(c); if (q instanceof Response) return q; if (org === "all") return c.json(CursorPage(RepositorySummary).parse(await listAllRepositories(deps.db, c.get("user").id, q.limit, q.cursor ?? null))); const denied = await guard(c, deps, org); if (denied) return denied; return c.json(CursorPage(RepositorySummary).parse(await listRepositories(deps.db, org, q.limit, q.cursor ?? null))); }));
-  for (const [path, fn, allFn, schema] of [["runs", listRuns, listAllRuns, RunSummary], ["pools", listPools, listAllPools, PoolSummary]] as const) app.get(`/api/organizations/:organizationId/${path}`, safe(async (c) => { const org = c.req.param("organizationId"); const q = parseQuery(c); if (q instanceof Response) return q; const search = c.req.query("search") ?? ""; if (org === "all") return c.json(CursorPage(schema).parse(await allFn(deps.db, c.get("user").id, q.limit))); const denied = await guard(c, deps, org); if (denied) return denied; return c.json(CursorPage(schema).parse(await fn(deps.db, org, q.limit, q.cursor ?? null, search))); }));
+  app.get("/api/organizations/:organizationId/repositories", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const q = parseQuery(c);
+    if (q instanceof Response) return q;
+    const filters = { search: q.search, availability: q.availability === undefined ? undefined : q.availability === "available", visibility: q.visibility };
+    if (org === "all") return c.json(CursorPage(RepositorySummary).parse(await listAllRepositories(deps.db, c.get("user").id, q.limit, q.cursor ?? null, filters)));
+    const denied = await guard(c, deps, org);
+    if (denied) return denied;
+    return c.json(CursorPage(RepositorySummary).parse(await listRepositories(deps.db, org, q.limit, q.cursor ?? null, filters)));
+  }));
+  app.get("/api/organizations/:organizationId/runs", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const q = parseQuery(c);
+    if (q instanceof Response) return q;
+    if (org === "all") return c.json(CursorPage(RunSummary).parse(await listAllRuns(deps.db, c.get("user").id, q.limit, q.cursor ?? null, q.search)));
+    const denied = await guard(c, deps, org);
+    if (denied) return denied;
+    return c.json(CursorPage(RunSummary).parse(await listRuns(deps.db, org, q.limit, q.cursor ?? null, q.search)));
+  }));
+  app.get("/api/organizations/:organizationId/pools", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const q = parseQuery(c);
+    if (q instanceof Response) return q;
+    if (org === "all") return c.json(CursorPage(PoolSummary).parse(await listAllPools(deps.db, c.get("user").id, q.limit)));
+    const denied = await guard(c, deps, org);
+    if (denied) return denied;
+    return c.json(CursorPage(PoolSummary).parse(await listPools(deps.db, org, q.limit)));
+  }));
   app.post("/api/organizations/:organizationId/repositories/:repositoryId/discovery/recheck", safe(async (c) => {
     const org = c.req.param("organizationId");
     const denied = await guard(c, deps, org);

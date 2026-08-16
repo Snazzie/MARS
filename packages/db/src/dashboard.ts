@@ -73,7 +73,35 @@ export async function getAllOverview(db: DashboardDb, userId: string, period: Ov
   const [row] = await db<OverviewDto[]>`SELECT 'all' AS "organizationId", ${period}::text AS period, count(*) FILTER (WHERE j.status='queued' AND NOT EXISTS (SELECT 1 FROM runner_leases l WHERE l.github_job_id=j.github_job_id AND l.state NOT IN ('completed','reaped','failed')))::int AS queued, count(*) FILTER (WHERE j.status='in_progress' OR EXISTS (SELECT 1 FROM runner_leases l WHERE l.github_job_id=j.github_job_id AND l.state NOT IN ('completed','reaped','failed')))::int AS running, count(*) FILTER (WHERE j.status='completed' AND j.conclusion='success')::int AS completed, count(*) FILTER (WHERE j.status='completed' AND j.conclusion <> 'success')::int AS failed, 0::int AS "queueP50Ms", 0::int AS "queueP95Ms", 0::int AS "durationP50Ms", 0::int AS "durationP95Ms", COALESCE((SELECT sum(((CASE WHEN jsonb_typeof(p.resources)='string' THEN (p.resources#>>'{}')::jsonb ELSE p.resources END)->>'concurrency')::int) FROM runner_pools p WHERE p.enabled=true),0)::int AS concurrency, 0::float AS utilization FROM dashboard_jobs j JOIN memberships m ON m.organization_id=j.organization_id AND m.user_id=${userId} WHERE j.queued_at >= now() - ${periodSql(period)}::interval`;
   return { ...row, organizationId: "all", utilization: overviewUtilization(row.running, row.concurrency), timeseries: await getOverviewTimeseries(db, period, "all", userId), jobOutcomes: await getOverviewJobOutcomes(db, "all", period, userId) };
 }
-export async function listRepositories(db: DashboardDb, organizationId: string, limit = 50, cursor: string | null = null): Promise<CursorPage<RepositorySummary>> { const rows = await db<Record<string, unknown>[]>`SELECT r.id, r.organization_id AS "organizationId", r.name, r.full_name AS "fullName", r.visibility, r.available, r.installation_id AS "installationId", CASE WHEN r.discovery_error='github_403' AND r.discovery_retry_at>now() THEN 'paused' WHEN r.discovery_error='github_403' AND r.discovery_retry_at<=now() THEN 'queued' ELSE 'active' END AS "discoveryState", r.discovery_retry_at AS "discoveryRetryAt" FROM dashboard_repositories r JOIN dashboard_installations i ON i.organization_id=r.organization_id AND i.id=r.installation_id LEFT JOIN dashboard_repositories cursor ON cursor.id=${cursor}::uuid WHERE r.organization_id=${organizationId} AND (cursor.id IS NULL OR (r.full_name,r.id)>(cursor.full_name,cursor.id)) ORDER BY r.full_name,r.id LIMIT ${limit + 1}`; const items = rows.slice(0, limit).map(normalizeRepository); return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null }; }
+export async function listRepositories(
+  db: DashboardDb,
+  organizationId: string,
+  limit = 50,
+  cursor: string | null = null,
+  filters: { search?: string; availability?: boolean; visibility?: string } = {},
+): Promise<CursorPage<RepositorySummary>> {
+  const search = filters.search?.trim() ?? "";
+  const availability = filters.availability ?? null;
+  const visibility = filters.visibility ?? "";
+  const rows = await db<Record<string, unknown>[]>`
+    SELECT r.id, r.organization_id AS "organizationId", r.name, r.full_name AS "fullName",
+      r.visibility, r.available, r.installation_id AS "installationId",
+      CASE WHEN r.discovery_error='github_403' AND r.discovery_retry_at>now() THEN 'paused'
+        WHEN r.discovery_error='github_403' AND r.discovery_retry_at<=now() THEN 'queued'
+        ELSE 'active' END AS "discoveryState",
+      r.discovery_retry_at AS "discoveryRetryAt"
+    FROM dashboard_repositories r
+    JOIN dashboard_installations i ON i.organization_id=r.organization_id AND i.id=r.installation_id
+    LEFT JOIN dashboard_repositories cursor ON cursor.id=${cursor}::uuid
+    WHERE r.organization_id=${organizationId}
+      AND (cursor.id IS NULL OR (r.full_name,r.id)>(cursor.full_name,cursor.id))
+      AND (${search}='' OR lower(r.full_name) LIKE lower(${"%" + search + "%"}))
+      AND (${availability}::boolean IS NULL OR r.available=${availability})
+      AND (${visibility}='' OR r.visibility=${visibility})
+    ORDER BY r.full_name,r.id LIMIT ${limit + 1}`;
+  const items = rows.slice(0, limit).map(normalizeRepository);
+  return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
+}
 function normalizeTimestamp(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   return value instanceof Date ? value.toISOString() : String(value);
@@ -101,13 +129,45 @@ function normalizeRunSummary(row: Record<string, unknown>): RunSummary {
     allocationState: row.allocationState === "whitesmith" || (row.allocationState == null && row.runtimeBoundary != null) ? "whitesmith" : "external",
   } as RunSummary;
 }
- export async function listRuns(db: DashboardDb, organizationId: string, limit = 50, cursor: string | null = null, search = ""): Promise<CursorPage<RunSummary>> {
-   const rows = await db<Record<string, unknown>[]>`SELECT r.id, r.organization_id AS "organizationId", r.repository_id AS "repositoryId", p.name AS "repositoryName", r.run_number AS "runNumber", r.workflow_name AS "workflowName", r.event, r.branch, r.commit_sha AS "commitSha", r.actor_login AS "actorLogin", r.status, r.conclusion, r.queued_at AS "queuedAt", r.started_at AS "startedAt", r.completed_at AS "completedAt", 0::bigint AS "durationMs", COALESCE(r.runtime_boundary, (SELECT CASE pool.driver WHEN 'tart-vm' THEN 'Tart VM' WHEN 'kata-k3s' THEN 'Kata VM-backed container' WHEN 'windows-hyperv' THEN 'Hyper-V isolated container' END FROM dashboard_jobs j JOIN runner_leases l ON l.github_job_id=j.github_job_id JOIN runner_pools pool ON pool.id=l.pool_id WHERE j.run_id=r.id ORDER BY l.created_at DESC LIMIT 1)) AS "runtimeBoundary", CASE WHEN EXISTS (SELECT 1 FROM dashboard_jobs allocation_job WHERE allocation_job.organization_id=r.organization_id AND allocation_job.run_id=r.id AND ((jsonb_typeof(allocation_job.requested_labels)='array' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(allocation_job.requested_labels) allocation_label WHERE lower(allocation_label) LIKE 'whitesmith-%')) OR (jsonb_typeof(allocation_job.requested_labels)='string' AND lower(allocation_job.requested_labels #>> '{}') LIKE '%"whitesmith-%'))) THEN 'whitesmith' ELSE 'external' END AS "allocationState" FROM dashboard_runs r JOIN dashboard_repositories p ON p.organization_id=r.organization_id AND p.id=r.repository_id LEFT JOIN dashboard_runs cursor_run ON cursor_run.id=${cursor}::uuid WHERE r.organization_id=${organizationId} AND (cursor_run.id IS NULL OR (r.queued_at,r.id)<(cursor_run.queued_at,cursor_run.id)) AND (${search}='' OR lower(concat_ws(' ',p.full_name,r.workflow_name,r.branch,r.actor_login,r.commit_sha)) LIKE lower(${"%" + search + "%"})) ORDER BY r.queued_at DESC, r.id DESC LIMIT ${limit + 1}`;
-   const items = rows.slice(0, limit).map(normalizeRunSummary);
-   return { items, nextCursor: rows.length > limit ? items.at(-1)!.id : null };
- }
-export async function listAllRepositories(db: DashboardDb, userId: string, limit = 50, cursor: string | null = null): Promise<CursorPage<RepositorySummary>> { const rows = await db<Record<string, unknown>[]>`SELECT r.id, r.organization_id AS "organizationId", r.name, r.full_name AS "fullName", r.visibility, r.available, r.installation_id AS "installationId", CASE WHEN r.discovery_error='github_403' AND r.discovery_retry_at>now() THEN 'paused' WHEN r.discovery_error='github_403' AND r.discovery_retry_at<=now() THEN 'queued' ELSE 'active' END AS "discoveryState", r.discovery_retry_at AS "discoveryRetryAt" FROM dashboard_repositories r JOIN memberships m ON m.organization_id=r.organization_id AND m.user_id=${userId} JOIN dashboard_installations i ON i.organization_id=r.organization_id AND i.id=r.installation_id LEFT JOIN dashboard_repositories cursor ON cursor.id=${cursor}::uuid WHERE cursor.id IS NULL OR (r.full_name,r.id)>(cursor.full_name,cursor.id) ORDER BY r.full_name,r.id LIMIT ${limit + 1}`; const items = rows.slice(0, limit).map(normalizeRepository); return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null }; }
-export async function listAllRuns(db: DashboardDb, userId: string, limit = 50): Promise<CursorPage<RunSummary>> { const rows = await db<Record<string, unknown>[]>`SELECT r.id, r.organization_id AS "organizationId", r.repository_id AS "repositoryId", p.name AS "repositoryName", r.run_number AS "runNumber", r.workflow_name AS "workflowName", r.event, r.branch, r.commit_sha AS "commitSha", r.actor_login AS "actorLogin", r.status, r.conclusion, r.queued_at AS "queuedAt", r.started_at AS "startedAt", r.completed_at AS "completedAt", 0::bigint AS "durationMs", COALESCE(r.runtime_boundary, (SELECT CASE pool.driver WHEN 'tart-vm' THEN 'Tart VM' WHEN 'kata-k3s' THEN 'Kata VM-backed container' WHEN 'windows-hyperv' THEN 'Hyper-V isolated container' END FROM dashboard_jobs j JOIN runner_leases l ON l.github_job_id=j.github_job_id JOIN runner_pools pool ON pool.id=l.pool_id WHERE j.run_id=r.id ORDER BY l.created_at DESC LIMIT 1)) AS "runtimeBoundary", CASE WHEN EXISTS (SELECT 1 FROM dashboard_jobs allocation_job WHERE allocation_job.organization_id=r.organization_id AND allocation_job.run_id=r.id AND ((jsonb_typeof(allocation_job.requested_labels)='array' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(allocation_job.requested_labels) allocation_label WHERE lower(allocation_label) LIKE 'whitesmith-%')) OR (jsonb_typeof(allocation_job.requested_labels)='string' AND lower(allocation_job.requested_labels #>> '{}') LIKE '%"whitesmith-%'))) THEN 'whitesmith' ELSE 'external' END AS "allocationState" FROM dashboard_runs r JOIN memberships m ON m.organization_id=r.organization_id AND m.user_id=${userId} JOIN dashboard_repositories p ON p.organization_id=r.organization_id AND p.id=r.repository_id ORDER BY r.queued_at DESC LIMIT ${limit + 1}`; const items = rows.slice(0, limit).map(normalizeRunSummary); return { items, nextCursor: rows.length > limit ? items.at(-1)!.id : null }; }
+export async function listRuns(db: DashboardDb, organizationId: string, limit = 50, cursor: string | null = null, search = ""): Promise<CursorPage<RunSummary>> {
+  const rows = await db<Record<string, unknown>[]>`SELECT r.id, r.organization_id AS "organizationId", r.repository_id AS "repositoryId", p.name AS "repositoryName", r.run_number AS "runNumber", r.workflow_name AS "workflowName", r.event, r.branch, r.commit_sha AS "commitSha", r.actor_login AS "actorLogin", r.status, r.conclusion, r.queued_at AS "queuedAt", r.started_at AS "startedAt", r.completed_at AS "completedAt", 0::bigint AS "durationMs", COALESCE(r.runtime_boundary, (SELECT CASE pool.driver WHEN 'tart-vm' THEN 'Tart VM' WHEN 'kata-k3s' THEN 'Kata VM-backed container' WHEN 'windows-hyperv' THEN 'Hyper-V isolated container' END FROM dashboard_jobs j JOIN runner_leases l ON l.github_job_id=j.github_job_id JOIN runner_pools pool ON pool.id=l.pool_id WHERE j.run_id=r.id ORDER BY l.created_at DESC LIMIT 1)) AS "runtimeBoundary", CASE WHEN EXISTS (SELECT 1 FROM dashboard_jobs allocation_job WHERE allocation_job.organization_id=r.organization_id AND allocation_job.run_id=r.id AND ((jsonb_typeof(allocation_job.requested_labels)='array' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(allocation_job.requested_labels) allocation_label WHERE lower(allocation_label) LIKE 'whitesmith-%')) OR (jsonb_typeof(allocation_job.requested_labels)='string' AND lower(allocation_job.requested_labels #>> '{}') LIKE '%"whitesmith-%'))) THEN 'whitesmith' ELSE 'external' END AS "allocationState" FROM dashboard_runs r JOIN dashboard_repositories p ON p.organization_id=r.organization_id AND p.id=r.repository_id LEFT JOIN dashboard_runs cursor_run ON cursor_run.id=${cursor}::uuid WHERE r.organization_id=${organizationId} AND (cursor_run.id IS NULL OR (r.queued_at,r.id)<(cursor_run.queued_at,cursor_run.id)) AND (${search}='' OR lower(concat_ws(' ',p.full_name,r.workflow_name,r.branch,r.actor_login,r.commit_sha)) LIKE lower(${"%" + search + "%"})) ORDER BY r.queued_at DESC, r.id DESC LIMIT ${limit + 1}`;
+  const items = rows.slice(0, limit).map(normalizeRunSummary);
+  return { items, nextCursor: rows.length > limit ? items.at(-1)!.id : null };
+}
+export async function listAllRepositories(
+  db: DashboardDb,
+  userId: string,
+  limit = 50,
+  cursor: string | null = null,
+  filters: { search?: string; availability?: boolean; visibility?: string } = {},
+): Promise<CursorPage<RepositorySummary>> {
+  const search = filters.search?.trim() ?? "";
+  const availability = filters.availability ?? null;
+  const visibility = filters.visibility ?? "";
+  const rows = await db<Record<string, unknown>[]>`
+    SELECT r.id, r.organization_id AS "organizationId", r.name, r.full_name AS "fullName",
+      r.visibility, r.available, r.installation_id AS "installationId",
+      CASE WHEN r.discovery_error='github_403' AND r.discovery_retry_at>now() THEN 'paused'
+        WHEN r.discovery_error='github_403' AND r.discovery_retry_at<=now() THEN 'queued'
+        ELSE 'active' END AS "discoveryState",
+      r.discovery_retry_at AS "discoveryRetryAt"
+    FROM dashboard_repositories r
+    JOIN memberships m ON m.organization_id=r.organization_id AND m.user_id=${userId}
+    JOIN dashboard_installations i ON i.organization_id=r.organization_id AND i.id=r.installation_id
+    LEFT JOIN dashboard_repositories cursor ON cursor.id=${cursor}::uuid
+    WHERE (cursor.id IS NULL OR (r.full_name,r.id)>(cursor.full_name,cursor.id))
+      AND (${search}='' OR lower(r.full_name) LIKE lower(${"%" + search + "%"}))
+      AND (${availability}::boolean IS NULL OR r.available=${availability})
+      AND (${visibility}='' OR r.visibility=${visibility})
+    ORDER BY r.full_name,r.id LIMIT ${limit + 1}`;
+  const items = rows.slice(0, limit).map(normalizeRepository);
+  return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
+}
+export async function listAllRuns(db: DashboardDb, userId: string, limit = 50, cursor: string | null = null, search = ""): Promise<CursorPage<RunSummary>> {
+  const rows = await db<Record<string, unknown>[]>`SELECT r.id, r.organization_id AS "organizationId", r.repository_id AS "repositoryId", p.name AS "repositoryName", r.run_number AS "runNumber", r.workflow_name AS "workflowName", r.event, r.branch, r.commit_sha AS "commitSha", r.actor_login AS "actorLogin", r.status, r.conclusion, r.queued_at AS "queuedAt", r.started_at AS "startedAt", r.completed_at AS "completedAt", 0::bigint AS "durationMs", COALESCE(r.runtime_boundary, (SELECT CASE pool.driver WHEN 'tart-vm' THEN 'Tart VM' WHEN 'kata-k3s' THEN 'Kata VM-backed container' WHEN 'windows-hyperv' THEN 'Hyper-V isolated container' END FROM dashboard_jobs j JOIN runner_leases l ON l.github_job_id=j.github_job_id JOIN runner_pools pool ON pool.id=l.pool_id WHERE j.run_id=r.id ORDER BY l.created_at DESC LIMIT 1)) AS "runtimeBoundary", CASE WHEN EXISTS (SELECT 1 FROM dashboard_jobs allocation_job WHERE allocation_job.organization_id=r.organization_id AND allocation_job.run_id=r.id AND ((jsonb_typeof(allocation_job.requested_labels)='array' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(allocation_job.requested_labels) allocation_label WHERE lower(allocation_label) LIKE 'whitesmith-%')) OR (jsonb_typeof(allocation_job.requested_labels)='string' AND lower(allocation_job.requested_labels #>> '{}') LIKE '%"whitesmith-%'))) THEN 'whitesmith' ELSE 'external' END AS "allocationState" FROM dashboard_runs r JOIN memberships m ON m.organization_id=r.organization_id AND m.user_id=${userId} JOIN dashboard_repositories p ON p.organization_id=r.organization_id AND p.id=r.repository_id LEFT JOIN dashboard_runs cursor_run ON cursor_run.id=${cursor}::uuid WHERE (cursor_run.id IS NULL OR (r.queued_at,r.id)<(cursor_run.queued_at,cursor_run.id)) AND (${search}='' OR lower(concat_ws(' ',p.full_name,r.workflow_name,r.branch,r.actor_login,r.commit_sha)) LIKE lower(${"%" + search + "%"})) ORDER BY r.queued_at DESC,r.id DESC LIMIT ${limit + 1}`;
+  const items = rows.slice(0, limit).map(normalizeRunSummary);
+  return { items, nextCursor: rows.length > limit ? items.at(-1)!.id : null };
+}
 export async function listAllPools(db: DashboardDb, userId: string, limit = 50): Promise<CursorPage<PoolSummary>> { const rows = await db<Record<string, unknown>[]>`SELECT p.id,p.organization_id AS "organizationId",p.worker_id AS "workerId",w.name AS "workerName",p.name,p.platform,p.driver,p.image_digest AS "imageDigest",p.resources,p.labels,p.trigger_label AS "triggerLabel",p.enabled,0::int AS active FROM runner_pools p JOIN memberships m ON m.organization_id=p.organization_id AND m.user_id=${userId} JOIN workers w ON w.id=p.worker_id ORDER BY p.name LIMIT ${limit + 1}`; const items = rows.slice(0, limit).map(normalizePool); return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null }; }
 export async function getRunDetail(db: DashboardDb, organizationId: string, runId: string): Promise<RunDetail | null> {
   const run = (await listRuns(db, organizationId, 1000)).items.find((item) => item.id === runId);

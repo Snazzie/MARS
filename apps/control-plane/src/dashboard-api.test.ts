@@ -103,6 +103,23 @@ describe("dashboard API", () => {
     expect(response.status).toBe(200);
     expect(values).toContain(cursor);
   });
+  test("forwards server-side run and repository filters", async () => {
+    const values: unknown[] = [];
+    const db = (async (strings: TemplateStringsArray, ...parameters: unknown[]) => {
+      if (strings.join(" ").includes("FROM memberships")) return [{ ok: true }];
+      values.push(...parameters);
+      return [];
+    }) as never;
+    const app = appFor(member, db);
+    const runs = await app.request("/api/organizations/org/runs?search=deploy");
+    const repositories = await app.request("/api/organizations/org/repositories?search=api&availability=unavailable&visibility=private");
+    expect(runs.status).toBe(200);
+    expect(repositories.status).toBe(200);
+    expect(values).toContain("%deploy%");
+    expect(values).toContain("%api%");
+    expect(values).toContain(false);
+    expect(values).toContain("private");
+  });
   test("requires global administrator access for worker mutations", async () => {
     const response = await appFor().request("/api/organizations/org/workers/w1/drain", { method: "POST", headers: sessionHeaders });
     expect(response.status).toBe(403);

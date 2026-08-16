@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RepositorySummary } from "@whitesmith/contracts";
 import { beginOrganizationGithubInstall, getGithubRepositorySettings, getMe, getRepositories, recheckRepositoryDiscovery, refreshGithubConnection, uninstallOrganizationGithub } from "../api.ts";
 import { Disclosure } from "../components/Disclosure.tsx";
@@ -33,9 +33,11 @@ export function RepositoriesPage() {
     }
   }, [connectOrganizationId, organizationId, organizations]);
 
-  const query = useQuery({
-    queryKey: ["org", organizationId, "repositories"],
-    queryFn: () => getRepositories(organizationId),
+  const query = useInfiniteQuery({
+    queryKey: ["org", organizationId, "repositories", search, availability, visibility],
+    queryFn: ({ pageParam }: { pageParam: string | null }) => getRepositories(organizationId, { cursor: pageParam, search, availability, visibility }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.nextCursor ?? undefined,
     enabled: Boolean(organizationId),
   });
   const me = useQuery({ queryKey: ["me"], queryFn: getMe });
@@ -71,16 +73,8 @@ export function RepositoriesPage() {
     onSuccess: () => client.invalidateQueries({ queryKey: ["org", organizationId, "repositories"] }),
   });
   const repositories = useMemo(
-    () =>
-      (query.data?.items ?? []).filter((repository) => {
-        const text = search.trim().toLowerCase();
-        return (
-          repository.available === (availability === "available") &&
-          (!text || repository.fullName.toLowerCase().includes(text)) &&
-          (visibility === "all" || repository.visibility === visibility)
-        );
-      }),
-    [query.data, search, visibility, availability],
+    () => query.data?.pages.flatMap((page) => page.items) ?? [],
+    [query.data],
   );
   const allWorkspaces = organizationId === "all";
   const canConnect = organizations.length > 0;
@@ -135,7 +129,7 @@ export function RepositoriesPage() {
           <Disclosure label="More filters"><label>Visibility<select value={visibility} onChange={(event) => setVisibility(event.target.value as typeof visibility)}><option value="all">All visibility</option><option value="private">Private</option><option value="internal">Internal</option></select></label></Disclosure>
         </div>
       </section>
-      <p className="filter-scope" role="note">Filters apply to the currently loaded repositories.</p>
+      <p className="filter-scope" role="note">Search and filters apply across all matching repositories.</p>
       <QueryState
         error={query.error}
         isLoading={query.isLoading}
@@ -211,6 +205,7 @@ export function RepositoriesPage() {
           </table>
         </section>
       )}
+      {query.hasNextPage && <button type="button" className="button secondary load-more" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage}>{query.isFetchingNextPage ? "Loading…" : "Load more repositories"}</button>}
       {runnerRepository && <RunnerWorkflowPrModal organizationId={runnerRepository.organizationId} repositoryId={runnerRepository.id} repositoryName={runnerRepository.fullName} open onClose={() => setRunnerRepository(null)} />}
     </>
   );
