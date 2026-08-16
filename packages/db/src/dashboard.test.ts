@@ -48,6 +48,22 @@ test("worker listing normalizes persisted telemetry into the WorkerDetail contra
   expect(page.items[0]).toMatchObject({ driver: "tart-vm", doctor: { probe: true }, limits: { maxVcpuPerPod: 2 }, capacity: { vcpu: { actual: 10, free: 10 }, memoryBytes: { actual: 34359738368, free: 16149077032 } } });
 });
 
+test("worker listings expose desired and applied configuration metadata", async () => {
+  const queries: string[] = [];
+  const db = (async (strings: TemplateStringsArray) => {
+    queries.push(strings.join(" "));
+    return [];
+  }) as never;
+  await listWorkers(db, "org-1");
+  await listAllWorkers(db, "user-1");
+  expect(queries).toHaveLength(2);
+  for (const query of queries) {
+    expect(query).toContain('configuration_revision AS "configurationRevision"');
+    expect(query).toContain('applied_configuration_revision AS "appliedConfigurationRevision"');
+    expect(query).toContain('configuration_applied_at AS "configurationAppliedAt"');
+  }
+});
+
 test("pool listing normalizes PostgreSQL JSONB resources and labels", async () => {
   const db = (async () => [{ id: "pool-1", organizationId: "org-1", workerId: "worker-1", workerName: "worker", name: "default", platform: "linux-x64", driver: "kata-k3s", imageDigest: "ubuntu@sha256:" + "a".repeat(64), resources: "{\"vcpu\":2,\"memoryBytes\":4294967296,\"storageBytes\":10737418240,\"concurrency\":1}", labels: "[\"self-hosted\",\"linux\",\"x64\",\"whitesmith-default\"]", triggerLabel: "whitesmith-default", enabled: true, active: "0" }]) as never;
   const page = await listPools(db, "org-1");

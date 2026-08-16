@@ -25,7 +25,7 @@ export const RunnerJitConfig = z.object({
 export type RunnerJitConfig = z.infer<typeof RunnerJitConfig>;
 export const WorkerState = z.enum(["pending", "adopted", "rejected", "revoked"]);
 export const ConnectionState = z.enum(["offline", "online"]);
-export const ConfigurationState = z.enum(["unconfigured", "ready", "error"]);
+export const ConfigurationState = z.enum(["unconfigured", "applying", "ready", "error"]);
 export const LeaseBootstrapEnvelope = z.object({
   leaseId: z.string().uuid(),
   jobId: z.string().uuid(),

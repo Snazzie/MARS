@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { positiveSafe, PoolResources, RuntimeDriverName, RuntimePlatform, WorkerLimits, GuestPlatform } from "./orchestration.ts";
+import { positiveSafe, PoolResources, RuntimeDriverName, RuntimePlatform, WorkerLimits, GuestPlatform, ConfigurationState } from "./orchestration.ts";
 
 const id = z.string().min(1);
 const timestamp = z.string().datetime({ offset: true });
@@ -54,7 +54,7 @@ export const WorkerDoctor = dto(strict({ nestedKvm: z.boolean().optional(), kvmM
 export type WorkerDoctor = z.infer<typeof WorkerDoctor>;
 export const CapacitySnapshot = dto(strict({ vcpu: strict({ actual: positiveSafe, reserved: positiveSafe.or(z.literal(0)), free: positiveSafe.or(z.literal(0)) }), memoryBytes: strict({ actual: positiveSafe, reserved: positiveSafe.or(z.literal(0)), free: positiveSafe.or(z.literal(0)) }), storageBytes: strict({ actual: positiveSafe, reserved: positiveSafe.or(z.literal(0)), free: positiveSafe.or(z.literal(0)) }), pods: strict({ actual: positiveSafe, reserved: positiveSafe.or(z.literal(0)), free: positiveSafe.or(z.literal(0)) }) }));
 export type CapacitySnapshot = z.infer<typeof CapacitySnapshot>;
-export const WorkerDetail = dto(strict({ id, organizationId: organizationId.nullable(), name: z.string().min(1), platform: RuntimePlatform, guestPlatforms: z.array(GuestPlatform).min(1), driver: RuntimeDriverName, admissionState: z.enum(["pending", "adopted", "rejected", "revoked"]), connectionState: z.enum(["offline", "online"]), configurationState: z.enum(["unconfigured", "ready", "error"]), fingerprint: z.string().min(1), limits: WorkerLimits.nullable(), doctor: WorkerDoctor.nullable(), capacity: CapacitySnapshot, activeSandboxes: positiveSafe.or(z.literal(0)), draining: z.boolean() }));
+export const WorkerDetail = dto(strict({ id, organizationId: organizationId.nullable(), name: z.string().min(1), platform: RuntimePlatform, guestPlatforms: z.array(GuestPlatform).min(1), driver: RuntimeDriverName, admissionState: z.enum(["pending", "adopted", "rejected", "revoked"]), connectionState: z.enum(["offline", "online"]), configurationState: ConfigurationState, configurationRevision: z.string().nullable(), appliedConfigurationRevision: z.string().nullable(), configurationAppliedAt: timestamp.nullable(), fingerprint: z.string().min(1), limits: WorkerLimits.nullable(), doctor: WorkerDoctor.nullable(), capacity: CapacitySnapshot, activeSandboxes: positiveSafe.or(z.literal(0)), draining: z.boolean() }));
 export type WorkerDetail = z.infer<typeof WorkerDetail>;
 export const PoolSummary = dto(strict({ id, organizationId: id.nullable(), workerId: id.nullable(), workerName: z.string().min(1).nullable(), name: z.string().min(1), platform: RuntimePlatform, driver: RuntimeDriverName, imageDigest: z.string().min(1), resources, labels: z.array(z.string().min(1)), triggerLabel: RunnerTriggerLabel.nullable(), enabled: z.boolean(), active: positiveSafe.or(z.literal(0)) }));
 export type PoolSummary = z.infer<typeof PoolSummary>;

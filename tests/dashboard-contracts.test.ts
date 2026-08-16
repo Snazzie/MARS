@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ApiError, CreatePoolRequest, CursorPage, OnboardingStep, OverviewDto, RepositorySummary, RunDetail } from "../packages/contracts/src/index.ts";
+import { ApiError, CreatePoolRequest, CursorPage, OnboardingStep, OverviewDto, RepositorySummary, RunDetail, WorkerDetail } from "../packages/contracts/src/index.ts";
 
 const run = { id: "run-1", organizationId: "org-1", repositoryId: "repo-1", repositoryName: "acme/app", runNumber: 4, workflowName: "CI", event: "workflow_dispatch", branch: "main", commitSha: "0123456789abcdef", actorLogin: "octocat", status: "completed" as const, conclusion: "success" as const, queuedAt: "2026-08-11T10:00:00Z", startedAt: "2026-08-11T10:01:00Z", completedAt: "2026-08-11T10:02:00Z", durationMs: 60_000, runtimeBoundary: "Kata VM-backed container" as const };
 
@@ -20,6 +20,33 @@ describe("dashboard contracts", () => {
     const detail = { ...run, jobs: [], stages: [{ stage: "queued" as const, startedAt: run.queuedAt, completedAt: run.startedAt, durationMs: 60_000 }], actionGraph: { nodes: [], edges: [] } };
     expect(RunDetail.safeParse(detail).success).toBe(true);
     expect(RunDetail.safeParse({ ...detail, stages: [{ ...detail.stages[0], startedAt: "bad" }] }).success).toBe(false);
+  });
+  test("accepts applying worker configuration metadata", () => {
+    expect(WorkerDetail.safeParse({
+      id: "86afd915-add3-407c-a6c1-1b46803ef713",
+      organizationId: null,
+      name: "windows-worker",
+      platform: "windows-x64",
+      guestPlatforms: ["windows-x64"],
+      driver: "windows-hyperv-container",
+      admissionState: "adopted",
+      connectionState: "online",
+      configurationState: "applying",
+      configurationRevision: "a".repeat(64),
+      appliedConfigurationRevision: "b".repeat(64),
+      configurationAppliedAt: "2026-08-16T15:00:00.000Z",
+      fingerprint: "sha256:worker",
+      limits: null,
+      doctor: null,
+      capacity: {
+        vcpu: { actual: 10, reserved: 0, free: 10 },
+        memoryBytes: { actual: 10, reserved: 0, free: 10 },
+        storageBytes: { actual: 10, reserved: 0, free: 10 },
+        pods: { actual: 1, reserved: 0, free: 1 },
+      },
+      activeSandboxes: 0,
+      draining: false,
+    }).success).toBe(true);
   });
   test("accepts immutable VM template and OCI image digests", () => {
     const request = {

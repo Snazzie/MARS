@@ -27,3 +27,11 @@ test("migrates legacy split runner labels to one composite trigger", () => {
   expect(schemaSql).toContain("WHEN platform='macos-arm64' AND trigger_label IN ('whitesmith-default','whitesmith-macos') THEN 'whitesmith-macos-arm64'");
   expect(schemaSql).toContain("UPDATE runner_pools SET labels=jsonb_build_array(trigger_label)");
 });
+
+test("persists desired and exactly applied worker configuration", () => {
+  expect(schemaSql).toContain("ALTER TABLE workers ADD COLUMN IF NOT EXISTS desired_configuration jsonb;");
+  expect(schemaSql).toContain("ALTER TABLE workers ADD COLUMN IF NOT EXISTS applied_configuration_revision text;");
+  expect(schemaSql).toContain("ALTER TABLE workers ADD COLUMN IF NOT EXISTS configuration_applied_at timestamptz;");
+  expect(schemaSql).toContain("FROM commands c");
+  expect(schemaSql).toContain("c.id=w.configuration_command_id");
+});
