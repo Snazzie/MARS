@@ -10,8 +10,13 @@ const copy: Record<Action, { label: string; confirm: string; variant: "primary" 
  remove: { label: "Remove", confirm: "Remove this worker? Pools will be disabled and the worker will be revoked after active leases finish.", variant: "destructive" },
 };
 export function buildWindowsUpgradeCommand(workerId: string, origin: string, runtime: "container" | "vm" = "container"): string {
+ const base = new URL(origin);
+ if (base.protocol !== "https:" && base.protocol !== "http:") throw new Error("Upgrade origin must use HTTP or HTTPS");
+ const protocol = base.protocol.slice(0, -1);
+ const tls = protocol === "https" ? " --tlsv1.3" : "";
+ const insecure = protocol === "http" ? " -AllowInsecureHttp" : "";
  const url = `${origin.replace(/\/$/, "")}/api/workers/installer?audience=windows-x64&runtime=${runtime}`;
- return `# Whitesmith worker ${workerId}\n$script = Join-Path $env:TEMP ("whitesmith-upgrade-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=https' --tlsv1.3 --output $script '${url}'\n  if ($LASTEXITCODE -ne 0) { throw "Upgrade command download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Upgrade\n} finally {\n  Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n}`;
+ return `# Whitesmith worker ${workerId}\n$script = Join-Path $env:TEMP ("whitesmith-upgrade-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${protocol}'${tls} --output $script '${url}'\n  if ($LASTEXITCODE -ne 0) { throw "Upgrade command download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Upgrade${insecure}\n} finally {\n  Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n}`;
 }
 export function WorkerActions({ organizationId, workerId, admissionState, draining, activeSandboxes = 0, platform, runtimeMode, onComplete }: { organizationId: string; workerId: string; admissionState: string; draining: boolean; activeSandboxes?: number; platform?: string; runtimeMode?: "container" | "vm" | null; onComplete: () => void }) {
  const [action, setAction] = useState<Action | null>(null);

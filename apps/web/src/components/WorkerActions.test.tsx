@@ -7,6 +7,12 @@ test("builds a Windows upgrade command for the existing worker", () => {
   expect(command).toContain("powershell.exe -NoProfile -ExecutionPolicy Bypass");
 });
 
+test("allows localhost control planes to use HTTP", () => {
+  const command = buildWindowsUpgradeCommand("worker", "http://localhost:5173", "container");
+  expect(command).toContain("--proto '=http'");
+  expect(command).toContain("-AllowInsecureHttp");
+  expect(command).not.toContain("--proto '=https'");
+});
 test("defaults Windows upgrades to container mode", () => {
   expect(buildWindowsUpgradeCommand("worker", "https://control.example")).toContain("runtime=container");
 });
