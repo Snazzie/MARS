@@ -195,7 +195,7 @@ test("fast pickup polls only queued runs for one configured repository", async (
   const githubFetch = async (input: RequestInfo | URL) => {
     const url = String(input);
     requests.push(url);
-    if (url.includes("status=queued")) return Response.json({
+    if (url.includes("status=queued") || !url.includes("status=")) return Response.json({
       total_count: 1,
       workflow_runs: [{
         id: 77,
@@ -224,8 +224,8 @@ test("fast pickup polls only queued runs for one configured repository", async (
   });
 
   expect(requests).toHaveLength(2);
-  expect(requests[0]).toContain("status=queued");
-  expect(requests.some((url) => url.includes("status=in_progress") || url.includes("status=completed") || url.includes("status=pending"))).toBe(false);
+  expect(requests[0]).not.toContain("status=");
+  expect(requests.some((url) => url.includes("status=in_progress") || url.includes("status=completed") || url.includes("status=pending") || url.includes("status=queued"))).toBe(false);
 });
 test("fast pickup includes GitHub pending runs", async () => {
   const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
@@ -234,7 +234,7 @@ test("fast pickup includes GitHub pending runs", async () => {
   const githubFetch = async (input: RequestInfo | URL) => {
     const url = String(input);
     requests.push(url);
-    if (url.includes("status=pending")) return Response.json({
+    if (!url.includes("status=")) return Response.json({
       total_count: 1,
       workflow_runs: [{
         id: 77, run_number: 77, name: "CI", event: "pull_request", head_branch: "main", head_sha: "a".repeat(40),
@@ -254,7 +254,7 @@ test("fast pickup includes GitHub pending runs", async () => {
   });
 
   expect(report).toMatchObject({ repositories: 1, discovered: 0, failed: 0 });
-  expect(requests.some((url) => url.includes("status=pending"))).toBe(true);
+  expect(requests.some((url) => !url.includes("status="))).toBe(true);
 });
 
 test("stops only the rate-limited installation's remaining repositories", async () => {

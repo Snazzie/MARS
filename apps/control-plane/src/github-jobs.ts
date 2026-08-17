@@ -81,8 +81,9 @@ export class GithubJobsClient {
     const status = jobStatus(value.status);
     return { id, runId, name: stringValue(value.name, "job"), status, conclusion: nullableString(value.conclusion), labels: labelsValue(value.labels), runnerName: nullableString(value.runner_name), queuedAt: stringValue(value.created_at, new Date().toISOString()), startedAt: status === "queued" ? null : nullableString(value.started_at), completedAt: status === "completed" ? nullableString(value.completed_at) : null, steps: parseSteps(value.steps, stringValue(value.created_at, new Date().toISOString())) };
   }
-  async listRuns(owner: string, repo: string, status: "queued" | "pending" | "in_progress" | "completed", page: number): Promise<{ totalCount: number; runs: GithubRunSnapshot[] }> {
-    const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?status=${status}&per_page=100&page=${page}`);
+  async listRuns(owner: string, repo: string, status: "queued" | "pending" | "in_progress" | "completed" | undefined, page: number): Promise<{ totalCount: number; runs: GithubRunSnapshot[] }> {
+    const statusQuery = status ? `status=${status}&` : "";
+    const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?${statusQuery}per_page=100&page=${page}`);
     const runs = Array.isArray(value.workflow_runs) ? value.workflow_runs.filter((x): x is Record<string, unknown> => Boolean(x && typeof x === "object")).map(x => this.parseRun(x)) : [];
     return { totalCount: Number(value.total_count) || runs.length, runs };
   }
