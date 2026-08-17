@@ -182,3 +182,28 @@ test("falls back to the configured memory limit when Docker stats reports an inv
   expect(await lease.sample!()).toMatchObject({ memoryLimitBytes: configuredMemory, memoryWorkingSetBytes: Math.round(10.52 * 1024 ** 3) });
   await driver.removeLease("55555555-5555-4555-8555-555555555555");
 });
+
+test("requests an idempotent graceful runner stop before forced cleanup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-stop-"));
+  roots.push(root);
+  const calls: string[][] = [];
+  const docker: DockerRunner = async (args) => {
+    calls.push(args);
+    if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 1_000_000_000, Memory: 1024 } }]), stderr: "" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const driver = new WindowsContainerDriver({
+    image: "whitesmith/windows-job:local",
+    prefix: "whitesmith",
+    bootstrapRoot: root,
+    limits: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1024, maxStorageBytesPerPod: 1024, maxConcurrentPods: 1 },
+    readyTimeoutMs: 100,
+    jobTimeoutMs: 100,
+    allowLocalImage: true,
+  }, docker);
+  await driver.createLease({ id: "66666666-6666-4666-8666-666666666666", jobId: "job", imageDigest: "whitesmith/windows-job:local", resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config" });
+  expect(await driver.requestGracefulStop("66666666-6666-4666-8666-666666666666", "out_of_memory", "memory limit exceeded")).toBe(true);
+  expect(await driver.requestGracefulStop("66666666-6666-4666-8666-666666666666", "out_of_memory", "memory limit exceeded")).toBe(true);
+  expect(calls.filter(args => args[0] === "exec")).toHaveLength(1);
+  await driver.removeLease("66666666-6666-4666-8666-666666666666");
+});

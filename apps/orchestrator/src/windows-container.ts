@@ -39,6 +39,7 @@ function dockerSample(name: string, configuredMemoryBytes: number, docker: Docke
 
 export class WindowsContainerDriver implements RuntimeDriver {
   readonly name = "windows-hyperv-container" as const;
+  private readonly gracefulStops = new Set<string>();
   private readonly leases = new Map<string, { name: string; root: string; runtime: RuntimeLease }>();
   constructor(private readonly config: WindowsContainerConfig, private readonly docker: DockerRunner = defaultDocker) {}
   private containerName(leaseId: string): string { return `${this.config.prefix}-${leaseId}`; }
@@ -87,6 +88,18 @@ export class WindowsContainerDriver implements RuntimeDriver {
     return Promise.race([completion, timeout]);
   }
   async inspectLease(leaseId: string): Promise<RuntimeLease> { const lease = this.leases.get(leaseId); if (!lease) throw new Error("sandbox not found"); return lease.runtime; }
+  async requestGracefulStop(leaseId: string, reason: "out_of_memory", message: string): Promise<boolean> {
+    if (reason !== "out_of_memory" || this.gracefulStops.has(leaseId)) return this.gracefulStops.has(leaseId);
+    const name = this.leases.get(leaseId)?.name ?? this.containerName(leaseId);
+    this.gracefulStops.add(leaseId);
+    console.warn("Requesting graceful job stop", { leaseId, reason, message: message.slice(0, 256) });
+    const result = await this.docker(["exec", name, "cmd.exe", "/c", "taskkill", "/IM", "Runner.Listener.exe", "/T"]);
+    if (result.code !== 0 && !/no instance|not found/i.test(`${result.stdout} ${result.stderr}`)) {
+      this.gracefulStops.delete(leaseId);
+      return false;
+    }
+    return true;
+  }
   async stopLease(leaseId: string): Promise<void> {
     const name = this.leases.get(leaseId)?.name ?? this.containerName(leaseId);
     const result = await this.docker(["stop", "--time", "10", name]);
@@ -100,6 +113,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
       const result = await this.docker(["rm", "-f", name]);
       if (result.code !== 0 && !/no such container/i.test(result.stderr)) checked(result, "docker rm");
     } finally {
+      this.gracefulStops.delete(leaseId);
       this.leases.delete(leaseId);
       await rm(root, { recursive: true, force: true });
     }
