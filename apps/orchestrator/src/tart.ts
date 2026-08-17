@@ -82,6 +82,7 @@ export interface TartVmRuntime {
   startRunner(vmName: string): TartRunnerExecution;
   stop(vmName: string): Promise<void>;
   remove(vmName: string): Promise<void>;
+  sample?(vmName: string): Promise<{ cpuUsagePercent: number; cpuTimeMs: number; memoryWorkingSetBytes: number; memoryLimitBytes: number }>;
 }
 
 export function createTartVmRuntime(tartExecutable = resolveTartExecutable(Bun.env.WHITESMITH_TART_EXECUTABLE)): TartVmRuntime {
@@ -137,6 +138,13 @@ export function createTartVmRuntime(tartExecutable = resolveTartExecutable(Bun.e
     },
     stop: async vmName => { await run(["stop", vmName]); processes.delete(vmName); },
     remove: async vmName => { await run(["delete", vmName]); processes.delete(vmName); },
+    sample: async vmName => {
+      const process = Bun.spawn([tartExecutable, "exec", vmName, "sh", "-c", "set -eu; cpu=$(ps -eo pcpu= | awk '{s+=$1} END {print s+0}'); rss=$(ps -eo rss= | awk '{s+=$1} END {print s+0}'); mem=$(awk '/MemTotal/{print $2}' /proc/meminfo); printf '%s %s %s' \"$cpu\" \"$rss\" \"$mem\""], { stdout: "pipe", stderr: "pipe" });
+      const [stdout, stderr, code] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
+      if (code !== 0) throw new Error(`tart resource sample failed: ${stderr.trim()}`);
+      const [cpu, rss, mem] = stdout.trim().split(/\s+/).map(Number);
+      return { cpuUsagePercent: Math.max(0, Math.min(100, cpu || 0)), cpuTimeMs: 0, memoryWorkingSetBytes: Math.max(0, (rss || 0) * 1024), memoryLimitBytes: Math.max(1, (mem || 1) * 1024) };
+    },
   };
 }
 
@@ -164,7 +172,7 @@ export class TartVmDriver implements RuntimeDriver {
       await this.tart.setResources(vmName, lease.resources);
       await this.tart.startWithBootstrap(vmName, lease.encodedJitConfig);
       const execution = this.tart.startRunner(vmName);
-      const runtime: RuntimeLease = { runtimeInstanceId: vmName, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: execution.completion, logs: execution.logs };
+      const runtime: RuntimeLease = { runtimeInstanceId: vmName, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: execution.completion, logs: execution.logs, sample: this.tart.sample ? () => this.tart.sample!(vmName) : undefined };
       this.leases.set(lease.id, { vmName, runtime });
       return runtime;
     } catch (error) {
