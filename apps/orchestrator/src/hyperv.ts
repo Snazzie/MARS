@@ -27,6 +27,7 @@ export interface HyperVRuntime {
   remove(vmName: string): Promise<void>;
   removeDisk(path: string): Promise<void>;
   reconcileOrphans(prefix: string): Promise<void>;
+  sample?(vmName: string): Promise<{ cpuUsagePercent: number; cpuTimeMs: number; memoryWorkingSetBytes: number; memoryLimitBytes: number }>;
 }
 export function createHyperVRuntime(run: HyperVRunner = defaultRunner): HyperVRuntime {
   async function invoke(script: string, args: string[] = []): Promise<string> {
@@ -46,6 +47,7 @@ export function createHyperVRuntime(run: HyperVRunner = defaultRunner): HyperVRu
     remove: async vmName => { await invoke("Remove-VM -Name $args[0] -Force -ErrorAction SilentlyContinue", [vmName]); },
     removeDisk: async path => { await rm(path, { force: true }); },
     reconcileOrphans: async prefix => { await invoke("Get-VM -Name ($args[0]+'-*') -ErrorAction SilentlyContinue | ForEach-Object { Stop-VM -VM $_ -TurnOff -Force -ErrorAction SilentlyContinue; Remove-VM -VM $_ -Force -ErrorAction SilentlyContinue }", [prefix]); },
+    sample: async vmName => { const value = JSON.parse(await invoke("Get-VM -Name $args[0] | Select-Object CPUUsage,MemoryAssigned | ConvertTo-Json -Compress", [vmName])) as { CPUUsage?: number; MemoryAssigned?: number }; return { cpuUsagePercent: Math.max(0, Math.min(100, Number(value.CPUUsage ?? 0))), cpuTimeMs: 0, memoryWorkingSetBytes: Number(value.MemoryAssigned ?? 0), memoryLimitBytes: Math.max(1, Number(value.MemoryAssigned ?? 0)) }; },
   };
 }
 export class HyperVDriver implements RuntimeDriver {
@@ -70,7 +72,7 @@ export class HyperVDriver implements RuntimeDriver {
       await this.hyperv.waitForGuestReady(vmName, Number(Bun.env.WHITESMITH_HYPERV_READY_TIMEOUT_MS ?? 120_000));
       await this.hyperv.copyBootstrap(vmName, bootstrapPath, "C:\\ProgramData\\Whitesmith\\bootstrap.json");
       const completion = this.hyperv.waitForStop(vmName, Number(Bun.env.WHITESMITH_HYPERV_JOB_TIMEOUT_MS ?? 3_600_000)).then(() => 0);
-      const runtime: RuntimeLease = { runtimeInstanceId: vmName, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: bytesToGigabytes(lease.resources.storageBytes) * 1024 ** 3 }, state: "sandbox_attested", completion };
+      const runtime: RuntimeLease = { runtimeInstanceId: vmName, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: bytesToGigabytes(lease.resources.storageBytes) * 1024 ** 3 }, state: "sandbox_attested", completion, sample: this.hyperv.sample ? () => this.hyperv.sample!(vmName) : undefined };
       this.leases.set(lease.id, { vmName, diskPath, runtime });
       return runtime;
     } catch (error) {
