@@ -1,8 +1,8 @@
 # Windows Worker Upgrade Follow-up Plan
 
-## Current decision
+Do not implement automatic worker upgrades from the dashboard yet. The current deliverable is a worker-card button that generates a manually runnable Windows upgrade command. A future button may dispatch the same operation through an authenticated durable worker command; it must not introduce a second upgrade implementation.
 
-Do not implement automatic worker upgrades from the dashboard yet. The immediate deliverable is a manually runnable Windows upgrade command. A future worker-card button will invoke the same command through an authenticated durable worker command; it must not introduce a second upgrade implementation.
+The generated command downloads `/api/workers/installer?audience=windows-x64&runtime=...` and invokes it with `-Upgrade`.
 
 ## Immediate command contract
 
