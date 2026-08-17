@@ -12,14 +12,16 @@ export async function recordJobTimingSnapshot(db: JobTimingDb, input: JobTimingS
       pool_id, artifact_digest, outcome, completed_at, queued_at, started_at,
       queue_duration_ms, startup_duration_ms, execution_duration_ms, cleanup_duration_ms, total_duration_ms,
       requested_vcpu, requested_memory_bytes, requested_storage_bytes, requested_concurrency,
-      observed_vcpu, observed_memory_bytes, observed_storage_bytes, effective_concurrency, created_at
+      observed_vcpu, observed_memory_bytes, observed_storage_bytes, effective_concurrency,
+      telemetry_state, telemetry_sample_count, cpu_average_percent, cpu_p50_percent, cpu_p95_percent, cpu_peak_percent, cpu_time_ms, memory_average_bytes, memory_peak_bytes, created_at
     ) VALUES (
       ${input.organizationId}, ${input.jobId}, ${input.runId}, ${input.repositoryId}, ${input.githubJobId},
       ${input.repositoryName}, ${input.workflowName}, ${input.jobName}, ${input.platform}, ${input.driver}, ${input.runtimeBoundary},
       ${input.poolId}, ${input.artifactDigest}, ${input.outcome}, ${input.completedAt}, ${input.queuedAt}, ${input.startedAt},
       ${input.queueDurationMs}, ${input.startupDurationMs}, ${input.executionDurationMs}, ${input.cleanupDurationMs}, ${input.totalDurationMs},
       ${input.requestedVcpu}, ${input.requestedMemoryBytes}, ${input.requestedStorageBytes}, ${input.requestedConcurrency},
-      ${input.observedVcpu}, ${input.observedMemoryBytes}, ${input.observedStorageBytes}, ${input.effectiveConcurrency}, ${input.createdAt ?? new Date().toISOString()}
+      ${input.observedVcpu}, ${input.observedMemoryBytes}, ${input.observedStorageBytes}, ${input.effectiveConcurrency},
+      ${input.telemetryState}, ${input.telemetrySampleCount}, ${input.cpuAveragePercent}, ${input.cpuP50Percent}, ${input.cpuP95Percent}, ${input.cpuPeakPercent}, ${input.cpuTimeMs}, ${input.memoryAverageBytes}, ${input.memoryPeakBytes}, ${input.createdAt ?? new Date().toISOString()}
     )
     ON CONFLICT (organization_id, job_id) DO NOTHING
     RETURNING job_id AS "jobId"
@@ -51,10 +53,14 @@ function normalizeTiming(row: Record<string, unknown>): JobTimingSnapshot {
     cleanupDurationMs: asNumber(row.cleanupDurationMs), totalDurationMs: asNumber(row.totalDurationMs),
     requestedVcpu: asNumber(row.requestedVcpu), requestedMemoryBytes: asNumber(row.requestedMemoryBytes),
     requestedStorageBytes: asNumber(row.requestedStorageBytes), requestedConcurrency: asNumber(row.requestedConcurrency),
-    observedVcpu: row.observedVcpu === null ? null : asNumber(row.observedVcpu),
-    observedMemoryBytes: row.observedMemoryBytes === null ? null : asNumber(row.observedMemoryBytes),
-    observedStorageBytes: row.observedStorageBytes === null ? null : asNumber(row.observedStorageBytes),
-    effectiveConcurrency: asNumber(row.effectiveConcurrency),
+    telemetrySampleCount: asNumber(row.telemetrySampleCount),
+    cpuAveragePercent: row.cpuAveragePercent === null ? null : asNumber(row.cpuAveragePercent),
+    cpuP50Percent: row.cpuP50Percent === null ? null : asNumber(row.cpuP50Percent),
+    cpuP95Percent: row.cpuP95Percent === null ? null : asNumber(row.cpuP95Percent),
+    cpuPeakPercent: row.cpuPeakPercent === null ? null : asNumber(row.cpuPeakPercent),
+    cpuTimeMs: row.cpuTimeMs === null ? null : asNumber(row.cpuTimeMs),
+    memoryAverageBytes: row.memoryAverageBytes === null ? null : asNumber(row.memoryAverageBytes),
+    memoryPeakBytes: row.memoryPeakBytes === null ? null : asNumber(row.memoryPeakBytes),
     completedAt: asIso(row.completedAt), queuedAt: asIso(row.queuedAt),
     startedAt: row.startedAt === null ? null : asIso(row.startedAt), createdAt: asIso(row.createdAt),
   } as JobTimingSnapshot;
@@ -71,7 +77,8 @@ export async function listJobTimingHistory(db: JobTimingDb, organizationId: stri
       execution_duration_ms AS "executionDurationMs", cleanup_duration_ms AS "cleanupDurationMs", total_duration_ms AS "totalDurationMs",
       requested_vcpu AS "requestedVcpu", requested_memory_bytes AS "requestedMemoryBytes", requested_storage_bytes AS "requestedStorageBytes",
       requested_concurrency AS "requestedConcurrency", observed_vcpu AS "observedVcpu", observed_memory_bytes AS "observedMemoryBytes",
-      observed_storage_bytes AS "observedStorageBytes", effective_concurrency AS "effectiveConcurrency", created_at AS "createdAt"
+      observed_storage_bytes AS "observedStorageBytes", effective_concurrency AS "effectiveConcurrency",
+      telemetry_state AS "telemetryState", telemetry_sample_count AS "telemetrySampleCount", cpu_average_percent AS "cpuAveragePercent", cpu_p50_percent AS "cpuP50Percent", cpu_p95_percent AS "cpuP95Percent", cpu_peak_percent AS "cpuPeakPercent", cpu_time_ms AS "cpuTimeMs", memory_average_bytes AS "memoryAverageBytes", memory_peak_bytes AS "memoryPeakBytes", created_at AS "createdAt"
     FROM dashboard_job_timing_snapshots
     WHERE organization_id=${organizationId}
       AND (${query.from ?? null}::timestamptz IS NULL OR completed_at >= ${query.from ?? null}::timestamptz)

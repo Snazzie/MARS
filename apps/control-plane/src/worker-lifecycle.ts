@@ -1,4 +1,4 @@
-import { jsonParameter, recordJobTimingSnapshot, type DatabaseClient, type JobTimingSnapshotInput } from "@whitesmith/db";
+import { jsonParameter, persistJobResourceSample, recordJobTimingSnapshot, type DatabaseClient, type JobTimingSnapshotInput } from "@whitesmith/db";
 import { WorkerEvent, WorkerEventPayload } from "@whitesmith/contracts";
 import type { AuthenticatedWorkerSocket, WorkerCommandDispatcher } from "./worker-dispatch.ts";
 
@@ -26,6 +26,15 @@ export function timingDurations(input: TimingBoundaryInputs) {
     totalDurationMs: Math.max(0, Date.parse(input.completedAt) - Date.parse(input.queuedAt)),
   };
 }
+export function aggregateResourceSamples(samples: Array<{ occurredAt: string; cpuUsagePercent: number; cpuTimeMs: number; memoryWorkingSetBytes: number }>, executionStart: string, completedAt: string) {
+  if (!samples.length) return { telemetryState: "unavailable" as const, telemetrySampleCount: 0, cpuAveragePercent: null, cpuP50Percent: null, cpuP95Percent: null, cpuPeakPercent: null, cpuTimeMs: null, memoryAverageBytes: null, memoryPeakBytes: null };
+  const ordered = [...samples].sort((a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt));
+  const cpu = ordered.map(sample => sample.cpuUsagePercent).sort((a, b) => a - b);
+  const percentile = (values: number[], p: number) => values[Math.min(values.length - 1, Math.max(0, Math.ceil(values.length * p) - 1))]!;
+  const gaps = ordered.slice(1).map((sample, index) => Date.parse(sample.occurredAt) - Date.parse(ordered[index]!.occurredAt));
+  const coverage = Math.abs(Date.parse(ordered[0]!.occurredAt) - Date.parse(executionStart)) <= 10_000 && Math.abs(Date.parse(completedAt) - Date.parse(ordered.at(-1)!.occurredAt)) <= 10_000 && gaps.every(gap => gap <= 15_000);
+  return { telemetryState: (coverage ? "available" : "partial") as "available" | "partial", telemetrySampleCount: ordered.length, cpuAveragePercent: cpu.reduce((sum, value) => sum + value, 0) / cpu.length, cpuP50Percent: percentile(cpu, 0.5), cpuP95Percent: percentile(cpu, 0.95), cpuPeakPercent: Math.max(...cpu), cpuTimeMs: ordered.reduce((sum, sample) => sum + sample.cpuTimeMs, 0), memoryAverageBytes: Math.round(ordered.reduce((sum, sample) => sum + sample.memoryWorkingSetBytes, 0) / ordered.length), memoryPeakBytes: Math.max(...ordered.map(sample => sample.memoryWorkingSetBytes)) };
+}
 
 export async function handleAuthenticatedWorkerEvent(
   db: DatabaseClient,
@@ -38,6 +47,7 @@ export async function handleAuthenticatedWorkerEvent(
   const payload = WorkerEventPayload.safeParse({ type: event.data.type, payload: event.data.payload });
   if (!payload.success) return false;
   if (payload.data.type === "command.accepted") return dispatcher.handleEvent(event.data, socket);
+  if (payload.data.type === "job.resource_sample") return (await persistJobResourceSample(db, event.data.workerId, event.data)) !== "rejected";
   if (payload.data.type === "job.log") return await persistWorkerLogEvent(db, event.data.workerId, payload.data.payload);
   await applyWorkerLeaseEvent(db, event.data);
   if (typeof event.data.payload.commandId === "string") dispatcher.handleEvent(event.data, socket);
@@ -70,6 +80,8 @@ async function recordReapedJobTiming(db: DatabaseClient, leaseId: string, reaped
   const queuedAt = asString(row.queuedAt), completedAt = asString(row.completedAt);
   if (!queuedAt || !completedAt || !requested) return;
   const startedAt = asString(row.startedAt);
+  const telemetryRows = await db<Record<string, unknown>[]>`SELECT occurred_at AS "occurredAt",cpu_usage_percent AS "cpuUsagePercent",cpu_time_ms AS "cpuTimeMs",memory_working_set_bytes AS "memoryWorkingSetBytes" FROM dashboard_job_resource_samples WHERE organization_id=${String(row.organizationId)} AND run_id=${String(row.runId)} AND job_id=${String(row.jobId)} AND lease_id=${leaseId} ORDER BY occurred_at`;
+  const telemetry = aggregateResourceSamples(telemetryRows.map(sample => ({ occurredAt: asString(sample.occurredAt) ?? completedAt, cpuUsagePercent: Number(sample.cpuUsagePercent), cpuTimeMs: Number(sample.cpuTimeMs), memoryWorkingSetBytes: Number(sample.memoryWorkingSetBytes) })), startedAt ?? queuedAt, completedAt);
   const snapshot: JobTimingSnapshotInput = {
     organizationId: String(row.organizationId), jobId: String(row.jobId), runId: String(row.runId),
     repositoryId: String(row.repositoryId), githubJobId: Number(row.githubJobId), repositoryName: String(row.repositoryName),
@@ -81,7 +93,7 @@ async function recordReapedJobTiming(db: DatabaseClient, leaseId: string, reaped
     ...timingDurations({ queuedAt, startedAt, completedAt, allocationStartedAt: asString(row.allocationStartedAt), sandboxReadyAt: asString(row.sandboxReadyAt), reapingStartedAt: asString(row.reapingStartedAt), reapedAt }),
     requestedVcpu: Number(requested.vcpu), requestedMemoryBytes: Number(requested.memoryBytes), requestedStorageBytes: Number(requested.storageBytes),
     requestedConcurrency: Number(requested.concurrency), observedVcpu: null, observedMemoryBytes: null, observedStorageBytes: null,
-    effectiveConcurrency: Number(requested.concurrency),
+    effectiveConcurrency: Number(requested.concurrency), ...telemetry,
   };
   if (Object.values(snapshot).some(value => value === "undefined" || (typeof value === "number" && !Number.isFinite(value)))) return;
   await recordJobTimingSnapshot(db, snapshot);
@@ -91,7 +103,7 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
   if (!parsedEvent.success) return false;
   const event = parsedEvent.data;
   const parsedPayload = WorkerEventPayload.safeParse({ type: event.type, payload: event.payload });
-  if (!parsedPayload.success || parsedPayload.data.type === "command.accepted" || parsedPayload.data.type === "job.log") return false;
+  if (!parsedPayload.success || parsedPayload.data.type === "command.accepted" || parsedPayload.data.type === "job.log" || parsedPayload.data.type === "job.resource_sample") return false;
 
   if (parsedPayload.data.type === "sandbox_attested") {
     const payload = parsedPayload.data.payload;

@@ -9,6 +9,7 @@ type RetentionConfig = {
   logs: number;
   audit: number;
   jobTimings: number;
+  jobResourceSamples: number;
 };
 
 const days = (name: string, fallback: number): number => {
@@ -26,6 +27,7 @@ export function retentionConfig(): RetentionConfig {
     logs: days("LOGS", 90),
     audit: days("AUDIT", 365),
     jobTimings: days("JOB_TIMINGS", 90),
+    jobResourceSamples: days("JOB_RESOURCE_SAMPLES", 7),
   };
 }
 
@@ -42,6 +44,7 @@ export async function pruneExpiredData(db: Sql<{}>, config = retentionConfig()):
   await prune("invalidations", db`DELETE FROM dashboard_outbox_invalidations WHERE occurred_at < now() - make_interval(days => ${config.invalidations}) RETURNING id`);
   await prune("logs", db`DELETE FROM dashboard_log_chunks WHERE occurred_at < now() - make_interval(days => ${config.logs}) RETURNING organization_id`);
   await prune("job_timings", db`DELETE FROM dashboard_job_timing_snapshots WHERE completed_at < now() - make_interval(days => ${config.jobTimings}) RETURNING organization_id, job_id`);
+  await prune("job_resource_samples", db`DELETE FROM dashboard_job_resource_samples WHERE occurred_at < now() - make_interval(days => ${config.jobResourceSamples}) RETURNING organization_id, job_id, occurred_at`);
   await prune("audit", db`DELETE FROM audit_events WHERE created_at < now() - make_interval(days => ${config.audit}) RETURNING id`);
   return results;
 }

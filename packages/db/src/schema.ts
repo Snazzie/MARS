@@ -102,6 +102,15 @@ CREATE TABLE IF NOT EXISTS dashboard_job_timing_snapshots (
   observed_memory_bytes bigint,
   observed_storage_bytes bigint,
   effective_concurrency bigint NOT NULL CHECK(effective_concurrency > 0),
+  telemetry_state text NOT NULL DEFAULT 'unavailable' CHECK(telemetry_state IN ('available','partial','unavailable')),
+  telemetry_sample_count bigint NOT NULL DEFAULT 0 CHECK(telemetry_sample_count >= 0),
+  cpu_average_percent numeric(5,2) CHECK(cpu_average_percent >= 0 AND cpu_average_percent <= 100),
+  cpu_p50_percent numeric(5,2) CHECK(cpu_p50_percent >= 0 AND cpu_p50_percent <= 100),
+  cpu_p95_percent numeric(5,2) CHECK(cpu_p95_percent >= 0 AND cpu_p95_percent <= 100),
+  cpu_peak_percent numeric(5,2) CHECK(cpu_peak_percent >= 0 AND cpu_peak_percent <= 100),
+  cpu_time_ms bigint CHECK(cpu_time_ms >= 0),
+  memory_average_bytes bigint CHECK(memory_average_bytes >= 0),
+  memory_peak_bytes bigint CHECK(memory_peak_bytes >= 0),
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (organization_id, job_id),
   FOREIGN KEY (organization_id, run_id, job_id) REFERENCES dashboard_jobs(organization_id, run_id, id) ON DELETE CASCADE,
@@ -109,6 +118,22 @@ CREATE TABLE IF NOT EXISTS dashboard_job_timing_snapshots (
 );
 CREATE INDEX IF NOT EXISTS dashboard_job_timing_completed_idx ON dashboard_job_timing_snapshots(organization_id, completed_at DESC, job_id DESC);
 CREATE INDEX IF NOT EXISTS dashboard_job_timing_dimensions_idx ON dashboard_job_timing_snapshots(organization_id, platform, driver, requested_vcpu, effective_concurrency, completed_at DESC);
+CREATE TABLE IF NOT EXISTS dashboard_job_resource_samples (
+  organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  run_id uuid NOT NULL,
+  job_id uuid NOT NULL,
+  lease_id uuid NOT NULL REFERENCES runner_leases(id) ON DELETE CASCADE,
+  occurred_at timestamptz NOT NULL,
+  cpu_usage_percent numeric(5,2) NOT NULL CHECK(cpu_usage_percent >= 0 AND cpu_usage_percent <= 100),
+  cpu_time_ms bigint NOT NULL CHECK(cpu_time_ms >= 0),
+  memory_working_set_bytes bigint NOT NULL CHECK(memory_working_set_bytes >= 0),
+  memory_limit_bytes bigint NOT NULL CHECK(memory_limit_bytes > 0),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (organization_id, job_id, occurred_at),
+  FOREIGN KEY (organization_id, run_id, job_id) REFERENCES dashboard_jobs(organization_id, run_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS dashboard_job_resource_samples_job_time_idx ON dashboard_job_resource_samples(organization_id, job_id, occurred_at);
+CREATE INDEX IF NOT EXISTS dashboard_job_resource_samples_retention_idx ON dashboard_job_resource_samples(created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS dashboard_jobs_org_run_id_idx ON dashboard_jobs(organization_id, run_id, id);
 CREATE TABLE IF NOT EXISTS dashboard_job_steps (organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE, run_id uuid NOT NULL, job_id uuid NOT NULL, id text NOT NULL, name text NOT NULL, number integer NOT NULL CHECK(number >= 0), status text NOT NULL, conclusion text, queued_at timestamptz NOT NULL DEFAULT now(), started_at timestamptz, completed_at timestamptz, duration_ms bigint NOT NULL DEFAULT 0 CHECK(duration_ms >= 0), PRIMARY KEY (organization_id, run_id, job_id, id), FOREIGN KEY (organization_id, run_id, job_id) REFERENCES dashboard_jobs(organization_id, run_id, id) ON DELETE CASCADE);
 CREATE INDEX IF NOT EXISTS dashboard_job_steps_order_idx ON dashboard_job_steps(organization_id, run_id, job_id, number, id);
@@ -198,7 +223,32 @@ export const jobTimingMigrationSql = `CREATE TABLE IF NOT EXISTS dashboard_job_t
   FOREIGN KEY (organization_id, run_id) REFERENCES dashboard_runs(organization_id, id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS dashboard_job_timing_completed_idx ON dashboard_job_timing_snapshots(organization_id, completed_at DESC, job_id DESC);
-CREATE INDEX IF NOT EXISTS dashboard_job_timing_dimensions_idx ON dashboard_job_timing_snapshots(organization_id, platform, driver, requested_vcpu, effective_concurrency, completed_at DESC);`;
+CREATE INDEX IF NOT EXISTS dashboard_job_timing_dimensions_idx ON dashboard_job_timing_snapshots(organization_id, platform, driver, requested_vcpu, effective_concurrency, completed_at DESC);
+ALTER TABLE dashboard_job_timing_snapshots ADD COLUMN IF NOT EXISTS telemetry_state text NOT NULL DEFAULT 'unavailable';
+ALTER TABLE dashboard_job_timing_snapshots ADD COLUMN IF NOT EXISTS telemetry_sample_count bigint NOT NULL DEFAULT 0;
+ALTER TABLE dashboard_job_timing_snapshots ADD COLUMN IF NOT EXISTS cpu_average_percent numeric(5,2);
+ALTER TABLE dashboard_job_timing_snapshots ADD COLUMN IF NOT EXISTS cpu_p50_percent numeric(5,2);
+ALTER TABLE dashboard_job_timing_snapshots ADD COLUMN IF NOT EXISTS cpu_p95_percent numeric(5,2);
+ALTER TABLE dashboard_job_timing_snapshots ADD COLUMN IF NOT EXISTS cpu_peak_percent numeric(5,2);
+ALTER TABLE dashboard_job_timing_snapshots ADD COLUMN IF NOT EXISTS cpu_time_ms bigint;
+ALTER TABLE dashboard_job_timing_snapshots ADD COLUMN IF NOT EXISTS memory_average_bytes bigint;
+ALTER TABLE dashboard_job_timing_snapshots ADD COLUMN IF NOT EXISTS memory_peak_bytes bigint;
+CREATE TABLE IF NOT EXISTS dashboard_job_resource_samples (
+  organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  run_id uuid NOT NULL,
+  job_id uuid NOT NULL,
+  lease_id uuid NOT NULL REFERENCES runner_leases(id) ON DELETE CASCADE,
+  occurred_at timestamptz NOT NULL,
+  cpu_usage_percent numeric(5,2) NOT NULL CHECK(cpu_usage_percent >= 0 AND cpu_usage_percent <= 100),
+  cpu_time_ms bigint NOT NULL CHECK(cpu_time_ms >= 0),
+  memory_working_set_bytes bigint NOT NULL CHECK(memory_working_set_bytes >= 0),
+  memory_limit_bytes bigint NOT NULL CHECK(memory_limit_bytes > 0),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (organization_id, job_id, occurred_at),
+  FOREIGN KEY (organization_id, run_id, job_id) REFERENCES dashboard_jobs(organization_id, run_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS dashboard_job_resource_samples_job_time_idx ON dashboard_job_resource_samples(organization_id, job_id, occurred_at);
+CREATE INDEX IF NOT EXISTS dashboard_job_resource_samples_retention_idx ON dashboard_job_resource_samples(created_at);`;
 
 
 export const workerJsonNormalizationMigrationSql = `UPDATE workers SET guest_platforms=(guest_platforms #>> '{}')::jsonb WHERE jsonb_typeof(guest_platforms)='string';

@@ -11,6 +11,7 @@ const input: JobTimingSnapshotInput = {
   queueDurationMs: 1000, startupDurationMs: 2000, executionDurationMs: 5000, cleanupDurationMs: 300, totalDurationMs: 8300,
   requestedVcpu: 2, requestedMemoryBytes: 1024, requestedStorageBytes: 2048, requestedConcurrency: 3,
   observedVcpu: 2, observedMemoryBytes: 1024, observedStorageBytes: 2048, effectiveConcurrency: 3,
+  telemetryState: "unavailable", telemetrySampleCount: 0, cpuAveragePercent: null, cpuP50Percent: null, cpuP95Percent: null, cpuPeakPercent: null, cpuTimeMs: null, memoryAverageBytes: null, memoryPeakBytes: null,
 };
 
 function fakeDb(rows: unknown[][]): JobTimingDb {

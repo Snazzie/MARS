@@ -60,7 +60,7 @@ export const JobTimingSnapshot = dto(strict({
   cleanupDurationMs: timingDuration, totalDurationMs: timingDuration,
   requestedVcpu: positiveSafe, requestedMemoryBytes: positiveSafe, requestedStorageBytes: positiveSafe,
   requestedConcurrency: positiveSafe, observedVcpu: positiveSafe.nullable(), observedMemoryBytes: positiveSafe.nullable(),
-  observedStorageBytes: positiveSafe.nullable(), effectiveConcurrency: positiveSafe, createdAt: timestamp,
+  observedStorageBytes: positiveSafe.nullable(), effectiveConcurrency: positiveSafe, telemetryState: z.enum(["available", "partial", "unavailable"]), telemetrySampleCount: positiveSafe.or(z.literal(0)), cpuAveragePercent: z.number().min(0).max(100).nullable(), cpuP50Percent: z.number().min(0).max(100).nullable(), cpuP95Percent: z.number().min(0).max(100).nullable(), cpuPeakPercent: z.number().min(0).max(100).nullable(), cpuTimeMs: timingDuration.nullable(), memoryAverageBytes: positiveSafe.nullable(), memoryPeakBytes: positiveSafe.nullable(), createdAt: timestamp,
 }));
 export type JobTimingSnapshot = z.infer<typeof JobTimingSnapshot>;
 export const JobTimingAggregate = dto(strict({
@@ -68,6 +68,8 @@ export const JobTimingAggregate = dto(strict({
   minMs: timingDuration, maxMs: timingDuration, p50Ms: timingDuration, p95Ms: timingDuration,
 }));
 export type JobTimingAggregate = z.infer<typeof JobTimingAggregate>;
+export const JobResourceSample = dto(strict({ organizationId: id, runId: id, jobId: id, leaseId: id, occurredAt: timestamp, cpuUsagePercent: z.number().min(0).max(100), cpuTimeMs: positiveSafe.or(z.literal(0)), memoryWorkingSetBytes: positiveSafe.or(z.literal(0)), memoryLimitBytes: positiveSafe }));
+export type JobResourceSample = z.infer<typeof JobResourceSample>;
 export const LogChunk = dto(strict({ organizationId, runId: id, jobId: id, sequence: positiveSafe.or(z.literal(0)), content: z.string(), hasMore: z.boolean(), occurredAt: timestamp }));
 export type LogChunk = z.infer<typeof LogChunk>;
 export const WorkerDoctor = dto(strict({ nestedKvm: z.boolean().optional(), kvmModules: z.boolean().optional(), versions: strict({ k3s: z.string(), kata: z.string(), containerd: z.string() }).optional(), runtimeHandler: z.string().optional(), runtimeMode: z.enum(["container", "vm", "tart"]).optional(), artifactDigest: z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/).optional(), probe: z.boolean().optional(), egress: z.boolean().optional(), imageSignatures: z.boolean().optional(), blockVolume: z.boolean().optional(), remediation: z.string().nullable().optional() }));
