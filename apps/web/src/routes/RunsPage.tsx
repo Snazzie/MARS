@@ -1,5 +1,6 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { getRuns } from "../api.ts";
 import { QueryState } from "../components/StateView.tsx";
 import { RunHistory } from "../components/RunHistory.tsx";
@@ -27,6 +28,7 @@ export function RunsPage() {
         <p className="eyebrow">Runs</p>
         <h1 id="run-history-title">Job Run History</h1>
       </div>
+      <Link className="button secondary" to="/runs/timing">Timing history</Link>
     </header>
     <QueryState error={query.error} isLoading={query.isLoading} isEmpty={!query.isLoading && !query.error && runs.length === 0} retry={() => void query.refetch()} operationLabel="run history" />
     {(runs.length > 0 || search) && <RunHistory runs={runs} onSearchChange={setSearch} />}

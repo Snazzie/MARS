@@ -6,6 +6,7 @@ import { OnboardingPage } from "./routes/OnboardingPage.tsx";
 import { OverviewPage } from "./routes/OverviewPage.tsx";
 import { WorkersPage } from "./routes/WorkersPage.tsx";
 import { RunsPage } from "./routes/RunsPage.tsx";
+import { TimingHistoryPage } from "./routes/TimingHistoryPage.tsx";
 import { RunDetailPage } from "./routes/RunDetailPage.tsx";
 import { RepositoriesPage } from "./routes/RepositoriesPage.tsx";
 import { PoolsPage } from "./routes/PoolsPage.tsx";
@@ -26,11 +27,12 @@ const dashboardGateRoute = createRoute({ getParentRoute: () => rootRoute, id: "d
 const dashboardRoute = createRoute({ getParentRoute: () => dashboardGateRoute, id: "dashboard", component: AppShell });
 const indexRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/", component: OverviewPage });
 const runsRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/runs", component: RunsPage });
+const timingHistoryRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/runs/timing", component: TimingHistoryPage });
 const runDetailRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/runs/$runId", validateSearch: z.object({ organizationId: z.string().optional() }), component: RunDetailPage });
 const repositoriesRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/repositories", component: RepositoriesPage });
 const workersRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/workers", component: WorkersPage });
 const poolsRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/pools", component: PoolsPage });
 const settingsRoute = createRoute({ getParentRoute: () => dashboardRoute, path: "/settings", component: SettingsPage });
-const routeTree = rootRoute.addChildren([onboardingRoute, dashboardGateRoute.addChildren([dashboardRoute.addChildren([indexRoute, runsRoute, runDetailRoute, repositoriesRoute, workersRoute, poolsRoute, settingsRoute])])]);
+const routeTree = rootRoute.addChildren([onboardingRoute, dashboardGateRoute.addChildren([dashboardRoute.addChildren([indexRoute, runsRoute, timingHistoryRoute, runDetailRoute, repositoriesRoute, workersRoute, poolsRoute, settingsRoute])])]);
 export const router = createRouter({ routeTree });
 declare module "@tanstack/react-router" { interface Register { router: typeof router } }

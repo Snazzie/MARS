@@ -13,6 +13,8 @@ import {
   RepositorySummary,
   RunDetail,
   RunSummary,
+  JobTimingSnapshot,
+  JobTimingAggregate,
   OnboardingDetail,
   OnboardingStatus,
   SelectOnboardingWorkerRequest,
@@ -82,6 +84,16 @@ export function getRuns(organizationId: string, { cursor, search = "", limit = 5
   if (search) query.set("search", search);
   if (cursor) query.set("cursor", cursor);
   return request(`/api/organizations/${organizationId}/runs?${query}`, CursorPage(RunSummary));
+}
+export function getJobTimingHistory(organizationId: string, params: { cursor?: string | null; from?: string; to?: string; platform?: string; vcpu?: number; concurrency?: number; limit?: number } = {}) {
+  const query = new URLSearchParams({ limit: String(params.limit ?? 50) });
+  for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null && key !== "limit") query.set(key, String(value));
+  return request(`/api/organizations/${organizationId}/job-timings?${query}`, CursorPage(JobTimingSnapshot));
+}
+export function getJobTimingAggregates(organizationId: string, params: { from?: string; to?: string; platform?: string; vcpu?: number; concurrency?: number } = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) if (value !== undefined) query.set(key, String(value));
+  return request(`/api/organizations/${organizationId}/job-timings/aggregates?${query}`, JobTimingAggregate.array());
 }
 export const getRun = (organizationId: string, runId: string) =>
   request(`/api/organizations/${organizationId}/runs/${runId}`, RunDetail);
