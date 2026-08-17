@@ -1,11 +1,11 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter } from "@whitesmith/db";
+import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates } from "@whitesmith/db";
 import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
-import { ApiError, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult } from "@whitesmith/contracts";
+import { ApiError, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate } from "@whitesmith/contracts";
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
@@ -15,6 +15,7 @@ const querySchema = z.object({
   visibility: z.enum(["public", "private", "internal"]).optional(),
 }).strict();
 const periodSchema = z.enum(["24h", "7d", "30d"]);
+const timingQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50), cursor: z.string().datetime({ offset: true }).optional(), from: z.string().datetime({ offset: true }).optional(), to: z.string().datetime({ offset: true }).optional(), repositoryId: z.string().uuid().optional(), workflow: z.string().max(200).optional(), jobName: z.string().max(200).optional(), platform: z.string().max(100).optional(), driver: z.string().max(100).optional(), vcpu: z.coerce.number().int().positive().optional(), concurrency: z.coerce.number().int().positive().optional(), outcome: z.enum(["success", "failure", "cancelled", "skipped", "neutral"]).optional() }).strict();
 const logSchema = z.object({ after: z.coerce.number().int().min(-1).default(-1), limit: z.coerce.number().int().min(1).max(100).default(100) }).strict();
 const mutationSchema = z.object({}).strict();
 
@@ -57,6 +58,22 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const denied = await guard(c, deps, org);
     if (denied) return denied;
     return c.json(CursorPage(RunSummary).parse(await listRuns(deps.db, org, q.limit, q.cursor ?? null, q.search)));
+  }));
+  app.get("/api/organizations/:organizationId/job-timings", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const denied = await guard(c, deps, org);
+    if (denied) return denied;
+    const parsed = timingQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) return error(c, 400, "invalid_timing_query", "Invalid timing history query", { issues: parsed.error.issues });
+    return c.json(CursorPage(JobTimingSnapshot).parse(await listJobTimingHistory(deps.db, org, parsed.data)));
+  }));
+  app.get("/api/organizations/:organizationId/job-timings/aggregates", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const denied = await guard(c, deps, org);
+    if (denied) return denied;
+    const parsed = timingQuerySchema.omit({ limit: true, cursor: true }).safeParse(c.req.query());
+    if (!parsed.success) return error(c, 400, "invalid_timing_query", "Invalid timing aggregate query", { issues: parsed.error.issues });
+    return c.json(JobTimingAggregate.array().parse(await getJobTimingAggregates(deps.db, org, parsed.data)));
   }));
   app.get("/api/organizations/:organizationId/pools", safe(async (c) => {
     const org = c.req.param("organizationId");

@@ -1,4 +1,4 @@
-import type { JobTimingSnapshot } from "@whitesmith/contracts";
+import type { JobTimingAggregate, JobTimingSnapshot } from "@whitesmith/contracts";
 import type { Sql } from "postgres";
 
 export type JobTimingSnapshotInput = Omit<JobTimingSnapshot, "createdAt"> & { createdAt?: string };
@@ -25,4 +25,85 @@ export async function recordJobTimingSnapshot(db: JobTimingDb, input: JobTimingS
     RETURNING job_id AS "jobId"
   `;
   return Boolean(row);
+}
+export type JobTimingHistoryQuery = {
+  limit?: number;
+  cursor?: string | null;
+  from?: string;
+  to?: string;
+  repositoryId?: string;
+  workflow?: string;
+  jobName?: string;
+  platform?: string;
+  driver?: string;
+  vcpu?: number;
+  concurrency?: number;
+  outcome?: JobTimingSnapshot["outcome"];
+};
+
+const asIso = (value: unknown) => value instanceof Date ? value.toISOString() : String(value);
+const asNumber = (value: unknown) => Number(value ?? 0);
+function normalizeTiming(row: Record<string, unknown>): JobTimingSnapshot {
+  return {
+    ...row,
+    githubJobId: asNumber(row.githubJobId), queueDurationMs: asNumber(row.queueDurationMs),
+    startupDurationMs: asNumber(row.startupDurationMs), executionDurationMs: asNumber(row.executionDurationMs),
+    cleanupDurationMs: asNumber(row.cleanupDurationMs), totalDurationMs: asNumber(row.totalDurationMs),
+    requestedVcpu: asNumber(row.requestedVcpu), requestedMemoryBytes: asNumber(row.requestedMemoryBytes),
+    requestedStorageBytes: asNumber(row.requestedStorageBytes), requestedConcurrency: asNumber(row.requestedConcurrency),
+    observedVcpu: row.observedVcpu === null ? null : asNumber(row.observedVcpu),
+    observedMemoryBytes: row.observedMemoryBytes === null ? null : asNumber(row.observedMemoryBytes),
+    observedStorageBytes: row.observedStorageBytes === null ? null : asNumber(row.observedStorageBytes),
+    effectiveConcurrency: asNumber(row.effectiveConcurrency),
+    completedAt: asIso(row.completedAt), queuedAt: asIso(row.queuedAt),
+    startedAt: row.startedAt === null ? null : asIso(row.startedAt), createdAt: asIso(row.createdAt),
+  } as JobTimingSnapshot;
+}
+
+export async function listJobTimingHistory(db: JobTimingDb, organizationId: string, query: JobTimingHistoryQuery = {}): Promise<{ items: JobTimingSnapshot[]; nextCursor: string | null }> {
+  const limit = Math.max(1, Math.min(100, Math.floor(query.limit ?? 50)));
+  const rows = await db<Record<string, unknown>[]>`
+    SELECT organization_id AS "organizationId", job_id AS "jobId", run_id AS "runId", repository_id AS "repositoryId",
+      github_job_id AS "githubJobId", repository_name AS "repositoryName", workflow_name AS "workflowName", job_name AS "jobName",
+      platform, driver, runtime_boundary AS "runtimeBoundary", pool_id AS "poolId", artifact_digest AS "artifactDigest",
+      outcome, completed_at AS "completedAt", queued_at AS "queuedAt", started_at AS "startedAt",
+      queue_duration_ms AS "queueDurationMs", startup_duration_ms AS "startupDurationMs",
+      execution_duration_ms AS "executionDurationMs", cleanup_duration_ms AS "cleanupDurationMs", total_duration_ms AS "totalDurationMs",
+      requested_vcpu AS "requestedVcpu", requested_memory_bytes AS "requestedMemoryBytes", requested_storage_bytes AS "requestedStorageBytes",
+      requested_concurrency AS "requestedConcurrency", observed_vcpu AS "observedVcpu", observed_memory_bytes AS "observedMemoryBytes",
+      observed_storage_bytes AS "observedStorageBytes", effective_concurrency AS "effectiveConcurrency", created_at AS "createdAt"
+    FROM dashboard_job_timing_snapshots
+    WHERE organization_id=${organizationId}
+      AND (${query.from ?? null}::timestamptz IS NULL OR completed_at >= ${query.from ?? null}::timestamptz)
+      AND (${query.to ?? null}::timestamptz IS NULL OR completed_at < ${query.to ?? null}::timestamptz)
+      AND (${query.repositoryId ?? null}::uuid IS NULL OR repository_id=${query.repositoryId ?? null})
+      AND (${query.workflow ?? null}::text IS NULL OR workflow_name=${query.workflow ?? null})
+      AND (${query.jobName ?? null}::text IS NULL OR job_name=${query.jobName ?? null})
+      AND (${query.platform ?? null}::text IS NULL OR platform=${query.platform ?? null})
+      AND (${query.driver ?? null}::text IS NULL OR driver=${query.driver ?? null})
+      AND (${query.vcpu ?? null}::bigint IS NULL OR requested_vcpu=${query.vcpu ?? null})
+      AND (${query.concurrency ?? null}::bigint IS NULL OR effective_concurrency=${query.concurrency ?? null})
+      AND (${query.outcome ?? null}::text IS NULL OR outcome=${query.outcome ?? null})
+      AND (${query.cursor ?? null}::timestamptz IS NULL OR (completed_at, job_id) < (${query.cursor ?? null}::timestamptz, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid))
+    ORDER BY completed_at DESC, job_id DESC
+    LIMIT ${limit + 1}
+  `;
+  const items = rows.slice(0, limit).map(normalizeTiming);
+  return { items, nextCursor: rows.length > limit ? items.at(-1)?.completedAt ?? null : null };
+}
+
+export async function getJobTimingAggregates(db: JobTimingDb, organizationId: string, query: Omit<JobTimingHistoryQuery, "cursor" | "limit"> = {}): Promise<JobTimingAggregate[]> {
+  const rows = await db<Record<string, unknown>[]>`
+    SELECT platform AS "groupPlatform", count(*)::int AS "sampleCount",
+      min(execution_duration_ms)::bigint AS "minMs", max(execution_duration_ms)::bigint AS "maxMs",
+      percentile_cont(0.5) WITHIN GROUP (ORDER BY execution_duration_ms)::bigint AS "p50Ms",
+      percentile_cont(0.95) WITHIN GROUP (ORDER BY execution_duration_ms)::bigint AS "p95Ms"
+    FROM dashboard_job_timing_snapshots
+    WHERE organization_id=${organizationId}
+      AND (${query.from ?? null}::timestamptz IS NULL OR completed_at >= ${query.from ?? null}::timestamptz)
+      AND (${query.to ?? null}::timestamptz IS NULL OR completed_at < ${query.to ?? null}::timestamptz)
+      AND (${query.platform ?? null}::text IS NULL OR platform=${query.platform ?? null})
+    GROUP BY platform ORDER BY platform
+  `;
+  return rows.map(row => ({ group: { platform: String(row.groupPlatform) }, sampleCount: asNumber(row.sampleCount), minMs: asNumber(row.minMs), maxMs: asNumber(row.maxMs), p50Ms: asNumber(row.p50Ms), p95Ms: asNumber(row.p95Ms) }));
 }
