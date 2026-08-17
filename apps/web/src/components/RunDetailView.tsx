@@ -39,6 +39,7 @@ function statusLabel(data: RunDetail): string {
 }
 
 function jobStatusLabel(job: RunJob): string {
+  if (job.failureReason === "out_of_memory") return "out of memory";
   return (job.conclusion ?? job.status).replaceAll("_", " ");
 }
 function DetailBadges({ values }: { values: readonly string[] }) {
@@ -48,6 +49,13 @@ function DetailBadges({ values }: { values: readonly string[] }) {
 function JobBadges({ job }: { job: RunJob }) {
   const labels = [job.runnerName ?? "Awaiting runner", ...job.requestedLabels];
   return <div className="detail-labels">{labels.map((label, index) => <Badge key={`${label}-${index}`} label={label} />)}</div>;
+}
+
+function OomNotice({ job }: { job: RunJob }) {
+  if (job.failureReason !== "out_of_memory" || !job.oom) return null;
+  const peak = formatResourceValue(job.oom.memoryWorkingSetBytes, "bytes");
+  const limit = formatResourceValue(job.oom.memoryLimitBytes, "bytes");
+  return <p className="detail-meta" role="status">Memory limit exceeded: {peak} used of {limit}. {job.oom.gracefulStopAcknowledged ? "Runner stopped gracefully." : "Runner was terminated after memory pressure."}</p>;
 }
 
 
@@ -64,7 +72,6 @@ function JobBadges({ job }: { job: RunJob }) {
       <DetailBadges values={[data.repositoryName, data.runtimeBoundary ?? "Runtime boundary pending", data.branch, data.actorLogin, `commit ${data.commitSha.slice(0, 12)}`]} />
       <dl className="detail-facts"><div><dt>Started</dt><dd>{facts.started}</dd></div><div><dt>Repository</dt><dd>{facts.repository}</dd></div><div><dt>Runner</dt><dd>{facts.runner}</dd></div><div><dt>Duration</dt><dd>{facts.duration}</dd></div><div><dt>Current stage</dt><dd>{detail.currentStage ?? "Not reported"}</dd></div><div><dt>Retry count</dt><dd>{detail.retryCount ?? 0}</dd></div><div><dt>Lease cleanup</dt><dd>{detail.leaseCleanupState ?? "Not reported"}</dd></div></dl>
       {detail.schedulerReason && <p className="detail-meta">Scheduler block: {detail.schedulerReason}</p>}
-      {detail.htmlUrl && <p className="detail-meta"><a href={detail.htmlUrl} target="_blank" rel="noreferrer">Open GitHub run</a></p>}
     </section>
     <div className="detail-tabs">
       <div className="detail-tab-list" role="tablist" aria-label="Run detail views">
@@ -72,7 +79,7 @@ function JobBadges({ job }: { job: RunJob }) {
         <button type="button" role="tab" id="run-metrics-tab" aria-selected={selectedTab === "metrics"} aria-controls="run-metrics-panel" tabIndex={selectedTab === "metrics" ? 0 : -1} onClick={() => setSelectedTab("metrics")}>Metrics</button>
       </div>
       {selectedTab === "logs" ? <section id="run-logs-panel" role="tabpanel" aria-labelledby="run-logs-tab" className="run-tab-panel">
-        {data.jobs.map((job) => <section className="run-job-logs" key={job.id}><header className="job-heading"><div><h2>{job.name}</h2><JobBadges job={job} /></div><span className={`status status-${job.conclusion ?? job.status}`}>{jobStatusLabel(job)}</span></header><LogViewer organizationId={organizationId} runId={data.id} jobId={job.id} logsState={job.logsState} steps={job.steps} /></section>)}
+        {data.jobs.map((job) => <section className="run-job-logs" key={job.id}><header className="job-heading"><div><h2>{job.name}</h2><JobBadges job={job} /></div><span className={`status ${job.failureReason === "out_of_memory" ? "status-failure" : `status-${job.conclusion ?? job.status}`}`}>{jobStatusLabel(job)}</span></header><OomNotice job={job} /><LogViewer organizationId={organizationId} runId={data.id} jobId={job.id} logsState={job.logsState} steps={job.steps} /></section>)}
       </section> : <section id="run-metrics-panel" role="tabpanel" aria-labelledby="run-metrics-tab" className="run-tab-panel">
         <RunTelemetry queuedAt={data.queuedAt} startedAt={data.startedAt} completedAt={data.completedAt} />
         <RunTimeline jobs={data.jobs} durations={stageDurations} />

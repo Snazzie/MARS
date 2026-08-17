@@ -88,6 +88,28 @@ test("renders an awaiting-runner badge when no runner is assigned", () => {
   expect(markup).toContain("Awaiting runner");
 });
 
+test("renders an actionable OOM diagnosis", () => {
+  const markup = renderView({
+    ...detail,
+    jobs: [{
+      ...detail.jobs[0]!,
+      conclusion: "failure",
+      failureReason: "out_of_memory",
+      oom: {
+        reason: "out_of_memory",
+        memoryWorkingSetBytes: 11_295_763_988,
+        memoryLimitBytes: 10_737_418_240,
+        detectedAt: "2026-08-17T20:59:24.015Z",
+        gracefulStopAcknowledged: false,
+      },
+    }],
+  });
+  expect(markup).toContain("out of memory");
+  expect(markup).toContain("Memory limit exceeded");
+  expect(markup).toContain("10.5 GiB");
+  expect(markup).toContain("10.0 GiB");
+});
+
 test("switches to Metrics without rendering log viewers", async () => {
   const window = new Window();
   // @ts-expect-error test DOM globals
