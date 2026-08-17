@@ -48,6 +48,26 @@ export const RunStageRecord = dto(strict({ stage: RunStage, startedAt: timestamp
 export type RunStageRecord = z.infer<typeof RunStageRecord>;
 export const RunDetail = dto(strict({ ...runSummaryShape, jobs: z.array(RunJob), stages: z.array(RunStageRecord), actionGraph: ActionGraph }));
 export type RunDetail = z.infer<typeof RunDetail>;
+const timingDuration = positiveSafe.or(z.literal(0));
+const timingOutcome = z.enum(["success", "failure", "cancelled", "skipped", "neutral"]);
+export const JobTimingSnapshot = dto(strict({
+  organizationId: id, jobId: id, runId: id, repositoryId: id, githubJobId: positiveSafe,
+  repositoryName: z.string().min(1), workflowName: z.string().min(1), jobName: z.string().min(1),
+  platform: z.string().min(1), driver: z.string().min(1), runtimeBoundary: z.string().nullable(),
+  poolId: id.nullable(), artifactDigest: z.string().nullable(), outcome: timingOutcome,
+  completedAt: timestamp, queuedAt: timestamp, startedAt: timestamp.nullable(),
+  queueDurationMs: timingDuration, startupDurationMs: timingDuration, executionDurationMs: timingDuration,
+  cleanupDurationMs: timingDuration, totalDurationMs: timingDuration,
+  requestedVcpu: positiveSafe, requestedMemoryBytes: positiveSafe, requestedStorageBytes: positiveSafe,
+  requestedConcurrency: positiveSafe, observedVcpu: positiveSafe.nullable(), observedMemoryBytes: positiveSafe.nullable(),
+  observedStorageBytes: positiveSafe.nullable(), effectiveConcurrency: positiveSafe, createdAt: timestamp,
+}));
+export type JobTimingSnapshot = z.infer<typeof JobTimingSnapshot>;
+export const JobTimingAggregate = dto(strict({
+  group: z.record(z.string(), z.string()), sampleCount: positiveSafe,
+  minMs: timingDuration, maxMs: timingDuration, p50Ms: timingDuration, p95Ms: timingDuration,
+}));
+export type JobTimingAggregate = z.infer<typeof JobTimingAggregate>;
 export const LogChunk = dto(strict({ organizationId, runId: id, jobId: id, sequence: positiveSafe.or(z.literal(0)), content: z.string(), hasMore: z.boolean(), occurredAt: timestamp }));
 export type LogChunk = z.infer<typeof LogChunk>;
 export const WorkerDoctor = dto(strict({ nestedKvm: z.boolean().optional(), kvmModules: z.boolean().optional(), versions: strict({ k3s: z.string(), kata: z.string(), containerd: z.string() }).optional(), runtimeHandler: z.string().optional(), runtimeMode: z.enum(["container", "vm", "tart"]).optional(), artifactDigest: z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/).optional(), probe: z.boolean().optional(), egress: z.boolean().optional(), imageSignatures: z.boolean().optional(), blockVolume: z.boolean().optional(), remediation: z.string().nullable().optional() }));

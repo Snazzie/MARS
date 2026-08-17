@@ -51,5 +51,6 @@ export async function migrate(sql: DatabaseClient): Promise<void> {
 export { schemaSql };
 export * from "./json.ts";
 export * from "./dashboard.ts";
+export * from "./job-timing.ts";
 export * from "./onboarding.ts";
 export * from "./leases.ts";
