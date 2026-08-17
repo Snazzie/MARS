@@ -22,7 +22,8 @@ param(
   [int]$WindowsContainerReadyTimeoutMs = 15000,
   [int]$WindowsContainerJobTimeoutMs = 900000,
   [switch]$AllowInsecureHttp,
-  [switch]$AllowLocalContainerImage
+  [switch]$AllowLocalContainerImage,
+  [switch]$Upgrade
 )
 $ErrorActionPreference = 'Stop'
 $windowsImageManifestPath = 'C:\ProgramData\Whitesmith\windows-job-image.json'
@@ -158,13 +159,14 @@ if ($WindowsRuntime -eq 'container') {
 }
 Write-Host '[3/8] Checking control-plane connectivity'
 Ensure-ControlPlane
-if ($JoinCode -match '^__') { throw 'Join code is not configured.' }
+if (-not $Upgrade -and $JoinCode -match '^__') { throw 'Join code is not configured.' }
 $root = 'C:\ProgramData\Whitesmith'; $bin = 'C:\Program Files\Whitesmith'; $identityPath = Join-Path $root 'worker-identity.json'
 Write-Host '[5/8] Preparing worker directories'
 New-Item -ItemType Directory -Force -Path $root,$bin | Out-Null
 $existingService = Get-Service WhitesmithWorker -ErrorAction SilentlyContinue
 $existingInstall = $existingService -or (Test-Path -LiteralPath $identityPath)
-if ($existingInstall) { Write-Host 'Existing Windows worker installation detected; reinstalling.' }
+if ($Upgrade -and (-not $existingService -or -not (Test-Path -LiteralPath $identityPath))) { throw 'Upgrade requires an existing WhitesmithWorker service and worker identity.' }
+if ($existingInstall) { if ($Upgrade) { Write-Host 'Existing Windows worker installation detected; upgrading while preserving identity.' } else { Write-Host 'Existing Windows worker installation detected; reinstalling.' } }
 if ($existingService) {
   Stop-Service WhitesmithWorker -Force -ErrorAction SilentlyContinue
   $serviceDelete = & sc.exe delete WhitesmithWorker 2>&1
@@ -173,11 +175,13 @@ if ($existingService) {
   while ((Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
   if (Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) { throw 'Timed out removing existing WhitesmithWorker service.' }
 }
-if ($existingInstall -and (Test-Path -LiteralPath $identityPath)) { Remove-Item -LiteralPath $identityPath -Force }
+if (-not $Upgrade -and $existingInstall -and (Test-Path -LiteralPath $identityPath)) { Remove-Item -LiteralPath $identityPath -Force }
 $joinCodePath = Join-Path $root 'join-code'
-[IO.File]::WriteAllText($joinCodePath, $JoinCode)
-$joinCodeAcl = & icacls.exe $joinCodePath /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' 2>&1
-if ($LASTEXITCODE -ne 0) { throw "Failed to secure worker join credential: $($joinCodeAcl -join ' ')" }
+if (-not $Upgrade) {
+  [IO.File]::WriteAllText($joinCodePath, $JoinCode)
+  $joinCodeAcl = & icacls.exe $joinCodePath /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to secure worker join credential: $($joinCodeAcl -join ' ')" }
+}
 $exe = Join-Path $bin 'whitesmith-orchestrator.exe'
 $serviceHost = Join-Path $bin 'whitesmith-service-host.exe'
 $stagedExe = Join-Path $root 'whitesmith-orchestrator.download'

@@ -165,6 +165,13 @@ test("Windows installer supports Docker mode with a fail-closed runtime probe", 
   expect(source).toContain("WHITESMITH_WINDOWS_RUNTIME");
   expect(source).toContain("WHITESMITH_WINDOWS_TEMPLATE_PATH");
 });
+test("Windows installer exposes identity-preserving upgrade mode", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).toContain("[switch]$Upgrade");
+  expect(source).toContain("Upgrade requires an existing WhitesmithWorker service and worker identity.");
+  expect(source).toContain("if (-not $Upgrade -and $existingInstall");
+  expect(source).toContain("if (-not $Upgrade) {");
+});
 test("Windows guest service runs as a startup-available system service account task", async () => {
   const source = await Bun.file(prepareWindowsTemplate).text();
   expect(source).toContain("New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount");
