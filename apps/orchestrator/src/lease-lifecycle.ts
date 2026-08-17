@@ -17,10 +17,28 @@ export async function runLeaseLifecycle(
     return;
   }
   send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "sandbox_attested", occurredAt: new Date().toISOString(), payload: { ...payload, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed } });
+  const sampleRuntime = runtime.sample;
+  let sampling = true;
+  const sampler = sampleRuntime ? (async () => {
+    while (sampling) {
+      await Bun.sleep(5_000);
+      if (!sampling) break;
+      try {
+        const sample = await sampleRuntime();
+        send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "job.resource_sample", occurredAt: new Date().toISOString(), payload: { jobId: bootstrap.jobId, leaseId: bootstrap.leaseId, occurredAt: new Date().toISOString(), ...sample } });
+      } catch (error) {
+        console.error("Job resource sample failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  })() : Promise.resolve();
   try {
     const exitCode = await runtime.completion;
+    sampling = false;
+    await sampler;
     send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "runner.finished", occurredAt: new Date().toISOString(), payload: { ...payload, exitCode } });
   } catch (error) {
+    sampling = false;
+    await sampler;
     console.error("Runner failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
     send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "runner_failed" } });
   }

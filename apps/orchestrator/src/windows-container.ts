@@ -13,6 +13,16 @@ const localImage = "whitesmith/windows-job:local";
 
 async function defaultDocker(args: string[]): Promise<DockerResult> { const process = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe" }); return { code: await process.exited, stdout: await new Response(process.stdout).text(), stderr: await new Response(process.stderr).text() }; }
 function checked(result: DockerResult, operation: string): string { if (result.code !== 0) throw new Error(`${operation} failed: ${result.stderr.replaceAll(/\r?\n/g, " ").slice(0, 500)}`); return result.stdout.trim(); }
+function parseMemoryBytes(value: string): number { const match = value.replaceAll(",", "").match(/([\d.]+)\s*([KMG]?i?B)/i); if (!match) return 0; const units: Record<string, number> = { b: 1, kb: 1024, kib: 1024, mb: 1024 ** 2, mib: 1024 ** 2, gb: 1024 ** 3, gib: 1024 ** 3 }; return Math.round(Number(match[1]) * (units[match[2]!.toLowerCase()] ?? 1)); }
+function dockerSample(name: string, docker: DockerRunner) {
+  return async () => {
+    const raw = checked(await docker(["stats", "--no-stream", "--format", "{{json .}}", name]), "docker stats");
+    const value = JSON.parse(raw) as { CPUPerc?: string; MemUsage?: string };
+    const cpuUsagePercent = Math.max(0, Math.min(100, Number.parseFloat(value.CPUPerc?.replace("%", "") ?? "0")));
+    const [working, limit] = (value.MemUsage ?? "").split("/");
+    return { cpuUsagePercent, cpuTimeMs: 0, memoryWorkingSetBytes: parseMemoryBytes(working ?? ""), memoryLimitBytes: Math.max(1, parseMemoryBytes(limit ?? "")) };
+  };
+}
 
 export class WindowsContainerDriver implements RuntimeDriver {
   readonly name = "windows-hyperv-container" as const;
@@ -41,8 +51,8 @@ export class WindowsContainerDriver implements RuntimeDriver {
       checked(await this.docker(["create", "--name", name, "--isolation=hyperv", "--label", "whitesmith.managed=true", "--label", `whitesmith.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), "--storage-opt", `size=${lease.resources.storageBytes}`, "--mount", `type=bind,source=${root},target=C:\\ProgramData\\Whitesmith\\bootstrap,readonly`, this.config.image]), "docker create");
       checked(await this.docker(["start", name]), "docker start");
       const inspect = JSON.parse(checked(await this.docker(["inspect", name]), "docker inspect")) as Array<{ HostConfig?: { Isolation?: string } }>;
+      const runtime: RuntimeLease = { runtimeInstanceId: name, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: this.wait(name), sample: dockerSample(name, this.docker) };
       if (inspect[0]?.HostConfig?.Isolation?.toLowerCase() !== "hyperv") throw new Error("container isolation is not Hyper-V");
-      const runtime: RuntimeLease = { runtimeInstanceId: name, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: this.wait(name) };
       this.leases.set(lease.id, { name, root, runtime });
       return runtime;
     } catch (error) { await this.removeLease(lease.id).catch(() => undefined); throw error; }

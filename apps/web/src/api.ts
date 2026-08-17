@@ -15,6 +15,7 @@ import {
   RunSummary,
   JobTimingSnapshot,
   JobTimingAggregate,
+  JobResourceSample,
   OnboardingDetail,
   OnboardingStatus,
   SelectOnboardingWorkerRequest,
@@ -95,6 +96,11 @@ export function getJobTimingAggregates(organizationId: string, params: { from?: 
   for (const [key, value] of Object.entries(params)) if (value !== undefined) query.set(key, String(value));
   return request(`/api/organizations/${organizationId}/job-timings/aggregates?${query}`, JobTimingAggregate.array());
 }
+export const getJobResourceSamples = (organizationId: string, runId: string, jobId: string, after: string | null = null, limit = 100) => {
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (after) query.set("after", after);
+  return request(`/api/organizations/${organizationId}/runs/${runId}/jobs/${jobId}/resource-samples?${query}`, CursorPage(JobResourceSample));
+};
 export const getRun = (organizationId: string, runId: string) =>
   request(`/api/organizations/${organizationId}/runs/${runId}`, RunDetail);
 export const getLogs = (organizationId: string, runId: string, jobId: string, after: string | number = -1, limit = 100) =>
