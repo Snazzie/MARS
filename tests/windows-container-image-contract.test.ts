@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, test } from "bun:test";
 
 const script = await readFile("deploy/workers/build-windows-container-image.ps1", "utf8");
+const localScript = await readFile("deploy/workers/build-windows-container-image-local.ps1", "utf8");
 const containerfile = await readFile("images/jobs/windows/Containerfile", "utf8");
 const entrypoint = await readFile("images/jobs/windows/entrypoint.ps1", "utf8");
 const verifier = await readFile("images/jobs/windows/verify-runtime.ps1", "utf8");
@@ -26,6 +27,15 @@ describe("Windows job image contract", () => {
     expect(verifier).toContain("Container TCP probe failed for api.github.com:443");
     expect(verifier).toContain("TcpClient");
     expect(verifier).toContain("Dispose()");
+  });
+  test("builds and caches locally without registry publication", () => {
+    expect(localScript).toContain("docker build");
+    expect(localScript).toContain("docker pull");
+    expect(localScript).toContain("docker wait");
+    expect(localScript).toContain("docker logs");
+    expect(localScript).toContain("Move-Item");
+    expect(localScript).toContain("runtimeProbe");
+    expect(localScript).not.toContain("docker push");
   });
 
   test("pins inputs and emits a registry digest", () => {

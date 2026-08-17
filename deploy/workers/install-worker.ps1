@@ -13,6 +13,11 @@ param(
   [string]$WindowsContainerGitSha256 = '__WINDOWS_CONTAINER_GIT_SHA256__',
   [string]$WindowsContainerVcUrl = '__WINDOWS_CONTAINER_VC_URL__',
   [string]$WindowsContainerVcSha256 = '__WINDOWS_CONTAINER_VC_SHA256__',
+  [string]$WindowsContainerBuilderUrl = '__WINDOWS_CONTAINER_BUILDER_URL__',
+  [string]$WindowsContainerVerifierUrl = '__WINDOWS_CONTAINER_VERIFIER_URL__',
+  [string]$WindowsContainerfileUrl = '__WINDOWS_CONTAINERFILE_URL__',
+  [string]$WindowsContainerEntrypointUrl = '__WINDOWS_CONTAINER_ENTRYPOINT_URL__',
+  [string]$WindowsContainerJobAgentUrl = '__WINDOWS_CONTAINER_JOB_AGENT_URL__',
   [string]$WindowsContainerPrefix = 'whitesmith',
   [int]$WindowsContainerReadyTimeoutMs = 15000,
   [int]$WindowsContainerJobTimeoutMs = 900000,
@@ -62,12 +67,48 @@ function Ensure-HyperV {
   if ($feature.State -ne 'Enabled') { throw 'Microsoft-Hyper-V-All must be enabled.' }
   if (-not (Get-VMHost -ErrorAction SilentlyContinue)) { throw 'Hyper-V host is unavailable.' }
 }
+function Build-LocalWindowsImage([string]$Image) {
+  $values = @(
+    @{ Name = 'WindowsContainerBaseImage'; Value = $WindowsContainerBaseImage },
+    @{ Name = 'WindowsContainerRunnerUrl'; Value = $WindowsContainerRunnerUrl },
+    @{ Name = 'WindowsContainerRunnerSha256'; Value = $WindowsContainerRunnerSha256 },
+    @{ Name = 'WindowsContainerGitUrl'; Value = $WindowsContainerGitUrl },
+    @{ Name = 'WindowsContainerGitSha256'; Value = $WindowsContainerGitSha256 },
+    @{ Name = 'WindowsContainerVcUrl'; Value = $WindowsContainerVcUrl },
+    @{ Name = 'WindowsContainerVcSha256'; Value = $WindowsContainerVcSha256 },
+    @{ Name = 'WindowsContainerBuilderUrl'; Value = $WindowsContainerBuilderUrl },
+    @{ Name = 'WindowsContainerVerifierUrl'; Value = $WindowsContainerVerifierUrl },
+    @{ Name = 'WindowsContainerfileUrl'; Value = $WindowsContainerfileUrl },
+    @{ Name = 'WindowsContainerEntrypointUrl'; Value = $WindowsContainerEntrypointUrl },
+    @{ Name = 'WindowsContainerJobAgentUrl'; Value = $WindowsContainerJobAgentUrl }
+  )
+  foreach ($value in $values) { if ([string]::IsNullOrWhiteSpace($value.Value) -or $value.Value -match '^__') { throw "Windows container build input is not configured: $($value.Name)" } }
+  foreach ($value in @($WindowsContainerBuilderUrl, $WindowsContainerVerifierUrl, $WindowsContainerfileUrl, $WindowsContainerEntrypointUrl, $WindowsContainerJobAgentUrl)) { Assert-HttpsUrl $value 'Windows container artifact URL' }
+  $root = Join-Path $env:ProgramData 'Whitesmith\image-build-inputs'
+  New-Item -ItemType Directory -Force -Path $root | Out-Null
+  $builder = Join-Path $root 'build-local.ps1'
+  $verifier = Join-Path $root 'verify-runtime.ps1'
+  $containerfile = Join-Path $root 'Containerfile'
+  $entrypoint = Join-Path $root 'entrypoint.ps1'
+  $jobAgent = Join-Path $root 'whitesmith-job-agent.exe'
+  Invoke-WebRequest -Uri $WindowsContainerBuilderUrl -OutFile $builder -UseBasicParsing -TimeoutSec 300
+  Invoke-WebRequest -Uri $WindowsContainerVerifierUrl -OutFile $verifier -UseBasicParsing -TimeoutSec 300
+  Invoke-WebRequest -Uri $WindowsContainerfileUrl -OutFile $containerfile -UseBasicParsing -TimeoutSec 300
+  Invoke-WebRequest -Uri $WindowsContainerEntrypointUrl -OutFile $entrypoint -UseBasicParsing -TimeoutSec 300
+  Invoke-WebRequest -Uri $WindowsContainerJobAgentUrl -OutFile $jobAgent -UseBasicParsing -TimeoutSec 300
+  & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $builder `
+    -BaseImage $WindowsContainerBaseImage -RunnerUrl $WindowsContainerRunnerUrl -RunnerSha256 $WindowsContainerRunnerSha256 `
+    -GitUrl $WindowsContainerGitUrl -GitSha256 $WindowsContainerGitSha256 -VcRuntimeUrl $WindowsContainerVcUrl `
+    -VcRuntimeSha256 $WindowsContainerVcSha256 -JobAgent $jobAgent -Image $Image -ManifestPath $windowsImageManifestPath `
+    -VerifierPath $verifier -ContainerfilePath $containerfile -EntrypointPath $entrypoint
+  if ($LASTEXITCODE -ne 0) { throw "Local Windows image build failed with exit code $LASTEXITCODE." }
+  Assert-LocalImageManifest $windowsImageManifestPath $Image | Out-Null
+}
 function Ensure-WindowsContainerRuntime([string]$Image, [string]$Prefix) {
   if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) { throw 'Docker Engine is required.' }
   if ((docker info --format '{{.OSType}}') -ne 'windows') { throw 'Docker must be running the Windows engine.' }
-  if ($AllowLocalContainerImage -and $Image -eq 'whitesmith/windows-job:local') {
-    docker image inspect $Image | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Local Windows image is not present: $Image" }
+  if ($Image -eq 'whitesmith/windows-job:local') {
+    Build-LocalWindowsImage $Image
   } else {
     $digests = @(docker image inspect --format '{{json .RepoDigests}}' $Image | ConvertFrom-Json)
     if ($LASTEXITCODE -ne 0 -or -not ($digests -contains $Image)) { throw "Digest-pinned Windows image is not present locally: $Image" }
