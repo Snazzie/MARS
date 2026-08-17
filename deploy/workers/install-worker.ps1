@@ -5,7 +5,14 @@ param(
   [ValidateSet('vm','container')][string]$WindowsRuntime = 'vm',
   [string]$WindowsTemplatePath = '__WINDOWS_TEMPLATE_PATH__',
   [string]$WindowsTemplateDigest = '__WINDOWS_TEMPLATE_DIGEST__',
-  [string]$WindowsContainerImage = '__WINDOWS_CONTAINER_IMAGE__',
+  [string]$WindowsContainerImage = 'whitesmith/windows-job:local',
+  [string]$WindowsContainerBaseImage = '__WINDOWS_CONTAINER_BASE_IMAGE__',
+  [string]$WindowsContainerRunnerUrl = '__WINDOWS_CONTAINER_RUNNER_URL__',
+  [string]$WindowsContainerRunnerSha256 = '__WINDOWS_CONTAINER_RUNNER_SHA256__',
+  [string]$WindowsContainerGitUrl = '__WINDOWS_CONTAINER_GIT_URL__',
+  [string]$WindowsContainerGitSha256 = '__WINDOWS_CONTAINER_GIT_SHA256__',
+  [string]$WindowsContainerVcUrl = '__WINDOWS_CONTAINER_VC_URL__',
+  [string]$WindowsContainerVcSha256 = '__WINDOWS_CONTAINER_VC_SHA256__',
   [string]$WindowsContainerPrefix = 'whitesmith',
   [int]$WindowsContainerReadyTimeoutMs = 15000,
   [int]$WindowsContainerJobTimeoutMs = 900000,
@@ -13,9 +20,27 @@ param(
   [switch]$AllowLocalContainerImage
 )
 $ErrorActionPreference = 'Stop'
+$windowsImageManifestPath = 'C:\ProgramData\Whitesmith\windows-job-image.json'
 function Require-Administrator {
   $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
   if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Administrator privileges are required.' }
+}
+function Assert-HttpsUrl([string]$Url, [string]$Name) {
+  if ($Url -notmatch '^https://') { throw "$Name must use HTTPS." }
+}
+function Assert-LocalImageManifest([string]$Path, [string]$Image) {
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Windows local image manifest is missing: $Path" }
+  $manifest = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+  if ($manifest.schemaVersion -ne 1) { throw 'Windows local image manifest schema is unsupported.' }
+  foreach ($field in @('baseImage','runnerSha256','gitSha256','vcRuntimeSha256','jobAgentSha256','image','imageId','runtimeProbe','builtAt')) {
+    if ($null -eq $manifest.$field -or [string]::IsNullOrWhiteSpace([string]$manifest.$field)) { throw "Windows local image manifest field is missing: $field" }
+  }
+  if ($manifest.image -ne $Image) { throw 'Windows local image manifest image mismatch.' }
+  $runtimeProbe = $manifest.runtimeProbe
+  if (-not $runtimeProbe -or -not $runtimeProbe.mediaFoundation -or -not $runtimeProbe.dns -or -not $runtimeProbe.tcp443) { throw 'Windows local image manifest runtime probe is not verified.' }
+  $imageId = (docker image inspect --format '{{.Id}}' $Image).Trim()
+  if ($LASTEXITCODE -ne 0 -or $imageId -ne $manifest.imageId) { throw 'Windows local image manifest image ID mismatch.' }
+  return $manifest
 }
 function Assert-ImageDigest([string]$Image) {
   if ($Image -match '^[^@\s]+@sha256:[0-9a-f]{64}$') { return }
