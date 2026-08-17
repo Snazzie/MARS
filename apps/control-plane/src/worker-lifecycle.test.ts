@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { applyWorkerLeaseEvent, handleAuthenticatedWorkerEvent } from "./worker-lifecycle.ts";
+import { applyWorkerLeaseEvent, handleAuthenticatedWorkerEvent, timingDurations } from "./worker-lifecycle.ts";
 
 const workerId = "11111111-1111-4111-8111-111111111111";
 const leaseId = "22222222-2222-4222-8222-222222222222";
@@ -63,6 +63,17 @@ test("marks cleanup failure without erasing the terminal runner result", async (
   expect(calls[0]!.query).toContain("cleanup_state='failed'");
   expect(calls[0]!.query).not.toContain("terminal_result=");
   expect(calls[0]!.query).toContain("'completed','failed'");
+});
+test("computes bounded completed-job phase durations", () => {
+  expect(timingDurations({
+    queuedAt: "2026-08-16T00:00:00.000Z",
+    startedAt: "2026-08-16T00:00:02.000Z",
+    completedAt: "2026-08-16T00:00:10.000Z",
+    allocationStartedAt: "2026-08-16T00:00:01.000Z",
+    sandboxReadyAt: "2026-08-16T00:00:03.000Z",
+    reapingStartedAt: "2026-08-16T00:00:10.000Z",
+    reapedAt: "2026-08-16T00:00:11.000Z",
+  })).toEqual({ queueDurationMs: 2000, startupDurationMs: 2000, executionDurationMs: 7000, cleanupDurationMs: 1000, totalDurationMs: 10000 });
 });
 
 test("routes accepted commands through the dispatcher without mutating lease state", async () => {

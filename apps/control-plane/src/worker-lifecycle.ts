@@ -1,6 +1,31 @@
-import { jsonParameter, type DatabaseClient } from "@whitesmith/db";
+import { jsonParameter, recordJobTimingSnapshot, type DatabaseClient, type JobTimingSnapshotInput } from "@whitesmith/db";
 import { WorkerEvent, WorkerEventPayload } from "@whitesmith/contracts";
 import type { AuthenticatedWorkerSocket, WorkerCommandDispatcher } from "./worker-dispatch.ts";
+
+export type TimingBoundaryInputs = {
+  queuedAt: string;
+  startedAt: string | null;
+  completedAt: string;
+  allocationStartedAt: string | null;
+  sandboxReadyAt: string | null;
+  reapingStartedAt: string | null;
+  reapedAt: string | null;
+};
+
+export function timingDurations(input: TimingBoundaryInputs) {
+  const ms = (from: string | null, to: string | null) => from && to ? Math.max(0, Date.parse(to) - Date.parse(from)) : 0;
+  const queueDurationMs = ms(input.queuedAt, input.startedAt ?? input.completedAt);
+  const startupDurationMs = ms(input.allocationStartedAt ?? input.startedAt, input.sandboxReadyAt);
+  const executionDurationMs = ms(input.sandboxReadyAt ?? input.startedAt, input.completedAt);
+  const cleanupDurationMs = ms(input.reapingStartedAt, input.reapedAt);
+  return {
+    queueDurationMs,
+    startupDurationMs,
+    executionDurationMs,
+    cleanupDurationMs,
+    totalDurationMs: Math.max(0, Date.parse(input.completedAt) - Date.parse(input.queuedAt)),
+  };
+}
 
 export async function handleAuthenticatedWorkerEvent(
   db: DatabaseClient,
@@ -19,6 +44,48 @@ export async function handleAuthenticatedWorkerEvent(
   return true;
 }
 
+async function recordReapedJobTiming(db: DatabaseClient, leaseId: string, reapedAt: string): Promise<void> {
+  const [row] = await db<Record<string, unknown>[]>`
+    SELECT j.id AS "jobId", j.organization_id AS "organizationId", j.run_id AS "runId",
+      j.github_job_id AS "githubJobId", j.name AS "jobName", j.queued_at AS "queuedAt",
+      j.started_at AS "startedAt", j.completed_at AS "completedAt", j.conclusion,
+      r.repository_id AS "repositoryId", p.name AS "repositoryName", r.workflow_name AS "workflowName",
+      r.runtime_boundary AS "runtimeBoundary", l.pool_id AS "poolId", l.requested,
+      l.terminal_result AS "terminalResult", p.platform, p.driver, p.image_digest AS "artifactDigest",
+      s.started_at AS "allocationStartedAt",
+      (SELECT started_at FROM dashboard_run_stages WHERE organization_id=j.organization_id AND run_id=j.run_id AND stage='sandbox_ready') AS "sandboxReadyAt",
+      l.updated_at AS "reapingStartedAt"
+    FROM dashboard_jobs j
+    JOIN dashboard_runs r ON r.organization_id=j.organization_id AND r.id=j.run_id
+    JOIN runner_leases l ON l.github_job_id=j.github_job_id
+    LEFT JOIN runner_pools p ON p.id=l.pool_id
+    LEFT JOIN dashboard_run_stages s ON s.organization_id=j.organization_id AND s.run_id=j.run_id AND s.stage='allocating'
+    WHERE l.id=${leaseId} AND j.status='completed' AND j.completed_at IS NOT NULL
+    LIMIT 1
+  `;
+  if (!row) return;
+  const requested = row.requested && typeof row.requested === "object" ? row.requested as Record<string, unknown> : null;
+  const terminalResult = row.terminalResult && typeof row.terminalResult === "object" ? row.terminalResult as Record<string, unknown> : null;
+  const asString = (value: unknown) => value instanceof Date ? value.toISOString() : typeof value === "string" ? value : null;
+  const queuedAt = asString(row.queuedAt), completedAt = asString(row.completedAt);
+  if (!queuedAt || !completedAt || !requested) return;
+  const startedAt = asString(row.startedAt);
+  const snapshot: JobTimingSnapshotInput = {
+    organizationId: String(row.organizationId), jobId: String(row.jobId), runId: String(row.runId),
+    repositoryId: String(row.repositoryId), githubJobId: Number(row.githubJobId), repositoryName: String(row.repositoryName),
+    workflowName: String(row.workflowName), jobName: String(row.jobName), platform: String(row.platform),
+    driver: String(row.driver), runtimeBoundary: row.runtimeBoundary ? String(row.runtimeBoundary) : null,
+    poolId: row.poolId ? String(row.poolId) : null, artifactDigest: row.artifactDigest ? String(row.artifactDigest) : null,
+    outcome: String(row.conclusion ?? (Number(terminalResult?.exitCode) === 0 ? "success" : "failure")) as JobTimingSnapshotInput["outcome"],
+    completedAt, queuedAt, startedAt,
+    ...timingDurations({ queuedAt, startedAt, completedAt, allocationStartedAt: asString(row.allocationStartedAt), sandboxReadyAt: asString(row.sandboxReadyAt), reapingStartedAt: asString(row.reapingStartedAt), reapedAt }),
+    requestedVcpu: Number(requested.vcpu), requestedMemoryBytes: Number(requested.memoryBytes), requestedStorageBytes: Number(requested.storageBytes),
+    requestedConcurrency: Number(requested.concurrency), observedVcpu: null, observedMemoryBytes: null, observedStorageBytes: null,
+    effectiveConcurrency: Number(requested.concurrency),
+  };
+  if (Object.values(snapshot).some(value => value === "undefined" || (typeof value === "number" && !Number.isFinite(value)))) return;
+  await recordJobTimingSnapshot(db, snapshot);
+}
 export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown): Promise<boolean> {
   const parsedEvent = WorkerEvent.safeParse(input);
   if (!parsedEvent.success) return false;
@@ -54,7 +121,9 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
   }
   const payload = parsedPayload.data.payload;
   const rows = await db`UPDATE runner_leases SET state='reaped',cleanup_state='completed',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed') RETURNING id`;
-  return Boolean(rows[0]);
+  if (!rows[0]) return false;
+  await recordReapedJobTiming(db, payload.leaseId, event.occurredAt);
+  return true;
 }
 
 type WorkerLogPayload = { jobId: string; stepId: string | null; sequence: number; content: string; occurredAt: string };
