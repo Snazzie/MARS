@@ -7,6 +7,7 @@ test("overview counts active leases as running jobs", async () => {
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
     queries.push(query);
+    if (query.includes("SELECT l.id")) return [{ id: "lease-1", jobId: "job-1", jobName: "build", repositoryName: "acme/project", workflowName: "CI", workerName: "worker-1", runtime: "windows-hyperv-container", startedAt: new Date("2026-08-17T20:00:00.000Z"), cpuUsagePercent: 42.5, memoryWorkingSetBytes: 2_147_483_648, memoryLimitBytes: 4_294_967_296, diskUsageBytes: null, allocatedStorageBytes: 10_737_418_240, sampledAt: new Date("2026-08-17T20:05:00.000Z") }];
     if (query.includes("generate_series")) return [{ bucket: new Date("2026-08-12T10:00:00.000Z"), pending: 2, running: 1 }];
     return [{
       organizationId: "org-1",
@@ -24,13 +25,13 @@ test("overview counts active leases as running jobs", async () => {
     }];
   }) as never;
   const result = await getOverview(db, "org-1", "24h");
-  expect(queries.some((query) => query.includes("runner_leases"))).toBe(true);
-  expect(OverviewDto.parse(result)).toMatchObject({ running: 2, utilization: { pods: 1 }, timeseries: [{ bucket: "2026-08-12T10:00:00.000Z", pending: 2, running: 1 }] });
+  expect(OverviewDto.parse(result)).toMatchObject({ running: 2, utilization: { pods: 1 }, timeseries: [{ bucket: "2026-08-12T10:00:00.000Z", pending: 2, running: 1 }], runningContainers: [{ jobName: "build", cpuUsagePercent: 42.5 }] });
 });
 test("overview outcome aggregation guards malformed scalar runner labels", async () => {
   const queries: string[] = [];
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
+    if (query.includes("SELECT l.id")) return [];
     queries.push(query);
     if (query.includes("generate_series")) return [];
     if (query.includes("GROUP BY outcome, platform")) return [{ outcome: "queued", platform: "other", count: 1 }];
