@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { LeaseBootstrapEnvelope, RunnerJitConfig } from "./orchestration.ts";
+import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig } from "./orchestration.ts";
 
 test("parses a GitHub JIT config with a one-time lease binding", () => {
   expect(RunnerJitConfig.parse({
@@ -22,4 +22,24 @@ test("parses a GitHub JIT config with a one-time lease binding", () => {
 
 test("rejects JIT config without runner labels", () => {
   expect(RunnerJitConfig.safeParse({ encodedJitConfig: "encoded", runnerName: "runner", labels: [], expiresAt: "2026-08-12T12:00:00.000Z" }).success).toBe(false);
+});
+
+test("parses structured out-of-memory results", () => {
+  expect(OutOfMemoryResult.parse({
+    reason: "out_of_memory",
+    memoryWorkingSetBytes: 11_295_763_988,
+    memoryLimitBytes: 10_737_418_240,
+    detectedAt: "2026-08-17T20:59:24.015Z",
+    gracefulStopAcknowledged: false,
+  })).toMatchObject({ reason: "out_of_memory", gracefulStopAcknowledged: false });
+});
+
+test("rejects invalid out-of-memory measurements", () => {
+  expect(() => OutOfMemoryResult.parse({
+    reason: "out_of_memory",
+    memoryWorkingSetBytes: -1,
+    memoryLimitBytes: 10,
+    detectedAt: "2026-08-17T20:59:24.015Z",
+    gracefulStopAcknowledged: false,
+  })).toThrow();
 });

@@ -12,6 +12,14 @@ export function validateWorkerGuestPlatforms(hostPlatform: RuntimePlatform, gues
 export const RuntimeDriverName = z.enum(["kata-k3s", "windows-hyperv", "windows-hyperv-container", "tart-vm"]);
 export type RuntimeDriverName = z.infer<typeof RuntimeDriverName>;
 const positiveSafe = z.number().int().positive().safe();
+export const OutOfMemoryResult = z.object({
+  reason: z.literal("out_of_memory"),
+  memoryWorkingSetBytes: positiveSafe,
+  memoryLimitBytes: positiveSafe,
+  detectedAt: z.string().datetime({ offset: true }),
+  gracefulStopAcknowledged: z.boolean(),
+}).strict();
+export type OutOfMemoryResult = z.infer<typeof OutOfMemoryResult>;
 export const WorkerLimits = z.object({ maxVcpuPerPod: positiveSafe, maxMemoryBytesPerPod: positiveSafe, maxStorageBytesPerPod: positiveSafe, maxConcurrentPods: positiveSafe });
 export type WorkerLimits = z.infer<typeof WorkerLimits>;
 export const PoolResources = z.object({ vcpu: positiveSafe, memoryBytes: positiveSafe, storageBytes: positiveSafe, concurrency: positiveSafe });
@@ -52,8 +60,7 @@ export const WorkerEventPayload = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sandbox_attested"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32), runtimeInstanceId: z.string().min(1), observed: z.object({ vcpu: positiveSafe, memoryBytes: positiveSafe, storageBytes: positiveSafe }).strict() }).strict() }),
   z.object({ type: z.literal("runner.finished"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32), exitCode: z.number().int().nonnegative() }).strict() }),
   z.object({ type: z.literal("lease.reaped"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32) }).strict() }),
-  z.object({ type: z.literal("lease.failed"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32), reason: z.enum(["provisioning_failed","runner_failed","cleanup_failed"]) }).strict() }),
-  z.object({ type: z.literal("job.log"), payload: z.object({ jobId: z.string().uuid(), stepId: z.string().uuid().nullable(), sequence: z.number().int().nonnegative(), content: z.string().max(256 * 1024), occurredAt: z.string().datetime() }).strict() }),
+  z.object({ type: z.literal("lease.failed"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32), reason: z.enum(["provisioning_failed","runner_failed","cleanup_failed","out_of_memory"]), oom: OutOfMemoryResult.optional() }).strict() }),
   z.object({ type: z.literal("job.resource_sample"), payload: z.object({ jobId: z.string().uuid(), leaseId: z.string().uuid(), occurredAt: z.string().datetime(), cpuUsagePercent: z.number().finite().min(0).max(100), cpuTimeMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), memoryWorkingSetBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), memoryLimitBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict() }),
 ]);
 export const WorkerApplianceConfiguration = z.object({ vcpu: positiveSafe, memoryBytes: positiveSafe, storageBytes: positiveSafe }).strict();
