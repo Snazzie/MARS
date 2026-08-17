@@ -71,6 +71,44 @@ CREATE TABLE IF NOT EXISTS github_discovery_checkpoints (repository_id uuid PRIM
 CREATE TABLE IF NOT EXISTS dashboard_runs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE, repository_id uuid NOT NULL, github_run_id bigint NOT NULL, run_number bigint NOT NULL, workflow_name text NOT NULL, event text NOT NULL, branch text NOT NULL, commit_sha text NOT NULL, actor_login text NOT NULL, status text NOT NULL, conclusion text, queued_at timestamptz NOT NULL, started_at timestamptz, completed_at timestamptz, runtime_boundary text, UNIQUE(organization_id, id), UNIQUE(organization_id, github_run_id), FOREIGN KEY (organization_id, repository_id) REFERENCES dashboard_repositories(organization_id, id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS dashboard_run_stages (organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE, run_id uuid NOT NULL, stage text NOT NULL, started_at timestamptz NOT NULL DEFAULT now(), completed_at timestamptz, PRIMARY KEY (organization_id, run_id, stage), FOREIGN KEY (organization_id, run_id) REFERENCES dashboard_runs(organization_id, id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS dashboard_jobs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE, run_id uuid NOT NULL, github_job_id bigint NOT NULL, name text NOT NULL, status text NOT NULL, conclusion text, stage text NOT NULL, runner_name text, requested jsonb NOT NULL, requested_labels jsonb NOT NULL DEFAULT '[]'::jsonb, observed jsonb, queued_at timestamptz NOT NULL DEFAULT now(), started_at timestamptz, completed_at timestamptz, UNIQUE(organization_id, id), UNIQUE(organization_id, github_job_id), FOREIGN KEY (organization_id, run_id) REFERENCES dashboard_runs(organization_id, id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS dashboard_job_timing_snapshots (
+  organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  job_id uuid NOT NULL,
+  run_id uuid NOT NULL,
+  repository_id uuid NOT NULL,
+  github_job_id bigint NOT NULL,
+  repository_name text NOT NULL,
+  workflow_name text NOT NULL,
+  job_name text NOT NULL,
+  platform text NOT NULL,
+  driver text NOT NULL,
+  runtime_boundary text,
+  pool_id uuid,
+  artifact_digest text,
+  outcome text NOT NULL,
+  completed_at timestamptz NOT NULL,
+  queued_at timestamptz NOT NULL,
+  started_at timestamptz,
+  queue_duration_ms bigint NOT NULL CHECK(queue_duration_ms >= 0),
+  startup_duration_ms bigint NOT NULL CHECK(startup_duration_ms >= 0),
+  execution_duration_ms bigint NOT NULL CHECK(execution_duration_ms >= 0),
+  cleanup_duration_ms bigint NOT NULL CHECK(cleanup_duration_ms >= 0),
+  total_duration_ms bigint NOT NULL CHECK(total_duration_ms >= 0),
+  requested_vcpu bigint NOT NULL CHECK(requested_vcpu > 0),
+  requested_memory_bytes bigint NOT NULL CHECK(requested_memory_bytes > 0),
+  requested_storage_bytes bigint NOT NULL CHECK(requested_storage_bytes > 0),
+  requested_concurrency bigint NOT NULL CHECK(requested_concurrency > 0),
+  observed_vcpu bigint,
+  observed_memory_bytes bigint,
+  observed_storage_bytes bigint,
+  effective_concurrency bigint NOT NULL CHECK(effective_concurrency > 0),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (organization_id, job_id),
+  FOREIGN KEY (organization_id, run_id, job_id) REFERENCES dashboard_jobs(organization_id, run_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (organization_id, run_id) REFERENCES dashboard_runs(organization_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS dashboard_job_timing_completed_idx ON dashboard_job_timing_snapshots(organization_id, completed_at DESC, job_id DESC);
+CREATE INDEX IF NOT EXISTS dashboard_job_timing_dimensions_idx ON dashboard_job_timing_snapshots(organization_id, platform, driver, requested_vcpu, effective_concurrency, completed_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS dashboard_jobs_org_run_id_idx ON dashboard_jobs(organization_id, run_id, id);
 CREATE TABLE IF NOT EXISTS dashboard_job_steps (organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE, run_id uuid NOT NULL, job_id uuid NOT NULL, id text NOT NULL, name text NOT NULL, number integer NOT NULL CHECK(number >= 0), status text NOT NULL, conclusion text, queued_at timestamptz NOT NULL DEFAULT now(), started_at timestamptz, completed_at timestamptz, duration_ms bigint NOT NULL DEFAULT 0 CHECK(duration_ms >= 0), PRIMARY KEY (organization_id, run_id, job_id, id), FOREIGN KEY (organization_id, run_id, job_id) REFERENCES dashboard_jobs(organization_id, run_id, id) ON DELETE CASCADE);
 CREATE INDEX IF NOT EXISTS dashboard_job_steps_order_idx ON dashboard_job_steps(organization_id, run_id, job_id, number, id);
@@ -123,6 +161,45 @@ ALTER TABLE workers ADD COLUMN IF NOT EXISTS configuration_applied_at timestampt
 UPDATE workers w SET desired_configuration=jsonb_build_object('appliance',c.payload->'appliance','runtime',c.payload->'runtime','guestPlatforms',c.payload->'guestPlatforms') FROM commands c WHERE w.desired_configuration IS NULL AND c.id=w.configuration_command_id AND c.type='worker.configure' AND c.payload ? 'appliance' AND c.payload ? 'runtime' AND c.payload ? 'guestPlatforms';
 UPDATE workers SET applied_configuration_revision=configuration_revision WHERE configuration_state='ready' AND desired_configuration IS NOT NULL AND applied_configuration_revision IS NULL;`;
 
+export const jobTimingMigrationSql = `CREATE TABLE IF NOT EXISTS dashboard_job_timing_snapshots (
+  organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  job_id uuid NOT NULL,
+  run_id uuid NOT NULL,
+  repository_id uuid NOT NULL,
+  github_job_id bigint NOT NULL,
+  repository_name text NOT NULL,
+  workflow_name text NOT NULL,
+  job_name text NOT NULL,
+  platform text NOT NULL,
+  driver text NOT NULL,
+  runtime_boundary text,
+  pool_id uuid,
+  artifact_digest text,
+  outcome text NOT NULL,
+  completed_at timestamptz NOT NULL,
+  queued_at timestamptz NOT NULL,
+  started_at timestamptz,
+  queue_duration_ms bigint NOT NULL CHECK(queue_duration_ms >= 0),
+  startup_duration_ms bigint NOT NULL CHECK(startup_duration_ms >= 0),
+  execution_duration_ms bigint NOT NULL CHECK(execution_duration_ms >= 0),
+  cleanup_duration_ms bigint NOT NULL CHECK(cleanup_duration_ms >= 0),
+  total_duration_ms bigint NOT NULL CHECK(total_duration_ms >= 0),
+  requested_vcpu bigint NOT NULL CHECK(requested_vcpu > 0),
+  requested_memory_bytes bigint NOT NULL CHECK(requested_memory_bytes > 0),
+  requested_storage_bytes bigint NOT NULL CHECK(requested_storage_bytes > 0),
+  requested_concurrency bigint NOT NULL CHECK(requested_concurrency > 0),
+  observed_vcpu bigint,
+  observed_memory_bytes bigint,
+  observed_storage_bytes bigint,
+  effective_concurrency bigint NOT NULL CHECK(effective_concurrency > 0),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (organization_id, job_id),
+  FOREIGN KEY (organization_id, run_id, job_id) REFERENCES dashboard_jobs(organization_id, run_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (organization_id, run_id) REFERENCES dashboard_runs(organization_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS dashboard_job_timing_completed_idx ON dashboard_job_timing_snapshots(organization_id, completed_at DESC, job_id DESC);
+CREATE INDEX IF NOT EXISTS dashboard_job_timing_dimensions_idx ON dashboard_job_timing_snapshots(organization_id, platform, driver, requested_vcpu, effective_concurrency, completed_at DESC);`;
+
 
 export const workerJsonNormalizationMigrationSql = `UPDATE workers SET guest_platforms=(guest_platforms #>> '{}')::jsonb WHERE jsonb_typeof(guest_platforms)='string';
 UPDATE workers SET limits=(limits #>> '{}')::jsonb WHERE jsonb_typeof(limits)='string';
@@ -165,4 +242,5 @@ ${workerConfigurationMigrationSql}
 ${workerJsonNormalizationMigrationSql}
 ${jsonShapeNormalizationMigrationSql}
 ${onboardingVerificationMigrationSql}
-${workerTelemetryMigrationSql}`;
+${workerTelemetryMigrationSql}
+${jobTimingMigrationSql}`;

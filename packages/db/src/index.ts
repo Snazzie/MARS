@@ -1,6 +1,6 @@
 import postgres, { type Sql } from "postgres";
 import { createHash } from "node:crypto";
-import { baselineSchemaSql, jsonShapeNormalizationMigrationSql, onboardingVerificationMigrationSql, schemaSql, workerConfigurationMigrationSql, workerJsonNormalizationMigrationSql, workerTelemetryMigrationSql } from "./schema.ts";
+import { baselineSchemaSql, jobTimingMigrationSql, jsonShapeNormalizationMigrationSql, onboardingVerificationMigrationSql, schemaSql, workerConfigurationMigrationSql, workerJsonNormalizationMigrationSql, workerTelemetryMigrationSql } from "./schema.ts";
 
 export type DatabaseClient = Sql<{}>;
 export function createDb(url: string): DatabaseClient { return postgres(url, { max: 10, prepare: false }); }
@@ -24,6 +24,7 @@ const migrations: Migration[] = [
   { version: 5, name: "json-shape-normalization", sql: jsonShapeNormalizationMigrationSql },
   { version: 6, name: "onboarding-verification", sql: onboardingVerificationMigrationSql },
   { version: 7, name: "worker-telemetry-timestamps", sql: workerTelemetryMigrationSql },
+  { version: 8, name: "job-timing-snapshots", sql: jobTimingMigrationSql },
 ];
 
 export async function migrate(sql: DatabaseClient): Promise<void> {

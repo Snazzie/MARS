@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { baselineSchemaSql, jsonShapeNormalizationMigrationSql, onboardingVerificationMigrationSql, schemaSql, workerConfigurationMigrationSql, workerJsonNormalizationMigrationSql } from "./schema.ts";
+import { baselineSchemaSql, jobTimingMigrationSql, jsonShapeNormalizationMigrationSql, onboardingVerificationMigrationSql, schemaSql, workerConfigurationMigrationSql, workerJsonNormalizationMigrationSql } from "./schema.ts";
 
 test("repository authorization is represented only by GitHub availability", () => {
   const repositoryDefinition = schemaSql.match(/CREATE TABLE IF NOT EXISTS dashboard_repositories \(([^;]+)\);/)?.[1];
@@ -36,10 +36,19 @@ test("persists desired and exactly applied worker configuration", () => {
   expect(schemaSql).toContain("c.id=w.configuration_command_id");
 });
 
-test("keeps worker configuration changes out of the immutable baseline migration", () => {
+test("keeps worker configuration and timing changes in append-only migrations", () => {
   expect(baselineSchemaSql).not.toContain("desired_configuration");
   expect(workerConfigurationMigrationSql).toContain("ADD COLUMN IF NOT EXISTS desired_configuration");
-  expect(schemaSql).toBe(`${baselineSchemaSql}\n${workerConfigurationMigrationSql}\n${workerJsonNormalizationMigrationSql}\n${jsonShapeNormalizationMigrationSql}\n${onboardingVerificationMigrationSql}`);
+  expect(jobTimingMigrationSql).toContain("CREATE TABLE IF NOT EXISTS dashboard_job_timing_snapshots");
+  expect(schemaSql).toContain(jobTimingMigrationSql);
+});
+
+test("timing snapshots preserve dimensions and non-negative durations", () => {
+  expect(schemaSql).toContain("PRIMARY KEY (organization_id, job_id)");
+  expect(schemaSql).toContain("queue_duration_ms bigint NOT NULL CHECK(queue_duration_ms >= 0)");
+  expect(schemaSql).toContain("execution_duration_ms bigint NOT NULL CHECK(execution_duration_ms >= 0)");
+  expect(schemaSql).toContain("requested_vcpu bigint NOT NULL CHECK(requested_vcpu > 0)");
+  expect(schemaSql).toContain("effective_concurrency bigint NOT NULL CHECK(effective_concurrency > 0)");
 });
 
 test("normalizes legacy double-encoded worker JSON in a later migration", () => {
