@@ -1,11 +1,14 @@
 import postgres, { type Sql } from "postgres";
 import { createHash } from "node:crypto";
-import { baselineSchemaSql, jobTimingMigrationSql, jsonShapeNormalizationMigrationSql, onboardingVerificationMigrationSql, schemaSql, workerConfigurationMigrationSql, workerJsonNormalizationMigrationSql, workerTelemetryMigrationSql } from "./schema.ts";
+import { baselineSchemaSql, jobTimingMigrationSql, jsonShapeNormalizationMigrationSql, onboardingVerificationMigrationSql, resourceTelemetryMigrationSql, schemaSql, workerConfigurationMigrationSql, workerJsonNormalizationMigrationSql, workerTelemetryMigrationSql } from "./schema.ts";
 
 export type DatabaseClient = Sql<{}>;
 export function createDb(url: string): DatabaseClient { return postgres(url, { max: 10, prepare: false }); }
 
 type Migration = { version: number; name: string; sql: string };
+const legacyChecksums = new Map<number, Set<string>>([
+  [1, new Set(["fed95e0e171ee0e4a8f708fcc48e2f5a1e241f0d54d6a83c02fed0e7bd0f0a75"])],
+]);
 const migrations: Migration[] = [
   { version: 1, name: "baseline", sql: baselineSchemaSql },
   {
@@ -25,6 +28,7 @@ const migrations: Migration[] = [
   { version: 6, name: "onboarding-verification", sql: onboardingVerificationMigrationSql },
   { version: 7, name: "worker-telemetry-timestamps", sql: workerTelemetryMigrationSql },
   { version: 8, name: "job-timing-snapshots", sql: jobTimingMigrationSql },
+  { version: 9, name: "job-resource-telemetry", sql: resourceTelemetryMigrationSql },
 ];
 
 export async function migrate(sql: DatabaseClient): Promise<void> {
@@ -40,7 +44,7 @@ export async function migrate(sql: DatabaseClient): Promise<void> {
       const checksum = createHash("sha256").update(migration.sql).digest("hex");
       const [applied] = await tx<{ checksum: string }[]>`select checksum from schema_migrations where version=${migration.version}`;
       if (applied) {
-        if (applied.checksum !== checksum) throw new Error(`migration_checksum_mismatch:${migration.version}`);
+        if (applied.checksum !== checksum && !legacyChecksums.get(migration.version)?.has(applied.checksum)) throw new Error(`migration_checksum_mismatch:${migration.version}`);
         continue;
       }
       for (const statement of migration.sql.split(";").map(s => s.trim()).filter(Boolean)) await tx.unsafe(statement);
