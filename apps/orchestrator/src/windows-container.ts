@@ -24,13 +24,16 @@ async function validateLocalManifest(config: WindowsContainerConfig, docker: Doc
   const imageId = checked(await docker(["image", "inspect", "--format", "{{.Id}}", config.image]), "image inspect");
   if (imageId !== manifest.imageId) throw new Error("local Windows image manifest image ID mismatch");
 }
-function dockerSample(name: string, docker: DockerRunner) {
+function dockerSample(name: string, configuredMemoryBytes: number, docker: DockerRunner) {
   return async () => {
     const raw = checked(await docker(["stats", "--no-stream", "--format", "{{json .}}", name]), "docker stats");
     const value = JSON.parse(raw) as { CPUPerc?: string; MemUsage?: string };
     const cpuUsagePercent = Math.max(0, Math.min(100, Number.parseFloat(value.CPUPerc?.replace("%", "") ?? "0")));
     const [working, limit] = (value.MemUsage ?? "").split("/");
-    return { cpuUsagePercent, cpuTimeMs: 0, memoryWorkingSetBytes: parseMemoryBytes(working ?? ""), memoryLimitBytes: Math.max(1, parseMemoryBytes(limit ?? "")) };
+    const memoryWorkingSetBytes = parseMemoryBytes(working ?? "");
+    const reportedLimitBytes = parseMemoryBytes(limit ?? "");
+    const memoryLimitBytes = reportedLimitBytes >= configuredMemoryBytes ? reportedLimitBytes : configuredMemoryBytes;
+    return { cpuUsagePercent, cpuTimeMs: 0, memoryWorkingSetBytes, memoryLimitBytes };
   };
 }
 
@@ -66,7 +69,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
       const observedVcpu = inspect[0]?.HostConfig?.NanoCpus;
       const observedMemoryBytes = inspect[0]?.HostConfig?.Memory;
       if (observedVcpu !== lease.resources.vcpu * 1_000_000_000 || observedMemoryBytes !== lease.resources.memoryBytes) throw new Error("container resource limits do not match requested values");
-      const runtime: RuntimeLease = { runtimeInstanceId: name, observed: { vcpu: observedVcpu / 1_000_000_000, memoryBytes: observedMemoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: this.wait(name), sample: dockerSample(name, this.docker) };
+      const runtime: RuntimeLease = { runtimeInstanceId: name, observed: { vcpu: observedVcpu / 1_000_000_000, memoryBytes: observedMemoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: this.wait(name), sample: dockerSample(name, lease.resources.memoryBytes, this.docker) };
       this.leases.set(lease.id, { name, root, runtime });
       return runtime;
     } catch (error) { await this.removeLease(lease.id).catch(() => undefined); throw error; }

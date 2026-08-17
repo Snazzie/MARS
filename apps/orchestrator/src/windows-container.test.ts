@@ -152,3 +152,33 @@ test("removes a known lease container after a worker restart", async () => {
   await driver.removeLease("33333333-3333-4333-8333-333333333333");
   expect(calls).toContainEqual(["rm", "-f", "whitesmith-33333333-3333-4333-8333-333333333333"]);
 });
+
+test("falls back to the configured memory limit when Docker stats reports an invalid limit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-stats-"));
+  roots.push(root);
+  const configuredMemory = 10 * 1024 ** 3;
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 2_000_000_000, Memory: configuredMemory } }]), stderr: "" };
+    if (args[0] === "stats") return { code: 0, stdout: JSON.stringify({ CPUPerc: "8.48%", MemUsage: "10.52GiB / 1B" }), stderr: "" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const driver = new WindowsContainerDriver({
+    image: "whitesmith/windows-job:local",
+    prefix: "whitesmith",
+    bootstrapRoot: root,
+    limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: configuredMemory, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
+    readyTimeoutMs: 100,
+    jobTimeoutMs: 100,
+    allowLocalImage: true,
+  }, docker);
+  const lease = await driver.createLease({
+    id: "55555555-5555-4555-8555-555555555555",
+    jobId: "job",
+    imageDigest: "whitesmith/windows-job:local",
+    resources: { vcpu: 2, memoryBytes: configuredMemory, storageBytes: 10 * 1024 ** 3, concurrency: 1 },
+    nonce: "n".repeat(32),
+    encodedJitConfig: "config",
+  });
+  expect(await lease.sample!()).toMatchObject({ memoryLimitBytes: configuredMemory, memoryWorkingSetBytes: Math.round(10.52 * 1024 ** 3) });
+  await driver.removeLease("55555555-5555-4555-8555-555555555555");
+});
