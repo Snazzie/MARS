@@ -24,6 +24,20 @@ export type ControlPlaneHttpDeps = {
   githubWebhookSecret?: string;
   githubApp?: GitHubAppService;
   defaultJobImages: Partial<Record<"linux-x64" | "windows-x64" | "macos-arm64", string>>;
+  windowsContainerBuild?: {
+    baseImage: string;
+    runnerUrl: string;
+    runnerSha256: string;
+    gitUrl: string;
+    gitSha256: string;
+    vcUrl: string;
+    vcSha256: string;
+    builderPath: string;
+    verifierPath: string;
+    containerfilePath: string;
+    entrypointPath: string;
+    jobAgentPath: string;
+  };
   templateManifestPaths?: Partial<Record<"windows-x64" | "linux-x64", string>>;
   templateArtifactPaths?: Partial<Record<"windows-x64" | "linux-x64", string>>;
   workerTemplatePaths?: Partial<Record<"windows-x64" | "linux-x64", string>>;

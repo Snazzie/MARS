@@ -74,18 +74,21 @@ describe("control-plane HTTP boundary", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
-  test("serves container-mode Windows installer without a VM template", async () => {
+  test("serves container-mode Windows installer with local image build inputs", async () => {
     const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-installers-"));
     try {
-      await Bun.write(join(root, "install-worker.ps1"), "'__WINDOWS_RUNTIME__' '__WINDOWS_CONTAINER_IMAGE__' '__WINDOWS_TEMPLATE_PATH__'");
-      const image = "registry.example/windows@sha256:" + "a".repeat(64);
+      await Bun.write(join(root, "install-worker.ps1"), "'__WINDOWS_RUNTIME__' '__WINDOWS_CONTAINER_IMAGE__' '__WINDOWS_CONTAINER_BASE_IMAGE__' '__WINDOWS_CONTAINER_BUILDER_URL__'");
+      const build = { baseImage: "mcr.microsoft.com/windows/server:ltsc2025@sha256:" + "a".repeat(64), runnerUrl: "https://example.test/runner.zip", runnerSha256: "b".repeat(64), gitUrl: "https://example.test/git.zip", gitSha256: "c".repeat(64), vcUrl: "https://example.test/vc.exe", vcSha256: "d".repeat(64), builderPath: join(root, "builder.ps1"), verifierPath: join(root, "verifier.ps1"), containerfilePath: join(root, "Containerfile"), entrypointPath: join(root, "entrypoint.ps1"), jobAgentPath: join(root, "job-agent.exe") };
+      for (const path of Object.values(build).slice(7)) await Bun.write(path, "artifact");
       const response = await createControlPlaneApp(fakeHttpDeps({
+        baseUrl: "https://control.test",
         workerInstallerRoot: pathToFileURL(`${root}/`),
-        defaultJobImages: { "windows-x64": image },
+        windowsContainerBuild: build,
       })).request("/api/workers/installer?audience=windows-x64&runtime=container");
       const installer = await response.text();
       expect(response.status).toBe(200);
-      expect(installer).toContain(`'${image}'`);
+      expect(installer).toContain("'mcr.microsoft.com/windows/server:ltsc2025@sha256:");
+      expect(installer).toContain("windows-container-builder");
       expect(installer).toContain("'container'");
     } finally {
       await rm(root, { recursive: true, force: true });

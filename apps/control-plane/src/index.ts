@@ -24,6 +24,7 @@ import { ensureDefaultPools } from "./default-pools.ts";
 import { canSubscribeToOrganization, loadBrowserInvalidations } from "./browser-invalidations.ts";
 import { GithubRateLimitGate } from "./github-rate-limit.ts";
 import { httpOrigin } from "./http-origin.ts";
+import { fileURLToPath } from "node:url";
 const required = (name: string): string => { const value = Bun.env[name]; if (!value) throw new Error(`${name} is required`); return value; };
 const baseUrl = httpOrigin("PUBLIC_BASE_URL", required("PUBLIC_BASE_URL"));
 const browserBaseUrl = httpOrigin("BROWSER_BASE_URL", Bun.env.BROWSER_BASE_URL?.trim() || baseUrl);
@@ -46,6 +47,37 @@ const workerOrchestratorExecutables = {
   "windows-x64": runtimeArtifact("WORKER_ORCHESTRATOR_WINDOWS_X64", "../../../apps/orchestrator/dist/whitesmith-orchestrator.exe"),
   "macos-arm64": runtimeArtifact("WORKER_ORCHESTRATOR_MACOS_ARM64", "../../../apps/orchestrator/dist/whitesmith-orchestrator-macos-arm64"),
 };
+const containerBuildArtifact = (name: string, fallback: string): string | undefined => {
+  const artifact = runtimeArtifact(name, fallback);
+  return artifact ? fileURLToPath(artifact) : undefined;
+};
+const windowsContainerBuild = (() => {
+  const baseImage = Bun.env.WHITESMITH_WINDOWS_CONTAINER_BASE_IMAGE;
+  const runnerUrl = Bun.env.WHITESMITH_WINDOWS_CONTAINER_RUNNER_URL;
+  const runnerSha256 = Bun.env.WHITESMITH_WINDOWS_CONTAINER_RUNNER_SHA256;
+  const gitUrl = Bun.env.WHITESMITH_WINDOWS_CONTAINER_GIT_URL;
+  const gitSha256 = Bun.env.WHITESMITH_WINDOWS_CONTAINER_GIT_SHA256;
+  const vcUrl = Bun.env.WHITESMITH_WINDOWS_CONTAINER_VC_URL;
+  const vcSha256 = Bun.env.WHITESMITH_WINDOWS_CONTAINER_VC_SHA256;
+  if (![baseImage, runnerUrl, runnerSha256, gitUrl, gitSha256, vcUrl, vcSha256].every(Boolean)) {
+    if (production) throw new Error("Windows container build inputs are required");
+    return undefined;
+  }
+  return {
+    baseImage: baseImage!,
+    runnerUrl: runnerUrl!,
+    runnerSha256: runnerSha256!,
+    gitUrl: gitUrl!,
+    gitSha256: gitSha256!,
+    vcUrl: vcUrl!,
+    vcSha256: vcSha256!,
+    builderPath: containerBuildArtifact("WHITESMITH_WINDOWS_CONTAINER_BUILDER", "../../../deploy/workers/build-windows-container-image-local.ps1")!,
+    verifierPath: containerBuildArtifact("WHITESMITH_WINDOWS_CONTAINER_VERIFIER", "../../../images/jobs/windows/verify-runtime.ps1")!,
+    containerfilePath: containerBuildArtifact("WHITESMITH_WINDOWS_CONTAINERFILE", "../../../images/jobs/windows/Containerfile")!,
+    entrypointPath: containerBuildArtifact("WHITESMITH_WINDOWS_CONTAINER_ENTRYPOINT", "../../../images/jobs/windows/entrypoint.ps1")!,
+    jobAgentPath: containerBuildArtifact("WHITESMITH_WINDOWS_CONTAINER_JOB_AGENT", "../../../apps/job-agent/dist/whitesmith-job-agent.exe")!,
+  };
+})();
 if (production) {
   const requiredReleaseArtifacts = {
     webIndex: new URL("index.html", webRoot),
@@ -118,7 +150,7 @@ const discoveryHealth = new DiscoveryHealthMonitor(discoveryIntervalMs, Date.par
 const githubApp = new GitHubAppService({ db, secretBox, baseUrl: env.BASE, browserBaseUrl: env.BROWSER_BASE, webhookUrl: env.WEBHOOK_URL });
 const githubRateLimits = new GithubRateLimitGate();
 let triggerReconciliation = () => Promise.resolve();
-const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, browserBaseUrl: env.BROWSER_BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerServiceHostExecutable, workerOrchestratorExecutables, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => { dispatcher.replayConnected(workerId); void triggerReconciliation(); }, health: () => ({ buildId: Bun.env.WHITESMITH_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
+const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, browserBaseUrl: env.BROWSER_BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, windowsContainerBuild, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerServiceHostExecutable, workerOrchestratorExecutables, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => { dispatcher.replayConnected(workerId); void triggerReconciliation(); }, health: () => ({ buildId: Bun.env.WHITESMITH_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
 const discoveryDeps = { db, installationToken: (installationId: number) => githubApp.getInstallationToken(installationId), githubFetchForInstallation: (installationId: number) => githubRateLimits.scopedFetch(installationId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY };
 let lastQueuedDiscoveryAt = 0;
 startReconciliationScheduler(async () => {

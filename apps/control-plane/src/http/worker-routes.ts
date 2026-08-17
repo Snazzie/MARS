@@ -60,6 +60,19 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", `attachment; filename="${platform}.vhdx"`);
     return new Response(Bun.file(path), { headers });
   });
+  const buildArtifact = async (c: Context<ControlPlaneEnv>, key: keyof NonNullable<ControlPlaneHttpDeps["windowsContainerBuild"]>, filename: string) => {
+    const path = deps.windowsContainerBuild?.[key];
+    if (!path || !await Bun.file(path).exists()) return c.json({ code: "artifact_unavailable", message: "Windows container build artifact is unavailable", artifact: `windows-container-${key}` }, 503, { "cache-control": "no-store" });
+    const headers = noStore();
+    headers.set("content-type", "application/octet-stream");
+    headers.set("content-disposition", `attachment; filename="${filename}"`);
+    return new Response(Bun.file(path), { headers });
+  };
+  app.get("/api/workers/windows-container-builder", (c) => buildArtifact(c, "builderPath", "build-windows-container-image-local.ps1"));
+  app.get("/api/workers/windows-container-verifier", (c) => buildArtifact(c, "verifierPath", "verify-runtime.ps1"));
+  app.get("/api/workers/windows-containerfile", (c) => buildArtifact(c, "containerfilePath", "Containerfile"));
+  app.get("/api/workers/windows-container-entrypoint", (c) => buildArtifact(c, "entrypointPath", "entrypoint.ps1"));
+  app.get("/api/workers/windows-container-job-agent", (c) => buildArtifact(c, "jobAgentPath", "whitesmith-job-agent.exe"));
   app.get("/api/workers/installer", async (c) => {
     const audience = c.req.query("audience");
     const runtime = c.req.query("runtime") ?? "container";
@@ -68,11 +81,19 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const installer = Bun.file(new URL(file, deps.workerInstallerRoot));
     if (audience === "windows-x64" && runtime !== "vm" && runtime !== "container") return c.json({ error: "unsupported Windows runtime" }, 400);
     if (!await installer.exists()) return c.json({ code: "artifact_unavailable", message: "Worker installer is unavailable", artifact: file }, 503, { "cache-control": "no-store" });
+    const build = deps.windowsContainerBuild;
+    const buildUrls = {
+      WINDOWS_CONTAINER_BUILDER_URL: `${new URL(deps.baseUrl).origin}/api/workers/windows-container-builder`,
+      WINDOWS_CONTAINER_VERIFIER_URL: `${new URL(deps.baseUrl).origin}/api/workers/windows-container-verifier`,
+      WINDOWS_CONTAINERFILE_URL: `${new URL(deps.baseUrl).origin}/api/workers/windows-containerfile`,
+      WINDOWS_CONTAINER_ENTRYPOINT_URL: `${new URL(deps.baseUrl).origin}/api/workers/windows-container-entrypoint`,
+      WINDOWS_CONTAINER_JOB_AGENT_URL: `${new URL(deps.baseUrl).origin}/api/workers/windows-container-job-agent`,
+    };
     const extra: Record<string, string> = audience === "windows-x64"
-      ? { WINDOWS_RUNTIME: runtime, WINDOWS_CONTAINER_IMAGE: deps.defaultJobImages["windows-x64"] ?? "", WINDOWS_TEMPLATE_PATH: deps.workerTemplatePaths?.["windows-x64"] ?? "", WINDOWS_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["windows-x64"] ?? "", LINUX_TEMPLATE_PATH: deps.workerTemplatePaths?.["linux-x64"] ?? "", LINUX_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["linux-x64"] ?? "" }
+      ? { WINDOWS_RUNTIME: runtime, WINDOWS_CONTAINER_IMAGE: "whitesmith/windows-job:local", WINDOWS_TEMPLATE_PATH: deps.workerTemplatePaths?.["windows-x64"] ?? "", WINDOWS_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["windows-x64"] ?? "", LINUX_TEMPLATE_PATH: deps.workerTemplatePaths?.["linux-x64"] ?? "", LINUX_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["linux-x64"] ?? "", ...(build ? { WINDOWS_CONTAINER_BASE_IMAGE: build.baseImage, WINDOWS_CONTAINER_RUNNER_URL: build.runnerUrl, WINDOWS_CONTAINER_RUNNER_SHA256: build.runnerSha256, WINDOWS_CONTAINER_GIT_URL: build.gitUrl, WINDOWS_CONTAINER_GIT_SHA256: build.gitSha256, WINDOWS_CONTAINER_VC_URL: build.vcUrl, WINDOWS_CONTAINER_VC_SHA256: build.vcSha256, ...buildUrls } : {}) }
       : audience === "macos-arm64" ? { TART_IMAGE: deps.macosTartBaseImage ?? "", TART_IMAGE_DIGEST: deps.defaultJobImages["macos-arm64"] ?? "" } : {};
-    if (audience === "windows-x64" && runtime === "vm" && (!extra.WINDOWS_TEMPLATE_PATH || !extra.WINDOWS_TEMPLATE_DIGEST)) return c.json({ code: "artifact_unavailable", message: "Windows Hyper-V template is not configured", artifact: "windows-template" }, 503, { "cache-control": "no-store" });
-    if (audience === "windows-x64" && runtime === "container" && !extra.WINDOWS_CONTAINER_IMAGE) return c.json({ code: "artifact_unavailable", message: "Windows container image is not configured", artifact: "windows-container-image" }, 503, { "cache-control": "no-store" });
+    if (audience === "windows-x64" && runtime === "vm" && (!extra.WINDOWS_TEMPLATE_PATH || !extra.WINDOWS_TEMPLATE_DIGEST)) return c.json({ code: "artifact_unavailable", message: "Windows Hyper-V template is not configured", artifact: "windows-template" }, 503);
+    if (audience === "windows-x64" && runtime === "container" && !build) return c.json({ code: "artifact_unavailable", message: "Windows container build inputs are not configured", artifact: "windows-container-build-inputs" }, 503);
     return new Response(injectInstallerOrigin(await installer.text(), deps.baseUrl, extra, audience === "windows-x64"), { headers: noStore() });
   });
   app.get("/api/workers/orchestrator", async (c) => { const audience = c.req.query("audience") as keyof NonNullable<typeof deps.workerOrchestratorExecutables>; const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined); if (!executable) return c.json({ code: "artifact_unavailable", message: "Orchestrator is unsupported", artifact: `orchestrator:${audience}` }, 503); if (!await Bun.file(executable).exists()) return c.json({ code: "artifact_unavailable", message: "Orchestrator is unavailable", artifact: `orchestrator:${audience}` }, 503, { "cache-control": "no-store" }); const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", 'attachment; filename="whitesmith-orchestrator"'); return new Response(Bun.file(executable), { headers }); });
