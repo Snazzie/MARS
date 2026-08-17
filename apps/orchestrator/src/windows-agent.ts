@@ -27,10 +27,23 @@ const commandSucceeds = async (command: string[]): Promise<boolean> => {
     return false;
   }
 };
+const localImageManifestVerified = async (image: string): Promise<boolean> => {
+  if (image !== "whitesmith/windows-job:local") return false;
+  const path = Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE_MANIFEST ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "windows-job-image.json");
+  try {
+    const manifest = JSON.parse(await readFile(path, "utf8")) as { schemaVersion?: number; image?: string; imageId?: string; runtimeProbe?: { mediaFoundation?: boolean; dns?: boolean; tcp443?: boolean } };
+    if (manifest.schemaVersion !== 1 || manifest.image !== image || !manifest.imageId || !manifest.runtimeProbe?.mediaFoundation || !manifest.runtimeProbe.dns || !manifest.runtimeProbe.tcp443) return false;
+    const process = Bun.spawn(["docker.exe", "image", "inspect", "--format", "{{.Id}}", image], { stdout: "pipe", stderr: "ignore" });
+    return (await process.exited) === 0 && (await new Response(process.stdout).text()).trim() === manifest.imageId;
+  } catch {
+    return false;
+  }
+};
 export const windowsDoctor = async (): Promise<WorkerDoctorData> => {
   const runtimeMode = Bun.env.WHITESMITH_WINDOWS_RUNTIME === "container" ? "container" : "vm";
   const artifactDigest = runtimeMode === "container" ? Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE : Bun.env.WHITESMITH_WINDOWS_TEMPLATE_DIGEST;
-  const immutableArtifact = typeof artifactDigest === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactDigest);
+  const localManifest = runtimeMode === "container" ? await localImageManifestVerified(artifactDigest ?? "") : false;
+  const immutableArtifact = localManifest || (typeof artifactDigest === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactDigest));
   const probe = runtimeMode === "container"
     ? await commandSucceeds(["docker.exe", "info", "--format", "{{.OSType}}"])
     : await commandSucceeds(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-VMHost -ErrorAction Stop | Out-Null"]);
@@ -41,8 +54,8 @@ export const windowsDoctor = async (): Promise<WorkerDoctorData> => {
   } catch {
     egress = false;
   }
-  const failures = [!probe && `${runtimeMode === "container" ? "Windows container host" : "Hyper-V host"} probe failed`, !egress && "GitHub egress probe failed", !immutableArtifact && "Immutable runtime artifact digest is missing"].filter(Boolean);
-  return WorkerDoctorData.parse({ runtimeMode, ...(immutableArtifact ? { artifactDigest } : {}), probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
+  const failures = [!probe && `${runtimeMode === "container" ? "Windows container host" : "Hyper-V host"} probe failed`, !egress && "GitHub egress probe failed", !immutableArtifact && "Verified Windows container image manifest is missing"].filter(Boolean);
+  return WorkerDoctorData.parse({ runtimeMode, ...(artifactDigest && immutableArtifact ? { artifactDigest } : {}), probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
 };
 const joinCode = async () => { const path = Bun.env.WHITESMITH_JOIN_CODE_FILE; if (path) return (await readFile(path, "utf8")).trim(); const reader = Bun.stdin.stream().getReader(); const { value } = await reader.read(); reader.releaseLock(); return Buffer.from(value ?? []).toString("utf8").trim(); };
 const save = async (identity: Identity) => { const path = identityPath(); await mkdir(dirname(path), { recursive: true }); await writeFile(path, JSON.stringify(identity) + "\n"); };

@@ -31,7 +31,7 @@ function Require-Administrator {
   if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Administrator privileges are required.' }
 }
 function Assert-HttpsUrl([string]$Url, [string]$Name) {
-  if ($Url -notmatch '^https://') { throw "$Name must use HTTPS." }
+  if ($Url -notmatch '^https://' -and $Url -notmatch '^http://(localhost|127\.0\.0\.1)(:\d+)?/') { throw "$Name must use HTTPS." }
 }
 function Assert-LocalImageManifest([string]$Path, [string]$Image) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Windows local image manifest is missing: $Path" }
@@ -48,8 +48,8 @@ function Assert-LocalImageManifest([string]$Path, [string]$Image) {
   return $manifest
 }
 function Assert-ImageDigest([string]$Image) {
+  if ($Image -eq 'whitesmith/windows-job:local') { return }
   if ($Image -match '^[^@\s]+@sha256:[0-9a-f]{64}$') { return }
-  if ($AllowLocalContainerImage -and $Image -eq 'whitesmith/windows-job:local' -and (docker image inspect $Image 2>$null)) { return }
   throw "Windows container image must be a full lowercase digest reference: $Image"
 }
 function Assert-Digest([string]$Digest) {

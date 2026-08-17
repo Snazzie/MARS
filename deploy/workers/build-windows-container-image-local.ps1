@@ -47,7 +47,7 @@ try {
   Copy-Item -LiteralPath $ContainerfilePath -Destination (Join-Path $context 'Containerfile')
   Copy-Item -LiteralPath $EntrypointPath -Destination (Join-Path $context 'entrypoint.ps1')
   Docker-Checked @('pull', $BaseImage) 'docker pull' | Out-Null
-  Docker-Checked @('build', '--build-arg', "BASE_IMAGE=$BaseImage", '--tag', $Image, $context) 'docker build' | Out-Null
+  Docker-Checked @('build', '--file', (Join-Path $context 'Containerfile'), '--build-arg', "BASE_IMAGE=$BaseImage", '--tag', $Image, $context) 'docker build' | Out-Null
   Docker-Checked @('create', '--name', $probe, '--entrypoint', 'powershell.exe', '--isolation=hyperv', '--label', 'whitesmith.managed=true', '--label', "whitesmith.lease-id=$([guid]::NewGuid())", $Image, '-NoLogo', '-NoProfile', '-NonInteractive', '-File', 'C:\Whitesmith\verify-runtime.ps1', '-RequireNetwork') | Out-Null
   Docker-Checked @('start', $probe) 'docker start' | Out-Null
   $inspection = @(Docker-Checked @('inspect', $probe) 'docker inspect' | ConvertFrom-Json)
