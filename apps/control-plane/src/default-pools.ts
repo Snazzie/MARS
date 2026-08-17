@@ -6,22 +6,37 @@ type PoolDefaults = Partial<Record<GuestPlatform, string | undefined>>;
 type WorkerLimits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
 const GIB = 1024 ** 3;
 
-export function poolResourcesForLimits(limits: WorkerLimits) {
+export function poolResourcesForLimits(limits: WorkerLimits, concurrency = limits.maxConcurrentPods) {
   return {
     vcpu: Math.min(4, limits.maxVcpuPerPod),
     memoryBytes: Math.min(6 * GIB, limits.maxMemoryBytesPerPod),
     storageBytes: Math.min(30 * GIB, limits.maxStorageBytesPerPod),
-    concurrency: Math.min(3, limits.maxConcurrentPods),
+    concurrency,
   };
 }
 
+export function poolResourcesForWorkers(workers: WorkerLimits[]) {
+  const [first] = workers;
+  if (!first) return null;
+  return poolResourcesForLimits(first, workers.reduce((sum, worker) => sum + worker.maxConcurrentPods, 0));
+}
+
+function guestPlatformsForWorker(worker: Record<string, unknown>): GuestPlatform[] {
+  const value = worker.guestPlatforms;
+  return (Array.isArray(value) ? value : [worker.platform]).filter((platform): platform is GuestPlatform => platform === "linux-x64" || platform === "windows-x64" || platform === "macos-arm64");
+}
+
 export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Promise<void> {
-  const [worker] = await db`select platform, guest_platforms as "guestPlatforms", limits from workers where admission_state='adopted' and configuration_state='ready' order by created_at asc limit 1`;
-  if (!worker || !worker.limits) return;
-  const guestPlatforms = (Array.isArray(worker.guestPlatforms) ? worker.guestPlatforms : [worker.platform]) as GuestPlatform[];
-  const limits = (typeof worker.limits === "string" ? JSON.parse(worker.limits) : worker.limits) as WorkerLimits;
-  const resources = poolResourcesForLimits(limits);
+  const workers = await db`select platform, guest_platforms as "guestPlatforms", limits from workers where admission_state='adopted' and configuration_state='ready' order by created_at asc`;
+  const configuredWorkers = workers
+    .map((worker) => ({ worker, limits: (typeof worker.limits === "string" ? JSON.parse(worker.limits) : worker.limits) as WorkerLimits }))
+    .filter(({ worker }) => worker.limits);
+  if (!configuredWorkers.length) return;
+  const guestPlatforms = [...new Set(configuredWorkers.flatMap(({ worker }) => guestPlatformsForWorker(worker)))];
   for (const platform of guestPlatforms) {
+    const compatibleWorkers = configuredWorkers.filter(({ worker }) => guestPlatformsForWorker(worker).includes(platform));
+    const resources = poolResourcesForWorkers(compatibleWorkers.map(({ limits }) => limits));
+    if (!resources) continue;
     const imageDigest = images[platform];
     if (!imageDigest) continue;
     const label = `whitesmith-${platform}`;
@@ -35,3 +50,4 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
     }
   }
 }
+

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { poolResourcesForLimits } from "./default-pools.ts";
+import { poolResourcesForLimits, poolResourcesForWorkers } from "./default-pools.ts";
 
 const GIB = 1024 ** 3;
 
@@ -9,6 +9,22 @@ test("allocates three useful sandboxes within the acknowledged worker ceiling", 
     memoryBytes: 6 * GIB,
     storageBytes: 30 * GIB,
     concurrency: 3,
+  });
+});
+
+test("preserves worker concurrency above the old automatic cap", () => {
+  expect(poolResourcesForLimits({ maxVcpuPerPod: 5, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 7 }).concurrency).toBe(7);
+});
+
+test("sums concurrency across workers sharing a default platform pool", () => {
+  expect(poolResourcesForWorkers([
+    { maxVcpuPerPod: 5, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 },
+    { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4 * GIB, maxStorageBytesPerPod: 20 * GIB, maxConcurrentPods: 5 },
+  ])).toEqual({
+    vcpu: 4,
+    memoryBytes: 6 * GIB,
+    storageBytes: 30 * GIB,
+    concurrency: 7,
   });
 });
 

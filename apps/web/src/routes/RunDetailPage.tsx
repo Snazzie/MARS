@@ -6,8 +6,8 @@ import { RunDetailView } from "../components/RunDetailView.tsx";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
 
 export function RunDetailPage() {
-  const { runId } = useParams({ from: "/dashboard-gate/dashboard/runs/$runId" });
-  const search = useSearch({ from: "/dashboard-gate/dashboard/runs/$runId" });
+  const { runId } = useParams({ from: "/_authenticated/runs/$runId" });
+  const search = useSearch({ from: "/_authenticated/runs/$runId" });
   const { organizationId } = useOrganizationFromRoute();
   const detailOrganizationId = typeof search.organizationId === "string" ? search.organizationId : organizationId;
   const query = useQuery({

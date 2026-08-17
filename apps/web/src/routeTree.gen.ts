@@ -17,6 +17,7 @@ import { Route as AuthenticatedRepositoriesRouteImport } from './file-routes/_au
 import { Route as AuthenticatedRunsRouteImport } from './file-routes/_authenticated/runs'
 import { Route as AuthenticatedSettingsRouteImport } from './file-routes/_authenticated/settings'
 import { Route as AuthenticatedWorkersRouteImport } from './file-routes/_authenticated/workers'
+import { Route as AuthenticatedRunsIndexRouteImport } from './file-routes/_authenticated/runs/index'
 import { Route as AuthenticatedRunsRunIdRouteImport } from './file-routes/_authenticated/runs/$runId'
 import { Route as AuthenticatedRunsTimingRouteImport } from './file-routes/_authenticated/runs.timing'
 
@@ -60,6 +61,11 @@ const AuthenticatedWorkersRoute = AuthenticatedWorkersRouteImport.update({
   path: '/workers',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedRunsIndexRoute = AuthenticatedRunsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AuthenticatedRunsRoute,
+} as any)
 const AuthenticatedRunsRunIdRoute = AuthenticatedRunsRunIdRouteImport.update({
   id: '/$runId',
   path: '/$runId',
@@ -81,17 +87,18 @@ export interface FileRoutesByFullPath {
   '/workers': typeof AuthenticatedWorkersRoute
   '/runs/$runId': typeof AuthenticatedRunsRunIdRoute
   '/runs/timing': typeof AuthenticatedRunsTimingRoute
+  '/runs/': typeof AuthenticatedRunsIndexRoute
 }
 export interface FileRoutesByTo {
   '/onboarding': typeof OnboardingRoute
   '/pools': typeof AuthenticatedPoolsRoute
   '/repositories': typeof AuthenticatedRepositoriesRoute
-  '/runs': typeof AuthenticatedRunsRouteWithChildren
   '/settings': typeof AuthenticatedSettingsRoute
   '/workers': typeof AuthenticatedWorkersRoute
   '/': typeof AuthenticatedIndexRoute
   '/runs/$runId': typeof AuthenticatedRunsRunIdRoute
   '/runs/timing': typeof AuthenticatedRunsTimingRoute
+  '/runs': typeof AuthenticatedRunsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -105,6 +112,7 @@ export interface FileRoutesById {
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/runs/$runId': typeof AuthenticatedRunsRunIdRoute
   '/_authenticated/runs/timing': typeof AuthenticatedRunsTimingRoute
+  '/_authenticated/runs/': typeof AuthenticatedRunsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -118,17 +126,18 @@ export interface FileRouteTypes {
     | '/workers'
     | '/runs/$runId'
     | '/runs/timing'
+    | '/runs/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/onboarding'
     | '/pools'
     | '/repositories'
-    | '/runs'
     | '/settings'
     | '/workers'
     | '/'
     | '/runs/$runId'
     | '/runs/timing'
+    | '/runs'
   id:
     | '__root__'
     | '/_authenticated'
@@ -141,6 +150,7 @@ export interface FileRouteTypes {
     | '/_authenticated/'
     | '/_authenticated/runs/$runId'
     | '/_authenticated/runs/timing'
+    | '/_authenticated/runs/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -206,6 +216,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedWorkersRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/runs/': {
+      id: '/_authenticated/runs/'
+      path: '/'
+      fullPath: '/runs/'
+      preLoaderRoute: typeof AuthenticatedRunsIndexRouteImport
+      parentRoute: typeof AuthenticatedRunsRoute
+    }
     '/_authenticated/runs/$runId': {
       id: '/_authenticated/runs/$runId'
       path: '/$runId'
@@ -226,11 +243,13 @@ declare module '@tanstack/react-router' {
 interface AuthenticatedRunsRouteChildren {
   AuthenticatedRunsRunIdRoute: typeof AuthenticatedRunsRunIdRoute
   AuthenticatedRunsTimingRoute: typeof AuthenticatedRunsTimingRoute
+  AuthenticatedRunsIndexRoute: typeof AuthenticatedRunsIndexRoute
 }
 
 const AuthenticatedRunsRouteChildren: AuthenticatedRunsRouteChildren = {
   AuthenticatedRunsRunIdRoute: AuthenticatedRunsRunIdRoute,
   AuthenticatedRunsTimingRoute: AuthenticatedRunsTimingRoute,
+  AuthenticatedRunsIndexRoute: AuthenticatedRunsIndexRoute,
 }
 
 const AuthenticatedRunsRouteWithChildren =
