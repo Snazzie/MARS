@@ -105,7 +105,8 @@ export async function runLeaseLifecycle(
     ]);
     sampling = false;
     await sampler;
-    send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "runner.finished", occurredAt: new Date().toISOString(), payload: { ...payload, exitCode, ...(oomResult ? { oom: oomResult } : {}) } });
+    const reportedExitCode = oomResult && exitCode === 0 ? 137 : exitCode;
+    send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "runner.finished", occurredAt: new Date().toISOString(), payload: { ...payload, exitCode: reportedExitCode, ...(oomResult ? { oom: oomResult } : {}) } });
   } catch (error) {
     sampling = false;
     await sampler;

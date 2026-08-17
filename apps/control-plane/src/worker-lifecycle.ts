@@ -118,7 +118,7 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
   }
   if (parsedPayload.data.type === "runner.finished") {
     const payload = parsedPayload.data.payload;
-    const state = payload.exitCode === 0 ? "completed" : "failed";
+    const state = payload.oom ? "failed" : payload.exitCode === 0 ? "completed" : "failed";
     const terminalResult = payload.oom ? { exitCode: payload.exitCode, reason: "out_of_memory", oom: payload.oom } : { exitCode: payload.exitCode };
     const rows = await db`UPDATE runner_leases SET state=${state},terminal_result=${jsonParameter(db, terminalResult)},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('sandbox_ready','online','busy') RETURNING id`;
     return Boolean(rows[0]);
