@@ -11,7 +11,7 @@ param(
   [Parameter(Mandatory = $true)][string]$Image
 )
 $ErrorActionPreference = 'Stop'
-if ($BaseImage -notmatch '^[^@\s]+@sha256:[0-9a-f]{64}$') { throw 'BaseImage must be a lowercase digest-pinned reference' }
+if ($BaseImage -notmatch '^mcr\.microsoft\.com/windows/server:ltsc2025@sha256:[0-9a-f]{64}$') { throw 'BaseImage must be a digest-pinned mcr.microsoft.com/windows/server:ltsc2025 reference' }
 if ($RunnerSha256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'RunnerSha256 must be a SHA-256 hex digest' }
 if ($GitSha256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'GitSha256 must be a SHA-256 hex digest' }
 if ($VcRuntimeSha256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'VcRuntimeSha256 must be a SHA-256 hex digest' }
@@ -31,6 +31,7 @@ try {
   Copy-Item -LiteralPath $JobAgent -Destination (Join-Path $temp 'whitesmith-job-agent.exe')
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\..\images\jobs\windows\Containerfile') -Destination (Join-Path $temp 'Containerfile')
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\..\images\jobs\windows\entrypoint.ps1') -Destination (Join-Path $temp 'entrypoint.ps1')
+  Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\..\images\jobs\windows\verify-runtime.ps1') -Destination (Join-Path $temp 'verify-runtime.ps1')
   & docker build --build-arg "BASE_IMAGE=$BaseImage" --tag $Image $temp
   if ($LASTEXITCODE -ne 0) { throw "docker build failed with exit code $LASTEXITCODE" }
   & docker push $Image

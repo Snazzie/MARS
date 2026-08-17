@@ -153,10 +153,15 @@ test("Windows installer restricts only the join credential, not the template roo
   expect(source).toContain("icacls.exe $joinCodePath /inheritance:r");
   expect(source).toContain("Failed to secure worker join credential");
 });
-test("Windows installer supports Docker container mode alongside VM mode", async () => {
+test("Windows installer supports Docker mode with a fail-closed runtime probe", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).toContain("Ensure-WindowsContainerRuntime");
   expect(source).toContain("--isolation=hyperv");
+  expect(source).toContain("verify-runtime.ps1");
+  expect(source).toContain("-RequireNetwork");
+  expect(source).toContain("docker wait");
+  expect(source).toContain("docker logs");
+  expect(source).toContain("2000");
   expect(source).toContain("WHITESMITH_WINDOWS_RUNTIME");
   expect(source).toContain("WHITESMITH_WINDOWS_TEMPLATE_PATH");
 });

@@ -49,13 +49,19 @@ function Ensure-WindowsContainerRuntime([string]$Image, [string]$Prefix) {
   }
   $name = "$Prefix-install-probe-$([guid]::NewGuid().ToString('N'))"
   try {
-    docker create --name $name --entrypoint cmd.exe --isolation=hyperv --label whitesmith.managed=true --label "whitesmith.lease-id=$([guid]::NewGuid())" $Image /c exit 0 | Out-Null
+    docker create --name $name --entrypoint powershell.exe --isolation=hyperv --label whitesmith.managed=true --label "whitesmith.lease-id=$([guid]::NewGuid())" $Image -NoLogo -NoProfile -NonInteractive -File C:\Whitesmith\verify-runtime.ps1 -RequireNetwork | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to create the Hyper-V container probe.' }
     docker start $name | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to start the Hyper-V container probe.' }
     $inspection = @(docker inspect $name | ConvertFrom-Json)
     if ($inspection[0].HostConfig.Isolation -ne 'hyperv') { throw 'Docker did not enforce Hyper-V isolation.' }
-    docker wait $name | Out-Null
+    $exitCode = [int](docker wait $name)
+    if ($LASTEXITCODE -ne 0) { throw 'Failed waiting for the Hyper-V container probe.' }
+    if ($exitCode -ne 0) {
+      $logs = ((docker logs $name 2>&1) -join ' ') -replace '\s+', ' '
+      if ($logs.Length -gt 2000) { $logs = $logs.Substring(0, 2000) }
+      throw "Windows container runtime prerequisite probe failed with exit code ${exitCode}: $logs"
+    }
   } finally {
     docker rm -f $name 2>$null | Out-Null
   }
