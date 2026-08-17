@@ -21,8 +21,9 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "happy-dom": "^20.11.2",
+    "@tanstack/router-plugin": "^1.130.0",
     "@vitejs/plugin-react": "^6.0.5",
+    "happy-dom": "^20.11.2",
     "vite": "^8.2.1"
   }
 }

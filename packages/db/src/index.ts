@@ -8,6 +8,7 @@ export function createDb(url: string): DatabaseClient { return postgres(url, { m
 type Migration = { version: number; name: string; sql: string };
 const legacyChecksums = new Map<number, Set<string>>([
   [1, new Set(["fed95e0e171ee0e4a8f708fcc48e2f5a1e241f0d54d6a83c02fed0e7bd0f0a75"])],
+  [8, new Set(["c09d8da50704baf298b3dfc4413c85b01a08ed9dab05e72e863085927da84bff"])],
 ]);
 const migrations: Migration[] = [
   { version: 1, name: "baseline", sql: baselineSchemaSql },

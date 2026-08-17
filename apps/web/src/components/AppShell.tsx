@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { getHealth, getMe, getOrganizations } from "../api.ts";
-import { useOrganization } from "../router.tsx";
+import { useOrganization } from "../organization.ts";
 import { QueryState } from "./StateView.tsx";
 import { ContextHelp } from "./ContextHelp.tsx";
 import { useDashboardInvalidations } from "../useDashboardInvalidations.ts";

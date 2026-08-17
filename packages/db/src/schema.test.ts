@@ -51,6 +51,13 @@ test("timing snapshots preserve dimensions and non-negative durations", () => {
   expect(schemaSql).toContain("effective_concurrency bigint NOT NULL CHECK(effective_concurrency > 0)");
 });
 
+test("creates the dashboard job composite key before dependent foreign keys", () => {
+  const key = schemaSql.indexOf("CREATE UNIQUE INDEX IF NOT EXISTS dashboard_jobs_org_run_id_idx");
+  const timingForeignKey = schemaSql.indexOf("FOREIGN KEY (organization_id, run_id, job_id) REFERENCES dashboard_jobs");
+  expect(key).toBeGreaterThan(-1);
+  expect(timingForeignKey).toBeGreaterThan(key);
+});
+
 test("normalizes legacy double-encoded worker JSON in a later migration", () => {
   expect(baselineSchemaSql).not.toContain("#>> '{}'");
   expect(workerJsonNormalizationMigrationSql).toContain("jsonb_typeof(guest_platforms)='string'");

@@ -13,7 +13,7 @@ export function httpOrigin(name: string, value: string): string {
   return url.origin;
 }
 
-export type BrowserPath = "/" | "/onboarding" | "/repositories" | "/onboarding?github=repository-selection-required";
+export type BrowserPath = string;
 
 export function browserLocation(origin: string, path: BrowserPath): string {
   return new URL(path, `${origin}/`).toString();

@@ -1,0 +1,17 @@
+services:
+  postgres:
+    container_name: whitesmith-postgres-local
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-whitesmith}
+      POSTGRES_USER: ${POSTGRES_USER:-whitesmith}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-whitesmith}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - 127.0.0.1:55432:5432
+
+volumes:
+  postgres-data:
+    name: whitesmith-postgres-data

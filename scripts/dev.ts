@@ -18,7 +18,7 @@ const dev = Bun.spawn([
   "--kill-others",
   "--names",
   "control-plane,web",
-  "bun --env-file=.env run --filter @whitesmith/control-plane dev",
+  "bun run scripts/control-plane-dev.ts",
   "bun run --filter @whitesmith/web dev",
 ], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
 

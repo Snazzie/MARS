@@ -6,6 +6,13 @@ import { browserLocation } from "../http-origin.ts";
 
 const cookieAttributes = (baseUrl: string, path: string, maxAge: number): string => { const secure = new URL(baseUrl).protocol === "https:" ? "; Secure" : ""; return `HttpOnly${secure}; SameSite=Lax; Path=${path}; Max-Age=${maxAge}`; };
 function cookieValue(header: string | undefined, name: string): string | null { const value = header?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`)); return value ? value.slice(name.length + 1) : null; }
+function localReturnTo(value: string | undefined): string | null {
+  if (!value || !value.startsWith("/") || value.startsWith("//") || value.startsWith("/api/") || value.includes("\\")) return null;
+  return value;
+}
+function decodeReturnTo(value: string | null): string | null {
+  try { return localReturnTo(value ? decodeURIComponent(value) : undefined); } catch { return null; }
+}
 const oauthStarts = new Map<string, number[]>();
 function allowOAuthStart(client: string): boolean {
   const now = Date.now(), cutoff = now - 60_000;
@@ -29,8 +36,8 @@ export function registerAuthRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlan
     const flow = createPkce();
     const encrypted = deps.secretBox.encrypt(flow.verifier);
     await deps.db`insert into github_setup_states(state_hash,purpose,encrypted_pkce_verifier,expires_at) values (${sha256(flow.state)},'oauth',${encrypted},now()+interval '10 minutes')`;
-    const returnTo = c.req.query("returnTo");
-    if (returnTo === "/repositories") c.header("Set-Cookie", `oauth_return_to=${encodeURIComponent(returnTo)}; ${cookieAttributes(deps.baseUrl, "/api/auth", 600)}`, { append: true });
+    const returnTo = localReturnTo(c.req.query("returnTo"));
+    if (returnTo) c.header("Set-Cookie", `oauth_return_to=${encodeURIComponent(returnTo)}; ${cookieAttributes(deps.baseUrl, "/api/auth", 600)}`, { append: true });
     c.header("Set-Cookie", `oauth_state=${flow.state}; ${cookieAttributes(deps.baseUrl, "/api/auth", 600)}`, { append: true });
     return c.redirect(githubAuthorizeUrl(deps.baseUrl, deps.githubClientId, flow), 302);
   });
@@ -39,8 +46,7 @@ export function registerAuthRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlan
     const cookie = c.req.header("Cookie");
     if (!state || cookieValue(cookie, "oauth_state") !== state) return c.json({ error:"invalid oauth state" },400);
     const encodedReturnTo = cookieValue(cookie, "oauth_return_to");
-    let returnTo: "/repositories" | null = null;
-    try { const decoded = encodedReturnTo ? decodeURIComponent(encodedReturnTo) : ""; if (decoded === "/repositories") returnTo = decoded; } catch { /* malformed return paths fall back to server routing */ }
+    const returnTo = decodeReturnTo(encodedReturnTo);
     const rows = await deps.db`update github_setup_states set consumed_at=now() where state_hash=${sha256(state)} and purpose='oauth' and consumed_at is null and expires_at>now() returning encrypted_pkce_verifier`;
     const row = rows[0] as { encrypted_pkce_verifier?: string } | undefined; if (!row?.encrypted_pkce_verifier) return c.json({ error:"invalid oauth state" },400);
     const flow = { state, verifier:deps.secretBox.decrypt(row.encrypted_pkce_verifier), createdAt:Date.now() }; const user = await exchangeOAuth(c.req.query("code") ?? "", flow, deps.githubClientId, deps.githubClientSecret, deps.baseUrl);

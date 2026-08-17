@@ -1,4 +1,5 @@
 import { defineConfig, type Plugin } from "vite";
+import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 
 const devEntry: Plugin = {
@@ -12,7 +13,7 @@ const devEntry: Plugin = {
 };
 
 export default defineConfig({
-  plugins: [devEntry, react()],
+  plugins: [TanStackRouterVite({ routesDirectory: "./src/file-routes", generatedRouteTree: "./src/routeTree.gen.ts" }), devEntry, react()],
   server: {
     port: Number(process.env.WEB_PORT ?? 5173),
     proxy: {
