@@ -195,7 +195,7 @@ test("fast pickup polls only queued runs for one configured repository", async (
   const githubFetch = async (input: RequestInfo | URL) => {
     const url = String(input);
     requests.push(url);
-    if (url.includes("/actions/runs?")) return Response.json({
+    if (url.includes("status=queued")) return Response.json({
       total_count: 1,
       workflow_runs: [{
         id: 77,
@@ -212,7 +212,8 @@ test("fast pickup polls only queued runs for one configured repository", async (
         updated_at: "2026-08-15T04:00:00Z",
       }],
     });
-    return Response.json({ total_count: 0, jobs: [] });
+    if (url.includes("/actions/runs/77/jobs")) return Response.json({ total_count: 0, jobs: [] });
+    return Response.json({ total_count: 0, workflow_runs: [] });
   };
 
   const report = await discoverQueuedRepositoryJobs({
@@ -222,10 +223,38 @@ test("fast pickup polls only queued runs for one configured repository", async (
     repositoryFullName: "acme/repo",
   });
 
-  expect(report).toMatchObject({ repositories: 1, discovered: 0, failed: 0 });
   expect(requests).toHaveLength(2);
   expect(requests[0]).toContain("status=queued");
-  expect(requests.some((url) => url.includes("status=in_progress") || url.includes("status=completed"))).toBe(false);
+  expect(requests.some((url) => url.includes("status=in_progress") || url.includes("status=completed") || url.includes("status=pending"))).toBe(false);
+});
+test("fast pickup includes GitHub pending runs", async () => {
+  const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
+  const requests: string[] = [];
+  const db = (async (strings: TemplateStringsArray) => strings.join(" ").includes("FROM dashboard_repositories repo") ? [repository] : []) as never;
+  const githubFetch = async (input: RequestInfo | URL) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.includes("status=pending")) return Response.json({
+      total_count: 1,
+      workflow_runs: [{
+        id: 77, run_number: 77, name: "CI", event: "pull_request", head_branch: "main", head_sha: "a".repeat(40),
+        actor: { login: "octocat" }, status: "pending", conclusion: null, created_at: "2026-08-15T04:00:00Z",
+        run_started_at: null, updated_at: "2026-08-15T04:00:00Z",
+      }],
+    });
+    if (url.includes("/actions/runs/77/jobs")) return Response.json({ total_count: 0, jobs: [] });
+    return Response.json({ total_count: 0, workflow_runs: [] });
+  };
+
+  const report = await discoverQueuedRepositoryJobs({
+    db,
+    installationToken: async () => "token",
+    githubFetchForInstallation: () => githubFetch,
+    repositoryFullName: repository.fullName,
+  });
+
+  expect(report).toMatchObject({ repositories: 1, discovered: 0, failed: 0 });
+  expect(requests.some((url) => url.includes("status=pending"))).toBe(true);
 });
 
 test("stops only the rate-limited installation's remaining repositories", async () => {

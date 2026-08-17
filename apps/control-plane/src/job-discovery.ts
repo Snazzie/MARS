@@ -48,7 +48,7 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
   const installationId = Number(row.installationId);
   const client = new GithubJobsClient({ token: () => deps.installationToken(installationId), fetch: deps.githubFetchForInstallation(installationId) });
   const runs = new Map<number, GithubRunSnapshot>();
-  for (const status of ["queued", "in_progress"] as const) {
+  for (const status of ["queued", "pending", "in_progress"] as const) {
     console.error(`GitHub discovery list ${fullName} ${status}`);
     const active = await pages(async page => { const value = await client.listRuns(owner, repo, status, page); return { totalCount: value.totalCount, items: value.runs }; });
     for (const run of active) runs.set(run.id, run);
@@ -91,7 +91,14 @@ export async function discoverQueuedRepositoryJobs(deps: DiscoveryDeps): Promise
       if (!owner || !repo || fullName.split("/").length !== 2) throw new Error("repository_name_invalid");
       const installationId = Number(row.installationId);
       const client = new GithubJobsClient({ token: () => deps.installationToken(installationId), fetch: deps.githubFetchForInstallation(installationId) });
-      const runs = await pages(async page => { const value = await client.listRuns(owner, repo, "queued", page); return { totalCount: value.totalCount, items: value.runs }; });
+      const queued = await pages(async page => {
+        const value = await client.listRuns(owner, repo, "queued", page);
+        return { totalCount: value.totalCount, items: value.runs };
+      });
+      const runs = queued.length ? queued : await pages(async page => {
+        const value = await client.listRuns(owner, repo, "pending", page);
+        return { totalCount: value.totalCount, items: value.runs };
+      });
       for (const run of runs) {
         const jobs = await pages(async page => { const value = await client.listJobs(owner, repo, run.id, page); return { totalCount: value.totalCount, items: value.jobs }; });
         for (const job of jobs) {
