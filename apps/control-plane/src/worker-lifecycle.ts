@@ -119,7 +119,8 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
   if (parsedPayload.data.type === "runner.finished") {
     const payload = parsedPayload.data.payload;
     const state = payload.exitCode === 0 ? "completed" : "failed";
-    const rows = await db`UPDATE runner_leases SET state=${state},terminal_result=${jsonParameter(db, { exitCode: payload.exitCode })},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('sandbox_ready','online','busy') RETURNING id`;
+    const terminalResult = payload.oom ? { exitCode: payload.exitCode, reason: "out_of_memory", oom: payload.oom } : { exitCode: payload.exitCode };
+    const rows = await db`UPDATE runner_leases SET state=${state},terminal_result=${jsonParameter(db, terminalResult)},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('sandbox_ready','online','busy') RETURNING id`;
     return Boolean(rows[0]);
   }
   if (parsedPayload.data.type === "lease.failed") {
@@ -128,7 +129,8 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
       const rows = await db`UPDATE runner_leases SET cleanup_state='failed',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed') RETURNING id`;
       return Boolean(rows[0]);
     }
-    const rows = await db`UPDATE runner_leases SET state='failed',terminal_result=${jsonParameter(db, { reason: payload.reason })},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('dispatched','provisioning','sandbox_ready','online','busy') RETURNING id`;
+    const terminalResult = payload.oom ? { reason: payload.reason, oom: payload.oom } : { reason: payload.reason };
+    const rows = await db`UPDATE runner_leases SET state='failed',terminal_result=${jsonParameter(db, terminalResult)},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('dispatched','provisioning','sandbox_ready','online','busy') RETURNING id`;
     return Boolean(rows[0]);
   }
   const payload = parsedPayload.data.payload;

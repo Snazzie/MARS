@@ -176,7 +176,8 @@ export async function getRunDetail(db: DashboardDb, organizationId: string, runI
   if (!run) return null;
   const jobRows = await db<Record<string, unknown>[]>`
     SELECT id,name,status,conclusion,stage,runner_name AS "runnerName",logs_state AS "logsState",
-      requested,requested_labels AS "requestedLabels",observed
+      requested,requested_labels AS "requestedLabels",observed,
+      (SELECT terminal_result FROM runner_leases WHERE github_job_id=dashboard_jobs.github_job_id ORDER BY updated_at DESC LIMIT 1) AS "terminalResult"
     FROM dashboard_jobs WHERE organization_id=${organizationId} AND run_id=${runId} ORDER BY id
   `;
   const stepRows = await db<Record<string, unknown>[]>`
@@ -207,6 +208,10 @@ export async function getRunDetail(db: DashboardDb, organizationId: string, runI
   }
   const jobs = jobRows.map((row): RunJob => {
     const requestedLabels = jsonValue(row.requestedLabels);
+    const terminal = jsonValue(row.terminalResult);
+    const terminalObject = terminal && typeof terminal === "object" ? terminal as Record<string, unknown> : null;
+    const oomCandidate = terminalObject?.oom;
+    const oom = oomCandidate && typeof oomCandidate === "object" ? oomCandidate as RunJob["oom"] : null;
     return {
       id: String(row.id),
       name: String(row.name),
@@ -218,6 +223,8 @@ export async function getRunDetail(db: DashboardDb, organizationId: string, runI
       requested: jsonValue(row.requested) as RunJob["requested"],
       requestedLabels: Array.isArray(requestedLabels) ? requestedLabels.filter((label): label is string => typeof label === "string") : [],
       observed: row.observed == null ? null : jsonValue(row.observed) as RunJob["observed"],
+      failureReason: terminalObject?.reason === "out_of_memory" || oom ? "out_of_memory" : null,
+      oom,
       steps: stepsByJob.get(String(row.id)) ?? [],
     };
   });

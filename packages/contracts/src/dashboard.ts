@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { positiveSafe, PoolResources, RuntimeDriverName, RuntimePlatform, WorkerLimits, GuestPlatform, ConfigurationState } from "./orchestration.ts";
+import { positiveSafe, OutOfMemoryResult, PoolResources, RuntimeDriverName, RuntimePlatform, WorkerLimits, GuestPlatform, ConfigurationState } from "./orchestration.ts";
 
 const id = z.string().min(1);
 const timestamp = z.string().datetime({ offset: true });
@@ -40,7 +40,7 @@ export const CreatePoolRequest = dto(strict({ poolId: id.optional(), workerId: i
 export type CreatePoolRequest = z.infer<typeof CreatePoolRequest>;
 export const RunStep = dto(strict({ id, name: z.string().min(1), number: z.number().int().nonnegative(), status: z.enum(["queued", "in_progress", "completed"]), conclusion: z.string().nullable(), queuedAt: timestamp, startedAt: timestamp.nullable(), completedAt: timestamp.nullable(), durationMs: positiveSafe.or(z.literal(0)) }));
 export type RunStep = z.infer<typeof RunStep>;
-export const RunJob = dto(strict({ id, name: z.string().min(1), status: z.enum(["queued", "in_progress", "completed"]), conclusion: z.string().nullable(), stage: RunStage, runnerName: z.string().nullable(), logsState: z.enum(["pending", "ingested", "unavailable"]), requested: resources, requestedLabels: z.array(z.string().min(1)), observed: resources.nullable(), steps: z.array(RunStep) }));
+export const RunJob = dto(strict({ id, name: z.string().min(1), status: z.enum(["queued", "in_progress", "completed"]), conclusion: z.string().nullable(), stage: RunStage, runnerName: z.string().nullable(), logsState: z.enum(["pending", "ingested", "unavailable"]), requested: resources, requestedLabels: z.array(z.string().min(1)), observed: resources.nullable(), failureReason: z.enum(["out_of_memory", "runner_lost", "runner_failed"]).nullable(), oom: OutOfMemoryResult.nullable(), steps: z.array(RunStep) }));
 export type RunJob = z.infer<typeof RunJob>;
 export const ActionGraph = dto(strict({ nodes: z.array(strict({ id, name: z.string().min(1), status: RunStage })), edges: z.array(strict({ from: id, to: id })) }));
 export type ActionGraph = z.infer<typeof ActionGraph>;
