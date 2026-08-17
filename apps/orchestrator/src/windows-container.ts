@@ -7,13 +7,23 @@ import { validateResources } from "./runtime.ts";
 
 export type DockerResult = { code: number; stdout: string; stderr: string };
 export type DockerRunner = (args: string[]) => Promise<DockerResult>;
-export type WindowsContainerConfig = { image: string; prefix: string; bootstrapRoot: string; limits: WorkerLimits; readyTimeoutMs: number; jobTimeoutMs: number; allowLocalImage?: boolean };
+export type WindowsContainerConfig = { image: string; prefix: string; bootstrapRoot: string; limits: WorkerLimits; readyTimeoutMs: number; jobTimeoutMs: number; allowLocalImage?: boolean; imageManifestPath?: string; requireLocalImageManifest?: boolean };
 const digest = /^[^@\s]+@sha256:[0-9a-f]{64}$/;
 const localImage = "whitesmith/windows-job:local";
 
 async function defaultDocker(args: string[]): Promise<DockerResult> { const process = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe" }); return { code: await process.exited, stdout: await new Response(process.stdout).text(), stderr: await new Response(process.stderr).text() }; }
 function checked(result: DockerResult, operation: string): string { if (result.code !== 0) throw new Error(`${operation} failed: ${result.stderr.replaceAll(/\r?\n/g, " ").slice(0, 500)}`); return result.stdout.trim(); }
 function parseMemoryBytes(value: string): number { const match = value.replaceAll(",", "").match(/([\d.]+)\s*([KMG]?i?B)/i); if (!match) return 0; const units: Record<string, number> = { b: 1, kb: 1024, kib: 1024, mb: 1024 ** 2, mib: 1024 ** 2, gb: 1024 ** 3, gib: 1024 ** 3 }; return Math.round(Number(match[1]) * (units[match[2]!.toLowerCase()] ?? 1)); }
+async function validateLocalManifest(config: WindowsContainerConfig, docker: DockerRunner): Promise<void> {
+  if (!config.requireLocalImageManifest) return;
+  if (!config.imageManifestPath) throw new Error("local Windows image manifest path is required");
+  let manifest: { schemaVersion?: number; image?: string; imageId?: string; runtimeProbe?: { mediaFoundation?: boolean; dns?: boolean; tcp443?: boolean } };
+  try { manifest = JSON.parse(await Bun.file(config.imageManifestPath).text()); } catch { throw new Error("local Windows image manifest is unavailable"); }
+  if (manifest.schemaVersion !== 1 || manifest.image !== config.image || !manifest.imageId) throw new Error("local Windows image manifest is invalid");
+  if (!manifest.runtimeProbe?.mediaFoundation || !manifest.runtimeProbe.dns || !manifest.runtimeProbe.tcp443) throw new Error("local Windows image runtime probe is not verified");
+  const imageId = checked(await docker(["image", "inspect", "--format", "{{.Id}}", config.image]), "image inspect");
+  if (imageId !== manifest.imageId) throw new Error("local Windows image manifest image ID mismatch");
+}
 function dockerSample(name: string, docker: DockerRunner) {
   return async () => {
     const raw = checked(await docker(["stats", "--no-stream", "--format", "{{json .}}", name]), "docker stats");
@@ -35,6 +45,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
     this.validatePool(resources);
     if (checked(await this.docker(["info", "--format", "{{.OSType}}"]), "docker info") !== "windows") throw new Error("Windows Docker engine is required");
     if (this.config.allowLocalImage && this.config.image === localImage) {
+      await validateLocalManifest(this.config, this.docker);
       checked(await this.docker(["image", "inspect", this.config.image]), "image inspect");
     } else {
       const digests = JSON.parse(checked(await this.docker(["image", "inspect", "--format", "{{json .RepoDigests}}", this.config.image]), "image inspect")) as string[];

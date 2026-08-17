@@ -8,6 +8,29 @@ const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
+test("rejects a local image without a verified matching manifest", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-manifest-"));
+  roots.push(root);
+  const manifestPath = join(root, "windows-job-image.json");
+  await Bun.write(manifestPath, JSON.stringify({ schemaVersion: 1, image: "whitesmith/windows-job:local", imageId: "sha256:old", runtimeProbe: { mediaFoundation: true, dns: true, tcp443: true } }));
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
+    if (args[0] === "image" && args[1] === "inspect" && args.includes("{{.Id}}")) return { code: 0, stdout: "sha256:new\n", stderr: "" };
+    return { code: 0, stdout: "[]", stderr: "" };
+  };
+  const driver = new WindowsContainerDriver({
+    image: "whitesmith/windows-job:local",
+    prefix: "whitesmith",
+    bootstrapRoot: root,
+    limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
+    readyTimeoutMs: 100,
+    jobTimeoutMs: 100,
+    allowLocalImage: true,
+    imageManifestPath: manifestPath,
+    requireLocalImageManifest: true,
+  }, docker);
+  await expect(driver.reserveCapacity({ vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 })).rejects.toThrow("image ID mismatch");
+});
 
 test("fails completion when a containerized job stops making terminal progress", async () => {
   const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-container-"));
