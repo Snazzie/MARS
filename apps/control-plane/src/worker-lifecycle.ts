@@ -1,7 +1,8 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { jsonParameter, persistJobResourceSample, recordJobTimingSnapshot, type DatabaseClient, type JobTimingSnapshotInput } from "@whitesmith/db";
 import { WorkerEvent, WorkerEventPayload } from "@whitesmith/contracts";
 import type { AuthenticatedWorkerSocket, WorkerCommandDispatcher } from "./worker-dispatch.ts";
-
 export type TimingBoundaryInputs = {
   queuedAt: string;
   startedAt: string | null;
@@ -36,6 +37,13 @@ export function aggregateResourceSamples(samples: Array<{ occurredAt: string; cp
   return { telemetryState: (coverage ? "available" : "partial") as "available" | "partial", telemetrySampleCount: ordered.length, cpuAveragePercent: cpu.reduce((sum, value) => sum + value, 0) / cpu.length, cpuP50Percent: percentile(cpu, 0.5), cpuP95Percent: percentile(cpu, 0.95), cpuPeakPercent: Math.max(...cpu), cpuTimeMs: ordered.reduce((sum, sample) => sum + sample.cpuTimeMs, 0), memoryAverageBytes: Math.round(ordered.reduce((sum, sample) => sum + sample.memoryWorkingSetBytes, 0) / ordered.length), memoryPeakBytes: Math.max(...ordered.map(sample => sample.memoryWorkingSetBytes)) };
 }
 
+async function persistDiagnosticChunk(workerId: string, payload: { diagnosticId: string; sequence: number; content: string }): Promise<void> {
+  const root = Bun.env.WHITESMITH_DIAGNOSTICS_ROOT ?? join(Bun.env.DATA_ROOT ?? "/var/lib/whitesmith", "diagnostics");
+  const directory = join(root, workerId, payload.diagnosticId);
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, `${String(payload.sequence).padStart(8, "0")}.log`), payload.content, { encoding: "utf8", flag: "wx" });
+}
+
 export async function handleAuthenticatedWorkerEvent(
   db: DatabaseClient,
   dispatcher: Pick<WorkerCommandDispatcher, "handleEvent">,
@@ -46,7 +54,15 @@ export async function handleAuthenticatedWorkerEvent(
   if (!event.success) return false;
   const payload = WorkerEventPayload.safeParse({ type: event.data.type, payload: event.data.payload });
   if (!payload.success) return false;
-  if (payload.data.type === "command.accepted") return dispatcher.handleEvent(event.data, socket);
+  if (payload.data.type === "diagnostic.chunk") {
+    try {
+      await persistDiagnosticChunk(event.data.workerId, payload.data.payload);
+      return true;
+    } catch (error) {
+      console.error("Worker diagnostic chunk persistence failed", { workerId: event.data.workerId, diagnosticId: payload.data.payload.diagnosticId, sequence: payload.data.payload.sequence, error: error instanceof Error ? error.message : String(error) });
+      return false;
+    }
+  }
   if (payload.data.type === "job.resource_sample") return (await persistJobResourceSample(db, event.data.workerId, event.data)) !== "rejected";
   if (payload.data.type === "job.log") return await persistWorkerLogEvent(db, event.data.workerId, payload.data.payload);
   await applyWorkerLeaseEvent(db, event.data);
@@ -103,7 +119,7 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
   if (!parsedEvent.success) return false;
   const event = parsedEvent.data;
   const parsedPayload = WorkerEventPayload.safeParse({ type: event.type, payload: event.payload });
-  if (!parsedPayload.success || parsedPayload.data.type === "command.accepted" || parsedPayload.data.type === "job.log" || parsedPayload.data.type === "job.resource_sample") return false;
+  if (!parsedPayload.success || parsedPayload.data.type === "command.accepted" || parsedPayload.data.type === "diagnostic.chunk" || parsedPayload.data.type === "job.log" || parsedPayload.data.type === "job.resource_sample") return false;
 
   if (parsedPayload.data.type === "sandbox_attested") {
     const payload = parsedPayload.data.payload;

@@ -74,7 +74,7 @@ function fallbackTermination(cause: RuntimeTerminationEvidence["cause"], exitCod
 
 export async function runLeaseLifecycle(
   command: WorkerCommand,
-  driver: Pick<RuntimeDriver, "createLease" | "requestGracefulStop" | "stopLease" | "removeLease">,
+  driver: Pick<RuntimeDriver, "createLease" | "requestGracefulStop" | "stopLease" | "removeLease" | "collectRawDiagnostics">,
   bootstrap: LeaseBootstrapEnvelope,
   send: (event: WorkerEvent) => void,
 ): Promise<void> {
@@ -145,6 +145,19 @@ export async function runLeaseLifecycle(
     const termination = runtime.termination ?? fallbackTermination("child_disappeared", null, Date.now() - startedAt, sampleCount, lastSampleOccurredAt, samplingGapMs);
     console.error("Runner failed", { leaseId: bootstrap.leaseId, correlationId, cause: termination.cause, error: error instanceof Error ? error.message : String(error) });
     send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: oomResult ? "out_of_memory" : "runner_failed", termination, ...(oomResult ? { oom: oomResult } : {}) } });
+  }
+  if (driver.collectRawDiagnostics) {
+    try {
+      const diagnosticId = crypto.randomUUID();
+      const raw = await driver.collectRawDiagnostics(bootstrap.leaseId);
+      const chunkSize = 96 * 1024;
+      const chunks = raw.length ? Math.ceil(raw.length / chunkSize) : 1;
+      for (let sequence = 0; sequence < chunks; sequence += 1) {
+        send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "diagnostic.chunk", occurredAt: new Date().toISOString(), payload: { jobId: bootstrap.jobId, leaseId: bootstrap.leaseId, diagnosticId, sequence, content: raw.slice(sequence * chunkSize, (sequence + 1) * chunkSize), final: sequence === chunks - 1 } });
+      }
+    } catch (error) {
+      console.error("Raw container diagnostics failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) });
+    }
   }
   let cleanupFailed = false;
   try { await driver.stopLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("Lease stop failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) }); }

@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { applyWorkerLeaseEvent, handleAuthenticatedWorkerEvent, timingDurations } from "./worker-lifecycle.ts";
 
 const workerId = "11111111-1111-4111-8111-111111111111";
@@ -131,7 +134,29 @@ test("persists attributed and unattributed log chunks idempotently and rejects u
   expect(calls.at(-1)).toContain("dashboard_step_log_chunks");
   const unattributed = event("job.log", { jobId, stepId: null, sequence: 1, content: "fallback", occurredAt: new Date().toISOString() });
   expect(await handleAuthenticatedWorkerEvent(db, { handleEvent() { return false; } }, unattributed, { send() {} })).toBe(true);
+
   expect(calls.at(-1)).toContain("dashboard_log_chunks");
   const unknownDb = Object.assign(async (_strings: TemplateStringsArray, ..._values: unknown[]) => (calls.length < 0 ? [{ organizationId: "org", runId: "run", jobId }] : []), {}) as never;
   expect(await handleAuthenticatedWorkerEvent(unknownDb, { handleEvent() { return false; } }, attributed, { send() {} })).toBe(false);
+});
+ 
+test("persists authenticated diagnostic chunks under the configured root", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whitesmith-diagnostics-"));
+  const previous = Bun.env.WHITESMITH_DIAGNOSTICS_ROOT;
+  Bun.env.WHITESMITH_DIAGNOSTICS_ROOT = root;
+  const diagnosticId = crypto.randomUUID();
+  try {
+    const accepted = await handleAuthenticatedWorkerEvent(
+      Object.assign(async () => [], {}) as never,
+      { handleEvent() { return false; } },
+      event("diagnostic.chunk", { jobId: crypto.randomUUID(), leaseId, diagnosticId, sequence: 0, content: "raw worker evidence", final: true }),
+      { send() {} },
+    );
+    expect(accepted).toBe(true);
+    expect(await readFile(join(root, workerId, diagnosticId, "00000000.log"), "utf8")).toBe("raw worker evidence");
+  } finally {
+    if (previous === undefined) delete Bun.env.WHITESMITH_DIAGNOSTICS_ROOT;
+    else Bun.env.WHITESMITH_DIAGNOSTICS_ROOT = previous;
+    await rm(root, { recursive: true, force: true });
+  }
 });

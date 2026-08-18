@@ -119,4 +119,22 @@ export class WindowsContainerDriver implements RuntimeDriver {
     }
   }
   async collectDiagnostics(leaseId: string): Promise<Record<string, unknown>> { const lease = await this.inspectLease(leaseId); return { isolation: "hyperv", runtimeInstanceId: lease.runtimeInstanceId, observed: lease.observed }; }
+  async collectRawDiagnostics(leaseId: string): Promise<string> {
+    const lease = await this.inspectLease(leaseId);
+    const name = lease.runtimeInstanceId;
+    const run = async (args: string[]) => {
+      try { return await this.docker(args); } catch (error) { return { code: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) }; }
+    };
+    const [inspect, logs, workerLog] = await Promise.all([
+      run(["inspect", name]),
+      run(["logs", "--timestamps", name]),
+      run(["exec", name, "cmd.exe", "/c", "type", "C:\\ProgramData\\Whitesmith\\logs\\worker.log"]),
+    ]);
+    const bundle = [
+      "=== docker inspect ===\n", inspect.stdout || inspect.stderr,
+      "\n=== docker logs --timestamps ===\n", logs.stdout || logs.stderr,
+      "\n=== service worker.log ===\n", workerLog.stdout || workerLog.stderr,
+    ].join("");
+    return bundle.length > 10 * 1024 * 1024 ? `${bundle.slice(0, 10 * 1024 * 1024)}\n=== diagnostic bundle truncated ===\n` : bundle;
+  }
 }

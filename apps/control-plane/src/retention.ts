@@ -1,5 +1,6 @@
+import { readdir, rm, stat } from "node:fs/promises";
+import { join } from "node:path";
 import type { Sql } from "postgres";
-
 type RetentionConfig = {
   sessions: number;
   webhooksCompleted: number;
@@ -10,6 +11,7 @@ type RetentionConfig = {
   audit: number;
   jobTimings: number;
   jobResourceSamples: number;
+  diagnostics: number;
 };
 
 const days = (name: string, fallback: number): number => {
@@ -28,9 +30,30 @@ export function retentionConfig(): RetentionConfig {
     audit: days("AUDIT", 365),
     jobTimings: days("JOB_TIMINGS", 90),
     jobResourceSamples: days("JOB_RESOURCE_SAMPLES", 7),
+    diagnostics: days("DIAGNOSTICS", 3),
   };
 }
 
+
+async function pruneDiagnosticFiles(daysToKeep: number): Promise<number> {
+  const root = Bun.env.WHITESMITH_DIAGNOSTICS_ROOT ?? join(Bun.env.DATA_ROOT ?? "/var/lib/whitesmith", "diagnostics");
+  const cutoff = Date.now() - daysToKeep * 24 * 60 * 60 * 1_000;
+  let removed = 0;
+  for (const worker of await readdir(root, { withFileTypes: true }).catch(() => [])) {
+    if (!worker.isDirectory()) continue;
+    const workerPath = join(root, worker.name);
+    for (const diagnostic of await readdir(workerPath, { withFileTypes: true }).catch(() => [])) {
+      if (!diagnostic.isDirectory()) continue;
+      const diagnosticPath = join(workerPath, diagnostic.name);
+      const info = await stat(diagnosticPath).catch(() => null);
+      if (info && info.mtimeMs < cutoff) {
+        await rm(diagnosticPath, { recursive: true, force: true });
+        removed += 1;
+      }
+    }
+  }
+  return removed;
+}
 export async function pruneExpiredData(db: Sql<{}>, config = retentionConfig()): Promise<Record<string, number>> {
   const results: Record<string, number> = {};
   const prune = async (name: string, query: PromiseLike<readonly unknown[]>): Promise<void> => {
@@ -46,5 +69,6 @@ export async function pruneExpiredData(db: Sql<{}>, config = retentionConfig()):
   await prune("job_timings", db`DELETE FROM dashboard_job_timing_snapshots WHERE completed_at < now() - make_interval(days => ${config.jobTimings}) RETURNING organization_id, job_id`);
   await prune("job_resource_samples", db`DELETE FROM dashboard_job_resource_samples WHERE occurred_at < now() - make_interval(days => ${config.jobResourceSamples}) RETURNING organization_id, job_id, occurred_at`);
   await prune("audit", db`DELETE FROM audit_events WHERE created_at < now() - make_interval(days => ${config.audit}) RETURNING id`);
+  results.diagnostics = await pruneDiagnosticFiles(config.diagnostics);
   return results;
 }
