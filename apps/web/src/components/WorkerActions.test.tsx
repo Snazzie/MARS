@@ -5,6 +5,7 @@ test("builds a Windows upgrade command for the existing worker", () => {
   const command = buildWindowsUpgradeCommand("worker/id", "https://control.example/", "container");
   expect(command).toContain("https://control.example/api/workers/installer?audience=windows-x64&runtime=container");
   expect(command).toContain("powershell.exe -NoProfile -ExecutionPolicy Bypass");
+  expect(command).toContain("-Upgrade -WindowsRuntime 'container'");
 });
 
 test("allows localhost control planes to use HTTP", () => {

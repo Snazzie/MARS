@@ -16,7 +16,7 @@ export function buildWindowsUpgradeCommand(workerId: string, origin: string, run
  const tls = protocol === "https" ? " --tlsv1.3" : "";
  const insecure = protocol === "http" ? " -AllowInsecureHttp" : "";
  const url = `${origin.replace(/\/$/, "")}/api/workers/installer?audience=windows-x64&runtime=${runtime}`;
- return `# Whitesmith worker ${workerId}\n$script = Join-Path $env:TEMP ("whitesmith-upgrade-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${protocol}'${tls} --output $script '${url}'\n  if ($LASTEXITCODE -ne 0) { throw "Upgrade command download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Upgrade${insecure}\n} finally {\n  Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n}`;
+ return `# Whitesmith worker ${workerId}\n$script = Join-Path $env:TEMP ("whitesmith-upgrade-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${protocol}'${tls}${insecure} --output $script '${url}'\n  if ($LASTEXITCODE -ne 0) { throw "Upgrade command download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Upgrade -WindowsRuntime '${runtime}'\n} finally {\n  Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n}`;
 }
 export function WorkerActions({ organizationId, workerId, admissionState, draining, activeSandboxes = 0, platform, runtimeMode, onComplete }: { organizationId: string; workerId: string; admissionState: string; draining: boolean; activeSandboxes?: number; platform?: string; runtimeMode?: "container" | "vm" | null; onComplete: () => void }) {
  const [action, setAction] = useState<Action | null>(null);
