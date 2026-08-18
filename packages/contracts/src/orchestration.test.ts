@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig } from "./orchestration.ts";
+import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig, RuntimeTerminationEvidence } from "./orchestration.ts";
 
 test("parses a GitHub JIT config with a one-time lease binding", () => {
   expect(RunnerJitConfig.parse({
@@ -32,6 +32,30 @@ test("parses structured out-of-memory results", () => {
     detectedAt: "2026-08-17T20:59:24.015Z",
     gracefulStopAcknowledged: false,
   })).toMatchObject({ reason: "out_of_memory", gracefulStopAcknowledged: false });
+});
+
+test("accepts sanitized forced-termination evidence", () => {
+  expect(RuntimeTerminationEvidence.parse({
+    cause: "forced_job_termination",
+    exitCode: 1,
+    exitObserved: false,
+    elapsedMs: 900_000,
+    childPid: 1234,
+    servicePid: 456,
+    activeProcessCount: 2,
+    peakProcessCount: 4,
+    peakProcessMemoryBytes: 10_000,
+    peakJobMemoryBytes: 12_000,
+    kernelTimeMs: 4_000,
+    userTimeMs: 8_000,
+    lastSampleOccurredAt: new Date().toISOString(),
+    sampleCount: 42,
+    samplingGapMs: 5_000,
+  }).cause).toBe("forced_job_termination");
+});
+
+test("rejects sensitive or unknown termination evidence fields", () => {
+  expect(RuntimeTerminationEvidence.safeParse({ cause: "child_exit", exitCode: 0, commandLine: "secret" }).success).toBe(false);
 });
 
 test("rejects invalid out-of-memory measurements", () => {

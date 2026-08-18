@@ -20,6 +20,26 @@ export const OutOfMemoryResult = z.object({
   gracefulStopAcknowledged: z.boolean(),
 }).strict();
 export type OutOfMemoryResult = z.infer<typeof OutOfMemoryResult>;
+export const RuntimeTerminationCause = z.enum(["child_exit", "service_stop", "forced_job_termination", "child_disappeared", "service_host_error"]);
+export type RuntimeTerminationCause = z.infer<typeof RuntimeTerminationCause>;
+export const RuntimeTerminationEvidence = z.object({
+  cause: RuntimeTerminationCause,
+  exitCode: z.number().int().nonnegative().nullable(),
+  exitObserved: z.boolean(),
+  elapsedMs: z.number().int().nonnegative().safe(),
+  childPid: z.number().int().positive().nullable(),
+  servicePid: z.number().int().positive().nullable(),
+  activeProcessCount: z.number().int().nonnegative().nullable(),
+  peakProcessCount: z.number().int().nonnegative().nullable(),
+  peakProcessMemoryBytes: z.number().int().nonnegative().nullable(),
+  peakJobMemoryBytes: z.number().int().nonnegative().nullable(),
+  kernelTimeMs: z.number().int().nonnegative().nullable(),
+  userTimeMs: z.number().int().nonnegative().nullable(),
+  lastSampleOccurredAt: z.string().datetime({ offset: true }).nullable(),
+  sampleCount: z.number().int().nonnegative().nullable(),
+  samplingGapMs: z.number().int().nonnegative().nullable(),
+}).strict();
+export type RuntimeTerminationEvidence = z.infer<typeof RuntimeTerminationEvidence>;
 export const WorkerLimits = z.object({ maxVcpuPerPod: positiveSafe, maxMemoryBytesPerPod: positiveSafe, maxStorageBytesPerPod: positiveSafe, maxConcurrentPods: positiveSafe });
 export type WorkerLimits = z.infer<typeof WorkerLimits>;
 export const PoolResources = z.object({ vcpu: positiveSafe, memoryBytes: positiveSafe, storageBytes: positiveSafe, concurrency: positiveSafe });
