@@ -41,4 +41,23 @@ test("detects over-limit memory immediately and does not infer OOM from missing 
   expect(updateMemoryPressure(initialMemoryPressureState(), null, 100).evidence).toBeNull();
 });
 
+test("reports runner failure with termination evidence when completion rejects", async () => {
+  const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+  const driver = {
+    createLease: async () => ({
+      runtimeInstanceId: "runtime",
+      observed: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
+      completion: Promise.reject(new Error("container disappeared")),
+      state: "sandbox_attested" as const,
+    }),
+    stopLease: async () => {},
+    removeLease: async () => {},
+  };
+  await runLeaseLifecycle(command, driver, bootstrap, event => events.push({ type: event.type, payload: event.payload }));
+  const failure = events.find(event => event.type === "lease.failed");
+  expect(failure?.payload).toMatchObject({ reason: "runner_failed", termination: { cause: "child_disappeared", exitObserved: false } });
+  expect(failure?.payload).not.toHaveProperty("oom");
+  expect(typeof failure?.payload.correlationId).toBe("string");
+});
+
 

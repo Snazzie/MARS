@@ -1,4 +1,4 @@
-import { OutOfMemoryResult, type LeaseBootstrapEnvelope, type WorkerCommand, type WorkerEvent } from "@whitesmith/contracts";
+import { OutOfMemoryResult, type LeaseBootstrapEnvelope, type RuntimeTerminationEvidence, type WorkerCommand, type WorkerEvent } from "@whitesmith/contracts";
 import type { RuntimeDriver } from "./runtime.ts";
 
 export type MemoryPressureState = {
@@ -52,18 +52,40 @@ export function updateMemoryPressure(
 
 const OOM_GRACE_PERIOD_MS = 10_000;
 
+function fallbackTermination(cause: RuntimeTerminationEvidence["cause"], exitCode: number | null, elapsedMs: number, sampleCount: number, lastSampleOccurredAt: string | null, samplingGapMs: number | null): RuntimeTerminationEvidence {
+  return {
+    cause,
+    exitCode,
+    exitObserved: cause === "child_exit",
+    elapsedMs,
+    childPid: null,
+    servicePid: null,
+    activeProcessCount: null,
+    peakProcessCount: null,
+    peakProcessMemoryBytes: null,
+    peakJobMemoryBytes: null,
+    kernelTimeMs: null,
+    userTimeMs: null,
+    lastSampleOccurredAt,
+    sampleCount,
+    samplingGapMs,
+  };
+}
+
 export async function runLeaseLifecycle(
   command: WorkerCommand,
   driver: Pick<RuntimeDriver, "createLease" | "requestGracefulStop" | "stopLease" | "removeLease">,
   bootstrap: LeaseBootstrapEnvelope,
   send: (event: WorkerEvent) => void,
 ): Promise<void> {
-  const payload = { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce };
+  const correlationId = crypto.randomUUID();
+  const startedAt = Date.now();
+  const payload = { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, correlationId };
   let runtime;
   try {
     runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
   } catch (error) {
-    console.error("Lease provisioning failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
+    console.error("Lease provisioning failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) });
     send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "provisioning_failed" } });
     return;
   }
@@ -72,6 +94,10 @@ export async function runLeaseLifecycle(
   let sampling = true;
   let pressure = initialMemoryPressureState();
   let oomResult: OutOfMemoryResult | null = null;
+  let sampleCount = 0;
+  let lastSampleOccurredAt: string | null = null;
+  let samplingGapMs: number | null = null;
+  let previousSampleMs = startedAt;
   let resolveOom: (() => void) | undefined;
   const oomDetected = new Promise<void>(resolve => { resolveOom = resolve; });
   const sampler = sampleRuntime ? (async () => {
@@ -81,6 +107,11 @@ export async function runLeaseLifecycle(
       try {
         const sample = await sampleRuntime();
         const occurredAt = new Date().toISOString();
+        const occurredMs = Date.parse(occurredAt);
+        sampleCount += 1;
+        lastSampleOccurredAt = occurredAt;
+        samplingGapMs = Math.max(samplingGapMs ?? 0, occurredMs - previousSampleMs);
+        previousSampleMs = occurredMs;
         send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "job.resource_sample", occurredAt, payload: { jobId: bootstrap.jobId, leaseId: bootstrap.leaseId, occurredAt, ...sample } });
         const result = updateMemoryPressure(pressure, sample, bootstrap.resources.memoryBytes);
         pressure = result.state;
@@ -93,7 +124,7 @@ export async function runLeaseLifecycle(
           }
         }
       } catch (error) {
-        console.error("Job resource sample failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
+        console.error("Job resource sample failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) });
       }
     }
   })() : Promise.resolve();
@@ -105,16 +136,18 @@ export async function runLeaseLifecycle(
     ]);
     sampling = false;
     await sampler;
+    const termination = runtime.termination ?? fallbackTermination("child_exit", exitCode, Date.now() - startedAt, sampleCount, lastSampleOccurredAt, samplingGapMs);
     const reportedExitCode = oomResult && exitCode === 0 ? 137 : exitCode;
-    send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "runner.finished", occurredAt: new Date().toISOString(), payload: { ...payload, exitCode: reportedExitCode, ...(oomResult ? { oom: oomResult } : {}) } });
+    send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "runner.finished", occurredAt: new Date().toISOString(), payload: { ...payload, exitCode: reportedExitCode, termination, ...(oomResult ? { oom: oomResult } : {}) } });
   } catch (error) {
     sampling = false;
     await sampler;
-    console.error("Runner failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
-    send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: oomResult ? "out_of_memory" : "runner_failed", ...(oomResult ? { oom: oomResult } : {}) } });
+    const termination = runtime.termination ?? fallbackTermination("child_disappeared", null, Date.now() - startedAt, sampleCount, lastSampleOccurredAt, samplingGapMs);
+    console.error("Runner failed", { leaseId: bootstrap.leaseId, correlationId, cause: termination.cause, error: error instanceof Error ? error.message : String(error) });
+    send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: oomResult ? "out_of_memory" : "runner_failed", termination, ...(oomResult ? { oom: oomResult } : {}) } });
   }
   let cleanupFailed = false;
-  try { await driver.stopLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("Lease stop failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) }); }
-  try { await driver.removeLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("Lease removal failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) }); }
+  try { await driver.stopLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("Lease stop failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) }); }
+  try { await driver.removeLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("Lease removal failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) }); }
   send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: cleanupFailed ? "lease.failed" : "lease.reaped", occurredAt: new Date().toISOString(), payload: cleanupFailed ? { ...payload, reason: "cleanup_failed" } : payload } as WorkerEvent);
 }
