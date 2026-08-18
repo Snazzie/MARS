@@ -139,7 +139,7 @@ test("persists attributed and unattributed log chunks idempotently and rejects u
   const unknownDb = Object.assign(async (_strings: TemplateStringsArray, ..._values: unknown[]) => (calls.length < 0 ? [{ organizationId: "org", runId: "run", jobId }] : []), {}) as never;
   expect(await handleAuthenticatedWorkerEvent(unknownDb, { handleEvent() { return false; } }, attributed, { send() {} })).toBe(false);
 });
- 
+
 test("persists authenticated diagnostic chunks under the configured root", async () => {
   const root = await mkdtemp(join(tmpdir(), "whitesmith-diagnostics-"));
   const previous = Bun.env.WHITESMITH_DIAGNOSTICS_ROOT;
