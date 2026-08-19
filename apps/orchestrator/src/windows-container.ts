@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PoolResources, WorkerLimits } from "@whitesmith/contracts";
 import type { Lease, RuntimeDriver, RuntimeLease } from "./runtime.ts";
@@ -36,6 +36,32 @@ function dockerSample(name: string, configuredMemoryBytes: number, docker: Docke
     return { cpuUsagePercent, cpuTimeMs: 0, memoryWorkingSetBytes, memoryLimitBytes };
   };
 }
+const DIAGNOSTIC_LIMIT_BYTES = 10 * 1024 * 1024;
+function redactRunnerLog(text: string): string {
+  return text
+    .replaceAll(/(authorization\s*:\s*bearer\s+)[^\s\r\n]+/gi, "$1[REDACTED]")
+    .replaceAll(/([?&](?:token|sig|signature|access_token|oauth_token)=)[^&\s]+/gi, "$1[REDACTED]");
+}
+async function copyRunnerDiagnostics(root: string, containerName: string, run: (args: string[]) => Promise<DockerResult>): Promise<string> {
+  const destination = join(root, "runner-diag");
+  const copied = await run(["cp", `${containerName}:C:\\actions-runner\\_diag\\.`, destination]);
+  if (copied.code !== 0) return `=== runner _diag copy failed ===\n${copied.stderr || copied.stdout}`;
+  const files = (await readdir(destination, { withFileTypes: true }).catch(() => []))
+    .filter(file => file.isFile() && (/^Runner_.*\.log$/i.test(file.name) || /^Worker_.*\.log$/i.test(file.name)))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  let bytes = 0;
+  const sections: string[] = [];
+  for (const file of files) {
+    if (bytes >= DIAGNOSTIC_LIMIT_BYTES) break;
+    const content = redactRunnerLog(await readFile(join(destination, file.name), "utf8").catch(() => ""));
+    const remaining = DIAGNOSTIC_LIMIT_BYTES - bytes;
+    const section = `=== runner _diag\\${file.name} ===\n${content.slice(0, remaining)}`;
+    sections.push(section);
+    bytes += Buffer.byteLength(section);
+  }
+  if (bytes >= DIAGNOSTIC_LIMIT_BYTES) sections.push("=== runner _diag truncated ===\n");
+  return sections.join("");
+}
 
 export class WindowsContainerDriver implements RuntimeDriver {
   readonly name = "windows-hyperv-container" as const;
@@ -63,7 +89,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
     await writeFile(join(root, "bootstrap.json"), JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig }), { mode: 0o600, flag: "wx" });
     const name = this.containerName(lease.id);
     try {
-      checked(await this.docker(["create", "--name", name, "--isolation=hyperv", "--label", "whitesmith.managed=true", "--label", `whitesmith.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), "--storage-opt", `size=${lease.resources.storageBytes}`, "--mount", `type=bind,source=${root},target=C:\\ProgramData\\Whitesmith\\bootstrap,readonly`, this.config.image]), "docker create");
+      checked(await this.docker(["create", "--name", name, "--log-driver", "json-file", "--log-opt", "max-size=50m", "--log-opt", "max-file=3", "--isolation=hyperv", "--label", "whitesmith.managed=true", "--label", `whitesmith.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), "--storage-opt", `size=${lease.resources.storageBytes}`, "--mount", `type=bind,source=${root},target=C:\\ProgramData\\Whitesmith\\bootstrap,readonly`, this.config.image]), "docker create");
       checked(await this.docker(["start", name]), "docker start");
       const inspect = JSON.parse(checked(await this.docker(["inspect", name]), "docker inspect")) as Array<{ HostConfig?: { Isolation?: string; NanoCpus?: number; Memory?: number } }>;
       if (inspect[0]?.HostConfig?.Isolation?.toLowerCase() !== "hyperv") throw new Error("container isolation is not Hyper-V");
@@ -120,8 +146,10 @@ export class WindowsContainerDriver implements RuntimeDriver {
   }
   async collectDiagnostics(leaseId: string): Promise<Record<string, unknown>> { const lease = await this.inspectLease(leaseId); return { isolation: "hyperv", runtimeInstanceId: lease.runtimeInstanceId, observed: lease.observed }; }
   async collectRawDiagnostics(leaseId: string): Promise<string> {
-    const lease = await this.inspectLease(leaseId);
-    const name = lease.runtimeInstanceId;
+    const owned = this.leases.get(leaseId);
+    if (!owned) throw new Error("sandbox not found");
+    const { root } = owned;
+    const name = owned.runtime.runtimeInstanceId;
     const run = async (args: string[]) => {
       try { return await this.docker(args); } catch (error) { return { code: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) }; }
     };
@@ -130,11 +158,13 @@ export class WindowsContainerDriver implements RuntimeDriver {
       run(["logs", "--timestamps", name]),
       run(["exec", name, "cmd.exe", "/c", "type", "C:\\ProgramData\\Whitesmith\\logs\\worker.log"]),
     ]);
+    const runnerDiag = await copyRunnerDiagnostics(root, name, run);
     const bundle = [
       "=== docker inspect ===\n", inspect.stdout || inspect.stderr,
       "\n=== docker logs --timestamps ===\n", logs.stdout || logs.stderr,
       "\n=== service worker.log ===\n", workerLog.stdout || workerLog.stderr,
+      "\n", runnerDiag,
     ].join("");
-    return bundle.length > 10 * 1024 * 1024 ? `${bundle.slice(0, 10 * 1024 * 1024)}\n=== diagnostic bundle truncated ===\n` : bundle;
+    return bundle.length > DIAGNOSTIC_LIMIT_BYTES ? `${bundle.slice(0, DIAGNOSTIC_LIMIT_BYTES)}\n=== diagnostic bundle truncated ===\n` : bundle;
   }
 }

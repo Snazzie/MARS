@@ -200,6 +200,7 @@ $serviceEnvironment = @(
   "WHITESMITH_CONTROL_PLANE_URL=$ControlPlaneUrl"
   "WHITESMITH_JOIN_CODE_FILE=$joinCodePath"
   "WHITESMITH_WINDOWS_RUNTIME=$WindowsRuntime"
+  "WHITESMITH_DEBUG_PRESERVE_LEASES=" + '__DEBUG_PRESERVE_LEASES__'
 )
 if ($WindowsRuntime -eq 'container') {
   $serviceEnvironment += "WHITESMITH_WINDOWS_CONTAINER_IMAGE=$WindowsContainerImage"

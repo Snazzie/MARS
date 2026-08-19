@@ -21,13 +21,13 @@ describe("browser invalidation authorization", () => {
 
 describe("browser invalidation replay", () => {
   test("normalizes durable rows after the requested cursor", async () => {
-    const rows = [
+    const rows: Array<{ organizationId: string; sequence: number | string; keys: string[]; occurredAt: Date | string }> = [
       { organizationId: "00000000-0000-4000-8000-000000000001", sequence: "7", keys: ["runs"], occurredAt: new Date("2026-08-16T12:00:00.000Z") },
       { organizationId: "00000000-0000-4000-8000-000000000001", sequence: 8, keys: ["overview", "workers"], occurredAt: "2026-08-16T12:00:01.000Z" },
     ];
     expect(await loadBrowserInvalidations(fakeDb(rows), rows[0]!.organizationId, 6)).toEqual([
       { ...rows[0], sequence: 7, occurredAt: "2026-08-16T12:00:00.000Z" },
-      rows[1],
+      { organizationId: rows[1]!.organizationId, sequence: 8, keys: rows[1]!.keys, occurredAt: "2026-08-16T12:00:01.000Z" },
     ]);
   });
 

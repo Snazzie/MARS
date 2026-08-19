@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WindowsContainerDriver, type DockerRunner } from "./windows-container.ts";
@@ -94,6 +94,10 @@ test("fails completion when a containerized job stops making terminal progress",
   expect(createArgs).toContain("2");
   expect(createArgs).toContain("--memory");
   expect(createArgs).toContain(String(8 * 1024 ** 3));
+  expect(createArgs).toContain("--log-driver");
+  expect(createArgs).toContain("json-file");
+  expect(createArgs).toContain("max-size=50m");
+  expect(createArgs).toContain("max-file=3");
   expect(createArgs).toContain("size=10737418240");
   expect(lease.observed).toEqual({ vcpu: 2, memoryBytes: 8 * 1024 ** 3, storageBytes: 10 * 1024 ** 3 });
 
@@ -151,6 +155,36 @@ test("removes a known lease container after a worker restart", async () => {
 
   await driver.removeLease("33333333-3333-4333-8333-333333333333");
   expect(calls).toContainEqual(["rm", "-f", "whitesmith-33333333-3333-4333-8333-333333333333"]);
+});
+
+test("copies runner and worker diagnostic logs from a stopped container", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-diag-"));
+  roots.push(root);
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 1_000_000_000, Memory: 1024 } }]), stderr: "" };
+    if (args[0] === "cp") {
+      const destination = args.at(-1)!;
+      await mkdir(destination, { recursive: true });
+      await Bun.write(join(destination, "Runner_2026.log"), "job completed Authorization: Bearer secret-token\n");
+      await Bun.write(join(destination, "Worker_2026.log"), "worker failure\n");
+    }
+    return { code: 0, stdout: args[0] === "wait" ? "0\n" : "", stderr: "" };
+  };
+  const driver = new WindowsContainerDriver({
+    image: "whitesmith/windows-job:local",
+    prefix: "whitesmith",
+    bootstrapRoot: root,
+    limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
+    readyTimeoutMs: 100,
+    jobTimeoutMs: 100,
+    allowLocalImage: true,
+  }, docker);
+  await driver.createLease({ id: "77777777-7777-4777-8777-777777777777", jobId: "job", imageDigest: "whitesmith/windows-job:local", resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config" });
+  const diagnostics = await driver.collectRawDiagnostics("77777777-7777-4777-8777-777777777777");
+  expect(diagnostics).toContain("Runner_2026.log");
+  expect(diagnostics).toContain("job completed Authorization: Bearer [REDACTED]");
+  expect(diagnostics).toContain("Worker_2026.log");
+  await driver.removeLease("77777777-7777-4777-8777-777777777777");
 });
 
 test("falls back to the configured memory limit when Docker stats reports an invalid limit", async () => {

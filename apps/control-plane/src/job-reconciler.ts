@@ -58,6 +58,11 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     JOIN dashboard_installations i ON i.id=repo.installation_id
       AND i.organization_id=r.organization_id AND i.state='approved'
     WHERE j.status='queued' AND r.status IN ('queued','in_progress')
+      AND NOT EXISTS (
+        SELECT 1 FROM runner_leases l
+        WHERE l.github_job_id=j.github_job_id
+          AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')
+      )
       AND (${deps.repositoryFullName ?? ""}='' OR repo.full_name=${deps.repositoryFullName ?? ""})
     ORDER BY j.queued_at ASC, j.github_job_id ASC
     FOR UPDATE OF j SKIP LOCKED`;

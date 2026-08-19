@@ -3,6 +3,7 @@ import type { Sql } from "postgres";
 
 export type JobResourceSampleResult = "stored" | "duplicate" | "rejected";
 export type JobResourceTelemetryDb = Sql<{}>;
+const LEASE_HEARTBEAT_TTL_MS = 10 * 60_000;
 
 export async function persistJobResourceSample(db: JobResourceTelemetryDb, workerId: string, input: unknown, now = Date.now()): Promise<JobResourceSampleResult> {
   const event = WorkerEvent.safeParse(input);
@@ -27,6 +28,11 @@ export async function persistJobResourceSample(db: JobResourceTelemetryDb, worke
     ON CONFLICT (organization_id,job_id,occurred_at) DO NOTHING
     RETURNING occurred_at AS "occurredAt"
   `;
+  if (inserted[0] && occurredMs >= now - LEASE_HEARTBEAT_TTL_MS) {
+    await db`UPDATE runner_leases SET expires_at=GREATEST(expires_at,${new Date(now + LEASE_HEARTBEAT_TTL_MS).toISOString()}),updated_at=now()
+      WHERE id=${sample.leaseId} AND worker_id=${workerId}
+        AND state IN ('sandbox_ready','online','busy')`;
+  }
   return inserted[0] ? "stored" : "duplicate";
 }
 

@@ -16,9 +16,13 @@ export function poolResourcesForLimits(limits: WorkerLimits, concurrency = limit
 }
 
 export function poolResourcesForWorkers(workers: WorkerLimits[]) {
-  const [first] = workers;
-  if (!first) return null;
-  return poolResourcesForLimits(first, workers.reduce((sum, worker) => sum + worker.maxConcurrentPods, 0));
+  if (!workers.length) return null;
+  return {
+    vcpu: workers.reduce((sum, worker) => sum + worker.maxVcpuPerPod, 0),
+    memoryBytes: workers.reduce((sum, worker) => sum + worker.maxMemoryBytesPerPod, 0),
+    storageBytes: workers.reduce((sum, worker) => sum + worker.maxStorageBytesPerPod, 0),
+    concurrency: workers.reduce((sum, worker) => sum + worker.maxConcurrentPods, 0),
+  };
 }
 
 function guestPlatformsForWorker(worker: Record<string, unknown>): GuestPlatform[] {

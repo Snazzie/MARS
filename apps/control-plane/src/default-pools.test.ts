@@ -21,9 +21,9 @@ test("sums concurrency across workers sharing a default platform pool", () => {
     { maxVcpuPerPod: 5, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 },
     { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4 * GIB, maxStorageBytesPerPod: 20 * GIB, maxConcurrentPods: 5 },
   ])).toEqual({
-    vcpu: 4,
-    memoryBytes: 6 * GIB,
-    storageBytes: 30 * GIB,
+    vcpu: 7,
+    memoryBytes: 12 * GIB,
+    storageBytes: 60 * GIB,
     concurrency: 7,
   });
 });

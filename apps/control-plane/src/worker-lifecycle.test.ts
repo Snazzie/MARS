@@ -39,6 +39,7 @@ test("promotes the dashboard job and run when the runner is attested", async () 
   await applyWorkerLeaseEvent(db, event("sandbox_attested", { leaseId, nonce, runtimeInstanceId: "vm", observed: { vcpu: 1, memoryBytes: 1, storageBytes: 1 } }));
   expect(calls.some(query => query.includes("UPDATE dashboard_jobs") && query.includes("status='in_progress'"))).toBe(true);
   expect(calls.some(query => query.includes("UPDATE dashboard_runs") && query.includes("status='in_progress'"))).toBe(true);
+  expect(calls.some(query => query.includes("expires_at=GREATEST"))).toBe(true);
 });
 
 test("records runner completion and final VM reap monotonically", async () => {
@@ -66,6 +67,13 @@ test("marks cleanup failure without erasing the terminal runner result", async (
   expect(calls[0]!.query).toContain("cleanup_state='failed'");
   expect(calls[0]!.query).not.toContain("terminal_result=");
   expect(calls[0]!.query).toContain("'completed','failed'");
+});
+
+test("marks debug-preserved leases without scheduling cleanup", async () => {
+  const { db, calls } = acceptingDb();
+  expect(await applyWorkerLeaseEvent(db, event("lease.failed", { leaseId, nonce, reason: "debug_preserve" }))).toBe(true);
+  expect(calls[0]!.query).toContain("cleanup_state='debug_preserved'");
+  expect(calls[0]!.query).not.toContain("cleanup_state='pending'");
 });
 test("computes bounded completed-job phase durations", () => {
   expect(timingDurations({

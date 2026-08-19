@@ -123,7 +123,7 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
 
   if (parsedPayload.data.type === "sandbox_attested") {
     const payload = parsedPayload.data.payload;
-    const rows = await db`UPDATE runner_leases SET state='sandbox_ready',runtime_instance_id=${payload.runtimeInstanceId},terminal_result=${jsonParameter(db, { observed: payload.observed })},updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state='dispatched' RETURNING id`;
+    const rows = await db`UPDATE runner_leases SET state='sandbox_ready',runtime_instance_id=${payload.runtimeInstanceId},terminal_result=${jsonParameter(db, { observed: payload.observed })},expires_at=GREATEST(expires_at,now()+interval '10 minutes'),updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state='dispatched' RETURNING id`;
     if (!rows[0]) return false;
     const [job] = await db`SELECT j.id,j.organization_id AS "organizationId",j.run_id AS "runId" FROM dashboard_jobs j JOIN runner_leases l ON l.github_job_id=j.github_job_id WHERE l.id=${payload.leaseId}`;
     if (job) {
@@ -143,6 +143,10 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
     const payload = parsedPayload.data.payload;
     if (payload.reason === "cleanup_failed") {
       const rows = await db`UPDATE runner_leases SET cleanup_state='failed',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed') RETURNING id`;
+      return Boolean(rows[0]);
+    }
+    if (payload.reason === "debug_preserve") {
+      const rows = await db`UPDATE runner_leases SET state='failed',terminal_result=${jsonParameter(db, { reason: payload.reason })},cleanup_state='debug_preserved',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed','sandbox_ready','online','busy') RETURNING id`;
       return Boolean(rows[0]);
     }
     const terminalResult = payload.oom ? { reason: payload.reason, oom: payload.oom } : { reason: payload.reason };

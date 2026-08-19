@@ -71,6 +71,10 @@ function fallbackTermination(cause: RuntimeTerminationEvidence["cause"], exitCod
     samplingGapMs,
   };
 }
+function preserveLeasesForDebugging(): boolean {
+  return Bun.env.WHITESMITH_DEBUG_PRESERVE_LEASES === "1";
+}
+
 
 export async function runLeaseLifecycle(
   command: WorkerCommand,
@@ -158,6 +162,11 @@ export async function runLeaseLifecycle(
     } catch (error) {
       console.error("Raw container diagnostics failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) });
     }
+  }
+  if (preserveLeasesForDebugging()) {
+    console.warn("Lease cleanup disabled for debugging", { leaseId: bootstrap.leaseId, correlationId });
+    send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "debug_preserve" } });
+    return;
   }
   let cleanupFailed = false;
   try { await driver.stopLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("Lease stop failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) }); }
