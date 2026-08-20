@@ -16,7 +16,7 @@ import { handleAuthenticatedWorkerEvent } from "./worker-lifecycle.ts";
 import { GitHubAppService } from "./github-app.ts";
 import { runQueuedJobReconciliation } from "./job-reconciler.ts";
 import { reapPendingLeases } from "./lease-cleanup.ts";
-import { reconcileExpiredLeasesWithGithub } from "./lease-reconciliation.ts";
+import { reconcileExpiredLeasesWithGithub, reconcileWorkerInventory } from "./lease-reconciliation.ts";
 import { startReconciliationScheduler } from "./reconcile-loop.ts";
 import { pruneExpiredData } from "./retention.ts";
 import { DiscoveryHealthMonitor, isDiscoveryCycleSuccessful } from "./discovery-health.ts";
@@ -260,7 +260,13 @@ server = Bun.serve<SocketData>({
           } else if (frame.type === "doctor" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && frame.workerId === ws.data.workerId && frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload) && !containsSecret(frame.payload)) {
             const epoch = ws.data.connectionEpoch;
             if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
-            await db`update workers set doctor=${jsonParameter(db, frame.payload)}, doctor_observed_at=now(), last_heartbeat_at=now() where id=${ws.data.workerId}`;
+            const doctorPayload = frame.payload as Record<string, unknown>;
+            await db`update workers set doctor=${jsonParameter(db, doctorPayload)}, doctor_observed_at=now(), last_heartbeat_at=now() where id=${ws.data.workerId}`;
+            const activeLeases = doctorPayload.doctor && typeof doctorPayload.doctor === "object" && !Array.isArray(doctorPayload.doctor) ? (doctorPayload.doctor as Record<string, unknown>).activeLeases : undefined;
+            if (Array.isArray(activeLeases) && activeLeases.every((value): value is string => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value))) {
+              const recovered = await reconcileWorkerInventory(db, ws.data.workerId, activeLeases);
+              if (recovered) console.log(`Worker inventory cleanup: worker=${ws.data.workerId} recovered=${recovered}`);
+            }
             if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
             ws.send(JSON.stringify({ version: 1, type: "doctor_ack", workerId: ws.data.workerId }));
           } else if (frame.type === "pong" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch) {
@@ -282,8 +288,6 @@ server = Bun.serve<SocketData>({
               if (!accepted) throw new Error("invalid worker event");
               console.log(`Worker event: ${ws.data.workerId} type=${frame.type}`);
             }
-          } else {
-            throw new Error("invalid worker frame");
           }
         } catch (error) {
           console.error("Worker websocket frame failed", { workerId: ws.data.workerId, error: error instanceof Error ? error.message : String(error) });

@@ -168,8 +168,8 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
         try {
           const frame = JSON.parse(String(message.data)) as Record<string, unknown>;
           if (frame.type === "challenge") return ws.send(JSON.stringify(auth(String(frame.nonce), identity)));
-          if (frame.type === "authenticated") return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: doctorReport, capacity: capacityReport } }));
-          if (frame.type === "ping") { ws.send("pong"); return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: doctorReport, capacity: await capacity() } })); }
+          if (frame.type === "authenticated") return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, activeLeases: [...activeLeases.keys()] }, capacity: capacityReport } }));
+          if (frame.type === "ping") { ws.send("pong"); return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, activeLeases: [...activeLeases.keys()] }, capacity: await capacity() } })); }
           if (frame.type === "doctor_ack") return;
           const command = WorkerCommand.parse(frame);
           if (command.type === "worker.configure") {

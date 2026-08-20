@@ -242,6 +242,7 @@ async function enrollMacWorker(controlPlane: URL, identity: MacWorkerIdentity): 
 }
 
 async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, driver: TartVmDriver, limits: MacWorkerLimits): Promise<never> {
+  const doctorReport = await currentMacDoctor();
   const activeLeases = new Map<string, Promise<void>>();
   for (;;) {
     const ws = new WebSocket(buildMacWorkerSocketUrl(controlPlane.toString(), identity.workerId));
@@ -255,7 +256,9 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           ws.send(JSON.stringify(buildMacWorkerAuthentication(frame.nonce, identity.workerId, identity.privateKey, identity.encryptionPublicKey)));
           return;
         }
-        if (frame.type === "authenticated" || frame.type === "doctor_ack" || frame.type === "ping") return;
+        if (frame.type === "authenticated") return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
+        if (frame.type === "ping") { ws.send("pong"); return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } })); }
+        if (frame.type === "doctor_ack") return;
         const command = WorkerCommand.parse(frame);
         if (command.type === "tart.create_lease") {
           if (!command.leaseId) throw new Error("lease id required");

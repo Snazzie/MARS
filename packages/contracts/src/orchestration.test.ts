@@ -74,6 +74,12 @@ test("accepts worker-local runtime readiness without a registry digest", () => {
     runtimeReady: true,
   });
 });
+test("accepts worker-reported active lease inventory", () => {
+  expect(WorkerDoctorData.parse({
+    runtimeMode: "tart",
+    activeLeases: ["11111111-1111-4111-8111-111111111111"],
+  }).activeLeases).toEqual(["11111111-1111-4111-8111-111111111111"]);
+});
 test("parses declarative local image build content", () => {
   expect(WorkerBuildImagePayload.parse({
     buildId: "11111111-1111-4111-8111-111111111111",

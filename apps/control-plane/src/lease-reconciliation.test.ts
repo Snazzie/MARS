@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { reconcileExpiredLeasesWithGithub, terminalLeaseState } from "./lease-reconciliation.ts";
+import { reconcileExpiredLeasesWithGithub, reconcileWorkerInventory, terminalLeaseState } from "./lease-reconciliation.ts";
 
 test("does not change an expired lease while GitHub still reports the job active", async () => {
   const queries: string[] = [];
@@ -21,4 +21,15 @@ test("maps successful GitHub jobs to completed leases and all other conclusions 
   expect(terminalLeaseState({ conclusion: "success" })).toBe("completed");
   expect(terminalLeaseState({ conclusion: "cancelled" })).toBe("failed");
   expect(terminalLeaseState({ conclusion: null })).toBe("failed");
+});
+test("worker inventory only reclaims expired runtime leases it does not report", async () => {
+  let query = "";
+  const db = (async (strings: TemplateStringsArray) => {
+    query = strings.join(" ");
+    return [{ id: "lease-1" }];
+  }) as never;
+  expect(await reconcileWorkerInventory(db, "worker-1", ["11111111-1111-4111-8111-111111111111"])).toBe(1);
+  expect(query).toContain("expires_at < now()");
+  expect(query).toContain("state IN ('sandbox_ready','online','busy')");
+  expect(query).toContain("NOT (id = ANY");
 });

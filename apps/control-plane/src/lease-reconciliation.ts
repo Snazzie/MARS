@@ -44,6 +44,19 @@ async function markTerminalLease(deps: StaleLeaseReconciliationDeps, row: StaleL
   const state = terminalLeaseState({ conclusion });
   await deps.db`UPDATE runner_leases SET state=${state}, terminal_result=${jsonParameter(deps.db, { reason: "github_reconciled", conclusion })}::jsonb, cleanup_state='pending', updated_at=now() WHERE id=${row.leaseId} AND nonce=${row.nonce} AND state NOT IN ('completed','failed','reaped')`;
 }
+export async function reconcileWorkerInventory(db: DatabaseClient, workerId: string, activeLeaseIds: readonly string[]): Promise<number> {
+  const ids = [...new Set(activeLeaseIds)];
+  const rows = await db<Array<{ id: string }>>`
+    UPDATE runner_leases
+    SET state='failed', terminal_result=${jsonParameter(db, { reason: "worker_inventory_missing" })}::jsonb, cleanup_state='pending', updated_at=now()
+    WHERE worker_id=${workerId}
+      AND expires_at < now()
+      AND state IN ('sandbox_ready','online','busy')
+      AND NOT (id = ANY(${ids}::uuid[]))
+    RETURNING id
+  `;
+  return rows.length;
+}
 export async function reconcileExpiredLeasesWithGithub(deps: StaleLeaseReconciliationDeps): Promise<StaleLeaseReconciliationReport> {
   const rows = await deps.db<StaleLeaseRow[]>`
     SELECT l.id AS "leaseId", l.organization_id AS "organizationId", l.worker_id AS "workerId", l.nonce,
