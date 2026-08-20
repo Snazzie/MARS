@@ -2,6 +2,7 @@ import type { DatabaseClient } from "@whitesmith/db";
 import { jsonParameter } from "@whitesmith/db";
 import { applyGithubJobSnapshot, type GithubJobSnapshot } from "./runs.ts";
 import { GithubJobsClient } from "./github-jobs.ts";
+import { isGithubRateLimitError } from "./github-rate-limit.ts";
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -75,7 +76,8 @@ export async function reconcileExpiredLeasesWithGithub(deps: StaleLeaseReconcili
     LIMIT 100
   `;
   const report: StaleLeaseReconciliationReport = { inspected: rows.length, completed: 0, stillActive: 0, skipped: 0 };
-  for (const row of rows) {
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index]!;
     const repository = splitRepository(String(row.repositoryFullName));
     const installationId = Number(row.installationId);
     const githubJobId = Number(row.githubJobId);
@@ -113,6 +115,10 @@ export async function reconcileExpiredLeasesWithGithub(deps: StaleLeaseReconcili
       await markTerminalLease(deps, row, job.conclusion);
       report.completed += 1;
     } catch (error) {
+      if (isGithubRateLimitError(error)) {
+        report.skipped += rows.length - index;
+        break;
+      }
       report.skipped += 1;
       console.error("GitHub stale lease reconciliation failed", { leaseId: row.leaseId, error: error instanceof Error ? error.message : String(error) });
     }
