@@ -96,7 +96,7 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, conf
     return result;
   });
   if (response.commandId !== commandId) return response;
-  dispatcher?.replayConnected(workerId);
+  await dispatcher?.replayConnected(workerId);
   return response;
 }
 export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event: { workerId: string; payload: unknown }): Promise<boolean> {

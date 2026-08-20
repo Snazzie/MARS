@@ -6,7 +6,7 @@ import { listOrganizations, getOverview, getAllOverview, listRepositories, listA
 import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
-import { ApiError, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceSample } from "@whitesmith/contracts";
+import { ApiError, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceSample } from "@whitesmith/contracts";
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
@@ -66,7 +66,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (denied) return denied;
     const parsed = timingQuerySchema.safeParse(c.req.query());
     if (!parsed.success) return error(c, 400, "invalid_timing_query", "Invalid timing history query", { issues: parsed.error.issues });
-    return c.json(CursorPage(JobTimingSnapshot).parse(await listJobTimingHistory(deps.db, org, parsed.data)));
+    return c.json(CursorPage(JobTimingSnapshot).parse(await listJobTimingHistory(deps.db, org, parsed.data, c.get("user").id)));
   }));
   app.get("/api/organizations/:organizationId/job-timings/aggregates", safe(async (c) => {
     const org = c.req.param("organizationId");
@@ -74,7 +74,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (denied) return denied;
     const parsed = timingQuerySchema.omit({ limit: true, cursor: true }).safeParse(c.req.query());
     if (!parsed.success) return error(c, 400, "invalid_timing_query", "Invalid timing aggregate query", { issues: parsed.error.issues });
-    return c.json(JobTimingAggregate.array().parse(await getJobTimingAggregates(deps.db, org, parsed.data)));
+    return c.json(JobTimingAggregate.array().parse(await getJobTimingAggregates(deps.db, org, parsed.data, c.get("user").id)));
   }));
   app.get("/api/organizations/:organizationId/pools", safe(async (c) => {
     const org = c.req.param("organizationId");
@@ -99,19 +99,23 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     return c.json({ queued: true }, 202);
   }));
   app.get("/api/organizations/:organizationId/workers", safe(async (c) => { if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required"); const q = parseQuery(c); if (q instanceof Response) return q; return c.json(CursorPage(WorkerDetail).parse(await listAllWorkers(deps.db, c.get("user").id, q.limit, q.includeInactive))); }));
-  app.post("/api/organizations/:organizationId/workers/:workerId/build-runtime", safe(async (c) => {
-    const org = c.req.param("organizationId");
-    const denied = await guard(c, deps, org);
-    if (denied) return denied;
+  app.post("/api/workers/:workerId/configure", safe(async (c) => {
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    const idem = requireMutation(c); if (idem) return idem;
+    const result = await configurePendingWorker(deps.db, c.req.param("workerId"), WorkerConfiguration.parse(await c.req.json()), c.get("user").id, deps.workerDispatcher, c.req.header("idempotency-key")!);
+    return c.json(DashboardWorkerMutationResponse.parse(result));
+  }));
+  app.post("/api/workers/:workerId/build-runtime", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const idem = requireMutation(c); if (idem) return idem;
     if (!deps.workerDispatcher) return error(c, 503, "worker_dispatch_unavailable", "Worker command dispatch is unavailable");
     const workerId = c.req.param("workerId");
-    const worker = await getWorkerDetail(deps.db, org, workerId);
+    const [worker] = await deps.db`SELECT admission_state AS "admissionState", connection_state AS "connectionState" FROM workers WHERE id=${workerId}`;
     if (!worker) return error(c, 404, "not_found", "Resource not found");
     if (worker.admissionState !== "adopted" || worker.connectionState !== "online") return error(c, 409, "worker_not_ready", "Worker must be adopted and online before building a runtime image");
     const spec = WorkerImageBuildSpec.parse(await c.req.json());
     const buildId = randomUUID();
+    await deps.db`UPDATE workers SET doctor=COALESCE(doctor,'{}'::jsonb) || ${JSON.stringify({ runtimeBuildState: "building", runtimeBuildMessage: null, runtimeReady: false })}::jsonb WHERE id=${workerId}`;
     await deps.workerDispatcher.dispatch({ type: "worker.build_image", workerId, leaseId: null, payload: { ...spec, buildId } });
     return c.json({ buildId }, 202);
   }));

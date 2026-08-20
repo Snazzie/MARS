@@ -11,7 +11,7 @@ export function WorkerImageBuildForm({ organizationId, workerId, onComplete, onC
     event.preventDefault();
     setPending(true); setError(null);
     try {
-      await buildWorkerImage(organizationId, workerId, { image: "whitesmith/windows-job:local", dockerfile, contextFiles: [] });
+      await buildWorkerImage(workerId, { image: "whitesmith/windows-job:local", dockerfile, contextFiles: [] });
       onComplete();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Image build could not be started.");

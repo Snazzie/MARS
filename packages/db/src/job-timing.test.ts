@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { JobTimingSnapshot } from "@whitesmith/contracts";
-import { recordJobTimingSnapshot, type JobTimingDb, type JobTimingSnapshotInput } from "./job-timing.ts";
+import { listJobTimingHistory, recordJobTimingSnapshot, type JobTimingDb, type JobTimingSnapshotInput } from "./job-timing.ts";
 
 const input: JobTimingSnapshotInput = {
   organizationId: "org-1", jobId: "job-1", runId: "run-1", repositoryId: "repo-1", githubJobId: 42,
@@ -31,4 +31,14 @@ test("inserts once and is idempotent on conflict", async () => {
   const db = fakeDb([[{ jobId: "job-1" }], []]);
   expect(await recordJobTimingSnapshot(db, input)).toBe(true);
   expect(await recordJobTimingSnapshot(db, input)).toBe(false);
+});
+test("normalizes PostgreSQL timestamp strings in timing history", async () => {
+  const db = fakeDb([[{ ...input, completedAt: "2026-08-16 00:00:10+00", queuedAt: "2026-08-16 00:00:00+00", startedAt: "2026-08-16 00:00:03+00", createdAt: "2026-08-16 00:00:10+00" }]]);
+  const result = await listJobTimingHistory(db, "org-1");
+  expect(result.items[0]).toMatchObject({
+    completedAt: "2026-08-16T00:00:10.000Z",
+    queuedAt: "2026-08-16T00:00:00.000Z",
+    startedAt: "2026-08-16T00:00:03.000Z",
+    createdAt: "2026-08-16T00:00:10.000Z",
+  });
 });

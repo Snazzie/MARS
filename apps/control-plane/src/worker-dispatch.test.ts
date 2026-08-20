@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { WorkerCommandDispatcher } from "./worker-dispatch.ts";
+import { WorkerCommandDispatcher, listReplayableWorkerCommands } from "./worker-dispatch.ts";
 import type { WorkerCommand } from "@whitesmith/contracts";
 
 const workerId = "00000000-0000-4000-8000-000000000001";
@@ -73,21 +73,22 @@ test("accepts the first acknowledgement for a newly persisted command", async ()
 });
 
 test("replays terminal-lease stop commands until their cleanup event is acknowledged", async () => {
-  const modulePath = "./worker-dispatch.ts";
-  const module = await import(modulePath) as typeof import("./worker-dispatch.ts") & {
-    listReplayableWorkerCommands?: (db: unknown, workerId: string) => Promise<WorkerCommand[]>;
-  };
-  expect(module.listReplayableWorkerCommands).toBeFunction();
-  if (!module.listReplayableWorkerCommands) return;
   const queries: string[] = [];
   const stopCommand = { ...command, type: "tart.stop_lease", leaseId: "22222222-2222-4222-8222-222222222222", occurredAt: new Date() };
   const db = Object.assign(async (strings: TemplateStringsArray) => {
     queries.push(strings.join(" "));
     return [stopCommand];
-  }, {});
-  const result = await module.listReplayableWorkerCommands(db, workerId);
+  }, {}) as never;
+  const result = await listReplayableWorkerCommands(db, workerId);
   expect(queries[0]).toContain("c.type='tart.stop_lease'");
   expect(result).toEqual([{ ...stopCommand, occurredAt: stopCommand.occurredAt.toISOString() }]);
+});
+test("normalizes database timestamp strings before validating commands", async () => {
+  const db = Object.assign(async () => [{ ...command, occurredAt: "2026-08-20 11:22:07.123+00" }], {}) as never;
+
+  const result = await listReplayableWorkerCommands(db, workerId);
+
+  expect(result[0]!.occurredAt).toBe("2026-08-20T11:22:07.123Z");
 });
 
 describe("WorkerCommandDispatcher frame and payload hardening", () => {

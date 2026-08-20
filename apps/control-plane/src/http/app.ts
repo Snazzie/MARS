@@ -46,12 +46,13 @@ export function createControlPlaneApp(deps: ControlPlaneHttpDeps) {
   registerGithubRoutes(app, deps);
   registerOnboardingRoutes(app, deps);
   registerStaticRoutes(app, deps);
+  app.get("/api/me", requireSession(deps), (c) => c.json(c.get("user")));
   const protectedApi = new Hono<ControlPlaneEnv>();
-  protectedApi.use("/api/organizations/*", requireSession(deps));
   protectedApi.use("/api/organizations", requireSession(deps));
+  protectedApi.use("/api/organizations/*", requireSession(deps));
   protectedApi.use("/api/pools", requireSession(deps));
   protectedApi.use("/api/pools/*", requireSession(deps));
-  protectedApi.use("/api/me", requireSession(deps));
+  protectedApi.use("/api/workers/*", requireSession(deps));
   registerDashboardRoutes(protectedApi, deps);
   registerWorkerRoutes(app, deps);
   app.route("/", protectedApi);

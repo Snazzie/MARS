@@ -43,7 +43,12 @@ export type JobTimingHistoryQuery = {
   outcome?: JobTimingSnapshot["outcome"];
 };
 
-const asIso = (value: unknown) => value instanceof Date ? value.toISOString() : String(value);
+const asIso = (value: unknown) => {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value !== "string") return String(value);
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : value;
+};
 const asNumber = (value: unknown) => Number(value ?? 0);
 function normalizeTiming(row: Record<string, unknown>): JobTimingSnapshot {
   return {
@@ -66,8 +71,7 @@ function normalizeTiming(row: Record<string, unknown>): JobTimingSnapshot {
     startedAt: row.startedAt === null ? null : asIso(row.startedAt), createdAt: asIso(row.createdAt),
   } as JobTimingSnapshot;
 }
-
-export async function listJobTimingHistory(db: JobTimingDb, organizationId: string, query: JobTimingHistoryQuery = {}): Promise<{ items: JobTimingSnapshot[]; nextCursor: string | null }> {
+export async function listJobTimingHistory(db: JobTimingDb, organizationId: string, query: JobTimingHistoryQuery = {}, userId?: string): Promise<{ items: JobTimingSnapshot[]; nextCursor: string | null }> {
   const limit = Math.max(1, Math.min(100, Math.floor(query.limit ?? 50)));
   const rows = await db<Record<string, unknown>[]>`
     SELECT organization_id AS "organizationId", job_id AS "jobId", run_id AS "runId", repository_id AS "repositoryId",
@@ -81,7 +85,10 @@ export async function listJobTimingHistory(db: JobTimingDb, organizationId: stri
       observed_storage_bytes AS "observedStorageBytes", effective_concurrency AS "effectiveConcurrency",
       telemetry_state AS "telemetryState", telemetry_sample_count AS "telemetrySampleCount", cpu_average_percent AS "cpuAveragePercent", cpu_p50_percent AS "cpuP50Percent", cpu_p95_percent AS "cpuP95Percent", cpu_peak_percent AS "cpuPeakPercent", cpu_time_ms AS "cpuTimeMs", memory_average_bytes AS "memoryAverageBytes", memory_peak_bytes AS "memoryPeakBytes", created_at AS "createdAt"
     FROM dashboard_job_timing_snapshots
-    WHERE organization_id=${organizationId}
+    WHERE (
+      (${organizationId === "all"} AND organization_id IN (SELECT organization_id FROM memberships WHERE user_id=${userId ?? null}))
+      OR (${organizationId !== "all"} AND organization_id=${organizationId === "all" ? null : organizationId}::uuid)
+    )
       AND (${query.from ?? null}::timestamptz IS NULL OR completed_at >= ${query.from ?? null}::timestamptz)
       AND (${query.to ?? null}::timestamptz IS NULL OR completed_at < ${query.to ?? null}::timestamptz)
       AND (${query.repositoryId ?? null}::uuid IS NULL OR repository_id=${query.repositoryId ?? null})
@@ -100,14 +107,17 @@ export async function listJobTimingHistory(db: JobTimingDb, organizationId: stri
   return { items, nextCursor: rows.length > limit ? items.at(-1)?.completedAt ?? null : null };
 }
 
-export async function getJobTimingAggregates(db: JobTimingDb, organizationId: string, query: Omit<JobTimingHistoryQuery, "cursor" | "limit"> = {}): Promise<JobTimingAggregate[]> {
+export async function getJobTimingAggregates(db: JobTimingDb, organizationId: string, query: Omit<JobTimingHistoryQuery, "cursor" | "limit"> = {}, userId?: string): Promise<JobTimingAggregate[]> {
   const rows = await db<Record<string, unknown>[]>`
     SELECT platform AS "groupPlatform", count(*)::int AS "sampleCount",
       min(execution_duration_ms)::bigint AS "minMs", max(execution_duration_ms)::bigint AS "maxMs",
       percentile_cont(0.5) WITHIN GROUP (ORDER BY execution_duration_ms)::bigint AS "p50Ms",
       percentile_cont(0.95) WITHIN GROUP (ORDER BY execution_duration_ms)::bigint AS "p95Ms"
     FROM dashboard_job_timing_snapshots
-    WHERE organization_id=${organizationId}
+    WHERE (
+      (${organizationId === "all"} AND organization_id IN (SELECT organization_id FROM memberships WHERE user_id=${userId ?? null}))
+      OR (${organizationId !== "all"} AND organization_id=${organizationId === "all" ? null : organizationId}::uuid)
+    )
       AND (${query.from ?? null}::timestamptz IS NULL OR completed_at >= ${query.from ?? null}::timestamptz)
       AND (${query.to ?? null}::timestamptz IS NULL OR completed_at < ${query.to ?? null}::timestamptz)
       AND (${query.platform ?? null}::text IS NULL OR platform=${query.platform ?? null})

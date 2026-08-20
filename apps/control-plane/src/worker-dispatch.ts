@@ -10,6 +10,12 @@ export interface WorkerCommandStore {
   acknowledge(commandId: string): Promise<void>;
 }
 export class WorkerDispatchError extends Error { constructor(message: string) { super(message); this.name = "WorkerDispatchError"; } }
+export function normalizeTimestamp(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value !== "string") return value;
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : value;
+}
 type Pending = { command: WorkerCommand; resolve: (event: WorkerEvent) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
 export async function listReplayableWorkerCommands(db: DatabaseClient, workerId: string): Promise<WorkerCommand[]> {
   const rows = await db`SELECT c.id,c.version,c.type,c.worker_id AS "workerId",c.lease_id AS "leaseId",c.occurred_at AS "occurredAt",c.payload
@@ -20,7 +26,7 @@ export async function listReplayableWorkerCommands(db: DatabaseClient, workerId:
   return rows.map(row => WorkerCommand.parse({
     ...row,
     payload: typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload,
-    occurredAt: row.occurredAt instanceof Date ? row.occurredAt.toISOString() : row.occurredAt,
+    occurredAt: normalizeTimestamp(row.occurredAt),
   }));
 }
 

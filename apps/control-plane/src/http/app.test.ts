@@ -25,6 +25,13 @@ describe("control-plane HTTP boundary", () => {
     });
     expect((await app.request("/healthz")).status).toBe(404);
   });
+  test("returns the authenticated operator for the dashboard session probe", async () => {
+    const member = { id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true };
+    const response = await createControlPlaneApp(fakeHttpDeps({ currentUser: async () => member })).request("/api/me");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(member);
+  });
   test("reports stale discovery as unhealthy", async () => {
     const response = await createControlPlaneApp(fakeHttpDeps({
       health: () => ({

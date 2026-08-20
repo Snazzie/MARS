@@ -29,6 +29,21 @@ import {
   RunnerWorkflowPrRequest,
   RunnerWorkflowPrResult,
 } from "@whitesmith/contracts";
+import {
+  DashboardBootstrapReveal,
+  DashboardBootstrapStatus,
+  DashboardBuildWorkerResponse,
+  DashboardHealthResponse,
+  DashboardOkResponse,
+  DashboardOperator,
+  DashboardWorkerMutationResponse,
+  DashboardPoolMutationResponse,
+  DashboardLocationResponse,
+  DashboardManifestResponse,
+  DashboardPendingWorkerResponse,
+  DashboardQueuedResponse,
+  DashboardPoolCreateResponse,
+} from "@whitesmith/contracts";
 import { z } from "zod";
 
 export type ApiResult<T> = { data: T; status: number };
@@ -71,7 +86,14 @@ async function request<S extends z.ZodTypeAny>(path: string, schema: S, init?: R
     throw new ApiRequestError(message, response.status, code);
   }
 
-  const body = await response.json();
+  const rawBody = await response.text();
+  if (!rawBody.trim()) throw new ApiRequestError("The control plane returned an empty response. Restart the control plane and try again.", response.status, "empty_response");
+  let body: unknown;
+  try {
+    body = JSON.parse(rawBody);
+  } catch {
+    throw new ApiRequestError("The control plane returned invalid JSON.", response.status, "invalid_json");
+  }
   try {
     return schema.parse(body);
   } catch (error) {
@@ -83,10 +105,9 @@ async function request<S extends z.ZodTypeAny>(path: string, schema: S, init?: R
   }
 }
 
-const meResponse = z.object({ id: z.string(), githubUserId: z.number().int(), login: z.string().min(1), isGlobalAdmin: z.boolean() });
-export const getMe = () => request("/api/me", meResponse);
-export const getHealth = () => request("/api/healthz", z.object({ ok: z.boolean(), discovery: z.object({ stale: z.boolean(), lastSuccessAt: z.string().nullable() }).passthrough() }).passthrough());
-export const logout = () => request("/api/auth/logout", z.object({ ok: z.literal(true) }), { method: "POST" });
+export const getMe = () => request("/api/me", DashboardOperator);
+export const getHealth = () => request("/api/healthz", DashboardHealthResponse);
+export const logout = () => request("/api/auth/logout", DashboardOkResponse, { method: "POST" });
 export const getOrganizations = () => request("/api/organizations", z.array(OrganizationSummary));
 export const getOverview = (organizationId: string, period: OverviewDto["period"] = "24h") =>
   request(`/api/organizations/${organizationId}/overview?period=${period}`, OverviewDto);
@@ -139,15 +160,15 @@ export function getRepositories(organizationId: string, {
 }
 export const getWorkers = (organizationId: string, includeInactive = false) =>
   request(`/api/organizations/${organizationId}/workers?includeInactive=${includeInactive ? "true" : "false"}`, CursorPage(WorkerDetail));
-export async function configureWorker(organizationId: string, workerId: string, input: WorkerConfigurationInput) {
-  return request(`/api/organizations/${organizationId}/workers/${workerId}/configure`, z.object({ revision: z.string(), fingerprint: z.string(), commandId: z.string().uuid().optional() }), {
+export async function configureWorker(workerId: string, input: WorkerConfigurationInput) {
+  return request(`/api/workers/${workerId}/configure`, DashboardWorkerMutationResponse, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify(input),
   });
 }
-export function buildWorkerImage(organizationId: string, workerId: string, spec: z.input<typeof WorkerImageBuildSpec>) {
-  return request(`/api/organizations/${organizationId}/workers/${workerId}/build-runtime`, z.object({ buildId: z.string().uuid() }), {
+export function buildWorkerImage(workerId: string, spec: z.input<typeof WorkerImageBuildSpec>) {
+  return request(`/api/workers/${workerId}/build-runtime`, DashboardBuildWorkerResponse, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify(WorkerImageBuildSpec.parse(spec)),
@@ -156,21 +177,17 @@ export function buildWorkerImage(organizationId: string, workerId: string, spec:
 
 export async function mutateWorker(organizationId: string, workerId: string, action: "reject" | "drain" | "resume" | "remove"): Promise<{ ok: boolean }> {
   const idempotencyKey = crypto.randomUUID();
-  return request(`/api/organizations/${organizationId}/workers/${workerId}/${action}`, z.object({ ok: z.boolean() }), {
+  return request(`/api/organizations/${organizationId}/workers/${workerId}/${action}`, DashboardOkResponse, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
     body: JSON.stringify({}),
   });
 }
-
-const WorkerBootstrapStatus = z.object({ initialized: z.boolean(), generation: z.number().nullable(), createdAt: z.string().nullable(), rotatedAt: z.string().nullable() });
-const WorkerBootstrapReveal = z.object({ code: z.string().min(1), generation: z.number(), createdAt: z.string() });
-export const getWorkerBootstrapStatus = () => request("/api/workers/bootstrap", WorkerBootstrapStatus, { cache: "no-store" });
+export const getWorkerBootstrapStatus = () => request("/api/workers/bootstrap", DashboardBootstrapStatus, { cache: "no-store" });
 export const getWorkerControlPlaneUrls = () => request("/api/workers/control-plane-urls", z.array(z.string().url()), { cache: "no-store" });
-const pendingWorkersResponse = z.array(z.object({ id: z.string().uuid(), fingerprint: z.string().min(1) }).merge(PendingWorkerRequest));
-export const getPendingWorkerRequests = () => request("/api/workers/pending", pendingWorkersResponse, { cache: "no-store" });
+export const getPendingWorkerRequests = () => request("/api/workers/pending", DashboardPendingWorkerResponse, { cache: "no-store" });
 export async function approvePendingWorker(workerId: string, input: ApproveWorkerRequest) {
-  return request(`/api/workers/pending/${workerId}/approve`, z.object({ ok: z.boolean() }), {
+  return request(`/api/workers/pending/${workerId}/approve`, DashboardOkResponse, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify(ApproveWorkerRequest.parse(input)),
@@ -182,36 +199,36 @@ export type WorkerConfigurationInput = {
   guestPlatforms: z.infer<typeof WorkerConfiguration>["guestPlatforms"];
 };
 export async function configurePendingWorker(workerId: string, input: WorkerConfigurationInput) {
-  return request(`/api/workers/pending/${workerId}/configure`, z.object({ revision: z.string(), fingerprint: z.string(), commandId: z.string().uuid().optional() }), {
+  return request(`/api/workers/pending/${workerId}/configure`, DashboardWorkerMutationResponse, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify(input),
   });
 }
 export async function rejectPendingWorker(workerId: string) {
-  return request(`/api/workers/pending/${workerId}/reject`, z.object({ ok: z.boolean() }), {
+  return request(`/api/workers/pending/${workerId}/reject`, DashboardOkResponse, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: "{}",
   });
 }
-export const initializeWorkerBootstrap = () => request("/api/workers/bootstrap/initialize", WorkerBootstrapReveal, { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: "{}" });
-export const rotateWorkerBootstrap = () => request("/api/workers/bootstrap/rotate", WorkerBootstrapReveal, { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: "{}" });
+export const initializeWorkerBootstrap = () => request("/api/workers/bootstrap/initialize", DashboardBootstrapReveal, { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: "{}" });
+export const rotateWorkerBootstrap = () => request("/api/workers/bootstrap/rotate", DashboardBootstrapReveal, { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: "{}" });
 export const getGlobalPools = (cursor?: string | null, limit = 50) => {
   const query = new URLSearchParams({ limit: String(limit) });
   if (cursor) query.set("cursor", cursor);
   return request(`/api/pools?${query}`, CursorPage(PoolSummary));
 };
 export const saveGlobalPool = (input: CreatePoolRequest) =>
-  request(input.poolId ? `/api/pools/${input.poolId}` : "/api/pools", z.object({ id: z.string().uuid(), labels: z.array(z.string()) }), {
+  request(input.poolId ? `/api/pools/${input.poolId}` : "/api/pools", DashboardPoolMutationResponse, {
     method: input.poolId ? "PUT" : "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify(input),
   });
 export const deleteGlobalPool = (poolId: string) =>
-  request(`/api/pools/${poolId}`, z.object({ ok: z.boolean() }), { method: "DELETE", headers: { "Idempotency-Key": crypto.randomUUID() } });
+  request(`/api/pools/${poolId}`, DashboardOkResponse, { method: "DELETE", headers: { "Idempotency-Key": crypto.randomUUID() } });
 export const mutateGlobalPool = (poolId: string, action: "enable" | "disable") =>
-  request(`/api/pools/${poolId}/${action}`, z.object({ ok: z.boolean() }), {
+  request(`/api/pools/${poolId}/${action}`, DashboardOkResponse, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: "{}",
@@ -219,7 +236,7 @@ export const mutateGlobalPool = (poolId: string, action: "enable" | "disable") =
 export const getSettings = (organizationId: string) =>
   request(`/api/organizations/${organizationId}/settings`, OrganizationSettings);
 export async function mutatePool(organizationId: string, poolId: string, action: "enable" | "disable") {
-  return request(`/api/organizations/${organizationId}/pools/${poolId}/${action}`, z.object({ ok: z.boolean() }), {
+  return request(`/api/organizations/${organizationId}/pools/${poolId}/${action}`, DashboardOkResponse, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify({}),
@@ -245,7 +262,7 @@ const onboardingDetailResponse = OnboardingDetail;
 export const getOnboardingStatus = () => request("/api/onboarding/status", onboardingStatusResponse, { cache: "no-store" });
 export const getOnboardingDetail = () => request("/api/onboarding", onboardingDetailResponse, { cache: "no-store" });
 export async function selectOnboardingWorker(input: SelectOnboardingWorkerRequest) {
-  return request("/api/onboarding/worker", z.object({ ok: z.boolean() }), {
+  return request("/api/onboarding/worker", DashboardOkResponse, {
     method: "PUT",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify(input),
@@ -265,25 +282,25 @@ export async function startOnboardingVerification(input: StartOnboardingVerifica
   });
 }
 export async function beginOnboardingGithubInstall(input: { organizationId: string }) {
-  return request("/api/github/app/install", z.object({ location: z.string().url() }), {
+  return request(`/api/github/app/install`, DashboardLocationResponse, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify(input),
   });
 }
 export async function beginOrganizationGithubInstall(organizationId: string) {
-  return request(`/api/organizations/${organizationId}/github/install`, z.object({ location: z.string().url() }), {
+  return request(`/api/organizations/${organizationId}/github/install`, DashboardLocationResponse, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: "{}",
   });
 }
 export const getGithubOrganizationSettings = (organizationId: string) =>
-  request(`/api/organizations/${organizationId}/github/settings`, z.object({ location: z.string().url() }));
+  request(`/api/organizations/${organizationId}/github/settings`, DashboardLocationResponse);
 export const getGithubRepositorySettings = (organizationId: string, repositoryId: string) =>
-  request(`/api/organizations/${organizationId}/repositories/${repositoryId}/github/settings`, z.object({ location: z.string().url() }));
+  request(`/api/organizations/${organizationId}/repositories/${repositoryId}/github/settings`, DashboardLocationResponse);
 export async function refreshGithubConnection(organizationId: string) {
-  return request(`/api/organizations/${organizationId}/github/refresh`, z.object({ ok: z.boolean() }), {
+  return request(`/api/organizations/${organizationId}/github/refresh`, DashboardOkResponse, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: "{}",
@@ -292,7 +309,7 @@ export async function refreshGithubConnection(organizationId: string) {
 export function recheckRepositoryDiscovery(organizationId: string, repositoryId: string) {
   return request(
     `/api/organizations/${organizationId}/repositories/${repositoryId}/discovery/recheck`,
-    z.object({ queued: z.literal(true) }),
+    DashboardQueuedResponse,
     {
       method: "POST",
       headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
@@ -301,21 +318,21 @@ export function recheckRepositoryDiscovery(organizationId: string, repositoryId:
   );
 }
 export async function uninstallOrganizationGithub(organizationId: string) {
-  return request(`/api/organizations/${organizationId}/github/uninstall`, z.object({ ok: z.boolean() }), {
+  return request(`/api/organizations/${organizationId}/github/uninstall`, DashboardOkResponse, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: "{}",
   });
 }
 export async function beginOnboardingGithubManifest(input: { organizationId: string }) {
-  return request("/api/github/app/manifest", z.object({ action: z.string().url(), manifest: z.string() }), {
+  return request("/api/github/app/manifest", DashboardManifestResponse, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify(input),
   });
 }
 export async function createOnboardingPool(input: CreatePoolRequest & { organizationId: string }) {
-  return request("/api/organizations/" + input.organizationId + "/pools", z.object({ id: z.string().uuid().optional() }).passthrough(), {
+  return request("/api/organizations/" + input.organizationId + "/pools", DashboardPoolCreateResponse, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify({ workerId: input.workerId, guestPlatform: input.guestPlatform, name: input.name, resources: input.resources, triggerLabel: input.triggerLabel, imageDigest: input.imageDigest }),

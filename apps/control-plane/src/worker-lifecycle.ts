@@ -65,7 +65,7 @@ export async function handleAuthenticatedWorkerEvent(
   }
   if (payload.data.type === "worker.build_completed" || payload.data.type === "worker.build_failed") {
     const ready = payload.data.payload.runtimeReady;
-    await db`UPDATE workers SET doctor=COALESCE(doctor,'{}'::jsonb) || ${JSON.stringify({ runtimeReady: ready, artifactSource: "worker_local", artifactIdentity: payload.data.payload.image, remediation: ready ? null : payload.data.payload.message })}::jsonb, doctor_observed_at=now(), last_heartbeat_at=now(), connection_state='online' WHERE id=${event.data.workerId}`;
+    await db`UPDATE workers SET doctor=COALESCE(doctor,'{}'::jsonb) || ${JSON.stringify({ runtimeReady: ready, runtimeBuildState: ready ? "ready" : "failed", runtimeBuildMessage: ready ? null : payload.data.payload.message, artifactSource: "worker_local", artifactIdentity: payload.data.payload.image, remediation: ready ? null : payload.data.payload.message })}::jsonb, doctor_observed_at=now(), last_heartbeat_at=now(), connection_state='online' WHERE id=${event.data.workerId}`;
     dispatcher.handleEvent(event.data, socket);
     return true;
   }

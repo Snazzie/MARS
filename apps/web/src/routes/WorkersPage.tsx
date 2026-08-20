@@ -8,8 +8,8 @@ import { WorkerCard } from "../components/WorkerCard.tsx";
 import { QueryState } from "../components/StateView.tsx";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
 
-export function workerRefetchInterval(workers: Array<Pick<WorkerDetail, "admissionState" | "configurationState">> | undefined): 2000 | false {
-  return workers?.some((worker) => worker.admissionState === "adopted" && worker.configurationState === "applying") ? 2_000 : false;
+export function workerRefetchInterval(workers: Array<Pick<WorkerDetail, "admissionState" | "configurationState"> & { doctor?: WorkerDetail["doctor"] }> | undefined): 2000 | false {
+  return workers?.some((worker) => worker.admissionState === "adopted" && (worker.configurationState === "applying" || worker.doctor?.runtimeBuildState === "building")) ? 2_000 : false;
 }
 
 export function WorkersPage() {

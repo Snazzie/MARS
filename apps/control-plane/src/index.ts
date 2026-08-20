@@ -9,7 +9,7 @@ import { discoverAvailableRepositoryJobs, discoverQueuedRepositoryJobs } from ".
 import { readBody, validSignature, acceptDelivery } from "./webhook.ts";
 import { verifyWorkerSignature } from "./workers.ts";
 import { createWorkerChallenge, decodeWorkerSignature } from "./worker-socket.ts";
-import { WorkerCommandDispatcher, containsSecret } from "./worker-dispatch.ts";
+import { WorkerCommandDispatcher, containsSecret, normalizeTimestamp } from "./worker-dispatch.ts";
 import { applyWorkerConfigurationAcknowledgement, createRequestLimiter } from "./worker-requests.ts";
 import { activateAuthenticatedWorkerConnection } from "./worker-connection.ts";
 import { handleAuthenticatedWorkerEvent } from "./worker-lifecycle.ts";
@@ -128,7 +128,7 @@ const commandStore = {
       return rows.map(row => WorkerCommandSchema.parse({
         ...row,
         payload: typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload,
-        occurredAt: row.occurredAt instanceof Date ? row.occurredAt.toISOString() : row.occurredAt,
+        occurredAt: normalizeTimestamp(row.occurredAt),
       }));
   },
   async markSent(commandId: string): Promise<void> {
@@ -263,6 +263,11 @@ server = Bun.serve<SocketData>({
           } else if (ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch && frame.workerId === ws.data.workerId) {
             if (frame.type === "worker.configured") {
               const acknowledged = await applyWorkerConfigurationAcknowledgement(db, { workerId: ws.data.workerId, payload: frame.payload });
+              if (!acknowledged) {
+                const payload = frame.payload && typeof frame.payload === "object" ? frame.payload as Record<string, unknown> : {};
+                const [state] = await db`SELECT configuration_command_id AS "commandId", configuration_revision AS revision, desired_configuration AS desired FROM workers WHERE id=${ws.data.workerId}`;
+                console.error("Worker configuration acknowledgement rejected", { workerId: ws.data.workerId, commandId: payload.commandId, revision: payload.revision, expectedCommandId: state?.commandId, expectedRevision: state?.revision, observed: payload.observed, desired: state?.desired });
+              }
               console.log(`Worker configuration acknowledgement: ${ws.data.workerId} accepted=${acknowledged}`);
               dispatcher.handleEvent(frame, ws);
               void triggerReconciliation();
@@ -306,15 +311,20 @@ server = Bun.serve<SocketData>({
   const url=new URL(request.url);
     requestSources.set(request, server.requestIP(request)?.address ?? "unknown");
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket" && url.pathname === "/api/browser/invalidations") {
-      const user = await current(request);
-      if (!user) return json({ code: "unauthorized", message: "Authentication required" }, 401);
-      const organizationId = url.searchParams.get("organizationId") ?? "";
-      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(organizationId)) return json({ code: "invalid_request", message: "A concrete organization is required" }, 400);
-      if (!await canSubscribeToOrganization(db, user, organizationId)) return json({ code: "not_found", message: "Organization not found" }, 404);
-      const rawCursor = Number(url.searchParams.get("cursor") ?? 0);
-      const cursor = Number.isSafeInteger(rawCursor) && rawCursor >= 0 ? rawCursor : 0;
-      if (server.upgrade(request, { data: { actor: "browser", organizationId, cursor } })) return undefined;
-      return json({ code: "upgrade_failed", message: "WebSocket upgrade failed" }, 400);
+      try {
+        const user = await current(request);
+        if (!user) return json({ code: "unauthorized", message: "Authentication required" }, 401);
+        const organizationId = url.searchParams.get("organizationId") ?? "";
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(organizationId)) return json({ code: "invalid_request", message: "A concrete organization is required" }, 400);
+        const rawCursor = Number(url.searchParams.get("cursor") ?? 0);
+        const cursor = Number.isSafeInteger(rawCursor) && rawCursor >= 0 ? rawCursor : 0;
+        if (!await canSubscribeToOrganization(db, user, organizationId)) return json({ code: "not_found", message: "Organization not found" }, 404);
+        if (server.upgrade(request, { data: { actor: "browser", organizationId, cursor } })) return undefined;
+        return json({ code: "upgrade_failed", message: "WebSocket upgrade failed" }, 400);
+      } catch (error) {
+        console.error("Browser invalidation websocket upgrade failed", error);
+        return json({ code: "internal_error", message: "WebSocket upgrade failed" }, 500);
+      }
     }
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket" && url.pathname === "/api/v1/workers/connect") {
       const workerId = url.searchParams.get("workerId");

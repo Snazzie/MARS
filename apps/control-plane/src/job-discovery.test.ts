@@ -184,7 +184,7 @@ describe("repository authorization lifecycle", () => {
     expect(report).toMatchObject({ repositories: 1, failed: 1 });
     expect(queries[0]).toContain("repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()");
     expect(queries.some(query => query.includes("discovery_error='github_rate_limited'"))).toBe(true);
-    expect(valuesSeen.at(-1)).toEqual([new Date(resetAt), repository.repositoryId]);
+    expect(valuesSeen.at(-1)).toEqual([new Date(resetAt).toISOString(), repository.repositoryId]);
   });
 });
 

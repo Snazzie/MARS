@@ -110,13 +110,13 @@ export async function discoverQueuedRepositoryJobs(deps: DiscoveryDeps): Promise
   }
   return report;
 }
-function rateLimitRetryAt(error: unknown): Date {
+function rateLimitRetryAt(error: unknown): string {
   const resetAt = error instanceof GithubRateLimitError
     ? error.resetAt
     : error && typeof error === "object" && typeof (error as { resetAt?: unknown }).resetAt === "number"
       ? (error as { resetAt: number }).resetAt
       : Date.now() + 60_000;
-  return new Date(resetAt);
+  return new Date(resetAt).toISOString();
 }
 
 export async function discoverAvailableRepositoryJobs(deps: DiscoveryDeps): Promise<DiscoveryReport> {
