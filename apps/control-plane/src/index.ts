@@ -1,4 +1,4 @@
-import { completeOnboardingIfReady, createDb, migrate, expireLeases, jsonParameter } from "@whitesmith/db";
+import { completeOnboardingIfReady, createDb, migrateDatabase, expireLeases, jsonParameter } from "@whitesmith/db";
 import type { WorkerCommand } from "@whitesmith/contracts";
 import { WorkerCommand as WorkerCommandSchema } from "@whitesmith/contracts";
 import type { Server, ServerWebSocket } from "bun";
@@ -91,7 +91,7 @@ if (production) {
     if (!artifact || !await Bun.file(artifact).exists()) throw new Error(`release artifact is unavailable: ${name}`);
   }
 }
-const db = createDb(env.DATABASE); await migrate(db); await ensureDefaultPools(db, env.DEFAULT_IMAGES); const secretBox = new SecretBox(masterKey);
+const db = createDb(env.DATABASE); await migrateDatabase(db); await ensureDefaultPools(db, env.DEFAULT_IMAGES); const secretBox = new SecretBox(masterKey);
 configureRunLifecycle(db);
 const json = (data: unknown, status=200) => Response.json(data,{status,headers:{"cache-control":"no-store"}});
 const cookie = (value:string, maxAge:number) => `whitesmith_session=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
