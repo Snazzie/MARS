@@ -88,6 +88,7 @@ export class GithubJobsClient {
     return { totalCount: Number(value.total_count) || runs.length, runs };
   }
   async getRun(owner: string, repo: string, runId: number): Promise<GithubRunSnapshot> { return this.parseRun(await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}`)); }
+  async getJob(owner: string, repo: string, jobId: number): Promise<GithubJobSnapshot> { return this.parseJob(await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/jobs/${jobId}`)); }
   async listJobs(owner: string, repo: string, runId: number, page: number): Promise<{ totalCount: number; jobs: GithubJobSnapshot[] }> {
     const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/jobs?filter=latest&per_page=100&page=${page}`);
     const jobs = Array.isArray(value.jobs) ? value.jobs.filter((x): x is Record<string, unknown> => Boolean(x && typeof x === "object")).map(x => this.parseJob(x)) : [];

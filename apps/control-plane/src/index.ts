@@ -1,4 +1,4 @@
-import { completeOnboardingIfReady, createDb, migrateDatabase, expireLeases, jsonParameter } from "@whitesmith/db";
+import { completeOnboardingIfReady, createDb, migrateDatabase, jsonParameter } from "@whitesmith/db";
 import type { WorkerCommand } from "@whitesmith/contracts";
 import { WorkerCommand as WorkerCommandSchema } from "@whitesmith/contracts";
 import type { Server, ServerWebSocket } from "bun";
@@ -16,6 +16,7 @@ import { handleAuthenticatedWorkerEvent } from "./worker-lifecycle.ts";
 import { GitHubAppService } from "./github-app.ts";
 import { runQueuedJobReconciliation } from "./job-reconciler.ts";
 import { reapPendingLeases } from "./lease-cleanup.ts";
+import { reconcileExpiredLeasesWithGithub } from "./lease-reconciliation.ts";
 import { startReconciliationScheduler } from "./reconcile-loop.ts";
 import { pruneExpiredData } from "./retention.ts";
 import { DiscoveryHealthMonitor, isDiscoveryCycleSuccessful } from "./discovery-health.ts";
@@ -168,7 +169,12 @@ const reconciliationScheduler = startReconciliationScheduler(async () => {
       const pickup = await discoverQueuedRepositoryJobs(discoveryDeps);
       if (pickup.discovered || pickup.failed) console.log(`Queued GitHub job pickup: repositories=${pickup.repositories} discovered=${pickup.discovered} updated=${pickup.updated} failed=${pickup.failed}`);
     }
-    await expireLeases(db);
+    const staleLeaseReport = await reconcileExpiredLeasesWithGithub({
+      db,
+      installationToken: (installationId) => githubApp.getInstallationToken(installationId),
+      githubFetchForInstallation: (installationId) => githubRateLimits.scopedFetch(installationId),
+    });
+    if (staleLeaseReport.completed || staleLeaseReport.skipped) console.log(`GitHub stale lease reconciliation: inspected=${staleLeaseReport.inspected} completed=${staleLeaseReport.completed} stillActive=${staleLeaseReport.stillActive} skipped=${staleLeaseReport.skipped}`);
     const report = await runQueuedJobReconciliation({
       db,
       installationToken: (installationId) => githubApp.getInstallationToken(installationId),

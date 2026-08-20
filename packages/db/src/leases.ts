@@ -65,8 +65,3 @@ export async function bindLeaseToJob(sql: DatabaseClient, leaseId: string, githu
 export async function completeLease(sql: DatabaseClient, leaseId: string, result: { state: "completed" | "failed"; conclusion?: string | null }): Promise<void> {
   await sql`UPDATE runner_leases SET state=${result.state}, terminal_result=${jsonParameter(sql, result)}, updated_at=now() WHERE id=${leaseId} AND state NOT IN ('completed','failed','reaped')`;
 }
-
-export async function expireLeases(sql: DatabaseClient, now = new Date()): Promise<string[]> {
-  const rows = await sql`UPDATE runner_leases SET state='failed', cleanup_state='pending', updated_at=now() WHERE expires_at < ${now.toISOString()} AND state NOT IN ('completed','failed','reaped') RETURNING worker_id AS "workerId"`;
-  return rows.map((row) => String(row.workerId));
-}
