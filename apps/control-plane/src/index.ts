@@ -152,6 +152,7 @@ let triggerReconciliation = () => Promise.resolve();
 const httpApp = createControlPlaneApp({ db, baseUrl: env.BASE, browserBaseUrl: env.BROWSER_BASE, workerControlPlaneUrls: controlPlaneAdapterUrls, githubClientId: env.CLIENT_ID, githubClientSecret: env.CLIENT_SECRET, bootstrapGithubLogin: env.BOOTSTRAP, secretBox, githubApp, githubWebhookSecret: env.WEBHOOK_SECRET, defaultJobImages: env.DEFAULT_IMAGES, windowsContainerBuild, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerServiceHostExecutable, workerOrchestratorExecutables, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, onWorkerAdopted: (workerId) => { dispatcher.replayConnected(workerId); void triggerReconciliation(); }, health: () => ({ buildId: Bun.env.WHITESMITH_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
 const discoveryDeps = { db, installationToken: (installationId: number) => githubApp.getInstallationToken(installationId), githubFetchForInstallation: (installationId: number) => githubRateLimits.scopedFetch(installationId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY };
 let lastQueuedDiscoveryAt = 0;
+let lastGithubLeaseReconciliationAt = 0;
 startReconciliationScheduler(async () => {
   discoveryHealth.markAttempt();
   try {
@@ -169,12 +170,15 @@ const reconciliationScheduler = startReconciliationScheduler(async () => {
       const pickup = await discoverQueuedRepositoryJobs(discoveryDeps);
       if (pickup.discovered || pickup.failed) console.log(`Queued GitHub job pickup: repositories=${pickup.repositories} discovered=${pickup.discovered} updated=${pickup.updated} failed=${pickup.failed}`);
     }
-    const staleLeaseReport = await reconcileExpiredLeasesWithGithub({
-      db,
-      installationToken: (installationId) => githubApp.getInstallationToken(installationId),
-      githubFetchForInstallation: (installationId) => githubRateLimits.scopedFetch(installationId),
-    });
-    if (staleLeaseReport.completed || staleLeaseReport.skipped) console.log(`GitHub stale lease reconciliation: inspected=${staleLeaseReport.inspected} completed=${staleLeaseReport.completed} stillActive=${staleLeaseReport.stillActive} skipped=${staleLeaseReport.skipped}`);
+    if (Date.now() - lastGithubLeaseReconciliationAt >= 60_000) {
+      lastGithubLeaseReconciliationAt = Date.now();
+      const staleLeaseReport = await reconcileExpiredLeasesWithGithub({
+        db,
+        installationToken: (installationId) => githubApp.getInstallationToken(installationId),
+        githubFetchForInstallation: (installationId) => githubRateLimits.scopedFetch(installationId),
+      });
+      if (staleLeaseReport.completed || staleLeaseReport.skipped) console.log(`GitHub stale lease reconciliation: inspected=${staleLeaseReport.inspected} completed=${staleLeaseReport.completed} stillActive=${staleLeaseReport.stillActive} skipped=${staleLeaseReport.skipped}`);
+    }
     const report = await runQueuedJobReconciliation({
       db,
       installationToken: (installationId) => githubApp.getInstallationToken(installationId),
