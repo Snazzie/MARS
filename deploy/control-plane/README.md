@@ -118,8 +118,7 @@ docker compose --env-file .env -f deploy/control-plane/compose.yaml logs --tail=
 Keep the previous release tag available until the new deployment passes `/api/readyz` and the browser smoke check. Roll back by restoring the previous tag and recreating the service. Do not remove PostgreSQL or the data volume during an application rollback.
 
 ## Database migrations
-
-Control-plane startup runs the checked-in Drizzle migration set. The existing numbered migrations remain a frozen compatibility boundary for installations that already contain `schema_migrations`; new schema changes must use Drizzle migration files and must not extend the legacy migration list.
+Control-plane startup runs the checked-in Drizzle migration set. Existing installations are adopted by seeding the Drizzle baseline metadata when the application schema already exists; new databases run the complete Drizzle baseline. New schema changes must use Drizzle migration files.
 
 For a development database:
 

@@ -59,8 +59,8 @@ The repository is a working baseline, not the full approved platform.
 
 - The Unraid XML template selects a release tag; worker download URLs and hashes are embedded in the release image manifest by CI rather than supplied through `.env`.
 
-## Database migration ownership
+## Database ownership
 
-- Drizzle ORM's PostgreSQL migrator now owns checked-in migrations after the frozen legacy `schema_migrations` boundary.
-- Existing tagged-SQL query modules remain unchanged during this migration-first adoption.
-- Existing installations validate and preserve legacy migration checksums before the Drizzle metadata bridge is initialized.
+- Drizzle ORM owns the PostgreSQL runtime client, generated schema, relations, and checked-in migrations.
+- Existing query modules execute through the Drizzle-backed database client while preserving their SQL semantics and result contracts.
+- The custom `schema_migrations` runner has been removed; existing installations are adopted by seeding the Drizzle baseline metadata before applying newer migrations.
