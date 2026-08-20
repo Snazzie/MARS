@@ -33,3 +33,13 @@ test("worker inventory only reclaims expired runtime leases it does not report",
   expect(query).toContain("state IN ('dispatched','sandbox_ready','online','busy')");
   expect(query).toContain("NOT (id = ANY");
 });
+test("worker inventory empty list reclaims all expired runtime leases", async () => {
+  let query = "";
+  const db = (async (strings: TemplateStringsArray) => {
+    query = strings.join(" ");
+    return [{ id: "lease-1" }];
+  }) as never;
+  expect(await reconcileWorkerInventory(db, "worker-1", [])).toBe(1);
+  expect(query).toContain("state IN ('dispatched','sandbox_ready','online','busy')");
+  expect(query).not.toContain("ANY");
+});

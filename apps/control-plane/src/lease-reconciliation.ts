@@ -47,15 +47,24 @@ async function markTerminalLease(deps: StaleLeaseReconciliationDeps, row: StaleL
 }
 export async function reconcileWorkerInventory(db: DatabaseClient, workerId: string, activeLeaseIds: readonly string[]): Promise<number> {
   const ids = [...new Set(activeLeaseIds)];
-  const rows = await db<Array<{ id: string }>>`
-    UPDATE runner_leases
-    SET state='failed', terminal_result=${jsonParameter(db, { reason: "worker_inventory_missing" })}::jsonb, cleanup_state='pending', updated_at=now()
-    WHERE worker_id=${workerId}
-      AND expires_at < now()
-      AND state IN ('dispatched','sandbox_ready','online','busy')
-      AND NOT (id = ANY(${ids}::uuid[]))
-    RETURNING id
-  `;
+  const rows = ids.length === 0
+    ? await db<Array<{ id: string }>>`
+        UPDATE runner_leases
+        SET state='failed', terminal_result=${jsonParameter(db, { reason: "worker_inventory_missing" })}::jsonb, cleanup_state='pending', updated_at=now()
+        WHERE worker_id=${workerId}
+          AND expires_at < now()
+          AND state IN ('dispatched','sandbox_ready','online','busy')
+        RETURNING id
+      `
+    : await db<Array<{ id: string }>>`
+        UPDATE runner_leases
+        SET state='failed', terminal_result=${jsonParameter(db, { reason: "worker_inventory_missing" })}::jsonb, cleanup_state='pending', updated_at=now()
+        WHERE worker_id=${workerId}
+          AND expires_at < now()
+          AND state IN ('dispatched','sandbox_ready','online','busy')
+          AND NOT (id = ANY(${ids}::uuid[]))
+        RETURNING id
+      `;
   return rows.length;
 }
 export async function reconcileExpiredLeasesWithGithub(deps: StaleLeaseReconciliationDeps): Promise<StaleLeaseReconciliationReport> {
