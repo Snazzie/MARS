@@ -47,6 +47,11 @@ describe("numeric provision labels", () => {
     expect(fits(value)).toBe(true);
   });
 });
+test("checks storage against the storage ceiling", () => {
+  const value = candidate(["whitesmith-linux-x64", "2vcpu"]);
+  value.pool.resources = { vcpu: 2, memoryBytes: 4, storageBytes: 8, concurrency: 1 };
+  expect(reason(value)).toBe("admissible");
+});
 test("blocks a worker whose local runtime is not ready", () => {
   const value = candidate(["whitesmith-linux-x64"]);
   value.worker.runtimeReady = false;

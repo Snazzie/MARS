@@ -71,6 +71,6 @@ export function reason(candidate: Candidate): string {
   if (candidate.pool.active >= candidate.pool.concurrency) return "pool_concurrency";
   const resources = resolveProvisionResources(candidate.pool.resources, provision);
   const limits = WorkerLimits.safeParse(candidate.worker.limits);
-  return resources && limits.success && resources.vcpu <= limits.data.maxVcpuPerPod && resources.memoryBytes <= limits.data.maxMemoryBytesPerPod && resources.storageBytes <= limits.data.maxMemoryBytesPerPod ? "admissible" : "resource_ceiling";
+  return resources && limits.success && resources.vcpu <= limits.data.maxVcpuPerPod && resources.memoryBytes <= limits.data.maxMemoryBytesPerPod && resources.storageBytes <= limits.data.maxStorageBytesPerPod ? "admissible" : "resource_ceiling";
 }
 
