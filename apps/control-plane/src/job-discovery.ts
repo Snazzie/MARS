@@ -7,6 +7,19 @@ import { GITHUB_LOG_FORMAT_VERSION, syncCompletedGithubJobLogs } from "./github-
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 export type DiscoveryDeps = { db: DatabaseClient; installationToken: (installationId: number) => Promise<string>; githubFetchForInstallation: (installationId: number) => Fetcher; repositoryFullName?: string };
 export type DiscoveryReport = { repositories: number; discovered: number; updated: number; failed: number };
+export async function syncCompletedJobLogsBestEffort(
+  jobId: number,
+  sync: () => Promise<unknown>,
+  onError: (jobId: number, error: string) => void = (id, error) => console.error("GitHub completed job log sync deferred", { jobId: id, error }),
+): Promise<boolean> {
+  try {
+    await sync();
+    return true;
+  } catch (error) {
+    onError(jobId, error instanceof Error ? error.message : String(error));
+    return false;
+  }
+}
 
 async function pages<T>(load: (page: number) => Promise<{ totalCount: number; items: T[] }>): Promise<T[]> {
   const result: T[] = [];
@@ -70,7 +83,7 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
       discovered += 1;
       const applied = await applyGithubJobSnapshot({ installationId: Number(row.installationId), repository: { id: Number(row.githubRepositoryId), name: String(row.name), fullName }, run, job, authoritative: true });
       if (applied) updated += 1;
-      if (applied && job.status === "completed") await syncCompletedGithubJobLogs({ db: deps.db, client, owner, repo, job });
+      if (applied && job.status === "completed") await syncCompletedJobLogsBestEffort(job.id, () => syncCompletedGithubJobLogs({ db: deps.db, client, owner, repo, job }));
     }
   }
   if (completed.newestRunId !== null) {

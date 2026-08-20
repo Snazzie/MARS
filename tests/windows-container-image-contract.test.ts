@@ -36,6 +36,7 @@ describe("Windows job image contract", () => {
     expect(localScript).toContain("Move-Item");
     expect(localScript).toContain("runtimeProbe");
     expect(localScript).not.toContain("docker push");
+    expect(localScript).toContain("$ErrorActionPreference = 'Stop'");
   });
 
   test("pins inputs and emits a registry digest", () => {

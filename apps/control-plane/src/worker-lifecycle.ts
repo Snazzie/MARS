@@ -65,7 +65,8 @@ export async function handleAuthenticatedWorkerEvent(
   }
   if (payload.data.type === "worker.build_completed" || payload.data.type === "worker.build_failed") {
     const ready = payload.data.payload.runtimeReady;
-    await db`UPDATE workers SET doctor=COALESCE(doctor,'{}'::jsonb) || ${JSON.stringify({ runtimeReady: ready, runtimeBuildState: ready ? "ready" : "failed", runtimeBuildMessage: ready ? null : payload.data.payload.message, artifactSource: "worker_local", artifactIdentity: payload.data.payload.image, remediation: ready ? null : payload.data.payload.message })}::jsonb, doctor_observed_at=now(), last_heartbeat_at=now(), connection_state='online' WHERE id=${event.data.workerId}`;
+    await db`UPDATE workers SET doctor=COALESCE(doctor,'{}'::jsonb) || ${JSON.stringify({ runtimeReady: ready, runtimeBuildState: ready ? "ready" : "failed", runtimeBuildMessage: ready ? null : payload.data.payload.message, artifactSource: "worker_local", artifactIdentity: payload.data.payload.image, ...(payload.data.payload.imageId ? { artifactDigest: payload.data.payload.imageId } : {}), remediation: ready ? null : payload.data.payload.message })}::jsonb, doctor_observed_at=now(), last_heartbeat_at=now(), connection_state='online' WHERE id=${event.data.workerId}`;
+    console.log("Windows image build event received", { workerId: event.data.workerId, type: payload.data.type, buildId: payload.data.payload.buildId, commandId: payload.data.payload.commandId, image: payload.data.payload.image, imageId: payload.data.payload.imageId, contentSha256: payload.data.payload.contentSha256, ...(payload.data.type === "worker.build_failed" ? { failureStage: payload.data.payload.failureStage, message: payload.data.payload.message } : {}) });
     dispatcher.handleEvent(event.data, socket);
     return true;
   }

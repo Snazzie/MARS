@@ -73,11 +73,37 @@ export const LeaseLifecycleEvent = z.object({
   occurredAt: z.string().datetime(),
 }).strict();
 export type LeaseLifecycleEvent = z.infer<typeof LeaseLifecycleEvent>;
-export const WorkerImageBuildFile = z.object({ path: z.string().min(1).max(260).regex(/^[^\\/:*?"<>|]+(?:[\\/][^\\/:*?"<>|]+)*$/).refine((value) => !value.split(/[\\/]/).some((segment) => segment === "." || segment === ".."), "context path traversal is not allowed"), contentBase64: z.string().min(1).max(16 * 1024 * 1024) }).strict();
-export const WorkerImageBuildSpec = z.object({ image: z.string().min(1).max(128), dockerfile: z.string().min(1).max(256 * 1024), contextFiles: z.array(WorkerImageBuildFile).max(256).default([]) }).strict();
-export const WorkerBuildImagePayload = WorkerImageBuildSpec.extend({ buildId: z.string().uuid() }).strict();
-export const WorkerBuildImageEventPayload = z.object({ commandId: z.string().uuid(), buildId: z.string().uuid(), image: z.string().min(1), runtimeReady: z.boolean(), message: z.string().min(1).max(1000).optional() }).strict();
-export const WorkerBuildImageFailedPayload = z.object({ commandId: z.string().uuid(), buildId: z.string().uuid(), image: z.string().min(1), runtimeReady: z.literal(false), message: z.string().min(1).max(1000) }).strict();
+const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/);
+const WindowsImageBuildArtifact = z.object({ url: z.string().url().refine((value) => value.startsWith("https://") || value.startsWith("http://localhost") || value.startsWith("http://127.0.0.1"), "build artifact URL must use HTTPS"), sha256: sha256Hex }).strict();
+export const WorkerImageBuildSpec = z.object({ image: z.literal("whitesmith/windows-job:local") }).strict();
+export const WorkerBuildImagePayload = WorkerImageBuildSpec.extend({
+  buildId: z.string().uuid(),
+  baseImage: z.string().regex(/^mcr\.microsoft\.com\/windows\/server:ltsc2025@sha256:[0-9a-f]{64}$/),
+  runner: WindowsImageBuildArtifact,
+  git: WindowsImageBuildArtifact,
+  vcRuntime: WindowsImageBuildArtifact,
+  artifacts: z.object({
+    builder: WindowsImageBuildArtifact,
+    verifier: WindowsImageBuildArtifact,
+    containerfile: WindowsImageBuildArtifact,
+    entrypoint: WindowsImageBuildArtifact,
+    jobAgent: WindowsImageBuildArtifact,
+  }).strict(),
+  contentSha256: sha256Hex,
+}).strict();
+export type WorkerBuildImagePayload = z.infer<typeof WorkerBuildImagePayload>;
+export function workerBuildImageContentDescriptor(payload: Omit<WorkerBuildImagePayload, "buildId" | "contentSha256">): string {
+  return JSON.stringify({
+    image: payload.image,
+    baseImage: payload.baseImage,
+    runner: payload.runner,
+    git: payload.git,
+    vcRuntime: payload.vcRuntime,
+    artifacts: payload.artifacts,
+  });
+}
+export const WorkerBuildImageEventPayload = z.object({ commandId: z.string().uuid(), buildId: z.string().uuid(), image: z.string().min(1), imageId: z.string().regex(/^sha256:[0-9a-f]{64}$/).optional(), contentSha256: sha256Hex, runtimeReady: z.boolean(), message: z.string().min(1).max(1000).optional() }).strict();
+export const WorkerBuildImageFailedPayload = WorkerBuildImageEventPayload.extend({ runtimeReady: z.literal(false), failureStage: z.string().min(1).max(64) }).strict();
 export const WorkerCommand = z.object({ version: z.literal(1), id: z.string().uuid(), type: z.string().min(1), workerId: z.string().uuid(), leaseId: z.string().uuid().nullable(), occurredAt: z.string().datetime(), payload: z.record(z.unknown()) });
 export const WorkerEvent = z.object({ version: z.literal(1), id: z.string().uuid(), workerId: z.string().uuid(), type: z.string().min(1), occurredAt: z.string().datetime(), payload: z.record(z.unknown()) });
 export const WorkerEventPayload = z.discriminatedUnion("type", [

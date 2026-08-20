@@ -14,6 +14,7 @@ param(
   [Parameter(Mandatory = $true)][string]$ContainerfilePath,
   [Parameter(Mandatory = $true)][string]$EntrypointPath
 )
+$ErrorActionPreference = 'Stop'
 if ($BaseImage -notmatch '^mcr\.microsoft\.com/windows/server:ltsc2025@sha256:[0-9a-f]{64}$') { throw 'BaseImage must be a digest-pinned mcr.microsoft.com/windows/server:ltsc2025 reference' }
 foreach ($url in @(@{ Value = $RunnerUrl; Name = 'RunnerUrl' }, @{ Value = $GitUrl; Name = 'GitUrl' }, @{ Value = $VcRuntimeUrl; Name = 'VcRuntimeUrl' })) {
   if ($url.Value -notmatch '^https://') { throw "$($url.Name) must use HTTPS." }

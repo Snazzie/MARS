@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { discoverAvailableRepositoryJobs, discoverQueuedRepositoryJobs, listCompletedRunsSince } from "./job-discovery.ts";
+import { discoverAvailableRepositoryJobs, discoverQueuedRepositoryJobs, listCompletedRunsSince, syncCompletedJobLogsBestEffort } from "./job-discovery.ts";
 import { GithubRateLimitError } from "./github-rate-limit.ts";
 import type { GithubRunSnapshot } from "./runs.ts";
 
@@ -52,6 +52,15 @@ describe("completed run recovery", () => {
       runs: Array.from({ length: 100 }, (_, index) => run(2_000 - ((page - 1) * 100) - index)),
     }), 500)).rejects.toThrow("completed_run_checkpoint_unreachable");
   });
+});
+
+test("completed log backfill failure does not abort authoritative status discovery", async () => {
+  const errors: Array<{ jobId: number; error: string }> = [];
+  const synced = await syncCompletedJobLogsBestEffort(96580319653, async () => {
+    throw new Error("github_job_logs_not_ready");
+  }, (jobId, error) => errors.push({ jobId, error }));
+  expect(synced).toBe(false);
+  expect(errors).toEqual([{ jobId: 96580319653, error: "github_job_logs_not_ready" }]);
 });
 
 describe("repository authorization lifecycle", () => {

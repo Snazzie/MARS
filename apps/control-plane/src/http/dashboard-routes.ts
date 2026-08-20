@@ -6,6 +6,7 @@ import { listOrganizations, getOverview, getAllOverview, listRepositories, listA
 import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
+import { createWorkerImageBuildPayload } from "../windows-image-build.ts";
 import { ApiError, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceSample } from "@whitesmith/contracts";
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -114,9 +115,12 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!worker) return error(c, 404, "not_found", "Resource not found");
     if (worker.admissionState !== "adopted" || worker.connectionState !== "online") return error(c, 409, "worker_not_ready", "Worker must be adopted and online before building a runtime image");
     const spec = WorkerImageBuildSpec.parse(await c.req.json());
+    if (!deps.windowsContainerBuild) return error(c, 503, "image_build_unavailable", "Authoritative Windows image build inputs are unavailable");
     const buildId = randomUUID();
+    const payload = await createWorkerImageBuildPayload({ baseUrl: deps.baseUrl, buildId, image: spec.image, build: deps.windowsContainerBuild });
+    console.log("Windows image build dispatch", { workerId, buildId, image: payload.image, contentSha256: payload.contentSha256 });
     await deps.db`UPDATE workers SET doctor=COALESCE(doctor,'{}'::jsonb) || ${JSON.stringify({ runtimeBuildState: "building", runtimeBuildMessage: null, runtimeReady: false })}::jsonb WHERE id=${workerId}`;
-    await deps.workerDispatcher.dispatch({ type: "worker.build_image", workerId, leaseId: null, payload: { ...spec, buildId } });
+    await deps.workerDispatcher.dispatch({ type: "worker.build_image", workerId, leaseId: null, payload });
     return c.json({ buildId }, 202);
   }));
   app.get("/api/organizations/:organizationId/runs/:runId", safe(async (c) => { const org=c.req.param("organizationId"); const denied=await guard(c,deps,org); if(denied)return denied; const value=await getRunDetail(deps.db,org,c.req.param("runId")); return value?c.json(RunDetail.parse(value)):error(c,404,"not_found","Resource not found"); }));

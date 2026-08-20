@@ -5,6 +5,7 @@ import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCommand, WorkerC
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { createHyperVRuntime, HyperVDriver } from "./hyperv.ts";
 import { WindowsContainerDriver, isExpectedWindowsEntrypoint } from "./windows-container.ts";
+import { downloadWindowsImageBuildArtifacts } from "./windows-image-build.ts";
 import type { RuntimeDriver } from "./runtime.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 
@@ -27,18 +28,18 @@ const commandSucceeds = async (command: string[]): Promise<boolean> => {
     return false;
   }
 };
-const localImageVerification = async (image: string): Promise<{ manifest: boolean; entrypoint: boolean }> => {
+const localImageVerification = async (image: string): Promise<{ manifest: boolean; entrypoint: boolean; imageId?: string }> => {
   if (image !== "whitesmith/windows-job:local") return { manifest: false, entrypoint: false };
   const path = Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE_MANIFEST ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "windows-job-image.json");
   try {
-    const manifest = JSON.parse(await readFile(path, "utf8")) as { schemaVersion?: number; image?: string; imageId?: string; runtimeProbe?: { mediaFoundation?: boolean; dns?: boolean; tcp443?: boolean } };
+    const manifest = JSON.parse((await readFile(path, "utf8")).replace(/^\uFEFF/, "")) as { schemaVersion?: number; image?: string; imageId?: string; runtimeProbe?: { mediaFoundation?: boolean; dns?: boolean; tcp443?: boolean } };
     if (manifest.schemaVersion !== 1 || manifest.image !== image || !manifest.imageId || !manifest.runtimeProbe?.mediaFoundation || !manifest.runtimeProbe.dns || !manifest.runtimeProbe.tcp443) return { manifest: false, entrypoint: false };
     const imageIdProcess = Bun.spawn(["docker.exe", "image", "inspect", "--format", "{{.Id}}", image], { stdout: "pipe", stderr: "ignore" });
     const imageId = (await new Response(imageIdProcess.stdout).text()).trim();
     if (await imageIdProcess.exited !== 0 || imageId !== manifest.imageId) return { manifest: false, entrypoint: false };
     const entrypointProcess = Bun.spawn(["docker.exe", "image", "inspect", "--format", "{{json .}}", image], { stdout: "pipe", stderr: "ignore" });
     const imageInspection = JSON.parse((await new Response(entrypointProcess.stdout).text()).trim()) as { Config?: { Entrypoint?: unknown } };
-    return { manifest: true, entrypoint: (await entrypointProcess.exited) === 0 && isExpectedWindowsEntrypoint(imageInspection.Config?.Entrypoint) };
+    return { manifest: true, entrypoint: (await entrypointProcess.exited) === 0 && isExpectedWindowsEntrypoint(imageInspection.Config?.Entrypoint), imageId };
   } catch {
     return { manifest: false, entrypoint: false };
   }
@@ -65,42 +66,54 @@ export const windowsDoctor = async (): Promise<WorkerDoctorData> => {
     !immutableArtifact && "Verified Windows container image manifest is missing or stale",
     runtimeMode === "container" && localManifest && !localVerification.entrypoint && "Windows container image entrypoint is invalid",
   ].filter((failure): failure is string => Boolean(failure));
-  const artifactDigest = typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactValue) ? artifactValue : undefined;
+  const artifactDigest = localVerification.imageId ?? (typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactValue) ? artifactValue : undefined);
   return WorkerDoctorData.parse({ runtimeMode, ...(runtimeMode === "container" ? { artifactSource: "worker_local", ...(artifactValue ? { artifactIdentity: artifactValue } : {}) } : { artifactSource: "template", ...(artifactDigest ? { artifactDigest } : {}) }), ...(artifactDigest ? { artifactDigest } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
 };
 const joinCode = async () => { const path = Bun.env.WHITESMITH_JOIN_CODE_FILE; if (path) return (await readFile(path, "utf8")).trim(); const reader = Bun.stdin.stream().getReader(); const { value } = await reader.read(); reader.releaseLock(); return Buffer.from(value ?? []).toString("utf8").trim(); };
 const save = async (identity: Identity) => { const path = identityPath(); await mkdir(dirname(path), { recursive: true }); await writeFile(path, JSON.stringify(identity) + "\n"); };
 const load = async () => { try { return JSON.parse(await readFile(identityPath(), "utf8")) as Identity; } catch { return null; } };
 const auth = (nonce: string, identity: Identity) => ({ type: "authenticate", workerId: identity.workerId, encryptionPublicKey: identity.encryptionPublicKey, signature: signMessage(null, Buffer.from(`${nonce}\n${identity.workerId}\n${identity.encryptionPublicKey}`), identity.privateKey).toString("base64url") });
-async function runDocker(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  const process = Bun.spawn(["docker.exe", ...args], { stdout: "pipe", stderr: "pipe" });
+async function runProcess(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  const process = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
   return { code: await process.exited, stdout: await new Response(process.stdout).text(), stderr: await new Response(process.stderr).text() };
+}
+async function runDocker(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  return runProcess(["docker.exe", ...args]);
 }
 export async function buildWindowsImage(command: WorkerCommand, send: (event: WorkerEvent) => void): Promise<void> {
   const payload = WorkerBuildImagePayload.parse(command.payload);
   const root = await mkdtemp(join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "image-build-"));
+  let failureStage = "receive_payload";
+  console.log("Windows image build command received", { workerId: command.workerId, commandId: command.id, buildId: payload.buildId, image: payload.image, contentSha256: payload.contentSha256 });
   try {
-    await writeFile(join(root, "Dockerfile"), payload.dockerfile, "utf8");
-    for (const file of payload.contextFiles) {
-      const target = join(root, file.path);
-      await mkdir(dirname(target), { recursive: true });
-      await writeFile(target, Buffer.from(file.contentBase64, "base64"));
-    }
-    const built = await runDocker(["build", "--isolation=hyperv", "--tag", payload.image, "--file", join(root, "Dockerfile"), root]);
-    if (built.code !== 0) throw new Error(built.stderr.trim().slice(0, 1000) || "docker build failed");
-    const imageId = (await runDocker(["image", "inspect", "--format", "{{.Id}}", payload.image])).stdout.trim();
-    if (!imageId) throw new Error("docker image inspect returned no image ID");
+    failureStage = "download_artifacts";
+    const paths = await downloadWindowsImageBuildArtifacts(payload, root);
+    const manifestPath = Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE_MANIFEST ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "windows-job-image.json");
+    failureStage = "build_and_probe";
+    const built = await runProcess([
+      "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", paths.builder,
+      "-BaseImage", payload.baseImage,
+      "-RunnerUrl", payload.runner.url, "-RunnerSha256", payload.runner.sha256,
+      "-GitUrl", payload.git.url, "-GitSha256", payload.git.sha256,
+      "-VcRuntimeUrl", payload.vcRuntime.url, "-VcRuntimeSha256", payload.vcRuntime.sha256,
+      "-JobAgent", paths.jobAgent, "-Image", payload.image, "-ManifestPath", manifestPath,
+      "-VerifierPath", paths.verifier, "-ContainerfilePath", paths.containerfile, "-EntrypointPath", paths.entrypoint,
+    ]);
+    if (built.code !== 0) throw new Error((built.stderr || built.stdout).trim().slice(0, 1000) || `image builder exited ${built.code}`);
+    failureStage = "inspect_image";
     const imageInspection = await runDocker(["image", "inspect", "--format", "{{json .}}", payload.image]);
     if (imageInspection.code !== 0) throw new Error(imageInspection.stderr.trim().slice(0, 1000) || "docker image inspect failed");
     const inspected = JSON.parse(imageInspection.stdout.trim()) as { Config?: { Entrypoint?: unknown }; Id?: string };
-    if (!inspected.Id || inspected.Id !== imageId || !isExpectedWindowsEntrypoint(inspected.Config?.Entrypoint)) throw new Error("Windows image entrypoint is invalid");
-    const probe = await runDocker(["run", "--rm", "--isolation=hyperv", "--entrypoint", "powershell.exe", payload.image, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"]);
-    const manifestPath = Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE_MANIFEST ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "windows-job-image.json");
-    await mkdir(dirname(manifestPath), { recursive: true });
-    await writeFile(manifestPath, JSON.stringify({ schemaVersion: 1, image: payload.image, imageId, builtAt: new Date().toISOString(), runtimeProbe: { mediaFoundation: true, dns: true, tcp443: true } }) + "\n");
-    send(event(command.workerId, "worker.build_completed", { commandId: command.id, buildId: payload.buildId, image: payload.image, runtimeReady: true, message: "Local image built and runtime probe passed" }));
+    if (!inspected.Id || !isExpectedWindowsEntrypoint(inspected.Config?.Entrypoint)) throw new Error("Windows image entrypoint is invalid");
+    failureStage = "verify_manifest";
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8").then((value) => value.replace(/^\uFEFF/, ""))) as { image?: string; imageId?: string; runtimeProbe?: { mediaFoundation?: boolean; dns?: boolean; tcp443?: boolean } };
+    if (manifest.image !== payload.image || manifest.imageId !== inspected.Id || !manifest.runtimeProbe?.mediaFoundation || !manifest.runtimeProbe.dns || !manifest.runtimeProbe.tcp443) throw new Error("Windows image manifest does not match the verified image");
+    console.log("Windows image build verified", { workerId: command.workerId, commandId: command.id, buildId: payload.buildId, image: payload.image, imageId: inspected.Id, contentSha256: payload.contentSha256 });
+    send(event(command.workerId, "worker.build_completed", { commandId: command.id, buildId: payload.buildId, image: payload.image, imageId: inspected.Id, contentSha256: payload.contentSha256, runtimeReady: true, message: "Local image built and runtime probe passed" }));
   } catch (error) {
-    send(event(command.workerId, "worker.build_failed", { commandId: command.id, buildId: payload.buildId, image: payload.image, runtimeReady: false, message: error instanceof Error ? error.message : String(error) }));
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("Windows image build failed", { workerId: command.workerId, commandId: command.id, buildId: payload.buildId, image: payload.image, contentSha256: payload.contentSha256, failureStage, error: message });
+    send(event(command.workerId, "worker.build_failed", { commandId: command.id, buildId: payload.buildId, image: payload.image, contentSha256: payload.contentSha256, runtimeReady: false, failureStage, message }));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

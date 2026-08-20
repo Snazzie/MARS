@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig, RuntimeTerminationEvidence, WorkerBuildImagePayload, WorkerDoctorData } from "./orchestration.ts";
+import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig, RuntimeTerminationEvidence, WorkerBuildImagePayload, WorkerDoctorData, WorkerImageBuildSpec } from "./orchestration.ts";
 
 test("parses a GitHub JIT config with a one-time lease binding", () => {
   expect(RunnerJitConfig.parse({
@@ -80,12 +80,25 @@ test("accepts worker-reported active lease inventory", () => {
     activeLeases: ["11111111-1111-4111-8111-111111111111"],
   }).activeLeases).toEqual(["11111111-1111-4111-8111-111111111111"]);
 });
-test("parses declarative local image build content", () => {
-  expect(WorkerBuildImagePayload.parse({
+test("parses an immutable worker-local image build request", () => {
+  const artifact = (name: string, hash: string) => ({ url: `https://control.test/api/workers/${name}`, sha256: hash.repeat(64) });
+  const payload = WorkerBuildImagePayload.parse({
     buildId: "11111111-1111-4111-8111-111111111111",
     image: "whitesmith/windows-job:local",
-    dockerfile: "FROM mcr.microsoft.com/windows/servercore:ltsc2025",
-    contextFiles: [{ path: "entrypoint.ps1", contentBase64: "c2V0" }],
-  })).toMatchObject({ image: "whitesmith/windows-job:local", contextFiles: [{ path: "entrypoint.ps1" }] });
-  expect(WorkerBuildImagePayload.safeParse({ buildId: "11111111-1111-4111-8111-111111111111", image: "whitesmith/windows-job:local", dockerfile: "FROM base", contextFiles: [{ path: "../escape", contentBase64: "c2V0" }] }).success).toBe(false);
+    baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${"a".repeat(64)}`,
+    runner: artifact("runner.zip", "b"),
+    git: artifact("git.zip", "c"),
+    vcRuntime: artifact("vc_redist.x64.exe", "d"),
+    artifacts: {
+      builder: artifact("windows-container-builder", "1"),
+      verifier: artifact("windows-container-verifier", "2"),
+      containerfile: artifact("windows-containerfile", "3"),
+      entrypoint: artifact("windows-container-entrypoint", "4"),
+      jobAgent: artifact("windows-container-job-agent", "5"),
+    },
+    contentSha256: "f".repeat(64),
+  });
+  expect(payload.artifacts.entrypoint.url).toBe("https://control.test/api/workers/windows-container-entrypoint");
+  expect(WorkerImageBuildSpec.safeParse({ image: "whitesmith/windows-job:local", dockerfile: "FROM base" }).success).toBe(false);
+  expect(WorkerBuildImagePayload.safeParse({ ...payload, contentSha256: "mutable" }).success).toBe(false);
 });
