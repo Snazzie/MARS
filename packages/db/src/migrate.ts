@@ -99,11 +99,12 @@ async function seedDrizzleBaseline(sql: RawDatabaseClient): Promise<void> {
 }
 
 async function runDrizzleMigrations(db: DatabaseClient): Promise<void> {
-  await drizzleMigrate(drizzle(db.$client), { migrationsFolder });
+  const raw = db.$client ?? db;
+  await drizzleMigrate(drizzle(raw), { migrationsFolder });
 }
 
 export async function migrateDatabase(db: DatabaseClient): Promise<void> {
-  const sql = db.$client;
+  const sql = db.$client ?? db;
   if (await hasLegacyHistory(sql)) {
     await applyLegacyMigrations(sql);
     await seedDrizzleBaseline(sql);

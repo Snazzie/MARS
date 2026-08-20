@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import type { Sql } from "postgres";
+import type { Sql } from "@whitesmith/db";
 import { jsonParameter } from "@whitesmith/db";
 import { sha256 } from "./auth.ts";
 

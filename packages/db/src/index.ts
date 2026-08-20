@@ -1,10 +1,11 @@
-import postgres, { type Sql } from "postgres";
+import postgres, { type Sql as PostgresSql } from "postgres";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { sql as drizzleSql } from "drizzle-orm";
 import * as schema from "./drizzle-schema.ts";
 
-export type RawDatabaseClient = Sql<{}>;
-export type DatabaseClient = RawDatabaseClient & PostgresJsDatabase<typeof schema> & { $client: RawDatabaseClient };
+export type RawDatabaseClient = PostgresSql<{}>;
+export type DatabaseClient = RawDatabaseClient & Partial<PostgresJsDatabase<typeof schema>> & { $client?: RawDatabaseClient };
+export type Sql<_ = {}> = DatabaseClient;
 type DrizzleDatabase = PostgresJsDatabase<typeof schema>;
 
 type QueryTag = <T extends readonly unknown[]>(strings: TemplateStringsArray, ...values: readonly unknown[]) => Promise<T>;

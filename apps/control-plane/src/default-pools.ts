@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { Sql } from "@whitesmith/db";
 import type { GuestPlatform } from "@whitesmith/contracts";
 import { jsonParameter } from "@whitesmith/db";
 

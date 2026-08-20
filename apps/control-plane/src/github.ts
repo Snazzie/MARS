@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { Sql } from "postgres";
+import type { Sql } from "@whitesmith/db";
 import { SecretBox } from "./auth.ts";
 
 export interface OAuthState { state: string; verifier: string; createdAt: number; }

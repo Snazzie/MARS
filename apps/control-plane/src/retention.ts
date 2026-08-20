@@ -1,6 +1,6 @@
 import { readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { Sql } from "postgres";
+import type { Sql } from "@whitesmith/db";
 type RetentionConfig = {
   sessions: number;
   webhooksCompleted: number;

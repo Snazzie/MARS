@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { Sql } from "postgres";
+import type { Sql } from "@whitesmith/db";
 import { initializeWorkerBootstrap, rotateWorkerBootstrap, verifyWorkerBootstrap } from "./worker-bootstrap.ts";
 
 type Row = { codeHash: Buffer; generation: number; createdAt: string; rotatedAt: string | null };

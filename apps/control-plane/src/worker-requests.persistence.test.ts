@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, test } from "bun:test";
-import type { Sql } from "postgres";
+import type { Sql } from "@whitesmith/db";
 import { configurePendingWorker, requestPendingWorker } from "./worker-requests.ts";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 

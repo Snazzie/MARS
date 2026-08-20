@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { Sql } from "@whitesmith/db";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, validateWorkerGuestPlatforms, type GuestPlatform } from "@whitesmith/contracts";
 import { jsonParameter } from "@whitesmith/db";

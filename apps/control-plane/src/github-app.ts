@@ -1,5 +1,5 @@
 import { createHash, createPrivateKey, createSign, randomBytes } from "node:crypto";
-import type { Sql } from "postgres";
+import type { Sql } from "@whitesmith/db";
 import type { SecretBox } from "./auth.ts";
 import { applyWorkflowMutation, discoverWorkflowFiles, previewWorkflowMutation, type WorkflowFilePreview, type WorkflowMutation } from "./workflow-pr.ts";
 import { browserLocation } from "./http-origin.ts";

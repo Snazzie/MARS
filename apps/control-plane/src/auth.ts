@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, createCipheriv, createDecipheriv, timingSafeEqual } from "node:crypto";
-import type { Sql } from "postgres";
+import type { Sql } from "@whitesmith/db";
 
 export interface SessionUser { id: string; githubUserId: number; login: string; isGlobalAdmin: boolean; }
 export function tokenBytes(): Buffer { return randomBytes(32); }

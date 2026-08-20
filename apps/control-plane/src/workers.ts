@@ -1,5 +1,5 @@
 import { createHash, generateKeyPairSync, verify } from "node:crypto";
-import type { Sql } from "postgres";
+import type { Sql } from "@whitesmith/db";
 import { jsonParameter } from "@whitesmith/db";
 
 export interface WorkerJoin { workerId: string; publicKey: string; fingerprint: string; vmUuid: string; platform: string; limits: Record<string, number>; }
