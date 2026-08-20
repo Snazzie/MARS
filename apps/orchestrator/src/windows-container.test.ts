@@ -241,3 +241,26 @@ test("requests an idempotent graceful runner stop before forced cleanup", async 
   expect(calls.filter(args => args[0] === "exec")).toHaveLength(1);
   await driver.removeLease("66666666-6666-4666-8666-666666666666");
 });
+test("waits for Docker to become ready before validating the image", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-docker-ready-"));
+  roots.push(root);
+  let infoAttempts = 0;
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "info" && ++infoAttempts === 1) return { code: 1, stdout: "", stderr: "cannot connect to docker_engine" };
+    if (args[0] === "info") return { code: 0, stdout: "windows\n", stderr: "" };
+    if (args[0] === "image") return { code: 0, stdout: JSON.stringify(["whitesmith/windows-job@sha256:" + "a".repeat(64)]), stderr: "" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const image = "whitesmith/windows-job@sha256:" + "a".repeat(64);
+  const driver = new WindowsContainerDriver({
+    image,
+    prefix: "whitesmith",
+    bootstrapRoot: root,
+    limits: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1024, maxStorageBytesPerPod: 1024, maxConcurrentPods: 1 },
+    readyTimeoutMs: 100,
+    jobTimeoutMs: 100,
+  }, docker);
+
+  await driver.reserveCapacity({ vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 });
+  expect(infoAttempts).toBe(2);
+});

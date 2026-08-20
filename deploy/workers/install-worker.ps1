@@ -196,6 +196,8 @@ $workerLogPath = Join-Path $root 'logs\worker.log'
 $previousWorkerLogPath = Join-Path $root 'logs\worker.previous.log'
 if (Test-Path -LiteralPath $workerLogPath) { Move-Item -LiteralPath $workerLogPath -Destination $previousWorkerLogPath -Force }
 $service = New-Service -Name WhitesmithWorker -BinaryPathName "`"$serviceHost`" `"$exe`" windows-worker" -StartupType Automatic -ErrorAction Stop
+$serviceDependency = & sc.exe config WhitesmithWorker depend= docker 2>&1
+if ($LASTEXITCODE -ne 0) { throw "Failed to configure Docker dependency: $($serviceDependency -join ' ')" }
 $serviceEnvironment = @(
   "WHITESMITH_CONTROL_PLANE_URL=$ControlPlaneUrl"
   "WHITESMITH_JOIN_CODE_FILE=$joinCodePath"

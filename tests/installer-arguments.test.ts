@@ -100,6 +100,7 @@ test("PowerShell installer supports VM and container runtime modes", async () =>
   expect(source).toContain("Stop-Service WhitesmithWorker");
   expect(source).toContain("New-Service -Name WhitesmithWorker");
   expect(source).toContain("-StartupType Automatic");
+  expect(source).toContain('sc.exe config WhitesmithWorker depend= docker');
 });
 test("Windows installer fails when service registration fails", async () => {
   const source = await Bun.file(powershell).text();

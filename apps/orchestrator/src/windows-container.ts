@@ -14,6 +14,16 @@ const localImage = "whitesmith/windows-job:local";
 async function defaultDocker(args: string[]): Promise<DockerResult> { const process = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe" }); return { code: await process.exited, stdout: await new Response(process.stdout).text(), stderr: await new Response(process.stderr).text() }; }
 function checked(result: DockerResult, operation: string): string { if (result.code !== 0) throw new Error(`${operation} failed: ${result.stderr.replaceAll(/\r?\n/g, " ").slice(0, 500)}`); return result.stdout.trim(); }
 function parseMemoryBytes(value: string): number { const match = value.replaceAll(",", "").match(/([\d.]+)\s*([KMG]?i?B)/i); if (!match) return 0; const units: Record<string, number> = { b: 1, kb: 1024, kib: 1024, mb: 1024 ** 2, mib: 1024 ** 2, gb: 1024 ** 3, gib: 1024 ** 3 }; return Math.round(Number(match[1]) * (units[match[2]!.toLowerCase()] ?? 1)); }
+async function waitForDockerEngine(docker: DockerRunner): Promise<string> {
+  let delayMs = 1_000;
+  for (;;) {
+    const result = await docker(["info", "--format", "{{.OSType}}"]);
+    if (result.code === 0) return result.stdout.trim();
+    console.warn(`Docker engine unavailable; retrying in ${delayMs}ms: ${result.stderr.replaceAll(/\r?\n/g, " ").slice(0, 500)}`);
+    await Bun.sleep(delayMs);
+    delayMs = Math.min(delayMs * 2, 30_000);
+  }
+}
 async function validateLocalManifest(config: WindowsContainerConfig, docker: DockerRunner): Promise<void> {
   if (!config.requireLocalImageManifest) return;
   if (!config.imageManifestPath) throw new Error("local Windows image manifest path is required");
@@ -73,7 +83,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
   validatePool(resources: PoolResources): void { validateResources(resources, this.config.limits); if (!digest.test(this.config.image) && !(this.config.allowLocalImage && this.config.image === localImage)) throw new Error("Windows container image must be digest pinned"); }
   async reserveCapacity(resources: PoolResources): Promise<void> {
     this.validatePool(resources);
-    if (checked(await this.docker(["info", "--format", "{{.OSType}}"]), "docker info") !== "windows") throw new Error("Windows Docker engine is required");
+    if (await waitForDockerEngine(this.docker) !== "windows") throw new Error("Windows Docker engine is required");
     if (this.config.allowLocalImage && this.config.image === localImage) {
       await validateLocalManifest(this.config, this.docker);
       checked(await this.docker(["image", "inspect", this.config.image]), "image inspect");
