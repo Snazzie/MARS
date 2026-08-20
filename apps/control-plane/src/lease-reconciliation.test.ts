@@ -30,6 +30,6 @@ test("worker inventory only reclaims expired runtime leases it does not report",
   }) as never;
   expect(await reconcileWorkerInventory(db, "worker-1", ["11111111-1111-4111-8111-111111111111"])).toBe(1);
   expect(query).toContain("expires_at < now()");
-  expect(query).toContain("state IN ('sandbox_ready','online','busy')");
+  expect(query).toContain("state IN ('dispatched','sandbox_ready','online','busy')");
   expect(query).toContain("NOT (id = ANY");
 });
