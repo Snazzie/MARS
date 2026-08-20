@@ -169,8 +169,8 @@ test("Windows installer supports Docker mode with a fail-closed runtime probe", 
 test("Windows installer exposes identity-preserving upgrade mode", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).toContain("[switch]$Upgrade");
-  expect(source).toContain("Upgrade requires an existing WhitesmithWorker service and worker identity.");
-  expect(source).toContain("if (-not $Upgrade -and $existingInstall");
+  expect(source).toContain("Upgrade requires an existing worker identity.");
+  expect(source).toContain("if ($Upgrade -and -not $existingService)");
   expect(source).toContain("if (-not $Upgrade) {");
 });
 test("Windows container upgrades reuse the existing verified image", async () => {

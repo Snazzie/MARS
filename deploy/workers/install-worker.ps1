@@ -171,8 +171,9 @@ Write-Host '[5/8] Preparing worker directories'
 New-Item -ItemType Directory -Force -Path $root,$bin | Out-Null
 $existingService = Get-Service WhitesmithWorker -ErrorAction SilentlyContinue
 $existingInstall = $existingService -or (Test-Path -LiteralPath $identityPath)
-if ($Upgrade -and (-not $existingService -or -not (Test-Path -LiteralPath $identityPath))) { throw 'Upgrade requires an existing WhitesmithWorker service and worker identity.' }
+if ($Upgrade -and -not (Test-Path -LiteralPath $identityPath)) { throw 'Upgrade requires an existing worker identity.' }
 if ($existingInstall) { if ($Upgrade) { Write-Host 'Existing Windows worker installation detected; upgrading while preserving identity.' } else { Write-Host 'Existing Windows worker installation detected; reinstalling.' } }
+if ($Upgrade -and -not $existingService) { Write-Warning 'WhitesmithWorker service is missing; recreating it during upgrade.' }
 if ($existingService) {
   Stop-Service WhitesmithWorker -Force -ErrorAction SilentlyContinue
   $serviceDelete = & sc.exe delete WhitesmithWorker 2>&1
