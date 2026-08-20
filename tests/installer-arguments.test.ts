@@ -173,6 +173,13 @@ test("Windows installer exposes identity-preserving upgrade mode", async () => {
   expect(source).toContain("if (-not $Upgrade -and $existingInstall");
   expect(source).toContain("if (-not $Upgrade) {");
 });
+test("Windows container upgrades reuse the existing verified image", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).toContain("if ($Upgrade) {");
+  expect(source).toContain("Assert-LocalImageManifest $windowsImageManifestPath $WindowsContainerImage");
+  expect(source).toContain("Ensure-WindowsContainerRuntime $WindowsContainerImage $WindowsContainerPrefix");
+  expect(source).toContain("elseif ($AllowLocalContainerImage -and (Test-Path -LiteralPath $windowsImageManifestPath))");
+});
 test("Windows guest service runs as a startup-available system service account task", async () => {
   const source = await Bun.file(prepareWindowsTemplate).text();
   expect(source).toContain("New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount");

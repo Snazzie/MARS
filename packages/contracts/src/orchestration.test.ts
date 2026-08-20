@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig, RuntimeTerminationEvidence } from "./orchestration.ts";
+import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig, RuntimeTerminationEvidence, WorkerBuildImagePayload, WorkerDoctorData } from "./orchestration.ts";
 
 test("parses a GitHub JIT config with a one-time lease binding", () => {
   expect(RunnerJitConfig.parse({
@@ -66,4 +66,20 @@ test("rejects invalid out-of-memory measurements", () => {
     detectedAt: "2026-08-17T20:59:24.015Z",
     gracefulStopAcknowledged: false,
   })).toThrow();
+});
+test("accepts worker-local runtime readiness without a registry digest", () => {
+  expect(WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "worker_local", artifactIdentity: "whitesmith/windows-job:local", runtimeReady: true, probe: true, egress: true, imageSignatures: true })).toMatchObject({
+    artifactSource: "worker_local",
+    artifactIdentity: "whitesmith/windows-job:local",
+    runtimeReady: true,
+  });
+});
+test("parses declarative local image build content", () => {
+  expect(WorkerBuildImagePayload.parse({
+    buildId: "11111111-1111-4111-8111-111111111111",
+    image: "whitesmith/windows-job:local",
+    dockerfile: "FROM mcr.microsoft.com/windows/servercore:ltsc2025",
+    contextFiles: [{ path: "entrypoint.ps1", contentBase64: "c2V0" }],
+  })).toMatchObject({ image: "whitesmith/windows-job:local", contextFiles: [{ path: "entrypoint.ps1" }] });
+  expect(WorkerBuildImagePayload.safeParse({ buildId: "11111111-1111-4111-8111-111111111111", image: "whitesmith/windows-job:local", dockerfile: "FROM base", contextFiles: [{ path: "../escape", contentBase64: "c2V0" }] }).success).toBe(false);
 });

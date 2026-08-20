@@ -38,7 +38,7 @@ function Assert-LocalImageManifest([string]$Path, [string]$Image) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Windows local image manifest is missing: $Path" }
   $manifest = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
   if ($manifest.schemaVersion -ne 1) { throw 'Windows local image manifest schema is unsupported.' }
-  foreach ($field in @('baseImage','runnerSha256','gitSha256','vcRuntimeSha256','jobAgentSha256','image','imageId','runtimeProbe','builtAt')) {
+  foreach ($field in @('image','imageId','runtimeProbe','builtAt')) {
     if ($null -eq $manifest.$field -or [string]::IsNullOrWhiteSpace([string]$manifest.$field)) { throw "Windows local image manifest field is missing: $field" }
   }
   if ($manifest.image -ne $Image) { throw 'Windows local image manifest image mismatch.' }
@@ -152,7 +152,13 @@ if (-not [Environment]::Is64BitOperatingSystem) { throw 'Windows x64 is required
 if ($WindowsRuntime -eq 'container') {
   Ensure-ContainerFeatures
   Assert-ImageDigest $WindowsContainerImage
-  Ensure-WindowsContainerRuntime $WindowsContainerImage $WindowsContainerPrefix
+  if ($Upgrade) {
+    Write-Host 'Upgrade mode: preserving the worker-local runtime state.'
+  } elseif ($AllowLocalContainerImage -and (Test-Path -LiteralPath $windowsImageManifestPath)) {
+    Assert-LocalImageManifest $windowsImageManifestPath $WindowsContainerImage | Out-Null
+  } else {
+    Ensure-WindowsContainerRuntime $WindowsContainerImage $WindowsContainerPrefix
+  }
 } else {
   Ensure-HyperV
   Assert-Template $WindowsTemplatePath $WindowsTemplateDigest

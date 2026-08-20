@@ -1,5 +1,5 @@
 import type { DatabaseClient } from "./index.ts";
-import { CapacitySnapshot, PoolSummary, RuntimeDriverName, RuntimePlatform, WorkerDoctor, WorkerLimits, GuestPlatform } from "@whitesmith/contracts";
+import { CapacitySnapshot, ConnectionState, ConfigurationState, PoolSummary, RuntimeDriverName, RuntimePlatform, WorkerDoctor, WorkerLimits, WorkerState, GuestPlatform } from "@whitesmith/contracts";
 import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, OverviewTimeseriesPoint, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail, OrganizationSettings } from "@whitesmith/contracts";
 import { jsonParameter } from "./json.ts";
 export type DashboardDb = DatabaseClient;
@@ -302,10 +302,12 @@ function workerDoctor(value: unknown): WorkerDetail["doctor"] {
   const source = wrapper.doctor && typeof wrapper.doctor === "object" ? wrapper.doctor as Record<string, unknown> : null;
   if (!source) return null;
   const candidate: Record<string, unknown> = {};
-  for (const key of ["nestedKvm", "kvmModules", "probe", "egress", "imageSignatures", "blockVolume"]) {
+  for (const key of ["nestedKvm", "kvmModules", "probe", "egress", "imageSignatures", "blockVolume", "runtimeReady"]) {
     if (typeof source[key] === "boolean") candidate[key] = source[key];
   }
   if (["container", "vm", "tart"].includes(String(source.runtimeMode))) candidate.runtimeMode = source.runtimeMode;
+  if (["worker_local", "registry", "template"].includes(String(source.artifactSource))) candidate.artifactSource = source.artifactSource;
+  if (typeof source.artifactIdentity === "string") candidate.artifactIdentity = source.artifactIdentity;
   if (typeof source.artifactDigest === "string") candidate.artifactDigest = source.artifactDigest;
   if (typeof source.runtimeHandler === "string") candidate.runtimeHandler = source.runtimeHandler;
   if (typeof source.remediation === "string" || source.remediation === null) candidate.remediation = source.remediation;
@@ -320,8 +322,35 @@ function normalizeWorker(row: Record<string, unknown>): WorkerDetail {
   const guestPlatforms = Array.isArray(rawGuestPlatforms) && rawGuestPlatforms.length > 0 ? rawGuestPlatforms.map((value) => GuestPlatform.parse(value)) : [platform];
   const limitsValue = WorkerLimits.safeParse(jsonValue(row.limits));
   const doctor = workerDoctor(row.doctor);
-  const timestamp = (value: unknown) => value instanceof Date ? value.toISOString() : typeof value === "string" ? value : null;
-  return { ...row, platform, guestPlatforms, driver, configurationRevision: typeof row.configurationRevision === "string" ? row.configurationRevision : null, appliedConfigurationRevision: typeof row.appliedConfigurationRevision === "string" ? row.appliedConfigurationRevision : null, configurationAppliedAt: timestamp(row.configurationAppliedAt), lastHeartbeatAt: timestamp(row.lastHeartbeatAt), lastDoctorAt: timestamp(row.lastDoctorAt), runtimeMode: doctor?.runtimeMode ?? (platform === "macos-arm64" ? "tart" : null), artifactDigest: doctor?.artifactDigest ?? null, limits: limitsValue.success ? limitsValue.data : null, doctor, capacity: workerCapacity(row.doctor), activeSandboxes: numberValue(row.activeSandboxes, 0), draining: row.draining === true } as WorkerDetail;
+  const timestamp = (value: unknown) => {
+    const date = value instanceof Date ? value : typeof value === "string" ? new Date(value) : null;
+    return date && Number.isFinite(date.getTime()) ? date.toISOString() : null;
+  };
+  const worker: WorkerDetail = {
+    id: String(row.id),
+    organizationId: typeof row.organizationId === "string" ? row.organizationId : null,
+    name: String(row.name),
+    platform,
+    guestPlatforms,
+    driver,
+    admissionState: WorkerState.parse(row.admissionState),
+    connectionState: ConnectionState.parse(row.connectionState),
+    configurationState: ConfigurationState.parse(row.configurationState),
+    configurationRevision: typeof row.configurationRevision === "string" ? row.configurationRevision : null,
+    appliedConfigurationRevision: typeof row.appliedConfigurationRevision === "string" ? row.appliedConfigurationRevision : null,
+    configurationAppliedAt: timestamp(row.configurationAppliedAt),
+    lastHeartbeatAt: timestamp(row.lastHeartbeatAt),
+    lastDoctorAt: timestamp(row.lastDoctorAt),
+    runtimeMode: doctor?.runtimeMode ?? (platform === "macos-arm64" ? "tart" : null),
+    artifactDigest: doctor?.artifactDigest ?? null,
+    fingerprint: String(row.fingerprint),
+    limits: limitsValue.success ? limitsValue.data : null,
+    doctor,
+    capacity: workerCapacity(row.doctor),
+    activeSandboxes: numberValue(row.activeSandboxes, 0),
+    draining: row.draining === true,
+  };
+  return worker;
 }
 export async function listWorkers(db: DashboardDb, organizationId: string, limit = 50): Promise<CursorPage<WorkerDetail>> {
   const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w ORDER BY w.name LIMIT ${limit + 1}`;

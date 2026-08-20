@@ -1,11 +1,12 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates, listJobResourceSamples } from "@whitesmith/db";
 import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
-import { ApiError, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceSample } from "@whitesmith/contracts";
+import { ApiError, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceSample } from "@whitesmith/contracts";
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
@@ -98,7 +99,22 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     return c.json({ queued: true }, 202);
   }));
   app.get("/api/organizations/:organizationId/workers", safe(async (c) => { if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required"); const q = parseQuery(c); if (q instanceof Response) return q; return c.json(CursorPage(WorkerDetail).parse(await listAllWorkers(deps.db, c.get("user").id, q.limit, q.includeInactive))); }));
-  app.post("/api/organizations/:organizationId/workers/:workerId/configure", safe(async (c) => { const org = c.req.param("organizationId"); const denied = await guard(c, deps, org); if (denied) return denied; if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required"); const idem = requireMutation(c); if (idem) return idem; const body = WorkerConfiguration.parse(await c.req.json()); const worker = await getWorkerDetail(deps.db, org, c.req.param("workerId")); if (!worker) return error(c, 404, "not_found", "Resource not found"); if (worker.admissionState === "rejected" || worker.admissionState === "revoked") return error(c, 409, "worker_not_configurable", "Rejected or revoked workers cannot be configured"); const result = await configurePendingWorker(deps.db, c.req.param("workerId"), body, c.get("user").id, deps.workerDispatcher, c.req.header("idempotency-key")!); if (org !== "all") await invalidateDashboard(deps.db, org, ["workers", "onboarding"]); return c.json(result, 202); }));
+  app.post("/api/organizations/:organizationId/workers/:workerId/build-runtime", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const denied = await guard(c, deps, org);
+    if (denied) return denied;
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    const idem = requireMutation(c); if (idem) return idem;
+    if (!deps.workerDispatcher) return error(c, 503, "worker_dispatch_unavailable", "Worker command dispatch is unavailable");
+    const workerId = c.req.param("workerId");
+    const worker = await getWorkerDetail(deps.db, org, workerId);
+    if (!worker) return error(c, 404, "not_found", "Resource not found");
+    if (worker.admissionState !== "adopted" || worker.connectionState !== "online") return error(c, 409, "worker_not_ready", "Worker must be adopted and online before building a runtime image");
+    const spec = WorkerImageBuildSpec.parse(await c.req.json());
+    const buildId = randomUUID();
+    await deps.workerDispatcher.dispatch({ type: "worker.build_image", workerId, leaseId: null, payload: { ...spec, buildId } });
+    return c.json({ buildId }, 202);
+  }));
   app.get("/api/organizations/:organizationId/runs/:runId", safe(async (c) => { const org=c.req.param("organizationId"); const denied=await guard(c,deps,org); if(denied)return denied; const value=await getRunDetail(deps.db,org,c.req.param("runId")); return value?c.json(RunDetail.parse(value)):error(c,404,"not_found","Resource not found"); }));
   app.get("/api/organizations/:organizationId/runs/:runId/jobs/:jobId/logs", safe(async (c) => { const org=c.req.param("organizationId"); const denied=await guard(c,deps,org); if(denied)return denied; const q=logSchema.safeParse(c.req.query()); if(!q.success)return error(c,400,"invalid_log_bounds","Invalid log bounds",{issues:q.error.issues}); return c.json(CursorPage(LogChunk).parse(await listLogChunks(deps.db,org,c.req.param("runId"),c.req.param("jobId"),q.data.after,q.data.limit))); }));
   app.get("/api/organizations/:organizationId/runs/:runId/jobs/:jobId/steps/:stepId/logs", safe(async (c) => { const org=c.req.param("organizationId"); const denied=await guard(c,deps,org); if(denied)return denied; const q=logSchema.safeParse(c.req.query()); if(!q.success)return error(c,400,"invalid_log_bounds","Invalid log bounds",{issues:q.error.issues}); return c.json(CursorPage(LogChunk).parse(await listStepLogChunks(deps.db,org,c.req.param("runId"),c.req.param("jobId"),c.req.param("stepId"),q.data.after,q.data.limit))); }));

@@ -63,13 +63,14 @@ describe("control-plane HTTP boundary", () => {
       await Bun.write(join(root, "install-worker.sh"), '#!/usr/bin/env bash\n: "${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}"\n');
       const response = await createControlPlaneApp(fakeHttpDeps({
         baseUrl: "http://localhost:3000",
+        browserBaseUrl: "http://localhost:5173",
         workerInstallerRoot: pathToFileURL(`${root}/`),
       })).request("/api/workers/installer?audience=linux-x64");
       const installer = await response.text();
 
       expect(response.status).toBe(200);
       expect(installer).toStartWith("#!/usr/bin/env bash\n");
-      expect(installer).toContain("PUBLIC_BASE_URL='http://localhost:3000'");
+      expect(installer).toContain("PUBLIC_BASE_URL='http://localhost:5173'");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -95,6 +96,22 @@ describe("control-plane HTTP boundary", () => {
     } finally {
       if (previousDebugPreserve === undefined) delete Bun.env.WHITESMITH_DEBUG_PRESERVE_LEASES;
       else Bun.env.WHITESMITH_DEBUG_PRESERVE_LEASES = previousDebugPreserve;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  test("serves a container-mode Windows installer without control-plane build metadata", async () => {
+    const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-local-installer-"));
+    try {
+      await Bun.write(join(root, "install-worker.ps1"), "'__WINDOWS_RUNTIME__' '__WINDOWS_CONTAINER_IMAGE__'");
+      const response = await createControlPlaneApp(fakeHttpDeps({
+        workerInstallerRoot: pathToFileURL(`${root}/`),
+        windowsContainerBuild: undefined,
+      })).request("/api/workers/installer?audience=windows-x64&runtime=container");
+      const installer = await response.text();
+      expect(response.status).toBe(200);
+      expect(installer).toContain("'container'");
+      expect(installer).toContain("'whitesmith/windows-job:local'");
+    } finally {
       await rm(root, { recursive: true, force: true });
     }
   });

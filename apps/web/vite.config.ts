@@ -20,6 +20,12 @@ export default defineConfig({
       "/api": {
         target: process.env.CONTROL_PLANE_URL ?? "http://127.0.0.1:3000",
         changeOrigin: true,
+        ws: true,
+        configure(proxy) {
+          proxy.on("error", (error) => {
+            if ((error as NodeJS.ErrnoException).code !== "ECONNRESET") console.warn("Control-plane proxy error", error);
+          });
+        },
       },
     },
   },

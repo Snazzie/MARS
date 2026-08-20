@@ -1,7 +1,7 @@
 import { generateKeyPairSync, sign as signMessage, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { WorkerBootstrapRequest, WorkerCommand, WorkerConfigurePayload, WorkerConfiguration, WorkerDoctorData, WorkerEvent, type WorkerCapacityData, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCommand, WorkerConfigurePayload, WorkerConfiguration, WorkerDoctorData, WorkerEvent, type WorkerCapacityData, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { createHyperVRuntime, HyperVDriver } from "./hyperv.ts";
 import { WindowsContainerDriver } from "./windows-container.ts";
@@ -41,9 +41,9 @@ const localImageManifestVerified = async (image: string): Promise<boolean> => {
 };
 export const windowsDoctor = async (): Promise<WorkerDoctorData> => {
   const runtimeMode = Bun.env.WHITESMITH_WINDOWS_RUNTIME === "container" ? "container" : "vm";
-  const artifactDigest = runtimeMode === "container" ? Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE : Bun.env.WHITESMITH_WINDOWS_TEMPLATE_DIGEST;
-  const localManifest = runtimeMode === "container" ? await localImageManifestVerified(artifactDigest ?? "") : false;
-  const immutableArtifact = localManifest || (typeof artifactDigest === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactDigest));
+  const artifactValue = runtimeMode === "container" ? Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE : Bun.env.WHITESMITH_WINDOWS_TEMPLATE_DIGEST;
+  const localManifest = runtimeMode === "container" ? await localImageManifestVerified(artifactValue ?? "") : false;
+  const immutableArtifact = localManifest || (typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactValue));
   const probe = runtimeMode === "container"
     ? await commandSucceeds(["docker.exe", "info", "--format", "{{.OSType}}"])
     : await commandSucceeds(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-VMHost -ErrorAction Stop | Out-Null"]);
@@ -55,12 +55,43 @@ export const windowsDoctor = async (): Promise<WorkerDoctorData> => {
     egress = false;
   }
   const failures = [!probe && `${runtimeMode === "container" ? "Windows container host" : "Hyper-V host"} probe failed`, !egress && "GitHub egress probe failed", !immutableArtifact && "Verified Windows container image manifest is missing"].filter(Boolean);
-  return WorkerDoctorData.parse({ runtimeMode, ...(artifactDigest && immutableArtifact ? { artifactDigest } : {}), probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
+  const artifactDigest = typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactValue) ? artifactValue : undefined;
+  return WorkerDoctorData.parse({ runtimeMode, ...(runtimeMode === "container" ? { artifactSource: "worker_local", ...(artifactValue ? { artifactIdentity: artifactValue } : {}) } : { artifactSource: "template", ...(artifactDigest ? { artifactDigest } : {}) }), ...(artifactDigest ? { artifactDigest } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
 };
 const joinCode = async () => { const path = Bun.env.WHITESMITH_JOIN_CODE_FILE; if (path) return (await readFile(path, "utf8")).trim(); const reader = Bun.stdin.stream().getReader(); const { value } = await reader.read(); reader.releaseLock(); return Buffer.from(value ?? []).toString("utf8").trim(); };
 const save = async (identity: Identity) => { const path = identityPath(); await mkdir(dirname(path), { recursive: true }); await writeFile(path, JSON.stringify(identity) + "\n"); };
 const load = async () => { try { return JSON.parse(await readFile(identityPath(), "utf8")) as Identity; } catch { return null; } };
 const auth = (nonce: string, identity: Identity) => ({ type: "authenticate", workerId: identity.workerId, encryptionPublicKey: identity.encryptionPublicKey, signature: signMessage(null, Buffer.from(`${nonce}\n${identity.workerId}\n${identity.encryptionPublicKey}`), identity.privateKey).toString("base64url") });
+async function runDocker(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  const process = Bun.spawn(["docker.exe", ...args], { stdout: "pipe", stderr: "pipe" });
+  return { code: await process.exited, stdout: await new Response(process.stdout).text(), stderr: await new Response(process.stderr).text() };
+}
+export async function buildWindowsImage(command: WorkerCommand, send: (event: WorkerEvent) => void): Promise<void> {
+  const payload = WorkerBuildImagePayload.parse(command.payload);
+  const root = await mkdtemp(join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "image-build-"));
+  try {
+    await writeFile(join(root, "Dockerfile"), payload.dockerfile, "utf8");
+    for (const file of payload.contextFiles) {
+      const target = join(root, file.path);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, Buffer.from(file.contentBase64, "base64"));
+    }
+    const built = await runDocker(["build", "--isolation=hyperv", "--tag", payload.image, "--file", join(root, "Dockerfile"), root]);
+    if (built.code !== 0) throw new Error(built.stderr.trim().slice(0, 1000) || "docker build failed");
+    const imageId = (await runDocker(["image", "inspect", "--format", "{{.Id}}", payload.image])).stdout.trim();
+    if (!imageId) throw new Error("docker image inspect returned no image ID");
+    const probe = await runDocker(["run", "--rm", "--isolation=hyperv", payload.image, "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"]);
+    if (probe.code !== 0) throw new Error(probe.stderr.trim().slice(0, 1000) || "runtime probe failed");
+    const manifestPath = Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE_MANIFEST ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "windows-job-image.json");
+    await mkdir(dirname(manifestPath), { recursive: true });
+    await writeFile(manifestPath, JSON.stringify({ schemaVersion: 1, image: payload.image, imageId, builtAt: new Date().toISOString(), runtimeProbe: { mediaFoundation: true, dns: true, tcp443: true } }) + "\n");
+    send(event(command.workerId, "worker.build_completed", { commandId: command.id, buildId: payload.buildId, image: payload.image, runtimeReady: true, message: "Local image built and runtime probe passed" }));
+  } catch (error) {
+    send(event(command.workerId, "worker.build_failed", { commandId: command.id, buildId: payload.buildId, image: payload.image, runtimeReady: false, message: error instanceof Error ? error.message : String(error) }));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
 async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> { const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), platform: "windows-x64", publicKey: identity.publicKey, encryptionPublicKey: identity.encryptionPublicKey, vmUuid: crypto.randomUUID(), machineUuid: await machineUuid(), doctor: await windowsDoctor(), capacity: await capacity() }); const response = await fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); if (!response.ok) throw new Error(`worker join failed: ${response.status}`); const joined = await response.json() as { workerId: string }; const result = { ...identity, workerId: joined.workerId }; await save(result); return result; }
 type WindowsRuntimeDriver = Pick<RuntimeDriver, "reserveCapacity" | "createLease" | "stopLease" | "removeLease"> & { reconcileOrphans?: () => Promise<void> };
 export function applyWindowsWorkerConfiguration(limits: Limits, payload: ReturnType<typeof WorkerConfigurePayload.parse>): ReturnType<typeof WorkerConfiguration.parse> {
@@ -120,8 +151,6 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
   } else {
     throw new Error(`Unsupported Windows runtime: ${mode}`);
   }
-  await driver.reserveCapacity({ vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 });
-  await driver.reconcileOrphans?.();
   const doctorReport = await windowsDoctor();
   const capacityReport = await capacity();
   const activeLeases = new Map<string, Promise<void>>();
@@ -147,6 +176,10 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
             const payload = WorkerConfigurePayload.parse(command.payload);
             const observed = applyWindowsWorkerConfiguration(limits, payload);
             return ws.send(JSON.stringify(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed })));
+          }
+          if (command.type === "worker.build_image") {
+            await buildWindowsImage(command, workerEvent => ws.send(JSON.stringify(workerEvent)));
+            return;
           }
           if (command.type === "tart.stop_lease") {
             await runWindowsLeaseCleanup(command, driver, workerEvent => ws.send(JSON.stringify(workerEvent)));

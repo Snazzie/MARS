@@ -47,3 +47,9 @@ describe("numeric provision labels", () => {
     expect(fits(value)).toBe(true);
   });
 });
+test("blocks a worker whose local runtime is not ready", () => {
+  const value = candidate(["whitesmith-linux-x64"]);
+  value.worker.runtimeReady = false;
+  expect(fits(value)).toBe(false);
+  expect(reason(value)).toBe("worker_runtime_not_ready");
+});

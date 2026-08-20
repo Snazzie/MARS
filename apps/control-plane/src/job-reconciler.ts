@@ -35,6 +35,7 @@ export function isDispatchableRunStatus(status: string): boolean {
 
 
 export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate["worker"] & { id: string } {
+  const doctor = jsonValue(row.doctor ?? row.worker_doctor);
   return {
     id: String(row.workerId ?? row.worker_id ?? ""),
     admissionState: String(row.admissionState ?? row.worker_admission_state),
@@ -42,6 +43,7 @@ export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate[
     configurationState: String(row.configurationState ?? row.worker_configuration_state),
     configurationRevision: nullableString(row.configurationRevision ?? row.worker_configuration_revision),
     appliedConfigurationRevision: nullableString(row.appliedConfigurationRevision ?? row.worker_applied_configuration_revision),
+    runtimeReady: doctor && typeof doctor === "object" && "runtimeReady" in doctor ? doctor.runtimeReady === true : undefined,
     limits: jsonValue(row.limits ?? row.worker_limits),
   };
 }
@@ -73,7 +75,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       w.id AS "workerId", p.enabled, p.platform, p.driver, p.image_digest AS "imageDigest", p.resources, p.labels, p.trigger_label AS "triggerLabel",
       w.admission_state AS "admissionState", w.connection_state AS "connectionState", w.configuration_state AS "configurationState",
       w.configuration_revision AS "configurationRevision", w.applied_configuration_revision AS "appliedConfigurationRevision",
-      w.limits, w.encryption_public_key AS "encryptionPublicKey",
+      w.limits, w.doctor, w.encryption_public_key AS "encryptionPublicKey",
       (SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.worker_id=w.id
         AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')) AS active
     FROM runner_pools p

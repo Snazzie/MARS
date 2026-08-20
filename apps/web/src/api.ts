@@ -7,9 +7,10 @@ import {
   OrganizationSummary,
   OverviewDto,
   PendingWorkerRequest,
+  PoolSummary,
+  WorkerImageBuildSpec,
   WorkerConfiguration,
   WorkerDetail,
-  PoolSummary,
   RepositorySummary,
   RunDetail,
   RunSummary,
@@ -70,7 +71,16 @@ async function request<S extends z.ZodTypeAny>(path: string, schema: S, init?: R
     throw new ApiRequestError(message, response.status, code);
   }
 
-  return schema.parse(await response.json());
+  const body = await response.json();
+  try {
+    return schema.parse(body);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      const issues = error.issues.map((issue) => `${issue.path.length ? issue.path.join(".") : "response"}: ${issue.message}`).join("; ");
+      throw new ApiRequestError(`Invalid API response for ${init?.method ?? "GET"} ${path}: ${issues}`, response.status, "invalid_response");
+    }
+    throw error;
+  }
 }
 
 const meResponse = z.object({ id: z.string(), githubUserId: z.number().int(), login: z.string().min(1), isGlobalAdmin: z.boolean() });
@@ -134,6 +144,13 @@ export async function configureWorker(organizationId: string, workerId: string, 
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify(input),
+  });
+}
+export function buildWorkerImage(organizationId: string, workerId: string, spec: z.input<typeof WorkerImageBuildSpec>) {
+  return request(`/api/organizations/${organizationId}/workers/${workerId}/build-runtime`, z.object({ buildId: z.string().uuid() }), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(WorkerImageBuildSpec.parse(spec)),
   });
 }
 

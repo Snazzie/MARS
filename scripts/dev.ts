@@ -15,7 +15,6 @@ const dev = Bun.spawn([
   "bun",
   "x",
   "concurrently",
-  "--kill-others",
   "--names",
   "control-plane,web",
   "bun run scripts/control-plane-dev.ts",

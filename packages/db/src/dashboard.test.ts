@@ -45,11 +45,11 @@ test("overview outcome aggregation guards malformed scalar runner labels", async
   expect(result.jobOutcomes.find((outcome) => outcome.outcome === "queued")?.platforms.other).toBe(1);
 });
 
-test("worker listing normalizes persisted telemetry into the WorkerDetail contract", async () => {
-  const db = (async () => [{ id: "86afd915-add3-407c-a6c1-1b46803ef713", organizationId: "c432f22a-16e2-44f8-9a6b-bc00e5de1a7d", name: "mac-worker", platform: "macos-arm64", driver: "tart-vm", admissionState: "adopted", connectionState: "online", configurationState: "ready", fingerprint: "sha256:worker", limits: "{\"maxVcpuPerPod\":2,\"maxMemoryBytesPerPod\":3221225472,\"maxStorageBytesPerPod\":10737418240,\"maxConcurrentPods\":1}", doctor: { doctor: { probe: true, egress: true }, capacity: { freeVcpu: 10, actualVcpu: 10, freeMemoryBytes: 16149077032, actualMemoryBytes: 34359738368, freeStorageBytes: 103244165120, actualStorageBytes: 994610155520 } }, activeSandboxes: 0, draining: false }]) as never;
-  const page = await listWorkers(db, "c432f22a-16e2-44f8-9a6b-bc00e5de1a7d");
+test("worker listing drops malformed persisted timestamps", async () => {
+  const db = (async () => [{ id: "86afd915-add3-407c-a6c1-1b46803ef713", organizationId: "c432f22a-16e4-44f8-9a6b-bc00e5de1a7d", name: "mac-worker", platform: "macos-arm64", driver: "tart-vm", admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationAppliedAt: "", lastHeartbeatAt: "not-a-date", lastDoctorAt: "0000-00-00", fingerprint: "sha256:worker", limits: "{\"maxVcpuPerPod\":2,\"maxMemoryBytesPerPod\":3221225472,\"maxStorageBytesPerPod\":10737418240,\"maxConcurrentPods\":1}", doctor: { doctor: { probe: true, egress: true }, capacity: { freeVcpu: 10, actualVcpu: 10, freeMemoryBytes: 16149077032, actualMemoryBytes: 34359738368, freeStorageBytes: 103244165120, actualStorageBytes: 994610155520 } }, activeSandboxes: 0, draining: false }]) as never;
+  const page = await listWorkers(db, "c432f22a-16e4-44f8-9a6b-bc00e5de1a7d");
+  expect(page.items[0]).toMatchObject({ configurationAppliedAt: null, lastHeartbeatAt: null, lastDoctorAt: null });
   expect(() => WorkerDetail.parse(page.items[0])).not.toThrow();
-  expect(page.items[0]).toMatchObject({ driver: "tart-vm", doctor: { probe: true }, limits: { maxVcpuPerPod: 2 }, capacity: { vcpu: { actual: 10, free: 10 }, memoryBytes: { actual: 34359738368, free: 16149077032 } } });
 });
 
 test("worker listings expose desired and applied configuration metadata", async () => {

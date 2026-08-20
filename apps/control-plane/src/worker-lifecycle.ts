@@ -63,6 +63,12 @@ export async function handleAuthenticatedWorkerEvent(
       return false;
     }
   }
+  if (payload.data.type === "worker.build_completed" || payload.data.type === "worker.build_failed") {
+    const ready = payload.data.payload.runtimeReady;
+    await db`UPDATE workers SET doctor=COALESCE(doctor,'{}'::jsonb) || ${JSON.stringify({ runtimeReady: ready, artifactSource: "worker_local", artifactIdentity: payload.data.payload.image, remediation: ready ? null : payload.data.payload.message })}::jsonb, doctor_observed_at=now(), last_heartbeat_at=now(), connection_state='online' WHERE id=${event.data.workerId}`;
+    dispatcher.handleEvent(event.data, socket);
+    return true;
+  }
   if (payload.data.type === "job.resource_sample") return (await persistJobResourceSample(db, event.data.workerId, event.data)) !== "rejected";
   if (payload.data.type === "job.log") return await persistWorkerLogEvent(db, event.data.workerId, payload.data.payload);
   await applyWorkerLeaseEvent(db, event.data);
@@ -119,7 +125,7 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
   if (!parsedEvent.success) return false;
   const event = parsedEvent.data;
   const parsedPayload = WorkerEventPayload.safeParse({ type: event.type, payload: event.payload });
-  if (!parsedPayload.success || parsedPayload.data.type === "command.accepted" || parsedPayload.data.type === "diagnostic.chunk" || parsedPayload.data.type === "job.log" || parsedPayload.data.type === "job.resource_sample") return false;
+  if (!parsedPayload.success || parsedPayload.data.type === "command.accepted" || parsedPayload.data.type === "worker.build_completed" || parsedPayload.data.type === "worker.build_failed" || parsedPayload.data.type === "diagnostic.chunk" || parsedPayload.data.type === "job.log" || parsedPayload.data.type === "job.resource_sample") return false;
 
   if (parsedPayload.data.type === "sandbox_attested") {
     const payload = parsedPayload.data.payload;
