@@ -43,9 +43,11 @@ function Assert-LocalImageManifest([string]$Path, [string]$Image) {
   }
   if ($manifest.image -ne $Image) { throw 'Windows local image manifest image mismatch.' }
   $runtimeProbe = $manifest.runtimeProbe
-  if (-not $runtimeProbe -or -not $runtimeProbe.mediaFoundation -or -not $runtimeProbe.dns -or -not $runtimeProbe.tcp443) { throw 'Windows local image manifest runtime probe is not verified.' }
-  $imageId = (docker image inspect --format '{{.Id}}' $Image).Trim()
-  if ($LASTEXITCODE -ne 0 -or $imageId -ne $manifest.imageId) { throw 'Windows local image manifest image ID mismatch.' }
+  $expectedEntrypoint = @('powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', 'C:/Whitesmith/entrypoint.ps1') | ConvertTo-Json -Compress
+  $imageInspection = (docker image inspect --format '{{json .}}' $Image | Select-Object -Last 1 | ConvertFrom-Json)
+  if ($LASTEXITCODE -ne 0 -or ($imageInspection.Config.Entrypoint | ConvertTo-Json -Compress) -ne $expectedEntrypoint) { throw 'Windows image entrypoint is invalid.' }
+  $imageId = $imageInspection.Id
+  if (-not $imageId -or $imageId -ne $manifest.imageId) { throw 'Windows local image manifest image ID mismatch.' }
   return $manifest
 }
 function Assert-ImageDigest([string]$Image) {
@@ -155,7 +157,12 @@ if ($WindowsRuntime -eq 'container') {
   if ($Upgrade) {
     Write-Host 'Upgrade mode: preserving the worker-local runtime state.'
   } elseif ($AllowLocalContainerImage -and (Test-Path -LiteralPath $windowsImageManifestPath)) {
-    Assert-LocalImageManifest $windowsImageManifestPath $WindowsContainerImage | Out-Null
+    try {
+      Assert-LocalImageManifest $windowsImageManifestPath $WindowsContainerImage | Out-Null
+    } catch {
+      Write-Warning "Existing local Windows image state is stale; rebuilding $WindowsContainerImage."
+      Ensure-WindowsContainerRuntime $WindowsContainerImage $WindowsContainerPrefix
+    }
   } else {
     Ensure-WindowsContainerRuntime $WindowsContainerImage $WindowsContainerPrefix
   }

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCommand, WorkerConfigurePayload, WorkerConfiguration, WorkerDoctorData, WorkerEvent, type WorkerCapacityData, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { createHyperVRuntime, HyperVDriver } from "./hyperv.ts";
-import { WindowsContainerDriver } from "./windows-container.ts";
+import { WindowsContainerDriver, isExpectedWindowsEntrypoint } from "./windows-container.ts";
 import type { RuntimeDriver } from "./runtime.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 
@@ -27,22 +27,27 @@ const commandSucceeds = async (command: string[]): Promise<boolean> => {
     return false;
   }
 };
-const localImageManifestVerified = async (image: string): Promise<boolean> => {
-  if (image !== "whitesmith/windows-job:local") return false;
+const localImageVerification = async (image: string): Promise<{ manifest: boolean; entrypoint: boolean }> => {
+  if (image !== "whitesmith/windows-job:local") return { manifest: false, entrypoint: false };
   const path = Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE_MANIFEST ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "windows-job-image.json");
   try {
     const manifest = JSON.parse(await readFile(path, "utf8")) as { schemaVersion?: number; image?: string; imageId?: string; runtimeProbe?: { mediaFoundation?: boolean; dns?: boolean; tcp443?: boolean } };
-    if (manifest.schemaVersion !== 1 || manifest.image !== image || !manifest.imageId || !manifest.runtimeProbe?.mediaFoundation || !manifest.runtimeProbe.dns || !manifest.runtimeProbe.tcp443) return false;
-    const process = Bun.spawn(["docker.exe", "image", "inspect", "--format", "{{.Id}}", image], { stdout: "pipe", stderr: "ignore" });
-    return (await process.exited) === 0 && (await new Response(process.stdout).text()).trim() === manifest.imageId;
+    if (manifest.schemaVersion !== 1 || manifest.image !== image || !manifest.imageId || !manifest.runtimeProbe?.mediaFoundation || !manifest.runtimeProbe.dns || !manifest.runtimeProbe.tcp443) return { manifest: false, entrypoint: false };
+    const imageIdProcess = Bun.spawn(["docker.exe", "image", "inspect", "--format", "{{.Id}}", image], { stdout: "pipe", stderr: "ignore" });
+    const imageId = (await new Response(imageIdProcess.stdout).text()).trim();
+    if (await imageIdProcess.exited !== 0 || imageId !== manifest.imageId) return { manifest: false, entrypoint: false };
+    const entrypointProcess = Bun.spawn(["docker.exe", "image", "inspect", "--format", "{{json .}}", image], { stdout: "pipe", stderr: "ignore" });
+    const imageInspection = JSON.parse((await new Response(entrypointProcess.stdout).text()).trim()) as { Config?: { Entrypoint?: unknown } };
+    return { manifest: true, entrypoint: (await entrypointProcess.exited) === 0 && isExpectedWindowsEntrypoint(imageInspection.Config?.Entrypoint) };
   } catch {
-    return false;
+    return { manifest: false, entrypoint: false };
   }
 };
 export const windowsDoctor = async (): Promise<WorkerDoctorData> => {
   const runtimeMode = Bun.env.WHITESMITH_WINDOWS_RUNTIME === "container" ? "container" : "vm";
   const artifactValue = runtimeMode === "container" ? Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE : Bun.env.WHITESMITH_WINDOWS_TEMPLATE_DIGEST;
-  const localManifest = runtimeMode === "container" ? await localImageManifestVerified(artifactValue ?? "") : false;
+  const localVerification = runtimeMode === "container" ? await localImageVerification(artifactValue ?? "") : { manifest: false, entrypoint: true };
+  const localManifest = localVerification.manifest;
   const immutableArtifact = localManifest || (typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactValue));
   const probe = runtimeMode === "container"
     ? await commandSucceeds(["docker.exe", "info", "--format", "{{.OSType}}"])
@@ -54,7 +59,12 @@ export const windowsDoctor = async (): Promise<WorkerDoctorData> => {
   } catch {
     egress = false;
   }
-  const failures = [!probe && `${runtimeMode === "container" ? "Windows container host" : "Hyper-V host"} probe failed`, !egress && "GitHub egress probe failed", !immutableArtifact && "Verified Windows container image manifest is missing"].filter(Boolean);
+  const failures = [
+    !probe && `${runtimeMode === "container" ? "Windows container host" : "Hyper-V host"} probe failed`,
+    !egress && "GitHub egress probe failed",
+    !immutableArtifact && "Verified Windows container image manifest is missing or stale",
+    runtimeMode === "container" && localManifest && !localVerification.entrypoint && "Windows container image entrypoint is invalid",
+  ].filter((failure): failure is string => Boolean(failure));
   const artifactDigest = typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactValue) ? artifactValue : undefined;
   return WorkerDoctorData.parse({ runtimeMode, ...(runtimeMode === "container" ? { artifactSource: "worker_local", ...(artifactValue ? { artifactIdentity: artifactValue } : {}) } : { artifactSource: "template", ...(artifactDigest ? { artifactDigest } : {}) }), ...(artifactDigest ? { artifactDigest } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
 };
@@ -80,8 +90,11 @@ export async function buildWindowsImage(command: WorkerCommand, send: (event: Wo
     if (built.code !== 0) throw new Error(built.stderr.trim().slice(0, 1000) || "docker build failed");
     const imageId = (await runDocker(["image", "inspect", "--format", "{{.Id}}", payload.image])).stdout.trim();
     if (!imageId) throw new Error("docker image inspect returned no image ID");
-    const probe = await runDocker(["run", "--rm", "--isolation=hyperv", payload.image, "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"]);
-    if (probe.code !== 0) throw new Error(probe.stderr.trim().slice(0, 1000) || "runtime probe failed");
+    const imageInspection = await runDocker(["image", "inspect", "--format", "{{json .}}", payload.image]);
+    if (imageInspection.code !== 0) throw new Error(imageInspection.stderr.trim().slice(0, 1000) || "docker image inspect failed");
+    const inspected = JSON.parse(imageInspection.stdout.trim()) as { Config?: { Entrypoint?: unknown }; Id?: string };
+    if (!inspected.Id || inspected.Id !== imageId || !isExpectedWindowsEntrypoint(inspected.Config?.Entrypoint)) throw new Error("Windows image entrypoint is invalid");
+    const probe = await runDocker(["run", "--rm", "--isolation=hyperv", "--entrypoint", "powershell.exe", payload.image, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"]);
     const manifestPath = Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE_MANIFEST ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "windows-job-image.json");
     await mkdir(dirname(manifestPath), { recursive: true });
     await writeFile(manifestPath, JSON.stringify({ schemaVersion: 1, image: payload.image, imageId, builtAt: new Date().toISOString(), runtimeProbe: { mediaFoundation: true, dns: true, tcp443: true } }) + "\n");
@@ -106,9 +119,13 @@ export async function runWindowsLeaseCleanup(
   driver: Pick<RuntimeDriver, "stopLease" | "removeLease">,
   send: (workerEvent: WorkerEvent) => void,
 ): Promise<void> {
-  if (command.type !== "tart.stop_lease" || !command.leaseId) throw new Error("Windows lease cleanup command invalid");
+  if (!["tart.stop_lease", "windows-container.stop_lease", "hyperv.stop_lease"].includes(command.type) || !command.leaseId) throw new Error("Windows lease cleanup command invalid");
   const nonce = String((command.payload as Record<string, unknown>).nonce ?? "");
   const payload = { commandId: command.id, leaseId: command.leaseId, nonce };
+  if (command.type !== "tart.stop_lease" && Bun.env.WHITESMITH_DEBUG_PRESERVE_LEASES === "1") {
+    send(event(command.workerId, "lease.failed", { ...payload, reason: "debug_preserve" }));
+    return;
+  }
   send(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId }));
   let cleanupFailed = false;
   try { await driver.stopLease(command.leaseId); } catch { cleanupFailed = true; }

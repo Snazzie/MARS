@@ -131,11 +131,6 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
     const payload = parsedPayload.data.payload;
     const rows = await db`UPDATE runner_leases SET state='sandbox_ready',runtime_instance_id=${payload.runtimeInstanceId},terminal_result=${jsonParameter(db, { observed: payload.observed })},expires_at=GREATEST(expires_at,now()+interval '10 minutes'),updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state='dispatched' RETURNING id`;
     if (!rows[0]) return false;
-    const [job] = await db`SELECT j.id,j.organization_id AS "organizationId",j.run_id AS "runId" FROM dashboard_jobs j JOIN runner_leases l ON l.github_job_id=j.github_job_id WHERE l.id=${payload.leaseId}`;
-    if (job) {
-      await db`UPDATE dashboard_jobs SET status='in_progress',stage='running',started_at=COALESCE(started_at,now()) WHERE id=${job.id} AND status='queued'`;
-      await db`UPDATE dashboard_runs SET status='in_progress',started_at=COALESCE(started_at,now()) WHERE organization_id=${job.organizationId} AND id=${job.runId} AND status='queued'`;
-    }
     return true;
   }
   if (parsedPayload.data.type === "runner.finished") {

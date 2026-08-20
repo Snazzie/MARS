@@ -46,6 +46,17 @@ describe("Windows job image contract", () => {
     expect(containerfile).toContain("whitesmith-job-agent.exe");
     expect(containerfile).toContain("entrypoint.ps1");
   });
+  test("preserves and validates the default exec-form entrypoint", () => {
+    const expected = '["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", "C:/Whitesmith/entrypoint.ps1"]';
+    expect(containerfile).toContain("# escape=`");
+    expect(containerfile).toContain(`ENTRYPOINT ${expected}`);
+    for (const buildScript of [script, localScript]) {
+      expect(buildScript).toContain("{{json .}}");
+      expect(buildScript).toContain(".Config.Entrypoint");
+      expect(buildScript).toContain("Windows image entrypoint is invalid");
+    }
+  });
+
 
   test("rejects Server Core and arbitrary base images", () => {
     expect(script).toContain("server:ltsc2025@sha256:[0-9a-f]{64}");

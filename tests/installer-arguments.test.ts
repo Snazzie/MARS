@@ -179,6 +179,7 @@ test("Windows container upgrades reuse the existing verified image", async () =>
   expect(source).toContain("Assert-LocalImageManifest $windowsImageManifestPath $WindowsContainerImage");
   expect(source).toContain("Ensure-WindowsContainerRuntime $WindowsContainerImage $WindowsContainerPrefix");
   expect(source).toContain("elseif ($AllowLocalContainerImage -and (Test-Path -LiteralPath $windowsImageManifestPath))");
+  expect(source).toContain("Existing local Windows image state is stale; rebuilding");
 });
 test("Windows guest service runs as a startup-available system service account task", async () => {
   const source = await Bun.file(prepareWindowsTemplate).text();

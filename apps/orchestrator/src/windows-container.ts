@@ -10,7 +10,10 @@ export type DockerRunner = (args: string[]) => Promise<DockerResult>;
 export type WindowsContainerConfig = { image: string; prefix: string; bootstrapRoot: string; limits: WorkerLimits; readyTimeoutMs: number; jobTimeoutMs: number; allowLocalImage?: boolean; imageManifestPath?: string; requireLocalImageManifest?: boolean };
 const digest = /^[^@\s]+@sha256:[0-9a-f]{64}$/;
 const localImage = "whitesmith/windows-job:local";
-
+const expectedWindowsEntrypoint = ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", "C:/Whitesmith/entrypoint.ps1"] as const;
+export function isExpectedWindowsEntrypoint(value: unknown): boolean {
+  return Array.isArray(value) && value.length === expectedWindowsEntrypoint.length && expectedWindowsEntrypoint.every((entry, index) => value[index] === entry);
+}
 async function defaultDocker(args: string[]): Promise<DockerResult> { const process = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe" }); return { code: await process.exited, stdout: await new Response(process.stdout).text(), stderr: await new Response(process.stderr).text() }; }
 function checked(result: DockerResult, operation: string): string { if (result.code !== 0) throw new Error(`${operation} failed: ${result.stderr.replaceAll(/\r?\n/g, " ").slice(0, 500)}`); return result.stdout.trim(); }
 function parseMemoryBytes(value: string): number { const match = value.replaceAll(",", "").match(/([\d.]+)\s*([KMG]?i?B)/i); if (!match) return 0; const units: Record<string, number> = { b: 1, kb: 1024, kib: 1024, mb: 1024 ** 2, mib: 1024 ** 2, gb: 1024 ** 3, gib: 1024 ** 3 }; return Math.round(Number(match[1]) * (units[match[2]!.toLowerCase()] ?? 1)); }
@@ -33,6 +36,8 @@ async function validateLocalManifest(config: WindowsContainerConfig, docker: Doc
   if (!manifest.runtimeProbe?.mediaFoundation || !manifest.runtimeProbe.dns || !manifest.runtimeProbe.tcp443) throw new Error("local Windows image runtime probe is not verified");
   const imageId = checked(await docker(["image", "inspect", "--format", "{{.Id}}", config.image]), "image inspect");
   if (imageId !== manifest.imageId) throw new Error("local Windows image manifest image ID mismatch");
+  const imageInspection = JSON.parse(checked(await docker(["image", "inspect", "--format", "{{json .}}", config.image]), "image inspect")) as { Config?: { Entrypoint?: unknown } };
+  if (!isExpectedWindowsEntrypoint(imageInspection.Config?.Entrypoint)) throw new Error("Windows container image entrypoint is invalid");
 }
 function dockerSample(name: string, configuredMemoryBytes: number, docker: DockerRunner) {
   return async () => {
@@ -93,7 +98,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
     }
   }
   async createLease(lease: Lease): Promise<RuntimeLease> {
-    this.validatePool(lease.resources);
+    await this.reserveCapacity(lease.resources);
     const root = this.bootstrapPath(lease.id);
     await mkdir(root, { recursive: true });
     await writeFile(join(root, "bootstrap.json"), JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig }), { mode: 0o600, flag: "wx" });

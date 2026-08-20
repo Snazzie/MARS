@@ -36,7 +36,10 @@ export function isDispatchableRunStatus(status: string): boolean {
 
 
 export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate["worker"] & { id: string } {
-  const doctor = jsonValue(row.doctor ?? row.worker_doctor);
+  const rawDoctor = jsonValue(row.doctor ?? row.worker_doctor);
+  const doctor = rawDoctor && typeof rawDoctor === "object" && "doctor" in rawDoctor
+    ? (rawDoctor as { doctor?: unknown }).doctor
+    : rawDoctor;
   return {
     id: String(row.workerId ?? row.worker_id ?? ""),
     admissionState: String(row.admissionState ?? row.worker_admission_state),

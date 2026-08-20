@@ -37,6 +37,7 @@ test("rejects a container when Docker applies different CPU or memory limits", a
   roots.push(root);
   const calls: string[][] = [];
   const docker: DockerRunner = async (args) => {
+    if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
     calls.push(args);
     if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 1_000_000_000, Memory: 1024 } }]), stderr: "" };
     return { code: 0, stdout: "", stderr: "" };
@@ -67,6 +68,7 @@ test("fails completion when a containerized job stops making terminal progress",
   roots.push(root);
   const calls: string[][] = [];
   const docker: DockerRunner = async (args) => {
+    if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
     calls.push(args);
     if (args[0] === "wait") return Promise.withResolvers<Awaited<ReturnType<DockerRunner>>>().promise;
     if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 2_000_000_000, Memory: 8 * 1024 ** 3 } }]), stderr: "" };
@@ -110,6 +112,7 @@ test("removes a container when startup fails after creation", async () => {
   roots.push(root);
   const calls: string[][] = [];
   const docker: DockerRunner = async (args) => {
+    if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
     calls.push(args);
     if (args[0] === "start") return { code: 1, stdout: "", stderr: "startup failed" };
     return { code: 0, stdout: "", stderr: "" };
@@ -140,6 +143,7 @@ test("removes a known lease container after a worker restart", async () => {
   roots.push(root);
   const calls: string[][] = [];
   const docker: DockerRunner = async (args) => {
+    if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
     calls.push(args);
     return { code: 0, stdout: "", stderr: "" };
   };
@@ -161,6 +165,7 @@ test("copies runner and worker diagnostic logs from a stopped container", async 
   const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-diag-"));
   roots.push(root);
   const docker: DockerRunner = async (args) => {
+    if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
     if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 1_000_000_000, Memory: 1024 } }]), stderr: "" };
     if (args[0] === "cp") {
       const destination = args.at(-1)!;
@@ -192,6 +197,7 @@ test("falls back to the configured memory limit when Docker stats reports an inv
   roots.push(root);
   const configuredMemory = 10 * 1024 ** 3;
   const docker: DockerRunner = async (args) => {
+    if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
     if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 2_000_000_000, Memory: configuredMemory } }]), stderr: "" };
     if (args[0] === "stats") return { code: 0, stdout: JSON.stringify({ CPUPerc: "8.48%", MemUsage: "10.52GiB / 1B" }), stderr: "" };
     return { code: 0, stdout: "", stderr: "" };
@@ -222,6 +228,7 @@ test("requests an idempotent graceful runner stop before forced cleanup", async 
   roots.push(root);
   const calls: string[][] = [];
   const docker: DockerRunner = async (args) => {
+    if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
     calls.push(args);
     if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 1_000_000_000, Memory: 1024 } }]), stderr: "" };
     return { code: 0, stdout: "", stderr: "" };

@@ -13,7 +13,7 @@ test("does not change an expired lease while GitHub still reports the job active
     return Response.json({ id: 42, run_id: 7, status: "in_progress", name: "build", created_at: "2026-08-20T00:00:00Z" });
   };
   const report = await reconcileExpiredLeasesWithGithub({ db, installationToken: async () => "token", githubFetchForInstallation: () => fetcher });
-  expect(report).toEqual({ inspected: 1, completed: 0, stillActive: 1, skipped: 0 });
+  expect(report).toEqual({ inspected: 1, completed: 0, released: 0, stillActive: 1, skipped: 0 });
   expect(queries.some(query => query.includes("UPDATE runner_leases"))).toBe(false);
 });
 

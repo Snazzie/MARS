@@ -68,7 +68,7 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
     const jobs = await pages(async page => { const value = await client.listJobs(owner, repo, run.id, page); return { totalCount: value.totalCount, items: value.jobs }; });
     for (const job of jobs) {
       discovered += 1;
-      const applied = await applyGithubJobSnapshot({ installationId: Number(row.installationId), repository: { id: Number(row.githubRepositoryId), name: String(row.name), fullName }, run, job });
+      const applied = await applyGithubJobSnapshot({ installationId: Number(row.installationId), repository: { id: Number(row.githubRepositoryId), name: String(row.name), fullName }, run, job, authoritative: true });
       if (applied) updated += 1;
       if (applied && job.status === "completed") await syncCompletedGithubJobLogs({ db: deps.db, client, owner, repo, job });
     }
@@ -96,7 +96,7 @@ export async function discoverQueuedRepositoryJobs(deps: DiscoveryDeps): Promise
         const jobs = await pages(async page => { const value = await client.listJobs(owner, repo, run.id, page); return { totalCount: value.totalCount, items: value.jobs }; });
         for (const job of jobs) {
           report.discovered += 1;
-          if (await applyGithubJobSnapshot({ installationId, repository: { id: Number(row.githubRepositoryId), name: String(row.name), fullName }, run, job })) report.updated += 1;
+          if (await applyGithubJobSnapshot({ installationId, repository: { id: Number(row.githubRepositoryId), name: String(row.name), fullName }, run, job, authoritative: true })) report.updated += 1;
         }
       }
     } catch (error) {

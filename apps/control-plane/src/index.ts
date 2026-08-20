@@ -65,7 +65,16 @@ type WindowsContainerReleaseConfig = {
 const loadWindowsContainerBuild = async (): Promise<ControlPlaneHttpDeps["windowsContainerBuild"]> => {
   const manifestUrl = new URL(Bun.env.WHITESMITH_RELEASE_MANIFEST ?? (production ? "./release-manifest.json" : "../../../deploy/control-plane/release-manifest.json"), import.meta.url);
   const manifest = await Bun.file(manifestUrl).json().catch(() => null) as { windowsContainerBuild?: WindowsContainerReleaseConfig | null } | null;
-  const release = manifest?.windowsContainerBuild;
+  const configured = manifest?.windowsContainerBuild ?? {
+    baseImage: Bun.env.WHITESMITH_WINDOWS_CONTAINER_BASE_IMAGE,
+    runnerUrl: Bun.env.WHITESMITH_WINDOWS_CONTAINER_RUNNER_URL,
+    runnerSha256: Bun.env.WHITESMITH_WINDOWS_CONTAINER_RUNNER_SHA256,
+    gitUrl: Bun.env.WHITESMITH_WINDOWS_CONTAINER_GIT_URL,
+    gitSha256: Bun.env.WHITESMITH_WINDOWS_CONTAINER_GIT_SHA256,
+    vcUrl: Bun.env.WHITESMITH_WINDOWS_CONTAINER_VC_URL,
+    vcSha256: Bun.env.WHITESMITH_WINDOWS_CONTAINER_VC_SHA256,
+  };
+  const release = configured && Object.values(configured).every((value) => typeof value === "string" && value.length > 0) ? configured as WindowsContainerReleaseConfig : undefined;
   if (!release) return undefined;
   return {
     ...release,
@@ -177,7 +186,7 @@ const reconciliationScheduler = startReconciliationScheduler(async () => {
         installationToken: (installationId) => githubApp.getInstallationToken(installationId),
         githubFetchForInstallation: (installationId) => githubRateLimits.scopedFetch(installationId),
       });
-      if (staleLeaseReport.completed || staleLeaseReport.skipped) console.log(`GitHub stale lease reconciliation: inspected=${staleLeaseReport.inspected} completed=${staleLeaseReport.completed} stillActive=${staleLeaseReport.stillActive} skipped=${staleLeaseReport.skipped}`);
+      if (staleLeaseReport.completed || staleLeaseReport.released || staleLeaseReport.skipped) console.log(`GitHub stale lease reconciliation: inspected=${staleLeaseReport.inspected} completed=${staleLeaseReport.completed} released=${staleLeaseReport.released} stillActive=${staleLeaseReport.stillActive} skipped=${staleLeaseReport.skipped}`);
     }
     const report = await runQueuedJobReconciliation({
       db,

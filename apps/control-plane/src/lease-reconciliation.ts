@@ -11,6 +11,7 @@ type StaleLeaseRow = {
   organizationId: string;
   workerId: string;
   nonce: string;
+  leaseState: string;
   githubJobId: number | string;
   githubRunId: number | string;
   githubRepositoryId: number | string;
@@ -24,6 +25,7 @@ type StaleLeaseRow = {
 export type StaleLeaseReconciliationReport = {
   inspected: number;
   completed: number;
+  released: number;
   stillActive: number;
   skipped: number;
 };
@@ -67,7 +69,7 @@ export async function reconcileWorkerInventory(db: DatabaseClient, workerId: str
 }
 export async function reconcileExpiredLeasesWithGithub(deps: StaleLeaseReconciliationDeps): Promise<StaleLeaseReconciliationReport> {
   const rows = await deps.db<StaleLeaseRow[]>`
-    SELECT l.id AS "leaseId", l.organization_id AS "organizationId", l.worker_id AS "workerId", l.nonce,
+    SELECT l.id AS "leaseId", l.organization_id AS "organizationId", l.worker_id AS "workerId", l.nonce, l.state AS "leaseState",
       l.github_job_id AS "githubJobId", r.github_run_id AS "githubRunId", j.status AS "jobStatus", j.conclusion AS "jobConclusion",
       repo.github_repository_id AS "githubRepositoryId", repo.name AS "repositoryName",
       repo.full_name AS "repositoryFullName", i.github_installation_id AS "installationId"
@@ -82,9 +84,14 @@ export async function reconcileExpiredLeasesWithGithub(deps: StaleLeaseReconcili
     ORDER BY l.expires_at
     LIMIT 100
   `;
-  const report: StaleLeaseReconciliationReport = { inspected: rows.length, completed: 0, stillActive: 0, skipped: 0 };
+  const report: StaleLeaseReconciliationReport = { inspected: rows.length, completed: 0, released: 0, stillActive: 0, skipped: 0 };
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index]!;
+    if (row.leaseState === "reserved" || row.leaseState === "requested") {
+      await deps.db`UPDATE runner_leases SET state='failed', terminal_result=${jsonParameter(deps.db, { reason: "startup_timeout" })}::jsonb, cleanup_state='pending', updated_at=now() WHERE id=${row.leaseId} AND nonce=${row.nonce} AND state IN ('reserved','requested')`;
+      report.released += 1;
+      continue;
+    }
     const repository = splitRepository(String(row.repositoryFullName));
     const installationId = Number(row.installationId);
     const githubJobId = Number(row.githubJobId);
@@ -114,6 +121,7 @@ export async function reconcileExpiredLeasesWithGithub(deps: StaleLeaseReconcili
         repository: { id: Number(row.githubRepositoryId), name: String(row.repositoryName), fullName: String(row.repositoryFullName) },
         run,
         job,
+        authoritative: true,
       });
       if (!applied) {
         report.skipped += 1;

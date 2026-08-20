@@ -48,6 +48,10 @@ try {
   Copy-Item -LiteralPath $EntrypointPath -Destination (Join-Path $context 'entrypoint.ps1')
   Docker-Checked @('pull', $BaseImage) 'docker pull' | Out-Null
   Docker-Checked @('build', '--file', (Join-Path $context 'Containerfile'), '--build-arg', "BASE_IMAGE=$BaseImage", '--tag', $Image, $context) 'docker build' | Out-Null
+  $expectedEntrypoint = @('powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', 'C:/Whitesmith/entrypoint.ps1')
+  $imageInspection = (Docker-Checked @('image', 'inspect', '--format', '{{json .}}', $Image) 'docker image inspect' | Select-Object -Last 1 | ConvertFrom-Json)
+  $entrypointJson = ($imageInspection.Config.Entrypoint | ConvertTo-Json -Compress).Trim()
+  if ($entrypointJson -ne ($expectedEntrypoint | ConvertTo-Json -Compress)) { throw 'Windows image entrypoint is invalid' }
   Docker-Checked @('create', '--name', $probe, '--entrypoint', 'powershell.exe', '--isolation=hyperv', '--label', 'whitesmith.managed=true', '--label', "whitesmith.lease-id=$([guid]::NewGuid())", $Image, '-NoLogo', '-NoProfile', '-NonInteractive', '-File', 'C:\Whitesmith\verify-runtime.ps1', '-RequireNetwork') | Out-Null
   Docker-Checked @('start', $probe) 'docker start' | Out-Null
   $inspection = @(Docker-Checked @('inspect', $probe) 'docker inspect' | ConvertFrom-Json)
@@ -64,6 +68,7 @@ try {
   $manifest = [ordered]@{ schemaVersion = 1; baseImage = $BaseImage; runnerSha256 = $RunnerSha256.ToLowerInvariant(); gitSha256 = $GitSha256.ToLowerInvariant(); vcRuntimeSha256 = $VcRuntimeSha256.ToLowerInvariant(); jobAgentSha256 = (Get-FileHash -LiteralPath $JobAgent -Algorithm SHA256).Hash.ToLowerInvariant(); image = $Image; imageId = $imageId; runtimeProbe = $runtimeProbe; builtAt = (Get-Date).ToUniversalTime().ToString('o') }
   $temporaryManifest = "$ManifestPath.tmp"
   $manifest | ConvertTo-Json -Depth 5 -Compress | Set-Content -LiteralPath $temporaryManifest -Encoding utf8 -NoNewline
+  if (Test-Path -LiteralPath $ManifestPath) { Remove-Item -LiteralPath $ManifestPath -Force }
   Move-Item -LiteralPath $temporaryManifest -Destination $ManifestPath -Force
   $manifest | ConvertTo-Json -Depth 5 -Compress
 } finally {

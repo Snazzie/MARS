@@ -34,6 +34,10 @@ try {
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\..\images\jobs\windows\verify-runtime.ps1') -Destination (Join-Path $temp 'verify-runtime.ps1')
   & docker build --build-arg "BASE_IMAGE=$BaseImage" --tag $Image $temp
   if ($LASTEXITCODE -ne 0) { throw "docker build failed with exit code $LASTEXITCODE" }
+  $expectedEntrypoint = @('powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', 'C:/Whitesmith/entrypoint.ps1')
+  $imageInspection = (& docker image inspect --format '{{json .}}' $Image | Select-Object -Last 1 | ConvertFrom-Json)
+  $entrypointJson = ($imageInspection.Config.Entrypoint | ConvertTo-Json -Compress).Trim()
+  if ($LASTEXITCODE -ne 0 -or $entrypointJson -ne ($expectedEntrypoint | ConvertTo-Json -Compress)) { throw 'Windows image entrypoint is invalid' }
   & docker push $Image
   if ($LASTEXITCODE -ne 0) { throw "docker push failed with exit code $LASTEXITCODE" }
   $inspect = & docker image inspect --format '{{json .RepoDigests}}' $Image

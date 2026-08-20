@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { LogChunk, OverviewDto, RepositorySummary, RunDetail, RunSummary, WorkerDetail } from "@whitesmith/contracts";
 import { getOverview, getOrganizationSettings, getRunDetail, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRepositories, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks, queueRepositoryDiscoveryRecheck } from "./dashboard.ts";
 
-test("overview counts active leases as running jobs", async () => {
+test("overview counts only GitHub job status and runtime leases", async () => {
   const queries: string[] = [];
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
@@ -26,9 +26,8 @@ test("overview counts active leases as running jobs", async () => {
   }) as never;
   const result = await getOverview(db, "org-1", "24h");
   expect(OverviewDto.parse(result)).toMatchObject({ running: 2, utilization: { pods: 1 }, timeseries: [{ bucket: "2026-08-12T10:00:00.000Z", pending: 2, running: 1 }], runningContainers: [{ jobName: "build", cpuUsagePercent: 42.5 }] });
-  expect(queries.some((query) => query.includes("NULLIF(s.memory_limit_bytes,0)") && query.includes("jsonb_typeof(l.requested)"))).toBe(true);
-  expect(queries.some((query) => query.includes("jsonb_typeof(l.requested)") && query.includes("jsonb_typeof(p.resources)"))).toBe(true);
-  expect(queries.some((query) => query.includes("j.status NOT IN ('completed')") && query.includes("j.completed_at IS NULL"))).toBe(true);
+  expect(queries.some((query) => query.includes("l.state IN ('sandbox_ready','online','busy')") && query.includes("j.status='in_progress'"))).toBe(true);
+  expect(queries.some((query) => query.includes("count(*) FILTER (WHERE j.status='queued')") && query.includes("count(*) FILTER (WHERE j.status='in_progress')"))).toBe(true);
 });
 test("overview outcome aggregation guards malformed scalar runner labels", async () => {
   const queries: string[] = [];

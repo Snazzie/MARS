@@ -21,7 +21,7 @@ export async function listReplayableWorkerCommands(db: DatabaseClient, workerId:
   const rows = await db`SELECT c.id,c.version,c.type,c.worker_id AS "workerId",c.lease_id AS "leaseId",c.occurred_at AS "occurredAt",c.payload
     FROM commands c LEFT JOIN runner_leases l ON l.id=c.lease_id
     WHERE c.worker_id=${workerId} AND c.state IN ('pending','sent')
-      AND (c.lease_id IS NULL OR c.type='tart.stop_lease' OR (l.id IS NOT NULL AND l.state NOT IN ('failed','reaped')))
+      AND (c.lease_id IS NULL OR c.type IN ('tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease') OR (l.id IS NOT NULL AND l.state NOT IN ('failed','reaped')))
     ORDER BY c.occurred_at ASC,c.id ASC`;
   return rows.map(row => WorkerCommand.parse({
     ...row,
