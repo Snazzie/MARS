@@ -107,6 +107,19 @@ docker compose --env-file .env -f deploy/control-plane/compose.yaml logs --tail=
 
 Keep the previous digest until the new deployment passes `/api/readyz` and the browser smoke check. Roll back by restoring the previous digest and recreating the service. Do not remove PostgreSQL or the data volume during an application rollback.
 
+## Database migrations
+
+Control-plane startup runs the checked-in Drizzle migration set. The existing numbered migrations remain a frozen compatibility boundary for installations that already contain `schema_migrations`; new schema changes must use Drizzle migration files and must not extend the legacy migration list.
+
+For a development database:
+
+```bash
+DATABASE_URL=postgres://whitesmith:password@localhost:5432/whitesmith \
+  bun run --cwd packages/db db:migrate
+```
+
+Back up PostgreSQL before upgrades. A migration failure keeps the control-plane process unhealthy and must be corrected before retrying startup.
+
 ## Optional tunnel profile
 
 The optional `tunnel` profile uses files beside this Compose file. It is not part of the required deployment and does not replace an Unraid ingress configuration. Operators who manage Cloudflare separately should omit this profile entirely.

@@ -49,8 +49,7 @@ jobs:
         run: |
           test -n "$DIGEST"
           case "$DIGEST" in sha256:????????????????????????????????????????????????????????????????) ;; *) echo "Invalid digest: $DIGEST" >&2; exit 1 ;; esac
-          docker pull "$IMAGE@$DIGEST"
-          docker run --rm --entrypoint /bin/sh "$IMAGE@$DIGEST" -c 'test -f /app/index.js && test -f /app/web/index.html && test -f /app/web/index.js && test -f /app/web/index.css && test -f /app/workers/install-worker.ps1 && test -f /app/workers/whitesmith-orchestrator.exe && test -f /app/workers/whitesmith-service-host.exe'
+          docker run --rm --entrypoint /bin/sh "$IMAGE@$DIGEST" -c 'test -f /app/index.js && test -f /app/web/index.html && test -f /app/web/index.js && test -f /app/web/index.css && test -f /app/migrations/0000_legacy_baseline.sql && test -f /app/migrations/meta/_journal.json && test -f /app/workers/install-worker.ps1 && test -f /app/workers/whitesmith-orchestrator.exe && test -f /app/workers/whitesmith-service-host.exe'
       - name: Smoke test immutable release image
         env:
           IMAGE: ghcr.io/whitesmith/control-plane@${{ steps.image.outputs.digest }}

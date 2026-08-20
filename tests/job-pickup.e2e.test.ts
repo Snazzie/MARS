@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { createDb, migrate, type DatabaseClient } from "../packages/db/src/index.ts";
+import { createDb, migrateDatabase, type DatabaseClient } from "../packages/db/src/index.ts";
 import { applyWorkflowJobWebhook, configureRunLifecycle } from "../apps/control-plane/src/runs.ts";
 import { runQueuedJobReconciliation } from "../apps/control-plane/src/job-reconciler.ts";
 
@@ -10,7 +10,7 @@ let sql: DatabaseClient | undefined;
 beforeAll(async () => {
   if (!databaseUrl) return;
   sql = createDb(databaseUrl);
-  await migrate(sql);
+  await migrateDatabase(sql);
   configureRunLifecycle(sql);
 });
 

@@ -56,3 +56,9 @@ The repository is a working baseline, not the full approved platform.
 - Tagged releases publish the control-plane image to GHCR with a recorded digest, SBOM, and provenance.
 - `deploy/control-plane/README.md` documents Unraid startup, ingress/WebSocket requirements, persistence, backup, upgrade, rollback, and optional external Cloudflare Tunnel usage.
 - This hosting gate does not imply that worker execution or GitHub App lifecycle is production-complete.
+
+## Database migration ownership
+
+- Drizzle ORM's PostgreSQL migrator now owns checked-in migrations after the frozen legacy `schema_migrations` boundary.
+- Existing tagged-SQL query modules remain unchanged during this migration-first adoption.
+- Existing installations validate and preserve legacy migration checksums before the Drizzle metadata bridge is initialized.

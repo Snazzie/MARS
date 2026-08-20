@@ -1,1 +1,19 @@
-{"name":"@whitesmith/db","version":"0.1.0","type":"module","exports":"./src/index.ts","scripts":{"typecheck":"tsc -p tsconfig.json --noEmit","lint":"tsc -p tsconfig.json --noEmit"},"dependencies":{"@whitesmith/contracts":"workspace:*","postgres":"^3.4.5"}}
+{
+  "name": "@whitesmith/db",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "db:generate": "drizzle-kit generate --config drizzle.config.ts",
+    "db:check": "drizzle-kit check --config drizzle.config.ts",
+    "db:migrate": "bun run src/migrate-cli.ts"
+  },
+  "dependencies": {
+    "@whitesmith/contracts": "workspace:*",
+    "drizzle-kit": "^0.31.10",
+    "drizzle-orm": "^0.45.2",
+    "postgres": "^3.4.5"
+  }
+}
