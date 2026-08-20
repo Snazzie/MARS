@@ -11,7 +11,7 @@ import type { OverviewDto } from "@whitesmith/contracts";
 export type OverviewPeriod = "24h" | "7d" | "30d";
 export const overviewPeriodLabels: Record<OverviewPeriod, string> = { "24h": "24 hours", "7d": "7 days", "30d": "30 days" };
 const overviewPeriods: readonly OverviewPeriod[] = ["24h", "7d", "30d"];
-export const overviewQueryOptions = (organizationId: string, period: OverviewPeriod) => ({ queryKey: ["org", organizationId, "overview", period], queryFn: () => getOverview(organizationId, period), enabled: Boolean(organizationId) });
+export const overviewQueryOptions = (organizationId: string, period: OverviewPeriod) => ({ queryKey: ["org", organizationId, "overview", period], queryFn: () => getOverview(organizationId, period), enabled: Boolean(organizationId), ...(organizationId === "all" ? { refetchInterval: 5_000 } : {}) });
 
 export function OverviewPeriodControl({ value, onChange }: { value: OverviewPeriod; onChange: (period: OverviewPeriod) => void }) {
   return <fieldset className="overview-period-control" aria-label="Overview time window"><legend className="sr-only">Overview time window</legend>{overviewPeriods.map((period) => <label key={period} className={value === period ? "is-selected" : ""}><input type="radio" name="overview-period" value={period} checked={value === period} onChange={() => onChange(period)} /><span>{period}</span></label>)}</fieldset>;

@@ -20,12 +20,12 @@ test("overview counts only GitHub job status and runtime leases", async () => {
       queueP95Ms: 0,
       durationP50Ms: 0,
       durationP95Ms: 0,
-      concurrency: 2,
+      concurrency: query.includes("FROM runner_pools") ? 10 : 0,
       utilization: 0,
     }];
   }) as never;
   const result = await getOverview(db, "org-1", "24h");
-  expect(OverviewDto.parse(result)).toMatchObject({ running: 2, utilization: { pods: 1 }, timeseries: [{ bucket: "2026-08-12T10:00:00.000Z", pending: 2, running: 1 }], runningContainers: [{ jobName: "build", cpuUsagePercent: 42.5 }] });
+  expect(OverviewDto.parse(result)).toMatchObject({ running: 2, concurrency: 10, utilization: { pods: 0.2 }, timeseries: [{ bucket: "2026-08-12T10:00:00.000Z", pending: 2, running: 1 }], runningContainers: [{ jobName: "build", cpuUsagePercent: 42.5 }] });
   expect(queries.some((query) => query.includes("l.state IN ('sandbox_ready','online','busy')") && query.includes("j.status='in_progress'"))).toBe(true);
   expect(queries.some((query) => query.includes("count(*) FILTER (WHERE j.status='queued')") && query.includes("count(*) FILTER (WHERE j.status='in_progress')"))).toBe(true);
 });

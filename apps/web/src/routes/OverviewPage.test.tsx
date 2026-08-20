@@ -12,6 +12,7 @@ test("period control exposes all supported overview windows", () => {
   expect(overviewPeriodLabels["30d"]).toBe("30 days");
 });
 
-test("overview query relies on durable invalidations instead of polling", () => {
+test("overview query polls only when aggregate invalidations are unavailable", () => {
   expect(overviewQueryOptions("org-1", "24h")).not.toHaveProperty("refetchInterval");
+  expect(overviewQueryOptions("all", "24h")).toMatchObject({ refetchInterval: 5_000 });
 });
