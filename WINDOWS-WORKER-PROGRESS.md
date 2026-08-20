@@ -1,6 +1,6 @@
 # Windows Worker Development Progress
 
-Last updated: 2026-08-14
+Last updated: 2026-08-20
 
 ## Current decision
 
@@ -102,6 +102,45 @@ The workflow uses scalar `runs-on: whitesmith-windows-x64`.
   - Waits for guest heartbeat before bootstrap copy.
 - `26f9f9e fix: enable Hyper-V guest file service [skip ci]`
   - Enables `Guest Service Interface` on every newly created VM.
+
+### Windows Docker startup ordering
+
+The container-mode Windows worker depends on the Windows Docker engine. Docker
+can be configured as a Windows engine and still be unavailable briefly during
+service startup because the `docker_engine` named pipe has not been created.
+
+The worker handles this race in two layers:
+
+1. `WindowsContainerDriver.reserveCapacity()` retries `docker info` indefinitely
+   with exponential backoff capped at 30 seconds.
+2. `deploy/workers/install-worker.ps1` configures the Windows service dependency:
+
+   ```powershell
+   sc.exe config WhitesmithWorker depend= docker
+   ```
+
+Image, manifest, and engine-mode validation still fail fast after Docker is
+reachable. The worker log records each Docker readiness retry.
+
+Operational checks:
+
+```powershell
+Get-Service docker,WhitesmithWorker
+docker info --format "OSType={{.OSType}}"
+Get-Content C:\ProgramData\Whitesmith\logs\worker.log -Tail 50
+sc.exe qc WhitesmithWorker
+```
+
+Expected values:
+
+- `docker`: `Running`
+- `WhitesmithWorker`: `Running`
+- `OSType`: `windows`
+- `WhitesmithWorker` dependencies: `docker`
+
+If the service was installed before this fix, rerun the worker installer from
+an elevated PowerShell to install the updated orchestrator and register the
+dependency. The change was committed as `b67305f`.
 
 ### Uncommitted source fixes
 
