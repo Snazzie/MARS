@@ -16,6 +16,8 @@ type StaleLeaseRow = {
   repositoryName: string;
   repositoryFullName: string;
   installationId: number | string;
+  jobStatus: string;
+  jobConclusion: string | null;
 };
 
 export type StaleLeaseReconciliationReport = {
@@ -38,10 +40,14 @@ function splitRepository(fullName: string): { owner: string; repo: string } | nu
 export function terminalLeaseState(job: Pick<GithubJobSnapshot, "conclusion">): "completed" | "failed" {
   return job.conclusion === "success" ? "completed" : "failed";
 }
+async function markTerminalLease(deps: StaleLeaseReconciliationDeps, row: StaleLeaseRow, conclusion: string | null): Promise<void> {
+  const state = terminalLeaseState({ conclusion });
+  await deps.db`UPDATE runner_leases SET state=${state}, terminal_result=${jsonParameter(deps.db, { reason: "github_reconciled", conclusion })}::jsonb, cleanup_state='pending', updated_at=now() WHERE id=${row.leaseId} AND nonce=${row.nonce} AND state NOT IN ('completed','failed','reaped')`;
+}
 export async function reconcileExpiredLeasesWithGithub(deps: StaleLeaseReconciliationDeps): Promise<StaleLeaseReconciliationReport> {
   const rows = await deps.db<StaleLeaseRow[]>`
     SELECT l.id AS "leaseId", l.organization_id AS "organizationId", l.worker_id AS "workerId", l.nonce,
-      l.github_job_id AS "githubJobId", r.github_run_id AS "githubRunId",
+      l.github_job_id AS "githubJobId", r.github_run_id AS "githubRunId", j.status AS "jobStatus", j.conclusion AS "jobConclusion",
       repo.github_repository_id AS "githubRepositoryId", repo.name AS "repositoryName",
       repo.full_name AS "repositoryFullName", i.github_installation_id AS "installationId"
     FROM runner_leases l
@@ -65,6 +71,15 @@ export async function reconcileExpiredLeasesWithGithub(deps: StaleLeaseReconcili
       report.skipped += 1;
       continue;
     }
+    if (row.jobStatus === "completed") {
+      try {
+        await markTerminalLease(deps, row, row.jobConclusion);
+        report.completed += 1;
+      } catch {
+        report.skipped += 1;
+      }
+      continue;
+    }
     try {
       const client = new GithubJobsClient({ token: () => deps.installationToken(installationId), fetch: deps.githubFetchForInstallation(installationId) });
       const [run, job] = await Promise.all([client.getRun(repository.owner, repository.repo, githubRunId), client.getJob(repository.owner, repository.repo, githubJobId)]);
@@ -82,8 +97,7 @@ export async function reconcileExpiredLeasesWithGithub(deps: StaleLeaseReconcili
         report.skipped += 1;
         continue;
       }
-      const state = terminalLeaseState(job);
-      await deps.db`UPDATE runner_leases SET state=${state}, terminal_result=${jsonParameter(deps.db, { reason: "github_reconciled", conclusion: job.conclusion })}::jsonb, cleanup_state='pending', updated_at=now() WHERE id=${row.leaseId} AND nonce=${row.nonce} AND state NOT IN ('completed','failed','reaped')`;
+      await markTerminalLease(deps, row, job.conclusion);
       report.completed += 1;
     } catch (error) {
       report.skipped += 1;
