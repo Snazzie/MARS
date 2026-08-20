@@ -122,9 +122,9 @@ export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event
     return true;
   });
 }
-export async function reconcileWorkerConfigurationOnConnect(db: Sql<{}>, workerId: string): Promise<{ state: "unconfigured" | "applying"; commandId: string | null }> {
+export async function reconcileWorkerConfigurationOnConnect(db: Sql<{}>, workerId: string): Promise<{ state: "unconfigured" | "applying" | "ready"; commandId: string | null }> {
   return db.begin(async tx => {
-    const [worker] = await tx<{ desiredConfiguration: unknown; configurationRevision: string | null }[]>`select desired_configuration AS "desiredConfiguration", configuration_revision AS "configurationRevision" from workers where id=${workerId} for update`;
+    const [worker] = await tx<{ desiredConfiguration: unknown; configurationRevision: string | null; appliedConfigurationRevision: string | null; configurationCommandId: string | null }[]>`select desired_configuration AS "desiredConfiguration", configuration_revision AS "configurationRevision", applied_configuration_revision AS "appliedConfigurationRevision", configuration_command_id AS "configurationCommandId" from workers where id=${workerId} for update`;
     if (!worker) throw new Error("worker configuration unavailable");
     let desiredInput = worker.desiredConfiguration;
     if (typeof desiredInput === "string") {
@@ -136,6 +136,11 @@ export async function reconcileWorkerConfigurationOnConnect(db: Sql<{}>, workerI
     }
     const desired = WorkerConfiguration.parse(desiredInput);
     const revision = worker.configurationRevision ?? createHash("sha256").update(canonical(desired)).digest("hex");
+    if (worker.appliedConfigurationRevision === revision) {
+      await tx`update workers set configuration_state='ready', configuration_revision=${revision} where id=${workerId}`;
+      if (worker.configurationCommandId) await tx`update commands set state='acknowledged' where id=${worker.configurationCommandId} and state in ('pending','sent')`;
+      return { state: "ready", commandId: worker.configurationCommandId };
+    }
     const pending = await tx<{ id: string; payload: unknown }[]>`select id,payload from commands where worker_id=${workerId} and type='worker.configure' and state in ('pending','sent') order by occurred_at desc`;
     const reusable = pending.find(command => {
       let payload = command.payload;
