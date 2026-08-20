@@ -174,14 +174,6 @@ $existingInstall = $existingService -or (Test-Path -LiteralPath $identityPath)
 if ($Upgrade -and -not (Test-Path -LiteralPath $identityPath)) { throw 'Upgrade requires an existing worker identity.' }
 if ($existingInstall) { if ($Upgrade) { Write-Host 'Existing Windows worker installation detected; upgrading while preserving identity.' } else { Write-Host 'Existing Windows worker installation detected; reinstalling.' } }
 if ($Upgrade -and -not $existingService) { Write-Warning 'WhitesmithWorker service is missing; recreating it during upgrade.' }
-if ($existingService) {
-  Stop-Service WhitesmithWorker -Force -ErrorAction SilentlyContinue
-  $serviceDelete = & sc.exe delete WhitesmithWorker 2>&1
-  if ($LASTEXITCODE -ne 0) { throw "Failed to remove existing WhitesmithWorker service: $($serviceDelete -join ' ')" }
-  $deadline = (Get-Date).AddSeconds(15)
-  while ((Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
-  if (Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) { throw 'Timed out removing existing WhitesmithWorker service.' }
-}
 if (-not $Upgrade -and $existingInstall -and (Test-Path -LiteralPath $identityPath)) { Remove-Item -LiteralPath $identityPath -Force }
 $joinCodePath = Join-Path $root 'join-code'
 if (-not $Upgrade) {
@@ -196,6 +188,14 @@ $stagedServiceHost = Join-Path $root 'whitesmith-service-host.download'
 Write-Host '[6/8] Downloading Windows worker runtime and service host'
 Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/orchestrator?audience=windows-x64" -OutFile $stagedExe -TimeoutSec 120
 Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/service-host?audience=windows-x64" -OutFile $stagedServiceHost -TimeoutSec 120
+if ($existingService) {
+  Stop-Service WhitesmithWorker -Force -ErrorAction SilentlyContinue
+  $serviceDelete = & sc.exe delete WhitesmithWorker 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to remove existing WhitesmithWorker service: $($serviceDelete -join ' ')" }
+  $deadline = (Get-Date).AddSeconds(15)
+  while ((Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+  if (Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) { throw 'Timed out removing existing WhitesmithWorker service.' }
+}
 Write-Host '[7/8] Registering LocalSystem worker service'
 Move-Item -LiteralPath $stagedExe -Destination $exe -Force
 Move-Item -LiteralPath $stagedServiceHost -Destination $serviceHost -Force
