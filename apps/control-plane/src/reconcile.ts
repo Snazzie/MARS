@@ -15,6 +15,7 @@ export type ReconcileDeps = {
   queued: QueuedRoutingJob[];
   candidates: Array<Candidate & { worker: Candidate["worker"] & { id: string }; pool: Candidate["pool"] & { id: string } }>;
   upsert?: (job: QueuedRoutingJob) => Promise<void>;
+  installationBlocked?: (installationId: number) => boolean;
   reserve: (input: { workerId: string; poolId: string; githubJobId: number; routingKey: string; requested: { vcpu: number; memoryBytes: number; storageBytes: number; concurrency: number } }) => Promise<LeaseReservation>;
   jit: (input: { installationId: number; owner: string; repo: string; runnerName: string; labels: string[]; githubJobId: number }) => Promise<RunnerJitConfig>;
   dispatch: (reservation: LeaseReservation, jit: RunnerJitConfig) => Promise<void>;
@@ -34,6 +35,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
     const requestedLabels = queued.labels.map((label) => label.trim()).filter(Boolean);
     const provision = parseProvisionLabels(requestedLabels);
     if (!provision) { report.skipped += 1; continue; }
+    if (deps.installationBlocked?.(queued.installationId)) { report.skipped += 1; continue; }
     const candidateOrder = deps.candidates.length > 1
       ? deps.candidates.map((_, index) => deps.candidates[(queued.jobId + index) % deps.candidates.length])
       : deps.candidates;

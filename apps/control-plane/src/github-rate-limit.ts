@@ -46,6 +46,15 @@ export class GithubRateLimitGate {
       return response;
     };
   }
+  isCoolingDown(installationId: number): boolean {
+    const cooldown = this.cooldowns.get(installationId);
+    if (cooldown === undefined) return false;
+    if (this.now() >= cooldown) {
+      this.cooldowns.delete(installationId);
+      return false;
+    }
+    return true;
+  }
 
   private enterCooldown(installationId: number, resetAt: number): void {
     if (this.cooldowns.get(installationId) === resetAt) return;

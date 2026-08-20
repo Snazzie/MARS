@@ -16,6 +16,7 @@ export interface JobReconciliationDeps {
   dispatcher: Dispatch;
   githubFetchForInstallation: (installationId: number) => Fetcher;
   workerConnected?: (workerId: string) => boolean;
+  installationBlocked?: (installationId: number) => boolean;
   repositoryFullName?: string;
 }
 function jsonValue(value: unknown): unknown {
@@ -108,6 +109,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       return { installationId: Number(row.installationId), repositoryId: String(row.repositoryId), repository: String(row.repository), runId: String(row.runId), jobId, labels: stringArray(row.labels) };
     }),
     candidates,
+    installationBlocked: deps.installationBlocked,
     reserve: (input) => reserveRoutingSlot(deps.db, { organizationId: organizationByJob.get(input.githubJobId)!, ...input, ttlMs: LEASE_STARTUP_TTL_MS }),
     jit: async (input) => {
       const installationId = input.installationId;
