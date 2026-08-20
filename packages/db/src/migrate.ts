@@ -84,14 +84,12 @@ async function seedDrizzleBaseline(sql: DatabaseClient): Promise<void> {
   const baselineHash = migrationHash(await Bun.file(new URL("./migrations/0000_legacy_baseline.sql", import.meta.url)).text());
   await sql.begin(async tx => {
     await tx`select pg_advisory_xact_lock(hashtext('whitesmith:migrations'))`;
-    await tx`
-      create schema if not exists drizzle;
-      create table if not exists drizzle.__drizzle_migrations (
-        id serial primary key,
-        hash text not null,
-        created_at bigint
-      );
-    `;
+    await tx`create schema if not exists drizzle`;
+    await tx`create table if not exists drizzle.__drizzle_migrations (
+      id serial primary key,
+      hash text not null,
+      created_at bigint
+    )`;
     await tx`
       insert into drizzle.__drizzle_migrations(hash, created_at)
       select ${baselineHash}, ${baselineCreatedAt}
