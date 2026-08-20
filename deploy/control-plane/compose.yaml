@@ -1,6 +1,6 @@
 services:
   control-plane:
-    image: ghcr.io/whitesmith/control-plane:${WHITESMITH_RELEASE_DIGEST:?set WHITESMITH_RELEASE_DIGEST}
+    image: ghcr.io/whitesmith/control-plane@${WHITESMITH_RELEASE_DIGEST:?set WHITESMITH_RELEASE_DIGEST}
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -50,7 +50,7 @@ services:
     profiles: [tunnel]
     entrypoint: [/bin/sh, /run/whitesmith/cloudflared-wrapper.sh]
     environment: {TUNNEL_TOKEN_FILE: /run/secrets/tunnel_token}
-    volumes: [./deploy/control-plane/cloudflared-wrapper.sh:/run/whitesmith/cloudflared-wrapper.sh:ro]
+    volumes: [./cloudflared-wrapper.sh:/run/whitesmith/cloudflared-wrapper.sh:ro]
     secrets: [tunnel_token]
     depends_on:
       control-plane:
@@ -60,6 +60,6 @@ volumes:
   postgres-data:
 secrets:
   app_master_key:
-    file: ./deploy/control-plane/app_master_key
+    file: ./app_master_key
   tunnel_token:
-    file: ./deploy/control-plane/tunnel_token
+    file: ./tunnel_token

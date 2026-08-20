@@ -38,6 +38,10 @@ ENV WHITESMITH_WINDOWS_CONTAINER_VERIFIER=/app/workers/verify-runtime.ps1
 ENV WHITESMITH_WINDOWS_CONTAINERFILE=/app/workers/Containerfile
 ENV WHITESMITH_WINDOWS_CONTAINER_ENTRYPOINT=/app/workers/entrypoint.ps1
 ENV WHITESMITH_WINDOWS_CONTAINER_JOB_AGENT=/app/workers/whitesmith-job-agent.exe
+ENV WEB_ROOT=file:///app/web/
+ENV WORKER_INSTALLER_ROOT=file:///app/workers/
+ENV WORKER_SERVICE_HOST_EXECUTABLE=file:///app/workers/whitesmith-service-host.exe
+ENV WORKER_ORCHESTRATOR_WINDOWS_X64=file:///app/workers/whitesmith-orchestrator.exe
 USER bun
 EXPOSE 3000
 ENTRYPOINT ["bun","run","index.js"]

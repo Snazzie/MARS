@@ -198,15 +198,15 @@ test("renders capacity configuration in Worker and pool labels in Trigger labels
   const configuring = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "worker", worker: { ...worker, configurationState: "unconfigured" }, organizations: [], github: { appConfigured: true, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "b".repeat(64) });
   expect(configuring).toContain("GiB");
   expect(configuring).toContain("Configure resources");
-  const labels = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "labels", worker, organizations: [], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "b".repeat(64) });
+  const labels = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "labels", worker: { ...worker, platform: "windows-x64", guestPlatforms: ["windows-x64"] }, organizations: [], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [] }, pool: null, defaultImageDigests: { "windows-x64": "windows-job@sha256:" + "b".repeat(64) }, defaultImageDigest: null });
   expect(labels).toContain("Trigger label");
   expect(labels).toContain("runs-on:");
-  expect(labels).toContain("whitesmith-linux-x64");
+  expect(labels).toContain("whitesmith-windows-x64");
   expect(labels).not.toContain("self-hosted");
 });
 
-test("defaults each pool to one canonical platform architecture label", () => {
-  for (const platform of ["linux-x64", "windows-x64", "macos-arm64"] as const) {
+test("defaults each supported pool to one canonical platform architecture label", () => {
+  for (const platform of ["windows-x64", "macos-arm64"] as const) {
     const html = markup({
       version: 1,
       onboardingRequired: true,

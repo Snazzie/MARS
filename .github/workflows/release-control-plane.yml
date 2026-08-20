@@ -1,0 +1,73 @@
+name: Release control plane
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release:
+    name: Publish immutable control-plane image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.20
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/whitesmith/control-plane
+          tags: |
+            type=ref,event=tag
+            type=sha
+      - id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/control-plane/Dockerfile
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          provenance: true
+          sbom: true
+      - name: Verify immutable release image
+        env:
+          IMAGE: ghcr.io/whitesmith/control-plane
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          test -n "$DIGEST"
+          case "$DIGEST" in sha256:????????????????????????????????????????????????????????????????) ;; *) echo "Invalid digest: $DIGEST" >&2; exit 1 ;; esac
+          docker pull "$IMAGE@$DIGEST"
+          docker run --rm --entrypoint /bin/sh "$IMAGE@$DIGEST" -c 'test -f /app/index.js && test -f /app/web/index.html && test -f /app/web/index.js && test -f /app/web/index.css && test -f /app/workers/install-worker.ps1 && test -f /app/workers/whitesmith-orchestrator.exe && test -f /app/workers/whitesmith-service-host.exe'
+      - name: Smoke test immutable release image
+        env:
+          IMAGE: ghcr.io/whitesmith/control-plane@${{ steps.image.outputs.digest }}
+        run: bash tests/control-plane-image-smoke.sh
+      - name: Publish release metadata
+        env:
+          IMAGE: ghcr.io/whitesmith/control-plane
+          DIGEST: ${{ steps.image.outputs.digest }}
+          BUILD_ID: ${{ github.sha }}
+        run: |
+          {
+            printf 'image=%s\n' "$IMAGE"
+            printf 'digest=%s\n' "$DIGEST"
+            printf 'build_id=%s\n' "$BUILD_ID"
+          } > control-plane-release.txt
+          cat control-plane-release.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: control-plane-release-metadata
+          path: control-plane-release.txt

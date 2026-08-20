@@ -47,3 +47,12 @@ The repository is a working baseline, not the full approved platform.
 - `apps/job-agent/src/index.ts`: only accepts and hashes a claim.
 - `apps/control-plane/src/github.ts`: OAuth helpers exist; GitHub App lifecycle is not complete.
 - `apps/orchestrator/src/tart.ts`: real Tart command lifecycle is implemented behind an injectable runtime; current tests use a fake runtime and do not create a 20+ GiB VM.
+
+## Control-plane hosting readiness
+
+- Production Compose uses an immutable GHCR digest and resolves secrets relative to `deploy/control-plane/`.
+- The control-plane image sets production artifact roots inside `/app` and keeps the runtime user as `bun`.
+- CI validates the Linux image artifact set and runs a PostgreSQL-backed live/readiness smoke.
+- Tagged releases publish the control-plane image to GHCR with a recorded digest, SBOM, and provenance.
+- `deploy/control-plane/README.md` documents Unraid startup, ingress/WebSocket requirements, persistence, backup, upgrade, rollback, and optional external Cloudflare Tunnel usage.
+- This hosting gate does not imply that worker execution or GitHub App lifecycle is production-complete.

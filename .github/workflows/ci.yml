@@ -18,14 +18,19 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.20
+      - uses: docker/setup-buildx-action@v3
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun test
       - run: bun run build
       - name: Build immutable control-plane image
-        run: docker build -f deploy/control-plane/Dockerfile -t whitesmith-control-plane:ci .
+        run: docker buildx build --load -f deploy/control-plane/Dockerfile -t whitesmith-control-plane:ci .
       - name: Verify release artifact set
         run: docker run --rm --entrypoint /bin/sh whitesmith-control-plane:ci -c 'test -f /app/index.js && test -f /app/web/index.html && test -f /app/web/index.js && test -f /app/web/index.css && test -f /app/workers/install-worker.ps1 && test -f /app/workers/whitesmith-orchestrator.exe && test -f /app/workers/whitesmith-service-host.exe'
+      - name: Smoke test control-plane startup
+        env:
+          IMAGE: whitesmith-control-plane:ci
+        run: bash tests/control-plane-image-smoke.sh
 
   compose:
     name: Validate production Compose
@@ -44,4 +49,11 @@ jobs:
           GITHUB_OAUTH_CLIENT_ID: ci
           GITHUB_OAUTH_CLIENT_SECRET: ci
           GITHUB_WEBHOOK_SECRET: ci
+          WHITESMITH_WINDOWS_CONTAINER_BASE_IMAGE: mcr.microsoft.com/windows/servercore:ltsc2025@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          WHITESMITH_WINDOWS_CONTAINER_RUNNER_URL: https://example.invalid/runner.zip
+          WHITESMITH_WINDOWS_CONTAINER_RUNNER_SHA256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          WHITESMITH_WINDOWS_CONTAINER_GIT_URL: https://example.invalid/git.zip
+          WHITESMITH_WINDOWS_CONTAINER_GIT_SHA256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          WHITESMITH_WINDOWS_CONTAINER_VC_URL: https://example.invalid/vc.exe
+          WHITESMITH_WINDOWS_CONTAINER_VC_SHA256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         run: docker compose -f deploy/control-plane/compose.yaml config -q
