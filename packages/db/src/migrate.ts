@@ -45,6 +45,7 @@ async function hasLegacyHistory(sql: DatabaseClient): Promise<boolean> {
 
 async function applyLegacyMigrations(sql: DatabaseClient): Promise<void> {
   await sql.begin(async tx => {
+    await tx`select pg_advisory_xact_lock(hashtext('whitesmith:migrations'))`;
     await tx`create table if not exists schema_migrations (
       version integer primary key,
       name text not null,
@@ -66,6 +67,7 @@ async function applyLegacyMigrations(sql: DatabaseClient): Promise<void> {
 
 async function seedLegacyHistory(sql: DatabaseClient): Promise<void> {
   await sql.begin(async tx => {
+    await tx`select pg_advisory_xact_lock(hashtext('whitesmith:migrations'))`;
     await tx`create table if not exists schema_migrations (
       version integer primary key,
       name text not null,
@@ -79,19 +81,23 @@ async function seedLegacyHistory(sql: DatabaseClient): Promise<void> {
 }
 
 async function seedDrizzleBaseline(sql: DatabaseClient): Promise<void> {
-  await sql`
-    create schema if not exists drizzle;
-    create table if not exists drizzle.__drizzle_migrations (
-      id serial primary key,
-      hash text not null,
-      created_at bigint
-    );
-  `;
-  await sql`
-    insert into drizzle.__drizzle_migrations(hash, created_at)
-    select ${migrationHash(await Bun.file(new URL("./migrations/0000_legacy_baseline.sql", import.meta.url)).text())}, ${baselineCreatedAt}
-    where not exists (select 1 from drizzle.__drizzle_migrations where created_at=${baselineCreatedAt});
-  `;
+  const baselineHash = migrationHash(await Bun.file(new URL("./migrations/0000_legacy_baseline.sql", import.meta.url)).text());
+  await sql.begin(async tx => {
+    await tx`select pg_advisory_xact_lock(hashtext('whitesmith:migrations'))`;
+    await tx`
+      create schema if not exists drizzle;
+      create table if not exists drizzle.__drizzle_migrations (
+        id serial primary key,
+        hash text not null,
+        created_at bigint
+      );
+    `;
+    await tx`
+      insert into drizzle.__drizzle_migrations(hash, created_at)
+      select ${baselineHash}, ${baselineCreatedAt}
+      where not exists (select 1 from drizzle.__drizzle_migrations where created_at=${baselineCreatedAt});
+    `;
+  });
 }
 
 async function runDrizzleMigrations(sql: DatabaseClient): Promise<void> {
@@ -100,19 +106,12 @@ async function runDrizzleMigrations(sql: DatabaseClient): Promise<void> {
 }
 
 export async function migrateDatabase(sql: DatabaseClient): Promise<void> {
-  const connection = await sql.reserve();
-  try {
-    await connection`select pg_advisory_lock(hashtext('whitesmith:migrations'))`;
-    if (await hasLegacyHistory(connection)) {
-      await applyLegacyMigrations(connection);
-      await seedDrizzleBaseline(connection);
-      await runDrizzleMigrations(connection);
-      return;
-    }
-    await runDrizzleMigrations(connection);
-    await seedLegacyHistory(connection);
-  } finally {
-    await connection`select pg_advisory_unlock(hashtext('whitesmith:migrations'))`;
-    connection.release();
+  if (await hasLegacyHistory(sql)) {
+    await applyLegacyMigrations(sql);
+    await seedDrizzleBaseline(sql);
+    await runDrizzleMigrations(sql);
+    return;
   }
+  await runDrizzleMigrations(sql);
+  await seedLegacyHistory(sql);
 }
