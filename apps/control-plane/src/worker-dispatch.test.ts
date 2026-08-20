@@ -83,6 +83,15 @@ test("replays terminal-lease stop commands until their cleanup event is acknowle
   expect(queries[0]).toContain("c.type='tart.stop_lease'");
   expect(result).toEqual([{ ...stopCommand, occurredAt: stopCommand.occurredAt.toISOString() }]);
 });
+test("does not replay lease commands whose lease row is gone", async () => {
+  const queries: string[] = [];
+  const db = Object.assign(async (strings: TemplateStringsArray) => {
+    queries.push(strings.join(" "));
+    return [];
+  }, {}) as never;
+  await listReplayableWorkerCommands(db, workerId);
+  expect(queries[0]).toContain("l.id IS NOT NULL");
+});
 test("normalizes database timestamp strings before validating commands", async () => {
   const db = Object.assign(async () => [{ ...command, occurredAt: "2026-08-20 11:22:07.123+00" }], {}) as never;
 

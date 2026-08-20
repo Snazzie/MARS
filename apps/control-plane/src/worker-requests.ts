@@ -137,9 +137,7 @@ export async function reconcileWorkerConfigurationOnConnect(db: Sql<{}>, workerI
     const desired = WorkerConfiguration.parse(desiredInput);
     const revision = worker.configurationRevision ?? createHash("sha256").update(canonical(desired)).digest("hex");
     if (worker.appliedConfigurationRevision === revision) {
-      await tx`update workers set configuration_state='ready', configuration_revision=${revision} where id=${workerId}`;
-      if (worker.configurationCommandId) await tx`update commands set state='acknowledged' where id=${worker.configurationCommandId} and state in ('pending','sent')`;
-      return { state: "ready", commandId: worker.configurationCommandId };
+      await tx`update workers set configuration_state='applying', configuration_revision=${revision} where id=${workerId}`;
     }
     const pending = await tx<{ id: string; payload: unknown }[]>`select id,payload from commands where worker_id=${workerId} and type='worker.configure' and state in ('pending','sent') order by occurred_at desc`;
     const reusable = pending.find(command => {

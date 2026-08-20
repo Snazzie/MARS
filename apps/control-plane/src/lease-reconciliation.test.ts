@@ -22,18 +22,18 @@ test("maps successful GitHub jobs to completed leases and all other conclusions 
   expect(terminalLeaseState({ conclusion: "cancelled" })).toBe("failed");
   expect(terminalLeaseState({ conclusion: null })).toBe("failed");
 });
-test("worker inventory only reclaims expired runtime leases it does not report", async () => {
+test("worker inventory reclaims runtime leases it does not report", async () => {
   let query = "";
   const db = (async (strings: TemplateStringsArray) => {
     query = strings.join(" ");
     return [{ id: "lease-1" }];
   }) as never;
   expect(await reconcileWorkerInventory(db, "worker-1", ["11111111-1111-4111-8111-111111111111"])).toBe(1);
-  expect(query).toContain("expires_at < now()");
+  expect(query).not.toContain("expires_at < now()");
   expect(query).toContain("state IN ('dispatched','sandbox_ready','online','busy')");
   expect(query).toContain("NOT (id = ANY");
 });
-test("worker inventory empty list reclaims all expired runtime leases", async () => {
+test("worker inventory empty list reclaims all runtime leases", async () => {
   let query = "";
   const db = (async (strings: TemplateStringsArray) => {
     query = strings.join(" ");
@@ -41,5 +41,6 @@ test("worker inventory empty list reclaims all expired runtime leases", async ()
   }) as never;
   expect(await reconcileWorkerInventory(db, "worker-1", [])).toBe(1);
   expect(query).toContain("state IN ('dispatched','sandbox_ready','online','busy')");
+  expect(query).not.toContain("expires_at < now()");
   expect(query).not.toContain("ANY");
 });

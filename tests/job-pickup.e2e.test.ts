@@ -39,7 +39,7 @@ test.skipIf(!databaseUrl)("queued webhook becomes a real lease and encrypted wor
   const result = await runQueuedJobReconciliation({
     db,
     installationToken: async () => "installation-token",
-    githubFetch: async (_input, init) => { expect(init?.method).toBe("POST"); return Response.json({ encoded_jit_config: "encoded-jit-config" }); },
+    githubFetchForInstallation: () => async (_input, init) => { expect(init?.method).toBe("POST"); return Response.json({ encoded_jit_config: "encoded-jit-config" }); },
     dispatcher: { dispatch: async (command) => { dispatched.push(command); return {} as never; } },
   });
   expect(result).toEqual({ reserved: 1, skipped: 0, failed: 0 });

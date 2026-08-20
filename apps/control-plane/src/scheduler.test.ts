@@ -16,6 +16,10 @@ describe("runner label routing", () => {
     expect(labelsMatch(["self-hosted", "linux", "x64"], ["whitesmith-linux-x64"], "whitesmith-linux-x64")).toBe(false);
     expect(reason(candidate(["self-hosted", "linux", "x64"]))).toBe("no_matching_labels");
   });
+ 
+  test("matches legacy split platform labels to a composite pool trigger", () => {
+    expect(labelsMatch(["self-hosted", "windows", "x64", "whitesmith-default"], ["whitesmith-windows-x64"], "whitesmith-windows-x64")).toBe(true);
+  });
 
   test("rejects extra requested labels", () => {
     expect(labelsMatch(["self-hosted", "whitesmith-linux-x64"], ["whitesmith-linux-x64"], "whitesmith-linux-x64")).toBe(false);

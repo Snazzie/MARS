@@ -83,3 +83,25 @@ test("continues other installations after a rate-limited JIT attempt", async () 
   expect(reservedJobs).toEqual([1, 3]);
   expect(result).toEqual({ reserved: 1, skipped: 1, failed: 1 });
 });
+ 
+test("resumes routing after an installation cooldown clears", async () => {
+  let blocked = true;
+  const calls: string[] = [];
+  const queued = [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "whitesmith-default"] }];
+  const candidates = [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted" as const, connectionState: "online" as const, configurationState: "ready" as const, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "whitesmith-default"], triggerLabel: "whitesmith-default" } }];
+  const deps = {
+    queued,
+    candidates,
+    installationBlocked: () => blocked,
+    reserve: async (input: { requested: { vcpu: number; memoryBytes: number; storageBytes: number; concurrency: number } }) => { calls.push("reserve"); return { id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested }; },
+    jit: async () => { calls.push("jit"); return { encodedJitConfig: "config", runnerName: "runner", labels: ["self-hosted"], expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
+    dispatch: async () => { calls.push("dispatch"); },
+  };
+  const blockedResult = await reconcileQueuedJobs(deps);
+  expect(blockedResult).toEqual({ reserved: 0, skipped: 1, failed: 0 });
+  expect(calls).toEqual([]);
+  blocked = false;
+  const resumedResult = await reconcileQueuedJobs(deps);
+  expect(resumedResult).toEqual({ reserved: 1, skipped: 0, failed: 0 });
+  expect(calls).toEqual(["reserve", "jit", "dispatch"]);
+});

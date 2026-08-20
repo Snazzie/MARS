@@ -52,7 +52,6 @@ export async function reconcileWorkerInventory(db: DatabaseClient, workerId: str
         UPDATE runner_leases
         SET state='failed', terminal_result=${jsonParameter(db, { reason: "worker_inventory_missing" })}::jsonb, cleanup_state='pending', updated_at=now()
         WHERE worker_id=${workerId}
-          AND expires_at < now()
           AND state IN ('dispatched','sandbox_ready','online','busy')
         RETURNING id
       `
@@ -60,7 +59,6 @@ export async function reconcileWorkerInventory(db: DatabaseClient, workerId: str
         UPDATE runner_leases
         SET state='failed', terminal_result=${jsonParameter(db, { reason: "worker_inventory_missing" })}::jsonb, cleanup_state='pending', updated_at=now()
         WHERE worker_id=${workerId}
-          AND expires_at < now()
           AND state IN ('dispatched','sandbox_ready','online','busy')
           AND NOT (id = ANY(${ids}::uuid[]))
         RETURNING id

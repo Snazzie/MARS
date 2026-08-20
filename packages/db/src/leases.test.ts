@@ -16,6 +16,17 @@ test("reserves a routing slot before any JIT request", async () => {
   expect(result.id).toBe("00000000-0000-4000-8000-000000000001");
   expect(queries.some((query) => query.toLowerCase().includes("insert into runner_leases"))).toBe(true);
 });
+test("normalizes PostgreSQL timestamp strings for encrypted lease bootstraps", async () => {
+  const tx = ((strings: TemplateStringsArray) => {
+    const query = strings.join(" ").toLowerCase();
+    if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, limits: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 } }];
+    if (query.includes("insert into runner_leases")) return [{ id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: "2026-08-20 18:36:34.099+01" }];
+    return [];
+  }) as unknown as Sql<{}>;
+  const db = Object.assign(((strings: TemplateStringsArray) => []) as unknown as Sql<{}>, { begin: async (fn: (value: Sql<{}>) => unknown) => fn(tx) });
+  const result = await reserveRoutingSlot(db, { organizationId: "org", poolId: "pool", workerId: "worker", routingKey: "org:pool:labels", requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, ttlMs: 60_000 });
+  expect(result.expiresAt).toBe("2026-08-20T17:36:34.099Z");
+});
 test("reserves when current free capacity already includes active leases", async () => {
   const tx = ((strings: TemplateStringsArray) => {
     const query = strings.join(" ").toLowerCase();

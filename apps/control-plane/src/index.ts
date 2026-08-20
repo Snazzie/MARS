@@ -183,6 +183,7 @@ const reconciliationScheduler = startReconciliationScheduler(async () => {
       db,
       installationToken: (installationId) => githubApp.getInstallationToken(installationId),
       githubFetchForInstallation: (installationId) => githubRateLimits.scopedFetch(installationId),
+      dispatcher,
       installationBlocked: (installationId) => githubRateLimits.isCoolingDown(installationId),
       workerConnected: (workerId) => dispatcher.isConnected(workerId),
       repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY,

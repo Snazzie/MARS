@@ -41,11 +41,19 @@ export function resolveProvisionResources(poolResources: unknown, provision: Pro
     : null;
 }
 
+const legacyRoutingLabels: Record<string, readonly string[][]> = {
+  "whitesmith-linux-x64": [["self-hosted", "linux", "x64", "whitesmith-default"]],
+  "whitesmith-windows-x64": [["self-hosted", "windows", "x64", "whitesmith-default"]],
+  "whitesmith-macos-arm64": [["self-hosted", "macos", "arm64", "whitesmith-default"], ["self-hosted", "macos", "arm64", "whitesmith-macos"]],
+};
+
 export function labelsMatch(requestedLabels: readonly string[], poolLabels: readonly string[], triggerLabel: string|null): boolean {
   if (!triggerLabel) return false;
   const requested = new Set(requestedLabels.map((label) => label.toLowerCase()));
   const labels = new Set(poolLabels.map((label) => label.toLowerCase()));
-  return requested.has(triggerLabel.toLowerCase()) && [...requested].every((label) => labels.has(label));
+  const trigger = triggerLabel.toLowerCase();
+  if (requested.has(trigger) && [...requested].every((label) => labels.has(label))) return true;
+  return (legacyRoutingLabels[trigger] ?? []).some((legacy) => legacy.length === requested.size && legacy.every((label) => requested.has(label)));
 }
 
 export function fits(candidate: Candidate): boolean {

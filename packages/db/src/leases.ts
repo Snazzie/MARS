@@ -50,7 +50,9 @@ export async function reserveRoutingSlot(sql: DatabaseClient, input: LeaseReserv
   });
   const row = rows[0];
   if (!row) throw new Error("lease_reservation_failed");
-  return { id: String(row.id), jobId: row.jobId === null || row.jobId === undefined ? undefined : Number(row.jobId), nonce: String(row.nonce), workerId: String(row.workerId), poolId: String(row.poolId), expiresAt: row.expiresAt instanceof Date ? row.expiresAt.toISOString() : String(row.expiresAt), requested: typeof row.requested === "string" ? JSON.parse(row.requested) : row.requested };
+  const normalizedExpiresAt = row.expiresAt instanceof Date ? row.expiresAt : new Date(String(row.expiresAt));
+  if (!Number.isFinite(normalizedExpiresAt.getTime())) throw new Error("lease_expiration_invalid");
+  return { id: String(row.id), jobId: row.jobId === null || row.jobId === undefined ? undefined : Number(row.jobId), nonce: String(row.nonce), workerId: String(row.workerId), poolId: String(row.poolId), expiresAt: normalizedExpiresAt.toISOString(), requested: typeof row.requested === "string" ? JSON.parse(row.requested) : row.requested };
 }
 
 export async function bindLeaseToJob(sql: DatabaseClient, leaseId: string, githubJobId: number): Promise<void> {
