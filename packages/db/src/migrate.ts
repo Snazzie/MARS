@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate as drizzleMigrate } from "drizzle-orm/postgres-js/migrator";
-import type { DatabaseClient } from "./index.ts";
+import type { DatabaseClient, RawDatabaseClient } from "./index.ts";
 import { baselineSchemaSql, jobTimingMigrationSql, jsonShapeNormalizationMigrationSql, onboardingVerificationMigrationSql, resourceTelemetryMigrationSql, workerConfigurationMigrationSql, workerJsonNormalizationMigrationSql, workerTelemetryMigrationSql } from "./schema.ts";
 
 type LegacyMigration = { version: number; name: string; sql: string };
@@ -38,12 +38,12 @@ const migrationsFolder = fileURLToPath(new URL("./migrations", import.meta.url))
 const baselineCreatedAt = 1_700_000_000_000;
 const migrationHash = (sql: string) => createHash("sha256").update(sql).digest("hex");
 
-async function hasLegacyHistory(sql: DatabaseClient): Promise<boolean> {
+async function hasLegacyHistory(sql: RawDatabaseClient): Promise<boolean> {
   const [row] = await sql<{ name: string | null }[]>`select to_regclass('public.schema_migrations') as name`;
   return Boolean(row?.name);
 }
 
-async function applyLegacyMigrations(sql: DatabaseClient): Promise<void> {
+async function applyLegacyMigrations(sql: RawDatabaseClient): Promise<void> {
   await sql.begin(async tx => {
     await tx`select pg_advisory_xact_lock(hashtext('whitesmith:migrations'))`;
     await tx`create table if not exists schema_migrations (
@@ -65,7 +65,7 @@ async function applyLegacyMigrations(sql: DatabaseClient): Promise<void> {
   });
 }
 
-async function seedLegacyHistory(sql: DatabaseClient): Promise<void> {
+async function seedLegacyHistory(sql: RawDatabaseClient): Promise<void> {
   await sql.begin(async tx => {
     await tx`select pg_advisory_xact_lock(hashtext('whitesmith:migrations'))`;
     await tx`create table if not exists schema_migrations (
@@ -80,7 +80,7 @@ async function seedLegacyHistory(sql: DatabaseClient): Promise<void> {
   });
 }
 
-async function seedDrizzleBaseline(sql: DatabaseClient): Promise<void> {
+async function seedDrizzleBaseline(sql: RawDatabaseClient): Promise<void> {
   const baselineHash = migrationHash(await Bun.file(new URL("./migrations/0000_legacy_baseline.sql", import.meta.url)).text());
   await sql.begin(async tx => {
     await tx`select pg_advisory_xact_lock(hashtext('whitesmith:migrations'))`;
@@ -98,18 +98,18 @@ async function seedDrizzleBaseline(sql: DatabaseClient): Promise<void> {
   });
 }
 
-async function runDrizzleMigrations(sql: DatabaseClient): Promise<void> {
-  const db = drizzle(sql);
-  await drizzleMigrate(db, { migrationsFolder });
+async function runDrizzleMigrations(db: DatabaseClient): Promise<void> {
+  await drizzleMigrate(drizzle(db.$client), { migrationsFolder });
 }
 
-export async function migrateDatabase(sql: DatabaseClient): Promise<void> {
+export async function migrateDatabase(db: DatabaseClient): Promise<void> {
+  const sql = db.$client;
   if (await hasLegacyHistory(sql)) {
     await applyLegacyMigrations(sql);
     await seedDrizzleBaseline(sql);
-    await runDrizzleMigrations(sql);
+    await runDrizzleMigrations(db);
     return;
   }
-  await runDrizzleMigrations(sql);
+  await runDrizzleMigrations(db);
   await seedLegacyHistory(sql);
 }
