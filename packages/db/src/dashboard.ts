@@ -1,8 +1,8 @@
-import type { Sql } from "postgres";
+import type { DatabaseClient } from "./index.ts";
 import { CapacitySnapshot, PoolSummary, RuntimeDriverName, RuntimePlatform, WorkerDoctor, WorkerLimits, GuestPlatform } from "@whitesmith/contracts";
 import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, OverviewTimeseriesPoint, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail, OrganizationSettings } from "@whitesmith/contracts";
 import { jsonParameter } from "./json.ts";
-export type DashboardDb = Sql<{}>;
+export type DashboardDb = DatabaseClient;
 export type RunTransition = { status: RunSummary["status"]; conclusion: RunSummary["conclusion"]; startedAt?: string | null; completedAt?: string | null };
 const statusOrder: Record<RunSummary["status"], number> = { queued: 0, in_progress: 1, completed: 2 };
 const terminalConclusions = new Set(["success", "failure", "cancelled", "skipped", "neutral"]);

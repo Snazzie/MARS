@@ -1,8 +1,8 @@
 import { WorkerEvent, WorkerEventPayload, type JobResourceSample } from "@whitesmith/contracts";
-import type { Sql } from "postgres";
+import type { DatabaseClient } from "./index.ts";
 
 export type JobResourceSampleResult = "stored" | "duplicate" | "rejected";
-export type JobResourceTelemetryDb = Sql<{}>;
+export type JobResourceTelemetryDb = DatabaseClient;
 const LEASE_HEARTBEAT_TTL_MS = 10 * 60_000;
 
 export async function persistJobResourceSample(db: JobResourceTelemetryDb, workerId: string, input: unknown, now = Date.now()): Promise<JobResourceSampleResult> {

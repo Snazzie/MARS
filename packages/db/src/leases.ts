@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { DatabaseClient } from "./index.ts";
 import { randomBytes, randomUUID } from "node:crypto";
 import { jsonParameter } from "./json.ts";
 
@@ -13,7 +13,7 @@ export type LeaseReservationInput = {
 };
 export type LeaseReservation = { id: string; jobId?: number; nonce: string; workerId: string; poolId: string; expiresAt: string; requested: { vcpu: number; memoryBytes: number; storageBytes: number; concurrency: number } };
 
-export async function reserveRoutingSlot(sql: Sql<{}>, input: LeaseReservationInput): Promise<LeaseReservation> {
+export async function reserveRoutingSlot(sql: DatabaseClient, input: LeaseReservationInput): Promise<LeaseReservation> {
   const nonce = randomBytes(32).toString("base64url");
   const id = randomUUID();
   const expiresAt = new Date(Date.now() + input.ttlMs).toISOString();
@@ -53,7 +53,7 @@ export async function reserveRoutingSlot(sql: Sql<{}>, input: LeaseReservationIn
   return { id: String(row.id), jobId: row.jobId === null || row.jobId === undefined ? undefined : Number(row.jobId), nonce: String(row.nonce), workerId: String(row.workerId), poolId: String(row.poolId), expiresAt: row.expiresAt instanceof Date ? row.expiresAt.toISOString() : String(row.expiresAt), requested: typeof row.requested === "string" ? JSON.parse(row.requested) : row.requested };
 }
 
-export async function bindLeaseToJob(sql: Sql<{}>, leaseId: string, githubJobId: number): Promise<void> {
+export async function bindLeaseToJob(sql: DatabaseClient, leaseId: string, githubJobId: number): Promise<void> {
   const rows = await sql`UPDATE runner_leases SET github_job_id=${githubJobId}, state='dispatched', updated_at=now() WHERE id=${leaseId} AND github_job_id IS NULL AND state IN ('reserved','requested') RETURNING id`;
   if (!rows[0]) {
     const existing = await sql`SELECT github_job_id FROM runner_leases WHERE id=${leaseId}`;
@@ -62,11 +62,11 @@ export async function bindLeaseToJob(sql: Sql<{}>, leaseId: string, githubJobId:
   }
 }
 
-export async function completeLease(sql: Sql<{}>, leaseId: string, result: { state: "completed" | "failed"; conclusion?: string | null }): Promise<void> {
+export async function completeLease(sql: DatabaseClient, leaseId: string, result: { state: "completed" | "failed"; conclusion?: string | null }): Promise<void> {
   await sql`UPDATE runner_leases SET state=${result.state}, terminal_result=${jsonParameter(sql, result)}, updated_at=now() WHERE id=${leaseId} AND state NOT IN ('completed','failed','reaped')`;
 }
 
-export async function expireLeases(sql: Sql<{}>, now = new Date()): Promise<string[]> {
+export async function expireLeases(sql: DatabaseClient, now = new Date()): Promise<string[]> {
   const rows = await sql`UPDATE runner_leases SET state='failed', cleanup_state='pending', updated_at=now() WHERE expires_at < ${now.toISOString()} AND state NOT IN ('completed','failed','reaped') RETURNING worker_id AS "workerId"`;
   return rows.map((row) => String(row.workerId));
 }

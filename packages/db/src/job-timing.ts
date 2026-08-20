@@ -1,8 +1,8 @@
 import type { JobTimingAggregate, JobTimingSnapshot } from "@whitesmith/contracts";
-import type { Sql } from "postgres";
+import type { DatabaseClient } from "./index.ts";
 
 export type JobTimingSnapshotInput = Omit<JobTimingSnapshot, "createdAt"> & { createdAt?: string };
-export type JobTimingDb = Sql<{}>;
+export type JobTimingDb = DatabaseClient;
 
 export async function recordJobTimingSnapshot(db: JobTimingDb, input: JobTimingSnapshotInput): Promise<boolean> {
   const [row] = await db<{ jobId: string }[]>`

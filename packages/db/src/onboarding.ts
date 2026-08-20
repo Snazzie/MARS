@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { DatabaseClient } from "./index.ts";
 import {
   OnboardingDetail,
   OnboardingStatus,
@@ -10,7 +10,7 @@ import {
   type RepositorySummary,
 } from "@whitesmith/contracts";
 
-export type OnboardingDb = Sql<{}>;
+export type OnboardingDb = DatabaseClient;
 type Row = Record<string, unknown>;
 
 const first = (rows: readonly unknown[]): Row | undefined => rows[0] && typeof rows[0] === "object" ? rows[0] as Row : undefined;
