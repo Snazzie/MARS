@@ -20,6 +20,7 @@ import { startReconciliationScheduler } from "./reconcile-loop.ts";
 import { pruneExpiredData } from "./retention.ts";
 import { DiscoveryHealthMonitor, isDiscoveryCycleSuccessful } from "./discovery-health.ts";
 import { createControlPlaneApp } from "./http/app.ts";
+import type { ControlPlaneHttpDeps } from "./http/types.ts";
 import { ensureDefaultPools } from "./default-pools.ts";
 import { canSubscribeToOrganization, loadBrowserInvalidations } from "./browser-invalidations.ts";
 import { GithubRateLimitGate } from "./github-rate-limit.ts";
@@ -51,33 +52,30 @@ const containerBuildArtifact = (name: string, fallback: string): string | undefi
   const artifact = runtimeArtifact(name, fallback);
   return artifact ? fileURLToPath(artifact) : undefined;
 };
-const windowsContainerBuild = (() => {
-  const baseImage = Bun.env.WHITESMITH_WINDOWS_CONTAINER_BASE_IMAGE;
-  const runnerUrl = Bun.env.WHITESMITH_WINDOWS_CONTAINER_RUNNER_URL;
-  const runnerSha256 = Bun.env.WHITESMITH_WINDOWS_CONTAINER_RUNNER_SHA256;
-  const gitUrl = Bun.env.WHITESMITH_WINDOWS_CONTAINER_GIT_URL;
-  const gitSha256 = Bun.env.WHITESMITH_WINDOWS_CONTAINER_GIT_SHA256;
-  const vcUrl = Bun.env.WHITESMITH_WINDOWS_CONTAINER_VC_URL;
-  const vcSha256 = Bun.env.WHITESMITH_WINDOWS_CONTAINER_VC_SHA256;
-  if (![baseImage, runnerUrl, runnerSha256, gitUrl, gitSha256, vcUrl, vcSha256].every(Boolean)) {
-    if (production) throw new Error("Windows container build inputs are required");
-    return undefined;
-  }
+type WindowsContainerReleaseConfig = {
+  baseImage: string;
+  runnerUrl: string;
+  runnerSha256: string;
+  gitUrl: string;
+  gitSha256: string;
+  vcUrl: string;
+  vcSha256: string;
+};
+const loadWindowsContainerBuild = async (): Promise<ControlPlaneHttpDeps["windowsContainerBuild"]> => {
+  const manifestUrl = new URL(Bun.env.WHITESMITH_RELEASE_MANIFEST ?? (production ? "./release-manifest.json" : "../../../deploy/control-plane/release-manifest.json"), import.meta.url);
+  const manifest = await Bun.file(manifestUrl).json().catch(() => null) as { windowsContainerBuild?: WindowsContainerReleaseConfig | null } | null;
+  const release = manifest?.windowsContainerBuild;
+  if (!release) return undefined;
   return {
-    baseImage: baseImage!,
-    runnerUrl: runnerUrl!,
-    runnerSha256: runnerSha256!,
-    gitUrl: gitUrl!,
-    gitSha256: gitSha256!,
-    vcUrl: vcUrl!,
-    vcSha256: vcSha256!,
+    ...release,
     builderPath: containerBuildArtifact("WHITESMITH_WINDOWS_CONTAINER_BUILDER", "../../../deploy/workers/build-windows-container-image-local.ps1")!,
     verifierPath: containerBuildArtifact("WHITESMITH_WINDOWS_CONTAINER_VERIFIER", "../../../images/jobs/windows/verify-runtime.ps1")!,
     containerfilePath: containerBuildArtifact("WHITESMITH_WINDOWS_CONTAINERFILE", "../../../images/jobs/windows/Containerfile")!,
     entrypointPath: containerBuildArtifact("WHITESMITH_WINDOWS_CONTAINER_ENTRYPOINT", "../../../images/jobs/windows/entrypoint.ps1")!,
     jobAgentPath: containerBuildArtifact("WHITESMITH_WINDOWS_CONTAINER_JOB_AGENT", "../../../apps/job-agent/dist/whitesmith-job-agent.exe")!,
   };
-})();
+};
+const windowsContainerBuild = await loadWindowsContainerBuild();
 if (production) {
   const requiredReleaseArtifacts = {
     webIndex: new URL("index.html", webRoot),

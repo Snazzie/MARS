@@ -25,6 +25,27 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Embed Windows worker release metadata
+        env:
+          BASE_IMAGE: ${{ vars.WHITESMITH_WINDOWS_CONTAINER_BASE_IMAGE }}
+          RUNNER_URL: ${{ vars.WHITESMITH_WINDOWS_CONTAINER_RUNNER_URL }}
+          RUNNER_SHA256: ${{ vars.WHITESMITH_WINDOWS_CONTAINER_RUNNER_SHA256 }}
+          GIT_URL: ${{ vars.WHITESMITH_WINDOWS_CONTAINER_GIT_URL }}
+          GIT_SHA256: ${{ vars.WHITESMITH_WINDOWS_CONTAINER_GIT_SHA256 }}
+          VC_URL: ${{ vars.WHITESMITH_WINDOWS_CONTAINER_VC_URL }}
+          VC_SHA256: ${{ vars.WHITESMITH_WINDOWS_CONTAINER_VC_SHA256 }}
+        run: |
+          test -n "$BASE_IMAGE" -a -n "$RUNNER_URL" -a -n "$RUNNER_SHA256" -a -n "$GIT_URL" -a -n "$GIT_SHA256" -a -n "$VC_URL" -a -n "$VC_SHA256"
+          jq -n \
+            --arg baseImage "$BASE_IMAGE" \
+            --arg runnerUrl "$RUNNER_URL" \
+            --arg runnerSha256 "$RUNNER_SHA256" \
+            --arg gitUrl "$GIT_URL" \
+            --arg gitSha256 "$GIT_SHA256" \
+            --arg vcUrl "$VC_URL" \
+            --arg vcSha256 "$VC_SHA256" \
+            '{schemaVersion: 1, windowsContainerBuild: {baseImage: $baseImage, runnerUrl: $runnerUrl, runnerSha256: $runnerSha256, gitUrl: $gitUrl, gitSha256: $gitSha256, vcUrl: $vcUrl, vcSha256: $vcSha256}}' \
+            > deploy/control-plane/release-manifest.json
       - id: metadata
         uses: docker/metadata-action@v5
         with:

@@ -23,6 +23,7 @@ FROM oven/bun:1.2.20-slim
 WORKDIR /app
 COPY --from=build /app/apps/control-plane/dist/index.js ./index.js
 COPY --from=build /app/packages/db/src/migrations ./migrations
+COPY --from=build /app/deploy/control-plane/release-manifest.json ./release-manifest.json
 COPY --from=build /app/apps/web/dist/index.html /app/web/index.html
 COPY --from=build /app/apps/web/dist/index.js /app/web/index.js
 COPY --from=build /app/apps/web/dist/index.css /app/web/index.css

@@ -6,10 +6,20 @@ This directory contains the production Docker image and Compose stack for the Wh
 
 - Unraid with a Linux Docker engine and Docker Compose support.
 - A deployment directory containing this `compose.yaml`, a populated `.env`, and an `app_master_key` file beside the Compose file.
-- A GitHub OAuth application and webhook secret.
-- An immutable control-plane image digest published to GHCR.
+- A published control-plane release tag selected by the Unraid template.
+  The Compose fallback is `ghcr.io/whitesmith/control-plane:latest`.
 - An ingress or reverse proxy if the service must be reachable outside the Unraid host.
 
+
+## Unraid template
+
+Import `deploy/unraid/whitesmith-control-plane.xml` into Unraid's Docker templates. The template selects a versioned image tag such as `v0.1.0`; update that tag for upgrades. It configures the control-plane port, persistent data path, master-key file, database URL, and GitHub credentials. It does not ask for image digests or Windows worker download hashes.
+
+The XML template runs the control plane as a single container. PostgreSQL must be provided by the Compose `postgres` service or an existing PostgreSQL 17 container reachable through the configured `DATABASE_URL`.
+
+Windows worker build URLs and SHA-256 values are release metadata, not operator configuration. Release CI embeds them in `/app/release-manifest.json`; they are not read from `.env` or the Unraid template. A release without that metadata can host the control plane but returns `artifact_unavailable` when a Windows container worker installer is requested.
+
+Release CI reads the following non-secret GitHub repository variables when publishing a tagged image: `WHITESMITH_WINDOWS_CONTAINER_BASE_IMAGE`, `WHITESMITH_WINDOWS_CONTAINER_RUNNER_URL`, `WHITESMITH_WINDOWS_CONTAINER_RUNNER_SHA256`, `WHITESMITH_WINDOWS_CONTAINER_GIT_URL`, `WHITESMITH_WINDOWS_CONTAINER_GIT_SHA256`, `WHITESMITH_WINDOWS_CONTAINER_VC_URL`, and `WHITESMITH_WINDOWS_CONTAINER_VC_SHA256`.
 The control plane coordinates external workers. Unraid does not provide the Windows Hyper-V or K3s/Kata runtime required to execute every worker platform inside this container.
 
 ## Prepare configuration
@@ -97,7 +107,7 @@ Back up the control-plane volume using the Unraid backup system or a stopped-con
 
 ## Upgrade and rollback
 
-Update `WHITESMITH_RELEASE_DIGEST` to the new immutable digest, then recreate the control-plane service:
+Update the image tag in the Unraid template to the new release, then recreate the control-plane service:
 
 ```bash
 docker compose --env-file .env -f deploy/control-plane/compose.yaml pull control-plane
@@ -105,7 +115,7 @@ docker compose --env-file .env -f deploy/control-plane/compose.yaml up -d contro
 docker compose --env-file .env -f deploy/control-plane/compose.yaml logs --tail=100 control-plane
 ```
 
-Keep the previous digest until the new deployment passes `/api/readyz` and the browser smoke check. Roll back by restoring the previous digest and recreating the service. Do not remove PostgreSQL or the data volume during an application rollback.
+Keep the previous release tag available until the new deployment passes `/api/readyz` and the browser smoke check. Roll back by restoring the previous tag and recreating the service. Do not remove PostgreSQL or the data volume during an application rollback.
 
 ## Database migrations
 

@@ -42,7 +42,6 @@ jobs:
       - name: Validate Compose interpolation
         env:
           WHITESMITH_BUILD_ID: ci
-          WHITESMITH_RELEASE_DIGEST: sha256:${{ hashFiles('deploy/control-plane/Dockerfile') }}
           PUBLIC_BASE_URL: https://example.invalid
           BROWSER_BASE_URL: https://example.invalid
           POSTGRES_PASSWORD: ci-only
@@ -50,11 +49,4 @@ jobs:
           GITHUB_OAUTH_CLIENT_ID: ci
           GITHUB_OAUTH_CLIENT_SECRET: ci
           GITHUB_WEBHOOK_SECRET: ci
-          WHITESMITH_WINDOWS_CONTAINER_BASE_IMAGE: mcr.microsoft.com/windows/servercore:ltsc2025@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          WHITESMITH_WINDOWS_CONTAINER_RUNNER_URL: https://example.invalid/runner.zip
-          WHITESMITH_WINDOWS_CONTAINER_RUNNER_SHA256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          WHITESMITH_WINDOWS_CONTAINER_GIT_URL: https://example.invalid/git.zip
-          WHITESMITH_WINDOWS_CONTAINER_GIT_SHA256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-          WHITESMITH_WINDOWS_CONTAINER_VC_URL: https://example.invalid/vc.exe
-          WHITESMITH_WINDOWS_CONTAINER_VC_SHA256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         run: docker compose -f deploy/control-plane/compose.yaml config -q
