@@ -16,7 +16,8 @@ function wrapDatabase(orm: DrizzleDatabase, raw: RawDatabaseClient): DatabaseCli
   } as QueryTag & Record<string, unknown>;
   const proxy = new Proxy(callable, {
     get(_target, property) {
-      if (property === "$client" || property === "end" || property === "json" || property === "unsafe") return raw[property as keyof RawDatabaseClient];
+      if (property === "$client") return raw;
+      if (property === "end" || property === "json" || property === "unsafe") return raw[property as keyof RawDatabaseClient];
       if (property === "begin") return (callback: (tx: DatabaseClient) => Promise<unknown>) => orm.transaction(async tx => callback(wrapDatabase(tx as unknown as DrizzleDatabase, raw)));
       return (orm as unknown as Record<PropertyKey, unknown>)[property];
     },
