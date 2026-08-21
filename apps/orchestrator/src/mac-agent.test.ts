@@ -72,7 +72,7 @@ test("signs worker websocket challenges with the enrolled key", () => {
 });
 describe("worker identity persistence", () => {
   test("accepts the persisted worker key and id shape", () => {
-    expect(parseMacWorkerIdentity({ workerId: "worker-1", publicKey: "public", privateKey: "private", encryptionPublicKey: "encryption-public", encryptionPrivateKey: "encryption-private" })).toEqual({ workerId: "worker-1", publicKey: "public", privateKey: "private", encryptionPublicKey: "encryption-public", encryptionPrivateKey: "encryption-private" });
+    expect(parseMacWorkerIdentity({ workerId: "worker-1", publicKey: "public", privateKey: "private", encryptionPublicKey: "encryption-public", encryptionPrivateKey: "encryption-private" })).toEqual({ workerId: "worker-1", publicKey: "public", privateKey: "private", encryptionPublicKey: "encryption-public", encryptionPrivateKey: "encryption-private", preserveLeases: false });
   });
   test("rejects incomplete persisted identity", () => {
     expect(() => parseMacWorkerIdentity({ workerId: "worker-1" })).toThrow("worker identity is invalid");

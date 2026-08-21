@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { statfsSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
 import { WorkerBootstrapRequest, WorkerCommand, WorkerConfigurePayload, WorkerConfiguration, WorkerDoctorData, WorkerEvent, type LeaseBootstrapEnvelope, type WorkerCapacityData } from "@whitesmith/contracts";
-import type { Lease } from "./runtime.ts";
+import type { Lease, RuntimeLease } from "./runtime.ts";
 import { createTartVmRuntime, TartVmDriver } from "./tart.ts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 
@@ -53,8 +53,9 @@ export async function runMacLeaseLifecycle(
   driver: TartVmDriver,
   bootstrap: LeaseBootstrapEnvelope,
   send: (event: WorkerEvent) => void,
+  preserveLeases = false,
 ): Promise<void> {
-  let runtime: Awaited<ReturnType<TartVmDriver["createLease"]>>;
+  let runtime: RuntimeLease;
   try {
     runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
   } catch (error) {
@@ -76,6 +77,10 @@ export async function runMacLeaseLifecycle(
     send(workerEvent(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "runner_failed" }));
   }
   let cleanupFailed = false;
+  if (preserveLeases) {
+    send(workerEvent(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "debug_preserve" }));
+    return;
+  }
   try { await driver.stopLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("macOS lease stop failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) }); }
   try { await driver.removeLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("macOS lease removal failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) }); }
   send(workerEvent(command.workerId, cleanupFailed ? "lease.failed" : "lease.reaped", cleanupFailed
@@ -88,10 +93,11 @@ export function startMacLeaseLifecycle(
   bootstrap: LeaseBootstrapEnvelope,
   send: (event: WorkerEvent) => void,
   active: Map<string, Promise<void>>,
+  preserveLeases: () => boolean = () => false,
 ): Promise<void> {
   const existing = active.get(bootstrap.leaseId);
   if (existing) return existing;
-  const lifecycle = runMacLeaseLifecycle(command, driver, bootstrap, send).finally(() => {
+  const lifecycle = runMacLeaseLifecycle(command, driver, bootstrap, send, preserveLeases()).finally(() => {
     if (active.get(bootstrap.leaseId) === lifecycle) active.delete(bootstrap.leaseId);
   });
   active.set(bootstrap.leaseId, lifecycle);
@@ -199,7 +205,7 @@ function validateControlPlaneUrl(baseUrl: string): URL {
   if (url.protocol !== "https:" && !(loopback && url.protocol === "http:") && !allowInsecureHttp) throw new Error("control plane must use HTTPS (TLS 1.3) except explicit localhost development");
   return url;
 }
-type MacWorkerIdentity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string };
+type MacWorkerIdentity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string; preserveLeases?: boolean };
 
 function identityFilePath(): string {
   return Bun.env.WHITESMITH_WORKER_IDENTITY_FILE ?? `${Bun.env.HOME ?? "."}/Library/Application Support/Whitesmith/worker-identity.json`;
@@ -208,7 +214,7 @@ export function parseMacWorkerIdentity(value: unknown): MacWorkerIdentity {
   if (!value || typeof value !== "object") throw new Error("worker identity is invalid");
   const record = value as Record<string, unknown>;
   if (typeof record.workerId !== "string" || typeof record.publicKey !== "string" || typeof record.privateKey !== "string" || typeof record.encryptionPublicKey !== "string" || typeof record.encryptionPrivateKey !== "string") throw new Error("worker identity is invalid");
-  return { workerId: record.workerId, publicKey: record.publicKey, privateKey: record.privateKey, encryptionPublicKey: record.encryptionPublicKey, encryptionPrivateKey: record.encryptionPrivateKey };
+  return { workerId: record.workerId, publicKey: record.publicKey, privateKey: record.privateKey, encryptionPublicKey: record.encryptionPublicKey, encryptionPrivateKey: record.encryptionPrivateKey, preserveLeases: record.preserveLeases === true };
 }
 
 async function loadMacWorkerIdentity(): Promise<MacWorkerIdentity | null> {
@@ -256,10 +262,21 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           ws.send(JSON.stringify(buildMacWorkerAuthentication(frame.nonce, identity.workerId, identity.privateKey, identity.encryptionPublicKey)));
           return;
         }
-        if (frame.type === "authenticated") return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
-        if (frame.type === "ping") { ws.send("pong"); return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } })); }
+        if (frame.type === "authenticated") return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
+        if (frame.type === "ping") { ws.send("pong"); return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } })); }
         if (frame.type === "doctor_ack") return;
         const command = WorkerCommand.parse(frame);
+        if (command.type === "worker.set_lease_preservation") {
+          const enabled = (command.payload as Record<string, unknown>).enabled;
+          if (typeof enabled !== "boolean") throw new Error("lease preservation command invalid");
+          identity.preserveLeases = enabled;
+          await saveMacWorkerIdentity(identity);
+          return ws.send(JSON.stringify(workerEvent(command.workerId, "command.accepted", { commandId: command.id, leaseId: null })));
+        }
+        if (command.type === "tart.stop_lease" && identity.preserveLeases === true && command.leaseId) {
+          const nonce = String((command.payload as Record<string, unknown>).nonce ?? "");
+          return ws.send(JSON.stringify(workerEvent(command.workerId, "lease.failed", { commandId: command.id, leaseId: command.leaseId, nonce, reason: "debug_preserve" })));
+        }
         if (command.type === "tart.create_lease") {
           if (!command.leaseId) throw new Error("lease id required");
           const payload = command.payload as { bootstrapCiphertext?: Parameters<typeof openLeaseBootstrap>[0] };
@@ -269,7 +286,7 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           ws.send(JSON.stringify(workerEvent(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
           void startMacLeaseLifecycle(command, driver, bootstrap, lifecycleEvent => {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(lifecycleEvent));
-          }, activeLeases);
+          }, activeLeases, () => identity.preserveLeases === true);
           return;
         }
         ws.send(JSON.stringify(await handleMacWorkerCommand(command, driver, limits, identity.encryptionPrivateKey)));

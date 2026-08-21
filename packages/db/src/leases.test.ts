@@ -14,7 +14,9 @@ test("reserves a routing slot before any JIT request", async () => {
   const db = Object.assign(((strings: TemplateStringsArray, ...values: unknown[]) => []) as unknown as Sql<{}>, { begin: async (fn: (value: Sql<{}>) => unknown) => fn(tx) });
   const result = await reserveRoutingSlot(db, { organizationId: "org", poolId: "pool", workerId: "worker", routingKey: "org:pool:labels", requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, ttlMs: 60_000 });
   expect(result.id).toBe("00000000-0000-4000-8000-000000000001");
-  expect(queries.some((query) => query.toLowerCase().includes("insert into runner_leases"))).toBe(true);
+  const insertQuery = queries.find((query) => query.toLowerCase().includes("insert into runner_leases"));
+  expect(insertQuery).toBeDefined();
+  expect(insertQuery).not.toContain("id=EXCLUDED.id");
 });
 test("normalizes PostgreSQL timestamp strings for encrypted lease bootstraps", async () => {
   const tx = ((strings: TemplateStringsArray) => {

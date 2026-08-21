@@ -62,7 +62,11 @@ export async function reconcileWorkerInventory(db: DatabaseClient, workerId: str
         SET state='failed', terminal_result=${jsonParameter(db, { reason: "worker_inventory_missing" })}::jsonb, cleanup_state='pending', updated_at=now()
         WHERE worker_id=${workerId}
           AND state IN ('dispatched','sandbox_ready','online','busy')
-          AND NOT (id = ANY(${ids}::uuid[]))
+          AND NOT EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb) AS active(id)
+            WHERE active.id::uuid = runner_leases.id
+          )
         RETURNING id
       `;
   return rows.length;

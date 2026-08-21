@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import type { LeaseBootstrapEnvelope, WorkerCommand } from "@whitesmith/contracts";
 import { initialMemoryPressureState, runLeaseLifecycle, updateMemoryPressure } from "./lease-lifecycle.ts";
-delete Bun.env.WHITESMITH_DEBUG_PRESERVE_LEASES;
 
 const command = { version: 1, id: "33333333-3333-4333-8333-333333333333", type: "windows-container.create_lease", workerId: "11111111-1111-4111-8111-111111111111", leaseId: "22222222-2222-4222-8222-222222222222", occurredAt: new Date().toISOString(), payload: {} } satisfies WorkerCommand;
 const bootstrap = { leaseId: command.leaseId!, jobId: command.leaseId!, nonce: "n".repeat(32), guestPlatform: "windows-x64", imageDigest: `repo@sha256:${"a".repeat(64)}`, resources: { vcpu: 1, memoryBytes: 2, storageBytes: 3, concurrency: 1 }, encodedJitConfig: "secret", expiresAt: new Date(Date.now() + 60_000).toISOString() } satisfies LeaseBootstrapEnvelope;
@@ -25,25 +24,18 @@ test("reports a nonzero runner exit before cleanup", async () => {
   ]);
 });
 
-test("preserves a lease when debug cleanup is disabled", async () => {
-  const previous = Bun.env.WHITESMITH_DEBUG_PRESERVE_LEASES;
+test("preserves a lease when worker setting is enabled", async () => {
   const stopped: string[] = [];
-  try {
-    Bun.env.WHITESMITH_DEBUG_PRESERVE_LEASES = "1";
-    const driver = {
-      createLease: async () => ({ runtimeInstanceId: "runtime", observed: { vcpu: 1, memoryBytes: 2, storageBytes: 3 }, completion: Promise.resolve(0), state: "sandbox_attested" as const }),
-      stopLease: async (leaseId: string) => { stopped.push(`stop:${leaseId}`); },
-      removeLease: async (leaseId: string) => { stopped.push(`remove:${leaseId}`); },
-      collectRawDiagnostics: async () => "runner diagnostics",
-    };
-    const events: string[] = [];
-    await runLeaseLifecycle(command, driver, bootstrap, event => events.push(event.type));
-    expect(stopped).toEqual([]);
-    expect(events).toEqual(["sandbox_attested", "runner.finished", "diagnostic.chunk", "lease.failed"]);
-  } finally {
-    if (previous === undefined) delete Bun.env.WHITESMITH_DEBUG_PRESERVE_LEASES;
-    else Bun.env.WHITESMITH_DEBUG_PRESERVE_LEASES = previous;
-  }
+  const driver = {
+    createLease: async () => ({ runtimeInstanceId: "runtime", observed: { vcpu: 1, memoryBytes: 2, storageBytes: 3 }, completion: Promise.resolve(0), state: "sandbox_attested" as const }),
+    stopLease: async (leaseId: string) => { stopped.push(`stop:${leaseId}`); },
+    removeLease: async (leaseId: string) => { stopped.push(`remove:${leaseId}`); },
+    collectRawDiagnostics: async () => "runner diagnostics",
+  };
+  const events: string[] = [];
+  await runLeaseLifecycle(command, driver, bootstrap, event => events.push(event.type), { preserveLeases: () => true });
+  expect(stopped).toEqual([]);
+  expect(events).toEqual(["sandbox_attested", "runner.finished", "diagnostic.chunk", "lease.failed"]);
 });
 
 test("requires two consecutive near-limit samples before OOM detection", () => {

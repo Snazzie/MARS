@@ -115,6 +115,7 @@ export const workers = pgTable("workers", {
 	configurationRevision: text("configuration_revision"),
 	configurationCommandId: uuid("configuration_command_id"),
 	draining: boolean().default(false).notNull(),
+	preserveLeases: boolean("preserve_leases").default(false).notNull(),
 	desiredConfiguration: jsonb("desired_configuration"),
 	appliedConfigurationRevision: text("applied_configuration_revision"),
 	configurationAppliedAt: timestamp("configuration_applied_at", { withTimezone: true, mode: 'string' }),

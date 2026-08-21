@@ -10,7 +10,7 @@ import type { RuntimeDriver } from "./runtime.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
-type Identity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string };
+type Identity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string; preserveLeases?: boolean };
 const identityPath = () => Bun.env.WHITESMITH_WORKER_IDENTITY_FILE ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "worker-identity.json");
 const event = (workerId: string, type: string, payload: Record<string, unknown>): WorkerEvent => WorkerEvent.parse({ version: 1, id: randomUUID(), workerId, type, occurredAt: new Date().toISOString(), payload });
 const keys = () => { const signing = generateKeyPairSync("ed25519"), encryption = generateKeyPairSync("x25519"); return { workerId: "", publicKey: signing.publicKey.export({ format: "pem", type: "spki" }).toString(), privateKey: signing.privateKey.export({ format: "pem", type: "pkcs8" }).toString(), encryptionPublicKey: encryption.publicKey.export({ format: "pem", type: "spki" }).toString(), encryptionPrivateKey: encryption.privateKey.export({ format: "pem", type: "pkcs8" }).toString() }; };
@@ -44,7 +44,7 @@ const localImageVerification = async (image: string): Promise<{ manifest: boolea
     return { manifest: false, entrypoint: false };
   }
 };
-export const windowsDoctor = async (): Promise<WorkerDoctorData> => {
+export const windowsDoctor = async (preserveLeases = false): Promise<WorkerDoctorData> => {
   const runtimeMode = Bun.env.WHITESMITH_WINDOWS_RUNTIME === "container" ? "container" : "vm";
   const artifactValue = runtimeMode === "container" ? Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE : Bun.env.WHITESMITH_WINDOWS_TEMPLATE_DIGEST;
   const localVerification = runtimeMode === "container" ? await localImageVerification(artifactValue ?? "") : { manifest: false, entrypoint: true };
@@ -67,7 +67,7 @@ export const windowsDoctor = async (): Promise<WorkerDoctorData> => {
     runtimeMode === "container" && localManifest && !localVerification.entrypoint && "Windows container image entrypoint is invalid",
   ].filter((failure): failure is string => Boolean(failure));
   const artifactDigest = localVerification.imageId ?? (typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactValue) ? artifactValue : undefined);
-  return WorkerDoctorData.parse({ runtimeMode, ...(runtimeMode === "container" ? { artifactSource: "worker_local", ...(artifactValue ? { artifactIdentity: artifactValue } : {}) } : { artifactSource: "template", ...(artifactDigest ? { artifactDigest } : {}) }), ...(artifactDigest ? { artifactDigest } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
+  return WorkerDoctorData.parse({ runtimeMode, preserveLeases, ...(runtimeMode === "container" ? { artifactSource: "worker_local", ...(artifactValue ? { artifactIdentity: artifactValue } : {}) } : { artifactSource: "template", ...(artifactDigest ? { artifactDigest } : {}) }), ...(artifactDigest ? { artifactDigest } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
 };
 const joinCode = async () => { const path = Bun.env.WHITESMITH_JOIN_CODE_FILE; if (path) return (await readFile(path, "utf8")).trim(); const reader = Bun.stdin.stream().getReader(); const { value } = await reader.read(); reader.releaseLock(); return Buffer.from(value ?? []).toString("utf8").trim(); };
 const save = async (identity: Identity) => { const path = identityPath(); await mkdir(dirname(path), { recursive: true }); await writeFile(path, JSON.stringify(identity) + "\n"); };
@@ -131,11 +131,12 @@ export async function runWindowsLeaseCleanup(
   command: WorkerCommand,
   driver: Pick<RuntimeDriver, "stopLease" | "removeLease">,
   send: (workerEvent: WorkerEvent) => void,
+  preserveLeases = false,
 ): Promise<void> {
   if (!["tart.stop_lease", "windows-container.stop_lease", "hyperv.stop_lease"].includes(command.type) || !command.leaseId) throw new Error("Windows lease cleanup command invalid");
   const nonce = String((command.payload as Record<string, unknown>).nonce ?? "");
   const payload = { commandId: command.id, leaseId: command.leaseId, nonce };
-  if (command.type !== "tart.stop_lease" && Bun.env.WHITESMITH_DEBUG_PRESERVE_LEASES === "1") {
+  if (command.type !== "tart.stop_lease" && preserveLeases) {
     send(event(command.workerId, "lease.failed", { ...payload, reason: "debug_preserve" }));
     return;
   }
@@ -154,10 +155,11 @@ export function startWindowsLeaseLifecycle(
   bootstrap: LeaseBootstrapEnvelope,
   send: (workerEvent: WorkerEvent) => void,
   active: Map<string, Promise<void>>,
+  preserveLeases: () => boolean = () => false,
 ): Promise<void> {
   const existing = active.get(bootstrap.leaseId);
   if (existing) return existing;
-  const lifecycle = runLeaseLifecycle(command, driver, bootstrap, send).finally(() => {
+  const lifecycle = runLeaseLifecycle(command, driver, bootstrap, send, { preserveLeases }).finally(() => {
     if (active.get(bootstrap.leaseId) === lifecycle) active.delete(bootstrap.leaseId);
   });
   active.set(bootstrap.leaseId, lifecycle);
@@ -181,7 +183,7 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
   } else {
     throw new Error(`Unsupported Windows runtime: ${mode}`);
   }
-  const doctorReport = await windowsDoctor();
+  const doctorReport = await windowsDoctor(identity.preserveLeases === true);
   const capacityReport = await capacity();
   const activeLeases = new Map<string, Promise<void>>();
   const loop = async (signal?: AbortSignal): Promise<never> => {
@@ -198,10 +200,17 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
         try {
           const frame = JSON.parse(String(message.data)) as Record<string, unknown>;
           if (frame.type === "challenge") return ws.send(JSON.stringify(auth(String(frame.nonce), identity)));
-          if (frame.type === "authenticated") return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, activeLeases: [...activeLeases.keys()] }, capacity: capacityReport } }));
-          if (frame.type === "ping") { ws.send("pong"); return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, activeLeases: [...activeLeases.keys()] }, capacity: await capacity() } })); }
+          if (frame.type === "authenticated") return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacityReport } }));
+          if (frame.type === "ping") { ws.send("pong"); return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: await capacity() } })); }
           if (frame.type === "doctor_ack") return;
           const command = WorkerCommand.parse(frame);
+          if (command.type === "worker.set_lease_preservation") {
+            const enabled = (command.payload as Record<string, unknown>).enabled;
+            if (typeof enabled !== "boolean") throw new Error("lease preservation command invalid");
+            identity.preserveLeases = enabled;
+            await save(identity);
+            return ws.send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: null })));
+          }
           if (command.type === "worker.configure") {
             const payload = WorkerConfigurePayload.parse(command.payload);
             const observed = applyWindowsWorkerConfiguration(limits, payload);
@@ -211,8 +220,8 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
             await buildWindowsImage(command, workerEvent => ws.send(JSON.stringify(workerEvent)));
             return;
           }
-          if (command.type === "tart.stop_lease") {
-            await runWindowsLeaseCleanup(command, driver, workerEvent => ws.send(JSON.stringify(workerEvent)));
+          if (command.type === "tart.stop_lease" || command.type === "windows-container.stop_lease" || command.type === "hyperv.stop_lease") {
+            await runWindowsLeaseCleanup(command, driver, workerEvent => ws.send(JSON.stringify(workerEvent)), identity.preserveLeases === true);
             return;
           }
           if (command.type === "windows-container.create_lease" || command.type === "hyperv.create_lease") {
@@ -223,7 +232,7 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
             const bootstrap: LeaseBootstrapEnvelope = openLeaseBootstrap(cipher, identity.encryptionPrivateKey);
             if (bootstrap.leaseId !== command.leaseId || (mode === "container" ? bootstrap.guestPlatform !== "windows-x64" : !["windows-x64", "linux-x64"].includes(bootstrap.guestPlatform))) throw new Error("Windows lease bootstrap mismatch");
             ws.send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
-            void startWindowsLeaseLifecycle(command, driver, bootstrap, workerEvent => ws.send(JSON.stringify(workerEvent)), activeLeases);
+            void startWindowsLeaseLifecycle(command, driver, bootstrap, workerEvent => ws.send(JSON.stringify(workerEvent)), activeLeases, () => identity.preserveLeases === true);
           }
         } catch (error) {
           console.error("Windows worker command failed", error);

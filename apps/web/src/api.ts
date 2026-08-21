@@ -183,6 +183,13 @@ export async function mutateWorker(organizationId: string, workerId: string, act
     body: JSON.stringify({}),
   });
 }
+export function setWorkerLeasePreservation(organizationId: string, workerId: string, enabled: boolean) {
+  return request(`/api/organizations/${organizationId}/workers/${workerId}/lease-preservation`, WorkerDetail, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ enabled }),
+  });
+}
 export const getWorkerBootstrapStatus = () => request("/api/workers/bootstrap", DashboardBootstrapStatus, { cache: "no-store" });
 export const getWorkerControlPlaneUrls = () => request("/api/workers/control-plane-urls", z.array(z.string().url()), { cache: "no-store" });
 export const getPendingWorkerRequests = () => request("/api/workers/pending", DashboardPendingWorkerResponse, { cache: "no-store" });

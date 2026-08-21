@@ -31,7 +31,8 @@ test("worker inventory reclaims runtime leases it does not report", async () => 
   expect(await reconcileWorkerInventory(db, "worker-1", ["11111111-1111-4111-8111-111111111111"])).toBe(1);
   expect(query).not.toContain("expires_at < now()");
   expect(query).toContain("state IN ('dispatched','sandbox_ready','online','busy')");
-  expect(query).toContain("NOT (id = ANY");
+  expect(query).not.toContain("ANY((");
+  expect(query).toContain("jsonb_array_elements_text");
 });
 test("worker inventory empty list reclaims all runtime leases", async () => {
   let query = "";

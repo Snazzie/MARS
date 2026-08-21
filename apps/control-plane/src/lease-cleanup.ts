@@ -2,6 +2,7 @@ import type { DatabaseClient } from "@whitesmith/db";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 
 type CleanupLease = { leaseId: string; workerId: string; nonce: string; cleanupType?: "tart.stop_lease" | "windows-container.stop_lease" | "hyperv.stop_lease" };
+export type LeaseCleanupReport = { dispatched: number; skipped: number; failed: number };
 
 export async function reapPendingLeases(input: {
   db: DatabaseClient;

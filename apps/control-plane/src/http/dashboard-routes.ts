@@ -156,6 +156,25 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     }
     return c.json({ ok: true });
   }));
+  app.post("/api/organizations/:organizationId/workers/:workerId/lease-preservation", safe(async (c) => {
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    if (!deps.workerDispatcher) return error(c, 503, "worker_dispatch_unavailable", "Worker command dispatch is unavailable");
+    const organizationId = c.req.param("organizationId");
+    const workerId = c.req.param("workerId");
+    const worker = await getWorkerDetail(deps.db, organizationId, workerId);
+    if (!worker) return error(c, 404, "not_found", "Resource not found");
+    const body = z.object({ enabled: z.boolean() }).strict().parse(await c.req.json());
+    const idem = requireMutation(c); if (idem) return idem;
+    const key = c.req.header("idempotency-key")!;
+    if (!(await dashboardMutation(deps.db, organizationId, key))) return c.json(WorkerDetail.parse(await getWorkerDetail(deps.db, organizationId, workerId)));
+    await deps.db`UPDATE workers SET preserve_leases=${body.enabled} WHERE id=${workerId}`;
+    if (!body.enabled) {
+      await deps.db`UPDATE runner_leases SET cleanup_state='pending' WHERE worker_id=${workerId} AND state='failed' AND cleanup_state='debug_preserved'`;
+    }
+    await deps.workerDispatcher.dispatch({ type: "worker.set_lease_preservation", workerId, leaseId: null, payload: { enabled: body.enabled } });
+    await invalidateDashboard(deps.db, organizationId, ["workers", workerId]);
+    return c.json(WorkerDetail.parse(await getWorkerDetail(deps.db, organizationId, workerId)));
+  }));
   app.get("/api/pools", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const q = parseQuery(c); if (q instanceof Response) return q;

@@ -10,7 +10,7 @@ ALTER TABLE organizations ADD CONSTRAINT organizations_github_account_type_check
 CREATE UNIQUE INDEX IF NOT EXISTS organizations_github_account_idx ON organizations(github_account_type, github_org_id);
 CREATE TABLE IF NOT EXISTS sessions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), token_hash bytea UNIQUE NOT NULL, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
 DROP TABLE IF EXISTS worker_join_codes;
-CREATE TABLE IF NOT EXISTS workers (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text NOT NULL, platform text NOT NULL, guest_platforms jsonb NOT NULL DEFAULT '[]'::jsonb, admission_state text NOT NULL, connection_state text NOT NULL DEFAULT 'offline', configuration_state text NOT NULL DEFAULT 'unconfigured', public_key text, encryption_public_key text, fingerprint text, limits jsonb, doctor jsonb, vm_uuid text, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS workers (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text NOT NULL, platform text NOT NULL, guest_platforms jsonb NOT NULL DEFAULT '[]'::jsonb, admission_state text NOT NULL, connection_state text NOT NULL DEFAULT 'offline', configuration_state text NOT NULL DEFAULT 'unconfigured', public_key text, encryption_public_key text, fingerprint text, limits jsonb, doctor jsonb, vm_uuid text, created_at timestamptz NOT NULL DEFAULT now(), preserve_leases boolean NOT NULL DEFAULT false);
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS guest_platforms jsonb;
 UPDATE workers SET guest_platforms=CASE WHEN platform='windows-x64' THEN '["windows-x64"]'::jsonb ELSE jsonb_build_array(platform) END WHERE guest_platforms IS NULL OR CASE WHEN jsonb_typeof(guest_platforms)='array' THEN jsonb_array_length(guest_platforms)=0 ELSE true END;
 ALTER TABLE workers ALTER COLUMN guest_platforms SET NOT NULL;
@@ -25,6 +25,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS workers_active_vm_uuid_idx ON workers(vm_uuid)
 CREATE UNIQUE INDEX IF NOT EXISTS workers_active_fingerprint_idx ON workers(fingerprint) WHERE fingerprint IS NOT NULL AND admission_state IN ('pending','adopted');
 CREATE UNIQUE INDEX IF NOT EXISTS workers_active_machine_uuid_idx ON workers(machine_uuid) WHERE machine_uuid IS NOT NULL AND admission_state IN ('pending','adopted');
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS draining boolean NOT NULL DEFAULT false;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS preserve_leases boolean NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS runner_pools (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid REFERENCES organizations(id), worker_id uuid REFERENCES workers(id), name text NOT NULL, platform text NOT NULL, driver text NOT NULL, image_digest text NOT NULL, resources jsonb NOT NULL, labels jsonb NOT NULL, trigger_label text, enabled boolean NOT NULL DEFAULT false);
 ALTER TABLE runner_pools ALTER COLUMN worker_id DROP NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS runner_pools_global_name_idx ON runner_pools(name) WHERE organization_id IS NULL;

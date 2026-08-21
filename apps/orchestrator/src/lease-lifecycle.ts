@@ -71,8 +71,8 @@ function fallbackTermination(cause: RuntimeTerminationEvidence["cause"], exitCod
     samplingGapMs,
   };
 }
-function preserveLeasesForDebugging(): boolean {
-  return Bun.env.WHITESMITH_DEBUG_PRESERVE_LEASES === "1";
+function preserveLeasesForDebugging(options?: { preserveLeases?: () => boolean }): boolean {
+  return options?.preserveLeases?.() === true;
 }
 
 
@@ -81,6 +81,7 @@ export async function runLeaseLifecycle(
   driver: Pick<RuntimeDriver, "createLease" | "requestGracefulStop" | "stopLease" | "removeLease" | "collectRawDiagnostics">,
   bootstrap: LeaseBootstrapEnvelope,
   send: (event: WorkerEvent) => void,
+  options?: { preserveLeases?: () => boolean },
 ): Promise<void> {
   const correlationId = crypto.randomUUID();
   const startedAt = Date.now();
@@ -163,7 +164,7 @@ export async function runLeaseLifecycle(
       console.error("Raw container diagnostics failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) });
     }
   }
-  if (preserveLeasesForDebugging()) {
+  if (preserveLeasesForDebugging(options)) {
     console.warn("Lease cleanup disabled for debugging", { leaseId: bootstrap.leaseId, correlationId });
     send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "debug_preserve" } });
     return;

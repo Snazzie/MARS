@@ -292,7 +292,7 @@ function workerDoctor(value: unknown): WorkerDetail["doctor"] {
   const source = { ...nested, ...wrapper };
   if (!Object.keys(source).length) return null;
   const candidate: Record<string, unknown> = {};
-  for (const key of ["nestedKvm", "kvmModules", "probe", "egress", "imageSignatures", "blockVolume", "runtimeReady"]) {
+  for (const key of ["nestedKvm", "kvmModules", "probe", "egress", "imageSignatures", "blockVolume", "runtimeReady", "preserveLeases"]) {
     if (typeof source[key] === "boolean") candidate[key] = source[key];
   }
   if (["idle", "building", "ready", "failed"].includes(String(source.runtimeBuildState))) candidate.runtimeBuildState = source.runtimeBuildState;
@@ -341,16 +341,17 @@ function normalizeWorker(row: Record<string, unknown>): WorkerDetail {
     capacity: workerCapacity(row.doctor),
     activeSandboxes: numberValue(row.activeSandboxes, 0),
     draining: row.draining === true,
+    preserveLeases: row.preserveLeases === true,
   };
   return worker;
 }
 export async function listWorkers(db: DashboardDb, organizationId: string, limit = 50): Promise<CursorPage<WorkerDetail>> {
-  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w ORDER BY w.name LIMIT ${limit + 1}`;
+  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.preserve_leases AS "preserveLeases",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w ORDER BY w.name LIMIT ${limit + 1}`;
   const items = rows.slice(0, limit).map(normalizeWorker);
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }
 export async function listAllWorkers(db: DashboardDb, userId: string, limit = 50, includeInactive = false): Promise<CursorPage<WorkerDetail>> {
-  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w WHERE ${includeInactive} OR w.admission_state NOT IN ('rejected','revoked') ORDER BY w.name LIMIT ${limit + 1}`;
+  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.preserve_leases AS "preserveLeases",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w WHERE ${includeInactive} OR w.admission_state NOT IN ('rejected','revoked') ORDER BY w.name LIMIT ${limit + 1}`;
   const items = rows.slice(0, limit).map(normalizeWorker);
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }

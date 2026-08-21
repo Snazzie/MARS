@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import type { WorkerDetail } from "@whitesmith/contracts";
+import { setWorkerLeasePreservation } from "../api.ts";
 import { Button } from "@astryxdesign/core/Button";
 import { WorkerActions } from "./WorkerActions.tsx";
 import { WorkerConfigurationForm } from "./WorkerConfigurationForm.tsx";
@@ -13,8 +14,17 @@ function appliedAt(value: string): string { return new Intl.DateTimeFormat("en",
 function telemetryAt(value: string | null): ReactNode {
   return value ? <time dateTime={value}>{appliedAt(value)}</time> : "Never";
 }
-export function WorkerCard({ worker, organizationId, onChange }: { worker: WorkerDetail; organizationId: string; onChange: () => void }) {
+export function WorkerCard({ worker, organizationId, onChange, canManage = false }: { worker: WorkerDetail; organizationId: string; onChange: () => void; canManage?: boolean }) {
   const active = worker.admissionState === "adopted";
+  const [preservationPending, setPreservationPending] = useState(false);
+  const [preservationError, setPreservationError] = useState<string | null>(null);
+  const togglePreservation = async (enabled: boolean) => {
+    setPreservationPending(true);
+    setPreservationError(null);
+    try { await setWorkerLeasePreservation(organizationId, worker.id, enabled); onChange(); }
+    catch (cause) { setPreservationError(cause instanceof Error ? cause.message : "Preservation setting failed"); }
+    finally { setPreservationPending(false); }
+  };
   const effectiveConfigurationState = worker.configurationState === "ready" && worker.configurationRevision !== worker.appliedConfigurationRevision ? "applying" : worker.configurationState;
   const runtimeReady = worker.doctor?.runtimeReady === true && worker.doctor.probe === true && worker.doctor.egress === true && worker.doctor.imageSignatures === true;
   const readinessLabel = workerReadinessLabel(effectiveConfigurationState);
@@ -33,8 +43,9 @@ export function WorkerCard({ worker, organizationId, onChange }: { worker: Worke
   return <article className={`worker-card ${worker.admissionState !== "adopted" ? "worker-card-pending" : ""}`} aria-labelledby={`worker-${worker.id}`}>
     <header className="worker-card-header"><div><div className="worker-name-row"><span className={`status-dot status-${worker.connectionState}`} aria-label={worker.connectionState} /><h2 id={`worker-${worker.id}`}>{worker.name}</h2></div><p className="worker-meta">{worker.platform} · guests: {worker.guestPlatforms.join(", ")} · {worker.driver} · <span className={`status-pill status-${worker.admissionState}`}>{worker.admissionState}</span></p><div className="worker-statuses" aria-label="Worker status"><span className={`status-pill status-${worker.connectionState}`}>{worker.connectionState}</span>{worker.draining && <span className="status-pill status-draining">draining</span>}<span className={`status-pill status-${effectiveConfigurationState}`}>{readinessLabel}</span></div></div><WorkerActions organizationId={organizationId} workerId={worker.id} admissionState={worker.admissionState} draining={worker.draining} activeSandboxes={worker.activeSandboxes} platform={worker.platform} runtimeMode={worker.platform === "windows-x64" ? "container" : worker.runtimeMode === "container" || worker.runtimeMode === "vm" ? worker.runtimeMode : null} onComplete={onChange} />{active && <Button label="Configure" variant="secondary" clickAction={openConfiguration} />}</header>
     {active && worker.platform === "windows-x64" && <button type="button" className="control-button" onClick={() => setBuilding(true)} disabled={worker.connectionState !== "online" || worker.doctor?.runtimeBuildState === "building"} title={worker.connectionState === "online" ? "Send the declarative image build to the worker" : "Worker must be online before it can build an image"}>{worker.connectionState !== "online" ? "Worker offline" : worker.doctor?.runtimeBuildState === "building" ? "Building…" : "Build local image"}</button>}
-    {worker.admissionState === "pending" && <p className="pending-note">Registered with the control plane. Configure resources before creating a pool.</p>}
+    {active && canManage && <div className="worker-policy-control"><label><input type="checkbox" checked={worker.preserveLeases === true} disabled={preservationPending} onChange={(event) => { void togglePreservation(event.currentTarget.checked); }} /> Preserve failed containers</label><p className="pending-note">Keeps failed runtimes for inspection and consumes worker capacity until disabled.</p>{preservationError && <p className="form-error" role="alert">{preservationError}</p>}</div>}
     {active && effectiveConfigurationState === "ready" && applied && <p className="pending-note">Configuration updated <time dateTime={worker.configurationAppliedAt!}>{applied.at}</time> · revision <code>{applied.revision}</code></p>}
+    {worker.admissionState === "pending" && <p className="pending-note">Registered with the control plane. Configure resources before creating a pool.</p>}
     {active && effectiveConfigurationState === "ready" && worker.doctor?.runtimeBuildState === "building" && <p className="pending-note" role="status">Building local runtime image. Scheduling remains paused until the worker reports completion.</p>}
     {active && effectiveConfigurationState === "ready" && !runtimeReady && worker.doctor?.runtimeBuildState !== "building" && <p className="pending-note" role="status">Runtime image is not ready. Scheduling remains paused until the worker reports a verified local runtime.</p>}
     {active && effectiveConfigurationState === "error" && <p className="pending-note" role="alert">Configuration update failed.{applied ? <> Last applied <time dateTime={worker.configurationAppliedAt!}>{applied.at}</time> · revision <code>{applied.revision}</code>.</> : " No configuration has been acknowledged."}</p>}
