@@ -4,8 +4,7 @@ import type { ControlPlaneHttpDeps } from "./types.ts";
 const fakeDb = (() => []) as unknown as ControlPlaneHttpDeps["db"];
 const fakeSetup: ControlPlaneHttpDeps["setup"] = {
   publicOrigin: () => "https://control-plane.test",
-  configure: async (_code, origin) => origin,
-  authorize: async () => true,
+  configure: async origin => origin,
   claimAdmin: async () => "admin",
 };
 

@@ -96,7 +96,6 @@ if (production) {
 }
 const db = createDb(env.DATABASE); await migrateDatabase(db); await ensureDefaultPools(db, env.DEFAULT_IMAGES);
 const initialized = await initializeControlPlaneSetup(db, dataRoot);
-if (initialized.setupCode) console.log(`Whitesmith first-run setup code: ${initialized.setupCode}`);
 const secretBox = new SecretBox(initialized.masterKey);
 const json = (data: unknown, status=200) => Response.json(data,{status,headers:{"cache-control":"no-store"}});
 const cookie = (value:string, maxAge:number) => `whitesmith_session=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;

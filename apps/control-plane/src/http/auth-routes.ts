@@ -59,7 +59,7 @@ export function registerAuthRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlan
     const setupCode = cookieValue(cookie, "whitesmith_setup");
     let userId: string;
     if (setupCode) {
-      try { userId = await deps.setup.claimAdmin(setupCode, user); }
+      try { userId = await deps.setup.claimAdmin(user); }
       catch (error) {
         if (error instanceof Error && ["setup_unauthorized", "setup_admin_conflict"].includes(error.message)) return c.json({ error: "forbidden" }, 403);
         throw error;
