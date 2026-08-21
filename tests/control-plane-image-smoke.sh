@@ -47,7 +47,11 @@ if [[ "$live" != 200 || "$ready" != 200 ]]; then
 fi
 echo 'control-plane live and ready'
 
-status=$(curl --silent --show-error http://127.0.0.1:3000/api/onboarding/status)
+for attempt in {1..20}; do
+  status=$(curl --silent --show-error http://127.0.0.1:3000/api/onboarding/status || true)
+  if [[ "$status" == *'"step":"setup"'* ]]; then break; fi
+  sleep 1
+done
 printf '%s' "$status" | bun -e 'const value=JSON.parse(await new Response(Bun.stdin).text()); if(value.step!=="setup") process.exit(1)'
 setup_code=$(docker logs "$CONTROL_PLANE" 2>&1 | sed -n 's/.*Whitesmith first-run setup code: //p' | tail -n 1)
 [[ ${#setup_code} -ge 32 ]]
@@ -68,6 +72,12 @@ for attempt in {1..60}; do
   if [[ "$ready" == 200 ]]; then break; fi
   sleep 2
 done
-[[ "$ready" == 200 ]]
-status=$(curl --silent --show-error http://127.0.0.1:3000/api/onboarding/status)
-printf '%s' "$status" | bun -e 'const value=JSON.parse(await new Response(Bun.stdin).text()); if(value.step!=="setup") process.exit(1)'
+if [[ "$ready" != 200 ]]; then docker logs "$CONTROL_PLANE" >&2; exit 1; fi
+for attempt in {1..20}; do
+  status=$(curl --silent --show-error http://127.0.0.1:3000/api/onboarding/status || true)
+  if [[ "$status" == *'"step":"setup"'* ]]; then break; fi
+  sleep 1
+done
+if [[ "$status" != *'"step":"setup"'* ]]; then docker logs "$CONTROL_PLANE" >&2; exit 1; fi
+:
+echo 'control-plane restart preserved setup state'

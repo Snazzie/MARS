@@ -1,7 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, chmod, readFile, unlink, open } from "node:fs/promises";
 import { join } from "node:path";
-import type { DashboardDb, DatabaseClient } from "@whitesmith/db";
+import type { DashboardDb } from "@whitesmith/db";
+import type { TransactionSql } from "postgres";
 import { httpOrigin } from "./http-origin.ts";
 
 const SETUP_LOCK = "whitesmith:control-plane-setup";
@@ -67,7 +68,7 @@ export async function initializeControlPlaneSetup(db: DashboardDb, dataRoot: str
   }
   if (config && !config.setupCompletedAt && !config.setupCodeHash) {
     const candidate = randomBytes(32).toString("base64url");
-    await db.begin(async (tx: DatabaseClient) => {
+    await db.begin(async (tx: TransactionSql) => {
       await tx`select pg_advisory_xact_lock(hashtext(${SETUP_LOCK}))`;
       const rows = await tx<ConfigRow[]>`select setup_code_hash as "setupCodeHash", setup_completed_at as "setupCompletedAt" from control_plane_config where singleton=true for update`;
       if (rows[0] && !rows[0].setupCompletedAt && !rows[0].setupCodeHash) {
@@ -80,7 +81,7 @@ export async function initializeControlPlaneSetup(db: DashboardDb, dataRoot: str
     try { await readFile(setupPath(dataRoot), "utf8"); } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       const candidate = randomBytes(32).toString("base64url");
-      await db.begin(async (tx: DatabaseClient) => {
+      await db.begin(async (tx: TransactionSql) => {
         await tx`select pg_advisory_xact_lock(hashtext(${SETUP_LOCK}))`;
         const rows = await tx<ConfigRow[]>`select setup_code_hash as "setupCodeHash", setup_completed_at as "setupCompletedAt" from control_plane_config where singleton=true for update`;
         if (rows[0] && !rows[0].setupCompletedAt) {
@@ -107,7 +108,7 @@ export async function initializeControlPlaneSetup(db: DashboardDb, dataRoot: str
       return Boolean(current && !current.setupCompletedAt && sameDigest(current.setupCodeHash, digest(code)));
     },
     claimAdmin: async (code, githubUser) => {
-      const result = await db.begin(async (tx: DatabaseClient) => {
+      const result = await db.begin(async (tx: TransactionSql) => {
         await tx`select pg_advisory_xact_lock(hashtext(${SETUP_LOCK}))`;
         const rows = await tx<ConfigRow[]>`select setup_code_hash as "setupCodeHash", setup_completed_at as "setupCompletedAt" from control_plane_config where singleton=true for update`;
         const current = rows[0];

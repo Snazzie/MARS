@@ -28,7 +28,7 @@ docker compose --env-file .env -f deploy/control-plane/compose.yaml logs control
 
 Read the one-time setup code from the stable `Whitesmith first-run setup code: ` log line. Open `/onboarding`, enter that code, and enter the externally reachable HTTPS origin. The setup flow creates the GitHub App, then redirects to GitHub for the first administrator sign-in.
 
-The control plane persists the generated encryption key at `${DATA_ROOT}/app_master_key` in the named `whitesmith-data` volume. Back up that file together with PostgreSQL. Losing either side makes encrypted GitHub credentials unrecoverable.
+The control plane persists the generated encryption key at `${DATA_ROOT}/app_master_key` in the named `whitesmith-data` volume. Operators should back up that file together with PostgreSQL. Losing either side makes encrypted GitHub credentials unrecoverable.
 
 ## Health checks
 
@@ -44,7 +44,7 @@ Import `deploy/unraid/whitesmith-control-plane.xml`. Required inputs are the ext
 
 ## Upgrades and backups
 
-Back up PostgreSQL with `pg_dump` and the persistent data volume before upgrades. Keep the same data volume and database across image changes. Restore both together; do not regenerate `app_master_key`.
+Operators should back up PostgreSQL with `pg_dump` and the persistent data volume before upgrades. Keep the same data volume and database across image changes. Restore both together; do not regenerate `app_master_key`.
 
 ## Scope boundary
 

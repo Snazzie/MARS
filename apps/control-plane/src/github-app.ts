@@ -50,17 +50,19 @@ export class GitHubAppService {
 
   private async saveState(raw: string, value: SetupState): Promise<void> {
     if (!isSql(this.db)) { this.db.setupStates.set(this.stateKey(raw), value); return; }
-    await this.db`INSERT INTO github_setup_states (state_hash,purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at) VALUES (decode(${this.stateKey(raw)},'hex'),${value.purpose},${value.userId},${value.organizationId},${value.idempotencyKey},${value.encryptedState ?? null},${value.encryptedPkceVerifier ?? null},to_timestamp(${value.expiresAt / 1000})) ON CONFLICT (state_hash) DO UPDATE SET purpose=excluded.purpose,user_id=excluded.user_id,organization_id=excluded.organization_id,idempotency_key=excluded.idempotency_key,encrypted_state=excluded.encrypted_state,encrypted_pkce_verifier=excluded.encrypted_pkce_verifier,expires_at=excluded.expires_at,consumed_at=NULL`;
+    await this.db`INSERT INTO github_setup_states (state_hash,purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at) VALUES (decode(${this.stateKey(raw)},'hex'),${value.purpose},${value.userId === "setup" ? null : value.userId},${value.organizationId === "setup" ? null : value.organizationId},${value.idempotencyKey},${value.encryptedState ?? null},${value.encryptedPkceVerifier ?? null},to_timestamp(${value.expiresAt / 1000})) ON CONFLICT (state_hash) DO UPDATE SET purpose=excluded.purpose,user_id=excluded.user_id,organization_id=excluded.organization_id,idempotency_key=excluded.idempotency_key,encrypted_state=excluded.encrypted_state,encrypted_pkce_verifier=excluded.encrypted_pkce_verifier,expires_at=excluded.expires_at,consumed_at=NULL`;
   }
 
   private async consume(raw: string, userId: string, purpose: SetupState["purpose"]): Promise<SetupState> {
     if (!isSql(this.db)) {
       const state = this.db.setupStates.get(this.stateKey(raw)) ?? this.db.setupStates.get(raw);
-      if (!state || state.purpose !== purpose || state.userId !== userId || state.consumedAt || state.expiresAt < Date.now()) throw new Error("setup_state_expired");
+      if (!state || state.purpose !== purpose || (userId !== "setup" && state.userId !== userId) || state.consumedAt || state.expiresAt < Date.now()) throw new Error("setup_state_expired");
       state.consumedAt = Date.now();
       return state;
     }
-    const rows = await this.db<SetupRow[]>`UPDATE github_setup_states SET consumed_at=now() WHERE state_hash=decode(${this.stateKey(raw)},'hex') AND purpose=${purpose} AND user_id=${userId} AND consumed_at IS NULL AND expires_at>now() RETURNING purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at`;
+    const rows = userId === "setup"
+      ? await this.db<SetupRow[]>`UPDATE github_setup_states SET consumed_at=now() WHERE state_hash=decode(${this.stateKey(raw)},'hex') AND purpose=${purpose} AND consumed_at IS NULL AND expires_at>now() RETURNING purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at`
+      : await this.db<SetupRow[]>`UPDATE github_setup_states SET consumed_at=now() WHERE state_hash=decode(${this.stateKey(raw)},'hex') AND purpose=${purpose} AND user_id=${userId} AND consumed_at IS NULL AND expires_at>now() RETURNING purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at`;
     const row = rows[0];
     if (!row) throw new Error("setup_state_expired");
     return { purpose: row.purpose, userId: row.user_id, organizationId: row.organization_id, idempotencyKey: row.idempotency_key, encryptedState: row.encrypted_state ?? undefined, encryptedPkceVerifier: row.encrypted_pkce_verifier ?? undefined, expiresAt: nowMs(row.expires_at), consumedAt: nowMs(row.consumed_at as Date | string) };
@@ -91,9 +93,11 @@ export class GitHubAppService {
   }
   async createManifestLaunch(userId: string, organizationId: string, idempotencyKey: string): Promise<{ action: string; manifest: string }> {
     if (!isSql(this.db)) {
-      for (const state of this.db.setupStates.values()) if (state.purpose === "manifest" && state.userId === userId && state.organizationId === organizationId && state.idempotencyKey === idempotencyKey && !state.consumedAt && state.expiresAt > Date.now()) return { action: `https://github.com/settings/apps/new?state=${this.box.decrypt(state.encryptedState!)}`, manifest: this.box.decrypt(state.encryptedPkceVerifier!) };
+      for (const state of this.db.setupStates.values()) if (state.purpose === "manifest" && (userId === "setup" || state.userId === userId) && (organizationId === "setup" || state.organizationId === organizationId) && state.idempotencyKey === idempotencyKey && !state.consumedAt && state.expiresAt > Date.now()) return { action: `https://github.com/settings/apps/new?state=${this.box.decrypt(state.encryptedState!)}`, manifest: this.box.decrypt(state.encryptedPkceVerifier!) };
     } else {
-      const rows = await this.db<SetupRow[]>`SELECT purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at FROM github_setup_states WHERE purpose='manifest' AND user_id=${userId} AND organization_id=${organizationId} AND idempotency_key=${idempotencyKey} AND consumed_at IS NULL AND expires_at>now()`;
+      const rows = userId === "setup"
+        ? await this.db<SetupRow[]>`SELECT purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at FROM github_setup_states WHERE purpose='manifest' AND idempotency_key=${idempotencyKey} AND consumed_at IS NULL AND expires_at>now()`
+        : await this.db<SetupRow[]>`SELECT purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at FROM github_setup_states WHERE purpose='manifest' AND user_id=${userId} AND organization_id=${organizationId} AND idempotency_key=${idempotencyKey} AND consumed_at IS NULL AND expires_at>now()`;
       const state = rows[0];
       if (state?.encrypted_state && state.encrypted_pkce_verifier) return { action: `https://github.com/settings/apps/new?state=${this.box.decrypt(state.encrypted_state)}`, manifest: this.box.decrypt(state.encrypted_pkce_verifier) };
     }

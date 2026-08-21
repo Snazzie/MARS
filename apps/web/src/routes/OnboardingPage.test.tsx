@@ -56,7 +56,7 @@ test("authenticated non-admin sees authorization terminal state without setup da
 test("worker step combines selection, capacity configuration, and four-step progress", () => {
   const selectedWorker = { ...worker, configurationState: "unconfigured", limits: null };
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "worker", worker: selectedWorker, organizations: [], github: { appConfigured: true, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "a".repeat(64) });
-  for (const [label, className] of [["Admin", "is-complete"], ["Worker", "is-current"], ["GitHub", "is-locked"], ["Trigger labels", "is-locked"]]) {
+  for (const [label, className] of [["Control plane", "is-complete"], ["GitHub", "is-complete"], ["Admin", "is-complete"], ["Worker", "is-current"], ["Trigger labels", "is-locked"]]) {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const element = html.match(new RegExp(`<li[^>]*>[^<]*<span>[^<]*</span>(?:<strong>|<button[^>]*>)${escaped}(?:</strong>|</button>)</li>`))?.[0] ?? "";
     expect(element).toContain(className);

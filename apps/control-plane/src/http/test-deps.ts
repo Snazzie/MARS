@@ -9,12 +9,17 @@ const fakeSetup: ControlPlaneHttpDeps["setup"] = {
   claimAdmin: async () => "admin",
 };
 
-export function fakeHttpDeps(overrides: Partial<ControlPlaneHttpDeps> = {}): ControlPlaneHttpDeps {
+type TestOverrides = Partial<ControlPlaneHttpDeps> & Partial<{ baseUrl: string; browserBaseUrl: string; githubWebhookSecret: string }>;
+export function fakeHttpDeps(overrides: TestOverrides = {}): ControlPlaneHttpDeps {
+  const legacy = overrides as Partial<{ baseUrl: string; browserBaseUrl: string }>;
+  const publicOrigin = legacy.baseUrl ?? "https://control-plane.test";
+  const browserOrigin = legacy.browserBaseUrl ?? publicOrigin;
   return {
     db: fakeDb,
-    setup: fakeSetup,
-    browserOrigin: () => "https://control-plane.test",
+    setup: { ...fakeSetup, publicOrigin: () => publicOrigin },
+    browserOrigin: () => browserOrigin,
     secretBox: new SecretBox(Buffer.alloc(32, 7).toString("base64")),
+    githubApp: { getOAuthCredentials: async () => ({ clientId: "client-id", clientSecret: "client-secret" }), getWebhookSecret: async () => null } as never,
     defaultJobImages: {},
     currentUser: async () => null,
     requestId: () => "request-test-0001",

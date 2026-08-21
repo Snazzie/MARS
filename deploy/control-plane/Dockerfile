@@ -13,7 +13,12 @@ COPY package.json bun.lock ./
 COPY apps ./apps
 COPY packages ./packages
 COPY deploy ./deploy
-RUN bun install --frozen-lockfile \
+COPY images ./images
+RUN rm -rf apps/*/node_modules packages/*/node_modules \
+  && bun install --frozen-lockfile --linker hoisted \
+  && bun install --cwd apps/web --frozen-lockfile --linker hoisted \
+  && bun install --cwd apps/control-plane --frozen-lockfile --linker hoisted \
+  && bun install --cwd apps/job-agent --frozen-lockfile --linker hoisted \
   && bun run --filter '@whitesmith/web' build \
   && bun run --filter '@whitesmith/control-plane' build \
   && bun run --filter '@whitesmith/job-agent' build \

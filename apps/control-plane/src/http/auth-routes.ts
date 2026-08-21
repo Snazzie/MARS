@@ -58,8 +58,13 @@ export function registerAuthRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlan
     const user = await exchangeOAuth(c.req.query("code") ?? "", flow, credentials.clientId, credentials.clientSecret, origin);
     const setupCode = cookieValue(cookie, "whitesmith_setup");
     let userId: string;
-    if (setupCode) userId = await deps.setup.claimAdmin(setupCode, user);
-    else {
+    if (setupCode) {
+      try { userId = await deps.setup.claimAdmin(setupCode, user); }
+      catch (error) {
+        if (error instanceof Error && ["setup_unauthorized", "setup_admin_conflict"].includes(error.message)) return c.json({ error: "forbidden" }, 403);
+        throw error;
+      }
+    } else {
       const [dbUser] = await deps.db`insert into users (github_user_id,login) values (${user.id},${user.login}) on conflict (github_user_id) do update set login=excluded.login returning id`;
       userId = String(dbUser.id);
     }

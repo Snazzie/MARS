@@ -33,6 +33,7 @@ export function OnboardingPage() {
   if (status.error || !s) return <main className="onboarding"><h1>Onboarding unavailable</h1><p role="alert">{status.error instanceof Error ? status.error.message : "Could not load onboarding."}</p><button onClick={() => void status.refetch()}>Retry</button></main>;
   if (s.step === "setup") return <SetupCard />;
   if (!s.authenticated) return <SignIn firstAdmin={!s.adminCreated} />;
+  if (!s.canManage) return <main className="onboarding"><section className="onboarding-card"><h1>Administrator access required</h1><p>Your GitHub account is signed in, but it cannot configure this control plane.</p></section></main>;
   const d = detail.data;
   if (!d) return <main className="onboarding"><p>Loading setup details…</p></main>;
   if (d.step === "complete") return <Complete detail={d} />;

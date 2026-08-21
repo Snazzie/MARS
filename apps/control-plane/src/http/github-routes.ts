@@ -12,8 +12,11 @@ const setupFailure = (cause: unknown): string | null => {
 export function registerGithubRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
   app.post("/api/setup/github-app", async (c) => {
     const key = c.req.header("Idempotency-Key");
+    if (!key) return c.json({ code: "idempotency_required" }, 400);
     const body = await c.req.json().catch(() => null) as { setupCode?: string; publicBaseUrl?: string } | null;
-    if (!body.setupCode || !body.publicBaseUrl) return c.json({ code: "invalid_request" }, 400);
+    if (!body?.setupCode) return c.json({ code: "unauthorized", message: "Invalid setup code" }, 401);
+    if (!body.publicBaseUrl) return c.json({ code: "invalid_request" }, 400);
+    if (!deps.githubApp) return c.json({ code: "setup_required", message: "Complete first-run setup" }, 503);
     try {
       const origin = await deps.setup.configure(body.setupCode, body.publicBaseUrl);
       const result = await deps.githubApp.createManifestLaunch("setup", "setup", key);

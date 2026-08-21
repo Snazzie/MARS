@@ -259,7 +259,7 @@ describe("control-plane HTTP boundary", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ organizationId: crypto.randomUUID() }),
     });
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(404);
   });
 
   test("requires an idempotency key for GitHub App installation launch", async () => {

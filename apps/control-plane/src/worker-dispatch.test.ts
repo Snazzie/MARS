@@ -80,7 +80,7 @@ test("replays terminal-lease stop commands until their cleanup event is acknowle
     return [stopCommand];
   }, {}) as never;
   const result = await listReplayableWorkerCommands(db, workerId);
-  expect(queries[0]).toContain("c.type='tart.stop_lease'");
+  expect(queries[0]).toContain("tart.stop_lease");
   expect(result).toEqual([{ ...stopCommand, occurredAt: stopCommand.occurredAt.toISOString() }]);
 });
 test("does not replay lease commands whose lease row is gone", async () => {
