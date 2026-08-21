@@ -117,7 +117,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const spec = WorkerImageBuildSpec.parse(await c.req.json());
     if (!deps.windowsContainerBuild) return error(c, 503, "image_build_unavailable", "Authoritative Windows image build inputs are unavailable");
     const buildId = randomUUID();
-    const payload = await createWorkerImageBuildPayload({ baseUrl: deps.baseUrl, buildId, image: spec.image, build: deps.windowsContainerBuild });
+    const payload = await createWorkerImageBuildPayload({ baseUrl: deps.setup.publicOrigin() ?? "", buildId, image: spec.image, build: deps.windowsContainerBuild });
     console.log("Windows image build dispatch", { workerId, buildId, image: payload.image, contentSha256: payload.contentSha256 });
     await deps.db`UPDATE workers SET doctor=COALESCE(doctor,'{}'::jsonb) || ${JSON.stringify({ runtimeBuildState: "building", runtimeBuildMessage: null, runtimeReady: false })}::jsonb WHERE id=${workerId}`;
     await deps.workerDispatcher.dispatch({ type: "worker.build_image", workerId, leaseId: null, payload });

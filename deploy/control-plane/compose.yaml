@@ -3,22 +3,8 @@ services:
     image: ghcr.io/whitesmith/control-plane:latest
     restart: unless-stopped
     environment:
-      NODE_ENV: production
-      WHITESMITH_BUILD_ID: ${WHITESMITH_BUILD_ID:?set WHITESMITH_BUILD_ID}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}
-      BROWSER_BASE_URL: ${BROWSER_BASE_URL:?set BROWSER_BASE_URL}
-      CONTROL_PLANE_ADAPTER_URLS: ${CONTROL_PLANE_ADAPTER_URLS:-}
-      GITHUB_WEBHOOK_URL: ${GITHUB_WEBHOOK_URL:-}
-      DATABASE_URL: postgres://whitesmith:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/whitesmith
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
       DATA_ROOT: /var/lib/whitesmith
-      APP_MASTER_KEY_FILE: /run/secrets/app_master_key
-      BOOTSTRAP_GITHUB_LOGIN: ${BOOTSTRAP_GITHUB_LOGIN:?set BOOTSTRAP_GITHUB_LOGIN}
-      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:?set GITHUB_OAUTH_CLIENT_ID}
-      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:?set GITHUB_OAUTH_CLIENT_SECRET}
-      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?set GITHUB_WEBHOOK_SECRET}
-      DEFAULT_JOB_IMAGE_LINUX_X64: ${DEFAULT_JOB_IMAGE_LINUX_X64:-}
-      DEFAULT_JOB_IMAGE_WINDOWS_X64: ${DEFAULT_JOB_IMAGE_WINDOWS_X64:-}
-      DEFAULT_JOB_IMAGE_MACOS_ARM64: ${DEFAULT_JOB_IMAGE_MACOS_ARM64:-}
     healthcheck:
       test: ["CMD", "bun", "-e", "const response=await fetch('http://localhost:3000/api/readyz');process.exit(response.ok?0:1)"]
       interval: 10s
@@ -26,32 +12,6 @@ services:
       retries: 6
       start_period: 60s
     volumes: [whitesmith-data:/var/lib/whitesmith]
-    secrets: [app_master_key]
-    depends_on: [postgres]
     ports: ["127.0.0.1:3000:3000"]
-  postgres:
-    image: postgres:17-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: whitesmith
-      POSTGRES_USER: whitesmith
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
-    volumes: [postgres-data:/var/lib/postgresql/data]
-  cloudflared:
-    image: cloudflare/cloudflared:2025.7.0
-    profiles: [tunnel]
-    entrypoint: [/bin/sh, /run/whitesmith/cloudflared-wrapper.sh]
-    environment: {TUNNEL_TOKEN_FILE: /run/secrets/tunnel_token}
-    volumes: [./cloudflared-wrapper.sh:/run/whitesmith/cloudflared-wrapper.sh:ro]
-    secrets: [tunnel_token]
-    depends_on:
-      control-plane:
-        condition: service_healthy
 volumes:
   whitesmith-data:
-  postgres-data:
-secrets:
-  app_master_key:
-    file: ./app_master_key
-  tunnel_token:
-    file: ./tunnel_token

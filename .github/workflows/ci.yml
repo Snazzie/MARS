@@ -25,7 +25,7 @@ jobs:
       - run: bun test
       - run: bun run build
       - name: Build immutable control-plane image
-        run: docker buildx build --load -f deploy/control-plane/Dockerfile -t whitesmith-control-plane:ci .
+        run: docker buildx build --load --build-arg WHITESMITH_BUILD_ID=ci -f deploy/control-plane/Dockerfile -t whitesmith-control-plane:ci .
       - name: Verify release artifact set
         run: docker run --rm --entrypoint /bin/sh whitesmith-control-plane:ci -c 'test -f /app/index.js && test -f /app/web/index.html && test -f /app/web/index.js && test -f /app/web/index.css && test -f /app/migrations/0000_legacy_baseline.sql && test -f /app/migrations/meta/_journal.json && test -f /app/workers/install-worker.ps1 && test -f /app/workers/whitesmith-orchestrator.exe && test -f /app/workers/whitesmith-service-host.exe'
       - name: Smoke test control-plane startup
@@ -41,12 +41,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate Compose interpolation
         env:
-          WHITESMITH_BUILD_ID: ci
-          PUBLIC_BASE_URL: https://example.invalid
-          BROWSER_BASE_URL: https://example.invalid
-          POSTGRES_PASSWORD: ci-only
-          BOOTSTRAP_GITHUB_LOGIN: ci
-          GITHUB_OAUTH_CLIENT_ID: ci
-          GITHUB_OAUTH_CLIENT_SECRET: ci
-          GITHUB_WEBHOOK_SECRET: ci
+          DATABASE_URL: postgres://whitesmith:ci@db.example:5432/whitesmith
         run: docker compose -f deploy/control-plane/compose.yaml config -q

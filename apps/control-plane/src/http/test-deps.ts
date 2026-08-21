@@ -2,18 +2,18 @@ import { SecretBox } from "../auth.ts";
 import type { ControlPlaneHttpDeps } from "./types.ts";
 
 const fakeDb = (() => []) as unknown as ControlPlaneHttpDeps["db"];
+const fakeSetup: ControlPlaneHttpDeps["setup"] = {
+  publicOrigin: () => "https://control-plane.test",
+  configure: async (_code, origin) => origin,
+  authorize: async () => true,
+  claimAdmin: async () => "admin",
+};
 
 export function fakeHttpDeps(overrides: Partial<ControlPlaneHttpDeps> = {}): ControlPlaneHttpDeps {
-  const baseUrl = overrides.baseUrl ?? "https://control-plane.test";
-  const browserBaseUrl = overrides.browserBaseUrl ?? baseUrl;
   return {
     db: fakeDb,
-    baseUrl,
-    browserBaseUrl,
-    githubClientId: "github-client",
-    githubClientSecret: "github-secret",
-    bootstrapGithubLogin: "bootstrap",
-    githubWebhookSecret: "webhook-secret",
+    setup: fakeSetup,
+    browserOrigin: () => "https://control-plane.test",
     secretBox: new SecretBox(Buffer.alloc(32, 7).toString("base64")),
     defaultJobImages: {},
     currentUser: async () => null,

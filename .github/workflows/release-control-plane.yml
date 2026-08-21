@@ -58,6 +58,8 @@ jobs:
         with:
           context: .
           file: deploy/control-plane/Dockerfile
+          build-args: |
+            WHITESMITH_BUILD_ID=${{ github.sha }}
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}

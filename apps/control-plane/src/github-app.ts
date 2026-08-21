@@ -24,17 +24,19 @@ export class GitHubAppService {
   private readonly db: Database;
   private readonly fetcher: Fetcher;
   private readonly box: SecretBox;
-  private readonly baseUrl: string;
-  private readonly browserBaseUrl: string;
-  private readonly webhookUrl: string;
+  private readonly publicOrigin: () => string | null;
 
-  constructor(opts: { db: Database; fetch?: Fetcher; secretBox: SecretBox; baseUrl: string; browserBaseUrl: string; webhookUrl?: string }) {
+  constructor(opts: { db: Database; fetch?: Fetcher; secretBox: SecretBox; publicOrigin: () => string | null }) {
     this.db = opts.db;
     this.fetcher = opts.fetch ?? fetch;
     this.box = opts.secretBox;
-    this.baseUrl = opts.baseUrl;
-    this.browserBaseUrl = opts.browserBaseUrl;
-    this.webhookUrl = opts.webhookUrl ?? `${opts.baseUrl}/api/github/webhooks`;
+    this.publicOrigin = opts.publicOrigin;
+  }
+
+  async getOAuthCredentials(): Promise<{ clientId: string; clientSecret: string } | null> {
+    const config = await this.getConfig();
+    if (!config?.clientId || !config.clientSecret) return null;
+    return { clientId: config.clientId, clientSecret: this.box.decrypt(config.clientSecret) };
   }
 
   private stateKey(raw: string): string { return createHash("sha256").update(raw).digest("hex"); }
@@ -87,7 +89,6 @@ export class GitHubAppService {
     const value: unknown = await response.json();
     return value && typeof value === "object" ? value as Record<string, unknown> : {};
   }
-
   async createManifestLaunch(userId: string, organizationId: string, idempotencyKey: string): Promise<{ action: string; manifest: string }> {
     if (!isSql(this.db)) {
       for (const state of this.db.setupStates.values()) if (state.purpose === "manifest" && state.userId === userId && state.organizationId === organizationId && state.idempotencyKey === idempotencyKey && !state.consumedAt && state.expiresAt > Date.now()) return { action: `https://github.com/settings/apps/new?state=${this.box.decrypt(state.encryptedState!)}`, manifest: this.box.decrypt(state.encryptedPkceVerifier!) };
@@ -96,8 +97,10 @@ export class GitHubAppService {
       const state = rows[0];
       if (state?.encrypted_state && state.encrypted_pkce_verifier) return { action: `https://github.com/settings/apps/new?state=${this.box.decrypt(state.encrypted_state)}`, manifest: this.box.decrypt(state.encrypted_pkce_verifier) };
     }
+    const origin = this.publicOrigin();
+    if (!origin) throw new Error("setup_required");
     const rawState = randomBytes(32).toString("base64url");
-    const manifest = JSON.stringify({ name: "whitesmith", public: true, url: this.baseUrl, hook_attributes: { url: this.webhookUrl, active: true }, redirect_url: `${this.baseUrl}/api/github/app/manifest/callback`, setup_url: `${this.baseUrl}/api/github/app/setup`, description: "Whitesmith self-hosted GitHub Actions runners", callback_urls: [`${this.baseUrl}/api/github/app/callback`], default_permissions: { actions: "read", contents: "write", members: "read", organization_self_hosted_runners: "write", pull_requests: "write", administration: "write" }, default_events: ["workflow_job", "membership"] });
+    const manifest = JSON.stringify({ name: "whitesmith", public: true, url: origin, hook_attributes: { url: `${origin}/api/github/webhooks`, active: true }, redirect_url: `${origin}/api/github/app/manifest/callback`, setup_url: `${origin}/api/github/app/setup`, description: "Whitesmith self-hosted GitHub Actions runners", callback_urls: [`${origin}/api/github/app/callback`], default_permissions: { actions: "read", contents: "write", members: "read", organization_self_hosted_runners: "write", pull_requests: "write", administration: "write" }, default_events: ["workflow_job", "membership"] });
     await this.saveState(rawState, { purpose: "manifest", userId, organizationId, idempotencyKey, encryptedState: this.box.encrypt(rawState), encryptedPkceVerifier: this.box.encrypt(manifest), expiresAt: Date.now() + 3_600_000 });
     return { action: `https://github.com/settings/apps/new?state=${rawState}`, manifest };
   }
@@ -139,7 +142,8 @@ export class GitHubAppService {
       if (installations[0]) {
         if (!bindOnboarding) throw new Error("github_organization_already_connected");
         const linked = await this.db`UPDATE system_onboarding SET organization_id=${organizationId} WHERE singleton=true AND admin_user_id=${userId} RETURNING organization_id`;
-        if (linked[0]) return { location: browserLocation(this.browserBaseUrl, "/onboarding") };
+        const origin = this.publicOrigin();
+        if (linked[0] && origin) return { location: browserLocation(origin, "/onboarding") };
       }
       const rows = await this.db<SetupRow[]>`SELECT purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at FROM github_setup_states WHERE purpose=${purpose} AND user_id=${userId} AND organization_id=${organizationId} AND idempotency_key=${idempotencyKey} AND consumed_at IS NULL AND expires_at>now()`;
       const state = rows[0];
@@ -151,7 +155,6 @@ export class GitHubAppService {
     await this.saveState(cookie, { purpose, userId, organizationId, idempotencyKey, encryptedState: this.box.encrypt(cookie), expiresAt: Date.now() + 600_000 });
     return { location: `https://github.com/apps/${slug}/installations/new`, installCookie: cookie };
   }
-
   async completeManifestRegistration(userId: string, state: string, code: string): Promise<{ location: string; installCookie?: string }> {
     const setup = await this.consume(state, userId, "manifest");
     const result = await this.gh(`/app-manifests/${encodeURIComponent(code)}/conversions`, { method: "POST" });
@@ -161,10 +164,11 @@ export class GitHubAppService {
     const clientId = typeof result.client_id === "string" ? result.client_id : undefined;
     const clientSecret = typeof result.client_secret === "string" ? result.client_secret : "";
     const webhookSecret = typeof result.webhook_secret === "string" ? result.webhook_secret : "";
-    if (!id || !pem || !clientSecret || !webhookSecret) throw new Error("github_manifest_invalid");
+    if (!id || !slug || !pem || !clientId || !clientSecret || !webhookSecret) throw new Error("github_manifest_invalid");
     await this.saveConfig({ id, slug, clientId, pem: this.box.encrypt(pem), clientSecret: this.box.encrypt(clientSecret), webhookSecret: this.box.encrypt(webhookSecret) });
-    const install = await this.beginInstallation(userId, setup.organizationId!, `${setup.idempotencyKey ?? "manifest"}:install`);
-    return install;
+    const origin = this.publicOrigin();
+    if (!origin) throw new Error("setup_required");
+    return { location: `${origin}/api/auth/github` };
   }
 
   private async appJwt(): Promise<string> {

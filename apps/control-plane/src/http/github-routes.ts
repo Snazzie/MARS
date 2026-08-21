@@ -10,19 +10,27 @@ const setupFailure = (cause: unknown): string | null => {
 };
 
 export function registerGithubRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
-  app.post("/api/github/app/manifest", async (c) => {
-    const user = await deps.currentUser(c.req.raw); if (!user) return c.json({ code: "unauthorized" }, 401); if (!user.isGlobalAdmin) return c.json({ code: "forbidden" }, 403);
-    const key = c.req.header("Idempotency-Key"); if (!key) return c.json({ code: "idempotency_required" }, 400);
-    const body = await c.req.json<{ organizationId?: string }>(); if (!body.organizationId || !deps.githubApp) return c.json({ code: "invalid_request" }, 400);
-    try { return c.json(await deps.githubApp.createManifestLaunch(user.id, body.organizationId, key)); } catch (cause) { const code = setupFailure(cause); if (code) return c.json({ code }, 409); throw cause; }
+  app.post("/api/setup/github-app", async (c) => {
+    const key = c.req.header("Idempotency-Key");
+    const body = await c.req.json().catch(() => null) as { setupCode?: string; publicBaseUrl?: string } | null;
+    if (!body.setupCode || !body.publicBaseUrl) return c.json({ code: "invalid_request" }, 400);
+    try {
+      const origin = await deps.setup.configure(body.setupCode, body.publicBaseUrl);
+      const result = await deps.githubApp.createManifestLaunch("setup", "setup", key);
+      c.header("Set-Cookie", `whitesmith_setup=${encodeURIComponent(body.setupCode)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=900${origin.startsWith("https://") ? "; Secure" : ""}`);
+      return c.json(result);
+    } catch (cause) {
+      if (cause instanceof Error && cause.message === "setup_unauthorized") return c.json({ code: "unauthorized", message: "Invalid setup code" }, 401);
+      throw cause;
+    }
   });
 
   app.get("/api/github/app/manifest/callback", async (c) => {
-    const user = await deps.currentUser(c.req.raw); if (!user) return c.json({ code: "unauthorized" }, 401); if (!user.isGlobalAdmin) return c.json({ code: "forbidden" }, 403);
-    const state = c.req.query("state"); const code = c.req.query("code"); if (!state || !code || !deps.githubApp) return c.json({ code: "invalid_request" }, 400);
+    const state = c.req.query("state"), code = c.req.query("code");
+    const cookie = (c.req.header("Cookie") ?? "").split(";").map((value) => value.trim()).find((value) => value.startsWith("whitesmith_setup="))?.slice(15);
+    if (!state || !code || !cookie || !deps.githubApp || !(await deps.setup.authorize(decodeURIComponent(cookie)))) return c.json({ code: "unauthorized" }, 401);
     try {
-      const result = await deps.githubApp.completeManifestRegistration(user.id, state, code);
-      if (result.installCookie) c.header("Set-Cookie", `github_install_state=${result.installCookie}; HttpOnly; Secure; SameSite=Lax; Path=/api/github/app; Max-Age=600`);
+      const result = await deps.githubApp.completeManifestRegistration("setup", state, code);
       return c.redirect(result.location, 302);
     } catch (cause) { const setupCode = setupFailure(cause); if (setupCode) return c.json({ code: setupCode }, 409); throw cause; }
   });
@@ -47,12 +55,12 @@ export function registerGithubRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     try {
       const onboarding = await deps.githubApp.completeInstallation(user.id, cookie, installationId);
       c.header("Set-Cookie", "github_install_state=; HttpOnly; Secure; SameSite=Lax; Path=/api/github/app; Max-Age=0");
-      return c.redirect(browserLocation(deps.browserBaseUrl, onboarding ? "/onboarding" : "/"), 302);
+      return c.redirect(browserLocation(deps.browserOrigin() ?? "", onboarding ? "/onboarding" : "/"), 302);
     } catch (cause) {
       const setupCode = setupFailure(cause);
       if (setupCode === "repository_selection_required") {
         c.header("Set-Cookie", "github_install_state=; HttpOnly; Secure; SameSite=Lax; Path=/api/github/app; Max-Age=0");
-        return c.redirect(browserLocation(deps.browserBaseUrl, "/onboarding?github=repository-selection-required"), 302);
+        return c.redirect(browserLocation(deps.browserOrigin() ?? "", "/onboarding?github=repository-selection-required"), 302);
       }
       if (setupCode) return c.json({ code: setupCode }, 409);
       throw cause;
