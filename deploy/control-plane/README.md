@@ -38,6 +38,16 @@ The control plane persists the generated encryption key at `${DATA_ROOT}/app_mas
 
 The Compose binding is loopback-only at `127.0.0.1:3000`; place an HTTPS reverse proxy or separately managed tunnel in front of it. Preserve WebSocket upgrades. Production uses the persisted canonical origin for browser, API, callback, and webhook URLs.
 
+## GitHub webhook endpoint
+
+Configure the GitHub App webhook URL as:
+
+```text
+https://<your-control-plane-origin>/api/github/webhooks
+```
+
+The endpoint accepts `POST` requests from GitHub, validates `X-Hub-Signature-256` with the encrypted webhook secret, and handles installation and `workflow_job` events. Do not expose a separate tunnel URL; use the persisted canonical control-plane origin.
+
 ## Unraid
 
 Import `deploy/unraid/whitesmith-control-plane.xml`. Required inputs are the external `DATABASE_URL`, HTTP port, and persistent data mount. No GitHub credentials or master-key file are entered in the template.
