@@ -31,6 +31,14 @@ function markup(detail: Record<string, unknown>, pendingWorkers?: readonly unkno
   return renderToStaticMarkup(<QueryClientProvider client={client}><OnboardingPage /></QueryClientProvider>);
 }
 
+test("setup step asks only for the public origin", () => {
+  const html = markup({ version: 1, onboardingRequired: true, adminCreated: false, authenticated: false, canManage: false, step: "setup" });
+  expect(html).toContain("Confirm the externally reachable HTTPS origin");
+  expect(html).toContain('aria-label="Public URL"');
+  expect(html).not.toContain("setup code");
+  expect(html).not.toContain("password");
+});
+
 test("first-admin sign-in copy explains administrator setup and links GitHub OAuth", () => {
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: false, authenticated: false, canManage: false, step: "admin" });
   expect(html).toContain("Create your administrator account");

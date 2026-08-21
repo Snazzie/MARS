@@ -43,5 +43,5 @@ test("image persists production data-root contract", async () => {
 
 test("deployment guide documents first-run persistence and incomplete worker gates", async () => {
   const readme = await read("deploy/control-plane/README.md");
-  for (const phrase of ["DATABASE_URL", "first-run setup code", "/api/livez", "/api/readyz", "WebSocket", "back up", "linux/amd64", "worker execution"]) expect(readme).toContain(phrase);
+  for (const phrase of ["DATABASE_URL", "/onboarding", "/api/livez", "/api/readyz", "WebSocket", "back up", "linux/amd64", "worker execution"]) expect(readme).toContain(phrase);
 });

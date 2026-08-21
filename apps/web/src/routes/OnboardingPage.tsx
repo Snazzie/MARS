@@ -50,7 +50,6 @@ function EditableStep({ detail, index, onDone, onDiscard, onSelect, onCreate }: 
 }
 function ResourceStep({ detail, onDone, onDiscard, edit = false }: { detail: OnboardingDetail; onDone: () => void; onDiscard?: () => void; edit?: boolean }) { const w = detail.worker; if (!w) return <p>Select a worker first.</p>; return <><h3>Configure resources</h3>{w.configurationState === "ready" && !edit ? <p role="status">Configuring worker complete. Waiting for server progress…</p> : <WorkerConfigurationForm worker={w} onConfigured={onDone} onDiscard={onDiscard} />}</>; }
 function SetupCard() {
-  const [setupCode, setSetupCode] = useState("");
   const [publicBaseUrl, setPublicBaseUrl] = useState(typeof window === "undefined" ? "" : window.location.origin);
   const [error, setError] = useState<string | null>(null);
   const setup = useMutation({
@@ -60,10 +59,9 @@ function SetupCard() {
   });
   return <main className="onboarding"><section className="onboarding-card">
     <p className="eyebrow">FIRST-RUN SETUP</p><h1>Connect this control plane</h1>
-    <p>Enter the one-time setup code printed by <code>docker compose logs control-plane</code>, then confirm the externally reachable HTTPS origin.</p>
-    <form onSubmit={(event) => { event.preventDefault(); setError(null); setup.mutate({ setupCode, publicBaseUrl }); }}>
+    <p>Confirm the externally reachable HTTPS origin to create the GitHub App.</p>
+    <form onSubmit={(event) => { event.preventDefault(); setError(null); setup.mutate({ publicBaseUrl }); }}>
       <label>Public URL<input aria-label="Public URL" type="url" value={publicBaseUrl} onChange={(event) => setPublicBaseUrl(event.target.value)} required /></label>
-      <label>Setup code<input aria-label="Setup code" type="password" autoComplete="off" value={setupCode} onChange={(event) => setSetupCode(event.target.value)} minLength={32} maxLength={256} required /></label>
       {error && <p role="alert" className="form-error">{error}</p>}
       <button type="submit" disabled={setup.isPending}>{setup.isPending ? "Creating GitHub App…" : "Create GitHub App"}</button>
     </form>
