@@ -50,14 +50,10 @@ The repository is a working baseline, not the full approved platform.
 
 ## Control-plane hosting readiness
 
-- Production Compose uses the Unraid-template-selected GHCR release tag and resolves secrets relative to `deploy/control-plane/`.
-- The control-plane image sets production artifact roots inside `/app` and keeps the runtime user as `bun`.
-- CI validates the Linux image artifact set and runs a PostgreSQL-backed live/readiness smoke.
-- Tagged releases publish the control-plane image to GHCR with a recorded digest, SBOM, and provenance.
-- `deploy/control-plane/README.md` documents Unraid startup, ingress/WebSocket requirements, persistence, backup, upgrade, rollback, and optional external Cloudflare Tunnel usage.
-- This hosting gate does not imply that worker execution or GitHub App lifecycle is production-complete.
-
-- The Unraid XML template selects a release tag; worker download URLs and hashes are embedded in the release image manifest by CI rather than supplied through `.env`.
+- The PostgreSQL-only Linux/amd64 control-plane image and Compose contract require only `DATABASE_URL`; persistent setup data lives in PostgreSQL plus the named data volume.
+- The first-run gate persists the canonical public origin, generates durable encryption material in `DATA_ROOT`, and collects GitHub App credentials through onboarding.
+- CI validates the image artifact set and live/readiness endpoints; release metadata records the Linux/amd64 image digest, SBOM, and provenance.
+- This proves control-plane hosting and the first-run gate only. Worker execution, GitHub workflow dispatch, and end-to-end runtime gates remain incomplete and the platform is not production-ready.
 
 ## Database ownership
 

@@ -5,18 +5,19 @@ import { dirname, join } from "node:path";
 const root = dirname(import.meta.dir);
 const read = (path: string) => readFile(join(root, path), "utf8");
 
-test("production Compose uses the template-selected release tag and resolves files beside the compose file", async () => {
+test("production Compose requires only DATABASE_URL and keeps the data volume", async () => {
   const compose = await read("deploy/control-plane/compose.yaml");
-  expect(compose).toContain("ghcr.io/whitesmith/control-plane:latest");
-  expect(compose).not.toContain("WHITESMITH_RELEASE_DIGEST");
-  expect(compose).not.toContain("WHITESMITH_WINDOWS_CONTAINER_");
-  expect(compose).toContain("file: ./app_master_key");
-  expect(compose).toContain("file: ./tunnel_token");
-  expect(compose).toContain("./cloudflared-wrapper.sh:/run/whitesmith/cloudflared-wrapper.sh:ro");
-  expect(compose).not.toContain("./deploy/control-plane/");
+  expect(compose).toContain("DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}");
+  expect(compose).toContain("DATA_ROOT: /var/lib/whitesmith");
+  expect(compose).toContain("whitesmith-data:/var/lib/whitesmith");
+  expect(compose).not.toContain("postgres:");
+  expect(compose).not.toContain("secrets:");
+  expect(compose).toContain("profiles: [tunnel]");
+  expect(compose).toContain("CLOUDFLARE_TUNNEL_TOKEN");
+  expect(compose).not.toContain("POSTGRES_PASSWORD");
 });
 
-test("deployment template documents every required Compose variable without credentials", async () => {
+test("deployment template documents the required database variable without secrets", async () => {
   const compose = await read("deploy/control-plane/compose.yaml");
   const envExample = await read(".env.example");
   const variables = [...compose.matchAll(/\$\{([A-Z0-9_]+)(?::[^}]*)?\}/g)].map((match) => match[1]);
@@ -24,34 +25,24 @@ test("deployment template documents every required Compose variable without cred
   expect(envExample).not.toMatch(/(ghp_|github_pat_|-----BEGIN [A-Z ]+ PRIVATE KEY-----)/i);
 });
 
-test("Unraid template selects a release tag and contains no worker hash inputs", async () => {
+test("Unraid exposes only database, port, and persistent data inputs", async () => {
   const template = await read("deploy/unraid/whitesmith-control-plane.xml");
-  expect(template).toContain("<Repository>ghcr.io/whitesmith/control-plane:v0.1.0</Repository>");
   expect(template).toContain("Target=\"DATABASE_URL\"");
-  expect(template).toContain("Target=\"/run/secrets/app_master_key\"");
-  expect(template).not.toContain("WHITESMITH_WINDOWS_CONTAINER_");
-  expect(template).not.toContain("sha256:");
+  expect(template).toContain("Target=\"3000\"");
+  expect(template).toContain("Target=\"/var/lib/whitesmith\"");
+  expect(template).not.toContain("/run/secrets/app_master_key");
+  expect(template).not.toContain("GITHUB_");
 });
 
-
-test("release image embeds worker metadata outside runtime environment", async () => {
+test("image persists production data-root contract", async () => {
   const dockerfile = await read("deploy/control-plane/Dockerfile");
-  const manifest = await read("deploy/control-plane/release-manifest.json");
-  expect(dockerfile).toContain("release-manifest.json");
-  expect(manifest).toContain("\"schemaVersion\": 1");
-  expect(manifest).toContain("\"windowsContainerBuild\": null");
+  expect(dockerfile).toContain("ARG WHITESMITH_BUILD_ID=unknown");
+  expect(dockerfile).toContain("ENV NODE_ENV=production");
+  expect(dockerfile).toContain("ENV DATA_ROOT=/var/lib/whitesmith");
+  expect(dockerfile).toContain("chmod 700 /var/lib/whitesmith");
 });
-test("Unraid documentation covers operations and keeps Cloudflare optional", async () => {
+
+test("deployment guide documents first-run persistence and incomplete worker gates", async () => {
   const readme = await read("deploy/control-plane/README.md");
-  for (const phrase of [
-    "docker compose",
-    "/api/livez",
-    "/api/readyz",
-    "WebSocket",
-    "backup",
-    "rollback",
-    "APP_MASTER_KEY",
-    "Cloudflare Tunnel",
-    "optional",
-  ]) expect(readme).toContain(phrase);
+  for (const phrase of ["DATABASE_URL", "/onboarding", "/api/livez", "/api/readyz", "WebSocket", "Cloudflare Tunnel", "CLOUDFLARE_TUNNEL_TOKEN", "/api/github/webhooks", "back up", "linux/amd64", "worker execution"]) expect(readme).toContain(phrase);
 });

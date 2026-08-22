@@ -117,7 +117,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const spec = WorkerImageBuildSpec.parse(await c.req.json());
     if (!deps.windowsContainerBuild) return error(c, 503, "image_build_unavailable", "Authoritative Windows image build inputs are unavailable");
     const buildId = randomUUID();
-    const payload = await createWorkerImageBuildPayload({ baseUrl: deps.baseUrl, buildId, image: spec.image, build: deps.windowsContainerBuild });
+    const payload = await createWorkerImageBuildPayload({ baseUrl: deps.setup.publicOrigin() ?? "", buildId, image: spec.image, build: deps.windowsContainerBuild });
     console.log("Windows image build dispatch", { workerId, buildId, image: payload.image, contentSha256: payload.contentSha256 });
     await deps.db`UPDATE workers SET doctor=COALESCE(doctor,'{}'::jsonb) || ${JSON.stringify({ runtimeBuildState: "building", runtimeBuildMessage: null, runtimeReady: false })}::jsonb WHERE id=${workerId}`;
     await deps.workerDispatcher.dispatch({ type: "worker.build_image", workerId, leaseId: null, payload });
@@ -180,14 +180,17 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const q = parseQuery(c); if (q instanceof Response) return q;
     return c.json(CursorPage(PoolSummary).parse(await listGlobalPools(deps.db, q.limit, q.cursor ?? null)));
   }));
-  const poolWorker = async (body: z.infer<typeof CreatePoolRequest>): Promise<{ driver: string } | { error: "not_found" | "worker_not_ready" | "worker_guest_platform_unsupported" | "runtime_unsupported" }> => {
-    if (body.guestPlatform === "linux-x64") return { error: "runtime_unsupported" };
-    const [worker] = await deps.db`SELECT platform,guest_platforms AS "guestPlatforms",admission_state AS "admissionState",configuration_state AS "configurationState",configuration_revision AS "configurationRevision",applied_configuration_revision AS "appliedConfigurationRevision" FROM workers WHERE id=${body.workerId}`;
+  const poolWorker = async (body: z.infer<typeof CreatePoolRequest>): Promise<{ driver: string } | { error: "not_found" | "worker_not_ready" | "worker_runtime_not_ready" | "worker_image_mismatch" | "worker_guest_platform_unsupported" | "runtime_unsupported" }> => {
+    const [worker] = await deps.db`SELECT platform,guest_platforms AS "guestPlatforms",admission_state AS "admissionState",configuration_state AS "configurationState",configuration_revision AS "configurationRevision",applied_configuration_revision AS "appliedConfigurationRevision",doctor FROM workers WHERE id=${body.workerId}`;
     if (!worker) return { error: "not_found" as const };
-    if (worker.platform === "linux-x64") return { error: "runtime_unsupported" };
     if (worker.admissionState !== "adopted" || worker.configurationState !== "ready" || worker.configurationRevision !== worker.appliedConfigurationRevision) return { error: "worker_not_ready" as const };
     if (!(Array.isArray(worker.guestPlatforms) ? worker.guestPlatforms : [worker.platform]).includes(body.guestPlatform)) return { error: "worker_guest_platform_unsupported" as const };
-    const driver = worker.platform === "linux-x64" ? "kata-k3s" : worker.platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm";
+    const driver = worker.platform === "linux-x64" ? "linux-libvirt-vm" : worker.platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm";
+    if (driver === "linux-libvirt-vm") {
+      const doctor = worker.doctor && typeof worker.doctor === "object" ? worker.doctor as Record<string, unknown> : {};
+      if (![doctor.runtimeReady, doctor.libvirtReady, doctor.networkReady, doctor.cloneStorageReady, doctor.imageSignatures, doctor.realVmSmoke].every((value) => value === true)) return { error: "worker_runtime_not_ready" };
+      if (doctor.artifactDigest !== body.imageDigest || doctor.smokeArtifactDigest !== body.imageDigest) return { error: "worker_image_mismatch" };
+    }
     return { driver };
   };
   app.post("/api/pools", safe(async (c) => {
@@ -196,7 +199,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const body = CreatePoolRequest.parse(await c.req.json());
     if (body.poolId) return error(c, 400, "invalid_request", "Use the pool update endpoint to edit an existing pool");
     const selected = await poolWorker(body);
-    if ("error" in selected) return selected.error === "not_found" ? error(c, 404, "not_found", "Worker not found") : error(c, 422, selected.error, selected.error === "worker_not_ready" ? "Worker configuration has not been reconciled" : selected.error === "runtime_unsupported" ? "Linux runners are not available in this release" : "Worker does not support the requested guest platform");
+    if ("error" in selected) return selected.error === "not_found" ? error(c, 404, "not_found", "Worker not found") : error(c, 422, selected.error, selected.error === "worker_not_ready" ? "Worker configuration has not been reconciled" : selected.error === "worker_runtime_not_ready" ? "Worker runtime host evidence is not ready" : selected.error === "worker_image_mismatch" ? "Worker image evidence does not match the requested digest" : "Worker does not support the requested guest platform");
     const [duplicate] = await deps.db`SELECT id FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel}) LIMIT 1`;
     if (duplicate) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
     const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${body.guestPlatform},${selected.driver},${body.imageDigest},${jsonParameter(deps.db, body.resources)}::jsonb,${jsonParameter(deps.db, [body.triggerLabel])}::jsonb,${body.triggerLabel},false) RETURNING id`;
@@ -212,7 +215,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!existing) return error(c, 404, "not_found", "Pool not found");
     if (existing.enabled || Number(existing.active) !== 0) return error(c, 409, "pool_in_use", "Disable the pool and wait for active leases to be reaped before editing");
     const selected = await poolWorker(body);
-    if ("error" in selected) return error(c, selected.error === "not_found" ? 404 : 422, selected.error, selected.error === "not_found" ? "Worker not found" : selected.error === "runtime_unsupported" ? "Linux runners are not available in this release" : "Worker is not compatible with this pool");
+    if ("error" in selected) return error(c, selected.error === "not_found" ? 404 : 422, selected.error, selected.error === "not_found" ? "Worker not found" : selected.error === "worker_runtime_not_ready" ? "Worker runtime host evidence is not ready" : selected.error === "worker_image_mismatch" ? "Worker image evidence does not match the requested digest" : "Worker is not compatible with this pool");
     const [duplicate] = await deps.db`SELECT id FROM runner_pools WHERE organization_id IS NULL AND id<>${poolId} AND (name=${body.name} OR trigger_label=${body.triggerLabel}) LIMIT 1`;
     if (duplicate) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
     await deps.db`UPDATE runner_pools SET name=${body.name},platform=${body.guestPlatform},driver=${selected.driver},image_digest=${body.imageDigest},resources=${jsonParameter(deps.db, body.resources)}::jsonb,labels=${jsonParameter(deps.db, [body.triggerLabel])}::jsonb,trigger_label=${body.triggerLabel} WHERE id=${poolId} AND organization_id IS NULL`;
@@ -234,10 +237,10 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!["enable", "disable"].includes(action)) return error(c, 404, "not_found", "Resource not found");
     const idem = requireMutation(c); if (idem) return idem;
     const poolId = c.req.param("poolId");
-    const [pool] = await deps.db`SELECT id,platform,driver FROM runner_pools WHERE id=${poolId} AND organization_id IS NULL`;
+    const [pool] = await deps.db`SELECT id,platform,driver,image_digest AS "imageDigest" FROM runner_pools WHERE id=${poolId} AND organization_id IS NULL`;
     if (!pool) return error(c, 404, "not_found", "Pool not found");
     if (action === "enable") {
-      const [ready] = await deps.db`SELECT w.id FROM workers w WHERE w.admission_state='adopted' AND w.connection_state='online' AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false AND w.last_heartbeat_at>now()-interval '90 seconds' AND w.doctor_observed_at IS NOT NULL AND ${pool.platform}=ANY(SELECT jsonb_array_elements_text(w.guest_platforms)) AND ${pool.driver}=CASE w.platform WHEN 'windows-x64' THEN 'windows-hyperv-container' WHEN 'macos-arm64' THEN 'tart-vm' ELSE 'kata-k3s' END LIMIT 1`;
+      const [ready] = await deps.db`SELECT w.id FROM workers w WHERE w.admission_state='adopted' AND w.connection_state='online' AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false AND w.last_heartbeat_at>now()-interval '90 seconds' AND w.doctor_observed_at IS NOT NULL AND ${pool.platform}=ANY(SELECT jsonb_array_elements_text(w.guest_platforms)) AND ${pool.driver}=CASE w.platform WHEN 'windows-x64' THEN 'windows-hyperv-container' WHEN 'macos-arm64' THEN 'tart-vm' ELSE 'linux-libvirt-vm' END AND (${pool.driver} <> 'linux-libvirt-vm' OR ((w.doctor->>'runtimeReady')::boolean IS TRUE AND (w.doctor->>'libvirtReady')::boolean IS TRUE AND (w.doctor->>'networkReady')::boolean IS TRUE AND (w.doctor->>'cloneStorageReady')::boolean IS TRUE AND (w.doctor->>'imageSignatures')::boolean IS TRUE AND (w.doctor->>'realVmSmoke')::boolean IS TRUE AND w.doctor->>'artifactDigest'=${pool.imageDigest} AND w.doctor->>'smokeArtifactDigest'=${pool.imageDigest})) LIMIT 1`;
       if (!ready) return error(c, 409, "no_compatible_ready_worker", "No compatible worker is online, reconciled, recently healthy, and ready for this pool");
     }
     await deps.db`UPDATE runner_pools SET enabled=${action === "enable"} WHERE id=${poolId} AND organization_id IS NULL`;
@@ -256,7 +259,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (w.platform === "linux-x64") return error(c, 422, "runtime_unsupported", "Linux runners are not available in this release");
     if (w.admissionState !== "adopted" || w.connectionState !== "online" || w.configurationState !== "ready" || w.draining) return error(c, 422, "worker_not_ready", "Worker is not ready");
     if (!(Array.isArray(w.guestPlatforms) ? w.guestPlatforms : [w.platform]).includes(body.guestPlatform)) return error(c, 422, "worker_guest_platform_unsupported", "Worker does not support the requested guest platform");
-    const driver = w.platform === "linux-x64" ? "kata-k3s" : w.platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm";
+    const driver = w.platform === "linux-x64" ? "linux-libvirt-vm" : w.platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm";
     const labels = [body.triggerLabel];
     const [duplicate] = await deps.db`SELECT id,name,trigger_label AS "triggerLabel" FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel})`;
     if (body.poolId) {

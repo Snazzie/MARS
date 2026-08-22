@@ -5,18 +5,17 @@ IMAGE=${IMAGE:?set IMAGE}
 NETWORK="whitesmith-smoke-${GITHUB_RUN_ID:-local}-${RANDOM}"
 POSTGRES="${NETWORK}-postgres"
 CONTROL_PLANE="${NETWORK}-control-plane"
-MASTER_KEY="$(mktemp)"
+DATA_VOLUME="${NETWORK}-data"
 
 cleanup() {
   docker rm -f "$CONTROL_PLANE" "$POSTGRES" >/dev/null 2>&1 || true
+  docker volume rm "$DATA_VOLUME" >/dev/null 2>&1 || true
   docker network rm "$NETWORK" >/dev/null 2>&1 || true
-  rm -f "$MASTER_KEY"
 }
 trap cleanup EXIT
 
-printf 'MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=' > "$MASTER_KEY"
-chmod 644 "$MASTER_KEY"
 docker network create "$NETWORK" >/dev/null
+docker volume create "$DATA_VOLUME" >/dev/null
 docker run -d --name "$POSTGRES" --network "$NETWORK" \
   -e POSTGRES_DB=whitesmith \
   -e POSTGRES_USER=whitesmith \
@@ -30,30 +29,55 @@ for attempt in {1..30}; do
 done
 
 docker run -d --name "$CONTROL_PLANE" --network "$NETWORK" \
-  -e NODE_ENV=production \
-  -e WHITESMITH_BUILD_ID=ci-smoke \
-  -e PUBLIC_BASE_URL=http://localhost:3000 \
-  -e BROWSER_BASE_URL=http://localhost:3000 \
   -e DATABASE_URL=postgres://whitesmith:ci-only@${POSTGRES}:5432/whitesmith \
-  -e BOOTSTRAP_GITHUB_LOGIN=ci \
-  -e GITHUB_OAUTH_CLIENT_ID=ci \
-  -e GITHUB_OAUTH_CLIENT_SECRET=ci \
-  -e GITHUB_WEBHOOK_SECRET=ci \
-  -e APP_MASTER_KEY_FILE=/run/secrets/app_master_key \
-  --mount "type=bind,src=$MASTER_KEY,dst=/run/secrets/app_master_key,readonly" \
+  -v "$DATA_VOLUME":/var/lib/whitesmith \
   -p 127.0.0.1:3000:3000 \
   "$IMAGE" >/dev/null
 
 for attempt in {1..60}; do
   live=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/api/livez || true)
   ready=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/api/readyz || true)
-  if [[ "$live" == 200 && "$ready" == 200 ]]; then
-    echo 'control-plane live and ready'
-    exit 0
-  fi
+  if [[ "$live" == 200 && "$ready" == 200 ]]; then break; fi
   sleep 2
 done
+if [[ "$live" != 200 || "$ready" != 200 ]]; then
+  echo 'control-plane failed readiness' >&2
+  docker logs "$CONTROL_PLANE" >&2
+  exit 1
+fi
+echo 'control-plane live and ready'
 
-echo 'control-plane failed readiness' >&2
-docker logs "$CONTROL_PLANE" >&2
-exit 1
+for attempt in {1..20}; do
+  status=$(curl --silent --show-error http://127.0.0.1:3000/api/onboarding/status || true)
+  if [[ "$status" == *'"step":"setup"'* ]]; then break; fi
+  sleep 1
+done
+printf '%s' "$status" | bun -e 'const value=JSON.parse(await new Response(Bun.stdin).text()); if(value.step!=="setup") process.exit(1)'
+setup_code=$(docker logs "$CONTROL_PLANE" 2>&1 | sed -n 's/.*Whitesmith first-run setup code: //p' | tail -n 1)
+[[ ${#setup_code} -ge 32 ]]
+manifest=$(curl --silent --show-error --fail -X POST http://127.0.0.1:3000/api/setup/github-app \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: smoke-setup' \
+  --data "{\"setupCode\":\"$setup_code\",\"publicBaseUrl\":\"http://127.0.0.1:3000\"}")
+printf '%s' "$manifest" | bun -e 'const value=JSON.parse(await new Response(Bun.stdin).text()); if(typeof value.action!=="string"||typeof value.manifest!=="string") process.exit(1)'
+printf '%s\n' "$manifest"
+
+docker rm -f "$CONTROL_PLANE" >/dev/null
+docker run -d --name "$CONTROL_PLANE" --network "$NETWORK" \
+  -e DATABASE_URL=postgres://whitesmith:ci-only@${POSTGRES}:5432/whitesmith \
+  -v "$DATA_VOLUME":/var/lib/whitesmith \
+  -p 127.0.0.1:3000:3000 \
+  "$IMAGE" >/dev/null
+for attempt in {1..60}; do
+  ready=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/api/readyz || true)
+  if [[ "$ready" == 200 ]]; then break; fi
+  sleep 2
+done
+if [[ "$ready" != 200 ]]; then docker logs "$CONTROL_PLANE" >&2; exit 1; fi
+for attempt in {1..20}; do
+  status=$(curl --silent --show-error http://127.0.0.1:3000/api/onboarding/status || true)
+  if [[ "$status" == *'"step":"setup"'* ]]; then break; fi
+  sleep 1
+done
+if [[ "$status" != *'"step":"setup"'* ]]; then docker logs "$CONTROL_PLANE" >&2; exit 1; fi
+:
+echo 'control-plane restart preserved setup state'

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { labelsMatch, parseProvisionLabels, reason, resolveProvisionResources, fits, type Candidate } from "./scheduler.ts";
 
 const candidate = (requestedLabels: string[], triggerLabel: string | null = "whitesmith-linux-x64"): Candidate => ({
-  worker: { admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 } },
+  worker: { admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "current", appliedConfigurationRevision: "current", runtimeReady: true, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 } },
   pool: { enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["whitesmith-linux-x64"], triggerLabel },
   requestedLabels,
 });

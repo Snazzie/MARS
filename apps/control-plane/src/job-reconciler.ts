@@ -40,6 +40,19 @@ export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate[
   const doctor = rawDoctor && typeof rawDoctor === "object" && "doctor" in rawDoctor
     ? (rawDoctor as { doctor?: unknown }).doctor
     : rawDoctor;
+  const doctorRecord = doctor && typeof doctor === "object" ? doctor as Record<string, unknown> : {};
+  const driver = String(row.driver ?? "");
+  const poolDigest = String(row.imageDigest ?? row.image_digest ?? "");
+  const linuxEvidenceReady = driver !== "linux-libvirt-vm" || (
+    doctorRecord.runtimeReady === true &&
+    doctorRecord.libvirtReady === true &&
+    doctorRecord.networkReady === true &&
+    doctorRecord.cloneStorageReady === true &&
+    doctorRecord.imageSignatures === true &&
+    doctorRecord.realVmSmoke === true &&
+    doctorRecord.artifactDigest === poolDigest &&
+    doctorRecord.smokeArtifactDigest === poolDigest
+  );
   return {
     id: String(row.workerId ?? row.worker_id ?? ""),
     admissionState: String(row.admissionState ?? row.worker_admission_state),
@@ -47,7 +60,8 @@ export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate[
     configurationState: String(row.configurationState ?? row.worker_configuration_state),
     configurationRevision: nullableString(row.configurationRevision ?? row.worker_configuration_revision),
     appliedConfigurationRevision: nullableString(row.appliedConfigurationRevision ?? row.worker_applied_configuration_revision),
-    runtimeReady: doctor && typeof doctor === "object" && "runtimeReady" in doctor ? doctor.runtimeReady === true : undefined,
+    runtimeReady: doctorRecord.runtimeReady === true,
+    linuxEvidenceReady,
     limits: jsonValue(row.limits ?? row.worker_limits),
   };
 }

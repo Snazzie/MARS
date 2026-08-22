@@ -26,8 +26,7 @@ function service(fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Pr
     db: fakeDb,
     fetch: fetchImpl,
     secretBox: new SecretBox(masterKey),
-    baseUrl: "https://control-plane.test",
-    browserBaseUrl: "https://control-plane.test",
+    publicOrigin: () => "https://control-plane.test",
   } as never);
 }
 
@@ -63,15 +62,13 @@ describe("GitHub App onboarding", () => {
       db: fakeDb,
       fetch: async () => Response.json({}),
       secretBox: new SecretBox(masterKey),
-      baseUrl: "http://localhost:3000",
-      browserBaseUrl: "http://localhost:5173",
-      webhookUrl: "https://whitesmith-dev.example/api/github/webhooks",
+      publicOrigin: () => "https://control-plane.test",
     } as never);
     const launch = await github.createManifestLaunch("admin-1", organizationId, "tunnel-key");
     const manifest = JSON.parse(launch.manifest);
-    expect(manifest.hook_attributes.url).toBe("https://whitesmith-dev.example/api/github/webhooks");
-    expect(manifest.redirect_url).toBe("http://localhost:3000/api/github/app/manifest/callback");
-    expect(manifest.setup_url).toBe("http://localhost:3000/api/github/app/setup");
+    expect(manifest.hook_attributes.url).toBe("https://control-plane.test/api/github/webhooks");
+    expect(manifest.redirect_url).toBe("https://control-plane.test/api/github/app/manifest/callback");
+    expect(manifest.setup_url).toBe("https://control-plane.test/api/github/app/setup");
   });
 
   test("converts a manifest and persists only encrypted returned secrets", async () => {
@@ -79,13 +76,13 @@ describe("GitHub App onboarding", () => {
     const github = service(async (input, init) => {
       const request = new Request(input, init);
       requests.push(request);
-      if (request.url.includes("/conversions")) return Response.json({ id: 42, slug: "whitesmith", pem: "PRIVATE PEM", client_secret: "client-secret", webhook_secret: "webhook-secret" });
+      if (request.url.includes("/conversions")) return Response.json({ id: 42, slug: "whitesmith", pem: "PRIVATE PEM", client_id: "client-id", client_secret: "client-secret", webhook_secret: "webhook-secret" });
       return Response.json({});
     });
     const launch = await github.createManifestLaunch("admin-1", organizationId, "manifest-key-2");
     const state = new URL(launch.action).searchParams.get("state")!;
     const result = await github.completeManifestRegistration("admin-1", state, "conversion-code");
-    expect(result.location).toContain("github.com/apps/");
+    expect(result.location).toBe("https://control-plane.test/api/auth/github");
     expect(requests[0].headers.get("accept")).toBe("application/vnd.github+json");
     expect(requests[0].headers.get("x-github-api-version")).toBe("2026-03-10");
     expect(requests[0].url).toContain("/app-manifests/conversion-code/conversions");
@@ -198,7 +195,7 @@ describe("GitHub App onboarding", () => {
       if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
       if (url.includes("/installation/repositories")) return Response.json({ repository_selection: "all", repositories: [] });
       return Response.json({});
-    }, secretBox: new SecretBox(masterKey), baseUrl: "https://control-plane.test", browserBaseUrl: "https://control-plane.test" } as never);
+    }, secretBox: new SecretBox(masterKey), publicOrigin: () => "https://control-plane.test" } as never);
     await expect(github.completeInstallation("admin-1", "cookie", 42)).rejects.toThrow("repository_selection_required");
     expect(calls.some((query) => query.includes("UPDATE system_onboarding SET organization_id"))).toBe(true);
   });
@@ -217,13 +214,12 @@ describe("GitHub App onboarding", () => {
       db: sql,
       fetch: async () => { throw new Error("GitHub should not be called"); },
       secretBox: new SecretBox(masterKey),
-      baseUrl: "https://control-plane.test",
-      browserBaseUrl: "http://localhost:5173",
+      publicOrigin: () => "https://control-plane.test",
     } as never);
 
     const launch = await github.beginInstallation("admin-1", organizationId, "resume-key");
 
-    expect(launch).toEqual({ location: "http://localhost:5173/onboarding" });
+    expect(launch).toEqual({ location: "https://control-plane.test/onboarding" });
     expect(calls.some((query) => query.includes("UPDATE system_onboarding SET organization_id"))).toBe(true);
     expect(calls.some((query) => query.includes("INSERT INTO github_setup_states"))).toBe(false);
     expect(calls.every((query) => !query.includes("r.approved"))).toBe(true);
@@ -380,8 +376,7 @@ test("workflow preview uses the current runner pool schema", async () => {
   const github = new GitHubAppService({
     db: sql,
     secretBox: box,
-    baseUrl: "https://control-plane.test",
-    browserBaseUrl: "https://control-plane.test",
+    publicOrigin: () => "https://control-plane.test",
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });

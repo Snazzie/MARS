@@ -19,6 +19,7 @@ import {
   JobResourceSample,
   OnboardingDetail,
   OnboardingStatus,
+  ControlPlaneSetupRequest,
   SelectOnboardingWorkerRequest,
   StartOnboardingVerificationRequest,
   StartOnboardingVerificationResult,
@@ -329,6 +330,13 @@ export async function uninstallOrganizationGithub(organizationId: string) {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: "{}",
+  });
+}
+export async function beginControlPlaneSetup(input: ControlPlaneSetupRequest) {
+  return request("/api/setup/github-app", DashboardManifestResponse, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(input),
   });
 }
 export async function beginOnboardingGithubManifest(input: { organizationId: string }) {

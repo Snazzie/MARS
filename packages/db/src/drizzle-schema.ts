@@ -244,6 +244,16 @@ export const dashboardInstallations = pgTable("dashboard_installations", {
 	check("dashboard_installations_repository_selection_check", sql`repository_selection = ANY (ARRAY['all'::text, 'selected'::text])`),
 ]);
 
+export const controlPlaneConfig = pgTable("control_plane_config", {
+	singleton: boolean().default(true).primaryKey().notNull(),
+	publicBaseUrl: text("public_base_url"),
+	setupCodeHash: bytea("setup_code_hash"),
+	setupCompletedAt: timestamp("setup_completed_at", { withTimezone: true, mode: 'string' }),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	check("control_plane_config_singleton_check", sql`CHECK (singleton)`),
+]);
+
 export const githubAppConfig = pgTable("github_app_config", {
 	singleton: boolean().default(true).primaryKey().notNull(),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations

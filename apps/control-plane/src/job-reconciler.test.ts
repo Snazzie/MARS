@@ -49,7 +49,7 @@ test("parses Windows CPU and memory routing labels", () => {
 });
 
 test("reports resource ceiling for a connected worker below the requested limits", () => {
-  const worker = candidateWorkerFromRow({ ...row, worker_limits: { maxVcpuPerPod: 8, maxMemoryBytesPerPod: 15 * 1024 ** 3, maxStorageBytesPerPod: 50 * 1024 ** 3, maxConcurrentPods: 1 } });
+  const worker = candidateWorkerFromRow({ ...row, worker_doctor: { runtimeReady: true }, worker_limits: { maxVcpuPerPod: 8, maxMemoryBytesPerPod: 15 * 1024 ** 3, maxStorageBytesPerPod: 50 * 1024 ** 3, maxConcurrentPods: 1 } });
   const value = candidate(worker);
   value.pool.resources = { vcpu: 16, memoryBytes: 20 * 1024 ** 3, storageBytes: 50 * 1024 ** 3, concurrency: 1 };
   value.requestedLabels = ["whitesmith-windows-x64", "10VCPU", "15G"];

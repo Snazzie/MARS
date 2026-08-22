@@ -1,5 +1,6 @@
 import type { DashboardDb } from "@whitesmith/db";
 import type { SessionUser, SecretBox } from "../auth.ts";
+import type { ControlPlaneSetup } from "../control-plane-setup.ts";
 import type { RequestLimiter } from "../worker-requests.ts";
 import type { WorkerCommandDispatcher } from "../worker-dispatch.ts";
 import type { GitHubAppService } from "../github-app.ts";
@@ -15,13 +16,9 @@ export type ControlPlaneHealth = {
 
 export type ControlPlaneHttpDeps = {
   db: DashboardDb;
-  baseUrl: string;
-  browserBaseUrl: string;
-  githubClientId: string;
-  githubClientSecret: string;
-  bootstrapGithubLogin: string;
+  setup: ControlPlaneSetup;
+  browserOrigin(): string | null;
   secretBox: SecretBox;
-  githubWebhookSecret?: string;
   githubApp?: GitHubAppService;
   defaultJobImages: Partial<Record<"linux-x64" | "windows-x64" | "macos-arm64", string>>;
   windowsContainerBuild?: {

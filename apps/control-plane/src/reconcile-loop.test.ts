@@ -33,7 +33,7 @@ test("dispatches durable cleanup for terminal leases without an outstanding stop
   const queries: string[] = [];
   const db = Object.assign(async (strings: TemplateStringsArray) => {
     queries.push(strings.join(" "));
-    return [{ leaseId: "22222222-2222-4222-8222-222222222222", workerId: "11111111-1111-4111-8111-111111111111", nonce: "n".repeat(32) }];
+    return [{ leaseId: "22222222-2222-4222-8222-222222222222", workerId: "11111111-1111-4111-8111-111111111111", nonce: "n".repeat(32), cleanupType: "tart.stop_lease" }];
   }, {});
   const commands: unknown[] = [];
   const report = await cleanup.reapPendingLeases({

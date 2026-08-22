@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { cliArgument, runGuestService, runOneTimeJitBootstrap } from "./bootstrap.ts";
+import { runLinuxVirtioGuest } from "./linux-guest.ts";
 function hash(value:Buffer):string{return createHash("sha256").update(value).digest("hex");}
 if (Bun.argv[2] === "bootstrap") {
   const configPath = cliArgument(Bun.argv, "--config-file");
@@ -11,8 +12,9 @@ if (Bun.argv[2] === "bootstrap") {
   const bootstrapPath = cliArgument(Bun.argv, "--bootstrap-file");
   const runnerRoot = cliArgument(Bun.argv, "--runner-root") ?? (platform === "windows-x64" ? "C:\\actions-runner" : "/opt/actions-runner");
   const completionMode = cliArgument(Bun.argv, "--completion-mode") ?? "shutdown";
-  if (!["windows-x64", "linux-x64"].includes(platform) || !bootstrapPath || !["shutdown", "exit"].includes(completionMode)) throw new Error("usage: whitesmith-job-agent guest-service --platform windows-x64|linux-x64 --completion-mode shutdown|exit --bootstrap-file PATH");
-  await runGuestService(platform, bootstrapPath, runnerRoot, completionMode as "shutdown" | "exit");
+  if (!["windows-x64", "linux-x64"].includes(platform) || !["shutdown", "exit"].includes(completionMode) || (platform === "windows-x64" && !bootstrapPath) || (platform === "linux-x64" && bootstrapPath)) throw new Error("usage: whitesmith-job-agent guest-service --platform windows-x64|linux-x64 --completion-mode shutdown|exit [--bootstrap-file PATH]");
+  if (platform === "linux-x64") await runLinuxVirtioGuest(undefined, runnerRoot);
+  else await runGuestService(platform, bootstrapPath!, runnerRoot, completionMode as "shutdown" | "exit");
 } else {
   if (Bun.argv[2] !== "accept-claim" || !Bun.argv.includes("--stdin")) throw new Error("usage: whitesmith-job-agent accept-claim --stdin");
   const claim=Buffer.from(await Bun.stdin.bytes()); if(claim.length < 32) throw new Error("claim missing");

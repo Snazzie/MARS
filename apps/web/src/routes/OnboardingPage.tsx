@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { beginOnboardingGithubInstall, beginOnboardingGithubManifest, createOnboardingPool, getOnboardingDetail, getOnboardingStatus, getRunnerWorkflowFiles, rejectPendingWorker, selectOnboardingWorker, startOnboardingVerification, verifyOnboardingRepositories } from "../api.ts";
+import { beginControlPlaneSetup, beginOnboardingGithubInstall, beginOnboardingGithubManifest, createOnboardingPool, getOnboardingDetail, getOnboardingStatus, getRunnerWorkflowFiles, rejectPendingWorker, selectOnboardingWorker, startOnboardingVerification, verifyOnboardingRepositories } from "../api.ts";
 import { EnrollmentPanel } from "../components/EnrollmentPanel.tsx";
 import { pendingWorkerQueryOptions } from "../components/PendingWorkerRequests.tsx";
 import { RunnerWorkflowPrModal } from "../components/RunnerWorkflowPrModal.tsx";
@@ -8,7 +8,7 @@ import { WorkerConfigurationForm } from "../components/WorkerConfigurationForm.t
 import { QueryState } from "../components/StateView.tsx";
 import type { CreatePoolRequest, OnboardingDetail, OnboardingStatus } from "@whitesmith/contracts";
 
-const steps = [["admin", "Admin"], ["worker", "Worker"], ["github", "GitHub"], ["labels", "Trigger labels"]] as const;
+const steps = [["setup", "Control plane"], ["github", "GitHub"], ["admin", "Admin"], ["worker", "Worker"], ["labels", "Trigger labels"]] as const;
 const gib = (bytes: number) => Math.max(1, Math.round(bytes / 1024 ** 3));
 
 export function OnboardingPage() {
@@ -31,6 +31,7 @@ export function OnboardingPage() {
   const pool = useMutation({ mutationFn: createOnboardingPool, onSuccess: refresh, onError: (e) => setError(e instanceof Error ? e.message : "Pool creation failed") });
   if (status.isLoading) return <main className="onboarding"><p>Loading onboarding…</p></main>;
   if (status.error || !s) return <main className="onboarding"><h1>Onboarding unavailable</h1><p role="alert">{status.error instanceof Error ? status.error.message : "Could not load onboarding."}</p><button onClick={() => void status.refetch()}>Retry</button></main>;
+  if (s.step === "setup") return <SetupCard />;
   if (!s.authenticated) return <SignIn firstAdmin={!s.adminCreated} />;
   if (!s.canManage) return <main className="onboarding"><section className="onboarding-card"><h1>Administrator access required</h1><p>Your GitHub account is signed in, but it cannot configure this control plane.</p></section></main>;
   const d = detail.data;
@@ -42,12 +43,30 @@ export function OnboardingPage() {
   return <main className="onboarding"><header><p className="eyebrow">FIRST-RUN SETUP</p><h1>Get Whitesmith ready</h1><p>Complete each verified step. Progress is saved on the control plane.</p></header>{error && <p role="alert" className="form-error">{error} <button onClick={() => setError(null)}>Dismiss</button></p>}<div className="onboarding-layout"><nav aria-label="Onboarding steps"><ol className="onboarding-steps">{steps.map(([id, label], index) => <li key={id} className={index === activeStep ? "is-current" : index < currentIndex ? "is-complete" : "is-locked"}><span>{index + 1}</span><strong>{label}</strong></li>)}</ol></nav><section className="onboarding-task" aria-live="polite"><h2>{steps[activeStep]?.[1]}</h2>{activeStep === 0 ? <p>Administrator account is configured.</p> : <EditableStep detail={d} index={activeStep} onDone={() => { refresh(); setViewStep(null); }} onDiscard={() => { refresh(); setViewStep(null); }} onSelect={(id) => select.mutate({ workerId: id })} onCreate={(input) => pool.mutate({ ...input, organizationId: d.github.organizationId ?? "" })} />}{activeStep > 0 && <div className="onboarding-navigation"><button type="button" onClick={() => setViewStep(Math.max(0, activeStep - 1))} disabled={activeStep === 0}>Back</button><button type="button" onClick={() => setViewStep(Math.min(currentIndex, activeStep + 1))} disabled={!viewingPastStep}>Next</button></div>}</section></div></main>;
 }
 function EditableStep({ detail, index, onDone, onDiscard, onSelect, onCreate }: { detail: OnboardingDetail; index: number; onDone: () => void; onDiscard: () => void; onSelect: (id: string) => void; onCreate: (input: CreatePoolRequest) => void }) {
-  if (index === 1) return <WorkerSetupStep detail={detail} edit onSelect={onSelect} onDone={onDone} onDiscard={onDiscard} />;
-  if (index === 2) return <GithubStep detail={detail} />;
-  if (index === 3) return <LabelsStep detail={detail} edit onCreate={onCreate} />;
+  if (index === 1) return <GithubStep detail={detail} />;
+  if (index === 3) return <WorkerSetupStep detail={detail} edit onSelect={onSelect} onDone={onDone} onDiscard={onDiscard} />;
+  if (index === 4) return <LabelsStep detail={detail} edit onCreate={onCreate} />;
   return <p>Administrator account is configured.</p>;
 }
 function ResourceStep({ detail, onDone, onDiscard, edit = false }: { detail: OnboardingDetail; onDone: () => void; onDiscard?: () => void; edit?: boolean }) { const w = detail.worker; if (!w) return <p>Select a worker first.</p>; return <><h3>Configure resources</h3>{w.configurationState === "ready" && !edit ? <p role="status">Configuring worker complete. Waiting for server progress…</p> : <WorkerConfigurationForm worker={w} onConfigured={onDone} onDiscard={onDiscard} />}</>; }
+function SetupCard() {
+  const [publicBaseUrl, setPublicBaseUrl] = useState(typeof window === "undefined" ? "" : window.location.origin);
+  const [error, setError] = useState<string | null>(null);
+  const setup = useMutation({
+    mutationFn: beginControlPlaneSetup,
+    onSuccess: submitGithubManifest,
+    onError: (cause) => setError(cause instanceof Error ? cause.message : "Setup failed"),
+  });
+  return <main className="onboarding"><section className="onboarding-card">
+    <p className="eyebrow">FIRST-RUN SETUP</p><h1>Connect this control plane</h1>
+    <p>Confirm the externally reachable HTTPS origin to create the GitHub App.</p>
+    <form onSubmit={(event) => { event.preventDefault(); setError(null); setup.mutate({ publicBaseUrl }); }}>
+      <label>Public URL<input aria-label="Public URL" type="url" value={publicBaseUrl} onChange={(event) => setPublicBaseUrl(event.target.value)} required /></label>
+      {error && <p role="alert" className="form-error">{error}</p>}
+      <button type="submit" disabled={setup.isPending}>{setup.isPending ? "Creating GitHub App…" : "Create GitHub App"}</button>
+    </form>
+  </section></main>;
+}
 
 function SignIn({ firstAdmin }: { firstAdmin: boolean }) { return <main className="onboarding"><section className="onboarding-card onboarding-sign-in"><p className="eyebrow">{firstAdmin ? "WELCOME TO WHITESMITH" : "WELCOME BACK"}</p><h1>{firstAdmin ? "Create your administrator account" : "Sign in to Whitesmith"}</h1><p>Use GitHub to verify your identity and securely manage this control plane.</p><a className="button" href="/api/auth/github">{firstAdmin ? "Continue with GitHub" : "Continue with GitHub"}</a><p>{firstAdmin ? "Create administrator with GitHub" : "Sign in with GitHub"}</p><p><strong>GitHub identity</strong><br />Only your GitHub identity is used for administrator access.</p><p className="security-note">Security note: setup data is shown only after your session is authorized.</p></section></main>; }
 function ReviewSummary({ detail, through, onClose }: { detail: OnboardingDetail; through: number; onClose?: () => void }) {

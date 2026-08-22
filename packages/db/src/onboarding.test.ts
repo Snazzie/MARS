@@ -13,11 +13,11 @@ const sql = (rows: unknown[] = []) => {
 describe("onboarding state derivation", () => {
   test("derives server step order from durable prerequisites", async () => {
     const status = await getOnboardingStatus(sql([{ adminUserId: null, workerId: null, organizationId: null, completedAt: null }]));
-    expect(status).toMatchObject({ version: 1, onboardingRequired: true, adminCreated: false, step: "admin" });
+    expect(status).toMatchObject({ version: 1, onboardingRequired: true, adminCreated: false, step: "setup" });
   });
 
   test("falls back to worker when selected worker is rejected or revoked", async () => {
-    const status = await getOnboardingStatus(sql([{ adminUserId: "u1", workerId: "w1", organizationId: null, completedAt: null, workerAdmissionState: "rejected" }]));
+    const status = await getOnboardingStatus(sql([{ adminUserId: "u1", workerId: "w1", organizationId: null, completedAt: null, originConfigured: true, githubAppConfigured: true, workerAdmissionState: "rejected" }]));
     expect(status.step).toBe("worker");
   });
 
@@ -26,15 +26,15 @@ describe("onboarding state derivation", () => {
       { workerAdmissionState: "pending", workerConfigurationState: "unconfigured" },
       { workerAdmissionState: "adopted", workerConfigurationState: "unconfigured" },
     ]) {
-      const db = sql([{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: null, githubReady: true, ...row }]);
+      const db = sql([{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: null, originConfigured: true, githubAppConfigured: true, githubReady: true, ...row }]);
       expect((await getOnboardingStatus(db)).step).toBe("worker");
     }
   });
 
   test("advances a ready adopted worker through GitHub to trigger labels", async () => {
-    const github = sql([{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: null, workerAdmissionState: "adopted", workerConfigurationState: "ready", githubReady: false }]);
+    const github = sql([{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: null, originConfigured: true, githubAppConfigured: true, workerAdmissionState: "adopted", workerConfigurationState: "ready", githubReady: false }]);
     expect((await getOnboardingStatus(github)).step).toBe("github");
-    const labels = sql([{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: null, workerAdmissionState: "adopted", workerConfigurationState: "ready", githubReady: true }]);
+    const labels = sql([{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: null, originConfigured: true, githubAppConfigured: true, workerAdmissionState: "adopted", workerConfigurationState: "ready", githubReady: true }]);
     expect((await getOnboardingStatus(labels)).step).toBe("labels");
   });
 
@@ -42,7 +42,7 @@ describe("onboarding state derivation", () => {
     let query = "";
     const db = (async (strings: TemplateStringsArray) => {
       query = strings.join(" ").toLowerCase();
-      return [{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: null, workerAdmissionState: "adopted", workerConfigurationState: "ready", githubReady: true }];
+      return [{ adminUserId: "u1", workerId: "w1", organizationId: "o1", completedAt: null, originConfigured: true, githubAppConfigured: true, workerAdmissionState: "adopted", workerConfigurationState: "ready", githubReady: true }];
     }) as never;
     expect((await getOnboardingStatus(db)).step).toBe("labels");
     expect(query).toContain("r.available=true");

@@ -13,13 +13,20 @@ COPY package.json bun.lock ./
 COPY apps ./apps
 COPY packages ./packages
 COPY deploy ./deploy
-RUN bun install --frozen-lockfile \
+COPY images ./images
+RUN rm -rf apps/*/node_modules packages/*/node_modules \
+  && bun install --frozen-lockfile --linker hoisted \
+  && bun install --cwd apps/web --frozen-lockfile --linker hoisted \
+  && bun install --cwd apps/control-plane --frozen-lockfile --linker hoisted \
+  && bun install --cwd apps/job-agent --frozen-lockfile --linker hoisted \
   && bun run --filter '@whitesmith/web' build \
   && bun run --filter '@whitesmith/control-plane' build \
   && bun run --filter '@whitesmith/job-agent' build \
   && bun build apps/orchestrator/src/index.ts --compile --target=bun-windows-x64 --outfile=/artifacts/whitesmith-orchestrator.exe
 
+ARG WHITESMITH_BUILD_ID=unknown
 FROM oven/bun:1.2.20-slim
+ARG WHITESMITH_BUILD_ID=unknown
 WORKDIR /app
 COPY --from=build /app/apps/control-plane/dist/index.js ./index.js
 COPY --from=build /app/packages/db/src/migrations ./migrations
@@ -44,6 +51,10 @@ ENV WEB_ROOT=file:///app/web/
 ENV WORKER_INSTALLER_ROOT=file:///app/workers/
 ENV WORKER_SERVICE_HOST_EXECUTABLE=file:///app/workers/whitesmith-service-host.exe
 ENV WORKER_ORCHESTRATOR_WINDOWS_X64=file:///app/workers/whitesmith-orchestrator.exe
+ENV NODE_ENV=production
+ENV DATA_ROOT=/var/lib/whitesmith
+ENV WHITESMITH_BUILD_ID=$WHITESMITH_BUILD_ID
+RUN mkdir -p /var/lib/whitesmith && chown bun:bun /var/lib/whitesmith && chmod 700 /var/lib/whitesmith
 USER bun
 EXPOSE 3000
 ENTRYPOINT ["bun","run","index.js"]

@@ -11,7 +11,50 @@ services:
       - postgres-data:/var/lib/postgresql/data
     ports:
       - 127.0.0.1:55432:5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-whitesmith} -d ${POSTGRES_DB:-whitesmith}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  control-plane:
+    build:
+      context: .
+      dockerfile: deploy/control-plane/Dockerfile
+      args:
+        WHITESMITH_BUILD_ID: ${WHITESMITH_BUILD_ID:-local}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-whitesmith}:${POSTGRES_PASSWORD:-whitesmith}@postgres:5432/${POSTGRES_DB:-whitesmith}
+      DATA_ROOT: /var/lib/whitesmith
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - control-plane-data:/var/lib/whitesmith
+    ports:
+      - 127.0.0.1:3000:3000
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const response=await fetch('http://localhost:3000/api/readyz');process.exit(response.ok?0:1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 60s
+
+  cloudflared:
+    image: cloudflare/cloudflared:2025.7.0
+    profiles: [tunnel]
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["test -n \"$$TUNNEL_TOKEN\" || { echo 'CLOUDFLARE_TUNNEL_TOKEN is required' >&2; exit 1; }; exec cloudflared tunnel --no-autoupdate run --token \"$$TUNNEL_TOKEN\""]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      control-plane:
+        condition: service_healthy
 
 volumes:
   postgres-data:
     name: whitesmith-postgres-data
+  control-plane-data:
+    name: whitesmith-control-plane-data

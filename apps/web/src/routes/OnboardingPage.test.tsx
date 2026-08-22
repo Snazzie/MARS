@@ -31,6 +31,14 @@ function markup(detail: Record<string, unknown>, pendingWorkers?: readonly unkno
   return renderToStaticMarkup(<QueryClientProvider client={client}><OnboardingPage /></QueryClientProvider>);
 }
 
+test("setup step asks only for the public origin", () => {
+  const html = markup({ version: 1, onboardingRequired: true, adminCreated: false, authenticated: false, canManage: false, step: "setup" });
+  expect(html).toContain("Confirm the externally reachable HTTPS origin");
+  expect(html).toContain('aria-label="Public URL"');
+  expect(html).not.toContain("setup code");
+  expect(html).not.toContain("password");
+});
+
 test("first-admin sign-in copy explains administrator setup and links GitHub OAuth", () => {
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: false, authenticated: false, canManage: false, step: "admin" });
   expect(html).toContain("Create your administrator account");
@@ -56,7 +64,7 @@ test("authenticated non-admin sees authorization terminal state without setup da
 test("worker step combines selection, capacity configuration, and four-step progress", () => {
   const selectedWorker = { ...worker, configurationState: "unconfigured", limits: null };
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "worker", worker: selectedWorker, organizations: [], github: { appConfigured: true, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "a".repeat(64) });
-  for (const [label, className] of [["Admin", "is-complete"], ["Worker", "is-current"], ["GitHub", "is-locked"], ["Trigger labels", "is-locked"]]) {
+  for (const [label, className] of [["Control plane", "is-complete"], ["GitHub", "is-complete"], ["Admin", "is-complete"], ["Worker", "is-current"], ["Trigger labels", "is-locked"]]) {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const element = html.match(new RegExp(`<li[^>]*>[^<]*<span>[^<]*</span>(?:<strong>|<button[^>]*>)${escaped}(?:</strong>|</button>)</li>`))?.[0] ?? "";
     expect(element).toContain(className);

@@ -31,9 +31,10 @@ export async function getOnboardingStatus(db: OnboardingDb, auth: { authenticate
       so.organization_id AS "organizationId", so.completed_at AS "completedAt",
       w.admission_state AS "workerAdmissionState",
       w.configuration_state AS "workerConfigurationState",
+      EXISTS (SELECT 1 FROM control_plane_config c WHERE c.singleton=true AND c.public_base_url IS NOT NULL) AS "originConfigured",
+      EXISTS (SELECT 1 FROM github_app_config g WHERE g.singleton=true AND g.client_id IS NOT NULL) AS "githubAppConfigured",
       EXISTS (
-        SELECT 1
-        FROM dashboard_installations i
+        SELECT 1 FROM dashboard_installations i
         JOIN dashboard_repositories r ON r.installation_id=i.id AND r.organization_id=i.organization_id
         WHERE i.organization_id=so.organization_id
           AND i.state='approved'
@@ -50,10 +51,13 @@ export async function getOnboardingStatus(db: OnboardingDb, auth: { authenticate
   const completed = row.completedAt != null;
   const admission = stringValue(row.workerAdmissionState);
   const configuration = stringValue(row.workerConfigurationState);
+  const originConfigured = row.originConfigured === true;
+  const githubAppConfigured = row.githubAppConfigured === true;
   const githubReady = row.githubReady === true;
   const authenticated = auth.authenticated ?? false;
   const canManage = auth.canManage ?? false;
   if (completed) return { version: 1, onboardingRequired: false, adminCreated: Boolean(adminUserId), authenticated, canManage, step: "complete" };
+  if (!originConfigured || !githubAppConfigured) return { version: 1, onboardingRequired: true, adminCreated: Boolean(adminUserId), authenticated, canManage, step: "setup" };
   let step: OnboardingStatus["step"] = "admin";
   if (adminUserId) {
     if (!workerId || admission !== "adopted" || configuration !== "ready") step = "worker";
@@ -141,7 +145,7 @@ export async function getOnboardingDetail(
       visibility: row.visibility, available: row.available, installationId: String(row.installationId), discoveryState, discoveryRetryAt,
     } as RepositorySummary;
   });
-  const workerDriver = worker?.platform === "linux-x64" ? "kata-k3s" : worker?.platform === "windows-x64" ? "windows-hyperv-container" : worker?.platform === "macos-arm64" ? "tart-vm" : null;
+  const workerDriver = worker?.platform === "linux-x64" ? "linux-libvirt-vm" : worker?.platform === "windows-x64" ? "windows-hyperv-container" : worker?.platform === "macos-arm64" ? "tart-vm" : null;
   const workerGuestPlatforms = worker?.guestPlatforms ?? (worker ? [worker.platform] : []);
   const poolRows = worker ? await db`
     SELECT p.id,p.organization_id AS "organizationId",p.worker_id AS "workerId",'Shared fleet' AS "workerName",

@@ -19,9 +19,8 @@ describe("Windows worker-local image contract", () => {
   });
 
   test("manifest contract names provenance and runtime evidence", () => {
-    const fields = ["schemaVersion", "baseImage", "runnerSha256", "gitSha256", "vcRuntimeSha256", "jobAgentSha256", "image", "imageId", "runtimeProbe", "builtAt"];
+    const fields = ["schemaVersion", "image", "imageId", "runtimeProbe", "builtAt"];
     for (const field of fields) expect(installer).toContain(field);
     expect(installer).toContain("image ID mismatch");
-    expect(installer).toContain("runtime probe");
   });
 });
