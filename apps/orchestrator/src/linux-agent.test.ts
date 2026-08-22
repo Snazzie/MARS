@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyLinuxWorkerConfigure, handleLinuxWorkerCommand } from "./linux-agent.ts";
+import { applyLinuxWorkerConfigure, buildLinuxWorkerJoinPayload, handleLinuxWorkerCommand } from "./linux-agent.ts";
 import type { WorkerCommand } from "@whitesmith/contracts";
 
 const workerId = "00000000-0000-4000-8000-000000000001";
@@ -34,4 +34,18 @@ describe("Linux worker.configure", () => {
     const resources = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 } };
     expect(() => handleLinuxWorkerCommand({ ...command, type: "doctor" }, resources)).toThrow("unsupported worker command");
   });
+});
+
+test("builds a Linux enrollment payload with digest-bound VM evidence", () => {
+  const payload = buildLinuxWorkerJoinPayload({
+    code: "A".repeat(43),
+    publicKey: "public",
+    encryptionPublicKey: "encryption",
+    vmUuid: workerId,
+    machineUuid: workerId,
+    doctor: { runtimeMode: "vm", artifactSource: "worker_local", artifactDigest: `sha256:${"a".repeat(64)}`, runtimeReady: true, libvirtReady: true, networkReady: true, cloneStorageReady: true, realVmSmoke: true, imageSignatures: true, smokeArtifactDigest: `sha256:${"a".repeat(64)}`, smokeObservedAt: "2026-08-11T00:00:00.000Z" },
+    capacity: { actualVcpu: 8, actualMemoryBytes: 16_000, actualStorageBytes: 64_000, freeVcpu: 8, freeMemoryBytes: 16_000, freeStorageBytes: 64_000 },
+  });
+  expect(payload.platform).toBe("linux-x64");
+  expect(payload.doctor.smokeArtifactDigest).toBe(payload.doctor.artifactDigest);
 });
