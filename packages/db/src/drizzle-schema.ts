@@ -292,6 +292,7 @@ export const githubDiscoveryCheckpoints = pgTable("github_discovery_checkpoints"
 	repositoryId: uuid("repository_id").primaryKey().notNull(),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	completedRunId: bigint("completed_run_id", { mode: "number" }).notNull(),
+	completedRunAttempt: integer("completed_run_attempt").default(1).notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	foreignKey({
@@ -299,6 +300,7 @@ export const githubDiscoveryCheckpoints = pgTable("github_discovery_checkpoints"
 			foreignColumns: [dashboardRepositories.id],
 			name: "github_discovery_checkpoints_repository_id_fkey"
 		}).onDelete("cascade"),
+	check("github_discovery_checkpoints_completed_run_attempt_check", sql`completed_run_attempt > 0`),
 ]);
 
 export const dashboardRuns = pgTable("dashboard_runs", {
@@ -320,6 +322,7 @@ export const dashboardRuns = pgTable("dashboard_runs", {
 	startedAt: timestamp("started_at", { withTimezone: true, mode: 'string' }),
 	completedAt: timestamp("completed_at", { withTimezone: true, mode: 'string' }),
 	runtimeBoundary: text("runtime_boundary"),
+	runAttempt: integer("run_attempt").default(1).notNull(),
 }, (table) => [
 	uniqueIndex("dashboard_runs_github_id_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.githubRunId.asc().nullsLast().op("uuid_ops")).where(sql`(github_run_id IS NOT NULL)`),
 	index("dashboard_runs_org_queued_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.queuedAt.desc().nullsFirst().op("timestamptz_ops"), table.id.desc().nullsFirst().op("uuid_ops")),
@@ -335,6 +338,7 @@ export const dashboardRuns = pgTable("dashboard_runs", {
 		}).onDelete("cascade"),
 	unique("dashboard_runs_organization_id_id_key").on(table.id, table.organizationId),
 	unique("dashboard_runs_organization_id_github_run_id_key").on(table.organizationId, table.githubRunId),
+	check("dashboard_runs_run_attempt_check", sql`run_attempt > 0`),
 ]);
 
 export const dashboardJobs = pgTable("dashboard_jobs", {
@@ -358,6 +362,7 @@ export const dashboardJobs = pgTable("dashboard_jobs", {
 	logsSyncedAt: timestamp("logs_synced_at", { withTimezone: true, mode: 'string' }),
 	logsError: text("logs_error"),
 	logsVersion: integer("logs_version").default(0).notNull(),
+	runAttempt: integer("run_attempt").default(1).notNull(),
 }, (table) => [
 	uniqueIndex("dashboard_jobs_github_id_idx").using("btree", table.organizationId.asc().nullsLast().op("int8_ops"), table.githubJobId.asc().nullsLast().op("int8_ops")).where(sql`(github_job_id IS NOT NULL)`),
 	index("dashboard_jobs_org_run_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.runId.asc().nullsLast().op("uuid_ops")),
@@ -374,7 +379,9 @@ export const dashboardJobs = pgTable("dashboard_jobs", {
 		}).onDelete("cascade"),
 	unique("dashboard_jobs_organization_id_id_key").on(table.id, table.organizationId),
 	unique("dashboard_jobs_organization_id_github_job_id_key").on(table.organizationId, table.githubJobId),
+	check("dashboard_jobs_run_attempt_check", sql`run_attempt > 0`),
 ]);
+
 
 export const dashboardOutboxInvalidations = pgTable("dashboard_outbox_invalidations", {
 	id: uuid().defaultRandom().primaryKey().notNull(),

@@ -15,6 +15,13 @@
       "when": 1700000001000,
       "tag": "0001_post_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1700000002000,
+      "tag": "0002_github_run_attempt",
+      "breakpoints": true
     }
   ]
 }
