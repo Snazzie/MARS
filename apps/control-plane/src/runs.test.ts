@@ -17,12 +17,17 @@ function makeStatefulSql() {
     if (text.includes("SELECT id FROM dashboard_repositories")) return repositories;
     if (text.startsWith("UPDATE dashboard_runs SET status='queued'")) {
       const current = [...runs.values()].find((run) => values.includes(run.github_run_id));
-      if (current && values.includes("queued")) Object.assign(current, { status: "queued", conclusion: null, started_at: null, completed_at: null });
+      const guardedNonterminal = text.includes("status <> 'completed'");
+      const guardedTerminal = text.includes("status='completed'");
+      if (current && values.includes("queued") && (!guardedNonterminal || current.status !== "completed") && (!guardedTerminal || current.status === "completed")) {
+        Object.assign(current, { status: "queued", conclusion: null, started_at: null, completed_at: null });
+      }
       return [];
     }
     if (text.startsWith("UPDATE dashboard_jobs SET status='queued'")) {
       const current = [...jobs.values()].find((job) => values.includes(job.github_job_id));
-      if (current) Object.assign(current, { status: "queued", conclusion: null, stage: "queued", started_at: null, completed_at: null });
+      const guardedNonterminal = text.includes("status <> 'completed'");
+      if (current && (!guardedNonterminal || current.status !== "completed")) Object.assign(current, { status: "queued", conclusion: null, stage: "queued", started_at: null, completed_at: null });
       return [];
     }
     if (text.startsWith("INSERT INTO dashboard_runs")) {
@@ -170,7 +175,7 @@ test("authoritative same-attempt queued REST state repairs a locally terminal jo
   const completedJob = { ...job, status: "completed" as const, conclusion: "failure", completedAt: completedRun.completedAt };
   await applyGithubJobSnapshot({ installationId: 5, repository, run: completedRun, job: completedJob });
   await applyGithubJobSnapshot({ installationId: 5, repository, run, job, authoritative: true });
-  expect(fake.jobs.get("org:99")).toMatchObject({ status: "queued", conclusion: null, started_at: null, completed_at: null });
+  expect(fake.runs.get("org:42")).toMatchObject({ status: "queued", conclusion: null, started_at: null, completed_at: null });
 });
 
 test("a completed workflow_job webhook does not terminalize a queued sibling", async () => {

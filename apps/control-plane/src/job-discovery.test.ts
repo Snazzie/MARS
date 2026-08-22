@@ -92,7 +92,7 @@ test("pairs rerun attempts during repository discovery", async () => {
   const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
   const requests: string[] = [];
   const persistedRuns: Array<{ runId: number; runAttempt: number; status: string }> = [];
-  const persistedJobs: Array<{ runAttempt: number; status: string; githubJobId: number }> = [];
+  const persistedJobs: Array<{ runId: number; runAttempt: number; status: string; githubJobId: number }> = [];
   const execute = async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join(" ");
     if (query.includes("FROM dashboard_installations")) return [{ id: "installation", organization_id: "org" }];
@@ -109,8 +109,9 @@ test("pairs rerun attempts during repository discovery", async () => {
       const attemptQualified = query.includes("run_attempt");
       const githubJobId = Number(values[attemptQualified ? 3 : 2]);
       const runAttempt = attemptQualified ? Number(values[2]) : 1;
+      const runId = Number(String(values[1]).replace(/^run-/, ""));
       const status = String(values[attemptQualified ? 5 : 4]);
-      persistedJobs.push({ githubJobId, runAttempt, status });
+      persistedJobs.push({ runId, githubJobId, runAttempt, status });
       return [{ id: `job-${githubJobId}`, status, run_attempt: runAttempt }];
     }
     if (query.includes("FROM dashboard_repositories repo")) return [repository];
@@ -139,7 +140,7 @@ test("pairs rerun attempts during repository discovery", async () => {
 
   expect(report).toMatchObject({ repositories: 1, discovered: 1, updated: 1, failed: 0 });
   expect(persistedRuns).toContainEqual({ runId: 32564909816, runAttempt: 2, status: "queued" });
-  expect(persistedJobs).toContainEqual({ githubJobId: 97018978327, runAttempt: 2, status: "queued" });
+  expect(persistedJobs).toContainEqual({ runId: 32564909816, githubJobId: 97018978327, runAttempt: 2, status: "queued" });
   expect(requests.some((url) => url === "https://api.github.com/repos/acme/repo/actions/runs/32564909816/attempts/2/jobs?per_page=100&page=1")).toBe(true);
   expect(requests.some((url) => url.includes("/actions/runs/32564909816/jobs?filter=latest"))).toBe(false);
 });
