@@ -13,5 +13,17 @@ services:
       start_period: 60s
     volumes: [whitesmith-data:/var/lib/whitesmith]
     ports: ["127.0.0.1:3000:3000"]
+
+  cloudflared:
+    image: cloudflare/cloudflared:2025.7.0
+    profiles: [tunnel]
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["test -n \"$$TUNNEL_TOKEN\" || { echo 'CLOUDFLARE_TUNNEL_TOKEN is required' >&2; exit 1; }; exec cloudflared tunnel --no-autoupdate run --token \"$$TUNNEL_TOKEN\""]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      control-plane:
+        condition: service_healthy
 volumes:
   whitesmith-data:

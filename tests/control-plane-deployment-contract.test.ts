@@ -12,7 +12,8 @@ test("production Compose requires only DATABASE_URL and keeps the data volume", 
   expect(compose).toContain("whitesmith-data:/var/lib/whitesmith");
   expect(compose).not.toContain("postgres:");
   expect(compose).not.toContain("secrets:");
-  expect(compose).not.toContain("cloudflared");
+  expect(compose).toContain("profiles: [tunnel]");
+  expect(compose).toContain("CLOUDFLARE_TUNNEL_TOKEN");
   expect(compose).not.toContain("POSTGRES_PASSWORD");
 });
 
@@ -43,5 +44,5 @@ test("image persists production data-root contract", async () => {
 
 test("deployment guide documents first-run persistence and incomplete worker gates", async () => {
   const readme = await read("deploy/control-plane/README.md");
-  for (const phrase of ["DATABASE_URL", "/onboarding", "/api/livez", "/api/readyz", "WebSocket", "back up", "linux/amd64", "worker execution"]) expect(readme).toContain(phrase);
+  for (const phrase of ["DATABASE_URL", "/onboarding", "/api/livez", "/api/readyz", "WebSocket", "Cloudflare Tunnel", "CLOUDFLARE_TUNNEL_TOKEN", "/api/github/webhooks", "back up", "linux/amd64", "worker execution"]) expect(readme).toContain(phrase);
 });

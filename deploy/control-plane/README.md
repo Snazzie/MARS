@@ -36,7 +36,30 @@ The control plane persists the generated encryption key at `${DATA_ROOT}/app_mas
 - `GET /api/readyz`
 - `GET /api/healthz`
 
-The Compose binding is loopback-only at `127.0.0.1:3000`; place an HTTPS reverse proxy or separately managed tunnel in front of it. Preserve WebSocket upgrades. Production uses the persisted canonical origin for browser, API, callback, and webhook URLs.
+The Compose binding is loopback-only at `127.0.0.1:3000`. For Cloudflare Tunnel, route the public hostname to `http://control-plane:3000` and preserve WebSocket upgrades. The persisted canonical origin remains the public HTTPS hostname used for browser, API, callback, and webhook URLs.
+
+## Cloudflare Tunnel
+
+Cloudflare Tunnel can expose the entire control plane without opening an inbound Unraid port. Create a remotely managed tunnel and configure one public hostname with service:
+
+```text
+https://control.example.com/*  ->  http://control-plane:3000
+```
+
+This forwards `/`, `/api/*`, WebSockets, and `POST /api/github/webhooks` through the same tunnel. Put the tunnel token in `.env`:
+
+```bash
+CLOUDFLARE_TUNNEL_TOKEN=eyJ...
+```
+
+Start the control plane and tunnel profile:
+
+```bash
+docker compose --env-file .env -f deploy/control-plane/compose.yaml --profile tunnel up -d
+docker compose --env-file .env -f deploy/control-plane/compose.yaml logs -f cloudflared
+```
+
+Cloudflare terminates public HTTPS; the internal service remains HTTP. Enter `https://control.example.com` as the public origin during onboarding. Do not use `http://control-plane:3000` or a tunnel-specific hostname as the GitHub callback/webhook origin.
 
 ## GitHub webhook endpoint
 

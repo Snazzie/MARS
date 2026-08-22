@@ -41,6 +41,18 @@ services:
       retries: 12
       start_period: 60s
 
+  cloudflared:
+    image: cloudflare/cloudflared:2025.7.0
+    profiles: [tunnel]
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["test -n \"$$TUNNEL_TOKEN\" || { echo 'CLOUDFLARE_TUNNEL_TOKEN is required' >&2; exit 1; }; exec cloudflared tunnel --no-autoupdate run --token \"$$TUNNEL_TOKEN\""]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      control-plane:
+        condition: service_healthy
+
 volumes:
   postgres-data:
     name: whitesmith-postgres-data
