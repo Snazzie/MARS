@@ -19,12 +19,37 @@ test("does not hide a missing JIT config response", async () => {
   await expect(client.generateJitConfig({ owner: "acme", repo: "project", runnerName: "ws-1", runnerGroupId: 1, workFolder: "_work", labels: ["self-hosted"] })).rejects.toThrow("github_jit_config_missing");
 });
 
-test("normalizes REST job steps and rejects malformed step payloads", async () => {
-  const client = new GithubJobsClient({ token: async () => "token", fetch: async () => Response.json({ total_count: 1, jobs: [{ id: 2, run_id: 1, status: "in_progress", name: "build", created_at: "2026-08-13T00:00:00Z", steps: [{ id: 9, number: 1, name: "Run", status: "queued", started_at: "2026-08-13T00:01:00Z" }] }] }) });
-  const result = await client.listJobs("acme", "project", 1, 1);
+test("normalizes attempt-qualified REST run and job snapshots", async () => {
+  const requests: Request[] = [];
+  const client = new GithubJobsClient({ token: async () => "token", fetch: async (input, init) => {
+    requests.push(new Request(input, init));
+    const url = String(input);
+    if (url.endsWith("/actions/runs/1/attempts/2/jobs?per_page=100&page=1")) {
+      return Response.json({ total_count: 1, jobs: [{ id: 2, run_id: 1, run_attempt: 2, status: "in_progress", name: "build", created_at: "2026-08-13T00:00:00Z", steps: [{ id: 9, number: 1, name: "Run", status: "queued", started_at: "2026-08-13T00:01:00Z" }] }] });
+    }
+    return Response.json({ id: 1, run_number: 1, run_attempt: 2, status: "in_progress", name: "CI", created_at: "2026-08-13T00:00:00Z" });
+  } });
+  const run = await client.getRun("acme", "project", 1);
+  const result = await client.listJobs("acme", "project", 1, 2, 1);
+  expect(run.runAttempt).toBe(2);
+  expect(result.jobs[0]?.runAttempt).toBe(2);
+  expect(requests[1]?.url).toBe("https://api.github.com/repos/acme/project/actions/runs/1/attempts/2/jobs?per_page=100&page=1");
   expect(result.jobs[0]?.steps[0]).toEqual({ id: "9", number: 1, name: "Run", status: "queued", conclusion: null, queuedAt: "2026-08-13T00:00:00Z", startedAt: null, completedAt: null, durationMs: 0 });
-  const malformed = new GithubJobsClient({ token: async () => "token", fetch: async () => Response.json({ jobs: [{ id: 2, run_id: 1, status: "queued", steps: [{ number: "nope", status: "queued" }] }] }) });
-  await expect(malformed.listJobs("acme", "project", 1, 1)).rejects.toThrow("github_payload_invalid");
+});
+
+test("rejects attempt-qualified jobs whose run identity or attempt mismatches the request", async () => {
+  const mismatchedRunId = new GithubJobsClient({ token: async () => "token", fetch: async () => Response.json({ jobs: [{ id: 2, run_id: 999, run_attempt: 2, status: "queued" }] }) });
+  await expect(mismatchedRunId.listJobs("acme", "project", 1, 2, 1)).rejects.toThrow("github_payload_invalid");
+  const mismatchedAttempt = new GithubJobsClient({ token: async () => "token", fetch: async () => Response.json({ jobs: [{ id: 2, run_id: 1, run_attempt: 1, status: "queued" }] }) });
+  await expect(mismatchedAttempt.listJobs("acme", "project", 1, 2, 1)).rejects.toThrow("github_payload_invalid");
+});
+
+test("normalizes REST job steps and rejects malformed step payloads", async () => {
+  const client = new GithubJobsClient({ token: async () => "token", fetch: async () => Response.json({ total_count: 1, jobs: [{ id: 2, run_id: 1, run_attempt: 2, status: "in_progress", name: "build", created_at: "2026-08-13T00:00:00Z", steps: [{ id: 9, number: 1, name: "Run", status: "queued", started_at: "2026-08-13T00:01:00Z" }] }] }) });
+  const result = await client.listJobs("acme", "project", 1, 2, 1);
+  expect(result.jobs[0]?.steps[0]).toEqual({ id: "9", number: 1, name: "Run", status: "queued", conclusion: null, queuedAt: "2026-08-13T00:00:00Z", startedAt: null, completedAt: null, durationMs: 0 });
+  const malformed = new GithubJobsClient({ token: async () => "token", fetch: async () => Response.json({ jobs: [{ id: 2, run_id: 1, run_attempt: 2, status: "queued", steps: [{ number: "nope", status: "queued" }] }] }) });
+  await expect(malformed.listJobs("acme", "project", 1, 2, 1)).rejects.toThrow("github_payload_invalid");
 });
 
 test("downloads bounded GitHub-masked job logs as text", async () => {

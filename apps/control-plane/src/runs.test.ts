@@ -25,7 +25,7 @@ function makeStatefulSql() {
     }
     if (text.startsWith("INSERT INTO dashboard_runs")) {
       const key = `${values[0]}:${values[2]}`;
-      const incoming = { organization_id: values[0], repository_id: values[1], id: `run-${values[2]}`, github_run_id: values[2], status: values[9], conclusion: values[10], queued_at: values[11], started_at: values[12], completed_at: values[13] };
+      const incoming = { organization_id: values[0], repository_id: values[1], id: `run-${values[2]}`, github_run_id: values[2], run_attempt: text.includes("run_attempt") ? Number(values[3]) : 1, status: values[9], conclusion: values[10], queued_at: values[11], started_at: values[12], completed_at: values[13] };
       const current = runs.get(key);
       if (!current) runs.set(key, incoming);
       else {
@@ -37,9 +37,18 @@ function makeStatefulSql() {
       }
       return [runs.get(key)!];
     }
+    if (text.startsWith("UPDATE dashboard_jobs SET status='completed'")) {
+      const runId = values.find((value) => typeof value === "number" && runs.has(`org:${value}`));
+      const scopedAttempt = text.includes("run_attempt") ? values.find((value) => typeof value === "number" && value !== runId && value > 0 && value < 10) : undefined;
+      for (const current of jobs.values()) {
+        if (current.run_id !== `run-${runId}` || scopedAttempt !== undefined && current.run_attempt !== scopedAttempt || current.status === "completed") continue;
+        Object.assign(current, { status: "completed", conclusion: current.conclusion ?? values[2] ?? null, completed_at: current.completed_at ?? values[3] ?? null });
+      }
+      return [];
+    }
     if (text.startsWith("INSERT INTO dashboard_jobs")) {
       const key = `${values[0]}:${values[2]}`;
-      const incoming = { organization_id: values[0], run_id: values[1], id: `job-${values[2]}`, github_job_id: values[2], name: values[3], status: values[4], conclusion: values[5], stage: values[6], runner_name: values[7], requested_labels: values[8], queued_at: values[9], started_at: values[10], completed_at: values[11] };
+      const incoming = { organization_id: values[0], run_id: values[1], id: `job-${values[2]}`, github_job_id: values[2], run_attempt: text.includes("run_attempt") ? Number(values[2]) : 1, name: values[3], status: values[4], conclusion: values[5], stage: values[6], runner_name: values[7], requested_labels: values[8], queued_at: values[9], started_at: values[10], completed_at: values[11] };
       const current = jobs.get(key);
       if (!current) jobs.set(key, incoming);
       else {
@@ -77,16 +86,16 @@ function makeStatefulSql() {
 }
 
 const queuedAt = "2026-08-13T00:00:00Z";
-const run: GithubRunSnapshot = { id: 42, runNumber: 7, workflowName: "CI", event: "push", branch: "main", commitSha: "abc", actorLogin: "octocat", status: "queued", conclusion: null, queuedAt, startedAt: null, completedAt: null };
+const run: GithubRunSnapshot = { id: 42, runAttempt: 1, runNumber: 7, workflowName: "CI", event: "push", branch: "main", commitSha: "abc", actorLogin: "octocat", status: "queued", conclusion: null, queuedAt, startedAt: null, completedAt: null };
 const step: GithubStepSnapshot = { id: null, number: 1, name: "build", status: "queued", conclusion: null, queuedAt, startedAt: null, completedAt: null, durationMs: 0 };
-const job: GithubJobSnapshot = { id: 99, runId: run.id, name: "macos", status: "queued", conclusion: null, labels: [" self-hosted ", "macOS", "self-hosted"], runnerName: null, queuedAt, startedAt: null, completedAt: null, steps: [step] };
+const job: GithubJobSnapshot = { id: 99, runId: run.id, runAttempt: 1, name: "macos", status: "queued", conclusion: null, labels: [" self-hosted ", "macOS", "self-hosted"], runnerName: null, queuedAt, startedAt: null, completedAt: null, steps: [step] };
 
  test("REST and webhook updates execute one monotonic state machine", async () => {
   const fake = makeStatefulSql(); configureRunLifecycle(fake.sql as never);
   const repository = { id: 123, name: "repo", fullName: "acme/repo" };
   expect(await applyGithubJobSnapshot({ installationId: 5, repository, run, job })).toBe(true);
   expect(fake.runs.get("org:42")?.status).toBe("queued");
-  expect(await applyWorkflowJobWebhook({ installation: { id: 5 }, repository: { id: 123, name: "repo", full_name: "acme/repo" }, sender: { login: "octocat" }, action: "queued", workflow_job: { id: 99, run_id: 42, run_number: 7, name: "macos", status: "queued", created_at: queuedAt, workflow_name: "CI", head_branch: "main", head_sha: "abc", event: "push", labels: job.labels, steps: [{ number: 1, name: "build", status: "queued" }] } })).toBe(true);
+  expect(await applyWorkflowJobWebhook({ installation: { id: 5 }, repository: { id: 123, name: "repo", full_name: "acme/repo" }, sender: { login: "octocat" }, action: "queued", workflow_job: { id: 99, run_id: 42, run_attempt: 1, run_number: 7, name: "macos", status: "queued", created_at: queuedAt, workflow_name: "CI", head_branch: "main", head_sha: "abc", event: "push", labels: job.labels, steps: [{ number: 1, name: "build", status: "queued" }] } })).toBe(true);
   const key = "org:99"; expect(fake.runs.get("org:42")?.status).toBe("queued"); expect(fake.jobs.get(key)?.status).toBe("queued"); expect(fake.jobs.get(key)?.started_at).toBeNull(); expect(fake.jobs.get(key)?.requested_labels).toEqual(["self-hosted", "macos"]); expect(fake.steps.size).toBe(1);
   expect(fake.queries.find((query) => query.startsWith("INSERT INTO dashboard_jobs"))).toContain("'::jsonb, ::jsonb,");
   const started = { ...run, status: "in_progress" as const, startedAt: "2026-08-13T00:02:00Z" }; const runningJob = { ...job, status: "in_progress" as const, startedAt: started.startedAt, runnerName: "runner" }; await applyGithubJobSnapshot({ installationId: 5, repository, run: started, job: runningJob });

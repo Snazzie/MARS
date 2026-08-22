@@ -3,9 +3,10 @@ import { discoverAvailableRepositoryJobs, discoverQueuedRepositoryJobs, listComp
 import { GithubRateLimitError } from "./github-rate-limit.ts";
 import type { GithubRunSnapshot } from "./runs.ts";
 
-function run(id: number): GithubRunSnapshot {
+function run(id: number, runAttempt: number): GithubRunSnapshot {
   return {
     id,
+    runAttempt,
     runNumber: id,
     workflowName: "CI",
     event: "push",
@@ -21,36 +22,61 @@ function run(id: number): GithubRunSnapshot {
 }
 
 describe("completed run recovery", () => {
-  test("paginates until the persisted completed-run checkpoint", async () => {
+  test("paginates until the persisted completed-run checkpoint pair", async () => {
     const requestedPages: number[] = [];
     const result = await listCompletedRunsSince(async (page) => {
       requestedPages.push(page);
-      const pages = page === 1 ? [run(105), run(104)] : [run(103), run(102)];
+      const pages = page === 1 ? [run(105, 1), run(104, 1)] : [run(103, 2), run(102, 1)];
       return { totalCount: 5, runs: pages };
-    }, 103);
+    }, { runId: 103, runAttempt: 1 });
 
     expect(requestedPages).toEqual([1, 2]);
-    expect(result.runs.map(({ id }) => id)).toEqual([105, 104]);
-    expect(result.newestRunId).toBe(105);
+    expect(result.runs.map(({ id }) => id)).toEqual([105, 104, 103]);
+    expect(result.newestCheckpoint).toEqual({ runId: 105, runAttempt: 1 });
+  });
+
+  test("does not stop on an older checkpoint attempt for the same run ID", async () => {
+    const requestedPages: number[] = [];
+    const result = await listCompletedRunsSince(async (page) => {
+      requestedPages.push(page);
+      const pages = page === 1 ? [run(32564909816, 2)] : [run(32564909815, 1)];
+      return { totalCount: 2, runs: pages };
+    }, { runId: 32564909816, runAttempt: 1 });
+
+    expect(requestedPages).toEqual([1]);
+    expect(result.runs).toEqual([run(32564909816, 2), run(32564909815, 1)]);
+    expect(result.newestCheckpoint).toEqual({ runId: 32564909816, runAttempt: 2 });
+  });
+
+  test("stops pagination on an exact completed-run checkpoint pair", async () => {
+    const requestedPages: number[] = [];
+    const result = await listCompletedRunsSince(async (page) => {
+      requestedPages.push(page);
+      return { totalCount: 2, runs: page === 1 ? [run(32564909816, 2)] : [run(32564909816, 1)] };
+    }, { runId: 32564909816, runAttempt: 1 });
+
+    expect(requestedPages).toEqual([1, 2]);
+    expect(result.runs).toEqual([run(32564909816, 2)]);
+    expect(result.newestCheckpoint).toEqual({ runId: 32564909816, runAttempt: 2 });
   });
 
   test("samples one page when no checkpoint exists", async () => {
     const requestedPages: number[] = [];
     const result = await listCompletedRunsSince(async (page) => {
       requestedPages.push(page);
-      return { totalCount: 200, runs: [run(200), run(199)] };
+      return { totalCount: 200, runs: [run(200, 1), run(199, 1)] };
     }, null);
 
     expect(requestedPages).toEqual([1]);
     expect(result.runs.map(({ id }) => id)).toEqual([200, 199]);
-    expect(result.newestRunId).toBe(200);
+    expect(result.newestCheckpoint).toEqual({ runId: 200, runAttempt: 1 });
   });
 
   test("fails closed when the GitHub completed-run cap hides the checkpoint", async () => {
     await expect(listCompletedRunsSince(async (page) => ({
       totalCount: 2_000,
-      runs: Array.from({ length: 100 }, (_, index) => run(2_000 - ((page - 1) * 100) - index)),
-    }), 500)).rejects.toThrow("completed_run_checkpoint_unreachable");
+      runs: Array.from({ length: 100 }, (_, index) => run(2_000 - ((page - 1) * 100) - index, 1)),
+    }), { runId: 500, runAttempt: 1 })).rejects.toThrow("completed_run_checkpoint_unreachable");
   });
 });
 
@@ -61,6 +87,41 @@ test("completed log backfill failure does not abort authoritative status discove
   }, (jobId, error) => errors.push({ jobId, error }));
   expect(synced).toBe(false);
   expect(errors).toEqual([{ jobId: 96580319653, error: "github_job_logs_not_ready" }]);
+});
+test("pairs rerun attempts during repository discovery", async () => {
+  const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
+  const requests: string[] = [];
+  const execute = async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ");
+    if (query.includes("FROM dashboard_installations")) return [{ id: "installation", organization_id: "org" }];
+    if (query.includes("SELECT id FROM dashboard_repositories")) return [{ id: "repository" }];
+    if (query.includes("FROM dashboard_repositories repo")) return [repository];
+    return [];
+  };
+  const db = Object.assign(execute, { begin: async (callback: (tx: typeof execute) => Promise<unknown>) => callback(execute) }) as never;
+  const githubFetch = async (input: RequestInfo | URL) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.includes("status=completed")) {
+      return Response.json({
+        total_count: 1,
+        workflow_runs: [{ id: 32564909816, run_number: 42, run_attempt: 1, name: "CI", event: "push", head_branch: "main", head_sha: "a".repeat(40), actor: { login: "octocat" }, status: "completed", conclusion: "failure", created_at: "2026-08-22T10:30:00Z", run_started_at: "2026-08-22T10:30:01Z", updated_at: "2026-08-22T10:31:17Z" }],
+      });
+    }
+    if (url.includes("/attempts/2/jobs")) {
+      return Response.json({ total_count: 1, jobs: [{ id: 97018978327, run_id: 32564909816, run_attempt: 2, name: "windows", status: "queued", conclusion: null, labels: ["self-hosted", "windows"], created_at: "2026-08-22T10:31:46Z", started_at: null, completed_at: null, steps: [] }] });
+    }
+    return Response.json({
+      total_count: 1,
+      workflow_runs: [{ id: 32564909816, run_number: 42, run_attempt: 2, name: "CI", event: "push", head_branch: "main", head_sha: "a".repeat(40), actor: { login: "octocat" }, status: "queued", conclusion: null, created_at: "2026-08-22T10:31:46Z", run_started_at: null, updated_at: "2026-08-22T10:31:46Z" }],
+    });
+  };
+
+  const report = await discoverAvailableRepositoryJobs({ db, installationToken: async () => "token", githubFetchForInstallation: () => githubFetch });
+
+  expect(report).toMatchObject({ repositories: 1, discovered: 1, failed: 0 });
+  expect(requests.some((url) => url === "https://api.github.com/repos/acme/repo/actions/runs/32564909816/attempts/2/jobs?per_page=100&page=1")).toBe(true);
+  expect(requests.some((url) => url.includes("/actions/runs/32564909816/jobs?filter=latest"))).toBe(false);
 });
 
 describe("repository authorization lifecycle", () => {
