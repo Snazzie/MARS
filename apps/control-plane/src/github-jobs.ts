@@ -10,6 +10,10 @@ const runStatus = (value: unknown): GithubRunSnapshot["status"] => value === "co
 const jobStatus = (value: unknown): GithubJobSnapshot["status"] => value === "completed" ? "completed" : value === "in_progress" ? "in_progress" : "queued";
 const stringValue = (value: unknown, fallback = "") => typeof value === "string" ? value : fallback;
 const nullableString = (value: unknown) => typeof value === "string" ? value : null;
+const positiveSafeInteger = (value: unknown): number => {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) throw new Error("github_payload_invalid");
+  return value;
+};
 const labelsValue = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 const parseSteps = (value: unknown, fallbackQueuedAt: string): GithubStepSnapshot[] => {
   if (value === undefined) return [];
@@ -73,13 +77,16 @@ export class GithubJobsClient {
     return text + decoder.decode();
   }
   private parseRun(value: Record<string, unknown>): GithubRunSnapshot {
-    const id = Number(value.id); if (!Number.isSafeInteger(id) || id <= 0) throw new Error("github_payload_invalid");
-    return { id, runNumber: Number(value.run_number) || id, workflowName: stringValue(value.name, stringValue(value.display_title, "workflow")), event: stringValue(value.event), branch: stringValue(value.head_branch), commitSha: stringValue(value.head_sha), actorLogin: stringValue((value.actor as Record<string, unknown> | undefined)?.login, "github"), status: runStatus(value.status), conclusion: nullableString(value.conclusion), queuedAt: stringValue(value.created_at, new Date().toISOString()), startedAt: nullableString(value.run_started_at), completedAt: nullableString(value.status === "completed" ? value.updated_at : null) };
+    const id = positiveSafeInteger(value.id);
+    const runAttempt = positiveSafeInteger(value.run_attempt);
+    return { id, runAttempt, runNumber: Number(value.run_number) || id, workflowName: stringValue(value.name, stringValue(value.display_title, "workflow")), event: stringValue(value.event), branch: stringValue(value.head_branch), commitSha: stringValue(value.head_sha), actorLogin: stringValue((value.actor as Record<string, unknown> | undefined)?.login, "github"), status: runStatus(value.status), conclusion: nullableString(value.conclusion), queuedAt: stringValue(value.created_at, new Date().toISOString()), startedAt: nullableString(value.run_started_at), completedAt: nullableString(value.status === "completed" ? value.updated_at : null) };
   }
   private parseJob(value: Record<string, unknown>): GithubJobSnapshot {
-    const id = Number(value.id), runId = Number(value.run_id); if (!Number.isSafeInteger(id) || !Number.isSafeInteger(runId) || id <= 0 || runId <= 0) throw new Error("github_payload_invalid");
+    const id = positiveSafeInteger(value.id);
+    const runId = positiveSafeInteger(value.run_id);
+    const runAttempt = positiveSafeInteger(value.run_attempt);
     const status = jobStatus(value.status);
-    return { id, runId, name: stringValue(value.name, "job"), status, conclusion: nullableString(value.conclusion), labels: labelsValue(value.labels), runnerName: nullableString(value.runner_name), queuedAt: stringValue(value.created_at, new Date().toISOString()), startedAt: status === "queued" ? null : nullableString(value.started_at), completedAt: status === "completed" ? nullableString(value.completed_at) : null, steps: parseSteps(value.steps, stringValue(value.created_at, new Date().toISOString())) };
+    return { id, runId, runAttempt, name: stringValue(value.name, "job"), status, conclusion: nullableString(value.conclusion), labels: labelsValue(value.labels), runnerName: nullableString(value.runner_name), queuedAt: stringValue(value.created_at, new Date().toISOString()), startedAt: status === "queued" ? null : nullableString(value.started_at), completedAt: status === "completed" ? nullableString(value.completed_at) : null, steps: parseSteps(value.steps, stringValue(value.created_at, new Date().toISOString())) };
   }
   async listRuns(owner: string, repo: string, status: "queued" | "pending" | "in_progress" | "completed" | undefined, page: number): Promise<{ totalCount: number; runs: GithubRunSnapshot[] }> {
     const statusQuery = status ? `status=${status}&` : "";
@@ -88,10 +95,16 @@ export class GithubJobsClient {
     return { totalCount: Number(value.total_count) || runs.length, runs };
   }
   async getRun(owner: string, repo: string, runId: number): Promise<GithubRunSnapshot> { return this.parseRun(await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}`)); }
+  async getRunAttempt(owner: string, repo: string, runId: number, runAttempt: number): Promise<GithubRunSnapshot> {
+    const run = this.parseRun(await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/attempts/${runAttempt}`));
+    if (run.id !== runId || run.runAttempt !== runAttempt) throw new Error("github_payload_invalid");
+    return run;
+  }
   async getJob(owner: string, repo: string, jobId: number): Promise<GithubJobSnapshot> { return this.parseJob(await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/jobs/${jobId}`)); }
-  async listJobs(owner: string, repo: string, runId: number, page: number): Promise<{ totalCount: number; jobs: GithubJobSnapshot[] }> {
-    const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/jobs?filter=latest&per_page=100&page=${page}`);
+  async listJobs(owner: string, repo: string, runId: number, runAttempt: number, page: number): Promise<{ totalCount: number; jobs: GithubJobSnapshot[] }> {
+    const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100&page=${page}`);
     const jobs = Array.isArray(value.jobs) ? value.jobs.filter((x): x is Record<string, unknown> => Boolean(x && typeof x === "object")).map(x => this.parseJob(x)) : [];
+    if (jobs.some(job => job.runId !== runId || job.runAttempt !== runAttempt)) throw new Error("github_payload_invalid");
     return { totalCount: Number(value.total_count) || jobs.length, jobs };
   }
   async getJobLogs(owner: string, repo: string, jobId: number, maxBytes = 10 * 1024 * 1024): Promise<string> {

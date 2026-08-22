@@ -43,6 +43,29 @@ test("rejects attempt-qualified jobs whose run identity or attempt mismatches th
   const mismatchedAttempt = new GithubJobsClient({ token: async () => "token", fetch: async () => Response.json({ jobs: [{ id: 2, run_id: 1, run_attempt: 1, status: "queued" }] }) });
   await expect(mismatchedAttempt.listJobs("acme", "project", 1, 2, 1)).rejects.toThrow("github_payload_invalid");
 });
+test("fetches an attempt-qualified run and rejects mismatched run pairs", async () => {
+  const requests: string[] = [];
+  const client = new GithubJobsClient({ token: async () => "token", fetch: async input => {
+    requests.push(String(input));
+    return Response.json({ id: 999, run_number: 1, run_attempt: 2, status: "queued" });
+  } });
+  await expect(client.getRunAttempt("acme", "project", 1, 2)).rejects.toThrow("github_payload_invalid");
+  expect(requests[0]).toBe("https://api.github.com/repos/acme/project/actions/runs/1/attempts/2");
+});
+
+test("rejects missing or nonpositive REST run attempts", async () => {
+  const missing = new GithubJobsClient({ token: async () => "token", fetch: async () => Response.json({ id: 1, status: "queued" }) });
+  await expect(missing.getRun("acme", "project", 1)).rejects.toThrow("github_payload_invalid");
+  const invalid = new GithubJobsClient({ token: async () => "token", fetch: async () => Response.json({ id: 1, run_attempt: 0, status: "queued" }) });
+  await expect(invalid.getRun("acme", "project", 1)).rejects.toThrow("github_payload_invalid");
+});
+
+test("rejects missing or nonpositive REST job attempts", async () => {
+  const missing = new GithubJobsClient({ token: async () => "token", fetch: async () => Response.json({ jobs: [{ id: 2, run_id: 1, status: "queued" }] }) });
+  await expect(missing.listJobs("acme", "project", 1, 2, 1)).rejects.toThrow("github_payload_invalid");
+  const invalid = new GithubJobsClient({ token: async () => "token", fetch: async () => Response.json({ jobs: [{ id: 2, run_id: 1, run_attempt: 1.5, status: "queued" }] }) });
+  await expect(invalid.listJobs("acme", "project", 1, 2, 1)).rejects.toThrow("github_payload_invalid");
+});
 
 test("normalizes REST job steps and rejects malformed step payloads", async () => {
   const client = new GithubJobsClient({ token: async () => "token", fetch: async () => Response.json({ total_count: 1, jobs: [{ id: 2, run_id: 1, run_attempt: 2, status: "in_progress", name: "build", created_at: "2026-08-13T00:00:00Z", steps: [{ id: 9, number: 1, name: "Run", status: "queued", started_at: "2026-08-13T00:01:00Z" }] }] }) });

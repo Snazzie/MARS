@@ -5,6 +5,7 @@ import type { GithubJobSnapshot } from "./runs.ts";
 const job: GithubJobSnapshot = {
   id: 42,
   runId: 7,
+  runAttempt: 1,
   name: "build",
   status: "completed",
   conclusion: "success",
