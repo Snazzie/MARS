@@ -1,38 +1,30 @@
-# Worker Connection State Convergence
+# In-Memory Worker Connection State
 
 ## Problem
 
-The control plane persists `workers.connection_state='online'` when a worker authenticates, but live dispatchability is held in the process-local WebSocket dispatcher. If the control plane or worker exits without the close handler completing, the database row remains online. Routing then has contradictory state: SQL reports online while the dispatcher reports no connected worker.
+`workers.connection_state` persisted WebSocket liveness. When a worker or control-plane process stopped without the close handler completing, the database retained `online` even though the dispatcher had no socket. Routing then exposed contradictory state.
 
 ## Decision
 
-Use both startup reconciliation and a heartbeat watchdog.
+Connection status is process-local only. The authenticated worker socket map/dispatcher is the sole source of truth for whether a worker is connected and dispatchable.
 
-### Startup reconciliation
+The control plane must stop writing `connection_state` during authentication, socket close, worker join, or startup. Existing database reads remain only as compatibility input for old clients/tests; production control-plane APIs override the value from the live dispatcher before returning or making readiness decisions.
 
-At control-plane startup, mark persisted worker rows `connection_state='offline'` before scheduling reconciliation. This clears state left by a previous control-plane process. A worker that connects after startup sets itself online through the existing authenticated connection path.
-
-The update must be limited to `connection_state='online'`; it must not alter admission, configuration, draining, leases, or heartbeat timestamps.
-
-### Heartbeat watchdog
-
-Run a bounded periodic task in the control plane. It marks workers offline when their heartbeat is older than a fixed liveness window. The update must only affect rows still marked online and must use a server-side timestamp comparison. The watchdog is defensive; routing still requires the live dispatcher socket.
-
-The liveness window is larger than the normal ping interval to tolerate scheduling jitter, while ensuring abandoned state converges without operator intervention.
+Persisted worker data remains responsible for durable identity, admission, configuration, doctor telemetry, and heartbeat timestamps. Those fields do not represent connection status.
 
 ## Data flow
 
-1. Process starts.
-2. Startup SQL clears stale persisted online states.
-3. Worker authenticates over WebSocket and updates its row online with `last_heartbeat_at=now()`.
-4. Worker heartbeat/pong traffic refreshes `last_heartbeat_at`.
-5. Watchdog marks rows offline after the liveness window.
-6. Dispatcher socket presence remains the authoritative dispatch gate.
+1. Worker authenticates.
+2. The control plane registers its socket in `WorkerCommandDispatcher`.
+3. Routing calls `dispatcher.isConnected(workerId)`.
+4. Socket close unregisters the socket; no database status update occurs.
+5. Dashboard/API worker responses derive `connectionState` from the same dispatcher callback.
+6. Restarting the control plane starts with no connected workers; workers become online only after re-authentication.
 
 ## Error handling
 
-Startup reconciliation failure must fail control-plane startup rather than silently retaining stale state. Watchdog query failures are logged and retried on the next interval; they must not stop the scheduler or WebSocket server.
+No stale persisted status can affect routing or readiness. A missing socket is offline immediately, including after process restart. Worker heartbeat timestamps may still be persisted for telemetry and health diagnostics, but are not used as connection truth.
 
 ## Tests
 
-Add focused tests for the state transition SQL behavior and watchdog scheduling/error isolation. Existing worker connection tests must continue to prove that a worker is not dispatchable before authentication and is online only after successful activation.
+Cover that authentication and close do not issue `connection_state` updates, routing uses live dispatcher presence, and dashboard worker responses override stale database connection values with the callback result.

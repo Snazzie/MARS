@@ -307,7 +307,7 @@ function workerDoctor(value: unknown): WorkerDetail["doctor"] {
   const result = WorkerDoctor.safeParse(candidate);
   return result.success ? result.data : null;
 }
-function normalizeWorker(row: Record<string, unknown>): WorkerDetail {
+function normalizeWorker(row: Record<string, unknown>, workerConnected?: (workerId: string) => boolean): WorkerDetail {
   const platform = RuntimePlatform.parse(row.platform);
   const driver = RuntimeDriverName.parse(platform === "linux-x64" ? "linux-libvirt-vm" : platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm");
   const rawGuestPlatforms = jsonValue(row.guestPlatforms);
@@ -326,7 +326,7 @@ function normalizeWorker(row: Record<string, unknown>): WorkerDetail {
     guestPlatforms,
     driver,
     admissionState: WorkerState.parse(row.admissionState),
-    connectionState: ConnectionState.parse(row.connectionState),
+    connectionState: workerConnected ? (workerConnected(String(row.id)) ? "online" : "offline") : ConnectionState.parse(row.connectionState),
     configurationState: ConfigurationState.parse(row.configurationState),
     configurationRevision: typeof row.configurationRevision === "string" ? row.configurationRevision : null,
     appliedConfigurationRevision: typeof row.appliedConfigurationRevision === "string" ? row.appliedConfigurationRevision : null,
@@ -345,17 +345,17 @@ function normalizeWorker(row: Record<string, unknown>): WorkerDetail {
   };
   return worker;
 }
-export async function listWorkers(db: DashboardDb, organizationId: string, limit = 50): Promise<CursorPage<WorkerDetail>> {
+export async function listWorkers(db: DashboardDb, organizationId: string, limit = 50, workerConnected?: (workerId: string) => boolean): Promise<CursorPage<WorkerDetail>> {
   const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.preserve_leases AS "preserveLeases",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w ORDER BY w.name LIMIT ${limit + 1}`;
-  const items = rows.slice(0, limit).map(normalizeWorker);
+  const items = rows.slice(0, limit).map(row => normalizeWorker(row, workerConnected));
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }
-export async function listAllWorkers(db: DashboardDb, userId: string, limit = 50, includeInactive = false): Promise<CursorPage<WorkerDetail>> {
-  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.preserve_leases AS "preserveLeases",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w WHERE ${includeInactive} OR w.admission_state NOT IN ('rejected','revoked') ORDER BY w.name LIMIT ${limit + 1}`;
-  const items = rows.slice(0, limit).map(normalizeWorker);
+export async function listAllWorkers(db: DashboardDb, userId: string, limit = 50, includeInactive = false, workerConnected?: (workerId: string) => boolean): Promise<CursorPage<WorkerDetail>> {
+  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.preserve_leases AS "preserveLeases",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w WHERE (${includeInactive} OR w.admission_state <> 'revoked') ORDER BY w.name LIMIT ${limit + 1}`;
+  const items = rows.slice(0, limit).map(row => normalizeWorker(row, workerConnected));
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }
-export async function getWorkerDetail(db: DashboardDb, organizationId: string, workerId: string): Promise<WorkerDetail | null> { const page = await listWorkers(db, organizationId, 1000); return page.items.find(worker => worker.id === workerId) ?? null; }
+export async function getWorkerDetail(db: DashboardDb, organizationId: string, workerId: string, workerConnected?: (workerId: string) => boolean): Promise<WorkerDetail | null> { const page = await listWorkers(db, organizationId, 1000, workerConnected); return page.items.find(worker => worker.id === workerId) ?? null; }
 export async function recordRunTransition(db: DashboardDb, organizationId: string, runId: string, transition: RunTransition): Promise<void> { await db`UPDATE dashboard_runs SET status=${transition.status}, conclusion=${transition.conclusion}, started_at=COALESCE(${transition.startedAt ?? null}, started_at), completed_at=COALESCE(${transition.completedAt ?? null}, completed_at) WHERE organization_id=${organizationId} AND id=${runId} AND status <> 'completed' AND (status='queued' OR ${transition.status} <> 'queued')`; }
 export async function recordRunStage(db: DashboardDb, organizationId: string, runId: string, stage: RunStage): Promise<void> { await db`INSERT INTO dashboard_run_stages (organization_id,run_id,stage) VALUES (${organizationId},${runId},${stage}) ON CONFLICT DO NOTHING`; }
 function normalizePool(row: Record<string, unknown>): PoolSummary { return PoolSummary.parse({ ...row, resources: jsonValue(row.resources), labels: jsonValue(row.labels), active: numberValue(row.active, 0) }); }

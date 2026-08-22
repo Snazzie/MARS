@@ -115,7 +115,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       pool: { id: poolId, enabled: Boolean(row.enabled), platform: String(row.platform), driver: String(row.driver), resources, concurrency, active: Number(row.active ?? 0), labels: stringArray(row.labels), triggerLabel: row.triggerLabel ? String(row.triggerLabel) : null },
     };
   });
-  const connectedCandidates = sqlCandidates.filter((candidate) => !deps.workerConnected || deps.workerConnected(candidate.worker.id));
+  const connectedCandidates = sqlCandidates.filter((candidate) => !deps.workerConnected || deps.workerConnected(candidate.worker.id)).map((candidate) => ({ ...candidate, worker: { ...candidate.worker, connectionState: "online" } }));
   const candidates = connectedCandidates;
   const reasons = new Map<string, number>();
   const schedulerAdmissible = new Set<string>();

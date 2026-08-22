@@ -37,7 +37,7 @@ export async function requestPendingWorker(db: Sql<{}>, input: WorkerBootstrapRe
     if (exact) {
       if (exact.encryptionPublicKey && exact.encryptionPublicKey !== parsed.encryptionPublicKey) return { conflict: true as const, invalid: false as const };
       await tx`update worker_bootstrap_credentials set consumed_at=now() where singleton=true and consumed_at is null`;
-      await tx`update workers set last_requested_at=now(), connection_state='offline', machine_uuid=${parsed.machineUuid}, encryption_public_key=${parsed.encryptionPublicKey}, doctor=${jsonParameter(tx, telemetry)}::jsonb, doctor_observed_at=now() where id=${exact.id}`;
+      await tx`update workers set last_requested_at=now(), machine_uuid=${parsed.machineUuid}, encryption_public_key=${parsed.encryptionPublicKey}, doctor=${jsonParameter(tx, telemetry)}::jsonb, doctor_observed_at=now() where id=${exact.id}`;
       return { status: "existing" as const, workerId: exact.id };
     }
     if (rows.length) return { conflict: true as const, invalid: false as const };

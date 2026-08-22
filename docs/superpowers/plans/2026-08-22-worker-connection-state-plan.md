@@ -1,59 +1,32 @@
-# Worker Connection State Convergence Implementation Plan
+# In-Memory Worker Connection State Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Make persisted worker connection state converge to reality after control-plane restart or lost heartbeats.
+**Goal:** Stop stale persisted worker connection state from claiming workers are online.
 
-**Architecture:** Add a small connection-state reconciliation module with startup reset and periodic heartbeat expiry. Wire it into control-plane startup without changing dispatcher routing, which remains authoritative for live dispatchability.
+**Architecture:** Use `WorkerCommandDispatcher.isConnected(workerId)` as the sole live connection predicate. Remove connection-state writes from worker authentication, socket close, and enrollment. Inject the predicate into HTTP/dashboard code so API responses and readiness checks agree with routing.
 
 **Tech Stack:** Bun, TypeScript, postgres tagged SQL, bun:test.
 
 ## Global Constraints
 
-- Startup reconciliation must run before scheduling jobs.
-- Startup SQL changes only `connection_state`.
-- Heartbeat expiry must use server-side `now()` and only update rows currently marked online.
-- Watchdog failures are logged and retried; they must not stop WebSocket or scheduler operation.
-- No manual database repair or service-state mutation.
+- Connection status is process-local only.
+- No control-plane path writes `workers.connection_state` for liveness.
+- Dispatcher socket presence is authoritative for routing and readiness.
+- Heartbeat timestamps remain telemetry only.
 
-### Task 1: Add connection-state reconciliation module
+### Task 1: Remove persisted liveness writes
 
-**Files:**
-- Create: `apps/control-plane/src/worker-connection-state.ts`
-- Test: `apps/control-plane/src/worker-connection-state.test.ts`
+**Files:** `apps/control-plane/src/worker-connection.ts`, `apps/control-plane/src/index.ts`, `apps/control-plane/src/worker-requests.ts`, `apps/control-plane/src/http/dashboard-routes.ts`.
 
-**Interfaces:**
-- `resetPersistedWorkerConnections(db): Promise<void>` updates online workers to offline.
-- `expireStaleWorkerConnections(db, staleAfterMs): Promise<number>` updates online workers whose `last_heartbeat_at` is older than the supplied interval and returns affected-row count.
+Remove `connection_state='online'` and `connection_state='offline'` mutations while retaining durable identity, doctor, admission, and configuration updates.
 
-Steps:
-- Write tests using the repository's mock tagged database pattern; assert exact SQL intent and affected-row handling.
-- Run the focused test and verify failure before implementation.
-- Implement both functions with tagged SQL and no unrelated worker mutations.
-- Run the focused test and verify pass.
+### Task 2: Project live state into APIs
 
-### Task 2: Wire lifecycle reconciliation into control plane
+**Files:** `apps/control-plane/src/http/types.ts`, `apps/control-plane/src/index.ts`, `apps/control-plane/src/http/dashboard-routes.ts`, `packages/db/src/dashboard.ts`.
 
-**Files:**
-- Modify: `apps/control-plane/src/index.ts`
-- Test: `apps/control-plane/src/reconcile-loop.test.ts` or the new module test where lifecycle behavior is isolated.
-
-**Interfaces:**
-- Startup invokes `resetPersistedWorkerConnections(db)` before `startReconciliationScheduler`.
-- A `setInterval` watchdog invokes `expireStaleWorkerConnections(db, configuredWindow)` and logs failures without throwing out of the timer callback.
-
-Steps:
-- Add environment-configurable interval/window with safe defaults larger than the heartbeat interval.
-- Add startup invocation and fail startup if reset rejects.
-- Add watchdog timer with error logging and affected-row logging only when rows change.
-- Run focused control-plane tests.
+Add an optional `workerConnected` callback, wire it to `dispatcher.isConnected`, and use it to override dashboard worker DTO state and readiness checks.
 
 ### Task 3: Verify behavior
 
-**Files:**
-- Existing focused tests only.
-
-Steps:
-- Run `bun test apps/control-plane/src/worker-connection-state.test.ts apps/control-plane/src/worker-connection.test.ts`.
-- Run the control-plane typecheck if available.
-- Inspect the final diff for scope and report exact evidence.
+Run focused worker connection, dashboard, database dashboard, scheduler, and control-plane typecheck tests. Confirm no production source writes `connection_state` for socket liveness.

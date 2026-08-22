@@ -99,7 +99,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     await invalidateDashboard(deps.db, org, ["repositories"]);
     return c.json({ queued: true }, 202);
   }));
-  app.get("/api/organizations/:organizationId/workers", safe(async (c) => { if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required"); const q = parseQuery(c); if (q instanceof Response) return q; return c.json(CursorPage(WorkerDetail).parse(await listAllWorkers(deps.db, c.get("user").id, q.limit, q.includeInactive))); }));
+  app.get("/api/organizations/:organizationId/workers", safe(async (c) => { if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required"); const q = parseQuery(c); if (q instanceof Response) return q; return c.json(CursorPage(WorkerDetail).parse(await listAllWorkers(deps.db, c.get("user").id, q.limit, q.includeInactive, deps.workerConnected))); }));
   app.post("/api/workers/:workerId/configure", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const idem = requireMutation(c); if (idem) return idem;
@@ -111,9 +111,9 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const idem = requireMutation(c); if (idem) return idem;
     if (!deps.workerDispatcher) return error(c, 503, "worker_dispatch_unavailable", "Worker command dispatch is unavailable");
     const workerId = c.req.param("workerId");
-    const [worker] = await deps.db`SELECT admission_state AS "admissionState", connection_state AS "connectionState" FROM workers WHERE id=${workerId}`;
+    const [worker] = await deps.db`SELECT admission_state AS "admissionState" FROM workers WHERE id=${workerId}`;
     if (!worker) return error(c, 404, "not_found", "Resource not found");
-    if (worker.admissionState !== "adopted" || worker.connectionState !== "online") return error(c, 409, "worker_not_ready", "Worker must be adopted and online before building a runtime image");
+    if (worker.admissionState !== "adopted" || (deps.workerConnected ? !deps.workerConnected(workerId) : false)) return error(c, 409, "worker_not_ready", "Worker must be adopted and connected before building a runtime image");
     const spec = WorkerImageBuildSpec.parse(await c.req.json());
     if (!deps.windowsContainerBuild) return error(c, 503, "image_build_unavailable", "Authoritative Windows image build inputs are unavailable");
     const buildId = randomUUID();
@@ -150,7 +150,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
       await deps.db.begin(async tx => {
         await tx`UPDATE workers SET draining=true WHERE id=${id}`;
         await tx`UPDATE runner_pools SET enabled=false WHERE worker_id=${id}`;
-        await tx`UPDATE workers SET admission_state='revoked',connection_state='offline' WHERE id=${id}`;
+        await tx`UPDATE workers SET admission_state='revoked' WHERE id=${id}`;
         await tx`INSERT INTO audit_events (actor,type,payload) VALUES (${c.get("user").id},'worker.removed',${jsonParameter(tx, { workerId: id })}::jsonb)`;
       });
     }
@@ -240,8 +240,8 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const [pool] = await deps.db`SELECT id,platform,driver,image_digest AS "imageDigest" FROM runner_pools WHERE id=${poolId} AND organization_id IS NULL`;
     if (!pool) return error(c, 404, "not_found", "Pool not found");
     if (action === "enable") {
-      const [ready] = await deps.db`SELECT w.id FROM workers w WHERE w.admission_state='adopted' AND w.connection_state='online' AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false AND w.last_heartbeat_at>now()-interval '90 seconds' AND w.doctor_observed_at IS NOT NULL AND ${pool.platform}=ANY(SELECT jsonb_array_elements_text(w.guest_platforms)) AND ${pool.driver}=CASE w.platform WHEN 'windows-x64' THEN 'windows-hyperv-container' WHEN 'macos-arm64' THEN 'tart-vm' ELSE 'linux-libvirt-vm' END AND (${pool.driver} <> 'linux-libvirt-vm' OR ((w.doctor->>'runtimeReady')::boolean IS TRUE AND (w.doctor->>'libvirtReady')::boolean IS TRUE AND (w.doctor->>'networkReady')::boolean IS TRUE AND (w.doctor->>'cloneStorageReady')::boolean IS TRUE AND (w.doctor->>'imageSignatures')::boolean IS TRUE AND (w.doctor->>'realVmSmoke')::boolean IS TRUE AND w.doctor->>'artifactDigest'=${pool.imageDigest} AND w.doctor->>'smokeArtifactDigest'=${pool.imageDigest})) LIMIT 1`;
-      if (!ready) return error(c, 409, "no_compatible_ready_worker", "No compatible worker is online, reconciled, recently healthy, and ready for this pool");
+      const [ready] = await deps.db`SELECT w.id FROM workers w WHERE w.admission_state='adopted' AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false AND w.last_heartbeat_at>now()-interval '90 seconds' AND w.doctor_observed_at IS NOT NULL AND ${pool.platform}=ANY(SELECT jsonb_array_elements_text(w.guest_platforms)) AND ${pool.driver}=CASE w.platform WHEN 'windows-x64' THEN 'windows-hyperv-container' WHEN 'macos-arm64' THEN 'tart-vm' ELSE 'linux-libvirt-vm' END AND (${pool.driver} <> 'linux-libvirt-vm' OR ((w.doctor->>'runtimeReady')::boolean IS TRUE AND (w.doctor->>'libvirtReady')::boolean IS TRUE AND (w.doctor->>'networkReady')::boolean IS TRUE AND (w.doctor->>'cloneStorageReady')::boolean IS TRUE AND (w.doctor->>'imageSignatures')::boolean IS TRUE AND (w.doctor->>'realVmSmoke')::boolean IS TRUE AND w.doctor->>'artifactDigest'=${pool.imageDigest} AND w.doctor->>'smokeArtifactDigest'=${pool.imageDigest})) LIMIT 1`;
+      if (!ready || (deps.workerConnected ? !deps.workerConnected(String(ready.id)) : false)) return error(c, 409, "no_compatible_ready_worker", "No compatible ready worker is connected for this pool");
     }
     await deps.db`UPDATE runner_pools SET enabled=${action === "enable"} WHERE id=${poolId} AND organization_id IS NULL`;
     return c.json({ ok: true });
@@ -254,10 +254,10 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const body = CreatePoolRequest.parse(await c.req.json());
     if (body.guestPlatform === "linux-x64") return error(c, 422, "runtime_unsupported", "Linux runners are not available in this release");
     if (body.triggerLabel === "self-hosted" || ["linux", "windows", "macos", "x64", "arm64"].includes(body.triggerLabel)) return error(c, 400, "reserved_trigger_label", "Trigger label is reserved");
-    const [w] = await deps.db`SELECT platform,guest_platforms AS "guestPlatforms",admission_state AS "admissionState",connection_state AS "connectionState",configuration_state AS "configurationState",draining,limits FROM workers WHERE id=${body.workerId}`;
+    const [w] = await deps.db`SELECT platform,guest_platforms AS "guestPlatforms",admission_state AS "admissionState",configuration_state AS "configurationState",draining,limits FROM workers WHERE id=${body.workerId}`;
     if (!w) return error(c, 404, "not_found", "Resource not found");
     if (w.platform === "linux-x64") return error(c, 422, "runtime_unsupported", "Linux runners are not available in this release");
-    if (w.admissionState !== "adopted" || w.connectionState !== "online" || w.configurationState !== "ready" || w.draining) return error(c, 422, "worker_not_ready", "Worker is not ready");
+    if (w.admissionState !== "adopted" || (deps.workerConnected ? !deps.workerConnected(body.workerId) : false) || w.configurationState !== "ready" || w.draining) return error(c, 422, "worker_not_ready", "Worker is not ready");
     if (!(Array.isArray(w.guestPlatforms) ? w.guestPlatforms : [w.platform]).includes(body.guestPlatform)) return error(c, 422, "worker_guest_platform_unsupported", "Worker does not support the requested guest platform");
     const driver = w.platform === "linux-x64" ? "linux-libvirt-vm" : w.platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm";
     const labels = [body.triggerLabel];

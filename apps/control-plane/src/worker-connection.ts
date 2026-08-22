@@ -16,9 +16,9 @@ export async function activateAuthenticatedWorkerConnection<Socket extends Authe
   await (input.reconcile ?? reconcileWorkerConfigurationOnConnect)(input.db, input.workerId);
   if (input.isCurrent && !input.isCurrent()) return false;
   if (input.encryptionPublicKey) {
-    await input.db`update workers set encryption_public_key=COALESCE(encryption_public_key,${input.encryptionPublicKey}), connection_state='online', last_heartbeat_at=now() where id=${input.workerId}`;
+    await input.db`update workers set encryption_public_key=COALESCE(encryption_public_key,${input.encryptionPublicKey}), last_heartbeat_at=now() where id=${input.workerId}`;
   } else {
-    await input.db`update workers set connection_state='online', last_heartbeat_at=now() where id=${input.workerId}`;
+    await input.db`update workers set last_heartbeat_at=now() where id=${input.workerId}`;
   }
   if (input.isCurrent && !input.isCurrent()) return false;
   input.markAuthenticated();

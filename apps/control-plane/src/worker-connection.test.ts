@@ -8,7 +8,7 @@ test("reconciles configuration before making a socket dispatchable", async () =>
   const workerSockets = new Map<string, typeof socket>();
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
-    if (query.includes("connection_state='online'")) order.push("online");
+    if (query.includes("last_heartbeat_at=now()")) order.push("online");
     return [];
   }) as never;
 
@@ -24,6 +24,20 @@ test("reconciles configuration before making a socket dispatchable", async () =>
 
   expect(order).toEqual(["reconcile", "online", "authenticated", "register"]);
   expect(workerSockets.get(workerId)).toBe(socket);
+});
+
+test("does not persist connection state on authentication", async () => {
+  const queries: string[] = [];
+  await activateAuthenticatedWorkerConnection({
+    db: (async (strings: TemplateStringsArray) => { queries.push(strings.join(" ")); return []; }) as never,
+    workerId: "worker",
+    socket: { send: () => {}, close: () => {} },
+    workerSockets: new Map(),
+    reconcile: async () => ({ state: "ready", commandId: null }),
+    markAuthenticated: () => {},
+    dispatcher: { register: () => {} },
+  });
+  expect(queries.join(" ")).not.toContain("connection_state");
 });
 
 test("does not expose a socket when reconciliation fails", async () => {

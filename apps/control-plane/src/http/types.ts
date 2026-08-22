@@ -51,6 +51,7 @@ export type ControlPlaneHttpDeps = {
   workerOrchestratorExecutable?: URL;
   workerRequestLimiter?: RequestLimiter;
   workerDispatcher?: WorkerCommandDispatcher;
+  workerConnected?: (workerId: string) => boolean;
   onWorkerAdopted(workerId: string): void;
   health(): ControlPlaneHealth;
 };
