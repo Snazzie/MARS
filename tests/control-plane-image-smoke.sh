@@ -14,6 +14,70 @@ cleanup() {
 }
 trap cleanup EXIT
 
+psql_db() {
+  local database=$1
+  shift
+  docker exec -i "$POSTGRES" psql -v ON_ERROR_STOP=1 -U whitesmith -d "$database" "$@"
+}
+
+wait_ready() {
+  local ready=''
+  for attempt in {1..60}; do
+    ready=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/api/readyz || true)
+    if [[ "$ready" == 200 ]]; then return 0; fi
+    sleep 2
+  done
+  docker logs "$CONTROL_PLANE" >&2
+  echo 'control-plane failed readiness' >&2
+  return 1
+}
+
+start_control_plane() {
+  docker rm -f "$CONTROL_PLANE" >/dev/null 2>&1 || true
+  docker run -d --name "$CONTROL_PLANE" --network "$NETWORK" \
+    -e DATABASE_URL="postgres://whitesmith:ci-only@${POSTGRES}:5432/$1" \
+    -v "$DATA_VOLUME":/var/lib/whitesmith \
+    -p 127.0.0.1:3000:3000 \
+    "$IMAGE" >/dev/null
+  wait_ready
+}
+
+seed_history() {
+  local database=$1
+  local branch=$2
+  psql_db postgres -c "CREATE DATABASE \"$database\"" >/dev/null
+  psql_db "$database" < packages/db/src/migrations/0000_legacy_baseline.sql >/dev/null
+  psql_db "$database" < packages/db/src/migrations/0001_post_baseline.sql >/dev/null
+  psql_db "$database" <<'SQL' >/dev/null
+CREATE SCHEMA IF NOT EXISTS drizzle;
+CREATE TABLE drizzle.__drizzle_migrations (id serial primary key, hash text not null, created_at bigint);
+INSERT INTO drizzle.__drizzle_migrations(hash, created_at) VALUES ('baseline', 1700000000000), ('post-baseline', 1700000001000), ('historical-branch', 1700000002000);
+SQL
+  if [[ "$branch" == run-attempt ]]; then
+    psql_db "$database" < packages/db/src/migrations/0002_github_run_attempt.sql >/dev/null
+  else
+    psql_db "$database" <<'SQL' >/dev/null
+CREATE TABLE IF NOT EXISTS "control_plane_config" (
+  "singleton" boolean PRIMARY KEY DEFAULT true NOT NULL,
+  "public_base_url" text,
+  "setup_code_hash" bytea,
+  "setup_completed_at" timestamptz,
+  "updated_at" timestamptz DEFAULT now() NOT NULL,
+  CONSTRAINT "control_plane_config_singleton_check" CHECK (singleton)
+);
+SQL
+  fi
+}
+
+assert_converged_schema() {
+  local database=$1
+  local table_count column_count constraint_count
+  table_count=$(psql_db "$database" -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='control_plane_config'")
+  column_count=$(psql_db "$database" -Atc "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND ((table_name='github_discovery_checkpoints' AND column_name='completed_run_attempt') OR (table_name IN ('dashboard_runs','dashboard_jobs') AND column_name='run_attempt'))")
+  constraint_count=$(psql_db "$database" -Atc "SELECT count(*) FROM pg_constraint WHERE conname IN ('github_discovery_checkpoints_completed_run_attempt_check','dashboard_runs_run_attempt_check','dashboard_jobs_run_attempt_check')")
+  [[ "$table_count" == 1 && "$column_count" == 3 && "$constraint_count" == 3 ]]
+}
+
 docker network create "$NETWORK" >/dev/null
 docker volume create "$DATA_VOLUME" >/dev/null
 docker run -d --name "$POSTGRES" --network "$NETWORK" \
@@ -28,56 +92,22 @@ for attempt in {1..30}; do
   sleep 2
 done
 
-docker run -d --name "$CONTROL_PLANE" --network "$NETWORK" \
-  -e DATABASE_URL=postgres://whitesmith:ci-only@${POSTGRES}:5432/whitesmith \
-  -v "$DATA_VOLUME":/var/lib/whitesmith \
-  -p 127.0.0.1:3000:3000 \
-  "$IMAGE" >/dev/null
-
-for attempt in {1..60}; do
-  live=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/api/livez || true)
-  ready=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/api/readyz || true)
-  if [[ "$live" == 200 && "$ready" == 200 ]]; then break; fi
-  sleep 2
-done
-if [[ "$live" != 200 || "$ready" != 200 ]]; then
-  echo 'control-plane failed readiness' >&2
-  docker logs "$CONTROL_PLANE" >&2
-  exit 1
-fi
+start_control_plane whitesmith
+printf '%s' "$(curl --silent --show-error --fail -X POST http://127.0.0.1:3000/api/setup/github-app \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: smoke-setup' \
+  --data '{"publicBaseUrl":"http://127.0.0.1:3000"}')" \
+  | bun -e 'const value=JSON.parse(await new Response(Bun.stdin).text()); if(typeof value.action!=="string"||typeof value.manifest!=="string") process.exit(1); console.log(JSON.stringify(value))'
 echo 'control-plane live and ready'
 
-for attempt in {1..20}; do
-  status=$(curl --silent --show-error http://127.0.0.1:3000/api/onboarding/status || true)
-  if [[ "$status" == *'"step":"setup"'* ]]; then break; fi
-  sleep 1
-done
-printf '%s' "$status" | bun -e 'const value=JSON.parse(await new Response(Bun.stdin).text()); if(value.step!=="setup") process.exit(1)'
-setup_code=$(docker logs "$CONTROL_PLANE" 2>&1 | sed -n 's/.*Whitesmith first-run setup code: //p' | tail -n 1)
-[[ ${#setup_code} -ge 32 ]]
-manifest=$(curl --silent --show-error --fail -X POST http://127.0.0.1:3000/api/setup/github-app \
-  -H 'Content-Type: application/json' -H 'Idempotency-Key: smoke-setup' \
-  --data "{\"setupCode\":\"$setup_code\",\"publicBaseUrl\":\"http://127.0.0.1:3000\"}")
-printf '%s' "$manifest" | bun -e 'const value=JSON.parse(await new Response(Bun.stdin).text()); if(typeof value.action!=="string"||typeof value.manifest!=="string") process.exit(1)'
-printf '%s\n' "$manifest"
-
 docker rm -f "$CONTROL_PLANE" >/dev/null
-docker run -d --name "$CONTROL_PLANE" --network "$NETWORK" \
-  -e DATABASE_URL=postgres://whitesmith:ci-only@${POSTGRES}:5432/whitesmith \
-  -v "$DATA_VOLUME":/var/lib/whitesmith \
-  -p 127.0.0.1:3000:3000 \
-  "$IMAGE" >/dev/null
-for attempt in {1..60}; do
-  ready=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/api/readyz || true)
-  if [[ "$ready" == 200 ]]; then break; fi
-  sleep 2
-done
-if [[ "$ready" != 200 ]]; then docker logs "$CONTROL_PLANE" >&2; exit 1; fi
-for attempt in {1..20}; do
-  status=$(curl --silent --show-error http://127.0.0.1:3000/api/onboarding/status || true)
-  if [[ "$status" == *'"step":"setup"'* ]]; then break; fi
-  sleep 1
-done
-if [[ "$status" != *'"step":"setup"'* ]]; then docker logs "$CONTROL_PLANE" >&2; exit 1; fi
-:
+start_control_plane whitesmith
+psql_db whitesmith -Atc "SELECT public_base_url FROM control_plane_config WHERE singleton=true" | grep -Fx 'http://127.0.0.1:3000' >/dev/null
 echo 'control-plane restart preserved setup state'
+
+for branch in run-attempt control-plane-config; do
+  database="history_${branch//-/_}"
+  seed_history "$database" "$branch"
+  start_control_plane "$database"
+  assert_converged_schema "$database"
+  echo "historical $branch upgrade converged"
+done

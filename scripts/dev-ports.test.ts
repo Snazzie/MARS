@@ -1,5 +1,14 @@
 import { expect, test } from "bun:test";
-import { devPorts, parseDevOptions, windowsPortCleanupScript } from "./dev-ports.ts";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  acquireDevLock,
+  devLockPath,
+  devPorts,
+  parseDevOptions,
+  windowsPortCleanupScript,
+} from "./dev-ports.ts";
 
 test("parses only the opt-in kill flag", () => {
   expect(parseDevOptions([])).toEqual({ kill: false });
@@ -22,7 +31,42 @@ test("Windows cleanup targets only configured listeners and excludes its parent"
   expect(script).toContain("Ports still occupied");
 });
 
+test("rejects a second live owner with the recorded PID", () => {
+  const repository = mkdtempSync(join(tmpdir(), "whitesmith-dev-test-"));
+  const first = acquireDevLock(repository, process.pid);
+  try {
+    expect(() => acquireDevLock(repository, process.pid + 1)).toThrow(`PID ${process.pid}`);
+  } finally {
+    first.release();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+test("reclaims a dead owner lock", () => {
+  const repository = mkdtempSync(join(tmpdir(), "whitesmith-dev-test-"));
+  const path = devLockPath(repository);
+  mkdirSync(path);
+  writeFileSync(join(path, "owner.json"), JSON.stringify({ pid: 999999999 }));
+  const lock = acquireDevLock(repository, process.pid);
+  expect(JSON.parse(readFileSync(join(path, "owner.json"), "utf8"))).toEqual({ pid: process.pid });
+  lock.release();
+  rmSync(repository, { recursive: true, force: true });
+});
+
+test("release cannot delete a lock reassigned to another PID", () => {
+  const repository = mkdtempSync(join(tmpdir(), "whitesmith-dev-test-"));
+  const lock = acquireDevLock(repository, process.pid);
+  writeFileSync(join(lock.path, "owner.json"), JSON.stringify({ pid: process.pid + 1 }));
+  lock.release();
+  expect(readFileSync(join(lock.path, "owner.json"), "utf8")).toContain(String(process.pid + 1));
+  rmSync(repository, { recursive: true, force: true });
+});
+
 test("package dev command delegates argument handling to the Bun entrypoint", async () => {
   const pkg = await Bun.file("package.json").json() as { scripts: Record<string, string> };
   expect(pkg.scripts.dev).toBe("bun run scripts/dev.ts");
+  const launcher = await Bun.file("scripts/dev.ts").text();
+  const ports = await Bun.file("scripts/dev-ports.ts").text();
+  expect(launcher).toContain("await killRecordedDevSupervisor();\n  await killDevPortListeners");
+  expect(ports).toContain("taskkill.exe");
+  expect(ports).toContain("windowsPortCleanupScript(ports, process.pid)");
 });

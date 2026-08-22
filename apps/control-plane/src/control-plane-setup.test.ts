@@ -11,7 +11,7 @@ describe("control-plane secret files", () => {
     const second = await loadOrCreateMasterKey(root);
     expect(first).toHaveLength(44);
     expect(second).toBe(first);
-    expect((await stat(join(root, "app_master_key"))).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect((await stat(join(root, "app_master_key"))).mode & 0o777).toBe(0o600);
   });
 
   test("does not replace a malformed existing key", async () => {

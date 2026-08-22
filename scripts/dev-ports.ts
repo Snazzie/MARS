@@ -1,6 +1,14 @@
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 export type DevOptions = { kill: boolean };
+export type DevLock = { path: string; pid: number; release: () => void };
 
 type DevEnvironment = Record<string, string | undefined>;
+
+type LockRecord = { pid: number };
 
 export function parseDevOptions(args: readonly string[]): DevOptions {
   let kill = false;
@@ -24,6 +32,64 @@ export function devPorts(environment: DevEnvironment): number[] {
     port("PORT", environment.PORT, 3000),
     port("WEB_PORT", environment.WEB_PORT, 5173),
   ])];
+}
+
+export function devLockPath(repository = process.cwd()): string {
+  const canonical = realpathSync.native(repository);
+  const key = createHash("sha256").update(canonical).digest("hex").slice(0, 24);
+  return join(tmpdir(), `whitesmith-dev-${key}.lock`);
+}
+
+function readLock(path: string): LockRecord | null {
+  try {
+    return JSON.parse(readFileSync(join(path, "owner.json"), "utf8")) as LockRecord;
+  } catch {
+    return null;
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function acquireDevLock(repository = process.cwd(), pid = process.pid): DevLock {
+  const path = devLockPath(repository);
+  for (;;) {
+    try {
+      mkdirSync(path);
+      writeFileSync(join(path, "owner.json"), JSON.stringify({ pid }), { encoding: "utf8", flag: "wx" });
+      return {
+        path,
+        pid,
+        release: () => {
+          const owner = readLock(path);
+          if (owner?.pid === pid) rmSync(path, { recursive: true, force: true });
+        },
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const owner = readLock(path);
+      if (owner && processIsAlive(owner.pid)) throw new Error(`Development supervisor already running (PID ${owner.pid})`);
+      rmSync(path, { recursive: true, force: true });
+    }
+  }
+}
+
+export async function killRecordedDevSupervisor(repository = process.cwd()): Promise<void> {
+  const path = devLockPath(repository);
+  const owner = existsSync(path) ? readLock(path) : null;
+  if (!owner || owner.pid === process.pid) return;
+  if (process.platform !== "win32") throw new Error("bun dev --kill is currently supported only on Windows");
+  const child = Bun.spawn(["taskkill.exe", "/PID", String(owner.pid), "/T", "/F"], { stdout: "inherit", stderr: "inherit" });
+  const exitCode = await child.exited;
+  if (exitCode !== 0 && processIsAlive(owner.pid)) throw new Error(`Could not stop development supervisor PID ${owner.pid} (exit ${exitCode})`);
+  rmSync(path, { recursive: true, force: true });
 }
 
 export function windowsPortCleanupScript(ports: readonly number[], parentPid: number): string {
