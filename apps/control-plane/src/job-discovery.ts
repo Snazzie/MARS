@@ -32,25 +32,23 @@ async function pages<T>(load: (page: number) => Promise<{ totalCount: number; it
 }
 export async function listCompletedRunsSince(
   load: (page: number) => Promise<{ totalCount: number; runs: GithubRunSnapshot[] }>,
-  checkpointRunId: number | null,
-): Promise<{ runs: GithubRunSnapshot[]; newestRunId: number | null }> {
+  checkpoint: { runId: number; runAttempt: number } | null,
+): Promise<{ runs: GithubRunSnapshot[]; newestCheckpoint: { runId: number; runAttempt: number } | null }> {
   const runs: GithubRunSnapshot[] = [];
-  let newestRunId: number | null = null;
+  let newestCheckpoint: { runId: number; runAttempt: number } | null = null;
   let totalCount = 0;
   for (let page = 1; page <= 10; page += 1) {
     const response = await load(page);
     totalCount = response.totalCount;
-    newestRunId ??= response.runs[0]?.id ?? null;
+    if (!newestCheckpoint && response.runs[0]) newestCheckpoint = { runId: response.runs[0].id, runAttempt: response.runs[0].runAttempt };
     for (const run of response.runs) {
-      if (run.id === checkpointRunId) return { runs, newestRunId };
+      if (checkpoint && run.id === checkpoint.runId && run.runAttempt === checkpoint.runAttempt) return { runs, newestCheckpoint };
       runs.push(run);
     }
-    if (checkpointRunId === null || runs.length >= Math.min(response.totalCount, 1000) || response.runs.length === 0) break;
+    if (checkpoint === null || runs.length >= Math.min(response.totalCount, 1000) || response.runs.length === 0) break;
   }
-  if (checkpointRunId !== null && totalCount > 1000 && runs.length >= 1000) {
-    throw new Error("completed_run_checkpoint_unreachable");
-  }
-  return { runs, newestRunId };
+  if (checkpoint !== null && totalCount > 1000 && runs.length >= 1000) throw new Error("completed_run_checkpoint_unreachable");
+  return { runs, newestCheckpoint };
 }
 
 
@@ -60,38 +58,43 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
   if (!owner || !repo || fullName.split("/").length !== 2) throw new Error("repository_name_invalid");
   const installationId = Number(row.installationId);
   const client = new GithubJobsClient({ token: () => deps.installationToken(installationId), fetch: deps.githubFetchForInstallation(installationId) });
-  const runs = new Map<number, GithubRunSnapshot>();
+  const runs = new Map<string, GithubRunSnapshot>();
   const active = await client.listRuns(owner, repo, undefined, 1);
   for (const run of active.runs) {
-    if (run.status === "queued" || run.status === "in_progress") runs.set(run.id, run);
+    if (run.status === "queued" || run.status === "in_progress") runs.set(`${run.id}:${run.runAttempt}`, run);
   }
-  const [checkpoint] = await deps.db`SELECT completed_run_id AS "completedRunId" FROM github_discovery_checkpoints WHERE repository_id=${String(row.repositoryId)}`;
+  const [checkpoint] = await deps.db`SELECT completed_run_id AS "completedRunId",completed_run_attempt AS "completedRunAttempt" FROM github_discovery_checkpoints WHERE repository_id=${String(row.repositoryId)}`;
   console.error(`GitHub discovery list ${fullName} completed`);
   const completed = await listCompletedRunsSince(
     page => client.listRuns(owner, repo, "completed", page),
-    checkpoint?.completedRunId == null ? null : Number(checkpoint.completedRunId),
+    checkpoint?.completedRunId == null || checkpoint?.completedRunAttempt == null ? null : { runId: Number(checkpoint.completedRunId), runAttempt: Number(checkpoint.completedRunAttempt) },
   );
-  for (const run of completed.runs) runs.set(run.id, run);
+  for (const run of completed.runs) runs.set(`${run.id}:${run.runAttempt}`, run);
   await deps.db`UPDATE dashboard_jobs j SET logs_state='unavailable',logs_synced_at=now(),logs_error='github_logs_expired',logs_version=${GITHUB_LOG_FORMAT_VERSION} FROM dashboard_runs r WHERE j.run_id=r.id AND r.repository_id=${String(row.repositoryId)} AND j.status='completed' AND j.completed_at<now()-interval '90 days' AND j.logs_version<${GITHUB_LOG_FORMAT_VERSION}`;
-  const activeLocal = await deps.db`SELECT DISTINCT r.github_run_id AS "runId" FROM dashboard_runs r WHERE r.repository_id=${String(row.repositoryId)} AND r.status<>'completed'`;
-  const logBackfill = await deps.db`SELECT DISTINCT r.github_run_id AS "runId" FROM dashboard_runs r JOIN dashboard_jobs j ON j.run_id=r.id WHERE r.repository_id=${String(row.repositoryId)} AND j.status='completed' AND j.completed_at>=now()-interval '90 days' AND (j.logs_state='pending' OR j.logs_version<${GITHUB_LOG_FORMAT_VERSION}) ORDER BY r.github_run_id DESC LIMIT 2`;
-  for (const item of [...activeLocal, ...logBackfill]) { const runId = Number(item.runId); if (runId > 0 && !runs.has(runId)) runs.set(runId, await client.getRun(owner, repo, runId)); }
+  const activeLocal = await deps.db`SELECT DISTINCT r.github_run_id AS "runId",r.run_attempt AS "runAttempt" FROM dashboard_runs r WHERE r.repository_id=${String(row.repositoryId)} AND r.status<>'completed'`;
+  const logBackfill = await deps.db`SELECT DISTINCT r.github_run_id AS "runId",j.run_attempt AS "runAttempt" FROM dashboard_runs r JOIN dashboard_jobs j ON j.run_id=r.id WHERE r.repository_id=${String(row.repositoryId)} AND j.status='completed' AND j.completed_at>=now()-interval '90 days' AND (j.logs_state='pending' OR j.logs_version<${GITHUB_LOG_FORMAT_VERSION}) ORDER BY r.github_run_id DESC LIMIT 2`;
+  for (const item of [...activeLocal, ...logBackfill]) {
+    const runId = Number(item.runId), runAttempt = Number(item.runAttempt);
+    if (runId > 0 && runAttempt > 0 && !runs.has(`${runId}:${runAttempt}`)) {
+      const recovered = await client.getRunAttempt(owner, repo, runId, runAttempt);
+      runs.set(`${recovered.id}:${recovered.runAttempt}`, recovered);
+    }
+  }
   let discovered = 0, updated = 0;
   for (const run of runs.values()) {
-    const jobs = await pages(async page => { const value = await client.listJobs(owner, repo, run.id, page); return { totalCount: value.totalCount, items: value.jobs }; });
+    const jobs = await pages(async page => { const value = await client.listJobs(owner, repo, run.id, run.runAttempt, page); return { totalCount: value.totalCount, items: value.jobs }; });
     for (const job of jobs) {
       discovered += 1;
-      const applied = await applyGithubJobSnapshot({ installationId: Number(row.installationId), repository: { id: Number(row.githubRepositoryId), name: String(row.name), fullName }, run, job, authoritative: true });
+      const applied = await applyGithubJobSnapshot({ installationId, repository: { id: Number(row.githubRepositoryId), name: String(row.name), fullName }, run, job, authoritative: true });
       if (applied) updated += 1;
       if (applied && job.status === "completed") await syncCompletedJobLogsBestEffort(job.id, () => syncCompletedGithubJobLogs({ db: deps.db, client, owner, repo, job }));
     }
   }
-  if (completed.newestRunId !== null) {
-    await deps.db`INSERT INTO github_discovery_checkpoints (repository_id,completed_run_id,updated_at) VALUES (${String(row.repositoryId)},${completed.newestRunId},now()) ON CONFLICT (repository_id) DO UPDATE SET completed_run_id=excluded.completed_run_id,updated_at=excluded.updated_at`;
+  if (completed.newestCheckpoint !== null) {
+    await deps.db`INSERT INTO github_discovery_checkpoints (repository_id,completed_run_id,completed_run_attempt,updated_at) VALUES (${String(row.repositoryId)},${completed.newestCheckpoint.runId},${completed.newestCheckpoint.runAttempt},now()) ON CONFLICT (repository_id) DO UPDATE SET completed_run_id=excluded.completed_run_id,completed_run_attempt=excluded.completed_run_attempt,updated_at=excluded.updated_at`;
   }
   return { discovered, updated };
 }
-
 export async function discoverQueuedRepositoryJobs(deps: DiscoveryDeps): Promise<DiscoveryReport> {
   if (!deps.repositoryFullName) return { repositories: 0, discovered: 0, updated: 0, failed: 0 };
   const rows = await deps.db`SELECT repo.id AS "repositoryId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' AND (repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()) AND repo.full_name=${deps.repositoryFullName} ORDER BY repo.full_name`;
@@ -106,7 +109,7 @@ export async function discoverQueuedRepositoryJobs(deps: DiscoveryDeps): Promise
       const active = await client.listRuns(owner, repo, undefined, 1);
       const runs = active.runs.filter(run => run.status === "queued" || run.status === "in_progress");
       for (const run of runs) {
-        const jobs = await pages(async page => { const value = await client.listJobs(owner, repo, run.id, page); return { totalCount: value.totalCount, items: value.jobs }; });
+        const jobs = await pages(async page => { const value = await client.listJobs(owner, repo, run.id, run.runAttempt, page); return { totalCount: value.totalCount, items: value.jobs }; });
         for (const job of jobs) {
           report.discovered += 1;
           if (await applyGithubJobSnapshot({ installationId, repository: { id: Number(row.githubRepositoryId), name: String(row.name), fullName }, run, job, authoritative: true })) report.updated += 1;

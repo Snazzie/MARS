@@ -104,18 +104,10 @@ export async function reconcileExpiredLeasesWithGithub(deps: StaleLeaseReconcili
       report.skipped += 1;
       continue;
     }
-    if (row.jobStatus === "completed") {
-      try {
-        await markTerminalLease(deps, row, row.jobConclusion);
-        report.completed += 1;
-      } catch {
-        report.skipped += 1;
-      }
-      continue;
-    }
     try {
       const client = new GithubJobsClient({ token: () => deps.installationToken(installationId), fetch: deps.githubFetchForInstallation(installationId) });
-      const [run, job] = await Promise.all([client.getRun(repository.owner, repository.repo, githubRunId), client.getJob(repository.owner, repository.repo, githubJobId)]);
+      const job = await client.getJob(repository.owner, repository.repo, githubJobId);
+      const run = await client.getRunAttempt(repository.owner, repository.repo, job.runId, job.runAttempt);
       if (job.status !== "completed") {
         report.stillActive += 1;
         continue;

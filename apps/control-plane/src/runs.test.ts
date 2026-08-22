@@ -52,13 +52,19 @@ function makeStatefulSql() {
       if (!current) runs.set(key, incoming);
       else if (runAttempt > Number(current.run_attempt)) {
         Object.assign(current, incoming);
+      } else if (runAttempt < Number(current.run_attempt) && !text.slice(text.indexOf("status=CASE"), text.indexOf(",conclusion=CASE")).includes("EXCLUDED.run_attempt=dashboard_runs.run_attempt AND")) {
+        Object.assign(current, incoming);
       } else if (runAttempt === Number(current.run_attempt)) {
-        const wasTerminal = current.status === "completed";
-        if (!wasTerminal && (incoming.status === "completed" || current.status === "queued" && incoming.status === "in_progress")) current.status = incoming.status;
-        current.conclusion ??= incoming.conclusion;
-        current.queued_at = [current.queued_at, incoming.queued_at].sort()[0];
-        current.started_at = current.started_at && incoming.started_at ? [current.started_at, incoming.started_at].sort()[0] : current.started_at ?? incoming.started_at;
-        if (!wasTerminal && (!current.completed_at || incoming.completed_at && String(incoming.completed_at) > String(current.completed_at))) current.completed_at = incoming.completed_at;
+        const authoritativeRepair = text.includes("EXCLUDED.status<>'completed'") && values.includes(true);
+        if (authoritativeRepair && incoming.status !== "completed") Object.assign(current, { status: incoming.status, conclusion: incoming.conclusion, queued_at: incoming.queued_at, started_at: incoming.started_at, completed_at: incoming.completed_at });
+        else {
+          const wasTerminal = current.status === "completed";
+          if (!wasTerminal && (incoming.status === "completed" || current.status === "queued" && incoming.status === "in_progress")) current.status = incoming.status;
+          current.conclusion ??= incoming.conclusion;
+          current.queued_at = [current.queued_at, incoming.queued_at].sort()[0];
+          current.started_at = current.started_at && incoming.started_at ? [current.started_at, incoming.started_at].sort()[0] : current.started_at ?? incoming.started_at;
+          if (!wasTerminal && (!current.completed_at || incoming.completed_at && String(incoming.completed_at) > String(current.completed_at))) current.completed_at = incoming.completed_at;
+        }
       }
       return [runs.get(key)!];
     }
@@ -99,13 +105,19 @@ function makeStatefulSql() {
       if (!current) jobs.set(key, incoming);
       else if (runAttempt > Number(current.run_attempt)) {
         Object.assign(current, incoming);
+      } else if (runAttempt < Number(current.run_attempt) && !text.slice(text.indexOf("status=CASE"), text.indexOf(",conclusion=CASE")).includes("EXCLUDED.run_attempt=dashboard_jobs.run_attempt AND")) {
+        Object.assign(current, incoming);
       } else if (runAttempt === Number(current.run_attempt)) {
-        if (current.status !== "completed" && (incoming.status === "completed" || current.status === "queued" && incoming.status === "in_progress")) current.status = incoming.status;
-        current.conclusion ??= incoming.conclusion;
-        current.runner_name = incoming.runner_name ?? current.runner_name;
-        current.queued_at = [current.queued_at, incoming.queued_at].sort()[0];
-        current.started_at = current.started_at && incoming.started_at ? [current.started_at, incoming.started_at].sort()[0] : current.started_at ?? incoming.started_at;
-        current.completed_at ??= incoming.completed_at;
+        const authoritativeRepair = text.includes("EXCLUDED.status<>'completed'") && values.includes(true);
+        if (authoritativeRepair && incoming.status !== "completed") Object.assign(current, { status: incoming.status, conclusion: incoming.conclusion, stage: incoming.stage, queued_at: incoming.queued_at, started_at: incoming.started_at, completed_at: incoming.completed_at });
+        else {
+          if (current.status !== "completed" && (incoming.status === "completed" || current.status === "queued" && incoming.status === "in_progress")) current.status = incoming.status;
+          current.conclusion ??= incoming.conclusion;
+          current.runner_name = incoming.runner_name ?? current.runner_name;
+          current.queued_at = [current.queued_at, incoming.queued_at].sort()[0];
+          current.started_at = current.started_at && incoming.started_at ? [current.started_at, incoming.started_at].sort()[0] : current.started_at ?? incoming.started_at;
+          current.completed_at ??= incoming.completed_at;
+        }
       }
       return [jobs.get(key)!];
     }
@@ -166,7 +178,22 @@ test("stale completion from an older attempt cannot terminalize a rerun", async 
   await applyGithubJobSnapshot({ installationId: 5, repository, run: attempt2Run, job: attempt2Job, authoritative: true });
   await applyGithubJobSnapshot({ installationId: 5, repository, run: attempt1Run, job: attempt1Job });
   expect(fake.runs.get("org:42")).toMatchObject({ run_attempt: 2, status: "queued", conclusion: null, completed_at: null });
+  expect(fake.queries.find((query) => query.startsWith("INSERT INTO dashboard_runs"))).toContain("EXCLUDED.run_attempt=dashboard_runs.run_attempt AND (EXCLUDED.status='completed'");
+  expect(fake.queries.find((query) => query.startsWith("INSERT INTO dashboard_jobs"))).toContain("EXCLUDED.run_attempt=dashboard_jobs.run_attempt AND (EXCLUDED.status='completed'");
   expect(fake.jobs.get("org:97018978327")).toMatchObject({ run_attempt: 2, status: "queued", conclusion: null, completed_at: null });
+});
+test("lower-attempt snapshots preserve newer concrete state", async () => {
+  const fake = makeStatefulSql();
+  configureRunLifecycle(fake.sql as never);
+  const repository = { id: 123, name: "repo", fullName: "acme/repo" };
+  const newerRun = { ...run, runAttempt: 2, queuedAt: "2026-08-22T10:31:46Z" };
+  const newerJob = { ...job, runAttempt: 2, queuedAt: newerRun.queuedAt };
+  await applyGithubJobSnapshot({ installationId: 5, repository, run: newerRun, job: newerJob, authoritative: true });
+  const olderRun = { ...run, status: "completed" as const, conclusion: "failure", completedAt: "2026-08-22T10:31:17Z" };
+  const olderJob = { ...job, status: "completed" as const, conclusion: "failure", completedAt: olderRun.completedAt };
+  await applyGithubJobSnapshot({ installationId: 5, repository, run: olderRun, job: olderJob });
+  expect(fake.runs.get("org:42")).toMatchObject({ run_attempt: 2, status: "queued", conclusion: null });
+  expect(fake.jobs.get("org:99")).toMatchObject({ run_attempt: 2, status: "queued", conclusion: null });
 });
 
 test("authoritative same-attempt queued REST state repairs a locally terminal job", async () => {

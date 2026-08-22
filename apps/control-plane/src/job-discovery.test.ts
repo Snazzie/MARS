@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { discoverAvailableRepositoryJobs, discoverQueuedRepositoryJobs, listCompletedRunsSince, syncCompletedJobLogsBestEffort } from "./job-discovery.ts";
+import { configureRunLifecycle } from "./runs.ts";
 import { GithubRateLimitError } from "./github-rate-limit.ts";
 import type { GithubRunSnapshot } from "./runs.ts";
 
@@ -118,6 +119,7 @@ test("pairs rerun attempts during repository discovery", async () => {
     return [];
   };
   const db = Object.assign(execute, { begin: async (callback: (tx: typeof execute) => Promise<unknown>) => callback(execute) }) as never;
+  configureRunLifecycle(db as never);
   const githubFetch = async (input: RequestInfo | URL) => {
     const url = String(input);
     requests.push(url);
@@ -291,6 +293,7 @@ test("fast pickup polls only queued runs for one configured repository", async (
       workflow_runs: [{
         id: 77,
         run_number: 77,
+        run_attempt: 1,
         name: "CI",
         event: "push",
         head_branch: "main",
@@ -328,7 +331,7 @@ test("fast pickup includes GitHub pending runs", async () => {
     if (!url.includes("status=")) return Response.json({
       total_count: 1,
       workflow_runs: [{
-        id: 77, run_number: 77, name: "CI", event: "pull_request", head_branch: "main", head_sha: "a".repeat(40),
+        id: 77, run_number: 77, run_attempt: 1, name: "CI", event: "pull_request", head_branch: "main", head_sha: "a".repeat(40),
         actor: { login: "octocat" }, status: "pending", conclusion: null, created_at: "2026-08-15T04:00:00Z",
         run_started_at: null, updated_at: "2026-08-15T04:00:00Z",
       }],
