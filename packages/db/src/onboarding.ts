@@ -145,7 +145,7 @@ export async function getOnboardingDetail(
       visibility: row.visibility, available: row.available, installationId: String(row.installationId), discoveryState, discoveryRetryAt,
     } as RepositorySummary;
   });
-  const workerDriver = worker?.platform === "linux-x64" ? "kata-k3s" : worker?.platform === "windows-x64" ? "windows-hyperv-container" : worker?.platform === "macos-arm64" ? "tart-vm" : null;
+  const workerDriver = worker?.platform === "linux-x64" ? "linux-libvirt-vm" : worker?.platform === "windows-x64" ? "windows-hyperv-container" : worker?.platform === "macos-arm64" ? "tart-vm" : null;
   const workerGuestPlatforms = worker?.guestPlatforms ?? (worker ? [worker.platform] : []);
   const poolRows = worker ? await db`
     SELECT p.id,p.organization_id AS "organizationId",p.worker_id AS "workerId",'Shared fleet' AS "workerName",

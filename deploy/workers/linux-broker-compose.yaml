@@ -1,0 +1,22 @@
+services:
+  linux-broker:
+    image: ${WHITESMITH_BROKER_IMAGE:?digest-pinned broker image required}
+    restart: unless-stopped
+    user: "10001:10001"
+    group_add:
+      - "${LIBVIRT_SOCKET_GID:?libvirt socket gid required}"
+    environment:
+      WHITESMITH_CONTROL_PLANE_URL: ${WHITESMITH_CONTROL_PLANE_URL}
+      WHITESMITH_GOLDEN_DISK: /var/lib/whitesmith/golden/worker.qcow2
+      WHITESMITH_GOLDEN_DIGEST: ${WHITESMITH_GOLDEN_DIGEST}
+      WHITESMITH_DOMAIN_TEMPLATE: /etc/whitesmith/worker-domain.xml
+      WHITESMITH_CLONE_ROOT: /var/lib/whitesmith/clones
+      WHITESMITH_CHANNEL_ROOT: /var/lib/whitesmith/channels
+      WHITESMITH_LIBVIRT_NETWORK: ${WHITESMITH_LIBVIRT_NETWORK}
+    volumes:
+      - /var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock
+      - ${WHITESMITH_BROKER_CONFIG:?config directory required}:/var/lib/whitesmith/config
+      - ${WHITESMITH_GOLDEN_ROOT:?golden directory required}:/var/lib/whitesmith/golden:ro
+      - ${WHITESMITH_CLONE_ROOT:?clone directory required}:/var/lib/whitesmith/clones
+      - ${WHITESMITH_CHANNEL_ROOT:?channel directory required}:/var/lib/whitesmith/channels
+      - ${WHITESMITH_DOMAIN_TEMPLATE:?domain template required}:/etc/whitesmith/worker-domain.xml:ro
