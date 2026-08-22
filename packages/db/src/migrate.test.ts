@@ -20,6 +20,7 @@ test("migration lineage preserves released history and converges exactly once", 
     "0002_github_run_attempt",
     "0003_control_plane_config",
     "0004_linux_libvirt_driver",
+    "0005_worker_preserve_leases",
   ]);
   expect(new Set(journal.entries.map(entry => entry.tag.slice(0, 4))).size).toBe(journal.entries.length);
   expect(new Set(journal.entries.map(entry => entry.when)).size).toBe(journal.entries.length);
@@ -34,6 +35,11 @@ test("released run-attempt migration remains non-destructive", async () => {
   expect(migrationText).toContain("ALTER TABLE \"dashboard_jobs\" ADD COLUMN \"run_attempt\" integer NOT NULL DEFAULT 1;");
   expect(migrationText).not.toContain("DROP CONSTRAINT");
   expect(migrationText).not.toContain("CREATE UNIQUE");
+});
+
+test("worker lease preservation migration is idempotent", async () => {
+  const migrationText = await migration("0005_worker_preserve_leases.sql");
+  expect(migrationText).toBe('ALTER TABLE "workers" ADD COLUMN IF NOT EXISTS "preserve_leases" boolean NOT NULL DEFAULT false;\n');
 });
 
 test("convergence migration is idempotent across both historical branches", async () => {
