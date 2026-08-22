@@ -39,16 +39,19 @@ function makeStatefulSql() {
     }
     if (text.startsWith("UPDATE dashboard_jobs SET status='completed'")) {
       const runId = values.find((value) => typeof value === "number" && runs.has(`org:${value}`));
+      const runRecord = values.find((value) => typeof value === "string" && [...runs.values()].some((run) => run.id === value));
+      const runKey = runRecord ?? (runId === undefined ? undefined : `run-${runId}`);
       const scopedAttempt = text.includes("run_attempt") ? values.find((value) => typeof value === "number" && value !== runId && value > 0 && value < 10) : undefined;
       for (const current of jobs.values()) {
-        if (current.run_id !== `run-${runId}` || scopedAttempt !== undefined && current.run_attempt !== scopedAttempt || current.status === "completed") continue;
-        Object.assign(current, { status: "completed", conclusion: current.conclusion ?? values[2] ?? null, completed_at: current.completed_at ?? values[3] ?? null });
+        if (current.run_id !== runKey || scopedAttempt !== undefined && current.run_attempt !== scopedAttempt || current.status === "completed") continue;
+        Object.assign(current, { status: "completed", conclusion: current.conclusion ?? values.find((value) => typeof value === "string" && ["success", "failure", "cancelled"].includes(value)) ?? null, completed_at: current.completed_at ?? values.find((value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value)) ?? null });
       }
       return [];
     }
     if (text.startsWith("INSERT INTO dashboard_jobs")) {
       const key = `${values[0]}:${values[2]}`;
-      const incoming = { organization_id: values[0], run_id: values[1], id: `job-${values[2]}`, github_job_id: values[2], run_attempt: text.includes("run_attempt") ? Number(values[2]) : 1, name: values[3], status: values[4], conclusion: values[5], stage: values[6], runner_name: values[7], requested_labels: values[8], queued_at: values[9], started_at: values[10], completed_at: values[11] };
+      const runAttempt = text.includes("run_attempt") ? Number(values[2]) : 1;
+      const incoming = { organization_id: values[0], run_id: values[1], id: `job-${values[2]}`, github_job_id: values[2], run_attempt: runAttempt, name: values[3], status: values[4], conclusion: values[5], stage: values[6], runner_name: values[7], requested_labels: values[8], queued_at: values[9], started_at: values[10], completed_at: values[11] };
       const current = jobs.get(key);
       if (!current) jobs.set(key, incoming);
       else {
@@ -105,20 +108,45 @@ const job: GithubJobSnapshot = { id: 99, runId: run.id, runAttempt: 1, name: "ma
   expect(fake.runs.get("org:42")?.status).toBe("completed"); expect(fake.runs.get("org:42")?.started_at).toBe("2026-08-13T00:01:00Z"); expect(fake.runs.get("org:42")?.completed_at).toBe(completed.completedAt);
   const storedStep = fake.steps.get("org:run-42:job-99:1"); expect(fake.jobs.get(key)?.status).toBe("completed"); expect(fake.jobs.get(key)?.started_at).toBe("2026-08-13T00:01:00Z"); expect(fake.jobs.get(key)?.completed_at).toBe(completed.completedAt); expect(storedStep?.status).toBe("completed"); expect(storedStep?.started_at).toBe("2026-08-13T00:01:00Z"); expect(storedStep?.completed_at).toBe(completed.completedAt); expect(storedStep?.duration_ms).toBe(180_000);
   const stable = { ...doneJob, steps: [{ ...doneJob.steps[0], id: "gh-step-1" }] }; await applyGithubJobSnapshot({ installationId: 5, repository, run: completed, job: stable }); expect(fake.steps.get("org:run-42:job-99:1")?.id).toMatch(/^[0-9a-f-]{36}$/);
- });
-
-test("a queued rerun reopens its completed workflow run", async () => {
+});
+test("stale completion from an older attempt cannot terminalize a rerun", async () => {
   const fake = makeStatefulSql();
   configureRunLifecycle(fake.sql as never);
   const repository = { id: 123, name: "repo", fullName: "acme/repo" };
-  await applyGithubJobSnapshot({ installationId: 5, repository, run, job });
-  const completedAt = "2026-08-13T00:04:00Z";
-  await applyGithubJobSnapshot({ installationId: 5, repository, run: { ...run, status: "completed", conclusion: "success", completedAt }, job: { ...job, status: "completed", conclusion: "success", completedAt } });
-  expect(fake.runs.get("org:42")?.status).toBe("completed");
+  const attempt1Run = { ...run, status: "completed" as const, conclusion: "failure", completedAt: "2026-08-22T10:31:17Z" };
+  const attempt1Job = { ...job, id: 900, status: "completed" as const, conclusion: "failure", completedAt: attempt1Run.completedAt };
+  await applyGithubJobSnapshot({ installationId: 5, repository, run: attempt1Run, job: attempt1Job });
+  const attempt2Run = { ...run, runAttempt: 2, queuedAt: "2026-08-22T10:31:46Z" };
+  const attempt2Job = { ...job, id: 97018978327, runAttempt: 2, queuedAt: attempt2Run.queuedAt };
+  await applyGithubJobSnapshot({ installationId: 5, repository, run: attempt2Run, job: attempt2Job, authoritative: true });
+  await applyGithubJobSnapshot({ installationId: 5, repository, run: attempt1Run, job: attempt1Job });
+  expect(fake.runs.get("org:42")).toMatchObject({ run_attempt: 2, status: "queued", conclusion: null, completed_at: null });
+  expect(fake.jobs.get("org:97018978327")).toMatchObject({ run_attempt: 2, status: "queued", conclusion: null, completed_at: null });
+});
 
-  await applyGithubJobSnapshot({ installationId: 5, repository, run, job: { ...job, id: 100 } });
+test("authoritative same-attempt queued REST state repairs a locally terminal job", async () => {
+  const fake = makeStatefulSql();
+  configureRunLifecycle(fake.sql as never);
+  const repository = { id: 123, name: "repo", fullName: "acme/repo" };
+  const completedRun = { ...run, status: "completed" as const, conclusion: "failure", completedAt: "2026-08-22T10:31:17Z" };
+  const completedJob = { ...job, status: "completed" as const, conclusion: "failure", completedAt: completedRun.completedAt };
+  await applyGithubJobSnapshot({ installationId: 5, repository, run: completedRun, job: completedJob });
+  await applyGithubJobSnapshot({ installationId: 5, repository, run, job, authoritative: true });
+  expect(fake.jobs.get("org:99")).toMatchObject({ status: "queued", conclusion: null, started_at: null, completed_at: null });
+});
 
-  expect(fake.runs.get("org:42")).toMatchObject({ status: "queued", conclusion: null, started_at: null, completed_at: null });
+test("a completed workflow_job webhook does not terminalize a queued sibling", async () => {
+  const fake = makeStatefulSql();
+  configureRunLifecycle(fake.sql as never);
+  const repository = { id: 123, name: "repo", fullName: "acme/repo" };
+  const attempt2Run = { ...run, runAttempt: 2 };
+  const sibling = { ...job, id: 1001, runAttempt: 2 };
+  const completed = { ...job, id: 1002, runAttempt: 2, status: "completed" as const, conclusion: "success", completedAt: "2026-08-22T10:32:00Z" };
+  await applyGithubJobSnapshot({ installationId: 5, repository, run: attempt2Run, job: sibling });
+  await applyGithubJobSnapshot({ installationId: 5, repository, run: attempt2Run, job: { ...completed, status: "queued", conclusion: null, completedAt: null } });
+  await applyWorkflowJobWebhook({ installation: { id: 5 }, repository: { id: 123, name: "repo", full_name: "acme/repo" }, sender: { login: "octocat" }, action: "completed", workflow_job: { id: completed.id, run_id: 42, run_attempt: 2, run_number: 7, name: completed.name, status: "completed", conclusion: "success", created_at: completed.queuedAt, completed_at: completed.completedAt, labels: completed.labels, steps: [] } });
+  expect(fake.jobs.get("org:1001")?.status).toBe("queued");
+  expect(fake.jobs.get("org:1002")?.status).toBe("completed");
 });
 
 test("step duration is monotonic-compatible for terminal timestamps", () => expect(stageDurationMs({ startedAt: "2026-08-13T00:01:00Z", completedAt: "2026-08-13T00:02:00Z" })).toBe(60_000));

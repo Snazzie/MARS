@@ -26,12 +26,12 @@ describe("completed run recovery", () => {
     const requestedPages: number[] = [];
     const result = await listCompletedRunsSince(async (page) => {
       requestedPages.push(page);
-      const pages = page === 1 ? [run(105, 1), run(104, 1)] : [run(103, 2), run(102, 1)];
+      const pages = page === 1 ? [run(105, 1), run(104, 1)] : [run(103, 2), run(102, 1), run(101, 1)];
       return { totalCount: 5, runs: pages };
     }, { runId: 103, runAttempt: 1 });
 
     expect(requestedPages).toEqual([1, 2]);
-    expect(result.runs.map(({ id }) => id)).toEqual([105, 104, 103]);
+    expect(result.runs.map(({ id }) => id)).toEqual([105, 104, 103, 102, 101]);
     expect(result.newestCheckpoint).toEqual({ runId: 105, runAttempt: 1 });
   });
 
@@ -39,11 +39,11 @@ describe("completed run recovery", () => {
     const requestedPages: number[] = [];
     const result = await listCompletedRunsSince(async (page) => {
       requestedPages.push(page);
-      const pages = page === 1 ? [run(32564909816, 2)] : [run(32564909815, 1)];
-      return { totalCount: 2, runs: pages };
+      const pages = page === 1 ? [run(32564909816, 2), run(32564909815, 1)] : [run(32564909816, 1), run(32564909814, 1)];
+      return { totalCount: 4, runs: pages };
     }, { runId: 32564909816, runAttempt: 1 });
 
-    expect(requestedPages).toEqual([1]);
+    expect(requestedPages).toEqual([1, 2]);
     expect(result.runs).toEqual([run(32564909816, 2), run(32564909815, 1)]);
     expect(result.newestCheckpoint).toEqual({ runId: 32564909816, runAttempt: 2 });
   });
@@ -91,10 +91,26 @@ test("completed log backfill failure does not abort authoritative status discove
 test("pairs rerun attempts during repository discovery", async () => {
   const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
   const requests: string[] = [];
-  const execute = async (strings: TemplateStringsArray) => {
+  const persistedJobs: Array<{ runAttempt: number; status: string; githubJobId: number }> = [];
+  const execute = async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join(" ");
     if (query.includes("FROM dashboard_installations")) return [{ id: "installation", organization_id: "org" }];
     if (query.includes("SELECT id FROM dashboard_repositories")) return [{ id: "repository" }];
+    if (query.startsWith("INSERT INTO dashboard_runs")) {
+      const attemptQualified = query.includes("run_attempt");
+      const githubRunId = Number(values[2]);
+      const runAttempt = attemptQualified ? Number(values[3]) : 1;
+      const status = String(values[attemptQualified ? 10 : 9]);
+      return [{ id: `run-${githubRunId}`, status, run_attempt: runAttempt }];
+    }
+    if (query.startsWith("INSERT INTO dashboard_jobs")) {
+      const attemptQualified = query.includes("run_attempt");
+      const githubJobId = Number(values[attemptQualified ? 3 : 2]);
+      const runAttempt = attemptQualified ? Number(values[2]) : 1;
+      const status = String(values[attemptQualified ? 5 : 4]);
+      persistedJobs.push({ githubJobId, runAttempt, status });
+      return [{ id: `job-${githubJobId}`, status, run_attempt: runAttempt }];
+    }
     if (query.includes("FROM dashboard_repositories repo")) return [repository];
     return [];
   };
@@ -119,7 +135,8 @@ test("pairs rerun attempts during repository discovery", async () => {
 
   const report = await discoverAvailableRepositoryJobs({ db, installationToken: async () => "token", githubFetchForInstallation: () => githubFetch });
 
-  expect(report).toMatchObject({ repositories: 1, discovered: 1, failed: 0 });
+  expect(report).toMatchObject({ repositories: 1, discovered: 1, updated: 1, failed: 0 });
+  expect(persistedJobs).toContainEqual({ githubJobId: 97018978327, runAttempt: 2, status: "queued" });
   expect(requests.some((url) => url === "https://api.github.com/repos/acme/repo/actions/runs/32564909816/attempts/2/jobs?per_page=100&page=1")).toBe(true);
   expect(requests.some((url) => url.includes("/actions/runs/32564909816/jobs?filter=latest"))).toBe(false);
 });
