@@ -16,18 +16,20 @@ function makeStatefulSql() {
     if (text.includes("SELECT id,organization_id FROM dashboard_installations")) return installations;
     if (text.includes("SELECT id FROM dashboard_repositories")) return repositories;
     if (text.startsWith("UPDATE dashboard_runs SET status='queued'")) {
-      const current = [...runs.values()].find((run) => values.includes(run.github_run_id));
+      const current = [...runs.values()].find((run) => run.organization_id === values[0] && values.includes(run.github_run_id));
+      const requestedAttempt = text.includes("run_attempt") ? values.find((value) => typeof value === "number" && value > 0 && !runs.has(`${values[0]}:${value}`)) : undefined;
       const guardedNonterminal = text.includes("status <> 'completed'");
       const guardedTerminal = text.includes("status='completed'");
-      if (current && values.includes("queued") && (!guardedNonterminal || current.status !== "completed") && (!guardedTerminal || current.status === "completed")) {
+      if (current && (requestedAttempt === undefined || current.run_attempt === requestedAttempt) && values.includes("queued") && (!guardedNonterminal || current.status !== "completed") && (!guardedTerminal || current.status === "completed")) {
         Object.assign(current, { status: "queued", conclusion: null, started_at: null, completed_at: null });
       }
       return [];
     }
     if (text.startsWith("UPDATE dashboard_jobs SET status='queued'")) {
-      const current = [...jobs.values()].find((job) => values.includes(job.github_job_id));
+      const current = [...jobs.values()].find((job) => job.organization_id === values[0] && values.includes(job.github_job_id));
+      const requestedAttempt = text.includes("run_attempt") ? values.find((value) => typeof value === "number" && value > 0 && !jobs.has(`${values[0]}:${value}`)) : undefined;
       const guardedNonterminal = text.includes("status <> 'completed'");
-      if (current && (!guardedNonterminal || current.status !== "completed")) Object.assign(current, { status: "queued", conclusion: null, stage: "queued", started_at: null, completed_at: null });
+      if (current && (requestedAttempt === undefined || current.run_attempt === requestedAttempt) && (!guardedNonterminal || current.status !== "completed")) Object.assign(current, { status: "queued", conclusion: null, stage: "queued", started_at: null, completed_at: null });
       return [];
     }
     if (text.startsWith("INSERT INTO dashboard_runs")) {
@@ -61,12 +63,12 @@ function makeStatefulSql() {
       return [runs.get(key)!];
     }
     if (text.startsWith("UPDATE dashboard_jobs SET status='completed'")) {
-      const runId = values.find((value) => typeof value === "number" && runs.has(`org:${value}`));
-      const runRecord = values.find((value) => typeof value === "string" && [...runs.values()].some((run) => run.id === value));
+      const runId = values.find((value) => typeof value === "number" && runs.has(`${values[0]}:${value}`));
+      const runRecord = values.find((value) => typeof value === "string" && [...runs.values()].some((run) => run.organization_id === values[0] && run.id === value));
       const runKey = runRecord ?? (runId === undefined ? undefined : `run-${runId}`);
-      const scopedAttempt = text.includes("run_attempt") ? values.find((value) => typeof value === "number" && value !== runId && value > 0 && value < 10) : undefined;
+      const scopedAttempt = text.includes("run_attempt") ? values.find((value) => typeof value === "number" && value > 0 && value !== runId && !runs.has(`${values[0]}:${value}`)) : undefined;
       for (const current of jobs.values()) {
-        if (current.run_id !== runKey || scopedAttempt !== undefined && current.run_attempt !== scopedAttempt || current.status === "completed") continue;
+        if (current.organization_id !== values[0] || current.run_id !== runKey || scopedAttempt !== undefined && current.run_attempt !== scopedAttempt || current.status === "completed") continue;
         Object.assign(current, { status: "completed", conclusion: current.conclusion ?? values.find((value) => typeof value === "string" && ["success", "failure", "cancelled"].includes(value)) ?? null, completed_at: current.completed_at ?? values.find((value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value)) ?? null });
       }
       return [];
@@ -176,6 +178,7 @@ test("authoritative same-attempt queued REST state repairs a locally terminal jo
   await applyGithubJobSnapshot({ installationId: 5, repository, run: completedRun, job: completedJob });
   await applyGithubJobSnapshot({ installationId: 5, repository, run, job, authoritative: true });
   expect(fake.runs.get("org:42")).toMatchObject({ status: "queued", conclusion: null, started_at: null, completed_at: null });
+  expect(fake.jobs.get("org:99")).toMatchObject({ status: "queued", conclusion: null, started_at: null, completed_at: null });
 });
 
 test("a completed workflow_job webhook does not terminalize a queued sibling", async () => {
