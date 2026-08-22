@@ -16,24 +16,42 @@ function makeStatefulSql() {
     if (text.includes("SELECT id,organization_id FROM dashboard_installations")) return installations;
     if (text.includes("SELECT id FROM dashboard_repositories")) return repositories;
     if (text.startsWith("UPDATE dashboard_runs SET status='queued'")) {
-      const current = runs.get(`${values[0]}:${values[1]}`);
-      const existingJob = jobs.get(`${values[3]}:${values[4]}`);
-      if (current?.status === "completed" && values[2] === "queued" && existingJob?.status !== "completed") {
-        Object.assign(current, { status: "queued", conclusion: null, started_at: null, completed_at: null });
-      }
+      const current = [...runs.values()].find((run) => values.includes(run.github_run_id));
+      if (current && values.includes("queued")) Object.assign(current, { status: "queued", conclusion: null, started_at: null, completed_at: null });
+      return [];
+    }
+    if (text.startsWith("UPDATE dashboard_jobs SET status='queued'")) {
+      const current = [...jobs.values()].find((job) => values.includes(job.github_job_id));
+      if (current) Object.assign(current, { status: "queued", conclusion: null, stage: "queued", started_at: null, completed_at: null });
       return [];
     }
     if (text.startsWith("INSERT INTO dashboard_runs")) {
+      const attemptQualified = text.includes("run_attempt");
       const key = `${values[0]}:${values[2]}`;
-      const incoming = { organization_id: values[0], repository_id: values[1], id: `run-${values[2]}`, github_run_id: values[2], run_attempt: text.includes("run_attempt") ? Number(values[3]) : 1, status: values[9], conclusion: values[10], queued_at: values[11], started_at: values[12], completed_at: values[13] };
+      const runAttempt = attemptQualified ? Number(values[3]) : 1;
+      const incoming = {
+        organization_id: values[0],
+        repository_id: values[1],
+        id: `run-${values[2]}`,
+        github_run_id: values[2],
+        run_attempt: runAttempt,
+        status: values[attemptQualified ? 10 : 9],
+        conclusion: values[attemptQualified ? 11 : 10],
+        queued_at: values[attemptQualified ? 12 : 11],
+        started_at: values[attemptQualified ? 13 : 12],
+        completed_at: values[attemptQualified ? 14 : 13],
+      };
       const current = runs.get(key);
       if (!current) runs.set(key, incoming);
-      else {
-        if (current.status !== "completed" && (incoming.status === "completed" || (current.status === "queued" && incoming.status === "in_progress"))) current.status = incoming.status;
+      else if (runAttempt > Number(current.run_attempt)) {
+        Object.assign(current, incoming);
+      } else if (runAttempt === Number(current.run_attempt)) {
+        const wasTerminal = current.status === "completed";
+        if (!wasTerminal && (incoming.status === "completed" || current.status === "queued" && incoming.status === "in_progress")) current.status = incoming.status;
         current.conclusion ??= incoming.conclusion;
         current.queued_at = [current.queued_at, incoming.queued_at].sort()[0];
         current.started_at = current.started_at && incoming.started_at ? [current.started_at, incoming.started_at].sort()[0] : current.started_at ?? incoming.started_at;
-        current.completed_at ??= incoming.completed_at;
+        if (!wasTerminal && (!current.completed_at || incoming.completed_at && String(incoming.completed_at) > String(current.completed_at))) current.completed_at = incoming.completed_at;
       }
       return [runs.get(key)!];
     }
@@ -49,13 +67,33 @@ function makeStatefulSql() {
       return [];
     }
     if (text.startsWith("INSERT INTO dashboard_jobs")) {
-      const key = `${values[0]}:${values[2]}`;
-      const runAttempt = text.includes("run_attempt") ? Number(values[2]) : 1;
-      const incoming = { organization_id: values[0], run_id: values[1], id: `job-${values[2]}`, github_job_id: values[2], run_attempt: runAttempt, name: values[3], status: values[4], conclusion: values[5], stage: values[6], runner_name: values[7], requested_labels: values[8], queued_at: values[9], started_at: values[10], completed_at: values[11] };
+      const attemptQualified = text.includes("run_attempt");
+      const jobIdIndex = attemptQualified ? 3 : 2;
+      const statusIndex = attemptQualified ? 5 : 4;
+      const key = `${values[0]}:${values[jobIdIndex]}`;
+      const runAttempt = attemptQualified ? Number(values[2]) : 1;
+      const incoming = {
+        organization_id: values[0],
+        run_id: values[1],
+        id: `job-${values[jobIdIndex]}`,
+        github_job_id: values[jobIdIndex],
+        run_attempt: runAttempt,
+        name: values[attemptQualified ? 4 : 3],
+        status: values[statusIndex],
+        conclusion: values[attemptQualified ? 6 : 5],
+        stage: values[attemptQualified ? 7 : 6],
+        runner_name: values[attemptQualified ? 8 : 7],
+        requested_labels: values[attemptQualified ? 9 : 8],
+        queued_at: values[attemptQualified ? 10 : 9],
+        started_at: values[attemptQualified ? 11 : 10],
+        completed_at: values[attemptQualified ? 12 : 11],
+      };
       const current = jobs.get(key);
       if (!current) jobs.set(key, incoming);
-      else {
-        if (current.status !== "completed" && (incoming.status === "completed" || (current.status === "queued" && incoming.status === "in_progress"))) current.status = incoming.status;
+      else if (runAttempt > Number(current.run_attempt)) {
+        Object.assign(current, incoming);
+      } else if (runAttempt === Number(current.run_attempt)) {
+        if (current.status !== "completed" && (incoming.status === "completed" || current.status === "queued" && incoming.status === "in_progress")) current.status = incoming.status;
         current.conclusion ??= incoming.conclusion;
         current.runner_name = incoming.runner_name ?? current.runner_name;
         current.queued_at = [current.queued_at, incoming.queued_at].sort()[0];

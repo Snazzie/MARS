@@ -91,6 +91,7 @@ test("completed log backfill failure does not abort authoritative status discove
 test("pairs rerun attempts during repository discovery", async () => {
   const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
   const requests: string[] = [];
+  const persistedRuns: Array<{ runId: number; runAttempt: number; status: string }> = [];
   const persistedJobs: Array<{ runAttempt: number; status: string; githubJobId: number }> = [];
   const execute = async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join(" ");
@@ -101,6 +102,7 @@ test("pairs rerun attempts during repository discovery", async () => {
       const githubRunId = Number(values[2]);
       const runAttempt = attemptQualified ? Number(values[3]) : 1;
       const status = String(values[attemptQualified ? 10 : 9]);
+      persistedRuns.push({ runId: githubRunId, runAttempt, status });
       return [{ id: `run-${githubRunId}`, status, run_attempt: runAttempt }];
     }
     if (query.startsWith("INSERT INTO dashboard_jobs")) {
@@ -136,6 +138,7 @@ test("pairs rerun attempts during repository discovery", async () => {
   const report = await discoverAvailableRepositoryJobs({ db, installationToken: async () => "token", githubFetchForInstallation: () => githubFetch });
 
   expect(report).toMatchObject({ repositories: 1, discovered: 1, updated: 1, failed: 0 });
+  expect(persistedRuns).toContainEqual({ runId: 32564909816, runAttempt: 2, status: "queued" });
   expect(persistedJobs).toContainEqual({ githubJobId: 97018978327, runAttempt: 2, status: "queued" });
   expect(requests.some((url) => url === "https://api.github.com/repos/acme/repo/actions/runs/32564909816/attempts/2/jobs?per_page=100&page=1")).toBe(true);
   expect(requests.some((url) => url.includes("/actions/runs/32564909816/jobs?filter=latest"))).toBe(false);
