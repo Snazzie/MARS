@@ -1,6 +1,6 @@
 import type { DatabaseClient } from "@whitesmith/db";
 import { reserveRoutingSlot } from "@whitesmith/db";
-import { PoolResources as PoolResourcesSchema, RuntimeDriverName, type RuntimeDriverName as RuntimeDriverNameValue, type RunnerJitConfig, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
+import { PoolResources as PoolResourcesSchema, RuntimeDriverName, type PoolResources as PoolResourcesValue, type RuntimeDriverName as RuntimeDriverNameValue, type RunnerJitConfig, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { dispatchLeaseBootstrap } from "./lease-dispatch.ts";
@@ -88,9 +88,8 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
 
   const organizationByJob = new Map<number, string>();
   const githubByInstallation = new Map<number, GithubJobsClient>();
-  const workerByPool = new Map<string, { workerId: string; encryptionPublicKey: string; imageDigest: string; guestPlatform: string; driver: RuntimeDriverNameValue; resources: ReturnType<typeof PoolResourcesSchema.parse> }>();
-
-  const candidates = candidateRows.filter((row) => !deps.workerConnected || deps.workerConnected(String(row.workerId))).map((row) => {
+  const workerByPool = new Map<string, { workerId: string; encryptionPublicKey: string; imageDigest: string; guestPlatform: string; driver: RuntimeDriverNameValue; resources: PoolResourcesValue }>();
+  const sqlCandidates = candidateRows.map((row) => {
     const resources = PoolResourcesSchema.parse(jsonValue(row.resources));
     const poolId = String(row.poolId);
     const workerId = String(row.workerId);
@@ -102,8 +101,20 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       pool: { id: poolId, enabled: Boolean(row.enabled), platform: String(row.platform), driver: String(row.driver), resources, concurrency, active: Number(row.active ?? 0), labels: stringArray(row.labels), triggerLabel: row.triggerLabel ? String(row.triggerLabel) : null },
     };
   });
-  console.log(`Routing candidates=${candidates.length} queued=${queuedRows.length}`);
-  for (const candidate of candidates) console.log(`Routing candidate ${candidate.pool.id}: ${reason({ ...candidate, requestedLabels: queuedRows[0] ? stringArray(queuedRows[0].labels) : [] })}`);
+  const connectedCandidates = sqlCandidates.filter((candidate) => !deps.workerConnected || deps.workerConnected(candidate.worker.id));
+  const candidates = connectedCandidates;
+  const reasons = new Map<string, number>();
+  const schedulerAdmissible = new Set<string>();
+  for (const candidate of sqlCandidates) {
+    const connected = !deps.workerConnected || deps.workerConnected(candidate.worker.id);
+    for (const queued of queuedRows) {
+      const requestedLabels = stringArray(queued.labels);
+      const routingReason = connected ? reason({ ...candidate, requestedLabels }) : "worker_offline";
+      reasons.set(routingReason, (reasons.get(routingReason) ?? 0) + 1);
+      if (routingReason === "admissible") schedulerAdmissible.add(`${candidate.pool.id}:${candidate.worker.id}`);
+    }
+  }
+  console.log(`Routing summary ${JSON.stringify({ queued: queuedRows.length, sqlEligible: sqlCandidates.length, connected: connectedCandidates.length, schedulerAdmissible: schedulerAdmissible.size, reasons: Object.fromEntries(reasons) })}`);
 
   return reconcileQueuedJobs({
     queued: queuedRows.map((row) => {

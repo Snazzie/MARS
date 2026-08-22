@@ -32,6 +32,7 @@ const launch = async () => {
       void launch();
       return;
     }
+    console.error(`Control-plane child exited unexpectedly (code=${exitCode}). Recover with: bun run dev -- --kill`);
     process.exit(exitCode);
   });
 };
