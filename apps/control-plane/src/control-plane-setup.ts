@@ -46,10 +46,10 @@ async function readConfig(db: DashboardDb): Promise<ConfigRow | null> {
   const rows = await db<ConfigRow[]>`select public_base_url as "publicBaseUrl", setup_completed_at as "setupCompletedAt" from control_plane_config where singleton=true`;
   return rows[0] ?? null;
 }
-
 export async function initializeControlPlaneSetup(db: DashboardDb, dataRoot: string): Promise<{ setup: ControlPlaneSetup; masterKey: string }> {
   await mkdir(dataRoot, { recursive: true, mode: 0o700 }); await chmod(dataRoot, 0o700);
-  const masterKey = await loadOrCreateMasterKey(dataRoot);
+  const masterKey = Bun.env.APP_MASTER_KEY?.trim() ?? await loadOrCreateMasterKey(dataRoot);
+  if (!validKey(masterKey)) throw new Error("APP_MASTER_KEY must be base64-encoded 32 bytes");
   let config = await readConfig(db);
   if (!config) { await db`insert into control_plane_config (singleton) values (true) on conflict (singleton) do nothing`; config = await readConfig(db); }
   const setup: ControlPlaneSetup = {

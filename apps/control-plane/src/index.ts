@@ -95,6 +95,7 @@ if (production) {
   }
 }
 const db = createDb(env.DATABASE); await migrateDatabase(db); await ensureDefaultPools(db, env.DEFAULT_IMAGES);
+configureRunLifecycle(db);
 const initialized = await initializeControlPlaneSetup(db, dataRoot);
 const secretBox = new SecretBox(initialized.masterKey);
 const json = (data: unknown, status=200) => Response.json(data,{status,headers:{"cache-control":"no-store"}});
