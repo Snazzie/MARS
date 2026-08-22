@@ -2,7 +2,7 @@ services:
   postgres:
     container_name: whitesmith-postgres-local
     image: postgres:17-alpine
-    restart: unless-stopped
+    restart: always
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-whitesmith}
       POSTGRES_USER: ${POSTGRES_USER:-whitesmith}
