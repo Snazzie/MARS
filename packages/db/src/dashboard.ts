@@ -1,5 +1,5 @@
 import type { DatabaseClient } from "./index.ts";
-import { CapacitySnapshot, ConnectionState, ConfigurationState, PoolSummary, RuntimeDriverName, RuntimePlatform, WorkerDoctor, WorkerLimits, WorkerState, GuestPlatform, WorkerCacheSummary } from "@whitesmith/contracts";
+import { CapacitySnapshot, ConnectionState, ConfigurationState, PoolSummary, RuntimeDriverName, RuntimePlatform, WorkerDoctor, WorkerLimits, WorkerState, GuestPlatform, WorkerCacheSummary, WorkerHealth } from "@whitesmith/contracts";
 import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, OverviewTimeseriesPoint, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail, OrganizationSettings } from "@whitesmith/contracts";
 import { jsonParameter } from "./json.ts";
 export type DashboardDb = DatabaseClient;
@@ -323,6 +323,137 @@ function workerCache(row: Record<string, unknown>): WorkerCacheSummary {
     error: row.cacheError == null ? null : String(row.cacheError),
   });
 }
+
+function healthDecimal(value: unknown, fallback = "0"): string {
+  if (typeof value === "bigint" && value >= 0n) return String(value);
+  if (typeof value === "string" && /^(?:0|[1-9]\d*)$/.test(value)) return value;
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return String(value);
+  return fallback;
+}
+function addHealthDecimals(values: unknown[]): string {
+  return values.reduce((total, value) => total + BigInt(healthDecimal(value)), 0n).toString();
+}
+function healthNumber(value: unknown, fallback = 0): number {
+  const candidate = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : NaN;
+  return Number.isSafeInteger(candidate) || (Number.isFinite(candidate) && candidate >= 0) ? candidate : fallback;
+}
+function healthAge(value: unknown, startedAt: string | null, observedAt: string | null): number | null {
+  if (value !== null && value !== undefined) return Math.max(0, Math.floor(healthNumber(value, 0)));
+  if (!startedAt || !observedAt) return null;
+  const age = (Date.parse(observedAt) - Date.parse(startedAt)) / 1000;
+  return Number.isFinite(age) ? Math.max(0, Math.floor(age)) : null;
+}
+function healthCapacitySource(value: unknown): Record<string, unknown> {
+  const parsed = jsonValue(value);
+  const wrapper = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+  const nested = wrapper.doctor && typeof wrapper.doctor === "object" ? wrapper.doctor as Record<string, unknown> : wrapper;
+  return nested.capacity && typeof nested.capacity === "object" ? nested.capacity as Record<string, unknown> : {};
+}
+function healthCapacityMetric(source: Record<string, unknown>, name: string, actualKey: string, freeKey: string, decimal = false) {
+  const raw = source[name];
+  const object = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  if (decimal) {
+    const actual = healthDecimal(object.actual ?? source[actualKey]);
+    const free = healthDecimal(object.free ?? source[freeKey], actual);
+    return { actual, free };
+  }
+  const actual = healthNumber(object.actual ?? source[actualKey]);
+  return { actual, free: healthNumber(object.free ?? source[freeKey], actual) };
+}
+function healthRequested(value: unknown): { vcpu: number; memoryBytes: string; storageBytes: string; concurrency: number } {
+  const parsed = jsonValue(value);
+  const request = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+  return { vcpu: healthNumber(request.vcpu), memoryBytes: healthDecimal(request.memoryBytes), storageBytes: healthDecimal(request.storageBytes), concurrency: healthNumber(request.concurrency) };
+}
+function healthJobId(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const id = healthNumber(value, -1);
+  return Number.isSafeInteger(id) && id >= 0 ? id : null;
+}
+
+export async function getWorkerHealth(db: DashboardDb, workerId: string, workerConnected: (workerId: string) => boolean): Promise<WorkerHealth | null> {
+  const [worker] = await db<Record<string, unknown>[]>`
+    SELECT w.id,w.connection_state AS "connectionState",w.last_heartbeat_at AS "lastHeartbeatAt",
+      w.doctor_observed_at AS "lastDoctorAt",w.doctor,w.desired_configuration AS "desiredConfiguration",
+      now() AS "observedAt",
+      GREATEST(0,EXTRACT(EPOCH FROM (now()-w.last_heartbeat_at)))::int AS "heartbeatAgeSeconds",
+      GREATEST(0,EXTRACT(EPOCH FROM (now()-w.doctor_observed_at)))::int AS "doctorAgeSeconds",
+      s.generation AS "cacheGeneration",s.ready AS "cacheReady",s.ttl_seconds AS "cacheTtlSeconds",
+      s.size_bytes::text AS "cacheSizeBytes",s.entry_count AS "cacheEntryCount",
+      s.observed_at AS "cacheObservedAt",s.error AS "cacheError"
+    FROM workers w
+    LEFT JOIN worker_cache_status s ON s.worker_id=w.id
+    WHERE w.id=${workerId}
+  `;
+  if (!worker) return null;
+  const observedAt = normalizeTimestamp(worker.observedAt);
+  const capacity = healthCapacitySource(worker.doctor);
+  const leases = await db<Record<string, unknown>[]>`
+    SELECT l.id AS "leaseId",l.github_job_id AS "jobId",r.full_name AS "repositoryFullName",
+      r.name AS "repositoryName",l.state,
+      COALESCE(l.updated_at,l.created_at) AS "startedAt",
+      GREATEST(0,EXTRACT(EPOCH FROM (now()-COALESCE(l.updated_at,l.created_at))))::int AS "ageSeconds",
+      l.requested
+    FROM runner_leases l
+    LEFT JOIN dashboard_jobs j ON j.github_job_id=l.github_job_id
+    LEFT JOIN dashboard_runs dr ON dr.id=j.run_id
+    LEFT JOIN dashboard_repositories r ON r.id=dr.repository_id
+    WHERE l.worker_id=${workerId}
+      AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')
+    ORDER BY l.created_at,l.id
+  `;
+  const requests = leases.map((row) => healthRequested(row.requested));
+  const actualCpu = healthCapacityMetric(capacity, "vcpu", "actualVcpu", "actualVcpu").actual;
+  const freeCpu = healthCapacityMetric(capacity, "vcpu", "freeVcpu", "freeVcpu").free;
+  const actualMemory = healthCapacityMetric(capacity, "memoryBytes", "actualMemoryBytes", "actualMemoryBytes", true);
+  const freeMemory = healthCapacityMetric(capacity, "memoryBytes", "freeMemoryBytes", "freeMemoryBytes", true);
+  const actualStorage = healthCapacityMetric(capacity, "storageBytes", "actualStorageBytes", "actualStorageBytes", true);
+  const freeStorage = healthCapacityMetric(capacity, "storageBytes", "freeStorageBytes", "freeStorageBytes", true);
+  const actualPods = healthCapacityMetric(capacity, "pods", "actualPods", "actualPods").actual;
+  const freePods = healthCapacityMetric(capacity, "pods", "freePods", "freePods").free;
+  const desired = jsonValue(worker.desiredConfiguration);
+  const desiredObject = desired && typeof desired === "object" ? desired as Record<string, unknown> : {};
+  const desiredCache = desiredObject.cache && typeof desiredObject.cache === "object" ? desiredObject.cache as Record<string, unknown> : {};
+  return WorkerHealth.parse({
+    observedAt,
+    connection: {
+      state: workerConnected(workerId) ? "online" : "offline",
+      lastHeartbeatAt: normalizeTimestamp(worker.lastHeartbeatAt),
+      lastDoctorAt: normalizeTimestamp(worker.lastDoctorAt),
+      heartbeatAgeSeconds: healthAge(worker.heartbeatAgeSeconds, normalizeTimestamp(worker.lastHeartbeatAt), observedAt),
+      doctorAgeSeconds: healthAge(worker.doctorAgeSeconds, normalizeTimestamp(worker.lastDoctorAt), observedAt),
+    },
+    usage: {
+      cpu: { actual: actualCpu, reserved: requests.reduce((sum, request) => sum + request.vcpu, 0), free: freeCpu },
+      memoryBytes: { actual: actualMemory.actual, reserved: addHealthDecimals(requests.map((request) => request.memoryBytes)), free: freeMemory.free },
+      storageBytes: { actual: actualStorage.actual, reserved: addHealthDecimals(requests.map((request) => request.storageBytes)), free: freeStorage.free },
+      pods: { actual: actualPods, reserved: requests.reduce((sum, request) => sum + request.concurrency, 0), free: freePods },
+    },
+    cache: {
+      desiredTtlSeconds: healthNumber(desiredCache.ttlSeconds, 172800),
+      effectiveTtlSeconds: worker.cacheTtlSeconds == null ? null : healthNumber(worker.cacheTtlSeconds),
+      ready: worker.cacheReady === true,
+      generation: typeof worker.cacheGeneration === "string" ? worker.cacheGeneration : null,
+      sizeBytes: healthDecimal(worker.cacheSizeBytes),
+      entryCount: healthNumber(worker.cacheEntryCount),
+      observedAt: normalizeTimestamp(worker.cacheObservedAt),
+      error: worker.cacheError == null ? null : String(worker.cacheError),
+    },
+    jobs: leases.map((row, index) => {
+      const startedAt = normalizeTimestamp(row.startedAt);
+      return {
+        jobId: healthJobId(row.jobId),
+        repositoryFullName: row.repositoryFullName == null ? null : String(row.repositoryFullName),
+        repositoryName: row.repositoryName == null ? null : String(row.repositoryName),
+        leaseId: String(row.leaseId),
+        state: String(row.state),
+        startedAt,
+        ageSeconds: healthAge(row.ageSeconds, startedAt, observedAt),
+        requested: requests[index]!,
+      };
+    }),
+  });
+}
 function normalizeWorker(row: Record<string, unknown>, workerConnected?: (workerId: string) => boolean): WorkerDetail {
   const platform = RuntimePlatform.parse(row.platform);
   const driver = RuntimeDriverName.parse(platform === "linux-x64" ? "linux-libvirt-vm" : platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm");
@@ -368,7 +499,7 @@ export async function listWorkers(db: DashboardDb, organizationId: string, limit
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }
 export async function listAllWorkers(db: DashboardDb, userId: string, limit = 50, includeInactive = false, workerConnected?: (workerId: string) => boolean): Promise<CursorPage<WorkerDetail>> {
-  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.desired_configuration AS "desiredConfiguration",w.preserve_leases AS "preserveLeases",s.ttl_seconds AS "cacheTtlSeconds",s.ready AS "cacheReady",s.proxy_origin AS "cacheProxyOrigin",s.cache_base_url AS "cacheBaseUrl",s.size_bytes AS "cacheSizeBytes",s.entry_count AS "cacheEntryCount",s.observed_at AS "cacheObservedAt",s.error AS "cacheError",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w LEFT JOIN worker_cache_status s ON s.worker_id=w.id WHERE (${includeInactive} OR w.admission_state <> 'revoked') ORDER BY w.name LIMIT ${limit + 1}`;
+  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.desired_configuration AS "desiredConfiguration",w.preserve_leases AS "preserveLeases",s.ttl_seconds AS "cacheTtlSeconds",s.ready AS "cacheReady",s.proxy_origin AS "cacheProxyOrigin",s.cache_base_url AS "cacheBaseUrl",s.size_bytes AS "cacheSizeBytes",s.entry_count AS "cacheEntryCount",s.observed_at AS "cacheObservedAt",s.error AS "cacheError",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w LEFT JOIN worker_cache_status s ON s.worker_id=w.id WHERE (${includeInactive} OR w.admission_state NOT IN ('rejected','revoked')) ORDER BY w.name LIMIT ${limit + 1}`;
   const items = rows.slice(0, limit).map(row => normalizeWorker(row, workerConnected));
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }

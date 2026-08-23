@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { LogChunk, OverviewDto, RepositorySummary, RunDetail, RunSummary, WorkerDetail } from "@whitesmith/contracts";
-import { getOverview, getOrganizationSettings, getRunDetail, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRepositories, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks, queueRepositoryDiscoveryRecheck } from "./dashboard.ts";
+import { LogChunk, OverviewDto, RepositorySummary, RunDetail, RunSummary, WorkerDetail, WorkerHealth } from "@whitesmith/contracts";
+import { getOverview, getOrganizationSettings, getRunDetail, getWorkerHealth, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRepositories, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks, queueRepositoryDiscoveryRecheck } from "./dashboard.ts";
 
 test("overview counts only GitHub job status and runtime leases", async () => {
   const queries: string[] = [];
@@ -66,6 +66,132 @@ test("worker listings expose desired and applied configuration metadata", async 
     expect(query).toContain('configuration_applied_at AS "configurationAppliedAt"');
   }
 });
+
+test("worker health projects complete cache and active lease telemetry", async () => {
+  const workerId = "86afd915-add3-407c-a6c1-1b46803ef713";
+  const cacheGeneration = "11111111-1111-4111-8111-111111111111";
+  const leases = [
+    { leaseId: "22222222-2222-4222-8222-222222222222", jobId: 42, repositoryFullName: "acme/project", repositoryName: "project", state: "busy", startedAt: new Date("2026-08-23T11:59:00.000Z"), ageSeconds: 60, requested: { vcpu: 2, memoryBytes: "100000000000000000000", storageBytes: "200000000000000000000", concurrency: 1 } },
+    { leaseId: "33333333-3333-4333-8333-333333333333", jobId: null, repositoryFullName: null, repositoryName: null, state: "online", startedAt: null, ageSeconds: null, requested: { vcpu: 1, memoryBytes: "300", storageBytes: "400", concurrency: 1 } },
+    { leaseId: "44444444-4444-4444-8444-444444444444", jobId: 43, repositoryFullName: null, repositoryName: null, state: "provisioning", startedAt: new Date("2026-08-23T11:58:00.000Z"), ageSeconds: 120, requested: { vcpu: 1, memoryBytes: "500", storageBytes: "600", concurrency: 1 } },
+    { leaseId: "55555555-5555-4555-8555-555555555555", jobId: 44, repositoryFullName: "acme/other", repositoryName: "other", state: "reserved", startedAt: new Date("2026-08-23T11:57:00.000Z"), ageSeconds: 180, requested: { vcpu: 0.5, memoryBytes: "700", storageBytes: "800", concurrency: 1 } },
+  ];
+  const db = workerHealthDb({
+    worker: {
+      heartbeatAgeSeconds: 1,
+      doctorAgeSeconds: 2,
+      connectionState: "offline",
+      lastHeartbeatAt: new Date("2026-08-23T11:59:59.000Z"),
+      lastDoctorAt: new Date("2026-08-23T11:59:58.000Z"),
+      observedAt: new Date("2026-08-23T12:00:00.000Z"),
+      desiredConfiguration: { cache: { ttlSeconds: 3600 } },
+      doctor: { capacity: { actualVcpu: 16, freeVcpu: 10, actualMemoryBytes: "100000000000000000000", freeMemoryBytes: "99999999999999999900", actualStorageBytes: "300000000000000000000", freeStorageBytes: "299999999999999999000", actualPods: 8, freePods: 4 } },
+      cacheGeneration,
+      cacheReady: true,
+      cacheTtlSeconds: 1800,
+      cacheSizeBytes: "100000000000000000000",
+      cacheEntryCount: 12,
+      cacheObservedAt: new Date("2026-08-23T11:59:50.000Z"),
+      cacheError: null,
+    },
+    leases,
+  });
+
+  const health = await getWorkerHealth(db, workerId, () => true);
+
+  expect(health).not.toBeNull();
+  expect(() => WorkerHealth.parse(health)).not.toThrow();
+  expect(health).toMatchObject({
+    observedAt: "2026-08-23T12:00:00.000Z",
+    connection: { state: "online", heartbeatAgeSeconds: 1, doctorAgeSeconds: 2 },
+    usage: {
+      cpu: { actual: 16, reserved: 4.5, free: 10 },
+      memoryBytes: { actual: "100000000000000000000", reserved: "100000000000000001500", free: "99999999999999999900" },
+      storageBytes: { actual: "300000000000000000000", reserved: "200000000000000001800", free: "299999999999999999000" },
+    },
+    cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: 1800, generation: cacheGeneration, sizeBytes: "100000000000000000000", entryCount: 12 },
+  });
+  expect(health?.jobs).toEqual(expect.arrayContaining([
+    expect.objectContaining({ jobId: 42, repositoryFullName: "acme/project", repositoryName: "project", ageSeconds: 60 }),
+    expect.objectContaining({ jobId: null, repositoryFullName: null, repositoryName: null, ageSeconds: null }),
+  ]));
+  expect(health?.jobs).toHaveLength(4);
+});
+
+test("worker health connection state uses the live connection callback", async () => {
+  const worker = minimalWorkerHealthRow({ connectionState: "online" });
+  const db = workerHealthDb({ worker, leases: [] });
+  expect((await getWorkerHealth(db, worker.id, () => false))?.connection.state).toBe("offline");
+  expect((await getWorkerHealth(db, worker.id, () => true))?.connection.state).toBe("online");
+});
+
+test("worker health excludes terminal leases and clamps negative ages", async () => {
+  const worker = minimalWorkerHealthRow();
+  const leases = [{ leaseId: "22222222-2222-4222-8222-222222222222", jobId: null, repositoryFullName: null, repositoryName: null, state: "busy", startedAt: new Date("2026-08-23T12:01:00.000Z"), ageSeconds: 0, requested: { vcpu: 1, memoryBytes: "1", storageBytes: "1", concurrency: 1 } }];
+  const db = workerHealthDb({ worker, leases });
+  const health = await getWorkerHealth(db, worker.id, () => true);
+  expect(health?.jobs).toHaveLength(1);
+  expect(health?.jobs[0]?.ageSeconds).toBe(0);
+  expect(db.queries.some((query) => query.includes("l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')"))).toBe(true);
+});
+
+test("worker health returns null for a missing worker", async () => {
+  const db = workerHealthDb({ worker: null, leases: [] });
+  expect(await getWorkerHealth(db, "86afd915-add3-407c-a6c1-1b46803ef713", () => true)).toBeNull();
+});
+
+test("worker health preserves exact large decimal byte strings", async () => {
+  const worker = minimalWorkerHealthRow({
+    doctor: { capacity: { actualVcpu: 2, freeVcpu: 1, actualMemoryBytes: "900719925474099300000", freeMemoryBytes: "900719925474099299999", actualStorageBytes: "900719925474099400000", freeStorageBytes: "900719925474099399999", actualPods: 2, freePods: 1 } },
+  });
+  const db = workerHealthDb({
+    worker,
+    leases: [{ leaseId: "22222222-2222-4222-8222-222222222222", jobId: null, repositoryFullName: null, repositoryName: null, state: "busy", startedAt: null, ageSeconds: null, requested: { vcpu: 1, memoryBytes: "900719925474099200000", storageBytes: "900719925474099100000", concurrency: 1 } }],
+  });
+  const health = await getWorkerHealth(db, worker.id, () => true);
+  expect(health?.usage.memoryBytes).toEqual({ actual: "900719925474099300000", reserved: "900719925474099200000", free: "900719925474099299999" });
+  expect(health?.jobs[0]?.requested.memoryBytes).toBe("900719925474099200000");
+});
+
+test("worker health tolerates missing cache telemetry while retaining desired TTL", async () => {
+  const db = workerHealthDb({ worker: minimalWorkerHealthRow({ desiredConfiguration: { cache: { ttlSeconds: 7200 } } }), leases: [] });
+  const health = await getWorkerHealth(db, "86afd915-add3-407c-a6c1-1b46803ef713", () => true);
+  expect(health?.cache).toEqual({ desiredTtlSeconds: 7200, effectiveTtlSeconds: null, ready: false, generation: null, sizeBytes: "0", entryCount: 0, observedAt: null, error: null });
+});
+
+function minimalWorkerHealthRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "86afd915-add3-407c-a6c1-1b46803ef713",
+    connectionState: "offline",
+    heartbeatAgeSeconds: null,
+    doctorAgeSeconds: null,
+    lastHeartbeatAt: new Date("2026-08-23T12:00:00.000Z"),
+    lastDoctorAt: null,
+    observedAt: new Date("2026-08-23T12:00:00.000Z"),
+    desiredConfiguration: { cache: { ttlSeconds: 172800 } },
+    doctor: { capacity: { actualVcpu: 1, freeVcpu: 1, actualMemoryBytes: "1", freeMemoryBytes: "1", actualStorageBytes: "1", freeStorageBytes: "1", actualPods: 1, freePods: 1 } },
+    cacheGeneration: null,
+    cacheReady: false,
+    cacheTtlSeconds: null,
+    cacheSizeBytes: null,
+    cacheEntryCount: null,
+    cacheObservedAt: null,
+    cacheError: null,
+    ...overrides,
+  };
+}
+
+function workerHealthDb(options: { worker: Record<string, unknown> | null; leases: Record<string, unknown>[] }) {
+  const queries: string[] = [];
+  const db = Object.assign(async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ");
+    queries.push(query);
+    if (query.includes("FROM workers w")) return options.worker ? [options.worker] : [];
+    if (query.includes("FROM runner_leases l")) return options.leases;
+    return [];
+  }, { queries });
+  return db as never;
+}
 
 test("pool listing normalizes PostgreSQL JSONB resources and labels", async () => {
   const db = (async () => [{ id: "pool-1", organizationId: "org-1", workerId: "worker-1", workerName: "worker", name: "default", platform: "linux-x64", driver: "linux-libvirt-vm", imageDigest: "ubuntu@sha256:" + "a".repeat(64), resources: "{\"vcpu\":2,\"memoryBytes\":4294967296,\"storageBytes\":10737418240,\"concurrency\":1}", labels: "[\"self-hosted\",\"linux\",\"x64\",\"whitesmith-default\"]", triggerLabel: "whitesmith-default", enabled: true, active: "0" }]) as never;
@@ -245,6 +371,13 @@ test("log listings normalize PostgreSQL bigint sequences", async () => {
 test("organization settings convert PostgreSQL numeric values to numbers", async () => {
   const db = (async () => [{ organizationId: "org-1", maxVcpuPerPod: "4", maxMemoryBytesPerPod: "8589934592", maxStorageBytesPerPod: "107374182400", maxConcurrentPods: "2" }]) as never;
   expect(await getOrganizationSettings(db, "org-1")).toEqual({ organizationId: "org-1", maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8589934592, maxStorageBytesPerPod: 107374182400, maxConcurrentPods: 2 });
+});
+
+test("all-workspace worker listing hides rejected workers by default", async () => {
+  let query = "";
+  const db = (async (strings: TemplateStringsArray) => { query = strings.join(" "); return []; }) as never;
+  await listAllWorkers(db, "user-1");
+  expect(query).toContain("w.admission_state NOT IN ('rejected','revoked')");
 });
 
 test("all-workspace worker listing includes workers across organizations", async () => {
