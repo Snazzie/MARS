@@ -81,6 +81,67 @@ export const CapacitySnapshot = dto(strict({ vcpu: strict({ actual: positiveSafe
 export type CapacitySnapshot = z.infer<typeof CapacitySnapshot>;
 export const WorkerCacheSummary = dto(strict({ desiredTtlSeconds: positiveSafe, effectiveTtlSeconds: positiveSafe.nullable(), ready: z.boolean(), proxyOrigin: z.string().url().nullable(), cacheBaseUrl: z.string().url().nullable(), sizeBytes: z.string().regex(/^(?:0|[1-9]\d*)$/), entryCount: nonnegativeSafe, observedAt: timestamp.nullable(), error: z.string().max(1000).nullable() }));
 export type WorkerCacheSummary = z.infer<typeof WorkerCacheSummary>;
+const nonnegativeSafeNumber = z.number().nonnegative().safe();
+const decimalBytes = z.string().regex(/^(?:0|[1-9]\d*)$/);
+const workerHealthMetric = strict({ actual: nonnegativeSafeNumber, reserved: nonnegativeSafeNumber, free: nonnegativeSafeNumber });
+
+export const WorkerHealthConnection = dto(strict({
+  state: z.enum(["offline", "online"]),
+  lastHeartbeatAt: timestamp.nullable(),
+  lastDoctorAt: timestamp.nullable(),
+  heartbeatAgeSeconds: nonnegativeSafe.nullable(),
+  doctorAgeSeconds: nonnegativeSafe.nullable(),
+}));
+export type WorkerHealthConnection = z.infer<typeof WorkerHealthConnection>;
+
+export const WorkerHealthUsage = dto(strict({
+  cpu: workerHealthMetric,
+  memoryBytes: strict({ actual: decimalBytes, reserved: decimalBytes, free: decimalBytes }),
+  storageBytes: strict({ actual: decimalBytes, reserved: decimalBytes, free: decimalBytes }),
+  pods: workerHealthMetric,
+}));
+export type WorkerHealthUsage = z.infer<typeof WorkerHealthUsage>;
+
+export const WorkerHealthCache = dto(strict({
+  desiredTtlSeconds: positiveSafe,
+  effectiveTtlSeconds: positiveSafe.nullable(),
+  ready: z.boolean(),
+  generation: z.string().uuid().nullable(),
+  sizeBytes: decimalBytes,
+  entryCount: nonnegativeSafe,
+  observedAt: timestamp.nullable(),
+  error: z.string().max(1000).nullable(),
+}));
+export type WorkerHealthCache = z.infer<typeof WorkerHealthCache>;
+
+export const WorkerHealthJobRequest = strict({
+  vcpu: nonnegativeSafeNumber,
+  memoryBytes: decimalBytes,
+  storageBytes: decimalBytes,
+  concurrency: nonnegativeSafeNumber,
+});
+export type WorkerHealthJobRequest = z.infer<typeof WorkerHealthJobRequest>;
+
+export const WorkerHealthJob = dto(strict({
+  jobId: nonnegativeSafe.nullable(),
+  repositoryFullName: z.string().min(1).nullable(),
+  repositoryName: z.string().min(1).nullable(),
+  leaseId: z.string().uuid(),
+  state: z.string().min(1),
+  startedAt: timestamp.nullable(),
+  ageSeconds: nonnegativeSafe.nullable(),
+  requested: WorkerHealthJobRequest,
+}));
+export type WorkerHealthJob = z.infer<typeof WorkerHealthJob>;
+
+export const WorkerHealth = dto(strict({
+  observedAt: timestamp.nullable(),
+  connection: WorkerHealthConnection,
+  usage: WorkerHealthUsage,
+  cache: WorkerHealthCache,
+  jobs: z.array(WorkerHealthJob),
+}));
+export type WorkerHealth = z.infer<typeof WorkerHealth>;
 export const DashboardWorkerCacheEntry = dto(strict({ entryId: id, githubRepositoryId: z.string().regex(/^(?:0|[1-9]\d*)$/), repositoryFullName: z.string().min(1).nullable(), repositoryUrl: z.string().url().nullable(), cacheKeyPreview: z.string().max(160), cacheKeyHash: z.string().regex(/^[0-9a-f]{64}$/), scopePreview: z.string().max(160), scopeHash: z.string().regex(/^[0-9a-f]{64}$/), versionHash: z.string().regex(/^[0-9a-f]{64}$/), sizeBytes: z.string().regex(/^(?:0|[1-9]\d*)$/), createdAt: timestamp, lastAccessedAt: timestamp, expiresAt: timestamp }));
 export type DashboardWorkerCacheEntry = z.infer<typeof DashboardWorkerCacheEntry>;
 export const DashboardWorkerCachePage = dto(strict({ items: z.array(DashboardWorkerCacheEntry), nextCursor: cursor.nullable() }));
