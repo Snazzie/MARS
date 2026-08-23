@@ -220,3 +220,17 @@ test("global admins can list the control-plane pool without selecting a workspac
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({ items: [{ name: "default", workerName: "Shared fleet" }] });
 });
+test("global admins can page worker cache inventory with an opaque cursor", async () => {
+  const db = Object.assign(async (strings: TemplateStringsArray) => {
+    if (strings.join(" ").includes("FROM worker_cache_entries")) return [{ entryId: "33333333-3333-4333-8333-333333333333", githubRepositoryId: "123", repositoryFullName: "Acme/Repo", cacheKeyPreview: "build-linux", cacheKeyHash: "a".repeat(64), scopePreview: "refs/heads/main", scopeHash: "b".repeat(64), versionHash: "c".repeat(64), sizeBytes: "10", createdAt: "2026-08-23T12:00:00.000Z", lastAccessedAt: "2026-08-23T12:01:00.000Z", expiresAt: "2026-08-25T12:01:00.000Z" }];
+    return [];
+  }, {}) as never;
+  const response = await appFor(admin, db).request("/api/workers/11111111-1111-4111-8111-111111111111/cache?limit=1&query=BUILD", { headers: sessionHeaders });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ items: [{ repositoryUrl: "https://github.com/Acme/Repo", githubRepositoryId: "123" }], nextCursor: null });
+});
+test("worker cache inventory rejects malformed opaque cursors", async () => {
+  const response = await appFor(admin).request("/api/workers/11111111-1111-4111-8111-111111111111/cache?cursor=%%%25", { headers: sessionHeaders });
+  expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({ code: "invalid_cache_cursor" });
+});

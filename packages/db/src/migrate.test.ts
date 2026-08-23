@@ -21,6 +21,7 @@ test("migration lineage preserves released history and converges exactly once", 
     "0003_control_plane_config",
     "0004_linux_libvirt_driver",
     "0005_worker_preserve_leases",
+    "0006_worker_action_cache",
   ]);
   expect(new Set(journal.entries.map(entry => entry.tag.slice(0, 4))).size).toBe(journal.entries.length);
   expect(new Set(journal.entries.map(entry => entry.when)).size).toBe(journal.entries.length);

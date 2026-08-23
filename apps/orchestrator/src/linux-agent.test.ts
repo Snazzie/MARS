@@ -15,24 +15,30 @@ const command: WorkerCommand = {
     appliance: { vcpu: 8, memoryBytes: 16_000, storageBytes: 64_000 },
     runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_000, maxStorageBytesPerPod: 16_000, maxConcurrentPods: 4 },
     guestPlatforms: ["linux-x64"],
+    cache: { ttlSeconds: 7200 },
     revision: "a".repeat(64),
     fingerprint: "b".repeat(64),
   },
 };
 
 describe("Linux worker.configure", () => {
-  test("applies resources and emits exact acknowledged observation", () => {
-    const resources = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 } };
-    const event = applyLinuxWorkerConfigure(command, resources);
-    expect(resources).toEqual({ appliance: { vcpu: 8, memoryBytes: 16_000, storageBytes: 64_000 }, runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_000, maxStorageBytesPerPod: 16_000, maxConcurrentPods: 4 } });
+  test("awaits the live cache TTL before emitting the acknowledged observation", async () => {
+    const resources = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }, cache: { ttlSeconds: 60 } };
+    let release!: () => void;
+    const applied = new Promise<void>((resolve) => { release = resolve; });
+    const result = applyLinuxWorkerConfigure(command, resources, { applyTtl: () => applied });
+    expect(resources.cache).toEqual({ ttlSeconds: 60 });
+    release();
+    const event = await result;
+    expect(resources).toEqual({ appliance: { vcpu: 8, memoryBytes: 16_000, storageBytes: 64_000 }, runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_000, maxStorageBytesPerPod: 16_000, maxConcurrentPods: 4 }, cache: { ttlSeconds: 7200 } });
     expect(event.type).toBe("worker.configured");
     expect(event.workerId).toBe(workerId);
-    expect(event.payload).toEqual({ commandId: command.id, workerId, revision: "a".repeat(64), observed: { appliance: resources.appliance, runtime: resources.runtime, guestPlatforms: ["linux-x64"] } });
+    expect(event.payload).toEqual({ commandId: command.id, workerId, revision: "a".repeat(64), observed: { appliance: resources.appliance, runtime: resources.runtime, guestPlatforms: ["linux-x64"], cache: resources.cache } });
   });
 
-  test("consumes only worker.configure", () => {
-    const resources = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 } };
-    expect(() => handleLinuxWorkerCommand({ ...command, type: "doctor" }, resources)).toThrow("unsupported worker command");
+  test("consumes only worker.configure", async () => {
+    const resources = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }, cache: { ttlSeconds: 60 } };
+    await expect(handleLinuxWorkerCommand({ ...command, type: "doctor" }, resources, { applyTtl: async () => {} })).rejects.toThrow("unsupported worker command");
   });
 });
 

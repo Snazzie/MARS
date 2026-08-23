@@ -13,10 +13,22 @@ services:
       WHITESMITH_CLONE_ROOT: /var/lib/whitesmith/clones
       WHITESMITH_CHANNEL_ROOT: /var/lib/whitesmith/channels
       WHITESMITH_LIBVIRT_NETWORK: ${WHITESMITH_LIBVIRT_NETWORK}
+      WHITESMITH_ACTION_CACHE_ROOT: ${WHITESMITH_ACTION_CACHE_ROOT:-/var/lib/whitesmith/action-cache}
+      WHITESMITH_CACHE_PROXY_PORT: ${WHITESMITH_CACHE_PROXY_PORT:-8788}
+      WHITESMITH_CACHE_DATA_PORT: ${WHITESMITH_CACHE_DATA_PORT:-8789}
+      WHITESMITH_CACHE_PROXY_URL: ${WHITESMITH_CACHE_PROXY_URL:-}
+      WHITESMITH_CACHE_ADVERTISE_URL: ${WHITESMITH_CACHE_ADVERTISE_URL:-}
+    ports:
+      - "${WHITESMITH_CACHE_PROXY_PORT:-8788}:${WHITESMITH_CACHE_PROXY_PORT:-8788}"
+      - "${WHITESMITH_CACHE_DATA_PORT:-8789}:${WHITESMITH_CACHE_DATA_PORT:-8789}"
     volumes:
       - /var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock
       - ${WHITESMITH_BROKER_CONFIG:?config directory required}:/var/lib/whitesmith/config
       - ${WHITESMITH_GOLDEN_ROOT:?golden directory required}:/var/lib/whitesmith/golden:ro
       - ${WHITESMITH_CLONE_ROOT:?clone directory required}:/var/lib/whitesmith/clones
       - ${WHITESMITH_CHANNEL_ROOT:?channel directory required}:/var/lib/whitesmith/channels
+      - action-cache:${WHITESMITH_ACTION_CACHE_ROOT:-/var/lib/whitesmith/action-cache}
       - ${WHITESMITH_DOMAIN_TEMPLATE:?domain template required}:/etc/whitesmith/worker-domain.xml:ro
+
+volumes:
+  action-cache:

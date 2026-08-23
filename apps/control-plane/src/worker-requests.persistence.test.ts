@@ -75,6 +75,7 @@ test("stores desired configuration and waits for acknowledgement", async () => {
     appliance: { vcpu: 4, memoryBytes: 4 * 1024 ** 3, storageBytes: 30 * 1024 ** 3 },
     runtime: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 },
     guestPlatforms: ["windows-x64" as const],
+    cache: { ttlSeconds: 3600 },
   };
   await configurePendingWorker(db, "worker", configuration, "admin");
   const update = queries.find(query => query.includes("update workers set"));
@@ -83,5 +84,6 @@ test("stores desired configuration and waits for acknowledgement", async () => {
   const updateValues = parameters[queries.indexOf(update!)];
   expect(updateValues).toContainEqual(configuration.runtime);
   expect(updateValues).toContainEqual(configuration.guestPlatforms);
+  expect(parameters.flat()).toContainEqual(expect.objectContaining({ cache: { ttlSeconds: 3600 } }));
   expect(updateValues.some(value => typeof value === "string" && (value.startsWith("{") || value.startsWith("[")))).toBe(false);
 });

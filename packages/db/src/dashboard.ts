@@ -1,5 +1,5 @@
 import type { DatabaseClient } from "./index.ts";
-import { CapacitySnapshot, ConnectionState, ConfigurationState, PoolSummary, RuntimeDriverName, RuntimePlatform, WorkerDoctor, WorkerLimits, WorkerState, GuestPlatform } from "@whitesmith/contracts";
+import { CapacitySnapshot, ConnectionState, ConfigurationState, PoolSummary, RuntimeDriverName, RuntimePlatform, WorkerDoctor, WorkerLimits, WorkerState, GuestPlatform, WorkerCacheSummary } from "@whitesmith/contracts";
 import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, OverviewTimeseriesPoint, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail, OrganizationSettings } from "@whitesmith/contracts";
 import { jsonParameter } from "./json.ts";
 export type DashboardDb = DatabaseClient;
@@ -307,6 +307,22 @@ function workerDoctor(value: unknown): WorkerDetail["doctor"] {
   const result = WorkerDoctor.safeParse(candidate);
   return result.success ? result.data : null;
 }
+function workerCache(row: Record<string, unknown>): WorkerCacheSummary {
+  const desired = jsonValue(row.desiredConfiguration);
+  const desiredObject = desired && typeof desired === "object" ? desired as Record<string, unknown> : {};
+  const cache = desiredObject.cache && typeof desiredObject.cache === "object" ? desiredObject.cache as Record<string, unknown> : {};
+  return WorkerCacheSummary.parse({
+    desiredTtlSeconds: Number(cache.ttlSeconds ?? 172800),
+    effectiveTtlSeconds: row.cacheTtlSeconds == null ? null : Number(row.cacheTtlSeconds),
+    ready: row.cacheReady === true,
+    proxyOrigin: row.cacheProxyOrigin == null ? null : String(row.cacheProxyOrigin),
+    cacheBaseUrl: row.cacheBaseUrl == null ? null : String(row.cacheBaseUrl),
+    sizeBytes: String(row.cacheSizeBytes ?? "0"),
+    entryCount: Number(row.cacheEntryCount ?? 0),
+    observedAt: row.cacheObservedAt == null ? null : normalizeTimestamp(row.cacheObservedAt),
+    error: row.cacheError == null ? null : String(row.cacheError),
+  });
+}
 function normalizeWorker(row: Record<string, unknown>, workerConnected?: (workerId: string) => boolean): WorkerDetail {
   const platform = RuntimePlatform.parse(row.platform);
   const driver = RuntimeDriverName.parse(platform === "linux-x64" ? "linux-libvirt-vm" : platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm");
@@ -342,16 +358,17 @@ function normalizeWorker(row: Record<string, unknown>, workerConnected?: (worker
     activeSandboxes: numberValue(row.activeSandboxes, 0),
     draining: row.draining === true,
     preserveLeases: row.preserveLeases === true,
+    cache: workerCache(row),
   };
   return worker;
 }
 export async function listWorkers(db: DashboardDb, organizationId: string, limit = 50, workerConnected?: (workerId: string) => boolean): Promise<CursorPage<WorkerDetail>> {
-  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.preserve_leases AS "preserveLeases",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w ORDER BY w.name LIMIT ${limit + 1}`;
+  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.desired_configuration AS "desiredConfiguration",w.preserve_leases AS "preserveLeases",s.ttl_seconds AS "cacheTtlSeconds",s.ready AS "cacheReady",s.proxy_origin AS "cacheProxyOrigin",s.cache_base_url AS "cacheBaseUrl",s.size_bytes AS "cacheSizeBytes",s.entry_count AS "cacheEntryCount",s.observed_at AS "cacheObservedAt",s.error AS "cacheError",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w LEFT JOIN worker_cache_status s ON s.worker_id=w.id ORDER BY w.name LIMIT ${limit + 1}`;
   const items = rows.slice(0, limit).map(row => normalizeWorker(row, workerConnected));
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }
 export async function listAllWorkers(db: DashboardDb, userId: string, limit = 50, includeInactive = false, workerConnected?: (workerId: string) => boolean): Promise<CursorPage<WorkerDetail>> {
-  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.preserve_leases AS "preserveLeases",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w WHERE (${includeInactive} OR w.admission_state <> 'revoked') ORDER BY w.name LIMIT ${limit + 1}`;
+  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.desired_configuration AS "desiredConfiguration",w.preserve_leases AS "preserveLeases",s.ttl_seconds AS "cacheTtlSeconds",s.ready AS "cacheReady",s.proxy_origin AS "cacheProxyOrigin",s.cache_base_url AS "cacheBaseUrl",s.size_bytes AS "cacheSizeBytes",s.entry_count AS "cacheEntryCount",s.observed_at AS "cacheObservedAt",s.error AS "cacheError",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w LEFT JOIN worker_cache_status s ON s.worker_id=w.id WHERE (${includeInactive} OR w.admission_state <> 'revoked') ORDER BY w.name LIMIT ${limit + 1}`;
   const items = rows.slice(0, limit).map(row => normalizeWorker(row, workerConnected));
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }

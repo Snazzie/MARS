@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode } from "react";
-import type { WorkerDetail } from "@whitesmith/contracts";
-import { setWorkerLeasePreservation } from "../api.ts";
+import { useInfiniteQuery } from "@tanstack/react-query";
+import type { DashboardWorkerCacheEntry, WorkerDetail } from "@whitesmith/contracts";
+import { getWorkerCache, setWorkerLeasePreservation } from "../api.ts";
 import { Button } from "@astryxdesign/core/Button";
 import { WorkerActions } from "./WorkerActions.tsx";
 import { WorkerConfigurationForm } from "./WorkerConfigurationForm.tsx";
@@ -13,6 +14,42 @@ export function workerReadinessLabel(state: WorkerDetail["configurationState"]):
 function appliedAt(value: string): string { return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(value)); }
 function telemetryAt(value: string | null): ReactNode {
   return value ? <time dateTime={value}>{appliedAt(value)}</time> : "Never";
+}
+function formatBytes(value: string | null | undefined): string {
+  if (value == null) return "Not reported";
+  try {
+    const bytes = BigInt(value);
+    const gib = 1024n ** 3n;
+    const mib = 1024n ** 2n;
+    if (bytes >= gib) return `${(Number(bytes) / Number(gib)).toFixed(1)} GiB`;
+    if (bytes >= mib) return `${Math.round(Number(bytes) / Number(mib))} MiB`;
+    return `${bytes.toString()} B`;
+  } catch {
+    return `${value} B`;
+  }
+}
+function ttlHours(seconds: number | null | undefined): string { return seconds == null ? "Not reported" : `${seconds / 3600} hours`; }
+function cacheEntrySize(value: string): string { return formatBytes(value); }
+function cacheInventory(workerId: string) {
+  return <WorkerCacheInventory workerId={workerId} />;
+}
+function WorkerCacheInventory({ workerId }: { workerId: string }) {
+  const [query, setQuery] = useState("");
+  const inventory = useInfiniteQuery({
+    queryKey: ["workers", workerId, "cache", query],
+    queryFn: ({ pageParam }: { pageParam: string | null }) => getWorkerCache(workerId, { cursor: pageParam, query, limit: 25 }),
+    initialPageParam: null,
+    getNextPageParam: (page) => page.nextCursor ?? undefined,
+  });
+  const entries = inventory.data?.pages.flatMap((page) => page.items) ?? [];
+  return <div className="worker-cache-inventory">
+    <label>Search cache inventory<input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Repository, key, scope, or hash" /></label>
+    {inventory.isLoading && <p role="status">Loading cache inventory…</p>}
+    {inventory.error && <p role="alert">Cache inventory unavailable. {inventory.error instanceof Error ? inventory.error.message : "Try again later."}</p>}
+    {!inventory.isLoading && !inventory.error && entries.length === 0 && <p className="pending-note">No cache entries match this search.</p>}
+    {entries.length > 0 && <div className="worker-cache-table-wrap"><table><caption>Read-only worker cache inventory</caption><thead><tr><th>Repository</th><th>Key preview</th><th>Scope preview</th><th>Version</th><th>Size</th><th>Last hit</th><th>Expires</th></tr></thead><tbody>{entries.map((entry: DashboardWorkerCacheEntry) => <tr key={entry.entryId}><td>{entry.repositoryUrl ? <a href={entry.repositoryUrl}>{entry.repositoryFullName ?? entry.githubRepositoryId}</a> : <span>{entry.repositoryFullName ?? entry.githubRepositoryId}</span>}<small>Repository metadata · ID {entry.githubRepositoryId}</small></td><td><code>{entry.cacheKeyPreview}</code><small>Workflow-provided metadata</small></td><td><code>{entry.scopePreview}</code><small>Workflow-provided metadata</small></td><td><code>{entry.versionHash}</code></td><td>{cacheEntrySize(entry.sizeBytes)}</td><td><time dateTime={entry.lastAccessedAt}>{appliedAt(entry.lastAccessedAt)}</time></td><td><time dateTime={entry.expiresAt}>{appliedAt(entry.expiresAt)}</time></td></tr>)}</tbody></table></div>}
+    {inventory.hasNextPage && <button type="button" className="control-button" onClick={() => void inventory.fetchNextPage()} disabled={inventory.isFetchingNextPage}>{inventory.isFetchingNextPage ? "Loading…" : "Load more"}</button>}
+  </div>;
 }
 export function WorkerCard({ worker, organizationId, onChange, canManage = false }: { worker: WorkerDetail; organizationId: string; onChange: () => void; canManage?: boolean }) {
   const active = worker.admissionState === "adopted";
@@ -27,6 +64,8 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
   };
   const effectiveConfigurationState = worker.configurationState === "ready" && worker.configurationRevision !== worker.appliedConfigurationRevision ? "applying" : worker.configurationState;
   const runtimeReady = worker.doctor?.runtimeReady === true && worker.doctor.probe === true && worker.doctor.egress === true && worker.doctor.imageSignatures === true;
+  const cache = worker.cache;
+  const [cacheInventoryOpen, setCacheInventoryOpen] = useState(false);
   const readinessLabel = workerReadinessLabel(effectiveConfigurationState);
   const applied = worker.appliedConfigurationRevision && worker.configurationAppliedAt
     ? { revision: worker.appliedConfigurationRevision.slice(0, 12), at: appliedAt(worker.configurationAppliedAt) }
@@ -58,8 +97,9 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
       <div><dt>Active leases</dt><dd>{worker.activeSandboxes}</dd></div>
     </dl>
     <div className="worker-grid"><section className="worker-section"><div className="panel-kicker">Capacity / actual · reserved · free</div><div className="capacity-grid">{capacity("vCPU", worker.capacity.vcpu)}{capacity("Memory", worker.capacity.memoryBytes, bytes)}{capacity("Storage", worker.capacity.storageBytes, bytes)}{capacity("Pods", worker.capacity.pods)}</div></section><section className="worker-section"><div className="panel-kicker">Policy ceilings</div>{worker.limits ? <dl className="limits-list"><div><dt>vCPU / pod</dt><dd>{worker.limits.maxVcpuPerPod}</dd></div><div><dt>Memory / pod</dt><dd>{bytes(worker.limits.maxMemoryBytesPerPod)}</dd></div><div><dt>Storage / pod</dt><dd>{bytes(worker.limits.maxStorageBytesPerPod)}</dd></div><div><dt>Concurrency</dt><dd>{worker.limits.maxConcurrentPods}</dd></div></dl> : <p className="muted">Not configured.</p>}</section></div>
+    {active && <section className="worker-section worker-cache-panel" aria-label="Action cache"><div className="panel-kicker">Action cache</div><div className="cache-summary-grid"><div><span>Desired TTL</span><strong>{ttlHours(cache?.desiredTtlSeconds)}</strong></div><div><span>Effective TTL</span><strong>{ttlHours(cache?.effectiveTtlSeconds)}</strong></div><div><span>Total size</span><strong>{formatBytes(cache?.sizeBytes)}</strong></div><div><span>Entries</span><strong>{cache?.entryCount ?? "Not reported"}</strong></div><div><span>Observed</span><strong>{telemetryAt(cache?.observedAt ?? null)}</strong></div></div>{cache && cache.desiredTtlSeconds !== cache.effectiveTtlSeconds && <p className="pending-note" role="status">Applying cache configuration. The desired TTL is waiting for worker acknowledgement.</p>}{(!cache || !cache.ready) && <p className="pending-note" role="status">Cache unavailable{cache?.error ? `: ${cache.error}` : ". The worker has not reported cache readiness."}</p>}{cache?.error && <p className="form-error" role="alert">Cache error: {cache.error}</p>}{cache?.ready && cache.entryCount === 0 && <p className="pending-note">No cache entries.</p>}{cache?.ready && cache.entryCount > 0 && <details onToggle={(event) => setCacheInventoryOpen(event.currentTarget.open)}><summary>Browse cache inventory</summary>{cacheInventoryOpen && cacheInventory(worker.id)}</details>}<dl className="limits-list"><div><dt>Service URL</dt><dd>{cache?.cacheBaseUrl ? <a href={cache.cacheBaseUrl}>{cache.cacheBaseUrl}</a> : "Not reported"}</dd></div><div><dt>Proxy origin</dt><dd>{cache?.proxyOrigin ?? "Not reported"}</dd></div></dl></section>}
     {building && <dialog open className="worker-config-dialog" aria-label="Build local runtime image"><WorkerImageBuildForm organizationId={organizationId} workerId={worker.id} onComplete={() => { setBuilding(false); onChange(); }} onCancel={() => setBuilding(false)} /></dialog>}
     {active && <WorkerDoctor doctor={worker.doctor} platform={worker.platform} dispatchReady={effectiveConfigurationState === "ready" && runtimeReady} />}
-    <dialog ref={dialog} className="worker-config-dialog" onCancel={closeConfiguration} aria-label="Configure worker">{configuring && <WorkerConfigurationForm worker={{ id: worker.id, admissionState: worker.admissionState, platform: worker.platform, guestPlatforms: worker.guestPlatforms, draining: worker.draining, activeSandboxes: worker.activeSandboxes, capacity: capacityData, limits: worker.limits }} organizationId={organizationId} onConfigured={() => { closeConfiguration(); onChange(); }} />}</dialog>
+    <dialog ref={dialog} className="worker-config-dialog" onCancel={closeConfiguration} aria-label="Configure worker">{configuring && <WorkerConfigurationForm worker={{ id: worker.id, admissionState: worker.admissionState, platform: worker.platform, guestPlatforms: worker.guestPlatforms, draining: worker.draining, activeSandboxes: worker.activeSandboxes, capacity: capacityData, limits: worker.limits, desiredCacheTtlSeconds: cache?.desiredTtlSeconds }} organizationId={organizationId} onConfigured={() => { closeConfiguration(); onChange(); }} />}</dialog>
   </article>;
 }

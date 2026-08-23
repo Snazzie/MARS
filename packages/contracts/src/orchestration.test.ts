@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig, RuntimeTerminationEvidence, WorkerBuildImagePayload, WorkerDoctorData, WorkerImageBuildSpec } from "./orchestration.ts";
+import * as orchestration from "./orchestration.ts";
 
 test("parses a GitHub JIT config with a one-time lease binding", () => {
   expect(RunnerJitConfig.parse({
@@ -101,4 +102,146 @@ test("parses an immutable worker-local image build request", () => {
   expect(payload.artifacts.entrypoint.url).toBe("https://control.test/api/workers/windows-container-entrypoint");
   expect(WorkerImageBuildSpec.safeParse({ image: "whitesmith/windows-job:local", dockerfile: "FROM base" }).success).toBe(false);
   expect(WorkerBuildImagePayload.safeParse({ ...payload, contentSha256: "mutable" }).success).toBe(false);
+});
+
+test("defaults durable worker cache configuration while requiring it on configure commands", () => {
+  expect(orchestration.WorkerConfiguration.parse({
+    appliance: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
+    runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 3, maxConcurrentPods: 1 },
+    guestPlatforms: ["linux-x64"],
+  }).cache).toEqual({ ttlSeconds: 172800 });
+  expect(orchestration.WorkerConfigurePayload.safeParse({
+    workerId: "11111111-1111-4111-8111-111111111111",
+    appliance: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
+    runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 3, maxConcurrentPods: 1 },
+    guestPlatforms: ["linux-x64"],
+    revision: "a".repeat(64),
+    fingerprint: "b".repeat(64),
+  }).success).toBe(false);
+  expect(orchestration.WorkerConfigurePayload.parse({
+    workerId: "11111111-1111-4111-8111-111111111111",
+    appliance: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
+    runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 3, maxConcurrentPods: 1 },
+    guestPlatforms: ["linux-x64"],
+    cache: { ttlSeconds: 3600 },
+    revision: "a".repeat(64),
+    fingerprint: "b".repeat(64),
+  }).cache).toEqual({ ttlSeconds: 3600 });
+  expect(orchestration.WorkerCacheConfiguration.safeParse({ ttlSeconds: 0 }).success).toBe(false);
+  expect(orchestration.WorkerCacheConfiguration.safeParse({ ttlSeconds: 1, extra: true }).success).toBe(false);
+});
+
+test("requires explicit cache configuration in worker configured acknowledgements", () => {
+  const observed = {
+    appliance: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
+    runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 3, maxConcurrentPods: 1 },
+    guestPlatforms: ["linux-x64"],
+  };
+  const acknowledgement = {
+    commandId: "11111111-1111-4111-8111-111111111111",
+    workerId: "22222222-2222-4222-8222-222222222222",
+    revision: "a".repeat(64),
+  };
+  expect(orchestration.WorkerConfiguredPayload.safeParse({ ...acknowledgement, observed }).success).toBe(false);
+  expect(orchestration.WorkerConfiguredPayload.safeParse({ ...acknowledgement, observed: { ...observed, cache: {} } }).success).toBe(false);
+  expect(orchestration.WorkerConfiguredPayload.safeParse({ ...acknowledgement, observed: { ...observed, cache: { ttlSeconds: 172800 } } }).success).toBe(true);
+});
+
+test("keeps cache proxy material guest-only", () => {
+  const cache = {
+    proxyUrl: "http://127.0.0.1:3128",
+    cacheBaseUrl: "https://cache.worker.test",
+    caCertificatePem: "-----BEGIN CERTIFICATE-----\npublic-ca\n-----END CERTIFICATE-----",
+    expiresAt: "2026-08-23T12:00:00.000Z",
+  };
+  expect(orchestration.WorkerCacheProxy.parse(cache)).toEqual(cache);
+  const envelope = {
+    leaseId: "11111111-1111-4111-8111-111111111111",
+    jobId: "22222222-2222-4222-8222-222222222222",
+    nonce: "n".repeat(32),
+    guestPlatform: "linux-x64",
+    encodedJitConfig: "encoded",
+    expiresAt: "2026-08-23T12:00:00.000Z",
+    imageDigest: "sha256:test",
+    resources: { vcpu: 1, memoryBytes: 2, storageBytes: 3, concurrency: 1 },
+  };
+  expect(LeaseBootstrapEnvelope.safeParse({ ...envelope, cache }).success).toBe(false);
+  expect(orchestration.WorkerCacheProxy.safeParse({ ...cache, workerAddress: "10.0.0.1" }).success).toBe(false);
+  expect(orchestration.WorkerCacheProxy.safeParse({ ...cache, proxyUrl: "http://lease-user:lease-secret@127.0.0.1:3128" }).success).toBe(false);
+  expect(orchestration.WorkerCacheProxy.safeParse({ ...cache, proxyUrl: "https://127.0.0.1:3128" }).success).toBe(false);
+  expect(orchestration.WorkerCacheProxy.safeParse({ ...cache, proxyUrl: "http://127.0.0.1:3128/path" }).success).toBe(false);
+  expect(orchestration.WorkerCacheProxy.safeParse({ ...cache, cacheBaseUrl: "http://cache.worker.test" }).success).toBe(false);
+  expect(orchestration.WorkerCacheProxy.safeParse({ ...cache, cacheBaseUrl: "https://user:secret@cache.worker.test" }).success).toBe(false);
+  expect(orchestration.WorkerCacheProxy.safeParse({ ...cache, cacheBaseUrl: "https://cache.worker.test/path" }).success).toBe(false);
+});
+
+test("parses strict lossless worker cache telemetry", () => {
+  const entry = {
+    entryId: "11111111-1111-4111-8111-111111111111",
+    githubRepositoryId: "9223372036854775807",
+    cacheKeyPreview: "node-modules-linux",
+    cacheKeyHash: "a".repeat(64),
+    scopePreview: "refs/heads/main",
+    scopeHash: "b".repeat(64),
+    versionHash: "c".repeat(64),
+    sizeBytes: "9007199254740993",
+    createdAt: "2026-08-23T12:00:00.000Z",
+    lastAccessedAt: "2026-08-23T12:01:00+00:00",
+    expiresAt: "2026-08-25T12:00:00.000Z",
+  };
+  const status = {
+    generation: "22222222-2222-4222-8222-222222222222",
+    ready: true,
+    ttlSeconds: 172800,
+    proxyOrigin: "http://127.0.0.1:3128",
+    cacheBaseUrl: "https://cache.worker.test",
+    sizeBytes: "9007199254740993",
+    entryCount: 1,
+    observedAt: "2026-08-23T12:01:00.000Z",
+    error: null,
+  };
+  expect(orchestration.WorkerCacheTelemetry.parse({
+    type: "worker.cache_entry_upsert",
+    payload: { generation: status.generation, entry },
+  }).payload).toEqual({ generation: status.generation, entry });
+  expect(orchestration.WorkerCacheTelemetry.parse({
+    type: "worker.cache_snapshot_begin",
+    payload: { snapshotId: "33333333-3333-4333-8333-333333333333", status },
+  }).payload).toEqual({ snapshotId: "33333333-3333-4333-8333-333333333333", status });
+  expect(orchestration.WorkerCacheEntryProjection.safeParse({ ...entry, sizeBytes: 9_007_199_254_740_993 }).success).toBe(false);
+  expect(orchestration.WorkerCacheEntryProjection.safeParse({ ...entry, githubRepositoryId: "9223372036854775808" }).success).toBe(false);
+  expect(() => orchestration.WorkerCacheEntryProjection.safeParse({ ...entry, githubRepositoryId: "not-a-number" })).not.toThrow();
+  expect(orchestration.WorkerCacheEntryProjection.safeParse({ ...entry, githubRepositoryId: "not-a-number" }).success).toBe(false);
+  expect(() => orchestration.WorkerCacheEntryProjection.safeParse({ ...entry, sizeBytes: "12.5" })).not.toThrow();
+  expect(orchestration.WorkerCacheEntryProjection.safeParse({ ...entry, sizeBytes: "12.5" }).success).toBe(false);
+  expect(orchestration.WorkerCacheStatus.safeParse({ ...status, proxyOrigin: "http://lease-user:lease-secret@127.0.0.1:3128" }).success).toBe(false);
+});
+
+test("bounds worker cache snapshot frames and requires completion counts", () => {
+  const entry = {
+    entryId: "11111111-1111-4111-8111-111111111111",
+    githubRepositoryId: "1",
+    cacheKeyPreview: "key",
+    cacheKeyHash: "a".repeat(64),
+    scopePreview: "scope",
+    scopeHash: "b".repeat(64),
+    versionHash: "c".repeat(64),
+    sizeBytes: "1",
+    createdAt: "2026-08-23T12:00:00.000Z",
+    lastAccessedAt: "2026-08-23T12:00:00.000Z",
+    expiresAt: "2026-08-25T12:00:00.000Z",
+  };
+  const snapshotId = "33333333-3333-4333-8333-333333333333";
+  expect(orchestration.WorkerCacheTelemetry.safeParse({
+    type: "worker.cache_snapshot_page",
+    payload: { snapshotId, sequence: 0, entries: Array.from({ length: 101 }, () => entry) },
+  }).success).toBe(false);
+  expect(orchestration.WorkerCacheTelemetry.safeParse({
+    type: "worker.cache_snapshot_end",
+    payload: { snapshotId, pageCount: 1, entryCount: 1 },
+  }).success).toBe(false);
+  expect(orchestration.WorkerCacheTelemetry.safeParse({
+    type: "worker.cache_snapshot_end",
+    payload: { snapshotId, pageCount: 1, entryCount: 1, sizeBytes: "1" },
+  }).success).toBe(true);
 });

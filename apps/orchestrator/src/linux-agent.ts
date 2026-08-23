@@ -3,23 +3,31 @@ import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { cpus, totalmem } from "node:os";
 import { statfsSync } from "node:fs";
-import { WorkerBootstrapRequest, WorkerConfiguration, WorkerConfigurePayload, WorkerCommand, WorkerDoctorData, WorkerEvent, type WorkerCapacityData } from "@whitesmith/contracts";
+import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerObservedConfiguration, WorkerConfigurePayload, WorkerCommand, WorkerDoctorData, WorkerEvent, type WorkerCapacityData } from "@whitesmith/contracts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { authenticateWorker, workerSocketUrl, type WorkerIdentity } from "./worker-client.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 import type { LibvirtVmDriver } from "./libvirt-vm.ts";
 import type { WorkerLimits } from "@whitesmith/contracts";
+import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 export type LinuxWorkerResources = {
   appliance: { vcpu: number; memoryBytes: number; storageBytes: number };
   runtime: { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
+  cache: WorkerCacheConfiguration;
 };
 
 /** Apply the durable worker.configure command and report the exact observed values. */
-export function applyLinuxWorkerConfigure(command: WorkerCommand, resources: LinuxWorkerResources): WorkerEvent {
+export async function applyLinuxWorkerConfigure(
+  command: WorkerCommand,
+  resources: LinuxWorkerResources,
+  cacheService: Pick<ActionCacheService, "applyTtl">,
+): Promise<WorkerEvent> {
   const payload = WorkerConfigurePayload.parse(command.payload);
-  const observed = WorkerConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms });
+  const observed = WorkerObservedConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms, cache: payload.cache });
+  await cacheService.applyTtl(observed.cache.ttlSeconds);
   resources.appliance = observed.appliance;
   resources.runtime = observed.runtime;
+  Object.assign(resources.cache, observed.cache);
   return {
     version: 1,
     id: crypto.randomUUID(),
@@ -30,9 +38,13 @@ export function applyLinuxWorkerConfigure(command: WorkerCommand, resources: Lin
   };
 }
 
-export function handleLinuxWorkerCommand(command: WorkerCommand, resources: LinuxWorkerResources): WorkerEvent {
+export async function handleLinuxWorkerCommand(
+  command: WorkerCommand,
+  resources: LinuxWorkerResources,
+  cacheService: Pick<ActionCacheService, "applyTtl">,
+): Promise<WorkerEvent> {
   if (command.type !== "worker.configure") throw new Error(`unsupported worker command: ${command.type}`);
-  return applyLinuxWorkerConfigure(command, resources);
+  return applyLinuxWorkerConfigure(command, resources, cacheService);
 }
 
 export type LinuxWorkerCommandContext = {
@@ -41,10 +53,11 @@ export type LinuxWorkerCommandContext = {
   runtimeReady: () => boolean;
   send: (event: WorkerEvent) => void;
   activeLeases?: Map<string, Promise<void>>;
+  cacheService: Pick<ActionCacheService, "applyTtl" | "transport">;
 };
 
 export async function handleLinuxWorkerCommandWithContext(command: WorkerCommand, resources: LinuxWorkerResources, context: LinuxWorkerCommandContext): Promise<WorkerEvent | void> {
-  if (command.type === "worker.configure") return handleLinuxWorkerCommand(command, resources);
+  if (command.type === "worker.configure") return handleLinuxWorkerCommand(command, resources, context.cacheService);
   if (command.type === "linux-vm.stop_lease") {
     if (!command.leaseId) throw new Error("lease_id_required");
     await context.driver.stopLease(command.leaseId);
@@ -60,7 +73,7 @@ export async function handleLinuxWorkerCommandWithContext(command: WorkerCommand
   if (command.leaseId !== bootstrap.leaseId) throw new Error("lease_id_mismatch");
   const active = context.activeLeases ?? new Map<string, Promise<void>>();
   if (active.has(bootstrap.leaseId)) return;
-  const lifecycle = runLeaseLifecycle(command, context.driver, bootstrap, context.send);
+  const lifecycle = runLeaseLifecycle(command, context.driver, bootstrap, context.send, { cacheService: context.cacheService });
   active.set(bootstrap.leaseId, lifecycle);
   void lifecycle.finally(() => active.delete(bootstrap.leaseId));
 }
@@ -136,7 +149,16 @@ async function enrollLinuxWorker(baseUrl: URL, identity: WorkerIdentity, driver:
   await saveIdentity(enrolled);
   return enrolled;
 }
-async function connectLinuxWorker(baseUrl: URL, identity: WorkerIdentity, driver: LibvirtVmDriver, limits: WorkerLimits, resources: LinuxWorkerResources, digest: string, channelRoot: string): Promise<never> {
+async function connectLinuxWorker(
+  baseUrl: URL,
+  identity: WorkerIdentity,
+  driver: LibvirtVmDriver,
+  limits: WorkerLimits,
+  resources: LinuxWorkerResources,
+  digest: string,
+  channelRoot: string,
+  cacheService: ActionCacheService,
+): Promise<never> {
   const activeLeases = new Map<string, Promise<void>>();
   let doctor = await linuxDoctor(driver, digest, channelRoot);
   for (;;) {
@@ -148,20 +170,27 @@ async function connectLinuxWorker(baseUrl: URL, identity: WorkerIdentity, driver
       try {
         const frame = JSON.parse(String(event.data)) as { type?: string; nonce?: string } & Partial<WorkerCommand>;
         if (frame.type === "challenge" && frame.nonce) return ws.send(JSON.stringify(authenticateWorker(frame.nonce, identity)));
-        if (frame.type === "authenticated" || frame.type === "ping") {
+        if (frame.type === "authenticated") {
+          await emitActionCacheSnapshot(cacheService, (type, payload) => {
+            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(workerEvent(identity.workerId, type, payload)));
+          });
+          doctor = await linuxDoctor(driver, digest, channelRoot);
+          return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctor, activeLeases: [...activeLeases.keys()] }, capacity: linuxCapacity() } }));
+        }
+        if (frame.type === "ping") {
           doctor = await linuxDoctor(driver, digest, channelRoot);
           return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctor, activeLeases: [...activeLeases.keys()] }, capacity: linuxCapacity() } }));
         }
         if (frame.type === "doctor_ack") return;
         const command = WorkerCommand.parse(frame);
-        if (command.type === "worker.configure") return ws.send(JSON.stringify(handleLinuxWorkerCommand(command, resources)));
+        if (command.type === "worker.configure") return ws.send(JSON.stringify(await handleLinuxWorkerCommand(command, resources, cacheService)));
         if (command.type === "linux-vm.create_lease") {
           ws.send(JSON.stringify(workerEvent(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
-          await handleLinuxWorkerCommandWithContext(command, resources, { driver, encryptionPrivateKey: identity.encryptionPrivateKey, runtimeReady: () => doctor.runtimeReady === true, send: (value) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); }, activeLeases });
+          await handleLinuxWorkerCommandWithContext(command, resources, { driver, encryptionPrivateKey: identity.encryptionPrivateKey, runtimeReady: () => doctor.runtimeReady === true, send: (value) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); }, activeLeases, cacheService });
           return;
         }
         if (command.type === "linux-vm.stop_lease") {
-          await handleLinuxWorkerCommandWithContext(command, resources, { driver, encryptionPrivateKey: identity.encryptionPrivateKey, runtimeReady: () => true, send: (value) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); }, activeLeases });
+          await handleLinuxWorkerCommandWithContext(command, resources, { driver, encryptionPrivateKey: identity.encryptionPrivateKey, runtimeReady: () => true, send: (value) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); }, activeLeases, cacheService });
           return;
         }
         throw new Error("unsupported Linux worker command");
@@ -179,8 +208,13 @@ export async function runLinuxWorker(baseUrl: string, driver: LibvirtVmDriver, l
   const host = await driver.validateHost();
   if (!host.runtimeReady) throw new Error(host.remediation ?? "linux runtime host validation failed");
   await driver.reconcileOrphans();
-  const resources: LinuxWorkerResources = { appliance: { vcpu: cpus().length, memoryBytes: totalmem(), storageBytes: linuxCapacity().actualStorageBytes }, runtime: limits };
+  const resources: LinuxWorkerResources = { appliance: { vcpu: cpus().length, memoryBytes: totalmem(), storageBytes: linuxCapacity().actualStorageBytes }, runtime: limits, cache: WorkerCacheConfiguration.parse({}) };
   const controlPlane = new URL(baseUrl);
-  const identity = (await loadIdentity()) ?? await enrollLinuxWorker(controlPlane, createLinuxIdentity(), driver, Bun.env.WHITESMITH_GOLDEN_DIGEST!, Bun.env.WHITESMITH_CHANNEL_ROOT!);
-  await connectLinuxWorker(controlPlane, identity, driver, limits, resources, Bun.env.WHITESMITH_GOLDEN_DIGEST!, Bun.env.WHITESMITH_CHANNEL_ROOT!);
+  const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: resources.cache.ttlSeconds });
+  try {
+    const identity = (await loadIdentity()) ?? await enrollLinuxWorker(controlPlane, createLinuxIdentity(), driver, Bun.env.WHITESMITH_GOLDEN_DIGEST!, Bun.env.WHITESMITH_CHANNEL_ROOT!);
+    await connectLinuxWorker(controlPlane, identity, driver, limits, resources, Bun.env.WHITESMITH_GOLDEN_DIGEST!, Bun.env.WHITESMITH_CHANNEL_ROOT!, cacheService);
+  } finally {
+    await cacheService.close();
+  }
 }

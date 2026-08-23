@@ -96,6 +96,39 @@ test("routes accepted commands through the dispatcher without mutating lease sta
   expect(dispatched).toEqual([expect.objectContaining({ type: "command.accepted" }), socket]);
   expect(calls).toHaveLength(0);
 });
+test("routes authenticated worker cache telemetry to durable cache storage", async () => {
+  const { db, calls } = acceptingDb();
+  const generation = crypto.randomUUID();
+  const dispatched: unknown[] = [];
+  const accepted = await handleAuthenticatedWorkerEvent(
+    db,
+    { handleEvent(input) { dispatched.push(input); return true; } },
+    event("worker.cache_entry_upsert", {
+      generation,
+      entry: {
+        entryId: crypto.randomUUID(),
+        githubRepositoryId: "123456789012345",
+        cacheKeyPreview: "build-linux",
+        cacheKeyHash: "a".repeat(64),
+        scopePreview: "refs/heads/main",
+        scopeHash: "b".repeat(64),
+        versionHash: "c".repeat(64),
+        sizeBytes: "9007199254740993",
+        createdAt: "2026-08-23T12:00:00.000Z",
+        lastAccessedAt: "2026-08-23T12:01:00.000Z",
+        expiresAt: "2026-08-25T12:01:00.000Z",
+      },
+    }),
+    { send() {} },
+  );
+  expect(accepted).toBe(true);
+  expect(dispatched).toHaveLength(0);
+  expect(calls).toHaveLength(2);
+  const insert = calls.find((call) => call.query.includes("INSERT INTO worker_cache_entries"));
+  expect(insert?.query).toContain("INSERT INTO worker_cache_entries");
+  expect(insert?.values).toContain(workerId);
+});
+
 
 test("persists authenticated lifecycle events independently of command acknowledgement state", async () => {
   const { db, calls } = acceptingDb();

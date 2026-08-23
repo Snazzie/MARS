@@ -1,4 +1,4 @@
-import { OutOfMemoryResult, type LeaseBootstrapEnvelope, type RuntimeTerminationEvidence, type WorkerCommand, type WorkerEvent } from "@whitesmith/contracts";
+import { OutOfMemoryResult, type LeaseBootstrapEnvelope, type RuntimeTerminationEvidence, type WorkerCacheProxy, type WorkerCommand, type WorkerEvent } from "@whitesmith/contracts";
 import type { RuntimeDriver } from "./runtime.ts";
 
 export type MemoryPressureState = {
@@ -81,14 +81,27 @@ export async function runLeaseLifecycle(
   driver: Pick<RuntimeDriver, "createLease" | "requestGracefulStop" | "stopLease" | "removeLease" | "collectRawDiagnostics">,
   bootstrap: LeaseBootstrapEnvelope,
   send: (event: WorkerEvent) => void,
-  options?: { preserveLeases?: () => boolean },
+  options?: {
+    preserveLeases?: () => boolean;
+    cacheService?: {
+      transport(expiresAt: string): WorkerCacheProxy;
+    };
+  },
 ): Promise<void> {
   const correlationId = crypto.randomUUID();
   const startedAt = Date.now();
   const payload = { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, correlationId };
+  let workerCache: WorkerCacheProxy | undefined;
+  try {
+    if (options?.cacheService) workerCache = options.cacheService.transport(bootstrap.expiresAt);
+  } catch (error) {
+    console.error("Lease cache transport setup failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) });
+    send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "provisioning_failed" } });
+    return;
+  }
   let runtime;
   try {
-    runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
+    runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig, ...(workerCache ? { workerCache } : {}) });
   } catch (error) {
     console.error("Lease provisioning failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) });
     send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "provisioning_failed" } });

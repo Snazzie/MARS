@@ -101,7 +101,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
     await this.reserveCapacity(lease.resources);
     const root = this.bootstrapPath(lease.id);
     await mkdir(root, { recursive: true });
-    await writeFile(join(root, "bootstrap.json"), JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig }), { mode: 0o600, flag: "wx" });
+    await writeFile(join(root, "bootstrap.json"), JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig, ...(lease.workerCache ? { workerCache: lease.workerCache } : {}) }), { mode: 0o600, flag: "wx" });
     const name = this.containerName(lease.id);
     try {
       checked(await this.docker(["create", "--name", name, "--log-driver", "json-file", "--log-opt", "max-size=50m", "--log-opt", "max-file=3", "--isolation=hyperv", "--label", "whitesmith.managed=true", "--label", `whitesmith.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), "--storage-opt", `size=${lease.resources.storageBytes}`, "--mount", `type=bind,source=${root},target=C:\\ProgramData\\Whitesmith\\bootstrap,readonly`, this.config.image]), "docker create");
