@@ -61,37 +61,25 @@ const cacheFixture = (overrides: Partial<WorkerCacheSummary> = {}): WorkerCacheS
 const cacheWorkerFixture = (overrides: Partial<WorkerDetail> = {}, cache = cacheFixture()) => ({ ...workerFixture(overrides), cache });
 const renderCard = (worker: WorkerDetail) => renderToStaticMarkup(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><WorkerCard worker={worker} organizationId="all" onChange={() => {}} /></QueryClientProvider>);
 
-test("renders the worker cache summary with TTL, URL, aggregate size, and observed time", () => {
+test("keeps worker health authoritative and cache inventory compact", () => {
   const markup = renderCard(cacheWorkerFixture());
-  expect(markup).toContain("Action cache");
-  expect(markup).toContain("48 hours");
-  expect(markup).toContain("2.0 GiB");
-  expect(markup).toContain("https://worker.example.test/_apis/artifactcache");
-  expect(markup).toContain("Aug");
-});
-
-test("renders an unavailable cache state without inventory controls", () => {
-  const markup = renderCard(cacheWorkerFixture({}, cacheFixture({ ready: false, effectiveTtlSeconds: null, error: "Cache proxy unavailable", cacheBaseUrl: null })));
-  expect(markup).toContain("Cache unavailable");
-  expect(markup).toContain("Cache proxy unavailable");
-  expect(markup).not.toContain("Browse cache inventory");
-});
-
-test("renders the cache panel as unavailable when cache status is missing", () => {
-  const markup = renderCard(workerFixture());
-  expect(markup).toContain("Action cache");
-  expect(markup).toContain("Cache unavailable");
-  expect(markup).not.toContain("Browse cache inventory");
-});
-
-test("renders an empty cache state when the worker reports no entries", () => {
-  const markup = renderCard(cacheWorkerFixture());
+  expect(markup).toContain("Cache inventory");
   expect(markup).toContain("No cache entries");
+  expect(markup).not.toContain("Capacity / actual");
+  expect(markup).not.toContain("Action cache");
+  expect(markup).not.toContain("cache-summary-grid");
 });
-test("renders cache errors as an alert", () => {
-  const markup = renderCard(cacheWorkerFixture({}, cacheFixture({ error: "TTL update rejected" })));
-  expect(markup).toContain("Cache error");
-  expect(markup).toContain("TTL update rejected");
+
+test("renders unavailable cache inventory without duplicate health details", () => {
+  const markup = renderCard(cacheWorkerFixture({}, cacheFixture({ ready: false, effectiveTtlSeconds: null, error: "Cache proxy unavailable", cacheBaseUrl: null })));
+  expect(markup).toContain("Cache inventory unavailable");
+  expect(markup).not.toContain("Browse cache inventory");
+  expect(markup).not.toContain("Cache proxy unavailable");
+});
+
+test("keeps the cache inventory affordance for populated caches", () => {
+  const markup = renderCard(cacheWorkerFixture({}, cacheFixture({ entryCount: 1 })));
+  expect(markup).toContain("Browse cache inventory");
 });
 
 test("lazy-loads a searchable paginated cache inventory", async () => {
