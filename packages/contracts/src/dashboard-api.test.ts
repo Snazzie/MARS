@@ -66,10 +66,14 @@ test("parses a complete worker health response", () => {
   expect(parsed.usage.memoryBytes.actual).toBe("100000000000000000000");
 });
 
-test("rejects unsafe numeric worker health values", () => {
+test("rejects unsafe numeric worker health values, including byte fields", () => {
   expect(WorkerHealth.safeParse({
     ...workerHealthFixture,
     usage: { ...workerHealthFixture.usage, pods: { actual: Number.MAX_SAFE_INTEGER + 1, reserved: 0, free: 0 } },
+  }).success).toBe(false);
+  expect(WorkerHealth.safeParse({
+    ...workerHealthFixture,
+    usage: { ...workerHealthFixture.usage, memoryBytes: { ...workerHealthFixture.usage.memoryBytes, actual: Number.MAX_SAFE_INTEGER + 1 } },
   }).success).toBe(false);
 });
 
