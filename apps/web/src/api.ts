@@ -9,6 +9,7 @@ import {
   OverviewDto,
   PendingWorkerRequest,
   PoolSummary,
+  WorkerHealth,
   WorkerImageBuildSpec,
   WorkerConfiguration,
   WorkerDetail,
@@ -109,6 +110,8 @@ async function request<S extends z.ZodTypeAny>(path: string, schema: S, init?: R
 
 export const getMe = () => request("/api/me", DashboardOperator);
 export const getHealth = () => request("/api/healthz", DashboardHealthResponse);
+export const getWorkerHealth = (workerId: string) =>
+  request(`/api/workers/${workerId}/health`, WorkerHealth, { cache: "no-store" });
 export const logout = () => request("/api/auth/logout", DashboardOkResponse, { method: "POST" });
 export const getOrganizations = () => request("/api/organizations", z.array(OrganizationSummary));
 export const getOverview = (organizationId: string, period: OverviewDto["period"] = "24h") =>
