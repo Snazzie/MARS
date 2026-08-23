@@ -1,16 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { getWorkerHealth } from "../api.ts";
 
-export function workerHealthQueryOptions(workerId: string, expanded: boolean) {
+export function workerHealthQueryOptions(workerId: string) {
   return {
     queryKey: ["worker-health", workerId] as const,
     queryFn: () => getWorkerHealth(workerId),
-    enabled: expanded && Boolean(workerId),
-    refetchInterval: expanded ? 3_000 : false,
+    enabled: Boolean(workerId),
+    refetchInterval: 3_000,
     refetchIntervalInBackground: false,
   };
 }
 
-export function useWorkerHealth(workerId: string, expanded: boolean) {
-  return useQuery(workerHealthQueryOptions(workerId, expanded));
+export function useWorkerHealth(workerId: string) {
+  return useQuery(workerHealthQueryOptions(workerId));
 }

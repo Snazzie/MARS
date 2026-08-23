@@ -22,7 +22,7 @@ const healthFixture = (overrides: Partial<WorkerHealth> = {}): WorkerHealth => (
     state: "busy",
     startedAt: "2026-08-23T11:59:56.000Z",
     ageSeconds: 3,
-    requested: { vcpu: 1, memoryBytes: "40", storageBytes: "100", concurrency: 1 },
+    requested: { vcpu: 1, memoryBytes: "536870912", storageBytes: "100", concurrency: 1 },
   }],
   ...overrides,
 });
@@ -35,15 +35,17 @@ test("renders usage, cache health, and running jobs with accessible sections", (
   expect(markup).toContain("Actual");
   expect(markup).toContain("Desired TTL");
   expect(markup).toContain("acme/repo");
+  expect(markup).toContain("512 MiB");
   expect(markup).toContain("<caption>Running worker jobs</caption>");
   expect(markup).toContain("<time dateTime=\"2026-08-23T11:59:56.000Z\">");
 });
 
-test("preserves large decimal byte strings without unsafe numeric conversion", () => {
+test("formats very large decimal byte strings with safe binary units", () => {
   const huge = "900719925474099300000";
   const health = healthFixture({ usage: { ...healthFixture().usage, memoryBytes: { actual: huge, reserved: huge, free: huge } } });
   const markup = renderToStaticMarkup(<WorkerHealthPanel health={health} />);
-  expect(markup).toContain(`${huge} B`);
+  expect(markup).toContain("819200000.0 TiB");
+  expect(markup).not.toContain(`${huge} B`);
 });
 test("combines resource usage into one accessible table with labeled allocation bars", () => {
   const markup = renderToStaticMarkup(<WorkerHealthPanel health={healthFixture()} />);
@@ -69,11 +71,10 @@ test("keeps zero-total allocation bars finite", () => {
   expect(markup).not.toContain('style="width:100%"');
 });
 
-test("preserves large decimal byte strings in each resource value", () => {
-  const huge = "900719925474099300000";
-  const health = healthFixture({ usage: { ...healthFixture().usage, memoryBytes: { actual: huge, reserved: huge, free: huge } } });
+test("formats each resource byte value with friendly binary units", () => {
+  const health = healthFixture({ usage: { ...healthFixture().usage, memoryBytes: { actual: "536870912", reserved: "536870912", free: "536870912" } } });
   const markup = renderToStaticMarkup(<WorkerHealthPanel health={health} />);
-  expect(markup.match(new RegExp(`${huge} B`, "g"))?.length).toBeGreaterThanOrEqual(3);
+  expect(markup.match(/512 MiB/g)?.length).toBeGreaterThanOrEqual(3);
 });
 
 

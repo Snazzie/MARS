@@ -59,9 +59,10 @@ const cacheFixture = (overrides: Partial<WorkerCacheSummary> = {}): WorkerCacheS
 });
 
 const cacheWorkerFixture = (overrides: Partial<WorkerDetail> = {}, cache = cacheFixture()) => ({ ...workerFixture(overrides), cache });
+const renderCard = (worker: WorkerDetail) => renderToStaticMarkup(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><WorkerCard worker={worker} organizationId="all" onChange={() => {}} /></QueryClientProvider>);
 
 test("renders the worker cache summary with TTL, URL, aggregate size, and observed time", () => {
-  const markup = renderToStaticMarkup(<WorkerCard worker={cacheWorkerFixture()} organizationId="all" onChange={() => {}} />);
+  const markup = renderCard(cacheWorkerFixture());
   expect(markup).toContain("Action cache");
   expect(markup).toContain("48 hours");
   expect(markup).toContain("2.0 GiB");
@@ -70,25 +71,25 @@ test("renders the worker cache summary with TTL, URL, aggregate size, and observ
 });
 
 test("renders an unavailable cache state without inventory controls", () => {
-  const markup = renderToStaticMarkup(<WorkerCard worker={cacheWorkerFixture({}, cacheFixture({ ready: false, effectiveTtlSeconds: null, error: "Cache proxy unavailable", cacheBaseUrl: null }))} organizationId="all" onChange={() => {}} />);
+  const markup = renderCard(cacheWorkerFixture({}, cacheFixture({ ready: false, effectiveTtlSeconds: null, error: "Cache proxy unavailable", cacheBaseUrl: null })));
   expect(markup).toContain("Cache unavailable");
   expect(markup).toContain("Cache proxy unavailable");
   expect(markup).not.toContain("Browse cache inventory");
 });
 
 test("renders the cache panel as unavailable when cache status is missing", () => {
-  const markup = renderToStaticMarkup(<WorkerCard worker={workerFixture()} organizationId="all" onChange={() => {}} />);
+  const markup = renderCard(workerFixture());
   expect(markup).toContain("Action cache");
   expect(markup).toContain("Cache unavailable");
   expect(markup).not.toContain("Browse cache inventory");
 });
 
 test("renders an empty cache state when the worker reports no entries", () => {
-  const markup = renderToStaticMarkup(<WorkerCard worker={cacheWorkerFixture()} organizationId="all" onChange={() => {}} />);
+  const markup = renderCard(cacheWorkerFixture());
   expect(markup).toContain("No cache entries");
 });
 test("renders cache errors as an alert", () => {
-  const markup = renderToStaticMarkup(<WorkerCard worker={cacheWorkerFixture({}, cacheFixture({ error: "TTL update rejected" }))} organizationId="all" onChange={() => {}} />);
+  const markup = renderCard(cacheWorkerFixture({}, cacheFixture({ error: "TTL update rejected" })));
   expect(markup).toContain("Cache error");
   expect(markup).toContain("TTL update rejected");
 });
@@ -162,14 +163,14 @@ test("maps worker configuration state to readiness labels", () => {
 });
 test("renders operational and readiness status in the worker card", () => {
   const worker = workerFixture();
-  const markup = renderToStaticMarkup(<WorkerCard worker={worker} organizationId="all" onChange={() => {}} />);
+  const markup = renderCard(worker);
   expect(markup).toContain(">online</span>");
   expect(markup).not.toContain("Needs configuration");
 });
 
 test("shows applying configuration until the desired revision is acknowledged", () => {
   const worker = workerFixture({ configurationState: "applying", configurationRevision: "b".repeat(64), doctor: { egress: true } });
-  const markup = renderToStaticMarkup(<WorkerCard worker={worker} organizationId="all" onChange={() => {}} />);
+  const markup = renderCard(worker);
   expect(markup).toContain("Applying configuration");
   expect(markup).toContain("Runtime checks pass");
   expect(markup).not.toContain("Ready for dispatch");
@@ -178,7 +179,7 @@ test("shows applying configuration until the desired revision is acknowledged", 
 
 test("shows the exact applied revision and acknowledgement time", () => {
   const worker = workerFixture();
-  const markup = renderToStaticMarkup(<WorkerCard worker={worker} organizationId="all" onChange={() => {}} />);
+  const markup = renderCard(worker);
   expect(markup).toContain("Configuration updated");
   expect(markup).toContain("aaaaaaaaaaaa");
   expect(markup).toContain("Aug");
@@ -186,19 +187,18 @@ test("shows the exact applied revision and acknowledgement time", () => {
 
 test("retains the last successful acknowledgement when an update fails", () => {
   const worker = workerFixture({ configurationState: "error", configurationRevision: "b".repeat(64) });
-  const markup = renderToStaticMarkup(<WorkerCard worker={worker} organizationId="all" onChange={() => {}} />);
+  const markup = renderCard(worker);
   expect(markup).toContain("Configuration update failed");
   expect(markup).toContain("Last applied");
   expect(markup).toContain("aaaaaaaaaaaa");
 });
-test("keeps live health collapsed until explicitly expanded", () => {
-  const markup = renderToStaticMarkup(<WorkerCard worker={workerFixture()} organizationId="all" onChange={() => {}} />);
-  expect(markup).toContain('aria-expanded="false"');
-  expect(markup).toContain('aria-controls="worker-health-86afd915-add3-407c-a6c1-1b46803ef713"');
-  expect(markup).toContain("Show live health");
-  expect(markup).not.toContain("System usage");
+test("keeps live health visible without expansion controls", () => {
+  const markup = renderCard(workerFixture());
+  expect(markup).not.toContain("worker-health-toggle");
+  expect(markup).not.toContain("Show live health");
+  expect(markup).toContain("Live worker health");
 });
-test("expands live health with an accessible control and lazy query", async () => {
+test("polls live health on mount without an expansion flag", async () => {
   const browser = new Window();
   // @ts-expect-error test DOM globals
   globalThis.document = browser.document;
@@ -210,22 +210,24 @@ test("expands live health with an accessible control and lazy query", async () =
   const root = createRoot(container);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => new Response(JSON.stringify({
-    observedAt: null,
-    connection: { state: "online", lastHeartbeatAt: null, lastDoctorAt: null, heartbeatAgeSeconds: null, doctorAgeSeconds: null },
-    usage: { cpu: { actual: 1, reserved: 0, free: 1 }, memoryBytes: { actual: "1", reserved: "0", free: "1" }, storageBytes: { actual: "1", reserved: "0", free: "1" }, pods: { actual: 1, reserved: 0, free: 1 } },
-    cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: null, ready: false, generation: null, sizeBytes: "0", entryCount: 0, observedAt: null, error: null },
-    jobs: [],
-  }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+  let requested = "";
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requested = String(input);
+    return new Response(JSON.stringify({
+      observedAt: null,
+      connection: { state: "online", lastHeartbeatAt: null, lastDoctorAt: null, heartbeatAgeSeconds: null, doctorAgeSeconds: null },
+      usage: { cpu: { actual: 1, reserved: 0, free: 1 }, memoryBytes: { actual: "1", reserved: "0", free: "1" }, storageBytes: { actual: "1", reserved: "0", free: "1" }, pods: { actual: 1, reserved: 0, free: 1 } },
+      cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: null, ready: false, generation: null, sizeBytes: "0", entryCount: 0, observedAt: null, error: null },
+      jobs: [],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as unknown as typeof fetch;
   try {
     await act(async () => {
       root.render(<QueryClientProvider client={client}><WorkerCard worker={workerFixture()} organizationId="all" onChange={() => {}} /></QueryClientProvider>);
     });
-    const button = container.querySelector<HTMLButtonElement>(".worker-health-toggle")!;
-    expect(button.getAttribute("aria-expanded")).toBe("false");
-    await act(async () => { button.click(); });
-    expect(button.getAttribute("aria-expanded")).toBe("true");
-    expect(container.querySelector("#worker-health-86afd915-add3-407c-a6c1-1b46803ef713")).not.toBeNull();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(requested).toBe("/api/workers/86afd915-add3-407c-a6c1-1b46803ef713/health");
+    expect(container.querySelector("#worker-health-86afd915-add3-407c-a6c1-1b46803ef713-panel")).not.toBeNull();
   } finally {
     globalThis.fetch = originalFetch;
     await act(async () => { root.unmount(); });

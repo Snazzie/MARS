@@ -14,12 +14,21 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Try again later.";
 }
 
+function formatScaledBytes(bytes: bigint, unit: bigint, label: string): string {
+  const tenths = (bytes * 10n + unit / 2n) / unit;
+  return `${tenths / 10n}.${tenths % 10n} ${label}`;
+}
+
 function formatBytes(value: string): string {
-  try {
-    return `${BigInt(value).toString()} B`;
-  } catch {
-    return `${value} B`;
-  }
+  if (!/^(?:0|[1-9]\d*)$/.test(value)) return `${value} B`;
+  const bytes = BigInt(value);
+  const mib = 1024n ** 2n;
+  const gib = 1024n ** 3n;
+  const tib = 1024n ** 4n;
+  if (bytes >= tib) return formatScaledBytes(bytes, tib, "TiB");
+  if (bytes >= gib) return formatScaledBytes(bytes, gib, "GiB");
+  if (bytes >= mib) return `${(bytes + mib / 2n) / mib} MiB`;
+  return `${bytes} B`;
 }
 type UsageMetric = { actual: number | string; reserved: number | string; free: number | string };
 

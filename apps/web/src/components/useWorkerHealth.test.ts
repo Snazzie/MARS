@@ -1,20 +1,20 @@
 import { expect, test } from "bun:test";
 import { workerHealthQueryOptions } from "./useWorkerHealth.ts";
 
-test("disables worker health while the panel is collapsed", () => {
-  expect(workerHealthQueryOptions("worker-1", false)).toMatchObject({
-    queryKey: ["worker-health", "worker-1"],
-    enabled: false,
-    refetchInterval: false,
-  });
-});
-
-test("enables independent worker health polling while the panel is expanded", () => {
-  const options = workerHealthQueryOptions("worker-1", true);
+test("enables worker health polling for a valid worker ID", () => {
+  const options = workerHealthQueryOptions("worker-1");
   expect(options).toMatchObject({
     queryKey: ["worker-health", "worker-1"],
     enabled: true,
     refetchInterval: 3000,
   });
   expect(options.queryKey).not.toEqual(["org", "all", "workers"]);
+});
+
+test("disables worker health when the worker ID is empty", () => {
+  expect(workerHealthQueryOptions("")).toMatchObject({
+    queryKey: ["worker-health", ""],
+    enabled: false,
+    refetchInterval: 3000,
+  });
 });
