@@ -163,7 +163,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
       if (value.admissionState !== "adopted" || value.configurationState !== "ready") return error(c, 409, "worker_not_ready", "Worker must be adopted and configured before resume");
       await deps.db`UPDATE workers SET draining=false WHERE id=${id} AND admission_state='adopted' AND configuration_state='ready'`;
     } else {
-      const [active] = await deps.db`SELECT id FROM runner_leases WHERE worker_id=${id} AND state NOT IN ('reaped','failed','expired') LIMIT 1`;
+      const [active] = await deps.db`SELECT id FROM runner_leases WHERE worker_id=${id} AND state NOT IN ('reaped','failed','expired','completed') LIMIT 1`;
       if (active) return error(c, 409, "worker_has_active_leases", "Worker has active leases; wait for reaping before removal");
       await deps.db.begin(async tx => {
         await tx`UPDATE workers SET draining=true WHERE id=${id}`;

@@ -20,4 +20,12 @@ Implemented `getWorkerHealth` with worker/cache projection, live connection call
 - Existing unrelated working-tree changes were left untouched.
 
 ## Commit
-Commit: `f54f2fa`
+Commit: `cfa3962`
+
+## Review fix
+- Corrected production-shaped persisted doctor JSON (`{ doctor, capacity }`) extraction.
+- Derived pod actual capacity from `limits.maxConcurrentPods`; reserved from active lease count; free is clamped capacity minus reserved.
+- Added production-shaped doctor and pod-capacity assertions to focused dashboard tests.
+- Focused verification remains 26 pass, 0 fail, 63 expectations.
+
+Follow-up commit: `d59104d`
