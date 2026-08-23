@@ -238,7 +238,7 @@ foreach ($name in @(
   'WHITESMITH_CACHE_PROXY_PORT',
   'WHITESMITH_CACHE_DATA_PORT',
   'WHITESMITH_CACHE_PROXY_URL',
-  'WHITESMITH_CACHE_ADVERTISE_URL',
+  'WHITESMITH_CACHE_ADVERTISE_URL'
 )) {
   $value = [Environment]::GetEnvironmentVariable($name)
   if (-not [string]::IsNullOrWhiteSpace($value)) { $serviceEnvironment += "$name=$value" }

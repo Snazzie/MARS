@@ -171,6 +171,10 @@ test("worker installers propagate optional cache service environment", async () 
   expect(composeSource).toContain("/var/lib/whitesmith/action-cache");
   expect(composeSource).toContain("action-cache:${WHITESMITH_ACTION_CACHE_ROOT:-/var/lib/whitesmith/action-cache}");
 });
+test("Windows installer keeps the optional cache environment list valid PowerShell", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).not.toMatch(/'WHITESMITH_CACHE_ADVERTISE_URL',\r?\n\s*\)\) \{/);
+});
 
 test("Windows installer replaces duplicate worker cache firewall rules with one scoped rule", async () => {
   const source = await Bun.file(powershell).text();
