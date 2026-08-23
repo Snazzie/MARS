@@ -26,6 +26,7 @@ bun test apps/web/src/components/WorkerCard.test.tsx apps/web/src/components/Wor
 ## Commit
 
 Implementation commit: `c11cda5` (`feat(web): always show worker health`)
+Test-path alignment commit: `2cf0991` (`test(web): align health hook test path`)
 
 ## Concerns
 
