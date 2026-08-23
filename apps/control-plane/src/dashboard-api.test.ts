@@ -41,9 +41,46 @@ function discoveryRecheckApiDb(result: "queued" | "not_found" | "not_paused" = "
   }) as never;
   return { db: sql, state };
 }
+const healthWorkerId = "86afd915-add3-407c-a6c1-1b46803ef713";
+function workerHealthApiDb(worker: Record<string, unknown> | null = {
+  id: healthWorkerId,
+  connectionState: "offline",
+  heartbeatAgeSeconds: 1,
+  doctorAgeSeconds: 2,
+  lastHeartbeatAt: new Date("2026-08-23T11:59:59.000Z"),
+  lastDoctorAt: new Date("2026-08-23T11:59:58.000Z"),
+  observedAt: new Date("2026-08-23T12:00:00.000Z"),
+  limits: { maxConcurrentPods: 2 },
+  doctor: { doctor: { probe: true }, capacity: { actualVcpu: 8, freeVcpu: 6, actualMemoryBytes: "100", freeMemoryBytes: "80", actualStorageBytes: "200", freeStorageBytes: "150" }, credentials: "do-not-return" },
+  desiredConfiguration: { cache: { ttlSeconds: 3600 } },
+  cacheGeneration: "11111111-1111-4111-8111-111111111111",
+  cacheReady: true,
+  cacheTtlSeconds: 1800,
+  cacheSizeBytes: "1000",
+  cacheEntryCount: 12,
+  cacheObservedAt: new Date("2026-08-23T11:59:50.000Z"),
+  cacheError: null,
+}) {
+  return Object.assign(async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ");
+    if (query.includes("FROM workers w")) return worker ? [worker] : [];
+    if (query.includes("FROM runner_leases l")) return [{
+      leaseId: "22222222-2222-4222-8222-222222222222",
+      jobId: 42,
+      repositoryFullName: "acme/project",
+      repositoryName: "project",
+      state: "busy",
+      startedAt: new Date("2026-08-23T11:59:00.000Z"),
+      ageSeconds: 60,
+      requested: { vcpu: 2, memoryBytes: "10", storageBytes: "20", concurrency: 1 },
+      credentials: "do-not-return",
+    }];
+  }, {}) as never;
+}
+
 const member = { id: "u1", githubUserId: 1, login: "member", isGlobalAdmin: false };
 const admin = { id: "u2", githubUserId: 2, login: "admin", isGlobalAdmin: true };
-function appFor(user = member, db = fakeDb()) { return createControlPlaneApp({ db, setup: { publicOrigin: () => "https://x", configure: async (origin: string) => origin, claimAdmin: async () => "admin" }, browserOrigin: () => "https://x", githubApp: { getOAuthCredentials: async () => ({ clientId: "id", clientSecret: "secret" }), getWebhookSecret: async () => "webhook" } as never, secretBox: new SecretBox(Buffer.alloc(32, 7).toString("base64")), defaultJobImages: {}, requestId: () => "req", requestSource: () => "test", webRoot: new URL("file:///tmp/"), workerInstallerRoot: new URL("file:///tmp/"), workerOrchestratorExecutable: new URL("file:///tmp/whitesmith-orchestrator"), onWorkerAdopted: () => {}, health: () => ({ buildId: "test", startedAt: new Date().toISOString(), discovery: { lastAttemptAt: null, lastSuccessAt: null, stale: false, staleAfterMs: 1 } }), currentUser: async () => user } as never); }
+function appFor(user: typeof member | typeof admin | null = member, db = fakeDb()) { return createControlPlaneApp({ db, setup: { publicOrigin: () => "https://x", configure: async (origin: string) => origin, claimAdmin: async () => "admin" }, browserOrigin: () => "https://x", githubApp: { getOAuthCredentials: async () => ({ clientId: "id", clientSecret: "secret" }), getWebhookSecret: async () => "webhook" } as never, secretBox: new SecretBox(Buffer.alloc(32, 7).toString("base64")), defaultJobImages: {}, requestId: () => "req", requestSource: () => "test", webRoot: new URL("file:///tmp/"), workerInstallerRoot: new URL("file:///tmp/"), workerOrchestratorExecutable: new URL("file:///tmp/whitesmith-orchestrator"), onWorkerAdopted: () => {}, workerConnected: () => true, health: () => ({ buildId: "test", startedAt: new Date().toISOString(), discovery: { lastAttemptAt: null, lastSuccessAt: null, stale: false, staleAfterMs: 1 } }), currentUser: async () => user } as never); }
 const sessionHeaders = { Cookie: "whitesmith_session=test" };
 
 test("session lookup normalizes PostgreSQL bigint GitHub IDs", async () => {
@@ -233,4 +270,65 @@ test("worker cache inventory rejects malformed opaque cursors", async () => {
   const response = await appFor(admin).request("/api/workers/11111111-1111-4111-8111-111111111111/cache?cursor=%%%25", { headers: sessionHeaders });
   expect(response.status).toBe(400);
   expect(await response.json()).toMatchObject({ code: "invalid_cache_cursor" });
+});
+test("worker health requires authentication", async () => {
+  const response = await appFor(null, workerHealthApiDb()).request(`/api/workers/${healthWorkerId}/health`);
+  expect(response.status).toBe(401);
+});
+
+test("worker health requires global administrator authorization", async () => {
+  const response = await appFor(member, workerHealthApiDb()).request(`/api/workers/${healthWorkerId}/health`, { headers: sessionHeaders });
+  expect(response.status).toBe(403);
+  expect(await response.json()).toMatchObject({ code: "forbidden" });
+});
+
+test("worker health returns a no-store not-found error for unknown workers", async () => {
+  const response = await appFor(admin, workerHealthApiDb(null)).request(`/api/workers/${healthWorkerId}/health`, { headers: sessionHeaders });
+  expect(response.status).toBe(404);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(await response.json()).toMatchObject({ code: "not_found" });
+});
+
+test("global admins receive strict no-store worker health without secrets", async () => {
+  const response = await appFor(admin, workerHealthApiDb()).request(`/api/workers/${healthWorkerId}/health`, { headers: sessionHeaders });
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  const body = await response.json();
+  expect(body).toEqual({
+    observedAt: "2026-08-23T12:00:00.000Z",
+    connection: {
+      state: "online",
+      lastHeartbeatAt: "2026-08-23T11:59:59.000Z",
+      lastDoctorAt: "2026-08-23T11:59:58.000Z",
+      heartbeatAgeSeconds: 1,
+      doctorAgeSeconds: 2,
+    },
+    usage: {
+      cpu: { actual: 8, reserved: 2, free: 6 },
+      memoryBytes: { actual: "100", reserved: "10", free: "80" },
+      storageBytes: { actual: "200", reserved: "20", free: "150" },
+      pods: { actual: 2, reserved: 1, free: 1 },
+    },
+    cache: {
+      desiredTtlSeconds: 3600,
+      effectiveTtlSeconds: 1800,
+      ready: true,
+      generation: "11111111-1111-4111-8111-111111111111",
+      sizeBytes: "1000",
+      entryCount: 12,
+      observedAt: "2026-08-23T11:59:50.000Z",
+      error: null,
+    },
+    jobs: [{
+      jobId: 42,
+      repositoryFullName: "acme/project",
+      repositoryName: "project",
+      leaseId: "22222222-2222-4222-8222-222222222222",
+      state: "busy",
+      startedAt: "2026-08-23T11:59:00.000Z",
+      ageSeconds: 60,
+      requested: { vcpu: 2, memoryBytes: "10", storageBytes: "20", concurrency: 1 },
+    }],
+  });
+  expect(JSON.stringify(body)).not.toContain("do-not-return");
 });
