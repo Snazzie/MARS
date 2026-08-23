@@ -6,6 +6,8 @@ import { Button } from "@astryxdesign/core/Button";
 import { WorkerActions } from "./WorkerActions.tsx";
 import { WorkerConfigurationForm } from "./WorkerConfigurationForm.tsx";
 import { WorkerDoctor } from "./WorkerDoctor.tsx";
+import { WorkerHealthPanel } from "./WorkerHealthPanel.tsx";
+import { useWorkerHealth } from "./useWorkerHealth.ts";
 import { WorkerImageBuildForm } from "./WorkerImageBuildForm.tsx";
 function bytes(value: number): string { if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GiB`; if (value >= 1024 ** 2) return `${Math.round(value / 1024 ** 2)} MiB`; return `${value} B`; }
 function capacity(label: string, value: { actual: number; reserved: number; free: number }, formatter: (n: number) => string = String) { return <div className="capacity-item"><span>{label}</span><strong>{formatter(value.free)} free</strong><small>{formatter(value.reserved)} reserved · {formatter(value.actual)} actual</small></div>; }
@@ -51,6 +53,11 @@ function WorkerCacheInventory({ workerId }: { workerId: string }) {
     {inventory.hasNextPage && <button type="button" className="control-button" onClick={() => void inventory.fetchNextPage()} disabled={inventory.isFetchingNextPage}>{inventory.isFetchingNextPage ? "Loading…" : "Load more"}</button>}
   </div>;
 }
+function WorkerHealthSection({ workerId }: { workerId: string }) {
+  const healthQuery = useWorkerHealth(workerId, true);
+  return <WorkerHealthPanel health={healthQuery.data} loading={healthQuery.isLoading} error={healthQuery.error} />;
+}
+
 export function WorkerCard({ worker, organizationId, onChange, canManage = false }: { worker: WorkerDetail; organizationId: string; onChange: () => void; canManage?: boolean }) {
   const active = worker.admissionState === "adopted";
   const [preservationPending, setPreservationPending] = useState(false);
@@ -66,6 +73,7 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
   const runtimeReady = worker.doctor?.runtimeReady === true && worker.doctor.probe === true && worker.doctor.egress === true && worker.doctor.imageSignatures === true;
   const cache = worker.cache;
   const [cacheInventoryOpen, setCacheInventoryOpen] = useState(false);
+  const [healthExpanded, setHealthExpanded] = useState(false);
   const readinessLabel = workerReadinessLabel(effectiveConfigurationState);
   const applied = worker.appliedConfigurationRevision && worker.configurationAppliedAt
     ? { revision: worker.appliedConfigurationRevision.slice(0, 12), at: appliedAt(worker.configurationAppliedAt) }
@@ -96,6 +104,8 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
       <div><dt>Artifact digest</dt><dd>{worker.artifactDigest ? <code>{worker.artifactDigest}</code> : worker.doctor?.artifactIdentity ? <code>{worker.doctor.artifactIdentity}</code> : "Not reported"}</dd></div>
       <div><dt>Active leases</dt><dd>{worker.activeSandboxes}</dd></div>
     </dl>
+    <button type="button" className="worker-health-toggle control-button" aria-expanded={healthExpanded} aria-controls={`worker-health-${worker.id}`} onClick={() => setHealthExpanded((expanded) => !expanded)}>{healthExpanded ? "Hide live health" : "Show live health"}</button>
+    <div id={`worker-health-${worker.id}`}>{healthExpanded && <WorkerHealthSection workerId={worker.id} />}</div>
     <div className="worker-grid"><section className="worker-section"><div className="panel-kicker">Capacity / actual · reserved · free</div><div className="capacity-grid">{capacity("vCPU", worker.capacity.vcpu)}{capacity("Memory", worker.capacity.memoryBytes, bytes)}{capacity("Storage", worker.capacity.storageBytes, bytes)}{capacity("Pods", worker.capacity.pods)}</div></section><section className="worker-section"><div className="panel-kicker">Policy ceilings</div>{worker.limits ? <dl className="limits-list"><div><dt>vCPU / pod</dt><dd>{worker.limits.maxVcpuPerPod}</dd></div><div><dt>Memory / pod</dt><dd>{bytes(worker.limits.maxMemoryBytesPerPod)}</dd></div><div><dt>Storage / pod</dt><dd>{bytes(worker.limits.maxStorageBytesPerPod)}</dd></div><div><dt>Concurrency</dt><dd>{worker.limits.maxConcurrentPods}</dd></div></dl> : <p className="muted">Not configured.</p>}</section></div>
     {active && <section className="worker-section worker-cache-panel" aria-label="Action cache"><div className="panel-kicker">Action cache</div><div className="cache-summary-grid"><div><span>Desired TTL</span><strong>{ttlHours(cache?.desiredTtlSeconds)}</strong></div><div><span>Effective TTL</span><strong>{ttlHours(cache?.effectiveTtlSeconds)}</strong></div><div><span>Total size</span><strong>{formatBytes(cache?.sizeBytes)}</strong></div><div><span>Entries</span><strong>{cache?.entryCount ?? "Not reported"}</strong></div><div><span>Observed</span><strong>{telemetryAt(cache?.observedAt ?? null)}</strong></div></div>{cache && cache.desiredTtlSeconds !== cache.effectiveTtlSeconds && <p className="pending-note" role="status">Applying cache configuration. The desired TTL is waiting for worker acknowledgement.</p>}{(!cache || !cache.ready) && <p className="pending-note" role="status">Cache unavailable{cache?.error ? `: ${cache.error}` : ". The worker has not reported cache readiness."}</p>}{cache?.error && <p className="form-error" role="alert">Cache error: {cache.error}</p>}{cache?.ready && cache.entryCount === 0 && <p className="pending-note">No cache entries.</p>}{cache?.ready && cache.entryCount > 0 && <details onToggle={(event) => setCacheInventoryOpen(event.currentTarget.open)}><summary>Browse cache inventory</summary>{cacheInventoryOpen && cacheInventory(worker.id)}</details>}<dl className="limits-list"><div><dt>Service URL</dt><dd>{cache?.cacheBaseUrl ? <a href={cache.cacheBaseUrl}>{cache.cacheBaseUrl}</a> : "Not reported"}</dd></div><div><dt>Proxy origin</dt><dd>{cache?.proxyOrigin ?? "Not reported"}</dd></div></dl></section>}
     {building && <dialog open className="worker-config-dialog" aria-label="Build local runtime image"><WorkerImageBuildForm organizationId={organizationId} workerId={worker.id} onComplete={() => { setBuilding(false); onChange(); }} onCancel={() => setBuilding(false)} /></dialog>}

@@ -191,3 +191,44 @@ test("retains the last successful acknowledgement when an update fails", () => {
   expect(markup).toContain("Last applied");
   expect(markup).toContain("aaaaaaaaaaaa");
 });
+test("keeps live health collapsed until explicitly expanded", () => {
+  const markup = renderToStaticMarkup(<WorkerCard worker={workerFixture()} organizationId="all" onChange={() => {}} />);
+  expect(markup).toContain('aria-expanded="false"');
+  expect(markup).toContain('aria-controls="worker-health-86afd915-add3-407c-a6c1-1b46803ef713"');
+  expect(markup).toContain("Show live health");
+  expect(markup).not.toContain("System usage");
+});
+test("expands live health with an accessible control and lazy query", async () => {
+  const browser = new Window();
+  // @ts-expect-error test DOM globals
+  globalThis.document = browser.document;
+  // @ts-expect-error test DOM globals
+  globalThis.window = browser;
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    observedAt: null,
+    connection: { state: "online", lastHeartbeatAt: null, lastDoctorAt: null, heartbeatAgeSeconds: null, doctorAgeSeconds: null },
+    usage: { cpu: { actual: 1, reserved: 0, free: 1 }, memoryBytes: { actual: "1", reserved: "0", free: "1" }, storageBytes: { actual: "1", reserved: "0", free: "1" }, pods: { actual: 1, reserved: 0, free: 1 } },
+    cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: null, ready: false, generation: null, sizeBytes: "0", entryCount: 0, observedAt: null, error: null },
+    jobs: [],
+  }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+  try {
+    await act(async () => {
+      root.render(<QueryClientProvider client={client}><WorkerCard worker={workerFixture()} organizationId="all" onChange={() => {}} /></QueryClientProvider>);
+    });
+    const button = container.querySelector<HTMLButtonElement>(".worker-health-toggle")!;
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => { button.click(); });
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector("#worker-health-86afd915-add3-407c-a6c1-1b46803ef713")).not.toBeNull();
+  } finally {
+    globalThis.fetch = originalFetch;
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});
