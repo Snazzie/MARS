@@ -1,59 +1,59 @@
-import { expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { WorkerCacheProxy } from "@whitesmith/contracts";
-import { encodeLinuxGuestMessage } from "../../orchestrator/src/linux-guest-protocol.ts";
+import { expect, mock, test } from "bun:test";
+import { encodeLinuxGuestMessage, LinuxGuestFrameParser } from "../../orchestrator/src/linux-guest-protocol.ts";
 import { runLinuxVirtioGuestStream } from "./linux-guest.ts";
 
-const workerCache: WorkerCacheProxy = {
-  proxyUrl: "http://127.0.0.1:39123",
-  cacheBaseUrl: "https://127.0.0.1:39443",
-  caCertificatePem: "-----BEGIN CERTIFICATE-----\nworker-ca\n-----END CERTIFICATE-----\n",
+const leaseId = "11111111-1111-4111-8111-111111111111";
+const envelope = {
+  leaseId,
+  jobId: "22222222-2222-4222-8222-222222222222",
+  nonce: "n".repeat(32),
+  guestPlatform: "linux-x64" as const,
+  encodedJitConfig: "encoded-jit-config",
   expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  imageDigest: "sha256:test",
+  resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 },
 };
 
-test("Linux guest runs official runner with credential-free worker cache transport", async () => {
-  if (process.platform === "win32") return;
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-linux-guest-"));
+function stream(text: string): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+      controller.close();
+    },
+  });
+}
+
+test("emits runner.ready before starting the Linux runner", async () => {
+  const events: string[] = [];
+  const parser = new LinuxGuestFrameParser();
+  const channel = {
+    readable: (async function* () {
+      yield encodeLinuxGuestMessage({ type: "bootstrap", envelope });
+    })(),
+    write(data: Uint8Array) {
+      for (const message of parser.push(data)) events.push(message.type);
+    },
+    close() {
+      events.push("channel.close");
+    },
+  };
+  const spawn = mock(() => {
+    events.push("runner.spawn");
+    return {
+      stdout: stream("runner started\n"),
+      stderr: stream(""),
+      exited: Promise.resolve(0),
+    };
+  });
+  const originalSpawn = Bun.spawn;
+  Bun.spawn = spawn as typeof Bun.spawn;
   try {
-    const output = join(root, "env");
-    await writeFile(join(root, "run.sh"), `#!/bin/sh
-printf '%s\n%s\n%s\n' "$HTTPS_PROXY" "$NODE_EXTRA_CA_CERTS" "$ACTIONS_RUNNER_INPUT_JITCONFIG" > '${output}'
-test -s "$NODE_EXTRA_CA_CERTS"
-`, { mode: 0o700 });
-    await chmod(join(root, "run.sh"), 0o700);
-    const envelope = {
-      leaseId: "11111111-1111-4111-8111-111111111111",
-      jobId: "22222222-2222-4222-8222-222222222222",
-      nonce: "n".repeat(32),
-      guestPlatform: "linux-x64" as const,
-      encodedJitConfig: "jit-config",
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      imageDigest: `repo@sha256:${"a".repeat(64)}`,
-      resources: { vcpu: 1, memoryBytes: 2, storageBytes: 3, concurrency: 1 },
-    };
-    const channel = {
-      readable: (async function* () { yield encodeLinuxGuestMessage({ type: "bootstrap", envelope }); })(),
-      writes: [] as Uint8Array[],
-      write(data: Uint8Array) { this.writes.push(data); },
-      close() {},
-    };
-    const previousHttpsProxy = Bun.env.HTTPS_PROXY;
-    Bun.env.HTTPS_PROXY = "ambient-proxy";
-    try {
-      await runLinuxVirtioGuestStream(channel, root, () => Date.now(), workerCache);
-    } finally {
-      if (previousHttpsProxy === undefined) delete Bun.env.HTTPS_PROXY;
-      else Bun.env.HTTPS_PROXY = previousHttpsProxy;
-    }
-    const lines = (await Bun.file(output).text()).trim().split("\n");
-    expect(lines[0]).toBe(workerCache.proxyUrl);
-    expect(new URL(workerCache.proxyUrl).username).toBe("");
-    expect(new URL(workerCache.proxyUrl).password).toBe("");
-    expect(lines[2]).toBe("jit-config");
-    expect(await Bun.file(lines[1]!).exists()).toBe(false);
+    await expect(runLinuxVirtioGuestStream(channel, "/runner", () => Date.now())).resolves.toBe(0);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    Bun.spawn = originalSpawn;
+    spawn.mockRestore();
   }
+
+  expect(events.slice(0, 3)).toEqual(["bootstrap.accepted", "runner.ready", "runner.spawn"]);
+  expect(events).toContain("runner.finished");
 });
