@@ -45,6 +45,36 @@ test("preserves large decimal byte strings without unsafe numeric conversion", (
   const markup = renderToStaticMarkup(<WorkerHealthPanel health={health} />);
   expect(markup).toContain(`${huge} B`);
 });
+test("combines resource usage into one accessible table with labeled allocation bars", () => {
+  const markup = renderToStaticMarkup(<WorkerHealthPanel health={healthFixture()} />);
+  expect(markup).toContain('<table class="worker-health-usage-table">');
+  expect(markup).toContain("<th scope=\"col\">Actual</th>");
+  expect(markup).toContain("<th scope=\"col\">Reserved by workers</th>");
+  expect(markup).toContain("<th scope=\"col\">Available</th>");
+  for (const resource of ["CPU", "Memory", "Storage", "Pods"]) expect(markup).toContain(`<th scope="row">${resource}</th>`);
+  expect(markup).toContain("Actual capacity");
+  expect(markup).toContain("Reserved by workers");
+  expect(markup).toContain("Available");
+  expect(markup).toContain('role="img"');
+  expect(markup).toContain("CPU: 1 reserved by workers, 1 available");
+});
+
+test("keeps zero-total allocation bars finite", () => {
+  const zero = { actual: 0, reserved: 0, free: 0 };
+  const markup = renderToStaticMarkup(<WorkerHealthPanel health={healthFixture({
+    usage: { cpu: zero, memoryBytes: { actual: "0", reserved: "0", free: "0" }, storageBytes: { actual: "0", reserved: "0", free: "0" }, pods: zero },
+  })} />);
+  expect(markup).not.toMatch(/(?:NaN|Infinity)%/);
+  expect(markup).toContain('style="width:0%"');
+});
+
+test("preserves large decimal byte strings in each resource value", () => {
+  const huge = "900719925474099300000";
+  const health = healthFixture({ usage: { ...healthFixture().usage, memoryBytes: { actual: huge, reserved: huge, free: huge } } });
+  const markup = renderToStaticMarkup(<WorkerHealthPanel health={health} />);
+  expect(markup.match(new RegExp(`${huge} B`, "g"))?.length).toBeGreaterThanOrEqual(3);
+});
+
 
 test("distinguishes stale, offline, empty, and unavailable telemetry states", () => {
   const health = healthFixture({

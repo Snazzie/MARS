@@ -21,6 +21,25 @@ function formatBytes(value: string): string {
     return `${value} B`;
   }
 }
+type UsageMetric = { actual: number | string; reserved: number | string; free: number | string };
+
+function allocationPercent(reserved: number | string, available: number | string): number {
+  const reservedText = String(reserved);
+  const availableText = String(available);
+  if (/^(?:0|[1-9]\d*)$/.test(reservedText) && /^(?:0|[1-9]\d*)$/.test(availableText)) {
+    const reservedInteger = BigInt(reservedText);
+    const availableInteger = BigInt(availableText);
+    const total = reservedInteger + availableInteger;
+    if (total === 0n) return 0;
+    return Number((reservedInteger * 10000n) / total) / 100;
+  }
+  const reservedNumber = typeof reserved === "number" ? reserved : Number(reserved);
+  const availableNumber = typeof available === "number" ? available : Number(available);
+  const total = reservedNumber + availableNumber;
+  if (!Number.isFinite(reservedNumber) || !Number.isFinite(availableNumber) || !Number.isFinite(total) || total <= 0) return 0;
+  return Math.max(0, Math.min(100, (reservedNumber / total) * 100));
+}
+
 
 function formatTtl(seconds: number | null): string {
   return seconds == null ? "Not reported" : `${seconds / 3600} hours`;
@@ -31,19 +50,20 @@ function timestamp(value: string | null, fallback = "Unavailable telemetry"): Re
   return <time dateTime={value}>{new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(value))}</time>;
 }
 
-function age(value: number | null): string {
-  return value == null ? "Unavailable telemetry" : `${value}s`;
-}
-function ageDisplay(value: number | null, startedAt: string | null): ReactNode {
-  const label = age(value);
-  return startedAt ? <time dateTime={startedAt}>{label}</time> : label;
-}
 function cacheStale(observedAt: string | null): boolean {
   if (!observedAt) return false;
   const ageSeconds = (Date.now() - Date.parse(observedAt)) / 1000;
   return ageSeconds > STALE_AFTER_SECONDS;
 }
 
+function age(value: number | null): string {
+  return value == null ? "Unavailable telemetry" : `${value}s`;
+}
+
+function ageDisplay(value: number | null, startedAt: string | null): ReactNode {
+  const label = age(value);
+  return startedAt ? <time dateTime={startedAt}>{label}</time> : label;
+}
 function stale(value: number | null): boolean {
   return value != null && value > STALE_AFTER_SECONDS;
 }
@@ -51,22 +71,45 @@ function stale(value: number | null): boolean {
 function StatusBadge({ children }: { children: ReactNode }) {
   return <span className="worker-health-status">{children}</span>;
 }
+
 function UsageSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: string }) {
-  const metric = (label: string, value: { actual: number | string; reserved: number | string; free: number | string }, bytes = false) => (
-    <div className="worker-health-metric">
-      <span>{label}</span>
-      <strong>Actual {bytes ? formatBytes(String(value.actual)) : value.actual}</strong>
-      <small>Reserved {bytes ? formatBytes(String(value.reserved)) : value.reserved} · Free {bytes ? formatBytes(String(value.free)) : value.free}</small>
-    </div>
-  );
+  const metrics: Array<{ label: string; values: UsageMetric; bytes?: boolean }> = [
+    { label: "CPU", values: health.usage.cpu },
+    { label: "Memory", values: health.usage.memoryBytes, bytes: true },
+    { label: "Storage", values: health.usage.storageBytes, bytes: true },
+    { label: "Pods", values: health.usage.pods },
+  ];
   return <section className="worker-health-section" aria-labelledby={`${idPrefix}-usage-heading`}>
     <h3 id={`${idPrefix}-usage-heading`}>System usage</h3>
-    <div className="worker-health-metrics">
-      {metric("CPU", health.usage.cpu)}
-      {metric("Memory", health.usage.memoryBytes, true)}
-      {metric("Storage", health.usage.storageBytes, true)}
-      {metric("Pods", health.usage.pods)}
+    <div className="worker-health-usage-table-wrap">
+      <table className="worker-health-usage-table">
+        <caption>Worker resource capacity and allocation</caption>
+        <thead><tr><th scope="col">Resource</th><th scope="col">Actual</th><th scope="col">Reserved by workers</th><th scope="col">Available</th><th scope="col">Allocation</th></tr></thead>
+        <tbody>{metrics.map(({ label, values, bytes }) => {
+          const actual = bytes ? formatBytes(String(values.actual)) : String(values.actual);
+          const reserved = bytes ? formatBytes(String(values.reserved)) : String(values.reserved);
+          const available = bytes ? formatBytes(String(values.free)) : String(values.free);
+          const reservedWidth = allocationPercent(values.reserved, values.free);
+          return <tr key={label}>
+            <th scope="row">{label}</th>
+            <td>{actual}</td>
+            <td>{reserved}</td>
+            <td>{available}</td>
+            <td>
+              <div className="worker-health-usage-bar" role="img" aria-label={`${label}: ${reserved} reserved by workers, ${available} available`}>
+                <span className="worker-health-usage-bar-reserved" style={{ width: `${reservedWidth}%` }} aria-hidden="true" />
+                <span className="worker-health-usage-bar-available" style={{ width: `${100 - reservedWidth}%` }} aria-hidden="true" />
+              </div>
+            </td>
+          </tr>;
+        })}</tbody>
+      </table>
     </div>
+    <ul className="worker-health-usage-legend" aria-label="Resource usage legend">
+      <li><span className="worker-health-legend-swatch worker-health-legend-actual" aria-hidden="true" />Actual capacity</li>
+      <li><span className="worker-health-legend-swatch worker-health-legend-reserved" aria-hidden="true" />Reserved by workers</li>
+      <li><span className="worker-health-legend-swatch worker-health-legend-available" aria-hidden="true" />Available</li>
+    </ul>
   </section>;
 }
 
