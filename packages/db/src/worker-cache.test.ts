@@ -41,8 +41,14 @@ test("worker cache upsert is idempotent and never stores secrets", async () => {
   const telemetry = await applyWorkerCacheTelemetry(db, event("worker.cache_entry_upsert", { generation, entry }));
   expect(telemetry).toBe(true);
   await applyWorkerCacheTelemetry(db, event("worker.cache_entry_upsert", { generation, entry }));
-  expect(calls.filter((sql) => sql.includes("worker_cache_entries")).length).toBe(2);
+  expect(calls.filter((sql) => sql.includes("INSERT INTO worker_cache_entries")).length).toBe(2);
   expect(calls.join(" ")).not.toMatch(/token|grant|certificate|signed_url/i);
+});
+test("worker cache deltas refresh summary count and bytes", async () => {
+  const { db, calls } = fakeDb();
+  await applyWorkerCacheTelemetry(db, event("worker.cache_entry_upsert", { generation, entry }));
+  await applyWorkerCacheTelemetry(db, event("worker.cache_entry_deleted", { generation, entryId: entry.entryId }));
+  expect(calls.filter((sql) => sql.includes("UPDATE worker_cache_status SET entry_count=")).length).toBe(2);
 });
 
 test("worker cache upsert rejects a delta from an inactive generation", async () => {

@@ -164,7 +164,7 @@ export function startWindowsLeaseLifecycle(
   send: (workerEvent: WorkerEvent) => void,
   active: Map<string, Promise<void>>,
   preserveLeases: () => boolean = () => false,
-  cacheService?: Pick<ActionCacheService, "transport">,
+  cacheService?: Pick<ActionCacheService, "transport" | "unregisterLease">,
 ): Promise<void> {
   const existing = active.get(bootstrap.leaseId);
   if (existing) return existing;

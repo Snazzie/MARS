@@ -39,6 +39,7 @@ export interface ActionCacheStore {
   reserveEntry(input: ReserveCacheEntryInput): Promise<ReservedCacheEntry | null>;
   writeArchive(entryId: string, bytes: Uint8Array): Promise<string>;
   writeUploadPart(entryId: string, partNumber: number, blockId: string, bytes: Uint8Array): Promise<string>;
+  writeUploadPartStream(entryId: string, partNumber: number, blockId: string, body: ReadableStream<Uint8Array>, maxBytes: number): Promise<string>;
   findReady(input: { githubRepositoryId: string; scopes: string[]; cacheKey: string; restoreKeys: string[]; version: string }): Promise<CacheStoreEntry | null>;
   findUploading(input: { githubRepositoryId: string; scope: string; cacheKey: string; version: string }): Promise<CacheStoreEntry | null>;
   touchReady(entryId: string): Promise<CacheStoreEntry>;
@@ -48,7 +49,8 @@ export interface ActionCacheStore {
   markReady(entryId: string, sizeBytes: bigint): Promise<void>;
   applyTtl(ttlSeconds: number): Promise<void>;
   setTelemetrySink(sink: ((type: ActionCacheMutation["type"], payload: Record<string, unknown>) => void) | null): void;
-  status(): Promise<{ sizeBytes: string; entryCount: number }>;
+  status(): { sizeBytes: string; entryCount: number };
+  sweep(): Promise<void>;
   snapshotPages(pageSize: number): AsyncIterable<WorkerCacheEntryProjection[]>;
   persistentSecretPath(label: string, extension: ".key" | ".crt"): string;
   probe(): Promise<void>;
@@ -221,18 +223,41 @@ class SqliteActionCacheStore implements ActionCacheStore {
   }
 
   async writeUploadPart(entryId: string, partNumber: number, blockId: string, bytes: Uint8Array): Promise<string> {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+    return this.writeUploadPartStream(entryId, partNumber, blockId, body, bytes.byteLength);
+  }
+
+  async writeUploadPartStream(entryId: string, partNumber: number, blockId: string, body: ReadableStream<Uint8Array>, maxBytes: number): Promise<string> {
     this.#assertOpen();
-    if (!Number.isSafeInteger(partNumber) || partNumber < 1 || partNumber > 10_000 || !blockId) throw new Error("invalid cache upload part");
+    if (!Number.isSafeInteger(partNumber) || partNumber < 1 || partNumber > 10_000 || !blockId || !Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error("invalid cache upload part");
     const exists = this.#db.query<{ value: number }, [string]>("SELECT 1 AS value FROM cache_entries WHERE entry_id=? AND state='uploading'").get(entryId);
     if (!exists) throw new Error("uploading cache entry not found");
     const pathId = randomUUID();
     const target = this.#partPath(pathId);
     const file = await open(target, "wx", 0o600);
-    try { await file.writeFile(bytes); await file.sync(); } finally { await file.close(); }
+    let sizeBytes = 0;
+    try {
+      for await (const chunk of body) {
+        sizeBytes += chunk.byteLength;
+        if (sizeBytes > maxBytes) throw new Error("cache upload block is too large");
+        await file.write(chunk);
+      }
+      await file.sync();
+    } catch (error) {
+      await file.close();
+      await this.#removeFile(target, { force: true });
+      throw error;
+    }
+    await file.close();
     await this.#syncDirectory(join(this.root, "blocks"));
     try {
       this.#db.query("INSERT INTO cache_upload_parts(entry_id,part_number,block_id,path_id,size_bytes,created_at) VALUES (?,?,?,?,?,?)")
-        .run(entryId, partNumber, blockId, pathId, String(bytes.byteLength), this.#now().toISOString());
+        .run(entryId, partNumber, blockId, pathId, String(sizeBytes), this.#now().toISOString());
     } catch (error) {
       await this.#removeFile(target, { force: true });
       await this.#syncDirectory(join(this.root, "blocks"));
@@ -243,24 +268,37 @@ class SqliteActionCacheStore implements ActionCacheStore {
 
   async findReady(input: { githubRepositoryId: string; scopes: string[]; cacheKey: string; restoreKeys: string[]; version: string }): Promise<CacheStoreEntry | null> {
     this.#assertOpen();
-    await this.#sweepExpired();
+    await this.sweep();
     requireRepositoryId(input.githubRepositoryId);
     const exactQuery = this.#db.prepare<EntryRow, [string, string, string, string]>(`SELECT entry_id AS entryId,github_repository_id AS githubRepositoryId,scope,cache_key AS cacheKey,version,archive_path_id AS archivePathId,size_bytes AS sizeBytes,created_at AS createdAt,updated_at AS updatedAt,last_accessed_at AS lastAccessedAt,expires_at AS expiresAt FROM cache_entries WHERE state='ready' AND github_repository_id=? AND scope=? AND cache_key=? AND version=? LIMIT 1`);
-    const restoreQuery = this.#db.prepare<EntryRow, [string, string, string, string]>(`SELECT entry_id AS entryId,github_repository_id AS githubRepositoryId,scope,cache_key AS cacheKey,version,archive_path_id AS archivePathId,size_bytes AS sizeBytes,created_at AS createdAt,updated_at AS updatedAt,last_accessed_at AS lastAccessedAt,expires_at AS expiresAt FROM cache_entries WHERE state='ready' AND github_repository_id=? AND scope=? AND cache_key LIKE ? ESCAPE '\\' AND version=? ORDER BY last_accessed_at DESC LIMIT 1`);
-    try {
+    const prefixQuery = this.#db.prepare<EntryRow, [string, string, string, string]>(`SELECT entry_id AS entryId,github_repository_id AS githubRepositoryId,scope,cache_key AS cacheKey,version,archive_path_id AS archivePathId,size_bytes AS sizeBytes,created_at AS createdAt,updated_at AS updatedAt,last_accessed_at AS lastAccessedAt,expires_at AS expiresAt FROM cache_entries WHERE state='ready' AND github_repository_id=? AND scope=? AND cache_key LIKE ? ESCAPE '\\' AND version=? ORDER BY last_accessed_at DESC LIMIT 1`);
+    const result = (row: EntryRow): CacheStoreEntry => ({ entryId: row.entryId, cacheKey: row.cacheKey, version: row.version, sizeBytes: row.sizeBytes, expiresAt: row.expiresAt, archivePath: this.#archivePath(row.archivePathId) });
+    const exact = (cacheKey: string): CacheStoreEntry | null => {
       for (const scope of input.scopes) {
-        const exact = exactQuery.get(input.githubRepositoryId, scope, input.cacheKey, input.version);
-        if (exact) return { entryId: exact.entryId, cacheKey: exact.cacheKey, version: exact.version, sizeBytes: exact.sizeBytes, expiresAt: exact.expiresAt, archivePath: this.#archivePath(exact.archivePathId) };
-        for (const restoreKey of input.restoreKeys) {
-          const escaped = restoreKey.replace(/[\\%_]/g, "\\$&");
-          const restored = restoreQuery.get(input.githubRepositoryId, scope, `${escaped}%`, input.version);
-          if (restored) return { entryId: restored.entryId, cacheKey: restored.cacheKey, version: restored.version, sizeBytes: restored.sizeBytes, expiresAt: restored.expiresAt, archivePath: this.#archivePath(restored.archivePathId) };
-        }
+        const row = exactQuery.get(input.githubRepositoryId, scope, cacheKey, input.version);
+        if (row) return result(row);
+      }
+      return null;
+    };
+    const prefix = (cacheKey: string): CacheStoreEntry | null => {
+      const escaped = cacheKey.replace(/[\\%_]/g, "\\$&");
+      for (const scope of input.scopes) {
+        const row = prefixQuery.get(input.githubRepositoryId, scope, `${escaped}%`, input.version);
+        if (row) return result(row);
+      }
+      return null;
+    };
+    try {
+      const primary = exact(input.cacheKey) ?? prefix(input.cacheKey);
+      if (primary) return primary;
+      for (const restoreKey of input.restoreKeys) {
+        const restored = exact(restoreKey) ?? prefix(restoreKey);
+        if (restored) return restored;
       }
       return null;
     } finally {
       exactQuery.finalize();
-      restoreQuery.finalize();
+      prefixQuery.finalize();
     }
   }
 
@@ -384,9 +422,15 @@ class SqliteActionCacheStore implements ActionCacheStore {
     });
     transaction();
     this.#ttlSeconds = ttlSeconds;
-    await this.#sweepExpired();
+    await this.sweep();
   }
 
+  async sweep(): Promise<void> {
+    this.#assertOpen();
+    const staleUploadCutoff = new Date(this.#now().getTime() - 60 * 60_000).toISOString();
+    this.#db.run("UPDATE cache_entries SET state='deleting',updated_at=? WHERE state='uploading' AND updated_at<=?", [this.#now().toISOString(), staleUploadCutoff]);
+    await this.#sweepExpired();
+  }
   async #sweepExpired(): Promise<void> {
     const now = this.#now().toISOString();
     const selectExpired = this.#db.prepare<EntryRow, [string]>(`SELECT entry_id AS entryId,github_repository_id AS githubRepositoryId,scope,cache_key AS cacheKey,version,
@@ -423,7 +467,7 @@ class SqliteActionCacheStore implements ActionCacheStore {
       await Promise.all([this.#syncDirectory(join(this.root, "archives")), this.#syncDirectory(join(this.root, "blocks"))]);
       this.#db.query("DELETE FROM cache_entries WHERE entry_id=? AND state='uploading'").run(row.entryId);
     }
-    await this.#sweepExpired();
+    await this.sweep();
     const archiveReferences = new Set(this.#db.query<{ pathId: string }, []>("SELECT archive_path_id AS pathId FROM cache_entries").all().map((row) => `${row.pathId}.archive`));
     const partReferences = new Set(this.#db.query<PartRow, []>("SELECT path_id AS pathId FROM cache_upload_parts").all().map((row) => `${row.pathId}.part`));
     for (const [directory, references] of [[join(this.root, "archives"), archiveReferences], [join(this.root, "blocks"), partReferences]] as const) {
@@ -435,10 +479,15 @@ class SqliteActionCacheStore implements ActionCacheStore {
     await this.#syncDirectory(probes);
   }
 
-  async status(): Promise<{ sizeBytes: string; entryCount: number }> {
+  status(): { sizeBytes: string; entryCount: number } {
     this.#assertOpen();
-    const row = this.#db.query<{ entryCount: number; sizeBytes: string }, []>("SELECT COUNT(*) AS entryCount,COALESCE(SUM(CAST(size_bytes AS INTEGER)),0) AS sizeBytes FROM cache_entries WHERE state='ready'").get();
-    return { entryCount: Number(row?.entryCount ?? 0), sizeBytes: String(row?.sizeBytes ?? "0") };
+    const query = this.#db.prepare<{ entryCount: number; sizeBytes: string }, []>("SELECT COUNT(*) AS entryCount,COALESCE(SUM(CAST(size_bytes AS INTEGER)),0) AS sizeBytes FROM cache_entries WHERE state='ready'");
+    try {
+      const row = query.get();
+      return { entryCount: Number(row?.entryCount ?? 0), sizeBytes: String(row?.sizeBytes ?? "0") };
+    } finally {
+      query.finalize();
+    }
   }
 
   async *snapshotPages(pageSize: number): AsyncIterable<WorkerCacheEntryProjection[]> {
@@ -491,6 +540,7 @@ class SqliteActionCacheStore implements ActionCacheStore {
     this.#closed = true;
     const database = this.#db as unknown as { clearQueryCache?: () => void; close: (force?: boolean) => void };
     database.clearQueryCache?.();
+    Bun.gc(true);
     database.close(true);
   }
 }

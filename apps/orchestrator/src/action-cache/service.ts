@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { createServer as createHttpsServer, request as httpsRequest, type Server as HttpsServer } from "node:https";
 import { isIP, connect as netConnect, type AddressInfo, type Socket } from "node:net";
@@ -12,12 +12,14 @@ import {
 } from "@whitesmith/contracts";
 import { loadOrCreateCertificateAuthority, type IssuedLeafCertificate, type WorkerCertificateAuthority } from "./certificates.ts";
 import { openActionCacheStore, type ActionCacheMutation, type ActionCacheStore } from "./store.ts";
-import { createActionCacheRoutes, createNodeActionCacheHandler, type NodeActionCacheHandler } from "./routes.ts";
+import { CREATE_CACHE_ENTRY_PATH, FINALIZE_CACHE_ENTRY_UPLOAD_PATH, GET_CACHE_ENTRY_DOWNLOAD_URL_PATH, createActionCacheRoutes, createGitHubCacheTokenVerifier, createNodeActionCacheHandler, type CacheTokenVerifier, type NodeActionCacheHandler } from "./routes.ts";
 
 type Environment = Record<string, string | undefined>;
 type Clock = () => Date;
 type CertificateRenewalHandle = { cancel(): void };
 type CertificateRenewalScheduler = (callback: () => Promise<void>, delayMs: number) => CertificateRenewalHandle;
+type SweepHandle = { cancel(): void };
+type SweepScheduler = (callback: () => Promise<void>, intervalMs: number) => SweepHandle;
 
 export type ActionCacheNetworkConfiguration = {
   proxyPort: number;
@@ -36,12 +38,16 @@ export type StartActionCacheServiceOptions = {
   now?: Clock;
   discoverAdvertiseHost?: (controlPlaneOrigin: string) => Promise<string>;
   scheduleCertificateRenewal?: CertificateRenewalScheduler;
+  authorizeCacheRequest?: CacheTokenVerifier;
+  forwardResultsRequest?: NodeActionCacheHandler;
+  scheduleSweep?: SweepScheduler;
 };
 
 export interface ActionCacheService {
   status(): WorkerCacheStatus;
   applyTtl(ttlSeconds: number): Promise<void>;
-  transport(expiresAt: string): WorkerCacheProxy;
+  transport(leaseId: string, expiresAt: string): WorkerCacheProxy;
+  unregisterLease(leaseId: string): void;
   snapshotPages(pageSize: number): AsyncIterable<WorkerCacheEntryProjection[]>;
   setTelemetrySink(sink: ((type: ActionCacheMutation["type"], payload: Record<string, unknown>) => void) | null): void;
   close(): Promise<void>;
@@ -175,6 +181,147 @@ function scheduleCertificateRenewal(callback: () => Promise<void>, delayMs: numb
   return { cancel: () => clearTimeout(timer) };
 }
 
+function scheduleSweep(callback: () => Promise<void>, intervalMs: number): SweepHandle {
+  const timer = setInterval(() => { void callback(); }, intervalMs);
+  timer.unref();
+  return { cancel: () => clearInterval(timer) };
+}
+
+const CACHE_RPC_PATHS = new Set([CREATE_CACHE_ENTRY_PATH, FINALIZE_CACHE_ENTRY_UPLOAD_PATH, GET_CACHE_ENTRY_DOWNLOAD_URL_PATH]);
+const CACHE_RPC_PREFIX = "/twirp/github.actions.results.api.v1.CacheService/";
+const CACHE_DATA_PREFIX = "/_apis/artifactcache/cache/";
+
+function forwardResultsRequest(request: Parameters<NodeActionCacheHandler>[0], response: Parameters<NodeActionCacheHandler>[1]): Promise<void> {
+  const authority = request.headers.host ?? "";
+  let target: URL;
+  try { target = new URL(`https://${authority}`); } catch {
+    response.writeHead(400, { "content-type": "text/plain", "cache-control": "no-store" });
+    response.end("invalid Results authority\n");
+    return Promise.resolve();
+  }
+  const hostname = normalizedHostname(target).toLowerCase();
+  if (!INTERCEPTED_CACHE_HOSTS.includes(hostname)) {
+    response.writeHead(403, { "content-type": "text/plain", "cache-control": "no-store" });
+    response.end("Results forwarding target rejected\n");
+    return Promise.resolve();
+  }
+  const headers = { ...request.headers };
+  delete headers["proxy-authorization"];
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  const upstream = httpsRequest({
+    hostname,
+    port: target.port ? Number(target.port) : 443,
+    method: request.method,
+    path: request.url,
+    headers,
+  }, (upstreamResponse) => {
+    response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+    upstreamResponse.pipe(response);
+    upstreamResponse.once("end", resolve);
+  });
+  upstream.once("error", reject);
+  request.pipe(upstream);
+  return promise;
+}
+
+function shouldHandleCacheLocally(host: string | undefined, path: string): boolean {
+  const hostname = (() => {
+    try { return normalizedHostname(new URL(`https://${host ?? ""}`)).toLowerCase(); } catch { return ""; }
+  })();
+  if (!INTERCEPTED_CACHE_HOSTS.includes(hostname)) return true;
+  return CACHE_RPC_PATHS.has(path) || path.startsWith(CACHE_RPC_PREFIX) || path.startsWith(CACHE_DATA_PREFIX);
+}
+
+type LeaseProxyCredential = { leaseId: string; username: string; token: string; expiresAt: number };
+
+class LeaseProxyCredentials {
+  readonly #byLease = new Map<string, LeaseProxyCredential>();
+  readonly #byUsername = new Map<string, LeaseProxyCredential>();
+  readonly #now: Clock;
+
+  constructor(now: Clock) {
+    this.#now = now;
+  }
+
+  register(leaseId: string, expiresAt: number): LeaseProxyCredential {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(leaseId)) throw new Error("cache transport lease ID must be a UUID");
+    this.unregister(leaseId);
+    const credential = {
+      leaseId,
+      username: randomBytes(18).toString("base64url"),
+      token: randomBytes(32).toString("base64url"),
+      expiresAt,
+    };
+    this.#byLease.set(leaseId, credential);
+    this.#byUsername.set(credential.username, credential);
+    return credential;
+  }
+
+  unregister(leaseId: string): void {
+    const credential = this.#byLease.get(leaseId);
+    if (!credential) return;
+    this.#byLease.delete(leaseId);
+    this.#byUsername.delete(credential.username);
+  }
+
+  authorize(header: string | undefined): boolean {
+    if (!header?.startsWith("Basic ")) return false;
+    let decoded: string;
+    try { decoded = Buffer.from(header.slice(6), "base64").toString("utf8"); } catch { return false; }
+    const separator = decoded.indexOf(":");
+    if (separator < 1) return false;
+    const username = decoded.slice(0, separator);
+    const token = decoded.slice(separator + 1);
+    const credential = this.#byUsername.get(username);
+    if (!credential || credential.expiresAt <= this.#now().getTime()) {
+      if (credential) this.unregister(credential.leaseId);
+      return false;
+    }
+    const actual = Buffer.from(token);
+    const expected = Buffer.from(credential.token);
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
+  }
+
+  clear(): void {
+    this.#byLease.clear();
+    this.#byUsername.clear();
+  }
+}
+class CacheGrantSigner {
+  readonly #cacheBaseUrl: string;
+  readonly #now: Clock;
+  readonly #secret = randomBytes(32);
+
+  constructor(cacheBaseUrl: string, now: Clock) {
+    this.#cacheBaseUrl = cacheBaseUrl;
+    this.#now = now;
+  }
+
+  #signature(operation: "upload" | "download", entryId: string, expiresAt: string): string {
+    return createHmac("sha256", this.#secret).update(`${operation}\n${entryId}\n${expiresAt}`).digest("base64url");
+  }
+
+  signedUrl(entryId: string, operation: "upload" | "download"): string {
+    const expiresAt = String(this.#now().getTime() + 15 * 60_000);
+    const url = new URL(`/_apis/artifactcache/cache/${entryId}`, this.#cacheBaseUrl);
+    url.searchParams.set("op", operation);
+    url.searchParams.set("exp", expiresAt);
+    url.searchParams.set("sig", this.#signature(operation, entryId, expiresAt));
+    return url.toString();
+  }
+
+  verify(request: Request, entryId: string, operation: "upload" | "download"): boolean {
+    const url = new URL(request.url);
+    const expiresAt = url.searchParams.get("exp");
+    const signature = url.searchParams.get("sig");
+    if (url.searchParams.get("op") !== operation || !expiresAt || !/^\d+$/.test(expiresAt) || Number(expiresAt) <= this.#now().getTime() || !signature) return false;
+    const expected = Buffer.from(this.#signature(operation, entryId, expiresAt));
+    const actual = Buffer.from(signature);
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
+  }
+}
+
+
 class PersistentActionCacheService implements ActionCacheService {
   readonly #store: ActionCacheStore;
   readonly #proxyServer: HttpServer;
@@ -188,13 +335,14 @@ class PersistentActionCacheService implements ActionCacheService {
   readonly #dataPort: number;
   readonly #proxyOrigin: string;
   readonly #cacheBaseUrl: string;
+  readonly #leaseCredentials: LeaseProxyCredentials;
   #ttlSeconds: number;
-  #entryCount: number;
-  #sizeBytes: string;
   #ready = true;
   #error: string | null = null;
   #closed = false;
   #renewal: CertificateRenewalHandle | null = null;
+  readonly #sweepHandle: SweepHandle;
+  #lastStoredStatus: { sizeBytes: string; entryCount: number };
 
   constructor(input: {
     store: ActionCacheStore;
@@ -205,14 +353,14 @@ class PersistentActionCacheService implements ActionCacheService {
     ttlSeconds: number;
     proxyOrigin: string;
     cacheBaseUrl: string;
-    entryCount: number;
-    sizeBytes: string;
     certificateAuthority: WorkerCertificateAuthority;
     advertiseHost: string;
     certificateExpiresAt: Date;
     scheduleRenewal: CertificateRenewalScheduler;
     createDataServer: (certificate: IssuedLeafCertificate) => HttpsServer;
     dataPort: number;
+    leaseCredentials: LeaseProxyCredentials;
+    sweepHandle: SweepHandle;
   }) {
     this.#store = input.store;
     this.#proxyServer = input.proxyServer;
@@ -222,13 +370,14 @@ class PersistentActionCacheService implements ActionCacheService {
     this.#ttlSeconds = input.ttlSeconds;
     this.#proxyOrigin = input.proxyOrigin;
     this.#cacheBaseUrl = input.cacheBaseUrl;
-    this.#entryCount = input.entryCount;
-    this.#sizeBytes = input.sizeBytes;
     this.#certificateAuthority = input.certificateAuthority;
     this.#advertiseHost = input.advertiseHost;
     this.#scheduleRenewal = input.scheduleRenewal;
     this.#createDataServer = input.createDataServer;
     this.#dataPort = input.dataPort;
+    this.#leaseCredentials = input.leaseCredentials;
+    this.#sweepHandle = input.sweepHandle;
+    this.#lastStoredStatus = input.store.status();
     this.#proxyServer.on("error", (error: Error) => this.#listenerFailed(error));
     this.#dataServer.on("error", (error: Error) => this.#listenerFailed(error));
     this.#scheduleCertificateRenewal(input.certificateExpiresAt);
@@ -270,16 +419,17 @@ class PersistentActionCacheService implements ActionCacheService {
     }, delayMs);
   }
 
-
   status(): WorkerCacheStatus {
+    if (!this.#closed) this.#lastStoredStatus = this.#store.status();
+    const stored = this.#lastStoredStatus;
     return WorkerCacheStatusSchema.parse({
       generation: this.#store.generation,
       ready: this.#ready && !this.#closed,
       ttlSeconds: this.#ttlSeconds,
       proxyOrigin: this.#proxyOrigin,
       cacheBaseUrl: this.#cacheBaseUrl,
-      sizeBytes: this.#sizeBytes,
-      entryCount: this.#entryCount,
+      sizeBytes: stored.sizeBytes,
+      entryCount: stored.entryCount,
       observedAt: this.#now().toISOString(),
       error: this.#error,
     });
@@ -288,17 +438,22 @@ class PersistentActionCacheService implements ActionCacheService {
   async applyTtl(ttlSeconds: number): Promise<void> {
     if (this.#closed) throw new Error("action cache service is closed");
     await this.#store.applyTtl(ttlSeconds);
-    const status = await this.#store.status();
     this.#ttlSeconds = ttlSeconds;
-    this.#entryCount = status.entryCount;
-    this.#sizeBytes = status.sizeBytes;
   }
 
-  transport(expiresAt: string): WorkerCacheProxy {
+  transport(leaseId: string, expiresAt: string): WorkerCacheProxy {
     if (this.#closed || !this.#ready) throw new Error("action cache service is not ready");
     const expiry = Date.parse(expiresAt);
     if (!Number.isFinite(expiry) || new Date(expiry).toISOString() !== expiresAt || expiry <= this.#now().getTime()) throw new Error("cache transport expiry must be in the future");
-    return WorkerCacheProxySchema.parse({ proxyUrl: this.#proxyOrigin, cacheBaseUrl: this.#cacheBaseUrl, caCertificatePem: this.#caCertificatePem, expiresAt });
+    const credential = this.#leaseCredentials.register(leaseId, expiry);
+    const proxyUrl = new URL(this.#proxyOrigin);
+    proxyUrl.username = credential.username;
+    proxyUrl.password = credential.token;
+    return WorkerCacheProxySchema.parse({ proxyUrl: proxyUrl.toString(), cacheBaseUrl: this.#cacheBaseUrl, caCertificatePem: this.#caCertificatePem, expiresAt });
+  }
+
+  unregisterLease(leaseId: string): void {
+    this.#leaseCredentials.unregister(leaseId);
   }
 
   snapshotPages(pageSize: number): AsyncIterable<WorkerCacheEntryProjection[]> {
@@ -310,14 +465,18 @@ class PersistentActionCacheService implements ActionCacheService {
 
   async close(): Promise<void> {
     if (this.#closed) return;
+    this.#lastStoredStatus = this.#store.status();
     this.#closed = true;
     this.#ready = false;
     this.#error = "action cache service is closed";
     this.#renewal?.cancel();
     this.#renewal = null;
-    const results = await Promise.allSettled([closeServer(this.#proxyServer), closeServer(this.#dataServer), this.#store.close()]);
-    const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
-    if (failed) throw failed.reason;
+    this.#sweepHandle.cancel();
+    this.#leaseCredentials.clear();
+    const listeners = await Promise.allSettled([closeServer(this.#proxyServer), closeServer(this.#dataServer)]);
+    const listenerFailure = listeners.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    await this.#store.close();
+    if (listenerFailure) throw listenerFailure.reason;
   }
 }
 
@@ -328,12 +487,23 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
   const proxyPort = explicitPort(options.proxyPort, network.proxyPort, "cache proxy port");
   const dataPort = explicitPort(options.dataPort, network.dataPort, "cache data port");
   const now = options.now ?? (() => new Date());
+  const leaseCredentials = new LeaseProxyCredentials(now);
+  const authorizeCacheRequest = options.authorizeCacheRequest ?? createGitHubCacheTokenVerifier({
+    issuer: env.WHITESMITH_CACHE_TOKEN_ISSUER,
+    jwksUrl: env.WHITESMITH_CACHE_JWKS_URL,
+  });
+  const forwardResults = options.forwardResultsRequest ?? forwardResultsRequest;
   let store: ActionCacheStore | null = null;
   let proxyServer: HttpServer | null = null;
   let dataServer: HttpsServer | null = null;
+  let sweepHandle: SweepHandle | null = null;
   try {
     store = await openActionCacheStore({ root: options.root, ttlSeconds: options.ttlSeconds, env, platform: options.platform, now });
     await store.probe();
+    sweepHandle = (options.scheduleSweep ?? scheduleSweep)(async () => {
+      try { await store!.sweep(); }
+      catch (error) { console.error("Action cache sweep failed", error instanceof Error ? error.message : String(error)); }
+    }, 60_000);
     const certificateAuthority = await loadOrCreateCertificateAuthority(store);
     const advertiseHost = network.overrideOrigins ? normalizedHostname(new URL(network.overrideOrigins.cacheBaseUrl)) : await (options.discoverAdvertiseHost ?? discoverActionCacheAdvertiseHost)(controlPlane);
     await certificateAuthority.issueLeaf("results-receiver.actions.githubusercontent.com", now());
@@ -350,9 +520,11 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
         response.end("cache routes not ready\n");
         return;
       }
-      void handleCacheRequest(request, response).catch((error) => {
-        if (!response.headersSent) response.writeHead(500, { "content-type": "text/plain", "cache-control": "no-store" });
-        response.end(`cache request failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      const path = (() => { try { return new URL(request.url ?? "/", "https://cache.invalid").pathname; } catch { return "/"; } })();
+      const handler = shouldHandleCacheLocally(request.headers.host, path) ? handleCacheRequest : forwardResults;
+      void handler(request, response).catch((error) => {
+        if (!response.headersSent) response.writeHead(502, { "content-type": "text/plain", "cache-control": "no-store" });
+        response.end(`cache transport request failed: ${error instanceof Error ? error.message : String(error)}\n`);
       });
     });
     dataServer = createDataServer(dataCertificate);
@@ -363,6 +535,10 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
     const proxy = proxyServer;
     let localDataPort = 0;
     proxy.on("connect", (request, socket, head) => {
+      if (!leaseCredentials.authorize(request.headers["proxy-authorization"])) {
+        socket.end("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"Whitesmith Worker Cache\"\r\nConnection: close\r\n\r\n");
+        return;
+      }
       let target: URL;
       try { target = new URL(`http://${request.url ?? ""}`); } catch { socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"); return; }
       const targetHost = normalizedHostname(target).toLowerCase();
@@ -384,9 +560,15 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
     localDataPort = boundDataPort;
     const proxyOrigin = network.overrideOrigins?.proxyOrigin ?? originFor("http:", advertiseHost, boundProxyPort);
     const cacheBaseUrl = network.overrideOrigins?.cacheBaseUrl ?? originFor("https:", advertiseHost, boundDataPort);
-    handleCacheRequest = createNodeActionCacheHandler(createActionCacheRoutes({ cacheBaseUrl, store }));
+    const grants = new CacheGrantSigner(cacheBaseUrl, now);
+    handleCacheRequest = createNodeActionCacheHandler(createActionCacheRoutes({
+      cacheBaseUrl,
+      store,
+      authorize: authorizeCacheRequest,
+      signedUrl: (entryId, operation) => grants.signedUrl(entryId, operation),
+      verifyGrant: (request, entryId, operation) => grants.verify(request, entryId, operation),
+    }));
     await probeDataEndpoint(cacheBaseUrl, certificateAuthority.certificatePem);
-    const storedStatus = await store.status();
     return new PersistentActionCacheService({
       store,
       proxyServer,
@@ -402,9 +584,11 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
       ttlSeconds: store.ttlSeconds,
       proxyOrigin,
       cacheBaseUrl,
-      ...storedStatus,
+      leaseCredentials,
+      sweepHandle,
     });
   } catch (error) {
+    sweepHandle?.cancel();
     await Promise.allSettled([closeServer(proxyServer), closeServer(dataServer), store?.close() ?? Promise.resolve()]);
     throw error;
   }

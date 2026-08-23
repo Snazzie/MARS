@@ -38,14 +38,15 @@ test("preserves a lease when worker setting is enabled", async () => {
   expect(events).toEqual(["sandbox_attested", "runner.finished", "diagnostic.chunk", "lease.failed"]);
 });
 
-test("passes credential-free worker cache transport without lease registration", async () => {
+test("passes authenticated worker cache transport and unregisters the lease", async () => {
   const workerCache = {
-    proxyUrl: "http://127.0.0.1:3128",
+    proxyUrl: "http://lease-user:lease-secret@127.0.0.1:3128",
     cacheBaseUrl: "https://127.0.0.1:8443",
     caCertificatePem: "worker-ca",
     expiresAt: bootstrap.expiresAt,
   };
   let received: unknown;
+  let unregistered: string | undefined;
   const driver = {
     createLease: async (lease: { workerCache?: unknown }) => {
       received = lease.workerCache;
@@ -55,15 +56,18 @@ test("passes credential-free worker cache transport without lease registration",
     removeLease: async () => {},
   };
   const cacheService = {
-    transport: (expiresAt: string) => {
+    transport: (leaseId: string, expiresAt: string) => {
+      expect(leaseId).toBe(bootstrap.leaseId);
       expect(expiresAt).toBe(bootstrap.expiresAt);
       return workerCache;
     },
+    unregisterLease: (leaseId: string) => { unregistered = leaseId; },
   };
-  await runLeaseLifecycle(command, driver, bootstrap, () => {}, { cacheService: cacheService as never });
+  await runLeaseLifecycle(command, driver, bootstrap, () => {}, { cacheService });
   expect(received).toEqual(workerCache);
-  expect(new URL(workerCache.proxyUrl).username).toBe("");
-  expect(new URL(workerCache.proxyUrl).password).toBe("");
+  expect(new URL(workerCache.proxyUrl).username).not.toBe("");
+  expect(new URL(workerCache.proxyUrl).password).not.toBe("");
+  expect(unregistered).toBe(bootstrap.leaseId);
 });
 
 test("fails lease provisioning closed when worker cache transport setup fails", async () => {

@@ -53,7 +53,7 @@ export type LinuxWorkerCommandContext = {
   runtimeReady: () => boolean;
   send: (event: WorkerEvent) => void;
   activeLeases?: Map<string, Promise<void>>;
-  cacheService: Pick<ActionCacheService, "applyTtl" | "transport">;
+  cacheService: Pick<ActionCacheService, "applyTtl" | "transport" | "unregisterLease">;
 };
 
 export async function handleLinuxWorkerCommandWithContext(command: WorkerCommand, resources: LinuxWorkerResources, context: LinuxWorkerCommandContext): Promise<WorkerEvent | void> {

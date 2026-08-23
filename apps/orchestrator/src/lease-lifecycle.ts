@@ -84,7 +84,8 @@ export async function runLeaseLifecycle(
   options?: {
     preserveLeases?: () => boolean;
     cacheService?: {
-      transport(expiresAt: string): WorkerCacheProxy;
+      transport(leaseId: string, expiresAt: string): WorkerCacheProxy;
+      unregisterLease(leaseId: string): void;
     };
   },
 ): Promise<void> {
@@ -93,12 +94,13 @@ export async function runLeaseLifecycle(
   const payload = { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, correlationId };
   let workerCache: WorkerCacheProxy | undefined;
   try {
-    if (options?.cacheService) workerCache = options.cacheService.transport(bootstrap.expiresAt);
+    if (options?.cacheService) workerCache = options.cacheService.transport(bootstrap.leaseId, bootstrap.expiresAt);
   } catch (error) {
     console.error("Lease cache transport setup failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) });
     send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "provisioning_failed" } });
     return;
   }
+  try {
   let runtime;
   try {
     runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig, ...(workerCache ? { workerCache } : {}) });
@@ -186,4 +188,7 @@ export async function runLeaseLifecycle(
   try { await driver.stopLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("Lease stop failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) }); }
   try { await driver.removeLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("Lease removal failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) }); }
   send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: cleanupFailed ? "lease.failed" : "lease.reaped", occurredAt: new Date().toISOString(), payload: cleanupFailed ? { ...payload, reason: "cleanup_failed" } : payload } as WorkerEvent);
+  } finally {
+    options?.cacheService?.unregisterLease(bootstrap.leaseId);
+  }
 }

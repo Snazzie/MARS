@@ -36,6 +36,9 @@ export async function sweepWorkerCacheSnapshots(db: SqlDb, maxAgeSeconds = 86_40
     await tx`UPDATE worker_cache_status SET active_snapshot_id=NULL,active_snapshot_started_at=NULL WHERE active_snapshot_started_at < ${cutoff}`;
   });
 }
+async function refreshWorkerCacheSummary(db: SqlDb, workerId: string, generation: string): Promise<void> {
+  await db`UPDATE worker_cache_status SET entry_count=(SELECT count(*)::int FROM worker_cache_entries WHERE worker_id=${workerId}),size_bytes=(SELECT COALESCE(sum(size_bytes),0) FROM worker_cache_entries WHERE worker_id=${workerId}),observed_at=now() WHERE worker_id=${workerId} AND generation=${generation}`;
+}
 
 export async function applyWorkerCacheTelemetry(db: SqlDb, input: TelemetryEvent): Promise<boolean> {
   const payload = input.payload ?? {};
@@ -48,6 +51,7 @@ export async function applyWorkerCacheTelemetry(db: SqlDb, input: TelemetryEvent
     if (typeof active?.generation === "string" && active.generation !== generation) return false;
     const values = entryValues(entry);
     await db`INSERT INTO worker_cache_entries (worker_id,entry_id,github_repository_id,cache_key_preview,cache_key_hash,scope_preview,scope_hash,version_hash,size_bytes,created_at,last_accessed_at,expires_at,observed_generation) SELECT ${input.workerId},${values[0]},${values[1]},${values[2]},${values[3]},${values[4]},${values[5]},${values[6]},${values[7]},${values[8]},${values[9]},${values[10]},${generation} FROM worker_cache_status WHERE worker_id=${input.workerId} AND generation=${generation} ON CONFLICT (worker_id,entry_id) DO UPDATE SET github_repository_id=excluded.github_repository_id,cache_key_preview=excluded.cache_key_preview,cache_key_hash=excluded.cache_key_hash,scope_preview=excluded.scope_preview,scope_hash=excluded.scope_hash,version_hash=excluded.version_hash,size_bytes=excluded.size_bytes,created_at=excluded.created_at,last_accessed_at=excluded.last_accessed_at,expires_at=excluded.expires_at,observed_generation=excluded.observed_generation WHERE worker_cache_entries.observed_generation=${generation} AND worker_cache_entries.observed_generation=(SELECT generation FROM worker_cache_status WHERE worker_id=${input.workerId})`;
+    await refreshWorkerCacheSummary(db, input.workerId, generation);
     return true;
   }
   if (input.type === "worker.cache_entry_deleted") {
@@ -55,6 +59,7 @@ export async function applyWorkerCacheTelemetry(db: SqlDb, input: TelemetryEvent
     const generation = payload.generation;
     const entryId = payload.entryId;
     await db`DELETE FROM worker_cache_entries WHERE worker_id=${input.workerId} AND entry_id=${entryId} AND observed_generation=${generation} AND observed_generation=(SELECT generation FROM worker_cache_status WHERE worker_id=${input.workerId})`;
+    await refreshWorkerCacheSummary(db, input.workerId, generation);
     return true;
   }
   if (input.type === "worker.cache_snapshot_begin") {

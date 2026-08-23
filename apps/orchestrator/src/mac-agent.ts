@@ -103,17 +103,21 @@ export async function runMacLeaseLifecycle(
   bootstrap: LeaseBootstrapEnvelope,
   send: (event: WorkerEvent) => void,
   preserveLeases = false,
-  cacheService?: Pick<ActionCacheService, "transport">,
+  cacheService?: Pick<ActionCacheService, "transport" | "unregisterLease">,
 ): Promise<void> {
   let workerCache: WorkerCacheProxy | undefined;
   try {
-    if (cacheService) workerCache = cacheService.transport(bootstrap.expiresAt);
+    if (cacheService) workerCache = cacheService.transport(bootstrap.leaseId, bootstrap.expiresAt);
   } catch (error) {
     console.error("macOS lease cache transport setup failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
     send(workerEvent(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "provisioning_failed" }));
     return;
   }
-  await runMacLeaseLifecycleWithTransport(command, driver, bootstrap, send, preserveLeases, workerCache);
+  try {
+    await runMacLeaseLifecycleWithTransport(command, driver, bootstrap, send, preserveLeases, workerCache);
+  } finally {
+    cacheService?.unregisterLease(bootstrap.leaseId);
+  }
 }
 export function startMacLeaseLifecycle(
   command: WorkerCommand,
@@ -122,7 +126,7 @@ export function startMacLeaseLifecycle(
   send: (event: WorkerEvent) => void,
   active: Map<string, Promise<void>>,
   preserveLeases: () => boolean = () => false,
-  cacheService?: Pick<ActionCacheService, "transport">,
+  cacheService?: Pick<ActionCacheService, "transport" | "unregisterLease">,
 ): Promise<void> {
   const existing = active.get(bootstrap.leaseId);
   if (existing) return existing;

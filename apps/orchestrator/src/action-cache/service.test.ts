@@ -11,29 +11,35 @@ const roots: string[] = [];
 const services: ActionCacheService[] = [];
 afterEach(async () => {
   await Promise.all(services.splice(0).map((service) => service.close().catch(() => undefined)));
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })));
 });
 async function root(): Promise<string> { const value = await mkdtemp(join(tmpdir(), "whitesmith-cache-service-")); roots.push(value); return value; }
 
 function connectProxy(proxyUrl: string): Promise<string> {
   const url = new URL(proxyUrl);
-  return new Promise((resolve, reject) => {
-    const socket = connect(Number(url.port), url.hostname);
-    let response = "";
-    socket.setTimeout(2_000, () => { socket.destroy(); reject(new Error("proxy timeout")); });
-    socket.on("connect", () => socket.write("CONNECT results-receiver.actions.githubusercontent.com:443 HTTP/1.1\r\nHost: results-receiver.actions.githubusercontent.com:443\r\n\r\n"));
-    socket.on("data", (chunk) => { response += chunk.toString("latin1"); if (response.includes("\r\n\r\n")) { socket.destroy(); resolve(response); } });
-    socket.on("error", reject);
-  });
+  const credentials = url.username
+    ? `Proxy-Authorization: Basic ${Buffer.from(`${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`).toString("base64")}\r\n`
+    : "";
+  const { promise, resolve, reject } = Promise.withResolvers<string>();
+  const socket = connect(Number(url.port), url.hostname);
+  let response = "";
+  socket.setTimeout(2_000, () => { socket.destroy(); reject(new Error("proxy timeout")); });
+  socket.on("connect", () => socket.write(`CONNECT results-receiver.actions.githubusercontent.com:443 HTTP/1.1\r\nHost: results-receiver.actions.githubusercontent.com:443\r\n${credentials}\r\n`));
+  socket.on("data", (chunk) => { response += chunk.toString("latin1"); if (response.includes("\r\n\r\n")) { socket.destroy(); resolve(response); } });
+  socket.on("error", reject);
+  return promise;
 }
 
 function requestThroughProxy(proxyUrl: string, targetHost: string, ca: string, path: string): Promise<number> {
   const proxy = new URL(proxyUrl);
+  const credentials = proxy.username
+    ? `Proxy-Authorization: Basic ${Buffer.from(`${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`).toString("base64")}\r\n`
+    : "";
   const { promise, resolve, reject } = Promise.withResolvers<number>();
   const socket = connect(Number(proxy.port), proxy.hostname);
   let response = "";
   socket.once("error", reject);
-  socket.once("connect", () => socket.write(`CONNECT ${targetHost}:443 HTTP/1.1\r\nHost: ${targetHost}:443\r\n\r\n`));
+  socket.once("connect", () => socket.write(`CONNECT ${targetHost}:443 HTTP/1.1\r\nHost: ${targetHost}:443\r\n${credentials}\r\n`));
   const connected = (chunk: Buffer) => {
     response += chunk.toString("latin1");
     if (!response.includes("\r\n\r\n")) return;
@@ -60,21 +66,33 @@ function requestThroughProxy(proxyUrl: string, targetHost: string, ca: string, p
 }
 
 function probeHttps(origin: string, ca: string): Promise<number | undefined> {
-  return new Promise((resolve, reject) => {
-    const request = httpsRequest(new URL("/healthz", origin), { ca }, (response) => { response.resume(); response.on("end", () => resolve(response.statusCode)); });
-    request.on("error", reject);
-    request.end();
-  });
+  const { promise, resolve, reject } = Promise.withResolvers<number | undefined>();
+  const request = httpsRequest(new URL("/healthz", origin), { ca }, (response) => { response.resume(); response.on("end", () => resolve(response.statusCode)); });
+  request.on("error", reject);
+  request.end();
+  return promise;
 }
 
-function probeHttpsBody(origin: string, path: string, ca: string): Promise<{ status: number | undefined; body: string }> {
+function probeHttpsBody(origin: string, path: string, ca: string, headers: Record<string, string> = {}): Promise<{ status: number | undefined; body: string }> {
   const { promise, resolve, reject } = Promise.withResolvers<{ status: number | undefined; body: string }>();
-  const request = httpsRequest(new URL(path, origin), { ca }, (response) => {
+  const request = httpsRequest(new URL(path, origin), { ca, headers }, (response) => {
     const chunks: Buffer[] = [];
     response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
     response.on("end", () => resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString("utf8") }));
   });
   request.on("error", reject);
+  request.end();
+  return promise;
+}
+function requestHttps(origin: string, ca: string, input: { method: string; path: string; headers?: Record<string, string>; body?: string }): Promise<{ status: number | undefined; body: string }> {
+  const { promise, resolve, reject } = Promise.withResolvers<{ status: number | undefined; body: string }>();
+  const request = httpsRequest(new URL(input.path, origin), { ca, method: input.method, headers: input.headers }, (response) => {
+    const chunks: Buffer[] = [];
+    response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    response.on("end", () => resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString("utf8") }));
+  });
+  request.on("error", reject);
+  if (input.body !== undefined) request.write(input.body);
   request.end();
   return promise;
 }
@@ -112,17 +130,17 @@ test("discovers the worker advertise address from the control-plane route", asyn
 });
 
 
-test("starts both ready listeners and reports effective origins without credentials", async () => {
+test("starts ready listeners and keeps credentials out of reported origins", async () => {
   const service = await startActionCacheService({ root: await root(), controlPlaneOrigin: "https://control.example.test", ttlSeconds: 3600, proxyPort: 0, dataPort: 0, discoverAdvertiseHost: async () => "127.0.0.1" });
   services.push(service);
   const status = service.status();
   expect(status).toMatchObject({ ready: true, ttlSeconds: 3600, error: null, entryCount: 0, sizeBytes: "0" });
   expect(status.proxyOrigin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   expect(status.cacheBaseUrl).toMatch(/^https:\/\/127\.0\.0\.1:\d+$/);
-  const transport = service.transport("2026-08-24T00:00:00.000Z");
+  const transport = service.transport("11111111-1111-4111-8111-111111111111", "2026-08-24T00:00:00.000Z");
   expect(await probeHttps(status.cacheBaseUrl, transport.caCertificatePem)).toBe(200);
-  expect(transport.proxyUrl).toBe(status.proxyOrigin);
-  expect(transport.proxyUrl).not.toContain("@");
+  expect(new URL(transport.proxyUrl).origin).toBe(status.proxyOrigin);
+  expect(transport.proxyUrl).toContain("@");
   expect(await connectProxy(transport.proxyUrl)).toStartWith("HTTP/1.1 200");
   expect(await Array.fromAsync(service.snapshotPages(100))).toEqual([]);
 });
@@ -136,20 +154,82 @@ test("emits a complete cache snapshot envelope for an empty cache", async () => 
   expect(frames[1]?.payload).toMatchObject({ pageCount: 0, entryCount: 0, sizeBytes: "0" });
 });
 
-test("accepts auth-free Results CONNECT transport", async () => {
+test("requires active per-lease credentials for proxy CONNECT", async () => {
   const service = await startActionCacheService({ root: await root(), controlPlaneOrigin: "https://control.example.test", ttlSeconds: 3600, proxyPort: 0, dataPort: 0, discoverAdvertiseHost: async () => "127.0.0.1" });
   services.push(service);
-  const transport = service.transport("2026-08-24T00:00:00.000Z");
+  const transport = service.transport("11111111-1111-4111-8111-111111111111", "2026-08-24T00:00:00.000Z");
+  await expect(connectProxy(service.status().proxyOrigin)).resolves.toStartWith("HTTP/1.1 407");
   await expect(connectProxy(transport.proxyUrl)).resolves.toStartWith("HTTP/1.1 200");
 });
 
 test("mounts the cache protocol router on the persistent HTTPS listener", async () => {
   const service = await startActionCacheService({ root: await root(), controlPlaneOrigin: "https://control.example.test", ttlSeconds: 3600, proxyPort: 0, dataPort: 0, discoverAdvertiseHost: async () => "127.0.0.1" });
   services.push(service);
-  const transport = service.transport("2026-08-24T00:00:00.000Z");
+  const transport = service.transport("11111111-1111-4111-8111-111111111111", "2026-08-24T00:00:00.000Z");
   const response = await probeHttpsBody(service.status().cacheBaseUrl, "/twirp/github.actions.results.api.v1.CacheService/Unknown", transport.caCertificatePem);
   expect(response.status).toBe(404);
   expect(JSON.parse(response.body)).toEqual({ code: "unimplemented", msg: "unsupported cache-service method", meta: {} });
+});
+test("forwards non-cache Results methods instead of handling them locally", async () => {
+  const service = await startActionCacheService({
+    root: await root(),
+    controlPlaneOrigin: "https://control.example.test",
+    ttlSeconds: 3600,
+    proxyPort: 0,
+    dataPort: 0,
+    discoverAdvertiseHost: async () => "127.0.0.1",
+    forwardResultsRequest: async (_request, response) => {
+      response.writeHead(204);
+      response.end();
+    },
+  });
+  services.push(service);
+  const transport = service.transport("11111111-1111-4111-8111-111111111111", "2026-08-24T00:00:00.000Z");
+  const response = await probeHttpsBody(service.status().cacheBaseUrl, "/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact", transport.caCertificatePem, { host: "results-receiver.actions.githubusercontent.com" });
+  expect(response.status).toBe(204);
+});
+test("reports live entry count and bytes after a cache fill", async () => {
+  let now = new Date("2026-08-23T00:00:00.000Z");
+  let scheduledSweep: (() => Promise<void>) | undefined;
+  const service = await startActionCacheService({
+    root: await root(),
+    controlPlaneOrigin: "https://control.example.test",
+    ttlSeconds: 3600,
+    proxyPort: 0,
+    dataPort: 0,
+    discoverAdvertiseHost: async () => "127.0.0.1",
+    authorizeCacheRequest: async () => ({ githubRepositoryId: "1", scopes: new Map([["refs/heads/main", 3]]) }),
+    now: () => now,
+    scheduleSweep: (callback) => {
+      scheduledSweep = callback;
+      return { cancel() {} };
+    },
+  });
+  services.push(service);
+  const transport = service.transport("11111111-1111-4111-8111-111111111111", "2026-08-24T00:00:00.000Z");
+  const create = await requestHttps(service.status().cacheBaseUrl, transport.caCertificatePem, {
+    method: "POST",
+    path: "/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ metadata: { repository_id: "1", scope: [{ scope: "refs/heads/main", permission: "2" }] }, key: "summary-key", version: "v1" }),
+  });
+  const createBody: unknown = JSON.parse(create.body);
+  if (!createBody || typeof createBody !== "object" || !("signed_upload_url" in createBody) || typeof createBody.signed_upload_url !== "string") throw new Error("cache create response missing upload URL");
+  const uploadUrl = new URL(createBody.signed_upload_url);
+  const blockBytes = Buffer.alloc(48);
+  Buffer.from("0").copy(blockBytes, 36);
+  uploadUrl.searchParams.set("comp", "block");
+  uploadUrl.searchParams.set("blockid", blockBytes.toString("base64"));
+  await requestHttps(uploadUrl.origin, transport.caCertificatePem, { method: "PUT", path: `${uploadUrl.pathname}${uploadUrl.search}`, body: "abc" });
+  uploadUrl.searchParams.set("comp", "blocklist");
+  uploadUrl.searchParams.delete("blockid");
+  await requestHttps(uploadUrl.origin, transport.caCertificatePem, { method: "PUT", path: `${uploadUrl.pathname}${uploadUrl.search}`, body: `<BlockList><Latest>${blockBytes.toString("base64")}</Latest></BlockList>` });
+  expect(service.status()).toMatchObject({ entryCount: 1, sizeBytes: "3" });
+  now = new Date("2026-08-23T02:00:00.000Z");
+  await scheduledSweep!();
+  expect(service.status()).toMatchObject({ entryCount: 0, sizeBytes: "0" });
+  await service.close();
+  services.splice(services.indexOf(service), 1);
 });
 
 test("rotates the advertised data certificate before expiry", async () => {
@@ -199,21 +279,22 @@ test("fails readiness when advertised certificate renewal cannot be probed", asy
   expect(service.status()).toMatchObject({ ready: false, error: expect.stringContaining("certificate renewal failed") });
 });
 
-test("exposes one credential-free cache transport without lease auth state", async () => {
+test("isolates and revokes per-lease proxy credentials", async () => {
   const service = await startActionCacheService({ root: await root(), controlPlaneOrigin: "https://control.example.test", ttlSeconds: 3600, proxyPort: 0, dataPort: 0, discoverAdvertiseHost: async () => "127.0.0.1" });
   services.push(service);
-  const first = service.transport("2026-08-24T00:00:00.000Z");
-  const second = service.transport("2026-08-25T00:00:00.000Z");
-  expect(new URL(first.proxyUrl).username).toBe("");
-  expect(second.proxyUrl).toBe(first.proxyUrl);
-  expect(await connectProxy(first.proxyUrl)).toStartWith("HTTP/1.1 200");
+  const first = service.transport("11111111-1111-4111-8111-111111111111", "2026-08-24T00:00:00.000Z");
+  const second = service.transport("22222222-2222-4222-8222-222222222222", "2026-08-25T00:00:00.000Z");
+  expect(new URL(first.proxyUrl).username).not.toBe(new URL(second.proxyUrl).username);
+  service.unregisterLease("11111111-1111-4111-8111-111111111111");
+  expect(await connectProxy(first.proxyUrl)).toStartWith("HTTP/1.1 407");
+  expect(await connectProxy(second.proxyUrl)).toStartWith("HTTP/1.1 200");
 });
 
 test("persists service generation and CA while applying TTL before resolving", async () => {
   const cacheRoot = await root();
   const first = await startActionCacheService({ root: cacheRoot, controlPlaneOrigin: "https://control.example.test", ttlSeconds: 3600, proxyPort: 0, dataPort: 0, discoverAdvertiseHost: async () => "127.0.0.1" });
   const generation = first.status().generation;
-  const firstCa = first.transport("2026-08-24T00:00:00.000Z").caCertificatePem;
+  const firstCa = first.transport("11111111-1111-4111-8111-111111111111", "2026-08-24T00:00:00.000Z").caCertificatePem;
   await first.applyTtl(7200);
   expect(first.status().ttlSeconds).toBe(7200);
   await first.close();
@@ -222,7 +303,7 @@ test("persists service generation and CA while applying TTL before resolving", a
   services.push(second);
   expect(second.status().generation).toBe(generation);
   expect(second.status().ttlSeconds).toBe(7200);
-  expect(second.transport("2026-08-24T00:00:00.000Z").caCertificatePem).toBe(firstCa);
+  expect(second.transport("11111111-1111-4111-8111-111111111111", "2026-08-24T00:00:00.000Z").caCertificatePem).toBe(firstCa);
 });
 
 test("close revokes readiness and is idempotent", async () => {

@@ -78,6 +78,27 @@ test("backs the cache route adapter with ordered blocks and ready lookups", asyn
   await expect(store.markReady(reserved.entryId, 2n)).resolves.toBeUndefined();
   await store.close();
 });
+test("matches primary and restore keys in GitHub cache precedence order", async () => {
+  const root = await temporaryRoot();
+  let now = new Date("2026-08-23T00:00:00.000Z");
+  const store = await openActionCacheStore({ root, ttlSeconds: 3600, now: () => now });
+  const createReady = async (cacheKey: string, minute: number) => {
+    now = new Date(`2026-08-23T00:${String(minute).padStart(2, "0")}:00.000Z`);
+    const reserved = (await store.reserveEntry({ githubRepositoryId: "125", scope: "refs/heads/main", cacheKey, version: "v1" }))!;
+    await store.writeArchive(reserved.entryId, new Uint8Array([minute]));
+    await store.markReady(reserved.entryId, 1n);
+    return reserved.entryId;
+  };
+  const primaryPrefix = await createReady("primary-new", 1);
+  const exactRestore = await createReady("restore", 2);
+  await createReady("restore-newer", 3);
+
+  await expect(store.findReady({ githubRepositoryId: "125", scopes: ["refs/heads/main"], cacheKey: "primary-", restoreKeys: ["restore"], version: "v1" }))
+    .resolves.toMatchObject({ entryId: primaryPrefix, cacheKey: "primary-new" });
+  await expect(store.findReady({ githubRepositoryId: "125", scopes: ["refs/heads/main"], cacheKey: "missing", restoreKeys: ["restore"], version: "v1" }))
+    .resolves.toMatchObject({ entryId: exactRestore, cacheKey: "restore" });
+  await store.close();
+});
 test("emits metadata upserts for fills and hits without cache bytes", async () => {
   const root = await temporaryRoot();
   const store = await openActionCacheStore({ root, ttlSeconds: 3600 });
@@ -107,6 +128,33 @@ test("recomputes expiry from last access and removes expired bytes before return
   expect(await store.status()).toEqual({ entryCount: 0, sizeBytes: "0" });
   await expect(stat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
   await store.close();
+});
+test("explicit sweep removes expired entries without a cache lookup", async () => {
+  const root = await temporaryRoot();
+  let now = new Date("2026-08-23T00:00:00.000Z");
+  const store = await openActionCacheStore({ root, ttlSeconds: 60, now: () => now });
+  const reserved = (await store.reserveEntry({ githubRepositoryId: "457", scope: "scope", cacheKey: "key", version: "version" }))!;
+  const archivePath = await store.writeArchive(reserved.entryId, new Uint8Array([1]));
+  await store.markReady(reserved.entryId, 1n);
+  now = new Date("2026-08-23T00:02:00.000Z");
+  await store.sweep();
+  expect(store.status()).toEqual({ entryCount: 0, sizeBytes: "0" });
+  await expect(stat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+  await store.close();
+});
+test("closes cleanly after sweeping a finalized block upload", async () => {
+  const root = await temporaryRoot();
+  let now = new Date("2026-08-23T00:00:00.000Z");
+  const store = await openActionCacheStore({ root, ttlSeconds: 60, now: () => now });
+  const reserved = (await store.reserveEntry({ githubRepositoryId: "458", scope: "scope", cacheKey: "key", version: "version" }))!;
+  await store.writeUploadPartStream(reserved.entryId, 1, "block", new Response("abc").body!, 1024);
+  await store.assembleUpload(reserved.entryId, ["block"]);
+  await store.markReady(reserved.entryId, 3n);
+  now = new Date("2026-08-23T00:02:00.000Z");
+  await store.sweep();
+  expect(store.status()).toEqual({ entryCount: 0, sizeBytes: "0" });
+  expect(store.status()).toEqual({ entryCount: 0, sizeBytes: "0" });
+  await expect(store.close()).resolves.toBeUndefined();
 });
 
 test("retries byte cleanup for entries left in deleting state", async () => {

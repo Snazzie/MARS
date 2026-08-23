@@ -58,8 +58,12 @@ const originUrl = (protocol: "http:" | "https:", name: string) => z.string().url
   const url = new URL(value);
   return url.protocol === protocol && url.username === "" && url.password === "" && url.pathname === "/" && url.search === "" && url.hash === "" && url.port !== "0";
 }, `${name} must be a credential-free ${protocol === "https:" ? "HTTPS" : "HTTP"} origin`);
+const authenticatedProxyUrl = z.string().url().refine((value) => {
+  const url = new URL(value);
+  return url.protocol === "http:" && url.username !== "" && url.password !== "" && url.pathname === "/" && url.search === "" && url.hash === "" && url.port !== "0";
+}, "Proxy URL must be an authenticated HTTP origin");
 export const WorkerCacheProxy = z.object({
-  proxyUrl: originUrl("http:", "Proxy URL"),
+  proxyUrl: authenticatedProxyUrl,
   cacheBaseUrl: originUrl("https:", "Cache base URL"),
   caCertificatePem: z.string().min(1),
   expiresAt: z.string().datetime(),

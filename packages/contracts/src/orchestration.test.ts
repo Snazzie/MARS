@@ -149,7 +149,7 @@ test("requires explicit cache configuration in worker configured acknowledgement
 
 test("keeps cache proxy material guest-only", () => {
   const cache = {
-    proxyUrl: "http://127.0.0.1:3128",
+    proxyUrl: "http://lease-user:lease-secret@127.0.0.1:3128",
     cacheBaseUrl: "https://cache.worker.test",
     caCertificatePem: "-----BEGIN CERTIFICATE-----\npublic-ca\n-----END CERTIFICATE-----",
     expiresAt: "2026-08-23T12:00:00.000Z",
@@ -167,7 +167,7 @@ test("keeps cache proxy material guest-only", () => {
   };
   expect(LeaseBootstrapEnvelope.safeParse({ ...envelope, cache }).success).toBe(false);
   expect(orchestration.WorkerCacheProxy.safeParse({ ...cache, workerAddress: "10.0.0.1" }).success).toBe(false);
-  expect(orchestration.WorkerCacheProxy.safeParse({ ...cache, proxyUrl: "http://lease-user:lease-secret@127.0.0.1:3128" }).success).toBe(false);
+  expect(orchestration.WorkerCacheProxy.safeParse({ ...cache, proxyUrl: "http://127.0.0.1:3128" }).success).toBe(false);
   expect(orchestration.WorkerCacheProxy.safeParse({ ...cache, proxyUrl: "https://127.0.0.1:3128" }).success).toBe(false);
   expect(orchestration.WorkerCacheProxy.safeParse({ ...cache, proxyUrl: "http://127.0.0.1:3128/path" }).success).toBe(false);
   expect(orchestration.WorkerCacheProxy.safeParse({ ...cache, cacheBaseUrl: "http://cache.worker.test" }).success).toBe(false);

@@ -6,7 +6,7 @@ import { cliArgument, consumeGuestJitConfig, consumeGuestJitConfigWithWorkerCach
 
 const roots: string[] = [];
 const workerCache = {
-  proxyUrl: "http://127.0.0.1:3128",
+  proxyUrl: "http://lease-user:lease-secret@127.0.0.1:3128",
   cacheBaseUrl: "https://127.0.0.1:8443",
   caCertificatePem: "-----BEGIN CERTIFICATE-----\nworker-ca\n-----END CERTIFICATE-----\n",
   expiresAt: new Date(Date.now() + 60_000).toISOString(),
@@ -50,8 +50,8 @@ cat "$NODE_EXTRA_CA_CERTS" >> '${outputPath}'
 
   const output = await Bun.file(outputPath).text();
   expect(output).toContain(`${workerCache.proxyUrl}\n${workerCache.proxyUrl}\n${workerCache.proxyUrl}\n${workerCache.proxyUrl}\n`);
-  expect(new URL(workerCache.proxyUrl).username).toBe("");
-  expect(new URL(workerCache.proxyUrl).password).toBe("");
+  expect(new URL(workerCache.proxyUrl).username).not.toBe("");
+  expect(new URL(workerCache.proxyUrl).password).not.toBe("");
   expect(output).toContain(`${workerCache.caCertificatePem}`);
   const caPath = output.split("\n")[6];
   expect(caPath).toBeTruthy();
