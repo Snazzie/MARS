@@ -22,11 +22,26 @@ test("migration lineage preserves released history and converges exactly once", 
     "0004_linux_libvirt_driver",
     "0005_worker_preserve_leases",
     "0006_worker_action_cache",
+    "0007_repair_worker_cache_snapshot_staging",
+    "0008_repair_worker_cache_snapshot_status",
   ]);
   expect(new Set(journal.entries.map(entry => entry.tag.slice(0, 4))).size).toBe(journal.entries.length);
   expect(new Set(journal.entries.map(entry => entry.when)).size).toBe(journal.entries.length);
   expect(journal.entries.every((entry, index) => index === 0 || entry.when > journal.entries[index - 1].when)).toBe(true);
   expect(journal.entries[2]?.when).toBe(1700000002000);
+});
+
+test("worker cache staging repair migration restores the sweep column", async () => {
+  const migrationText = await migration("0007_repair_worker_cache_snapshot_staging.sql");
+  expect(migrationText).toContain('ALTER TABLE "worker_cache_snapshot_entries" ADD COLUMN IF NOT EXISTS "staged_at" timestamptz NOT NULL DEFAULT now();');
+  expect(migrationText).toContain('CREATE INDEX IF NOT EXISTS "worker_cache_snapshot_entries_staged_at_idx" ON "worker_cache_snapshot_entries"("staged_at");');
+});
+
+test("worker cache status repair migration restores snapshot lifecycle columns", async () => {
+  const migrationText = await migration("0008_repair_worker_cache_snapshot_status.sql");
+  expect(migrationText).toContain('ALTER TABLE "worker_cache_status" ADD COLUMN IF NOT EXISTS "active_snapshot_id" uuid;');
+  expect(migrationText).toContain('ALTER TABLE "worker_cache_status" ADD COLUMN IF NOT EXISTS "active_snapshot_started_at" timestamptz;');
+  expect(migrationText).toContain('ALTER TABLE "worker_cache_status" ADD COLUMN IF NOT EXISTS "last_completed_snapshot_id" uuid;');
 });
 
 test("released run-attempt migration remains non-destructive", async () => {

@@ -50,6 +50,20 @@
       "when": 1787428800000,
       "tag": "0006_worker_action_cache",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787511000000,
+      "tag": "0007_repair_worker_cache_snapshot_staging",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787511060000,
+      "tag": "0008_repair_worker_cache_snapshot_status",
+      "breakpoints": true
     }
   ]
 }
