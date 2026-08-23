@@ -811,3 +811,67 @@ export const dashboardJobTimingSnapshots = pgTable("dashboard_job_timing_snapsho
 	check("dashboard_job_timing_snapshots_requested_concurrency_check", sql`requested_concurrency > 0`),
 	check("dashboard_job_timing_snapshots_effective_concurrency_check", sql`effective_concurrency > 0`),
 ]);
+export const workerCacheStatus = pgTable("worker_cache_status", {
+	workerId: uuid("worker_id").primaryKey().notNull(),
+	generation: uuid().notNull(),
+	ready: boolean().default(false).notNull(),
+	ttlSeconds: integer("ttl_seconds").notNull(),
+	proxyOrigin: text("proxy_origin").notNull(),
+	cacheBaseUrl: text("cache_base_url").notNull(),
+	sizeBytes: bigint("size_bytes", { mode: "number" }).default(0).notNull(),
+	entryCount: bigint("entry_count", { mode: "number" }).default(0).notNull(),
+	observedAt: timestamp("observed_at", { withTimezone: true, mode: 'string' }).notNull(),
+	error: text(),
+	activeSnapshotId: uuid("active_snapshot_id"),
+	activeSnapshotStartedAt: timestamp("active_snapshot_started_at", { withTimezone: true, mode: 'string' }),
+	lastCompletedSnapshotId: uuid("last_completed_snapshot_id"),
+}, (table) => [
+	foreignKey({ columns: [table.workerId], foreignColumns: [workers.id], name: "worker_cache_status_worker_id_fkey" }).onDelete("cascade"),
+	check("worker_cache_status_size_bytes_check", sql`size_bytes >= 0`),
+	check("worker_cache_status_entry_count_check", sql`entry_count >= 0`),
+]);
+
+export const workerCacheEntries = pgTable("worker_cache_entries", {
+	workerId: uuid("worker_id").notNull(),
+	entryId: uuid("entry_id").notNull(),
+	githubRepositoryId: bigint("github_repository_id", { mode: "number" }).notNull(),
+	cacheKeyPreview: text("cache_key_preview").notNull(),
+	cacheKeyHash: text("cache_key_hash").notNull(),
+	scopePreview: text("scope_preview").notNull(),
+	scopeHash: text("scope_hash").notNull(),
+	versionHash: text("version_hash").notNull(),
+	sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
+	lastAccessedAt: timestamp("last_accessed_at", { withTimezone: true, mode: 'string' }).notNull(),
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).notNull(),
+	observedGeneration: uuid("observed_generation").notNull(),
+}, (table) => [
+	primaryKey({ columns: [table.workerId, table.entryId], name: "worker_cache_entries_pkey" }),
+	foreignKey({ columns: [table.workerId], foreignColumns: [workers.id], name: "worker_cache_entries_worker_id_fkey" }).onDelete("cascade"),
+	index("worker_cache_entries_order_idx").on(table.workerId, table.lastAccessedAt, table.entryId),
+	index("worker_cache_entries_repository_idx").on(table.workerId, table.githubRepositoryId),
+]);
+
+export const workerCacheSnapshotEntries = pgTable("worker_cache_snapshot_entries", {
+	workerId: uuid("worker_id").notNull(),
+	snapshotId: uuid("snapshot_id").notNull(),
+	sequence: integer().notNull(),
+	entryId: uuid("entry_id").notNull(),
+	githubRepositoryId: bigint("github_repository_id", { mode: "number" }).notNull(),
+	cacheKeyPreview: text("cache_key_preview").notNull(),
+	cacheKeyHash: text("cache_key_hash").notNull(),
+	scopePreview: text("scope_preview").notNull(),
+	scopeHash: text("scope_hash").notNull(),
+	versionHash: text("version_hash").notNull(),
+	sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
+	lastAccessedAt: timestamp("last_accessed_at", { withTimezone: true, mode: 'string' }).notNull(),
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).notNull(),
+	observedGeneration: uuid("observed_generation").notNull(),
+	stagedAt: timestamp("staged_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	primaryKey({ columns: [table.workerId, table.snapshotId, table.sequence, table.entryId], name: "worker_cache_snapshot_entries_pkey" }),
+	foreignKey({ columns: [table.workerId], foreignColumns: [workers.id], name: "worker_cache_snapshot_entries_worker_id_fkey" }).onDelete("cascade"),
+	index("worker_cache_snapshot_entries_idx").on(table.workerId, table.snapshotId, table.sequence, table.entryId),
+	index("worker_cache_snapshot_entries_staged_at_idx").on(table.stagedAt),
+]);

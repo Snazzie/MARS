@@ -2,6 +2,7 @@ import {
   ApiError,
   ApproveWorkerRequest,
   CursorPage,
+  DashboardWorkerCachePage,
   LogChunk,
   OrganizationSettings,
   OrganizationSummary,
@@ -205,7 +206,15 @@ export type WorkerConfigurationInput = {
   appliance: z.infer<typeof WorkerConfiguration>["appliance"];
   runtime: z.infer<typeof WorkerConfiguration>["runtime"];
   guestPlatforms: z.infer<typeof WorkerConfiguration>["guestPlatforms"];
+  cache?: { ttlSeconds: number };
 };
+export function getWorkerCache(workerId: string, { cursor, query = "", limit = 50 }: { cursor?: string | null; query?: string; limit?: number } = {}) {
+  const params = new URLSearchParams();
+  if (cursor) params.set("cursor", cursor);
+  params.set("limit", String(limit));
+  if (query) params.set("query", query);
+  return request(`/api/workers/${workerId}/cache?${params.toString()}`, DashboardWorkerCachePage);
+}
 export async function configurePendingWorker(workerId: string, input: WorkerConfigurationInput) {
   return request(`/api/workers/pending/${workerId}/configure`, DashboardWorkerMutationResponse, {
     method: "POST",

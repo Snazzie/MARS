@@ -2,9 +2,16 @@ import { afterEach, expect, test } from "bun:test";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cliArgument, consumeGuestJitConfig, runGuestService, runOneTimeJitBootstrap, runnerCommandForPlatform, waitForGuestBootstrap } from "./bootstrap.ts";
+import { cliArgument, consumeGuestJitConfig, consumeGuestJitConfigWithWorkerCache, runGuestService, runOneTimeJitBootstrap, runnerCommandForPlatform, waitForGuestBootstrap } from "./bootstrap.ts";
 
 const roots: string[] = [];
+const workerCache = {
+  proxyUrl: "http://127.0.0.1:3128",
+  cacheBaseUrl: "https://127.0.0.1:8443",
+  caCertificatePem: "-----BEGIN CERTIFICATE-----\nworker-ca\n-----END CERTIFICATE-----\n",
+  expiresAt: new Date(Date.now() + 60_000).toISOString(),
+};
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -23,6 +30,32 @@ test("starts run.sh from the supplied Actions Runner root", async () => {
 
   expect(await Bun.file(outputPath).text()).toBe("encoded-jit-config");
   expect(await Bun.file(configPath).exists()).toBe(false);
+});
+
+test("official runner receives worker cache proxy variables and a temporary CA", async () => {
+  if (process.platform === "win32") return;
+  const root = await mkdtemp(join(tmpdir(), "whitesmith-job-agent-"));
+  roots.push(root);
+  const outputPath = join(root, "cache-env");
+  await writeFile(join(root, "run.sh"), `#!/bin/sh
+printf '%s\n%s\n%s\n%s\n' "$HTTP_PROXY" "$http_proxy" "$HTTPS_PROXY" "$https_proxy" > '${outputPath}'
+printf '%s\n' "$NO_PROXY" "$no_proxy" >> '${outputPath}'
+printf '%s\n' "$NODE_EXTRA_CA_CERTS" "$node_extra_ca_certs" >> '${outputPath}'
+test -s "$NODE_EXTRA_CA_CERTS"
+cat "$NODE_EXTRA_CA_CERTS" >> '${outputPath}'
+`, { mode: 0o700 });
+  await chmod(join(root, "run.sh"), 0o700);
+
+  await consumeGuestJitConfigWithWorkerCache("encoded-jit-config", root, "linux-x64", workerCache);
+
+  const output = await Bun.file(outputPath).text();
+  expect(output).toContain(`${workerCache.proxyUrl}\n${workerCache.proxyUrl}\n${workerCache.proxyUrl}\n${workerCache.proxyUrl}\n`);
+  expect(new URL(workerCache.proxyUrl).username).toBe("");
+  expect(new URL(workerCache.proxyUrl).password).toBe("");
+  expect(output).toContain(`${workerCache.caCertificatePem}`);
+  const caPath = output.split("\n")[6];
+  expect(caPath).toBeTruthy();
+  expect(await Bun.file(caPath).exists()).toBe(false);
 });
 
 test("waits for the host to copy the guest bootstrap after startup", async () => {

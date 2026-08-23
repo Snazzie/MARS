@@ -64,7 +64,7 @@ export class HyperVDriver implements RuntimeDriver {
     const vmName = `${this.prefix}-${lease.id.slice(0, 8)}`;
     const diskPath = join(this.bootstrapRoot, `${vmName}.vhdx`);
     const bootstrapPath = join(this.bootstrapRoot, `${vmName}.json`);
-    await writeFile(bootstrapPath, JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig }), { flag: "wx", mode: 0o600 });
+    await writeFile(bootstrapPath, JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig, ...(lease.workerCache ? { workerCache: lease.workerCache } : {}) }), { flag: "wx", mode: 0o600 });
     try {
       await this.hyperv.createDifferencingDisk(this.templatePath, diskPath);
       await this.hyperv.createVm({ name: vmName, diskPath, resources: lease.resources });

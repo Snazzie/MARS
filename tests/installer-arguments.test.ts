@@ -6,6 +6,7 @@ const linux = join(root, "deploy/workers/install-worker.sh");
 const mac = join(root, "deploy/workers/install-worker-macos.sh");
 const prepareMacImage = join(root, "deploy/workers/prepare-macos-job-image.sh");
 const powershell = join(root, "deploy/workers/install-worker.ps1");
+const linuxCompose = join(root, "deploy/workers/linux-broker-compose.yaml");
 const prepareWindowsTemplate = join(root, "deploy/workers/prepare-windows-hyperv-template.ps1");
 const valid = "A".repeat(43);
 const posixRuntimeTest = process.platform === "win32" ? test.skip : test;
@@ -147,6 +148,46 @@ test("Windows installer gives the service a fresh environment without rebooting"
   expect(serviceEnvironment).toBeLessThan(source.indexOf("Start-Service WhitesmithWorker"));
   expect(source).toContain("HKLM:\\SYSTEM\\CurrentControlSet\\Services\\WhitesmithWorker");
   expect(source).toContain("-Name Environment -PropertyType MultiString");
+});
+test("worker installers propagate optional cache service environment", async () => {
+  const [windowsSource, macSource, composeSource] = await Promise.all([
+    Bun.file(powershell).text(),
+    Bun.file(mac).text(),
+    Bun.file(linuxCompose).text(),
+  ]);
+  for (const name of [
+    "WHITESMITH_ACTION_CACHE_ROOT",
+    "WHITESMITH_CACHE_PROXY_PORT",
+    "WHITESMITH_CACHE_DATA_PORT",
+    "WHITESMITH_CACHE_PROXY_URL",
+    "WHITESMITH_CACHE_ADVERTISE_URL",
+  ]) {
+    expect(windowsSource).toContain(name);
+    expect(macSource).toContain(name);
+    expect(composeSource).toContain(name);
+  }
+  expect(composeSource).toContain("${WHITESMITH_CACHE_PROXY_PORT:-8788}:${WHITESMITH_CACHE_PROXY_PORT:-8788}");
+  expect(composeSource).toContain("${WHITESMITH_CACHE_DATA_PORT:-8789}:${WHITESMITH_CACHE_DATA_PORT:-8789}");
+  expect(composeSource).toContain("/var/lib/whitesmith/action-cache");
+  expect(composeSource).toContain("action-cache:${WHITESMITH_ACTION_CACHE_ROOT:-/var/lib/whitesmith/action-cache}");
+});
+
+test("Windows installer replaces duplicate worker cache firewall rules with one scoped rule", async () => {
+  const source = await Bun.file(powershell).text();
+  const name = "Whitesmith Worker Cache";
+  expect(source).toContain(`Get-NetFirewallRule -DisplayName '${name}'`);
+  expect(source).toContain("Remove-NetFirewallRule");
+  expect(source).toContain(`New-NetFirewallRule -DisplayName '${name}'`);
+  expect(source).toContain("-Direction Inbound");
+  expect(source).toContain("-Protocol TCP");
+  expect(source).toContain("-Profile Domain,Private");
+  expect(source).toContain("-RemoteAddress LocalSubnet");
+  expect(source).toContain("-Program $exe");
+  expect(source).toContain("$cacheProxyPort");
+  expect(source).toContain("$cacheDataPort");
+  expect(source).toContain("$cacheFirewallPorts");
+  expect(source).toContain("between 1 and 65535");
+  expect(source).toContain("-LocalPort $cacheFirewallPorts");
 });
 test("Windows installer restricts only the join credential, not the template root", async () => {
   const source = await Bun.file(powershell).text();

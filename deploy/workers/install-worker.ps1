@@ -34,6 +34,15 @@ function Require-Administrator {
 function Assert-HttpsUrl([string]$Url, [string]$Name) {
   if ($Url -notmatch '^https://' -and $Url -notmatch '^http://(localhost|127\.0\.0\.1)(:\d+)?/') { throw "$Name must use HTTPS." }
 }
+function Resolve-CachePort([string]$Name, [int]$DefaultPort) {
+  $raw = [Environment]::GetEnvironmentVariable($Name)
+  if ([string]::IsNullOrWhiteSpace($raw)) { return $DefaultPort }
+  $port = 0
+  if (-not [int]::TryParse($raw, [ref]$port) -or $port -lt 1 -or $port -gt 65535) {
+    throw "$Name must be an integer between 1 and 65535."
+  }
+  return $port
+}
 function Assert-LocalImageManifest([string]$Path, [string]$Image) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Windows local image manifest is missing: $Path" }
   $manifest = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
@@ -206,6 +215,13 @@ if ($existingService) {
 Write-Host '[7/8] Registering LocalSystem worker service'
 Move-Item -LiteralPath $stagedExe -Destination $exe -Force
 Move-Item -LiteralPath $stagedServiceHost -Destination $serviceHost -Force
+$cacheProxyPort = Resolve-CachePort 'WHITESMITH_CACHE_PROXY_PORT' 8788
+$cacheDataPort = Resolve-CachePort 'WHITESMITH_CACHE_DATA_PORT' 8789
+$cacheFirewallPorts = @($cacheProxyPort, $cacheDataPort) | Sort-Object -Unique
+Get-NetFirewallRule -DisplayName 'Whitesmith Worker Cache' -ErrorAction SilentlyContinue |
+  Remove-NetFirewallRule -ErrorAction Stop
+New-NetFirewallRule -DisplayName 'Whitesmith Worker Cache' -Direction Inbound -Action Allow -Protocol TCP `
+  -LocalPort $cacheFirewallPorts -Program $exe -Profile Domain,Private -RemoteAddress LocalSubnet | Out-Null
 $workerLogPath = Join-Path $root 'logs\worker.log'
 $previousWorkerLogPath = Join-Path $root 'logs\worker.previous.log'
 if (Test-Path -LiteralPath $workerLogPath) { Move-Item -LiteralPath $workerLogPath -Destination $previousWorkerLogPath -Force }
@@ -217,6 +233,16 @@ $serviceEnvironment = @(
   "WHITESMITH_JOIN_CODE_FILE=$joinCodePath"
   "WHITESMITH_WINDOWS_RUNTIME=$WindowsRuntime"
 )
+foreach ($name in @(
+  'WHITESMITH_ACTION_CACHE_ROOT',
+  'WHITESMITH_CACHE_PROXY_PORT',
+  'WHITESMITH_CACHE_DATA_PORT',
+  'WHITESMITH_CACHE_PROXY_URL',
+  'WHITESMITH_CACHE_ADVERTISE_URL',
+)) {
+  $value = [Environment]::GetEnvironmentVariable($name)
+  if (-not [string]::IsNullOrWhiteSpace($value)) { $serviceEnvironment += "$name=$value" }
+}
 if ($WindowsRuntime -eq 'container') {
   $serviceEnvironment += "WHITESMITH_WINDOWS_CONTAINER_IMAGE=$WindowsContainerImage"
   $serviceEnvironment += "WHITESMITH_WINDOWS_CONTAINER_PREFIX=$WindowsContainerPrefix"

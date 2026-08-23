@@ -34,6 +34,7 @@ export { migrateDatabase } from "./migrate.ts";
 export { schemaSql } from "./schema.ts";
 export * from "./json.ts";
 export * from "./dashboard.ts";
+export * from "./worker-cache.ts";
 export * from "./job-timing.ts";
 export * from "./job-resource-telemetry.ts";
 export * from "./onboarding.ts";

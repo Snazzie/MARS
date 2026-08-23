@@ -54,6 +54,17 @@ export type RunnerJitConfig = z.infer<typeof RunnerJitConfig>;
 export const WorkerState = z.enum(["pending", "adopted", "rejected", "revoked"]);
 export const ConnectionState = z.enum(["offline", "online"]);
 export const ConfigurationState = z.enum(["unconfigured", "applying", "ready", "error"]);
+const originUrl = (protocol: "http:" | "https:", name: string) => z.string().url().refine((value) => {
+  const url = new URL(value);
+  return url.protocol === protocol && url.username === "" && url.password === "" && url.pathname === "/" && url.search === "" && url.hash === "" && url.port !== "0";
+}, `${name} must be a credential-free ${protocol === "https:" ? "HTTPS" : "HTTP"} origin`);
+export const WorkerCacheProxy = z.object({
+  proxyUrl: originUrl("http:", "Proxy URL"),
+  cacheBaseUrl: originUrl("https:", "Cache base URL"),
+  caCertificatePem: z.string().min(1),
+  expiresAt: z.string().datetime(),
+}).strict();
+export type WorkerCacheProxy = z.infer<typeof WorkerCacheProxy>;
 export const LeaseBootstrapEnvelope = z.object({
   leaseId: z.string().uuid(),
   jobId: z.string().uuid(),
@@ -104,6 +115,77 @@ export function workerBuildImageContentDescriptor(payload: Omit<WorkerBuildImage
 }
 export const WorkerBuildImageEventPayload = z.object({ commandId: z.string().uuid(), buildId: z.string().uuid(), image: z.string().min(1), imageId: z.string().regex(/^sha256:[0-9a-f]{64}$/).optional(), contentSha256: sha256Hex, runtimeReady: z.boolean(), message: z.string().min(1).max(1000).optional() }).strict();
 export const WorkerBuildImageFailedPayload = WorkerBuildImageEventPayload.extend({ runtimeReady: z.literal(false), failureStage: z.string().min(1).max(64) }).strict();
+const decimalInt64 = z.string().refine(
+  (value) => /^(?:0|[1-9]\d*)$/.test(value) && BigInt(value) <= 9_223_372_036_854_775_807n,
+  "Value must be a canonical nonnegative decimal signed int64",
+);
+const positiveDecimalInt64 = decimalInt64.refine((value) => value !== "0", "Value must be positive");
+const printablePreview = z.string().max(160).refine((value) => !/[\p{Cc}\p{Cs}]/u.test(value), "Preview must contain only printable characters");
+const proxyOrigin = originUrl("http:", "Proxy origin");
+const cacheBaseUrl = originUrl("https:", "Cache base URL");
+export const WorkerCacheEntryProjection = z.object({
+  entryId: z.string().uuid(),
+  githubRepositoryId: positiveDecimalInt64,
+  cacheKeyPreview: printablePreview,
+  cacheKeyHash: sha256Hex,
+  scopePreview: printablePreview,
+  scopeHash: sha256Hex,
+  versionHash: sha256Hex,
+  sizeBytes: decimalInt64,
+  createdAt: z.string().datetime({ offset: true }),
+  lastAccessedAt: z.string().datetime({ offset: true }),
+  expiresAt: z.string().datetime({ offset: true }),
+}).strict();
+export type WorkerCacheEntryProjection = z.infer<typeof WorkerCacheEntryProjection>;
+export const WorkerCacheStatus = z.object({
+  generation: z.string().uuid(),
+  ready: z.boolean(),
+  ttlSeconds: positiveSafe,
+  proxyOrigin,
+  cacheBaseUrl,
+  sizeBytes: decimalInt64,
+  entryCount: z.number().int().nonnegative().safe(),
+  observedAt: z.string().datetime({ offset: true }),
+  error: z.string().max(1000).nullable(),
+}).strict();
+export type WorkerCacheStatus = z.infer<typeof WorkerCacheStatus>;
+export const WorkerCacheEntryUpsertTelemetry = z.object({
+  type: z.literal("worker.cache_entry_upsert"),
+  payload: z.object({ generation: z.string().uuid(), entry: WorkerCacheEntryProjection }).strict(),
+}).strict();
+export const WorkerCacheEntryDeletedTelemetry = z.object({
+  type: z.literal("worker.cache_entry_deleted"),
+  payload: z.object({ generation: z.string().uuid(), entryId: z.string().uuid() }).strict(),
+}).strict();
+export const WorkerCacheSnapshotBeginTelemetry = z.object({
+  type: z.literal("worker.cache_snapshot_begin"),
+  payload: z.object({ snapshotId: z.string().uuid(), status: WorkerCacheStatus }).strict(),
+}).strict();
+export const WorkerCacheSnapshotPageTelemetry = z.object({
+  type: z.literal("worker.cache_snapshot_page"),
+  payload: z.object({
+    snapshotId: z.string().uuid(),
+    sequence: z.number().int().nonnegative().safe(),
+    entries: z.array(WorkerCacheEntryProjection).max(100),
+  }).strict(),
+}).strict();
+export const WorkerCacheSnapshotEndTelemetry = z.object({
+  type: z.literal("worker.cache_snapshot_end"),
+  payload: z.object({
+    snapshotId: z.string().uuid(),
+    pageCount: z.number().int().nonnegative().safe(),
+    entryCount: z.number().int().nonnegative().safe(),
+    sizeBytes: decimalInt64,
+  }).strict(),
+}).strict();
+export const WorkerCacheTelemetry = z.discriminatedUnion("type", [
+  WorkerCacheEntryUpsertTelemetry,
+  WorkerCacheEntryDeletedTelemetry,
+  WorkerCacheSnapshotBeginTelemetry,
+  WorkerCacheSnapshotPageTelemetry,
+  WorkerCacheSnapshotEndTelemetry,
+]);
+export type WorkerCacheTelemetry = z.infer<typeof WorkerCacheTelemetry>;
 export const WorkerCommand = z.object({ version: z.literal(1), id: z.string().uuid(), type: z.string().min(1), workerId: z.string().uuid(), leaseId: z.string().uuid().nullable(), occurredAt: z.string().datetime(), payload: z.record(z.unknown()) });
 export const WorkerEvent = z.object({ version: z.literal(1), id: z.string().uuid(), workerId: z.string().uuid(), type: z.string().min(1), occurredAt: z.string().datetime(), payload: z.record(z.unknown()) });
 export const WorkerEventPayload = z.discriminatedUnion("type", [
@@ -117,11 +199,44 @@ export const WorkerEventPayload = z.discriminatedUnion("type", [
   z.object({ type: z.literal("diagnostic.chunk"), payload: z.object({ jobId: z.string().uuid(), leaseId: z.string().uuid(), diagnosticId: z.string().uuid(), sequence: z.number().int().nonnegative(), content: z.string().max(128 * 1024), final: z.boolean() }).strict() }),
   z.object({ type: z.literal("job.log"), payload: z.object({ jobId: z.string().uuid(), stepId: z.string().uuid().nullable(), sequence: z.number().int().nonnegative(), content: z.string().max(256 * 1024), occurredAt: z.string().datetime() }).strict() }),
   z.object({ type: z.literal("job.resource_sample"), payload: z.object({ jobId: z.string().uuid(), leaseId: z.string().uuid(), occurredAt: z.string().datetime(), cpuUsagePercent: z.number().min(0).max(100), cpuTimeMs: z.number().int().nonnegative(), memoryWorkingSetBytes: z.number().int().nonnegative(), memoryLimitBytes: z.number().int().positive() }).strict() }),
+  WorkerCacheEntryUpsertTelemetry,
+  WorkerCacheEntryDeletedTelemetry,
+  WorkerCacheSnapshotBeginTelemetry,
+  WorkerCacheSnapshotPageTelemetry,
+  WorkerCacheSnapshotEndTelemetry,
 ]);
 export const WorkerApplianceConfiguration = z.object({ vcpu: positiveSafe, memoryBytes: positiveSafe, storageBytes: positiveSafe }).strict();
-export const WorkerConfiguration = z.object({ appliance: WorkerApplianceConfiguration, runtime: WorkerLimits, guestPlatforms: WorkerGuestPlatforms.default(["macos-arm64"]) }).strict();
-export const WorkerConfigurePayload = z.object({ workerId: z.string().uuid(), appliance: WorkerApplianceConfiguration, runtime: WorkerLimits, guestPlatforms: WorkerGuestPlatforms, revision: z.string().regex(/^[a-f0-9]{64}$/), fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
-export const WorkerConfiguredPayload = z.object({ commandId: z.string().uuid(), workerId: z.string().uuid(), revision: z.string().regex(/^[a-f0-9]{64}$/), observed: WorkerConfiguration }).strict();
+const workerCacheTtlSeconds = z.number().int().positive().safe();
+const RequiredWorkerCacheConfiguration = z.object({
+  ttlSeconds: workerCacheTtlSeconds,
+}).strict();
+export const WorkerCacheConfiguration = z.object({
+  ttlSeconds: workerCacheTtlSeconds.default(172800),
+}).strict();
+export type WorkerCacheConfiguration = z.infer<typeof WorkerCacheConfiguration>;
+const workerConfigurationShape = {
+  appliance: WorkerApplianceConfiguration,
+  runtime: WorkerLimits,
+  guestPlatforms: WorkerGuestPlatforms,
+};
+export const WorkerConfiguration = z.object({
+  ...workerConfigurationShape,
+  guestPlatforms: WorkerGuestPlatforms.default(["macos-arm64"]),
+  cache: WorkerCacheConfiguration.default({ ttlSeconds: 172800 }),
+}).strict();
+export type WorkerConfiguration = z.infer<typeof WorkerConfiguration>;
+export const WorkerObservedConfiguration = z.object({
+  ...workerConfigurationShape,
+  cache: RequiredWorkerCacheConfiguration,
+}).strict();
+export type WorkerObservedConfiguration = z.infer<typeof WorkerObservedConfiguration>;
+export const WorkerConfigurePayload = WorkerObservedConfiguration.extend({
+  workerId: z.string().uuid(),
+  revision: z.string().regex(/^[a-f0-9]{64}$/),
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+export type WorkerConfigurePayload = z.infer<typeof WorkerConfigurePayload>;
+export const WorkerConfiguredPayload = z.object({ commandId: z.string().uuid(), workerId: z.string().uuid(), revision: z.string().regex(/^[a-f0-9]{64}$/), observed: WorkerObservedConfiguration }).strict();
 const boundedResource = z.number().int().finite().min(0).max(Number.MAX_SAFE_INTEGER);
 export const WorkerDoctorData = z.object({ nestedKvm: z.boolean().optional(), kvmModules: z.boolean().optional(), probe: z.boolean().optional(), egress: z.boolean().optional(), imageSignatures: z.boolean().optional(), blockVolume: z.boolean().optional(), libvirtReady: z.boolean().optional(), networkReady: z.boolean().optional(), cloneStorageReady: z.boolean().optional(), realVmSmoke: z.boolean().optional(), smokeArtifactDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/).optional(), smokeObservedAt: z.string().datetime({ offset: true }).optional(), runtimeMode: z.enum(["container", "vm", "tart"]).optional(), artifactSource: z.enum(["worker_local", "registry", "template"]).optional(), artifactIdentity: z.string().min(1).optional(), artifactDigest: z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/).optional(), runtimeReady: z.boolean().optional(), runtimeBuildState: z.enum(["idle", "building", "ready", "failed"]).optional(), runtimeBuildMessage: z.string().max(1000).nullable().optional(), remediation: z.string().nullable().optional(), actualVcpu: boundedResource.optional(), actualMemoryBytes: boundedResource.optional(), actualStorageBytes: boundedResource.optional(), freeVcpu: boundedResource.optional(), freeMemoryBytes: boundedResource.optional(), freeStorageBytes: boundedResource.optional(), activeLeases: z.array(z.string().uuid()).optional(), preserveLeases: z.boolean().optional() }).strict();
 export const WorkerCapacityData = z.object({ actualVcpu: boundedResource, actualMemoryBytes: boundedResource, actualStorageBytes: boundedResource, freeVcpu: boundedResource, freeMemoryBytes: boundedResource, freeStorageBytes: boundedResource }).strict();

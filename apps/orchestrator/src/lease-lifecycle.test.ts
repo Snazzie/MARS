@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { LeaseBootstrapEnvelope, WorkerCommand } from "@whitesmith/contracts";
+import type { LeaseBootstrapEnvelope, WorkerCommand, WorkerEvent } from "@whitesmith/contracts";
 import { initialMemoryPressureState, runLeaseLifecycle, updateMemoryPressure } from "./lease-lifecycle.ts";
 
 const command = { version: 1, id: "33333333-3333-4333-8333-333333333333", type: "windows-container.create_lease", workerId: "11111111-1111-4111-8111-111111111111", leaseId: "22222222-2222-4222-8222-222222222222", occurredAt: new Date().toISOString(), payload: {} } satisfies WorkerCommand;
@@ -36,6 +36,55 @@ test("preserves a lease when worker setting is enabled", async () => {
   await runLeaseLifecycle(command, driver, bootstrap, event => events.push(event.type), { preserveLeases: () => true });
   expect(stopped).toEqual([]);
   expect(events).toEqual(["sandbox_attested", "runner.finished", "diagnostic.chunk", "lease.failed"]);
+});
+
+test("passes credential-free worker cache transport without lease registration", async () => {
+  const workerCache = {
+    proxyUrl: "http://127.0.0.1:3128",
+    cacheBaseUrl: "https://127.0.0.1:8443",
+    caCertificatePem: "worker-ca",
+    expiresAt: bootstrap.expiresAt,
+  };
+  let received: unknown;
+  const driver = {
+    createLease: async (lease: { workerCache?: unknown }) => {
+      received = lease.workerCache;
+      return { runtimeInstanceId: "runtime", observed: { vcpu: 1, memoryBytes: 2, storageBytes: 3 }, completion: Promise.resolve(0), state: "sandbox_attested" as const };
+    },
+    stopLease: async () => {},
+    removeLease: async () => {},
+  };
+  const cacheService = {
+    transport: (expiresAt: string) => {
+      expect(expiresAt).toBe(bootstrap.expiresAt);
+      return workerCache;
+    },
+  };
+  await runLeaseLifecycle(command, driver, bootstrap, () => {}, { cacheService: cacheService as never });
+  expect(received).toEqual(workerCache);
+  expect(new URL(workerCache.proxyUrl).username).toBe("");
+  expect(new URL(workerCache.proxyUrl).password).toBe("");
+});
+
+test("fails lease provisioning closed when worker cache transport setup fails", async () => {
+  let created = false;
+  const events: WorkerEvent[] = [];
+  const driver = {
+    createLease: async () => {
+      created = true;
+      throw new Error("must not run");
+    },
+    stopLease: async () => {},
+    removeLease: async () => {},
+  };
+  const cacheService = {
+    transport: () => {
+      throw new Error("cache unavailable");
+    },
+  };
+  await runLeaseLifecycle(command, driver, bootstrap, event => events.push(event), { cacheService: cacheService as never });
+  expect(created).toBe(false);
+  expect(events).toEqual([expect.objectContaining({ type: "lease.failed", payload: expect.objectContaining({ reason: "provisioning_failed" }) })]);
 });
 
 test("requires two consecutive near-limit samples before OOM detection", () => {

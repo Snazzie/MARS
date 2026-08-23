@@ -1,7 +1,48 @@
 import { describe, expect, test } from "bun:test";
-import { WorkerBootstrapRequest } from "@whitesmith/contracts";
+import { WorkerBootstrapRequest, type WorkerCommand } from "@whitesmith/contracts";
 import { generateKeyPairSync, verify as verifySignature } from "node:crypto";
-import { availableMacMemoryBytes, buildMacWorkerAuthentication, buildMacWorkerJoinPayload, parseMacWorkerIdentity, runMacLeaseLifecycle, startMacLeaseLifecycle } from "./mac-agent.ts";
+import { applyWorkerConfigure, availableMacMemoryBytes, buildMacWorkerAuthentication, buildMacWorkerJoinPayload, parseMacWorkerIdentity, runMacLeaseLifecycle, startMacLeaseLifecycle } from "./mac-agent.ts";
+
+test("awaits the live cache TTL before acknowledging macOS worker configuration", async () => {
+  const workerId = "00000000-0000-4000-8000-000000000001";
+  const command: WorkerCommand = {
+    version: 1,
+    id: "00000000-0000-4000-8000-000000000002",
+    type: "worker.configure",
+    workerId,
+    leaseId: null,
+    occurredAt: "2026-08-23T00:00:00.000Z",
+    payload: {
+      workerId,
+      appliance: { vcpu: 8, memoryBytes: 16_000, storageBytes: 64_000 },
+      runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_000, maxStorageBytesPerPod: 16_000, maxConcurrentPods: 4 },
+      guestPlatforms: ["macos-arm64"],
+      cache: { ttlSeconds: 5400 },
+      revision: "a".repeat(64),
+      fingerprint: "b".repeat(64),
+    },
+  };
+  const limits = { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 };
+  const cache = { ttlSeconds: 60 };
+  let release!: () => void;
+  const applied = new Promise<void>((resolve) => { release = resolve; });
+  const result = applyWorkerConfigure(command, limits, cache, { applyTtl: () => applied });
+  expect(cache).toEqual({ ttlSeconds: 60 });
+  release();
+  const configured = await result;
+  expect(cache).toEqual({ ttlSeconds: 5400 });
+  expect(configured.payload).toEqual({
+    commandId: command.id,
+    workerId,
+    revision: "a".repeat(64),
+    observed: {
+      appliance: command.payload.appliance,
+      runtime: command.payload.runtime,
+      guestPlatforms: ["macos-arm64"],
+      cache: { ttlSeconds: 5400 },
+    },
+  });
+});
 
 describe("macOS memory availability", () => {
   test("converts the OS-reported free percentage to available bytes", () => {
@@ -109,6 +150,38 @@ test("reports cleanup failure after runner completion without claiming reap", as
   expect(sent.map(event => event.type)).toEqual(["sandbox_attested", "runner.finished", "lease.failed"]);
   expect(sent[1]!.payload.exitCode).toBe(1);
   expect(sent[2]!.payload.reason).toBe("cleanup_failed");
+});
+
+test("passes credential-free worker cache transport into macOS runtime", async () => {
+  const workerCache = { proxyUrl: "http://127.0.0.1:3128", cacheBaseUrl: "https://127.0.0.1:8443", caCertificatePem: "worker-ca", expiresAt: new Date(Date.now() + 60_000).toISOString() };
+  let received: unknown;
+  const driver = {
+    async createLease(lease: { workerCache?: unknown }) {
+      received = lease.workerCache;
+      return { runtimeInstanceId: "vm-1", observed: { vcpu: 1, memoryBytes: 2, storageBytes: 3 }, state: "sandbox_attested" as const, completion: Promise.resolve(0) };
+    },
+    async stopLease() {},
+    async removeLease() {},
+  };
+  const bootstrap = { leaseId: "22222222-2222-4222-8222-222222222222", jobId: "44444444-4444-4444-8444-444444444444", nonce: "n".repeat(32), guestPlatform: "macos-arm64" as const, imageDigest: "sha256:test", resources: { vcpu: 1, memoryBytes: 2, storageBytes: 3, concurrency: 1 }, encodedJitConfig: "secret", expiresAt: workerCache.expiresAt };
+  await runMacLeaseLifecycle({ version: 1, id: "33333333-3333-4333-8333-333333333333", type: "tart.create_lease", workerId: "11111111-1111-4111-8111-111111111111", leaseId: bootstrap.leaseId, occurredAt: new Date().toISOString(), payload: {} }, driver as never, bootstrap, () => {}, false, { transport: () => workerCache });
+  expect(received).toEqual(workerCache);
+  expect(new URL(workerCache.proxyUrl).username).toBe("");
+  expect(new URL(workerCache.proxyUrl).password).toBe("");
+});
+
+test("fails macOS lease provisioning closed when worker cache transport setup fails", async () => {
+  let created = false;
+  const sent: Array<{ type: string; payload: Record<string, unknown> }> = [];
+  const driver = {
+    async createLease() { created = true; throw new Error("must not run"); },
+    async stopLease() {},
+    async removeLease() {},
+  };
+  const bootstrap = { leaseId: "22222222-2222-4222-8222-222222222222", jobId: "44444444-4444-4444-8444-444444444444", nonce: "n".repeat(32), guestPlatform: "macos-arm64" as const, imageDigest: "sha256:test", resources: { vcpu: 1, memoryBytes: 2, storageBytes: 3, concurrency: 1 }, encodedJitConfig: "secret", expiresAt: new Date(Date.now() + 60_000).toISOString() };
+  await runMacLeaseLifecycle({ version: 1, id: "33333333-3333-4333-8333-333333333333", type: "tart.create_lease", workerId: "11111111-1111-4111-8111-111111111111", leaseId: bootstrap.leaseId, occurredAt: new Date().toISOString(), payload: {} }, driver as never, bootstrap, event => sent.push(event as never), false, { transport: () => { throw new Error("cache unavailable"); } });
+  expect(created).toBe(false);
+  expect(sent).toEqual([expect.objectContaining({ type: "lease.failed", payload: expect.objectContaining({ reason: "provisioning_failed" }) })]);
 });
 
 test("deduplicates repeated delivery of an active lease", async () => {

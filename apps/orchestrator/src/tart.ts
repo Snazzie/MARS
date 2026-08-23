@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PoolResources } from "@whitesmith/contracts";
+import type { PoolResources, WorkerCacheProxy } from "@whitesmith/contracts";
 import type { Lease, RuntimeDriver, RuntimeLease } from "./runtime.ts";
 import { validateResources } from "./runtime.ts";
 
@@ -78,7 +78,7 @@ async function pumpText(stream: ReadableStream<Uint8Array>, queue: AsyncTextQueu
 export interface TartVmRuntime {
   clone(baseImage: string, vmName: string): Promise<void>;
   setResources(vmName: string, resources: PoolResources): Promise<void>;
-  startWithBootstrap(vmName: string, encodedJitConfig: string): Promise<void>;
+  startWithBootstrap(vmName: string, encodedJitConfig: string, workerCache?: WorkerCacheProxy): Promise<void>;
   startRunner(vmName: string): TartRunnerExecution;
   stop(vmName: string): Promise<void>;
   remove(vmName: string): Promise<void>;
@@ -120,11 +120,12 @@ export function createTartVmRuntime(tartExecutable = resolveTartExecutable(Bun.e
       void Promise.all([pumpText(process.stdout, queue), pumpText(process.stderr, queue)]).finally(() => queue.close());
       return { completion: process.exited, logs: queue };
     },
-    async startWithBootstrap(vmName, encodedJitConfig) {
+    async startWithBootstrap(vmName, encodedJitConfig, workerCache) {
       if (processes.has(vmName)) throw new Error(`Tart VM already running: ${vmName}`);
       const bootstrapDirectory = await mkdtemp(join(tmpdir(), "whitesmith-bootstrap-"));
       const configPath = join(bootstrapDirectory, "jit-config");
-      const configBytes = Buffer.from(encodedJitConfig, "utf8");
+      const config = workerCache ? JSON.stringify({ encodedJitConfig, workerCache }) : encodedJitConfig;
+      const configBytes = Buffer.from(config, "utf8");
       try {
         await writeFile(configPath, configBytes, { flag: "wx", mode: 0o600 });
         const process = Bun.spawn([tartExecutable, ...buildTartRunArguments(vmName, bootstrapDirectory)], { stdout: "ignore", stderr: "ignore" });
@@ -169,8 +170,7 @@ export class TartVmDriver implements RuntimeDriver {
     const vmName = `${this.namePrefix}-${lease.id.slice(0, 8)}`;
     await this.tart.clone(this.baseImage, vmName);
     try {
-      await this.tart.setResources(vmName, lease.resources);
-      await this.tart.startWithBootstrap(vmName, lease.encodedJitConfig);
+      await this.tart.startWithBootstrap(vmName, lease.encodedJitConfig, lease.workerCache);
       const execution = this.tart.startRunner(vmName);
       const runtime: RuntimeLease = { runtimeInstanceId: vmName, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: execution.completion, logs: execution.logs, sample: this.tart.sample ? () => this.tart.sample!(vmName) : undefined };
       this.leases.set(lease.id, { vmName, runtime });

@@ -5,7 +5,7 @@ test("records the active desired configuration after an exact acknowledgement", 
   const commandId = "b430a582-a516-48a6-abb9-72c1af04a8c3";
   const workerId = "cbb0e9d8-23ff-480e-8465-408197c0c2d2";
   const revision = "a".repeat(64);
-  const expected = { appliance: { vcpu: 2, memoryBytes: 4, storageBytes: 8 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 4, maxConcurrentPods: 1 }, guestPlatforms: ["macos-arm64"] };
+  const expected = { appliance: { vcpu: 2, memoryBytes: 4, storageBytes: 8 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 4, maxConcurrentPods: 1 }, guestPlatforms: ["macos-arm64"], cache: { ttlSeconds: 172800 } };
   const queries: string[] = [];
   const query = async (strings: TemplateStringsArray) => {
     const text = strings.join(" ");
@@ -15,6 +15,9 @@ test("records the active desired configuration after an exact acknowledgement", 
     return [];
   };
   const db = Object.assign(query, { begin: async (fn: (tx: typeof query) => unknown) => fn(query) }) as never;
+  const { cache: _cache, ...withoutCache } = expected;
+  await expect(applyWorkerConfigurationAcknowledgement(db, { workerId, payload: { commandId, workerId, revision, observed: withoutCache } })).resolves.toBe(false);
+  await expect(applyWorkerConfigurationAcknowledgement(db, { workerId, payload: { commandId, workerId, revision, observed: { ...withoutCache, cache: {} } } })).resolves.toBe(false);
   const result = await applyWorkerConfigurationAcknowledgement(db, { workerId, payload: { commandId, workerId, revision, observed: expected } });
   expect(result).toBe(true);
   expect(queries.some(query => query.includes("applied_configuration_revision=configuration_revision"))).toBe(true);
@@ -27,7 +30,7 @@ test("keeps the last applied configuration when the current acknowledgement mism
   const commandId = "b430a582-a516-48a6-abb9-72c1af04a8c3";
   const workerId = "cbb0e9d8-23ff-480e-8465-408197c0c2d2";
   const revision = "a".repeat(64);
-  const desired = { appliance: { vcpu: 2, memoryBytes: 4, storageBytes: 8 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 4, maxConcurrentPods: 1 }, guestPlatforms: ["macos-arm64"] };
+  const desired = { appliance: { vcpu: 2, memoryBytes: 4, storageBytes: 8 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 4, maxConcurrentPods: 1 }, guestPlatforms: ["macos-arm64"], cache: { ttlSeconds: 172800 } };
   const queries: string[] = [];
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
@@ -35,7 +38,7 @@ test("keeps the last applied configuration when the current acknowledgement mism
     if (query.includes("configuration_revision as")) return [{ configurationRevision: revision, configurationCommandId: commandId, desiredConfiguration: desired }];
     return [];
   }) as never;
-  const result = await applyWorkerConfigurationAcknowledgement(db, { workerId, payload: { commandId, workerId, revision, observed: { ...desired, appliance: { ...desired.appliance, vcpu: 1 } } } });
+  const result = await applyWorkerConfigurationAcknowledgement(db, { workerId, payload: { commandId, workerId, revision, observed: { ...desired, cache: { ttlSeconds: 3600 } } } });
   expect(result).toBe(false);
   expect(queries.some(query => query.includes("configuration_state='error'") && query.includes("configuration_command_id="))).toBe(true);
   expect(queries.every(query => !query.includes("configuration_applied_at=now()"))).toBe(true);

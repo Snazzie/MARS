@@ -1,13 +1,14 @@
 import { generateKeyPairSync, sign as signMessage, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCommand, WorkerConfigurePayload, WorkerConfiguration, WorkerDoctorData, WorkerEvent, type WorkerCapacityData, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
+import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerDoctorData, WorkerEvent, type WorkerCapacityData, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { createHyperVRuntime, HyperVDriver } from "./hyperv.ts";
 import { WindowsContainerDriver, isExpectedWindowsEntrypoint } from "./windows-container.ts";
 import { downloadWindowsImageBuildArtifacts } from "./windows-image-build.ts";
 import type { RuntimeDriver } from "./runtime.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
+import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
 type Identity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string; preserveLeases?: boolean };
@@ -120,9 +121,16 @@ export async function buildWindowsImage(command: WorkerCommand, send: (event: Wo
 }
 async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> { const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), platform: "windows-x64", publicKey: identity.publicKey, encryptionPublicKey: identity.encryptionPublicKey, vmUuid: crypto.randomUUID(), machineUuid: await machineUuid(), doctor: await windowsDoctor(), capacity: await capacity() }); const response = await fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); if (!response.ok) throw new Error(`worker join failed: ${response.status}`); const joined = await response.json() as { workerId: string }; const result = { ...identity, workerId: joined.workerId }; await save(result); return result; }
 type WindowsRuntimeDriver = Pick<RuntimeDriver, "reserveCapacity" | "createLease" | "stopLease" | "removeLease"> & { reconcileOrphans?: () => Promise<void> };
-export function applyWindowsWorkerConfiguration(limits: Limits, payload: ReturnType<typeof WorkerConfigurePayload.parse>): ReturnType<typeof WorkerConfiguration.parse> {
-  const observed = WorkerConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms });
+export async function applyWindowsWorkerConfiguration(
+  limits: Limits,
+  cache: WorkerCacheConfiguration,
+  payload: WorkerConfigurePayload,
+  cacheService: Pick<ActionCacheService, "applyTtl">,
+): Promise<WorkerObservedConfiguration> {
+  const observed = WorkerObservedConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms, cache: payload.cache });
+  await cacheService.applyTtl(observed.cache.ttlSeconds);
   Object.assign(limits, observed.runtime);
+  Object.assign(cache, observed.cache);
   return observed;
 }
 
@@ -156,17 +164,18 @@ export function startWindowsLeaseLifecycle(
   send: (workerEvent: WorkerEvent) => void,
   active: Map<string, Promise<void>>,
   preserveLeases: () => boolean = () => false,
+  cacheService?: Pick<ActionCacheService, "transport">,
 ): Promise<void> {
   const existing = active.get(bootstrap.leaseId);
   if (existing) return existing;
-  const lifecycle = runLeaseLifecycle(command, driver, bootstrap, send, { preserveLeases }).finally(() => {
+  const lifecycle = runLeaseLifecycle(command, driver, bootstrap, send, { preserveLeases, cacheService }).finally(() => {
     if (active.get(bootstrap.leaseId) === lifecycle) active.delete(bootstrap.leaseId);
   });
   active.set(bootstrap.leaseId, lifecycle);
   return lifecycle;
 }
 
-export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise<never> {
+async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache: WorkerCacheConfiguration, cacheService: ActionCacheService): Promise<never> {
   const controlPlane = new URL(baseUrl);
   const identity = (await load()) ?? await enroll(controlPlane, keys());
   const mode = Bun.env.WHITESMITH_WINDOWS_RUNTIME ?? "vm";
@@ -200,7 +209,12 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
         try {
           const frame = JSON.parse(String(message.data)) as Record<string, unknown>;
           if (frame.type === "challenge") return ws.send(JSON.stringify(auth(String(frame.nonce), identity)));
-          if (frame.type === "authenticated") return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacityReport } }));
+          if (frame.type === "authenticated") {
+            await emitActionCacheSnapshot(cacheService, (type, payload) => {
+              if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(event(identity.workerId, type, payload)));
+            });
+            return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacityReport } }));
+          }
           if (frame.type === "ping") { ws.send("pong"); return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: await capacity() } })); }
           if (frame.type === "doctor_ack") return;
           const command = WorkerCommand.parse(frame);
@@ -213,7 +227,7 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
           }
           if (command.type === "worker.configure") {
             const payload = WorkerConfigurePayload.parse(command.payload);
-            const observed = applyWindowsWorkerConfiguration(limits, payload);
+            const observed = await applyWindowsWorkerConfiguration(limits, cache, payload, cacheService);
             return ws.send(JSON.stringify(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed })));
           }
           if (command.type === "worker.build_image") {
@@ -232,7 +246,7 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
             const bootstrap: LeaseBootstrapEnvelope = openLeaseBootstrap(cipher, identity.encryptionPrivateKey);
             if (bootstrap.leaseId !== command.leaseId || (mode === "container" ? bootstrap.guestPlatform !== "windows-x64" : !["windows-x64", "linux-x64"].includes(bootstrap.guestPlatform))) throw new Error("Windows lease bootstrap mismatch");
             ws.send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
-            void startWindowsLeaseLifecycle(command, driver, bootstrap, workerEvent => ws.send(JSON.stringify(workerEvent)), activeLeases, () => identity.preserveLeases === true);
+            void startWindowsLeaseLifecycle(command, driver, bootstrap, workerEvent => ws.send(JSON.stringify(workerEvent)), activeLeases, () => identity.preserveLeases === true, cacheService);
           }
         } catch (error) {
           console.error("Windows worker command failed", error);
@@ -244,4 +258,14 @@ export async function runWindowsWorker(baseUrl: string, limits: Limits): Promise
     }
   };
   return loop();
+}
+
+export async function runWindowsWorker(baseUrl: string, limits: Limits, cache = WorkerCacheConfiguration.parse({})): Promise<never> {
+  const controlPlane = new URL(baseUrl);
+  const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: cache.ttlSeconds });
+  try {
+    return await runWindowsWorkerWithCache(baseUrl, limits, cache, cacheService);
+  } finally {
+    await cacheService.close();
+  }
 }

@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import { buildTartBootstrapArguments, buildTartRunnerArguments, buildTartSetArguments, resolveTartExecutable, TART_JIT_CONFIG_PATH, TartVmDriver } from "./tart.ts";
 import * as tartModule from "./tart.ts";
+import type { WorkerCacheProxy } from "@whitesmith/contracts";
 
 const resources = (storageBytes: number) => ({ vcpu: 4, memoryBytes: 4 * 1024 ** 3, storageBytes, concurrency: 1 });
+const workerCache: WorkerCacheProxy = { proxyUrl: "http://127.0.0.1:39123", cacheBaseUrl: "https://127.0.0.1:39443", caCertificatePem: "worker-ca", expiresAt: new Date(Date.now() + 60_000).toISOString() };
 
 test("does not ask Tart to shrink a cloned base-image disk", () => {
   expect(buildTartSetArguments("lease-vm", resources(20 * 1024 ** 3), 50)).toEqual([
@@ -53,6 +55,21 @@ test("passes the Actions Runner root explicitly to the guest job agent", () => {
     "/opt/actions-runner",
   ]);
 });
+test("passes the worker cache descriptor into Tart full bootstrap", async () => {
+  let received: unknown;
+  const tart = {
+    clone: async () => {},
+    setResources: async () => {},
+    startWithBootstrap: async (_vm: string, _jit: string, cache?: WorkerCacheProxy) => { received = cache; },
+    startRunner: () => ({ completion: Promise.resolve(0), logs: (async function* () {})() }),
+    stop: async () => {},
+    remove: async () => {},
+  };
+  const driver = new TartVmDriver(tart, "base", "whitesmith");
+  await driver.createLease({ id: "11111111-1111-4111-8111-111111111111", jobId: "22222222-2222-4222-8222-222222222222", imageDigest: "base", resources: resources(20 * 1024 ** 3), nonce: "n".repeat(32), encodedJitConfig: "jit", workerCache });
+  expect(received).toEqual(workerCache);
+});
+
 
 test("uses the installer-provided absolute Tart executable under launchd", () => {
   expect(resolveTartExecutable("/opt/homebrew/bin/tart")).toBe("/opt/homebrew/bin/tart");

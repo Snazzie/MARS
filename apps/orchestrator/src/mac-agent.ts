@@ -3,10 +3,11 @@ import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { statfsSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
-import { WorkerBootstrapRequest, WorkerCommand, WorkerConfigurePayload, WorkerConfiguration, WorkerDoctorData, WorkerEvent, type LeaseBootstrapEnvelope, type WorkerCapacityData } from "@whitesmith/contracts";
+import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerDoctorData, WorkerEvent, type LeaseBootstrapEnvelope, type WorkerCacheProxy, type WorkerCapacityData } from "@whitesmith/contracts";
 import type { Lease, RuntimeLease } from "./runtime.ts";
 import { createTartVmRuntime, TartVmDriver } from "./tart.ts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
+import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 
 export interface MacWorkerLimits { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number }
 export interface MacWorkerJoinInput {
@@ -22,10 +23,17 @@ export type MacWorkerJoinPayload = MacWorkerJoinInput & { platform: "macos-arm64
 export function workerEvent(workerId: string, type: string, payload: Record<string, unknown>): WorkerEvent {
   return WorkerEvent.parse({ version: 1, id: randomUUID(), workerId, type, occurredAt: new Date().toISOString(), payload });
 }
-export function applyWorkerConfigure(command: WorkerCommand, limits: MacWorkerLimits): WorkerEvent {
+export async function applyWorkerConfigure(
+  command: WorkerCommand,
+  limits: MacWorkerLimits,
+  cache: WorkerCacheConfiguration,
+  cacheService: Pick<ActionCacheService, "applyTtl">,
+): Promise<WorkerEvent> {
   const payload = WorkerConfigurePayload.parse(command.payload);
-  const observed = WorkerConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms });
+  const observed = WorkerObservedConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms, cache: payload.cache });
+  await cacheService.applyTtl(observed.cache.ttlSeconds);
   Object.assign(limits, payload.runtime);
+  Object.assign(cache, observed.cache);
   return workerEvent(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed });
 }
 export function buildMacWorkerJoinPayload(input: MacWorkerJoinInput): MacWorkerJoinPayload { return { code: input.code, publicKey: input.publicKey, encryptionPublicKey: input.encryptionPublicKey, vmUuid: input.vmUuid, machineUuid: input.machineUuid, doctor: input.doctor, capacity: input.capacity, platform: "macos-arm64" }; }
@@ -48,16 +56,17 @@ async function emitRuntimeLogs(workerId: string, jobId: string, logs: AsyncItera
   }
 }
 
-export async function runMacLeaseLifecycle(
+async function runMacLeaseLifecycleWithTransport(
   command: WorkerCommand,
   driver: TartVmDriver,
   bootstrap: LeaseBootstrapEnvelope,
   send: (event: WorkerEvent) => void,
   preserveLeases = false,
+  workerCache?: WorkerCacheProxy,
 ): Promise<void> {
   let runtime: RuntimeLease;
   try {
-    runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
+    runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig, ...(workerCache ? { workerCache } : {}) });
   } catch (error) {
     console.error("macOS lease provisioning failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
     send(workerEvent(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "provisioning_failed" }));
@@ -87,6 +96,25 @@ export async function runMacLeaseLifecycle(
     ? { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "cleanup_failed" }
     : { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce }));
 }
+
+export async function runMacLeaseLifecycle(
+  command: WorkerCommand,
+  driver: TartVmDriver,
+  bootstrap: LeaseBootstrapEnvelope,
+  send: (event: WorkerEvent) => void,
+  preserveLeases = false,
+  cacheService?: Pick<ActionCacheService, "transport">,
+): Promise<void> {
+  let workerCache: WorkerCacheProxy | undefined;
+  try {
+    if (cacheService) workerCache = cacheService.transport(bootstrap.expiresAt);
+  } catch (error) {
+    console.error("macOS lease cache transport setup failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
+    send(workerEvent(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "provisioning_failed" }));
+    return;
+  }
+  await runMacLeaseLifecycleWithTransport(command, driver, bootstrap, send, preserveLeases, workerCache);
+}
 export function startMacLeaseLifecycle(
   command: WorkerCommand,
   driver: TartVmDriver,
@@ -94,19 +122,22 @@ export function startMacLeaseLifecycle(
   send: (event: WorkerEvent) => void,
   active: Map<string, Promise<void>>,
   preserveLeases: () => boolean = () => false,
+  cacheService?: Pick<ActionCacheService, "transport">,
 ): Promise<void> {
   const existing = active.get(bootstrap.leaseId);
   if (existing) return existing;
-  const lifecycle = runMacLeaseLifecycle(command, driver, bootstrap, send, preserveLeases()).finally(() => {
+  const lifecycle = runMacLeaseLifecycle(command, driver, bootstrap, send, preserveLeases(), cacheService).finally(() => {
     if (active.get(bootstrap.leaseId) === lifecycle) active.delete(bootstrap.leaseId);
   });
   active.set(bootstrap.leaseId, lifecycle);
   return lifecycle;
 }
-export async function handleMacWorkerCommand(command: WorkerCommand, driver: TartVmDriver, limits?: MacWorkerLimits, encryptionPrivateKey?: string): Promise<WorkerEvent> {
+export async function handleMacWorkerCommand(command: WorkerCommand, driver: TartVmDriver, limits?: MacWorkerLimits, encryptionPrivateKey?: string, cache?: WorkerCacheConfiguration, cacheService?: Pick<ActionCacheService, "applyTtl">): Promise<WorkerEvent> {
   if (command.type === "worker.configure") {
     if (!limits) throw new Error("worker limits unavailable");
-    return applyWorkerConfigure(command, limits);
+    if (!cache) throw new Error("worker cache configuration unavailable");
+    if (!cacheService) throw new Error("worker cache service unavailable");
+    return applyWorkerConfigure(command, limits, cache, cacheService);
   }
   if (command.type === "tart.create_lease") {
     if (!command.leaseId || !encryptionPrivateKey) throw new Error("lease encryption key required");
@@ -247,7 +278,7 @@ async function enrollMacWorker(controlPlane: URL, identity: MacWorkerIdentity): 
   } finally { codeBytes.fill(0); }
 }
 
-async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, driver: TartVmDriver, limits: MacWorkerLimits): Promise<never> {
+async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, driver: TartVmDriver, limits: MacWorkerLimits, cache: WorkerCacheConfiguration, cacheService: ActionCacheService): Promise<never> {
   const doctorReport = await currentMacDoctor();
   const activeLeases = new Map<string, Promise<void>>();
   for (;;) {
@@ -262,7 +293,12 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           ws.send(JSON.stringify(buildMacWorkerAuthentication(frame.nonce, identity.workerId, identity.privateKey, identity.encryptionPublicKey)));
           return;
         }
-        if (frame.type === "authenticated") return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
+        if (frame.type === "authenticated") {
+          await emitActionCacheSnapshot(cacheService, (type, payload) => {
+            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(workerEvent(identity.workerId, type, payload)));
+          });
+          return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
+        }
         if (frame.type === "ping") { ws.send("pong"); return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } })); }
         if (frame.type === "doctor_ack") return;
         const command = WorkerCommand.parse(frame);
@@ -286,10 +322,10 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           ws.send(JSON.stringify(workerEvent(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
           void startMacLeaseLifecycle(command, driver, bootstrap, lifecycleEvent => {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(lifecycleEvent));
-          }, activeLeases, () => identity.preserveLeases === true);
+          }, activeLeases, () => identity.preserveLeases === true, cacheService);
           return;
         }
-        ws.send(JSON.stringify(await handleMacWorkerCommand(command, driver, limits, identity.encryptionPrivateKey)));
+        ws.send(JSON.stringify(await handleMacWorkerCommand(command, driver, limits, identity.encryptionPrivateKey, cache, cacheService)));
       } catch { ws.close(1011, "worker command failed"); }
     };
     await closed.promise;
@@ -312,12 +348,17 @@ export async function runWorkerJoin(platform: "macos-arm64" | "windows-x64", bas
     if (!response.ok) throw new Error(`worker join failed: ${response.status} ${await response.text()}`);
   } finally { codeBytes.fill(0); }
 }
-export async function runMacWorker(baseUrl: string, limits: MacWorkerLimits): Promise<never> {
+export async function runMacWorker(baseUrl: string, limits: MacWorkerLimits, cache = WorkerCacheConfiguration.parse({})): Promise<never> {
   const controlPlane = validateControlPlaneUrl(baseUrl);
-  const driver = new TartVmDriver(createTartVmRuntime(), Bun.env.WHITESMITH_TART_BASE_IMAGE ?? "whitesmith-macos-worker", "whitesmith-job", limits, Bun.env.WHITESMITH_TART_IMAGE_DIGEST ?? Bun.env.WHITESMITH_TART_BASE_IMAGE ?? "whitesmith-macos-worker");
-  const existing = await loadMacWorkerIdentity();
-  const identity = existing ?? await enrollMacWorker(controlPlane, { workerId: "", ...createKeyPair() });
-  return connectMacWorker(controlPlane, identity, driver, limits);
+  const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: cache.ttlSeconds });
+  try {
+    const driver = new TartVmDriver(createTartVmRuntime(), Bun.env.WHITESMITH_TART_BASE_IMAGE ?? "whitesmith-macos-worker", "whitesmith-job", limits, Bun.env.WHITESMITH_TART_IMAGE_DIGEST ?? Bun.env.WHITESMITH_TART_BASE_IMAGE ?? "whitesmith-macos-worker");
+    const existing = await loadMacWorkerIdentity();
+    const identity = existing ?? await enrollMacWorker(controlPlane, { workerId: "", ...createKeyPair() });
+    return await connectMacWorker(controlPlane, identity, driver, limits, cache, cacheService);
+  } finally {
+    await cacheService.close();
+  }
 }
 if (import.meta.main && Bun.argv[2] === "mac-worker") { const baseUrl = Bun.env.WHITESMITH_CONTROL_PLANE_URL; if (!baseUrl) throw new Error("WHITESMITH_CONTROL_PLANE_URL is required"); await runMacWorker(baseUrl, { maxVcpuPerPod: Number(Bun.env.MAX_VCPU_PER_POD ?? 2), maxMemoryBytesPerPod: Number(Bun.env.MAX_MEMORY_BYTES_PER_POD ?? 4 * 1024 ** 3), maxStorageBytesPerPod: Number(Bun.env.MAX_STORAGE_BYTES_PER_POD ?? 20 * 1024 ** 3), maxConcurrentPods: Number(Bun.env.MAX_CONCURRENT_PODS ?? 1) }); }
 if (import.meta.main && Bun.argv[2] === "join") { const platform = Bun.argv[3]; if (platform !== "macos-arm64" && platform !== "windows-x64") throw new Error("unsupported join platform"); const baseUrl = Bun.env.WHITESMITH_CONTROL_PLANE_URL; if (!baseUrl) throw new Error("WHITESMITH_CONTROL_PLANE_URL is required"); await runWorkerJoin(platform, baseUrl); }

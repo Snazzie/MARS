@@ -1,6 +1,6 @@
 import type { Sql } from "@whitesmith/db";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, validateWorkerGuestPlatforms, type GuestPlatform } from "@whitesmith/contracts";
+import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, WorkerObservedConfiguration, validateWorkerGuestPlatforms, type GuestPlatform } from "@whitesmith/contracts";
 import { jsonParameter } from "@whitesmith/db";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { fingerprint } from "./workers.ts";
@@ -63,14 +63,14 @@ export async function approvePendingWorker(db: Sql<{}>, workerId: string, input:
     await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.approved',${jsonParameter(tx, { workerId, limits: parsed.limits })}::jsonb)`;
   });
 }
-export type WorkerConfigurationInput = { appliance: { vcpu: number; memoryBytes: number; storageBytes: number }; runtime: { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number }; guestPlatforms?: GuestPlatform[] };
+export type WorkerConfigurationInput = { appliance: { vcpu: number; memoryBytes: number; storageBytes: number }; runtime: { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number }; guestPlatforms?: GuestPlatform[]; cache?: { ttlSeconds: number } };
 function canonical(value: unknown): string { if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`; if (value && typeof value === "object") return `{${Object.entries(value).sort(([a],[b]) => a.localeCompare(b)).map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`).join(",")}}`; return JSON.stringify(value); }
 export async function configurePendingWorker(db: Sql<{}>, workerId: string, configuration: WorkerConfigurationInput, adminId: string, dispatcher?: WorkerCommandDispatcher, idempotencyKey?: string): Promise<{ revision: string; fingerprint: string; commandId?: string }> {
   const parsed = WorkerConfiguration.parse({ ...configuration, guestPlatforms: configuration.guestPlatforms ?? ["macos-arm64"] });
   const revision = createHash("sha256").update(canonical(parsed)).digest("hex");
   const fp = createHash("sha256").update(`${workerId}:${revision}`).digest("hex");
   const commandId = randomUUID();
-  const payload = { workerId, appliance: parsed.appliance, runtime: parsed.runtime, guestPlatforms: parsed.guestPlatforms, revision, fingerprint: fp };
+  const payload: WorkerConfigurePayload = { workerId, appliance: parsed.appliance, runtime: parsed.runtime, guestPlatforms: parsed.guestPlatforms, cache: parsed.cache, revision, fingerprint: fp };
   const response = await db.begin(async tx => {
     if (idempotencyKey) {
       await tx`select pg_advisory_xact_lock(hashtext(${`whitesmith:configure:${workerId}:${idempotencyKey}`}))`;
@@ -101,7 +101,7 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, conf
 }
 export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event: { workerId: string; payload: unknown }): Promise<boolean> {
   const input = event.payload as Record<string, unknown>;
-  const observed = WorkerConfiguration.safeParse(input?.observed);
+  const observed = WorkerObservedConfiguration.safeParse(input?.observed);
   const commandId = typeof input?.commandId === "string" ? input.commandId : "";
   const revision = typeof input?.revision === "string" ? input.revision : "";
   const [worker] = await db<{ configurationRevision: string | null; configurationCommandId: string | null; desiredConfiguration: unknown }[]>`select configuration_revision as "configurationRevision", configuration_command_id as "configurationCommandId", desired_configuration as "desiredConfiguration" from workers where id=${event.workerId}`;
@@ -145,7 +145,8 @@ export async function reconcileWorkerConfigurationOnConnect(db: Sql<{}>, workerI
       if (typeof payload === "string") {
         try { payload = JSON.parse(payload); } catch { return false; }
       }
-      return Boolean(payload && typeof payload === "object" && (payload as Record<string, unknown>).revision === revision);
+      const parsed = WorkerConfigurePayload.safeParse(payload);
+      return parsed.success && parsed.data.revision === revision;
     });
     if (reusable) {
       await tx`update workers set configuration_state='applying', configuration_revision=${revision}, configuration_command_id=${reusable.id} where id=${workerId}`;
@@ -153,7 +154,7 @@ export async function reconcileWorkerConfigurationOnConnect(db: Sql<{}>, workerI
     }
     const commandId = randomUUID();
     const fingerprint = createHash("sha256").update(`${workerId}:${revision}`).digest("hex");
-    const payload = { workerId, appliance: desired.appliance, runtime: desired.runtime, guestPlatforms: desired.guestPlatforms, revision, fingerprint };
+    const payload: WorkerConfigurePayload = { workerId, appliance: desired.appliance, runtime: desired.runtime, guestPlatforms: desired.guestPlatforms, cache: desired.cache, revision, fingerprint };
     await tx`update commands set state='failed' where worker_id=${workerId} and type='worker.configure' and state in ('pending','sent')`;
     await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,${"worker.configure"},${workerId},null,now(),${jsonParameter(tx, payload)}::jsonb)`;
     await tx`update workers set configuration_state='applying', configuration_revision=${revision}, configuration_command_id=${commandId} where id=${workerId}`;

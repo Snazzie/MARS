@@ -43,6 +43,13 @@
       "when": 1700000005000,
       "tag": "0005_worker_preserve_leases",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787428800000,
+      "tag": "0006_worker_action_cache",
+      "breakpoints": true
     }
   ]
 }

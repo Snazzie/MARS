@@ -1,9 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WindowsContainerDriver, type DockerRunner } from "./windows-container.ts";
+import type { WorkerCacheProxy } from "@whitesmith/contracts";
 
+const workerCache: WorkerCacheProxy = { proxyUrl: "http://127.0.0.1:39123", cacheBaseUrl: "https://127.0.0.1:39443", caCertificatePem: "worker-ca", expiresAt: new Date(Date.now() + 60_000).toISOString() };
 const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -30,6 +32,20 @@ test("rejects a local image without a verified matching manifest", async () => {
     requireLocalImageManifest: true,
   }, docker);
   await expect(driver.reserveCapacity({ vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 })).rejects.toThrow("image ID mismatch");
+});
+test("includes worker cache descriptor in Windows container bootstrap", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-cache-"));
+  roots.push(root);
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
+    if (args[0] === "image") return { code: 0, stdout: JSON.stringify(["repo@sha256:" + "a".repeat(64)]), stderr: "" };
+    if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 1_000_000_000, Memory: 1024 } }]), stderr: "" };
+    return { code: 0, stdout: "0", stderr: "" };
+  };
+  const driver = new WindowsContainerDriver({ image: "repo@sha256:" + "a".repeat(64), prefix: "whitesmith", bootstrapRoot: root, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 }, readyTimeoutMs: 100, jobTimeoutMs: 100 }, docker);
+  const leaseId = "33333333-3333-4333-8333-333333333333";
+  await driver.createLease({ id: leaseId, jobId: "job", imageDigest: "repo@sha256:" + "a".repeat(64), resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config", workerCache });
+  expect(JSON.parse(await readFile(join(root, leaseId, "bootstrap.json"), "utf8")).workerCache).toEqual(workerCache);
 });
 
 test("rejects a container when Docker applies different CPU or memory limits", async () => {

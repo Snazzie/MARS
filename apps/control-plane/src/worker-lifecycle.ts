@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { jsonParameter, persistJobResourceSample, recordJobTimingSnapshot, type DatabaseClient, type JobTimingSnapshotInput } from "@whitesmith/db";
-import { WorkerEvent, WorkerEventPayload } from "@whitesmith/contracts";
+import { jsonParameter, persistJobResourceSample, recordJobTimingSnapshot, applyWorkerCacheTelemetry, type DatabaseClient, type JobTimingSnapshotInput } from "@whitesmith/db";
+import { WorkerEvent, WorkerEventPayload, WorkerCacheTelemetry } from "@whitesmith/contracts";
 import type { AuthenticatedWorkerSocket, WorkerCommandDispatcher } from "./worker-dispatch.ts";
 export type TimingBoundaryInputs = {
   queuedAt: string;
@@ -54,6 +54,8 @@ export async function handleAuthenticatedWorkerEvent(
   if (!event.success) return false;
   const payload = WorkerEventPayload.safeParse({ type: event.data.type, payload: event.data.payload });
   if (!payload.success) return false;
+  const cacheTelemetry = WorkerCacheTelemetry.safeParse({ type: event.data.type, payload: event.data.payload });
+  if (cacheTelemetry.success) return await applyWorkerCacheTelemetry(db, { workerId: event.data.workerId, type: cacheTelemetry.data.type, payload: cacheTelemetry.data.payload });
   if (payload.data.type === "diagnostic.chunk") {
     try {
       await persistDiagnosticChunk(event.data.workerId, payload.data.payload);
@@ -126,7 +128,7 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
   if (!parsedEvent.success) return false;
   const event = parsedEvent.data;
   const parsedPayload = WorkerEventPayload.safeParse({ type: event.type, payload: event.payload });
-  if (!parsedPayload.success || parsedPayload.data.type === "command.accepted" || parsedPayload.data.type === "worker.build_completed" || parsedPayload.data.type === "worker.build_failed" || parsedPayload.data.type === "diagnostic.chunk" || parsedPayload.data.type === "job.log" || parsedPayload.data.type === "job.resource_sample") return false;
+  if (!parsedPayload.success || parsedPayload.data.type === "command.accepted" || parsedPayload.data.type === "worker.build_completed" || parsedPayload.data.type === "worker.build_failed" || parsedPayload.data.type === "worker.cache_entry_upsert" || parsedPayload.data.type === "worker.cache_entry_deleted" || parsedPayload.data.type === "worker.cache_snapshot_begin" || parsedPayload.data.type === "worker.cache_snapshot_page" || parsedPayload.data.type === "worker.cache_snapshot_end" || parsedPayload.data.type === "diagnostic.chunk" || parsedPayload.data.type === "job.log" || parsedPayload.data.type === "job.resource_sample") return false;
 
   if (parsedPayload.data.type === "sandbox_attested") {
     const payload = parsedPayload.data.payload;

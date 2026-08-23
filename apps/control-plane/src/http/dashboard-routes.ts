@@ -2,12 +2,12 @@ import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates, listJobResourceSamples } from "@whitesmith/db";
+import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates, listJobResourceSamples, listWorkerCacheEntries, decodeWorkerCacheCursor } from "@whitesmith/db";
 import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 import { createWorkerImageBuildPayload } from "../windows-image-build.ts";
-import { ApiError, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceSample } from "@whitesmith/contracts";
+import { ApiError, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceSample } from "@whitesmith/contracts";
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
@@ -130,6 +130,19 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   app.get("/api/organizations/:organizationId/settings", safe(async(c)=>{const org=c.req.param("organizationId");const denied=await guard(c,deps,org);if(denied)return denied;return c.json(OrganizationSettings.parse(await getOrganizationSettings(deps.db,org)));}));
   app.put("/api/organizations/:organizationId/settings", safe(async(c)=>{const org=c.req.param("organizationId");const denied=await guard(c,deps,org);if(denied)return denied;if(!c.get("user").isGlobalAdmin)return error(c,403,"forbidden","Global administrator authorization required");const idem=requireMutation(c);if(idem)return idem;const body=OrganizationSettings.parse({...await c.req.json(),organizationId:org});const key=c.req.header("idempotency-key")!;if(!(await dashboardMutation(deps.db,org,key)))return c.json(OrganizationSettings.parse(await getOrganizationSettings(deps.db,org)));const value=await updateOrganizationSettings(deps.db,body);await invalidateDashboard(deps.db,org,["settings"]);return c.json(OrganizationSettings.parse(value));}));
   app.get("/api/organizations/:organizationId/workers/:workerId", safe(async(c)=>{if(!c.get("user").isGlobalAdmin)return error(c,403,"forbidden","Global administrator authorization required");const value=await getWorkerDetail(deps.db,c.req.param("organizationId"),c.req.param("workerId"));return value?c.json(WorkerDetail.parse(value)):error(c,404,"not_found","Resource not found");}));
+  app.get("/api/workers/:workerId/cache", safe(async (c) => {
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    const rawLimit = c.req.query("limit") ?? "50";
+    const limit = Number(rawLimit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) return error(c, 400, "invalid_cache_limit", "Invalid cache limit");
+    const rawCursor = c.req.query("cursor");
+    if (rawCursor !== undefined) {
+      try { decodeWorkerCacheCursor(rawCursor); } catch { return error(c, 400, "invalid_cache_cursor", "Invalid cache cursor"); }
+    }
+    const query = c.req.query("query") ?? "";
+    if (query.length > 200) return error(c, 400, "invalid_cache_query", "Invalid cache query");
+    return c.json(DashboardWorkerCachePage.parse(await listWorkerCacheEntries(deps.db, c.req.param("workerId"), { cursor: rawCursor ?? null, limit, query })));
+  }));
   app.post("/api/organizations/:organizationId/workers/:workerId/:action", safe(async (c) => {
     const action = c.req.param("action"), id = c.req.param("workerId");
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
