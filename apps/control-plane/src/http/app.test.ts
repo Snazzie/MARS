@@ -64,7 +64,7 @@ describe("control-plane HTTP boundary", () => {
     const response = await createControlPlaneApp(fakeHttpDeps()).request("/api/workers/bootstrap/initialize", { method: "POST", headers: { "Idempotency-Key": "test" } });
     expect(response.status).toBe(401);
   });
-  test("injects the download origin into the Linux installer", async () => {
+  test("injects the control-plane origin into the Linux installer", async () => {
     const root = await mkdtemp(join(tmpdir(), "whitesmith-installers-"));
     try {
       await Bun.write(join(root, "install-worker.sh"), '#!/usr/bin/env bash\n: "${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}"\n');
@@ -77,7 +77,7 @@ describe("control-plane HTTP boundary", () => {
 
       expect(response.status).toBe(200);
       expect(installer).toStartWith("#!/usr/bin/env bash\n");
-      expect(installer).toContain("PUBLIC_BASE_URL='http://localhost:5173'");
+      expect(installer).toContain("PUBLIC_BASE_URL='http://127.0.0.1:3000'");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
