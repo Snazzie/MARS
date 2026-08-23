@@ -346,8 +346,9 @@ function healthAge(value: unknown, startedAt: string | null, observedAt: string 
 function healthCapacitySource(value: unknown): Record<string, unknown> {
   const parsed = jsonValue(value);
   const wrapper = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
-  const nested = wrapper.doctor && typeof wrapper.doctor === "object" ? wrapper.doctor as Record<string, unknown> : wrapper;
-  return nested.capacity && typeof nested.capacity === "object" ? nested.capacity as Record<string, unknown> : {};
+  const nested = wrapper.doctor && typeof wrapper.doctor === "object" ? wrapper.doctor as Record<string, unknown> : {};
+  const capacity = wrapper.capacity && typeof wrapper.capacity === "object" ? wrapper.capacity : nested.capacity;
+  return capacity && typeof capacity === "object" ? capacity as Record<string, unknown> : {};
 }
 function healthCapacityMetric(source: Record<string, unknown>, name: string, actualKey: string, freeKey: string, decimal = false) {
   const raw = source[name];
@@ -374,7 +375,7 @@ function healthJobId(value: unknown): number | null {
 export async function getWorkerHealth(db: DashboardDb, workerId: string, workerConnected: (workerId: string) => boolean): Promise<WorkerHealth | null> {
   const [worker] = await db<Record<string, unknown>[]>`
     SELECT w.id,w.connection_state AS "connectionState",w.last_heartbeat_at AS "lastHeartbeatAt",
-      w.doctor_observed_at AS "lastDoctorAt",w.doctor,w.desired_configuration AS "desiredConfiguration",
+      w.doctor_observed_at AS "lastDoctorAt",w.doctor,w.limits,w.desired_configuration AS "desiredConfiguration",
       now() AS "observedAt",
       GREATEST(0,EXTRACT(EPOCH FROM (now()-w.last_heartbeat_at)))::int AS "heartbeatAgeSeconds",
       GREATEST(0,EXTRACT(EPOCH FROM (now()-w.doctor_observed_at)))::int AS "doctorAgeSeconds",
@@ -409,8 +410,11 @@ export async function getWorkerHealth(db: DashboardDb, workerId: string, workerC
   const freeMemory = healthCapacityMetric(capacity, "memoryBytes", "freeMemoryBytes", "freeMemoryBytes", true);
   const actualStorage = healthCapacityMetric(capacity, "storageBytes", "actualStorageBytes", "actualStorageBytes", true);
   const freeStorage = healthCapacityMetric(capacity, "storageBytes", "freeStorageBytes", "freeStorageBytes", true);
-  const actualPods = healthCapacityMetric(capacity, "pods", "actualPods", "actualPods").actual;
-  const freePods = healthCapacityMetric(capacity, "pods", "freePods", "freePods").free;
+  const limits = jsonValue(worker.limits);
+  const limitsObject = limits && typeof limits === "object" ? limits as Record<string, unknown> : {};
+  const actualPods = healthNumber(limitsObject.maxConcurrentPods, requests.length);
+  const reservedPods = requests.length;
+  const freePods = Math.max(0, actualPods - reservedPods);
   const desired = jsonValue(worker.desiredConfiguration);
   const desiredObject = desired && typeof desired === "object" ? desired as Record<string, unknown> : {};
   const desiredCache = desiredObject.cache && typeof desiredObject.cache === "object" ? desiredObject.cache as Record<string, unknown> : {};
@@ -427,7 +431,7 @@ export async function getWorkerHealth(db: DashboardDb, workerId: string, workerC
       cpu: { actual: actualCpu, reserved: requests.reduce((sum, request) => sum + request.vcpu, 0), free: freeCpu },
       memoryBytes: { actual: actualMemory.actual, reserved: addHealthDecimals(requests.map((request) => request.memoryBytes)), free: freeMemory.free },
       storageBytes: { actual: actualStorage.actual, reserved: addHealthDecimals(requests.map((request) => request.storageBytes)), free: freeStorage.free },
-      pods: { actual: actualPods, reserved: requests.reduce((sum, request) => sum + request.concurrency, 0), free: freePods },
+      pods: { actual: actualPods, reserved: reservedPods, free: freePods },
     },
     cache: {
       desiredTtlSeconds: healthNumber(desiredCache.ttlSeconds, 172800),

@@ -85,7 +85,8 @@ test("worker health projects complete cache and active lease telemetry", async (
       lastDoctorAt: new Date("2026-08-23T11:59:58.000Z"),
       observedAt: new Date("2026-08-23T12:00:00.000Z"),
       desiredConfiguration: { cache: { ttlSeconds: 3600 } },
-      doctor: { capacity: { actualVcpu: 16, freeVcpu: 10, actualMemoryBytes: "100000000000000000000", freeMemoryBytes: "99999999999999999900", actualStorageBytes: "300000000000000000000", freeStorageBytes: "299999999999999999000", actualPods: 8, freePods: 4 } },
+      limits: { maxConcurrentPods: 8 },
+      doctor: { doctor: { probe: true }, capacity: { actualVcpu: 16, freeVcpu: 10, actualMemoryBytes: "100000000000000000000", freeMemoryBytes: "99999999999999999900", actualStorageBytes: "300000000000000000000", freeStorageBytes: "299999999999999999000" } },
       cacheGeneration,
       cacheReady: true,
       cacheTtlSeconds: 1800,
@@ -106,6 +107,7 @@ test("worker health projects complete cache and active lease telemetry", async (
     connection: { state: "online", heartbeatAgeSeconds: 1, doctorAgeSeconds: 2 },
     usage: {
       cpu: { actual: 16, reserved: 4.5, free: 10 },
+      pods: { actual: 8, reserved: 4, free: 4 },
       memoryBytes: { actual: "100000000000000000000", reserved: "100000000000000001500", free: "99999999999999999900" },
       storageBytes: { actual: "300000000000000000000", reserved: "200000000000000001800", free: "299999999999999999000" },
     },
@@ -142,7 +144,7 @@ test("worker health returns null for a missing worker", async () => {
 
 test("worker health preserves exact large decimal byte strings", async () => {
   const worker = minimalWorkerHealthRow({
-    doctor: { capacity: { actualVcpu: 2, freeVcpu: 1, actualMemoryBytes: "900719925474099300000", freeMemoryBytes: "900719925474099299999", actualStorageBytes: "900719925474099400000", freeStorageBytes: "900719925474099399999", actualPods: 2, freePods: 1 } },
+    doctor: { doctor: { probe: true }, capacity: { actualVcpu: 2, freeVcpu: 1, actualMemoryBytes: "900719925474099300000", freeMemoryBytes: "900719925474099299999", actualStorageBytes: "900719925474099400000", freeStorageBytes: "900719925474099399999" } },
   });
   const db = workerHealthDb({
     worker,
@@ -168,8 +170,9 @@ function minimalWorkerHealthRow(overrides: Record<string, unknown> = {}) {
     lastHeartbeatAt: new Date("2026-08-23T12:00:00.000Z"),
     lastDoctorAt: null,
     observedAt: new Date("2026-08-23T12:00:00.000Z"),
+    limits: { maxConcurrentPods: 1 },
+    doctor: { doctor: { probe: true }, capacity: { actualVcpu: 1, freeVcpu: 1, actualMemoryBytes: "1", freeMemoryBytes: "1", actualStorageBytes: "1", freeStorageBytes: "1" } },
     desiredConfiguration: { cache: { ttlSeconds: 172800 } },
-    doctor: { capacity: { actualVcpu: 1, freeVcpu: 1, actualMemoryBytes: "1", freeMemoryBytes: "1", actualStorageBytes: "1", freeStorageBytes: "1", actualPods: 1, freePods: 1 } },
     cacheGeneration: null,
     cacheReady: false,
     cacheTtlSeconds: null,
