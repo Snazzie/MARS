@@ -23,20 +23,20 @@ function formatBytes(value: string): string {
 }
 type UsageMetric = { actual: number | string; reserved: number | string; free: number | string };
 
-function allocationPercent(reserved: number | string, available: number | string): number {
+function allocationPercent(reserved: number | string, available: number | string): number | null {
   const reservedText = String(reserved);
   const availableText = String(available);
   if (/^(?:0|[1-9]\d*)$/.test(reservedText) && /^(?:0|[1-9]\d*)$/.test(availableText)) {
     const reservedInteger = BigInt(reservedText);
     const availableInteger = BigInt(availableText);
     const total = reservedInteger + availableInteger;
-    if (total === 0n) return 0;
+    if (total === 0n) return null;
     return Number((reservedInteger * 10000n) / total) / 100;
   }
   const reservedNumber = typeof reserved === "number" ? reserved : Number(reserved);
   const availableNumber = typeof available === "number" ? available : Number(available);
   const total = reservedNumber + availableNumber;
-  if (!Number.isFinite(reservedNumber) || !Number.isFinite(availableNumber) || !Number.isFinite(total) || total <= 0) return 0;
+  if (!Number.isFinite(reservedNumber) || !Number.isFinite(availableNumber) || !Number.isFinite(total) || total <= 0) return null;
   return Math.max(0, Math.min(100, (reservedNumber / total) * 100));
 }
 
@@ -89,7 +89,9 @@ function UsageSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: st
           const actual = bytes ? formatBytes(String(values.actual)) : String(values.actual);
           const reserved = bytes ? formatBytes(String(values.reserved)) : String(values.reserved);
           const available = bytes ? formatBytes(String(values.free)) : String(values.free);
-          const reservedWidth = allocationPercent(values.reserved, values.free);
+          const allocation = allocationPercent(values.reserved, values.free);
+          const reservedWidth = allocation ?? 0;
+          const availableWidth = allocation == null ? 0 : 100 - reservedWidth;
           return <tr key={label}>
             <th scope="row">{label}</th>
             <td>{actual}</td>
@@ -98,7 +100,7 @@ function UsageSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: st
             <td>
               <div className="worker-health-usage-bar" role="img" aria-label={`${label}: ${reserved} reserved by workers, ${available} available`}>
                 <span className="worker-health-usage-bar-reserved" style={{ width: `${reservedWidth}%` }} aria-hidden="true" />
-                <span className="worker-health-usage-bar-available" style={{ width: `${100 - reservedWidth}%` }} aria-hidden="true" />
+                <span className="worker-health-usage-bar-available" style={{ width: `${availableWidth}%` }} aria-hidden="true" />
               </div>
             </td>
           </tr>;

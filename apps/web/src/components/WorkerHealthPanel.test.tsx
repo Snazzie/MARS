@@ -66,6 +66,7 @@ test("keeps zero-total allocation bars finite", () => {
   })} />);
   expect(markup).not.toMatch(/(?:NaN|Infinity)%/);
   expect(markup).toContain('style="width:0%"');
+  expect(markup).not.toContain('style="width:100%"');
 });
 
 test("preserves large decimal byte strings in each resource value", () => {
