@@ -55,7 +55,7 @@ function WorkerCacheInventory({ workerId }: { workerId: string }) {
 }
 function WorkerHealthSection({ workerId }: { workerId: string }) {
   const healthQuery = useWorkerHealth(workerId, true);
-  return <WorkerHealthPanel health={healthQuery.data} loading={healthQuery.isLoading} error={healthQuery.error} />;
+  return <WorkerHealthPanel workerId={workerId} health={healthQuery.data} loading={healthQuery.isLoading} error={healthQuery.error} />;
 }
 
 export function WorkerCard({ worker, organizationId, onChange, canManage = false }: { worker: WorkerDetail; organizationId: string; onChange: () => void; canManage?: boolean }) {

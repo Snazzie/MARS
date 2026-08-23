@@ -73,3 +73,19 @@ test("renders independent loading and error states", () => {
   expect(renderToStaticMarkup(<WorkerHealthPanel loading />)).toContain('role="status"');
   expect(renderToStaticMarkup(<WorkerHealthPanel error={new Error("health endpoint unavailable")} />)).toContain('role="alert"');
 });
+test("marks cache age from observedAt without treating fresh non-ready telemetry as stale", () => {
+  const freshObservedAt = new Date(Date.now() - 1_000).toISOString();
+  const freshMarkup = renderToStaticMarkup(<WorkerHealthPanel health={healthFixture({ cache: { ...healthFixture().cache, ready: false, observedAt: freshObservedAt } })} />);
+  expect(freshMarkup).not.toContain("Stale cache");
+  const oldObservedAt = new Date(Date.now() - 10_000 * 1_000).toISOString();
+  const oldMarkup = renderToStaticMarkup(<WorkerHealthPanel health={healthFixture({ cache: { ...healthFixture().cache, ready: true, observedAt: oldObservedAt } })} />);
+  expect(oldMarkup).toContain("Stale cache");
+});
+
+test("prefixes panel and subsection IDs per worker", () => {
+  const markup = renderToStaticMarkup(<WorkerHealthPanel workerId="worker-42" health={healthFixture()} />);
+  expect(markup).toContain('id="worker-health-worker-42-panel"');
+  expect(markup).toContain('aria-labelledby="worker-health-worker-42-usage-heading"');
+  expect(markup).toContain('aria-labelledby="worker-health-worker-42-cache-heading"');
+  expect(markup).toContain('aria-labelledby="worker-health-worker-42-jobs-heading"');
+});

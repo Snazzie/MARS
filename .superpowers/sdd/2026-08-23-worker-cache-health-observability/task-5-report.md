@@ -39,7 +39,13 @@ bun test apps/web/src/components/WorkerCard.test.tsx apps/web/src/components/Wor
 
 Per the brief, formatters, linters, and project-wide suites were not run.
 
+## Review follow-up
+
+- Fixed duplicate health panel/subsection IDs by prefixing all IDs with the worker ID and wiring `aria-controls`/`aria-labelledby` consistently.
+- Fixed cache stale detection to compare `observedAt` against the 300-second threshold, including tests for fresh non-ready and old ready snapshots.
+- Focused verification after fixes: `21 pass`, `0 fail`, `73 expect() calls`.
+
 ## Concerns
 
-- The `WorkerHealth` DTO exposes cache `observedAt` but no cache age-seconds field; the panel marks cache stale when an observed snapshot exists while cache readiness is false, while heartbeat/doctor stale badges use their server age fields.
+- The `WorkerHealth` DTO exposes cache `observedAt` but no server-provided cache age-seconds field; cache age is computed client-side from `observedAt`.
 - Existing unrelated working-tree changes were left untouched.

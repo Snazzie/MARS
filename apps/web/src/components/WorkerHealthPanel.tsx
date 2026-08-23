@@ -4,6 +4,7 @@ import type { WorkerHealth } from "@whitesmith/contracts";
 const STALE_AFTER_SECONDS = 300;
 
 type WorkerHealthPanelProps = {
+  workerId?: string;
   health?: WorkerHealth | null;
   loading?: boolean;
   error?: unknown;
@@ -37,6 +38,11 @@ function ageDisplay(value: number | null, startedAt: string | null): ReactNode {
   const label = age(value);
   return startedAt ? <time dateTime={startedAt}>{label}</time> : label;
 }
+function cacheStale(observedAt: string | null): boolean {
+  if (!observedAt) return false;
+  const ageSeconds = (Date.now() - Date.parse(observedAt)) / 1000;
+  return ageSeconds > STALE_AFTER_SECONDS;
+}
 
 function stale(value: number | null): boolean {
   return value != null && value > STALE_AFTER_SECONDS;
@@ -45,8 +51,7 @@ function stale(value: number | null): boolean {
 function StatusBadge({ children }: { children: ReactNode }) {
   return <span className="worker-health-status">{children}</span>;
 }
-
-function UsageSection({ health }: { health: WorkerHealth }) {
+function UsageSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: string }) {
   const metric = (label: string, value: { actual: number | string; reserved: number | string; free: number | string }, bytes = false) => (
     <div className="worker-health-metric">
       <span>{label}</span>
@@ -54,8 +59,8 @@ function UsageSection({ health }: { health: WorkerHealth }) {
       <small>Reserved {bytes ? formatBytes(String(value.reserved)) : value.reserved} · Free {bytes ? formatBytes(String(value.free)) : value.free}</small>
     </div>
   );
-  return <section className="worker-health-section" aria-labelledby="worker-health-usage-heading">
-    <h3 id="worker-health-usage-heading">System usage</h3>
+  return <section className="worker-health-section" aria-labelledby={`${idPrefix}-usage-heading`}>
+    <h3 id={`${idPrefix}-usage-heading`}>System usage</h3>
     <div className="worker-health-metrics">
       {metric("CPU", health.usage.cpu)}
       {metric("Memory", health.usage.memoryBytes, true)}
@@ -65,11 +70,10 @@ function UsageSection({ health }: { health: WorkerHealth }) {
   </section>;
 }
 
-function CacheSection({ health }: { health: WorkerHealth }) {
+function CacheSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: string }) {
   const cache = health.cache;
-  const cacheStale = !cache.ready && cache.observedAt != null;
-  return <section className="worker-health-section" aria-labelledby="worker-health-cache-heading">
-    <h3 id="worker-health-cache-heading">Cache health</h3>
+  return <section className="worker-health-section" aria-labelledby={`${idPrefix}-cache-heading`}>
+    <h3 id={`${idPrefix}-cache-heading`}>Cache health</h3>
     <dl className="worker-health-details">
       <div><dt>Readiness</dt><dd>{cache.ready ? "Ready" : "Unavailable"}</dd></div>
       <div><dt>Desired TTL</dt><dd>{formatTtl(cache.desiredTtlSeconds)}</dd></div>
@@ -82,25 +86,28 @@ function CacheSection({ health }: { health: WorkerHealth }) {
     </dl>
     <div className="worker-health-statuses" aria-label="Cache health status">
       {!cache.generation && <StatusBadge>No cache snapshot</StatusBadge>}
-      {cacheStale && <StatusBadge>Stale cache</StatusBadge>}
+      {cacheStale(cache.observedAt) && <StatusBadge>Stale cache</StatusBadge>}
       {!cache.observedAt && <StatusBadge>Unavailable telemetry</StatusBadge>}
     </div>
     {cache.error && <div className="worker-health-error" role="alert"><strong>Cache error</strong><span>{cache.error}</span><small>Remediation: verify the worker cache service and retry the health check.</small></div>}
   </section>;
 }
 
-function JobsSection({ health }: { health: WorkerHealth }) {
-  return <section className="worker-health-section" aria-labelledby="worker-health-jobs-heading">
-    <h3 id="worker-health-jobs-heading">Running jobs</h3>
+function JobsSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: string }) {
+  return <section className="worker-health-section" aria-labelledby={`${idPrefix}-jobs-heading`}>
+    <h3 id={`${idPrefix}-jobs-heading`}>Running jobs</h3>
     {health.jobs.length === 0 ? <p className="worker-health-empty">No active jobs</p> : <div className="worker-health-table-wrap"><table className="worker-health-table"><caption>Running worker jobs</caption><thead><tr><th scope="col">Job ID</th><th scope="col">Repository / name</th><th scope="col">Lease state</th><th scope="col">Age</th><th scope="col">Requested vCPU / memory / storage / concurrency</th></tr></thead><tbody>{health.jobs.map((job) => <tr key={job.leaseId}><td>{job.jobId ?? "Unavailable telemetry"}</td><td>{job.repositoryFullName ?? job.repositoryName ?? "Unavailable telemetry"}</td><td>{job.state}</td><td>{ageDisplay(job.ageSeconds, job.startedAt)}{stale(job.ageSeconds) && <StatusBadge>Stale job telemetry</StatusBadge>}</td><td>{job.requested.vcpu} / {formatBytes(job.requested.memoryBytes)} / {formatBytes(job.requested.storageBytes)} / {job.requested.concurrency}</td></tr>)}</tbody></table></div>}
   </section>;
 }
 
-export function WorkerHealthPanel({ health, loading = false, error }: WorkerHealthPanelProps) {
-  if (loading) return <section className="worker-health-panel" role="status" aria-label="Live worker health"><p>Loading live health…</p></section>;
-  if (error) return <section className="worker-health-panel" role="alert" aria-label="Live worker health error"><p>Live health unavailable. {errorMessage(error)}</p></section>;
-  if (!health) return <section className="worker-health-panel" role="alert" aria-label="Live worker health error"><p>Live health unavailable. No telemetry was reported.</p></section>;
-  return <section id="worker-health-panel" className="worker-health-panel" aria-label="Live worker health">
+
+
+export function WorkerHealthPanel({ workerId, health, loading = false, error }: WorkerHealthPanelProps) {
+  const idPrefix = workerId ? `worker-health-${workerId}` : "worker-health";
+  if (loading) return <section id={`${idPrefix}-panel`} className="worker-health-panel" role="status" aria-label="Live worker health"><p>Loading live health…</p></section>;
+  if (error) return <section id={`${idPrefix}-panel`} className="worker-health-panel" role="alert" aria-label="Live worker health error"><p>Live health unavailable. {errorMessage(error)}</p></section>;
+  if (!health) return <section id={`${idPrefix}-panel`} className="worker-health-panel" role="alert" aria-label="Live worker health error"><p>Live health unavailable. No telemetry was reported.</p></section>;
+  return <section id={`${idPrefix}-panel`} className="worker-health-panel" aria-label="Live worker health">
     <div className="worker-health-statuses" aria-label="Worker telemetry status">
       <StatusBadge>{health.connection.state === "offline" ? "Offline" : "Online"}</StatusBadge>
       {stale(health.connection.heartbeatAgeSeconds) && <StatusBadge>Stale heartbeat</StatusBadge>}
@@ -108,8 +115,8 @@ export function WorkerHealthPanel({ health, loading = false, error }: WorkerHeal
       {health.connection.heartbeatAgeSeconds == null && <StatusBadge>Unavailable telemetry</StatusBadge>}
       {health.connection.doctorAgeSeconds == null && <StatusBadge>Unavailable telemetry</StatusBadge>}
     </div>
-    <UsageSection health={health} />
-    <CacheSection health={health} />
-    <JobsSection health={health} />
+    <UsageSection health={health} idPrefix={idPrefix} />
+    <CacheSection health={health} idPrefix={idPrefix} />
+    <JobsSection health={health} idPrefix={idPrefix} />
   </section>;
 }
