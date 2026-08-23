@@ -14,9 +14,21 @@ test("reserves a routing slot before any JIT request", async () => {
   const db = Object.assign(((strings: TemplateStringsArray, ...values: unknown[]) => []) as unknown as Sql<{}>, { begin: async (fn: (value: Sql<{}>) => unknown) => fn(tx) });
   const result = await reserveRoutingSlot(db, { organizationId: "org", poolId: "pool", workerId: "worker", routingKey: "org:pool:labels", requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, ttlMs: 60_000 });
   expect(result.id).toBe("00000000-0000-4000-8000-000000000001");
+  const poolQuery = queries.find((query) => query.toLowerCase().includes("from runner_pools"));
+  expect(poolQuery).toBeDefined();
+  expect(poolQuery?.toLowerCase()).not.toContain("w.connection_state='online'");
   const insertQuery = queries.find((query) => query.toLowerCase().includes("insert into runner_leases"));
   expect(insertQuery).toBeDefined();
   expect(insertQuery).not.toContain("id=EXCLUDED.id");
+});
+
+test("rejects reservation when the worker row is no longer eligible", async () => {
+  const tx = ((strings: TemplateStringsArray) => {
+    if (strings.join(" ").toLowerCase().includes("from runner_pools")) return [];
+    return [];
+  }) as unknown as Sql<{}>;
+  const db = Object.assign(((strings: TemplateStringsArray) => []) as unknown as Sql<{}>, { begin: async (fn: (value: Sql<{}>) => unknown) => fn(tx) });
+  await expect(reserveRoutingSlot(db, { organizationId: "org", poolId: "pool", workerId: "worker", routingKey: "org:pool:labels", requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, ttlMs: 60_000 })).rejects.toThrow("worker_not_eligible");
 });
 test("normalizes PostgreSQL timestamp strings for encrypted lease bootstraps", async () => {
   const tx = ((strings: TemplateStringsArray) => {

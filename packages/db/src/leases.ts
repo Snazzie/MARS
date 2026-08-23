@@ -21,8 +21,9 @@ export async function reserveRoutingSlot(sql: DatabaseClient, input: LeaseReserv
     const eligible = await tx`SELECT p.id, p.resources, w.id AS "workerId", w.limits, w.doctor
       FROM runner_pools p JOIN workers w ON w.id=${input.workerId}
       WHERE p.id=${input.poolId}
-        AND p.enabled=true AND w.admission_state='adopted' AND w.connection_state='online'
+        AND p.enabled=true AND w.admission_state='adopted'
         AND w.configuration_state='ready' AND w.draining=false FOR UPDATE OF p, w`;
+    if (!eligible[0]) throw new Error("worker_not_eligible");
     const [organization] = await tx`SELECT max_vcpu_per_pod AS "maxVcpuPerPod", max_memory_bytes_per_pod AS "maxMemoryBytesPerPod", max_storage_bytes_per_pod AS "maxStorageBytesPerPod", max_concurrent_pods AS "maxConcurrentPods" FROM organization_settings WHERE organization_id=${input.organizationId}`;
     if (organization && (input.requested.vcpu > Number(organization.maxVcpuPerPod) || input.requested.memoryBytes > Number(organization.maxMemoryBytesPerPod) || input.requested.storageBytes > Number(organization.maxStorageBytesPerPod))) throw new Error("organization_limit");
     if (organization) {
