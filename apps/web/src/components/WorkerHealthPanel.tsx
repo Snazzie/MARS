@@ -95,7 +95,7 @@ function UsageSection({ health, idPrefix, limits }: { health: WorkerHealth; idPr
     <div className="worker-health-usage-table-wrap">
       <table className="worker-health-usage-table">
         <caption>Worker resource capacity and allocation</caption>
-        <thead><tr><th scope="col">Resource</th><th scope="col">Actual</th><th scope="col">Reserved by workers</th><th scope="col">Available</th><th scope="col">Per-job ceiling</th><th scope="col">Allocation</th></tr></thead>
+        <thead><tr><th scope="col">Resource</th><th scope="col">Worker capacity</th><th scope="col">Reserved by workers</th><th scope="col">Available</th><th scope="col">Per-job ceiling</th><th scope="col">Allocation</th></tr></thead>
         <tbody>{metrics.map(({ label, values, bytes, ceiling }) => {
           const actual = bytes ? formatBytes(String(values.actual)) : String(values.actual);
           const reserved = bytes ? formatBytes(String(values.reserved)) : String(values.reserved);

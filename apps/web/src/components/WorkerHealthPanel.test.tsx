@@ -50,7 +50,7 @@ test("formats very large decimal byte strings with safe binary units", () => {
 test("combines resource usage into one accessible table with labeled allocation bars", () => {
   const markup = renderToStaticMarkup(<WorkerHealthPanel health={healthFixture()} />);
   expect(markup).toContain('<table class="worker-health-usage-table">');
-  expect(markup).toContain("<th scope=\"col\">Actual</th>");
+  expect(markup).toContain("<th scope=\"col\">Worker capacity</th>");
   expect(markup).toContain("<th scope=\"col\">Reserved by workers</th>");
   expect(markup).toContain("<th scope=\"col\">Available</th>");
   for (const resource of ["CPU", "Memory", "Storage", "Pods"]) expect(markup).toContain(`<th scope="row">${resource}</th>`);
