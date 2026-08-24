@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { WorkerHealth } from "@whitesmith/contracts";
+import type { WorkerDetail, WorkerHealth } from "@whitesmith/contracts";
 
 const STALE_AFTER_SECONDS = 300;
 
@@ -8,6 +8,8 @@ type WorkerHealthPanelProps = {
   health?: WorkerHealth | null;
   loading?: boolean;
   error?: unknown;
+  limits?: WorkerDetail["limits"];
+  showConnectionStatus?: boolean;
 };
 
 function errorMessage(error: unknown): string {
@@ -81,20 +83,20 @@ function StatusBadge({ children }: { children: ReactNode }) {
   return <span className="worker-health-status">{children}</span>;
 }
 
-function UsageSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: string }) {
-  const metrics: Array<{ label: string; values: UsageMetric; bytes?: boolean }> = [
-    { label: "CPU", values: health.usage.cpu },
-    { label: "Memory", values: health.usage.memoryBytes, bytes: true },
-    { label: "Storage", values: health.usage.storageBytes, bytes: true },
-    { label: "Pods", values: health.usage.pods },
+function UsageSection({ health, idPrefix, limits }: { health: WorkerHealth; idPrefix: string; limits?: WorkerDetail["limits"] }) {
+  const metrics: Array<{ label: string; values: UsageMetric; bytes?: boolean; ceiling: number | null }> = [
+    { label: "CPU", values: health.usage.cpu, ceiling: limits?.maxVcpuPerPod ?? null },
+    { label: "Memory", values: health.usage.memoryBytes, bytes: true, ceiling: limits?.maxMemoryBytesPerPod ?? null },
+    { label: "Storage", values: health.usage.storageBytes, bytes: true, ceiling: limits?.maxStorageBytesPerPod ?? null },
+    { label: "Pods", values: health.usage.pods, ceiling: limits?.maxConcurrentPods ?? null },
   ];
   return <section className="worker-health-section" aria-labelledby={`${idPrefix}-usage-heading`}>
     <h3 id={`${idPrefix}-usage-heading`}>System usage</h3>
     <div className="worker-health-usage-table-wrap">
       <table className="worker-health-usage-table">
         <caption>Worker resource capacity and allocation</caption>
-        <thead><tr><th scope="col">Resource</th><th scope="col">Actual</th><th scope="col">Reserved by workers</th><th scope="col">Available</th><th scope="col">Allocation</th></tr></thead>
-        <tbody>{metrics.map(({ label, values, bytes }) => {
+        <thead><tr><th scope="col">Resource</th><th scope="col">Actual</th><th scope="col">Reserved by workers</th><th scope="col">Available</th><th scope="col">Per-job ceiling</th><th scope="col">Allocation</th></tr></thead>
+        <tbody>{metrics.map(({ label, values, bytes, ceiling }) => {
           const actual = bytes ? formatBytes(String(values.actual)) : String(values.actual);
           const reserved = bytes ? formatBytes(String(values.reserved)) : String(values.reserved);
           const available = bytes ? formatBytes(String(values.free)) : String(values.free);
@@ -106,6 +108,7 @@ function UsageSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: st
             <td>{actual}</td>
             <td>{reserved}</td>
             <td>{available}</td>
+            <td>{ceiling == null ? "Not configured" : bytes ? formatBytes(String(ceiling)) : ceiling}</td>
             <td>
               <div className="worker-health-usage-bar" role="img" aria-label={`${label}: ${reserved} reserved by workers, ${available} available`}>
                 <span className="worker-health-usage-bar-reserved" style={{ width: `${reservedWidth}%` }} aria-hidden="true" />
@@ -156,20 +159,20 @@ function JobsSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: str
 
 
 
-export function WorkerHealthPanel({ workerId, health, loading = false, error }: WorkerHealthPanelProps) {
+export function WorkerHealthPanel({ workerId, health, loading = false, error, limits, showConnectionStatus = true }: WorkerHealthPanelProps) {
   const idPrefix = workerId ? `worker-health-${workerId}` : "worker-health";
   if (loading) return <section id={`${idPrefix}-panel`} className="worker-health-panel" role="status" aria-label="Live worker health"><p>Loading live health…</p></section>;
   if (error) return <section id={`${idPrefix}-panel`} className="worker-health-panel" role="alert" aria-label="Live worker health error"><p>Live health unavailable. {errorMessage(error)}</p></section>;
   if (!health) return <section id={`${idPrefix}-panel`} className="worker-health-panel" role="alert" aria-label="Live worker health error"><p>Live health unavailable. No telemetry was reported.</p></section>;
   return <section id={`${idPrefix}-panel`} className="worker-health-panel" aria-label="Live worker health">
-    <div className="worker-health-statuses" aria-label="Worker telemetry status">
+    {showConnectionStatus && <div className="worker-health-statuses" aria-label="Worker telemetry status">
       <StatusBadge>{health.connection.state === "offline" ? "Offline" : "Online"}</StatusBadge>
       {stale(health.connection.heartbeatAgeSeconds) && <StatusBadge>Stale heartbeat</StatusBadge>}
       {stale(health.connection.doctorAgeSeconds) && <StatusBadge>Stale doctor</StatusBadge>}
       {health.connection.heartbeatAgeSeconds == null && <StatusBadge>Unavailable telemetry</StatusBadge>}
       {health.connection.doctorAgeSeconds == null && <StatusBadge>Unavailable telemetry</StatusBadge>}
-    </div>
-    <UsageSection health={health} idPrefix={idPrefix} />
+    </div>}
+    <UsageSection health={health} idPrefix={idPrefix} limits={limits} />
     <CacheSection health={health} idPrefix={idPrefix} />
     <JobsSection health={health} idPrefix={idPrefix} />
   </section>;

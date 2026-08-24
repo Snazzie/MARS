@@ -156,6 +156,17 @@ test("renders operational and readiness status in the worker card", () => {
   expect(markup).not.toContain("Needs configuration");
 });
 
+test("uses a compact identity and operations layout without artifact or standalone policy rows", () => {
+  const markup = renderCard(workerFixture({
+    limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_294_967_296, maxStorageBytesPerPod: 10_737_418_240, maxConcurrentPods: 3 },
+  }));
+  expect(markup).toContain('class="worker-card-controls"');
+  expect(markup).toContain('class="worker-fingerprint"');
+  expect(markup).toContain('worker-operational-strip"');
+  expect(markup).not.toContain("Artifact digest");
+  expect(markup).not.toContain("Policy ceilings");
+});
+
 test("shows applying configuration until the desired revision is acknowledged", () => {
   const worker = workerFixture({ configurationState: "applying", configurationRevision: "b".repeat(64), doctor: { egress: true } });
   const markup = renderCard(worker);

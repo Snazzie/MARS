@@ -25,7 +25,6 @@ function formatBytes(value: string | null | undefined): string {
   if (bytes >= mib) return `${(bytes + mib / 2n) / mib} MiB`;
   return `${bytes} B`;
 }
-function bytes(value: number): string { return formatBytes(String(value)); }
 export function workerOperationalLabel(worker: Pick<WorkerDetail, "connectionState" | "draining">): "Online" | "Offline" | "Draining" { return worker.draining ? "Draining" : worker.connectionState === "online" ? "Online" : "Offline"; }
 export function workerReadinessLabel(state: WorkerDetail["configurationState"]): "Ready" | "Applying configuration" | "Needs configuration" | "Error" { return state === "ready" ? "Ready" : state === "applying" ? "Applying configuration" : state === "error" ? "Error" : "Needs configuration"; }
 function appliedAt(value: string): string { return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(value)); }
@@ -54,9 +53,9 @@ function WorkerCacheInventory({ workerId }: { workerId: string }) {
     {inventory.hasNextPage && <button type="button" className="control-button" onClick={() => void inventory.fetchNextPage()} disabled={inventory.isFetchingNextPage}>{inventory.isFetchingNextPage ? "Loading…" : "Load more"}</button>}
   </div>;
 }
-function WorkerHealthSection({ workerId }: { workerId: string }) {
-  const healthQuery = useWorkerHealth(workerId);
-  return <WorkerHealthPanel workerId={workerId} health={healthQuery.data} loading={healthQuery.isLoading} error={healthQuery.error} />;
+function WorkerHealthSection({ worker }: { worker: WorkerDetail }) {
+  const healthQuery = useWorkerHealth(worker.id);
+  return <WorkerHealthPanel workerId={worker.id} health={healthQuery.data} loading={healthQuery.isLoading} error={healthQuery.error} limits={worker.limits} showConnectionStatus={false} />;
 }
 
 export function WorkerCard({ worker, organizationId, onChange, canManage = false }: { worker: WorkerDetail; organizationId: string; onChange: () => void; canManage?: boolean }) {
@@ -80,6 +79,7 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
     : null;
   const [configuring, setConfiguring] = useState(false);
   const [building, setBuilding] = useState(false);
+  const staleBefore = Date.now() - 300_000;
   const dialog = useRef<HTMLDialogElement>(null);
   const openConfiguration = () => { setConfiguring(true); dialog.current?.showModal(); };
   const closeConfiguration = () => { dialog.current?.close(); setConfiguring(false); };
@@ -88,24 +88,31 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
     freeVcpu: worker.capacity.vcpu.free, freeMemoryBytes: worker.capacity.memoryBytes.free, freeStorageBytes: worker.capacity.storageBytes.free,
   };
   return <article className={`worker-card ${worker.admissionState !== "adopted" ? "worker-card-pending" : ""}`} aria-labelledby={`worker-${worker.id}`}>
-    <header className="worker-card-header"><div><div className="worker-name-row"><span className={`status-dot status-${worker.connectionState}`} aria-label={worker.connectionState} /><h2 id={`worker-${worker.id}`}>{worker.name}</h2></div><p className="worker-meta">{worker.platform} · guests: {worker.guestPlatforms.join(", ")} · {worker.driver} · <span className={`status-pill status-${worker.admissionState}`}>{worker.admissionState}</span></p><div className="worker-statuses" aria-label="Worker status"><span className={`status-pill status-${worker.connectionState}`}>{worker.connectionState}</span>{worker.draining && <span className="status-pill status-draining">draining</span>}<span className={`status-pill status-${effectiveConfigurationState}`}>{readinessLabel}</span></div></div><WorkerActions organizationId={organizationId} workerId={worker.id} admissionState={worker.admissionState} draining={worker.draining} activeSandboxes={worker.activeSandboxes} platform={worker.platform} runtimeMode={worker.platform === "windows-x64" ? "container" : worker.runtimeMode === "container" || worker.runtimeMode === "vm" ? worker.runtimeMode : null} onComplete={onChange} />{active && <Button label="Configure" variant="secondary" clickAction={openConfiguration} />}</header>
-    {active && worker.platform === "windows-x64" && <button type="button" className="control-button" onClick={() => setBuilding(true)} disabled={worker.connectionState !== "online" || worker.doctor?.runtimeBuildState === "building"} title={worker.connectionState === "online" ? "Send the declarative image build to the worker" : "Worker must be online before it can build an image"}>{worker.connectionState !== "online" ? "Worker offline" : worker.doctor?.runtimeBuildState === "building" ? "Building…" : "Build local image"}</button>}
-    {active && canManage && <div className="worker-policy-control"><label><input type="checkbox" checked={worker.preserveLeases === true} disabled={preservationPending} onChange={(event) => { void togglePreservation(event.currentTarget.checked); }} /> Preserve failed containers</label><p className="pending-note">Keeps failed runtimes for inspection and consumes worker capacity until disabled.</p>{preservationError && <p className="form-error" role="alert">{preservationError}</p>}</div>}
+    <header className="worker-card-header">
+      <div className="worker-card-identity">
+        <div className="worker-name-row"><span className={`status-dot status-${worker.connectionState}`} aria-label={worker.connectionState} /><h2 id={`worker-${worker.id}`}>{worker.name}</h2></div>
+        <div className="worker-statuses" aria-label="Worker status"><span className={`status-pill status-${worker.connectionState}`}>{worker.connectionState}</span>{worker.lastHeartbeatAt && Date.parse(worker.lastHeartbeatAt) < staleBefore && <span className="status-pill status-stale">stale heartbeat</span>}{worker.lastDoctorAt && Date.parse(worker.lastDoctorAt) < staleBefore && <span className="status-pill status-stale">stale doctor</span>}{worker.draining && <span className="status-pill status-draining">draining</span>}<span className={`status-pill status-${effectiveConfigurationState}`}>{readinessLabel}</span><span className={`status-pill status-${worker.admissionState}`}>{worker.admissionState}</span></div>
+        <p className="worker-meta">{worker.platform} · guests: {worker.guestPlatforms.join(", ")} · {worker.driver} · <span className="worker-fingerprint">key <code tabIndex={0} title={worker.fingerprint}>{worker.fingerprint}</code></span></p>
+      </div>
+      <div className="worker-card-controls">
+        {active && worker.platform === "windows-x64" && <button type="button" className="control-button" onClick={() => setBuilding(true)} disabled={worker.connectionState !== "online" || worker.doctor?.runtimeBuildState === "building"} title={worker.connectionState === "online" ? "Send the declarative image build to the worker" : "Worker must be online before it can build an image"}>{worker.connectionState !== "online" ? "Worker offline" : worker.doctor?.runtimeBuildState === "building" ? "Building…" : "Build local image"}</button>}
+        <WorkerActions organizationId={organizationId} workerId={worker.id} admissionState={worker.admissionState} draining={worker.draining} activeSandboxes={worker.activeSandboxes} platform={worker.platform} runtimeMode={worker.platform === "windows-x64" ? "container" : worker.runtimeMode === "container" || worker.runtimeMode === "vm" ? worker.runtimeMode : null} onComplete={onChange} />
+        {active && <Button label="Configure" variant="secondary" clickAction={openConfiguration} />}
+      </div>
+    </header>
+    {active && canManage && <div className="worker-policy-control"><label title="Keeps failed runtimes for inspection and consumes worker capacity until disabled."><input type="checkbox" checked={worker.preserveLeases === true} disabled={preservationPending} onChange={(event) => { void togglePreservation(event.currentTarget.checked); }} /> Preserve failed containers</label>{preservationError && <p className="form-error" role="alert">{preservationError}</p>}</div>}
+    <dl className="limits-list worker-telemetry worker-operational-strip">
+      <div><dt>Last heartbeat</dt><dd>{telemetryAt(worker.lastHeartbeatAt)}</dd></div>
+      <div><dt>Last successful doctor</dt><dd>{telemetryAt(worker.lastDoctorAt)}</dd></div>
+      <div><dt>Runtime mode</dt><dd>{worker.runtimeMode ?? "Not reported"}</dd></div>
+      <div><dt>Active leases</dt><dd>{worker.activeSandboxes}</dd></div>
+    </dl>
     {active && effectiveConfigurationState === "ready" && applied && <p className="pending-note">Configuration updated <time dateTime={worker.configurationAppliedAt!}>{applied.at}</time> · revision <code>{applied.revision}</code></p>}
     {worker.admissionState === "pending" && <p className="pending-note">Registered with the control plane. Configure resources before creating a pool.</p>}
     {active && effectiveConfigurationState === "ready" && worker.doctor?.runtimeBuildState === "building" && <p className="pending-note" role="status">Building local runtime image. Scheduling remains paused until the worker reports completion.</p>}
     {active && effectiveConfigurationState === "ready" && !runtimeReady && worker.doctor?.runtimeBuildState !== "building" && <p className="pending-note" role="status">Runtime image is not ready. Scheduling remains paused until the worker reports a verified local runtime.</p>}
     {active && effectiveConfigurationState === "error" && <p className="pending-note" role="alert">Configuration update failed.{applied ? <> Last applied <time dateTime={worker.configurationAppliedAt!}>{applied.at}</time> · revision <code>{applied.revision}</code>.</> : " No configuration has been acknowledged."}</p>}
-    <div className="fingerprint-block"><span>Public key fingerprint</span><code tabIndex={0}>{worker.fingerprint}</code></div>
-    <dl className="limits-list worker-telemetry">
-      <div><dt>Last heartbeat</dt><dd>{telemetryAt(worker.lastHeartbeatAt)}</dd></div>
-      <div><dt>Last successful doctor</dt><dd>{telemetryAt(worker.lastDoctorAt)}</dd></div>
-      <div><dt>Runtime mode</dt><dd>{worker.runtimeMode ?? "Not reported"}</dd></div>
-      <div><dt>Artifact digest</dt><dd>{worker.artifactDigest ? <code>{worker.artifactDigest}</code> : worker.doctor?.artifactIdentity ? <code>{worker.doctor.artifactIdentity}</code> : "Not reported"}</dd></div>
-      <div><dt>Active leases</dt><dd>{worker.activeSandboxes}</dd></div>
-    </dl>
-    <WorkerHealthSection workerId={worker.id} />
-    <div className="worker-grid"><section className="worker-section"><div className="panel-kicker">Policy ceilings</div>{worker.limits ? <dl className="limits-list"><div><dt>vCPU / pod</dt><dd>{worker.limits.maxVcpuPerPod}</dd></div><div><dt>Memory / pod</dt><dd>{bytes(worker.limits.maxMemoryBytesPerPod)}</dd></div><div><dt>Storage / pod</dt><dd>{bytes(worker.limits.maxStorageBytesPerPod)}</dd></div><div><dt>Concurrency</dt><dd>{worker.limits.maxConcurrentPods}</dd></div></dl> : <p className="muted">Not configured.</p>}</section></div>
+    <WorkerHealthSection worker={worker} />
     {active && <section className="worker-section worker-cache-panel" aria-label="Cache inventory"><div className="panel-kicker">Cache inventory</div>{cache?.ready && cache.entryCount > 0 ? <details onToggle={(event) => setCacheInventoryOpen(event.currentTarget.open)}><summary>Browse cache inventory</summary>{cacheInventoryOpen && cacheInventory(worker.id)}</details> : <p className="muted">{cache?.ready ? "No cache entries." : "Cache inventory unavailable."}</p>}</section>}
     {building && <dialog open className="worker-config-dialog" aria-label="Build local runtime image"><WorkerImageBuildForm organizationId={organizationId} workerId={worker.id} onComplete={() => { setBuilding(false); onChange(); }} onCancel={() => setBuilding(false)} /></dialog>}
     {active && <WorkerDoctor doctor={worker.doctor} platform={worker.platform} dispatchReady={effectiveConfigurationState === "ready" && runtimeReady} />}

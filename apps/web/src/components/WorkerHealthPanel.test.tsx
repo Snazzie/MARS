@@ -61,6 +61,19 @@ test("combines resource usage into one accessible table with labeled allocation 
   expect(markup).toContain("CPU: 1 reserved by workers, 1 available");
 });
 
+test("merges configured policy ceilings into system usage", () => {
+  const markup = renderToStaticMarkup(<WorkerHealthPanel health={healthFixture()} limits={{
+    maxVcpuPerPod: 2,
+    maxMemoryBytesPerPod: 4_294_967_296,
+    maxStorageBytesPerPod: 10_737_418_240,
+    maxConcurrentPods: 3,
+  }} />);
+  expect(markup).toContain("<th scope=\"col\">Per-job ceiling</th>");
+  expect(markup).toContain("4.0 GiB");
+  expect(markup).toContain("10.0 GiB");
+  expect(markup).toContain(">3</td>");
+});
+
 test("keeps zero-total allocation bars finite", () => {
   const zero = { actual: 0, reserved: 0, free: 0 };
   const markup = renderToStaticMarkup(<WorkerHealthPanel health={healthFixture({
