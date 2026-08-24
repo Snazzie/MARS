@@ -5,7 +5,7 @@ import { cpus, totalmem } from "node:os";
 import { statfsSync } from "node:fs";
 import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerObservedConfiguration, WorkerConfigurePayload, WorkerCommand, WorkerDoctorData, WorkerEvent, type WorkerCapacityData } from "@whitesmith/contracts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
-import { authenticateWorker, workerSocketUrl, type WorkerIdentity } from "./worker-client.ts";
+import { authenticateWorker, retryControlPlaneOperation, workerSocketUrl, type WorkerIdentity } from "./worker-client.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 import type { LibvirtVmDriver } from "./libvirt-vm.ts";
 import type { WorkerLimits } from "@whitesmith/contracts";
@@ -141,7 +141,7 @@ async function enrollLinuxWorker(baseUrl: URL, identity: WorkerIdentity, driver:
   const capacity = linuxCapacity();
   const doctor = await linuxDoctor(driver, digest, channelRoot);
   const payload = buildLinuxWorkerJoinPayload({ code, publicKey: identity.publicKey, encryptionPublicKey: identity.encryptionPublicKey, vmUuid: Bun.env.WHITESMITH_VM_UUID ?? randomUUID(), machineUuid: Bun.env.WHITESMITH_MACHINE_UUID ?? randomUUID(), doctor, capacity });
-  const response = await fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) });
+  const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) }));
   if (!response.ok) throw new Error(`worker join failed: ${response.status}`);
   const joined = await response.json() as { workerId?: string };
   if (!joined.workerId) throw new Error("worker join response missing workerId");

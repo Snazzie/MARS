@@ -10,6 +10,7 @@ import {
   type WorkerCacheProxy,
   type WorkerCacheStatus,
 } from "@whitesmith/contracts";
+import { retryControlPlaneOperation } from "../worker-client.ts";
 import { loadOrCreateCertificateAuthority, type IssuedLeafCertificate, type WorkerCertificateAuthority } from "./certificates.ts";
 import { openActionCacheStore, type ActionCacheMutation, type ActionCacheStore } from "./store.ts";
 import { CREATE_CACHE_ENTRY_PATH, FINALIZE_CACHE_ENTRY_UPLOAD_PATH, GET_CACHE_ENTRY_DOWNLOAD_URL_PATH, createActionCacheRoutes, createGitHubCacheTokenVerifier, createNodeActionCacheHandler, type CacheTokenVerifier, type NodeActionCacheHandler } from "./routes.ts";
@@ -505,7 +506,9 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
       catch (error) { console.error("Action cache sweep failed", error instanceof Error ? error.message : String(error)); }
     }, 60_000);
     const certificateAuthority = await loadOrCreateCertificateAuthority(store);
-    const advertiseHost = network.overrideOrigins ? normalizedHostname(new URL(network.overrideOrigins.cacheBaseUrl)) : await (options.discoverAdvertiseHost ?? discoverActionCacheAdvertiseHost)(controlPlane);
+    const advertiseHost = network.overrideOrigins
+      ? normalizedHostname(new URL(network.overrideOrigins.cacheBaseUrl))
+      : await retryControlPlaneOperation("action-cache route discovery", () => (options.discoverAdvertiseHost ?? discoverActionCacheAdvertiseHost)(controlPlane));
     await certificateAuthority.issueLeaf("results-receiver.actions.githubusercontent.com", now());
     const dataCertificate = await certificateAuthority.issueLeaf(advertiseHost, now(), INTERCEPTED_CACHE_HOSTS);
     let handleCacheRequest: NodeActionCacheHandler | null = null;

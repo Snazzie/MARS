@@ -7,6 +7,7 @@ import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerCommand, Worker
 import type { Lease, RuntimeLease } from "./runtime.ts";
 import { createTartVmRuntime, TartVmDriver } from "./tart.ts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
+import { retryControlPlaneOperation } from "./worker-client.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 
 export interface MacWorkerLimits { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number }
@@ -271,7 +272,7 @@ async function enrollMacWorker(controlPlane: URL, identity: MacWorkerIdentity): 
   const codeBytes = await readJoinCode();
   try {
     const payload = await currentMacWorkerJoinPayload(codeBytes.toString("utf8").trim(), identity.publicKey, identity.encryptionPublicKey);
-    const response = await fetch(new URL("/api/workers/join", controlPlane), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) });
+    const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", controlPlane), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) }));
     if (!response.ok) throw new Error(`worker join failed: ${response.status} ${await response.text()}`);
     const joined = await response.json() as { workerId?: string };
     if (typeof joined.workerId !== "string" || !joined.workerId) throw new Error("worker join response missing workerId");
