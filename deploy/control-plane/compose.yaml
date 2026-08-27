@@ -1,6 +1,6 @@
 services:
   control-plane:
-    image: ghcr.io/snazzie/whitesmith/control-plane:latest
+    image: ghcr.io/snazzie/mars/control-plane:latest
     restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}

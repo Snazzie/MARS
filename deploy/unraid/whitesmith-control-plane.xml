@@ -1,13 +1,13 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>Mars Control Plane</Name>
-  <Repository>ghcr.io/snazzie/whitesmith/control-plane:v0.1.0</Repository>
+  <Repository>ghcr.io/snazzie/mars/control-plane:v0.1.0</Repository>
   <Registry>https://ghcr.io/</Registry>
   <Network>bridge</Network>
   <WebUI>http://[IP]:[PORT:3000]/</WebUI>
   <Privileged>false</Privileged>
-  <Support>https://github.com/Snazzie/whitesmith</Support>
-  <Project>https://github.com/Snazzie/whitesmith</Project>
+  <Support>https://github.com/Snazzie/Mars</Support>
+  <Project>https://github.com/Snazzie/Mars</Project>
   <Overview>Mars control plane. Requires an external PostgreSQL 17 database and an HTTPS reverse proxy with WebSocket support. Worker execution runtimes are external to Unraid.</Overview>
   <Config Name="HTTP Port" Target="3000" Default="3000" Mode="tcp" Description="Control-plane HTTP and WebSocket port." Type="Port" Display="always" Required="true" Mask="false">3000</Config>
   <Config Name="Persistent data" Target="/var/lib/whitesmith" Default="/mnt/user/appdata/whitesmith-control-plane/data" Mode="rw" Description="Persistent control-plane diagnostic data." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/whitesmith-control-plane/data</Config>
