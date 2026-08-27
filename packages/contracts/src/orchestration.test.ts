@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig, RuntimeTerminationEvidence, WorkerBuildImagePayload, WorkerDoctorData, WorkerImageBuildSpec } from "./orchestration.ts";
+import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig, RuntimeTerminationEvidence, WorkerBuildImagePayload, WorkerDoctorData, WorkerImageBuildSpec, sanitizeDiagnosticText } from "./orchestration.ts";
 import * as orchestration from "./orchestration.ts";
 
 test("parses a GitHub JIT config with a one-time lease binding", () => {
@@ -244,4 +244,20 @@ test("bounds worker cache snapshot frames and requires completion counts", () =>
     type: "worker.cache_snapshot_end",
     payload: { snapshotId, pageCount: 1, entryCount: 1, sizeBytes: "1" },
   }).success).toBe(true);
+});
+test("redacts diagnostic credential assignments while preserving useful output", () => {
+  const input = [
+    "started worker",
+    "config.password=secret-one",
+    "PASSWORD=secret-two",
+    "token=secret-three",
+    "api-key: secret-four",
+    "--credential=secret-five",
+    "healthy nonsecret diagnostic",
+  ].join("\n");
+  const output = sanitizeDiagnosticText(input);
+  expect(output).toContain("started worker");
+  expect(output).toContain("healthy nonsecret diagnostic");
+  for (const secret of ["secret-one", "secret-two", "secret-three", "secret-four", "secret-five"]) expect(output).not.toContain(secret);
+  expect(output.match(/\[REDACTED\]/g)?.length).toBe(5);
 });
