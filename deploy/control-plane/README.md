@@ -1,6 +1,11 @@
-# Control Plane Docker Deployment
+# Mars Control Plane Docker Deployment
 
-This directory contains the Linux/amd64 control-plane image and PostgreSQL-only Compose stack. PostgreSQL is external to this core file; Cloudflare Tunnel and ingress are operator-managed.
+Mars means **Managed Action Runner System**: the control plane for managing
+GitHub Actions runners and worker execution.
+
+This directory contains the Linux/amd64 Mars control-plane image and
+PostgreSQL-only Compose stack. PostgreSQL is external to this core file;
+Cloudflare Tunnel and ingress are operator-managed.
 
 ## Prerequisites
 
