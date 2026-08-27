@@ -1,6 +1,6 @@
 # Mars Control Plane Docker Deployment
 
-Mars means **My Action Runners**: the control plane for managing
+Mars means **Managed Action Runners**: the control plane for managing
 GitHub Actions runners and worker execution.
 
 This directory contains the Linux/amd64 Mars control-plane image and
