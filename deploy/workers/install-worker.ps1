@@ -5,7 +5,7 @@ param(
   [ValidateSet('vm','container')][string]$WindowsRuntime = 'vm',
   [string]$WindowsTemplatePath = '__WINDOWS_TEMPLATE_PATH__',
   [string]$WindowsTemplateDigest = '__WINDOWS_TEMPLATE_DIGEST__',
-  [string]$WindowsContainerImage = 'whitesmith/windows-job:local',
+  [string]$WindowsContainerImage = 'mars/windows-job:local',
   [string]$WindowsContainerBaseImage = '__WINDOWS_CONTAINER_BASE_IMAGE__',
   [string]$WindowsContainerRunnerUrl = '__WINDOWS_CONTAINER_RUNNER_URL__',
   [string]$WindowsContainerRunnerSha256 = '__WINDOWS_CONTAINER_RUNNER_SHA256__',
@@ -18,7 +18,7 @@ param(
   [string]$WindowsContainerfileUrl = '__WINDOWS_CONTAINERFILE_URL__',
   [string]$WindowsContainerEntrypointUrl = '__WINDOWS_CONTAINER_ENTRYPOINT_URL__',
   [string]$WindowsContainerJobAgentUrl = '__WINDOWS_CONTAINER_JOB_AGENT_URL__',
-  [string]$WindowsContainerPrefix = 'whitesmith',
+  [string]$WindowsContainerPrefix = 'mars',
   [int]$WindowsContainerReadyTimeoutMs = 15000,
   [int]$WindowsContainerJobTimeoutMs = 900000,
   [switch]$AllowInsecureHttp,
@@ -26,7 +26,7 @@ param(
   [switch]$Upgrade
 )
 $ErrorActionPreference = 'Stop'
-$windowsImageManifestPath = 'C:\ProgramData\Whitesmith\windows-job-image.json'
+$windowsImageManifestPath = 'C:\ProgramData\Mars\windows-job-image.json'
 function Require-Administrator {
   $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
   if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Administrator privileges are required.' }
@@ -52,7 +52,7 @@ function Assert-LocalImageManifest([string]$Path, [string]$Image) {
   }
   if ($manifest.image -ne $Image) { throw 'Windows local image manifest image mismatch.' }
   $runtimeProbe = $manifest.runtimeProbe
-  $expectedEntrypoint = @('powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', 'C:/Whitesmith/entrypoint.ps1') | ConvertTo-Json -Compress
+  $expectedEntrypoint = @('powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', 'C:/Mars/entrypoint.ps1') | ConvertTo-Json -Compress
   $imageInspection = (docker image inspect --format '{{json .}}' $Image | Select-Object -Last 1 | ConvertFrom-Json)
   if ($LASTEXITCODE -ne 0 -or ($imageInspection.Config.Entrypoint | ConvertTo-Json -Compress) -ne $expectedEntrypoint) { throw 'Windows image entrypoint is invalid.' }
   $imageId = $imageInspection.Id
@@ -60,7 +60,7 @@ function Assert-LocalImageManifest([string]$Path, [string]$Image) {
   return $manifest
 }
 function Assert-ImageDigest([string]$Image) {
-  if ($Image -eq 'whitesmith/windows-job:local') { return }
+  if ($Image -eq 'mars/windows-job:local') { return }
   if ($Image -match '^[^@\s]+@sha256:[0-9a-f]{64}$') { return }
   throw "Windows container image must be a full lowercase digest reference: $Image"
 }
@@ -96,13 +96,13 @@ function Build-LocalWindowsImage([string]$Image) {
   )
   foreach ($value in $values) { if ([string]::IsNullOrWhiteSpace($value.Value) -or $value.Value -match '^__') { throw "Windows container build input is not configured: $($value.Name)" } }
   foreach ($value in @($WindowsContainerBuilderUrl, $WindowsContainerVerifierUrl, $WindowsContainerfileUrl, $WindowsContainerEntrypointUrl, $WindowsContainerJobAgentUrl)) { Assert-HttpsUrl $value 'Windows container artifact URL' }
-  $root = Join-Path $env:ProgramData 'Whitesmith\image-build-inputs'
+  $root = Join-Path $env:ProgramData 'Mars\image-build-inputs'
   New-Item -ItemType Directory -Force -Path $root | Out-Null
   $builder = Join-Path $root 'build-local.ps1'
   $verifier = Join-Path $root 'verify-runtime.ps1'
   $containerfile = Join-Path $root 'Containerfile'
   $entrypoint = Join-Path $root 'entrypoint.ps1'
-  $jobAgent = Join-Path $root 'whitesmith-job-agent.exe'
+  $jobAgent = Join-Path $root 'mars-job-agent.exe'
   Invoke-WebRequest -Uri $WindowsContainerBuilderUrl -OutFile $builder -UseBasicParsing -TimeoutSec 300
   Invoke-WebRequest -Uri $WindowsContainerVerifierUrl -OutFile $verifier -UseBasicParsing -TimeoutSec 300
   Invoke-WebRequest -Uri $WindowsContainerfileUrl -OutFile $containerfile -UseBasicParsing -TimeoutSec 300
@@ -119,7 +119,7 @@ function Build-LocalWindowsImage([string]$Image) {
 function Ensure-WindowsContainerRuntime([string]$Image, [string]$Prefix) {
   if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) { throw 'Docker Engine is required.' }
   if ((docker info --format '{{.OSType}}') -ne 'windows') { throw 'Docker must be running the Windows engine.' }
-  if ($Image -eq 'whitesmith/windows-job:local') {
+  if ($Image -eq 'mars/windows-job:local') {
     Build-LocalWindowsImage $Image
   } else {
     $digests = @(docker image inspect --format '{{json .RepoDigests}}' $Image | ConvertFrom-Json)
@@ -127,7 +127,7 @@ function Ensure-WindowsContainerRuntime([string]$Image, [string]$Prefix) {
   }
   $name = "$Prefix-install-probe-$([guid]::NewGuid().ToString('N'))"
   try {
-    docker create --name $name --entrypoint powershell.exe --isolation=hyperv --label whitesmith.managed=true --label "whitesmith.lease-id=$([guid]::NewGuid())" $Image -NoLogo -NoProfile -NonInteractive -File C:\Whitesmith\verify-runtime.ps1 -RequireNetwork | Out-Null
+    docker create --name $name --entrypoint powershell.exe --isolation=hyperv --label mars.managed=true --label "mars.lease-id=$([guid]::NewGuid())" $Image -NoLogo -NoProfile -NonInteractive -File C:\Mars\verify-runtime.ps1 -RequireNetwork | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to create the Hyper-V container probe.' }
     docker start $name | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to start the Hyper-V container probe.' }
@@ -182,14 +182,14 @@ if ($WindowsRuntime -eq 'container') {
 Write-Host '[3/8] Checking control-plane connectivity'
 Ensure-ControlPlane
 if (-not $Upgrade -and $JoinCode -match '^__') { throw 'Join code is not configured.' }
-$root = 'C:\ProgramData\Whitesmith'; $bin = 'C:\Program Files\Whitesmith'; $identityPath = Join-Path $root 'worker-identity.json'
+$root = 'C:\ProgramData\Mars'; $bin = 'C:\Program Files\Mars'; $identityPath = Join-Path $root 'worker-identity.json'
 Write-Host '[5/8] Preparing worker directories'
 New-Item -ItemType Directory -Force -Path $root,$bin | Out-Null
-$existingService = Get-Service WhitesmithWorker -ErrorAction SilentlyContinue
+$existingService = Get-Service MarsWorker -ErrorAction SilentlyContinue
 $existingInstall = $existingService -or (Test-Path -LiteralPath $identityPath)
 if ($Upgrade -and -not (Test-Path -LiteralPath $identityPath)) { throw 'Upgrade requires an existing worker identity.' }
 if ($existingInstall) { if ($Upgrade) { Write-Host 'Existing Windows worker installation detected; upgrading while preserving identity.' } else { Write-Host 'Existing Windows worker installation detected; reinstalling.' } }
-if ($Upgrade -and -not $existingService) { Write-Warning 'WhitesmithWorker service is missing; recreating it during upgrade.' }
+if ($Upgrade -and -not $existingService) { Write-Warning 'MarsWorker service is missing; recreating it during upgrade.' }
 if (-not $Upgrade -and $existingInstall -and (Test-Path -LiteralPath $identityPath)) { Remove-Item -LiteralPath $identityPath -Force }
 $joinCodePath = Join-Path $root 'join-code'
 if (-not $Upgrade) {
@@ -197,90 +197,90 @@ if (-not $Upgrade) {
   $joinCodeAcl = & icacls.exe $joinCodePath /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' 2>&1
   if ($LASTEXITCODE -ne 0) { throw "Failed to secure worker join credential: $($joinCodeAcl -join ' ')" }
 }
-$exe = Join-Path $bin 'whitesmith-orchestrator.exe'
-$serviceHost = Join-Path $bin 'whitesmith-service-host.exe'
-$stagedExe = Join-Path $root 'whitesmith-orchestrator.download'
-$stagedServiceHost = Join-Path $root 'whitesmith-service-host.download'
+$exe = Join-Path $bin 'mars-orchestrator.exe'
+$serviceHost = Join-Path $bin 'mars-service-host.exe'
+$stagedExe = Join-Path $root 'mars-orchestrator.download'
+$stagedServiceHost = Join-Path $root 'mars-service-host.download'
 Write-Host '[6/8] Downloading Windows worker runtime and service host'
 Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/orchestrator?audience=windows-x64" -OutFile $stagedExe -TimeoutSec 120
 Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/service-host?audience=windows-x64" -OutFile $stagedServiceHost -TimeoutSec 120
 if ($existingService) {
-  Stop-Service WhitesmithWorker -Force -ErrorAction SilentlyContinue
-  $serviceDelete = & sc.exe delete WhitesmithWorker 2>&1
-  if ($LASTEXITCODE -ne 0) { throw "Failed to remove existing WhitesmithWorker service: $($serviceDelete -join ' ')" }
+  Stop-Service MarsWorker -Force -ErrorAction SilentlyContinue
+  $serviceDelete = & sc.exe delete MarsWorker 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to remove existing MarsWorker service: $($serviceDelete -join ' ')" }
   $deadline = (Get-Date).AddSeconds(15)
-  while ((Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
-  if (Get-Service WhitesmithWorker -ErrorAction SilentlyContinue) { throw 'Timed out removing existing WhitesmithWorker service.' }
+  while ((Get-Service MarsWorker -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+  if (Get-Service MarsWorker -ErrorAction SilentlyContinue) { throw 'Timed out removing existing MarsWorker service.' }
 }
 Write-Host '[7/8] Registering LocalSystem worker service'
 Move-Item -LiteralPath $stagedExe -Destination $exe -Force
 Move-Item -LiteralPath $stagedServiceHost -Destination $serviceHost -Force
-$cacheProxyPort = Resolve-CachePort 'WHITESMITH_CACHE_PROXY_PORT' 8788
-$cacheDataPort = Resolve-CachePort 'WHITESMITH_CACHE_DATA_PORT' 8789
+$cacheProxyPort = Resolve-CachePort 'MARS_CACHE_PROXY_PORT' 8788
+$cacheDataPort = Resolve-CachePort 'MARS_CACHE_DATA_PORT' 8789
 $cacheFirewallPorts = @($cacheProxyPort, $cacheDataPort) | Sort-Object -Unique
-Get-NetFirewallRule -DisplayName 'Whitesmith Worker Cache' -ErrorAction SilentlyContinue |
+Get-NetFirewallRule -DisplayName 'Mars Worker Cache' -ErrorAction SilentlyContinue |
   Remove-NetFirewallRule -ErrorAction Stop
-New-NetFirewallRule -DisplayName 'Whitesmith Worker Cache' -Direction Inbound -Action Allow -Protocol TCP `
+New-NetFirewallRule -DisplayName 'Mars Worker Cache' -Direction Inbound -Action Allow -Protocol TCP `
   -LocalPort $cacheFirewallPorts -Program $exe -Profile Domain,Private -RemoteAddress LocalSubnet | Out-Null
 $workerLogPath = Join-Path $root 'logs\worker.log'
 $previousWorkerLogPath = Join-Path $root 'logs\worker.previous.log'
 if (Test-Path -LiteralPath $workerLogPath) { Move-Item -LiteralPath $workerLogPath -Destination $previousWorkerLogPath -Force }
-$service = New-Service -Name WhitesmithWorker -BinaryPathName "`"$serviceHost`" `"$exe`" windows-worker" -StartupType Automatic -ErrorAction Stop
-$serviceDependency = & sc.exe config WhitesmithWorker depend= docker 2>&1
+$service = New-Service -Name MarsWorker -BinaryPathName "`"$serviceHost`" `"$exe`" windows-worker" -StartupType Automatic -ErrorAction Stop
+$serviceDependency = & sc.exe config MarsWorker depend= docker 2>&1
 if ($LASTEXITCODE -ne 0) { throw "Failed to configure Docker dependency: $($serviceDependency -join ' ')" }
 $serviceEnvironment = @(
-  "WHITESMITH_CONTROL_PLANE_URL=$ControlPlaneUrl"
-  "WHITESMITH_JOIN_CODE_FILE=$joinCodePath"
-  "WHITESMITH_WINDOWS_RUNTIME=$WindowsRuntime"
+  "MARS_CONTROL_PLANE_URL=$ControlPlaneUrl"
+  "MARS_JOIN_CODE_FILE=$joinCodePath"
+  "MARS_WINDOWS_RUNTIME=$WindowsRuntime"
 )
 foreach ($name in @(
-  'WHITESMITH_ACTION_CACHE_ROOT',
-  'WHITESMITH_CACHE_PROXY_PORT',
-  'WHITESMITH_CACHE_DATA_PORT',
-  'WHITESMITH_CACHE_PROXY_URL',
-  'WHITESMITH_CACHE_ADVERTISE_URL'
+  'MARS_ACTION_CACHE_ROOT',
+  'MARS_CACHE_PROXY_PORT',
+  'MARS_CACHE_DATA_PORT',
+  'MARS_CACHE_PROXY_URL',
+  'MARS_CACHE_ADVERTISE_URL'
 )) {
   $value = [Environment]::GetEnvironmentVariable($name)
   if (-not [string]::IsNullOrWhiteSpace($value)) { $serviceEnvironment += "$name=$value" }
 }
 if ($WindowsRuntime -eq 'container') {
-  $serviceEnvironment += "WHITESMITH_WINDOWS_CONTAINER_IMAGE=$WindowsContainerImage"
-  $serviceEnvironment += "WHITESMITH_WINDOWS_CONTAINER_PREFIX=$WindowsContainerPrefix"
-  $serviceEnvironment += "WHITESMITH_WINDOWS_CONTAINER_READY_TIMEOUT_MS=$WindowsContainerReadyTimeoutMs"
-  $serviceEnvironment += "WHITESMITH_WINDOWS_CONTAINER_JOB_TIMEOUT_MS=$WindowsContainerJobTimeoutMs"
-  $serviceEnvironment += "WHITESMITH_WINDOWS_CONTAINER_IMAGE_MANIFEST=$windowsImageManifestPath"
-  if ($AllowLocalContainerImage -or $WindowsContainerImage -eq 'whitesmith/windows-job:local') { $serviceEnvironment += "WHITESMITH_ALLOW_LOCAL_CONTAINER_IMAGE=true" }
+  $serviceEnvironment += "MARS_WINDOWS_CONTAINER_IMAGE=$WindowsContainerImage"
+  $serviceEnvironment += "MARS_WINDOWS_CONTAINER_PREFIX=$WindowsContainerPrefix"
+  $serviceEnvironment += "MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS=$WindowsContainerReadyTimeoutMs"
+  $serviceEnvironment += "MARS_WINDOWS_CONTAINER_JOB_TIMEOUT_MS=$WindowsContainerJobTimeoutMs"
+  $serviceEnvironment += "MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST=$windowsImageManifestPath"
+  if ($AllowLocalContainerImage -or $WindowsContainerImage -eq 'mars/windows-job:local') { $serviceEnvironment += "MARS_ALLOW_LOCAL_CONTAINER_IMAGE=true" }
 } else {
-  $serviceEnvironment += "WHITESMITH_WINDOWS_TEMPLATE_PATH=$WindowsTemplatePath"
-  $serviceEnvironment += "WHITESMITH_WINDOWS_TEMPLATE_DIGEST=$WindowsTemplateDigest"
+  $serviceEnvironment += "MARS_WINDOWS_TEMPLATE_PATH=$WindowsTemplatePath"
+  $serviceEnvironment += "MARS_WINDOWS_TEMPLATE_DIGEST=$WindowsTemplateDigest"
 }
-$serviceRegistryPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\WhitesmithWorker'
+$serviceRegistryPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\MarsWorker'
 New-ItemProperty -Path $serviceRegistryPath -Name Environment -PropertyType MultiString -Value $serviceEnvironment -Force | Out-Null
-$serviceFailure = & sc.exe failure WhitesmithWorker "reset= 86400" "actions= restart/5000/restart/30000/none/0" 2>&1
-if ($LASTEXITCODE -ne 0) { throw "Failed to configure WhitesmithWorker recovery: $($serviceFailure -join ' ')" }
-Get-Service WhitesmithWorker -ErrorAction Stop | Out-Null
-Write-Host '[8/8] Starting Whitesmith worker service'
+$serviceFailure = & sc.exe failure MarsWorker "reset= 86400" "actions= restart/5000/restart/30000/none/0" 2>&1
+if ($LASTEXITCODE -ne 0) { throw "Failed to configure MarsWorker recovery: $($serviceFailure -join ' ')" }
+Get-Service MarsWorker -ErrorAction Stop | Out-Null
+Write-Host '[8/8] Starting Mars worker service'
 try {
-  Start-Service WhitesmithWorker -ErrorAction Stop
-  $service = Get-Service WhitesmithWorker -ErrorAction Stop
+  Start-Service MarsWorker -ErrorAction Stop
+  $service = Get-Service MarsWorker -ErrorAction Stop
   $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(30))
   Start-Sleep -Seconds 2
   $service.Refresh()
-  if ($service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running) { throw "WhitesmithWorker stopped immediately with status $($service.Status)." }
+  if ($service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running) { throw "MarsWorker stopped immediately with status $($service.Status)." }
 } catch {
   $startupError = $_.Exception.Message
   $recoveryDeadline = (Get-Date).AddSeconds(15)
   do {
     Start-Sleep -Milliseconds 500
-    $currentService = Get-Service WhitesmithWorker -ErrorAction SilentlyContinue
+    $currentService = Get-Service MarsWorker -ErrorAction SilentlyContinue
   } while ($currentService -and $currentService.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running -and (Get-Date) -lt $recoveryDeadline)
   if ($currentService -and $currentService.Status -eq [System.ServiceProcess.ServiceControllerStatus]::Running) {
-    Write-Warning "WhitesmithWorker recovered after initial startup failure: $startupError"
+    Write-Warning "MarsWorker recovered after initial startup failure: $startupError"
   } else {
     $events = Get-WinEvent -FilterHashtable @{ LogName='System'; ProviderName='Service Control Manager'; StartTime=(Get-Date).AddMinutes(-5) } -ErrorAction SilentlyContinue |
-      Where-Object Message -Match 'WhitesmithWorker' | Select-Object -First 5 | ForEach-Object { "[$($_.Id)] $($_.Message)" }
+      Where-Object Message -Match 'MarsWorker' | Select-Object -First 5 | ForEach-Object { "[$($_.Id)] $($_.Message)" }
     $workerLog = if (Test-Path -LiteralPath $workerLogPath) { (Get-Content -LiteralPath $workerLogPath -Tail 50 -ErrorAction SilentlyContinue) -join [Environment]::NewLine } else { 'Worker log not created.' }
-    throw "WhitesmithWorker failed to reach Running.`nStartup error: $startupError`nSCM events:`n$($events -join [Environment]::NewLine)`nWorker log:`n$workerLog"
+    throw "MarsWorker failed to reach Running.`nStartup error: $startupError`nSCM events:`n$($events -join [Environment]::NewLine)`nWorker log:`n$workerLog"
   }
 }
 Write-Output "Windows $WindowsRuntime worker setup complete."

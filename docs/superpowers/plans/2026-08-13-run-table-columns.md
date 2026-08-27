@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the existing `RunTable` component and `RunSummary` contract. Change only the table header/cell layout; derive the seven-character commit display locally and preserve the full SHA in accessible metadata.
 
-**Tech Stack:** React, TypeScript, `@whitesmith/contracts`, Bun tests, existing web app CSS.
+**Tech Stack:** React, TypeScript, `@mars/contracts`, Bun tests, existing web app CSS.
 
 ## Global Constraints
 

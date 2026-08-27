@@ -1,4 +1,4 @@
-import { WorkerEvent, WorkerEventPayload, type JobResourceSample } from "@whitesmith/contracts";
+import { WorkerEvent, WorkerEventPayload, type JobResourceSample } from "@mars/contracts";
 import type { DatabaseClient } from "./index.ts";
 
 export type JobResourceSampleResult = "stored" | "duplicate" | "rejected";

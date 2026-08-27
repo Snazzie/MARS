@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { WorkerCommand, WorkerEvent } from "@whitesmith/contracts";
-import type { DatabaseClient } from "@whitesmith/db";
+import { WorkerCommand, WorkerEvent } from "@mars/contracts";
+import type { DatabaseClient } from "@mars/db";
 
 export interface AuthenticatedWorkerSocket { send(data: string): void; close?(code?: number, reason?: string): void; }
 export interface WorkerCommandStore {

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WindowsContainerDriver, type DockerRunner } from "./windows-container.ts";
-import type { WorkerCacheProxy } from "@whitesmith/contracts";
+import type { WorkerCacheProxy } from "@mars/contracts";
 
 const workerCache: WorkerCacheProxy = { proxyUrl: "http://127.0.0.1:39123", cacheBaseUrl: "https://127.0.0.1:39443", caCertificatePem: "worker-ca", expiresAt: new Date(Date.now() + 60_000).toISOString() };
 const roots: string[] = [];
@@ -11,18 +11,18 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 test("rejects a local image without a verified matching manifest", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-manifest-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-windows-manifest-"));
   roots.push(root);
   const manifestPath = join(root, "windows-job-image.json");
-  await Bun.write(manifestPath, JSON.stringify({ schemaVersion: 1, image: "whitesmith/windows-job:local", imageId: "sha256:old", runtimeProbe: { mediaFoundation: true, dns: true, tcp443: true } }));
+  await Bun.write(manifestPath, JSON.stringify({ schemaVersion: 1, image: "mars/windows-job:local", imageId: "sha256:old", runtimeProbe: { mediaFoundation: true, dns: true, tcp443: true } }));
   const docker: DockerRunner = async (args) => {
     if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
     if (args[0] === "image" && args[1] === "inspect" && args.includes("{{.Id}}")) return { code: 0, stdout: "sha256:new\n", stderr: "" };
     return { code: 0, stdout: "[]", stderr: "" };
   };
   const driver = new WindowsContainerDriver({
-    image: "whitesmith/windows-job:local",
-    prefix: "whitesmith",
+    image: "mars/windows-job:local",
+    prefix: "mars",
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
@@ -34,7 +34,7 @@ test("rejects a local image without a verified matching manifest", async () => {
   await expect(driver.reserveCapacity({ vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 })).rejects.toThrow("image ID mismatch");
 });
 test("includes worker cache descriptor in Windows container bootstrap", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-cache-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-windows-cache-"));
   roots.push(root);
   const docker: DockerRunner = async (args) => {
     if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
@@ -42,14 +42,14 @@ test("includes worker cache descriptor in Windows container bootstrap", async ()
     if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 1_000_000_000, Memory: 1024 } }]), stderr: "" };
     return { code: 0, stdout: "0", stderr: "" };
   };
-  const driver = new WindowsContainerDriver({ image: "repo@sha256:" + "a".repeat(64), prefix: "whitesmith", bootstrapRoot: root, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 }, readyTimeoutMs: 100, jobTimeoutMs: 100 }, docker);
+  const driver = new WindowsContainerDriver({ image: "repo@sha256:" + "a".repeat(64), prefix: "mars", bootstrapRoot: root, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 }, readyTimeoutMs: 100, jobTimeoutMs: 100 }, docker);
   const leaseId = "33333333-3333-4333-8333-333333333333";
   await driver.createLease({ id: leaseId, jobId: "job", imageDigest: "repo@sha256:" + "a".repeat(64), resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config", workerCache });
   expect(JSON.parse(await readFile(join(root, leaseId, "bootstrap.json"), "utf8")).workerCache).toEqual(workerCache);
 });
 
 test("rejects a container when Docker applies different CPU or memory limits", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-resource-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-windows-resource-"));
   roots.push(root);
   const calls: string[][] = [];
   const docker: DockerRunner = async (args) => {
@@ -59,8 +59,8 @@ test("rejects a container when Docker applies different CPU or memory limits", a
     return { code: 0, stdout: "", stderr: "" };
   };
   const driver = new WindowsContainerDriver({
-    image: "whitesmith/windows-job:local",
-    prefix: "whitesmith",
+    image: "mars/windows-job:local",
+    prefix: "mars",
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
@@ -71,16 +71,16 @@ test("rejects a container when Docker applies different CPU or memory limits", a
   await expect(driver.createLease({
     id: "44444444-4444-4444-8444-444444444444",
     jobId: "job",
-    imageDigest: "whitesmith/windows-job:local",
+    imageDigest: "mars/windows-job:local",
     resources: { vcpu: 2, memoryBytes: 8 * 1024 ** 3, storageBytes: 10 * 1024 ** 3, concurrency: 1 },
     nonce: "n".repeat(32),
     encodedJitConfig: "config",
   })).rejects.toThrow("resource limits");
-  expect(calls).toContainEqual(["rm", "-f", "whitesmith-44444444-4444-4444-8444-444444444444"]);
+  expect(calls).toContainEqual(["rm", "-f", "mars-44444444-4444-4444-8444-444444444444"]);
 });
 
 test("fails completion when a containerized job stops making terminal progress", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-container-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-windows-container-"));
   roots.push(root);
   const calls: string[][] = [];
   const docker: DockerRunner = async (args) => {
@@ -91,8 +91,8 @@ test("fails completion when a containerized job stops making terminal progress",
     return { code: 0, stdout: "", stderr: "" };
   };
   const driver = new WindowsContainerDriver({
-    image: "whitesmith/windows-job:local",
-    prefix: "whitesmith",
+    image: "mars/windows-job:local",
+    prefix: "mars",
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
@@ -102,7 +102,7 @@ test("fails completion when a containerized job stops making terminal progress",
   const lease = await driver.createLease({
     id: "11111111-1111-4111-8111-111111111111",
     jobId: "job",
-    imageDigest: "whitesmith/windows-job:local",
+    imageDigest: "mars/windows-job:local",
     resources: { vcpu: 2, memoryBytes: 8 * 1024 ** 3, storageBytes: 10 * 1024 ** 3, concurrency: 1 },
     nonce: "n".repeat(32),
     encodedJitConfig: "config",
@@ -124,7 +124,7 @@ test("fails completion when a containerized job stops making terminal progress",
 });
 
 test("removes a container when startup fails after creation", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-container-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-windows-container-"));
   roots.push(root);
   const calls: string[][] = [];
   const docker: DockerRunner = async (args) => {
@@ -134,8 +134,8 @@ test("removes a container when startup fails after creation", async () => {
     return { code: 0, stdout: "", stderr: "" };
   };
   const driver = new WindowsContainerDriver({
-    image: "whitesmith/windows-job:local",
-    prefix: "whitesmith",
+    image: "mars/windows-job:local",
+    prefix: "mars",
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
@@ -146,16 +146,16 @@ test("removes a container when startup fails after creation", async () => {
   await expect(driver.createLease({
     id: "22222222-2222-4222-8222-222222222222",
     jobId: "job",
-    imageDigest: "whitesmith/windows-job:local",
+    imageDigest: "mars/windows-job:local",
     resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 },
     nonce: "n".repeat(32),
     encodedJitConfig: "config",
   })).rejects.toThrow("docker start failed");
-  expect(calls).toContainEqual(["rm", "-f", "whitesmith-22222222-2222-4222-8222-222222222222"]);
+  expect(calls).toContainEqual(["rm", "-f", "mars-22222222-2222-4222-8222-222222222222"]);
 });
 
 test("removes a known lease container after a worker restart", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-container-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-windows-container-"));
   roots.push(root);
   const calls: string[][] = [];
   const docker: DockerRunner = async (args) => {
@@ -164,8 +164,8 @@ test("removes a known lease container after a worker restart", async () => {
     return { code: 0, stdout: "", stderr: "" };
   };
   const driver = new WindowsContainerDriver({
-    image: "whitesmith/windows-job:local",
-    prefix: "whitesmith",
+    image: "mars/windows-job:local",
+    prefix: "mars",
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
@@ -174,11 +174,11 @@ test("removes a known lease container after a worker restart", async () => {
   }, docker);
 
   await driver.removeLease("33333333-3333-4333-8333-333333333333");
-  expect(calls).toContainEqual(["rm", "-f", "whitesmith-33333333-3333-4333-8333-333333333333"]);
+  expect(calls).toContainEqual(["rm", "-f", "mars-33333333-3333-4333-8333-333333333333"]);
 });
 
 test("copies runner and worker diagnostic logs from a stopped container", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-diag-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-windows-diag-"));
   roots.push(root);
   const docker: DockerRunner = async (args) => {
     if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
@@ -192,15 +192,15 @@ test("copies runner and worker diagnostic logs from a stopped container", async 
     return { code: 0, stdout: args[0] === "wait" ? "0\n" : "", stderr: "" };
   };
   const driver = new WindowsContainerDriver({
-    image: "whitesmith/windows-job:local",
-    prefix: "whitesmith",
+    image: "mars/windows-job:local",
+    prefix: "mars",
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
     jobTimeoutMs: 100,
     allowLocalImage: true,
   }, docker);
-  await driver.createLease({ id: "77777777-7777-4777-8777-777777777777", jobId: "job", imageDigest: "whitesmith/windows-job:local", resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config" });
+  await driver.createLease({ id: "77777777-7777-4777-8777-777777777777", jobId: "job", imageDigest: "mars/windows-job:local", resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config" });
   const diagnostics = await driver.collectRawDiagnostics("77777777-7777-4777-8777-777777777777");
   expect(diagnostics).toContain("Runner_2026.log");
   expect(diagnostics).toContain("job completed Authorization: Bearer [REDACTED]");
@@ -209,7 +209,7 @@ test("copies runner and worker diagnostic logs from a stopped container", async 
 });
 
 test("falls back to the configured memory limit when Docker stats reports an invalid limit", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-stats-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-windows-stats-"));
   roots.push(root);
   const configuredMemory = 10 * 1024 ** 3;
   const docker: DockerRunner = async (args) => {
@@ -219,8 +219,8 @@ test("falls back to the configured memory limit when Docker stats reports an inv
     return { code: 0, stdout: "", stderr: "" };
   };
   const driver = new WindowsContainerDriver({
-    image: "whitesmith/windows-job:local",
-    prefix: "whitesmith",
+    image: "mars/windows-job:local",
+    prefix: "mars",
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: configuredMemory, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
@@ -230,7 +230,7 @@ test("falls back to the configured memory limit when Docker stats reports an inv
   const lease = await driver.createLease({
     id: "55555555-5555-4555-8555-555555555555",
     jobId: "job",
-    imageDigest: "whitesmith/windows-job:local",
+    imageDigest: "mars/windows-job:local",
     resources: { vcpu: 2, memoryBytes: configuredMemory, storageBytes: 10 * 1024 ** 3, concurrency: 1 },
     nonce: "n".repeat(32),
     encodedJitConfig: "config",
@@ -240,7 +240,7 @@ test("falls back to the configured memory limit when Docker stats reports an inv
 });
 
 test("requests an idempotent graceful runner stop before forced cleanup", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-stop-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-windows-stop-"));
   roots.push(root);
   const calls: string[][] = [];
   const docker: DockerRunner = async (args) => {
@@ -250,34 +250,34 @@ test("requests an idempotent graceful runner stop before forced cleanup", async 
     return { code: 0, stdout: "", stderr: "" };
   };
   const driver = new WindowsContainerDriver({
-    image: "whitesmith/windows-job:local",
-    prefix: "whitesmith",
+    image: "mars/windows-job:local",
+    prefix: "mars",
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1024, maxStorageBytesPerPod: 1024, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
     jobTimeoutMs: 100,
     allowLocalImage: true,
   }, docker);
-  await driver.createLease({ id: "66666666-6666-4666-8666-666666666666", jobId: "job", imageDigest: "whitesmith/windows-job:local", resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config" });
+  await driver.createLease({ id: "66666666-6666-4666-8666-666666666666", jobId: "job", imageDigest: "mars/windows-job:local", resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config" });
   expect(await driver.requestGracefulStop("66666666-6666-4666-8666-666666666666", "out_of_memory", "memory limit exceeded")).toBe(true);
   expect(await driver.requestGracefulStop("66666666-6666-4666-8666-666666666666", "out_of_memory", "memory limit exceeded")).toBe(true);
   expect(calls.filter(args => args[0] === "exec")).toHaveLength(1);
   await driver.removeLease("66666666-6666-4666-8666-666666666666");
 });
 test("waits for Docker to become ready before validating the image", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-docker-ready-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-windows-docker-ready-"));
   roots.push(root);
   let infoAttempts = 0;
   const docker: DockerRunner = async (args) => {
     if (args[0] === "info" && ++infoAttempts === 1) return { code: 1, stdout: "", stderr: "cannot connect to docker_engine" };
     if (args[0] === "info") return { code: 0, stdout: "windows\n", stderr: "" };
-    if (args[0] === "image") return { code: 0, stdout: JSON.stringify(["whitesmith/windows-job@sha256:" + "a".repeat(64)]), stderr: "" };
+    if (args[0] === "image") return { code: 0, stdout: JSON.stringify(["mars/windows-job@sha256:" + "a".repeat(64)]), stderr: "" };
     return { code: 0, stdout: "", stderr: "" };
   };
-  const image = "whitesmith/windows-job@sha256:" + "a".repeat(64);
+  const image = "mars/windows-job@sha256:" + "a".repeat(64);
   const driver = new WindowsContainerDriver({
     image,
-    prefix: "whitesmith",
+    prefix: "mars",
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1024, maxStorageBytesPerPod: 1024, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { WorkerBootstrapRequest, type WorkerCommand } from "@whitesmith/contracts";
+import { WorkerBootstrapRequest, type WorkerCommand } from "@mars/contracts";
 import { generateKeyPairSync, verify as verifySignature } from "node:crypto";
 import { applyWorkerConfigure, availableMacMemoryBytes, buildMacWorkerAuthentication, buildMacWorkerJoinPayload, parseMacWorkerIdentity, runMacLeaseLifecycle, startMacLeaseLifecycle } from "./mac-agent.ts";
 

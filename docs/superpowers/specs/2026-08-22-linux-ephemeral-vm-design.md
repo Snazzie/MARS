@@ -6,7 +6,7 @@ Run one GitHub Actions job per disposable Ubuntu VM on Unraid, using libvirt clo
 
 ## Decision
 
-Use full libvirt-managed Ubuntu VMs instead of K3s/Kata for the first Linux production path. The VM is the isolation boundary. The guest contains the Whitesmith job agent and GitHub runner prerequisites; the Unraid host does not expose its Docker socket or host filesystem to jobs.
+Use full libvirt-managed Ubuntu VMs instead of K3s/Kata for the first Linux production path. The VM is the isolation boundary. The guest contains the Mars job agent and GitHub runner prerequisites; the Unraid host does not expose its Docker socket or host filesystem to jobs.
 
 ## Architecture
 
@@ -23,7 +23,7 @@ Control plane + PostgreSQL + cloudflared
 
 The broker is a persistent control process, not a runner. It advertises clone capacity, creates a uniquely named libvirt VM for each lease, injects the encrypted lease bootstrap through a one-use cloud-init/virtio channel, proxies guest lifecycle events, and destroys the VM and overlay disk after completion.
 
-The golden image is a signed Ubuntu 24.04 x86_64 qcow2 containing the guest agent, runner dependencies, cloud-init, and no reusable GitHub credentials. Every clone receives a fresh VM UUID, MAC address, hostname, machine identity, and Whitesmith lease identity. Suspended prewarm clones are optional optimization; they are not active workers.
+The golden image is a signed Ubuntu 24.04 x86_64 qcow2 containing the guest agent, runner dependencies, cloud-init, and no reusable GitHub credentials. Every clone receives a fresh VM UUID, MAC address, hostname, machine identity, and Mars lease identity. Suspended prewarm clones are optional optimization; they are not active workers.
 
 ## Lifecycle
 
@@ -34,7 +34,7 @@ The golden image is a signed Ubuntu 24.04 x86_64 qcow2 containing the guest agen
 5. Guest executes exactly one JIT GitHub job.
 6. Guest reports exit/result and bounded diagnostics.
 7. Broker stops and undefines the VM, deletes the overlay and transient bootstrap material, and reports lease reaped.
-8. Broker reconciles orphaned `whitesmith` VMs after restart before accepting new leases.
+8. Broker reconciles orphaned `mars` VMs after restart before accepting new leases.
 
 ## Security invariants
 

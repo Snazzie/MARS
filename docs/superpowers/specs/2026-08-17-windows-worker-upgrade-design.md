@@ -35,7 +35,7 @@ Repeated requests MUST be idempotent while an upgrade is pending. A second upgra
 3. It downloads the versioned installer/build inputs from the control plane.
 4. The installer verifies every configured artifact hash and rebuilds/verifies the local Windows job image.
 5. The installer replaces the orchestrator/service-host binaries and service environment.
-6. The installer MUST preserve `C:\ProgramData\Whitesmith\worker-identity.json` and the existing worker ID/keypair.
+6. The installer MUST preserve `C:\ProgramData\Mars\worker-identity.json` and the existing worker ID/keypair.
 7. The service restarts using the existing identity.
 8. The worker reconnects, reports doctor/capacity data, and retains the same control-plane worker ID.
 9. The control plane marks the upgrade complete only after the expected release/runtime evidence is observed.

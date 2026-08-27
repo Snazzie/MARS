@@ -1,5 +1,5 @@
 import { createHash, createPrivateKey, createSign, randomBytes } from "node:crypto";
-import type { Sql } from "@whitesmith/db";
+import type { Sql } from "@mars/db";
 import type { SecretBox } from "./auth.ts";
 import { applyWorkflowMutation, discoverWorkflowFiles, previewWorkflowMutation, type WorkflowFilePreview, type WorkflowMutation } from "./workflow-pr.ts";
 import { browserLocation } from "./http-origin.ts";
@@ -104,7 +104,7 @@ export class GitHubAppService {
     const origin = this.publicOrigin();
     if (!origin) throw new Error("setup_required");
     const rawState = randomBytes(32).toString("base64url");
-    const manifest = JSON.stringify({ name: "whitesmith", public: true, url: origin, hook_attributes: { url: `${origin}/api/github/webhooks`, active: true }, redirect_url: `${origin}/api/github/app/manifest/callback`, setup_url: `${origin}/api/github/app/setup`, description: "Whitesmith self-hosted GitHub Actions runners", callback_urls: [`${origin}/api/github/app/callback`], default_permissions: { actions: "read", contents: "write", members: "read", organization_self_hosted_runners: "write", pull_requests: "write", administration: "write" }, default_events: ["workflow_job", "membership"] });
+    const manifest = JSON.stringify({ name: "mars", public: true, url: origin, hook_attributes: { url: `${origin}/api/github/webhooks`, active: true }, redirect_url: `${origin}/api/github/app/manifest/callback`, setup_url: `${origin}/api/github/app/setup`, description: "Mars self-hosted GitHub Actions runners", callback_urls: [`${origin}/api/github/app/callback`], default_permissions: { actions: "read", contents: "write", members: "read", organization_self_hosted_runners: "write", pull_requests: "write", administration: "write" }, default_events: ["workflow_job", "membership"] });
     await this.saveState(rawState, { purpose: "manifest", userId, organizationId, idempotencyKey, encryptedState: this.box.encrypt(rawState), encryptedPkceVerifier: this.box.encrypt(manifest), expiresAt: Date.now() + 3_600_000 });
     return { action: `https://github.com/settings/apps/new?state=${rawState}`, manifest };
   }
@@ -163,7 +163,7 @@ export class GitHubAppService {
     const setup = await this.consume(state, userId, "manifest");
     const result = await this.gh(`/app-manifests/${encodeURIComponent(code)}/conversions`, { method: "POST" });
     const id = typeof result.id === "number" ? result.id : 0;
-    const slug = typeof result.slug === "string" ? result.slug : "whitesmith";
+    const slug = typeof result.slug === "string" ? result.slug : "mars";
     const pem = typeof result.pem === "string" ? result.pem : "";
     const clientId = typeof result.client_id === "string" ? result.client_id : undefined;
     const clientSecret = typeof result.client_secret === "string" ? result.client_secret : "";
@@ -479,12 +479,12 @@ export class GitHubAppService {
       const files = discoverWorkflowFiles(listing.files);
       const mutation = previewWorkflowMutation({ files, selectedPaths: input.selectedPaths, labels: ctx.repo.labels });
       const changed = listing.files.filter((file) => mutation.changedFiles.includes(file.path)).map((file) => ({ ...file, content: applyWorkflowMutation(file.content, ctx.repo.labels) }));
-      const branch = `whitesmith/use-runners-${randomBytes(6).toString("hex")}`;
+      const branch = `mars/use-runners-${randomBytes(6).toString("hex")}`;
       const blobs = await Promise.all(changed.map(async (file) => ({ path: file.path, mode: "100644", type: "blob", sha: (await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/blobs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: file.content, encoding: "utf-8" }) }, ctx.token)).sha as string })));
       const tree = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/trees`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ base_tree: headSha, tree: blobs }) }, ctx.token);
-      const commit = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/commits`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: "Configure Whitesmith runners", tree: tree.sha, parents: [headSha] }) }, ctx.token);
+      const commit = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/commits`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: "Configure Mars runners", tree: tree.sha, parents: [headSha] }) }, ctx.token);
       await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/refs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: commit.sha }) }, ctx.token);
-      const pr = await this.gh(`/repos/${ctx.owner}/${ctx.name}/pulls`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: input.title?.trim() || "Use Whitesmith runners", body: input.body?.trim() || "Configure GitHub Actions workflows to use Whitesmith runners.", head: branch, base: listing.defaultBranch }) }, ctx.token);
+      const pr = await this.gh(`/repos/${ctx.owner}/${ctx.name}/pulls`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: input.title?.trim() || "Use Mars runners", body: input.body?.trim() || "Configure GitHub Actions workflows to use Mars runners.", head: branch, base: listing.defaultBranch }) }, ctx.token);
       return { url: String(pr.html_url ?? ""), number: Number(pr.number ?? 0), branch, changedFiles: mutation.changedFiles, replacementCount: mutation.replacementCount };
     });
   }

@@ -1,6 +1,6 @@
-import type { Sql } from "@whitesmith/db";
-import type { GuestPlatform } from "@whitesmith/contracts";
-import { jsonParameter } from "@whitesmith/db";
+import type { Sql } from "@mars/db";
+import type { GuestPlatform } from "@mars/contracts";
+import { jsonParameter } from "@mars/db";
 
 type PoolDefaults = Partial<Record<GuestPlatform, string | undefined>>;
 type WorkerLimits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
@@ -43,7 +43,7 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
     if (!resources) continue;
     const imageDigest = images[platform];
     if (!imageDigest) continue;
-    const label = `whitesmith-${platform}`;
+    const label = `mars-${platform}`;
     const driver = platform === "linux-x64" ? "linux-libvirt-vm" : platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm";
     const name = `default-${platform}`;
     const [existing] = await db`select id from runner_pools where organization_id is null and (name=${name} or trigger_label=${label}) limit 1`;

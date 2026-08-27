@@ -6,7 +6,7 @@
 
 **Architecture:** Add a shared `dashboard-api.ts` contract module in `packages/contracts`, then migrate the browser API client and control-plane HTTP handlers to import those schemas. Keep runtime parsing at HTTP/database boundaries and normalize database timestamps before protocol schema validation.
 
-**Tech Stack:** TypeScript, Zod, Bun, Hono, Bun test, workspace package `@whitesmith/contracts`.
+**Tech Stack:** TypeScript, Zod, Bun, Hono, Bun test, workspace package `@mars/contracts`.
 
 ## Global Constraints
 
@@ -128,7 +128,7 @@ Expected: the new compile-time/schema references fail until imports and shared d
 
 - [ ] **Step 3: Replace browser inline response schemas**
 
-Import shared schemas from `@whitesmith/contracts` in `apps/web/src/api.ts`. Replace duplicate schemas for health, worker configuration, workers, pools, settings, repositories, runs, onboarding, and mutation responses. Preserve request paths, headers, body serialization, and response parsing behavior.
+Import shared schemas from `@mars/contracts` in `apps/web/src/api.ts`. Replace duplicate schemas for health, worker configuration, workers, pools, settings, repositories, runs, onboarding, and mutation responses. Preserve request paths, headers, body serialization, and response parsing behavior.
 
 - [ ] **Step 4: Apply shared request/response schemas on the server**
 

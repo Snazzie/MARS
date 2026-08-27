@@ -4,7 +4,7 @@
 
 The onboarding flow currently advances from Worker as soon as a pending worker is selected, then asks the administrator to approve and configure it in a separate Resources step. This splits one decision across two steps and permits the UI to present GitHub setup before worker approval is complete.
 
-Repository access has a second, redundant authorization layer. GitHub App installation access determines which repositories Whitesmith can reach, but Whitesmith also stores an `approved` flag and requires the administrator to select repositories during onboarding. The two sources of truth can drift. The onboarding checkboxes and the Windows guest-platform checkbox also inherit text-input sizing, producing oversized controls.
+Repository access has a second, redundant authorization layer. GitHub App installation access determines which repositories Mars can reach, but Mars also stores an `approved` flag and requires the administrator to select repositories during onboarding. The two sources of truth can drift. The onboarding checkboxes and the Windows guest-platform checkbox also inherit text-input sizing, producing oversized controls.
 
 ## Goals
 
@@ -67,7 +67,7 @@ When GitHub exposes no repositories, installation completion remains pending and
 
 ## Repository Authorization Model
 
-Remove Whitesmith's per-repository `approved` state completely. A repository is authorized when:
+Remove Mars's per-repository `approved` state completely. A repository is authorized when:
 
 - its GitHub App installation is active; and
 - its repository row has `available=true`.
@@ -115,7 +115,7 @@ Responses for invalid installation credentials, 403, 429, and GitHub 5xx failure
 
 The Repositories page keeps the existing Available and Unavailable views.
 
-Available repositories can create or update Whitesmith runner workflows without an additional approval action. Unavailable repositories:
+Available repositories can create or update Mars runner workflows without an additional approval action. Unavailable repositories:
 
 - remain visible in the Unavailable view;
 - show that GitHub no longer grants access;

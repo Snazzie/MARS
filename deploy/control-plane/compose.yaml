@@ -4,14 +4,14 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
-      DATA_ROOT: /var/lib/whitesmith
+      DATA_ROOT: /var/lib/mars
     healthcheck:
       test: ["CMD", "bun", "-e", "const response=await fetch('http://localhost:3000/api/readyz');process.exit(response.ok?0:1)"]
       interval: 10s
       timeout: 3s
       retries: 6
       start_period: 60s
-    volumes: [whitesmith-data:/var/lib/whitesmith]
+    volumes: [mars-data:/var/lib/mars]
     ports: ["127.0.0.1:3000:3000"]
 
   cloudflared:
@@ -26,4 +26,4 @@ services:
       control-plane:
         condition: service_healthy
 volumes:
-  whitesmith-data:
+  mars-data:

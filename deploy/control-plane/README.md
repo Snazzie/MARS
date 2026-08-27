@@ -19,7 +19,7 @@ Create `.env` containing only the database DSN:
 
 ```bash
 cat > .env <<'EOF'
-DATABASE_URL=postgres://whitesmith:password@db.example:5432/whitesmith
+DATABASE_URL=postgres://mars:password@db.example:5432/mars
 EOF
 chmod 600 .env
 ```
@@ -33,7 +33,7 @@ docker compose --env-file .env -f deploy/control-plane/compose.yaml logs control
 
 Open `/onboarding`, confirm the externally reachable HTTPS origin, and create the GitHub App. The flow then redirects to GitHub for the first administrator sign-in.
 
-The control plane persists the generated encryption key at `${DATA_ROOT}/app_master_key` in the named `whitesmith-data` volume. Operators should back up that file together with PostgreSQL. Losing either side makes encrypted GitHub credentials unrecoverable.
+The control plane persists the generated encryption key at `${DATA_ROOT}/app_master_key` in the named `mars-data` volume. Operators should back up that file together with PostgreSQL. Losing either side makes encrypted GitHub credentials unrecoverable.
 
 ## Health checks
 
@@ -78,7 +78,7 @@ The endpoint accepts `POST` requests from GitHub, validates `X-Hub-Signature-256
 
 ## Unraid
 
-Import `deploy/unraid/whitesmith-control-plane.xml`. Required inputs are the external `DATABASE_URL`, HTTP port, and persistent data mount. No GitHub credentials or master-key file are entered in the template.
+Import `deploy/unraid/mars-control-plane.xml`. Required inputs are the external `DATABASE_URL`, HTTP port, and persistent data mount. No GitHub credentials or master-key file are entered in the template.
 
 ## Upgrades and backups
 

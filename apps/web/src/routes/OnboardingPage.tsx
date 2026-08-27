@@ -6,7 +6,7 @@ import { pendingWorkerQueryOptions } from "../components/PendingWorkerRequests.t
 import { RunnerWorkflowPrModal } from "../components/RunnerWorkflowPrModal.tsx";
 import { WorkerConfigurationForm } from "../components/WorkerConfigurationForm.tsx";
 import { QueryState } from "../components/StateView.tsx";
-import type { CreatePoolRequest, OnboardingDetail, OnboardingStatus } from "@whitesmith/contracts";
+import type { CreatePoolRequest, OnboardingDetail, OnboardingStatus } from "@mars/contracts";
 
 const steps = [["setup", "Control plane"], ["github", "GitHub"], ["admin", "Admin"], ["worker", "Worker"], ["labels", "Trigger labels"]] as const;
 const gib = (bytes: number) => Math.max(1, Math.round(bytes / 1024 ** 3));
@@ -40,7 +40,7 @@ export function OnboardingPage() {
   const currentIndex = steps.findIndex(([id]) => id === d.step);
   const activeStep = viewStep ?? currentIndex;
   const viewingPastStep = activeStep < currentIndex;
-  return <main className="onboarding"><header><p className="eyebrow">FIRST-RUN SETUP</p><h1>Get Whitesmith ready</h1><p>Complete each verified step. Progress is saved on the control plane.</p></header>{error && <p role="alert" className="form-error">{error} <button onClick={() => setError(null)}>Dismiss</button></p>}<div className="onboarding-layout"><nav aria-label="Onboarding steps"><ol className="onboarding-steps">{steps.map(([id, label], index) => <li key={id} className={index === activeStep ? "is-current" : index < currentIndex ? "is-complete" : "is-locked"}><span>{index + 1}</span><strong>{label}</strong></li>)}</ol></nav><section className="onboarding-task" aria-live="polite"><h2>{steps[activeStep]?.[1]}</h2>{activeStep === 0 ? <p>Administrator account is configured.</p> : <EditableStep detail={d} index={activeStep} onDone={() => { refresh(); setViewStep(null); }} onDiscard={() => { refresh(); setViewStep(null); }} onSelect={(id) => select.mutate({ workerId: id })} onCreate={(input) => pool.mutate({ ...input, organizationId: d.github.organizationId ?? "" })} />}{activeStep > 0 && <div className="onboarding-navigation"><button type="button" onClick={() => setViewStep(Math.max(0, activeStep - 1))} disabled={activeStep === 0}>Back</button><button type="button" onClick={() => setViewStep(Math.min(currentIndex, activeStep + 1))} disabled={!viewingPastStep}>Next</button></div>}</section></div></main>;
+  return <main className="onboarding"><header><p className="eyebrow">FIRST-RUN SETUP</p><h1>Get Mars ready</h1><p>Complete each verified step. Progress is saved on the control plane.</p></header>{error && <p role="alert" className="form-error">{error} <button onClick={() => setError(null)}>Dismiss</button></p>}<div className="onboarding-layout"><nav aria-label="Onboarding steps"><ol className="onboarding-steps">{steps.map(([id, label], index) => <li key={id} className={index === activeStep ? "is-current" : index < currentIndex ? "is-complete" : "is-locked"}><span>{index + 1}</span><strong>{label}</strong></li>)}</ol></nav><section className="onboarding-task" aria-live="polite"><h2>{steps[activeStep]?.[1]}</h2>{activeStep === 0 ? <p>Administrator account is configured.</p> : <EditableStep detail={d} index={activeStep} onDone={() => { refresh(); setViewStep(null); }} onDiscard={() => { refresh(); setViewStep(null); }} onSelect={(id) => select.mutate({ workerId: id })} onCreate={(input) => pool.mutate({ ...input, organizationId: d.github.organizationId ?? "" })} />}{activeStep > 0 && <div className="onboarding-navigation"><button type="button" onClick={() => setViewStep(Math.max(0, activeStep - 1))} disabled={activeStep === 0}>Back</button><button type="button" onClick={() => setViewStep(Math.min(currentIndex, activeStep + 1))} disabled={!viewingPastStep}>Next</button></div>}</section></div></main>;
 }
 function EditableStep({ detail, index, onDone, onDiscard, onSelect, onCreate }: { detail: OnboardingDetail; index: number; onDone: () => void; onDiscard: () => void; onSelect: (id: string) => void; onCreate: (input: CreatePoolRequest) => void }) {
   if (index === 1) return <GithubStep detail={detail} />;
@@ -68,7 +68,7 @@ function SetupCard() {
   </section></main>;
 }
 
-function SignIn({ firstAdmin }: { firstAdmin: boolean }) { return <main className="onboarding"><section className="onboarding-card onboarding-sign-in"><p className="eyebrow">{firstAdmin ? "WELCOME TO WHITESMITH" : "WELCOME BACK"}</p><h1>{firstAdmin ? "Create your administrator account" : "Sign in to Whitesmith"}</h1><p>Use GitHub to verify your identity and securely manage this control plane.</p><a className="button" href="/api/auth/github">{firstAdmin ? "Continue with GitHub" : "Continue with GitHub"}</a><p>{firstAdmin ? "Create administrator with GitHub" : "Sign in with GitHub"}</p><p><strong>GitHub identity</strong><br />Only your GitHub identity is used for administrator access.</p><p className="security-note">Security note: setup data is shown only after your session is authorized.</p></section></main>; }
+function SignIn({ firstAdmin }: { firstAdmin: boolean }) { return <main className="onboarding"><section className="onboarding-card onboarding-sign-in"><p className="eyebrow">{firstAdmin ? "WELCOME TO MARS" : "WELCOME BACK"}</p><h1>{firstAdmin ? "Create your administrator account" : "Sign in to Mars"}</h1><p>Use GitHub to verify your identity and securely manage this control plane.</p><a className="button" href="/api/auth/github">{firstAdmin ? "Continue with GitHub" : "Continue with GitHub"}</a><p>{firstAdmin ? "Create administrator with GitHub" : "Sign in with GitHub"}</p><p><strong>GitHub identity</strong><br />Only your GitHub identity is used for administrator access.</p><p className="security-note">Security note: setup data is shown only after your session is authorized.</p></section></main>; }
 function ReviewSummary({ detail, through, onClose }: { detail: OnboardingDetail; through: number; onClose?: () => void }) {
   const org = detail.organizations.find((item) => item.id === detail.github.organizationId);
   return <aside className="onboarding-review">
@@ -129,15 +129,15 @@ function GithubStep({ detail }: { detail: OnboardingDetail }) {
   return <div>
     <h3>Connect GitHub account</h3>
     {!hasInstallation && <>
-      <p>Choose the GitHub account where Whitesmith should run jobs. These are accounts available to your signed-in GitHub user, not existing Whitesmith App installations.</p>
-      {!detail.github.appConfigured && <p>Whitesmith will create a GitHub App for this control plane before installing it in the selected account.</p>}
+      <p>Choose the GitHub account where Mars should run jobs. These are accounts available to your signed-in GitHub user, not existing Mars App installations.</p>
+      {!detail.github.appConfigured && <p>Mars will create a GitHub App for this control plane before installing it in the selected account.</p>}
       <label>GitHub account
         <select aria-label="GitHub account" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
           <option value="">Select account</option>
           {detail.organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
         </select>
       </label>
-      <button type="button" disabled={!organizationId} onClick={() => void connect()}>{detail.github.appConfigured ? "Install Whitesmith GitHub App" : "Create Whitesmith GitHub App"}</button>
+      <button type="button" disabled={!organizationId} onClick={() => void connect()}>{detail.github.appConfigured ? "Install Mars GitHub App" : "Create Mars GitHub App"}</button>
       {connectError && <p role="alert" className="form-error">{connectError}</p>}
     </>}
     {hasInstallation && !hasUsableInstallation && <>
@@ -149,7 +149,7 @@ function GithubStep({ detail }: { detail: OnboardingDetail }) {
       {verify.error && <p role="alert" className="form-error">{verify.error instanceof Error ? verify.error.message : "Repository verification failed"}</p>}
       {connectError && <p role="alert" className="form-error">{connectError}</p>}
     </>}
-    {hasUsableInstallation && <p role="status">GitHub installation connected. Whitesmith verified {availableRepositories.length} available {availableRepositories.length === 1 ? "repository" : "repositories"}.</p>}
+    {hasUsableInstallation && <p role="status">GitHub installation connected. Mars verified {availableRepositories.length} available {availableRepositories.length === 1 ? "repository" : "repositories"}.</p>}
   </div>;
 }
 function WorkerSetupStep({ detail, onSelect, onDone, onDiscard, edit = false }: { detail: OnboardingDetail; onSelect: (id: string) => void; onDone: () => void; onDiscard?: () => void; edit?: boolean }) {
@@ -157,7 +157,7 @@ function WorkerSetupStep({ detail, onSelect, onDone, onDiscard, edit = false }: 
   if (!detail.worker) return <WorkerStep onSelect={onSelect} />;
   return <div><h3>Worker enrollment</h3><p>Selected worker: {detail.worker.name ?? detail.worker.vmUuid}</p>{detail.worker.admissionState === "pending" && onDiscard && <button type="button" onClick={() => { if (window.confirm("Discard this pending worker and generate a new installation?")) discard.mutate(detail.worker!.id); }} disabled={discard.isPending}>Discard and reinstall</button>}{discard.error && <p role="alert">{discard.error instanceof Error ? discard.error.message : "Could not discard the pending worker."}</p>}<ResourceStep detail={detail} onDone={onDone} onDiscard={onDiscard} edit={edit} /></div>;
 }
-const canonicalRunnerLabel = (platform: "linux-x64" | "windows-x64" | "macos-arm64") => `whitesmith-${platform}`;
+const canonicalRunnerLabel = (platform: "linux-x64" | "windows-x64" | "macos-arm64") => `mars-${platform}`;
 function LabelsStep({ detail, onCreate, edit = false }: { detail: OnboardingDetail; onCreate: (input: CreatePoolRequest) => void; edit?: boolean }) {
   if (detail.pool) return <OnboardingVerificationStep detail={detail} />;
   return <PoolSetupStep detail={detail} onCreate={onCreate} edit={edit} />;
@@ -206,7 +206,7 @@ function OnboardingVerificationStep({ detail }: { detail: OnboardingDetail }) {
   const state = detail.verification.state;
   if (["queued", "running", "reaping"].includes(state)) return <div>
     <h3>Verify the runner</h3>
-    <p role="status">{state === "queued" ? "Smoke workflow queued on GitHub." : state === "running" ? "Smoke workflow is running on the selected Whitesmith pool." : "Smoke workflow succeeded. Waiting for lease cleanup."}</p>
+    <p role="status">{state === "queued" ? "Smoke workflow queued on GitHub." : state === "running" ? "Smoke workflow is running on the selected Mars pool." : "Smoke workflow succeeded. Waiting for lease cleanup."}</p>
     {detail.verification.runId && <a href={`/runs/${detail.verification.runId}`}>View verification run</a>}
   </div>;
   if (state === "complete") return <div><h3>Verify the runner</h3><p role="status">Smoke workflow succeeded and its runner lease was reaped.</p></div>;
@@ -227,4 +227,4 @@ function OnboardingVerificationStep({ detail }: { detail: OnboardingDetail }) {
     {verification.error && <p role="alert" className="form-error">{verification.error instanceof Error ? verification.error.message : "Smoke workflow dispatch failed"}</p>}
   </div>;
 }
-function Complete({ detail }: { detail: OnboardingDetail }) { const [runnerRepository, setRunnerRepository] = useState<OnboardingDetail["github"]["repositories"][number] | null>(null); const available = detail.github.repositories.find((repository) => repository.available); const org = detail.organizations.find((o) => o.id === detail.github.organizationId); return <main className="onboarding"><section className="onboarding-card"><h1>Onboarding complete</h1><p>Organization: {org?.name ?? detail.github.organizationId}</p><p>Available repositories: {detail.github.repositories.filter((repository) => repository.available).length}</p><p>Worker: {detail.worker?.name ?? "Ready"}</p><p>Pool: {detail.pool?.name ?? "default"}</p><p>Effective labels: {detail.pool?.labels?.join(", ")}</p><pre>runs-on: [{detail.pool?.labels?.join(", ")}]</pre>{available && <button type="button" className="button" onClick={() => setRunnerRepository(available)}>Use Whitesmith runners</button>}<a className="button secondary" href="/">Open dashboard</a></section>{runnerRepository && detail.github.organizationId && <RunnerWorkflowPrModal organizationId={detail.github.organizationId} repositoryId={runnerRepository.id} repositoryName={runnerRepository.fullName} open onClose={() => setRunnerRepository(null)} />}</main>; }
+function Complete({ detail }: { detail: OnboardingDetail }) { const [runnerRepository, setRunnerRepository] = useState<OnboardingDetail["github"]["repositories"][number] | null>(null); const available = detail.github.repositories.find((repository) => repository.available); const org = detail.organizations.find((o) => o.id === detail.github.organizationId); return <main className="onboarding"><section className="onboarding-card"><h1>Onboarding complete</h1><p>Organization: {org?.name ?? detail.github.organizationId}</p><p>Available repositories: {detail.github.repositories.filter((repository) => repository.available).length}</p><p>Worker: {detail.worker?.name ?? "Ready"}</p><p>Pool: {detail.pool?.name ?? "default"}</p><p>Effective labels: {detail.pool?.labels?.join(", ")}</p><pre>runs-on: [{detail.pool?.labels?.join(", ")}]</pre>{available && <button type="button" className="button" onClick={() => setRunnerRepository(available)}>Use Mars runners</button>}<a className="button secondary" href="/">Open dashboard</a></section>{runnerRepository && detail.github.organizationId && <RunnerWorkflowPrModal organizationId={detail.github.organizationId} repositoryId={runnerRepository.id} repositoryName={runnerRepository.fullName} open onClose={() => setRunnerRepository(null)} />}</main>; }

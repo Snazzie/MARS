@@ -3,12 +3,12 @@ import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { cpus, totalmem } from "node:os";
 import { statfsSync } from "node:fs";
-import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerObservedConfiguration, WorkerConfigurePayload, WorkerCommand, WorkerDoctorData, WorkerEvent, type WorkerCapacityData } from "@whitesmith/contracts";
+import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerObservedConfiguration, WorkerConfigurePayload, WorkerCommand, WorkerDoctorData, WorkerEvent, type WorkerCapacityData } from "@mars/contracts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { authenticateWorker, retryControlPlaneOperation, workerSocketUrl, type WorkerIdentity } from "./worker-client.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 import type { LibvirtVmDriver } from "./libvirt-vm.ts";
-import type { WorkerLimits } from "@whitesmith/contracts";
+import type { WorkerLimits } from "@mars/contracts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 export type LinuxWorkerResources = {
   appliance: { vcpu: number; memoryBytes: number; storageBytes: number };
@@ -104,7 +104,7 @@ function createLinuxIdentity(): WorkerIdentity {
     encryptionPrivateKey: encryption.privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
   };
 }
-function identityPath(): string { return Bun.env.WHITESMITH_WORKER_IDENTITY_FILE ?? "/var/lib/whitesmith/config/worker-identity.json"; }
+function identityPath(): string { return Bun.env.MARS_WORKER_IDENTITY_FILE ?? "/var/lib/mars/config/worker-identity.json"; }
 async function loadIdentity(): Promise<WorkerIdentity | null> {
   try { return JSON.parse(await readFile(identityPath(), "utf8")) as WorkerIdentity; } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -118,7 +118,7 @@ async function saveIdentity(identity: WorkerIdentity): Promise<void> {
   await chmod(path, 0o600);
 }
 async function readEnrollmentCode(): Promise<string> {
-  if (Bun.env.WHITESMITH_JOIN_CODE_FILE) return (await readFile(Bun.env.WHITESMITH_JOIN_CODE_FILE, "utf8")).trim();
+  if (Bun.env.MARS_JOIN_CODE_FILE) return (await readFile(Bun.env.MARS_JOIN_CODE_FILE, "utf8")).trim();
   const value = await Bun.stdin.text();
   return value.trim();
 }
@@ -140,7 +140,7 @@ async function enrollLinuxWorker(baseUrl: URL, identity: WorkerIdentity, driver:
   const code = await readEnrollmentCode();
   const capacity = linuxCapacity();
   const doctor = await linuxDoctor(driver, digest, channelRoot);
-  const payload = buildLinuxWorkerJoinPayload({ code, publicKey: identity.publicKey, encryptionPublicKey: identity.encryptionPublicKey, vmUuid: Bun.env.WHITESMITH_VM_UUID ?? randomUUID(), machineUuid: Bun.env.WHITESMITH_MACHINE_UUID ?? randomUUID(), doctor, capacity });
+  const payload = buildLinuxWorkerJoinPayload({ code, publicKey: identity.publicKey, encryptionPublicKey: identity.encryptionPublicKey, vmUuid: Bun.env.MARS_VM_UUID ?? randomUUID(), machineUuid: Bun.env.MARS_MACHINE_UUID ?? randomUUID(), doctor, capacity });
   const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) }));
   if (!response.ok) throw new Error(`worker join failed: ${response.status}`);
   const joined = await response.json() as { workerId?: string };
@@ -201,8 +201,8 @@ async function connectLinuxWorker(
   }
 }
 export async function runLinuxWorker(baseUrl: string, driver: LibvirtVmDriver, limits: WorkerLimits): Promise<void> {
-  if (!baseUrl) throw new Error("WHITESMITH_CONTROL_PLANE_URL is required");
-  const required = ["WHITESMITH_GOLDEN_DISK", "WHITESMITH_GOLDEN_DIGEST", "WHITESMITH_DOMAIN_TEMPLATE", "WHITESMITH_CLONE_ROOT", "WHITESMITH_CHANNEL_ROOT", "WHITESMITH_LIBVIRT_NETWORK"];
+  if (!baseUrl) throw new Error("MARS_CONTROL_PLANE_URL is required");
+  const required = ["MARS_GOLDEN_DISK", "MARS_GOLDEN_DIGEST", "MARS_DOMAIN_TEMPLATE", "MARS_CLONE_ROOT", "MARS_CHANNEL_ROOT", "MARS_LIBVIRT_NETWORK"];
   const missing = required.filter((name) => !Bun.env[name]);
   if (missing.length) throw new Error(`missing Linux worker configuration: ${missing.join(", ")}`);
   const host = await driver.validateHost();
@@ -212,8 +212,8 @@ export async function runLinuxWorker(baseUrl: string, driver: LibvirtVmDriver, l
   const controlPlane = new URL(baseUrl);
   const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: resources.cache.ttlSeconds });
   try {
-    const identity = (await loadIdentity()) ?? await enrollLinuxWorker(controlPlane, createLinuxIdentity(), driver, Bun.env.WHITESMITH_GOLDEN_DIGEST!, Bun.env.WHITESMITH_CHANNEL_ROOT!);
-    await connectLinuxWorker(controlPlane, identity, driver, limits, resources, Bun.env.WHITESMITH_GOLDEN_DIGEST!, Bun.env.WHITESMITH_CHANNEL_ROOT!, cacheService);
+    const identity = (await loadIdentity()) ?? await enrollLinuxWorker(controlPlane, createLinuxIdentity(), driver, Bun.env.MARS_GOLDEN_DIGEST!, Bun.env.MARS_CHANNEL_ROOT!);
+    await connectLinuxWorker(controlPlane, identity, driver, limits, resources, Bun.env.MARS_GOLDEN_DIGEST!, Bun.env.MARS_CHANNEL_ROOT!, cacheService);
   } finally {
     await cacheService.close();
   }

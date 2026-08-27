@@ -8,7 +8,7 @@ import {
   type OrganizationSummary,
   type PoolSummary,
   type RepositorySummary,
-} from "@whitesmith/contracts";
+} from "@mars/contracts";
 
 export type OnboardingDb = DatabaseClient;
 type Row = Record<string, unknown>;

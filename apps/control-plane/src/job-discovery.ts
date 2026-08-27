@@ -1,4 +1,4 @@
-import type { DatabaseClient } from "@whitesmith/db";
+import type { DatabaseClient } from "@mars/db";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { GithubRateLimitError, isGithubRateLimitError } from "./github-rate-limit.ts";
 import { applyGithubJobSnapshot, type GithubRunSnapshot } from "./runs.ts";

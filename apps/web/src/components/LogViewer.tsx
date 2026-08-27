@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import type { RunJob, RunStep } from "@whitesmith/contracts";
+import type { RunJob, RunStep } from "@mars/contracts";
 import { getLogs, getStepLogs } from "../api.ts";
 import { QueryState } from "./StateView.tsx";
 

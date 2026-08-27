@@ -1,5 +1,5 @@
 {
-  "name": "whitesmith",
+  "name": "mars",
   "private": true,
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {

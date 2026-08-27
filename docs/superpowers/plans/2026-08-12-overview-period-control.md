@@ -46,6 +46,6 @@
 
 **Files:** None.
 
-- [ ] Run `bun run --filter '@whitesmith/web' typecheck`.
+- [ ] Run `bun run --filter '@mars/web' typecheck`.
 - [ ] Run `bun test apps/web/src/routes/OverviewPage.test.tsx apps/web/src/components/JobActivityChart.test.tsx`.
-- [ ] Run `bun run --filter '@whitesmith/web' build` and confirm exit code 0.
+- [ ] Run `bun run --filter '@mars/web' build` and confirm exit code 0.

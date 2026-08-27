@@ -1,4 +1,4 @@
-import type { DatabaseClient } from "@whitesmith/db";
+import type { DatabaseClient } from "@mars/db";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 
 type CleanupLease = { leaseId: string; workerId: string; nonce: string; cleanupType?: "linux-vm.stop_lease" | "tart.stop_lease" | "windows-container.stop_lease" | "hyperv.stop_lease" };

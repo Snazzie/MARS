@@ -41,9 +41,9 @@ test("macOS installer configures Tart sudo capability without switching to root"
   const source = await Bun.file(mac).text();
   expect(source).toContain("sudo -n \"$TART_BIN\" --version");
   expect(source).toContain("sudo -v");
-  expect(source).toContain("/etc/sudoers.d/whitesmith-tart-");
+  expect(source).toContain("/etc/sudoers.d/mars-tart-");
   expect(source).toContain("visudo -cf");
-  expect(source).toContain('PLIST="$HOME/Library/LaunchAgents/com.whitesmith.worker.plist"');
+  expect(source).toContain('PLIST="$HOME/Library/LaunchAgents/com.mars.worker.plist"');
   expect(source).not.toContain("sudo zsh");
   expect(source).toContain('[[ "$EUID" -ne 0 ]]');
   expect(source).toContain("check 'Checking macOS host and Tart'");
@@ -53,14 +53,14 @@ test("macOS installer configures Tart sudo capability without switching to root"
 test("macOS installer provisions a persistent user-scoped worker service", async () => {
   const source = await Bun.file(mac).text();
   expect(source).toContain("/api/workers/orchestrator?audience=macos-arm64");
-  expect(source).toContain("WHITESMITH_CONTROL_PLANE_URL");
+  expect(source).toContain("MARS_CONTROL_PLANE_URL");
   expect(source).toContain("mac-worker");
   expect(source).toContain("worker-identity.json");
   expect(source).toContain("launchctl bootstrap");
   expect(source).not.toContain("launchctl bootstrap system");
-  expect(source).toContain('export WHITESMITH_TART_BASE_IMAGE=$(printf');
-  expect(source).toContain('export WHITESMITH_TART_IMAGE_DIGEST=$(printf');
-  expect(source).toContain('export WHITESMITH_TART_EXECUTABLE=$(printf');
+  expect(source).toContain('export MARS_TART_BASE_IMAGE=$(printf');
+  expect(source).toContain('export MARS_TART_IMAGE_DIGEST=$(printf');
+  expect(source).toContain('export MARS_TART_EXECUTABLE=$(printf');
   expect(source).not.toContain('if [[ -n "\\${TART_IMAGE_DIGEST:-}" ]]');
 });
 test("macOS job image preparation is immutable, pinned, and emits split runtime identity", async () => {
@@ -70,8 +70,8 @@ test("macOS job image preparation is immutable, pinned, and emits split runtime 
   expect(source).toContain("8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2239ee3dfce28b079");
   expect(source).toContain("target already exists");
   expect(source).toContain("image-manifest.json");
-  expect(source).toContain("WHITESMITH_TART_BASE_IMAGE=");
-  expect(source).toContain("WHITESMITH_TART_IMAGE_DIGEST=");
+  expect(source).toContain("MARS_TART_BASE_IMAGE=");
+  expect(source).toContain("MARS_TART_IMAGE_DIGEST=");
   expect(source).toContain('tart delete "$TARGET"');
 });
 macosRuntimeTest("macOS job image preparation accepts immutable OCI digest sources", async () => {
@@ -93,20 +93,20 @@ test("PowerShell installer supports VM and container runtime modes", async () =>
   expect(source).toContain("Ensure-HyperV");
   expect(source).toContain("Ensure-ContainerFeatures");
   expect(source).toContain("Ensure-WindowsContainerRuntime");
-  expect(source).toContain("WHITESMITH_WINDOWS_RUNTIME");
-  expect(source).toContain("WHITESMITH_WINDOWS_CONTAINER_IMAGE");
-  expect(source).toContain("WHITESMITH_WINDOWS_TEMPLATE_PATH");
+  expect(source).toContain("MARS_WINDOWS_RUNTIME");
+  expect(source).toContain("MARS_WINDOWS_CONTAINER_IMAGE");
+  expect(source).toContain("MARS_WINDOWS_TEMPLATE_PATH");
   expect(source).toContain("Remove-Item -LiteralPath $identityPath -Force");
   expect(source).toContain("Existing Windows worker installation detected; reinstalling.");
-  expect(source).toContain("Stop-Service WhitesmithWorker");
-  expect(source).toContain("New-Service -Name WhitesmithWorker");
+  expect(source).toContain("Stop-Service MarsWorker");
+  expect(source).toContain("New-Service -Name MarsWorker");
   expect(source).toContain("-StartupType Automatic");
-  expect(source).toContain('sc.exe config WhitesmithWorker depend= docker');
+  expect(source).toContain('sc.exe config MarsWorker depend= docker');
 });
 test("Windows installer fails when service registration fails", async () => {
   const source = await Bun.file(powershell).text();
-  expect(source).toContain('$service = New-Service -Name WhitesmithWorker');
-  expect(source).toContain('Get-Service WhitesmithWorker -ErrorAction Stop');
+  expect(source).toContain('$service = New-Service -Name MarsWorker');
+  expect(source).toContain('Get-Service MarsWorker -ErrorAction Stop');
   expect(source).toContain('"reset= 86400"');
   expect(source).toContain('"actions= restart/5000/restart/30000/none/0"');
 });
@@ -123,21 +123,21 @@ test("Windows installer accepts a successful SCM recovery restart", async () => 
 });
 test("Windows installer stages runtime downloads before replacing a running service", async () => {
   const source = await Bun.file(powershell).text();
-  expect(source).toContain("$stagedExe = Join-Path $root 'whitesmith-orchestrator.download'");
-  expect(source).toContain("$stagedServiceHost = Join-Path $root 'whitesmith-service-host.download'");
+  expect(source).toContain("$stagedExe = Join-Path $root 'mars-orchestrator.download'");
+  expect(source).toContain("$stagedServiceHost = Join-Path $root 'mars-service-host.download'");
   expect(source).toContain('OutFile $stagedExe');
   expect(source).toContain('OutFile $stagedServiceHost');
   expect(source).toContain("Move-Item -LiteralPath $stagedExe -Destination $exe -Force");
-  expect(source.indexOf("Stop-Service WhitesmithWorker")).toBeLessThan(source.indexOf("Move-Item -LiteralPath $stagedExe"));
+  expect(source.indexOf("Stop-Service MarsWorker")).toBeLessThan(source.indexOf("Move-Item -LiteralPath $stagedExe"));
 });
 test("Windows installer waits on a fresh service controller", async () => {
   const source = await Bun.file(powershell).text();
-  expect(source.indexOf("$service = Get-Service WhitesmithWorker -ErrorAction Stop")).toBeLessThan(source.indexOf("$service.WaitForStatus"));
+  expect(source.indexOf("$service = Get-Service MarsWorker -ErrorAction Stop")).toBeLessThan(source.indexOf("$service.WaitForStatus"));
 });
 test("Windows installer downloads and registers the native SCM host", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).toContain("/api/workers/service-host?audience=windows-x64");
-  expect(source).toContain("whitesmith-service-host.exe");
+  expect(source).toContain("mars-service-host.exe");
   expect(source).toContain('-BinaryPathName "`"$serviceHost`"');
   expect(source).not.toContain("windows-worker --service");
 });
@@ -145,8 +145,8 @@ test("Windows installer gives the service a fresh environment without rebooting"
   const source = await Bun.file(powershell).text();
   const serviceEnvironment = source.indexOf("$serviceEnvironment = @(");
   expect(serviceEnvironment).toBeGreaterThan(source.indexOf("$service = New-Service"));
-  expect(serviceEnvironment).toBeLessThan(source.indexOf("Start-Service WhitesmithWorker"));
-  expect(source).toContain("HKLM:\\SYSTEM\\CurrentControlSet\\Services\\WhitesmithWorker");
+  expect(serviceEnvironment).toBeLessThan(source.indexOf("Start-Service MarsWorker"));
+  expect(source).toContain("HKLM:\\SYSTEM\\CurrentControlSet\\Services\\MarsWorker");
   expect(source).toContain("-Name Environment -PropertyType MultiString");
 });
 test("worker installers propagate optional cache service environment", async () => {
@@ -156,29 +156,29 @@ test("worker installers propagate optional cache service environment", async () 
     Bun.file(linuxCompose).text(),
   ]);
   for (const name of [
-    "WHITESMITH_ACTION_CACHE_ROOT",
-    "WHITESMITH_CACHE_PROXY_PORT",
-    "WHITESMITH_CACHE_DATA_PORT",
-    "WHITESMITH_CACHE_PROXY_URL",
-    "WHITESMITH_CACHE_ADVERTISE_URL",
+    "MARS_ACTION_CACHE_ROOT",
+    "MARS_CACHE_PROXY_PORT",
+    "MARS_CACHE_DATA_PORT",
+    "MARS_CACHE_PROXY_URL",
+    "MARS_CACHE_ADVERTISE_URL",
   ]) {
     expect(windowsSource).toContain(name);
     expect(macSource).toContain(name);
     expect(composeSource).toContain(name);
   }
-  expect(composeSource).toContain("${WHITESMITH_CACHE_PROXY_PORT:-8788}:${WHITESMITH_CACHE_PROXY_PORT:-8788}");
-  expect(composeSource).toContain("${WHITESMITH_CACHE_DATA_PORT:-8789}:${WHITESMITH_CACHE_DATA_PORT:-8789}");
-  expect(composeSource).toContain("/var/lib/whitesmith/action-cache");
-  expect(composeSource).toContain("action-cache:${WHITESMITH_ACTION_CACHE_ROOT:-/var/lib/whitesmith/action-cache}");
+  expect(composeSource).toContain("${MARS_CACHE_PROXY_PORT:-8788}:${MARS_CACHE_PROXY_PORT:-8788}");
+  expect(composeSource).toContain("${MARS_CACHE_DATA_PORT:-8789}:${MARS_CACHE_DATA_PORT:-8789}");
+  expect(composeSource).toContain("/var/lib/mars/action-cache");
+  expect(composeSource).toContain("action-cache:${MARS_ACTION_CACHE_ROOT:-/var/lib/mars/action-cache}");
 });
 test("Windows installer keeps the optional cache environment list valid PowerShell", async () => {
   const source = await Bun.file(powershell).text();
-  expect(source).not.toMatch(/'WHITESMITH_CACHE_ADVERTISE_URL',\r?\n\s*\)\) \{/);
+  expect(source).not.toMatch(/'MARS_CACHE_ADVERTISE_URL',\r?\n\s*\)\) \{/);
 });
 
 test("Windows installer replaces duplicate worker cache firewall rules with one scoped rule", async () => {
   const source = await Bun.file(powershell).text();
-  const name = "Whitesmith Worker Cache";
+  const name = "Mars Worker Cache";
   expect(source).toContain(`Get-NetFirewallRule -DisplayName '${name}'`);
   expect(source).toContain("Remove-NetFirewallRule");
   expect(source).toContain(`New-NetFirewallRule -DisplayName '${name}'`);
@@ -208,8 +208,8 @@ test("Windows installer supports Docker mode with a fail-closed runtime probe", 
   expect(source).toContain("docker wait");
   expect(source).toContain("docker logs");
   expect(source).toContain("2000");
-  expect(source).toContain("WHITESMITH_WINDOWS_RUNTIME");
-  expect(source).toContain("WHITESMITH_WINDOWS_TEMPLATE_PATH");
+  expect(source).toContain("MARS_WINDOWS_RUNTIME");
+  expect(source).toContain("MARS_WINDOWS_TEMPLATE_PATH");
 });
 test("Windows installer exposes identity-preserving upgrade mode", async () => {
   const source = await Bun.file(powershell).text();
@@ -230,7 +230,7 @@ test("Windows guest service runs as a startup-available system service account t
   const source = await Bun.file(prepareWindowsTemplate).text();
   expect(source).toContain("New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount");
   expect(source).toContain("New-ScheduledTaskSettingsSet -StartWhenAvailable");
-  expect(source).toContain("Register-ScheduledTask -TaskName 'WhitesmithGuestService' -Action $action -Trigger $trigger -Principal $principal -Settings $settings");
+  expect(source).toContain("Register-ScheduledTask -TaskName 'MarsGuestService' -Action $action -Trigger $trigger -Principal $principal -Settings $settings");
 });
 test("orchestrator entrypoint uses the native host instead of a JavaScript service shim", async () => {
   const source = await Bun.file(join(root, "apps/orchestrator/src/index.ts")).text();
@@ -240,7 +240,7 @@ test("orchestrator entrypoint uses the native host instead of a JavaScript servi
 });
 test("Windows development preparation rebuilds the orchestrator artifact", async () => {
   const source = await Bun.file(join(root, "scripts/build-windows-worker.ts")).text();
-  expect(source).toContain('"bun", "run", "--filter", "@whitesmith/orchestrator", "build"');
+  expect(source).toContain('"bun", "run", "--filter", "@mars/orchestrator", "build"');
   expect(source).toContain('"cargo", "build", "--release"');
 });
 

@@ -75,7 +75,7 @@ Configure PostgreSQL dialect, schema path, migration output directory, and `DATA
 Run:
 
 ```bash
-bun run --filter '@whitesmith/db' typecheck
+bun run --filter '@mars/db' typecheck
 ```
 
 Expected: PASS.
@@ -110,7 +110,7 @@ Against a disposable PostgreSQL database, run the Drizzle migration files and as
 - [ ] **Step 4: Run migration generation checks**
 
 ```bash
-bun run --filter '@whitesmith/db' db:check
+bun run --filter '@mars/db' db:check
 ```
 
 Expected: PASS with no uncommitted generated changes.
@@ -173,7 +173,7 @@ Expected: PASS.
 - Modify: `IMPLEMENTATION-STATUS.md`
 
 **Interfaces:**
-- `bun run --filter '@whitesmith/db' db:migrate` applies checked-in migrations using `DATABASE_URL`.
+- `bun run --filter '@mars/db' db:migrate` applies checked-in migrations using `DATABASE_URL`.
 - Deployment documentation explains startup migration ownership and the frozen custom boundary.
 
 - [ ] **Step 1: Add CLI behavior**
@@ -202,7 +202,7 @@ State that queries remain tagged SQL while migration ownership moved to Drizzle,
 - [ ] **Step 1: Run migration generation consistency**
 
 ```bash
-bun run --filter '@whitesmith/db' db:check
+bun run --filter '@mars/db' db:check
 ```
 
 - [ ] **Step 2: Run workspace typecheck**

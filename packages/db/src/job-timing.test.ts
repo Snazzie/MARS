@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { JobTimingSnapshot } from "@whitesmith/contracts";
+import { JobTimingSnapshot } from "@mars/contracts";
 import { listJobTimingHistory, recordJobTimingSnapshot, type JobTimingDb, type JobTimingSnapshotInput } from "./job-timing.ts";
 
 const input: JobTimingSnapshotInput = {

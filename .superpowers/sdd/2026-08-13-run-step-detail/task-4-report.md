@@ -16,7 +16,7 @@ Implemented collapsed, accessible job-step rows and lazy step-log loading.
 ## Verification
 
 - `bun test apps/web/src/components/LogViewer.test.tsx apps/web/src/components/StateView.test.tsx apps/web/src/components/Disclosure.test.tsx` — 6 passing.
-- `bun run --filter @whitesmith/web typecheck` — passed.
+- `bun run --filter @mars/web typecheck` — passed.
 - `git diff --check` — passed.
 
 Project-wide formatters, linters, and suites were intentionally not run per the task brief.

@@ -4,7 +4,7 @@
 
 **Goal:** Make Windows container workers build, verify, cache, and reuse their own Playwright-capable job image during install/reinstall.
 
-**Architecture:** The control plane injects signed-by-configuration build metadata into `install-worker.ps1`. The Windows installer downloads hash-pinned inputs over HTTPS, builds `whitesmith/windows-job:local` with the existing Containerfile, verifies the runtime in a Hyper-V probe, and atomically writes a provenance manifest before service registration. The orchestrator continues launching Hyper-V-isolated containers from the local tag.
+**Architecture:** The control plane injects signed-by-configuration build metadata into `install-worker.ps1`. The Windows installer downloads hash-pinned inputs over HTTPS, builds `mars/windows-job:local` with the existing Containerfile, verifies the runtime in a Hyper-V probe, and atomically writes a provenance manifest before service registration. The orchestrator continues launching Hyper-V-isolated containers from the local tag.
 
 **Tech Stack:** PowerShell, Docker Windows engine, Hyper-V isolation, Bun/TypeScript, Hono worker routes, Bun tests.
 
@@ -16,7 +16,7 @@
 - Runtime verification MUST require `mf.dll`, `mfplat.dll`, `msmpeg2vdec.dll`, `evr.dll`, `avrt.dll`, DNS, and TCP/443.
 - Failed rebuild MUST preserve the existing service and prior cached image.
 - Job containers MUST remain Hyper-V isolated; no `--no-sandbox` or network-policy changes.
-- Local image provenance MUST be persisted in `C:\ProgramData\Whitesmith\windows-job-image.json`.
+- Local image provenance MUST be persisted in `C:\ProgramData\Mars\windows-job-image.json`.
 
 ---
 
@@ -28,7 +28,7 @@
 - Create: `tests/windows-worker-image-manifest.test.ts`
 
 **Interfaces:**
-- Add installer parameters/placeholders for `WindowsContainerBaseImage`, runner/Git/VC URLs and SHA-256 values, and `WindowsContainerImage` defaulting to `whitesmith/windows-job:local`.
+- Add installer parameters/placeholders for `WindowsContainerBaseImage`, runner/Git/VC URLs and SHA-256 values, and `WindowsContainerImage` defaulting to `mars/windows-job:local`.
 - Define manifest JSON fields: `schemaVersion`, `baseImage`, `runnerSha256`, `gitSha256`, `vcRuntimeSha256`, `jobAgentSha256`, `image`, `imageId`, `runtimeProbe`, `builtAt`.
 - Add pure test helpers for exact base validation and manifest validation if they are extracted from PowerShell as text-contracts only; do not introduce a runtime TypeScript implementation that duplicates PowerShell behavior.
 
@@ -86,7 +86,7 @@ Expected: local build script and installer integration assertions fail.
 
 - [ ] **Step 3: Implement the local builder**
 
-Use a unique staging directory under `C:\ProgramData\Whitesmith\image-build-<guid>`. Download with `Invoke-WebRequest -UseBasicParsing`, reject non-HTTPS URLs, verify `Get-FileHash`, copy the job agent and verifier, run `docker pull` against the exact base digest, run `docker build --build-arg BASE_IMAGE=... --tag whitesmith/windows-job:local`, and remove staging in `finally`.
+Use a unique staging directory under `C:\ProgramData\Mars\image-build-<guid>`. Download with `Invoke-WebRequest -UseBasicParsing`, reject non-HTTPS URLs, verify `Get-FileHash`, copy the job agent and verifier, run `docker pull` against the exact base digest, run `docker build --build-arg BASE_IMAGE=... --tag mars/windows-job:local`, and remove staging in `finally`.
 
 Run a separate probe container with `--entrypoint powershell.exe --isolation=hyperv`, `verify-runtime.ps1 -RequireNetwork`, exact integer exit-code checking, bounded `docker logs`, and unconditional `docker rm -f`. Inspect the local image ID. Write `windows-job-image.json.tmp`, flush content, then `Move-Item -Force` to the manifest path.
 
@@ -120,7 +120,7 @@ git commit -m "feat(windows): build job image locally"
 
 **Interfaces:**
 - Add `windowsContainerBuild` dependencies with base image, HTTPS payload URLs, and SHA-256 values.
-- Add environment variables: `WHITESMITH_WINDOWS_CONTAINER_BASE_IMAGE`, `WHITESMITH_WINDOWS_CONTAINER_RUNNER_URL`, `WHITESMITH_WINDOWS_CONTAINER_RUNNER_SHA256`, `WHITESMITH_WINDOWS_CONTAINER_GIT_URL`, `WHITESMITH_WINDOWS_CONTAINER_GIT_SHA256`, `WHITESMITH_WINDOWS_CONTAINER_VC_URL`, `WHITESMITH_WINDOWS_CONTAINER_VC_SHA256`.
+- Add environment variables: `MARS_WINDOWS_CONTAINER_BASE_IMAGE`, `MARS_WINDOWS_CONTAINER_RUNNER_URL`, `MARS_WINDOWS_CONTAINER_RUNNER_SHA256`, `MARS_WINDOWS_CONTAINER_GIT_URL`, `MARS_WINDOWS_CONTAINER_GIT_SHA256`, `MARS_WINDOWS_CONTAINER_VC_URL`, `MARS_WINDOWS_CONTAINER_VC_SHA256`.
 - Installer route injects those values for Windows container runtime and no longer rejects an empty remote image when local-build configuration is present.
 
 - [ ] **Step 1: Write failing route tests**
@@ -143,7 +143,7 @@ Inject build metadata only for Windows container installers. Keep VM installer b
 
 ```powershell
 bun test apps/control-plane/src/http/app.test.ts
-bun run --filter '@whitesmith/control-plane' typecheck
+bun run --filter '@mars/control-plane' typecheck
 ```
 
 - [ ] **Step 6: Commit**
@@ -180,7 +180,7 @@ Read and parse the manifest, require schema version and local image, inspect Doc
 
 ```powershell
 bun test apps/orchestrator/src/windows-container.test.ts
-bun run --filter '@whitesmith/orchestrator' typecheck
+bun run --filter '@mars/orchestrator' typecheck
 ```
 
 - [ ] **Step 5: Commit**
@@ -209,12 +209,12 @@ Parse the local builder, verifier, installer, and proof scripts with `Parser.Par
 - [ ] **Step 3: Build the job-agent artifact**
 
 ```powershell
-bun run --filter '@whitesmith/job-agent' build
+bun run --filter '@mars/job-agent' build
 ```
 
 - [ ] **Step 4: Configure control plane and reinstall one drained worker**
 
-Set all seven `WHITESMITH_WINDOWS_CONTAINER_*` values to immutable URLs/hashes, deploy the control plane, request a Windows container installer, and run it on one drained worker. Require the manifest and local image ID to match.
+Set all seven `MARS_WINDOWS_CONTAINER_*` values to immutable URLs/hashes, deploy the control plane, request a Windows container installer, and run it on one drained worker. Require the manifest and local image ID to match.
 
 - [ ] **Step 5: Exercise actual browser behavior**
 

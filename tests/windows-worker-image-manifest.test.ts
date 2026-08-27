@@ -14,8 +14,8 @@ describe("Windows worker-local image contract", () => {
       "WindowsContainerVcSha256",
     ]) expect(installer).toContain(name);
     expect(installer).toContain("https://");
-    expect(installer).toContain("whitesmith/windows-job:local");
-    expect(installer).toContain("C:\\ProgramData\\Whitesmith\\windows-job-image.json");
+    expect(installer).toContain("mars/windows-job:local");
+    expect(installer).toContain("C:\\ProgramData\\Mars\\windows-job-image.json");
   });
 
   test("manifest contract names provenance and runtime evidence", () => {

@@ -83,7 +83,7 @@ export function browserLocation(origin: string, path: "/" | "/onboarding" | "/re
 
 - [ ] **Step 4: Run focused tests and typecheck**
 
-Run: `bun test apps/control-plane/src/http-origin.test.ts && bun run --filter @whitesmith/control-plane typecheck`
+Run: `bun test apps/control-plane/src/http-origin.test.ts && bun run --filter @mars/control-plane typecheck`
 
 Expected: all origin tests pass and the unchanged control plane typechecks.
 
@@ -121,7 +121,7 @@ The observable assertions are:
 expect(oauthAuthorizeUrl).toContain("redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fapi%2Fauth%2Fgithub%2Fcallback");
 expect(callback.headers.get("location")).toBe("http://localhost:5173/onboarding");
 expect(repositoryCallback.headers.get("location")).toBe("http://localhost:5173/repositories");
-expect(callback.headers.get("set-cookie")).toContain("whitesmith_session=");
+expect(callback.headers.get("set-cookie")).toContain("mars_session=");
 ```
 
 - [ ] **Step 2: Run the OAuth tests and verify RED**
@@ -164,7 +164,7 @@ The allowlist still limits `returnTo` to `"/repositories"`.
 
 - [ ] **Step 6: Run OAuth tests and typecheck**
 
-Run: `bun test apps/control-plane/src/http-origin.test.ts apps/control-plane/src/http/app.test.ts --test-name-pattern "browser origin|dashboard return path|unsafe OAuth" && bun run --filter @whitesmith/control-plane typecheck`
+Run: `bun test apps/control-plane/src/http-origin.test.ts apps/control-plane/src/http/app.test.ts --test-name-pattern "browser origin|dashboard return path|unsafe OAuth" && bun run --filter @mars/control-plane typecheck`
 
 Expected: selected tests pass; callback and cookie origins satisfy their separate contracts.
 
@@ -255,7 +255,7 @@ Do not change inbound callback routes or webhook paths.
 
 - [ ] **Step 6: Run complete control-plane tests and typecheck**
 
-Run: `bun test apps/control-plane/src/http-origin.test.ts apps/control-plane/src/github-app.test.ts apps/control-plane/src/http/app.test.ts && bun run --filter @whitesmith/control-plane typecheck`
+Run: `bun test apps/control-plane/src/http-origin.test.ts apps/control-plane/src/github-app.test.ts apps/control-plane/src/http/app.test.ts && bun run --filter @mars/control-plane typecheck`
 
 Expected: all tests pass and typecheck exits 0.
 
@@ -291,7 +291,7 @@ Do not print, stage, or commit other `.env` values.
 
 - [ ] **Step 2: Restart the development stack**
 
-Start `bun run dev -- --kill` through the harness process supervisor rather than a finite shell command. Wait for both `Whitesmith control plane listening on http://localhost:3000/` and `VITE ... ready` before browser interaction.
+Start `bun run dev -- --kill` through the harness process supervisor rather than a finite shell command. Wait for both `Mars control plane listening on http://localhost:3000/` and `VITE ... ready` before browser interaction.
 
 - [ ] **Step 3: Verify machine-facing URLs remain on port 3000**
 
@@ -309,8 +309,8 @@ Run:
 
 ```bash
 bun test apps/control-plane/src/http-origin.test.ts apps/control-plane/src/github-app.test.ts apps/control-plane/src/http/app.test.ts apps/web/src/routes/OnboardingPage.test.tsx
-bun run --filter @whitesmith/control-plane typecheck
-bun run --filter @whitesmith/web typecheck
+bun run --filter @mars/control-plane typecheck
+bun run --filter @mars/web typecheck
 git diff --check
 ```
 

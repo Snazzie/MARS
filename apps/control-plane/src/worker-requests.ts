@@ -1,7 +1,7 @@
-import type { Sql } from "@whitesmith/db";
+import type { Sql } from "@mars/db";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, WorkerObservedConfiguration, validateWorkerGuestPlatforms, type GuestPlatform } from "@whitesmith/contracts";
-import { jsonParameter } from "@whitesmith/db";
+import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, WorkerObservedConfiguration, validateWorkerGuestPlatforms, type GuestPlatform } from "@mars/contracts";
+import { jsonParameter } from "@mars/db";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { fingerprint } from "./workers.ts";
 
@@ -28,7 +28,7 @@ export async function requestPendingWorker(db: Sql<{}>, input: WorkerBootstrapRe
   const lockKeys = [`machine:${parsed.machineUuid}`, `vm:${parsed.vmUuid}`, `fingerprint:${fp}`].sort();
   const outcome = await db.begin(async tx => {
     const telemetry = { doctor: parsed.doctor, capacity: parsed.capacity };
-    for (const key of lockKeys) await tx`select pg_advisory_xact_lock(hashtext(${`whitesmith:worker:${key}`}))`;
+    for (const key of lockKeys) await tx`select pg_advisory_xact_lock(hashtext(${`mars:worker:${key}`}))`;
     const [credential] = await tx<{ codeHash: Buffer }[]>`select code_hash as "codeHash" from worker_bootstrap_credentials where singleton=true and consumed_at is null for update`;
     const candidate = createHash("sha256").update(Buffer.from(parsed.code, "base64url")).digest();
     if (!credential || credential.codeHash.length !== candidate.length || !timingSafeEqual(credential.codeHash, candidate)) return { conflict: false as const, invalid: true as const };
@@ -73,7 +73,7 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, conf
   const payload: WorkerConfigurePayload = { workerId, appliance: parsed.appliance, runtime: parsed.runtime, guestPlatforms: parsed.guestPlatforms, cache: parsed.cache, revision, fingerprint: fp };
   const response = await db.begin(async tx => {
     if (idempotencyKey) {
-      await tx`select pg_advisory_xact_lock(hashtext(${`whitesmith:configure:${workerId}:${idempotencyKey}`}))`;
+      await tx`select pg_advisory_xact_lock(hashtext(${`mars:configure:${workerId}:${idempotencyKey}`}))`;
       const prior = await tx<{ response: { revision: string; fingerprint: string; commandId?: string } | null }[]>`select response from worker_mutations where worker_id=${workerId} and idempotency_key=${idempotencyKey}`;
       if (prior[0]?.response) return prior[0].response;
     }

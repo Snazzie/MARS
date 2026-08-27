@@ -2,7 +2,7 @@
 
 ## Problem
 
-The control plane repeatedly attempts GitHub JIT runner creation for every eligible queued job on each five-second reconciliation tick. When GitHub returns `403` because the installation's core quota is exhausted, the reservation is released immediately and the same job is retried on the next tick. Repository discovery also issues requests concurrently across the installation. This request storm consumed all 7,200 installation requests and prevented otherwise admissible `whitesmith-windows-x64` jobs from receiving JIT runner configuration.
+The control plane repeatedly attempts GitHub JIT runner creation for every eligible queued job on each five-second reconciliation tick. When GitHub returns `403` because the installation's core quota is exhausted, the reservation is released immediately and the same job is retried on the next tick. Repository discovery also issues requests concurrently across the installation. This request storm consumed all 7,200 installation requests and prevented otherwise admissible `mars-windows-x64` jobs from receiving JIT runner configuration.
 
 The pool and workflow labels already match. The installed GitHub App has `administration: write`; permissions are not the failure.
 

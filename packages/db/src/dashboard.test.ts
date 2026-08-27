@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { LogChunk, OverviewDto, RepositorySummary, RunDetail, RunSummary, WorkerDetail, WorkerHealth } from "@whitesmith/contracts";
+import { LogChunk, OverviewDto, RepositorySummary, RunDetail, RunSummary, WorkerDetail, WorkerHealth } from "@mars/contracts";
 import { getOverview, getOrganizationSettings, getRunDetail, getWorkerHealth, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRepositories, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks, queueRepositoryDiscoveryRecheck } from "./dashboard.ts";
 
 test("overview counts only GitHub job status and runtime leases", async () => {
@@ -197,10 +197,10 @@ function workerHealthDb(options: { worker: Record<string, unknown> | null; lease
 }
 
 test("pool listing normalizes PostgreSQL JSONB resources and labels", async () => {
-  const db = (async () => [{ id: "pool-1", organizationId: "org-1", workerId: "worker-1", workerName: "worker", name: "default", platform: "linux-x64", driver: "linux-libvirt-vm", imageDigest: "ubuntu@sha256:" + "a".repeat(64), resources: "{\"vcpu\":2,\"memoryBytes\":4294967296,\"storageBytes\":10737418240,\"concurrency\":1}", labels: "[\"self-hosted\",\"linux\",\"x64\",\"whitesmith-default\"]", triggerLabel: "whitesmith-default", enabled: true, active: "0" }]) as never;
+  const db = (async () => [{ id: "pool-1", organizationId: "org-1", workerId: "worker-1", workerName: "worker", name: "default", platform: "linux-x64", driver: "linux-libvirt-vm", imageDigest: "ubuntu@sha256:" + "a".repeat(64), resources: "{\"vcpu\":2,\"memoryBytes\":4294967296,\"storageBytes\":10737418240,\"concurrency\":1}", labels: "[\"self-hosted\",\"linux\",\"x64\",\"mars-default\"]", triggerLabel: "mars-default", enabled: true, active: "0" }]) as never;
   const page = await listPools(db, "org-1");
   expect(page.items[0].resources.memoryBytes).toBe(4294967296);
-  expect(page.items[0].labels).toEqual(["self-hosted", "linux", "x64", "whitesmith-default"]);
+  expect(page.items[0].labels).toEqual(["self-hosted", "linux", "x64", "mars-default"]);
 });
 
 test("repository listings normalize active paused and queued discovery states", async () => {
@@ -286,7 +286,7 @@ test("run listing normalizes PostgreSQL bigint and timestamp values", async () =
   });
 });
 
-test("run listing distinguishes jobs without a Whitesmith pool label", async () => {
+test("run listing distinguishes jobs without a Mars pool label", async () => {
   let query = "";
   const db = (async (strings: TemplateStringsArray) => {
     query = strings.join(" ");
@@ -295,7 +295,7 @@ test("run listing distinguishes jobs without a Whitesmith pool label", async () 
 
   const item = (await listRuns(db, "org-1")).items[0];
 
-  expect(query).toContain("lower(allocation_label) LIKE 'whitesmith-%'");
+  expect(query).toContain("lower(allocation_label) LIKE 'mars-%'");
   expect(item.allocationState).toBe("external");
 });
 
@@ -391,7 +391,7 @@ test("all-workspace worker listing includes workers across organizations", async
 test("all-workspace listings preserve tenant membership and workspace IDs", async () => {
   const repository = { id: "repo-1", organizationId: "org-1", name: "repo", fullName: "acme/repo", visibility: "private", available: false, installationId: "install-1" };
   const run = { id: "run-1", organizationId: "org-1", repositoryId: "repo-1", repositoryName: "repo", runNumber: 1, workflowName: "ci", event: "push", branch: "main", commitSha: "abcdef1", actorLogin: "acme", status: "completed", conclusion: "success", queuedAt: new Date().toISOString(), startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), durationMs: 0, runtimeBoundary: null };
-  const pool = { id: "pool-1", organizationId: "org-1", workerId: "worker-1", workerName: "worker", name: "default", platform: "linux-x64", driver: "linux-libvirt-vm", imageDigest: "ubuntu@sha256:" + "a".repeat(64), resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, labels: ["self-hosted"], triggerLabel: "whitesmith", enabled: true, active: 0 };
+  const pool = { id: "pool-1", organizationId: "org-1", workerId: "worker-1", workerName: "worker", name: "default", platform: "linux-x64", driver: "linux-libvirt-vm", imageDigest: "ubuntu@sha256:" + "a".repeat(64), resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, labels: ["self-hosted"], triggerLabel: "mars", enabled: true, active: 0 };
   const queries: string[] = [];
   const db = (async (strings: TemplateStringsArray) => { const query = strings.join(" "); queries.push(query); if (query.includes("runner_pools")) return [pool]; if (query.includes("dashboard_repositories")) return [repository]; if (query.includes("dashboard_runs")) return [run]; return []; }) as never;
   expect((await listAllRepositories(db, "user-1")).items[0]).toMatchObject({ organizationId: "org-1", available: false });

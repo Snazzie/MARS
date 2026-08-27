@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make the Whitesmith control-plane hosting layer releasable and deployable on Unraid through Docker/Compose. This work does not make the worker execution platform production-complete. Cloudflare Tunnel remains an operator-managed, external ingress option and is not required by the core deployment.
+Make the Mars control-plane hosting layer releasable and deployable on Unraid through Docker/Compose. This work does not make the worker execution platform production-complete. Cloudflare Tunnel remains an operator-managed, external ingress option and is not required by the core deployment.
 
 ## Scope
 
@@ -31,7 +31,7 @@ Make the Whitesmith control-plane hosting layer releasable and deployable on Unr
 
 The required stack is two services:
 
-1. `control-plane`: immutable GHCR image, port 3000, `/var/lib/whitesmith` persistent volume, and `app_master_key` Docker secret.
+1. `control-plane`: immutable GHCR image, port 3000, `/var/lib/mars` persistent volume, and `app_master_key` Docker secret.
 2. `postgres`: PostgreSQL 17 image and persistent database volume.
 
 The optional `cloudflared` Compose profile is not part of the required stack. If retained, it must be independently correct and documented as optional.

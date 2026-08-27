@@ -18,7 +18,7 @@ afterEach(async () => {
 
 test("starts run.sh from the supplied Actions Runner root", async () => {
   if (process.platform === "win32") return;
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-job-agent-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
   roots.push(root);
   const configPath = join(root, "jit-config");
   const outputPath = join(root, "received-config");
@@ -34,7 +34,7 @@ test("starts run.sh from the supplied Actions Runner root", async () => {
 
 test("official runner receives worker cache proxy variables and a temporary CA", async () => {
   if (process.platform === "win32") return;
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-job-agent-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
   roots.push(root);
   const outputPath = join(root, "cache-env");
   await writeFile(join(root, "run.sh"), `#!/bin/sh
@@ -59,7 +59,7 @@ cat "$NODE_EXTRA_CA_CERTS" >> '${outputPath}'
 });
 
 test("waits for the host to copy the guest bootstrap after startup", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-job-agent-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
   roots.push(root);
   const bootstrapPath = join(root, "bootstrap.json");
   let copied = false;
@@ -76,7 +76,7 @@ test("launches the Windows runner batch file through cmd.exe", () => {
   expect(runnerCommandForPlatform("linux-x64")).toEqual(["./run.sh"]);
 });
 test("container completion exits instead of shutting down a guest", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-job-agent-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
   roots.push(root);
   const bootstrapPath = join(root, "bootstrap.json");
   await writeFile(bootstrapPath, JSON.stringify({ version: 1, leaseId: "lease", nonce: "nonce", encodedJitConfig: "jit" }));
@@ -91,7 +91,7 @@ test("container completion exits instead of shutting down a guest", async () => 
   expect(shutdowns).toBe(0);
 });
 test("returns the runner process failure code to the container entrypoint", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-job-agent-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
   roots.push(root);
   if (process.platform === "win32") {
     await writeFile(join(root, "run.cmd"), "@echo off\r\nexit /b 17\r\n");
@@ -104,7 +104,7 @@ test("returns the runner process failure code to the container entrypoint", asyn
 
 test("executes a supplied Windows runner command and passes its JIT config", async () => {
   if (process.platform !== "win32") return;
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-job-agent-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
   roots.push(root);
   const outputPath = join(root, "result.txt");
   await writeFile(join(root, "run.cmd"), `@echo off\r\n>\"${outputPath}\" echo %ACTIONS_RUNNER_INPUT_JITCONFIG%\r\nexit /b 0\r\n`, { mode: 0o700 });
@@ -113,7 +113,7 @@ test("executes a supplied Windows runner command and passes its JIT config", asy
 });
 
 test("does not treat the executable path as a missing optional argument", () => {
-  const argv = ["C:\\ProgramData\\Whitesmith\\whitesmith-job-agent.exe", "guest-service", "--platform", "windows-x64"];
+  const argv = ["C:\\ProgramData\\Mars\\mars-job-agent.exe", "guest-service", "--platform", "windows-x64"];
   expect(cliArgument(argv, "--runner-root")).toBeUndefined();
   expect(cliArgument(argv, "--platform")).toBe("windows-x64");
 });

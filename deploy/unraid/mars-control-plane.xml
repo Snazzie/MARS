@@ -10,6 +10,6 @@
   <Project>https://github.com/Snazzie/Mars</Project>
   <Overview>Mars control plane. Requires an external PostgreSQL 17 database and an HTTPS reverse proxy with WebSocket support. Worker execution runtimes are external to Unraid.</Overview>
   <Config Name="HTTP Port" Target="3000" Default="3000" Mode="tcp" Description="Control-plane HTTP and WebSocket port." Type="Port" Display="always" Required="true" Mask="false">3000</Config>
-  <Config Name="Persistent data" Target="/var/lib/whitesmith" Default="/mnt/user/appdata/whitesmith-control-plane/data" Mode="rw" Description="Persistent control-plane diagnostic data." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/whitesmith-control-plane/data</Config>
-  <Config Name="Database URL" Target="DATABASE_URL" Default="postgres://whitesmith:change-me@db.example:5432/whitesmith" Description="External PostgreSQL connection URL." Type="Variable" Display="always" Required="true" Mask="true">postgres://whitesmith:change-me@db.example:5432/whitesmith</Config>
+  <Config Name="Persistent data" Target="/var/lib/mars" Default="/mnt/user/appdata/mars-control-plane/data" Mode="rw" Description="Persistent control-plane diagnostic data." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/mars-control-plane/data</Config>
+  <Config Name="Database URL" Target="DATABASE_URL" Default="postgres://mars:change-me@db.example:5432/mars" Description="External PostgreSQL connection URL." Type="Variable" Display="always" Required="true" Mask="true">postgres://mars:change-me@db.example:5432/mars</Config>
 </Container>

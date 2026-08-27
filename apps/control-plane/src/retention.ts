@@ -1,6 +1,6 @@
 import { readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { Sql } from "@whitesmith/db";
+import type { Sql } from "@mars/db";
 type RetentionConfig = {
   sessions: number;
   webhooksCompleted: number;
@@ -15,7 +15,7 @@ type RetentionConfig = {
 };
 
 const days = (name: string, fallback: number): number => {
-  const value = Number(Bun.env[`WHITESMITH_RETENTION_${name}_DAYS`] ?? fallback);
+  const value = Number(Bun.env[`MARS_RETENTION_${name}_DAYS`] ?? fallback);
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 };
 
@@ -36,7 +36,7 @@ export function retentionConfig(): RetentionConfig {
 
 
 async function pruneDiagnosticFiles(daysToKeep: number): Promise<number> {
-  const root = Bun.env.WHITESMITH_DIAGNOSTICS_ROOT ?? join(Bun.env.DATA_ROOT ?? "/var/lib/whitesmith", "diagnostics");
+  const root = Bun.env.MARS_DIAGNOSTICS_ROOT ?? join(Bun.env.DATA_ROOT ?? "/var/lib/mars", "diagnostics");
   const cutoff = Date.now() - daysToKeep * 24 * 60 * 60 * 1_000;
   let removed = 0;
   for (const worker of await readdir(root, { withFileTypes: true }).catch(() => [])) {

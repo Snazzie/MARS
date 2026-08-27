@@ -36,7 +36,7 @@ while IFS= read -r image; do
   [[ "$image" != "$TARGET" ]] || { print -u2 "target already exists: $TARGET"; exit 1; }
 done < <(tart list --source local --quiet)
 
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/whitesmith-image.XXXXXX")"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mars-image.XXXXXX")"
 RUNNER_ARCHIVE="$TMP_DIR/actions-runner.tar.gz"
 MANIFEST="$TMP_DIR/image-manifest.json"
 RUN_PID=""
@@ -61,7 +61,7 @@ JOB_AGENT_SHA256="$(shasum -a 256 "$JOB_AGENT" | cut -d ' ' -f 1)"
 printf '{"jobAgentSha256":"%s","runnerArchiveSha256":"%s","runnerVersion":"%s","source":"%s"}\n' \
   "$JOB_AGENT_SHA256" "$RUNNER_SHA256" "$RUNNER_VERSION" "$SOURCE" > "$MANIFEST"
 MANIFEST_SHA256="$(shasum -a 256 "$MANIFEST" | cut -d ' ' -f 1)"
-LOGICAL_DIGEST="whitesmith-macos-job@sha256:${MANIFEST_SHA256}"
+LOGICAL_DIGEST="mars-macos-job@sha256:${MANIFEST_SHA256}"
 
 tart clone "$SOURCE" "$TARGET"
 CREATED=1
@@ -77,15 +77,15 @@ done
 (( READY == 1 )) || { print -u2 "timed out waiting for prepared image"; exit 1; }
 
 tart exec "$TARGET" /bin/test ! -e /opt/actions-runner
-tart exec -i "$TARGET" /bin/zsh -c 'set -euo pipefail; rm -rf /tmp/whitesmith-actions-runner; mkdir -p /tmp/whitesmith-actions-runner; /usr/bin/tar -xzf - -C /tmp/whitesmith-actions-runner' < "$RUNNER_ARCHIVE"
-tart exec -i "$TARGET" /bin/zsh -c 'set -euo pipefail; umask 077; /bin/cat > /tmp/whitesmith-job-agent' < "$JOB_AGENT"
-tart exec -i "$TARGET" /bin/zsh -c 'set -euo pipefail; umask 077; /bin/cat > /tmp/whitesmith-image-manifest.json' < "$MANIFEST"
-tart exec "$TARGET" /usr/bin/sudo /bin/mkdir -p /opt /etc/whitesmith /usr/local/bin
-tart exec "$TARGET" /usr/bin/sudo /bin/mv /tmp/whitesmith-actions-runner /opt/actions-runner
-tart exec "$TARGET" /usr/bin/sudo /usr/bin/install -m 0755 /tmp/whitesmith-job-agent /usr/local/bin/whitesmith-job-agent
-tart exec "$TARGET" /usr/bin/sudo /usr/bin/install -m 0644 /tmp/whitesmith-image-manifest.json /etc/whitesmith/image-manifest.json
+tart exec -i "$TARGET" /bin/zsh -c 'set -euo pipefail; rm -rf /tmp/mars-actions-runner; mkdir -p /tmp/mars-actions-runner; /usr/bin/tar -xzf - -C /tmp/mars-actions-runner' < "$RUNNER_ARCHIVE"
+tart exec -i "$TARGET" /bin/zsh -c 'set -euo pipefail; umask 077; /bin/cat > /tmp/mars-job-agent' < "$JOB_AGENT"
+tart exec -i "$TARGET" /bin/zsh -c 'set -euo pipefail; umask 077; /bin/cat > /tmp/mars-image-manifest.json' < "$MANIFEST"
+tart exec "$TARGET" /usr/bin/sudo /bin/mkdir -p /opt /etc/mars /usr/local/bin
+tart exec "$TARGET" /usr/bin/sudo /bin/mv /tmp/mars-actions-runner /opt/actions-runner
+tart exec "$TARGET" /usr/bin/sudo /usr/bin/install -m 0755 /tmp/mars-job-agent /usr/local/bin/mars-job-agent
+tart exec "$TARGET" /usr/bin/sudo /usr/bin/install -m 0644 /tmp/mars-image-manifest.json /etc/mars/image-manifest.json
 tart exec "$TARGET" /bin/test -x /opt/actions-runner/run.sh
-tart exec "$TARGET" /bin/test -x /usr/local/bin/whitesmith-job-agent
+tart exec "$TARGET" /bin/test -x /usr/local/bin/mars-job-agent
 tart exec "$TARGET" /opt/actions-runner/bin/Runner.Listener --version | while IFS= read -r version; do
   [[ "$version" == "$RUNNER_VERSION" ]] || { print -u2 "unexpected Actions Runner version"; exit 1; }
 done
@@ -95,5 +95,5 @@ wait "$RUN_PID" >/dev/null 2>&1 || true
 RUN_PID=""
 SUCCEEDED=1
 
-print -r -- "WHITESMITH_TART_BASE_IMAGE=$TARGET"
-print -r -- "WHITESMITH_TART_IMAGE_DIGEST=$LOGICAL_DIGEST"
+print -r -- "MARS_TART_BASE_IMAGE=$TARGET"
+print -r -- "MARS_TART_IMAGE_DIGEST=$LOGICAL_DIGEST"

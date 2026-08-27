@@ -1,6 +1,6 @@
-import type { DatabaseClient } from "@whitesmith/db";
-import { reserveRoutingSlot } from "@whitesmith/db";
-import { PoolResources as PoolResourcesSchema, RuntimeDriverName, type PoolResources as PoolResourcesValue, type RuntimeDriverName as RuntimeDriverNameValue, type RunnerJitConfig, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
+import type { DatabaseClient } from "@mars/db";
+import { reserveRoutingSlot } from "@mars/db";
+import { PoolResources as PoolResourcesSchema, RuntimeDriverName, type PoolResources as PoolResourcesValue, type RuntimeDriverName as RuntimeDriverNameValue, type RunnerJitConfig, type LeaseBootstrapEnvelope } from "@mars/contracts";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { dispatchLeaseBootstrap } from "./lease-dispatch.ts";

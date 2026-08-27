@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { jsonParameter, persistJobResourceSample, recordJobTimingSnapshot, applyWorkerCacheTelemetry, type DatabaseClient, type JobTimingSnapshotInput } from "@whitesmith/db";
-import { WorkerEvent, WorkerEventPayload, WorkerCacheTelemetry } from "@whitesmith/contracts";
+import { jsonParameter, persistJobResourceSample, recordJobTimingSnapshot, applyWorkerCacheTelemetry, type DatabaseClient, type JobTimingSnapshotInput } from "@mars/db";
+import { WorkerEvent, WorkerEventPayload, WorkerCacheTelemetry } from "@mars/contracts";
 import type { AuthenticatedWorkerSocket, WorkerCommandDispatcher } from "./worker-dispatch.ts";
 export type TimingBoundaryInputs = {
   queuedAt: string;
@@ -38,7 +38,7 @@ export function aggregateResourceSamples(samples: Array<{ occurredAt: string; cp
 }
 
 async function persistDiagnosticChunk(workerId: string, payload: { diagnosticId: string; sequence: number; content: string }): Promise<void> {
-  const root = Bun.env.WHITESMITH_DIAGNOSTICS_ROOT ?? join(Bun.env.DATA_ROOT ?? "/var/lib/whitesmith", "diagnostics");
+  const root = Bun.env.MARS_DIAGNOSTICS_ROOT ?? join(Bun.env.DATA_ROOT ?? "/var/lib/mars", "diagnostics");
   const directory = join(root, workerId, payload.diagnosticId);
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, `${String(payload.sequence).padStart(8, "0")}.log`), payload.content, { encoding: "utf8", flag: "wx" });

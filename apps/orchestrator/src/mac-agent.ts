@@ -3,7 +3,7 @@ import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { statfsSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
-import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerDoctorData, WorkerEvent, type LeaseBootstrapEnvelope, type WorkerCacheProxy, type WorkerCapacityData } from "@whitesmith/contracts";
+import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerDoctorData, WorkerEvent, type LeaseBootstrapEnvelope, type WorkerCacheProxy, type WorkerCapacityData } from "@mars/contracts";
 import type { Lease, RuntimeLease } from "./runtime.ts";
 import { createTartVmRuntime, TartVmDriver } from "./tart.ts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
@@ -198,7 +198,7 @@ function capacity(): WorkerCapacityData {
   };
 }
 async function macMachineUuid(): Promise<string> {
-  if (Bun.env.WHITESMITH_MACHINE_UUID) return Bun.env.WHITESMITH_MACHINE_UUID.toLowerCase();
+  if (Bun.env.MARS_MACHINE_UUID) return Bun.env.MARS_MACHINE_UUID.toLowerCase();
   const process = Bun.spawn(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"], { stdout: "pipe", stderr: "pipe" });
   const output = await new Response(process.stdout).text();
   if (await process.exited !== 0) throw new Error(`could not read macOS machine UUID: ${await new Response(process.stderr).text()}`);
@@ -211,12 +211,12 @@ async function currentMacDoctor(): Promise<WorkerDoctorData> {
   const probe = tart.exitCode === 0;
   let egress = false;
   try {
-    const response = await fetch("https://api.github.com/meta", { signal: AbortSignal.timeout(5_000), headers: { "user-agent": "whitesmith-worker-doctor" } });
+    const response = await fetch("https://api.github.com/meta", { signal: AbortSignal.timeout(5_000), headers: { "user-agent": "mars-worker-doctor" } });
     egress = response.ok;
   } catch {
     egress = false;
   }
-  const artifactDigest = Bun.env.WHITESMITH_TART_IMAGE_DIGEST ?? Bun.env.WHITESMITH_TART_BASE_IMAGE;
+  const artifactDigest = Bun.env.MARS_TART_IMAGE_DIGEST ?? Bun.env.MARS_TART_BASE_IMAGE;
   const immutableArtifact = typeof artifactDigest === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactDigest);
   const failures = [!probe && "Tart runtime probe failed", !egress && "GitHub egress probe failed", !immutableArtifact && "Immutable Tart image digest is missing"].filter(Boolean);
   return WorkerDoctorData.parse({ runtimeMode: "tart", artifactSource: "registry", ...(immutableArtifact ? { artifactDigest, artifactIdentity: artifactDigest } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
@@ -229,7 +229,7 @@ async function currentMacWorkerJoinPayload(code: string, publicKey: string, encr
     publicKey,
     encryptionPublicKey,
     machineUuid,
-    vmUuid: (Bun.env.WHITESMITH_VM_UUID ?? machineUuid).toLowerCase(),
+    vmUuid: (Bun.env.MARS_VM_UUID ?? machineUuid).toLowerCase(),
     doctor: { ...await currentMacDoctor(), ...resources },
     capacity: resources,
   })) as MacWorkerJoinPayload;
@@ -237,14 +237,14 @@ async function currentMacWorkerJoinPayload(code: string, publicKey: string, encr
 function validateControlPlaneUrl(baseUrl: string): URL {
   const url = new URL(baseUrl);
   const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
-  const allowInsecureHttp = Bun.env.WHITESMITH_ALLOW_INSECURE_HTTP === "true";
+  const allowInsecureHttp = Bun.env.MARS_ALLOW_INSECURE_HTTP === "true";
   if (url.protocol !== "https:" && !(loopback && url.protocol === "http:") && !allowInsecureHttp) throw new Error("control plane must use HTTPS (TLS 1.3) except explicit localhost development");
   return url;
 }
 type MacWorkerIdentity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string; preserveLeases?: boolean };
 
 function identityFilePath(): string {
-  return Bun.env.WHITESMITH_WORKER_IDENTITY_FILE ?? `${Bun.env.HOME ?? "."}/Library/Application Support/Whitesmith/worker-identity.json`;
+  return Bun.env.MARS_WORKER_IDENTITY_FILE ?? `${Bun.env.HOME ?? "."}/Library/Application Support/Mars/worker-identity.json`;
 }
 export function parseMacWorkerIdentity(value: unknown): MacWorkerIdentity {
   if (!value || typeof value !== "object") throw new Error("worker identity is invalid");
@@ -278,7 +278,7 @@ async function enrollMacWorker(controlPlane: URL, identity: MacWorkerIdentity): 
     if (typeof joined.workerId !== "string" || !joined.workerId) throw new Error("worker join response missing workerId");
     const enrolled = { ...identity, workerId: joined.workerId };
     await saveMacWorkerIdentity(enrolled);
-    if (Bun.env.WHITESMITH_JOIN_CODE_FILE) await unlink(Bun.env.WHITESMITH_JOIN_CODE_FILE).catch(() => {});
+    if (Bun.env.MARS_JOIN_CODE_FILE) await unlink(Bun.env.MARS_JOIN_CODE_FILE).catch(() => {});
     return enrolled;
   } finally { codeBytes.fill(0); }
 }
@@ -357,7 +357,7 @@ export async function runMacWorker(baseUrl: string, limits: MacWorkerLimits, cac
   const controlPlane = validateControlPlaneUrl(baseUrl);
   const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: cache.ttlSeconds });
   try {
-    const driver = new TartVmDriver(createTartVmRuntime(), Bun.env.WHITESMITH_TART_BASE_IMAGE ?? "whitesmith-macos-worker", "whitesmith-job", limits, Bun.env.WHITESMITH_TART_IMAGE_DIGEST ?? Bun.env.WHITESMITH_TART_BASE_IMAGE ?? "whitesmith-macos-worker");
+    const driver = new TartVmDriver(createTartVmRuntime(), Bun.env.MARS_TART_BASE_IMAGE ?? "mars-macos-worker", "mars-job", limits, Bun.env.MARS_TART_IMAGE_DIGEST ?? Bun.env.MARS_TART_BASE_IMAGE ?? "mars-macos-worker");
     const existing = await loadMacWorkerIdentity();
     const identity = existing ?? await enrollMacWorker(controlPlane, { workerId: "", ...createKeyPair() });
     return await connectMacWorker(controlPlane, identity, driver, limits, cache, cacheService);
@@ -365,5 +365,5 @@ export async function runMacWorker(baseUrl: string, limits: MacWorkerLimits, cac
     await cacheService.close();
   }
 }
-if (import.meta.main && Bun.argv[2] === "mac-worker") { const baseUrl = Bun.env.WHITESMITH_CONTROL_PLANE_URL; if (!baseUrl) throw new Error("WHITESMITH_CONTROL_PLANE_URL is required"); await runMacWorker(baseUrl, { maxVcpuPerPod: Number(Bun.env.MAX_VCPU_PER_POD ?? 2), maxMemoryBytesPerPod: Number(Bun.env.MAX_MEMORY_BYTES_PER_POD ?? 4 * 1024 ** 3), maxStorageBytesPerPod: Number(Bun.env.MAX_STORAGE_BYTES_PER_POD ?? 20 * 1024 ** 3), maxConcurrentPods: Number(Bun.env.MAX_CONCURRENT_PODS ?? 1) }); }
-if (import.meta.main && Bun.argv[2] === "join") { const platform = Bun.argv[3]; if (platform !== "macos-arm64" && platform !== "windows-x64") throw new Error("unsupported join platform"); const baseUrl = Bun.env.WHITESMITH_CONTROL_PLANE_URL; if (!baseUrl) throw new Error("WHITESMITH_CONTROL_PLANE_URL is required"); await runWorkerJoin(platform, baseUrl); }
+if (import.meta.main && Bun.argv[2] === "mac-worker") { const baseUrl = Bun.env.MARS_CONTROL_PLANE_URL; if (!baseUrl) throw new Error("MARS_CONTROL_PLANE_URL is required"); await runMacWorker(baseUrl, { maxVcpuPerPod: Number(Bun.env.MAX_VCPU_PER_POD ?? 2), maxMemoryBytesPerPod: Number(Bun.env.MAX_MEMORY_BYTES_PER_POD ?? 4 * 1024 ** 3), maxStorageBytesPerPod: Number(Bun.env.MAX_STORAGE_BYTES_PER_POD ?? 20 * 1024 ** 3), maxConcurrentPods: Number(Bun.env.MAX_CONCURRENT_PODS ?? 1) }); }
+if (import.meta.main && Bun.argv[2] === "join") { const platform = Bun.argv[3]; if (platform !== "macos-arm64" && platform !== "windows-x64") throw new Error("unsupported join platform"); const baseUrl = Bun.env.MARS_CONTROL_PLANE_URL; if (!baseUrl) throw new Error("MARS_CONTROL_PLANE_URL is required"); await runWorkerJoin(platform, baseUrl); }

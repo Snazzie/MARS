@@ -12,8 +12,8 @@ Implemented pending worker approval UI and focused tests.
 
 ## Verification
 - `bun test apps/web/src/components/PendingWorkerRequests.test.tsx` — 2 passed.
-- `bun run --filter '@whitesmith/web' typecheck` — passed.
-- `bun run --filter '@whitesmith/control-plane' typecheck` — passed.
+- `bun run --filter '@mars/web' typecheck` — passed.
+- `bun run --filter '@mars/control-plane' typecheck` — passed.
 
 ## Machine identity follow-up
 

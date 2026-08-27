@@ -235,7 +235,7 @@ Run:
 
 ```bash
 bun test apps/web/src/components/EnrollmentPanel.test.ts apps/web/src/routes/OnboardingPage.test.tsx apps/web/src/routes/WorkersPage.test.tsx apps/web/src/components/PendingWorkerRequests.test.tsx
-bun run --filter @whitesmith/web typecheck
+bun run --filter @mars/web typecheck
 ```
 
 Expected: all tests pass and TypeScript exits 0.
@@ -268,7 +268,7 @@ Run:
 
 ```bash
 bun test apps/web/src/components/EnrollmentPanel.test.ts apps/web/src/routes/OnboardingPage.test.tsx apps/web/src/routes/WorkersPage.test.tsx apps/web/src/components/PendingWorkerRequests.test.tsx
-bun run --filter @whitesmith/web typecheck
+bun run --filter @mars/web typecheck
 git diff --check
 git push origin main
 ```

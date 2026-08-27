@@ -143,8 +143,8 @@ Run:
 
 ```bash
 bun test packages/db/src/schema.test.ts packages/db/src/dashboard.test.ts tests/dashboard-contracts.test.ts
-bun run --filter '@whitesmith/contracts' typecheck
-bun run --filter '@whitesmith/db' typecheck
+bun run --filter '@mars/contracts' typecheck
+bun run --filter '@mars/db' typecheck
 ```
 
 Expected: all commands pass.
@@ -289,7 +289,7 @@ Run:
 
 ```bash
 bun test apps/control-plane/src/worker-requests.persistence.test.ts apps/control-plane/src/worker-requests.ack.test.ts
-bun run --filter '@whitesmith/control-plane' typecheck
+bun run --filter '@mars/control-plane' typecheck
 ```
 
 Expected: all commands pass.
@@ -436,7 +436,7 @@ Run:
 
 ```bash
 bun test apps/control-plane/src/worker-configuration-reconcile.test.ts apps/control-plane/src/worker-connection.test.ts apps/control-plane/src/worker-requests.ack.test.ts apps/control-plane/src/scheduler.test.ts apps/control-plane/src/job-reconciler.test.ts
-bun run --filter '@whitesmith/control-plane' typecheck
+bun run --filter '@mars/control-plane' typecheck
 ```
 
 Expected: all commands pass.
@@ -571,8 +571,8 @@ Run:
 
 ```bash
 bun test apps/web/src/components/WorkerCard.test.tsx apps/web/src/routes/WorkersPage.test.tsx apps/web/src/components/PendingWorkerRequests.test.tsx
-bun run --filter '@whitesmith/web' typecheck
-bun run --filter '@whitesmith/web' build
+bun run --filter '@mars/web' typecheck
+bun run --filter '@mars/web' build
 ```
 
 Expected: all commands pass.
@@ -610,12 +610,12 @@ Expected: all tests pass.
 Run:
 
 ```bash
-bun run --filter '@whitesmith/contracts' typecheck
-bun run --filter '@whitesmith/db' typecheck
-bun run --filter '@whitesmith/control-plane' typecheck
-bun run --filter '@whitesmith/orchestrator' typecheck
-bun run --filter '@whitesmith/web' typecheck
-bun run --filter '@whitesmith/web' build
+bun run --filter '@mars/contracts' typecheck
+bun run --filter '@mars/db' typecheck
+bun run --filter '@mars/control-plane' typecheck
+bun run --filter '@mars/orchestrator' typecheck
+bun run --filter '@mars/web' typecheck
+bun run --filter '@mars/web' build
 ```
 
 Expected: all commands pass.
@@ -625,11 +625,11 @@ Expected: all commands pass.
 With the local worker configured for 10 vCPU, 10 GiB memory, 30 GiB storage, and concurrency 3:
 
 1. Record the Workers page showing `Configuration updated` and its acknowledgement time.
-2. Restart the `WhitesmithWorker` Windows service.
+2. Restart the `MarsWorker` Windows service.
 3. Observe the control-plane row change to `applying` and one current-revision `worker.configure` command enter `pending` or `sent`.
 4. Observe the exact acknowledgement change the row to `ready`, make desired/applied revisions equal, and advance `configuration_applied_at` beyond the process restart time.
 5. Browser-drive `/workers` and verify `Applying configuration…` transitions to `Configuration updated` with the new timestamp, with no uncaught console error or failed same-origin request.
-6. Dispatch or rerun a workflow requesting `whitesmith-windows-x64`, `10VCPU`, and `10G`; verify the lease advances beyond `reserved`, an ephemeral GitHub runner becomes online, and the worker log does not contain `resource ceiling exceeded` for that lease.
+6. Dispatch or rerun a workflow requesting `mars-windows-x64`, `10VCPU`, and `10G`; verify the lease advances beyond `reserved`, an ephemeral GitHub runner becomes online, and the worker log does not contain `resource ceiling exceeded` for that lease.
 
 - [ ] **Step 4: Check the final diff and commit any verification-driven correction**
 

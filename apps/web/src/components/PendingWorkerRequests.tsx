@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { PendingWorkerRequestData } from "@whitesmith/contracts";
+import type { PendingWorkerRequestData } from "@mars/contracts";
 import { ApiRequestError, getPendingWorkerRequests, isUnauthorized, rejectPendingWorker } from "../api.ts";
 import { QueryState } from "./StateView.tsx";
 import { WorkerConfigurationForm } from "./WorkerConfigurationForm.tsx";

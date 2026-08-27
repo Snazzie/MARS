@@ -2,7 +2,7 @@
 
 ## Goal
 
-Run Windows workers with concurrent Windows and Linux guests using Hyper-V Gen 2 virtual machines. Use downloaded vendor VMs as source artifacts, derive sealed Whitesmith templates, and never depend on Docker engine mode switching.
+Run Windows workers with concurrent Windows and Linux guests using Hyper-V Gen 2 virtual machines. Use downloaded vendor VMs as source artifacts, derive sealed Mars templates, and never depend on Docker engine mode switching.
 
 ## Image supply chain
 
@@ -11,7 +11,7 @@ Vendor images are inputs, not production job images:
 - Microsoft Windows 11 Enterprise Evaluation Hyper-V Gen 2 VHDX for `windows-x64`.
 - Official Ubuntu Hyper-V/cloud image for `linux-x64`.
 
-Each source download is verified against a configured SHA-256 and recorded in a manifest with source URL, publisher/version, and source digest. A temporary VM is created to install the Whitesmith guest service and compiled job agent, configure automatic startup and readiness signaling, remove users, credentials, machine identity, keys, logs, caches, and runner registration, then generalize where supported. The VM is shut down, compacted, sealed, and hashed.
+Each source download is verified against a configured SHA-256 and recorded in a manifest with source URL, publisher/version, and source digest. A temporary VM is created to install the Mars guest service and compiled job agent, configure automatic startup and readiness signaling, remove users, credentials, machine identity, keys, logs, caches, and runner registration, then generalize where supported. The VM is shut down, compacted, sealed, and hashed.
 
 The sealed-template manifest records:
 

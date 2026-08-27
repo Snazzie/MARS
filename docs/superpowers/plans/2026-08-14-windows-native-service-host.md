@@ -26,7 +26,7 @@
 
 **Interfaces:**
 - Consumes: command line `<orchestrator.exe> windows-worker`
-- Produces: `dist/whitesmith-service-host.exe`
+- Produces: `dist/mars-service-host.exe`
 
 - [ ] Write unit tests for Windows command-line quoting and exit-code mapping.
 - [ ] Run `cargo test --manifest-path apps/windows-service-host/Cargo.toml` and observe failure before implementation.
@@ -64,7 +64,7 @@
 - Modify: `tests/installer-arguments.test.ts`
 
 **Interfaces:**
-- Consumes: native host launches `whitesmith-orchestrator.exe windows-worker`
+- Consumes: native host launches `mars-orchestrator.exe windows-worker`
 - Produces: one ordinary Windows worker entrypoint
 
 - [ ] Add a failing assertion that `--service` and `runWindowsWorkerService` are absent.

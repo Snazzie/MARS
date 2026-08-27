@@ -15,7 +15,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\upgrade-worker.ps1
 The command MUST:
 
 1. Require an elevated PowerShell session.
-2. Require the existing `WhitesmithWorker` service and `C:\ProgramData\Whitesmith\worker-identity.json`.
+2. Require the existing `MarsWorker` service and `C:\ProgramData\Mars\worker-identity.json`.
 3. Require the operator to drain the worker and wait for zero active leases before execution.
 4. Download the current Windows worker installer and build inputs from the control plane.
 5. Rebuild and verify the configured local Windows job image before replacing the service.

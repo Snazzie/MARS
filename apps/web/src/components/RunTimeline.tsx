@@ -1,4 +1,4 @@
-import type { RunJob, RunStage } from "@whitesmith/contracts";
+import type { RunJob, RunStage } from "@mars/contracts";
 
 const stages: RunStage[] = ["queued", "allocating", "sandbox_ready", "agent_call_home", "runner_online", "running", "completed", "reaping", "reaped"];
 const labels: Record<RunStage, string> = { queued: "Queued", allocating: "Allocating", sandbox_ready: "Sandbox ready", agent_call_home: "Agent call-home", runner_online: "Runner online", running: "Running", completed: "Completed", failed: "Failed", reaping: "Reaping", reaped: "Reaped" };

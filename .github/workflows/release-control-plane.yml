@@ -27,13 +27,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Embed Windows worker release metadata
         env:
-          BASE_IMAGE: ${{ vars.WHITESMITH_WINDOWS_CONTAINER_BASE_IMAGE }}
-          RUNNER_URL: ${{ vars.WHITESMITH_WINDOWS_CONTAINER_RUNNER_URL }}
-          RUNNER_SHA256: ${{ vars.WHITESMITH_WINDOWS_CONTAINER_RUNNER_SHA256 }}
-          GIT_URL: ${{ vars.WHITESMITH_WINDOWS_CONTAINER_GIT_URL }}
-          GIT_SHA256: ${{ vars.WHITESMITH_WINDOWS_CONTAINER_GIT_SHA256 }}
-          VC_URL: ${{ vars.WHITESMITH_WINDOWS_CONTAINER_VC_URL }}
-          VC_SHA256: ${{ vars.WHITESMITH_WINDOWS_CONTAINER_VC_SHA256 }}
+          BASE_IMAGE: ${{ vars.MARS_WINDOWS_CONTAINER_BASE_IMAGE }}
+          RUNNER_URL: ${{ vars.MARS_WINDOWS_CONTAINER_RUNNER_URL }}
+          RUNNER_SHA256: ${{ vars.MARS_WINDOWS_CONTAINER_RUNNER_SHA256 }}
+          GIT_URL: ${{ vars.MARS_WINDOWS_CONTAINER_GIT_URL }}
+          GIT_SHA256: ${{ vars.MARS_WINDOWS_CONTAINER_GIT_SHA256 }}
+          VC_URL: ${{ vars.MARS_WINDOWS_CONTAINER_VC_URL }}
+          VC_SHA256: ${{ vars.MARS_WINDOWS_CONTAINER_VC_SHA256 }}
         run: |
           test -n "$BASE_IMAGE" -a -n "$RUNNER_URL" -a -n "$RUNNER_SHA256" -a -n "$GIT_URL" -a -n "$GIT_SHA256" -a -n "$VC_URL" -a -n "$VC_SHA256"
           jq -n \
@@ -59,7 +59,7 @@ jobs:
           context: .
           file: deploy/control-plane/Dockerfile
           build-args: |
-            WHITESMITH_BUILD_ID=${{ github.sha }}
+            MARS_BUILD_ID=${{ github.sha }}
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
@@ -72,7 +72,7 @@ jobs:
         run: |
           test -n "$DIGEST"
           case "$DIGEST" in sha256:????????????????????????????????????????????????????????????????) ;; *) echo "Invalid digest: $DIGEST" >&2; exit 1 ;; esac
-          docker run --rm --entrypoint /bin/sh "$IMAGE@$DIGEST" -c 'test -f /app/index.js && test -f /app/web/index.html && test -f /app/web/index.js && test -f /app/web/index.css && test -f /app/migrations/0000_legacy_baseline.sql && test -f /app/migrations/meta/_journal.json && test -f /app/workers/install-worker.ps1 && test -f /app/workers/whitesmith-orchestrator.exe && test -f /app/workers/whitesmith-service-host.exe'
+          docker run --rm --entrypoint /bin/sh "$IMAGE@$DIGEST" -c 'test -f /app/index.js && test -f /app/web/index.html && test -f /app/web/index.js && test -f /app/web/index.css && test -f /app/migrations/0000_legacy_baseline.sql && test -f /app/migrations/meta/_journal.json && test -f /app/workers/install-worker.ps1 && test -f /app/workers/mars-orchestrator.exe && test -f /app/workers/mars-service-host.exe'
       - name: Smoke test immutable release image
         env:
           IMAGE: ghcr.io/snazzie/mars/control-plane@${{ steps.image.outputs.digest }}

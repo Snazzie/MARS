@@ -27,7 +27,7 @@ export function buildInstallerCommand(installer: string, audience: RuntimePlatfo
     url.searchParams.set("runtime", windowsRuntime);
     const codeArg = code ? ` -Code ${quotePowerShell(code)}` : "";
     const insecureArg = protocol === "http" ? " -AllowInsecureHttp" : "";
-    return `$whitesmithInstaller = Join-Path $env:TEMP ("whitesmith-installer-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${protocol}'${tls} --output $whitesmithInstaller '${url}'\n  if ($LASTEXITCODE -ne 0) { throw "Installer download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $whitesmithInstaller -WindowsRuntime ${quotePowerShell(windowsRuntime)}${windowsRuntime === "container" ? " -AllowLocalContainerImage" : ""}${codeArg}${insecureArg}\n} finally {\n  Remove-Item -Force -ErrorAction SilentlyContinue $whitesmithInstaller\n}`;
+    return `$marsInstaller = Join-Path $env:TEMP ("mars-installer-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${protocol}'${tls} --output $marsInstaller '${url}'\n  if ($LASTEXITCODE -ne 0) { throw "Installer download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $marsInstaller -WindowsRuntime ${quotePowerShell(windowsRuntime)}${windowsRuntime === "container" ? " -AllowLocalContainerImage" : ""}${codeArg}${insecureArg}\n} finally {\n  Remove-Item -Force -ErrorAction SilentlyContinue $marsInstaller\n}`;
   }
   const shell = audience === "macos-arm64" ? "zsh" : "bash";
   const codeArg = code ? ` -- --code ${quoteShell(code)}` : "";

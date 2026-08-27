@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import type { DashboardWorkerCacheEntry, WorkerDetail } from "@whitesmith/contracts";
+import type { DashboardWorkerCacheEntry, WorkerDetail } from "@mars/contracts";
 import { getWorkerCache, setWorkerLeasePreservation } from "../api.ts";
 import { Button } from "@astryxdesign/core/Button";
 import { WorkerActions } from "./WorkerActions.tsx";

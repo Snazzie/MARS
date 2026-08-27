@@ -1,4 +1,4 @@
-import type { DatabaseClient } from "@whitesmith/db";
+import type { DatabaseClient } from "@mars/db";
 import type { AuthenticatedWorkerSocket, WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { reconcileWorkerConfigurationOnConnect } from "./worker-requests.ts";
 

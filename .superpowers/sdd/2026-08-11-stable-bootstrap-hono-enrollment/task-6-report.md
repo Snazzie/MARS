@@ -10,5 +10,5 @@ Implemented show-once bootstrap command generation and enrollment UI.
 
 Verification:
 - `bun test apps/control-plane/src/http/app.test.ts apps/web/src/components/EnrollmentWizard.test.ts` — 12 passed.
-- `bun run --filter '@whitesmith/control-plane' typecheck` — passed.
-- `bun run --filter '@whitesmith/web' typecheck` — passed.
+- `bun run --filter '@mars/control-plane' typecheck` — passed.
+- `bun run --filter '@mars/web' typecheck` — passed.

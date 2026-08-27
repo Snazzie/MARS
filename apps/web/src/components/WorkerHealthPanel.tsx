@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { WorkerDetail, WorkerHealth } from "@whitesmith/contracts";
+import type { WorkerDetail, WorkerHealth } from "@mars/contracts";
 
 const STALE_AFTER_SECONDS = 300;
 

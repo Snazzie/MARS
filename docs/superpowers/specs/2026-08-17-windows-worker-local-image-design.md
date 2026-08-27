@@ -20,7 +20,7 @@ The control plane injects these trusted, immutable build inputs into the Windows
 - HTTPS VC++ redistributable URL and SHA-256;
 - local job-agent executable endpoint, downloaded from the control plane and hash-checked by HTTPS transport plus the existing artifact endpoint behavior.
 
-The installer creates a restricted staging directory under `C:\ProgramData\Whitesmith\image-build`. URLs must be HTTPS; every downloaded file is verified against its injected SHA-256 before Docker receives it. The base image is pulled by its exact digest.
+The installer creates a restricted staging directory under `C:\ProgramData\Mars\image-build`. URLs must be HTTPS; every downloaded file is verified against its injected SHA-256 before Docker receives it. The base image is pulled by its exact digest.
 
 ### Build and cache
 
@@ -29,12 +29,12 @@ The installer creates a restricted staging directory under `C:\ProgramData\White
 1. validate Docker Windows engine, Containers feature, and Hyper-V;
 2. download or refresh the four external inputs and the job agent;
 3. verify all hashes and exact base-image syntax;
-4. build `whitesmith/windows-job:local` with the existing `Containerfile` and staged `verify-runtime.ps1`;
+4. build `mars/windows-job:local` with the existing `Containerfile` and staged `verify-runtime.ps1`;
 5. run the verifier in a Hyper-V container with `-RequireNetwork`;
 6. require exit code zero, Media Foundation, DNS, and TCP/443 success;
-7. inspect the image ID and write `C:\ProgramData\Whitesmith\windows-job-image.json` atomically;
+7. inspect the image ID and write `C:\ProgramData\Mars\windows-job-image.json` atomically;
 8. remove the previous local image only after the new manifest is complete;
-9. register the worker service with `WHITESMITH_WINDOWS_CONTAINER_IMAGE=whitesmith/windows-job:local` and local-image mode enabled.
+9. register the worker service with `MARS_WINDOWS_CONTAINER_IMAGE=mars/windows-job:local` and local-image mode enabled.
 
 The manifest contains the base digest, artifact hashes, image ID, verifier result, build timestamp, and schema version. A failed build leaves the existing service and cached image untouched. A first install fails closed without registering a worker service.
 
@@ -57,7 +57,7 @@ The worker installer route adds configuration for the build inputs and emits a l
 - manifest write failure: do not replace the service environment;
 - stale or missing manifest at worker startup: worker doctor reports not ready and the runtime rejects leases.
 
-All temporary containers have Whitesmith ownership labels and are removed in `finally` blocks.
+All temporary containers have Mars ownership labels and are removed in `finally` blocks.
 
 ## Testing
 

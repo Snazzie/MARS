@@ -4,8 +4,8 @@ import viteConfig from "./vite.config.ts";
 
 function devEntryHook(): IndexHtmlTransformHook {
   const config = viteConfig as UserConfig;
-  const plugin = (config.plugins as Plugin[]).find((candidate) => candidate.name === "whitesmith-dev-entry");
-  if (!plugin?.transformIndexHtml) throw new Error("whitesmith-dev-entry plugin is missing");
+  const plugin = (config.plugins as Plugin[]).find((candidate) => candidate.name === "mars-dev-entry");
+  if (!plugin?.transformIndexHtml) throw new Error("mars-dev-entry plugin is missing");
   return plugin.transformIndexHtml;
 }
 

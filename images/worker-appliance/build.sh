@@ -9,15 +9,15 @@ set -euo pipefail
 command -v virt-customize >/dev/null
 command -v qemu-img >/dev/null
 command -v cosign >/dev/null
-name=${1:-whitesmith-worker}
+name=${1:-mars-worker}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 curl --fail --location --output "$work/base.qcow2" "$UBUNTU_QCOW2_URL"
 echo "$UBUNTU_QCOW2_SHA256  $work/base.qcow2" | sha256sum --check --status
 curl --fail --location --output "$work/runner.tgz" "$RUNNER_ARCHIVE_URL"
 echo "$RUNNER_ARCHIVE_SHA256  $work/runner.tgz" | sha256sum --check --status
-cp "$JOB_AGENT_BINARY" "$work/whitesmith-job-agent"
-virt-customize -a "$work/base.qcow2" --install ca-certificates,curl --mkdir /opt/actions-runner --copy-in "$work/runner.tgz:/opt/actions-runner" --copy-in "$work/whitesmith-job-agent:/usr/local/bin" --run-command 'useradd --system --create-home whitesmith || true' --run-command 'rm -rf /var/lib/cloud/instances/* /etc/ssh/ssh_host_* /var/log/*.log /var/cache/apt/*' --run-command 'truncate -s 0 /etc/machine-id' --run-command 'systemctl disable ssh || true'
+cp "$JOB_AGENT_BINARY" "$work/mars-job-agent"
+virt-customize -a "$work/base.qcow2" --install ca-certificates,curl --mkdir /opt/actions-runner --copy-in "$work/runner.tgz:/opt/actions-runner" --copy-in "$work/mars-job-agent:/usr/local/bin" --run-command 'useradd --system --create-home mars || true' --run-command 'rm -rf /var/lib/cloud/instances/* /etc/ssh/ssh_host_* /var/log/*.log /var/cache/apt/*' --run-command 'truncate -s 0 /etc/machine-id' --run-command 'systemctl disable ssh || true'
 qemu-img check "$work/base.qcow2"
 mkdir -p dist
 cp "$work/base.qcow2" "dist/$name.qcow2"

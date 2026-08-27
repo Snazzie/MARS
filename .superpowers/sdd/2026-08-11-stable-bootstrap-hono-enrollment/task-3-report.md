@@ -12,7 +12,7 @@ Implemented and hardened stable worker bootstrap enrollment.
 
 Verification:
 - `bun test apps/control-plane/src/worker-bootstrap.test.ts apps/control-plane/src/dashboard-api.test.ts` — 9 pass, 0 fail, 28 expects.
-- `bun run --filter '@whitesmith/db' typecheck` — pass.
-- `bun run --filter '@whitesmith/control-plane' typecheck` — pass.
+- `bun run --filter '@mars/db' typecheck` — pass.
+- `bun run --filter '@mars/control-plane' typecheck` — pass.
 
 No broad validation was run.

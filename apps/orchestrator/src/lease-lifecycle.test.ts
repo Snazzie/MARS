@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { LeaseBootstrapEnvelope, WorkerCommand, WorkerEvent } from "@whitesmith/contracts";
+import type { LeaseBootstrapEnvelope, WorkerCommand, WorkerEvent } from "@mars/contracts";
 import { initialMemoryPressureState, runLeaseLifecycle, updateMemoryPressure } from "./lease-lifecycle.ts";
 
 const command = { version: 1, id: "33333333-3333-4333-8333-333333333333", type: "windows-container.create_lease", workerId: "11111111-1111-4111-8111-111111111111", leaseId: "22222222-2222-4222-8222-222222222222", occurredAt: new Date().toISOString(), payload: {} } satisfies WorkerCommand;

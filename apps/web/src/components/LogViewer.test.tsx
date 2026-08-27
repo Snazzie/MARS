@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { Window } from "happy-dom";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
-import type { RunJob, RunStep } from "@whitesmith/contracts";
+import type { RunJob, RunStep } from "@mars/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LogViewer, countLogLines, deriveStepDuration, filterLoadedLogChunks, normalizeStepResult, stepDurationPercent, stepLogEmptyMessage, stepMatchesSearch } from "./LogViewer.tsx";
 

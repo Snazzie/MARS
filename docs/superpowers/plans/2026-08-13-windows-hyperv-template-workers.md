@@ -4,7 +4,7 @@
 
 **Goal:** Replace the Windows Docker-container worker with a native Hyper-V Gen 2 worker that runs concurrent Windows and Linux guests from verified, sealed vendor-derived VHDX templates.
 
-**Architecture:** Downloaded Microsoft Windows and official Ubuntu images are verified source inputs. An operator preparation workflow installs the Whitesmith guest service/job agent, removes state, generalizes and seals each image, then publishes a digest-pinned template manifest. Windows workers cache and verify those templates, create per-lease differencing disks and Gen 2 VMs, transfer encrypted bootstrap data through Guest Service Interface, and route leases by guest platform.
+**Architecture:** Downloaded Microsoft Windows and official Ubuntu images are verified source inputs. An operator preparation workflow installs the Mars guest service/job agent, removes state, generalizes and seals each image, then publishes a digest-pinned template manifest. Windows workers cache and verify those templates, create per-lease differencing disks and Gen 2 VMs, transfer encrypted bootstrap data through Guest Service Interface, and route leases by guest platform.
 
 **Tech Stack:** Bun/TypeScript, Zod contracts, PostgreSQL migrations, Hono HTTP routes, React/TypeScript UI, PowerShell, Hyper-V PowerShell cmdlets, Windows service integration.
 
@@ -40,7 +40,7 @@
 
 - [ ] **Step 1: Identify and remove Docker-only changes from the current working tree**
   - Retain guest-platform contract changes that are still required.
-  - Remove `WHITESMITH_WINDOWS_CONTAINER_*` configuration, Docker image bundle routes, Docker image preparation scripts, and local generated bundle artifacts.
+  - Remove `MARS_WINDOWS_CONTAINER_*` configuration, Docker image bundle routes, Docker image preparation scripts, and local generated bundle artifacts.
   - Do not remove the existing guest-platform persistence or UI work if it is independent of Docker.
 - [ ] **Step 2: Update focused tests to assert Hyper-V template behavior instead of Docker behavior**
 - [ ] **Step 3: Run the focused tests and confirm Docker assumptions fail before replacement**
@@ -308,7 +308,7 @@
 - [ ] **Step 1: Run all targeted contract, routing, runtime, installer, and guest-agent tests**
   - Run: `bun test packages/contracts/src/*.test.ts apps/orchestrator/src/hyperv.test.ts apps/orchestrator/src/windows-agent.test.ts apps/control-plane/src/http/worker-routes.test.ts apps/control-plane/src/lease-dispatch.test.ts tests/installer-arguments.test.ts`
 - [ ] **Step 2: Run package typechecks**
-  - Run: `bun run --filter @whitesmith/contracts typecheck && bun run --filter @whitesmith/control-plane typecheck && bun run --filter @whitesmith/orchestrator typecheck && bun run --filter @whitesmith/web typecheck`
+  - Run: `bun run --filter @mars/contracts typecheck && bun run --filter @mars/control-plane typecheck && bun run --filter @mars/orchestrator typecheck && bun run --filter @mars/web typecheck`
 - [ ] **Step 3: Run control-plane smoke verification**
   - Launch PostgreSQL and the control plane, fetch a manifest fixture, verify authenticated artifact streaming, and exercise Windows/Linux routing through the fake Hyper-V adapter.
 - [ ] **Step 4: Run PowerShell syntax verification**

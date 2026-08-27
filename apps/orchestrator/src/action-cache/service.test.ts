@@ -13,7 +13,7 @@ afterEach(async () => {
   await Promise.all(services.splice(0).map((service) => service.close().catch(() => undefined)));
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })));
 });
-async function root(): Promise<string> { const value = await mkdtemp(join(tmpdir(), "whitesmith-cache-service-")); roots.push(value); return value; }
+async function root(): Promise<string> { const value = await mkdtemp(join(tmpdir(), "mars-cache-service-")); roots.push(value); return value; }
 const leaseExpiry = (milliseconds = 60 * 60 * 1000): string => new Date(Date.now() + milliseconds).toISOString();
 
 function connectProxy(proxyUrl: string): Promise<string> {
@@ -101,18 +101,18 @@ function requestHttps(origin: string, ca: string, input: { method: string; path:
 
 test("requires paired, credential-free HTTP(S) advertise overrides on one hostname", () => {
   expect(resolveActionCacheNetworkConfiguration({})).toMatchObject({ proxyPort: 8788, dataPort: 8789, overrideOrigins: null });
-  expect(resolveActionCacheNetworkConfiguration({ WHITESMITH_CACHE_PROXY_PORT: "9000", WHITESMITH_CACHE_DATA_PORT: "9001", WHITESMITH_CACHE_PROXY_URL: "http://cache.example.test:80", WHITESMITH_CACHE_ADVERTISE_URL: "https://cache.example.test:443" })).toMatchObject({ proxyPort: 9000, dataPort: 9001, overrideOrigins: { proxyOrigin: "http://cache.example.test", cacheBaseUrl: "https://cache.example.test" } });
+  expect(resolveActionCacheNetworkConfiguration({ MARS_CACHE_PROXY_PORT: "9000", MARS_CACHE_DATA_PORT: "9001", MARS_CACHE_PROXY_URL: "http://cache.example.test:80", MARS_CACHE_ADVERTISE_URL: "https://cache.example.test:443" })).toMatchObject({ proxyPort: 9000, dataPort: 9001, overrideOrigins: { proxyOrigin: "http://cache.example.test", cacheBaseUrl: "https://cache.example.test" } });
   for (const env of [
-    { WHITESMITH_CACHE_PROXY_URL: "http://cache.example.test" },
-    { WHITESMITH_CACHE_ADVERTISE_URL: "https://cache.example.test" },
-    { WHITESMITH_CACHE_PROXY_URL: "https://cache.example.test", WHITESMITH_CACHE_ADVERTISE_URL: "https://cache.example.test" },
-    { WHITESMITH_CACHE_PROXY_URL: "http://cache.example.test/path", WHITESMITH_CACHE_ADVERTISE_URL: "https://cache.example.test" },
-    { WHITESMITH_CACHE_PROXY_URL: "http://user@cache.example.test", WHITESMITH_CACHE_ADVERTISE_URL: "https://cache.example.test" },
-    { WHITESMITH_CACHE_PROXY_URL: "http://cache.example.test", WHITESMITH_CACHE_ADVERTISE_URL: "https://other.example.test" },
-    { WHITESMITH_CACHE_PROXY_PORT: "0" },
-    { WHITESMITH_CACHE_DATA_PORT: "65536" },
-    { WHITESMITH_CACHE_PROXY_URL: "http://cache.example.test:0", WHITESMITH_CACHE_ADVERTISE_URL: "https://cache.example.test" },
-    { WHITESMITH_CACHE_PROXY_URL: "http://cache.example.test", WHITESMITH_CACHE_ADVERTISE_URL: "https://cache.example.test:0" },
+    { MARS_CACHE_PROXY_URL: "http://cache.example.test" },
+    { MARS_CACHE_ADVERTISE_URL: "https://cache.example.test" },
+    { MARS_CACHE_PROXY_URL: "https://cache.example.test", MARS_CACHE_ADVERTISE_URL: "https://cache.example.test" },
+    { MARS_CACHE_PROXY_URL: "http://cache.example.test/path", MARS_CACHE_ADVERTISE_URL: "https://cache.example.test" },
+    { MARS_CACHE_PROXY_URL: "http://user@cache.example.test", MARS_CACHE_ADVERTISE_URL: "https://cache.example.test" },
+    { MARS_CACHE_PROXY_URL: "http://cache.example.test", MARS_CACHE_ADVERTISE_URL: "https://other.example.test" },
+    { MARS_CACHE_PROXY_PORT: "0" },
+    { MARS_CACHE_DATA_PORT: "65536" },
+    { MARS_CACHE_PROXY_URL: "http://cache.example.test:0", MARS_CACHE_ADVERTISE_URL: "https://cache.example.test" },
+    { MARS_CACHE_PROXY_URL: "http://cache.example.test", MARS_CACHE_ADVERTISE_URL: "https://cache.example.test:0" },
   ]) expect(() => resolveActionCacheNetworkConfiguration(env)).toThrow();
 });
 

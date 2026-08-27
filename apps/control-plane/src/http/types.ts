@@ -1,4 +1,4 @@
-import type { DashboardDb } from "@whitesmith/db";
+import type { DashboardDb } from "@mars/db";
 import type { SessionUser, SecretBox } from "../auth.ts";
 import type { ControlPlaneSetup } from "../control-plane-setup.ts";
 import type { RequestLimiter } from "../worker-requests.ts";

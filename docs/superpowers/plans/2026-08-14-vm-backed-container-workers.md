@@ -17,8 +17,8 @@
 - Runtime sockets, host credentials, arbitrary host paths, host namespaces, host devices, and privileged mode must never enter a job sandbox.
 - The encoded JIT configuration must not appear in command arguments, logs, labels, diagnostics, or runtime object names.
 - One sandbox executes at most one lease and is never reused.
-- Owned runtime objects carry `whitesmith.managed=true` and `whitesmith.lease-id=<uuid>` labels.
-- Orphan reconciliation may remove only objects carrying both Whitesmith ownership labels.
+- Owned runtime objects carry `mars.managed=true` and `mars.lease-id=<uuid>` labels.
+- Orphan reconciliation may remove only objects carrying both Mars ownership labels.
 - Pre-pulled Windows sandboxes must become runner-ready within 15 seconds before production cutover.
 - Warm containers are outside scope unless the measured, optimized image misses the startup gate.
 - The existing Tart macOS path remains unchanged.
@@ -52,7 +52,7 @@
 **Interfaces:**
 - Produces: `runGuestService(platform, bootstrapPath, runnerRoot, completionMode: "shutdown" | "exit"): Promise<void>`.
 - Produces CLI option: `guest-service --completion-mode shutdown|exit`; default remains `shutdown` until the full-VM path is removed.
-- Consumes: built `apps/job-agent/dist/whitesmith-job-agent.exe`, a GitHub Actions Runner Windows x64 archive, and a digest-pinned Microsoft Server Core base image.
+- Consumes: built `apps/job-agent/dist/mars-job-agent.exe`, a GitHub Actions Runner Windows x64 archive, and a digest-pinned Microsoft Server Core base image.
 - Produces: `build-windows-container-image.ps1 -BaseImage <repo@sha256> -RunnerArchive <path> -RunnerSha256 <hex> -JobAgent <path> -Image <registry/repository:tag>`; prints the pushed `repository@sha256:<hex>` reference as its final stdout line.
 
 - [ ] **Step 1: Write failing container-completion tests**
@@ -94,7 +94,7 @@ describe("Windows job image contract", () => {
     expect(script).toContain("Get-FileHash");
     expect(script).toContain("docker push");
     expect(script).toContain("RepoDigests");
-    expect(containerfile).toContain("whitesmith-job-agent.exe");
+    expect(containerfile).toContain("mars-job-agent.exe");
     expect(containerfile).toContain("entrypoint.ps1");
   });
 });
@@ -112,8 +112,8 @@ Use an exec-style PowerShell process, select container completion explicitly, an
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$bootstrap = 'C:\ProgramData\Whitesmith\bootstrap\bootstrap.json'
-$agent = 'C:\Whitesmith\whitesmith-job-agent.exe'
+$bootstrap = 'C:\ProgramData\Mars\bootstrap\bootstrap.json'
+$agent = 'C:\Mars\mars-job-agent.exe'
 & $agent guest-service --platform windows-x64 --completion-mode exit --bootstrap-file $bootstrap --runner-root C:\actions-runner
 exit $LASTEXITCODE
 ```
@@ -129,9 +129,9 @@ SHELL ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
 WORKDIR C:/actions-runner
 COPY runner.zip C:/temp/runner.zip
 RUN Expand-Archive C:/temp/runner.zip C:/actions-runner; Remove-Item C:/temp/runner.zip
-COPY whitesmith-job-agent.exe C:/Whitesmith/whitesmith-job-agent.exe
-COPY entrypoint.ps1 C:/Whitesmith/entrypoint.ps1
-ENTRYPOINT ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", "C:\\Whitesmith\\entrypoint.ps1"]
+COPY mars-job-agent.exe C:/Mars/mars-job-agent.exe
+COPY entrypoint.ps1 C:/Mars/entrypoint.ps1
+ENTRYPOINT ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", "C:\\Mars\\entrypoint.ps1"]
 ```
 
 - [ ] **Step 8: Implement the build script**
@@ -201,10 +201,10 @@ For every iteration:
 ```powershell
 docker create --name $name `
   --isolation=hyperv `
-  --label whitesmith.managed=true `
-  --label "whitesmith.lease-id=$leaseId" `
+  --label mars.managed=true `
+  --label "mars.lease-id=$leaseId" `
   --cpus 1 --memory 2GB `
-  --mount "type=bind,source=$leaseDir,target=C:\ProgramData\Whitesmith\bootstrap,readonly" `
+  --mount "type=bind,source=$leaseDir,target=C:\ProgramData\Mars\bootstrap,readonly" `
   $Image | Out-Null
 docker start $name | Out-Null
 ```
@@ -213,7 +213,7 @@ Inspect `.HostConfig.Isolation`, wait for a marker emitted only after the job ag
 
 - [ ] **Step 5: Add destructive cleanup verification**
 
-Start one sandbox with a blocking synthetic workload, force-remove it, delete the lease directory, and assert that `docker ps -a --filter label=whitesmith.lease-id=<id> --format '{{.ID}}'` returns no IDs.
+Start one sandbox with a blocking synthetic workload, force-remove it, delete the lease directory, and assert that `docker ps -a --filter label=mars.lease-id=<id> --format '{{.ID}}'` returns no IDs.
 
 - [ ] **Step 6: Execute the actual host gate**
 
@@ -411,7 +411,7 @@ Create the sandbox with `--isolation=hyperv`, lease labels, CPU/memory/storage l
 
 - [ ] **Step 6: Implement lifecycle and reconciliation**
 
-`stopLease` uses `docker stop --time 10`; `removeLease` uses `docker rm -f` and deletes lease material in `finally`. Reconciliation first lists `label=whitesmith.managed=true`, then inspects and removes only entries whose lease label parses as a UUID and whose name begins with the configured prefix.
+`stopLease` uses `docker stop --time 10`; `removeLease` uses `docker rm -f` and deletes lease material in `finally`. Reconciliation first lists `label=mars.managed=true`, then inspects and removes only entries whose lease label parses as a UUID and whose name begins with the configured prefix.
 
 - [ ] **Step 7: Verify and commit**
 
@@ -434,8 +434,8 @@ Commit: `feat: run Windows leases in Hyper-V containers`
 - Remove after verified cutover: `deploy/workers/prepare-windows-hyperv-template.ps1`
 
 **Interfaces:**
-- Consumes environment: `WHITESMITH_WINDOWS_CONTAINER_IMAGE`, `WHITESMITH_WINDOWS_CONTAINER_PREFIX`, `WHITESMITH_WINDOWS_CONTAINER_READY_TIMEOUT_MS`, and `WHITESMITH_WINDOWS_CONTAINER_JOB_TIMEOUT_MS`.
-- Removes active environment: `WHITESMITH_WINDOWS_TEMPLATE_PATH`, `WHITESMITH_WINDOWS_TEMPLATE_DIGEST`, and `WHITESMITH_HYPERV_VM_PREFIX`.
+- Consumes environment: `MARS_WINDOWS_CONTAINER_IMAGE`, `MARS_WINDOWS_CONTAINER_PREFIX`, `MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS`, and `MARS_WINDOWS_CONTAINER_JOB_TIMEOUT_MS`.
+- Removes active environment: `MARS_WINDOWS_TEMPLATE_PATH`, `MARS_WINDOWS_TEMPLATE_DIGEST`, and `MARS_HYPERV_VM_PREFIX`.
 
 - [ ] **Step 1: Change worker and installer tests first**
 
@@ -491,7 +491,7 @@ export type KubectlResult = { code: number; stdout: string; stderr: string };
 export type KubectlRunner = (args: string[], stdin?: string) => Promise<KubectlResult>;
 export type KataK3sConfig = {
   namespace: string;
-  runtimeClassName: "whitesmith-kata";
+  runtimeClassName: "mars-kata";
   image: string;
   prefix: string;
   limits: WorkerLimits;
@@ -502,7 +502,7 @@ export class KataK3sDriver implements RuntimeDriver;
 
 - [ ] **Step 1: Write manifest and lifecycle tests**
 
-Assert exact `runtimeClassName: whitesmith-kata`, digest image, CPU/memory requests and limits, `emptyDir.sizeLimit`, `automountServiceAccountToken: false`, RuntimeDefault seccomp, dropped capabilities, no host fields, no privileged flag, bootstrap Secret via stdin, completion exit code, and ownership-filtered cleanup.
+Assert exact `runtimeClassName: mars-kata`, digest image, CPU/memory requests and limits, `emptyDir.sizeLimit`, `automountServiceAccountToken: false`, RuntimeDefault seccomp, dropped capabilities, no host fields, no privileged flag, bootstrap Secret via stdin, completion exit code, and ownership-filtered cleanup.
 
 - [ ] **Step 2: Run tests and confirm the in-memory stub fails**
 
@@ -516,11 +516,11 @@ Use `kubectl apply -f -` with manifest JSON supplied through stdin. Never place 
 
 - [ ] **Step 4: Implement reserveCapacity**
 
-Verify the RuntimeClass exists and its handler is the configured Kata handler. Create a labeled probe Pod with `runtimeClassName: whitesmith-kata`, wait for success, inspect the resulting Pod spec and node, then delete it. Any missing class, scheduling fallback, or probe failure keeps the worker unready.
+Verify the RuntimeClass exists and its handler is the configured Kata handler. Create a labeled probe Pod with `runtimeClassName: mars-kata`, wait for success, inspect the resulting Pod spec and node, then delete it. Any missing class, scheduling fallback, or probe failure keeps the worker unready.
 
 - [ ] **Step 5: Implement per-lease Kubernetes objects**
 
-Apply one immutable Secret and one Pod. The Pod uses a disposable `emptyDir` work volume with `sizeLimit`, a read-only Secret volume, exact resource limits, no service-account token, and the two Whitesmith labels. The image entrypoint launches the job agent against `/var/lib/whitesmith/bootstrap/bootstrap.json`.
+Apply one immutable Secret and one Pod. The Pod uses a disposable `emptyDir` work volume with `sizeLimit`, a read-only Secret volume, exact resource limits, no service-account token, and the two Mars labels. The image entrypoint launches the job agent against `/var/lib/mars/bootstrap/bootstrap.json`.
 
 - [ ] **Step 6: Implement completion and cleanup**
 
@@ -533,10 +533,10 @@ Use a digest-pinned base and copy verified runner/job-agent inputs. The entrypoi
 ```sh
 #!/usr/bin/env sh
 set -eu
-exec /usr/local/bin/whitesmith-job-agent guest-service \
+exec /usr/local/bin/mars-job-agent guest-service \
   --platform linux-x64 \
   --completion-mode exit \
-  --bootstrap-file /var/lib/whitesmith/bootstrap/bootstrap.json \
+  --bootstrap-file /var/lib/mars/bootstrap/bootstrap.json \
   --runner-root /opt/actions-runner
 ```
 
@@ -560,7 +560,7 @@ Commit: `feat: run Linux leases with Kata`
 - Modify: `deploy/workers/prepare-linux-job-image.sh`
 
 **Interfaces:**
-- Consumes environment: `WHITESMITH_LINUX_CONTAINER_IMAGE`, `WHITESMITH_KATA_NAMESPACE`, `WHITESMITH_KATA_RUNTIME_CLASS=whitesmith-kata`, and `WHITESMITH_KATA_JOB_TIMEOUT_MS`.
+- Consumes environment: `MARS_LINUX_CONTAINER_IMAGE`, `MARS_KATA_NAMESPACE`, `MARS_KATA_RUNTIME_CLASS=mars-kata`, and `MARS_KATA_JOB_TIMEOUT_MS`.
 - Consumes command: `kata.create_lease` with the existing encrypted `LeaseBootstrapEnvelope`.
 
 - [ ] **Step 1: Write worker-loop tests**
@@ -579,7 +579,7 @@ Follow the existing authenticated worker protocol, construct `KataK3sDriver`, ru
 
 - [ ] **Step 4: Add Linux installer preflight**
 
-Require KVM, K3s/containerd, the `whitesmith-kata` RuntimeClass, the configured handler, exact image digest, egress, capacity, and a successful Kata probe. Install the worker service only after preflight succeeds.
+Require KVM, K3s/containerd, the `mars-kata` RuntimeClass, the configured handler, exact image digest, egress, capacity, and a successful Kata probe. Install the worker service only after preflight succeeds.
 
 - [ ] **Step 5: Replace VM-oriented image preparation**
 
@@ -609,7 +609,7 @@ Commit: `feat: connect Kata Linux workers`
 - Modify: `IMPLEMENTATION-STATUS.md`
 
 **Interfaces:**
-- Consumes: `--image <repository@sha256>`, `--runtime-class whitesmith-kata`, and `--namespace <name>`.
+- Consumes: `--image <repository@sha256>`, `--runtime-class mars-kata`, and `--namespace <name>`.
 - Produces JSON containing the runtime class, handler, guest-kernel evidence, runner-ready duration, job exit code, and cleanup result.
 
 - [ ] **Step 1: Add a failing proof-contract test**
@@ -641,7 +641,7 @@ Commit: `test: prove Kata Linux job isolation`
 - Modify: `IMPLEMENTATION-STATUS.md`
 
 **Interfaces:**
-- Workflow jobs use `runs-on: whitesmith-windows-x64` and `runs-on: whitesmith-linux-x64` without dependencies between them.
+- Workflow jobs use `runs-on: mars-windows-x64` and `runs-on: mars-linux-x64` without dependencies between them.
 - Smoke output records each job's runner start, first step, completion, sandbox ID, and cleanup time.
 
 - [ ] **Step 1: Add the two-job workflow**
@@ -651,12 +651,12 @@ name: Cross-platform smoke
 on: workflow_dispatch
 jobs:
   linux:
-    runs-on: whitesmith-linux-x64
+    runs-on: mars-linux-x64
     steps:
       - shell: bash
         run: echo "linux-start=$(date -u +%s)"; sleep 20; uname -a
   windows:
-    runs-on: whitesmith-windows-x64
+    runs-on: mars-windows-x64
     steps:
       - shell: pwsh
         run: Write-Output "windows-start=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"; Start-Sleep 20; cmd /c ver
@@ -664,7 +664,7 @@ jobs:
 
 - [ ] **Step 2: Implement the smoke verifier**
 
-Trigger the workflow, poll both jobs through the existing GitHub client conventions, and require overlapping `[startedAt, completedAt]` intervals. Query Whitesmith lease state and require both leases to reach reaped with distinct worker IDs and runtime instance IDs.
+Trigger the workflow, poll both jobs through the existing GitHub client conventions, and require overlapping `[startedAt, completedAt]` intervals. Query Mars lease state and require both leases to reach reaped with distinct worker IDs and runtime instance IDs.
 
 - [ ] **Step 3: Verify runtime cleanup**
 
@@ -720,7 +720,7 @@ Enable Windows, run one smoke, and re-drain on any failure. Then enable Linux an
 
 - [ ] **Step 5: Remove obsolete host artifacts**
 
-After successful production smoke, remove only Whitesmith-owned old Hyper-V disposable VMs, exported diagnostic checkpoint copies, VHDX templates, and obsolete service environment entries. Preserve the user's named Hyper-V checkpoint and source VM identified in `WINDOWS-WORKER-PROGRESS.md`.
+After successful production smoke, remove only Mars-owned old Hyper-V disposable VMs, exported diagnostic checkpoint copies, VHDX templates, and obsolete service environment entries. Preserve the user's named Hyper-V checkpoint and source VM identified in `WINDOWS-WORKER-PROGRESS.md`.
 
 - [ ] **Step 6: Commit and push final status**
 

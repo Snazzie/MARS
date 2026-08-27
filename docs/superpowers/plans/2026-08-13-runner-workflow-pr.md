@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let global administrators preview and submit a GitHub PR that replaces `runs-on` values in all or selected repository workflow files with the configured Whitesmith runner labels.
+**Goal:** Let global administrators preview and submit a GitHub PR that replaces `runs-on` values in all or selected repository workflow files with the configured Mars runner labels.
 
 **Architecture:** Add a focused workflow mutation module that discovers, parses, previews, and rewrites GitHub Actions workflow files. Extend `GitHubAppService` with installation-token repository operations and expose authenticated repository-scoped preview/create routes. Reuse one React modal from onboarding and the dashboard repositories page; the server recomputes and validates the preview before creating a branch, commit, and PR.
 
@@ -12,7 +12,7 @@
 
 - The action is available from onboarding and the dashboard repositories page.
 - The modal defaults to all eligible `.github/workflows/*.yml` and `.yaml` files and permits explicit file selection.
-- The modal lists each selected job's current `runs-on` and proposed Whitesmith labels before confirmation.
+- The modal lists each selected job's current `runs-on` and proposed Mars labels before confirmation.
 - Runner labels are server-derived from the configured repository pool; browsers cannot provide labels.
 - Only `runs-on` values change; unrelated workflow content stays unchanged.
 - Submission revalidates repository approval, selected paths, branch head, and file contents.
@@ -45,7 +45,7 @@ expect(discoverWorkflowFiles([
 expect(previewWorkflowMutation({
   files,
   selectedPaths: [".github/workflows/ci.yml"],
-  labels: ["self-hosted", "macos", "arm64", "whitesmith-default"],
+  labels: ["self-hosted", "macos", "arm64", "mars-default"],
 }).replacementCount).toBe(1);
 ```
 
@@ -100,11 +100,11 @@ Expected: FAIL because the new service methods are absent.
 
 - [ ] **Step 3: Implement authenticated GitHub operations**
 
-Reuse `getInstallationToken` and `gh`. Resolve the approved repository and installation from `dashboard_repositories`/`dashboard_installations`, derive labels from the repository's effective pool query, and reject missing approval/pool state. Read the default branch and current tree, fetch only workflow file blobs, then call the pure workflow module. On create, re-read the branch head and selected blobs, compare against `expectedHeadSha`, and stop before any write if stale or no-op. Generate a unique `whitesmith/use-runners-${random}` branch and standard commit/PR text; accept only optional title/body text from the caller.
+Reuse `getInstallationToken` and `gh`. Resolve the approved repository and installation from `dashboard_repositories`/`dashboard_installations`, derive labels from the repository's effective pool query, and reject missing approval/pool state. Read the default branch and current tree, fetch only workflow file blobs, then call the pure workflow module. On create, re-read the branch head and selected blobs, compare against `expectedHeadSha`, and stop before any write if stale or no-op. Generate a unique `mars/use-runners-${random}` branch and standard commit/PR text; accept only optional title/body text from the caller.
 
 - [ ] **Step 4: Run focused GitHub tests and typecheck**
 
-Run: `bun test apps/control-plane/src/github-app.test.ts && bun run --filter '@whitesmith/control-plane' typecheck`
+Run: `bun test apps/control-plane/src/github-app.test.ts && bun run --filter '@mars/control-plane' typecheck`
 
 Expected: PASS.
 
@@ -186,7 +186,7 @@ Use semantic dialog markup with labelled heading, close button, focus-visible co
 
 - [ ] **Step 3: Add repository-page entrypoint**
 
-Add a `Use Whitesmith runners` action to approved/available repository rows. Track the selected repository and render the shared modal. Invalidate the repository query after creation only if needed; show the PR URL directly.
+Add a `Use Mars runners` action to approved/available repository rows. Track the selected repository and render the shared modal. Invalidate the repository query after creation only if needed; show the PR URL directly.
 
 - [ ] **Step 4: Add onboarding entrypoint**
 

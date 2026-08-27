@@ -1,4 +1,4 @@
-import type { DatabaseClient } from "@whitesmith/db";
+import type { DatabaseClient } from "@mars/db";
 
 export type BrowserInvalidation = { organizationId: string; sequence: number; keys: string[]; occurredAt: string };
 

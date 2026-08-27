@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { WorkerDetail } from "@whitesmith/contracts";
+import type { WorkerDetail } from "@mars/contracts";
 import { getMe, getWorkers } from "../api.ts";
 import { EnrollmentPanel } from "../components/EnrollmentPanel.tsx";
 import { PendingWorkerRequests, pendingWorkerQueryOptions } from "../components/PendingWorkerRequests.tsx";

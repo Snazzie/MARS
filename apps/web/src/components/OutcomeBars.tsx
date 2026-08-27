@@ -5,7 +5,7 @@ import { Chart } from "@tanstack/charts/react";
 import { scaleBand } from "@tanstack/charts/scales/band";
 import { scaleLinear } from "@tanstack/charts/scales/linear";
 import { scaleOrdinal } from "@tanstack/charts/scales/ordinal";
-import type { OverviewDto } from "@whitesmith/contracts";
+import type { OverviewDto } from "@mars/contracts";
 
 type JobOutcome = NonNullable<OverviewDto["jobOutcomes"]>[number];
 type Platform = keyof JobOutcome["platforms"];

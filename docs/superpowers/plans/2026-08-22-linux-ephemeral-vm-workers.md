@@ -76,7 +76,7 @@ Produce `LibvirtVmProvider` with `validateHost`, `cloneLease`, `startLease`, `wa
 - [ ] Define/start the domain from a rendered XML template and require KVM acceleration.
 - [ ] Inject bootstrap through a one-use cloud-init/virtio channel; keep it out of argv and logs.
 - [ ] Implement bounded guest-ready/completion waits and unconditional stop/destroy/overlay cleanup.
-- [ ] Reconcile only `whitesmith.managed=true` domains and never delete unknown VMs.
+- [ ] Reconcile only `mars.managed=true` domains and never delete unknown VMs.
 - [ ] Run `bun test apps/orchestrator/src/libvirt-vm.test.ts`.
 - [ ] Commit the provider.
 
@@ -119,7 +119,7 @@ Produce `LibvirtVmProvider` with `validateHost`, `cloneLease`, `startLease`, `wa
 - [ ] Make installer preflight require `virsh`, `/dev/kvm`, x86_64, signed image bundle, and a usable libvirt network.
 - [ ] Generate fresh broker identity and avoid reusing guest machine identity across clones.
 - [ ] Register the broker as a service that survives host reboot without starting a job VM.
-- [ ] Add a safe uninstall/upgrade path that preserves the golden image and removes only Whitesmith-owned domains/overlays.
+- [ ] Add a safe uninstall/upgrade path that preserves the golden image and removes only Mars-owned domains/overlays.
 - [ ] Update installer contract tests for the new arguments and no K3s/Kata requirements.
 - [ ] Run focused installer tests.
 - [ ] Commit appliance and installer changes.
@@ -180,7 +180,7 @@ Produce `LibvirtVmProvider` with `validateHost`, `cloneLease`, `startLease`, `wa
 
 **Interfaces:**
 - Fake-host integration exercises the complete broker/guest lifecycle without libvirt.
-- Real smoke runs only when `WHITESMITH_LINUX_VM_E2E=1` and requires Unraid/libvirt/KVM, a signed golden disk, a deployed control plane, and a disposable GitHub repository.
+- Real smoke runs only when `MARS_LINUX_VM_E2E=1` and requires Unraid/libvirt/KVM, a signed golden disk, a deployed control plane, and a disposable GitHub repository.
 
 - [ ] Add fake end-to-end test: provision, ready, run one job, complete, destroy, reconcile.
 - [ ] Add failure tests for stale domains, missing overlays, guest timeout, and broker restart.
@@ -195,5 +195,5 @@ Produce `LibvirtVmProvider` with `validateHost`, `cloneLease`, `startLease`, `wa
 - `bun test apps/orchestrator/src/libvirt-vm.test.ts apps/orchestrator/src/linux-vm-broker.test.ts apps/job-agent/src/linux-guest.test.ts apps/control-plane/src/lease-dispatch.test.ts apps/control-plane/src/http/app.test.ts apps/control-plane/src/scheduler.test.ts`
 - `bun run typecheck`
 - `bun run build`
-- `WHITESMITH_LINUX_VM_E2E=1 bash tests/linux-libvirt-worker-smoke.sh` on an Unraid/libvirt host.
+- `MARS_LINUX_VM_E2E=1 bash tests/linux-libvirt-worker-smoke.sh` on an Unraid/libvirt host.
 - Acceptance requires a real one-job VM clone, runner completion, VM destruction, overlay deletion, and orphan reconciliation.

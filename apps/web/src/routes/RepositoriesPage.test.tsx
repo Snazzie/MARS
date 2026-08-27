@@ -34,8 +34,8 @@ test("repository table presents GitHub installation access without approval poli
   expect(html).toContain("acme/private");
   expect(html).toContain("Available");
   expect(html).toContain("Manage GitHub");
-  expect(html).toContain("Use Whitesmith runners");
-  expect(html).not.toContain("Whitesmith access");
+  expect(html).toContain("Use Mars runners");
+  expect(html).not.toContain("Mars access");
   expect(html).not.toContain("Approved");
   expect(html).not.toContain("Not approved");
   expect(html).not.toContain(">Remove<");
@@ -43,7 +43,7 @@ test("repository table presents GitHub installation access without approval poli
 
 test("available repositories enable workflow setup without a second authorization gate", () => {
   const html = markup();
-  const action = html.match(/<button[^>]*>Use Whitesmith runners<\/button>/)?.[0] ?? "";
+  const action = html.match(/<button[^>]*>Use Mars runners<\/button>/)?.[0] ?? "";
   expect(action).not.toContain("disabled");
   expect(html).not.toContain("acme/removed");
 });

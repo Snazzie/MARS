@@ -114,7 +114,7 @@ Use the repository's current schema-file migration convention in `packages/db/sr
 
 - [ ] **Step 4: Register 90-day retention**
 
-Extend the retention configuration with a timing-specific environment override named `WHITESMITH_RETENTION_JOB_TIMINGS_DAYS`, defaulting to `90`, and delete only rows whose jobs are terminal and whose `completed_at` is older than the cutoff. Use bounded batches and report deleted rows/failures using existing pruner telemetry.
+Extend the retention configuration with a timing-specific environment override named `MARS_RETENTION_JOB_TIMINGS_DAYS`, defaulting to `90`, and delete only rows whose jobs are terminal and whose `completed_at` is older than the cutoff. Use bounded batches and report deleted rows/failures using existing pruner telemetry.
 
 - [ ] **Step 5: Run focused schema tests**
 
@@ -482,7 +482,7 @@ Start the existing development stack through the repository’s documented comma
 
 - [ ] **Step 4: Run retention and replay checks**
 
-Run the retention test with the default and overridden `WHITESMITH_RETENTION_JOB_TIMINGS_DAYS`, then run the terminal replay integration test. Expected: old eligible snapshots are deleted in bounded batches and duplicate terminal events leave one snapshot.
+Run the retention test with the default and overridden `MARS_RETENTION_JOB_TIMINGS_DAYS`, then run the terminal replay integration test. Expected: old eligible snapshots are deleted in bounded batches and duplicate terminal events leave one snapshot.
 
 
 Do not commit generated build output or unrelated production-readiness changes.

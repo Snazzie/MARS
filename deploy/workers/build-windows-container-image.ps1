@@ -22,19 +22,19 @@ $actualGit = (Get-FileHash -LiteralPath $GitArchive -Algorithm SHA256).Hash
 if ($actualGit -ine $GitSha256) { throw "Git archive hash mismatch: expected $GitSha256, got $actualGit" }
 $actualVcRuntime = (Get-FileHash -LiteralPath $VcRuntimeInstaller -Algorithm SHA256).Hash
 if ($actualVcRuntime -ine $VcRuntimeSha256) { throw "VC runtime installer hash mismatch: expected $VcRuntimeSha256, got $actualVcRuntime" }
-$temp = Join-Path ([System.IO.Path]::GetTempPath()) ("whitesmith-windows-image-" + [guid]::NewGuid().ToString('N'))
+$temp = Join-Path ([System.IO.Path]::GetTempPath()) ("mars-windows-image-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $temp | Out-Null
 try {
   Copy-Item -LiteralPath $RunnerArchive -Destination (Join-Path $temp 'runner.zip')
   Copy-Item -LiteralPath $GitArchive -Destination (Join-Path $temp 'git.zip')
   Copy-Item -LiteralPath $VcRuntimeInstaller -Destination (Join-Path $temp 'vc_redist.x64.exe')
-  Copy-Item -LiteralPath $JobAgent -Destination (Join-Path $temp 'whitesmith-job-agent.exe')
+  Copy-Item -LiteralPath $JobAgent -Destination (Join-Path $temp 'mars-job-agent.exe')
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\..\images\jobs\windows\Containerfile') -Destination (Join-Path $temp 'Containerfile')
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\..\images\jobs\windows\entrypoint.ps1') -Destination (Join-Path $temp 'entrypoint.ps1')
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\..\images\jobs\windows\verify-runtime.ps1') -Destination (Join-Path $temp 'verify-runtime.ps1')
   & docker build --build-arg "BASE_IMAGE=$BaseImage" --tag $Image $temp
   if ($LASTEXITCODE -ne 0) { throw "docker build failed with exit code $LASTEXITCODE" }
-  $expectedEntrypoint = @('powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', 'C:/Whitesmith/entrypoint.ps1')
+  $expectedEntrypoint = @('powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', 'C:/Mars/entrypoint.ps1')
   $imageInspection = (& docker image inspect --format '{{json .}}' $Image | Select-Object -Last 1 | ConvertFrom-Json)
   $entrypointJson = ($imageInspection.Config.Entrypoint | ConvertTo-Json -Compress).Trim()
   if ($LASTEXITCODE -ne 0 -or $entrypointJson -ne ($expectedEntrypoint | ConvertTo-Json -Compress)) { throw 'Windows image entrypoint is invalid' }

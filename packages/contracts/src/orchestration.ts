@@ -101,7 +101,7 @@ export const LeaseLifecycleEvent = z.object({
 export type LeaseLifecycleEvent = z.infer<typeof LeaseLifecycleEvent>;
 const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/);
 const WindowsImageBuildArtifact = z.object({ url: z.string().url().refine((value) => value.startsWith("https://") || value.startsWith("http://localhost") || value.startsWith("http://127.0.0.1"), "build artifact URL must use HTTPS"), sha256: sha256Hex }).strict();
-export const WorkerImageBuildSpec = z.object({ image: z.literal("whitesmith/windows-job:local") }).strict();
+export const WorkerImageBuildSpec = z.object({ image: z.literal("mars/windows-job:local") }).strict();
 export const WorkerBuildImagePayload = WorkerImageBuildSpec.extend({
   buildId: z.string().uuid(),
   baseImage: z.string().regex(/^mcr\.microsoft\.com\/windows\/server:ltsc2025@sha256:[0-9a-f]{64}$/),

@@ -8,8 +8,8 @@ Let operators filter run history by runner ownership while preserving the curren
 
 `/runs` displays a three-option segmented toggle:
 
-- **All** — show Whitesmith and external runs. This is the default.
-- **Whitesmith** — show runs whose `allocationState` is `whitesmith`.
+- **All** — show Mars and external runs. This is the default.
+- **Mars** — show runs whose `allocationState` is `mars`.
 - **External** — show runs whose `allocationState` is `external`.
 
 The runner filter composes with the existing search and queued-time range filters. Empty results use the existing run-history empty state. The toggle exposes the selected option with `aria-pressed`.

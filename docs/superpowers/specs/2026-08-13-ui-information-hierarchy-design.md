@@ -1,4 +1,4 @@
-# Whitesmith UI Information Hierarchy and Responsive Design
+# Mars UI Information Hierarchy and Responsive Design
 
 ## Status
 
@@ -6,7 +6,7 @@ Approved direction; implementation pending written plan.
 
 ## Goal
 
-Reduce operator cognitive load without replacing Whitesmith's existing visual identity. The current interface is distinctive but exposes too many peer-level controls, raw infrastructure values, and ambiguous health signals. The redesign keeps the dark operator-console aesthetic, editorial typography, and existing route model while making the primary task on each surface obvious.
+Reduce operator cognitive load without replacing Mars's existing visual identity. The current interface is distinctive but exposes too many peer-level controls, raw infrastructure values, and ambiguous health signals. The redesign keeps the dark operator-console aesthetic, editorial typography, and existing route model while making the primary task on each surface obvious.
 
 ## Scope
 

@@ -341,4 +341,4 @@ git add apps/web/src/routes/RunDetailPage.tsx apps/web/src/routes/RunDetailPage.
 Run the focused behavioral suite above, then exercise a disposable Windows job whose memory usage crosses its configured limit. Verify both outcomes:
 
 1. Runner alive: GitHub receives a normal failed result with the bounded OOM diagnostic.
-2. Runner killed: GitHub may show runner loss, but Whitesmith job detail and timing history show `out_of_memory` with peak and configured bytes.
+2. Runner killed: GitHub may show runner loss, but Mars job detail and timing history show `out_of_memory` with peak and configured bytes.

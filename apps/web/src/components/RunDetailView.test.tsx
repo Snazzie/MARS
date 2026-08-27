@@ -4,14 +4,14 @@ import { Window } from "happy-dom";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { RunDetail } from "@whitesmith/contracts";
+import type { RunDetail } from "@mars/contracts";
 import { RunDetailView, formatResourceValue, runDetailFacts } from "./RunDetailView.tsx";
 
 const detail: RunDetail = {
   id: "run-1",
   organizationId: "org-1",
   repositoryId: "repo-1",
-  repositoryName: "acme/whitesmith",
+  repositoryName: "acme/mars",
   runNumber: 42,
   workflowName: "macos-smoke.yml",
   event: "workflow_dispatch",
@@ -31,7 +31,7 @@ const detail: RunDetail = {
     status: "completed",
     conclusion: "success",
     stage: "completed",
-    runnerName: "whitesmith-lease-1",
+    runnerName: "mars-lease-1",
     logsState: "pending",
     requested: { vcpu: 2, memoryBytes: 4_294_967_296, storageBytes: 10_737_418_240, concurrency: 3 },
     requestedLabels: ["self-hosted", "macos", "arm64"],
@@ -52,7 +52,7 @@ const renderView = (data = detail) => renderToStaticMarkup(
 );
 
 test("maps real run facts and names missing values explicitly", () => {
-  expect(runDetailFacts(detail).runner).toBe("whitesmith-lease-1");
+  expect(runDetailFacts(detail).runner).toBe("mars-lease-1");
   expect(runDetailFacts({ ...detail, startedAt: null, jobs: [{ ...detail.jobs[0], runnerName: null }] })).toMatchObject({
     started: "Not started",
     runner: "Awaiting runner",
@@ -67,12 +67,12 @@ test("renders only semantic Logs and Metrics tabs with complete run context", ()
   expect(markup).not.toContain("Network");
   expect(markup).not.toContain("Tests");
   expect(markup).toContain('aria-selected="true"');
-  expect(markup).toContain("acme/whitesmith");
+  expect(markup).toContain("acme/mars");
   expect(markup).toContain("Tart VM");
   expect(markup).toContain("main");
   expect(markup).toContain("acoop");
   expect(markup).toContain("commit abcdef012345");
-  expect(markup).toContain("whitesmith-lease-1");
+  expect(markup).toContain("mars-lease-1");
   expect(markup).toContain("self-hosted");
   expect(markup).toContain("macos");
   expect(markup).toContain("arm64");

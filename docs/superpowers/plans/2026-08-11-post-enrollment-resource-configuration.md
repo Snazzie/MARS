@@ -62,9 +62,9 @@ Expected: failures identify the required `limits` field and current payload pers
 
 ```bash
 bun test tests/contracts.test.ts apps/control-plane/src/worker-requests.test.ts
-bun run --filter '@whitesmith/contracts' typecheck
-bun run --filter '@whitesmith/control-plane' typecheck
-bun run --filter '@whitesmith/orchestrator' typecheck
+bun run --filter '@mars/contracts' typecheck
+bun run --filter '@mars/control-plane' typecheck
+bun run --filter '@mars/orchestrator' typecheck
 ```
 
 Expected: all focused tests and typechecks pass.
@@ -130,8 +130,8 @@ Expected: failures show missing command/event and configuration route behavior.
 
 ```bash
 bun test apps/control-plane/src/worker-dispatch.test.ts apps/control-plane/src/http/app.test.ts apps/control-plane/src/worker-requests.test.ts tests/worker-dispatch.test.ts
-bun run --filter '@whitesmith/control-plane' typecheck
-bun run --filter '@whitesmith/contracts' typecheck
+bun run --filter '@mars/control-plane' typecheck
+bun run --filter '@mars/contracts' typecheck
 ```
 
 Expected: command replay, acknowledgement, validation, and scheduling-gate tests pass.
@@ -187,7 +187,7 @@ Expected: failures identify missing post-enrollment form and API function.
 
 ```bash
 bun test apps/web/src/components/PendingWorkerRequests.test.tsx apps/web/src/routes/WorkersPage.test.tsx
-bun run --filter '@whitesmith/web' typecheck
+bun run --filter '@mars/web' typecheck
 ```
 
 Expected: UI behavior and typecheck pass.

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { Sql } from "@whitesmith/db";
+import type { Sql } from "@mars/db";
 import { reconcileWorkerConfigurationOnConnect } from "./worker-requests.ts";
 
 const desired = {

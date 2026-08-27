@@ -32,7 +32,7 @@ test("Windows cleanup targets only configured listeners and excludes its parent"
 });
 
 test("rejects a second live owner with the recorded PID", () => {
-  const repository = mkdtempSync(join(tmpdir(), "whitesmith-dev-test-"));
+  const repository = mkdtempSync(join(tmpdir(), "mars-dev-test-"));
   const first = acquireDevLock(repository, process.pid);
   try {
     expect(() => acquireDevLock(repository, process.pid + 1)).toThrow(`PID ${process.pid}`);
@@ -42,7 +42,7 @@ test("rejects a second live owner with the recorded PID", () => {
   }
 });
 test("reclaims a dead owner lock", () => {
-  const repository = mkdtempSync(join(tmpdir(), "whitesmith-dev-test-"));
+  const repository = mkdtempSync(join(tmpdir(), "mars-dev-test-"));
   const path = devLockPath(repository);
   mkdirSync(path);
   writeFileSync(join(path, "owner.json"), JSON.stringify({ pid: 999999999 }));
@@ -53,7 +53,7 @@ test("reclaims a dead owner lock", () => {
 });
 
 test("release cannot delete a lock reassigned to another PID", () => {
-  const repository = mkdtempSync(join(tmpdir(), "whitesmith-dev-test-"));
+  const repository = mkdtempSync(join(tmpdir(), "mars-dev-test-"));
   const lock = acquireDevLock(repository, process.pid);
   writeFileSync(join(lock.path, "owner.json"), JSON.stringify({ pid: process.pid + 1 }));
   lock.release();

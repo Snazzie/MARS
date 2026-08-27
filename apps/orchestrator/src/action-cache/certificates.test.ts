@@ -7,7 +7,7 @@ import { openActionCacheStore } from "./store.ts";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
-async function root(): Promise<string> { const value = await mkdtemp(join(tmpdir(), "whitesmith-cache-credentials-")); roots.push(value); return value; }
+async function root(): Promise<string> { const value = await mkdtemp(join(tmpdir(), "mars-cache-credentials-")); roots.push(value); return value; }
 
 test("persists a private worker CA at UUID-derived paths and signs short-lived host leaves", async () => {
   const cacheRoot = await root();

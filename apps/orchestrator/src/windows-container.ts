@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { PoolResources, WorkerLimits } from "@whitesmith/contracts";
+import type { PoolResources, WorkerLimits } from "@mars/contracts";
 import type { Lease, RuntimeDriver, RuntimeLease } from "./runtime.ts";
 import { validateResources } from "./runtime.ts";
 
@@ -9,8 +9,8 @@ export type DockerResult = { code: number; stdout: string; stderr: string };
 export type DockerRunner = (args: string[]) => Promise<DockerResult>;
 export type WindowsContainerConfig = { image: string; prefix: string; bootstrapRoot: string; limits: WorkerLimits; readyTimeoutMs: number; jobTimeoutMs: number; allowLocalImage?: boolean; imageManifestPath?: string; requireLocalImageManifest?: boolean };
 const digest = /^[^@\s]+@sha256:[0-9a-f]{64}$/;
-const localImage = "whitesmith/windows-job:local";
-const expectedWindowsEntrypoint = ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", "C:/Whitesmith/entrypoint.ps1"] as const;
+const localImage = "mars/windows-job:local";
+const expectedWindowsEntrypoint = ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", "C:/Mars/entrypoint.ps1"] as const;
 export function isExpectedWindowsEntrypoint(value: unknown): boolean {
   return Array.isArray(value) && value.length === expectedWindowsEntrypoint.length && expectedWindowsEntrypoint.every((entry, index) => value[index] === entry);
 }
@@ -104,7 +104,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
     await writeFile(join(root, "bootstrap.json"), JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig, ...(lease.workerCache ? { workerCache: lease.workerCache } : {}) }), { mode: 0o600, flag: "wx" });
     const name = this.containerName(lease.id);
     try {
-      checked(await this.docker(["create", "--name", name, "--log-driver", "json-file", "--log-opt", "max-size=50m", "--log-opt", "max-file=3", "--isolation=hyperv", "--label", "whitesmith.managed=true", "--label", `whitesmith.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), "--storage-opt", `size=${lease.resources.storageBytes}`, "--mount", `type=bind,source=${root},target=C:\\ProgramData\\Whitesmith\\bootstrap,readonly`, this.config.image]), "docker create");
+      checked(await this.docker(["create", "--name", name, "--log-driver", "json-file", "--log-opt", "max-size=50m", "--log-opt", "max-file=3", "--isolation=hyperv", "--label", "mars.managed=true", "--label", `mars.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), "--storage-opt", `size=${lease.resources.storageBytes}`, "--mount", `type=bind,source=${root},target=C:\\ProgramData\\Mars\\bootstrap,readonly`, this.config.image]), "docker create");
       checked(await this.docker(["start", name]), "docker start");
       const inspect = JSON.parse(checked(await this.docker(["inspect", name]), "docker inspect")) as Array<{ HostConfig?: { Isolation?: string; NanoCpus?: number; Memory?: number } }>;
       if (inspect[0]?.HostConfig?.Isolation?.toLowerCase() !== "hyperv") throw new Error("container isolation is not Hyper-V");
@@ -171,7 +171,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
     const [inspect, logs, workerLog] = await Promise.all([
       run(["inspect", name]),
       run(["logs", "--timestamps", name]),
-      run(["exec", name, "cmd.exe", "/c", "type", "C:\\ProgramData\\Whitesmith\\logs\\worker.log"]),
+      run(["exec", name, "cmd.exe", "/c", "type", "C:\\ProgramData\\Mars\\logs\\worker.log"]),
     ]);
     const runnerDiag = await copyRunnerDiagnostics(root, name, run);
     const bundle = [

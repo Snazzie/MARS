@@ -3,8 +3,8 @@ ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 SHELL ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue';"]
 RUN $feature = Install-WindowsFeature -Name Server-Media-Foundation; if (-not $feature.Success -or $feature.RestartNeeded -eq 'Yes') { throw "Server-Media-Foundation installation failed or requires restart: $($feature | ConvertTo-Json -Compress)" }
-COPY verify-runtime.ps1 C:/Whitesmith/verify-runtime.ps1
-RUN & C:/Whitesmith/verify-runtime.ps1 | Write-Output
+COPY verify-runtime.ps1 C:/Mars/verify-runtime.ps1
+RUN & C:/Mars/verify-runtime.ps1 | Write-Output
 WORKDIR C:/actions-runner
 COPY runner.zip C:/temp/runner.zip
 RUN Expand-Archive C:/temp/runner.zip C:/actions-runner; Remove-Item C:/temp/runner.zip
@@ -12,6 +12,6 @@ COPY git.zip C:/temp/git.zip
 RUN Expand-Archive C:/temp/git.zip C:/Git; Remove-Item C:/temp/git.zip; & C:/Git/cmd/git.exe config --system core.autocrlf false
 COPY vc_redist.x64.exe C:/temp/vc_redist.x64.exe
 RUN $process = Start-Process C:/temp/vc_redist.x64.exe -ArgumentList '/install','/quiet','/norestart' -Wait -PassThru; if ($process.ExitCode -notin 0,3010) { throw "VC runtime installer failed with exit code $($process.ExitCode)" }; Remove-Item C:/temp/vc_redist.x64.exe
-COPY whitesmith-job-agent.exe C:/Whitesmith/whitesmith-job-agent.exe
-COPY entrypoint.ps1 C:/Whitesmith/entrypoint.ps1
-ENTRYPOINT ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", "C:/Whitesmith/entrypoint.ps1"]
+COPY mars-job-agent.exe C:/Mars/mars-job-agent.exe
+COPY entrypoint.ps1 C:/Mars/entrypoint.ps1
+ENTRYPOINT ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", "C:/Mars/entrypoint.ps1"]

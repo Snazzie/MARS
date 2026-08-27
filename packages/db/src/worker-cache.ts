@@ -1,5 +1,5 @@
 import type { DatabaseClient } from "./index.ts";
-import type { DashboardWorkerCacheEntry, DashboardWorkerCachePage, WorkerCacheSummary } from "@whitesmith/contracts";
+import type { DashboardWorkerCacheEntry, DashboardWorkerCachePage, WorkerCacheSummary } from "@mars/contracts";
 
 type SqlDb = DatabaseClient;
 type CacheEntry = {

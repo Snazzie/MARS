@@ -22,7 +22,7 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 
-const SERVICE_NAME: &str = "WhitesmithWorker";
+const SERVICE_NAME: &str = "MarsWorker";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TerminationCause {
@@ -207,7 +207,7 @@ fn worker_command(args: &[OsString]) -> io::Result<(PathBuf, Vec<OsString>)> {
 
 fn log_path() -> PathBuf {
     PathBuf::from(env::var_os("ProgramData").unwrap_or_else(|| OsString::from(r"C:\ProgramData")))
-        .join("Whitesmith")
+        .join("Mars")
         .join("logs")
         .join("worker.log")
 }
@@ -309,7 +309,7 @@ fn log_host_error(error: &dyn std::fmt::Display) {
         let _ = fs::create_dir_all(parent);
     }
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "Whitesmith service host failed: {error}");
+        let _ = writeln!(file, "Mars service host failed: {error}");
     }
 }
 

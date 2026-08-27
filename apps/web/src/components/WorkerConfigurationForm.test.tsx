@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { WorkerCapacityData } from "@whitesmith/contracts";
+import type { WorkerCapacityData } from "@mars/contracts";
 import { WorkerConfigurationForm } from "./WorkerConfigurationForm.tsx";
 
 const capacity: WorkerCapacityData = {

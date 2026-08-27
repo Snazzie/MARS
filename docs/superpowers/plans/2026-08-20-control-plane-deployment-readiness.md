@@ -13,7 +13,7 @@
 - The core deployment must not require Cloudflare Tunnel.
 - Production images must use immutable `repository@sha256:<digest>` references.
 - The production image must run as the existing non-root `bun` user.
-- Preserve `/var/lib/whitesmith` and PostgreSQL persistent storage.
+- Preserve `/var/lib/mars` and PostgreSQL persistent storage.
 - Do not claim worker-runtime production readiness.
 - CI must fail on typecheck, test, build, image, or startup-smoke failures.
 - Do not put usable credentials in tracked files.
@@ -44,7 +44,7 @@
 
 - [ ] **Step 1: Add tests for immutable image and relative paths**
 
-Assert that the production service uses `@${WHITESMITH_RELEASE_DIGEST}` or an equivalent repository-plus-digest form, rejects `:sha256:` construction, and references `./app_master_key`, `./tunnel_token`, and `./cloudflared-wrapper.sh` relative to the Compose directory.
+Assert that the production service uses `@${MARS_RELEASE_DIGEST}` or an equivalent repository-plus-digest form, rejects `:sha256:` construction, and references `./app_master_key`, `./tunnel_token`, and `./cloudflared-wrapper.sh` relative to the Compose directory.
 
 - [ ] **Step 2: Add tests for required configuration documentation**
 
@@ -74,7 +74,7 @@ Expected: failures for files not yet created or corrected.
 - Modify: `tests/control-plane-deployment-contract.test.ts`
 
 **Interfaces:**
-- Compose consumes `WHITESMITH_RELEASE_DIGEST` as `sha256:<64 hex>` and renders `ghcr.io/whitesmith/control-plane@sha256:<64 hex>`.
+- Compose consumes `MARS_RELEASE_DIGEST` as `sha256:<64 hex>` and renders `ghcr.io/mars/control-plane@sha256:<64 hex>`.
 - Compose resolves secret and optional wrapper files from `deploy/control-plane/`.
 - `.env.example` supplies safe placeholders only.
 
@@ -141,7 +141,7 @@ State that users may run `cloudflared` separately and that no tunnel token is ne
 
 **Interfaces:**
 - CI builds the image on a Linux runner and verifies required runtime files.
-- Release workflow publishes to `ghcr.io/whitesmith/control-plane`, resolves the pushed digest, and emits release metadata.
+- Release workflow publishes to `ghcr.io/mars/control-plane`, resolves the pushed digest, and emits release metadata.
 - Smoke script exits nonzero unless the control plane reaches live and ready health endpoints with PostgreSQL.
 
 - [ ] **Step 1: Harden CI image validation**
@@ -161,7 +161,7 @@ In CI, start PostgreSQL with a temporary network, run the image with production-
 Trigger on a version tag and manual dispatch. Use `docker/login-action`, `docker/metadata-action`, and `docker/build-push-action` with `push: true`, `provenance: true`, and `sbom: true`. Capture the registry digest from metadata or inspect and write a release artifact containing:
 
 ```text
-image=ghcr.io/whitesmith/control-plane
+image=ghcr.io/mars/control-plane
  digest=sha256:<64 hex>
  build_id=<commit SHA or release tag>
 ```
@@ -215,7 +215,7 @@ bun run build
 docker compose -f deploy/control-plane/compose.yaml config
 ```
 
-Verify the output contains `ghcr.io/whitesmith/control-plane@sha256:...` and no nested `deploy/control-plane/deploy/control-plane` paths.
+Verify the output contains `ghcr.io/mars/control-plane@sha256:...` and no nested `deploy/control-plane/deploy/control-plane` paths.
 
 - [ ] **Step 7: Run Linux image and startup smoke**
 

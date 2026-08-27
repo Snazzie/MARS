@@ -2,16 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add an accessible All / Whitesmith / External toggle to `/runs`, defaulting to All and composing with existing run filters.
+**Goal:** Add an accessible All / Mars / External toggle to `/runs`, defaulting to All and composing with existing run filters.
 
 **Architecture:** Keep the feature client-side. `RunHistory` owns the selected runner filter and extends its pure `filterRuns` predicate with a `RunHistoryRunnerFilter` argument; `RunsPage` and API contracts remain unchanged. Render the control beside the existing search and time-range controls.
 
-**Tech Stack:** React, TypeScript, TanStack Query, Bun test, `@whitesmith/contracts`.
+**Tech Stack:** React, TypeScript, TanStack Query, Bun test, `@mars/contracts`.
 
 ## Global Constraints
 
 - Default runner filter is `all`.
-- `whitesmith` matches only `allocationState === "whitesmith"`.
+- `mars` matches only `allocationState === "mars"`.
 - `external` matches only `allocationState === "external"`.
 - Runner filtering composes with search and queued-time range filtering.
 - Toggle buttons use `aria-pressed` and existing run-history toolbar styling.
@@ -25,12 +25,12 @@
 - Modify: `apps/web/src/components/RunHistory.tsx`
 
 **Interfaces:**
-- Produces `RunHistoryRunnerFilter = "all" | "whitesmith" | "external"`.
+- Produces `RunHistoryRunnerFilter = "all" | "mars" | "external"`.
 - Extends `filterRuns(runs, search, range, nowMs, runnerFilter)` with a default-compatible runner filter argument.
 
 - [ ] **Step 1: Extend the pure filtering test fixture**
 
-In `apps/web/src/components/RunHistory.test.tsx`, add an external fixture using `allocationState: "external"` and a Whitesmith fixture using `allocationState: "whitesmith"`. Keep their timestamps within `NOW` so only runner ownership differs.
+In `apps/web/src/components/RunHistory.test.tsx`, add an external fixture using `allocationState: "external"` and a Mars fixture using `allocationState: "mars"`. Keep their timestamps within `NOW` so only runner ownership differs.
 
 - [ ] **Step 2: Write failing predicate tests**
 
@@ -38,9 +38,9 @@ Add tests equivalent to:
 
 ```ts
 test("filters runs by runner ownership", () => {
-  const runs = [run({ id: "white", allocationState: "whitesmith" }), run({ id: "external", allocationState: "external" })];
+  const runs = [run({ id: "white", allocationState: "mars" }), run({ id: "external", allocationState: "external" })];
   expect(filterRuns(runs, "", "all", NOW, "all").map((item) => item.id)).toEqual(["white", "external"]);
-  expect(filterRuns(runs, "", "all", NOW, "whitesmith").map((item) => item.id)).toEqual(["white"]);
+  expect(filterRuns(runs, "", "all", NOW, "mars").map((item) => item.id)).toEqual(["white"]);
   expect(filterRuns(runs, "", "all", NOW, "external").map((item) => item.id)).toEqual(["external"]);
 });
 ```
@@ -53,7 +53,7 @@ Expected: FAIL because `filterRuns` does not yet accept or apply the runner filt
 
 - [ ] **Step 4: Implement the minimal runner filter**
 
-Define `RunHistoryRunnerFilter`, add a `runnerFilter` parameter to `filterRuns`, and require the run to match the selected allocation state unless the filter is `all`. Default the parameter to `all` to preserve existing callers. Add `useState<RunHistoryRunnerFilter>("all")` in `RunHistory`, pass it into `filterRuns`, and render All / Whitesmith / External buttons with `aria-pressed` in the existing toolbar.
+Define `RunHistoryRunnerFilter`, add a `runnerFilter` parameter to `filterRuns`, and require the run to match the selected allocation state unless the filter is `all`. Default the parameter to `all` to preserve existing callers. Add `useState<RunHistoryRunnerFilter>("all")` in `RunHistory`, pass it into `filterRuns`, and render All / Mars / External buttons with `aria-pressed` in the existing toolbar.
 
 - [ ] **Step 5: Run focused component tests**
 
@@ -91,7 +91,7 @@ Expected: PASS with no snapshot or type errors.
 
 - [ ] **Step 3: Run the web typecheck**
 
-Run: `bun run --filter @whitesmith/web typecheck`
+Run: `bun run --filter @mars/web typecheck`
 
 Expected: PASS.
 

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { WorkerConfigurePayload, type LeaseBootstrapEnvelope, type WorkerCommand, type WorkerEvent } from "@whitesmith/contracts";
+import { WorkerConfigurePayload, type LeaseBootstrapEnvelope, type WorkerCommand, type WorkerEvent } from "@mars/contracts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 import { applyWindowsWorkerConfiguration, runWindowsLeaseCleanup, startWindowsLeaseLifecycle } from "./windows-agent.ts";
 

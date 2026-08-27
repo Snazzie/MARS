@@ -15,7 +15,7 @@ describe("Windows job image contract", () => {
     expect(containerfile).toContain("Install-WindowsFeature -Name Server-Media-Foundation");
     expect(containerfile).toContain("RestartNeeded");
     expect(containerfile).toContain("verify-runtime.ps1");
-    expect(containerfile).toContain("C:/Whitesmith/verify-runtime.ps1");
+    expect(containerfile).toContain("C:/Mars/verify-runtime.ps1");
   });
   test("verifies Playwright Media Foundation and network prerequisites", () => {
     for (const name of ["mf.dll", "mfplat.dll", "msmpeg2vdec.dll", "evr.dll", "avrt.dll"]) {
@@ -44,11 +44,11 @@ describe("Windows job image contract", () => {
     expect(script).toContain("Get-FileHash");
     expect(script).toContain("docker push");
     expect(script).toContain("RepoDigests");
-    expect(containerfile).toContain("whitesmith-job-agent.exe");
+    expect(containerfile).toContain("mars-job-agent.exe");
     expect(containerfile).toContain("entrypoint.ps1");
   });
   test("preserves and validates the default exec-form entrypoint", () => {
-    const expected = '["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", "C:/Whitesmith/entrypoint.ps1"]';
+    const expected = '["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", "C:/Mars/entrypoint.ps1"]';
     expect(containerfile).toContain("# escape=`");
     expect(containerfile).toContain(`ENTRYPOINT ${expected}`);
     for (const buildScript of [script, localScript]) {

@@ -1,5 +1,5 @@
 {
-  "name": "@whitesmith/control-plane",
+  "name": "@mars/control-plane",
   "version": "0.1.0",
   "type": "module",
   "scripts": {
@@ -9,8 +9,8 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@whitesmith/contracts": "workspace:*",
-    "@whitesmith/db": "workspace:*",
+    "@mars/contracts": "workspace:*",
+    "@mars/db": "workspace:*",
     "hono": "4.13.1",
     "jose": "^6.0.10",
     "postgres": "^3.4.5",

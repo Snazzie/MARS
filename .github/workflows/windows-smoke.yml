@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 jobs:
   smoke:
-    runs-on: whitesmith-windows-x64
+    runs-on: mars-windows-x64
     timeout-minutes: 15
     steps:
       - name: Check out project
@@ -40,13 +40,13 @@ jobs:
           Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,TotalPhysicalMemory
           test-path package.json
           test-path .github/workflows
-      - name: Verify Whitesmith Windows runner
+      - name: Verify Mars Windows runner
         shell: powershell
         run: |
           if ($env:RUNNER_OS -ne 'Windows') { throw "Expected Windows runner, got $env:RUNNER_OS" }
           if ($env:RUNNER_ARCH -ne 'X64') { throw "Expected x64 runner, got $env:RUNNER_ARCH" }
-          if ($env:RUNNER_NAME -notmatch '^whitesmith-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') {
-            throw "Unexpected Whitesmith runner name: $env:RUNNER_NAME"
+          if ($env:RUNNER_NAME -notmatch '^mars-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') {
+            throw "Unexpected Mars runner name: $env:RUNNER_NAME"
           }
           Write-Host "Picked up by $env:RUNNER_NAME"
       - name: Execute Windows smoke workload

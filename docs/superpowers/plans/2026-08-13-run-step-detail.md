@@ -85,7 +85,7 @@ Implement `listStepLogChunks` with the same authorization boundary inputs and cu
 
 - [ ] **Step 6: Run focused database tests**
 
-Run `bun test packages/db/src/dashboard.test.ts` and `bun run --filter @whitesmith/db typecheck`.
+Run `bun test packages/db/src/dashboard.test.ts` and `bun run --filter @mars/db typecheck`.
 
 ---
 

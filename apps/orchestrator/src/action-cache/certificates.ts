@@ -25,7 +25,7 @@ function createCertificateAuthority(): { certificatePem: string; privateKeyPem: 
   certificate.serialNumber = serialNumber();
   certificate.validity.notBefore = new Date(Date.now() - 5 * 60_000);
   certificate.validity.notAfter = new Date(Date.now() + 10 * 365 * 24 * 60 * 60_000);
-  const attributes = [{ name: "commonName", value: "Whitesmith Worker Cache CA" }, { name: "organizationName", value: "Whitesmith" }];
+  const attributes = [{ name: "commonName", value: "Mars Worker Cache CA" }, { name: "organizationName", value: "Mars" }];
   certificate.setSubject(attributes);
   certificate.setIssuer(attributes);
   certificate.setExtensions([
@@ -55,7 +55,7 @@ function certificateAuthorityFromPem(certificatePem: string, privateKeyPem: stri
       certificate.validity.notBefore = new Date(now.getTime() - 5 * 60_000);
       const expiresAt = new Date(now.getTime() + 24 * 60 * 60_000);
       certificate.validity.notAfter = expiresAt;
-      certificate.setSubject([{ name: "commonName", value: hostname }, { name: "organizationName", value: "Whitesmith" }]);
+      certificate.setSubject([{ name: "commonName", value: hostname }, { name: "organizationName", value: "Mars" }]);
       certificate.setIssuer(caCertificate.subject.attributes);
       const alternativeNames = hostnames.map((value) => isIP(value) ? { type: 7, ip: value } : { type: 2, value });
       certificate.setExtensions([

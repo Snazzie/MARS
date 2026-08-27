@@ -65,7 +65,7 @@ describe("control-plane HTTP boundary", () => {
     expect(response.status).toBe(401);
   });
   test("injects the control-plane origin into the Linux installer", async () => {
-    const root = await mkdtemp(join(tmpdir(), "whitesmith-installers-"));
+    const root = await mkdtemp(join(tmpdir(), "mars-installers-"));
     try {
       await Bun.write(join(root, "install-worker.sh"), '#!/usr/bin/env bash\n: "${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}"\n');
       const response = await createControlPlaneApp(fakeHttpDeps({
@@ -83,7 +83,7 @@ describe("control-plane HTTP boundary", () => {
     }
   });
   test("serves container-mode Windows installer with local image build inputs", async () => {
-    const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-installers-"));
+    const root = await mkdtemp(join(tmpdir(), "mars-windows-installers-"));
     try {
       await Bun.write(join(root, "install-worker.ps1"), "'__WINDOWS_RUNTIME__' '__WINDOWS_CONTAINER_IMAGE__' '__WINDOWS_CONTAINER_BASE_IMAGE__' '__WINDOWS_CONTAINER_BUILDER_URL__'");
       const build = { baseImage: "mcr.microsoft.com/windows/server/ltsc2025@sha256:" + "a".repeat(64), runnerUrl: "https://example.test/runner.zip", runnerSha256: "b".repeat(64), gitUrl: "https://example.test/git.zip", gitSha256: "c".repeat(64), vcUrl: "https://example.test/vc.exe", vcSha256: "d".repeat(64), builderPath: join(root, "builder.ps1"), verifierPath: join(root, "verifier.ps1"), containerfilePath: join(root, "Containerfile"), entrypointPath: join(root, "entrypoint.ps1"), jobAgentPath: join(root, "job-agent.exe") };
@@ -92,14 +92,14 @@ describe("control-plane HTTP boundary", () => {
       const response = await createControlPlaneApp(fakeHttpDeps(deps)).request("/api/workers/installer?audience=windows-x64&runtime=container");
       const installer = await response.text();
       expect(response.status).toBe(200);
-      expect(installer).toContain("'whitesmith/windows-job:local'");
+      expect(installer).toContain("'mars/windows-job:local'");
       expect(installer).not.toContain("DEBUG_PRESERVE_LEASES");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
   test("serves a container-mode Windows installer without control-plane build metadata", async () => {
-    const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-local-installer-"));
+    const root = await mkdtemp(join(tmpdir(), "mars-windows-local-installer-"));
     try {
       await Bun.write(join(root, "install-worker.ps1"), "'__WINDOWS_RUNTIME__' '__WINDOWS_CONTAINER_IMAGE__'");
       const response = await createControlPlaneApp(fakeHttpDeps({
@@ -109,13 +109,13 @@ describe("control-plane HTTP boundary", () => {
       const installer = await response.text();
       expect(response.status).toBe(200);
       expect(installer).toContain("'container'");
-      expect(installer).toContain("'whitesmith/windows-job:local'");
+      expect(installer).toContain("'mars/windows-job:local'");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
   test("requires the Windows template only for VM installer mode", async () => {
-    const root = await mkdtemp(join(tmpdir(), "whitesmith-windows-installers-"));
+    const root = await mkdtemp(join(tmpdir(), "mars-windows-installers-"));
     try {
       await Bun.write(join(root, "install-worker.ps1"), "ready");
       const response = await createControlPlaneApp(fakeHttpDeps({
@@ -128,28 +128,28 @@ describe("control-plane HTTP boundary", () => {
     }
   });
   test("injects split Tart runtime identity into the macOS installer", async () => {
-    const root = await mkdtemp(join(tmpdir(), "whitesmith-macos-installers-"));
+    const root = await mkdtemp(join(tmpdir(), "mars-macos-installers-"));
     try {
       await Bun.write(join(root, "install-worker-macos.sh"), "#!/bin/zsh\nprint ready\n");
-      const digest = `whitesmith-macos-job@sha256:${"b".repeat(64)}`;
+      const digest = `mars-macos-job@sha256:${"b".repeat(64)}`;
       const response = await createControlPlaneApp(fakeHttpDeps({
         baseUrl: "http://localhost:3000",
         workerInstallerRoot: pathToFileURL(`${root}/`),
-        macosTartBaseImage: "whitesmith-macos-smoke-v3",
+        macosTartBaseImage: "mars-macos-smoke-v3",
         defaultJobImages: { "macos-arm64": digest },
       })).request("/api/workers/installer?audience=macos-arm64");
       const installer = await response.text();
       expect(response.status).toBe(200);
-      expect(installer).toContain("TART_IMAGE='whitesmith-macos-smoke-v3'");
+      expect(installer).toContain("TART_IMAGE='mars-macos-smoke-v3'");
       expect(installer).toContain(`TART_IMAGE_DIGEST='${digest}'`);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
   test("serves the configured macOS orchestrator executable", async () => {
-    const root = await mkdtemp(join(tmpdir(), "whitesmith-orchestrator-"));
+    const root = await mkdtemp(join(tmpdir(), "mars-orchestrator-"));
     try {
-      const executable = join(root, "whitesmith-orchestrator");
+      const executable = join(root, "mars-orchestrator");
       await Bun.write(executable, "macos-arm64-binary");
       const response = await createControlPlaneApp(fakeHttpDeps({
         workerOrchestratorExecutable: pathToFileURL(executable),
@@ -163,9 +163,9 @@ describe("control-plane HTTP boundary", () => {
     }
   });
   test("serves the configured Windows service host executable", async () => {
-    const root = await mkdtemp(join(tmpdir(), "whitesmith-service-host-"));
+    const root = await mkdtemp(join(tmpdir(), "mars-service-host-"));
     try {
-      const executable = join(root, "whitesmith-service-host.exe");
+      const executable = join(root, "mars-service-host.exe");
       await Bun.write(executable, "windows-service-host-binary");
       const response = await createControlPlaneApp(fakeHttpDeps({
         workerServiceHostExecutable: pathToFileURL(executable),
@@ -173,7 +173,7 @@ describe("control-plane HTTP boundary", () => {
 
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("windows-service-host-binary");
-      expect(response.headers.get("content-disposition")).toContain("whitesmith-service-host.exe");
+      expect(response.headers.get("content-disposition")).toContain("mars-service-host.exe");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -230,7 +230,7 @@ describe("control-plane HTTP boundary", () => {
         headers: { Cookie: "oauth_state=state" },
       });
       expect(callback.headers.get("location")).toBe("http://localhost:5173/onboarding");
-      expect(callback.headers.get("set-cookie")).toContain("whitesmith_session=");
+      expect(callback.headers.get("set-cookie")).toContain("mars_session=");
 
       const repositoryCallback = await createControlPlaneApp(deps).request("/api/auth/github/callback?state=state&code=code", {
         headers: { Cookie: "oauth_state=state; oauth_return_to=%2Frepositories" },
@@ -492,7 +492,7 @@ test("starts GitHub installation for a non-onboarding organization", async () =>
     githubApp: {
       beginOrganizationInstallation: async (_userId: string, organizationId: string) => {
         requestedOrganization = organizationId;
-        return { location: "https://github.com/apps/whitesmith/installations/new" };
+        return { location: "https://github.com/apps/mars/installations/new" };
       },
     } as never,
   })).request("/api/organizations/org-2/github/install", {
@@ -502,5 +502,5 @@ test("starts GitHub installation for a non-onboarding organization", async () =>
 
   expect(response.status).toBe(200);
   expect(requestedOrganization).toBe("org-2");
-  expect(await response.json()).toEqual({ location: "https://github.com/apps/whitesmith/installations/new" });
+  expect(await response.json()).toEqual({ location: "https://github.com/apps/mars/installations/new" });
 });

@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import type { Sql } from "@whitesmith/db";
-import { jsonParameter } from "@whitesmith/db";
+import type { Sql } from "@mars/db";
+import { jsonParameter } from "@mars/db";
 export async function readBody(request: Request, maxBytes=2*1024*1024): Promise<Buffer> { const reader=request.body?.getReader(); if (!reader) return Buffer.alloc(0); const chunks: Uint8Array[]=[]; let size=0; while(true){ const {done,value}=await reader.read(); if(done) break; size+=value.byteLength; if(size>maxBytes) throw new Error("webhook body too large"); chunks.push(value); } return Buffer.concat(chunks); }
 export function validSignature(body: Buffer, header: string| null, secret: string): boolean { if (!header || !/^sha256=[0-9a-f]{64}$/.test(header)) return false; const expected=Buffer.from(header.slice(7),"hex"); const actual=createHmac("sha256",secret).update(body).digest(); return timingSafeEqual(expected,actual); }
 export async function acceptDelivery(sql: Sql<{}>, deliveryId:string, installationId:number, payload:unknown, eventName = "unknown"): Promise<boolean> {

@@ -1,6 +1,6 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
-import type { WorkerCapacityData, WorkerLimits } from "@whitesmith/contracts";
+import type { WorkerCapacityData, WorkerLimits } from "@mars/contracts";
 import { configurePendingWorker, configureWorker, rejectPendingWorker, type WorkerConfigurationInput } from "../api.ts";
 type Props = { worker: { id: string; admissionState: "pending" | "adopted" | "rejected" | "revoked"; platform?: "linux-x64" | "windows-x64" | "macos-arm64"; guestPlatforms?: ("linux-x64" | "windows-x64" | "macos-arm64")[]; draining?: boolean; activeSandboxes?: number; capacity: WorkerCapacityData; limits: WorkerLimits | null; desiredCacheTtlSeconds?: number }; organizationId?: string; onConfigured(): void; onDiscard?(): void };
 const GIB = 1024 ** 3;

@@ -1,7 +1,7 @@
 if (process.platform !== "win32") process.exit(0);
 
 const commands = [
-  ["bun", "run", "--filter", "@whitesmith/orchestrator", "build"],
+  ["bun", "run", "--filter", "@mars/orchestrator", "build"],
   ["cargo", "build", "--release", "--manifest-path", "apps/windows-service-host/Cargo.toml"],
 ];
 

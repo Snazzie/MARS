@@ -20,8 +20,8 @@ const row = {
 function candidate(worker: Candidate["worker"]): Candidate {
   return {
     worker,
-    pool: { enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["whitesmith-windows-x64"], triggerLabel: "whitesmith-windows-x64" },
-    requestedLabels: ["whitesmith-windows-x64"],
+    pool: { enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" },
+    requestedLabels: ["mars-windows-x64"],
   };
 }
 
@@ -41,8 +41,8 @@ test("reports an online database worker without an authenticated socket as offli
 });
 
 test("parses Windows CPU and memory routing labels", () => {
-  expect(parseProvisionLabels(["whitesmith-windows-x64", "10VCPU", "15G"])).toEqual({
-    routingLabels: ["whitesmith-windows-x64"],
+  expect(parseProvisionLabels(["mars-windows-x64", "10VCPU", "15G"])).toEqual({
+    routingLabels: ["mars-windows-x64"],
     vcpu: 10,
     memoryBytes: 15 * 1024 ** 3,
   });
@@ -52,7 +52,7 @@ test("reports resource ceiling for a connected worker below the requested limits
   const worker = candidateWorkerFromRow({ ...row, worker_doctor: { runtimeReady: true }, worker_limits: { maxVcpuPerPod: 8, maxMemoryBytesPerPod: 15 * 1024 ** 3, maxStorageBytesPerPod: 50 * 1024 ** 3, maxConcurrentPods: 1 } });
   const value = candidate(worker);
   value.pool.resources = { vcpu: 16, memoryBytes: 20 * 1024 ** 3, storageBytes: 50 * 1024 ** 3, concurrency: 1 };
-  value.requestedLabels = ["whitesmith-windows-x64", "10VCPU", "15G"];
+  value.requestedLabels = ["mars-windows-x64", "10VCPU", "15G"];
   expect(fits(value)).toBe(false);
   expect(reason(value)).toBe("resource_ceiling");
 });

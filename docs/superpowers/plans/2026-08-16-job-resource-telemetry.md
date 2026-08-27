@@ -12,7 +12,7 @@
 
 - Workers sample active jobs every 5 seconds.
 - Raw samples are retained for 7 days.
-- `WHITESMITH_RETENTION_JOB_RESOURCE_SAMPLES_DAYS` defaults to `7`.
+- `MARS_RETENTION_JOB_RESOURCE_SAMPLES_DAYS` defaults to `7`.
 - Completed-job aggregates remain in the existing 90-day timing-history window.
 - Supported first-release collectors: Windows containers, Hyper-V VMs, and macOS Tart VMs.
 - Linux/Kata collection remains excluded.
@@ -386,8 +386,8 @@ Only show “Likely CPU-bound” or “Likely wait/I/O-bound” when execution d
 
 ```bash
 bun test apps/web/src/routes/TimingHistoryPage.test.tsx
-bun run --filter @whitesmith/web typecheck
-bun run --filter @whitesmith/web build
+bun run --filter @mars/web typecheck
+bun run --filter @mars/web build
  git add apps/web/src/routes/TimingHistoryPage.tsx apps/web/src/routes/TimingHistoryPage.test.tsx apps/web/src/styles.css
  git commit -m "feat: show per-job resource load"
 ```
@@ -412,11 +412,11 @@ Expected: PASS.
 - [ ] **Step 2: Verify package typechecks**
 
 ```bash
-bun run --filter @whitesmith/contracts typecheck
-bun run --filter @whitesmith/db typecheck
-bun run --filter @whitesmith/web typecheck
-bun run --filter @whitesmith/control-plane typecheck
-bun run --filter @whitesmith/orchestrator typecheck
+bun run --filter @mars/contracts typecheck
+bun run --filter @mars/db typecheck
+bun run --filter @mars/web typecheck
+bun run --filter @mars/control-plane typecheck
+bun run --filter @mars/orchestrator typecheck
 ```
 
 Expected: no new diagnostics attributable to telemetry. Existing unrelated diagnostics must be recorded rather than hidden.
@@ -427,7 +427,7 @@ Start the web/control-plane stack, open `/runs/timing`, select a completed job w
 
 - [ ] **Step 4: Verify retention and replay**
 
-Run the retention test with default and overridden `WHITESMITH_RETENTION_JOB_RESOURCE_SAMPLES_DAYS`; deliver the same sample event twice and assert one row; deliver samples out of order and assert aggregate sorting; complete a job with no samples and assert telemetry remains unavailable.
+Run the retention test with default and overridden `MARS_RETENTION_JOB_RESOURCE_SAMPLES_DAYS`; deliver the same sample event twice and assert one row; deliver samples out of order and assert aggregate sorting; complete a job with no samples and assert telemetry remains unavailable.
 
 - [ ] **Step 5: Commit only test fixture corrections**
 

@@ -8,7 +8,7 @@ Status: DONE
 
 ## Focused verification
 - `bun test apps/control-plane/src/http/app.test.ts` — PASS (4 tests, 7 expectations)
-- `bun run --filter '@whitesmith/control-plane' typecheck` — PASS (previously verified; unchanged by route-only fix)
+- `bun run --filter '@mars/control-plane' typecheck` — PASS (previously verified; unchanged by route-only fix)
 
 ## Scope
 - Added Hono 4.13.1, typed application/dependency boundaries, deterministic test dependencies, static routes, session middleware, and standalone Hono app.

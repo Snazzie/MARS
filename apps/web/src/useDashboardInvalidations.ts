@@ -24,7 +24,7 @@ export function useDashboardInvalidations(organizationId: string | undefined): v
   const client = useQueryClient();
   useEffect(() => {
     if (!organizationId || organizationId === "all" || typeof window === "undefined") return;
-    const storageKey = `whitesmith:invalidation:${organizationId}`;
+    const storageKey = `mars:invalidation:${organizationId}`;
     let cursor = Number(window.localStorage.getItem(storageKey) ?? 0);
     if (!Number.isSafeInteger(cursor) || cursor < 0) cursor = 0;
     let socket: WebSocket | null = null;

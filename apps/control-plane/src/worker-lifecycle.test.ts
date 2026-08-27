@@ -20,7 +20,7 @@ function acceptingDb() {
 
 test("attests only the matching dispatched worker lease and nonce", async () => {
   const { db, calls } = acceptingDb();
-  const accepted = await applyWorkerLeaseEvent(db, event("sandbox_attested", { leaseId, nonce, runtimeInstanceId: "whitesmith-job-22222222", observed: { vcpu: 4, memoryBytes: 4_294_967_296, storageBytes: 21_474_836_480 } }));
+  const accepted = await applyWorkerLeaseEvent(db, event("sandbox_attested", { leaseId, nonce, runtimeInstanceId: "mars-job-22222222", observed: { vcpu: 4, memoryBytes: 4_294_967_296, storageBytes: 21_474_836_480 } }));
   expect(accepted).toBe(true);
   expect(calls).toHaveLength(1);
   expect(calls[0]!.query).toContain("state='sandbox_ready'");
@@ -182,9 +182,9 @@ test("persists attributed and unattributed log chunks idempotently and rejects u
 });
 
 test("persists authenticated diagnostic chunks under the configured root", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-diagnostics-"));
-  const previous = Bun.env.WHITESMITH_DIAGNOSTICS_ROOT;
-  Bun.env.WHITESMITH_DIAGNOSTICS_ROOT = root;
+  const root = await mkdtemp(join(tmpdir(), "mars-diagnostics-"));
+  const previous = Bun.env.MARS_DIAGNOSTICS_ROOT;
+  Bun.env.MARS_DIAGNOSTICS_ROOT = root;
   const diagnosticId = crypto.randomUUID();
   try {
     const accepted = await handleAuthenticatedWorkerEvent(
@@ -196,8 +196,8 @@ test("persists authenticated diagnostic chunks under the configured root", async
     expect(accepted).toBe(true);
     expect(await readFile(join(root, workerId, diagnosticId, "00000000.log"), "utf8")).toBe("raw worker evidence");
   } finally {
-    if (previous === undefined) delete Bun.env.WHITESMITH_DIAGNOSTICS_ROOT;
-    else Bun.env.WHITESMITH_DIAGNOSTICS_ROOT = previous;
+    if (previous === undefined) delete Bun.env.MARS_DIAGNOSTICS_ROOT;
+    else Bun.env.MARS_DIAGNOSTICS_ROOT = previous;
     await rm(root, { recursive: true, force: true });
   }
 });

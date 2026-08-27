@@ -1,5 +1,5 @@
 {
-  "name": "@whitesmith/db",
+  "name": "@mars/db",
   "version": "0.1.0",
   "type": "module",
   "exports": "./src/index.ts",
@@ -11,7 +11,7 @@
     "db:migrate": "bun run src/migrate-cli.ts"
   },
   "dependencies": {
-    "@whitesmith/contracts": "workspace:*",
+    "@mars/contracts": "workspace:*",
     "drizzle-kit": "^0.31.10",
     "drizzle-orm": "^0.45.2",
     "postgres": "^3.4.5"

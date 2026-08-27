@@ -3,13 +3,13 @@
   <uuid>{{DOMAIN_UUID}}</uuid>
   <memory unit='MiB'>{{MEMORY_MIB}}</memory>
   <vcpu placement='static'>{{VCPU}}</vcpu>
-  <metadata><whitesmith:lease xmlns:whitesmith='urn:whitesmith' managed='true' id='{{LEASE_ID}}'/></metadata>
+  <metadata><mars:lease xmlns:mars='urn:mars' managed='true' id='{{LEASE_ID}}'/></metadata>
   <os><type arch='x86_64' machine='q35'>hvm</type><boot dev='hd'/></os>
   <features><acpi/><apic/><vmport state='off'/></features>
   <devices>
     <disk type='file' device='disk'><driver name='qemu' type='qcow2'/><source file='{{OVERLAY_PATH}}'/><target dev='vda' bus='virtio'/></disk>
     <interface type='network'><source network='{{NETWORK}}'/><model type='virtio'/></interface>
-    <channel type='unix'><source mode='bind' path='{{CHANNEL_SOCKET}}'/><target type='virtio' name='org.whitesmith.bootstrap'/></channel>
+    <channel type='unix'><source mode='bind' path='{{CHANNEL_SOCKET}}'/><target type='virtio' name='org.mars.bootstrap'/></channel>
     <memballoon model='none'/>
   </devices>
 </domain>

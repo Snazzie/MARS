@@ -1,4 +1,4 @@
-import type { JobTimingAggregate, JobTimingSnapshot } from "@whitesmith/contracts";
+import type { JobTimingAggregate, JobTimingSnapshot } from "@mars/contracts";
 import type { DatabaseClient } from "./index.ts";
 
 export type JobTimingSnapshotInput = Omit<JobTimingSnapshot, "createdAt"> & { createdAt?: string };

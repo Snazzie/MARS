@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { buildTartBootstrapArguments, buildTartRunnerArguments, buildTartSetArguments, resolveTartExecutable, TART_JIT_CONFIG_PATH, TartVmDriver } from "./tart.ts";
 import * as tartModule from "./tart.ts";
-import type { WorkerCacheProxy } from "@whitesmith/contracts";
+import type { WorkerCacheProxy } from "@mars/contracts";
 
 const resources = (storageBytes: number) => ({ vcpu: 4, memoryBytes: 4 * 1024 ** 3, storageBytes, concurrency: 1 });
 const workerCache: WorkerCacheProxy = { proxyUrl: "http://127.0.0.1:39123", cacheBaseUrl: "https://127.0.0.1:39443", caCertificatePem: "worker-ca", expiresAt: new Date(Date.now() + 60_000).toISOString() };
@@ -23,11 +23,11 @@ test("starts the VM with only a read-only bootstrap directory path", () => {
     buildTartRunArguments?: (vmName: string, bootstrapDirectory: string) => string[];
   }).buildTartRunArguments;
   expect(buildTartRunArguments).toBeFunction();
-  expect(buildTartRunArguments!("lease-vm", "/private/tmp/whitesmith-bootstrap")).toEqual([
+  expect(buildTartRunArguments!("lease-vm", "/private/tmp/mars-bootstrap")).toEqual([
     "run",
     "--no-graphics",
     "--dir",
-    "/private/tmp/whitesmith-bootstrap:ro",
+    "/private/tmp/mars-bootstrap:ro",
     "lease-vm",
   ]);
 });
@@ -38,16 +38,16 @@ test("copies bootstrap configuration from the read-only VM share without stdin a
     "lease-vm",
     "sh",
     "-c",
-    `set -eu; umask 077; install -d -m 700 /tmp/whitesmith; rm -f ${TART_JIT_CONFIG_PATH}; cat "/Volumes/My Shared Files/jit-config" > ${TART_JIT_CONFIG_PATH}`,
+    `set -eu; umask 077; install -d -m 700 /tmp/mars; rm -f ${TART_JIT_CONFIG_PATH}; cat "/Volumes/My Shared Files/jit-config" > ${TART_JIT_CONFIG_PATH}`,
   ]);
-  expect(TART_JIT_CONFIG_PATH).toBe("/tmp/whitesmith/jit-config");
+  expect(TART_JIT_CONFIG_PATH).toBe("/tmp/mars/jit-config");
 });
 
 test("passes the Actions Runner root explicitly to the guest job agent", () => {
   expect(buildTartRunnerArguments("lease-vm")).toEqual([
     "exec",
     "lease-vm",
-    "/usr/local/bin/whitesmith-job-agent",
+    "/usr/local/bin/mars-job-agent",
     "bootstrap",
     "--config-file",
     TART_JIT_CONFIG_PATH,
@@ -65,7 +65,7 @@ test("passes the worker cache descriptor into Tart full bootstrap", async () => 
     stop: async () => {},
     remove: async () => {},
   };
-  const driver = new TartVmDriver(tart, "base", "whitesmith");
+  const driver = new TartVmDriver(tart, "base", "mars");
   await driver.createLease({ id: "11111111-1111-4111-8111-111111111111", jobId: "22222222-2222-4222-8222-222222222222", imageDigest: "base", resources: resources(20 * 1024 ** 3), nonce: "n".repeat(32), encodedJitConfig: "jit", workerCache });
   expect(received).toEqual(workerCache);
 });
@@ -86,13 +86,13 @@ test("stops and deletes an orphan lease by its deterministic VM name", async () 
     stop: async (name: string) => { calls.push(["stop", name]); },
     remove: async (name: string) => { calls.push(["remove", name]); },
   };
-  const driver = new TartVmDriver(runtime, "base", "whitesmith-job");
+  const driver = new TartVmDriver(runtime, "base", "mars-job");
   const leaseId = "22222222-2222-4222-8222-222222222222";
   await driver.stopLease(leaseId);
   await driver.removeLease(leaseId);
   expect(calls).toEqual([
-    ["stop", "whitesmith-job-22222222"],
-    ["remove", "whitesmith-job-22222222"],
+    ["stop", "mars-job-22222222"],
+    ["remove", "mars-job-22222222"],
   ]);
 });
 
@@ -103,8 +103,8 @@ test("treats an already deleted orphan VM as reaped", async () => {
     startWithBootstrap: async () => {},
     startRunner: () => ({ completion: Promise.resolve(0), logs: (async function* () {})() }),
     stop: async () => {},
-    remove: async () => { throw new Error('tart delete failed: the specified VM "whitesmith-job-22222222" does not exist'); },
+    remove: async () => { throw new Error('tart delete failed: the specified VM "mars-job-22222222" does not exist'); },
   };
-  const driver = new TartVmDriver(runtime, "base", "whitesmith-job");
+  const driver = new TartVmDriver(runtime, "base", "mars-job");
   await expect(driver.removeLease("22222222-2222-4222-8222-222222222222")).resolves.toBeUndefined();
 });

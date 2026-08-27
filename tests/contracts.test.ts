@@ -13,7 +13,7 @@ describe("pool creation contracts", () => {
     guestPlatform: "linux-x64",
     name: "default",
     resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 2048, concurrency: 1 },
-    triggerLabel: "whitesmith-default",
+    triggerLabel: "mars-default",
     imageDigest: "ubuntu@sha256:" + "a".repeat(64),
   };
 
@@ -53,7 +53,7 @@ describe("Tart VM lifecycle", () => {
       stop: async (name) => { calls.push(["stop", name]); },
       remove: async (name) => { calls.push(["remove", name]); },
     };
-    const driver = new TartVmDriver(runtime, "base-image", "whitesmith-job");
+    const driver = new TartVmDriver(runtime, "base-image", "mars-job");
     const lease = await driver.createLease({
       id: "11111111-1111-4111-8111-111111111111",
       jobId: "22222222-2222-4222-8222-222222222222",
@@ -64,16 +64,16 @@ describe("Tart VM lifecycle", () => {
     });
     expect(lease.state).toBe("sandbox_attested");
     expect(calls).toEqual([
-      ["clone", "base-image", "whitesmith-job-11111111"],
-      ["set", "whitesmith-job-11111111", "2", "4294967296", "21474836480"],
-      ["start-with-bootstrap", "whitesmith-job-11111111", "jit-config"],
-      ["runner", "whitesmith-job-11111111"],
+      ["clone", "base-image", "mars-job-11111111"],
+      ["set", "mars-job-11111111", "2", "4294967296", "21474836480"],
+      ["start-with-bootstrap", "mars-job-11111111", "jit-config"],
+      ["runner", "mars-job-11111111"],
     ]);
     await driver.stopLease("11111111-1111-4111-8111-111111111111");
     await driver.removeLease("11111111-1111-4111-8111-111111111111");
     expect(calls.slice(-2)).toEqual([
-      ["stop", "whitesmith-job-11111111"],
-      ["remove", "whitesmith-job-11111111"],
+      ["stop", "mars-job-11111111"],
+      ["remove", "mars-job-11111111"],
     ]);
   });
 });

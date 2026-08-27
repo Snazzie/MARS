@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Permit GitHub App installations on personal accounts as first-class Whitesmith workspaces while preserving organization installs and tenant isolation.
+**Goal:** Permit GitHub App installations on personal accounts as first-class Mars workspaces while preserving organization installs and tenant isolation.
 
 **Architecture:** Reuse the `organizations` table as the workspace table and add an explicit `github_account_type` discriminator. Personal workspaces use the authenticated GitHub user's immutable ID as the account ID, receive an owner membership, and flow through the existing repository approval and scheduler paths. Installation callbacks validate both account type and immutable account ID.
 
@@ -115,6 +115,6 @@
 - [ ] Run `bun run typecheck`.
 - [ ] Run `bun test`.
 - [ ] Run `bun run build`.
-- [ ] With authenticated GitHub access, create/select the personal `Snazzie` workspace, launch installation for `Snazzie/whitesmith`, select the private repository, approve it, and verify repository/webhook records.
-- [ ] Record the remaining independent execution limitation if the guest Actions runner/JIT bridge is still absent; do not claim a job was picked up without a completed GitHub run and Whitesmith lifecycle evidence.
+- [ ] With authenticated GitHub access, create/select the personal `Snazzie` workspace, launch installation for `Snazzie/mars`, select the private repository, approve it, and verify repository/webhook records.
+- [ ] Record the remaining independent execution limitation if the guest Actions runner/JIT bridge is still absent; do not claim a job was picked up without a completed GitHub run and Mars lifecycle evidence.
 - [ ] Store the completed decision and verification result in ICM.

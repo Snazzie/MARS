@@ -1,4 +1,4 @@
-import { RunnerJitConfig, type WorkerCacheProxy } from "@whitesmith/contracts";
+import { RunnerJitConfig, type WorkerCacheProxy } from "@mars/contracts";
 import { LinuxGuestFrameParser, encodeLinuxGuestMessage, type LinuxGuestMessage } from "../../orchestrator/src/linux-guest-protocol.ts";
 import { runRunnerWithWorkerCache } from "./bootstrap.ts";
 
@@ -34,7 +34,7 @@ export async function runLinuxVirtioGuestStream(channel: Duplex, runnerRoot: str
   throw new Error("linux_guest_channel_closed");
 }
 
-export async function runLinuxVirtioGuest(channelPath = "/dev/virtio-ports/org.whitesmith.bootstrap", runnerRoot = "/runner", workerCache?: WorkerCacheProxy): Promise<number> {
+export async function runLinuxVirtioGuest(channelPath = "/dev/virtio-ports/org.mars.bootstrap", runnerRoot = "/runner", workerCache?: WorkerCacheProxy): Promise<number> {
   const socket = await (Bun as unknown as { connect(options: unknown): Promise<Duplex> }).connect({ unix: channelPath });
   return runLinuxVirtioGuestStream(socket, runnerRoot, () => Date.now(), workerCache);
 }

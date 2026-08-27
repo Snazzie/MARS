@@ -2,7 +2,7 @@
 
 ## Goal
 
-When a job runtime exceeds its configured memory budget, Whitesmith should identify the cause as out-of-memory instead of leaving only GitHub's generic self-hosted-runner communication failure. When the runner is still alive, the worker should stop the job through the runner boundary and allow GitHub to receive a normal failed result with an actionable message. If the operating system has already killed the runner, Whitesmith must still classify and retain the OOM diagnosis locally.
+When a job runtime exceeds its configured memory budget, Mars should identify the cause as out-of-memory instead of leaving only GitHub's generic self-hosted-runner communication failure. When the runner is still alive, the worker should stop the job through the runner boundary and allow GitHub to receive a normal failed result with an actionable message. If the operating system has already killed the runner, Mars must still classify and retain the OOM diagnosis locally.
 
 ## Scope
 

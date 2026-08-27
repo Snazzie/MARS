@@ -1,4 +1,4 @@
-import type { RuntimePlatform, WorkerDoctor as WorkerDoctorDto } from "@whitesmith/contracts";
+import type { RuntimePlatform, WorkerDoctor as WorkerDoctorDto } from "@mars/contracts";
 
 type CheckKey = keyof Pick<WorkerDoctorDto, "nestedKvm" | "kvmModules" | "probe" | "egress" | "imageSignatures" | "blockVolume">;
 type Check = { key: CheckKey; label: string; platforms: RuntimePlatform[] };

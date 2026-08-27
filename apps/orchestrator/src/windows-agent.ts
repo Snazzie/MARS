@@ -1,7 +1,7 @@
 import { generateKeyPairSync, sign as signMessage, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerDoctorData, WorkerEvent, type WorkerCapacityData, type LeaseBootstrapEnvelope } from "@whitesmith/contracts";
+import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerDoctorData, WorkerEvent, type WorkerCapacityData, type LeaseBootstrapEnvelope } from "@mars/contracts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { createHyperVRuntime, HyperVDriver } from "./hyperv.ts";
 import { WindowsContainerDriver, isExpectedWindowsEntrypoint } from "./windows-container.ts";
@@ -13,7 +13,7 @@ import { retryControlPlaneOperation } from "./worker-client.ts";
 
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
 type Identity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string; preserveLeases?: boolean };
-const identityPath = () => Bun.env.WHITESMITH_WORKER_IDENTITY_FILE ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "worker-identity.json");
+const identityPath = () => Bun.env.MARS_WORKER_IDENTITY_FILE ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Mars", "worker-identity.json");
 const event = (workerId: string, type: string, payload: Record<string, unknown>): WorkerEvent => WorkerEvent.parse({ version: 1, id: randomUUID(), workerId, type, occurredAt: new Date().toISOString(), payload });
 const keys = () => { const signing = generateKeyPairSync("ed25519"), encryption = generateKeyPairSync("x25519"); return { workerId: "", publicKey: signing.publicKey.export({ format: "pem", type: "spki" }).toString(), privateKey: signing.privateKey.export({ format: "pem", type: "pkcs8" }).toString(), encryptionPublicKey: encryption.publicKey.export({ format: "pem", type: "spki" }).toString(), encryptionPrivateKey: encryption.privateKey.export({ format: "pem", type: "pkcs8" }).toString() }; };
 const machineUuid = async () => { const process = Bun.spawn(["powershell.exe", "-NoProfile", "-Command", "(Get-CimInstance Win32_ComputerSystemProduct).UUID"], { stdout: "pipe" }); return (await new Response(process.stdout).text()).trim(); };
@@ -31,8 +31,8 @@ const commandSucceeds = async (command: string[]): Promise<boolean> => {
   }
 };
 const localImageVerification = async (image: string): Promise<{ manifest: boolean; entrypoint: boolean; imageId?: string }> => {
-  if (image !== "whitesmith/windows-job:local") return { manifest: false, entrypoint: false };
-  const path = Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE_MANIFEST ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "windows-job-image.json");
+  if (image !== "mars/windows-job:local") return { manifest: false, entrypoint: false };
+  const path = Bun.env.MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Mars", "windows-job-image.json");
   try {
     const manifest = JSON.parse((await readFile(path, "utf8")).replace(/^\uFEFF/, "")) as { schemaVersion?: number; image?: string; imageId?: string; runtimeProbe?: { mediaFoundation?: boolean; dns?: boolean; tcp443?: boolean } };
     if (manifest.schemaVersion !== 1 || manifest.image !== image || !manifest.imageId || !manifest.runtimeProbe?.mediaFoundation || !manifest.runtimeProbe.dns || !manifest.runtimeProbe.tcp443) return { manifest: false, entrypoint: false };
@@ -47,8 +47,8 @@ const localImageVerification = async (image: string): Promise<{ manifest: boolea
   }
 };
 export const windowsDoctor = async (preserveLeases = false): Promise<WorkerDoctorData> => {
-  const runtimeMode = Bun.env.WHITESMITH_WINDOWS_RUNTIME === "container" ? "container" : "vm";
-  const artifactValue = runtimeMode === "container" ? Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE : Bun.env.WHITESMITH_WINDOWS_TEMPLATE_DIGEST;
+  const runtimeMode = Bun.env.MARS_WINDOWS_RUNTIME === "container" ? "container" : "vm";
+  const artifactValue = runtimeMode === "container" ? Bun.env.MARS_WINDOWS_CONTAINER_IMAGE : Bun.env.MARS_WINDOWS_TEMPLATE_DIGEST;
   const localVerification = runtimeMode === "container" ? await localImageVerification(artifactValue ?? "") : { manifest: false, entrypoint: true };
   const localManifest = localVerification.manifest;
   const immutableArtifact = localManifest || (typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactValue));
@@ -57,7 +57,7 @@ export const windowsDoctor = async (preserveLeases = false): Promise<WorkerDocto
     : await commandSucceeds(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-VMHost -ErrorAction Stop | Out-Null"]);
   let egress = false;
   try {
-    const response = await fetch("https://api.github.com/meta", { signal: AbortSignal.timeout(5_000), headers: { "user-agent": "whitesmith-worker-doctor" } });
+    const response = await fetch("https://api.github.com/meta", { signal: AbortSignal.timeout(5_000), headers: { "user-agent": "mars-worker-doctor" } });
     egress = response.ok;
   } catch {
     egress = false;
@@ -71,7 +71,7 @@ export const windowsDoctor = async (preserveLeases = false): Promise<WorkerDocto
   const artifactDigest = localVerification.imageId ?? (typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactValue) ? artifactValue : undefined);
   return WorkerDoctorData.parse({ runtimeMode, preserveLeases, ...(runtimeMode === "container" ? { artifactSource: "worker_local", ...(artifactValue ? { artifactIdentity: artifactValue } : {}) } : { artifactSource: "template", ...(artifactDigest ? { artifactDigest } : {}) }), ...(artifactDigest ? { artifactDigest } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
 };
-const joinCode = async () => { const path = Bun.env.WHITESMITH_JOIN_CODE_FILE; if (path) return (await readFile(path, "utf8")).trim(); const reader = Bun.stdin.stream().getReader(); const { value } = await reader.read(); reader.releaseLock(); return Buffer.from(value ?? []).toString("utf8").trim(); };
+const joinCode = async () => { const path = Bun.env.MARS_JOIN_CODE_FILE; if (path) return (await readFile(path, "utf8")).trim(); const reader = Bun.stdin.stream().getReader(); const { value } = await reader.read(); reader.releaseLock(); return Buffer.from(value ?? []).toString("utf8").trim(); };
 const save = async (identity: Identity) => { const path = identityPath(); await mkdir(dirname(path), { recursive: true }); await writeFile(path, JSON.stringify(identity) + "\n"); };
 const load = async () => { try { return JSON.parse(await readFile(identityPath(), "utf8")) as Identity; } catch { return null; } };
 const auth = (nonce: string, identity: Identity) => ({ type: "authenticate", workerId: identity.workerId, encryptionPublicKey: identity.encryptionPublicKey, signature: signMessage(null, Buffer.from(`${nonce}\n${identity.workerId}\n${identity.encryptionPublicKey}`), identity.privateKey).toString("base64url") });
@@ -84,13 +84,13 @@ async function runDocker(args: string[]): Promise<{ code: number; stdout: string
 }
 export async function buildWindowsImage(command: WorkerCommand, send: (event: WorkerEvent) => void): Promise<void> {
   const payload = WorkerBuildImagePayload.parse(command.payload);
-  const root = await mkdtemp(join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "image-build-"));
+  const root = await mkdtemp(join(Bun.env.ProgramData ?? "C:\\ProgramData", "Mars", "image-build-"));
   let failureStage = "receive_payload";
   console.log("Windows image build command received", { workerId: command.workerId, commandId: command.id, buildId: payload.buildId, image: payload.image, contentSha256: payload.contentSha256 });
   try {
     failureStage = "download_artifacts";
     const paths = await downloadWindowsImageBuildArtifacts(payload, root);
-    const manifestPath = Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE_MANIFEST ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "windows-job-image.json");
+    const manifestPath = Bun.env.MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Mars", "windows-job-image.json");
     failureStage = "build_and_probe";
     const built = await runProcess([
       "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", paths.builder,
@@ -179,17 +179,17 @@ export function startWindowsLeaseLifecycle(
 async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache: WorkerCacheConfiguration, cacheService: ActionCacheService): Promise<never> {
   const controlPlane = new URL(baseUrl);
   const identity = (await load()) ?? await enroll(controlPlane, keys());
-  const mode = Bun.env.WHITESMITH_WINDOWS_RUNTIME ?? "vm";
+  const mode = Bun.env.MARS_WINDOWS_RUNTIME ?? "vm";
   let driver: WindowsRuntimeDriver;
   if (mode === "container") {
-    const image = Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE;
-    if (!image) throw new Error("WHITESMITH_WINDOWS_CONTAINER_IMAGE is required in container mode");
-    driver = new WindowsContainerDriver({ image, prefix: Bun.env.WHITESMITH_WINDOWS_CONTAINER_PREFIX ?? "whitesmith", bootstrapRoot: Bun.env.ProgramData ? `${Bun.env.ProgramData}\\Whitesmith\\leases` : "C:\\ProgramData\\Whitesmith\\leases", limits, readyTimeoutMs: Number(Bun.env.WHITESMITH_WINDOWS_CONTAINER_READY_TIMEOUT_MS ?? 15_000), jobTimeoutMs: Number(Bun.env.WHITESMITH_WINDOWS_CONTAINER_JOB_TIMEOUT_MS ?? 900_000), allowLocalImage: Bun.env.WHITESMITH_ALLOW_LOCAL_CONTAINER_IMAGE === "true", imageManifestPath: Bun.env.WHITESMITH_WINDOWS_CONTAINER_IMAGE_MANIFEST, requireLocalImageManifest: image === "whitesmith/windows-job:local" });
+    const image = Bun.env.MARS_WINDOWS_CONTAINER_IMAGE;
+    if (!image) throw new Error("MARS_WINDOWS_CONTAINER_IMAGE is required in container mode");
+    driver = new WindowsContainerDriver({ image, prefix: Bun.env.MARS_WINDOWS_CONTAINER_PREFIX ?? "mars", bootstrapRoot: Bun.env.ProgramData ? `${Bun.env.ProgramData}\\Mars\\leases` : "C:\\ProgramData\\Mars\\leases", limits, readyTimeoutMs: Number(Bun.env.MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS ?? 15_000), jobTimeoutMs: Number(Bun.env.MARS_WINDOWS_CONTAINER_JOB_TIMEOUT_MS ?? 900_000), allowLocalImage: Bun.env.MARS_ALLOW_LOCAL_CONTAINER_IMAGE === "true", imageManifestPath: Bun.env.MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST, requireLocalImageManifest: image === "mars/windows-job:local" });
   } else if (mode === "vm") {
-    const templatePath = Bun.env.WHITESMITH_WINDOWS_TEMPLATE_PATH;
-    const templateDigest = Bun.env.WHITESMITH_WINDOWS_TEMPLATE_DIGEST;
+    const templatePath = Bun.env.MARS_WINDOWS_TEMPLATE_PATH;
+    const templateDigest = Bun.env.MARS_WINDOWS_TEMPLATE_DIGEST;
     if (!templatePath || !templateDigest) throw new Error("Windows Hyper-V template path and digest are required in VM mode");
-    driver = new HyperVDriver(createHyperVRuntime(), templatePath, templateDigest, Bun.env.WHITESMITH_HYPERV_VM_PREFIX ?? "whitesmith", limits);
+    driver = new HyperVDriver(createHyperVRuntime(), templatePath, templateDigest, Bun.env.MARS_HYPERV_VM_PREFIX ?? "mars", limits);
   } else {
     throw new Error(`Unsupported Windows runtime: ${mode}`);
   }

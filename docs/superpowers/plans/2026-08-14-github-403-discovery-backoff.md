@@ -178,8 +178,8 @@ Run:
 
 ```bash
 bun test packages/db/src/schema.test.ts packages/db/src/dashboard.test.ts tests/dashboard-contracts.test.ts
-bun run --filter @whitesmith/contracts typecheck
-bun run --filter @whitesmith/db typecheck
+bun run --filter @mars/contracts typecheck
+bun run --filter @mars/db typecheck
 ```
 
 Expected: all commands exit 0.
@@ -325,7 +325,7 @@ Run:
 
 ```bash
 bun test apps/control-plane/src/job-discovery.test.ts apps/control-plane/src/discovery-health.test.ts
-bun run --filter @whitesmith/control-plane typecheck
+bun run --filter @mars/control-plane typecheck
 ```
 
 Expected: all commands exit 0. Existing discovery health semantics remain green because future-deadline rows are absent from the report.
@@ -349,7 +349,7 @@ git push origin main
 - Modify: `apps/control-plane/src/dashboard-api.test.ts`
 
 **Interfaces:**
-- Produces: `queueRepositoryDiscoveryRecheck(db, organizationId, repositoryId, idempotencyKey): Promise<"queued" | "not_found" | "not_paused">` from `@whitesmith/db`.
+- Produces: `queueRepositoryDiscoveryRecheck(db, organizationId, repositoryId, idempotencyKey): Promise<"queued" | "not_found" | "not_paused">` from `@mars/db`.
 - Produces: `POST /api/organizations/:organizationId/repositories/:repositoryId/discovery/recheck` → HTTP 202 `{ queued: true }`.
 - Consumes: approved, available repository rows with `discovery_error='github_403'` and `discovery_retry_at>now()`.
 
@@ -508,8 +508,8 @@ Run:
 
 ```bash
 bun test packages/db/src/dashboard.test.ts apps/control-plane/src/dashboard-api.test.ts apps/control-plane/src/http/app.test.ts
-bun run --filter @whitesmith/db typecheck
-bun run --filter @whitesmith/control-plane typecheck
+bun run --filter @mars/db typecheck
+bun run --filter @mars/control-plane typecheck
 ```
 
 Expected: all commands exit 0.
@@ -691,7 +691,7 @@ Run:
 
 ```bash
 bun test apps/web/src/routes/RepositoriesPage.test.tsx tests/dashboard-contracts.test.ts
-bun run --filter @whitesmith/web typecheck
+bun run --filter @mars/web typecheck
 ```
 
 Expected: all commands exit 0.

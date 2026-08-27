@@ -4,7 +4,7 @@
 Show every GitHub Actions step inside each run job as a collapsed row with its result and duration; expanding a row loads persisted logs for that step.
 
 ## Scope
-The feature applies to the existing Whitesmith run-detail page. A job remains the top-level execution unit, with runner/resource metadata unchanged. Its GitHub Actions steps become the primary expandable log units.
+The feature applies to the existing Mars run-detail page. A job remains the top-level execution unit, with runner/resource metadata unchanged. Its GitHub Actions steps become the primary expandable log units.
 
 ## Data model and ingestion
 Extend the internal GitHub job snapshot with normalized step records containing a stable step ID, name, status, conclusion, number, queued/start/completion timestamps, and derived duration. Parse `workflow_job.steps` from REST discovery and webhook payloads. Upsert step records monotonically: preserve the earliest non-null start time, first non-null completion time, terminal conclusion, and prevent completed steps from regressing.

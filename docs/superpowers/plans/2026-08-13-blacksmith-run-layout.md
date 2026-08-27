@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Recompose Whitesmith's run history and run detail pages into the approved Blacksmith-inspired, information-dense layout using only real data already available through the current run contracts.
+**Goal:** Recompose Mars's run history and run detail pages into the approved Blacksmith-inspired, information-dense layout using only real data already available through the current run contracts.
 
 **Architecture:** Keep route fetching and the existing application shell unchanged. Replace the table-oriented run presentation with a focused `RunHistory` component, extract the fetched detail body into a stateful `RunDetailView`, and extend `LogViewer` with controlled disclosures and loaded-log search. Pure filtering and formatting helpers carry deterministic tests; browser verification proves the final responsive composition.
 
@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Keep the Whitesmith wordmark, sidebar navigation, workspace selector, and routing behavior unchanged.
+- Keep the Mars wordmark, sidebar navigation, workspace selector, and routing behavior unchanged.
 - Reuse `RunSummary`, `RunDetail`, and existing APIs; do not change backend routes, database schema, contracts, or ingestion.
 - Render only real Logs and Metrics tabs; do not render Network or Tests placeholders.
 - Time controls filter only the current API response. Default to all returned runs.
@@ -44,7 +44,7 @@ Replace the old table-column assertions with behavior tests built from one fixtu
 
 ```tsx
 import { expect, test } from "bun:test";
-import type { RunSummary } from "@whitesmith/contracts";
+import type { RunSummary } from "@mars/contracts";
 import { filterRuns, runDetailLink } from "./RunHistory.tsx";
 
 const NOW = Date.parse("2026-08-13T16:00:00.000Z");
@@ -52,7 +52,7 @@ const run = (overrides: Partial<RunSummary> = {}): RunSummary => ({
   id: "run-1",
   organizationId: "org-1",
   repositoryId: "repo-1",
-  repositoryName: "whitesmith",
+  repositoryName: "mars",
   runNumber: 11,
   workflowName: "macOS runner smoke",
   event: "workflow_dispatch",
@@ -196,7 +196,7 @@ git commit -m "feat(web): add Blacksmith run history"
 Create a complete `RunDetail` fixture with one completed job and one step. Test real metadata mapping and explicit missing labels:
 
 ```tsx
-expect(runDetailFacts(detail).runner).toBe("whitesmith-lease-1");
+expect(runDetailFacts(detail).runner).toBe("mars-lease-1");
 expect(runDetailFacts({ ...detail, startedAt: null, jobs: [{ ...detail.jobs[0], runnerName: null }] })).toMatchObject({
   started: "Not started",
   runner: "Awaiting runner",
@@ -456,7 +456,7 @@ bun test \
   apps/web/src/routes/RunsPage.test.tsx \
   apps/web/src/components/RunDetailView.test.tsx \
   apps/web/src/components/LogViewer.test.tsx
-bun run --filter @whitesmith/web typecheck
+bun run --filter @mars/web typecheck
 ```
 
 Expected: all focused tests pass and TypeScript reports zero diagnostics.
@@ -467,7 +467,7 @@ Invoke the `react-doctor` skill and run its prescribed check over the changed Re
 
 - [ ] **Step 7: Smoke test the real UI in a browser**
 
-Start the existing Whitesmith web/control-plane development path. Open `/runs` with real data and one real `/runs/:runId` detail page.
+Start the existing Mars web/control-plane development path. Open `/runs` with real data and one real `/runs/:runId` detail page.
 
 Desktop checks at approximately 1440×1000:
 

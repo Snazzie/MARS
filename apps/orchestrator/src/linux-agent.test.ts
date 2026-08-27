@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { applyLinuxWorkerConfigure, buildLinuxWorkerJoinPayload, handleLinuxWorkerCommand } from "./linux-agent.ts";
-import type { WorkerCommand } from "@whitesmith/contracts";
+import type { WorkerCommand } from "@mars/contracts";
 
 const workerId = "00000000-0000-4000-8000-000000000001";
 const command: WorkerCommand = {

@@ -8,7 +8,7 @@ parse_args() {
   if [ "$#" -eq 2 ] && [ "$1" = "--code" ]; then
     JOIN_CODE="$2"
   elif [ "$#" -eq 0 ] && [ -t 0 ]; then
-    read -r -s 'JOIN_CODE?Whitesmith enrollment code: '; printf '\n' >&2
+    read -r -s 'JOIN_CODE?Mars enrollment code: '; printf '\n' >&2
   else
     usage
   fi
@@ -19,7 +19,7 @@ trap 'unset JOIN_CODE' EXIT
 CHECK=0
 check() { CHECK=$((CHECK + 1)); print "[$CHECK/8] $1"; }
 pass() { print "  [✓] $1"; }
-print 'Whitesmith macOS worker enrollment'
+print 'Mars macOS worker enrollment'
 
 check 'Checking macOS host and Tart'
 [[ "$EUID" -ne 0 ]] || { echo 'Run this installer as the logged-in user, not with sudo.' >&2; exit 1; }
@@ -35,7 +35,7 @@ configure_tart_sudo() {
   fi
   echo 'Administrator permission is required once to enable Tart networking.' >&2
   sudo -v || { echo 'Administrator authorization was cancelled.' >&2; exit 1; }
-  local sudoers="/etc/sudoers.d/whitesmith-tart-${USER}"
+  local sudoers="/etc/sudoers.d/mars-tart-${USER}"
   printf '%s ALL=(root) NOPASSWD: %s\n' "$USER" "$TART_BIN" | sudo tee "$sudoers" >/dev/null || {
     echo 'Could not install the Tart administrator permission.' >&2
     exit 1
@@ -67,13 +67,13 @@ IMAGE="$TART_IMAGE"
 tart list | grep -q "$IMAGE" || { echo "Tart image '$IMAGE' is missing for user $USER" >&2; exit 1; }
 pass "Tart image available: $IMAGE"
 
-APP_DIR="$HOME/Library/Application Support/Whitesmith"
-ORCHESTRATOR="$APP_DIR/whitesmith-orchestrator"
+APP_DIR="$HOME/Library/Application Support/Mars"
+ORCHESTRATOR="$APP_DIR/mars-orchestrator"
 TEMP_ORCHESTRATOR="$ORCHESTRATOR.tmp.$$"
 IDENTITY_FILE="$APP_DIR/worker-identity.json"
 JOIN_CODE_FILE="$APP_DIR/join-code"
 LAUNCHER="$APP_DIR/run-worker.sh"
-PLIST="$HOME/Library/LaunchAgents/com.whitesmith.worker.plist"
+PLIST="$HOME/Library/LaunchAgents/com.mars.worker.plist"
 mkdir -p "$APP_DIR" "$(dirname "$PLIST")"
 cleanup() { unset JOIN_CODE; rm -f "$TEMP_ORCHESTRATOR"; }
 trap cleanup EXIT
@@ -95,29 +95,29 @@ cat > "$LAUNCHER" <<EOF
 #!/bin/zsh
 set -euo pipefail
 export PUBLIC_BASE_URL=$(printf '%q' "$PUBLIC_BASE_URL")
-export WHITESMITH_CONTROL_PLANE_URL=$(printf '%q' "$PUBLIC_BASE_URL")
-export WHITESMITH_ACTION_CACHE_ROOT=$(printf '%q' "${WHITESMITH_ACTION_CACHE_ROOT:-}")
-export WHITESMITH_CACHE_PROXY_PORT=$(printf '%q' "${WHITESMITH_CACHE_PROXY_PORT:-}")
-export WHITESMITH_CACHE_DATA_PORT=$(printf '%q' "${WHITESMITH_CACHE_DATA_PORT:-}")
-export WHITESMITH_CACHE_PROXY_URL=$(printf '%q' "${WHITESMITH_CACHE_PROXY_URL:-}")
-export WHITESMITH_CACHE_ADVERTISE_URL=$(printf '%q' "${WHITESMITH_CACHE_ADVERTISE_URL:-}")
-export WHITESMITH_WORKER_IDENTITY_FILE=$(printf '%q' "$IDENTITY_FILE")
-export WHITESMITH_JOIN_CODE_FILE=$(printf '%q' "$JOIN_CODE_FILE")
-export WHITESMITH_TART_BASE_IMAGE=$(printf '%q' "$IMAGE")
-export WHITESMITH_TART_IMAGE_DIGEST=$(printf '%q' "$TART_IMAGE_DIGEST")
-export WHITESMITH_TART_EXECUTABLE=$(printf '%q' "$TART_BIN")
-if [[ -f "\$WHITESMITH_WORKER_IDENTITY_FILE" ]]; then
-  rm -f "\$WHITESMITH_JOIN_CODE_FILE"
+export MARS_CONTROL_PLANE_URL=$(printf '%q' "$PUBLIC_BASE_URL")
+export MARS_ACTION_CACHE_ROOT=$(printf '%q' "${MARS_ACTION_CACHE_ROOT:-}")
+export MARS_CACHE_PROXY_PORT=$(printf '%q' "${MARS_CACHE_PROXY_PORT:-}")
+export MARS_CACHE_DATA_PORT=$(printf '%q' "${MARS_CACHE_DATA_PORT:-}")
+export MARS_CACHE_PROXY_URL=$(printf '%q' "${MARS_CACHE_PROXY_URL:-}")
+export MARS_CACHE_ADVERTISE_URL=$(printf '%q' "${MARS_CACHE_ADVERTISE_URL:-}")
+export MARS_WORKER_IDENTITY_FILE=$(printf '%q' "$IDENTITY_FILE")
+export MARS_JOIN_CODE_FILE=$(printf '%q' "$JOIN_CODE_FILE")
+export MARS_TART_BASE_IMAGE=$(printf '%q' "$IMAGE")
+export MARS_TART_IMAGE_DIGEST=$(printf '%q' "$TART_IMAGE_DIGEST")
+export MARS_TART_EXECUTABLE=$(printf '%q' "$TART_BIN")
+if [[ -f "\$MARS_WORKER_IDENTITY_FILE" ]]; then
+  rm -f "\$MARS_JOIN_CODE_FILE"
   exec "$ORCHESTRATOR" mac-worker
 fi
-exec "$ORCHESTRATOR" mac-worker < "\$WHITESMITH_JOIN_CODE_FILE"
+exec "$ORCHESTRATOR" mac-worker < "\$MARS_JOIN_CODE_FILE"
 EOF
 chmod 755 "$LAUNCHER"
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>Label</key><string>com.whitesmith.worker</string>
+<key>Label</key><string>com.mars.worker</string>
 <key>ProgramArguments</key><array><string>$XML_LAUNCHER</string></array>
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><true/>
@@ -127,7 +127,7 @@ cat > "$PLIST" <<EOF
 EOF
 pass 'User-scoped worker service installed'
 check 'Starting the worker'
-launchctl bootout "gui/$UID/com.whitesmith.worker" >/dev/null 2>&1 || true
+launchctl bootout "gui/$UID/com.mars.worker" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$UID" "$PLIST"
-launchctl kickstart -k "gui/$UID/com.whitesmith.worker"
+launchctl kickstart -k "gui/$UID/com.mars.worker"
 pass 'Worker started; return to onboarding to verify its fingerprint'

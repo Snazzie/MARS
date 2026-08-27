@@ -6,11 +6,11 @@ Run potentially hostile GitHub Actions jobs with disposable, hardware-backed san
 
 ## Decision
 
-Whitesmith will use one immutable container per lease while retaining a virtual-machine security boundary:
+Mars will use one immutable container per lease while retaining a virtual-machine security boundary:
 
-- `whitesmith-windows-x64`: a native Windows worker runs Windows containers with mandatory Hyper-V isolation.
-- `whitesmith-linux-x64`: a native Linux worker runs Linux containers with Kata Containers through containerd/K3s.
-- `whitesmith-macos-arm64`: the existing Tart VM path remains unchanged.
+- `mars-windows-x64`: a native Windows worker runs Windows containers with mandatory Hyper-V isolation.
+- `mars-linux-x64`: a native Linux worker runs Linux containers with Kata Containers through containerd/K3s.
+- `mars-macos-arm64`: the existing Tart VM path remains unchanged.
 
 Windows process-isolated containers and Linux `runc` containers are prohibited for job execution. The worker must fail closed when the configured isolation runtime is unavailable. There is no runtime fallback.
 
@@ -65,10 +65,10 @@ A failed probe keeps the worker unready and drained. It must never retry under w
 3. The worker validates the command, lease ID, nonce, platform, expiry, image digest, and resource limits.
 4. The worker creates a unique sandbox name and a restrictive lease directory containing the bootstrap file.
 5. The runtime creates one sandbox with ownership and lease labels, resource limits, an isolated writable work area, controlled networking, and only the bootstrap mount.
-6. The image entrypoint starts `whitesmith-job-agent`, which consumes the bootstrap and launches the Actions Runner using the encoded JIT configuration.
+6. The image entrypoint starts `mars-job-agent`, which consumes the bootstrap and launches the Actions Runner using the encoded JIT configuration.
 7. The sandbox executes at most one GitHub job. The worker reports attestation, runner completion, and diagnostics through the existing event protocol.
 8. Every terminal path force-stops and removes the sandbox, work storage, bootstrap material, and in-memory lease record.
-9. On service restart, the worker enumerates only objects with the Whitesmith ownership label, reconciles their lease state, and removes stale owned objects. It never modifies unrelated runtime objects.
+9. On service restart, the worker enumerates only objects with the Mars ownership label, reconciles their lease state, and removes stale owned objects. It never modifies unrelated runtime objects.
 
 Sandboxes are not reused. Initial performance relies on pre-pulled immutable image layers rather than warm containers. A warm mechanism is outside scope unless measured pre-pulled startup cannot meet the 15-second target.
 
@@ -81,7 +81,7 @@ Every create command includes Hyper-V isolation explicitly. Preflight creates a 
 The Windows image is based on a compatible Microsoft Windows Server Core image. The initial tool profile contains:
 
 - GitHub Actions Runner;
-- `whitesmith-job-agent.exe`;
+- `mars-job-agent.exe`;
 - PowerShell and CMD;
 - Git;
 - Node.js;
@@ -92,11 +92,11 @@ Windows containers intentionally do not support interactive desktop applications
 
 ## Linux runtime
 
-The Linux worker uses K3s/containerd with a dedicated `whitesmith-kata` RuntimeClass backed by Kata Containers. The job Pod must select that runtime class explicitly. Admission or preflight rejects Pods that resolve to ordinary `runc`.
+The Linux worker uses K3s/containerd with a dedicated `mars-kata` RuntimeClass backed by Kata Containers. The job Pod must select that runtime class explicitly. Admission or preflight rejects Pods that resolve to ordinary `runc`.
 
 Each lease uses an isolated bootstrap Secret, a disposable work volume, strict resource requests and limits, no service-account token, no host paths, no privileged containers, and no added Linux capabilities. Owned Secrets, Pods, and volumes carry lease labels and are deleted together.
 
-The initial Linux image contains the Actions Runner, Whitesmith job agent, Bash, Git, Node.js, CA certificates, and the selected build tool profile.
+The initial Linux image contains the Actions Runner, Mars job agent, Bash, Git, Node.js, CA certificates, and the selected build tool profile.
 
 ## Image supply chain
 
@@ -127,7 +127,7 @@ Before changing the active Windows worker, a host-level proof must demonstrate:
 
 1. Windows engine mode and Hyper-V isolation are available.
 2. A digest-pinned Server Core sandbox reports Hyper-V isolation.
-3. The Whitesmith image starts the job agent and executes synthetic CMD and PowerShell workloads.
+3. The Mars image starts the job agent and executes synthetic CMD and PowerShell workloads.
 4. A one-use GitHub JIT runner executes a real smoke job.
 5. Force-removal during execution leaves no owned container or bootstrap data.
 6. A pre-pulled image becomes runner-ready within 15 seconds over repeated runs.

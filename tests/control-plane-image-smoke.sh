@@ -2,7 +2,7 @@
 set -euo pipefail
 
 IMAGE=${IMAGE:?set IMAGE}
-NETWORK="whitesmith-smoke-${GITHUB_RUN_ID:-local}-${RANDOM}"
+NETWORK="mars-smoke-${GITHUB_RUN_ID:-local}-${RANDOM}"
 POSTGRES="${NETWORK}-postgres"
 CONTROL_PLANE="${NETWORK}-control-plane"
 DATA_VOLUME="${NETWORK}-data"
@@ -17,7 +17,7 @@ trap cleanup EXIT
 psql_db() {
   local database=$1
   shift
-  docker exec -i "$POSTGRES" psql -v ON_ERROR_STOP=1 -U whitesmith -d "$database" "$@"
+  docker exec -i "$POSTGRES" psql -v ON_ERROR_STOP=1 -U mars -d "$database" "$@"
 }
 
 wait_ready() {
@@ -35,8 +35,8 @@ wait_ready() {
 start_control_plane() {
   docker rm -f "$CONTROL_PLANE" >/dev/null 2>&1 || true
   docker run -d --name "$CONTROL_PLANE" --network "$NETWORK" \
-    -e DATABASE_URL="postgres://whitesmith:ci-only@${POSTGRES}:5432/$1" \
-    -v "$DATA_VOLUME":/var/lib/whitesmith \
+    -e DATABASE_URL="postgres://mars:ci-only@${POSTGRES}:5432/$1" \
+    -v "$DATA_VOLUME":/var/lib/mars \
     -p 127.0.0.1:3000:3000 \
     "$IMAGE" >/dev/null
   wait_ready
@@ -81,18 +81,18 @@ assert_converged_schema() {
 docker network create "$NETWORK" >/dev/null
 docker volume create "$DATA_VOLUME" >/dev/null
 docker run -d --name "$POSTGRES" --network "$NETWORK" \
-  -e POSTGRES_DB=whitesmith \
-  -e POSTGRES_USER=whitesmith \
+  -e POSTGRES_DB=mars \
+  -e POSTGRES_USER=mars \
   -e POSTGRES_PASSWORD=ci-only \
   postgres:17-alpine >/dev/null
 
 for attempt in {1..30}; do
-  if docker exec "$POSTGRES" pg_isready -U whitesmith -d whitesmith >/dev/null 2>&1; then break; fi
+  if docker exec "$POSTGRES" pg_isready -U mars -d mars >/dev/null 2>&1; then break; fi
   if [[ "$attempt" == 30 ]]; then echo 'PostgreSQL did not become ready' >&2; exit 1; fi
   sleep 2
 done
 
-start_control_plane whitesmith
+start_control_plane mars
 printf '%s' "$(curl --silent --show-error --fail -X POST http://127.0.0.1:3000/api/setup/github-app \
   -H 'Content-Type: application/json' -H 'Idempotency-Key: smoke-setup' \
   --data '{"publicBaseUrl":"http://127.0.0.1:3000"}')" \
@@ -100,8 +100,8 @@ printf '%s' "$(curl --silent --show-error --fail -X POST http://127.0.0.1:3000/a
 echo 'control-plane live and ready'
 
 docker rm -f "$CONTROL_PLANE" >/dev/null
-start_control_plane whitesmith
-psql_db whitesmith -Atc "SELECT public_base_url FROM control_plane_config WHERE singleton=true" | grep -Fx 'http://127.0.0.1:3000' >/dev/null
+start_control_plane mars
+psql_db mars -Atc "SELECT public_base_url FROM control_plane_config WHERE singleton=true" | grep -Fx 'http://127.0.0.1:3000' >/dev/null
 echo 'control-plane restart preserved setup state'
 
 for branch in run-attempt control-plane-config; do

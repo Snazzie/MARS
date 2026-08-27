@@ -1,18 +1,18 @@
 services:
   postgres:
-    container_name: whitesmith-postgres-local
+    container_name: mars-postgres-local
     image: postgres:17-alpine
     restart: always
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-whitesmith}
-      POSTGRES_USER: ${POSTGRES_USER:-whitesmith}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-whitesmith}
+      POSTGRES_DB: ${POSTGRES_DB:-mars}
+      POSTGRES_USER: ${POSTGRES_USER:-mars}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mars}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     ports:
       - 127.0.0.1:55432:5432
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-whitesmith} -d ${POSTGRES_DB:-whitesmith}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mars} -d ${POSTGRES_DB:-mars}"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -22,16 +22,16 @@ services:
       context: .
       dockerfile: deploy/control-plane/Dockerfile
       args:
-        WHITESMITH_BUILD_ID: ${WHITESMITH_BUILD_ID:-local}
+        MARS_BUILD_ID: ${MARS_BUILD_ID:-local}
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-whitesmith}:${POSTGRES_PASSWORD:-whitesmith}@postgres:5432/${POSTGRES_DB:-whitesmith}
-      DATA_ROOT: /var/lib/whitesmith
+      DATABASE_URL: postgres://${POSTGRES_USER:-mars}:${POSTGRES_PASSWORD:-mars}@postgres:5432/${POSTGRES_DB:-mars}
+      DATA_ROOT: /var/lib/mars
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
-      - control-plane-data:/var/lib/whitesmith
+      - control-plane-data:/var/lib/mars
     ports:
       - 127.0.0.1:3000:3000
     healthcheck:
@@ -55,6 +55,6 @@ services:
 
 volumes:
   postgres-data:
-    name: whitesmith-postgres-data
+    name: mars-postgres-data
   control-plane-data:
-    name: whitesmith-control-plane-data
+    name: mars-control-plane-data

@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { OrganizationSettings } from "@whitesmith/contracts";
+import { OrganizationSettings } from "@mars/contracts";
 import { getMe, getSettings, logout, updateSettings } from "../api.ts";
 import { QueryState, WorkspaceRequired } from "../components/StateView.tsx";
 import { useOrganizationFromRoute } from "./useOrganization.ts";

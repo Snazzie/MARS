@@ -31,7 +31,7 @@ import {
   RunnerWorkflowPreview,
   RunnerWorkflowPrRequest,
   RunnerWorkflowPrResult,
-} from "@whitesmith/contracts";
+} from "@mars/contracts";
 import {
   DashboardBootstrapReveal,
   DashboardBootstrapStatus,
@@ -46,7 +46,7 @@ import {
   DashboardPendingWorkerResponse,
   DashboardQueuedResponse,
   DashboardPoolCreateResponse,
-} from "@whitesmith/contracts";
+} from "@mars/contracts";
 import { z } from "zod";
 
 export type ApiResult<T> = { data: T; status: number };

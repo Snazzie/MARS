@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import { OnboardingDetail, OnboardingStatus, SelectOnboardingWorkerRequest, StartOnboardingVerificationRequest, StartOnboardingVerificationResult, VerifyOnboardingRepositoriesResult } from "@whitesmith/contracts";
+import { OnboardingDetail, OnboardingStatus, SelectOnboardingWorkerRequest, StartOnboardingVerificationRequest, StartOnboardingVerificationResult, VerifyOnboardingRepositoriesResult } from "@mars/contracts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { dashboardMutation, getOnboardingDetail, getOnboardingRepositoryOrganization, getOnboardingStatus, getVerifiedOnboardingRepositories, invalidateDashboard, recordOnboardingVerification, selectOnboardingWorker } from "@whitesmith/db";
+import { dashboardMutation, getOnboardingDetail, getOnboardingRepositoryOrganization, getOnboardingStatus, getVerifiedOnboardingRepositories, invalidateDashboard, recordOnboardingVerification, selectOnboardingWorker } from "@mars/db";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 
 const hasKey = (c: { req: { header(name:string): string|undefined } }) => Boolean(c.req.header("Idempotency-Key")?.trim());

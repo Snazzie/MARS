@@ -13,7 +13,7 @@
 ## Verification
 
 - `bun test apps/web/src/components/RunDetailView.test.tsx apps/web/src/components/LogViewer.test.tsx` — 8 passed, 0 failed, 46 expectations.
-- `bun run --filter @whitesmith/web typecheck` — passed (exit code 0).
+- `bun run --filter @mars/web typecheck` — passed (exit code 0).
 
 ## Commit
 
@@ -29,9 +29,9 @@ Changes are present in the worktree at final-fix verification. Git reported the 
    48 expect() calls
   Ran 10 tests across 4 files.
   ```
-- `bun run --filter @whitesmith/web typecheck`
+- `bun run --filter @mars/web typecheck`
   ```
-  @whitesmith/web typecheck: Exited with code 0
+  @mars/web typecheck: Exited with code 0
   ```
 - Added `filterLoadedLogChunks` regression coverage for matching, no-match, and empty-query behavior; the unattributed panel now explicitly reports `No matching loaded log output in unattributed job logs.` when filtered loaded chunks are absent.
 - Added `RunDetailPage.test.tsx` static route regression coverage proving the legacy `page-header` is absent while back navigation and the loading heading remain.

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Adopt TanStack Form across Whitesmith data-entry forms while preserving existing API contracts and server-derived onboarding progression. Improve validation UX with blur/submit validation, field-level errors, cross-field errors, first-invalid focus, dirty state, and reliable mutation state.
+Adopt TanStack Form across Mars data-entry forms while preserving existing API contracts and server-derived onboarding progression. Improve validation UX with blur/submit validation, field-level errors, cross-field errors, first-invalid focus, dirty state, and reliable mutation state.
 
 ## Scope
 
@@ -21,7 +21,7 @@ Keep outside TanStack Form:
 
 ## Architecture
 
-Add `@tanstack/react-form` and one shared Whitesmith form-hook module built with `createFormHook`. The module registers typed reusable controls for text, integer/number, select, checkbox groups, field errors, form errors, and submit buttons.
+Add `@tanstack/react-form` and one shared Mars form-hook module built with `createFormHook`. The module registers typed reusable controls for text, integer/number, select, checkbox groups, field errors, form errors, and submit buttons.
 
 TanStack Form owns values, touched/dirty state, validation state, submission state, and first-invalid focus. TanStack Query remains responsible for network mutations, cache invalidation, and server-derived onboarding detail. Existing API functions and payload contracts remain unchanged.
 

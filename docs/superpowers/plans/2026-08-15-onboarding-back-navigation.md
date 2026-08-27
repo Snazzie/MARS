@@ -43,7 +43,7 @@ Replace the completed-step click path with `editingStep` state. Render a `<dialo
 
 - [ ] **Step 4: Run focused tests and typecheck**
 
-Run: `bun test apps/web/src/routes/OnboardingPage.test.tsx && bun run --filter @whitesmith/web typecheck`
+Run: `bun test apps/web/src/routes/OnboardingPage.test.tsx && bun run --filter @mars/web typecheck`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -81,7 +81,7 @@ Allow `WorkerConfigurationForm` to render for an already configured worker in ed
 
 - [ ] **Step 4: Run focused tests and typecheck**
 
-Run: `bun test apps/web/src/routes/OnboardingPage.test.tsx apps/web/src/components/PendingWorkerRequests.test.tsx && bun run --filter @whitesmith/web typecheck`
+Run: `bun test apps/web/src/routes/OnboardingPage.test.tsx apps/web/src/components/PendingWorkerRequests.test.tsx && bun run --filter @mars/web typecheck`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -124,7 +124,7 @@ Extend the pool request with optional `poolId`. Initialize labels fields from `d
 
 - [ ] **Step 5: Run focused tests and typecheck**
 
-Run: `bun test apps/web/src/routes/OnboardingPage.test.tsx apps/control-plane/src/http/app.test.ts && bun run --filter @whitesmith/web typecheck && bun run --filter @whitesmith/control-plane typecheck`
+Run: `bun test apps/web/src/routes/OnboardingPage.test.tsx apps/control-plane/src/http/app.test.ts && bun run --filter @mars/web typecheck && bun run --filter @mars/control-plane typecheck`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
@@ -147,7 +147,7 @@ Expected: PASS.
 
 - [ ] **Step 2: Run web and control-plane typechecks**
 
-Run: `bun run --filter @whitesmith/web typecheck && bun run --filter @whitesmith/control-plane typecheck`
+Run: `bun run --filter @mars/web typecheck && bun run --filter @mars/control-plane typecheck`
 Expected: PASS.
 
 - [ ] **Step 3: Exercise the onboarding UI**

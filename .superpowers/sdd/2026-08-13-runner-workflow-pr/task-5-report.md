@@ -15,6 +15,6 @@
 - The modal now requires an explicit “I confirm the selected workflow replacements” checkbox before Create PR enables. Confirmation resets whenever selected files or newly loaded workflow data changes.
 - Dialog keyboard handling now cycles Tab and Shift+Tab through all dialog controls, while preserving Escape dismissal and restoration of the previously focused element.
 - Focused verification: `bun test apps/web/src/components/RunnerWorkflowPrModal.test.tsx apps/web/src/components/RunnerWorkflowPrModal.dom.test.tsx apps/control-plane/src/workflow-pr.test.ts apps/control-plane/src/http/app.test.ts` — PASS, 38 tests / 88 assertions.
-- Typechecks: `bun run --filter @whitesmith/control-plane typecheck && bun run --filter @whitesmith/web typecheck` — PASS.
+- Typechecks: `bun run --filter @mars/control-plane typecheck && bun run --filter @mars/web typecheck` — PASS.
 
 - Follow-up focus-trap correction: Shift+Tab from the dialog container itself now wraps to the last available control (including during initial loading before content controls render).

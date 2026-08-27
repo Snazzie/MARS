@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "bun:test";
-import type { WorkerHealth } from "@whitesmith/contracts";
+import type { WorkerHealth } from "@mars/contracts";
 import { WorkerHealthPanel } from "./WorkerHealthPanel.tsx";
 
 const healthFixture = (overrides: Partial<WorkerHealth> = {}): WorkerHealth => ({

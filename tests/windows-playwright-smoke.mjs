@@ -4,7 +4,7 @@ import { chromium } from '@playwright/test';
 
 const server = http.createServer((_request, response) => {
   response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
-  response.end('whitesmith-playwright-smoke');
+  response.end('mars-playwright-smoke');
 });
 let browser;
 let page;
@@ -19,7 +19,7 @@ try {
   page = await browser.newPage();
   const response = await page.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: 'load' });
   assert.equal(response?.status(), 200);
-  assert.equal(await page.locator('body').innerText(), 'whitesmith-playwright-smoke');
+  assert.equal(await page.locator('body').innerText(), 'mars-playwright-smoke');
 } finally {
   await page?.close().catch(() => {});
   await browser?.close().catch(() => {});

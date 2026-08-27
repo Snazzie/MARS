@@ -15,7 +15,7 @@
 - Immediate effect for running leases, future leases, and pending cleanup.
 - Disable requeues existing `debug_preserved` leases.
 - Worker persistence completes before acknowledgement.
-- Remove `WHITESMITH_DEBUG_PRESERVE_LEASES` from config, installer, and runtime.
+- Remove `MARS_DEBUG_PRESERVE_LEASES` from config, installer, and runtime.
 - Do not alter runner-loss classification, allocation, capacity, or unrelated cleanup retry behavior.
 
 ## Layer Contract Matrix
@@ -99,7 +99,7 @@ Files: `.env.example`, `deploy/control-plane/compose.yaml`, `apps/control-plane/
 - [ ] Add failing assertions for absent placeholder/assignment and no runtime environment dependency.
 - [ ] Run installer/orchestrator focused tests; verify failure.
 - [ ] Remove compose/env entry, route injection, PowerShell service assignment, and runtime reads; retain safe default false.
-- [ ] Re-run tests and search for `WHITESMITH_DEBUG_PRESERVE_LEASES`; require no active production/config references.
+- [ ] Re-run tests and search for `MARS_DEBUG_PRESERVE_LEASES`; require no active production/config references.
 - [ ] Commit `refactor: remove install-time lease preservation flag`.
 
 Layer check: fetch generated installer through the actual route and inspect PowerShell output.
@@ -109,7 +109,7 @@ Layer check: fetch generated installer through the actual route and inspect Powe
 Files: existing worker operations docs and smoke tests.
 
 - [ ] Run `bun test packages/db/src apps/control-plane/src apps/orchestrator/src apps/web/src tests/installer-arguments.test.ts tests/dashboard-contracts.test.ts`; require zero changed-area failures.
-- [ ] Run typechecks for `@whitesmith/db`, `@whitesmith/control-plane`, `@whitesmith/orchestrator`, and `@whitesmith/web`; require no new changed-file diagnostics.
+- [ ] Run typechecks for `@mars/db`, `@mars/control-plane`, `@mars/orchestrator`, and `@mars/web`; require no new changed-file diagnostics.
 - [ ] Exercise disposable worker: enable, fail lease, verify retention/event; disable without reinstall, verify requeue/cleanup; restart and verify persistence/replay.
 - [ ] Verify every Layer Contract Matrix boundary with observed data.
 - [ ] Document toggle, resource warning, immediate disable cleanup, offline replay, and runner-loss semantics; do not document removed environment variable as active configuration.

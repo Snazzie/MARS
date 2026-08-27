@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 import { createWorkerImageBuildPayload } from "./windows-image-build.ts";
 
 test("binds the worker build command to the authoritative artifact bytes", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-image-payload-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-image-payload-"));
   try {
     const files = {
       builderPath: "builder.ps1",
@@ -19,7 +19,7 @@ test("binds the worker build command to the authoritative artifact bytes", async
     const payload = await createWorkerImageBuildPayload({
       baseUrl: "https://control.test/path",
       buildId: randomUUID(),
-      image: "whitesmith/windows-job:local",
+      image: "mars/windows-job:local",
       build: {
         baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${"a".repeat(64)}`,
         runnerUrl: "https://downloads.test/runner.zip",

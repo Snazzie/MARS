@@ -2,7 +2,7 @@
 
 ## Problem
 
-`WHITESMITH_DEBUG_PRESERVE_LEASES` is injected into the Windows installer when the worker is downloaded. Changing the control-plane environment does not affect an installed worker and requires reinstalling it. The preservation policy also has no operator-visible per-worker state.
+`MARS_DEBUG_PRESERVE_LEASES` is injected into the Windows installer when the worker is downloaded. Changing the control-plane environment does not affect an installed worker and requires reinstalling it. The preservation policy also has no operator-visible per-worker state.
 
 ## Goals
 
@@ -64,7 +64,7 @@ The same current setting is checked by durable cleanup-command handling. This co
 Changing the setting affects already-running leases and pending cleanup commands. When disabling preservation, the control plane transitions existing `debug_preserved` leases for that worker back to cleanup-pending and dispatches normal stop/remove commands. This makes disable immediate for already-preserved runtimes; command delivery remains durable if the worker is offline. Enabling preservation does not retroactively alter cleanup commands already acknowledged.
 
 
-Remove `WHITESMITH_DEBUG_PRESERVE_LEASES` from `.env.example`, compose configuration, installer substitution, worker service environment, and all runtime checks.
+Remove `MARS_DEBUG_PRESERVE_LEASES` from `.env.example`, compose configuration, installer substitution, worker service environment, and all runtime checks.
 
 ## Failure handling and security
 

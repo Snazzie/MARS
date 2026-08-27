@@ -5,7 +5,7 @@ test("Linux broker is non-root and has only libvirt/qemu runtime dependencies", 
   const dockerfile = await readFile("deploy/workers/linux-broker.Dockerfile", "utf8");
   expect(dockerfile).toContain("libvirt-clients");
   expect(dockerfile).toContain("qemu-utils");
-  expect(dockerfile).toContain("USER whitesmith");
+  expect(dockerfile).toContain("USER mars");
   expect(dockerfile).not.toContain("docker.sock");
 });
 

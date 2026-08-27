@@ -39,9 +39,9 @@
 - Modify: `deploy/workers/install-worker.ps1`
 
 **Interfaces:**
-- Existing `WhitesmithWorker` installation remains unchanged except for SCM dependency configuration.
+- Existing `MarsWorker` installation remains unchanged except for SCM dependency configuration.
 
-- [ ] Configure `WhitesmithWorker` to depend on the Windows `docker` service after creation.
+- [ ] Configure `MarsWorker` to depend on the Windows `docker` service after creation.
 - [ ] Preserve existing failure recovery actions and startup verification.
 - [ ] Run the installer contract tests covering service installation text and confirm they pass.
 

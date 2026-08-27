@@ -7,7 +7,7 @@ import { OutcomeBars } from "../components/OutcomeBars.tsx";
 import { JobActivityChart } from "../components/JobActivityChart.tsx";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
 import { RunningContainers } from "../components/RunningContainers.tsx";
-import type { OverviewDto } from "@whitesmith/contracts";
+import type { OverviewDto } from "@mars/contracts";
 export type OverviewPeriod = "24h" | "7d" | "30d";
 export const overviewPeriodLabels: Record<OverviewPeriod, string> = { "24h": "24 hours", "7d": "7 days", "30d": "30 days" };
 const overviewPeriods: readonly OverviewPeriod[] = ["24h", "7d", "30d"];

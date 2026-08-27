@@ -47,9 +47,9 @@ test("first-admin sign-in copy explains administrator setup and links GitHub OAu
   expect(html).toContain("GitHub identity");
 });
 
-test("returning administrator sign-in copy names Whitesmith", () => {
+test("returning administrator sign-in copy names Mars", () => {
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: false, canManage: false, step: "admin" });
-  expect(html).toContain("Sign in to Whitesmith");
+  expect(html).toContain("Sign in to Mars");
 });
 
 test("authenticated non-admin sees authorization terminal state without setup data", () => {
@@ -161,7 +161,7 @@ test("registers an unconfigured GitHub App through the manifest flow", async () 
   globalThis.fetch = (async (input) => {
     const path = String(input);
     requests.push(path);
-    if (path === "/api/github/app/manifest") return Response.json({ action: "https://github.com/settings/apps/new?state=test", manifest: "{\"name\":\"whitesmith\"}" });
+    if (path === "/api/github/app/manifest") return Response.json({ action: "https://github.com/settings/apps/new?state=test", manifest: "{\"name\":\"mars\"}" });
     if (path === "/api/github/app/install") return Response.json({ location: "http://localhost/onboarding" });
     return Response.json({ code: "unexpected_request" }, { status: 500 });
   }) as typeof globalThis.fetch;
@@ -190,7 +190,7 @@ test("registers an unconfigured GitHub App through the manifest flow", async () 
     expect(requests).toEqual(["/api/github/app/manifest"]);
     expect(submittedForm()?.method).toBe("post");
     expect(submittedForm()?.action).toBe("https://github.com/settings/apps/new?state=test");
-    expect(submittedForm()?.querySelector<HTMLInputElement>('input[name="manifest"]')?.value).toBe("{\"name\":\"whitesmith\"}");
+    expect(submittedForm()?.querySelector<HTMLInputElement>('input[name="manifest"]')?.value).toBe("{\"name\":\"mars\"}");
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();
@@ -209,7 +209,7 @@ test("renders capacity configuration in Worker and pool labels in Trigger labels
   const labels = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "labels", worker: { ...worker, platform: "windows-x64", guestPlatforms: ["windows-x64"] }, organizations: [], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [] }, pool: null, defaultImageDigests: { "windows-x64": "windows-job@sha256:" + "b".repeat(64) }, defaultImageDigest: null });
   expect(labels).toContain("Trigger label");
   expect(labels).toContain("runs-on:");
-  expect(labels).toContain("whitesmith-windows-x64");
+  expect(labels).toContain("mars-windows-x64");
   expect(labels).not.toContain("self-hosted");
 });
 
@@ -229,7 +229,7 @@ test("defaults each supported pool to one canonical platform architecture label"
       defaultImageDigests: { [platform]: `job@sha256:${"b".repeat(64)}` },
       defaultImageDigest: null,
     });
-    expect(html).toContain(`runs-on: ${`whitesmith-${platform}`}`);
+    expect(html).toContain(`runs-on: ${`mars-${platform}`}`);
     expect(html).not.toContain("self-hosted");
   }
 });
@@ -244,7 +244,7 @@ test("keeps onboarding in Trigger labels while the smoke workflow is active", ()
     worker,
     organizations: [],
     github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [{ id: "repo-1", name: "private", fullName: "acme/private", visibility: "private", available: true }] },
-    pool: { id: "pool-1", name: "default", triggerLabel: "whitesmith-windows-x64", labels: ["whitesmith-windows-x64"] },
+    pool: { id: "pool-1", name: "default", triggerLabel: "mars-windows-x64", labels: ["mars-windows-x64"] },
     verification: { state: "queued", repositoryId: "repo-1", poolId: "pool-1", workflowPath: ".github/workflows/smoke.yml", githubRunId: 41, runId: null, error: null },
     defaultImageDigest: null,
   });
@@ -254,9 +254,9 @@ test("keeps onboarding in Trigger labels while the smoke workflow is active", ()
 });
 
 test("complete state summarizes available repositories and offers workflow setup", () => {
-  const html = markup({ version: 1, onboardingRequired: false, adminCreated: true, authenticated: true, canManage: true, step: "complete", worker, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 1, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [{ id: "repo-1", name: "private", fullName: "acme/private", visibility: "private", available: true }] }, pool: { id: "pool-1", name: "default", triggerLabel: "whitesmith-default", labels: ["self-hosted", "linux", "x64", "whitesmith-default"] }, defaultImageDigest: "ubuntu@sha256:" + "c".repeat(64) });
+  const html = markup({ version: 1, onboardingRequired: false, adminCreated: true, authenticated: true, canManage: true, step: "complete", worker, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 1, workerCount: 1 }], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [{ id: "repo-1", name: "private", fullName: "acme/private", visibility: "private", available: true }] }, pool: { id: "pool-1", name: "default", triggerLabel: "mars-default", labels: ["self-hosted", "linux", "x64", "mars-default"] }, defaultImageDigest: "ubuntu@sha256:" + "c".repeat(64) });
   expect(html).toContain("Onboarding complete");
   expect(html).toContain("Available repositories: 1");
-  expect(html).toContain("Use Whitesmith runners");
+  expect(html).toContain("Use Mars runners");
   expect(html).toContain("Open dashboard");
 });

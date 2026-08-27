@@ -2,7 +2,7 @@
 
 ## Objective
 
-Restyle Whitesmith's run history and run detail screens to follow the Blacksmith references' compact, information-dense hierarchy while preserving Whitesmith's existing sidebar, workspace selection, live data, and operational detail.
+Restyle Mars's run history and run detail screens to follow the Blacksmith references' compact, information-dense hierarchy while preserving Mars's existing sidebar, workspace selection, live data, and operational detail.
 
 The implementation must not display invented data or unsupported views. It reuses the current `RunSummary` and `RunDetail` contracts and does not change the API, database, or ingestion paths.
 
@@ -28,7 +28,7 @@ The page has two real tab panels:
 - **Logs**: searchable step list with expand/collapse controls, line counts, step durations, status icons and labels, and inline monospace output. Step output remains lazily fetched when a step is expanded. Search matches step names and any log text already loaded in the client.
 - **Metrics**: the existing lifecycle telemetry, requested and observed resources, runner identity, run timeline, and action graph, reorganized into the compact panel system.
 
-Network and Tests tabs are omitted because Whitesmith has no corresponding datasets. No disabled placeholders are rendered.
+Network and Tests tabs are omitted because Mars has no corresponding datasets. No disabled placeholders are rendered.
 
 ## Data Mapping
 
@@ -53,7 +53,7 @@ The run workspace follows the references with:
 - compact controls and tightly spaced metadata;
 - flat panels rather than decorative gradients.
 
-The Whitesmith wordmark, sidebar navigation, workspace selector, and routing behavior remain unchanged. Small inline SVG or CSS icons may be introduced. No chart or icon dependency is added.
+The Mars wordmark, sidebar navigation, workspace selector, and routing behavior remain unchanged. Small inline SVG or CSS icons may be introduced. No chart or icon dependency is added.
 
 ## Interaction and Accessibility
 

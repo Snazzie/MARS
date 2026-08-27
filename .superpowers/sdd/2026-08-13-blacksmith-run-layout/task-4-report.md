@@ -11,7 +11,7 @@
 
 - `bun test apps/web/src/components/RunHistory.test.tsx apps/web/src/routes/RunsPage.test.tsx apps/web/src/components/RunDetailView.test.tsx apps/web/src/components/LogViewer.test.tsx`
   - **15 passed, 0 failed, 57 assertions**.
-- `bun run --filter @whitesmith/web typecheck`
+- `bun run --filter @mars/web typecheck`
   - **Passed with 0 diagnostics** (the earlier happy-dom/global Event diagnostics were resolved by concurrent Task 3 changes).
 - React Doctor: `npx -y react-doctor@latest . --verbose --diff`
   - **Score 67/100**, 16 findings across existing component exports/effect patterns and immutable sorting. No React files were changed, so no finding was caused by this CSS-only task.

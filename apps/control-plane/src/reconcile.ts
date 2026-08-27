@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { RunnerJitConfig } from "@whitesmith/contracts";
+import type { RunnerJitConfig } from "@mars/contracts";
 import { parseProvisionLabels, resolveProvisionResources, fits, type Candidate } from "./scheduler.ts";
-import type { LeaseReservation } from "@whitesmith/db";
+import type { LeaseReservation } from "@mars/db";
 
 
 export type QueuedRoutingJob = {
@@ -66,7 +66,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
       reservation = claimed;
       let jit: RunnerJitConfig;
       try {
-        jit = await deps.jit({ installationId: queued.installationId, owner, repo, runnerName: `whitesmith-${randomUUID()}`, labels: requestedLabels, githubJobId: queued.jobId });
+        jit = await deps.jit({ installationId: queued.installationId, owner, repo, runnerName: `mars-${randomUUID()}`, labels: requestedLabels, githubJobId: queued.jobId });
       } catch (error) {
         jitFailed = true;
         throw error;

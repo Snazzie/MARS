@@ -1,4 +1,4 @@
-# Whitesmith Implementation Status
+# Mars Implementation Status
 
 The repository is a working baseline, not the full approved platform.
 

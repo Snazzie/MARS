@@ -1,8 +1,8 @@
-# Whitesmith UI Information Hierarchy Implementation Plan
+# Mars UI Information Hierarchy Implementation Plan
 
 > **For agentic workers:** Execute task-by-task with verification after each task.
 
-**Goal:** Reduce Whitesmith operator cognitive load while preserving the existing dark console visual identity, by restructuring actions, translating infrastructure values, separating health states, and replacing clipped mobile navigation.
+**Goal:** Reduce Mars operator cognitive load while preserving the existing dark console visual identity, by restructuring actions, translating infrastructure values, separating health states, and replacing clipped mobile navigation.
 
 **Architecture:** Keep existing TanStack Router routes, React Query contracts, and mutation behavior. Add presentational disclosure/menu primitives in the web app, use local form-unit conversion at the settings boundary, and derive scoped health copy from existing query/mutation states without API changes.
 
@@ -37,7 +37,7 @@
 - [ ] **Step 2: Add the `Disclosure` component using native `<details>` and `<summary>`, preserving children and focus-visible behavior.**
 - [ ] **Step 3: Add scoped retry copy to `QueryState` without changing query/mutation behavior.**
 - [ ] **Step 4: Add styles for summary affordance, focus, spacing, and a destructive disclosure tone.**
-- [ ] **Step 5: Run `bun test apps/web/src/components/StateView.test.tsx` if the file exists, then `bun run --filter '@whitesmith/web' typecheck`.**
+- [ ] **Step 5: Run `bun test apps/web/src/components/StateView.test.tsx` if the file exists, then `bun run --filter '@mars/web' typecheck`.**
 
 ### Task 2: Replace clipped mobile rail with intentional navigation
 
@@ -135,8 +135,8 @@
 **Files:**
 - No new files.
 
-- [ ] **Step 1: Run `bun run --filter '@whitesmith/web' typecheck`.**
-- [ ] **Step 2: Run `bun run --filter '@whitesmith/web' build`; record any existing non-fatal CSS warnings.**
+- [ ] **Step 1: Run `bun run --filter '@mars/web' typecheck`.**
+- [ ] **Step 2: Run `bun run --filter '@mars/web' build`; record any existing non-fatal CSS warnings.**
 - [ ] **Step 3: Start the built web shell on an unused local port and inspect `/`, `/repositories`, `/settings`, `/pools`, and `/onboarding` at 1440px and 390px.**
 - [ ] **Step 4: Verify mobile menu open/close, Escape dismissal, keyboard focus, disclosure behavior, no clipped labels, and 44px touch targets.**
 - [ ] **Step 5: Run `node /Users/acoop/.claude/skills/impeccable/scripts/detect.mjs --json apps/web/src` and confirm no new high-severity findings.**

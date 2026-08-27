@@ -80,8 +80,8 @@ function workerHealthApiDb(worker: Record<string, unknown> | null = {
 
 const member = { id: "u1", githubUserId: 1, login: "member", isGlobalAdmin: false };
 const admin = { id: "u2", githubUserId: 2, login: "admin", isGlobalAdmin: true };
-function appFor(user: typeof member | typeof admin | null = member, db = fakeDb()) { return createControlPlaneApp({ db, setup: { publicOrigin: () => "https://x", configure: async (origin: string) => origin, claimAdmin: async () => "admin" }, browserOrigin: () => "https://x", githubApp: { getOAuthCredentials: async () => ({ clientId: "id", clientSecret: "secret" }), getWebhookSecret: async () => "webhook" } as never, secretBox: new SecretBox(Buffer.alloc(32, 7).toString("base64")), defaultJobImages: {}, requestId: () => "req", requestSource: () => "test", webRoot: new URL("file:///tmp/"), workerInstallerRoot: new URL("file:///tmp/"), workerOrchestratorExecutable: new URL("file:///tmp/whitesmith-orchestrator"), onWorkerAdopted: () => {}, workerConnected: () => true, health: () => ({ buildId: "test", startedAt: new Date().toISOString(), discovery: { lastAttemptAt: null, lastSuccessAt: null, stale: false, staleAfterMs: 1 } }), currentUser: async () => user } as never); }
-const sessionHeaders = { Cookie: "whitesmith_session=test" };
+function appFor(user: typeof member | typeof admin | null = member, db = fakeDb()) { return createControlPlaneApp({ db, setup: { publicOrigin: () => "https://x", configure: async (origin: string) => origin, claimAdmin: async () => "admin" }, browserOrigin: () => "https://x", githubApp: { getOAuthCredentials: async () => ({ clientId: "id", clientSecret: "secret" }), getWebhookSecret: async () => "webhook" } as never, secretBox: new SecretBox(Buffer.alloc(32, 7).toString("base64")), defaultJobImages: {}, requestId: () => "req", requestSource: () => "test", webRoot: new URL("file:///tmp/"), workerInstallerRoot: new URL("file:///tmp/"), workerOrchestratorExecutable: new URL("file:///tmp/mars-orchestrator"), onWorkerAdopted: () => {}, workerConnected: () => true, health: () => ({ buildId: "test", startedAt: new Date().toISOString(), discovery: { lastAttemptAt: null, lastSuccessAt: null, stale: false, staleAfterMs: 1 } }), currentUser: async () => user } as never); }
+const sessionHeaders = { Cookie: "mars_session=test" };
 
 test("session lookup normalizes PostgreSQL bigint GitHub IDs", async () => {
   const db = (async () => [{ id: "user-1", githubUserId: "153311365", login: "admin", isGlobalAdmin: true }]) as never;
@@ -224,10 +224,10 @@ test("global admins can create the control-plane default pool without an organiz
   const response = await appFor(admin, db).request("/api/pools", {
     method: "POST",
     headers: { ...sessionHeaders, "Content-Type": "application/json", "Idempotency-Key": "global-pool" },
-    body: JSON.stringify({ workerId: "00000000-0000-4000-8000-000000000004", name: "default", resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, triggerLabel: "whitesmith-macos-arm64", imageDigest: `macos@sha256:${"a".repeat(64)}` }),
+    body: JSON.stringify({ workerId: "00000000-0000-4000-8000-000000000004", name: "default", resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, triggerLabel: "mars-macos-arm64", imageDigest: `macos@sha256:${"a".repeat(64)}` }),
   });
   expect(response.status).toBe(200);
-  expect(await response.json()).toMatchObject({ labels: ["whitesmith-macos-arm64"] });
+  expect(await response.json()).toMatchObject({ labels: ["mars-macos-arm64"] });
   expect(queries.some((query) => query.includes("INSERT INTO runner_pools"))).toBe(true);
 });
 test("global pool creation rejects duplicate names and labels", async () => {
@@ -236,13 +236,13 @@ test("global pool creation rejects duplicate names and labels", async () => {
     const query = strings.join(" ");
     queries.push(query);
     if (query.includes("FROM workers")) return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64"], admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "a", appliedConfigurationRevision: "a", draining: false }];
-    if (query.includes("FROM runner_pools")) return [{ id: "00000000-0000-4000-8000-000000000003", name: "macos-smoke", triggerLabel: "whitesmith-macos" }];
+    if (query.includes("FROM runner_pools")) return [{ id: "00000000-0000-4000-8000-000000000003", name: "macos-smoke", triggerLabel: "mars-macos" }];
     return [];
   }, {}) as never;
   const response = await appFor(admin, db).request("/api/pools", {
     method: "POST",
     headers: { ...sessionHeaders, "Content-Type": "application/json", "Idempotency-Key": "repair-global-pool" },
-    body: JSON.stringify({ workerId: "00000000-0000-4000-8000-000000000004", name: "macos-smoke", resources: { vcpu: 4, memoryBytes: 8_589_934_592, storageBytes: 85_899_345_920, concurrency: 1 }, triggerLabel: "whitesmith-macos", imageDigest: `whitesmith-macos-job@sha256:${"a".repeat(64)}` }),
+    body: JSON.stringify({ workerId: "00000000-0000-4000-8000-000000000004", name: "macos-smoke", resources: { vcpu: 4, memoryBytes: 8_589_934_592, storageBytes: 85_899_345_920, concurrency: 1 }, triggerLabel: "mars-macos", imageDigest: `mars-macos-job@sha256:${"a".repeat(64)}` }),
   });
   expect(response.status).toBe(409);
   expect(await response.json()).toMatchObject({ code: "pool_conflict" });
@@ -250,7 +250,7 @@ test("global pool creation rejects duplicate names and labels", async () => {
 });
 test("global admins can list the control-plane pool without selecting a workspace", async () => {
   const db = Object.assign(async (strings: TemplateStringsArray) => {
-    if (strings.join(" ").includes("runner_pools")) return [{ id: "pool-1", organizationId: null, workerId: null, workerName: "Shared fleet", name: "default", platform: "macos-arm64", driver: "tart-vm", imageDigest: `macos@sha256:${"a".repeat(64)}`, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, labels: ["self-hosted", "macos", "arm64", "whitesmith-macos"], triggerLabel: "whitesmith-macos", enabled: true, active: 0 }];
+    if (strings.join(" ").includes("runner_pools")) return [{ id: "pool-1", organizationId: null, workerId: null, workerName: "Shared fleet", name: "default", platform: "macos-arm64", driver: "tart-vm", imageDigest: `macos@sha256:${"a".repeat(64)}`, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, labels: ["self-hosted", "macos", "arm64", "mars-macos"], triggerLabel: "mars-macos", enabled: true, active: 0 }];
     return [];
   }, {}) as never;
   const response = await appFor(admin, db).request("/api/pools", { headers: sessionHeaders });

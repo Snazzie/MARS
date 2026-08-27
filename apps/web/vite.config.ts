@@ -3,7 +3,7 @@ import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 
 const devEntry: Plugin = {
-  name: "whitesmith-dev-entry",
+  name: "mars-dev-entry",
   transformIndexHtml: {
     order: "pre",
     handler(html) {

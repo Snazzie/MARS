@@ -9,7 +9,7 @@ export function WorkerImageBuildForm({ organizationId, workerId, onComplete, onC
     event.preventDefault();
     setPending(true); setError(null);
     try {
-      await buildWorkerImage(workerId, { image: "whitesmith/windows-job:local" });
+      await buildWorkerImage(workerId, { image: "mars/windows-job:local" });
       onComplete();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Image build could not be started.");

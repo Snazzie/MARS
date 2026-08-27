@@ -23,9 +23,9 @@ export function fakeHttpDeps(overrides: TestOverrides = {}): ControlPlaneHttpDep
     currentUser: async () => null,
     requestId: () => "request-test-0001",
     requestSource: () => "test",
-    webRoot: new URL("file:///tmp/whitesmith-web/"),
-    workerInstallerRoot: new URL("file:///tmp/whitesmith-installers/"),
-    workerOrchestratorExecutable: new URL("file:///tmp/whitesmith-orchestrator"),
+    webRoot: new URL("file:///tmp/mars-web/"),
+    workerInstallerRoot: new URL("file:///tmp/mars-installers/"),
+    workerOrchestratorExecutable: new URL("file:///tmp/mars-orchestrator"),
     onWorkerAdopted: () => undefined,
     health: () => ({
       buildId: "test-build",

@@ -9,7 +9,7 @@ import {
   type WorkerCacheEntryProjection,
   type WorkerCacheProxy,
   type WorkerCacheStatus,
-} from "@whitesmith/contracts";
+} from "@mars/contracts";
 import { retryControlPlaneOperation } from "../worker-client.ts";
 import { loadOrCreateCertificateAuthority, type IssuedLeafCertificate, type WorkerCertificateAuthority } from "./certificates.ts";
 import { openActionCacheStore, type ActionCacheMutation, type ActionCacheStore } from "./store.ts";
@@ -98,10 +98,10 @@ function parseAdvertiseOrigin(value: string, protocol: "http:" | "https:", name:
 }
 
 export function resolveActionCacheNetworkConfiguration(env: Environment = Bun.env): ActionCacheNetworkConfiguration {
-  const proxyPort = configuredPort(env.WHITESMITH_CACHE_PROXY_PORT, 8788, "cache proxy port");
-  const dataPort = configuredPort(env.WHITESMITH_CACHE_DATA_PORT, 8789, "cache data port");
-  const proxyOverride = env.WHITESMITH_CACHE_PROXY_URL?.trim();
-  const dataOverride = env.WHITESMITH_CACHE_ADVERTISE_URL?.trim();
+  const proxyPort = configuredPort(env.MARS_CACHE_PROXY_PORT, 8788, "cache proxy port");
+  const dataPort = configuredPort(env.MARS_CACHE_DATA_PORT, 8789, "cache data port");
+  const proxyOverride = env.MARS_CACHE_PROXY_URL?.trim();
+  const dataOverride = env.MARS_CACHE_ADVERTISE_URL?.trim();
   if (Boolean(proxyOverride) !== Boolean(dataOverride)) throw new Error("cache proxy and advertise URL overrides must be configured together");
   if (!proxyOverride || !dataOverride) return { proxyPort, dataPort, overrideOrigins: null };
   const proxyUrl = parseAdvertiseOrigin(proxyOverride, "http:", "cache proxy URL");
@@ -490,8 +490,8 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
   const now = options.now ?? (() => new Date());
   const leaseCredentials = new LeaseProxyCredentials(now);
   const authorizeCacheRequest = options.authorizeCacheRequest ?? createGitHubCacheTokenVerifier({
-    issuer: env.WHITESMITH_CACHE_TOKEN_ISSUER,
-    jwksUrl: env.WHITESMITH_CACHE_JWKS_URL,
+    issuer: env.MARS_CACHE_TOKEN_ISSUER,
+    jwksUrl: env.MARS_CACHE_JWKS_URL,
   });
   const forwardResults = options.forwardResultsRequest ?? forwardResultsRequest;
   let store: ActionCacheStore | null = null;
@@ -539,7 +539,7 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
     let localDataPort = 0;
     proxy.on("connect", (request, socket, head) => {
       if (!leaseCredentials.authorize(request.headers["proxy-authorization"])) {
-        socket.end("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"Whitesmith Worker Cache\"\r\nConnection: close\r\n\r\n");
+        socket.end("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"Mars Worker Cache\"\r\nConnection: close\r\n\r\n");
         return;
       }
       let target: URL;

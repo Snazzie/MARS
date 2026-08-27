@@ -15,7 +15,7 @@ if (-not (Test-Path -LiteralPath $SourceVhdx -PathType Leaf)) { throw "Source VH
 if (-not (Test-Path -LiteralPath $JobAgentPath -PathType Leaf)) { throw "Job agent not found: $JobAgentPath" }
 AssertDigest (Digest $SourceVhdx) ("sha256:" + $SourceSha256.Trim().ToLowerInvariant().Replace('sha256:','')) 'source VHDX'
 if ((Get-VHD -Path $SourceVhdx).VhdType -eq 'Differencing') { throw 'Source VHDX must be a sealed non-differencing parent.' }
-$name = "whitesmith-template-$([guid]::NewGuid().ToString('N'))"
+$name = "mars-template-$([guid]::NewGuid().ToString('N'))"
 $temp = Join-Path ([IO.Path]::GetTempPath()) $name
 New-Item -ItemType Directory -Force -Path $temp | Out-Null
 $working = Join-Path $temp 'template.vhdx'
@@ -30,19 +30,19 @@ try {
   $deadline = (Get-Date).AddMinutes(10)
   do { Start-Sleep -Seconds 2; $heartbeat = (Get-VMIntegrationService -VMName $name -Name 'Heartbeat').PrimaryStatusDescription } while ($heartbeat -ne 'OK' -and (Get-Date) -lt $deadline)
   if ($heartbeat -ne 'OK') { throw 'Windows template guest heartbeat did not become ready.' }
-  Copy-VMFile -VMName $name -SourcePath $JobAgentPath -DestinationPath 'C:\Windows\Temp\whitesmith-job-agent.exe' -FileSource Host -CreateFullPath
+  Copy-VMFile -VMName $name -SourcePath $JobAgentPath -DestinationPath 'C:\Windows\Temp\mars-job-agent.exe' -FileSource Host -CreateFullPath
   Invoke-Command -VMName $name -Credential $GuestCredential -ScriptBlock {
-    New-Item -ItemType Directory -Force -Path 'C:\ProgramData\Whitesmith' | Out-Null
-    Copy-Item 'C:\Windows\Temp\whitesmith-job-agent.exe' 'C:\ProgramData\Whitesmith\whitesmith-job-agent.exe' -Force
-    New-Item -ItemType File -Force -Path 'C:\ProgramData\Whitesmith\guest-service.ready' | Out-Null
-    $action = New-ScheduledTaskAction -Execute 'C:\ProgramData\Whitesmith\whitesmith-job-agent.exe' -Argument 'guest-service --platform windows-x64 --bootstrap-file C:\ProgramData\Whitesmith\bootstrap.json'
+    New-Item -ItemType Directory -Force -Path 'C:\ProgramData\Mars' | Out-Null
+    Copy-Item 'C:\Windows\Temp\mars-job-agent.exe' 'C:\ProgramData\Mars\mars-job-agent.exe' -Force
+    New-Item -ItemType File -Force -Path 'C:\ProgramData\Mars\guest-service.ready' | Out-Null
+    $action = New-ScheduledTaskAction -Execute 'C:\ProgramData\Mars\mars-job-agent.exe' -Argument 'guest-service --platform windows-x64 --bootstrap-file C:\ProgramData\Mars\bootstrap.json'
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
-    Register-ScheduledTask -TaskName 'WhitesmithGuestService' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-    Remove-Item 'C:\Windows\Temp\whitesmith-job-agent.exe' -Force
+    Register-ScheduledTask -TaskName 'MarsGuestService' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    Remove-Item 'C:\Windows\Temp\mars-job-agent.exe' -Force
     Remove-Item 'C:\Users\*\AppData\Local\Temp\*' -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item 'C:\ProgramData\Whitesmith\worker-identity.json' -Force -ErrorAction SilentlyContinue
+    Remove-Item 'C:\ProgramData\Mars\worker-identity.json' -Force -ErrorAction SilentlyContinue
   }
   Invoke-Command -VMName $name -Credential $GuestCredential -ScriptBlock { Start-Process 'C:\Windows\System32\Sysprep\Sysprep.exe' -ArgumentList '/generalize','/oobe','/shutdown','/quiet' -Wait }
   $deadline = (Get-Date).AddMinutes(10)

@@ -1,11 +1,11 @@
 import { mkdir, chmod, readFile, open } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import type { DashboardDb } from "@whitesmith/db";
+import type { DashboardDb } from "@mars/db";
 import type { TransactionSql } from "postgres";
 import { httpOrigin } from "./http-origin.ts";
 
-const SETUP_LOCK = "whitesmith:control-plane-setup";
+const SETUP_LOCK = "mars:control-plane-setup";
 const masterPath = (root: string) => join(root, "app_master_key");
 
 async function exclusiveSecretFile(path: string, value: string): Promise<void> {

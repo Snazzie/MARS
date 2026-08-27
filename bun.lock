@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "whitesmith",
+      "name": "mars",
       "devDependencies": {
         "@playwright/test": "1.62.0",
         "@types/bun": "latest",
@@ -14,11 +14,11 @@
       },
     },
     "apps/control-plane": {
-      "name": "@whitesmith/control-plane",
+      "name": "@mars/control-plane",
       "version": "0.1.0",
       "dependencies": {
-        "@whitesmith/contracts": "workspace:*",
-        "@whitesmith/db": "workspace:*",
+        "@mars/contracts": "workspace:*",
+        "@mars/db": "workspace:*",
         "hono": "4.13.1",
         "jose": "^6.0.10",
         "postgres": "^3.4.5",
@@ -27,18 +27,18 @@
       },
     },
     "apps/job-agent": {
-      "name": "@whitesmith/job-agent",
+      "name": "@mars/job-agent",
       "version": "0.1.0",
       "dependencies": {
-        "@whitesmith/contracts": "workspace:*",
+        "@mars/contracts": "workspace:*",
         "zod": "^3.25.0",
       },
     },
     "apps/orchestrator": {
-      "name": "@whitesmith/orchestrator",
+      "name": "@mars/orchestrator",
       "version": "0.1.0",
       "dependencies": {
-        "@whitesmith/contracts": "workspace:*",
+        "@mars/contracts": "workspace:*",
         "jose": "^6.0.10",
         "node-forge": "^1.4.0",
         "zod": "^3.25.0",
@@ -48,7 +48,7 @@
       },
     },
     "apps/web": {
-      "name": "@whitesmith/web",
+      "name": "@mars/web",
       "version": "0.1.0",
       "dependencies": {
         "@astryxdesign/core": "^0.3.0",
@@ -57,7 +57,7 @@
         "@tanstack/react-query": "^5.83.0",
         "@tanstack/react-router": "^1.130.0",
         "@tanstack/react-table": "^8.21.0",
-        "@whitesmith/contracts": "workspace:*",
+        "@mars/contracts": "workspace:*",
         "react": "^19.1.0",
         "react-dom": "^19.1.0",
         "zod": "^3.25.0",
@@ -70,17 +70,17 @@
       },
     },
     "packages/contracts": {
-      "name": "@whitesmith/contracts",
+      "name": "@mars/contracts",
       "version": "0.1.0",
       "dependencies": {
         "zod": "^3.25.0",
       },
     },
     "packages/db": {
-      "name": "@whitesmith/db",
+      "name": "@mars/db",
       "version": "0.1.0",
       "dependencies": {
-        "@whitesmith/contracts": "workspace:*",
+        "@mars/contracts": "workspace:*",
         "drizzle-kit": "^0.31.10",
         "drizzle-orm": "^0.45.2",
         "postgres": "^3.4.5",
@@ -332,17 +332,17 @@
 
     "@vitejs/plugin-react": ["@vitejs/plugin-react@6.0.5", "", { "dependencies": { "@rolldown/pluginutils": "^1.0.1" }, "peerDependencies": { "@rolldown/plugin-babel": "^0.1.7 || ^0.2.0", "babel-plugin-react-compiler": "^1.0.0", "vite": "^8.0.0" }, "optionalPeers": ["@rolldown/plugin-babel", "babel-plugin-react-compiler"] }, "sha512-BOVzne/NL162sMdResB25mUv+vWMF5NoAjNf09TeGlE7ZpszZWSD3winycicLJw72yeVsoCn/2kOhEuCvEShMA=="],
 
-    "@whitesmith/contracts": ["@whitesmith/contracts@workspace:packages/contracts"],
+    "@mars/contracts": ["@mars/contracts@workspace:packages/contracts"],
 
-    "@whitesmith/control-plane": ["@whitesmith/control-plane@workspace:apps/control-plane"],
+    "@mars/control-plane": ["@mars/control-plane@workspace:apps/control-plane"],
 
-    "@whitesmith/db": ["@whitesmith/db@workspace:packages/db"],
+    "@mars/db": ["@mars/db@workspace:packages/db"],
 
-    "@whitesmith/job-agent": ["@whitesmith/job-agent@workspace:apps/job-agent"],
+    "@mars/job-agent": ["@mars/job-agent@workspace:apps/job-agent"],
 
-    "@whitesmith/orchestrator": ["@whitesmith/orchestrator@workspace:apps/orchestrator"],
+    "@mars/orchestrator": ["@mars/orchestrator@workspace:apps/orchestrator"],
 
-    "@whitesmith/web": ["@whitesmith/web@workspace:apps/web"],
+    "@mars/web": ["@mars/web@workspace:apps/web"],
 
     "ansi-regex": ["ansi-regex@6.3.0", "", {}, "sha512-WpDfL7NO6j7tH88IDBNVdUJxDh9nmCteAVW9dsep846XdwF4naCBK+/tGLX3KJgcpgMRXCFlTM2hKGoK9FsdrQ=="],
 

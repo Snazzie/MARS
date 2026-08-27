@@ -17,7 +17,7 @@ const links = [
 ] as const;
 const helpByRoute: Record<(typeof links)[number][0], { label: string; text: string }> = {
   "/": { label: "About overview health", text: "What: workload outcomes and control-plane freshness for the selected workspace. How: change the time window to inspect trends. Fix: open Workers when capacity or runtime health is degraded, then Runs for individual failures." },
-  "/runs": { label: "About run history", text: "What: GitHub workflow jobs observed by Whitesmith. How: filter by repository, branch, actor, status, or conclusion and open a run for jobs, stages, and logs. Fix: use the linked GitHub run when cancellation or rerun is required." },
+  "/runs": { label: "About run history", text: "What: GitHub workflow jobs observed by Mars. How: filter by repository, branch, actor, status, or conclusion and open a run for jobs, stages, and logs. Fix: use the linked GitHub run when cancellation or rerun is required." },
   "/repositories": { label: "About repository setup", text: "What: repositories available through the selected GitHub App installation. How: preview workflow label changes before opening a pull request. Fix: manage the installation when a repository is missing or access is stale." },
   "/workers": { label: "About worker readiness", text: "What: enrollment, connection, configuration, doctor checks, and free capacity. How: adopt a pending host, configure its supported runtime, then wait for the applied revision. Fix: follow the reported remediation and drain before removal." },
   "/pools": { label: "About shared pools", text: "What: global routing labels backed by compatible ready workers. How: keep labels canonical and only enable a pool after coverage is ready. Fix: disable the pool and wait for active leases before editing or deleting it." },
@@ -54,7 +54,7 @@ export function AppShell() {
     <div className="console-frame">
       <ContextHelp label={currentHelp.label}>{currentHelp.text}</ContextHelp>
       <aside className="rail">
-        <div className="brand-lockup"><span className="brand-pip" aria-hidden="true" /><span>WHITESMITH</span></div>
+        <div className="brand-lockup"><span className="brand-pip" aria-hidden="true" /><span>MARS</span></div>
         <p className="rail-caption">Runner operations / 01</p>
         <label className="rail-org-picker">Workspace
           <select aria-label="Select workspace" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
@@ -75,7 +75,7 @@ export function AppShell() {
       <div className="console-body">
         <header className="mobile-header">
           <div className="mobile-header-top">
-            <div className="brand-lockup"><span className="brand-pip" aria-hidden="true" /><span>WHITESMITH</span></div>
+            <div className="brand-lockup"><span className="brand-pip" aria-hidden="true" /><span>MARS</span></div>
             <button ref={menuButtonRef} type="button" className="mobile-menu-button" aria-expanded={mobileMenuOpen} aria-controls="mobile-navigation" onClick={() => setMobileMenuOpen((open) => !open)}>
               {mobileMenuOpen ? "Close" : "Menu"}
             </button>

@@ -1,4 +1,4 @@
-import { PoolResources, WorkerLimits } from "@whitesmith/contracts";
+import { PoolResources, WorkerLimits } from "@mars/contracts";
 
 export interface Candidate {
   worker: { admissionState:string; connectionState:string; configurationState:string; configurationRevision:string|null; appliedConfigurationRevision:string|null; runtimeReady?: boolean; linuxEvidenceReady?: boolean; limits: unknown };
@@ -42,9 +42,9 @@ export function resolveProvisionResources(poolResources: unknown, provision: Pro
 }
 
 const legacyRoutingLabels: Record<string, readonly string[][]> = {
-  "whitesmith-linux-x64": [["self-hosted", "linux", "x64", "whitesmith-default"]],
-  "whitesmith-windows-x64": [["self-hosted", "windows", "x64", "whitesmith-default"]],
-  "whitesmith-macos-arm64": [["self-hosted", "macos", "arm64", "whitesmith-default"], ["self-hosted", "macos", "arm64", "whitesmith-macos"]],
+  "mars-linux-x64": [["self-hosted", "linux", "x64", "mars-default"]],
+  "mars-windows-x64": [["self-hosted", "windows", "x64", "mars-default"]],
+  "mars-macos-arm64": [["self-hosted", "macos", "arm64", "mars-default"], ["self-hosted", "macos", "arm64", "mars-macos"]],
 };
 
 export function labelsMatch(requestedLabels: readonly string[], poolLabels: readonly string[], triggerLabel: string|null): boolean {

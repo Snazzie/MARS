@@ -11,22 +11,22 @@ afterEach(async () => {
 });
 
 async function temporaryRoot(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "whitesmith-action-cache-"));
+  const root = await mkdtemp(join(tmpdir(), "mars-action-cache-"));
   roots.push(root);
   return root;
 }
 
 test("resolves the worker-local cache root for every supported platform", () => {
-  expect(resolveActionCacheRoot({ WHITESMITH_ACTION_CACHE_ROOT: "D:\\cache" }, "win32")).toBe("D:\\cache");
-  expect(resolveActionCacheRoot({ ProgramData: "D:\\ProgramData" }, "win32")).toBe("D:\\ProgramData\\Whitesmith\\action-cache");
-  expect(resolveActionCacheRoot({ HOME: "/Users/worker" }, "darwin")).toBe("/Users/worker/Library/Application Support/Whitesmith/action-cache");
-  expect(resolveActionCacheRoot({}, "linux")).toBe("/var/lib/whitesmith/action-cache");
+  expect(resolveActionCacheRoot({ MARS_ACTION_CACHE_ROOT: "D:\\cache" }, "win32")).toBe("D:\\cache");
+  expect(resolveActionCacheRoot({ ProgramData: "D:\\ProgramData" }, "win32")).toBe("D:\\ProgramData\\Mars\\action-cache");
+  expect(resolveActionCacheRoot({ HOME: "/Users/worker" }, "darwin")).toBe("/Users/worker/Library/Application Support/Mars/action-cache");
+  expect(resolveActionCacheRoot({}, "linux")).toBe("/var/lib/mars/action-cache");
 });
 
 test("rejects relative or control-character cache roots", () => {
-  expect(() => resolveActionCacheRoot({ WHITESMITH_ACTION_CACHE_ROOT: "relative/cache" }, "linux")).toThrow("absolute");
-  expect(() => resolveActionCacheRoot({ WHITESMITH_ACTION_CACHE_ROOT: "relative\\cache" }, "win32")).toThrow("absolute");
-  expect(() => resolveActionCacheRoot({ WHITESMITH_ACTION_CACHE_ROOT: "/var/lib/cache\nother" }, "linux")).toThrow("invalid");
+  expect(() => resolveActionCacheRoot({ MARS_ACTION_CACHE_ROOT: "relative/cache" }, "linux")).toThrow("absolute");
+  expect(() => resolveActionCacheRoot({ MARS_ACTION_CACHE_ROOT: "relative\\cache" }, "win32")).toThrow("absolute");
+  expect(() => resolveActionCacheRoot({ MARS_ACTION_CACHE_ROOT: "/var/lib/cache\nother" }, "linux")).toThrow("invalid");
 });
 
 test("persists one generation and immutable entry metadata in WAL SQLite", async () => {

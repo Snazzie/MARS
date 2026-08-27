@@ -1,6 +1,6 @@
-import { completeOnboardingIfReady, createDb, migrateDatabase, jsonParameter } from "@whitesmith/db";
-import type { WorkerCommand } from "@whitesmith/contracts";
-import { WorkerCommand as WorkerCommandSchema } from "@whitesmith/contracts";
+import { completeOnboardingIfReady, createDb, migrateDatabase, jsonParameter } from "@mars/db";
+import type { WorkerCommand } from "@mars/contracts";
+import { WorkerCommand as WorkerCommandSchema } from "@mars/contracts";
 import type { Server, ServerWebSocket } from "bun";
 import { createSession, getSession, SecretBox } from "./auth.ts";
 import { createPkce, githubAuthorizeUrl, exchangeOAuth, ensureBootstrapAdmin, syncGithubOrganizations } from "./github.ts";
@@ -28,9 +28,9 @@ import { GithubRateLimitGate } from "./github-rate-limit.ts";
 import { fileURLToPath } from "node:url";
 import { initializeControlPlaneSetup } from "./control-plane-setup.ts";
 const required = (name: string): string => { const value = Bun.env[name]; if (!value) throw new Error(`${name} is required`); return value; };
-const dataRoot = Bun.env.DATA_ROOT?.trim() || "/var/lib/whitesmith";
+const dataRoot = Bun.env.DATA_ROOT?.trim() || "/var/lib/mars";
 const controlPlaneAdapterUrls = (Bun.env.CONTROL_PLANE_ADAPTER_URLS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
-const env = { DATABASE: required("DATABASE_URL"), MACOS_TART_BASE_IMAGE: Bun.env.WHITESMITH_TART_BASE_IMAGE, DEFAULT_IMAGES: { "linux-x64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_X64, "windows-x64": Bun.env.DEFAULT_JOB_IMAGE_WINDOWS_X64, "macos-arm64": Bun.env.DEFAULT_JOB_IMAGE_MACOS_ARM64 }, TEMPLATE_MANIFESTS: { "windows-x64": Bun.env.WHITESMITH_WINDOWS_TEMPLATE_MANIFEST, "linux-x64": Bun.env.WHITESMITH_LINUX_TEMPLATE_MANIFEST }, TEMPLATE_ARTIFACTS: { "windows-x64": Bun.env.WHITESMITH_WINDOWS_TEMPLATE_ARTIFACT, "linux-x64": Bun.env.WHITESMITH_LINUX_TEMPLATE_ARTIFACT }, WORKER_TEMPLATE_PATHS: { "windows-x64": Bun.env.WHITESMITH_WINDOWS_TEMPLATE_PATH, "linux-x64": Bun.env.WHITESMITH_LINUX_TEMPLATE_PATH }, WORKER_TEMPLATE_DIGESTS: { "windows-x64": Bun.env.WHITESMITH_WINDOWS_TEMPLATE_DIGEST, "linux-x64": Bun.env.WHITESMITH_LINUX_TEMPLATE_DIGEST } };
+const env = { DATABASE: required("DATABASE_URL"), MACOS_TART_BASE_IMAGE: Bun.env.MARS_TART_BASE_IMAGE, DEFAULT_IMAGES: { "linux-x64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_X64, "windows-x64": Bun.env.DEFAULT_JOB_IMAGE_WINDOWS_X64, "macos-arm64": Bun.env.DEFAULT_JOB_IMAGE_MACOS_ARM64 }, TEMPLATE_MANIFESTS: { "windows-x64": Bun.env.MARS_WINDOWS_TEMPLATE_MANIFEST, "linux-x64": Bun.env.MARS_LINUX_TEMPLATE_MANIFEST }, TEMPLATE_ARTIFACTS: { "windows-x64": Bun.env.MARS_WINDOWS_TEMPLATE_ARTIFACT, "linux-x64": Bun.env.MARS_LINUX_TEMPLATE_ARTIFACT }, WORKER_TEMPLATE_PATHS: { "windows-x64": Bun.env.MARS_WINDOWS_TEMPLATE_PATH, "linux-x64": Bun.env.MARS_LINUX_TEMPLATE_PATH }, WORKER_TEMPLATE_DIGESTS: { "windows-x64": Bun.env.MARS_WINDOWS_TEMPLATE_DIGEST, "linux-x64": Bun.env.MARS_LINUX_TEMPLATE_DIGEST } };
 const production = Bun.env.NODE_ENV === "production";
 const webRoot = new URL(Bun.env.WEB_ROOT ?? "../../web/dist/", import.meta.url);
 const workerInstallerRoot = new URL(production ? required("WORKER_INSTALLER_ROOT") : Bun.env.WORKER_INSTALLER_ROOT ?? "../../../deploy/workers/", import.meta.url);
@@ -38,11 +38,11 @@ const runtimeArtifact = (name: string, fallback: string): URL | undefined => {
   const configured = Bun.env[name];
   return configured ? new URL(configured, import.meta.url) : production ? undefined : new URL(fallback, import.meta.url);
 };
-const workerServiceHostExecutable = runtimeArtifact("WORKER_SERVICE_HOST_EXECUTABLE", "../../../apps/windows-service-host/target/release/whitesmith-service-host.exe");
+const workerServiceHostExecutable = runtimeArtifact("WORKER_SERVICE_HOST_EXECUTABLE", "../../../apps/windows-service-host/target/release/mars-service-host.exe");
 const workerOrchestratorExecutables = {
-  "linux-x64": runtimeArtifact("WORKER_ORCHESTRATOR_LINUX_X64", "../../../apps/orchestrator/dist/whitesmith-orchestrator"),
-  "windows-x64": runtimeArtifact("WORKER_ORCHESTRATOR_WINDOWS_X64", "../../../apps/orchestrator/dist/whitesmith-orchestrator.exe"),
-  "macos-arm64": runtimeArtifact("WORKER_ORCHESTRATOR_MACOS_ARM64", "../../../apps/orchestrator/dist/whitesmith-orchestrator-macos-arm64"),
+  "linux-x64": runtimeArtifact("WORKER_ORCHESTRATOR_LINUX_X64", "../../../apps/orchestrator/dist/mars-orchestrator"),
+  "windows-x64": runtimeArtifact("WORKER_ORCHESTRATOR_WINDOWS_X64", "../../../apps/orchestrator/dist/mars-orchestrator.exe"),
+  "macos-arm64": runtimeArtifact("WORKER_ORCHESTRATOR_MACOS_ARM64", "../../../apps/orchestrator/dist/mars-orchestrator-macos-arm64"),
 };
 const containerBuildArtifact = (name: string, fallback: string): string | undefined => {
   const artifact = runtimeArtifact(name, fallback);
@@ -58,26 +58,26 @@ type WindowsContainerReleaseConfig = {
   vcSha256: string;
 };
 const loadWindowsContainerBuild = async (): Promise<ControlPlaneHttpDeps["windowsContainerBuild"]> => {
-  const manifestUrl = new URL(Bun.env.WHITESMITH_RELEASE_MANIFEST ?? (production ? "./release-manifest.json" : "../../../deploy/control-plane/release-manifest.json"), import.meta.url);
+  const manifestUrl = new URL(Bun.env.MARS_RELEASE_MANIFEST ?? (production ? "./release-manifest.json" : "../../../deploy/control-plane/release-manifest.json"), import.meta.url);
   const manifest = await Bun.file(manifestUrl).json().catch(() => null) as { windowsContainerBuild?: WindowsContainerReleaseConfig | null } | null;
   const configured = manifest?.windowsContainerBuild ?? {
-    baseImage: Bun.env.WHITESMITH_WINDOWS_CONTAINER_BASE_IMAGE,
-    runnerUrl: Bun.env.WHITESMITH_WINDOWS_CONTAINER_RUNNER_URL,
-    runnerSha256: Bun.env.WHITESMITH_WINDOWS_CONTAINER_RUNNER_SHA256,
-    gitUrl: Bun.env.WHITESMITH_WINDOWS_CONTAINER_GIT_URL,
-    gitSha256: Bun.env.WHITESMITH_WINDOWS_CONTAINER_GIT_SHA256,
-    vcUrl: Bun.env.WHITESMITH_WINDOWS_CONTAINER_VC_URL,
-    vcSha256: Bun.env.WHITESMITH_WINDOWS_CONTAINER_VC_SHA256,
+    baseImage: Bun.env.MARS_WINDOWS_CONTAINER_BASE_IMAGE,
+    runnerUrl: Bun.env.MARS_WINDOWS_CONTAINER_RUNNER_URL,
+    runnerSha256: Bun.env.MARS_WINDOWS_CONTAINER_RUNNER_SHA256,
+    gitUrl: Bun.env.MARS_WINDOWS_CONTAINER_GIT_URL,
+    gitSha256: Bun.env.MARS_WINDOWS_CONTAINER_GIT_SHA256,
+    vcUrl: Bun.env.MARS_WINDOWS_CONTAINER_VC_URL,
+    vcSha256: Bun.env.MARS_WINDOWS_CONTAINER_VC_SHA256,
   };
   const release = configured && Object.values(configured).every((value) => typeof value === "string" && value.length > 0) ? configured as WindowsContainerReleaseConfig : undefined;
   if (!release) return undefined;
   return {
     ...release,
-    builderPath: containerBuildArtifact("WHITESMITH_WINDOWS_CONTAINER_BUILDER", "../../../deploy/workers/build-windows-container-image-local.ps1")!,
-    verifierPath: containerBuildArtifact("WHITESMITH_WINDOWS_CONTAINER_VERIFIER", "../../../images/jobs/windows/verify-runtime.ps1")!,
-    containerfilePath: containerBuildArtifact("WHITESMITH_WINDOWS_CONTAINERFILE", "../../../images/jobs/windows/Containerfile")!,
-    entrypointPath: containerBuildArtifact("WHITESMITH_WINDOWS_CONTAINER_ENTRYPOINT", "../../../images/jobs/windows/entrypoint.ps1")!,
-    jobAgentPath: containerBuildArtifact("WHITESMITH_WINDOWS_CONTAINER_JOB_AGENT", "../../../apps/job-agent/dist/whitesmith-job-agent.exe")!,
+    builderPath: containerBuildArtifact("MARS_WINDOWS_CONTAINER_BUILDER", "../../../deploy/workers/build-windows-container-image-local.ps1")!,
+    verifierPath: containerBuildArtifact("MARS_WINDOWS_CONTAINER_VERIFIER", "../../../images/jobs/windows/verify-runtime.ps1")!,
+    containerfilePath: containerBuildArtifact("MARS_WINDOWS_CONTAINERFILE", "../../../images/jobs/windows/Containerfile")!,
+    entrypointPath: containerBuildArtifact("MARS_WINDOWS_CONTAINER_ENTRYPOINT", "../../../images/jobs/windows/entrypoint.ps1")!,
+    jobAgentPath: containerBuildArtifact("MARS_WINDOWS_CONTAINER_JOB_AGENT", "../../../apps/job-agent/dist/mars-job-agent.exe")!,
   };
 };
 const windowsContainerBuild = await loadWindowsContainerBuild();
@@ -99,7 +99,7 @@ configureRunLifecycle(db);
 const initialized = await initializeControlPlaneSetup(db, dataRoot);
 const secretBox = new SecretBox(initialized.masterKey);
 const json = (data: unknown, status=200) => Response.json(data,{status,headers:{"cache-control":"no-store"}});
-const cookie = (value:string, maxAge:number) => `whitesmith_session=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
+const cookie = (value:string, maxAge:number) => `mars_session=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
 const sessions = new Map<string, {state:string; verifier:string; createdAt:number}>();
 type WorkerSocketData = { actor: "worker"; workerId: string; challenge?: Buffer; authenticated: boolean; connectionEpoch?: number; authTimer?: ReturnType<typeof setTimeout> };
 type BrowserSocketData = { actor: "browser"; organizationId: string; cursor: number };
@@ -125,7 +125,7 @@ async function replayBrowserInvalidations(ws: ServerWebSocket<SocketData>): Prom
     replayingBrowserSockets.delete(ws);
   }
 }
-async function current(request: Request) { return getSession(db, request.headers.get("cookie")?.match(/whitesmith_session=([^;]+)/)?.[1]); }
+async function current(request: Request) { return getSession(db, request.headers.get("cookie")?.match(/mars_session=([^;]+)/)?.[1]); }
 const commandStore = {
   async save(command: WorkerCommand): Promise<void> {
     await db`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${command.id},${command.version},${command.type},${command.workerId},${command.leaseId},${command.occurredAt},${jsonParameter(db, command.payload)}) on conflict (id) do nothing`;
@@ -155,7 +155,7 @@ const discoveryHealth = new DiscoveryHealthMonitor(discoveryIntervalMs, Date.par
 const githubApp = new GitHubAppService({ db, secretBox, publicOrigin: initialized.setup.publicOrigin });
 const githubRateLimits = new GithubRateLimitGate();
 let triggerReconciliation = () => Promise.resolve();
-const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerControlPlaneUrls: controlPlaneAdapterUrls, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, windowsContainerBuild, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerServiceHostExecutable, workerOrchestratorExecutables, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, workerConnected: (workerId) => dispatcher.isConnected(workerId), onWorkerAdopted: (workerId) => { dispatcher.replayConnected(workerId); void triggerReconciliation(); }, health: () => ({ buildId: Bun.env.WHITESMITH_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
+const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerControlPlaneUrls: controlPlaneAdapterUrls, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, windowsContainerBuild, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerServiceHostExecutable, workerOrchestratorExecutables, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, workerConnected: (workerId) => dispatcher.isConnected(workerId), onWorkerAdopted: (workerId) => { dispatcher.replayConnected(workerId); void triggerReconciliation(); }, health: () => ({ buildId: Bun.env.MARS_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
 const discoveryDeps = { db, installationToken: (installationId: number) => githubApp.getInstallationToken(installationId), githubFetchForInstallation: (installationId: number) => githubRateLimits.scopedFetch(installationId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY };
 let lastQueuedDiscoveryAt = 0;
 let lastGithubLeaseReconciliationAt = 0;
@@ -300,7 +300,7 @@ server = Bun.serve<SocketData>({
     return httpApp.fetch(request);
   },
 });
-console.log(`Whitesmith control plane listening on ${server.url}`);
+console.log(`Mars control plane listening on ${server.url}`);
 startReconciliationScheduler(async () => {
   discoveryHealth.markAttempt();
   try {

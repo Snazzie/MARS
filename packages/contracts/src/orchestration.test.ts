@@ -5,10 +5,10 @@ import * as orchestration from "./orchestration.ts";
 test("parses a GitHub JIT config with a one-time lease binding", () => {
   expect(RunnerJitConfig.parse({
     encodedJitConfig: "encoded",
-    runnerName: "whitesmith-lease-1",
-    labels: ["self-hosted", "macos", "arm64", "whitesmith-default"],
+    runnerName: "mars-lease-1",
+    labels: ["self-hosted", "macos", "arm64", "mars-default"],
     expiresAt: "2026-08-12T12:00:00.000Z",
-  })).toMatchObject({ runnerName: "whitesmith-lease-1" });
+  })).toMatchObject({ runnerName: "mars-lease-1" });
   expect(LeaseBootstrapEnvelope.safeParse({
     leaseId: "11111111-1111-4111-8111-111111111111",
     jobId: "22222222-2222-4222-8222-222222222222",
@@ -69,9 +69,9 @@ test("rejects invalid out-of-memory measurements", () => {
   })).toThrow();
 });
 test("accepts worker-local runtime readiness without a registry digest", () => {
-  expect(WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "worker_local", artifactIdentity: "whitesmith/windows-job:local", runtimeReady: true, probe: true, egress: true, imageSignatures: true })).toMatchObject({
+  expect(WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "worker_local", artifactIdentity: "mars/windows-job:local", runtimeReady: true, probe: true, egress: true, imageSignatures: true })).toMatchObject({
     artifactSource: "worker_local",
-    artifactIdentity: "whitesmith/windows-job:local",
+    artifactIdentity: "mars/windows-job:local",
     runtimeReady: true,
   });
 });
@@ -85,7 +85,7 @@ test("parses an immutable worker-local image build request", () => {
   const artifact = (name: string, hash: string) => ({ url: `https://control.test/api/workers/${name}`, sha256: hash.repeat(64) });
   const payload = WorkerBuildImagePayload.parse({
     buildId: "11111111-1111-4111-8111-111111111111",
-    image: "whitesmith/windows-job:local",
+    image: "mars/windows-job:local",
     baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${"a".repeat(64)}`,
     runner: artifact("runner.zip", "b"),
     git: artifact("git.zip", "c"),
@@ -100,7 +100,7 @@ test("parses an immutable worker-local image build request", () => {
     contentSha256: "f".repeat(64),
   });
   expect(payload.artifacts.entrypoint.url).toBe("https://control.test/api/workers/windows-container-entrypoint");
-  expect(WorkerImageBuildSpec.safeParse({ image: "whitesmith/windows-job:local", dockerfile: "FROM base" }).success).toBe(false);
+  expect(WorkerImageBuildSpec.safeParse({ image: "mars/windows-job:local", dockerfile: "FROM base" }).success).toBe(false);
   expect(WorkerBuildImagePayload.safeParse({ ...payload, contentSha256: "mutable" }).success).toBe(false);
 });
 

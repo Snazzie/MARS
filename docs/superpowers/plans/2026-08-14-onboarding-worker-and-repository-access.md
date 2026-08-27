@@ -435,8 +435,8 @@ git push origin main
 - Modify: `apps/web/src/styles.css` only if an existing status style cannot express unavailable detail
 
 **UI behavior:**
-- Remove the Whitesmith approval column and Approve/Remove controls.
-- Available repositories can open `Use Whitesmith runners` regardless of visibility.
+- Remove the Mars approval column and Approve/Remove controls.
+- Available repositories can open `Use Mars runners` regardless of visibility.
 - Unavailable history remains readable, displays that GitHub no longer grants access, and disables setup/management actions.
 - Keep Available/Unavailable filtering and explicit GitHub connection management.
 
@@ -458,9 +458,9 @@ Expected: old approval column/actions remain.
 
 - [ ] **Step 3: Simplify the repository table**
 
-Remove approval mutation imports/state and error aggregation. Change page/caption copy from Whitesmith-selected access to GitHub-granted access. Keep repository, visibility, GitHub access, and actions columns. In the access cell, show `Available` or `Unavailable` and explain unavailable rows with “GitHub no longer grants access.”
+Remove approval mutation imports/state and error aggregation. Change page/caption copy from Mars-selected access to GitHub-granted access. Keep repository, visibility, GitHub access, and actions columns. In the access cell, show `Available` or `Unavailable` and explain unavailable rows with “GitHub no longer grants access.”
 
-Enable `Use Whitesmith runners` exactly when `repository.available`; keep unavailable actions disabled.
+Enable `Use Mars runners` exactly when `repository.available`; keep unavailable actions disabled.
 
 - [ ] **Step 4: Re-run the focused web test**
 
@@ -511,10 +511,10 @@ Expected: all pass.
 - [ ] **Step 3: Run workspace typechecks**
 
 ```bash
-bun run --filter @whitesmith/contracts typecheck
-bun run --filter @whitesmith/db typecheck
-bun run --filter @whitesmith/control-plane typecheck
-bun run --filter @whitesmith/web typecheck
+bun run --filter @mars/contracts typecheck
+bun run --filter @mars/db typecheck
+bun run --filter @mars/control-plane typecheck
+bun run --filter @mars/web typecheck
 ```
 
 Expected: all exit 0.

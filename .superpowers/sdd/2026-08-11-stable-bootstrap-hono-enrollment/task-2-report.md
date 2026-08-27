@@ -6,7 +6,7 @@ Removed the legacy `createDashboardApi` Request dispatcher and migrated dashboar
 
 Verification:
 - `bun test apps/control-plane/src/http/app.test.ts apps/control-plane/src/dashboard-api.test.ts` — 11 passed, 0 failed.
-- `bun run --filter '@whitesmith/control-plane' typecheck` — passed.
+- `bun run --filter '@mars/control-plane' typecheck` — passed.
 - Restored the canonical installer URL in worker enrollment responses and covered it with a focused route assertion.
 - Settings PUT now validates the payload before consuming `Idempotency-Key`, preserving corrected retries after malformed requests.
 - Settings PUT now checks missing idempotency before body parsing, then validates, consumes, and updates in that order; focused tests cover missing-key precedence and same-key corrected retry.

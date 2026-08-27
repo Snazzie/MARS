@@ -1,4 +1,4 @@
-import type { ActionGraph as ActionGraphDto } from "@whitesmith/contracts";
+import type { ActionGraph as ActionGraphDto } from "@mars/contracts";
 
 export function ActionGraph({ graph }: { graph: ActionGraphDto }) {
   const columns = Math.max(1, Math.ceil(Math.sqrt(graph.nodes.length)));

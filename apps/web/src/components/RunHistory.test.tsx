@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { RunSummary } from "@whitesmith/contracts";
+import type { RunSummary } from "@mars/contracts";
 import { filterRuns, runDetailLink, RunHistory } from "./RunHistory.tsx";
 
 const NOW = Date.parse("2026-08-13T16:00:00.000Z");
@@ -8,7 +8,7 @@ const run = (overrides: Partial<RunSummary> = {}): RunSummary => ({
   id: "run-1",
   organizationId: "org-1",
   repositoryId: "repo-1",
-  repositoryName: "whitesmith",
+  repositoryName: "mars",
   runNumber: 11,
   workflowName: "macOS runner smoke",
   event: "workflow_dispatch",
@@ -22,7 +22,7 @@ const run = (overrides: Partial<RunSummary> = {}): RunSummary => ({
   completedAt: "2026-08-13T15:31:35.000Z",
   durationMs: 90_000,
   runtimeBoundary: "Tart VM",
-  allocationState: "whitesmith",
+  allocationState: "mars",
   ...overrides,
 });
 
@@ -32,19 +32,19 @@ test("filters run history across Blacksmith metadata", () => {
   expect(filterRuns(runs, "tart vm", "all", NOW).map((item) => item.id)).toEqual(["run-1", "run-2"]);
 });
 test("filters runs by runner ownership", () => {
-  const runs = [run({ id: "white", allocationState: "whitesmith" }), run({ id: "external", allocationState: "external" })];
+  const runs = [run({ id: "white", allocationState: "mars" }), run({ id: "external", allocationState: "external" })];
   expect(filterRuns(runs, "", "all", NOW, "all").map((item) => item.id)).toEqual(["white", "external"]);
-  expect(filterRuns(runs, "", "all", NOW, "whitesmith").map((item) => item.id)).toEqual(["white"]);
+  expect(filterRuns(runs, "", "all", NOW, "mars").map((item) => item.id)).toEqual(["white"]);
   expect(filterRuns(runs, "", "all", NOW, "external").map((item) => item.id)).toEqual(["external"]);
 });
 
 test("renders the runner filter with All selected by default", () => {
   const html = renderToStaticMarkup(<RunHistory runs={[run()]} allowDetails={false} nowMs={NOW} />);
   expect(html).toContain(">All</button>");
-  expect(html).toContain(">Whitesmith</button>");
+  expect(html).toContain(">Mars</button>");
   expect(html).toContain(">External</button>");
   expect(html).toContain('aria-pressed="true">All</button>');
-  expect(html).toContain('aria-pressed="false">Whitesmith</button>');
+  expect(html).toContain('aria-pressed="false">Mars</button>');
   expect(html).toContain('aria-pressed="false">External</button>');
 });
 
@@ -80,7 +80,7 @@ test("renders dense history rows and an in-panel empty state", () => {
   expect(renderToStaticMarkup(<RunHistory runs={[]} allowDetails={false} nowMs={NOW} />)).toContain("No runs match these filters.");
 });
 
-test("does not mark externally routed jobs as awaiting Whitesmith allocation", () => {
+test("does not mark externally routed jobs as awaiting Mars allocation", () => {
   const html = renderToStaticMarkup(<RunHistory runs={[run({
     status: "queued",
     conclusion: null,

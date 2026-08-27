@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ApproveWorkerRequest, PendingWorkerRequest, WorkerBootstrapRequest, WorkerConfiguration } from "@whitesmith/contracts";
+import { ApproveWorkerRequest, PendingWorkerRequest, WorkerBootstrapRequest, WorkerConfiguration } from "@mars/contracts";
 import { createRequestLimiter, hasMachineIdentity, matchesWorkerIdentity, WorkerRequestError } from "./worker-requests.ts";
 import { pendingWorkerDto } from "./http/worker-routes.ts";
 

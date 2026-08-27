@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createPublicKey, createPrivateKey, diffieHellman, generateKeyPairSync, randomBytes } from "node:crypto";
-import { LeaseBootstrapEnvelope, type RuntimeDriverName as RuntimeDriverNameValue } from "@whitesmith/contracts";
+import { LeaseBootstrapEnvelope, type RuntimeDriverName as RuntimeDriverNameValue } from "@mars/contracts";
 
 type Ciphertext = { version: 1; algorithm: "x25519-aes-256-gcm"; ephemeralPublicKey: string; iv: string; tag: string; ciphertext: string };
 export type LeaseDispatchInput = LeaseBootstrapEnvelope & { driver: RuntimeDriverNameValue; workerId: string; workerEncryptionPublicKey: string };

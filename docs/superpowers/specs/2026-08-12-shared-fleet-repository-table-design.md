@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make Whitesmith accurately represent workers and runner pools as control-plane-wide shared capacity, while redesigning `/repositories` as a clean, fast-scanning GitHub access table.
+Make Mars accurately represent workers and runner pools as control-plane-wide shared capacity, while redesigning `/repositories` as a clean, fast-scanning GitHub access table.
 
 ## Ownership model
 
@@ -23,7 +23,7 @@ Use a dense responsive table with columns:
 1. Repository — full name and compact organization context.
 2. Visibility — private, internal, or public.
 3. Access — available/unavailable from the GitHub installation.
-4. Whitesmith approval — approved or pending.
+4. Mars approval — approved or pending.
 5. Actions — approve/reject, manage GitHub access, and installation management where applicable.
 
 Behavior:

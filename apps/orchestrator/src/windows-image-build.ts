@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { workerBuildImageContentDescriptor, type WorkerBuildImagePayload } from "@whitesmith/contracts";
+import { workerBuildImageContentDescriptor, type WorkerBuildImagePayload } from "@mars/contracts";
 
 type ArtifactPaths = {
   builder: string;
@@ -16,7 +16,7 @@ const filenames: Record<keyof ArtifactPaths, string> = {
   verifier: "verify-runtime.ps1",
   containerfile: "Containerfile",
   entrypoint: "entrypoint.ps1",
-  jobAgent: "whitesmith-job-agent.exe",
+  jobAgent: "mars-job-agent.exe",
 };
 
 export async function downloadWindowsImageBuildArtifacts(

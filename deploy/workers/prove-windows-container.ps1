@@ -16,9 +16,9 @@ function Get-ProbeLogs([string]$Name) {
   return $logs
 }
 $runtimeProbe = $null
-$prerequisiteName = "whitesmith-runtime-probe-$([guid]::NewGuid().ToString('N'))"
+$prerequisiteName = "mars-runtime-probe-$([guid]::NewGuid().ToString('N'))"
 try {
-  docker create --name $prerequisiteName --entrypoint powershell.exe --isolation=hyperv --label whitesmith.managed=true --label "whitesmith.lease-id=$([guid]::NewGuid())" $Image -NoLogo -NoProfile -NonInteractive -File C:\Whitesmith\verify-runtime.ps1 -RequireNetwork | Out-Null
+  docker create --name $prerequisiteName --entrypoint powershell.exe --isolation=hyperv --label mars.managed=true --label "mars.lease-id=$([guid]::NewGuid())" $Image -NoLogo -NoProfile -NonInteractive -File C:\Mars\verify-runtime.ps1 -RequireNetwork | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Failed to create the Hyper-V runtime prerequisite probe.' }
   docker start $prerequisiteName | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Failed to start the Hyper-V runtime prerequisite probe.' }
@@ -35,10 +35,10 @@ try {
 $results = @()
 for ($i = 0; $i -lt $Iterations; $i++) {
   $leaseId = [guid]::NewGuid().ToString()
-  $name = "whitesmith-proof-$($leaseId.Replace('-', ''))"
+  $name = "mars-proof-$($leaseId.Replace('-', ''))"
   $started = Get-Date
   try {
-    docker create --name $name --isolation=hyperv --label whitesmith.managed=true --label "whitesmith.lease-id=$leaseId" --cpus 1 --memory 2GB --mount "type=bind,source=$BootstrapFile,target=C:\ProgramData\Whitesmith\bootstrap,readonly" $Image | Out-Null
+    docker create --name $name --isolation=hyperv --label mars.managed=true --label "mars.lease-id=$leaseId" --cpus 1 --memory 2GB --mount "type=bind,source=$BootstrapFile,target=C:\ProgramData\Mars\bootstrap,readonly" $Image | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to create proof lease container.' }
     docker start $name | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to start proof lease container.' }
@@ -52,7 +52,7 @@ for ($i = 0; $i -lt $Iterations; $i++) {
     docker rm -f $name 2>$null | Out-Null
   }
 }
-$remaining = @(docker ps -a --filter 'label=whitesmith.managed=true' --filter 'label=whitesmith.lease-id' --format '{{.ID}}')
+$remaining = @(docker ps -a --filter 'label=mars.managed=true' --filter 'label=mars.lease-id' --format '{{.ID}}')
 $cleanupVerified = $remaining.Count -eq 0
 $timingPassed = (($results | Where-Object { $_.runnerReadyMs -ge 15000 }).Count -eq 0)
 $passed = $cleanupVerified -and $timingPassed

@@ -40,7 +40,7 @@ try {
       "--names",
       "control-plane,web",
       "bun run scripts/control-plane-dev.ts",
-      "bun run --filter @whitesmith/web dev",
+      "bun run --filter @mars/web dev",
     ], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
     process.exitCode = await dev.exited;
   }

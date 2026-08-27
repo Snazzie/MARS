@@ -1,7 +1,7 @@
 import { mkdir, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
-import { TemplateManifest } from "@whitesmith/contracts";
+import { TemplateManifest } from "@mars/contracts";
 
 export async function cacheTemplate(manifestValue: unknown, _manifestUrl: string, artifactUrl: string, destination: string): Promise<string> {
   const manifest = TemplateManifest.parse(manifestValue);

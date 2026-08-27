@@ -1,4 +1,4 @@
-import { LeaseBootstrapEnvelope } from "@whitesmith/contracts";
+import { LeaseBootstrapEnvelope } from "@mars/contracts";
 import { z } from "zod";
 
 export const MAX_LINUX_GUEST_FRAME = 1024 * 1024;

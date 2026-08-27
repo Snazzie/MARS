@@ -30,5 +30,5 @@
 - [ ] Replace the plain context spans with badges.
 - [ ] Replace plain job runner and requested-label strings in logs and metrics headers with badges.
 - [ ] Run `bun test apps/web/src/components/RunDetailView.test.tsx` and confirm it passes.
-- [ ] Run `bun run --filter @whitesmith/web typecheck`.
+- [ ] Run `bun run --filter @mars/web typecheck`.
 - [ ] Run `git diff --check` and commit with `feat: improve run detail labels`.

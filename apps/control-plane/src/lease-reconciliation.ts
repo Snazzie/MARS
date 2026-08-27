@@ -1,5 +1,5 @@
-import type { DatabaseClient } from "@whitesmith/db";
-import { jsonParameter } from "@whitesmith/db";
+import type { DatabaseClient } from "@mars/db";
+import { jsonParameter } from "@mars/db";
 import { applyGithubJobSnapshot, type GithubJobSnapshot } from "./runs.ts";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { isGithubRateLimitError } from "./github-rate-limit.ts";

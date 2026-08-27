@@ -1,7 +1,7 @@
 import { mkdtemp, unlink, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RunnerJitConfig, WorkerCacheProxy } from "@whitesmith/contracts";
+import { RunnerJitConfig, WorkerCacheProxy } from "@mars/contracts";
 
 type GuestBootstrap = { version: 1; leaseId: string; nonce: string; encodedJitConfig: string; callbackUrl?: string; callbackToken?: string; workerCache?: WorkerCacheProxy };
 export function cliArgument(argv: readonly string[], flag: string): string | undefined {
@@ -15,7 +15,7 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
     const env: Record<string, string> = { ...Bun.env, ACTIONS_RUNNER_INPUT_JITCONFIG: encodedJitConfig };
     if (workerCache) {
       const proxy = WorkerCacheProxy.parse(workerCache);
-      caDirectory = await mkdtemp(join(tmpdir(), "whitesmith-worker-cache-"));
+      caDirectory = await mkdtemp(join(tmpdir(), "mars-worker-cache-"));
       const caPath = join(caDirectory, "worker-ca.pem");
       await writeFile(caPath, proxy.caCertificatePem, { mode: 0o600, flag: "wx" });
       env.HTTP_PROXY = proxy.proxyUrl;
@@ -27,7 +27,7 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
       env.NODE_EXTRA_CA_CERTS = caPath;
       env.node_extra_ca_certs = caPath;
     }
-    const runnerCommand = Bun.env.WHITESMITH_RUNNER_COMMAND ?? (platform === "windows-x64" ? "run.cmd" : "./run.sh");
+    const runnerCommand = Bun.env.MARS_RUNNER_COMMAND ?? (platform === "windows-x64" ? "run.cmd" : "./run.sh");
     const command = platform === "windows-x64" ? (runnerCommand.endsWith(".sh") ? ["bash", runnerCommand] : ["cmd.exe", "/c", runnerCommand]) : [runnerCommand];
     const runner = Bun.spawn(command, { cwd: runnerRoot, env, stdout: onOutput ? "pipe" : "ignore", stderr: onOutput ? "pipe" : "ignore" });
     if (!onOutput) return await runner.exited;

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Allow Whitesmith to install its GitHub App on a personal GitHub account and manage that account's private repositories through the existing workspace, repository approval, webhook, and scheduler flows.
+Allow Mars to install its GitHub App on a personal GitHub account and manage that account's private repositories through the existing workspace, repository approval, webhook, and scheduler flows.
 
 ## Design
 
@@ -43,4 +43,4 @@ Use `wrong_github_account` for account-type or immutable-ID mismatch. Do not fal
 
 ## Scope boundary
 
-This change does not implement the separate GitHub Actions guest-runner/JIT execution bridge. It only makes personal-account repositories valid tenants for the existing Whitesmith control-plane flow.
+This change does not implement the separate GitHub Actions guest-runner/JIT execution bridge. It only makes personal-account repositories valid tenants for the existing Mars control-plane flow.

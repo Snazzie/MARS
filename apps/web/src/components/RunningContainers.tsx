@@ -1,4 +1,4 @@
-import type { OverviewDto } from "@whitesmith/contracts";
+import type { OverviewDto } from "@mars/contracts";
 
 type RunningContainer = OverviewDto["runningContainers"][number];
 

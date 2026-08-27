@@ -15,17 +15,17 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: '1.2.20' }
       - run: bun install --frozen-lockfile
-      - run: bun build apps/orchestrator/src/index.ts --compile --outfile dist/whitesmith-orchestrator
+      - run: bun build apps/orchestrator/src/index.ts --compile --outfile dist/mars-orchestrator
       - run: docker build -f deploy/workers/linux-broker.Dockerfile -t ghcr.io/${{ github.repository }}/linux-broker:${{ github.sha }} .
       - run: docker push ghcr.io/${{ github.repository }}/linux-broker:${{ github.sha }}
-      - run: bash images/worker-appliance/build.sh whitesmith-worker
+      - run: bash images/worker-appliance/build.sh mars-worker
         env:
           COSIGN_KEY: ${{ secrets.COSIGN_KEY }}
           UBUNTU_QCOW2_URL: ${{ vars.UBUNTU_QCOW2_URL }}
           UBUNTU_QCOW2_SHA256: ${{ vars.UBUNTU_QCOW2_SHA256 }}
           RUNNER_ARCHIVE_URL: ${{ vars.RUNNER_ARCHIVE_URL }}
           RUNNER_ARCHIVE_SHA256: ${{ vars.RUNNER_ARCHIVE_SHA256 }}
-          JOB_AGENT_BINARY: dist/whitesmith-job-agent
+          JOB_AGENT_BINARY: dist/mars-job-agent
       - uses: actions/upload-artifact@v4
         with:
           name: linux-worker-manifest

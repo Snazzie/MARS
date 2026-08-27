@@ -1,4 +1,4 @@
-import { PoolResources, type RuntimeTerminationEvidence, type WorkerCacheProxy } from "@whitesmith/contracts";
+import { PoolResources, type RuntimeTerminationEvidence, type WorkerCacheProxy } from "@mars/contracts";
 export interface Lease { id:string; jobId:string; imageDigest:string; resources:PoolResources; nonce:string; encodedJitConfig:string; workerCache?: WorkerCacheProxy; }
 export interface RuntimeLease {
   runtimeInstanceId:string;

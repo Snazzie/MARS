@@ -40,7 +40,7 @@
 - [ ] Add schemas for all DTOs and typed API errors.
 - [ ] Add strict parsing tests for valid DTOs, invalid cursors, malformed timestamps, and forbidden secret-like keys.
 - [ ] Run `bun test tests/dashboard-contracts.test.ts`.
-- [ ] Run `bun run --filter @whitesmith/contracts typecheck`.
+- [ ] Run `bun run --filter @mars/contracts typecheck`.
 
 ### Task 2: Add dashboard persistence schema and repository services
 

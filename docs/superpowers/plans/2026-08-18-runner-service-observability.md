@@ -4,7 +4,7 @@
 
 **Goal:** Capture trustworthy Windows runner termination and resource evidence so an abrupt GitHub Actions runner disappearance is not misclassified as out of memory.
 
-**Architecture:** Keep the existing append-only `ProgramData\\Whitesmith\\logs\\worker.log` as the service-host sink, but write one JSON object per lifecycle event with a stable lease correlation ID. Extend the Rust host’s Windows Job Object wrapper to collect accounting and termination evidence. Carry only sanitized runtime evidence across the existing orchestrator lifecycle; classify OOM only from explicit validated memory evidence and preserve unknown termination as runner failure.
+**Architecture:** Keep the existing append-only `ProgramData\\Mars\\logs\\worker.log` as the service-host sink, but write one JSON object per lifecycle event with a stable lease correlation ID. Extend the Rust host’s Windows Job Object wrapper to collect accounting and termination evidence. Carry only sanitized runtime evidence across the existing orchestrator lifecycle; classify OOM only from explicit validated memory evidence and preserve unknown termination as runner failure.
 
 **Tech Stack:** Rust 2024, `windows-service` 0.8, `windows-sys` 0.59 Windows Job Objects APIs, Bun/TypeScript, Zod worker contracts, Bun tests.
 

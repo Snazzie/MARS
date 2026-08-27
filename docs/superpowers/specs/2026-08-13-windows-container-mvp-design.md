@@ -6,7 +6,7 @@ Run Windows GitHub Actions jobs on a Windows worker using Docker Windows contain
 
 ## Runtime
 
-The Windows worker uses Docker in Windows-container mode. Each lease creates a disposable container with `--isolation=hyperv` from an immutable Windows base image digest. The container runs the Actions Runner and `whitesmith-job-agent` guest service. The existing worker enrollment, encrypted lease bootstrap, command acknowledgment, lifecycle events, and cleanup protocol remain unchanged.
+The Windows worker uses Docker in Windows-container mode. Each lease creates a disposable container with `--isolation=hyperv` from an immutable Windows base image digest. The container runs the Actions Runner and `mars-job-agent` guest service. The existing worker enrollment, encrypted lease bootstrap, command acknowledgment, lifecycle events, and cleanup protocol remain unchanged.
 
 The existing Generation 2 VHDX Hyper-V driver remains available but is not selected by the MVP Windows worker path. Linux guests are not supported by this Windows-container MVP.
 
@@ -36,7 +36,7 @@ Failure of any Hyper-V isolation check is fatal. The installer must never silent
 6. Accept only the authenticated one-use completion callback for the lease.
 7. Map successful, runner-failed, provisioning-failed, timeout, and cleanup outcomes to existing lifecycle events.
 8. Stop and remove the container on every terminal path; delete host bootstrap material in a `finally` path.
-9. On worker restart, enumerate only containers carrying the Whitesmith lease label and reconcile orphaned containers before accepting new work.
+9. On worker restart, enumerate only containers carrying the Mars lease label and reconcile orphaned containers before accepting new work.
 
 No host Docker socket, arbitrary host filesystem path, or reusable credential is exposed inside a job container.
 
@@ -46,7 +46,7 @@ The image is operator-built and digest-pinned. It must contain:
 
 - A compatible Windows Server Core base.
 - Actions Runner at the configured runner root.
-- `whitesmith-job-agent.exe`.
+- `mars-job-agent.exe`.
 - The Windows guest-service startup command.
 - Required networking and shell support.
 

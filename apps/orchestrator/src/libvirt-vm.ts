@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { access, readFile, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { relative, join, isAbsolute } from "node:path";
-import { WorkerLimits, type PoolResources } from "@whitesmith/contracts";
+import { WorkerLimits, type PoolResources } from "@mars/contracts";
 import { validateResources, type Lease, type RuntimeDriver, type RuntimeLease } from "./runtime.ts";
 
 export type HostCommandResult = { code: number; stdout: string; stderr: string };

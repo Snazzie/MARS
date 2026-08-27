@@ -2,7 +2,7 @@
 
 ## Goal
 
-Capture enough evidence to distinguish an ordinary child-process failure, an intentional service stop, a forced sandbox termination, and a true out-of-memory event when a Whitesmith Windows runner disappears during a GitHub Actions job.
+Capture enough evidence to distinguish an ordinary child-process failure, an intentional service stop, a forced sandbox termination, and a true out-of-memory event when a Mars Windows runner disappears during a GitHub Actions job.
 
 ## Scope
 

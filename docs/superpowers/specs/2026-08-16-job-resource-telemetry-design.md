@@ -33,7 +33,7 @@ The worker emits samples only while the lease is active. The control plane valid
 
 Add `dashboard_job_resource_samples` with organization, job, run, lease, occurred-at, CPU, and memory fields. Enforce non-negative values, CPU percentage within the normalized range, and a uniqueness constraint for duplicate event replay. Add indexes for job/time retrieval and retention deletion.
 
-Raw samples are pruned after 7 days using the existing retention scheduler and `WHITESMITH_RETENTION_JOB_RESOURCE_SAMPLES_DAYS`, default `7`. The existing job timing snapshot stores only aggregates, not raw samples.
+Raw samples are pruned after 7 days using the existing retention scheduler and `MARS_RETENTION_JOB_RESOURCE_SAMPLES_DAYS`, default `7`. The existing job timing snapshot stores only aggregates, not raw samples.
 
 Extend timing snapshots with nullable aggregate fields:
 

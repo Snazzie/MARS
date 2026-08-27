@@ -146,7 +146,7 @@ Run:
 
 ```bash
 bun test apps/control-plane/src/http/app.test.ts
-bun run --filter '@whitesmith/control-plane' typecheck
+bun run --filter '@mars/control-plane' typecheck
 ```
 
 Expected: the standalone Hono app passes `/api/healthz`, `/healthz`, unknown API, asset, and SPA-fallback tests while the live server remains unchanged.
@@ -246,7 +246,7 @@ Run:
 
 ```bash
 bun test apps/control-plane/src/http/app.test.ts apps/control-plane/src/dashboard-api.test.ts
-bun run --filter '@whitesmith/control-plane' typecheck
+bun run --filter '@mars/control-plane' typecheck
 ```
 
 Expected: every pre-existing route family passes through Hono with typed 401/404/500 behavior; WebSocket tests remain unchanged.
@@ -337,8 +337,8 @@ Run:
 
 ```bash
 bun test apps/control-plane/src/worker-bootstrap.test.ts
-bun run --filter '@whitesmith/db' typecheck
-bun run --filter '@whitesmith/control-plane' typecheck
+bun run --filter '@mars/db' typecheck
+bun run --filter '@mars/control-plane' typecheck
 ```
 
 Expected: lifecycle tests pass and no old worker-code symbols remain.
@@ -538,9 +538,9 @@ Assert exact target syntax and quoting:
 
 ```ts
 expect(buildInstallerCommand(localMacUrl, "macos-arm64", code))
-  .toContain(`zsh "$whitesmith_installer" --code '${code}'`);
+  .toContain(`zsh "$mars_installer" --code '${code}'`);
 expect(buildInstallerCommand(httpsLinuxUrl, "linux-x64", code))
-  .toContain(`bash "$whitesmith_installer" --code '${code}'`);
+  .toContain(`bash "$mars_installer" --code '${code}'`);
 expect(buildInstallerCommand(httpsWindowsUrl, "windows-x64", code))
   .toContain(`-Code '${code}'`);
 ```
@@ -580,8 +580,8 @@ Run:
 ```bash
 bun test apps/web/src/components/EnrollmentWizard.test.ts
 npx -y react-doctor@latest apps/web --verbose --scope changed
-bun run --filter '@whitesmith/web' typecheck
-bun run --filter '@whitesmith/web' build
+bun run --filter '@mars/web' typecheck
+bun run --filter '@mars/web' build
 ```
 
 Expected: command/component tests pass, React Doctor reports no new issue, build exits 0.
@@ -636,8 +636,8 @@ Run:
 
 ```bash
 bun test apps/web/src/components/PendingWorkerRequests.test.tsx
-bun run --filter '@whitesmith/web' typecheck
-bun run --filter '@whitesmith/web' build
+bun run --filter '@mars/web' typecheck
+bun run --filter '@mars/web' build
 ```
 
 Expected: PASS and no blank/error-only Workers view.

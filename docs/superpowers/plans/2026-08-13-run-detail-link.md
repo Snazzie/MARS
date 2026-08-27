@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make failed runs clickable from every Runs view and route to the existing Whitesmith run-detail page.
+**Goal:** Make failed runs clickable from every Runs view and route to the existing Mars run-detail page.
 
 **Architecture:** Keep navigation in `RunTable`'s run-number cell. Remove the cross-workspace restriction at the caller, and make the detail page query use the selected run's organization ID rather than the literal `all` route scope.
 

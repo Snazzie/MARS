@@ -6,7 +6,7 @@ import { loadOrCreateMasterKey } from "./control-plane-setup.ts";
 
 describe("control-plane secret files", () => {
   test("creates a durable 0600 master key and reuses it", async () => {
-    const root = await mkdtemp(join(tmpdir(), "whitesmith-setup-"));
+    const root = await mkdtemp(join(tmpdir(), "mars-setup-"));
     const first = await loadOrCreateMasterKey(root);
     const second = await loadOrCreateMasterKey(root);
     expect(first).toHaveLength(44);
@@ -15,7 +15,7 @@ describe("control-plane secret files", () => {
   });
 
   test("does not replace a malformed existing key", async () => {
-    const root = await mkdtemp(join(tmpdir(), "whitesmith-setup-"));
+    const root = await mkdtemp(join(tmpdir(), "mars-setup-"));
     const path = join(root, "app_master_key");
     await writeFile(path, "not-a-key", { mode: 0o600 });
     await expect(loadOrCreateMasterKey(root)).rejects.toThrow("invalid key");

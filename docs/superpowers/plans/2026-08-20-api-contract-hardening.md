@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Reuse existing schemas from `@whitesmith/contracts`.
+- Reuse existing schemas from `@mars/contracts`.
 - Invalid nullable timestamps normalize to `null`.
 - No database mutation or silent schema relaxation.
 - Run targeted tests; skip formatters and project-wide suites during implementation.

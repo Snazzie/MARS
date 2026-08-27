@@ -34,7 +34,7 @@ export function QueryState({ error, isLoading, isEmpty, retry, operationLabel }:
   const retryLabel = operationLabel ? `Retry ${operationLabel}` : "Retry";
   if (isLoading) return <StateView kind="loading" />;
   if (error && isUnauthorized(error)) return <StateView kind="error" title="Sign-in required" message="Your operator session is no longer valid. Sign in again to continue." action={<Button label="Sign in with GitHub" variant="secondary" href="/api/auth/github" />} />;
-  if (error && isOffline(error)) return <StateView kind="error" title="Control plane unreachable" message="Whitesmith could not reach the server. Check your network, then retry." action={<Button label={operationLabel ? `Retry ${operationLabel}` : "Retry connection"} variant="secondary" clickAction={retry} />} />;
+  if (error && isOffline(error)) return <StateView kind="error" title="Control plane unreachable" message="Mars could not reach the server. Check your network, then retry." action={<Button label={operationLabel ? `Retry ${operationLabel}` : "Retry connection"} variant="secondary" clickAction={retry} />} />;
   if (error) return <StateView kind="error" title="Unable to load this view" message={error instanceof Error ? error.message : undefined} action={<Button label={retryLabel} variant="secondary" clickAction={retry} />} />;
   if (isEmpty) return <StateView kind="empty" />;
   return null;

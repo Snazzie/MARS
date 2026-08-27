@@ -1,6 +1,6 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { PoolResources } from "@whitesmith/contracts";
+import type { PoolResources } from "@mars/contracts";
 import type { Lease, RuntimeDriver, RuntimeLease } from "./runtime.ts";
 import { validateResources } from "./runtime.ts";
 
@@ -53,7 +53,7 @@ export function createHyperVRuntime(run: HyperVRunner = defaultRunner): HyperVRu
 export class HyperVDriver implements RuntimeDriver {
   readonly name = "windows-hyperv" as const;
   private readonly leases = new Map<string, { vmName: string; diskPath: string; runtime: RuntimeLease }>();
-  constructor(private readonly hyperv: HyperVRuntime, private readonly templatePath: string, private readonly templateDigest: string, private readonly prefix: string, private readonly limits: Limits, private readonly bootstrapRoot = join(Bun.env.ProgramData ?? "C:\\ProgramData", "Whitesmith", "leases")) {}
+  constructor(private readonly hyperv: HyperVRuntime, private readonly templatePath: string, private readonly templateDigest: string, private readonly prefix: string, private readonly limits: Limits, private readonly bootstrapRoot = join(Bun.env.ProgramData ?? "C:\\ProgramData", "Mars", "leases")) {}
   validatePool(resources: PoolResources): void { validateResources(resources, this.limits); }
   async reserveCapacity(resources: PoolResources): Promise<void> { this.validatePool(resources); await this.hyperv.verifyHost(); }
   async reconcileOrphans(): Promise<void> { await this.hyperv.reconcileOrphans(this.prefix); }
@@ -69,9 +69,9 @@ export class HyperVDriver implements RuntimeDriver {
       await this.hyperv.createDifferencingDisk(this.templatePath, diskPath);
       await this.hyperv.createVm({ name: vmName, diskPath, resources: lease.resources });
       await this.hyperv.start(vmName);
-      await this.hyperv.waitForGuestReady(vmName, Number(Bun.env.WHITESMITH_HYPERV_READY_TIMEOUT_MS ?? 120_000));
-      await this.hyperv.copyBootstrap(vmName, bootstrapPath, "C:\\ProgramData\\Whitesmith\\bootstrap.json");
-      const completion = this.hyperv.waitForStop(vmName, Number(Bun.env.WHITESMITH_HYPERV_JOB_TIMEOUT_MS ?? 3_600_000)).then(() => 0);
+      await this.hyperv.waitForGuestReady(vmName, Number(Bun.env.MARS_HYPERV_READY_TIMEOUT_MS ?? 120_000));
+      await this.hyperv.copyBootstrap(vmName, bootstrapPath, "C:\\ProgramData\\Mars\\bootstrap.json");
+      const completion = this.hyperv.waitForStop(vmName, Number(Bun.env.MARS_HYPERV_JOB_TIMEOUT_MS ?? 3_600_000)).then(() => 0);
       const runtime: RuntimeLease = { runtimeInstanceId: vmName, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: bytesToGigabytes(lease.resources.storageBytes) * 1024 ** 3 }, state: "sandbox_attested", completion, sample: this.hyperv.sample ? () => this.hyperv.sample!(vmName) : undefined };
       this.leases.set(lease.id, { vmName, diskPath, runtime });
       return runtime;

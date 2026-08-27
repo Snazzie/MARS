@@ -1,4 +1,4 @@
-import { RunnerJitConfig } from "@whitesmith/contracts";
+import { RunnerJitConfig } from "@mars/contracts";
 import type { GithubJobSnapshot, GithubRunSnapshot, GithubStepSnapshot } from "./runs.ts";
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;

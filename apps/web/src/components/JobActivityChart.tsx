@@ -4,7 +4,7 @@ import { defineChart, lineY } from "@tanstack/charts";
 import { tooltip } from "@tanstack/charts/tooltip";
 import { scalePoint } from "@tanstack/charts/scales/point";
 import { scaleLinear } from "@tanstack/charts/scales/linear";
-import type { OverviewTimeseriesPoint } from "@whitesmith/contracts";
+import type { OverviewTimeseriesPoint } from "@mars/contracts";
 
 type ActivityRow = { bucket: string; series: "Pending" | "Running"; value: number };
 

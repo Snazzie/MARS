@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createControlPlaneApp } from "./http/app.ts";
 import { fakeHttpDeps } from "./http/test-deps.ts";
-import { OnboardingStatus, OnboardingDetail, SelectOnboardingWorkerRequest } from "@whitesmith/contracts";
+import { OnboardingStatus, OnboardingDetail, SelectOnboardingWorkerRequest } from "@mars/contracts";
 
 describe("onboarding HTTP contract", () => {
   test("public status exposes only server-derived status fields", async () => {
@@ -64,7 +64,7 @@ describe("onboarding HTTP contract", () => {
       if (query.includes("SELECT organization_id AS")) return [{ organizationId }];
       if (query.includes("FROM dashboard_installations WHERE")) return [{ id: installationId, githubInstallationId: 42, state: "approved", repositorySelection: "all" }];
       if (query.includes("FROM dashboard_repositories WHERE")) return [{ id: repositoryId, organizationId, name: "private", fullName: "acme/private", visibility: "private", available: true, installationId, discoveryError: null, discoveryRetryAt: null }];
-      if (query.includes("FROM runner_pools") && normalized.includes("p.organization_id is null")) return [{ id: poolId, organizationId: null, workerId: null, workerName: "Shared fleet", name: "default", platform: "windows-x64", driver: "windows-hyperv-container", imageDigest: `sha256:${"a".repeat(64)}`, resources: { vcpu: 2, memoryBytes: 2_147_483_648, storageBytes: 10_737_418_240, concurrency: 1 }, labels: ["whitesmith-windows-x64"], triggerLabel: "whitesmith-windows-x64", enabled: true, active: 0 }];
+      if (query.includes("FROM runner_pools") && normalized.includes("p.organization_id is null")) return [{ id: poolId, organizationId: null, workerId: null, workerName: "Shared fleet", name: "default", platform: "windows-x64", driver: "windows-hyperv-container", imageDigest: `sha256:${"a".repeat(64)}`, resources: { vcpu: 2, memoryBytes: 2_147_483_648, storageBytes: 10_737_418_240, concurrency: 1 }, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64", enabled: true, active: 0 }];
       if (query.includes("INSERT INTO dashboard_mutations")) return [{ idempotency_key: "verify-1" }];
       return [];
     }) as never;
@@ -72,7 +72,7 @@ describe("onboarding HTTP contract", () => {
       db,
       currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
       githubApp: {
-        listRepositoryRunnerWorkflows: async () => ({ defaultBranch: "main", files: [{ path: ".github/workflows/smoke.yml", sha: "sha", content: "on: workflow_dispatch\njobs:\n  smoke:\n    runs-on: whitesmith-windows-x64\n" }] }),
+        listRepositoryRunnerWorkflows: async () => ({ defaultBranch: "main", files: [{ path: ".github/workflows/smoke.yml", sha: "sha", content: "on: workflow_dispatch\njobs:\n  smoke:\n    runs-on: mars-windows-x64\n" }] }),
         dispatchRepositoryWorkflow: async () => ({ githubRunId: 41 }),
       } as never,
     }));

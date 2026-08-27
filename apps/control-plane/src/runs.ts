@@ -1,6 +1,6 @@
-import type { Sql } from "@whitesmith/db";
-import type { RunStage } from "@whitesmith/contracts";
-import { jsonParameter } from "@whitesmith/db";
+import type { Sql } from "@mars/db";
+import type { RunStage } from "@mars/contracts";
+import { jsonParameter } from "@mars/db";
 
 export type StageTimestamps = { startedAt: string; completedAt?: string | null };
 export type GithubStepSnapshot = { id: string | null; number: number; name: string; status: "queued"|"in_progress"|"completed"; conclusion: string|null; queuedAt: string; startedAt: string|null; completedAt: string|null; durationMs: number };

@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PoolResources, WorkerCacheProxy } from "@whitesmith/contracts";
+import type { PoolResources, WorkerCacheProxy } from "@mars/contracts";
 import type { Lease, RuntimeDriver, RuntimeLease } from "./runtime.ts";
 import { validateResources } from "./runtime.ts";
 
@@ -9,19 +9,19 @@ export function resolveTartExecutable(configured: string | undefined): string {
   return configured?.trim() || "tart";
 }
 
-export const TART_JIT_CONFIG_PATH = "/tmp/whitesmith/jit-config";
+export const TART_JIT_CONFIG_PATH = "/tmp/mars/jit-config";
 const TART_BOOTSTRAP_SHARE_PATH = "/Volumes/My Shared Files/jit-config";
 export function buildTartRunArguments(vmName: string, bootstrapDirectory: string): string[] {
   return ["run", "--no-graphics", "--dir", `${bootstrapDirectory}:ro`, vmName];
 }
 export function buildTartBootstrapArguments(vmName: string): string[] {
-  return ["exec", vmName, "sh", "-c", `set -eu; umask 077; install -d -m 700 /tmp/whitesmith; rm -f ${TART_JIT_CONFIG_PATH}; cat "${TART_BOOTSTRAP_SHARE_PATH}" > ${TART_JIT_CONFIG_PATH}`];
+  return ["exec", vmName, "sh", "-c", `set -eu; umask 077; install -d -m 700 /tmp/mars; rm -f ${TART_JIT_CONFIG_PATH}; cat "${TART_BOOTSTRAP_SHARE_PATH}" > ${TART_JIT_CONFIG_PATH}`];
 }
 export function buildTartRunnerArguments(vmName: string): string[] {
   return [
     "exec",
     vmName,
-    "/usr/local/bin/whitesmith-job-agent",
+    "/usr/local/bin/mars-job-agent",
     "bootstrap",
     "--config-file",
     TART_JIT_CONFIG_PATH,
@@ -85,7 +85,7 @@ export interface TartVmRuntime {
   sample?(vmName: string): Promise<{ cpuUsagePercent: number; cpuTimeMs: number; memoryWorkingSetBytes: number; memoryLimitBytes: number }>;
 }
 
-export function createTartVmRuntime(tartExecutable = resolveTartExecutable(Bun.env.WHITESMITH_TART_EXECUTABLE)): TartVmRuntime {
+export function createTartVmRuntime(tartExecutable = resolveTartExecutable(Bun.env.MARS_TART_EXECUTABLE)): TartVmRuntime {
   const processes = new Map<string, Bun.Subprocess>();
   async function run(args: string[]): Promise<void> {
     let lastExit = 1;
@@ -122,7 +122,7 @@ export function createTartVmRuntime(tartExecutable = resolveTartExecutable(Bun.e
     },
     async startWithBootstrap(vmName, encodedJitConfig, workerCache) {
       if (processes.has(vmName)) throw new Error(`Tart VM already running: ${vmName}`);
-      const bootstrapDirectory = await mkdtemp(join(tmpdir(), "whitesmith-bootstrap-"));
+      const bootstrapDirectory = await mkdtemp(join(tmpdir(), "mars-bootstrap-"));
       const configPath = join(bootstrapDirectory, "jit-config");
       const config = workerCache ? JSON.stringify({ encodedJitConfig, workerCache }) : encodedJitConfig;
       const configBytes = Buffer.from(config, "utf8");

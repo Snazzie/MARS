@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, open, readdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, join, posix, win32 } from "node:path";
-import type { WorkerCacheEntryProjection } from "@whitesmith/contracts";
+import type { WorkerCacheEntryProjection } from "@mars/contracts";
 
 const SCHEMA_VERSION = 1;
 const MAX_SIGNED_INT64 = 9_223_372_036_854_775_807n;
@@ -66,10 +66,10 @@ function validateActionCacheRoot(value: string, platform: NodeJS.Platform): stri
 
 export function resolveActionCacheRoot(env: Environment = Bun.env, platform: NodeJS.Platform = process.platform): string {
   let root: string;
-  if (env.WHITESMITH_ACTION_CACHE_ROOT?.trim()) root = env.WHITESMITH_ACTION_CACHE_ROOT;
-  else if (platform === "win32") root = win32.join(env.ProgramData?.trim() || "C:\\ProgramData", "Whitesmith", "action-cache");
-  else if (platform === "darwin") root = posix.join(env.HOME?.trim() || "/Users/Shared", "Library/Application Support/Whitesmith/action-cache");
-  else root = "/var/lib/whitesmith/action-cache";
+  if (env.MARS_ACTION_CACHE_ROOT?.trim()) root = env.MARS_ACTION_CACHE_ROOT;
+  else if (platform === "win32") root = win32.join(env.ProgramData?.trim() || "C:\\ProgramData", "Mars", "action-cache");
+  else if (platform === "darwin") root = posix.join(env.HOME?.trim() || "/Users/Shared", "Library/Application Support/Mars/action-cache");
+  else root = "/var/lib/mars/action-cache";
   return validateActionCacheRoot(root, platform);
 }
 

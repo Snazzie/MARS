@@ -137,12 +137,12 @@ Create one `GithubRateLimitGate` in `index.ts`. Pass `installationId => gate.sco
 
 - [ ] **Step 4: Run focused tests and typecheck**
 
-Run: `bun test apps/control-plane/src/github-rate-limit.test.ts apps/control-plane/src/github-jobs.test.ts apps/control-plane/src/reconcile.test.ts apps/control-plane/src/runs.test.ts apps/control-plane/src/job-discovery.test.ts && bun run --filter @whitesmith/control-plane typecheck`
+Run: `bun test apps/control-plane/src/github-rate-limit.test.ts apps/control-plane/src/github-jobs.test.ts apps/control-plane/src/reconcile.test.ts apps/control-plane/src/runs.test.ts apps/control-plane/src/job-discovery.test.ts && bun run --filter @mars/control-plane typecheck`
 Expected: PASS.
 
 - [ ] **Step 5: Run the live recovery scenario**
 
-Restart `whitesmith-bun-dev`. Confirm logs show one JIT attempt per installation per tick, no repeated network calls during an active cooldown, and automatic recovery after GitHub's reset time. Confirm the `whitesmith-windows-x64` workflow leaves GitHub's queued state or produces a single actionable non-rate-limit failure.
+Restart `mars-bun-dev`. Confirm logs show one JIT attempt per installation per tick, no repeated network calls during an active cooldown, and automatic recovery after GitHub's reset time. Confirm the `mars-windows-x64` workflow leaves GitHub's queued state or produces a single actionable non-rate-limit failure.
 
 - [ ] **Step 6: Commit and push**
 

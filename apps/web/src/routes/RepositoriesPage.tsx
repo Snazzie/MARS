@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { RepositorySummary } from "@whitesmith/contracts";
+import type { RepositorySummary } from "@mars/contracts";
 import { beginOrganizationGithubInstall, getGithubRepositorySettings, getMe, getRepositories, recheckRepositoryDiscovery, refreshGithubConnection, uninstallOrganizationGithub } from "../api.ts";
 import { Disclosure } from "../components/Disclosure.tsx";
 import { QueryState } from "../components/StateView.tsx";
@@ -53,11 +53,11 @@ export function RepositoriesPage() {
     mutationFn: () => uninstallOrganizationGithub(organizationId),
     onSuccess: () => {
       try {
-        localStorage.removeItem("whitesmith.organization");
+        localStorage.removeItem("mars.organization");
       } catch {
         /* storage can be disabled */
       }
-      window.dispatchEvent(new Event("whitesmith-org-change"));
+      window.dispatchEvent(new Event("mars-org-change"));
       void client.invalidateQueries({ queryKey: ["organizations"] });
       void client.invalidateQueries({ queryKey: ["org", organizationId, "repositories"] });
     },
@@ -108,7 +108,7 @@ export function RepositoriesPage() {
               <button type="button" className="button secondary" onClick={() => refreshConnection.mutate()} disabled={allWorkspaces || !organizationId || refreshConnection.isPending}>
                 {refreshConnection.isPending ? "Syncing…" : "Sync installed repositories"}
               </button>
-              <button type="button" className="button secondary" onClick={() => { if (window.confirm("Uninstall Whitesmith from this GitHub organization?")) manageOrganization.mutate(); }} disabled={allWorkspaces || !organizationId || manageOrganization.isPending}>
+              <button type="button" className="button secondary" onClick={() => { if (window.confirm("Uninstall Mars from this GitHub organization?")) manageOrganization.mutate(); }} disabled={allWorkspaces || !organizationId || manageOrganization.isPending}>
                 Uninstall
               </button>
             </div>
@@ -201,7 +201,7 @@ export function RepositoriesPage() {
                       >
                         Manage GitHub
                       </button>
-                      <button type="button" className="control-button" onClick={() => setRunnerRepository(repository)} disabled={!repository.available}>Use Whitesmith runners</button>
+                      <button type="button" className="control-button" onClick={() => setRunnerRepository(repository)} disabled={!repository.available}>Use Mars runners</button>
                     </div>
                   </td>
                 </tr>

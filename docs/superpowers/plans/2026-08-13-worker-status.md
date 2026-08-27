@@ -91,7 +91,7 @@ Add a labelled `Worker status` block to each pool. Shared pools show `{online} o
 
 - [ ] **Step 4: Run pool tests and typecheck**
 
-Run `bun test apps/web/src/routes/PoolsPage.test.tsx && bun run --filter @whitesmith/web typecheck`.
+Run `bun test apps/web/src/routes/PoolsPage.test.tsx && bun run --filter @mars/web typecheck`.
 Expected: PASS.
 
 ---
@@ -108,7 +108,7 @@ Expected: PASS.
 
 - [ ] **Step 2: Run web typecheck and build**
 
-Run `bun run --filter @whitesmith/web typecheck && bun run --filter @whitesmith/web build`.
+Run `bun run --filter @mars/web typecheck && bun run --filter @mars/web build`.
 Expected: typecheck and build exit 0.
 
 - [ ] **Step 3: Restart the static web service and inspect `/workers` and `/pools`**
@@ -117,4 +117,4 @@ Restart `web-static`, open both routes in the browser, and confirm the rendered 
 
 - [ ] **Step 4: Store completion context**
 
-Run `icm store -t context-whitesmith -c "Implemented worker operational/readiness status and pool worker coverage UI; verified focused tests, typecheck, build, and browser routes." -i high`.
+Run `icm store -t context-mars -c "Implemented worker operational/readiness status and pool worker coverage UI; verified focused tests, typecheck, build, and browser routes." -i high`.

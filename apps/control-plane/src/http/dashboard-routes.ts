@@ -2,12 +2,12 @@ import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates, listJobResourceSamples, listWorkerCacheEntries, decodeWorkerCacheCursor, getWorkerHealth } from "@whitesmith/db";
+import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates, listJobResourceSamples, listWorkerCacheEntries, decodeWorkerCacheCursor, getWorkerHealth } from "@mars/db";
 import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 import { createWorkerImageBuildPayload } from "../windows-image-build.ts";
-import { ApiError, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceSample, WorkerHealth } from "@whitesmith/contracts";
+import { ApiError, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceSample, WorkerHealth } from "@mars/contracts";
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),

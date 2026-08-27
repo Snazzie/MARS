@@ -1,4 +1,4 @@
-import type { DatabaseClient } from "@whitesmith/db";
+import type { DatabaseClient } from "@mars/db";
 import type { GithubJobsClient } from "./github-jobs.ts";
 import { attributeGithubJobLog } from "./github-job-logs.ts";
 import type { GithubJobSnapshot } from "./runs.ts";

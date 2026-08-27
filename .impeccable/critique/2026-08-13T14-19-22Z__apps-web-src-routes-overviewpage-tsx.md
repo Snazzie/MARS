@@ -1,5 +1,5 @@
 ---
-target: current Whitesmith web UI layout/design
+target: current Mars web UI layout/design
 total_score: 20
 max_score: 40
 na_heuristics: 
@@ -40,7 +40,7 @@ The shell looks deliberate and credible, but the product asks operators to parse
 
 ## What's Working
 
-- Strong authored identity: dark green-black surface, acid status color, editorial typography, and numbered navigation distinguish Whitesmith from a generic admin template.
+- Strong authored identity: dark green-black surface, acid status color, editorial typography, and numbered navigation distinguish Mars from a generic admin template.
 - Shared shell primitives are consistent: `AppShell.tsx:25-50`, `page-header`, `QueryState`, and panel treatments create a recognizable system.
 - The overview concept is directionally right: current load, queue, completed/failed counts, and a period control put operational signal first (`OverviewPage.tsx:21-30`).
 

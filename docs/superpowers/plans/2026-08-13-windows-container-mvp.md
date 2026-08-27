@@ -14,7 +14,7 @@
 - Process-isolated fallback is forbidden.
 - Images MUST use a full immutable `@sha256:` digest.
 - No Docker socket, arbitrary host path, or reusable credential may enter a job container.
-- Containers MUST carry a Whitesmith lease label and be removed after terminal lease handling.
+- Containers MUST carry a Mars lease label and be removed after terminal lease handling.
 - Linux guests are unsupported by the Windows-container MVP.
 - Existing Hyper-V VHDX driver remains available but is not selected by the Windows MVP.
 - Skip formatters, linters, and project-wide test suites during task implementation; run verification once at the end.
@@ -37,7 +37,7 @@
 - [ ] Implement Docker process invocation with stdout/stderr capture and nonzero exit errors.
 - [ ] Validate image format `^[^@\s]+@sha256:[0-9a-f]{64}$`; reject all tags and process isolation.
 - [ ] Implement `reserveCapacity` using Docker info and a Windows-container/Hyper-V isolation probe; fail if Docker is unavailable or in Linux mode.
-- [ ] Implement lease creation using a unique container name, Whitesmith lease labels, pinned image, `--isolation=hyperv`, CPU/memory/storage limits, and a temporary bootstrap file that is passed only through the minimal required container path.
+- [ ] Implement lease creation using a unique container name, Mars lease labels, pinned image, `--isolation=hyperv`, CPU/memory/storage limits, and a temporary bootstrap file that is passed only through the minimal required container path.
 - [ ] Keep bootstrap payload out of Docker argv and logs; remove temporary host material in `finally` paths.
 - [ ] Implement inspect, stop, remove, diagnostics, and label-based orphan reconciliation.
 - [ ] Run the focused driver tests and confirm they pass.
@@ -51,7 +51,7 @@
 
 **Interfaces:**
 - Consumes: `WindowsContainerDriver` from Task 1.
-- Produces: Windows worker startup using `WHITESMITH_WINDOWS_CONTAINER_IMAGE` and container runtime settings.
+- Produces: Windows worker startup using `MARS_WINDOWS_CONTAINER_IMAGE` and container runtime settings.
 
 - [ ] Add worker startup tests asserting Windows worker construction uses the container driver and does not require VHDX variables.
 - [ ] Replace `HyperVDriver` construction in `runWindowsWorker` with `WindowsContainerDriver` configured from the immutable container image and resource limits.
@@ -72,7 +72,7 @@
 - [ ] Add tests asserting the installer checks Containers, Hyper-V, Docker CLI/daemon, Windows engine mode, immutable image digest, and an actual `docker run --rm --isolation=hyperv` probe.
 - [ ] Replace VHDX parameters with `WindowsContainerImage`; retain `-Code` alias and local insecure-development exception.
 - [ ] Add noninteractive Docker checks and fail clearly for Linux container mode, missing Docker, missing Containers/Hyper-V features, probe failure, or digest mismatch.
-- [ ] Configure `WHITESMITH_WINDOWS_CONTAINER_IMAGE` and remove VHDX environment output from the Windows path.
+- [ ] Configure `MARS_WINDOWS_CONTAINER_IMAGE` and remove VHDX environment output from the Windows path.
 - [ ] Preserve protected identity/join-code directories, LocalSystem service registration, firewall setup, and service restart behavior.
 - [ ] Parse the PowerShell script and run focused installer tests.
 
@@ -84,7 +84,7 @@
 - Modify: `tests/installer-arguments.test.ts`
 
 **Interfaces:**
-- Consumes: an operator-provided Windows Server Core image reference and `whitesmith-job-agent.exe`.
+- Consumes: an operator-provided Windows Server Core image reference and `mars-job-agent.exe`.
 - Produces: a digest-pinned Windows container image containing the Actions Runner, job agent, startup command, and manifest.
 
 - [ ] Add tests for immutable source/target validation and manifest output.

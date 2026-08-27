@@ -1,10 +1,10 @@
  import { Link } from "@tanstack/react-router";
  import { useEffect, useMemo, useState } from "react";
-import type { RunSummary } from "@whitesmith/contracts";
+import type { RunSummary } from "@mars/contracts";
 import { formatDuration } from "./RunTelemetry.tsx";
 
 export type RunHistoryRange = "all" | "1h" | "2h" | "4h" | "12h" | "1d" | "2d";
-export type RunHistoryRunnerFilter = "all" | "whitesmith" | "external";
+export type RunHistoryRunnerFilter = "all" | "mars" | "external";
 
 const RANGE_MS: Record<Exclude<RunHistoryRange, "all">, number> = {
   "1h": 3_600_000,
@@ -18,7 +18,7 @@ const RANGE_MS: Record<Exclude<RunHistoryRange, "all">, number> = {
 const RANGE_LABELS: readonly RunHistoryRange[] = ["all", "1h", "2h", "4h", "12h", "1d", "2d"];
 const RUNNER_FILTER_LABELS: readonly { value: RunHistoryRunnerFilter; label: string }[] = [
   { value: "all", label: "All" },
-  { value: "whitesmith", label: "Whitesmith" },
+  { value: "mars", label: "Mars" },
   { value: "external", label: "External" },
 ];
 

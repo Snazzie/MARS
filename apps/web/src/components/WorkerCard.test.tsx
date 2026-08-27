@@ -4,7 +4,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { WorkerDetail } from "@whitesmith/contracts";
+import type { WorkerDetail } from "@mars/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WorkerCard, workerOperationalLabel, workerReadinessLabel } from "./WorkerCard.tsx";
 

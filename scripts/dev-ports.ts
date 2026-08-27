@@ -37,7 +37,7 @@ export function devPorts(environment: DevEnvironment): number[] {
 export function devLockPath(repository = process.cwd()): string {
   const canonical = realpathSync.native(repository);
   const key = createHash("sha256").update(canonical).digest("hex").slice(0, 24);
-  return join(tmpdir(), `whitesmith-dev-${key}.lock`);
+  return join(tmpdir(), `mars-dev-${key}.lock`);
 }
 
 function readLock(path: string): LockRecord | null {

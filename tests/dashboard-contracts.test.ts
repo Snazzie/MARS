@@ -58,7 +58,7 @@ describe("dashboard contracts", () => {
       name: "default",
       guestPlatform: "windows-x64",
       resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 },
-      triggerLabel: "whitesmith-default",
+      triggerLabel: "mars-default",
     };
     expect(CreatePoolRequest.safeParse({ ...request, imageDigest: `sha256:${"a".repeat(64)}` }).success).toBe(true);
     expect(CreatePoolRequest.safeParse({ ...request, imageDigest: `windows-template@sha256:${"a".repeat(64)}` }).success).toBe(true);

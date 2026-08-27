@@ -37,7 +37,7 @@ User-created checkpoint:
 - Created: `2026-08-14T23:31:12.4463990+01:00`
 - Parent: automatic checkpoint created at 23:29:48
 
-Do not delete or overwrite this user checkpoint. Create a new Whitesmith-ready checkpoint after updating the guest agent.
+Do not delete or overwrite this user checkpoint. Create a new Mars-ready checkpoint after updating the guest agent.
 
 ## Proven locally
 
@@ -74,18 +74,18 @@ The synthetic command did not execute in that clone because the checkpoint conta
 
 The routing contract is now one label only:
 
-- Windows: `whitesmith-windows-x64`
-- macOS: `whitesmith-macos-arm64`
-- Linux: `whitesmith-linux-x64`
+- Windows: `mars-windows-x64`
+- macOS: `mars-macos-arm64`
+- Linux: `mars-linux-x64`
 
 The live Windows pool is migrated to:
 
 ```text
-labels=["whitesmith-windows-x64"]
-trigger_label=whitesmith-windows-x64
+labels=["mars-windows-x64"]
+trigger_label=mars-windows-x64
 ```
 
-The workflow uses scalar `runs-on: whitesmith-windows-x64`.
+The workflow uses scalar `runs-on: mars-windows-x64`.
 
 ## Defects found and fixed
 
@@ -116,7 +116,7 @@ The worker handles this race in two layers:
 2. `deploy/workers/install-worker.ps1` configures the Windows service dependency:
 
    ```powershell
-   sc.exe config WhitesmithWorker depend= docker
+   sc.exe config MarsWorker depend= docker
    ```
 
 Image, manifest, and engine-mode validation still fail fast after Docker is
@@ -125,18 +125,18 @@ reachable. The worker log records each Docker readiness retry.
 Operational checks:
 
 ```powershell
-Get-Service docker,WhitesmithWorker
+Get-Service docker,MarsWorker
 docker info --format "OSType={{.OSType}}"
-Get-Content C:\ProgramData\Whitesmith\logs\worker.log -Tail 50
-sc.exe qc WhitesmithWorker
+Get-Content C:\ProgramData\Mars\logs\worker.log -Tail 50
+sc.exe qc MarsWorker
 ```
 
 Expected values:
 
 - `docker`: `Running`
-- `WhitesmithWorker`: `Running`
+- `MarsWorker`: `Running`
 - `OSType`: `windows`
-- `WhitesmithWorker` dependencies: `docker`
+- `MarsWorker` dependencies: `docker`
 
 If the service was installed before this fix, rerun the worker installer from
 an elevated PowerShell to install the updated orchestrator and register the
@@ -188,18 +188,18 @@ Perform these in order. Do not resume GitHub assignment before step 6 passes.
 ### 1. Update the source guest and create a new golden checkpoint
 
 - Keep `Windows 11 dev environment` running and signed in.
-- Copy the current `apps/job-agent/dist/whitesmith-job-agent.exe` into `C:\ProgramData\Whitesmith\whitesmith-job-agent.exe` inside the guest.
-- Register/restart `WhitesmithGuestService` as SYSTEM with `StartWhenAvailable`.
+- Copy the current `apps/job-agent/dist/mars-job-agent.exe` into `C:\ProgramData\Mars\mars-job-agent.exe` inside the guest.
+- Register/restart `MarsGuestService` as SYSTEM with `StartWhenAvailable`.
 - Remove stale local bootstrap/result probe files only.
 - Start the task and verify the corrected agent is waiting.
-- Create a new running-state Standard checkpoint named clearly, for example `Whitesmith Ready 2026-08-14`.
+- Create a new running-state Standard checkpoint named clearly, for example `Mars Ready 2026-08-14`.
 - Preserve the user-created 23:31 checkpoint.
 
-This step needs elevated host PowerShell and the `WhitesmithAdmin` guest credential for PowerShell Direct.
+This step needs elevated host PowerShell and the `MarsAdmin` guest credential for PowerShell Direct.
 
 ### 2. Repeat the checkpoint clone synthetic execution proof
 
-Export the new Whitesmith checkpoint, then:
+Export the new Mars checkpoint, then:
 
 - `Import-VM -Copy -GenerateNewId`.
 - Verify imported state is `Saved`.
@@ -232,7 +232,7 @@ Replace the VHDX-per-lease path in `apps/orchestrator/src/hyperv.ts` with checkp
 The Windows installer/runtime configuration currently points at:
 
 ```text
-WHITESMITH_WINDOWS_TEMPLATE_PATH=C:\ProgramData\Whitesmith\templates\windows.vhdx
+MARS_WINDOWS_TEMPLATE_PATH=C:\ProgramData\Mars\templates\windows.vhdx
 ```
 
 Replace this contract with the exported golden-checkpoint location and immutable manifest/digest. Update:
@@ -275,7 +275,7 @@ Before enabling the worker:
 Only after local checkpoint execution and warm-pool recovery pass:
 
 - Set `draining=false`.
-- Trigger one Windows smoke run using `whitesmith-windows-x64`.
+- Trigger one Windows smoke run using `mars-windows-x64`.
 - Confirm assignment, bootstrap, ephemeral runner pickup, workflow steps, guest shutdown, lease completion, VM cleanup, and warm-slot replenishment.
 
 ## Current external state
@@ -284,7 +284,7 @@ Only after local checkpoint execution and warm-pool recovery pass:
 - Worker connection/configuration: `online`, `ready`
 - Worker draining: `true`
 - Windows pool ID: `6e9c03f7-469a-4667-a3c2-df6b883b30af`
-- Pool label: `whitesmith-windows-x64`
+- Pool label: `mars-windows-x64`
 - Latest Windows smoke run `31841520964`: cancelled
 - No successful end-to-end Windows GitHub smoke yet
 
@@ -294,15 +294,15 @@ Temporary diagnostic/proof outputs:
 
 ```text
 C:\Users\acoop\AppData\Local\Temp\windows-dev-checkpoint.txt
-C:\Users\acoop\AppData\Local\Temp\whitesmith-golden-checkpoint-result.txt
-C:\Users\acoop\AppData\Local\Temp\whitesmith-guest-execution-result.txt
-C:\Users\acoop\AppData\Local\Temp\whitesmith-vm-lifecycle-result.txt
+C:\Users\acoop\AppData\Local\Temp\mars-golden-checkpoint-result.txt
+C:\Users\acoop\AppData\Local\Temp\mars-guest-execution-result.txt
+C:\Users\acoop\AppData\Local\Temp\mars-vm-lifecycle-result.txt
 ```
 
 Golden checkpoint export created during the proof:
 
 ```text
-C:\ProgramData\Whitesmith\golden-checkpoint
+C:\ProgramData\Mars\golden-checkpoint
 ```
 
-Treat that export as diagnostic. Re-export from the new corrected Whitesmith-ready checkpoint before production use.
+Treat that export as diagnostic. Re-export from the new corrected Mars-ready checkpoint before production use.

@@ -25,8 +25,8 @@ function allowOAuthStart(client: string): boolean {
 export function registerAuthRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
   app.post("/api/auth/logout", async (c) => {
     const origin = deps.setup.publicOrigin();
-    await deleteSession(deps.db, cookieValue(c.req.header("Cookie"), "whitesmith_session") ?? undefined);
-    if (origin) c.header("Set-Cookie", `whitesmith_session=; ${cookieAttributes(origin, "/", 0)}`);
+    await deleteSession(deps.db, cookieValue(c.req.header("Cookie"), "mars_session") ?? undefined);
+    if (origin) c.header("Set-Cookie", `mars_session=; ${cookieAttributes(origin, "/", 0)}`);
     return c.json({ ok: true });
   });
   app.get("/api/auth/github", async (c) => {
@@ -65,7 +65,7 @@ export function registerAuthRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlan
     await syncGithubOrganizations(deps.db, userId, user.accessToken);
     await syncGithubPersonalWorkspace(deps.db, userId, user);
     const [onboarding] = await deps.db`SELECT completed_at FROM system_onboarding WHERE singleton=true`;
-    c.header("Set-Cookie", `whitesmith_session=${await createSession(deps.db, userId)}; ${cookieAttributes(origin, "/", 604800)}`);
+    c.header("Set-Cookie", `mars_session=${await createSession(deps.db, userId)}; ${cookieAttributes(origin, "/", 604800)}`);
     if (encodedReturnTo) c.header("Set-Cookie", `oauth_return_to=; ${cookieAttributes(origin, "/api/auth", 0)}`, { append: true });
     return c.redirect(browserLocation(deps.browserOrigin() ?? origin, returnTo ?? (onboarding?.completed_at ? "/" : "/onboarding")), 302);
   });

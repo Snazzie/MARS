@@ -1,17 +1,17 @@
-# Whitesmith Sign-in and Onboarding Wizard UI
+# Mars Sign-in and Onboarding Wizard UI
 
 ## Goal
 
-Replace the current bare onboarding markup with a proper GitHub sign-in screen and a resumable, server-gated setup wizard. The flow must remain safe to refresh, understandable to operators, and consistent with the existing dark Whitesmith console visual language.
+Replace the current bare onboarding markup with a proper GitHub sign-in screen and a resumable, server-gated setup wizard. The flow must remain safe to refresh, understandable to operators, and consistent with the existing dark Mars console visual language.
 
 ## Sign-in
 
 `OnboardingPage` renders a focused centered card before authentication.
 
 - No setup detail is fetched or rendered until the public status reports an authenticated global administrator.
-- When `adminCreated=false`, heading is `Create your administrator account`; otherwise it is `Sign in to Whitesmith`.
+- When `adminCreated=false`, heading is `Create your administrator account`; otherwise it is `Sign in to Mars`.
 - The primary action links to `/api/auth/github` and is labeled `Continue with GitHub`.
-- The card explains that GitHub supplies identity and organization access; Whitesmith stores no password.
+- The card explains that GitHub supplies identity and organization access; Mars stores no password.
 - Include a security note that only the configured GitHub account can administer the instance.
 - Loading, API failure, and return-from-OAuth states are explicit and accessible.
 - An authenticated non-admin sees an administrator-required terminal state with a retry/sign-out affordance, without setup data.

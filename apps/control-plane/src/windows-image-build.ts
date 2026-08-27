@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { WorkerBuildImagePayload, workerBuildImageContentDescriptor } from "@whitesmith/contracts";
+import { WorkerBuildImagePayload, workerBuildImageContentDescriptor } from "@mars/contracts";
 import type { ControlPlaneHttpDeps } from "./http/types.ts";
 
 type WindowsContainerBuild = NonNullable<ControlPlaneHttpDeps["windowsContainerBuild"]>;
@@ -11,7 +11,7 @@ async function fileSha256(path: string): Promise<string> {
 export async function createWorkerImageBuildPayload(input: {
   baseUrl: string;
   buildId: string;
-  image: "whitesmith/windows-job:local";
+  image: "mars/windows-job:local";
   build: WindowsContainerBuild;
 }): Promise<WorkerBuildImagePayload> {
   const origin = new URL(input.baseUrl).origin;

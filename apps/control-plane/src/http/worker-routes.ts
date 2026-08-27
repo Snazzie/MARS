@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { PendingWorkerRequest, WorkerConfiguration } from "@whitesmith/contracts";
+import { PendingWorkerRequest, WorkerConfiguration } from "@mars/contracts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { verifyWorkerBootstrap, initializeWorkerBootstrap, rotateWorkerBootstrap, getWorkerBootstrapStatus } from "../worker-bootstrap.ts";
 import { approvePendingWorker, configurePendingWorker, createRequestLimiter, hasMachineIdentity, parseApproveWorkerRequest, requestPendingWorker, rejectPendingWorker } from "../worker-requests.ts";
@@ -77,7 +77,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   app.get("/api/workers/windows-container-verifier", (c) => buildArtifact(c, "verifierPath", "verify-runtime.ps1"));
   app.get("/api/workers/windows-containerfile", (c) => buildArtifact(c, "containerfilePath", "Containerfile"));
   app.get("/api/workers/windows-container-entrypoint", (c) => buildArtifact(c, "entrypointPath", "entrypoint.ps1"));
-  app.get("/api/workers/windows-container-job-agent", (c) => buildArtifact(c, "jobAgentPath", "whitesmith-job-agent.exe"));
+  app.get("/api/workers/windows-container-job-agent", (c) => buildArtifact(c, "jobAgentPath", "mars-job-agent.exe"));
   app.get("/api/workers/installer", async (c) => {
     const audience = c.req.query("audience");
     const runtime = c.req.query("runtime") ?? "container";
@@ -98,19 +98,19 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       WINDOWS_CONTAINER_JOB_AGENT_URL: `${origin}/api/workers/windows-container-job-agent`,
     };
     const extra: Record<string, string> = audience === "windows-x64"
-      ? { WINDOWS_RUNTIME: runtime, WINDOWS_CONTAINER_IMAGE: "whitesmith/windows-job:local", WINDOWS_TEMPLATE_PATH: deps.workerTemplatePaths?.["windows-x64"] ?? "", WINDOWS_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["windows-x64"] ?? "", LINUX_TEMPLATE_PATH: deps.workerTemplatePaths?.["linux-x64"] ?? "", LINUX_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["linux-x64"] ?? "", ...(build ? { WINDOWS_CONTAINER_BASE_IMAGE: build.baseImage, WINDOWS_CONTAINER_RUNNER_URL: build.runnerUrl, WINDOWS_CONTAINER_RUNNER_SHA256: build.runnerSha256, WINDOWS_CONTAINER_GIT_URL: build.gitUrl, WINDOWS_CONTAINER_GIT_SHA256: build.gitSha256, WINDOWS_CONTAINER_VC_URL: build.vcUrl, WINDOWS_CONTAINER_VC_SHA256: build.vcSha256, ...buildUrls } : {}) }
+      ? { WINDOWS_RUNTIME: runtime, WINDOWS_CONTAINER_IMAGE: "mars/windows-job:local", WINDOWS_TEMPLATE_PATH: deps.workerTemplatePaths?.["windows-x64"] ?? "", WINDOWS_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["windows-x64"] ?? "", LINUX_TEMPLATE_PATH: deps.workerTemplatePaths?.["linux-x64"] ?? "", LINUX_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["linux-x64"] ?? "", ...(build ? { WINDOWS_CONTAINER_BASE_IMAGE: build.baseImage, WINDOWS_CONTAINER_RUNNER_URL: build.runnerUrl, WINDOWS_CONTAINER_RUNNER_SHA256: build.runnerSha256, WINDOWS_CONTAINER_GIT_URL: build.gitUrl, WINDOWS_CONTAINER_GIT_SHA256: build.gitSha256, WINDOWS_CONTAINER_VC_URL: build.vcUrl, WINDOWS_CONTAINER_VC_SHA256: build.vcSha256, ...buildUrls } : {}) }
       : audience === "macos-arm64" ? { TART_IMAGE: deps.macosTartBaseImage ?? "", TART_IMAGE_DIGEST: deps.defaultJobImages["macos-arm64"] ?? "" } : {};
     if (audience === "windows-x64" && runtime === "vm" && (!extra.WINDOWS_TEMPLATE_PATH || !extra.WINDOWS_TEMPLATE_DIGEST)) return c.json({ code: "artifact_unavailable", message: "Windows Hyper-V template is not configured", artifact: "windows-template" }, 503);
     return new Response(injectInstallerOrigin(await installer.text(), workerOrigin(origin), extra, audience === "windows-x64"), { headers: noStore() });
   });
-  app.get("/api/workers/orchestrator", async (c) => { const audience = c.req.query("audience") as keyof NonNullable<typeof deps.workerOrchestratorExecutables>; const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined); if (!executable) return c.json({ code: "artifact_unavailable", message: "Orchestrator is unsupported", artifact: `orchestrator:${audience}` }, 503); if (!await Bun.file(executable).exists()) return c.json({ code: "artifact_unavailable", message: "Orchestrator is unavailable", artifact: `orchestrator:${audience}` }, 503, { "cache-control": "no-store" }); const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", 'attachment; filename="whitesmith-orchestrator"'); return new Response(Bun.file(executable), { headers }); });
+  app.get("/api/workers/orchestrator", async (c) => { const audience = c.req.query("audience") as keyof NonNullable<typeof deps.workerOrchestratorExecutables>; const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined); if (!executable) return c.json({ code: "artifact_unavailable", message: "Orchestrator is unsupported", artifact: `orchestrator:${audience}` }, 503); if (!await Bun.file(executable).exists()) return c.json({ code: "artifact_unavailable", message: "Orchestrator is unavailable", artifact: `orchestrator:${audience}` }, 503, { "cache-control": "no-store" }); const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", 'attachment; filename="mars-orchestrator"'); return new Response(Bun.file(executable), { headers }); });
   app.get("/api/workers/service-host", async (c) => {
     const executable = deps.workerServiceHostExecutable;
     if (c.req.query("audience") !== "windows-x64" || !executable) return c.json({ error: "unsupported service host audience" }, 400);
     if (!await Bun.file(executable).exists()) return c.json({ error: "Windows service host is unavailable" }, 503, { "cache-control": "no-store" });
     const headers = noStore();
     headers.set("content-type", "application/octet-stream");
-    headers.set("content-disposition", 'attachment; filename="whitesmith-service-host.exe"');
+    headers.set("content-disposition", 'attachment; filename="mars-service-host.exe"');
     return new Response(Bun.file(executable), { headers });
   });
   app.post("/api/workers/join", async (c) => {

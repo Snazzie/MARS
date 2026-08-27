@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { PoolResources, RunDetail, RunJob, RunStage } from "@whitesmith/contracts";
+import type { PoolResources, RunDetail, RunJob, RunStage } from "@mars/contracts";
 import { Badge } from "@astryxdesign/core/Badge";
 import { ActionGraph } from "./ActionGraph.tsx";
 import { LogViewer } from "./LogViewer.tsx";

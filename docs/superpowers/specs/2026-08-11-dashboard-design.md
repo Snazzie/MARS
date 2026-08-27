@@ -1,4 +1,4 @@
-# Whitesmith Dashboard Design
+# Mars Dashboard Design
 
 ## Decision
 

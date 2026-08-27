@@ -1,4 +1,4 @@
-import { OutOfMemoryResult, type LeaseBootstrapEnvelope, type RuntimeTerminationEvidence, type WorkerCacheProxy, type WorkerCommand, type WorkerEvent } from "@whitesmith/contracts";
+import { OutOfMemoryResult, type LeaseBootstrapEnvelope, type RuntimeTerminationEvidence, type WorkerCacheProxy, type WorkerCommand, type WorkerEvent } from "@mars/contracts";
 import type { RuntimeDriver } from "./runtime.ts";
 
 export type MemoryPressureState = {

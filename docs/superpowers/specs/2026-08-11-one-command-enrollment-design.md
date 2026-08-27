@@ -24,20 +24,20 @@ The code authenticates only a request. Possession never authorizes jobs, JIT cre
 
 ## Bootstrap code lifecycle
 
-Setup generates one random 256-bit bootstrap code for the control-plane deployment. Whitesmith displays the plaintext once and stores only:
+Setup generates one random 256-bit bootstrap code for the control-plane deployment. Mars displays the plaintext once and stores only:
 
 - its SHA-256 hash;
 - creation and rotation timestamps;
 - the global administrator responsible for setup or rotation;
 - audit metadata that never contains the plaintext.
 
-Whitesmith does not store encrypted or plaintext code and cannot reveal it later.
+Mars does not store encrypted or plaintext code and cannot reveal it later.
 
 Rotation generates and displays a replacement once and atomically invalidates the previous hash for new requests. Requests already recorded as pending remain pending for explicit approval or rejection. Losing the code or saved commands requires rotation.
 
 ## Command generation
 
-During setup or rotation, Whitesmith emits Linux, Windows, and macOS command blocks containing the same bootstrap code:
+During setup or rotation, Mars emits Linux, Windows, and macOS command blocks containing the same bootstrap code:
 
 - `macos-arm64`: download to a temporary file, then run `zsh <file> --code <code>`.
 - `linux-x64`: download to a temporary file, then run `bash <file> --code <code>`.

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CreatePoolRequest, type PoolSummary, type WorkerDetail } from "@whitesmith/contracts";
+import { CreatePoolRequest, type PoolSummary, type WorkerDetail } from "@mars/contracts";
 import { ApiRequestError, deleteGlobalPool, getGlobalPools, getWorkers, mutateGlobalPool, saveGlobalPool } from "../api.ts";
 import { Disclosure } from "../components/Disclosure.tsx";
 import { QueryState } from "../components/StateView.tsx";

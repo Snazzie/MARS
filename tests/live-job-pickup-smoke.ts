@@ -1,6 +1,6 @@
 import { createDb, getOverview, type DatabaseClient } from "../packages/db/src/index.ts";
 
-const DEFAULT_REPOSITORY = "Snazzie/whitesmith";
+const DEFAULT_REPOSITORY = "Snazzie/mars";
 const DEFAULT_WORKFLOW = "macos-smoke.yml";
 const DEFAULT_REF = "main";
 const POLL_INTERVAL_MS = 1_000;
@@ -77,8 +77,8 @@ type DatabaseRunState = {
   pending: number;
 };
 
-export function isWhitesmithRunnerName(value: string | null): boolean {
-  return typeof value === "string" && /^whitesmith-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+export function isMarsRunnerName(value: string | null): boolean {
+  return typeof value === "string" && /^mars-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 }
 export function assertExpectedControlPlaneBuild(value: unknown, expectedBuildId: string): asserts value is ControlPlaneHealthResponse {
   if (!value || typeof value !== "object") throw new Error("control_plane_health_invalid");
@@ -114,7 +114,7 @@ export function initialFreshRunMilestones(): FreshRunMilestones {
 export function advanceFreshRunMilestones(previous: FreshRunMilestones, snapshot: FreshRunSnapshot): FreshRunMilestones {
   const queued = previous.queued || (snapshot.databaseJobStatus === "queued" && snapshot.pending >= 1);
   const lease = previous.lease || (queued && snapshot.leaseId !== null);
-  const inProgress = previous.inProgress || (lease && snapshot.githubStatus === "in_progress" && isWhitesmithRunnerName(snapshot.runnerName));
+  const inProgress = previous.inProgress || (lease && snapshot.githubStatus === "in_progress" && isMarsRunnerName(snapshot.runnerName));
   const terminal = previous.terminal || (inProgress && snapshot.githubStatus === "completed" && snapshot.githubConclusion === "success" && snapshot.databaseRunStatus === "completed" && snapshot.databaseJobStatus === "completed");
   const reaped = previous.reaped || (terminal && snapshot.leaseState === "reaped");
   const pendingZero = previous.pendingZero || (reaped && snapshot.pending === 0);
@@ -195,11 +195,11 @@ async function waitForExistingRun(repository: string, runId: number): Promise<vo
   while (Date.now() < deadline) {
     const [run, jobs] = await Promise.all([getRun(repository, runId), listRunJobs(repository, runId)]);
     const runnerNames = jobs.map((job) => job.runnerName);
-    if (run.status !== "queued" && jobs.length > 0 && runnerNames.every(isWhitesmithRunnerName)) {
+    if (run.status !== "queued" && jobs.length > 0 && runnerNames.every(isMarsRunnerName)) {
       console.log(JSON.stringify({ event: "baseline_run_assigned", runId, status: run.status, conclusion: run.conclusion, runnerNames }));
       return;
     }
-    if (run.status === "completed") throw new Error(`baseline_run_${runId}_completed_without_whitesmith_runner`);
+    if (run.status === "completed") throw new Error(`baseline_run_${runId}_completed_without_mars_runner`);
     await delay(POLL_INTERVAL_MS);
   }
   throw new Error(`baseline_run_${runId}_timeout`);
@@ -316,25 +316,25 @@ async function proveFreshRun(db: DatabaseClient, options: LiveOptions, organizat
 async function assertNoLeaseVms(tartExecutable: string): Promise<void> {
   const output = await runCommand(tartExecutable, ["list", "--format", "json"]);
   const entries = JSON.parse(output) as Array<{ Name?: unknown; name?: unknown }>;
-  const names = entries.map((entry) => String(entry.Name ?? entry.name ?? "")).filter((name) => name.startsWith("whitesmith-job-"));
+  const names = entries.map((entry) => String(entry.Name ?? entry.name ?? "")).filter((name) => name.startsWith("mars-job-"));
   if (names.length) throw new Error(`tart_lease_vms_remain: ${names.join(",")}`);
 }
 
 async function runLiveSmoke(): Promise<void> {
-  if (Bun.env.WHITESMITH_LIVE_E2E !== "1") throw new Error("WHITESMITH_LIVE_E2E=1 is required");
+  if (Bun.env.MARS_LIVE_E2E !== "1") throw new Error("MARS_LIVE_E2E=1 is required");
   const options: LiveOptions = {
-    repository: Bun.env.WHITESMITH_SMOKE_REPOSITORY ?? DEFAULT_REPOSITORY,
-    workflow: Bun.env.WHITESMITH_SMOKE_WORKFLOW ?? DEFAULT_WORKFLOW,
-    ref: Bun.env.WHITESMITH_SMOKE_REF ?? DEFAULT_REF,
+    repository: Bun.env.MARS_SMOKE_REPOSITORY ?? DEFAULT_REPOSITORY,
+    workflow: Bun.env.MARS_SMOKE_WORKFLOW ?? DEFAULT_WORKFLOW,
+    ref: Bun.env.MARS_SMOKE_REF ?? DEFAULT_REF,
     databaseUrl: Bun.env.DATABASE_URL ?? "",
-    tartExecutable: Bun.env.WHITESMITH_TART_EXECUTABLE ?? "tart",
-    controlPlaneUrl: Bun.env.WHITESMITH_CONTROL_PLANE_URL ?? Bun.env.PUBLIC_BASE_URL ?? "",
-    expectedBuildId: Bun.env.WHITESMITH_EXPECTED_BUILD_ID ?? "",
+    tartExecutable: Bun.env.MARS_TART_EXECUTABLE ?? "tart",
+    controlPlaneUrl: Bun.env.MARS_CONTROL_PLANE_URL ?? Bun.env.PUBLIC_BASE_URL ?? "",
+    expectedBuildId: Bun.env.MARS_EXPECTED_BUILD_ID ?? "",
   };
   if (!options.databaseUrl) throw new Error("DATABASE_URL is required");
-  if (options.repository.split("/").length !== 2) throw new Error("WHITESMITH_SMOKE_REPOSITORY must be owner/repo");
-  if (!options.controlPlaneUrl) throw new Error("WHITESMITH_CONTROL_PLANE_URL or PUBLIC_BASE_URL is required");
-  if (!options.expectedBuildId) throw new Error("WHITESMITH_EXPECTED_BUILD_ID is required");
+  if (options.repository.split("/").length !== 2) throw new Error("MARS_SMOKE_REPOSITORY must be owner/repo");
+  if (!options.controlPlaneUrl) throw new Error("MARS_CONTROL_PLANE_URL or PUBLIC_BASE_URL is required");
+  if (!options.expectedBuildId) throw new Error("MARS_EXPECTED_BUILD_ID is required");
   await verifyControlPlaneBuild(options.controlPlaneUrl, options.expectedBuildId);
   await runCommand("gh", ["auth", "status", "--hostname", "github.com"]);
   const db = createDb(options.databaseUrl);

@@ -1,4 +1,4 @@
-# Whitesmith Sign-in and Onboarding Wizard Implementation Plan
+# Mars Sign-in and Onboarding Wizard Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -6,7 +6,7 @@
 
 **Architecture:** Keep `OnboardingPage` as the server-state coordinator and preserve all existing API/mutation contracts. Extract presentational sign-in, step rail, and task-card concerns into focused components only where this reduces complexity; use CSS classes scoped to onboarding so the existing dashboard remains unchanged. Completed-step review is local UI state and read-only; the server-derived `detail.step` remains the only source of mutation authority.
 
-**Tech Stack:** React 19, TanStack Query, TanStack Router, TypeScript, existing Whitesmith CSS tokens, Bun test.
+**Tech Stack:** React 19, TanStack Query, TanStack Router, TypeScript, existing Mars CSS tokens, Bun test.
 
 ## Global Constraints
 
@@ -41,7 +41,7 @@ expect(html).toContain('/api/auth/github');
 expect(html).toContain("GitHub supplies identity");
 ```
 
-Add a returning-admin fixture asserting `Sign in to Whitesmith` rather than the create-admin heading.
+Add a returning-admin fixture asserting `Sign in to Mars` rather than the create-admin heading.
 
 - [ ] **Step 2: Add non-admin privacy assertion**
 
@@ -93,7 +93,7 @@ type OnboardingSignInProps = {
 
 Render a centered card with:
 
-- `Create your administrator account` or `Sign in to Whitesmith`;
+- `Create your administrator account` or `Sign in to Mars`;
 - explanatory GitHub identity copy;
 - `Continue with GitHub` link to `/api/auth/github`;
 - security note;
@@ -178,7 +178,7 @@ Below 800px collapse to a horizontal scrollable step strip and a single task col
 Run:
 
 ```bash
-bun run --filter '@whitesmith/web' build
+bun run --filter '@mars/web' build
 ```
 
 Expected: browser bundle builds without CSS or JSX errors.

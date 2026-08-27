@@ -1,6 +1,6 @@
 import { createHash, generateKeyPairSync, verify } from "node:crypto";
-import type { Sql } from "@whitesmith/db";
-import { jsonParameter } from "@whitesmith/db";
+import type { Sql } from "@mars/db";
+import { jsonParameter } from "@mars/db";
 
 export interface WorkerJoin { workerId: string; publicKey: string; fingerprint: string; vmUuid: string; platform: string; limits: Record<string, number>; }
 export function fingerprint(publicKey: string): string { return createHash("sha256").update(publicKey).digest("hex"); }
