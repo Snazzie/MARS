@@ -49,7 +49,7 @@ jobs:
       - id: metadata
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/forgedatscale/whitesmith/control-plane
+          images: ghcr.io/snazzie/whitesmith/control-plane
           tags: |
             type=ref,event=tag
             type=sha
@@ -67,7 +67,7 @@ jobs:
           sbom: true
       - name: Verify immutable release image
         env:
-          IMAGE: ghcr.io/forgedatscale/whitesmith/control-plane
+          IMAGE: ghcr.io/snazzie/whitesmith/control-plane
           DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           test -n "$DIGEST"
@@ -75,11 +75,11 @@ jobs:
           docker run --rm --entrypoint /bin/sh "$IMAGE@$DIGEST" -c 'test -f /app/index.js && test -f /app/web/index.html && test -f /app/web/index.js && test -f /app/web/index.css && test -f /app/migrations/0000_legacy_baseline.sql && test -f /app/migrations/meta/_journal.json && test -f /app/workers/install-worker.ps1 && test -f /app/workers/whitesmith-orchestrator.exe && test -f /app/workers/whitesmith-service-host.exe'
       - name: Smoke test immutable release image
         env:
-          IMAGE: ghcr.io/forgedatscale/whitesmith/control-plane@${{ steps.image.outputs.digest }}
+          IMAGE: ghcr.io/snazzie/whitesmith/control-plane@${{ steps.image.outputs.digest }}
         run: bash tests/control-plane-image-smoke.sh
       - name: Publish release metadata
         env:
-          IMAGE: ghcr.io/forgedatscale/whitesmith/control-plane
+          IMAGE: ghcr.io/snazzie/whitesmith/control-plane
           DIGEST: ${{ steps.image.outputs.digest }}
           BUILD_ID: ${{ github.sha }}
         run: |
