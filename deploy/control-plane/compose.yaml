@@ -1,6 +1,6 @@
 services:
   control-plane:
-    image: ghcr.io/whitesmith/control-plane:latest
+    image: ghcr.io/forgedatscale/whitesmith/control-plane:latest
     restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
