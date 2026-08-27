@@ -35,6 +35,13 @@ export type ControlPlaneHttpDeps = {
     entrypointPath: string;
     jobAgentPath: string;
   };
+  windowsContainerArtifacts?: {
+    builderPath: string;
+    verifierPath: string;
+    containerfilePath: string;
+    entrypointPath: string;
+    jobAgentPath: string;
+  };
   templateManifestPaths?: Partial<Record<"windows-x64" | "linux-x64", string>>;
   templateArtifactPaths?: Partial<Record<"windows-x64" | "linux-x64", string>>;
   workerTemplatePaths?: Partial<Record<"windows-x64" | "linux-x64", string>>;

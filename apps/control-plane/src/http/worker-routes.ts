@@ -65,8 +65,8 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", `attachment; filename="${platform}.vhdx"`);
     return new Response(Bun.file(path), { headers });
   });
-  const buildArtifact = async (c: Context<ControlPlaneEnv>, key: keyof NonNullable<ControlPlaneHttpDeps["windowsContainerBuild"]>, filename: string) => {
-    const path = deps.windowsContainerBuild?.[key];
+  const buildArtifact = async (c: Context<ControlPlaneEnv>, key: keyof NonNullable<ControlPlaneHttpDeps["windowsContainerArtifacts"]>, filename: string) => {
+    const path = (deps.windowsContainerArtifacts ?? deps.windowsContainerBuild)?.[key];
     if (!path || !await Bun.file(path).exists()) return c.json({ code: "artifact_unavailable", message: "Windows container build artifact is unavailable", artifact: `windows-container-${key}` }, 503, { "cache-control": "no-store" });
     const headers = noStore();
     headers.set("content-type", "application/octet-stream");
@@ -87,7 +87,6 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const installer = Bun.file(new URL(file, deps.workerInstallerRoot));
     if (audience === "windows-x64" && runtime !== "vm" && runtime !== "container") return c.json({ error: "unsupported Windows runtime" }, 400);
     if (!await installer.exists()) return c.json({ code: "artifact_unavailable", message: "Worker installer is unavailable", artifact: file }, 503, { "cache-control": "no-store" });
-    const build = deps.windowsContainerBuild;
     const origin = deps.setup.publicOrigin();
     if (!origin) return c.json({ code: "setup_required", message: "Complete first-run setup" }, 503);
     const buildUrls = {
@@ -98,7 +97,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       WINDOWS_CONTAINER_JOB_AGENT_URL: `${origin}/api/workers/windows-container-job-agent`,
     };
     const extra: Record<string, string> = audience === "windows-x64"
-      ? { WINDOWS_RUNTIME: runtime, WINDOWS_CONTAINER_IMAGE: "mars/windows-job:local", WINDOWS_TEMPLATE_PATH: deps.workerTemplatePaths?.["windows-x64"] ?? "", WINDOWS_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["windows-x64"] ?? "", LINUX_TEMPLATE_PATH: deps.workerTemplatePaths?.["linux-x64"] ?? "", LINUX_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["linux-x64"] ?? "", ...(build ? { WINDOWS_CONTAINER_BASE_IMAGE: build.baseImage, WINDOWS_CONTAINER_RUNNER_URL: build.runnerUrl, WINDOWS_CONTAINER_RUNNER_SHA256: build.runnerSha256, WINDOWS_CONTAINER_GIT_URL: build.gitUrl, WINDOWS_CONTAINER_GIT_SHA256: build.gitSha256, WINDOWS_CONTAINER_VC_URL: build.vcUrl, WINDOWS_CONTAINER_VC_SHA256: build.vcSha256, ...buildUrls } : {}) }
+      ? { WINDOWS_RUNTIME: runtime, WINDOWS_CONTAINER_IMAGE: "mars/windows-job:local", WINDOWS_TEMPLATE_PATH: deps.workerTemplatePaths?.["windows-x64"] ?? "", WINDOWS_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["windows-x64"] ?? "", LINUX_TEMPLATE_PATH: deps.workerTemplatePaths?.["linux-x64"] ?? "", LINUX_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["linux-x64"] ?? "", ...buildUrls }
       : audience === "macos-arm64" ? { TART_IMAGE: deps.macosTartBaseImage ?? "", TART_IMAGE_DIGEST: deps.defaultJobImages["macos-arm64"] ?? "" } : {};
     if (audience === "windows-x64" && runtime === "vm" && (!extra.WINDOWS_TEMPLATE_PATH || !extra.WINDOWS_TEMPLATE_DIGEST)) return c.json({ code: "artifact_unavailable", message: "Windows Hyper-V template is not configured", artifact: "windows-template" }, 503);
     return new Response(injectInstallerOrigin(await installer.text(), workerOrigin(origin), extra, audience === "windows-x64"), { headers: noStore() });

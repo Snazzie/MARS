@@ -48,39 +48,18 @@ const containerBuildArtifact = (name: string, fallback: string): string | undefi
   const artifact = runtimeArtifact(name, fallback);
   return artifact ? fileURLToPath(artifact) : undefined;
 };
-type WindowsContainerReleaseConfig = {
-  baseImage: string;
-  runnerUrl: string;
-  runnerSha256: string;
-  gitUrl: string;
-  gitSha256: string;
-  vcUrl: string;
-  vcSha256: string;
-};
-const loadWindowsContainerBuild = async (): Promise<ControlPlaneHttpDeps["windowsContainerBuild"]> => {
-  const manifestUrl = new URL(Bun.env.MARS_RELEASE_MANIFEST ?? (production ? "./release-manifest.json" : "../../../deploy/control-plane/release-manifest.json"), import.meta.url);
-  const manifest = await Bun.file(manifestUrl).json().catch(() => null) as { windowsContainerBuild?: WindowsContainerReleaseConfig | null } | null;
-  const configured = manifest?.windowsContainerBuild ?? {
-    baseImage: Bun.env.MARS_WINDOWS_CONTAINER_BASE_IMAGE,
-    runnerUrl: Bun.env.MARS_WINDOWS_CONTAINER_RUNNER_URL,
-    runnerSha256: Bun.env.MARS_WINDOWS_CONTAINER_RUNNER_SHA256,
-    gitUrl: Bun.env.MARS_WINDOWS_CONTAINER_GIT_URL,
-    gitSha256: Bun.env.MARS_WINDOWS_CONTAINER_GIT_SHA256,
-    vcUrl: Bun.env.MARS_WINDOWS_CONTAINER_VC_URL,
-    vcSha256: Bun.env.MARS_WINDOWS_CONTAINER_VC_SHA256,
+const loadWindowsContainerArtifacts = (): ControlPlaneHttpDeps["windowsContainerArtifacts"] => {
+  const artifacts = {
+    builderPath: containerBuildArtifact("MARS_WINDOWS_CONTAINER_BUILDER", "../../../deploy/workers/build-windows-container-image-local.ps1"),
+    verifierPath: containerBuildArtifact("MARS_WINDOWS_CONTAINER_VERIFIER", "../../../images/jobs/windows/verify-runtime.ps1"),
+    containerfilePath: containerBuildArtifact("MARS_WINDOWS_CONTAINERFILE", "../../../images/jobs/windows/Containerfile"),
+    entrypointPath: containerBuildArtifact("MARS_WINDOWS_CONTAINER_ENTRYPOINT", "../../../images/jobs/windows/entrypoint.ps1"),
+    jobAgentPath: containerBuildArtifact("MARS_WINDOWS_CONTAINER_JOB_AGENT", "../../../apps/job-agent/dist/mars-job-agent.exe"),
   };
-  const release = configured && Object.values(configured).every((value) => typeof value === "string" && value.length > 0) ? configured as WindowsContainerReleaseConfig : undefined;
-  if (!release) return undefined;
-  return {
-    ...release,
-    builderPath: containerBuildArtifact("MARS_WINDOWS_CONTAINER_BUILDER", "../../../deploy/workers/build-windows-container-image-local.ps1")!,
-    verifierPath: containerBuildArtifact("MARS_WINDOWS_CONTAINER_VERIFIER", "../../../images/jobs/windows/verify-runtime.ps1")!,
-    containerfilePath: containerBuildArtifact("MARS_WINDOWS_CONTAINERFILE", "../../../images/jobs/windows/Containerfile")!,
-    entrypointPath: containerBuildArtifact("MARS_WINDOWS_CONTAINER_ENTRYPOINT", "../../../images/jobs/windows/entrypoint.ps1")!,
-    jobAgentPath: containerBuildArtifact("MARS_WINDOWS_CONTAINER_JOB_AGENT", "../../../apps/job-agent/dist/mars-job-agent.exe")!,
-  };
+  return Object.values(artifacts).every(Boolean) ? artifacts as NonNullable<ControlPlaneHttpDeps["windowsContainerArtifacts"]> : undefined;
 };
-const windowsContainerBuild = await loadWindowsContainerBuild();
+const windowsContainerArtifacts = loadWindowsContainerArtifacts();
+const windowsContainerBuild: ControlPlaneHttpDeps["windowsContainerBuild"] = undefined;
 if (production) {
   const requiredReleaseArtifacts = {
     webIndex: new URL("index.html", webRoot),
@@ -155,7 +134,7 @@ const discoveryHealth = new DiscoveryHealthMonitor(discoveryIntervalMs, Date.par
 const githubApp = new GitHubAppService({ db, secretBox, publicOrigin: initialized.setup.publicOrigin });
 const githubRateLimits = new GithubRateLimitGate();
 let triggerReconciliation = () => Promise.resolve();
-const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerControlPlaneUrls: controlPlaneAdapterUrls, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, windowsContainerBuild, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerServiceHostExecutable, workerOrchestratorExecutables, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, workerConnected: (workerId) => dispatcher.isConnected(workerId), onWorkerAdopted: (workerId) => { dispatcher.replayConnected(workerId); void triggerReconciliation(); }, health: () => ({ buildId: Bun.env.MARS_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
+const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerControlPlaneUrls: controlPlaneAdapterUrls, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, windowsContainerBuild, windowsContainerArtifacts, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerServiceHostExecutable, workerOrchestratorExecutables, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, workerConnected: (workerId) => dispatcher.isConnected(workerId), onWorkerAdopted: (workerId) => { dispatcher.replayConnected(workerId); void triggerReconciliation(); }, health: () => ({ buildId: Bun.env.MARS_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
 const discoveryDeps = { db, installationToken: (installationId: number) => githubApp.getInstallationToken(installationId), githubFetchForInstallation: (installationId: number) => githubRateLimits.scopedFetch(installationId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY };
 let lastQueuedDiscoveryAt = 0;
 let lastGithubLeaseReconciliationAt = 0;
