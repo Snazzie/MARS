@@ -43,6 +43,19 @@ test("supports each immutable release installer asset", () => {
     expect(command).not.toContain("worker-v0.1.0");
   }
 });
+test("uses the local control-plane installer endpoint in development", () => {
+  const command = buildInstallerCommands("http://localhost:3000", "windows-x64", "code", true)[0]?.command ?? "";
+  expect(command).toContain("http://localhost:3000/api/workers/installer?");
+  expect(command).toContain("audience=windows-x64");
+  expect(command).toContain("runtime=container");
+  expect(command).toContain("connectOrigin=http%3A%2F%2Flocalhost%3A3000");
+  expect(command).toContain("-ControlPlaneUrl 'http://localhost:3000'");
+  expect(command).not.toContain("github.com/Snazzie/Mars/releases");
+});
+test("keeps the GitHub release installer URL in production", () => {
+  const command = buildInstallerCommands("https://control.example", "windows-x64", "code", false)[0]?.command ?? "";
+  expect(command).toContain("https://github.com/Snazzie/Mars/releases/latest/download/install-worker-windows-x64.ps1");
+});
 test("builds only the selected platform installer command", () => {
   const commands = buildInstallerCommands("https://control.example", "windows-x64", "one-use-code");
   expect(commands).toHaveLength(1);
