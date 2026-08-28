@@ -99,21 +99,34 @@ test("aggregate release validation installs locked dependencies before importing
   expect(validation).toBeGreaterThan(install);
 });
 
-test("release workflow publishes signed immutable large worker assets", async () => {
+test("release workflow acquires and signs immutable large worker assets", async () => {
   const workflow = await read(".github/workflows/release-workers.yml");
   for (const requirement of [
-    "MARS_LINUX_GOLDEN_IMAGE_PATH", "mars-worker-golden.qcow2",
-    "mars-worker-golden.qcow2.bundle", "MARS_WINDOWS_VM_TEMPLATE_PATH",
-    "mars-worker-template.vhdx", "mars-worker-template.vhdx.bundle",
+    "MARS_LINUX_GOLDEN_IMAGE_SOURCE_URL",
+    'curl --fail --location --retry 3 --proto "=https" --tlsv1.2 "$GOLDEN_IMAGE_SOURCE_URL"',
+    "mars-worker-golden.qcow2",
+    "mars-worker-golden.qcow2.bundle",
+    "MARS_WINDOWS_VM_TEMPLATE_SOURCE_URL",
+    'Invoke-WebRequest -Uri $env:VM_TEMPLATE_SOURCE_URL -OutFile $vmTemplatePath',
+    "mars-worker-template.vhdx",
+    "mars-worker-template.vhdx.bundle",
     "MARS_MACOS_TART_SOURCE_IMAGE", "tart pull \"$TART_SOURCE_IMAGE\"",
     "prepare-macos-job-image.sh", "tart push \"$TARGET\" \"$PUBLISHED_REF\"",
     "imagetools inspect", "tart clone \"$TART_IMAGE\"",
     "TART_IMAGE_DIGEST", 'cosign sign --yes "$TART_IMAGE"',
     "cosign sign-blob", "gh release create",
   ]) expect(workflow).toContain(requirement);
+  expect(workflow).not.toContain("MARS_LINUX_GOLDEN_IMAGE_PATH");
+  expect(workflow).not.toContain("MARS_WINDOWS_VM_TEMPLATE_PATH");
   expect(workflow).toMatch(/mars-worker-golden\.qcow2(?:\\|\s|,)/);
   expect(workflow).toMatch(/mars-worker-template\.vhdx(?:\\|\s|,)/);
   expect(workflow).toContain("@sha256:");
+
+  const linux = workflow.slice(workflow.indexOf("\n  linux:"));
+  expect(linux.indexOf('curl --fail --location --retry 3 --proto "=https" --tlsv1.2 "$GOLDEN_IMAGE_SOURCE_URL"')).toBeGreaterThanOrEqual(0);
+  expect(linux.indexOf('curl --fail --location --retry 3 --proto "=https" --tlsv1.2 "$GOLDEN_IMAGE_SOURCE_URL"')).toBeLessThan(linux.indexOf('test -s "$GOLDEN_IMAGE_PATH"'));
+  const windows = workflow.slice(workflow.indexOf("\n  windows:"));
+  expect(windows.indexOf('Invoke-WebRequest -Uri $env:VM_TEMPLATE_SOURCE_URL -OutFile $vmTemplatePath')).toBeLessThan(windows.indexOf('Test-Path -LiteralPath $vmTemplatePath -PathType Leaf'));
 });
 
 test("image smoke asserts complete runtime metadata and Windows container inputs", async () => {
