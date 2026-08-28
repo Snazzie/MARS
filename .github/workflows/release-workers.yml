@@ -304,9 +304,6 @@ jobs:
           cp dist/worker-windows-${{ github.sha }}/mars-worker-template.vhdx dist/release/mars-worker-template.vhdx
           cp dist/worker-macos-${{ github.sha }}/mars-orchestrator dist/release/mars-orchestrator-macos-arm64
           cp dist/worker-macos-${{ github.sha }}/mars-job-agent dist/release/mars-job-agent-macos-arm64
-      - name: Build control-plane image with the unsigned manifest
-        run: |
-          docker buildx build --push --build-arg MARS_BUILD_ID="$BUILD_ID" --build-arg MARS_RELEASE_MANIFEST=dist/worker-release-manifest.json --build-arg MARS_WINDOWS_SERVICE_HOST_ARTIFACT="dist/worker-windows-${{ github.sha }}/mars-service-host.exe" -f deploy/control-plane/Dockerfile -t ghcr.io/snazzie/mars/control-plane:latest .
       - uses: actions/upload-artifact@v4
         with:
           name: worker-release-assets-${{ github.sha }}
@@ -337,3 +334,6 @@ jobs:
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" dist/release/* --generate-notes --latest
           fi
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --latest
+      - name: Build control-plane image with the unsigned manifest
+        run: |
+          docker buildx build --push --build-arg MARS_BUILD_ID="$BUILD_ID" --build-arg MARS_RELEASE_MANIFEST=dist/worker-release-manifest.json --build-arg MARS_WINDOWS_SERVICE_HOST_ARTIFACT="dist/worker-windows-${{ github.sha }}/mars-service-host.exe" -f deploy/control-plane/Dockerfile -t ghcr.io/snazzie/mars/control-plane:latest .

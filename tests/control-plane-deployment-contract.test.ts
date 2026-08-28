@@ -198,6 +198,12 @@ test("worker release workflow publishes latest assets for tag pushes and manual 
   expect(aggregate).toContain('--target "$GITHUB_SHA"');
   expect(aggregate).toContain('gh release edit "$RELEASE_TAG"');
   expect(aggregate).toContain("--latest");
+  const publication = aggregate.indexOf("name: Publish complete worker release");
+  const latest = aggregate.indexOf('gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --latest');
+  const image = aggregate.indexOf("name: Build control-plane image with the unsigned manifest");
+  expect(publication).toBeGreaterThanOrEqual(0);
+  expect(latest).toBeGreaterThan(publication);
+  expect(image).toBeGreaterThan(latest);
   expect(aggregate).not.toContain("if: startsWith(github.ref, 'refs/tags/')");
 });
 
