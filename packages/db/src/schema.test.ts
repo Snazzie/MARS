@@ -5,10 +5,11 @@ test("workers retain crash-safe enrollment replay evidence columns", () => {
   expect(workers.enrollmentCodeHash).toBeDefined();
   expect(workers.enrollmentAuthenticatedAt).toBeDefined();
 });
-test("webhook deliveries default to pending state for retention cleanup", () => {
-  expect(schemaSql).toContain(
-    "CREATE TABLE IF NOT EXISTS webhook_deliveries (delivery_id text PRIMARY KEY, installation_id bigint NOT NULL, payload jsonb NOT NULL, received_at timestamptz NOT NULL DEFAULT now(), state text NOT NULL DEFAULT 'pending');",
-  );
+test("webhook deliveries match the ORM-required baseline fields and index", () => {
+  const webhookDefinition = "CREATE TABLE IF NOT EXISTS webhook_deliveries (delivery_id text PRIMARY KEY, installation_id bigint NOT NULL, payload jsonb NOT NULL, received_at timestamptz NOT NULL DEFAULT now(), event_name text NOT NULL DEFAULT 'unknown', state text NOT NULL DEFAULT 'received', attempt_count integer NOT NULL DEFAULT 0, last_error text, processed_at timestamptz);";
+  expect(schemaSql).toContain(webhookDefinition);
+  expect(schemaSql).toContain("CREATE INDEX IF NOT EXISTS webhook_deliveries_state_idx ON webhook_deliveries(state, received_at);");
+  expect(schemaSql).not.toContain("CREATE TABLE IF NOT EXISTS webhook_deliveries (delivery_id text PRIMARY KEY, installation_id bigint NOT NULL, payload jsonb NOT NULL, received_at timestamptz NOT NULL DEFAULT now(), state text NOT NULL DEFAULT 'pending');");
 });
 
 
