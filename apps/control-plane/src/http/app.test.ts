@@ -197,6 +197,7 @@ describe("control-plane HTTP boundary", () => {
       const installer = await response.text();
       expect(response.status).toBe(200);
       expect(installer).toContain(`TART_IMAGE='ghcr.io/mars/macos@sha256:${"a".repeat(64)}'`);
+      expect(installer).toContain(`MARS_ORCHESTRATOR_SHA256='${"a".repeat(64)}'`);
       expect(installer).toContain(`TART_IMAGE_DIGEST='${"a".repeat(64)}'`);
     } finally {
       await rm(root, { recursive: true, force: true });

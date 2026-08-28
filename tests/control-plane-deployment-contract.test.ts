@@ -125,6 +125,9 @@ test("control-plane image packages every platform's small worker artifact", asyn
     "Containerfile", "entrypoint.ps1", "mars-job-agent.exe",
     "release-manifest.json",
   ]) expect(dockerfile).toContain(artifact);
+  expect(dockerfile).toContain("MARS_RELEASE_MANIFEST=deploy/control-plane/release-manifest.json");
+  expect(dockerfile).toContain("does not match packaged");
+  expect(dockerfile).toContain("createHash(\"sha256\")");
   expect(dockerfile).toContain("--target=bun-linux-x64");
   expect(dockerfile).toContain("--target=bun-windows-x64");
   expect(dockerfile).toContain("--target=bun-darwin-arm64");
@@ -157,7 +160,7 @@ test("aggregate release validation installs locked dependencies before importing
   expect(validation).toBeGreaterThan(install);
 });
 
-test("release workflow acquires and signs immutable large worker assets", async () => {
+test("release workflow acquires, authenticates, and signs immutable large worker assets", async () => {
   const workflow = await read(".github/workflows/release-workers.yml");
   for (const requirement of [
     "MARS_LINUX_GOLDEN_IMAGE_SOURCE_URL",
@@ -168,7 +171,7 @@ test("release workflow acquires and signs immutable large worker assets", async 
     'curl.exe --fail --location --retry 3 --proto "=https" --proto-redir "=https" --tlsv1.2 --output $vmTemplatePath $env:VM_TEMPLATE_SOURCE_URL',
     "mars-worker-template.vhdx",
     "mars-worker-template.vhdx.bundle",
-    "MARS_MACOS_TART_SOURCE_IMAGE", "tart pull \"$TART_SOURCE_IMAGE\"",
+    "MARS_MACOS_TART_SOURCE_IMAGE", "TART_SOURCE_REGISTRY_HOSTNAME", "docker login \"$TART_REGISTRY_HOSTNAME\"", "tart pull \"$TART_SOURCE_IMAGE\"",
     "prepare-macos-job-image.sh", "tart push \"$TARGET\" \"$PUBLISHED_REF\"",
     "imagetools inspect", "tart clone \"$TART_IMAGE\"",
     "TART_IMAGE_DIGEST", 'cosign sign --yes "$TART_IMAGE"',

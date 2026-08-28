@@ -194,7 +194,7 @@ download_asset "$MARS_GOLDEN_IMAGE" "$MARS_GOLDEN_DIGEST" "$GOLDEN_PATH" 'golden
 download_unverified "$MARS_GOLDEN_BUNDLE" "$BUNDLE_PATH" 'golden cosign bundle'
 download_asset "$MARS_COMPOSE_FILE" "$MARS_COMPOSE_SHA256" "$COMPOSE_PATH" compose
 download_asset "$MARS_DOMAIN_TEMPLATE" "$MARS_DOMAIN_TEMPLATE_SHA256" "$DOMAIN_PATH" 'domain template'
-cosign verify-blob --bundle "$BUNDLE_PATH" --certificate-identity-regexp 'mars-release' --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' "$GOLDEN_PATH" >/dev/null
+cosign verify-blob --bundle "$BUNDLE_PATH" --certificate-identity-regexp 'https://github\.com/[^/]+/[^/]+/\.github/workflows/release-workers\.yml@.*' --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' "$GOLDEN_PATH" >/dev/null
 rm -f "$BUNDLE_PATH"; chmod 0444 "$GOLDEN_PATH"; pass 'Hashes, release signature, and broker metadata verified'; write_state download_verified complete
 
 stage 'Writing broker configuration' configuration

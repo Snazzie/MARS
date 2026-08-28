@@ -71,6 +71,7 @@ export function windowsInstallerValues(platform: WindowsWorkerRelease, connectOr
 export function macosInstallerValues(platform: MacosWorkerRelease, connectOrigin: string): InstallerValues {
   return {
     PUBLIC_BASE_URL: new URL(connectOrigin).origin,
+    MARS_ORCHESTRATOR_SHA256: platform.orchestratorSha256,
     TART_IMAGE: platform.tartImage,
     TART_IMAGE_DIGEST: platform.tartImageDigest,
   };

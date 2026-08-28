@@ -15,8 +15,10 @@ parse_args "$@"
 :
 
 : "${PUBLIC_BASE_URL:?installer origin missing}"
+: "${MARS_ORCHESTRATOR_SHA256:?set orchestrator SHA-256}"
 : "${TART_IMAGE:?TART_IMAGE is required}"
 : "${TART_IMAGE_DIGEST:?TART_IMAGE_DIGEST is required}"
+[[ "$MARS_ORCHESTRATOR_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo 'MARS_ORCHESTRATOR_SHA256 must be a lowercase SHA-256 value' >&2; exit 1; }
 [[ "$TART_IMAGE_DIGEST" =~ ^(sha256:)?[0-9a-f]{64}$ ]] || { echo 'TART_IMAGE_DIGEST must be a lowercase SHA-256 value' >&2; exit 1; }
 [[ "$EUID" -ne 0 ]] || { echo 'Run this installer as the logged-in user, not with sudo.' >&2; exit 1; }
 [[ "$(uname -s)" == Darwin ]] || { echo 'macOS is required' >&2; exit 1; }
@@ -79,7 +81,7 @@ write_state tart-image complete; pass "Tart image verified: $IMAGE"
 check 'Downloading and verifying the worker orchestrator' orchestrator
 curl --silent --show-error --fail --location "${CURL_SECURITY[@]}" --dump-header "$ORCHESTRATOR_HEADERS" --output "$TEMP_ORCHESTRATOR" "${PUBLIC_BASE_URL%/}/api/workers/orchestrator?audience=macos-arm64"
 response_hash="$(awk 'BEGIN{IGNORECASE=1} tolower($1)=="x-content-sha256:" {gsub("\r","",$2); print $2; exit}' "$ORCHESTRATOR_HEADERS")"; actual_hash="$(shasum -a 256 "$TEMP_ORCHESTRATOR" | cut -d' ' -f1)"
-if [[ -n "${MARS_ORCHESTRATOR_SHA256:-}" && "$actual_hash" != "$MARS_ORCHESTRATOR_SHA256" ]]; then echo 'orchestrator checksum mismatch' >&2; exit 1; fi
+if [[ "$actual_hash" != "$MARS_ORCHESTRATOR_SHA256" ]]; then echo 'orchestrator checksum mismatch' >&2; exit 1; fi
 # Tart source is immutable; the clone checkpoint is equivalent to `tart clone <digest> <local>`.
 [[ -z "$response_hash" || "$response_hash" == "$actual_hash" ]] || { echo 'orchestrator response hash mismatch' >&2; exit 1; }
 chmod 755 "$TEMP_ORCHESTRATOR"; mv -f "$TEMP_ORCHESTRATOR" "$ORCHESTRATOR"; rm -f "$ORCHESTRATOR_HEADERS"; pass 'Orchestrator hash verified'; write_state orchestrator complete

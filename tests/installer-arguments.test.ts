@@ -281,6 +281,7 @@ test("Linux installer materializes and verifies remote worker assets before star
   expect(source).toContain("curl --silent --show-error --fail");
   expect(source).toContain("sha256sum");
   expect(source).toContain("cosign verify-blob --bundle");
+  expect(source).toContain("--certificate-identity-regexp 'https://github\\.com/[^/]+/[^/]+/\\.github/workflows/release-workers\\.yml@.*'");
   expect(source).toContain("/var/lib/mars/install-state.json");
   expect(source).toContain("/var/log/mars/install.log");
   expect(source.indexOf("download_verified")).toBeLessThan(source.indexOf("docker compose"));
@@ -308,6 +309,8 @@ test("fresh-host installers gate supported host versions before mutation and per
   expect(macSource).toContain("brew install");
   expect(macSource).toContain("tart clone");
   expect(macSource).toContain("TART_IMAGE_DIGEST");
+  expect(macSource).toContain('${MARS_ORCHESTRATOR_SHA256:?set orchestrator SHA-256}');
+  expect(macSource).toContain('"$actual_hash" != "$MARS_ORCHESTRATOR_SHA256"');
   expect(macSource).toContain("install-state.json");
 });
 test("installer preflight runs before host mutation and preserves protected credentials", async () => {
@@ -349,6 +352,8 @@ test("fresh-host blocker fixes remain fail-closed and resumable", async () => {
   const wingetIndex = windowsSource.indexOf("winget install");
   expect(windowsSource.indexOf("Refresh-ProcessPath", wingetIndex)).toBeGreaterThan(wingetIndex);
   expect(windowsSource).toContain("-WindowsServiceHostSha256");
+  expect(windowsSource).toContain("Copy-Item -LiteralPath $PSCommandPath -Destination $persistentInstallerPath -Force");
+  expect(windowsSource).toContain("Register-ResumeTask $persistentInstallerPath");
   expect(windowsSource.lastIndexOf("Remove-ResumeTask")).toBeGreaterThan(windowsSource.indexOf("Start-Service MarsWorker"));
   expect(macSource).toContain("${PUBLIC_BASE_URL%/}/api/healthz");
   expect(macSource).toContain("cleanup() {");

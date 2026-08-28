@@ -8,12 +8,14 @@ COPY apps/windows-service-host ./apps/windows-service-host
 RUN cargo build --manifest-path apps/windows-service-host/Cargo.toml --release --locked --target x86_64-pc-windows-gnu
 
 FROM oven/bun:1.2.20 AS build
+ARG MARS_RELEASE_MANIFEST=deploy/control-plane/release-manifest.json
 WORKDIR /app
 COPY package.json bun.lock ./
 COPY apps ./apps
 COPY packages ./packages
 COPY deploy ./deploy
 COPY images ./images
+COPY ${MARS_RELEASE_MANIFEST} /release-manifest.json
 RUN rm -rf apps/*/node_modules packages/*/node_modules \
   && bun install --frozen-lockfile --linker hoisted \
   && bun install --cwd apps/web --frozen-lockfile --linker hoisted \
@@ -31,8 +33,8 @@ FROM oven/bun:1.2.20-slim
 ARG MARS_BUILD_ID=unknown
 WORKDIR /app
 COPY --from=build /app/apps/control-plane/dist/index.js ./index.js
+COPY --from=build /release-manifest.json ./release-manifest.json
 COPY --from=build /app/packages/db/src/migrations ./migrations
-COPY --from=build /app/deploy/control-plane/release-manifest.json ./release-manifest.json
 COPY --from=build /app/apps/web/dist/index.html /app/web/index.html
 COPY --from=build /app/apps/web/dist/index.js /app/web/index.js
 COPY --from=build /app/apps/web/dist/index.css /app/web/index.css
@@ -50,6 +52,7 @@ COPY --from=build /artifacts/mars-orchestrator-linux-x64 /app/workers/mars-orche
 COPY --from=build /artifacts/mars-orchestrator-windows-x64.exe /app/workers/mars-orchestrator.exe
 COPY --from=build /artifacts/mars-orchestrator-macos-arm64 /app/workers/mars-orchestrator-macos-arm64
 COPY --from=windows-service-host /src/apps/windows-service-host/target/x86_64-pc-windows-gnu/release/mars-service-host.exe /app/workers/mars-service-host.exe
+RUN bun -e 'import { createHash } from "node:crypto"; const manifest=JSON.parse(await Bun.file("/app/release-manifest.json").text()); const hash=/^[0-9a-f]{64}$/; const artifacts=[["linux-x64","orchestratorSha256","/app/workers/mars-orchestrator"],["linux-x64","composeSha256","/app/workers/linux-broker-compose.yaml"],["linux-x64","domainTemplateSha256","/app/workers/worker-domain.xml"],["windows-x64","orchestratorSha256","/app/workers/mars-orchestrator.exe"],["windows-x64","serviceHostSha256","/app/workers/mars-service-host.exe"],["macos-arm64","orchestratorSha256","/app/workers/mars-orchestrator-macos-arm64"]]; for (const [platform,field,path] of artifacts) { const record=manifest.platforms?.[platform]; if (record == null) continue; const expected=record[field]; if (typeof expected !== "string") throw new Error(`missing ${platform}.${field}`); if (!hash.test(expected)) throw new Error(`invalid ${platform}.${field}`); const actual=createHash("sha256").update(Buffer.from(await Bun.file(path).arrayBuffer())).digest("hex"); if (actual !== expected) throw new Error(`${platform}.${field} does not match packaged ${path}: expected ${expected}, got ${actual}`); }'
 ENV MARS_WINDOWS_CONTAINER_BUILDER=/app/workers/build-windows-container-image-local.ps1
 ENV MARS_WINDOWS_CONTAINER_VERIFIER=/app/workers/verify-runtime.ps1
 ENV MARS_WINDOWS_CONTAINERFILE=/app/workers/Containerfile

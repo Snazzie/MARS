@@ -309,7 +309,7 @@ Write-Host '[1/8] Checking administrator privileges'
 Require-Administrator
 Write-Host '[2/8] Checking Windows 11 Pro/Enterprise 24H2 x64 host'
 Assert-HostPreflight
-$root = 'C:\ProgramData\Mars'; $bin = 'C:\Program Files\Mars'; $identityPath = Join-Path $root 'worker-identity.json'
+$root = 'C:\ProgramData\Mars'; $bin = 'C:\Program Files\Mars'; $identityPath = Join-Path $root 'worker-identity.json'; $persistentInstallerPath = Join-Path $root 'install-worker.ps1'
 New-Item -ItemType Directory -Force -Path $root,$bin | Out-Null
 $transcriptStarted = $false
 try { Start-Transcript -LiteralPath (Join-Path $root 'install.log') -Append | Out-Null; $transcriptStarted = $true } catch { Write-Warning "Unable to start persistent installer log: $($_.Exception.Message)" }
@@ -325,7 +325,10 @@ if (-not $Upgrade) {
 Write-State 'preflight' 'complete'
 Write-Host "[3/8] Checking $WindowsRuntime runtime and installing prerequisites"
 if (Ensure-ContainerFeatures) {
-  Register-ResumeTask $PSCommandPath
+  if ([IO.Path]::GetFullPath($PSCommandPath) -ne [IO.Path]::GetFullPath($persistentInstallerPath)) {
+    Copy-Item -LiteralPath $PSCommandPath -Destination $persistentInstallerPath -Force
+  }
+  Register-ResumeTask $persistentInstallerPath
   Write-State 'reboot-required' 'pending'
   Write-Host 'Windows features require a reboot; MarsWorkerInstallResume will continue automatically.'
   Restart-Computer -Force
