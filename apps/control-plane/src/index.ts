@@ -1,34 +1,27 @@
 import { completeOnboardingIfReady, createDb, migrateDatabase, jsonParameter } from "@mars/db";
-import type { WorkerCommand } from "@mars/contracts";
-import { WorkerCommand as WorkerCommandSchema } from "@mars/contracts";
-import type { Server, ServerWebSocket } from "bun";
-import { createSession, getSession, SecretBox } from "./auth.ts";
-import { createPkce, githubAuthorizeUrl, exchangeOAuth, ensureBootstrapAdmin, syncGithubOrganizations } from "./github.ts";
-import { applyWorkflowJobWebhook, configureRunLifecycle } from "./runs.ts";
+import { WorkerCommand as WorkerCommandSchema, type WorkerCommand } from "@mars/contracts";
+import type { Server } from "bun";
+import { getSession, SecretBox } from "./auth.ts";
+import { configureRunLifecycle } from "./runs.ts";
 import { discoverAvailableRepositoryJobs, discoverQueuedRepositoryJobs } from "./job-discovery.ts";
-import { readBody, validSignature, acceptDelivery } from "./webhook.ts";
-import { verifyWorkerSignature } from "./workers.ts";
-import { createWorkerChallenge, decodeWorkerSignature } from "./worker-socket.ts";
-import { WorkerCommandDispatcher, containsSecret, normalizeTimestamp } from "./worker-dispatch.ts";
-import { applyWorkerConfigurationAcknowledgement, createRequestLimiter } from "./worker-requests.ts";
-import { activateAuthenticatedWorkerConnection } from "./worker-connection.ts";
-import { handleAuthenticatedWorkerEvent } from "./worker-lifecycle.ts";
+import { WorkerCommandDispatcher, normalizeTimestamp } from "./worker-dispatch.ts";
+import { createRequestLimiter } from "./worker-requests.ts";
 import { GitHubAppService } from "./github-app.ts";
 import { runQueuedJobReconciliation } from "./job-reconciler.ts";
 import { reapPendingLeases } from "./lease-cleanup.ts";
-import { reconcileExpiredLeasesWithGithub, reconcileWorkerInventory } from "./lease-reconciliation.ts";
+import { reconcileExpiredLeasesWithGithub } from "./lease-reconciliation.ts";
 import { startReconciliationScheduler } from "./reconcile-loop.ts";
 import { pruneExpiredData } from "./retention.ts";
 import { DiscoveryHealthMonitor, isDiscoveryCycleSuccessful } from "./discovery-health.ts";
 import { createControlPlaneApp } from "./http/app.ts";
 import type { ControlPlaneHttpDeps } from "./http/types.ts";
 import { ensureDefaultPools } from "./default-pools.ts";
-import { canSubscribeToOrganization, loadBrowserInvalidations } from "./browser-invalidations.ts";
 import { GithubRateLimitGate } from "./github-rate-limit.ts";
 import { fileURLToPath } from "node:url";
 import { initializeControlPlaneSetup } from "./control-plane-setup.ts";
 import { httpOrigin } from "./http-origin.ts";
 import { loadWorkerReleaseManifest } from "./worker-release.ts";
+import { createControlPlaneGateway, type ControlPlaneSocketData } from "./control-plane-gateway.ts";
 const required = (name: string): string => { const value = Bun.env[name]; if (!value) throw new Error(`${name} is required`); return value; };
 const dataRoot = Bun.env.DATA_ROOT?.trim() || "/var/lib/mars";
 const configuredPublicOriginRaw = Bun.env.PUBLIC_BASE_URL?.trim() || undefined;
@@ -101,30 +94,6 @@ const secretBox = new SecretBox(initialized.masterKey);
 const json = (data: unknown, status=200) => Response.json(data,{status,headers:{"cache-control":"no-store"}});
 const cookie = (value:string, maxAge:number) => `mars_session=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
 const sessions = new Map<string, {state:string; verifier:string; createdAt:number}>();
-type WorkerSocketData = { actor: "worker"; workerId: string; challenge?: Buffer; authenticated: boolean; connectionEpoch?: number; authTimer?: ReturnType<typeof setTimeout> };
-type BrowserSocketData = { actor: "browser"; organizationId: string; cursor: number };
-type SocketData = WorkerSocketData | BrowserSocketData;
-const workerSockets = new Map<string, ServerWebSocket<SocketData>>();
-const browserSockets = new Set<ServerWebSocket<SocketData>>();
-const replayingBrowserSockets = new WeakSet<ServerWebSocket<SocketData>>();
-const workerConnectionEpochs = new Map<string, number>();
-let nextWorkerConnectionEpoch = 0;
-async function replayBrowserInvalidations(ws: ServerWebSocket<SocketData>): Promise<void> {
-  if (ws.data.actor !== "browser" || replayingBrowserSockets.has(ws)) return;
-  replayingBrowserSockets.add(ws);
-  try {
-    for (let page = 0; page < 10; page += 1) {
-      const rows = await loadBrowserInvalidations(db, ws.data.organizationId, ws.data.cursor);
-      for (const row of rows) {
-        ws.send(JSON.stringify({ version: 1, type: "invalidate", ...row }));
-        ws.data.cursor = row.sequence;
-      }
-      if (rows.length < 100) break;
-    }
-  } finally {
-    replayingBrowserSockets.delete(ws);
-  }
-}
 async function current(request: Request) { return getSession(db, request.headers.get("cookie")?.match(/mars_session=([^;]+)/)?.[1]); }
 const commandStore = {
   async save(command: WorkerCommand): Promise<void> {
@@ -155,151 +124,29 @@ const discoveryHealth = new DiscoveryHealthMonitor(discoveryIntervalMs, Date.par
 const githubApp = new GitHubAppService({ db, secretBox, publicOrigin: initialized.setup.publicOrigin });
 const githubRateLimits = new GithubRateLimitGate();
 let triggerReconciliation = () => Promise.resolve();
-const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, windowsContainerBuild, windowsContainerArtifacts, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerServiceHostExecutable, workerOrchestratorExecutables, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, workerConnected: (workerId) => dispatcher.isConnected(workerId), onWorkerAdopted: (workerId) => { dispatcher.replayConnected(workerId); void triggerReconciliation(); }, health: () => ({ buildId: Bun.env.MARS_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
+const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, windowsContainerBuild, windowsContainerArtifacts, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerOrchestratorExecutables, workerServiceHostExecutable, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, workerConnected: (workerId) => dispatcher.isConnected(workerId), onWorkerAdopted: (workerId) => void dispatcher.replayConnected(workerId), health: () => ({ buildId: Bun.env.MARS_BUILD_ID ?? "dev", startedAt, discovery: discoveryHealth.snapshot() }) });
+let server: Server<ControlPlaneSocketData>;
+const gateway = createControlPlaneGateway({
+  db,
+  httpFetch: async request => await httpApp.fetch(request),
+  current,
+  requestSource: (request, activeServer) => {
+    requestSources.set(request, activeServer.requestIP(request)?.address ?? "unknown");
+    return requestSources.get(request) ?? "unknown";
+  },
+  dispatcher,
+  triggerReconciliation: () => triggerReconciliation(),
+  requestId: () => crypto.randomUUID(),
+});
+server = Bun.serve<ControlPlaneSocketData>({
+  port: Number(Bun.env.PORT ?? 3000),
+  websocket: gateway.websocket,
+  fetch: request => gateway.fetch(request, server),
+});
+console.log(`Mars control plane listening on ${server.url}`);
 const discoveryDeps = { db, installationToken: (installationId: number) => githubApp.getInstallationToken(installationId), githubFetchForInstallation: (installationId: number) => githubRateLimits.scopedFetch(installationId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY };
 let lastQueuedDiscoveryAt = 0;
 let lastGithubLeaseReconciliationAt = 0;
-let server: Server<SocketData>;
-server = Bun.serve<SocketData>({
-  port: Number(Bun.env.PORT ?? 3000),
-  websocket: {
-    open(ws) {
-      if (ws.data.actor === "worker") {
-        const workerData = ws.data;
-        workerData.authTimer = setTimeout(() => { if (!workerData.authenticated) ws.close(1008, "worker authentication timeout"); }, 10_000);
-        const challenge = createWorkerChallenge(workerData.workerId);
-        workerData.challenge = challenge.nonce;
-        ws.send(JSON.stringify({ version: 1, type: "challenge", nonce: challenge.nonce.toString("base64url") }));
-      } else {
-        browserSockets.add(ws);
-        void replayBrowserInvalidations(ws);
-      }
-    },
-    async message(ws, message) {
-      if (ws.data.actor === "worker") {
-        const workerData = ws.data;
-        try {
-          if (typeof message === "string" ? message.length > 256 * 1024 : message.byteLength > 256 * 1024) return ws.close(1009, "worker frame too large");
-          const frame = JSON.parse(String(message)) as { type?: string; signature?: string; workerId?: string; encryptionPublicKey?: string; payload?: Record<string, unknown> };
-          if (frame.type === "authenticate" && frame.workerId === ws.data.workerId && frame.signature && typeof frame.encryptionPublicKey === "string") {
-            const epoch = ws.data.connectionEpoch;
-            if (!epoch || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return ws.close(4001, "superseded");
-            if (!ws.data.challenge) return ws.close(1008, "worker authentication failed");
-            const [worker] = await db`select public_key,encryption_public_key,admission_state from workers where id=${ws.data.workerId}`;
-            const canonical = Buffer.from(`${ws.data.challenge.toString("base64url")}\n${ws.data.workerId}\n${frame.encryptionPublicKey}`);
-            if (!worker || !verifyWorkerSignature(worker.public_key, canonical, decodeWorkerSignature(frame.signature))) return ws.close(1008, "worker authentication failed");
-            if (worker.encryption_public_key && worker.encryption_public_key !== frame.encryptionPublicKey) return ws.close(1008, "worker encryption key mismatch");
-            if (workerConnectionEpochs.get(ws.data.workerId) !== epoch) return ws.close(4001, "superseded");
-            const activated = await activateAuthenticatedWorkerConnection({
-              db,
-              workerId: ws.data.workerId,
-              encryptionPublicKey: frame.encryptionPublicKey,
-              socket: ws,
-              workerSockets,
-              dispatcher,
-              isCurrent: () => workerConnectionEpochs.get(workerData.workerId) === epoch,
-              markAuthenticated: () => {
-                workerData.authTimer && clearTimeout(workerData.authTimer);
-                workerData.authTimer = undefined;
-                workerData.authenticated = true;
-              },
-            });
-            if (!activated) return ws.close(4001, "superseded");
-            ws.send(JSON.stringify({ version: 1, type: "authenticated", workerId: ws.data.workerId, admissionState: worker.admission_state }));
-          } else if (frame.type === "doctor" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && frame.workerId === ws.data.workerId && frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload) && !containsSecret(frame.payload)) {
-            const epoch = ws.data.connectionEpoch;
-            if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
-            const doctorPayload = frame.payload as Record<string, unknown>;
-            await db`update workers set doctor=${jsonParameter(db, doctorPayload)}, doctor_observed_at=now(), last_heartbeat_at=now() where id=${ws.data.workerId}`;
-            const activeLeases = doctorPayload.doctor && typeof doctorPayload.doctor === "object" && !Array.isArray(doctorPayload.doctor) ? (doctorPayload.doctor as Record<string, unknown>).activeLeases : undefined;
-            if (Array.isArray(activeLeases) && activeLeases.every((value): value is string => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value))) {
-              const recovered = await reconcileWorkerInventory(db, ws.data.workerId, activeLeases);
-              if (recovered) console.log(`Worker inventory cleanup: worker=${ws.data.workerId} recovered=${recovered}`);
-            }
-            if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
-            ws.send(JSON.stringify({ version: 1, type: "doctor_ack", workerId: ws.data.workerId }));
-          } else if (frame.type === "pong" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch) {
-            await db`update workers set last_heartbeat_at=now() where id=${ws.data.workerId}`;
-            ws.send(JSON.stringify({ version: 1, type: "ping" }));
-          } else if (ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch && frame.workerId === ws.data.workerId) {
-            if (frame.type === "worker.configured") {
-              const acknowledged = await applyWorkerConfigurationAcknowledgement(db, { workerId: ws.data.workerId, payload: frame.payload });
-              if (!acknowledged) {
-                const payload = frame.payload && typeof frame.payload === "object" ? frame.payload as Record<string, unknown> : {};
-                const [state] = await db`SELECT configuration_command_id AS "commandId", configuration_revision AS revision, desired_configuration AS desired FROM workers WHERE id=${ws.data.workerId}`;
-                console.error("Worker configuration acknowledgement rejected", { workerId: ws.data.workerId, commandId: payload.commandId, revision: payload.revision, expectedCommandId: state?.commandId, expectedRevision: state?.revision, observed: payload.observed, desired: state?.desired });
-              }
-              console.log(`Worker configuration acknowledgement: ${ws.data.workerId} accepted=${acknowledged}`);
-              dispatcher.handleEvent(frame, ws);
-              void triggerReconciliation();
-            } else {
-              const accepted = await handleAuthenticatedWorkerEvent(db, dispatcher, frame, ws);
-              if (!accepted) throw new Error("invalid worker event");
-              console.log(`Worker event: ${ws.data.workerId} type=${frame.type}`);
-            }
-          }
-        } catch (error) {
-          console.error("Worker websocket frame failed", { workerId: ws.data.workerId, error: error instanceof Error ? error.message : String(error) });
-          ws.close(1008, "invalid worker frame");
-        }
-      } else if (String(message) === "ping") {
-        ws.send("pong");
-      }
-    },
-    close(ws) {
-      if (ws.data.actor === "worker") {
-        if (ws.data.authTimer) {
-          clearTimeout(ws.data.authTimer);
-          ws.data.authTimer = undefined;
-        }
-        dispatcher.unregister(ws.data.workerId, ws);
-        const currentSocket = workerSockets.get(ws.data.workerId);
-        if (currentSocket === ws) {
-          workerSockets.delete(ws.data.workerId);
-          if (ws.data.connectionEpoch === workerConnectionEpochs.get(ws.data.workerId)) {
-            workerConnectionEpochs.delete(ws.data.workerId);
-          }
-        }
-        browserSockets.delete(ws);
-      }
-    },
-  },
-  async fetch(request): Promise<Response | undefined> {
-  const url=new URL(request.url);
-    requestSources.set(request, server.requestIP(request)?.address ?? "unknown");
-    if (request.headers.get("upgrade")?.toLowerCase() === "websocket" && url.pathname === "/api/browser/invalidations") {
-      try {
-        const user = await current(request);
-        if (!user) return json({ code: "unauthorized", message: "Authentication required" }, 401);
-        const organizationId = url.searchParams.get("organizationId") ?? "";
-        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(organizationId)) return json({ code: "invalid_request", message: "A concrete organization is required" }, 400);
-        const rawCursor = Number(url.searchParams.get("cursor") ?? 0);
-        const cursor = Number.isSafeInteger(rawCursor) && rawCursor >= 0 ? rawCursor : 0;
-        if (!await canSubscribeToOrganization(db, user, organizationId)) return json({ code: "not_found", message: "Organization not found" }, 404);
-        if (server.upgrade(request, { data: { actor: "browser", organizationId, cursor } })) return undefined;
-        return json({ code: "upgrade_failed", message: "WebSocket upgrade failed" }, 400);
-      } catch (error) {
-        console.error("Browser invalidation websocket upgrade failed", error);
-        return json({ code: "internal_error", message: "WebSocket upgrade failed" }, 500);
-      }
-    }
-    if (request.headers.get("upgrade")?.toLowerCase() === "websocket" && url.pathname === "/api/v1/workers/connect") {
-      const workerId = url.searchParams.get("workerId");
-      if (!workerId) return json({ error: "workerId required" }, 400);
-      const [worker] = await db`select admission_state from workers where id=${workerId}`;
-      if (!worker || worker.admission_state === "revoked" || worker.admission_state === "rejected") return json({ code: "worker_unavailable", message: "Worker is unknown or revoked" }, 403);
-      const previousEpoch = workerConnectionEpochs.get(workerId);
-      const connectionEpoch = ++nextWorkerConnectionEpoch;
-      workerConnectionEpochs.set(workerId, connectionEpoch);
-      if (server.upgrade(request, { data: { actor: "worker", workerId, authenticated: false, connectionEpoch } })) return undefined;
-      if (workerConnectionEpochs.get(workerId) === connectionEpoch) {
-        if (previousEpoch === undefined) workerConnectionEpochs.delete(workerId); else workerConnectionEpochs.set(workerId, previousEpoch);
-      }
-      return json({ error: "websocket upgrade failed" }, 400);
-    }
-    return httpApp.fetch(request);
-  },
-});
 console.log(`Mars control plane listening on ${server.url}`);
 startReconciliationScheduler(async () => {
   discoveryHealth.markAttempt();
@@ -361,5 +208,5 @@ void runRetention();
 setInterval(() => { void runRetention(); }, retentionIntervalMs);
 triggerReconciliation = reconciliationScheduler.trigger;
 setInterval(() => {
-  for (const socket of browserSockets) void replayBrowserInvalidations(socket);
+  for (const socket of gateway.browserSockets) void gateway.replayBrowserInvalidations(socket);
 }, 1_000);
