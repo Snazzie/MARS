@@ -12,12 +12,17 @@ const copy: Record<Action, { label: string; confirm: string; variant: "primary" 
 const WORKER_WINDOWS_RELEASE_URL = "https://github.com/Snazzie/Mars/releases/latest/download/install-worker-windows-x64.ps1";
 function quotePowerShell(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
 
-export function buildWindowsUpgradeCommand(workerId: string, origin: string, connectOrigin: string = origin): string {
- const selectedOrigin = new URL(connectOrigin).origin;
+export function buildWindowsUpgradeCommand(workerId: string, origin: string, connectOrigin: string = origin, localDevelopment: boolean = import.meta.env?.DEV ?? false): string {
+ const selectedOrigin = new URL(connectOrigin || origin).origin;
  if (selectedOrigin.startsWith("https:") === false && selectedOrigin.startsWith("http:") === false) throw new Error("Upgrade origin must use HTTP or HTTPS");
  const controlPlane = quotePowerShell(selectedOrigin);
  const insecure = selectedOrigin.startsWith("http:") ? " -AllowInsecureHttp" : "";
- return `# Mars worker ${workerId}\n$script = Join-Path $env:TEMP ("mars-upgrade-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=https' --tlsv1.3 --output $script '${WORKER_WINDOWS_RELEASE_URL}'\n  if ($LASTEXITCODE -ne 0) { throw "Upgrade command download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -ControlPlaneUrl ${controlPlane} -Upgrade -WindowsRuntime 'container'${insecure}\n} finally {\n  Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n}`;
+ const installerUrl = localDevelopment
+  ? `${selectedOrigin}/api/workers/installer?audience=windows-x64&runtime=container&connectOrigin=${encodeURIComponent(selectedOrigin)}`
+  : WORKER_WINDOWS_RELEASE_URL;
+ const installerProtocol = installerUrl.startsWith("http:") ? "http" : "https";
+ const tls = installerProtocol === "https" ? " --tlsv1.3" : "";
+ return `# Mars worker ${workerId}\n$script = Join-Path $env:TEMP ("mars-upgrade-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${installerProtocol}'${tls} --output $script '${installerUrl}'\n  if ($LASTEXITCODE -ne 0) { throw "Upgrade command download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -ControlPlaneUrl ${controlPlane} -Upgrade -WindowsRuntime 'container'${insecure}\n} finally {\n  Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n}`;
 }
 export function WorkerActions({ organizationId, workerId, admissionState, draining, activeSandboxes = 0, platform, runtimeMode, onComplete }: { organizationId: string; workerId: string; admissionState: string; draining: boolean; activeSandboxes?: number; platform?: string; runtimeMode?: "container" | "vm" | null; onComplete: () => void }) {
  const [action, setAction] = useState<Action | null>(null);

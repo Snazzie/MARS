@@ -23,3 +23,17 @@ test("cannot select a Windows VM runtime for upgrades", async () => {
   expect(source).not.toContain("Windows VM");
   expect(buildWindowsUpgradeCommand("worker", "https://control.example")).toContain("-WindowsRuntime 'container'");
 });
+
+test("uses the local installer endpoint for development upgrades", () => {
+  const command = buildWindowsUpgradeCommand("worker/id", "http://localhost:3000", "http://localhost:3000", true);
+  expect(command).toContain("http://localhost:3000/api/workers/installer?");
+  expect(command).toContain("audience=windows-x64");
+  expect(command).toContain("runtime=container");
+  expect(command).toContain("connectOrigin=http%3A%2F%2Flocalhost%3A3000");
+  expect(command).not.toContain("github.com/Snazzie/Mars/releases");
+});
+
+test("uses the GitHub release installer for production upgrades", () => {
+  const command = buildWindowsUpgradeCommand("worker/id", "https://control.example", "https://control.example", false);
+  expect(command).toContain("https://github.com/Snazzie/Mars/releases/latest/download/install-worker-windows-x64.ps1");
+});
