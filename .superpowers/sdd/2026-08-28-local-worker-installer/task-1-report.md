@@ -6,7 +6,7 @@ Implemented environment-aware installer URL selection in `buildInstallerCommands
 
 ## Behavior
 
-- Added optional deterministic `localDevelopment` boolean with default `import.meta.env.DEV`.
+- Added optional deterministic `localDevelopment` boolean with a Bun-safe default of `import.meta.env?.DEV ?? false`; production runtimes without `import.meta.env` now select GitHub assets instead of throwing.
 - Development mode downloads each selected platform installer from the selected control-plane origin:
   - `/api/workers/installer?audience=<platform>&runtime=container&connectOrigin=<encoded-origin>`
 - Production mode continues using the GitHub latest-release asset URL for each platform.
@@ -25,3 +25,9 @@ Red phase before implementation: 1 failing development URL test, 12 passing. Gre
 ## Concerns
 
 None identified within Task 1 scope. Broad suites, formatters, and linters were intentionally not run per brief.
+
+## Follow-up Fix
+
+Review identified that directly reading `import.meta.env.DEV` could throw in a production Bun runtime where `import.meta.env` is unavailable. Changed the default to optional chaining with an explicit `false` fallback. This preserves Vite's development-mode behavior and deterministic explicit boolean overrides while making production command generation safe.
+
+Re-ran `bun test apps/web/src/components/EnrollmentPanel.test.ts`: 13 passed, 0 failed, 48 assertions.
