@@ -21,7 +21,7 @@ import { GithubRateLimitGate } from "./github-rate-limit.ts";
 import { fileURLToPath } from "node:url";
 import { initializeControlPlaneSetup } from "./control-plane-setup.ts";
 import { httpOrigin, publicHttpOrigin } from "./http-origin.ts";
-import { loadWorkerReleaseManifest } from "./worker-release.ts";
+import { loadWorkerReleaseManifest, type DevelopmentWorkerRelease } from "./worker-release.ts";
 import { createControlPlaneGateway, type ControlPlaneSocketData } from "./control-plane-gateway.ts";
 
 export function resolveWebhookOrigin(raw: string | undefined = Bun.env.GITHUB_WEBHOOK_URL): string {
@@ -108,12 +108,42 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
       verifierPath: containerBuildArtifact("MARS_WINDOWS_CONTAINER_VERIFIER", "../../../images/jobs/windows/verify-runtime.ps1"),
       containerfilePath: containerBuildArtifact("MARS_WINDOWS_CONTAINERFILE", "../../../images/jobs/windows/Containerfile"),
       entrypointPath: containerBuildArtifact("MARS_WINDOWS_CONTAINER_ENTRYPOINT", "../../../images/jobs/windows/entrypoint.ps1"),
-      jobAgentPath: containerBuildArtifact("MARS_WINDOWS_CONTAINER_JOB_AGENT", "../../../apps/job-agent/dist/mars-job-agent.exe"),
+      jobAgentPath: containerBuildArtifact("MARS_WINDOWS_CONTAINER_JOB_AGENT", "../../../apps/job-agent/dist/whitesmith-job-agent.exe"),
     };
     return Object.values(artifacts).every(Boolean) ? artifacts as NonNullable<ControlPlaneHttpDeps["windowsContainerArtifacts"]> : undefined;
   };
   const windowsContainerArtifacts = loadWindowsContainerArtifacts();
-  const workerReleaseManifest = options.workerReleaseManifest ?? await loadWorkerReleaseManifest();
+  const windowsContainerConfig = {
+    baseImage: Bun.env.MARS_WINDOWS_CONTAINER_BASE_IMAGE?.trim(),
+    runnerUrl: Bun.env.MARS_WINDOWS_CONTAINER_RUNNER_URL?.trim(),
+    runnerSha256: Bun.env.MARS_WINDOWS_CONTAINER_RUNNER_SHA256?.trim(),
+    gitUrl: Bun.env.MARS_WINDOWS_CONTAINER_GIT_URL?.trim(),
+    gitSha256: Bun.env.MARS_WINDOWS_CONTAINER_GIT_SHA256?.trim(),
+    vcUrl: Bun.env.MARS_WINDOWS_CONTAINER_VC_URL?.trim(),
+    vcSha256: Bun.env.MARS_WINDOWS_CONTAINER_VC_SHA256?.trim(),
+  };
+  const windowsTemplateSha256 = Bun.env.MARS_WINDOWS_TEMPLATE_DIGEST?.trim().replace(/^sha256:/, "");
+  const hasWindowsContainerConfig = Object.values(windowsContainerConfig).every(value => Boolean(value)) && Boolean(windowsTemplateSha256);
+  const windowsContainerBuild = !production && hasWindowsContainerConfig && windowsContainerArtifacts
+    ? { ...windowsContainerConfig, ...windowsContainerArtifacts } as NonNullable<ControlPlaneHttpDeps["windowsContainerBuild"]>
+    : undefined;
+  const developmentRelease = !production && hasWindowsContainerConfig && windowsContainerArtifacts
+    ? {
+      windows: {
+        orchestrator: workerOrchestratorExecutables["windows-x64"]!,
+        serviceHost: workerServiceHostExecutable!,
+        vmTemplateUrl: Bun.env.MARS_WINDOWS_TEMPLATE_URL?.trim() || "https://github.com/Snazzie/Mars/releases/latest/download/windows-worker.vhdx",
+        vmTemplateSha256: windowsTemplateSha256!,
+        container: {
+          baseImage: windowsContainerConfig.baseImage!.replace(/:[^/@]+(?=@sha256:)/, ""),
+          runner: { url: windowsContainerConfig.runnerUrl!, sha256: windowsContainerConfig.runnerSha256! },
+          git: { url: windowsContainerConfig.gitUrl!, sha256: windowsContainerConfig.gitSha256! },
+          vcRuntime: { url: windowsContainerConfig.vcUrl!, sha256: windowsContainerConfig.vcSha256! },
+        },
+      },
+    } satisfies DevelopmentWorkerRelease
+    : undefined;
+  const workerReleaseManifest = options.workerReleaseManifest ?? await loadWorkerReleaseManifest(undefined, developmentRelease);
   if (production && !options.skipArtifactChecks) {
     const requiredReleaseArtifacts = {
       webIndex: new URL("index.html", webRoot),
@@ -175,7 +205,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const githubApp = options.githubApp ?? new GitHubAppService({ db, secretBox, publicOrigin: initialized.setup.publicOrigin, webhookOrigin: () => configuredWebhookOrigin });
   const githubRateLimits = new GithubRateLimitGate();
   let triggerReconciliation = () => Promise.resolve();
-  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerOrchestratorExecutables, workerServiceHostExecutable, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerAdopted: workerId => void dispatcher.replayConnected(workerId), health: () => ({ buildId: Bun.env.MARS_BUILD_ID ?? "dev", startedAt, discovery: discoveryHealth.snapshot() }) });
+  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, windowsContainerBuild, windowsContainerArtifacts, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerOrchestratorExecutables, workerServiceHostExecutable, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerAdopted: workerId => void dispatcher.replayConnected(workerId), health: () => ({ buildId: Bun.env.MARS_BUILD_ID ?? "dev", startedAt, discovery: discoveryHealth.snapshot() }) });
   let server!: Server<ControlPlaneSocketData>;
   const gateway = createControlPlaneGateway({ db, httpFetch: async request => await httpApp.fetch(request), current, requestSource: (request, activeServer) => { requestSources.set(request, activeServer.requestIP(request)?.address ?? "unknown"); return requestSources.get(request) ?? "unknown"; }, dispatcher, triggerReconciliation: () => triggerReconciliation(), requestId: () => crypto.randomUUID() });
   server = Bun.serve<ControlPlaneSocketData>({ port: options.port ?? Number(Bun.env.PORT ?? 3000), websocket: gateway.websocket, fetch: request => gateway.fetch(request, server) });
