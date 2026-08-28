@@ -14,7 +14,7 @@ async function hasApplicationSchema(sql: RawDatabaseClient): Promise<boolean> {
 }
 
 async function seedDrizzleBaseline(sql: RawDatabaseClient): Promise<void> {
-  const baselineHash = migrationHash(await Bun.file(new URL("./migrations/0000_legacy_baseline.sql", import.meta.url)).text());
+  const baselineHash = migrationHash(await Bun.file(new URL("./migrations/0000_mars_baseline.sql", import.meta.url)).text());
   await sql.begin(async tx => {
     await tx`select pg_advisory_xact_lock(hashtext('mars:migrations'))`;
     await tx`create schema if not exists drizzle`;

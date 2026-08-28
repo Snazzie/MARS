@@ -6,77 +6,7 @@
       "idx": 0,
       "version": "7",
       "when": 1700000000000,
-      "tag": "0000_legacy_baseline",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1700000001000,
-      "tag": "0001_post_baseline",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1700000002000,
-      "tag": "0002_github_run_attempt",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1700000003000,
-      "tag": "0003_control_plane_config",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1700000004000,
-      "tag": "0004_linux_libvirt_driver",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1700000005000,
-      "tag": "0005_worker_preserve_leases",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1787428800000,
-      "tag": "0006_worker_action_cache",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1787511000000,
-      "tag": "0007_repair_worker_cache_snapshot_staging",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
-      "when": 1787511060000,
-      "tag": "0008_repair_worker_cache_snapshot_status",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "7",
-      "when": 1787873197031,
-      "tag": "0009_mars_runner_labels",
-      "breakpoints": true
-    },
-    {
-      "idx": 10,
-      "version": "7",
-      "when": 1787873200000,
-      "tag": "0010_worker_enrollment_replay",
+      "tag": "0000_mars_baseline",
       "breakpoints": true
     }
   ]

@@ -1,4 +1,3 @@
-
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE IF NOT EXISTS users (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), github_user_id bigint UNIQUE NOT NULL, login text NOT NULL, is_global_admin boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS organizations (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), github_org_id bigint UNIQUE NOT NULL, login text NOT NULL, github_account_type text NOT NULL DEFAULT 'Organization' CHECK(github_account_type IN ('User','Organization')), created_at timestamptz NOT NULL DEFAULT now());
@@ -10,7 +9,7 @@ ALTER TABLE organizations ADD CONSTRAINT organizations_github_account_type_check
 CREATE UNIQUE INDEX IF NOT EXISTS organizations_github_account_idx ON organizations(github_account_type, github_org_id);
 CREATE TABLE IF NOT EXISTS sessions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), token_hash bytea UNIQUE NOT NULL, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
 DROP TABLE IF EXISTS worker_join_codes;
-CREATE TABLE IF NOT EXISTS workers (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text NOT NULL, platform text NOT NULL, guest_platforms jsonb NOT NULL DEFAULT '[]'::jsonb, admission_state text NOT NULL, connection_state text NOT NULL DEFAULT 'offline', configuration_state text NOT NULL DEFAULT 'unconfigured', public_key text, encryption_public_key text, fingerprint text, limits jsonb, doctor jsonb, vm_uuid text, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS workers (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text NOT NULL, platform text NOT NULL, guest_platforms jsonb NOT NULL DEFAULT '[]'::jsonb, admission_state text NOT NULL, connection_state text NOT NULL DEFAULT 'offline', configuration_state text NOT NULL DEFAULT 'unconfigured', public_key text, encryption_public_key text, fingerprint text, limits jsonb, doctor jsonb, vm_uuid text, created_at timestamptz NOT NULL DEFAULT now(), preserve_leases boolean NOT NULL DEFAULT false);
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS guest_platforms jsonb;
 UPDATE workers SET guest_platforms=CASE WHEN platform='windows-x64' THEN '["windows-x64"]'::jsonb ELSE jsonb_build_array(platform) END WHERE guest_platforms IS NULL OR CASE WHEN jsonb_typeof(guest_platforms)='array' THEN jsonb_array_length(guest_platforms)=0 ELSE true END;
 ALTER TABLE workers ALTER COLUMN guest_platforms SET NOT NULL;
@@ -25,6 +24,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS workers_active_vm_uuid_idx ON workers(vm_uuid)
 CREATE UNIQUE INDEX IF NOT EXISTS workers_active_fingerprint_idx ON workers(fingerprint) WHERE fingerprint IS NOT NULL AND admission_state IN ('pending','adopted');
 CREATE UNIQUE INDEX IF NOT EXISTS workers_active_machine_uuid_idx ON workers(machine_uuid) WHERE machine_uuid IS NOT NULL AND admission_state IN ('pending','adopted');
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS draining boolean NOT NULL DEFAULT false;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS preserve_leases boolean NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS runner_pools (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid REFERENCES organizations(id), worker_id uuid REFERENCES workers(id), name text NOT NULL, platform text NOT NULL, driver text NOT NULL, image_digest text NOT NULL, resources jsonb NOT NULL, labels jsonb NOT NULL, trigger_label text, enabled boolean NOT NULL DEFAULT false);
 ALTER TABLE runner_pools ALTER COLUMN worker_id DROP NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS runner_pools_global_name_idx ON runner_pools(name) WHERE organization_id IS NULL;
@@ -33,9 +33,9 @@ ALTER TABLE runner_pools ADD COLUMN IF NOT EXISTS trigger_label text;
 ALTER TABLE runner_pools ALTER COLUMN organization_id DROP NOT NULL;
 UPDATE runner_pools SET organization_id=NULL WHERE organization_id IS NOT NULL;
 ALTER TABLE runner_pools ADD COLUMN IF NOT EXISTS trigger_label text;
-UPDATE runner_pools SET trigger_label=CASE WHEN platform='windows-x64' AND trigger_label='whitesmith-default' THEN 'whitesmith-windows-x64' WHEN platform='linux-x64' AND trigger_label='whitesmith-default' THEN 'whitesmith-linux-x64' WHEN platform='macos-arm64' AND trigger_label IN ('whitesmith-default','whitesmith-macos') THEN 'whitesmith-macos-arm64' ELSE trigger_label END;
+UPDATE runner_pools SET trigger_label=CASE WHEN platform='windows-x64' AND trigger_label='mars-default' THEN 'mars-windows-x64' WHEN platform='linux-x64' AND trigger_label='mars-default' THEN 'mars-linux-x64' WHEN platform='macos-arm64' AND trigger_label IN ('mars-default','mars-macos') THEN 'mars-macos-arm64' ELSE trigger_label END;
 UPDATE runner_pools SET labels=jsonb_build_array(trigger_label) WHERE trigger_label IS NOT NULL;
-UPDATE runner_pools SET trigger_label='whitesmith-' || platform, labels=jsonb_build_array('whitesmith-' || platform) WHERE organization_id IS NULL AND trigger_label IN ('whitesmith-default', 'default') AND platform IN ('linux-x64','windows-x64','macos-arm64');
+UPDATE runner_pools SET trigger_label='mars-' || platform, labels=jsonb_build_array('mars-' || platform) WHERE organization_id IS NULL AND trigger_label IN ('mars-default', 'default') AND platform IN ('linux-x64','windows-x64','macos-arm64');
 CREATE TABLE IF NOT EXISTS runner_leases (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id), pool_id uuid NOT NULL REFERENCES runner_pools(id), worker_id uuid NOT NULL REFERENCES workers(id), routing_key text NOT NULL, github_job_id bigint UNIQUE, state text NOT NULL, requested jsonb NOT NULL, nonce text NOT NULL, expires_at timestamptz NOT NULL, runtime_instance_id text, terminal_result jsonb, cleanup_state text NOT NULL DEFAULT 'none', dispatch_attempts integer NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
 ALTER TABLE runner_leases ADD COLUMN IF NOT EXISTS worker_id uuid REFERENCES workers(id);
 ALTER TABLE runner_leases ADD COLUMN IF NOT EXISTS routing_key text;
@@ -46,7 +46,7 @@ ALTER TABLE runner_leases ADD COLUMN IF NOT EXISTS terminal_result jsonb;
 ALTER TABLE runner_leases ADD COLUMN IF NOT EXISTS cleanup_state text NOT NULL DEFAULT 'none';
 ALTER TABLE runner_leases ADD COLUMN IF NOT EXISTS dispatch_attempts integer NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS job_claims (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), lease_id uuid UNIQUE NOT NULL REFERENCES runner_leases(id) ON DELETE CASCADE, token_hash bytea UNIQUE NOT NULL, expires_at timestamptz NOT NULL, consumed_at timestamptz);
-CREATE TABLE IF NOT EXISTS webhook_deliveries (delivery_id text PRIMARY KEY, installation_id bigint NOT NULL, payload jsonb NOT NULL, received_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS webhook_deliveries (delivery_id text PRIMARY KEY, installation_id bigint NOT NULL, payload jsonb NOT NULL, received_at timestamptz NOT NULL DEFAULT now(), state text NOT NULL DEFAULT 'pending');
 CREATE TABLE IF NOT EXISTS audit_events (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid, actor text NOT NULL, type text NOT NULL, payload jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS commands (id uuid PRIMARY KEY, version integer NOT NULL, type text NOT NULL, worker_id uuid NOT NULL REFERENCES workers(id) ON DELETE CASCADE, lease_id uuid, occurred_at timestamptz NOT NULL, payload jsonb NOT NULL, state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','sent','acknowledged','completed','failed')), UNIQUE(id));
 CREATE TABLE IF NOT EXISTS worker_mutations (worker_id uuid NOT NULL REFERENCES workers(id) ON DELETE CASCADE, idempotency_key text NOT NULL, response jsonb, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (worker_id, idempotency_key));
@@ -154,6 +154,103 @@ CREATE TABLE IF NOT EXISTS system_onboarding (singleton boolean PRIMARY KEY DEFA
 CREATE TABLE IF NOT EXISTS github_setup_states (state_hash bytea PRIMARY KEY, purpose text NOT NULL CHECK (purpose IN ('oauth','manifest','install','organization_install')), user_id uuid REFERENCES users(id), organization_id uuid REFERENCES organizations(id), idempotency_key text, encrypted_state text, encrypted_pkce_verifier text, expires_at timestamptz NOT NULL, consumed_at timestamptz);
 ALTER TABLE github_setup_states DROP CONSTRAINT IF EXISTS github_setup_states_purpose_check;
 ALTER TABLE github_setup_states ADD CONSTRAINT github_setup_states_purpose_check CHECK (purpose IN ('oauth','manifest','install','organization_install'));
+CREATE TABLE IF NOT EXISTS control_plane_config (
+  singleton boolean PRIMARY KEY DEFAULT true NOT NULL,
+  public_base_url text,
+  setup_code_hash bytea,
+  setup_completed_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT control_plane_config_singleton_check CHECK (singleton)
+);
+ALTER TABLE github_discovery_checkpoints ADD COLUMN IF NOT EXISTS completed_run_attempt integer NOT NULL DEFAULT 1;
+ALTER TABLE dashboard_runs ADD COLUMN IF NOT EXISTS run_attempt integer NOT NULL DEFAULT 1;
+ALTER TABLE dashboard_jobs ADD COLUMN IF NOT EXISTS run_attempt integer NOT NULL DEFAULT 1;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'github_discovery_checkpoints'::regclass
+      AND conname = 'github_discovery_checkpoints_completed_run_attempt_check'
+  ) THEN
+    ALTER TABLE github_discovery_checkpoints
+      ADD CONSTRAINT github_discovery_checkpoints_completed_run_attempt_check
+      CHECK (completed_run_attempt > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'dashboard_runs'::regclass
+      AND conname = 'dashboard_runs_run_attempt_check'
+  ) THEN
+    ALTER TABLE dashboard_runs
+      ADD CONSTRAINT dashboard_runs_run_attempt_check
+      CHECK (run_attempt > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'dashboard_jobs'::regclass
+      AND conname = 'dashboard_jobs_run_attempt_check'
+  ) THEN
+    ALTER TABLE dashboard_jobs
+      ADD CONSTRAINT dashboard_jobs_run_attempt_check
+      CHECK (run_attempt > 0);
+  END IF;
+END $$;
+CREATE TABLE IF NOT EXISTS worker_cache_status (
+  worker_id uuid PRIMARY KEY REFERENCES workers(id) ON DELETE CASCADE,
+  generation uuid NOT NULL,
+  ready boolean NOT NULL DEFAULT false,
+  ttl_seconds integer NOT NULL,
+  proxy_origin text NOT NULL,
+  cache_base_url text NOT NULL,
+  size_bytes bigint NOT NULL DEFAULT 0 CHECK (size_bytes >= 0),
+  entry_count bigint NOT NULL DEFAULT 0 CHECK (entry_count >= 0),
+  observed_at timestamptz NOT NULL,
+  error text,
+  active_snapshot_id uuid,
+  active_snapshot_started_at timestamptz,
+  last_completed_snapshot_id uuid
+);
+CREATE TABLE IF NOT EXISTS worker_cache_entries (
+  worker_id uuid NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+  entry_id uuid NOT NULL,
+  github_repository_id bigint NOT NULL,
+  cache_key_preview text NOT NULL,
+  cache_key_hash text NOT NULL,
+  scope_preview text NOT NULL,
+  scope_hash text NOT NULL,
+  version_hash text NOT NULL,
+  size_bytes bigint NOT NULL CHECK (size_bytes >= 0),
+  created_at timestamptz NOT NULL,
+  last_accessed_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL,
+  observed_generation uuid NOT NULL,
+  PRIMARY KEY (worker_id, entry_id)
+);
+CREATE INDEX IF NOT EXISTS worker_cache_entries_order_idx ON worker_cache_entries(worker_id, last_accessed_at DESC, entry_id);
+CREATE INDEX IF NOT EXISTS worker_cache_entries_repository_idx ON worker_cache_entries(worker_id, github_repository_id);
+CREATE TABLE IF NOT EXISTS worker_cache_snapshot_entries (
+  worker_id uuid NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+  snapshot_id uuid NOT NULL,
+  sequence integer NOT NULL CHECK (sequence >= 0),
+  entry_id uuid NOT NULL,
+  github_repository_id bigint NOT NULL,
+  cache_key_preview text NOT NULL,
+  cache_key_hash text NOT NULL,
+  scope_preview text NOT NULL,
+  scope_hash text NOT NULL,
+  version_hash text NOT NULL,
+  size_bytes bigint NOT NULL CHECK (size_bytes >= 0),
+  created_at timestamptz NOT NULL,
+  last_accessed_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL,
+  observed_generation uuid NOT NULL,
+  staged_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (worker_id, snapshot_id, sequence, entry_id)
+);
+CREATE INDEX IF NOT EXISTS worker_cache_snapshot_entries_idx ON worker_cache_snapshot_entries(worker_id, snapshot_id, sequence, entry_id);
+CREATE INDEX IF NOT EXISTS worker_cache_snapshot_entries_staged_at_idx ON worker_cache_snapshot_entries(staged_at);
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS enrollment_code_hash bytea;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS enrollment_authenticated_at timestamptz;
 
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS desired_configuration jsonb;
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS applied_configuration_revision text;
