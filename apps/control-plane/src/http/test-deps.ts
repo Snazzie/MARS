@@ -14,7 +14,6 @@ const testReleaseManifest: WorkerReleaseManifest = {
       brokerImage: `ghcr.io/mars/broker@sha256:${testHash}`,
       goldenImageUrl: "https://release.test/worker.qcow2",
       goldenImageSha256: testHash,
-      goldenCosignBundleUrl: "https://release.test/worker.qcow2.bundle",
       composeSha256: testHash,
       domainTemplateSha256: testHash,
     },

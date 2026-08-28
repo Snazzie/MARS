@@ -13,7 +13,6 @@ const valid = {
       brokerImage: "ghcr.io/example/mars-broker@sha256:" + hash,
       goldenImageUrl: "https://downloads.example.test/worker.qcow2",
       goldenImageSha256: hash,
-      goldenCosignBundleUrl: "https://downloads.example.test/worker.qcow2.bundle",
       composeSha256: hash,
       domainTemplateSha256: hash,
     },

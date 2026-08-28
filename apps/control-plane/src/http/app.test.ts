@@ -637,7 +637,7 @@ test("generates complete platform installers from the immutable release manifest
       buildId: "build-1",
       contractVersion: "0.1.0",
       platforms: {
-        "linux-x64": { orchestratorSha256: hash, brokerImage: `ghcr.io/mars/broker@sha256:${hash}`, goldenImageUrl: "https://release.test/worker.qcow2", goldenImageSha256: hash, goldenCosignBundleUrl: "https://release.test/worker.qcow2.bundle", composeSha256: hash, domainTemplateSha256: hash },
+        "linux-x64": { orchestratorSha256: hash, brokerImage: `ghcr.io/mars/broker@sha256:${hash}`, goldenImageUrl: "https://release.test/worker.qcow2", goldenImageSha256: hash, composeSha256: hash, domainTemplateSha256: hash },
         "windows-x64": { orchestratorSha256: hash, serviceHostSha256: hash, vmTemplateUrl: "https://release.test/worker.vhdx", vmTemplateSha256: hash, container: { baseImage: `mcr.microsoft.com/windows@sha256:${hash}`, runner: { url: "https://release.test/runner.zip", sha256: hash }, git: { url: "https://release.test/git.zip", sha256: hash }, vcRuntime: { url: "https://release.test/vc.exe", sha256: hash } } },
         "macos-arm64": { orchestratorSha256: hash, tartImage: `ghcr.io/mars/macos@sha256:${hash}`, tartImageDigest: hash },
       },

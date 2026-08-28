@@ -72,7 +72,7 @@ assert_release_artifacts() {
     for(const name of ["linux-x64","windows-x64","macos-arm64"]) if(!(name in platforms)) process.exit(1);
     if(platforms["linux-x64"]){
       const p=platforms["linux-x64"];
-      if(!hash.test(p.orchestratorSha256)||!oci.test(p.brokerImage)||!https(p.goldenImageUrl)||!hash.test(p.goldenImageSha256)||!https(p.goldenCosignBundleUrl)||!hash.test(p.composeSha256)||!hash.test(p.domainTemplateSha256)) process.exit(1);
+      if(!hash.test(p.orchestratorSha256)||!oci.test(p.brokerImage)||!https(p.goldenImageUrl)||!hash.test(p.goldenImageSha256)||!hash.test(p.composeSha256)||!hash.test(p.domainTemplateSha256)) process.exit(1);
     }
     if(platforms["windows-x64"]){
       const p=platforms["windows-x64"], c=p.container;

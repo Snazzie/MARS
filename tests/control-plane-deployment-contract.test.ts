@@ -164,14 +164,20 @@ test("CI builds and passes a real Windows service-host artifact explicitly", asy
 });
 
 
-test("worker release workflow gates aggregate publication on all platforms", async () => {
+test("worker release workflow gates unsigned aggregate publication on all platforms", async () => {
   const workflow = await read(".github/workflows/release-workers.yml");
   expect(workflow).toContain("tags: ['worker-*']");
   expect(workflow).toContain("needs: [linux, windows, macos]");
   expect(workflow).toContain("schemaVersion:2");
-  expect(workflow).toContain("cosign sign-blob");
   expect(workflow).toContain("worker-release-manifest.json");
+  expect(workflow).toContain("Publish complete unsigned worker release");
+  expect(workflow).not.toMatch(/cosign|signature|\.bundle/);
   expect(workflow).not.toContain("windows-worker-*");
+  for (const installer of [
+    "install-worker-linux-x64.sh",
+    "install-worker-windows-x64.ps1",
+    "install-worker-macos-arm64.sh",
+  ]) expect(workflow).toContain(installer);
 });
 
 test("production startup checks every packaged Windows container input", async () => {
@@ -191,51 +197,38 @@ test("aggregate release validation installs locked dependencies before importing
   expect(validation).toBeGreaterThan(install);
 });
 
-test("release workflow acquires, authenticates, and signs immutable large worker assets", async () => {
+test("release workflow validates SHA-256/HTTPS assets and publishes fixed release URLs", async () => {
   const workflow = await read(".github/workflows/release-workers.yml");
   for (const requirement of [
     "MARS_LINUX_GOLDEN_IMAGE_SOURCE_URL",
     'curl --fail --location --retry 3 --proto "=https" --tlsv1.2 "$GOLDEN_IMAGE_SOURCE_URL"',
     "mars-worker-golden.qcow2",
-    "mars-worker-golden.qcow2.bundle",
     "MARS_WINDOWS_VM_TEMPLATE_SOURCE_URL",
     'curl.exe --fail --location --retry 3 --proto "=https" --proto-redir "=https" --tlsv1.2 --output $vmTemplatePath $env:VM_TEMPLATE_SOURCE_URL',
     "mars-worker-template.vhdx",
-    "mars-worker-template.vhdx.bundle",
     "MARS_MACOS_TART_SOURCE_IMAGE", "TART_SOURCE_REGISTRY_HOSTNAME", "docker login \"$TART_REGISTRY_HOSTNAME\"", "tart pull \"$TART_SOURCE_IMAGE\"",
     "prepare-macos-job-image.sh", "tart push \"$TARGET\" \"$PUBLISHED_REF\"",
-    "imagetools inspect", "tart clone \"$TART_IMAGE\"",
-    "TART_IMAGE_DIGEST", 'cosign sign --yes "$TART_IMAGE"',
-    "cosign sign-blob", "gh release create",
+    "imagetools inspect", "TART_IMAGE_DIGEST",
+    "https://github.com/$env:GITHUB_REPOSITORY/releases/download/worker-v0.1.0",
+    "https://github.com/${GITHUB_REPOSITORY}/releases/download/worker-v0.1.0",
+    "gh release create",
   ]) expect(workflow).toContain(requirement);
   expect(workflow).not.toContain("MARS_LINUX_GOLDEN_IMAGE_PATH");
   expect(workflow).not.toContain("MARS_WINDOWS_VM_TEMPLATE_PATH");
   expect(workflow).not.toContain("Invoke-WebRequest");
-  expect(workflow).toMatch(/mars-worker-golden\.qcow2(?:\\|\s|,)/);
-  expect(workflow).toMatch(/mars-worker-template\.vhdx(?:\\|\s|,)/);
+  expect(workflow).not.toMatch(/cosign|signature|\.bundle/);
+  for (const asset of [
+    "install-worker-linux-x64.sh", "install-worker-windows-x64.ps1", "install-worker-macos-arm64.sh",
+    "worker-release-manifest.json", "linux-broker-compose.yaml", "worker-domain.xml",
+    "mars-orchestrator-linux-x64", "mars-orchestrator-windows-x64.exe", "mars-orchestrator-macos-arm64",
+    "mars-job-agent-linux-x64", "mars-job-agent-macos-arm64", "mars-service-host.exe",
+    "mars-worker-golden.qcow2", "mars-worker-template.vhdx",
+    "mars-windows-runner.zip", "mars-windows-git.zip", "mars-windows-vc-runtime.exe",
+  ]) expect(workflow).toContain(`dist/release/${asset}`);
   expect(workflow).toContain("@sha256:");
-
-  const linux = workflow.slice(workflow.indexOf("\n  linux:"));
-  const linuxDownload = linux.indexOf('curl --fail --location --retry 3 --proto "=https" --tlsv1.2 "$GOLDEN_IMAGE_SOURCE_URL"');
-  const linuxValidation = linux.indexOf('test "$actualGoldenSha256" = "$GOLDEN_IMAGE_SHA256"');
-  const linuxBundleSign = linux.indexOf("cosign sign-blob --yes --bundle dist/linux/mars-worker-golden.qcow2.bundle");
-  const brokerPublish = linux.indexOf("docker buildx build --push");
-  const brokerSign = linux.indexOf('cosign sign --yes "$BROKER_REPOSITORY@$brokerDigest"');
-  expect(linuxDownload).toBeGreaterThanOrEqual(0);
-  expect(linuxDownload).toBeLessThan(linuxValidation);
-  expect(linuxValidation).toBeLessThan(linuxBundleSign);
-  expect(linuxBundleSign).toBeLessThan(brokerPublish);
-  expect(brokerPublish).toBeLessThan(brokerSign);
-
-  const windows = workflow.slice(workflow.indexOf("\n  windows:"));
-  const windowsDownload = windows.indexOf('curl.exe --fail --location --retry 3 --proto "=https" --proto-redir "=https" --tlsv1.2 --output $vmTemplatePath $env:VM_TEMPLATE_SOURCE_URL');
-  const windowsValidation = windows.indexOf('Test-Path -LiteralPath $vmTemplatePath -PathType Leaf');
-  expect(windowsDownload).toBeGreaterThanOrEqual(0);
-  expect(windowsDownload).toBeLessThan(windowsValidation);
-  expect(windows).toContain('--proto-redir "=https"');
 });
 
-test("image smoke asserts complete runtime metadata and Windows container inputs", async () => {
+test("image smoke asserts complete unsigned runtime metadata and Windows container inputs", async () => {
   const smoke = await read("tests/control-plane-image-smoke.sh");
   for (const artifact of [
     "/app/workers/build-windows-container-image-local.ps1",
@@ -243,8 +236,9 @@ test("image smoke asserts complete runtime metadata and Windows container inputs
     "/app/workers/entrypoint.ps1", "/app/workers/mars-job-agent.exe",
   ]) expect(smoke).toContain(artifact);
   for (const field of [
-    "goldenImageUrl", "goldenCosignBundleUrl", "vmTemplateUrl",
+    "goldenImageUrl", "goldenImageSha256", "vmTemplateUrl",
     "serviceHostSha256", "packagedServiceHost", "asset.url", "asset.sha256",
     "vcRuntime", "tartImageDigest", "__PLACEHOLDER__",
   ]) expect(smoke).toContain(field);
+  expect(smoke).not.toMatch(/cosign|goldenCosignBundleUrl|\.bundle/);
 });

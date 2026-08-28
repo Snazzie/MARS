@@ -13,7 +13,6 @@ export const LinuxWorkerRelease = z.object({
   brokerImage: ociDigest,
   goldenImageUrl: httpsUrl,
   goldenImageSha256: sha256,
-  goldenCosignBundleUrl: httpsUrl,
   composeSha256: sha256,
   domainTemplateSha256: sha256,
 }).strict();

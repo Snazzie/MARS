@@ -10,10 +10,10 @@ test("broker compose mounts only declared worker resources", async () => {
   expect(compose).not.toContain("/:/host");
 });
 
-test("installer does not boot a job VM", async () => {
+test("installer starts the KVM-capable broker without signature prerequisites", async () => {
   const installer = await readFile("deploy/workers/install-worker.sh", "utf8");
   expect(installer).toContain("docker compose");
   expect(installer).toContain("no job VM was started");
   expect(installer).not.toMatch(/virsh\s+(define|start)/);
-  expect(installer).toContain("cosign verify-blob");
+  expect(installer).not.toMatch(/cosign|signature|\.bundle/);
 });
