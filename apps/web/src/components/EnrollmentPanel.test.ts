@@ -21,6 +21,13 @@ test("downloads the macOS installer to a temporary file and cleans it after --co
   expect(command).toContain("trap");
   expect(command).toContain("connectOrigin=https%3A%2F%2Frunner.example.com");
 });
+test("aborts before invoking Linux/macOS installer when curl fails", () => {
+  for (const [audience, shell] of [["linux-x64", "bash"], ["macos-arm64", "zsh"]] as const) {
+    const command = buildInstallerCommand(`https://runner.example.com/api/workers/installer?audience=${audience}`, audience, "Abc_-9");
+    expect(command.startsWith("set -e\n")).toBe(true);
+    expect(command.indexOf("\ncurl ")).toBeLessThan(command.indexOf(`\n${shell} `));
+  }
+});
 test("supports each installer audience", () => { expect(buildInstallerCommand(url, "linux-x64")).toContain("bash"); expect(buildInstallerCommand(url, "windows-x64")).toContain("powershell.exe"); expect(buildInstallerCommand(url, "macos-arm64")).toContain("zsh"); });
 
 test("builds only the selected platform installer command", () => {

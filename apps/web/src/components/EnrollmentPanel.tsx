@@ -34,7 +34,7 @@ export function buildInstallerCommand(installer: string, audience: RuntimePlatfo
   url.searchParams.set("connectOrigin", selectedOrigin);
   const shell = audience === "macos-arm64" ? "zsh" : "bash";
   const codeArg = code ? ` --code ${quoteShell(code)}` : "";
-  return `marsInstaller="$(mktemp "\${TMPDIR:-/tmp}/mars-installer.XXXXXX")"\ntrap 'rm -f "$marsInstaller"' EXIT\ncurl --fail --proto '=${protocol}'${tls} --output "$marsInstaller" ${quoteShell(url.toString())}\n${shell} "$marsInstaller"${codeArg}`;
+  return `set -e\nmarsInstaller="$(mktemp "\${TMPDIR:-/tmp}/mars-installer.XXXXXX")"\ntrap 'rm -f "$marsInstaller"' EXIT\ncurl --fail --proto '=${protocol}'${tls} --output "$marsInstaller" ${quoteShell(url.toString())}\n${shell} "$marsInstaller"${codeArg}`;
 }
 export function buildInstallerCommands(origin: string, audience: RuntimePlatform, code?: string, windowsRuntime: WindowsRuntime = "container"): { label: string; command: string }[] {
   const labels: Record<RuntimePlatform, string> = { "linux-x64": "Linux x64", "windows-x64": `Windows x64 (${windowsRuntime === "container" ? "Hyper-V container" : "Hyper-V VM"})`, "macos-arm64": "macOS arm64" };
