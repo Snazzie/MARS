@@ -4,33 +4,37 @@
 
 Release tag: `worker-v0.1.0`.
 
-Supported v1 runtimes:
+Preserve the existing Linux and Windows worker runtime architecture, including their current VM/container capabilities. No runtime conversion is required for v1. Preserve macOS arm64 Tart support.
 
-- Linux x64: container-only worker path; no KVM/libvirt, qcow2, or VM broker prerequisites.
-- Windows x64: container-only worker path; no Windows VM runtime or Hyper-V VM installer path.
-- macOS arm64: retain Tart because it is the supported macOS worker runtime.
+## Installer delivery
 
-## Integrity and artifact delivery
+The control plane generates one copied command per platform. The command downloads the platform installer script from the immutable GitHub release asset for `worker-v0.1.0`, then runs that script with:
 
-Remove cosign signing and verification for v1. Retain HTTPS-only downloads and SHA-256 validation for release artifacts.
+- the selected control-plane URL;
+- the one-use enrollment code;
+- the existing platform/runtime arguments where applicable.
 
-Copied enrollment commands must contain:
+The installer script contains the complete prerequisite, artifact, service, enrollment, and authenticated-worker flow. Runtime binaries and support artifacts are downloaded from GitHub release assets or the existing immutable artifact references; the control-plane URL is used for enrollment and worker communication.
 
-- The immutable GitHub release asset URL for the selected platform and `worker-v0.1.0` tag.
-- The selected control-plane URL.
-- The one-use enrollment code.
-- Windows container runtime arguments where applicable.
+## Integrity
 
-The worker downloads installer/runtime artifacts from GitHub. The control-plane URL is used for enrollment and worker communication, not installer distribution.
+Cosign signing is not required for v1. Retain HTTPS-only downloads and SHA-256 verification where already supported. Do not add fake signatures or claim signed releases.
 
 ## Release assets
 
-The release workflow builds and publishes Linux container, Windows container, and macOS Tart artifacts under `worker-v0.1.0`. The generated manifest records HTTPS URLs and SHA-256 values. VM-only fields and signature bundle fields are removed from the v1 contract.
+Publish self-contained Linux, Windows, and macOS installer scripts under stable names:
+
+- `install-worker-linux-x64.sh`
+- `install-worker-windows-x64.ps1`
+- `install-worker-macos-arm64.sh`
+
+Preserve existing VM/container release metadata and runtime paths unless needed solely to make the copied GitHub installer self-contained.
 
 ## Acceptance
 
-- UI-generated commands use GitHub tag assets and pass control-plane URL/code.
-- Linux and Windows commands cannot select VM runtimes.
-- macOS command uses the Tart-backed installer.
-- All downloaded artifacts remain HTTPS and SHA-256 verified.
-- Release workflow publishes the three v1 platform artifacts and manifest without cosign.
+- Copied commands resolve to the `worker-v0.1.0` GitHub release assets.
+- Commands include the control-plane URL and enrollment code.
+- Each downloaded installer contains its complete existing install flow and accepts those arguments.
+- Linux and Windows runtime capabilities remain unchanged.
+- macOS Tart remains supported.
+- Release assets are observable before claiming publication.
