@@ -1,27 +1,27 @@
 [CmdletBinding()]
 param(
-[string]$ControlPlaneUrl = '__PUBLIC_BASE_URL__',
-[Alias('Code')][string]$JoinCode = '__JOIN_CODE__',
+[string]$ControlPlaneUrl = '',
+[Alias('Code')][string]$JoinCode = '',
 [string]$JoinCodeFile = 'C:\ProgramData\Mars\join-code',
   [ValidateSet('vm','container')][string]$WindowsRuntime = 'vm',
-[string]$WindowsOrchestratorSha256 = '__WINDOWS_ORCHESTRATOR_SHA256__',
-[string]$WindowsServiceHostSha256 = '__WINDOWS_SERVICE_HOST_SHA256__',
-  [string]$WindowsTemplateUrl = '__WINDOWS_TEMPLATE_URL__',
-  [string]$WindowsTemplatePath = '__WINDOWS_TEMPLATE_PATH__',
-  [string]$WindowsTemplateDigest = '__WINDOWS_TEMPLATE_DIGEST__',
-  [string]$WindowsContainerImage = '__WINDOWS_CONTAINER_IMAGE__',
-  [string]$WindowsContainerBaseImage = '__WINDOWS_CONTAINER_BASE_IMAGE__',
-  [string]$WindowsContainerRunnerUrl = '__WINDOWS_CONTAINER_RUNNER_URL__',
-  [string]$WindowsContainerRunnerSha256 = '__WINDOWS_CONTAINER_RUNNER_SHA256__',
-  [string]$WindowsContainerGitUrl = '__WINDOWS_CONTAINER_GIT_URL__',
-  [string]$WindowsContainerGitSha256 = '__WINDOWS_CONTAINER_GIT_SHA256__',
-  [string]$WindowsContainerVcUrl = '__WINDOWS_CONTAINER_VC_URL__',
-  [string]$WindowsContainerVcSha256 = '__WINDOWS_CONTAINER_VC_SHA256__',
-  [string]$WindowsContainerBuilderUrl = '__WINDOWS_CONTAINER_BUILDER_URL__',
-  [string]$WindowsContainerVerifierUrl = '__WINDOWS_CONTAINER_VERIFIER_URL__',
-  [string]$WindowsContainerfileUrl = '__WINDOWS_CONTAINERFILE_URL__',
-  [string]$WindowsContainerEntrypointUrl = '__WINDOWS_CONTAINER_ENTRYPOINT_URL__',
-  [string]$WindowsContainerJobAgentUrl = '__WINDOWS_CONTAINER_JOB_AGENT_URL__',
+[string]$WindowsOrchestratorSha256 = '',
+[string]$WindowsServiceHostSha256 = '',
+  [string]$WindowsTemplateUrl = '',
+  [string]$WindowsTemplatePath = 'C:\ProgramData\Mars\worker-template.vhdx',
+  [string]$WindowsTemplateDigest = '',
+  [string]$WindowsContainerImage = 'mars/windows-job:local',
+  [string]$WindowsContainerBaseImage = '',
+  [string]$WindowsContainerRunnerUrl = '',
+  [string]$WindowsContainerRunnerSha256 = '',
+  [string]$WindowsContainerGitUrl = '',
+  [string]$WindowsContainerGitSha256 = '',
+  [string]$WindowsContainerVcUrl = '',
+  [string]$WindowsContainerVcSha256 = '',
+  [string]$WindowsContainerBuilderUrl = '',
+  [string]$WindowsContainerVerifierUrl = '',
+  [string]$WindowsContainerfileUrl = '',
+  [string]$WindowsContainerEntrypointUrl = '',
+  [string]$WindowsContainerJobAgentUrl = '',
   [string]$WindowsContainerPrefix = 'mars',
   [int]$WindowsContainerReadyTimeoutMs = 15000,
   [int]$WindowsContainerJobTimeoutMs = 900000,
@@ -40,6 +40,38 @@ function Assert-HttpsUrl([string]$Url, [string]$Name) {
 }
 function Assert-StrictHttpsUrl([string]$Url, [string]$Name) {
   if ($Url -notmatch '^https://') { throw "$Name must use HTTPS." }
+}
+$ReleaseBaseUrl = 'https://github.com/Snazzie/Mars/releases/download/worker-v0.1.0'
+$ReleaseManifestUrl = "$ReleaseBaseUrl/worker-release-manifest.json"
+function Load-ReleaseMetadata {
+  $needs = [string]::IsNullOrWhiteSpace($WindowsOrchestratorSha256) -or
+    [string]::IsNullOrWhiteSpace($WindowsServiceHostSha256) -or
+    ($WindowsRuntime -eq 'vm' -and ([string]::IsNullOrWhiteSpace($WindowsTemplateUrl) -or [string]::IsNullOrWhiteSpace($WindowsTemplateDigest))) -or
+    ($WindowsRuntime -eq 'container' -and ([string]::IsNullOrWhiteSpace($WindowsContainerBaseImage) -or [string]::IsNullOrWhiteSpace($WindowsContainerRunnerUrl) -or [string]::IsNullOrWhiteSpace($WindowsContainerRunnerSha256) -or [string]::IsNullOrWhiteSpace($WindowsContainerGitUrl) -or [string]::IsNullOrWhiteSpace($WindowsContainerGitSha256) -or [string]::IsNullOrWhiteSpace($WindowsContainerVcUrl) -or [string]::IsNullOrWhiteSpace($WindowsContainerVcSha256)))
+  if ($needs) {
+    Assert-StrictHttpsUrl $ReleaseManifestUrl 'worker release manifest URL'
+    $manifest = Invoke-RestMethod -Uri $ReleaseManifestUrl -Method Get -UseBasicParsing -TimeoutSec 30
+    $platform = $manifest.platforms.'windows-x64'
+    if ($null -eq $platform) { throw 'Windows release metadata is unavailable.' }
+    if ([string]::IsNullOrWhiteSpace($WindowsOrchestratorSha256)) { $script:WindowsOrchestratorSha256 = [string]$platform.orchestratorSha256 }
+    if ([string]::IsNullOrWhiteSpace($WindowsServiceHostSha256)) { $script:WindowsServiceHostSha256 = [string]$platform.serviceHostSha256 }
+    if ([string]::IsNullOrWhiteSpace($WindowsTemplateUrl)) { $script:WindowsTemplateUrl = [string]$platform.vmTemplateUrl }
+    if ([string]::IsNullOrWhiteSpace($WindowsTemplateDigest)) { $script:WindowsTemplateDigest = "sha256:$([string]$platform.vmTemplateSha256)" }
+    if ($WindowsRuntime -eq 'container') {
+      if ([string]::IsNullOrWhiteSpace($WindowsContainerBaseImage)) { $script:WindowsContainerBaseImage = [string]$platform.container.baseImage }
+      if ([string]::IsNullOrWhiteSpace($WindowsContainerRunnerUrl)) { $script:WindowsContainerRunnerUrl = [string]$platform.container.runner.url }
+      if ([string]::IsNullOrWhiteSpace($WindowsContainerRunnerSha256)) { $script:WindowsContainerRunnerSha256 = [string]$platform.container.runner.sha256 }
+      if ([string]::IsNullOrWhiteSpace($WindowsContainerGitUrl)) { $script:WindowsContainerGitUrl = [string]$platform.container.git.url }
+      if ([string]::IsNullOrWhiteSpace($WindowsContainerGitSha256)) { $script:WindowsContainerGitSha256 = [string]$platform.container.git.sha256 }
+      if ([string]::IsNullOrWhiteSpace($WindowsContainerVcUrl)) { $script:WindowsContainerVcUrl = [string]$platform.container.vcRuntime.url }
+      if ([string]::IsNullOrWhiteSpace($WindowsContainerVcSha256)) { $script:WindowsContainerVcSha256 = [string]$platform.container.vcRuntime.sha256 }
+    }
+  }
+  if ([string]::IsNullOrWhiteSpace($WindowsContainerBuilderUrl)) { $script:WindowsContainerBuilderUrl = "$ReleaseBaseUrl/build-windows-container-image-local.ps1" }
+  if ([string]::IsNullOrWhiteSpace($WindowsContainerVerifierUrl)) { $script:WindowsContainerVerifierUrl = "$ReleaseBaseUrl/verify-runtime.ps1" }
+  if ([string]::IsNullOrWhiteSpace($WindowsContainerfileUrl)) { $script:WindowsContainerfileUrl = "$ReleaseBaseUrl/Containerfile" }
+  if ([string]::IsNullOrWhiteSpace($WindowsContainerEntrypointUrl)) { $script:WindowsContainerEntrypointUrl = "$ReleaseBaseUrl/entrypoint.ps1" }
+  if ([string]::IsNullOrWhiteSpace($WindowsContainerJobAgentUrl)) { $script:WindowsContainerJobAgentUrl = "$ReleaseBaseUrl/mars-job-agent.exe" }
 }
 function Write-State([string]$Stage, [string]$Status) {
   $statePath = 'C:\ProgramData\Mars\install-state.json'
@@ -102,7 +134,7 @@ function Assert-HostPreflight {
   if ($ControlPlaneUrl -notmatch '^https://' -and -not $localHttp -and -not $AllowInsecureHttp) { throw 'Control-plane URL must use HTTPS.' }
   Invoke-WebRequest -Uri "$ControlPlaneUrl/api/healthz" -Method Get -UseBasicParsing -TimeoutSec 30 | Out-Null
   $joinFileExists = Test-Path -LiteralPath $JoinCodeFile
-  if ($JoinCode -match '^__' -or [string]::IsNullOrWhiteSpace($JoinCode)) {
+  if ([string]::IsNullOrWhiteSpace($JoinCode)) {
     if (-not $joinFileExists) { throw 'Join code is not configured.' }
   } elseif ($JoinCode -notmatch '^[A-Za-z0-9_-]{43}$') {
     throw 'Join code is not configured.'
@@ -185,14 +217,14 @@ function Assert-Digest([string]$Digest) {
   if ($Digest -notmatch '^sha256:[0-9a-fA-F]{64}$') { throw "Template digest must be sha256:hex: $Digest" }
 }
 function Assert-Template([string]$Path, [string]$Digest) {
-  if ($Path -match '^__' -or $Digest -match '^__') { throw 'Windows Hyper-V template is not configured.' }
+  if ([string]::IsNullOrWhiteSpace($Path) -or [string]::IsNullOrWhiteSpace($Digest)) { throw 'Windows Hyper-V template is not configured.' }
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Windows Hyper-V template is missing: $Path" }
   Assert-Digest $Digest
   $actual = 'sha256:' + (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
   if ($actual -ne $Digest.ToLowerInvariant()) { throw "Windows Hyper-V template checksum mismatch: expected $Digest, got $actual" }
 }
 function Download-Template {
-  if ($WindowsTemplateUrl -match '^__' -or $WindowsTemplatePath -match '^__') { throw 'Windows Hyper-V template is not configured.' }
+  if ([string]::IsNullOrWhiteSpace($WindowsTemplateUrl) -or [string]::IsNullOrWhiteSpace($WindowsTemplatePath)) { throw 'Windows Hyper-V template is not configured.' }
   Assert-StrictHttpsUrl $WindowsTemplateUrl 'Windows Hyper-V template URL'
   Assert-Digest $WindowsTemplateDigest
   $parent = Split-Path -Parent $WindowsTemplatePath
@@ -227,7 +259,7 @@ function Build-LocalWindowsImage([string]$Image) {
     @{ Name = 'WindowsContainerEntrypointUrl'; Value = $WindowsContainerEntrypointUrl },
     @{ Name = 'WindowsContainerJobAgentUrl'; Value = $WindowsContainerJobAgentUrl }
   )
-  foreach ($value in $values) { if ([string]::IsNullOrWhiteSpace($value.Value) -or $value.Value -match '^__') { throw "Windows container build input is not configured: $($value.Name)" } }
+  foreach ($value in $values) { if ([string]::IsNullOrWhiteSpace($value.Value)) { throw "Windows container build input is not configured: $($value.Name)" } }
   foreach ($value in @($WindowsContainerBuilderUrl, $WindowsContainerVerifierUrl, $WindowsContainerfileUrl, $WindowsContainerEntrypointUrl, $WindowsContainerJobAgentUrl)) { Assert-HttpsUrl $value 'Windows container artifact URL' }
   $root = Join-Path $env:ProgramData 'Mars\image-build-inputs'
   New-Item -ItemType Directory -Force -Path $root | Out-Null
@@ -298,7 +330,7 @@ function Ensure-ControlPlane {
   Invoke-WebRequest -Uri "$ControlPlaneUrl/api/healthz" -Method Get -UseBasicParsing -TimeoutSec 30 | Out-Null
 }
 function Verify-DownloadedFile([string]$Path, [string]$Expected, [string]$Name, $Response) {
-  if ($Expected -match '^__' -or $Expected -notmatch '^[0-9a-f]{64}$') { throw "$Name SHA-256 is not configured." }
+  if ([string]::IsNullOrWhiteSpace($Expected) -or $Expected -notmatch '^[0-9a-f]{64}$') { throw "$Name SHA-256 is not configured." }
   $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
   if ($actual -ne $Expected.ToLowerInvariant()) { throw "$Name checksum mismatch: expected $Expected, got $actual" }
   $responseHash = if ($Response -and $Response.Headers['X-Content-SHA256']) { [string]$Response.Headers['X-Content-SHA256'] } else { '' }
@@ -309,11 +341,12 @@ Write-Host '[1/8] Checking administrator privileges'
 Require-Administrator
 Write-Host '[2/8] Checking Windows 11 Pro/Enterprise 24H2 x64 host'
 Assert-HostPreflight
+Load-ReleaseMetadata
 $root = 'C:\ProgramData\Mars'; $bin = 'C:\Program Files\Mars'; $identityPath = Join-Path $root 'worker-identity.json'; $persistentInstallerPath = Join-Path $root 'install-worker.ps1'
 New-Item -ItemType Directory -Force -Path $root,$bin | Out-Null
 $transcriptStarted = $false
 try { Start-Transcript -LiteralPath (Join-Path $root 'install.log') -Append | Out-Null; $transcriptStarted = $true } catch { Write-Warning "Unable to start persistent installer log: $($_.Exception.Message)" }
-if (([string]::IsNullOrWhiteSpace($JoinCode) -or $JoinCode -match '^__') -and (Test-Path -LiteralPath $JoinCodeFile)) { $JoinCode = (Get-Content -LiteralPath $JoinCodeFile -Raw).Trim() }
+if ([string]::IsNullOrWhiteSpace($JoinCode) -and (Test-Path -LiteralPath $JoinCodeFile)) { $JoinCode = (Get-Content -LiteralPath $JoinCodeFile -Raw).Trim() }
 if (-not $Upgrade) {
   $joinCodePath = $JoinCodeFile
   if (-not (Test-Path -LiteralPath $joinCodePath)) {
@@ -355,7 +388,7 @@ if ($WindowsRuntime -eq 'container') {
 Write-State 'prerequisites' 'complete'
 Write-Host '[4/8] Checking control-plane connectivity'
 Ensure-ControlPlane
-if (-not $Upgrade -and $JoinCode -match '^__') { throw 'Join code is not configured.' }
+if (-not $Upgrade -and [string]::IsNullOrWhiteSpace($JoinCode)) { throw 'Join code is not configured.' }
 $existingService = Get-Service MarsWorker -ErrorAction SilentlyContinue
 $existingInstall = $existingService -or (Test-Path -LiteralPath $identityPath)
 if ($Upgrade -and -not (Test-Path -LiteralPath $identityPath)) { throw 'Upgrade requires an existing worker identity.' }

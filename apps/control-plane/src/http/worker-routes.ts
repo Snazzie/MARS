@@ -13,8 +13,15 @@ function powerShellQuote(value: string): string { return `'${value.replaceAll("'
 type InstallerValues = Record<string, string>;
 type ArtifactPath = string | URL;
 function injectInstallerOrigin(source: string, baseUrl: string, extra: InstallerValues = {}, powershell = false): string {
+  if (powershell) {
+    const values = { ControlPlaneUrl: new URL(baseUrl).origin, ...extra };
+    const injected = Object.entries(values).map(([key, value]) => `$${key} = ${powerShellQuote(value)}`).join("\n");
+    const parameterBlock = source.match(/^param\([\s\S]*?\)\r?\n/);
+    if (!parameterBlock) return `${injected}\n${source}`;
+    const insertAt = parameterBlock.index! + parameterBlock[0].length;
+    return `${source.slice(0, insertAt)}${injected}\n${source.slice(insertAt)}`;
+  }
   const values = { PUBLIC_BASE_URL: new URL(baseUrl).origin, ...extra };
-  if (powershell) return Object.entries(values).reduce((result, [key, value]) => result.replaceAll(`'__${key}__'`, powerShellQuote(value)), source);
   const injected = Object.entries(values).flatMap(([key, value]) => [`${key}=${shellQuote(value)}`, `export ${key}`]).join("\n");
   const newline = source.indexOf("\n"); const insertAt = source.startsWith("#!") && newline >= 0 ? newline + 1 : 0;
   return `${source.slice(0, insertAt)}${injected}\n${source.slice(insertAt)}`;
@@ -43,29 +50,27 @@ export function linuxInstallerValues(platform: LinuxWorkerRelease, connectOrigin
 }
 
 export function windowsInstallerValues(platform: WindowsWorkerRelease, connectOrigin: string): InstallerValues {
-  const values: InstallerValues = {
-    WINDOWS_RUNTIME: "container",
-    WINDOWS_ORCHESTRATOR_SHA256: platform.orchestratorSha256,
-    WINDOWS_SERVICE_HOST_SHA256: platform.serviceHostSha256,
-    WINDOWS_TEMPLATE_URL: platform.vmTemplateUrl,
-    WINDOWS_TEMPLATE_PATH: "C:\\ProgramData\\Mars\\worker-template.vhdx",
-    WINDOWS_TEMPLATE_DIGEST: `sha256:${platform.vmTemplateSha256}`,
-    WINDOWS_CONTAINER_IMAGE: "mars/windows-job:local",
-    WINDOWS_CONTAINER_BASE_IMAGE: platform.container.baseImage,
-    WINDOWS_CONTAINER_RUNNER_URL: platform.container.runner.url,
-    WINDOWS_CONTAINER_RUNNER_SHA256: platform.container.runner.sha256,
-    WINDOWS_CONTAINER_GIT_URL: platform.container.git.url,
-    WINDOWS_CONTAINER_GIT_SHA256: platform.container.git.sha256,
-    WINDOWS_CONTAINER_VC_URL: platform.container.vcRuntime.url,
-    WINDOWS_CONTAINER_VC_SHA256: platform.container.vcRuntime.sha256,
-    WINDOWS_CONTAINER_BUILDER_URL: `${connectOrigin}/api/workers/windows-container-builder`,
-    WINDOWS_CONTAINER_VERIFIER_URL: `${connectOrigin}/api/workers/windows-container-verifier`,
-    WINDOWS_CONTAINERFILE_URL: `${connectOrigin}/api/workers/windows-containerfile`,
-    WINDOWS_CONTAINER_ENTRYPOINT_URL: `${connectOrigin}/api/workers/windows-container-entrypoint`,
-    WINDOWS_CONTAINER_JOB_AGENT_URL: `${connectOrigin}/api/workers/windows-container-job-agent`,
-    JOIN_CODE: "",
+  return {
+    WindowsRuntime: "container",
+    WindowsOrchestratorSha256: platform.orchestratorSha256,
+    WindowsServiceHostSha256: platform.serviceHostSha256,
+    WindowsTemplateUrl: platform.vmTemplateUrl,
+    WindowsTemplatePath: "C:\\ProgramData\\Mars\\worker-template.vhdx",
+    WindowsTemplateDigest: `sha256:${platform.vmTemplateSha256}`,
+    WindowsContainerImage: "mars/windows-job:local",
+    WindowsContainerBaseImage: platform.container.baseImage,
+    WindowsContainerRunnerUrl: platform.container.runner.url,
+    WindowsContainerRunnerSha256: platform.container.runner.sha256,
+    WindowsContainerGitUrl: platform.container.git.url,
+    WindowsContainerGitSha256: platform.container.git.sha256,
+    WindowsContainerVcUrl: platform.container.vcRuntime.url,
+    WindowsContainerVcSha256: platform.container.vcRuntime.sha256,
+    WindowsContainerBuilderUrl: `${connectOrigin}/api/workers/windows-container-builder`,
+    WindowsContainerVerifierUrl: `${connectOrigin}/api/workers/windows-container-verifier`,
+    WindowsContainerfileUrl: `${connectOrigin}/api/workers/windows-containerfile`,
+    WindowsContainerEntrypointUrl: `${connectOrigin}/api/workers/windows-container-entrypoint`,
+    WindowsContainerJobAgentUrl: `${connectOrigin}/api/workers/windows-container-job-agent`,
   };
-  return values;
 }
 
 export function macosInstallerValues(platform: MacosWorkerRelease, connectOrigin: string): InstallerValues {

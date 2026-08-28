@@ -32,15 +32,37 @@ parse_args() {
 parse_args "$@"
 trap 'unset JOIN_CODE CONTROL_PLANE_URL_ARG' EXIT
 
-: "${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}"
-: "${MARS_BROKER_IMAGE:?set digest-pinned broker image}"
-: "${MARS_GOLDEN_IMAGE:?set HTTPS golden image URL}"
-: "${MARS_GOLDEN_BUNDLE:?set HTTPS golden cosign bundle URL}"
-: "${MARS_GOLDEN_DIGEST:?set golden sha256 digest}"
-: "${MARS_COMPOSE_FILE:?set HTTPS compose URL}"
-: "${MARS_COMPOSE_SHA256:?set compose SHA-256}"
-: "${MARS_DOMAIN_TEMPLATE:?set HTTPS domain template URL}"
-: "${MARS_DOMAIN_TEMPLATE_SHA256:?set domain template SHA-256}"
+RELEASE_BASE_URL='https://github.com/Snazzie/Mars/releases/download/worker-v0.1.0'
+RELEASE_MANIFEST_URL="$RELEASE_BASE_URL/worker-release-manifest.json"
+MARS_COMPOSE_FILE="${MARS_COMPOSE_FILE:-$RELEASE_BASE_URL/linux-broker-compose.yaml}"
+MARS_DOMAIN_TEMPLATE="${MARS_DOMAIN_TEMPLATE:-$RELEASE_BASE_URL/worker-domain.xml}"
+manifest_json=""
+manifest_value() {
+  local path="$1"
+  python3 -c '
+import json, sys
+value = json.load(sys.stdin)
+for key in sys.argv[1].split("."):
+    value = value[key]
+if not isinstance(value, str) or not value:
+    raise SystemExit(1)
+print(value)
+' "$path" <<<"$manifest_json"
+}
+load_release_metadata() {
+  if [[ -n "${MARS_BROKER_IMAGE:-}" && -n "${MARS_GOLDEN_IMAGE:-}" && -n "${MARS_GOLDEN_DIGEST:-}" && -n "${MARS_COMPOSE_SHA256:-}" && -n "${MARS_DOMAIN_TEMPLATE_SHA256:-}" ]]; then
+    return
+  fi
+  validate_https_asset "$RELEASE_MANIFEST_URL" "worker release manifest URL"
+  manifest_json="$(curl --silent --show-error --fail --location --proto '=https' --tlsv1.2 "$RELEASE_MANIFEST_URL")" || {
+    echo "worker release manifest could not be downloaded" >&2; exit 1;
+  }
+  MARS_BROKER_IMAGE="${MARS_BROKER_IMAGE:-$(manifest_value 'platforms.linux-x64.brokerImage')}"
+  MARS_GOLDEN_IMAGE="${MARS_GOLDEN_IMAGE:-$(manifest_value 'platforms.linux-x64.goldenImageUrl')}"
+  MARS_GOLDEN_DIGEST="${MARS_GOLDEN_DIGEST:-$(manifest_value 'platforms.linux-x64.goldenImageSha256')}"
+  MARS_COMPOSE_SHA256="${MARS_COMPOSE_SHA256:-$(manifest_value 'platforms.linux-x64.composeSha256')}"
+  MARS_DOMAIN_TEMPLATE_SHA256="${MARS_DOMAIN_TEMPLATE_SHA256:-$(manifest_value 'platforms.linux-x64.domainTemplateSha256')}"
+}
 
 validate_control_plane_url() {
   python3 - "$PUBLIC_BASE_URL" <<'PY'
@@ -82,7 +104,6 @@ validate_sha256() { [[ "$1" =~ ^(sha256:)?[0-9a-f]{64}$ ]] || { echo "$2 must be
 preflight() {
   validate_control_plane_url
   validate_https_asset "$MARS_GOLDEN_IMAGE" "golden image URL"
-  validate_https_asset "$MARS_GOLDEN_BUNDLE" "golden cosign bundle URL"
   validate_sha256 "$MARS_GOLDEN_DIGEST" "golden image"
   validate_sha256 "$MARS_COMPOSE_SHA256" "compose"
   validate_sha256 "$MARS_DOMAIN_TEMPLATE_SHA256" "domain template"
@@ -103,10 +124,11 @@ preflight() {
     curl --silent --show-error --fail --max-time 15 --location --proto '=https' --tlsv1.2 "$PUBLIC_BASE_URL/api/healthz" >/dev/null
   fi
 }
+load_release_metadata
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   command -v sudo >/dev/null || { echo 'Root or sudo is required.' >&2; exit 1; }
-  exec sudo --preserve-env=PUBLIC_BASE_URL,MARS_BROKER_IMAGE,MARS_GOLDEN_IMAGE,MARS_GOLDEN_BUNDLE,MARS_GOLDEN_DIGEST,MARS_COMPOSE_FILE,MARS_COMPOSE_SHA256,MARS_DOMAIN_TEMPLATE,MARS_DOMAIN_TEMPLATE_SHA256,MARS_BROKER_CONFIG,MARS_LIBVIRT_NETWORK,MARS_COSIGN_VERSION,MARS_COSIGN_SHA256,MARS_ACTION_CACHE_ROOT,MARS_CACHE_PROXY_PORT,MARS_CACHE_DATA_PORT,MARS_CACHE_PROXY_URL,MARS_CACHE_ADVERTISE_URL "$0" "$@"
+  exec sudo --preserve-env=PUBLIC_BASE_URL,RELEASE_BASE_URL,RELEASE_MANIFEST_URL,MARS_BROKER_IMAGE,MARS_GOLDEN_IMAGE,MARS_GOLDEN_DIGEST,MARS_COMPOSE_FILE,MARS_COMPOSE_SHA256,MARS_DOMAIN_TEMPLATE,MARS_DOMAIN_TEMPLATE_SHA256,MARS_BROKER_CONFIG,MARS_LIBVIRT_NETWORK,MARS_ACTION_CACHE_ROOT,MARS_CACHE_PROXY_PORT,MARS_CACHE_DATA_PORT,MARS_CACHE_PROXY_URL,MARS_CACHE_ADVERTISE_URL "$0" "$@"
 fi
 
 check_kvm_access() {
@@ -148,19 +170,7 @@ arch="$(dpkg --print-architecture)"
 printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu %s stable\n' "$arch" "$VERSION_CODENAME" > /etc/apt/sources.list.d/docker.list
 apt-get update -qq
 apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null
-if ! command -v cosign >/dev/null; then
-  COSIGN_VERSION=${MARS_COSIGN_VERSION:-v2.4.1}
-  COSIGN_URL="https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
-  COSIGN_TMP="/tmp/cosign.$$"
-  curl --silent --show-error --fail --location --proto '=https' --tlsv1.2 --output "$COSIGN_TMP" "$COSIGN_URL"
-  if [[ -n "${MARS_COSIGN_SHA256:-}" ]]; then
-    validate_sha256 "$MARS_COSIGN_SHA256" "cosign"
-    [[ "$(sha256sum "$COSIGN_TMP" | cut -d' ' -f1)" == "${MARS_COSIGN_SHA256#sha256:}" ]] || { rm -f "$COSIGN_TMP"; echo 'cosign checksum mismatch' >&2; exit 1; }
-  fi
-  chmod 0755 "$COSIGN_TMP"; install -m 0755 "$COSIGN_TMP" /usr/local/bin/cosign; rm -f "$COSIGN_TMP"
-fi
-command -v cosign >/dev/null || { echo 'pinned cosign binary is required' >&2; exit 1; }
-pass 'Docker Engine, Compose v2, libvirt, QEMU, curl, and cosign installed'
+pass 'Docker Engine, Compose v2, libvirt, QEMU, and curl installed'
 write_state packages complete
 
 stage 'Enabling virtualization services and default NAT network' virtualization
@@ -204,18 +214,13 @@ download_asset() {
   [[ -z "$response_hash" || "$response_hash" == "$expected_hex" ]] || { echo "$name response hash mismatch" >&2; return 1; }
   mv -f "$tmp" "$destination"; rm -f "$headers"; DOWNLOAD_TMP=""
 }
-download_unverified() {
-  local url="$1" destination="$2" name="$3"; validate_https_asset "$url" "$name"; local tmp="${destination}.download.$$.$RANDOM"; DOWNLOAD_TMP="$tmp"; mkdir -p "$(dirname "$destination")"; curl --silent --show-error --fail --location --proto '=https' --tlsv1.2 --output "$tmp" "$url"; mv -f "$tmp" "$destination"; DOWNLOAD_TMP=""
-}
 
 stage 'Downloading and verifying immutable worker assets' download_verified
-GOLDEN_ROOT=${MARS_GOLDEN_ROOT:-$CONFIG_DIR/golden}; GOLDEN_PATH="$GOLDEN_ROOT/worker.qcow2"; BUNDLE_PATH="$CONFIG_DIR/worker.qcow2.bundle"; COMPOSE_PATH="$CONFIG_DIR/linux-broker-compose.yaml"; DOMAIN_PATH="$CONFIG_DIR/worker-domain.xml"
+GOLDEN_ROOT=${MARS_GOLDEN_ROOT:-$CONFIG_DIR/golden}; GOLDEN_PATH="$GOLDEN_ROOT/worker.qcow2"; COMPOSE_PATH="$CONFIG_DIR/linux-broker-compose.yaml"; DOMAIN_PATH="$CONFIG_DIR/worker-domain.xml"
 download_asset "$MARS_GOLDEN_IMAGE" "$MARS_GOLDEN_DIGEST" "$GOLDEN_PATH" 'golden image'
-download_unverified "$MARS_GOLDEN_BUNDLE" "$BUNDLE_PATH" 'golden cosign bundle'
 download_asset "$MARS_COMPOSE_FILE" "$MARS_COMPOSE_SHA256" "$COMPOSE_PATH" compose
 download_asset "$MARS_DOMAIN_TEMPLATE" "$MARS_DOMAIN_TEMPLATE_SHA256" "$DOMAIN_PATH" 'domain template'
-cosign verify-blob --bundle "$BUNDLE_PATH" --certificate-identity-regexp 'https://github\.com/[^/]+/[^/]+/\.github/workflows/release-workers\.yml@.*' --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' "$GOLDEN_PATH" >/dev/null
-rm -f "$BUNDLE_PATH"; chmod 0444 "$GOLDEN_PATH"; pass 'Hashes, release signature, and broker metadata verified'; write_state download_verified complete
+chmod 0444 "$GOLDEN_PATH"; pass 'Hashes and broker metadata verified'; write_state download_verified complete
 
 stage 'Writing broker configuration' configuration
 mkdir -p "$GOLDEN_ROOT" "${MARS_CLONE_ROOT:-$CONFIG_DIR/clones}" "${MARS_CHANNEL_ROOT:-$CONFIG_DIR/channels}"

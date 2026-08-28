@@ -34,14 +34,23 @@ parse_args() {
   PUBLIC_BASE_URL="$CONTROL_PLANE_URL"
 }
 parse_args "$@"
-:
-
-: "${PUBLIC_BASE_URL:?installer origin missing}"
-: "${MARS_ORCHESTRATOR_SHA256:?set orchestrator SHA-256}"
-: "${TART_IMAGE:?TART_IMAGE is required}"
-: "${TART_IMAGE_DIGEST:?TART_IMAGE_DIGEST is required}"
-[[ "$MARS_ORCHESTRATOR_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo 'MARS_ORCHESTRATOR_SHA256 must be a lowercase SHA-256 value' >&2; exit 1; }
-[[ "$TART_IMAGE_DIGEST" =~ ^(sha256:)?[0-9a-f]{64}$ ]] || { echo 'TART_IMAGE_DIGEST must be a lowercase SHA-256 value' >&2; exit 1; }
+RELEASE_BASE_URL='https://github.com/Snazzie/Mars/releases/download/worker-v0.1.0'
+RELEASE_MANIFEST_URL="$RELEASE_BASE_URL/worker-release-manifest.json"
+load_release_metadata() {
+  if [[ -n "${MARS_ORCHESTRATOR_SHA256:-}" && -n "${TART_IMAGE:-}" && -n "${TART_IMAGE_DIGEST:-}" ]]; then
+    return
+  fi
+  local manifest_path
+  manifest_path="$(mktemp "${TMPDIR:-/tmp}/mars-worker-release.XXXXXX")"
+  trap 'rm -f "$manifest_path"; unset JOIN_CODE CONTROL_PLANE_URL_ARG' EXIT
+  curl --silent --show-error --fail --location --proto '=https' --tlsv1.2 --output "$manifest_path" "$RELEASE_MANIFEST_URL"
+  manifest_value() { /usr/bin/plutil -extract "$1" raw -o - "$manifest_path"; }
+  MARS_ORCHESTRATOR_SHA256="${MARS_ORCHESTRATOR_SHA256:-$(manifest_value 'platforms.macos-arm64.orchestratorSha256')}"
+  TART_IMAGE="${TART_IMAGE:-$(manifest_value 'platforms.macos-arm64.tartImage')}"
+  TART_IMAGE_DIGEST="${TART_IMAGE_DIGEST:-$(manifest_value 'platforms.macos-arm64.tartImageDigest')}"
+  rm -f "$manifest_path"
+  trap - EXIT
+}
 [[ "$EUID" -ne 0 ]] || { echo 'Run this installer as the logged-in user, not with sudo.' >&2; exit 1; }
 [[ "$(uname -s)" == Darwin ]] || { echo 'macOS is required' >&2; exit 1; }
 [[ "$(uname -m)" == arm64 ]] || { echo 'macOS 14+ arm64 is required' >&2; exit 1; }
@@ -52,6 +61,10 @@ elif [[ "$PUBLIC_BASE_URL" =~ ^http://(localhost|127\.0\.0\.1)(:[0-9]+)?(/|$) ]]
 else echo 'Control-plane URL must use HTTPS.' >&2; exit 1
 fi
 curl --silent --show-error --fail --max-time 20 --location "${CURL_SECURITY[@]}" "${PUBLIC_BASE_URL%/}/api/healthz" >/dev/null
+load_release_metadata
+[[ "$MARS_ORCHESTRATOR_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo 'MARS_ORCHESTRATOR_SHA256 must be a lowercase SHA-256 value' >&2; exit 1; }
+[[ "$TART_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo 'TART_IMAGE must be digest-pinned' >&2; exit 1; }
+[[ "$TART_IMAGE_DIGEST" =~ ^(sha256:)?[0-9a-f]{64}$ ]] || { echo 'TART_IMAGE_DIGEST must be a lowercase SHA-256 value' >&2; exit 1; }
 
 APP_DIR="$HOME/Library/Application Support/Mars"; STATE_FILE="$APP_DIR/install-state.json"; LOG_FILE="$APP_DIR/install.log"
 JOIN_CODE_FILE="$APP_DIR/join-code"; IDENTITY_FILE="$APP_DIR/worker-identity.json"; ORCHESTRATOR="$APP_DIR/mars-orchestrator"
