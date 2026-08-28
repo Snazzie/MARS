@@ -96,6 +96,9 @@ async function main(): Promise<void> {
 
   const baseUrl = `http://127.0.0.1:${proxy.port}`;
   try {
+    const gatewayError = await gateway.fetch(new Request(`${baseUrl}/api/v1/workers/connect`, { headers: { upgrade: "websocket" } }), upstream);
+    assert(gatewayError !== undefined && gatewayError.status === 400, "gateway rejected missing worker id");
+    assert(gatewayError.headers.get("cache-control") === "no-store", "gateway JSON errors disable caching");
     const setupResponse = await fetch(`${baseUrl}/api/setup/github-app`, { method: "POST", headers: { "content-type": "application/json", "idempotency-key": "smoke-manifest" }, body: JSON.stringify({ publicBaseUrl: providerOrigin }) });
     const setupResult = await setupResponse.json() as { manifest?: string; action?: string };
     assert(setupResponse.status === 200, `real setup route status is ${setupResponse.status}`); assert(setupCalls.length === 1 && setupCalls[0] === providerOrigin, "setup route reached the real control-plane setup object");

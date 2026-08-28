@@ -32,7 +32,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
   const workerConnectionEpochs = new Map<string, number>();
   let nextWorkerConnectionEpoch = 0;
 
-  const json = (data: unknown, status = 200) => Response.json(data, { status });
+  const json = (data: unknown, status = 200) => Response.json(data, { status, headers: { "cache-control": "no-store" } });
 
   async function replayBrowserInvalidations(ws: ServerWebSocket<ControlPlaneSocketData>): Promise<void> {
     if (ws.data.actor !== "browser" || replayingBrowserSockets.has(ws)) return;
