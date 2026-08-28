@@ -72,7 +72,7 @@ test("Unraid exposes origin, database, port, and persistent data inputs", async 
   expect(template).toContain("Target=\"PUBLIC_BASE_URL\"");
   expect(template).toContain("Target=\"CONTROL_PLANE_ADAPTER_URLS\"");
   expect(template).toContain("Default=\"https://control.example.com\"");
-  expect(template).toContain("Default=\"https://worker.example.com\"");
+  expect(template).toContain("Default=\"\"");
   expect(template).toContain("Public HTTPS");
   expect(template).toContain("worker-only");
   expect(template).toContain("app_master_key");
