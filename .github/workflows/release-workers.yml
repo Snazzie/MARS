@@ -1,0 +1,188 @@
+name: Release workers
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['worker-*']
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+env:
+  BUILD_ID: ${{ github.sha }}
+  CONTRACT_VERSION: 0.1.0
+
+jobs:
+  linux:
+    name: Build Linux x64 worker
+    runs-on: ubuntu-24.04
+    outputs:
+      metadata: ${{ steps.metadata.outputs.json }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.20
+      - name: Build Linux worker binaries
+        run: |
+          bun install --frozen-lockfile
+          mkdir -p dist/linux
+          bun build apps/orchestrator/src/index.ts --compile --target=bun-linux-x64 --outfile=dist/linux/mars-orchestrator
+          bun build apps/job-agent/src/index.ts --compile --target=bun-linux-x64 --outfile=dist/linux/mars-job-agent
+          cp deploy/workers/install-worker.sh deploy/workers/linux-broker-compose.yaml deploy/workers/worker-domain.xml dist/linux/
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@v3
+      - name: Publish digest-pinned Linux broker image
+        env:
+          BROKER_REPOSITORY: ${{ vars.MARS_LINUX_BROKER_REPOSITORY }}
+        run: |
+          test -n "$BROKER_REPOSITORY"
+          docker buildx build --push -f deploy/workers/linux-broker.Dockerfile -t "$BROKER_REPOSITORY:$BUILD_ID" .
+          brokerDigest="$(docker buildx imagetools inspect "$BROKER_REPOSITORY:$BUILD_ID" --format '{{.Manifest.Digest}}')"
+          case "$brokerDigest" in sha256:[0-9a-fA-F][0-9a-fA-F]*) ;; *) echo "broker image digest missing" >&2; exit 1 ;; esac
+          cosign sign --yes "$BROKER_REPOSITORY@$brokerDigest"
+          echo "BROKER_IMAGE=$BROKER_REPOSITORY@$brokerDigest" >> "$GITHUB_ENV"
+      - name: Prepare and sign Linux release artifacts
+        env:
+          GOLDEN_IMAGE_URL: ${{ vars.MARS_LINUX_GOLDEN_IMAGE_URL }}
+          GOLDEN_IMAGE_SHA256: ${{ vars.MARS_LINUX_GOLDEN_IMAGE_SHA256 }}
+          GOLDEN_COSIGN_BUNDLE_URL: ${{ vars.MARS_LINUX_GOLDEN_COSIGN_BUNDLE_URL }}
+        id: metadata
+        run: |
+          test -n "$GOLDEN_IMAGE_URL" -a -n "$GOLDEN_IMAGE_SHA256" -a -n "$GOLDEN_COSIGN_BUNDLE_URL" -a -n "$BROKER_IMAGE"
+          sha256sum dist/linux/mars-orchestrator | cut -d' ' -f1 > dist/linux/orchestrator.sha256
+          sha256sum dist/linux/linux-broker-compose.yaml | cut -d' ' -f1 > dist/linux/compose.sha256
+          sha256sum dist/linux/worker-domain.xml | cut -d' ' -f1 > dist/linux/domain.sha256
+          jq -cn --arg orchestratorSha256 "$(cat dist/linux/orchestrator.sha256)" --arg brokerImage "$BROKER_IMAGE" --arg goldenImageUrl "$GOLDEN_IMAGE_URL" --arg goldenImageSha256 "$GOLDEN_IMAGE_SHA256" --arg goldenCosignBundleUrl "$GOLDEN_COSIGN_BUNDLE_URL" --arg composeSha256 "$(cat dist/linux/compose.sha256)" --arg domainTemplateSha256 "$(cat dist/linux/domain.sha256)" '{orchestratorSha256:$orchestratorSha256,brokerImage:$brokerImage,goldenImageUrl:$goldenImageUrl,goldenImageSha256:$goldenImageSha256,goldenCosignBundleUrl:$goldenCosignBundleUrl,composeSha256:$composeSha256,domainTemplateSha256:$domainTemplateSha256}' > dist/linux/metadata.json
+          echo "json=$(cat dist/linux/metadata.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worker-linux-${{ github.sha }}
+          path: dist/linux
+
+  windows:
+    name: Build Windows x64 worker
+    runs-on: windows-2022
+    outputs:
+      metadata: ${{ steps.metadata.outputs.json }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.20
+      - name: Build Windows worker binaries
+        shell: pwsh
+        run: |
+          bun install --frozen-lockfile
+          New-Item -ItemType Directory -Force dist/windows | Out-Null
+          bun build apps/orchestrator/src/index.ts --compile --target=bun-windows-x64 --outfile=dist/windows/mars-orchestrator.exe
+          Copy-Item deploy/workers/install-worker.ps1,deploy/workers/build-windows-container-image-local.ps1,images/jobs/windows/verify-runtime.ps1,images/jobs/windows/Containerfile,images/jobs/windows/entrypoint.ps1 dist/windows
+          cargo build --manifest-path apps/windows-service-host/Cargo.toml --release --target x86_64-pc-windows-gnu
+          Copy-Item apps/windows-service-host/target/x86_64-pc-windows-gnu/release/mars-service-host.exe dist/windows/mars-service-host.exe
+      - name: Write Windows release metadata
+        id: metadata
+        shell: pwsh
+        env:
+          VM_TEMPLATE_URL: ${{ vars.MARS_WINDOWS_VM_TEMPLATE_URL }}
+          VM_TEMPLATE_SHA256: ${{ vars.MARS_WINDOWS_VM_TEMPLATE_SHA256 }}
+          BASE_IMAGE: ${{ vars.MARS_WINDOWS_CONTAINER_BASE_IMAGE }}
+          RUNNER_URL: ${{ vars.MARS_WINDOWS_RUNNER_URL }}
+          RUNNER_SHA256: ${{ vars.MARS_WINDOWS_RUNNER_SHA256 }}
+          GIT_URL: ${{ vars.MARS_WINDOWS_GIT_URL }}
+          GIT_SHA256: ${{ vars.MARS_WINDOWS_GIT_SHA256 }}
+          VC_URL: ${{ vars.MARS_WINDOWS_VC_RUNTIME_URL }}
+          VC_SHA256: ${{ vars.MARS_WINDOWS_VC_RUNTIME_SHA256 }}
+        run: |
+          $required = @($env:VM_TEMPLATE_URL,$env:VM_TEMPLATE_SHA256,$env:BASE_IMAGE,$env:RUNNER_URL,$env:RUNNER_SHA256,$env:GIT_URL,$env:GIT_SHA256,$env:VC_URL,$env:VC_SHA256)
+          if ($required | Where-Object { [string]::IsNullOrWhiteSpace($_) }) { throw 'Windows release asset metadata is incomplete' }
+          $orchestrator = (Get-FileHash dist/windows/mars-orchestrator.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $serviceHost = (Get-FileHash dist/windows/mars-service-host.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $metadata = [ordered]@{ orchestratorSha256=$orchestrator; serviceHostSha256=$serviceHost; vmTemplateUrl=$env:VM_TEMPLATE_URL; vmTemplateSha256=$env:VM_TEMPLATE_SHA256; container=[ordered]@{ baseImage=$env:BASE_IMAGE; runner=[ordered]@{url=$env:RUNNER_URL;sha256=$env:RUNNER_SHA256}; git=[ordered]@{url=$env:GIT_URL;sha256=$env:GIT_SHA256}; vcRuntime=[ordered]@{url=$env:VC_URL;sha256=$env:VC_SHA256} } }
+          $metadata | ConvertTo-Json -Depth 6 -Compress | Set-Content dist/windows/metadata.json
+          "json=$($metadata | ConvertTo-Json -Depth 6 -Compress)" | Out-File $env:GITHUB_OUTPUT -Append
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worker-windows-${{ github.sha }}
+          path: dist/windows
+
+  macos:
+    name: Build Apple Silicon macOS worker
+    runs-on: macos-14
+    outputs:
+      metadata: ${{ steps.metadata.outputs.json }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.20
+      - name: Build macOS worker binaries
+        run: |
+          bun install --frozen-lockfile
+          mkdir -p dist/macos
+          bun build apps/orchestrator/src/index.ts --compile --target=bun-darwin-arm64 --outfile=dist/macos/mars-orchestrator
+          cp deploy/workers/install-worker-macos.sh dist/macos/
+      - name: Write macOS release metadata
+        id: metadata
+        env:
+          TART_IMAGE: ${{ vars.MARS_MACOS_TART_IMAGE }}
+          TART_IMAGE_DIGEST: ${{ vars.MARS_MACOS_TART_IMAGE_DIGEST }}
+        run: |
+          test -n "$TART_IMAGE" -a -n "$TART_IMAGE_DIGEST"
+          orchestratorSha256="$(shasum -a 256 dist/macos/mars-orchestrator | cut -d' ' -f1)"
+          jq -cn --arg orchestratorSha256 "$orchestratorSha256" --arg tartImage "$TART_IMAGE" --arg tartImageDigest "$TART_IMAGE_DIGEST" '{orchestratorSha256:$orchestratorSha256,tartImage:$tartImage,tartImageDigest:$tartImageDigest}' > dist/macos/metadata.json
+          echo "json=$(cat dist/macos/metadata.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worker-macos-${{ github.sha }}
+          path: dist/macos
+
+  aggregate:
+    name: Sign and publish complete worker manifest
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.20
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: worker-*
+          path: dist
+          merge-multiple: false
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@v3
+      - name: Assemble and validate schema-2 manifest
+        run: |
+          linux=$(cat dist/worker-linux-${{ github.sha }}/metadata.json)
+          windows=$(cat dist/worker-windows-${{ github.sha }}/metadata.json)
+          macos=$(cat dist/worker-macos-${{ github.sha }}/metadata.json)
+          jq -n --arg buildId "$BUILD_ID" --arg contractVersion "$CONTRACT_VERSION" --argjson linux "$linux" --argjson windows "$windows" --argjson macos "$macos" '{schemaVersion:2,buildId:$buildId,contractVersion:$contractVersion,platforms:{"linux-x64":$linux,"windows-x64":$windows,"macos-arm64":$macos}}' > dist/worker-release-manifest.json
+          bun -e 'import { WorkerReleaseManifest } from "./packages/contracts/src/worker-release.ts"; WorkerReleaseManifest.parse(JSON.parse(await Bun.file("dist/worker-release-manifest.json").text()))'
+      - name: Sign release manifest
+        run: |
+          cosign sign-blob --yes --bundle dist/worker-release-manifest.json.bundle dist/worker-release-manifest.json
+      - name: Build control-plane image with the signed manifest
+        run: |
+          cp dist/worker-release-manifest.json deploy/control-plane/release-manifest.json
+          docker buildx build --push --build-arg MARS_BUILD_ID="$BUILD_ID" -f deploy/control-plane/Dockerfile -t ghcr.io/${{ github.repository }}/control-plane:worker-${{ github.sha }} .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worker-release-manifest-${{ github.sha }}
+          path: dist/worker-release-manifest.json*
+      - name: Publish complete worker release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" dist/worker-release-manifest.json dist/worker-release-manifest.json.bundle --generate-notes

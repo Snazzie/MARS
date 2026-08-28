@@ -42,6 +42,23 @@ start_control_plane() {
   wait_ready
 }
 
+assert_release_artifacts() {
+  for artifact in \
+    /app/release-manifest.json \
+    /app/workers/install-worker.sh \
+    /app/workers/install-worker.ps1 \
+    /app/workers/install-worker-macos.sh \
+    /app/workers/linux-broker-compose.yaml \
+    /app/workers/worker-domain.xml \
+    /app/workers/mars-orchestrator \
+    /app/workers/mars-orchestrator.exe \
+    /app/workers/mars-orchestrator-macos-arm64 \
+    /app/workers/mars-service-host.exe; do
+    docker exec "$CONTROL_PLANE" test -f "$artifact"
+  done
+  docker exec "$CONTROL_PLANE" bun -e 'const value=JSON.parse(await Bun.file("/app/release-manifest.json").text()); if(value.schemaVersion!==2 || !value.platforms || !("linux-x64" in value.platforms) || !("windows-x64" in value.platforms) || !("macos-arm64" in value.platforms)) process.exit(1)'
+}
+
 seed_history() {
   local database=$1
   local branch=$2
@@ -93,6 +110,7 @@ for attempt in {1..30}; do
 done
 
 start_control_plane mars
+assert_release_artifacts
 printf '%s' "$(curl --silent --show-error --fail -X POST http://127.0.0.1:3000/api/setup/github-app \
   -H 'Content-Type: application/json' -H 'Idempotency-Key: smoke-setup' \
   --data '{"publicBaseUrl":"http://127.0.0.1:3000"}')" \

@@ -28,6 +28,7 @@ import { GithubRateLimitGate } from "./github-rate-limit.ts";
 import { fileURLToPath } from "node:url";
 import { initializeControlPlaneSetup } from "./control-plane-setup.ts";
 import { httpOrigin } from "./http-origin.ts";
+import { loadWorkerReleaseManifest } from "./worker-release.ts";
 const required = (name: string): string => { const value = Bun.env[name]; if (!value) throw new Error(`${name} is required`); return value; };
 const dataRoot = Bun.env.DATA_ROOT?.trim() || "/var/lib/mars";
 const configuredPublicOriginRaw = Bun.env.PUBLIC_BASE_URL?.trim() || undefined;
@@ -63,14 +64,22 @@ const loadWindowsContainerArtifacts = (): ControlPlaneHttpDeps["windowsContainer
 };
 const windowsContainerArtifacts = loadWindowsContainerArtifacts();
 const windowsContainerBuild: ControlPlaneHttpDeps["windowsContainerBuild"] = undefined;
+const workerReleaseManifest = await loadWorkerReleaseManifest();
 if (production) {
   const requiredReleaseArtifacts = {
     webIndex: new URL("index.html", webRoot),
     webScript: new URL("index.js", webRoot),
     webStyles: new URL("index.css", webRoot),
+    releaseManifest: Bun.env.WORKER_RELEASE_MANIFEST?.trim() || "/app/release-manifest.json",
+    linuxInstaller: new URL("install-worker.sh", workerInstallerRoot),
     windowsInstaller: new URL("install-worker.ps1", workerInstallerRoot),
+    macosInstaller: new URL("install-worker-macos.sh", workerInstallerRoot),
+    linuxCompose: new URL("linux-broker-compose.yaml", workerInstallerRoot),
+    linuxDomainTemplate: new URL("worker-domain.xml", workerInstallerRoot),
+    linuxOrchestrator: workerOrchestratorExecutables["linux-x64"],
     windowsServiceHost: workerServiceHostExecutable,
     windowsOrchestrator: workerOrchestratorExecutables["windows-x64"],
+    macosOrchestrator: workerOrchestratorExecutables["macos-arm64"],
   };
   for (const [name, artifact] of Object.entries(requiredReleaseArtifacts)) {
     if (!artifact || !await Bun.file(artifact).exists()) throw new Error(`release artifact is unavailable: ${name}`);

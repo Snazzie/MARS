@@ -27,7 +27,7 @@ jobs:
       - name: Build immutable control-plane image
         run: docker buildx build --load --build-arg MARS_BUILD_ID=ci -f deploy/control-plane/Dockerfile -t mars-control-plane:ci .
       - name: Verify release artifact set
-        run: docker run --rm --entrypoint /bin/sh mars-control-plane:ci -c 'test -f /app/index.js && test -f /app/web/index.html && test -f /app/web/index.js && test -f /app/web/index.css && test -f /app/migrations/0000_legacy_baseline.sql && test -f /app/migrations/meta/_journal.json && test -f /app/workers/install-worker.ps1 && test -f /app/workers/mars-orchestrator.exe && test -f /app/workers/mars-service-host.exe'
+        run: docker run --rm --entrypoint /bin/sh mars-control-plane:ci -c 'test -f /app/index.js && test -f /app/web/index.html && test -f /app/web/index.js && test -f /app/web/index.css && test -f /app/migrations/0000_legacy_baseline.sql && test -f /app/migrations/meta/_journal.json && test -f /app/release-manifest.json && test -f /app/workers/install-worker.sh && test -f /app/workers/install-worker.ps1 && test -f /app/workers/install-worker-macos.sh && test -f /app/workers/linux-broker-compose.yaml && test -f /app/workers/worker-domain.xml && test -f /app/workers/mars-orchestrator && test -f /app/workers/mars-orchestrator.exe && test -f /app/workers/mars-orchestrator-macos-arm64 && test -f /app/workers/mars-service-host.exe'
       - name: Smoke test control-plane startup
         env:
           IMAGE: mars-control-plane:ci

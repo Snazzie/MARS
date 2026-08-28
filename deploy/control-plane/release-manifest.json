@@ -1,4 +1,10 @@
 {
-  "schemaVersion": 1,
-  "windowsContainerBuild": null
+  "schemaVersion": 2,
+  "buildId": "development",
+  "contractVersion": "0.1.0",
+  "platforms": {
+    "linux-x64": null,
+    "windows-x64": null,
+    "macos-arm64": null
+  }
 }

@@ -46,3 +46,36 @@ test("deployment guide documents first-run persistence and incomplete worker gat
   const readme = await read("deploy/control-plane/README.md");
   for (const phrase of ["DATABASE_URL", "/onboarding", "/api/livez", "/api/readyz", "WebSocket", "Cloudflare Tunnel", "CLOUDFLARE_TUNNEL_TOKEN", "/api/github/webhooks", "back up", "linux/amd64", "worker execution"]) expect(readme).toContain(phrase);
 });
+
+test("schema-2 release fixture keeps unavailable platforms explicit", async () => {
+  const manifest = JSON.parse(await read("deploy/control-plane/release-manifest.json"));
+  expect(manifest).toMatchObject({
+    schemaVersion: 2,
+    platforms: { "linux-x64": null, "windows-x64": null, "macos-arm64": null },
+  });
+  expect(manifest).not.toHaveProperty("windowsContainerBuild");
+});
+
+test("control-plane image packages every platform's small worker artifact", async () => {
+  const dockerfile = await read("deploy/control-plane/Dockerfile");
+  for (const artifact of [
+    "install-worker.sh", "install-worker.ps1", "install-worker-macos.sh",
+    "linux-broker-compose.yaml", "worker-domain.xml",
+    "mars-orchestrator-linux-x64", "mars-orchestrator-windows-x64.exe",
+    "mars-orchestrator-macos-arm64", "mars-service-host.exe",
+    "release-manifest.json",
+  ]) expect(dockerfile).toContain(artifact);
+  expect(dockerfile).toContain("--target=bun-linux-x64");
+  expect(dockerfile).toContain("--target=bun-windows-x64");
+  expect(dockerfile).toContain("--target=bun-darwin-arm64");
+});
+
+test("worker release workflow gates aggregate publication on all platforms", async () => {
+  const workflow = await read(".github/workflows/release-workers.yml");
+  expect(workflow).toContain("tags: ['worker-*']");
+  expect(workflow).toContain("needs: [linux, windows, macos]");
+  expect(workflow).toContain("schemaVersion:2");
+  expect(workflow).toContain("cosign sign-blob");
+  expect(workflow).toContain("worker-release-manifest.json");
+  expect(workflow).not.toContain("windows-worker-*");
+});
