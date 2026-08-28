@@ -28,6 +28,15 @@ test("creates a missing database through the postgres maintenance database", asy
   expect(connection?.unsafeStatements).toEqual(['CREATE DATABASE "mars"']);
   expect(connection?.ended).toBe(true);
 });
+test("creates a missing database with a hyphenated identifier", async () => {
+  let connection: FakeSql | undefined;
+  await ensureDatabase("postgresql://alice:secret@example.test/mars-prod", {
+    connect: url => connection = fakeDatabase([], url),
+  });
+
+  expect(connection?.unsafeStatements).toEqual(['CREATE DATABASE "mars-prod"']);
+  expect(connection?.ended).toBe(true);
+});
 
 test("treats an existing database as a successful no-op", async () => {
   let connection: FakeSql | undefined;

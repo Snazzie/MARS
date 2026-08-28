@@ -46,7 +46,7 @@ function databaseNameFromUrl(databaseUrl: string): { name: string; maintenanceUr
   } catch (error) {
     throw new Error("DATABASE_URL contains an invalid database identifier", { cause: error });
   }
-  if (!/^[A-Za-z_][A-Za-z0-9_$]{0,62}$/.test(name)) {
+  if (!/^[A-Za-z_][A-Za-z0-9_$-]{0,62}$/.test(name)) {
     throw new Error("DATABASE_URL contains an invalid database identifier");
   }
   url.pathname = "/postgres";
