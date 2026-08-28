@@ -51,4 +51,5 @@ jobs:
       - name: Validate Compose interpolation
         env:
           DATABASE_URL: postgres://mars:ci@db.example:5432/mars
+          PUBLIC_BASE_URL: https://control.example.test
         run: docker compose -f deploy/control-plane/compose.yaml config -q

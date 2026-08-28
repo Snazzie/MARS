@@ -36,6 +36,7 @@ start_control_plane() {
   docker rm -f "$CONTROL_PLANE" >/dev/null 2>&1 || true
   docker run -d --name "$CONTROL_PLANE" --network "$NETWORK" \
     -e DATABASE_URL="postgres://mars:ci-only@${POSTGRES}:5432/$1" \
+    -e PUBLIC_BASE_URL="http://127.0.0.1:3000" \
     -v "$DATA_VOLUME":/var/lib/mars \
     -p 127.0.0.1:3000:3000 \
     "$IMAGE" >/dev/null
