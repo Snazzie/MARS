@@ -1,7 +1,7 @@
 import type { DatabaseClient } from "@mars/db";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 
-type CleanupLease = { leaseId: string; workerId: string; nonce: string; cleanupType?: "linux-container.stop_lease" | "tart.stop_lease" | "windows-container.stop_lease" | "hyperv.stop_lease" };
+type CleanupLease = { leaseId: string; workerId: string; nonce: string; cleanupType?: "linux-vm.stop_lease" | "tart.stop_lease" | "windows-container.stop_lease" | "hyperv.stop_lease" };
 export type LeaseCleanupReport = { dispatched: number; skipped: number; failed: number };
 
 export async function reapPendingLeases(input: {
@@ -12,13 +12,13 @@ export async function reapPendingLeases(input: {
   const leases = await input.db<CleanupLease[]>`SELECT l.id AS "leaseId", l.worker_id AS "workerId", l.nonce,
       COALESCE((
         SELECT CASE
-          WHEN c.type='linux-container.create_lease' THEN 'linux-container.stop_lease'
+          WHEN c.type='linux-vm.create_lease' THEN 'linux-vm.stop_lease'
           WHEN c.type='windows-container.create_lease' THEN 'windows-container.stop_lease'
           WHEN c.type='hyperv.create_lease' THEN 'hyperv.stop_lease'
           WHEN c.type='tart.create_lease' THEN 'tart.stop_lease'
         END
         FROM commands c
-        WHERE c.lease_id=l.id AND c.type IN ('linux-container.create_lease','windows-container.create_lease','hyperv.create_lease','tart.create_lease')
+        WHERE c.lease_id=l.id AND c.type IN ('linux-vm.create_lease','windows-container.create_lease','hyperv.create_lease','tart.create_lease')
         ORDER BY c.occurred_at ASC LIMIT 1
       )) AS "cleanupType"
     FROM runner_leases l
@@ -26,7 +26,7 @@ export async function reapPendingLeases(input: {
       AND l.cleanup_state IN ('pending','failed')
       AND NOT EXISTS (
         SELECT 1 FROM commands c
-        WHERE c.lease_id=l.id AND c.type IN ('linux-container.stop_lease','tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease')
+        WHERE c.lease_id=l.id AND c.type IN ('linux-vm.stop_lease','tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease')
           AND (c.state='pending' OR (c.state='sent' AND c.occurred_at>now()-interval '1 minute'))
       )
     LIMIT 100`;

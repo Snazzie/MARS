@@ -43,12 +43,15 @@ export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate[
   const doctorRecord = doctor && typeof doctor === "object" ? doctor as Record<string, unknown> : {};
   const driver = String(row.driver ?? "");
   const poolDigest = String(row.imageDigest ?? row.image_digest ?? "");
-  const linuxEvidenceReady = driver !== "linux-container" || (
+  const linuxEvidenceReady = driver !== "linux-libvirt-vm" || (
     doctorRecord.runtimeReady === true &&
-    doctorRecord.probe === true &&
-    doctorRecord.egress === true &&
+    doctorRecord.libvirtReady === true &&
+    doctorRecord.networkReady === true &&
+    doctorRecord.cloneStorageReady === true &&
     doctorRecord.imageSignatures === true &&
-    doctorRecord.artifactDigest === poolDigest
+    doctorRecord.realVmSmoke === true &&
+    doctorRecord.artifactDigest === poolDigest &&
+    doctorRecord.smokeArtifactDigest === poolDigest
   );
   return {
     id: String(row.workerId ?? row.worker_id ?? ""),

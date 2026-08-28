@@ -9,7 +9,7 @@ export type WorkerGuestPlatforms = z.infer<typeof WorkerGuestPlatforms>;
 export function validateWorkerGuestPlatforms(hostPlatform: RuntimePlatform, guestPlatforms: WorkerGuestPlatforms): boolean {
   return guestPlatforms.length === 1 && guestPlatforms[0] === hostPlatform;
 }
-export const RuntimeDriverName = z.enum(["linux-container", "windows-hyperv", "windows-hyperv-container", "tart-vm"]);
+export const RuntimeDriverName = z.enum(["linux-libvirt-vm", "windows-hyperv", "windows-hyperv-container", "tart-vm"]);
 const diagnosticSecretAssignment = /((?:^|[\s"'`([{;,&])(?:--)?[A-Za-z_$][A-Za-z0-9_$.-]*)(\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s"'`,;)\]}]+)/g;
 const diagnosticSecretKey = /(?:^|[._:-])(?:password|passwd|passphrase|secret|token|credential|credentials|private[-_.]?key|access[-_.]?key|auth[-_.]?token|refresh[-_.]?token|client[-_.]?secret|api[-_.]?key)(?:$|[._:-])/i;
 export function sanitizeDiagnosticText(input: string, maxLength = 128 * 1024): string {
