@@ -6,7 +6,7 @@ const fakeSetup: ControlPlaneHttpDeps["setup"] = {
   publicOrigin: () => "https://control-plane.test",
   publicOriginManaged: () => false,
   configure: async origin => origin,
-  claimAdmin: async () => "admin",
+  authenticate: async () => ({ userId: "admin", firstAdmin: true }),
 };
 
 type TestOverrides = Partial<ControlPlaneHttpDeps> & Partial<{ baseUrl: string; browserBaseUrl: string; githubWebhookSecret: string }>;

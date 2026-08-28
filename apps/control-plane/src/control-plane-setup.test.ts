@@ -75,3 +75,41 @@ test("caches the normalized DB-managed origin only after a guarded update return
   await expect(setup.configure("https://candidate.example/")).resolves.toBe("https://candidate.example");
   expect(setup.publicOrigin()).toBe("https://candidate.example");
 });
+test("claims first administration during authentication under the setup lock", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-setup-auth-"));
+  const queries: string[] = [];
+  const db = Object.assign((async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ").toLowerCase();
+    queries.push(query);
+    if (query.includes("select public_base_url")) return [{ publicBaseUrl: null, setupCompletedAt: null }];
+    if (query.includes("select setup_completed_at")) return [{ setupCompletedAt: null }];
+    if (query.includes("insert into users")) return [{ id: "user-1" }];
+    if (query.includes("select admin_user_id")) return [{ adminUserId: null }];
+    return [];
+  }) as never, {
+    begin: async (callback: (tx: never) => Promise<unknown>) => callback(db),
+  });
+  const { setup } = await initializeControlPlaneSetup(db, root);
+  await expect(setup.authenticate({ id: 7, login: "first-admin" })).resolves.toEqual({ userId: "user-1", firstAdmin: true });
+  expect(queries.some((query) => query.includes("update users set is_global_admin=true"))).toBe(true);
+  expect(queries.some((query) => query.includes("update control_plane_config set setup_completed_at"))).toBe(true);
+});
+
+test("upserts a returning GitHub user without granting administration after setup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-setup-returning-"));
+  const queries: string[] = [];
+  const db = Object.assign((async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ").toLowerCase();
+    queries.push(query);
+    if (query.includes("select public_base_url")) return [{ publicBaseUrl: "https://control.example", setupCompletedAt: new Date() }];
+    if (query.includes("select setup_completed_at")) return [{ setupCompletedAt: new Date() }];
+    if (query.includes("insert into users")) return [{ id: "user-2" }];
+    return [];
+  }) as never, {
+    begin: async (callback: (tx: unknown) => Promise<unknown>) => callback(db),
+  });
+  const { setup } = await initializeControlPlaneSetup(db, root);
+  await expect(setup.authenticate({ id: 8, login: "returning-user" })).resolves.toEqual({ userId: "user-2", firstAdmin: false });
+  expect(queries.some((query) => query.includes("update users set is_global_admin=true"))).toBe(false);
+  expect(queries.some((query) => query.includes("update system_onboarding"))).toBe(false);
+});

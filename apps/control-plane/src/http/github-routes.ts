@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { ControlPlaneSetupRequest } from "@mars/contracts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { readBody, validSignature, acceptDelivery, completeDelivery, failDelivery } from "../webhook.ts";
 import { applyWorkflowJobWebhook, type WorkflowJobPayload } from "../runs.ts";
@@ -13,12 +14,37 @@ export function registerGithubRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   app.post("/api/setup/github-app", async (c) => {
     const key = c.req.header("Idempotency-Key");
     if (!key) return c.json({ code: "idempotency_required" }, 400);
-    const body = await c.req.json().catch(() => null) as { publicBaseUrl?: string } | null;
-    if (!body?.publicBaseUrl) return c.json({ code: "invalid_request" }, 400);
+    const parsed = ControlPlaneSetupRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ code: "invalid_request" }, 400);
     if (!deps.githubApp) return c.json({ code: "setup_required", message: "Complete first-run setup" }, 503);
-    const origin = await deps.setup.configure(body.publicBaseUrl);
-    const result = await deps.githubApp.createManifestLaunch("setup", "setup", key);
-    return c.json(result);
+    try {
+      await deps.setup.configure(parsed.data.publicBaseUrl);
+      return c.json(await deps.githubApp.createManifestLaunch("setup", "setup", key));
+    } catch (cause) {
+      if (cause instanceof Error && cause.message === "configured_origin_mismatch") return c.json({ code: "configured_origin_mismatch" }, 400);
+      if (cause instanceof Error && cause.message.startsWith("PUBLIC_BASE_URL must be")) return c.json({ code: "invalid_origin", message: cause.message }, 400);
+      const setupCode = setupFailure(cause);
+      if (setupCode) return c.json({ code: setupCode }, 409);
+      throw cause;
+    }
+  });
+
+  app.post("/api/github/app/manifest", async (c) => {
+    const user = await deps.currentUser(c.req.raw);
+    if (!user) return c.json({ code: "unauthorized" }, 401);
+    if (!user.isGlobalAdmin) return c.json({ code: "forbidden" }, 403);
+    const key = c.req.header("Idempotency-Key");
+    if (!key) return c.json({ code: "idempotency_required" }, 400);
+    const body = await c.req.json().catch(() => null) as { organizationId?: unknown } | null;
+    if (!body || typeof body.organizationId !== "string" || !body.organizationId) return c.json({ code: "invalid_request" }, 400);
+    if (!deps.githubApp) return c.json({ code: "setup_required", message: "Complete first-run setup" }, 503);
+    try {
+      return c.json(await deps.githubApp.createManifestLaunch(user.id, body.organizationId, key));
+    } catch (cause) {
+      const setupCode = setupFailure(cause);
+      if (setupCode) return c.json({ code: setupCode }, 409);
+      throw cause;
+    }
   });
 
   app.get("/api/github/app/manifest/callback", async (c) => {

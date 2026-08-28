@@ -40,7 +40,7 @@ export type ControlPlaneSetup = {
   publicOrigin(): string | null;
   publicOriginManaged(): boolean;
   configure(candidateOrigin: string): Promise<string>;
-  claimAdmin(githubUser: { id: number; login: string }): Promise<string>;
+  authenticate(githubUser: { id: number; login: string }): Promise<{ userId: string; firstAdmin: boolean }>;
 };
 type ConfigRow = { publicBaseUrl: string | null; setupCompletedAt: Date | string | null };
 async function readConfig(db: DashboardDb): Promise<ConfigRow | null> {
@@ -71,21 +71,23 @@ export async function initializeControlPlaneSetup(db: DashboardDb, dataRoot: str
       config = { ...config!, publicBaseUrl: persisted ?? origin };
       return persisted ?? origin;
     },
-    claimAdmin: async githubUser => {
+    authenticate: async githubUser => {
       const result = await db.begin(async (tx: TransactionSql) => {
         await tx`select pg_advisory_xact_lock(hashtext(${SETUP_LOCK}))`;
         const rows = await tx<Array<{ setupCompletedAt: Date | string | null }>>`select setup_completed_at as "setupCompletedAt" from control_plane_config where singleton=true for update`;
-        if (!rows[0] || rows[0].setupCompletedAt) throw new Error("setup_state_expired");
+        if (!rows[0]) throw new Error("setup_state_expired");
         const users = await tx<Array<{ id: string }>>`insert into users (github_user_id, login) values (${githubUser.id}, ${githubUser.login}) on conflict (github_user_id) do update set login=excluded.login returning id`;
-        const user = users[0]; if (!user) throw new Error("setup_admin_failed");
+        const user = users[0]; if (!user) throw new Error("setup_authenticate_failed");
+        if (rows[0].setupCompletedAt) return { userId: user.id, firstAdmin: false };
         const existing = await tx<Array<{ adminUserId: string | null }>>`select admin_user_id as "adminUserId" from system_onboarding where singleton=true for update`;
         if (existing[0]?.adminUserId && existing[0].adminUserId !== user.id) throw new Error("setup_admin_conflict");
         await tx`update users set is_global_admin=true where id=${user.id}`;
         await tx`update system_onboarding set admin_user_id=${user.id} where singleton=true and (admin_user_id is null or admin_user_id=${user.id})`;
         await tx`update control_plane_config set setup_completed_at=now(), updated_at=now() where singleton=true`;
-        return user.id;
+        return { userId: user.id, firstAdmin: true };
       });
-      config = { ...config!, setupCompletedAt: new Date() }; return result;
+      config = { ...config!, setupCompletedAt: result.firstAdmin ? new Date() : config?.setupCompletedAt ?? null };
+      return result;
     },
   };
   return { setup, masterKey };

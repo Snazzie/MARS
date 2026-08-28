@@ -34,7 +34,7 @@ describe("control-plane HTTP boundary", () => {
     }) as never;
     const response = await createControlPlaneApp(fakeHttpDeps({
       db,
-      setup: { publicOrigin: () => "https://control.example.com", publicOriginManaged: () => true, configure: async origin => origin, claimAdmin: async () => "admin" },
+      setup: { publicOrigin: () => "https://control.example.com", publicOriginManaged: () => true, configure: async origin => origin, authenticate: async () => ({ userId: "admin", firstAdmin: true }) },
     })).request("/api/onboarding/status");
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ publicBaseUrl: "https://control.example.com", publicBaseUrlManaged: true, step: "setup" });
@@ -267,13 +267,80 @@ describe("control-plane HTTP boundary", () => {
     }
   });
 });
-  test("requires an idempotency key for GitHub App manifest launch", async () => {
+  test("requires authentication for GitHub App manifest launch", async () => {
     const response = await createControlPlaneApp(fakeHttpDeps()).request("/api/github/app/manifest", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ organizationId: crypto.randomUUID() }),
     });
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(401);
+  });
+
+  test("launches GitHub App manifest for a global admin", async () => {
+    const calls: Array<{ userId: string; organizationId: string; idempotencyKey: string }> = [];
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      currentUser: async () => ({ id: "admin", githubUserId: 7, login: "admin", isGlobalAdmin: true }),
+      githubApp: {
+        createManifestLaunch: async (userId: string, organizationId: string, idempotencyKey: string) => {
+          calls.push({ userId, organizationId, idempotencyKey });
+          return { action: "https://github.com/settings/apps/new?state=test", manifest: "{\"name\":\"mars\"}" };
+        },
+      } as never,
+    })).request("/api/github/app/manifest", {
+      method: "POST",
+      headers: { "content-type": "application/json", "Idempotency-Key": "manifest-test" },
+      body: JSON.stringify({ organizationId: "11111111-1111-4111-8111-111111111111" }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ action: "https://github.com/settings/apps/new?state=test", manifest: "{\"name\":\"mars\"}" });
+    expect(calls).toEqual([{ userId: "admin", organizationId: "11111111-1111-4111-8111-111111111111", idempotencyKey: "manifest-test" }]);
+  });
+  test("rejects malformed setup origins before launching a manifest", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      setup: {
+        ...fakeHttpDeps().setup,
+        configure: async () => { throw new Error("PUBLIC_BASE_URL must be an absolute HTTP(S) origin"); },
+      },
+      githubApp: { createManifestLaunch: async () => ({ action: "unused", manifest: "{}" }) } as never,
+    })).request("/api/setup/github-app", {
+      method: "POST",
+      headers: { "content-type": "application/json", "Idempotency-Key": "setup-test" },
+      body: JSON.stringify({ publicBaseUrl: "ftp://unsafe.example" }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "invalid_origin" });
+  });
+
+  test("maps a completed setup race to setup_state_expired", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      setup: {
+        ...fakeHttpDeps().setup,
+        configure: async () => { throw new Error("setup_state_expired"); },
+      },
+      githubApp: { createManifestLaunch: async () => ({ action: "unused", manifest: "{}" }) } as never,
+    })).request("/api/setup/github-app", {
+      method: "POST",
+      headers: { "content-type": "application/json", "Idempotency-Key": "setup-race" },
+      body: JSON.stringify({ publicBaseUrl: "https://control-plane.test" }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ code: "setup_state_expired" });
+  });
+
+  test("maps an environment-managed origin mismatch to a bad request", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      setup: {
+        ...fakeHttpDeps().setup,
+        configure: async () => { throw new Error("configured_origin_mismatch"); },
+      },
+      githubApp: { createManifestLaunch: async () => ({ action: "unused", manifest: "{}" }) } as never,
+    })).request("/api/setup/github-app", {
+      method: "POST",
+      headers: { "content-type": "application/json", "Idempotency-Key": "setup-mismatch" },
+      body: JSON.stringify({ publicBaseUrl: "https://other.example" }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ code: "configured_origin_mismatch" });
   });
 
   test("requires an idempotency key for GitHub App installation launch", async () => {

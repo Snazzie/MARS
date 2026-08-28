@@ -69,6 +69,7 @@ describe("GitHub App onboarding", () => {
     expect(manifest.hook_attributes.url).toBe("https://control-plane.test/api/github/webhooks");
     expect(manifest.redirect_url).toBe("https://control-plane.test/api/github/app/manifest/callback");
     expect(manifest.setup_url).toBe("https://control-plane.test/api/github/app/setup");
+    expect(manifest.callback_urls).toEqual(["https://control-plane.test/api/auth/github/callback"]);
   });
 
   test("converts a manifest and persists only encrypted returned secrets", async () => {

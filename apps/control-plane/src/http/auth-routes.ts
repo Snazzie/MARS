@@ -56,12 +56,13 @@ export function registerAuthRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlan
     if (!row?.encrypted_pkce_verifier) return c.json({ error: "invalid oauth state" }, 400);
     const flow = { state, verifier: deps.secretBox.decrypt(row.encrypted_pkce_verifier), createdAt: Date.now() };
     const user = await exchangeOAuth(c.req.query("code") ?? "", flow, credentials.clientId, credentials.clientSecret, origin);
-    let userId: string;
-    try { userId = await deps.setup.claimAdmin(user); }
+    let authentication: { userId: string; firstAdmin: boolean };
+    try { authentication = await deps.setup.authenticate(user); }
     catch (error) {
       if (error instanceof Error && ["setup_state_expired", "setup_admin_conflict"].includes(error.message)) return c.json({ error: "forbidden" }, 403);
       throw error;
     }
+    const userId = authentication.userId;
     await syncGithubOrganizations(deps.db, userId, user.accessToken);
     await syncGithubPersonalWorkspace(deps.db, userId, user);
     const [onboarding] = await deps.db`SELECT completed_at FROM system_onboarding WHERE singleton=true`;
