@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { windowsInstallerValues } from "./http/worker-routes.ts";
 import { loadWorkerReleaseManifest } from "./worker-release.ts";
 
 const hash = "a".repeat(64);
@@ -30,7 +31,7 @@ test("loads a usable Windows release from local development artifacts", async ()
         vmTemplateUrl: "https://github.com/Snazzie/Mars/releases/latest/download/windows-worker.vhdx",
         vmTemplateSha256: hash,
         container: {
-          baseImage: `mcr.microsoft.com/windows/server@sha256:${hash}`,
+          baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}`,
           runner: { url: "https://downloads.example.test/runner.zip", sha256: hash },
           git: { url: "https://downloads.example.test/git.zip", sha256: hash },
           vcRuntime: { url: "https://downloads.example.test/vc.exe", sha256: hash },
@@ -42,9 +43,11 @@ test("loads a usable Windows release from local development artifacts", async ()
       serviceHostSha256: expect.any(String),
       orchestratorSha256: expect.any(String),
       vmTemplateUrl: "https://github.com/Snazzie/Mars/releases/latest/download/windows-worker.vhdx",
-      container: { baseImage: `mcr.microsoft.com/windows/server@sha256:${hash}` },
+      container: { baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}` },
     });
     expect(manifest.platforms["windows-x64"]?.orchestratorSha256).not.toBe(hash);
+    const values = windowsInstallerValues(manifest.platforms["windows-x64"]!, "http://localhost:3000");
+    expect(values.WindowsContainerBaseImage).toBe(`mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}`);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

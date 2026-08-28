@@ -135,7 +135,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
         vmTemplateUrl: Bun.env.MARS_WINDOWS_TEMPLATE_URL?.trim() || "https://github.com/Snazzie/Mars/releases/latest/download/windows-worker.vhdx",
         vmTemplateSha256: windowsTemplateSha256!,
         container: {
-          baseImage: windowsContainerConfig.baseImage!.replace(/:[^/@]+(?=@sha256:)/, ""),
+          baseImage: windowsContainerConfig.baseImage!,
           runner: { url: windowsContainerConfig.runnerUrl!, sha256: windowsContainerConfig.runnerSha256! },
           git: { url: windowsContainerConfig.gitUrl!, sha256: windowsContainerConfig.gitSha256! },
           vcRuntime: { url: windowsContainerConfig.vcUrl!, sha256: windowsContainerConfig.vcSha256! },

@@ -52,3 +52,21 @@ Result:
 The generated script contains the local control-plane Windows container-builder URL and no unresolved installer placeholders. It does not need to download the installer script or release manifest from GitHub; all required Windows container values are injected before the script is returned.
 
 A live restart of the repository server was not possible against the current database: the local `.env` webhook value includes `/api/github/webhooks`, while startup now correctly requires an origin, and the database is in the guarded non-final migration state. The old process on port 3000 consequently continued returning the original 503 and was not used as green evidence.
+
+## Review correction
+
+The local `.env` base image is intentionally a tag-plus-digest reference:
+`mcr.microsoft.com/windows/server:ltsc2025@sha256:...`. The local image builder
+requires that exact form, so development metadata now preserves the tag instead
+of stripping it. The OCI contract accepts the tag-plus-digest form while still
+requiring the immutable `@sha256:<64 lowercase hex>` suffix. The regression test
+asserts the tagged value survives through `windowsInstallerValues`.
+
+Post-correction focused result:
+
+`bun test apps/control-plane/src/worker-release.test.ts apps/control-plane/src/index.test.ts apps/control-plane/src/http/app.test.ts packages/contracts/src/worker-release.test.ts`
+
+Result: `64 pass, 0 fail, 140 expect() calls`.
+
+Control-plane typecheck still reports only the two pre-existing
+`packages/db/src/dashboard.ts:334` unknown-type diagnostics.
