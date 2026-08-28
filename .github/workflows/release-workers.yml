@@ -288,7 +288,7 @@ jobs:
           cosign sign-blob --yes --bundle dist/worker-release-manifest.json.bundle dist/worker-release-manifest.json
       - name: Build control-plane image with the signed manifest
         run: |
-          docker buildx build --push --build-arg MARS_BUILD_ID="$BUILD_ID" --build-arg MARS_RELEASE_MANIFEST=dist/worker-release-manifest.json -f deploy/control-plane/Dockerfile -t ghcr.io/${{ github.repository }}/control-plane:worker-${{ github.sha }} .
+          docker buildx build --push --build-arg MARS_BUILD_ID="$BUILD_ID" --build-arg MARS_RELEASE_MANIFEST=dist/worker-release-manifest.json --build-arg MARS_WINDOWS_SERVICE_HOST_ARTIFACT="dist/worker-windows-${{ github.sha }}/mars-service-host.exe" -f deploy/control-plane/Dockerfile -t ghcr.io/${{ github.repository }}/control-plane:worker-${{ github.sha }} .
       - uses: actions/upload-artifact@v4
         with:
           name: worker-release-manifest-${{ github.sha }}

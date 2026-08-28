@@ -132,6 +132,21 @@ test("control-plane image packages every platform's small worker artifact", asyn
   expect(dockerfile).toContain("--target=bun-windows-x64");
   expect(dockerfile).toContain("--target=bun-darwin-arm64");
 });
+test("control-plane image packages the exact Windows service-host release artifact", async () => {
+  const dockerfile = await read("deploy/control-plane/Dockerfile");
+  const workflow = await read(".github/workflows/release-workers.yml");
+  expect(dockerfile).toContain("ARG MARS_WINDOWS_SERVICE_HOST_ARTIFACT=");
+  expect(dockerfile).toContain("RUN --mount=type=bind,target=/release-context,readonly");
+  expect(dockerfile).toContain("MARS_WINDOWS_SERVICE_HOST_ARTIFACT is required");
+  expect(dockerfile).toContain("release artifact is unavailable: /release-context/$MARS_WINDOWS_SERVICE_HOST_ARTIFACT");
+  expect(dockerfile).toContain('cp "/release-context/$MARS_WINDOWS_SERVICE_HOST_ARTIFACT" /artifacts/mars-service-host.exe');
+  expect(dockerfile).toContain("COPY --from=build /artifacts/mars-service-host.exe /app/workers/mars-service-host.exe");
+  expect(dockerfile).not.toContain("FROM rust:");
+  expect(dockerfile).not.toContain("cargo build --manifest-path apps/windows-service-host/Cargo.toml");
+  expect(workflow).toContain('--build-arg MARS_WINDOWS_SERVICE_HOST_ARTIFACT="dist/worker-windows-${{ github.sha }}/mars-service-host.exe"');
+  expect(workflow).toContain("Get-FileHash dist/windows/mars-service-host.exe");
+  expect(workflow).toContain("path: dist/windows");
+});
 
 test("worker release workflow gates aggregate publication on all platforms", async () => {
   const workflow = await read(".github/workflows/release-workers.yml");
