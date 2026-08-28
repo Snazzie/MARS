@@ -1,8 +1,11 @@
 [CmdletBinding()]
 param(
-  [string]$ControlPlaneUrl = '__PUBLIC_BASE_URL__',
-  [Alias('Code')][string]$JoinCode = '__JOIN_CODE__',
+[string]$ControlPlaneUrl = '__PUBLIC_BASE_URL__',
+[Alias('Code')][string]$JoinCode = '__JOIN_CODE__',
+[string]$JoinCodeFile = 'C:\ProgramData\Mars\join-code',
   [ValidateSet('vm','container')][string]$WindowsRuntime = 'vm',
+[string]$WindowsOrchestratorSha256 = '__WINDOWS_ORCHESTRATOR_SHA256__',
+[string]$WindowsServiceHostSha256 = '__WINDOWS_SERVICE_HOST_SHA256__',
   [string]$WindowsTemplateUrl = '__WINDOWS_TEMPLATE_URL__',
   [string]$WindowsTemplatePath = '__WINDOWS_TEMPLATE_PATH__',
   [string]$WindowsTemplateDigest = '__WINDOWS_TEMPLATE_DIGEST__',
@@ -37,6 +40,44 @@ function Assert-HttpsUrl([string]$Url, [string]$Name) {
 }
 function Assert-StrictHttpsUrl([string]$Url, [string]$Name) {
   if ($Url -notmatch '^https://') { throw "$Name must use HTTPS." }
+}
+function Write-State([string]$Stage, [string]$Status) {
+  $statePath = 'C:\ProgramData\Mars\install-state.json'
+  New-Item -ItemType Directory -Force -Path (Split-Path $statePath) | Out-Null
+  [ordered]@{ stage = $Stage; status = $Status; updatedAt = [DateTime]::UtcNow.ToString('o') } |
+    ConvertTo-Json -Compress | Set-Content -LiteralPath $statePath -Encoding utf8
+}
+function Install-DockerDesktop {
+  if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) { throw 'winget is required to install Docker Desktop.' }
+    winget install --id Docker.DockerDesktop --exact --silent --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) { throw "Docker Desktop installation failed with exit code $LASTEXITCODE." }
+  }
+  $deadline = (Get-Date).AddMinutes(3)
+  while (-not (Get-Command docker.exe -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+  if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) { throw 'Docker Desktop did not install.' }
+}
+function Assert-HostPreflight {
+  $os = Get-CimInstance Win32_OperatingSystem
+  if ($os.Caption -notmatch '^Microsoft Windows 11 (Pro|Enterprise)') { throw 'Windows 11 Pro or Enterprise is required.' }
+  if ([int]$os.BuildNumber -lt 26100) { throw 'Windows 11 24H2 (build 26100 or newer) is required.' }
+  if (-not [Environment]::Is64BitOperatingSystem) { throw 'Windows x64 is required.' }
+  $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+  if (-not $cpu.VirtualizationFirmwareEnabled -or -not $cpu.SecondLevelAddressTranslationExtensions) { throw 'hardware virtualization is required.' }
+  $localHttp = $ControlPlaneUrl -match '^http://(localhost|127\.0\.0\.1)(:\d+)?$'
+  if ($ControlPlaneUrl -notmatch '^https://' -and -not $localHttp -and -not $AllowInsecureHttp) { throw 'Control-plane URL must use HTTPS.' }
+  Invoke-WebRequest -Uri "$ControlPlaneUrl/health" -Method Get -UseBasicParsing -TimeoutSec 30 | Out-Null
+  if ($JoinCode -notmatch '^__' -and $JoinCode -notmatch '^[A-Za-z0-9_-]{43}$' -and -not (Test-Path -LiteralPath $JoinCodeFile)) { throw 'Join code is not configured.' }
+}
+function Register-ResumeTask {
+  param([string]$ScriptPath)
+  $action = New-ScheduledTaskAction -Execute 'PowerShell.exe' -Argument "-NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -ControlPlaneUrl `"$ControlPlaneUrl`" -JoinCodeFile `"$JoinCodeFile`" -WindowsRuntime $WindowsRuntime"
+  $trigger = New-ScheduledTaskTrigger -AtStartup
+  $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+  Register-ScheduledTask -TaskName 'MarsWorkerInstallResume' -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+}
+function Remove-ResumeTask {
+  Unregister-ScheduledTask -TaskName 'MarsWorkerInstallResume' -Confirm:$false -ErrorAction SilentlyContinue
 }
 function Resolve-CachePort([string]$Name, [int]$DefaultPort) {
   $raw = [Environment]::GetEnvironmentVariable($Name)
@@ -165,33 +206,65 @@ function Ensure-WindowsContainerRuntime([string]$Image, [string]$Prefix) {
   }
 }
 function Ensure-ContainerFeatures {
-  $containers = Get-WindowsOptionalFeature -Online -FeatureName Containers -ErrorAction SilentlyContinue
-  if ($containers.State -ne 'Enabled') { throw 'Containers Windows feature must be enabled.' }
-  $hyperv = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -ErrorAction SilentlyContinue
-  if ($hyperv.State -ne 'Enabled') { throw 'Microsoft-Hyper-V-All must be enabled.' }
+  $restart = $false
+  $features = @('Microsoft-Hyper-V-All')
+  if ($WindowsRuntime -eq 'container') { $features += 'Containers' }
+  foreach ($featureName in $features) {
+    $feature = Get-WindowsOptionalFeature -Online -FeatureName $featureName -ErrorAction SilentlyContinue
+    if ($feature.State -ne 'Enabled') {
+      $result = Enable-WindowsOptionalFeature -Online -FeatureName $featureName -All -NoRestart
+      if ($result.RestartNeeded) { $restart = $true }
+    }
+  }
+  if ($restart) { return $true }
   if (-not (Get-VMHost -ErrorAction SilentlyContinue)) { throw 'Hyper-V host is unavailable.' }
+  return $false
 }
 function Ensure-ControlPlane {
   $localHttp = $ControlPlaneUrl -match '^http://(localhost|127\.0\.0\.1)(:\d+)?$'
   if ($ControlPlaneUrl -notmatch '^https://' -and -not $localHttp -and -not $AllowInsecureHttp) { throw 'Control-plane URL must use HTTPS.' }
-  Invoke-WebRequest -Uri $ControlPlaneUrl -Method Get -UseBasicParsing -TimeoutSec 30 | Out-Null
+  Invoke-WebRequest -Uri "$ControlPlaneUrl/health" -Method Get -UseBasicParsing -TimeoutSec 30 | Out-Null
 }
+function Verify-DownloadedFile([string]$Path, [string]$Expected, [string]$Name, $Response) {
+  if ($Expected -match '^__' -or $Expected -notmatch '^[0-9a-f]{64}$') { throw "$Name SHA-256 is not configured." }
+  $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+  if ($actual -ne $Expected.ToLowerInvariant()) { throw "$Name checksum mismatch: expected $Expected, got $actual" }
+  $responseHash = if ($Response -and $Response.Headers['X-Content-SHA256']) { [string]$Response.Headers['X-Content-SHA256'] } else { '' }
+  if ($responseHash -and $responseHash -ne $Expected) { throw "$Name response hash mismatch." }
+}
+
 Write-Host '[1/8] Checking administrator privileges'
 Require-Administrator
-Write-Host "[2/8] Checking Windows $WindowsRuntime runtime"
-if (-not [Environment]::Is64BitOperatingSystem) { throw 'Windows x64 is required.' }
+Write-Host '[2/8] Checking Windows 11 Pro/Enterprise 24H2 x64 host'
+Assert-HostPreflight
+$root = 'C:\ProgramData\Mars'; $bin = 'C:\Program Files\Mars'; $identityPath = Join-Path $root 'worker-identity.json'
+New-Item -ItemType Directory -Force -Path $root,$bin | Out-Null
+if ($JoinCode -match '^__' -and (Test-Path -LiteralPath $JoinCodeFile)) { $JoinCode = (Get-Content -LiteralPath $JoinCodeFile -Raw).Trim() }
+if (-not $Upgrade) {
+  $joinCodePath = $JoinCodeFile
+  if (-not (Test-Path -LiteralPath $joinCodePath)) {
+    [IO.File]::WriteAllText($joinCodePath, $JoinCode)
+    $joinCodeAcl = & icacls.exe $joinCodePath /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Failed to secure worker join credential: $($joinCodeAcl -join ' ')" }
+  }
+}
+Write-State 'preflight' 'complete'
+Write-Host "[3/8] Checking $WindowsRuntime runtime and installing prerequisites"
+if (Ensure-ContainerFeatures) {
+  Register-ResumeTask $PSCommandPath
+  Write-State 'reboot-required' 'pending'
+  Write-Host 'Windows features require a reboot; MarsWorkerInstallResume will continue automatically.'
+  Restart-Computer -Force
+  exit 0
+}
 if ($WindowsRuntime -eq 'container') {
-  Ensure-ContainerFeatures
   Assert-ImageDigest $WindowsContainerImage
   if ($Upgrade) {
     Write-Host 'Upgrade mode: preserving the worker-local runtime state.'
+    Assert-LocalImageManifest $windowsImageManifestPath $WindowsContainerImage | Out-Null
   } elseif ($AllowLocalContainerImage -and (Test-Path -LiteralPath $windowsImageManifestPath)) {
-    try {
-      Assert-LocalImageManifest $windowsImageManifestPath $WindowsContainerImage | Out-Null
-    } catch {
-      Write-Warning "Existing local Windows image state is stale; rebuilding $WindowsContainerImage."
-      Ensure-WindowsContainerRuntime $WindowsContainerImage $WindowsContainerPrefix
-    }
+    try { Assert-LocalImageManifest $windowsImageManifestPath $WindowsContainerImage | Out-Null }
+    catch { Write-Warning 'Existing local Windows image state is stale; rebuilding the verified image.'; Ensure-WindowsContainerRuntime $WindowsContainerImage $WindowsContainerPrefix }
   } else {
     Ensure-WindowsContainerRuntime $WindowsContainerImage $WindowsContainerPrefix
   }
@@ -200,31 +273,26 @@ if ($WindowsRuntime -eq 'container') {
   Download-Template
   Assert-Template $WindowsTemplatePath $WindowsTemplateDigest
 }
-Write-Host '[3/8] Checking control-plane connectivity'
+Write-State 'prerequisites' 'complete'
+Write-Host '[4/8] Checking control-plane connectivity'
 Ensure-ControlPlane
 if (-not $Upgrade -and $JoinCode -match '^__') { throw 'Join code is not configured.' }
-$root = 'C:\ProgramData\Mars'; $bin = 'C:\Program Files\Mars'; $identityPath = Join-Path $root 'worker-identity.json'
-Write-Host '[5/8] Preparing worker directories'
-New-Item -ItemType Directory -Force -Path $root,$bin | Out-Null
 $existingService = Get-Service MarsWorker -ErrorAction SilentlyContinue
 $existingInstall = $existingService -or (Test-Path -LiteralPath $identityPath)
 if ($Upgrade -and -not (Test-Path -LiteralPath $identityPath)) { throw 'Upgrade requires an existing worker identity.' }
-if ($existingInstall) { if ($Upgrade) { Write-Host 'Existing Windows worker installation detected; upgrading while preserving identity.' } else { Write-Host 'Existing Windows worker installation detected; reinstalling.' } }
+if ($existingInstall) { Write-Host 'Existing Windows worker installation detected; preserving identity and resuming checkpoints.' }
 if ($Upgrade -and -not $existingService) { Write-Warning 'MarsWorker service is missing; recreating it during upgrade.' }
-if (-not $Upgrade -and $existingInstall -and (Test-Path -LiteralPath $identityPath)) { Remove-Item -LiteralPath $identityPath -Force }
-$joinCodePath = Join-Path $root 'join-code'
-if (-not $Upgrade) {
-  [IO.File]::WriteAllText($joinCodePath, $JoinCode)
-  $joinCodeAcl = & icacls.exe $joinCodePath /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' 2>&1
-  if ($LASTEXITCODE -ne 0) { throw "Failed to secure worker join credential: $($joinCodeAcl -join ' ')" }
-}
+Write-Host '[5/8] Preparing worker directories'
 $exe = Join-Path $bin 'mars-orchestrator.exe'
 $serviceHost = Join-Path $bin 'mars-service-host.exe'
 $stagedExe = Join-Path $root 'mars-orchestrator.download'
 $stagedServiceHost = Join-Path $root 'mars-service-host.download'
 Write-Host '[6/8] Downloading Windows worker runtime and service host'
-Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/orchestrator?audience=windows-x64" -OutFile $stagedExe -TimeoutSec 120
-Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/service-host?audience=windows-x64" -OutFile $stagedServiceHost -TimeoutSec 120
+$orchestratorResponse = Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/orchestrator?audience=windows-x64" -OutFile $stagedExe -TimeoutSec 120
+$serviceHostResponse = Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/service-host?audience=windows-x64" -OutFile $stagedServiceHost -TimeoutSec 120
+Verify-DownloadedFile $stagedExe $WindowsOrchestratorSha256 'Windows orchestrator' $orchestratorResponse
+Verify-DownloadedFile $stagedServiceHost $WindowsServiceHostSha256 'Windows service host' $serviceHostResponse
+Write-State 'runtime-download' 'complete'
 if ($existingService) {
   Stop-Service MarsWorker -Force -ErrorAction SilentlyContinue
   $serviceDelete = & sc.exe delete MarsWorker 2>&1
@@ -239,10 +307,9 @@ Move-Item -LiteralPath $stagedServiceHost -Destination $serviceHost -Force
 $cacheProxyPort = Resolve-CachePort 'MARS_CACHE_PROXY_PORT' 8788
 $cacheDataPort = Resolve-CachePort 'MARS_CACHE_DATA_PORT' 8789
 $cacheFirewallPorts = @($cacheProxyPort, $cacheDataPort) | Sort-Object -Unique
-Get-NetFirewallRule -DisplayName 'Mars Worker Cache' -ErrorAction SilentlyContinue |
-  Remove-NetFirewallRule -ErrorAction Stop
-New-NetFirewallRule -DisplayName 'Mars Worker Cache' -Direction Inbound -Action Allow -Protocol TCP `
-  -LocalPort $cacheFirewallPorts -Program $exe -Profile Domain,Private -RemoteAddress LocalSubnet | Out-Null
+Get-NetFirewallRule -DisplayName 'Mars Worker Cache' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
+New-NetFirewallRule -DisplayName 'Mars Worker Cache' -Direction Inbound -Action Allow -Protocol TCP -LocalPort $cacheFirewallPorts -Program $exe -Profile Domain,Private -RemoteAddress LocalSubnet | Out-Null
+$joinCodePath = $JoinCodeFile
 $workerLogPath = Join-Path $root 'logs\worker.log'
 $previousWorkerLogPath = Join-Path $root 'logs\worker.previous.log'
 if (Test-Path -LiteralPath $workerLogPath) { Move-Item -LiteralPath $workerLogPath -Destination $previousWorkerLogPath -Force }
@@ -254,33 +321,18 @@ $serviceEnvironment = @(
   "MARS_JOIN_CODE_FILE=$joinCodePath"
   "MARS_WINDOWS_RUNTIME=$WindowsRuntime"
 )
-foreach ($name in @(
-  'MARS_ACTION_CACHE_ROOT',
-  'MARS_CACHE_PROXY_PORT',
-  'MARS_CACHE_DATA_PORT',
-  'MARS_CACHE_PROXY_URL',
-  'MARS_CACHE_ADVERTISE_URL'
-)) {
+foreach ($name in @('MARS_ACTION_CACHE_ROOT','MARS_CACHE_PROXY_PORT','MARS_CACHE_DATA_PORT','MARS_CACHE_PROXY_URL','MARS_CACHE_ADVERTISE_URL')) {
   $value = [Environment]::GetEnvironmentVariable($name)
   if (-not [string]::IsNullOrWhiteSpace($value)) { $serviceEnvironment += "$name=$value" }
 }
 if ($WindowsRuntime -eq 'container') {
-  $serviceEnvironment += "MARS_WINDOWS_CONTAINER_IMAGE=$WindowsContainerImage"
-  $serviceEnvironment += "MARS_WINDOWS_CONTAINER_PREFIX=$WindowsContainerPrefix"
-  $serviceEnvironment += "MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS=$WindowsContainerReadyTimeoutMs"
-  $serviceEnvironment += "MARS_WINDOWS_CONTAINER_JOB_TIMEOUT_MS=$WindowsContainerJobTimeoutMs"
-  $serviceEnvironment += "MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST=$windowsImageManifestPath"
-  if ($AllowLocalContainerImage -or $WindowsContainerImage -eq 'mars/windows-job:local') { $serviceEnvironment += "MARS_ALLOW_LOCAL_CONTAINER_IMAGE=true" }
-} else {
-  $serviceEnvironment += "MARS_WINDOWS_TEMPLATE_PATH=$WindowsTemplatePath"
-  $serviceEnvironment += "MARS_WINDOWS_TEMPLATE_DIGEST=$WindowsTemplateDigest"
-}
+  $serviceEnvironment += "MARS_WINDOWS_CONTAINER_IMAGE=$WindowsContainerImage"; $serviceEnvironment += "MARS_WINDOWS_CONTAINER_PREFIX=$WindowsContainerPrefix"; $serviceEnvironment += "MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS=$WindowsContainerReadyTimeoutMs"; $serviceEnvironment += "MARS_WINDOWS_CONTAINER_JOB_TIMEOUT_MS=$WindowsContainerJobTimeoutMs"; $serviceEnvironment += "MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST=$windowsImageManifestPath"
+  if ($AllowLocalContainerImage -or $WindowsContainerImage -eq 'mars/windows-job:local') { $serviceEnvironment += 'MARS_ALLOW_LOCAL_CONTAINER_IMAGE=true' }
+} else { $serviceEnvironment += "MARS_WINDOWS_TEMPLATE_PATH=$WindowsTemplatePath"; $serviceEnvironment += "MARS_WINDOWS_TEMPLATE_DIGEST=$WindowsTemplateDigest" }
 $serviceRegistryPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\MarsWorker'
 New-ItemProperty -Path $serviceRegistryPath -Name Environment -PropertyType MultiString -Value $serviceEnvironment -Force | Out-Null
 $serviceFailure = & sc.exe failure MarsWorker "reset= 86400" "actions= restart/5000/restart/30000/none/0" 2>&1
 if ($LASTEXITCODE -ne 0) { throw "Failed to configure MarsWorker recovery: $($serviceFailure -join ' ')" }
-Get-Service MarsWorker -ErrorAction Stop | Out-Null
-Write-Host '[8/8] Starting Mars worker service'
 try {
   Start-Service MarsWorker -ErrorAction Stop
   $service = Get-Service MarsWorker -ErrorAction Stop
@@ -291,17 +343,11 @@ try {
 } catch {
   $startupError = $_.Exception.Message
   $recoveryDeadline = (Get-Date).AddSeconds(15)
-  do {
-    Start-Sleep -Milliseconds 500
-    $currentService = Get-Service MarsWorker -ErrorAction SilentlyContinue
-  } while ($currentService -and $currentService.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running -and (Get-Date) -lt $recoveryDeadline)
-  if ($currentService -and $currentService.Status -eq [System.ServiceProcess.ServiceControllerStatus]::Running) {
-    Write-Warning "MarsWorker recovered after initial startup failure: $startupError"
-  } else {
-    $events = Get-WinEvent -FilterHashtable @{ LogName='System'; ProviderName='Service Control Manager'; StartTime=(Get-Date).AddMinutes(-5) } -ErrorAction SilentlyContinue |
-      Where-Object Message -Match 'MarsWorker' | Select-Object -First 5 | ForEach-Object { "[$($_.Id)] $($_.Message)" }
-    $workerLog = if (Test-Path -LiteralPath $workerLogPath) { (Get-Content -LiteralPath $workerLogPath -Tail 50 -ErrorAction SilentlyContinue) -join [Environment]::NewLine } else { 'Worker log not created.' }
-    throw "MarsWorker failed to reach Running.`nStartup error: $startupError`nSCM events:`n$($events -join [Environment]::NewLine)`nWorker log:`n$workerLog"
+  do { Start-Sleep -Milliseconds 500; $currentService = Get-Service MarsWorker -ErrorAction SilentlyContinue } while ($currentService -and $currentService.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running -and (Get-Date) -lt $recoveryDeadline)
+  if (-not $currentService -or $currentService.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running) {
+    throw "MarsWorker failed to reach Running. Startup error: $startupError"
   }
+  Write-Warning "MarsWorker recovered after initial startup failure: $startupError"
 }
-Write-Output "Windows $WindowsRuntime worker setup complete."
+Write-State 'complete' 'complete'
+Write-Output "Windows $WindowsRuntime worker setup complete; join-code remains until authenticated."

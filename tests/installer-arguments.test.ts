@@ -97,8 +97,8 @@ test("PowerShell installer supports VM and container runtime modes", async () =>
   expect(source).toContain("MARS_WINDOWS_RUNTIME");
   expect(source).toContain("MARS_WINDOWS_CONTAINER_IMAGE");
   expect(source).toContain("MARS_WINDOWS_TEMPLATE_PATH");
-  expect(source).toContain("Remove-Item -LiteralPath $identityPath -Force");
-  expect(source).toContain("Existing Windows worker installation detected; reinstalling.");
+  expect(source).not.toContain("Remove-Item -LiteralPath $identityPath -Force");
+  expect(source).toContain("preserving identity and resuming checkpoints");
   expect(source).toContain("Stop-Service MarsWorker");
   expect(source).toContain("New-Service -Name MarsWorker");
   expect(source).toContain("-StartupType Automatic");
@@ -284,4 +284,46 @@ test("Linux installer materializes and verifies remote worker assets before star
   expect(source).toContain("/var/lib/mars/install-state.json");
   expect(source).toContain("/var/log/mars/install.log");
   expect(source.indexOf("download_verified")).toBeLessThan(source.indexOf("docker compose"));
+});
+test("fresh-host installers gate supported host versions before mutation and persist checkpoints", async () => {
+  const [linuxSource, windowsSource, macSource] = await Promise.all([
+    Bun.file(linux).text(),
+    Bun.file(powershell).text(),
+    Bun.file(mac).text(),
+  ]);
+  expect(linuxSource).toContain("Ubuntu 24.04");
+  expect(linuxSource).toContain("sudo --preserve-env");
+  expect(linuxSource).toContain("apt-get install");
+  expect(linuxSource).toContain("systemctl enable --now libvirtd");
+  expect(linuxSource).toContain("virsh net-autostart default");
+  expect(linuxSource).toContain("install-state.json");
+  expect(linuxSource).toContain("join-code");
+  expect(windowsSource).toContain("Windows 11");
+  expect(windowsSource).toContain("24H2");
+  expect(windowsSource).toContain("Register-ScheduledTask");
+  expect(windowsSource).toContain("MarsWorkerInstallResume");
+  expect(windowsSource).toContain("Docker.DockerDesktop");
+  expect(windowsSource).toContain("install-state.json");
+  expect(macSource).toContain("sw_vers");
+  expect(macSource).toContain("brew install");
+  expect(macSource).toContain("tart clone");
+  expect(macSource).toContain("TART_IMAGE_DIGEST");
+  expect(macSource).toContain("install-state.json");
+});
+test("installer preflight runs before host mutation and preserves protected credentials", async () => {
+  const [linuxSource, windowsSource, macSource] = await Promise.all([
+    Bun.file(linux).text(),
+    Bun.file(powershell).text(),
+    Bun.file(mac).text(),
+  ]);
+  expect(linuxSource.indexOf("preflight\nCONFIG_DIR")).toBeLessThan(linuxSource.indexOf("apt-get update"));
+  expect(linuxSource.indexOf("preflight\nCONFIG_DIR")).toBeLessThan(linuxSource.indexOf("mkdir -p \"$CONFIG_DIR\""));
+  expect(linuxSource).toContain("if [[ ! -f \"$JOIN_CODE_FILE\" ]]");
+  expect(windowsSource.indexOf("Assert-HostPreflight\n$root")).toBeLessThan(windowsSource.indexOf("if (Ensure-ContainerFeatures)"));
+  expect(windowsSource.indexOf("Assert-HostPreflight")).toBeLessThan(windowsSource.indexOf("Enable-WindowsOptionalFeature"));
+  expect(windowsSource).toContain("Remove-ResumeTask");
+  expect(windowsSource).not.toContain("Remove-Item -LiteralPath $identityPath -Force");
+  expect(macSource.indexOf("sw_vers")).toBeLessThan(macSource.indexOf("brew install"));
+  expect(macSource).toContain("if [[ ! -f \"$JOIN_CODE_FILE\" ]]");
+  expect(macSource).not.toContain("rm -f \"$JOIN_CODE_FILE\"");
 });

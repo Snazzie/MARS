@@ -2,95 +2,91 @@
 set -euo pipefail
 umask 077
 
-usage() { echo "usage: $0" >&2; exit 2; }
+usage() { echo "usage: $0 --code ENROLLMENT_CODE" >&2; exit 2; }
 parse_args() {
   JOIN_CODE=""
-  if [ "$#" -eq 2 ] && [ "$1" = "--code" ]; then
-    JOIN_CODE="$2"
-  elif [ "$#" -eq 0 ] && [ -t 0 ]; then
-    read -r -s 'JOIN_CODE?Mars enrollment code: '; printf '\n' >&2
-  else
-    usage
+  if [[ $# -eq 2 && "$1" == "--code" ]]; then JOIN_CODE="$2"
+  elif [[ $# -eq 0 && -t 0 ]]; then read -r -s 'JOIN_CODE?Mars enrollment code: '; print >&2
+  else usage
   fi
   [[ "$JOIN_CODE" =~ ^[A-Za-z0-9_-]{43}$ ]] || usage
 }
 parse_args "$@"
 trap 'unset JOIN_CODE' EXIT
-CHECK=0
-check() { CHECK=$((CHECK + 1)); print "[$CHECK/8] $1"; }
-pass() { print "  [✓] $1"; }
-print 'Mars macOS worker enrollment'
 
-check 'Checking macOS host and Tart'
-[[ "$EUID" -ne 0 ]] || { echo 'Run this installer as the logged-in user, not with sudo.' >&2; exit 1; }
-[[ "$(uname -m)" == arm64 ]] || { echo 'macos-arm64 required' >&2; exit 1; }
-TART_BIN="$(command -v tart 2>/dev/null || true)"
-[[ -n "$TART_BIN" ]] || { echo 'Tart required' >&2; exit 1; }
-pass 'Apple Silicon and Tart detected'
-configure_tart_sudo() {
-  check 'Checking administrator permission for Tart'
-  if sudo -n "$TART_BIN" --version >/dev/null 2>&1; then
-    pass 'Tart administrator permission already configured'
-    return 0
-  fi
-  echo 'Administrator permission is required once to enable Tart networking.' >&2
-  sudo -v || { echo 'Administrator authorization was cancelled.' >&2; exit 1; }
-  local sudoers="/etc/sudoers.d/mars-tart-${USER}"
-  printf '%s ALL=(root) NOPASSWD: %s\n' "$USER" "$TART_BIN" | sudo tee "$sudoers" >/dev/null || {
-    echo 'Could not install the Tart administrator permission.' >&2
-    exit 1
-  }
-  sudo chmod 440 "$sudoers"
-  sudo visudo -cf "$sudoers" >/dev/null 2>&1 || {
-    sudo rm -f "$sudoers"
-    echo 'The Tart administrator permission failed validation.' >&2
-    exit 1
-  }
-  sudo -n "$TART_BIN" --version >/dev/null 2>&1 || {
-    echo 'Tart is not usable with the configured administrator permission.' >&2
-    exit 1
-  }
-  pass 'Tart administrator permission configured'
-}
-configure_tart_sudo
-check 'Validating control-plane URL'
 : "${PUBLIC_BASE_URL:?installer origin missing}"
-case "$PUBLIC_BASE_URL" in
-  http://*|https://*) CURL_SECURITY=(--proto "=${PUBLIC_BASE_URL%%:*}") ;;
-  *) echo 'Control-plane URL must use HTTP or HTTPS' >&2; exit 1 ;;
-esac
-pass 'Control-plane URL accepted'
-check 'Checking the pinned Tart image'
 : "${TART_IMAGE:?TART_IMAGE is required}"
 : "${TART_IMAGE_DIGEST:?TART_IMAGE_DIGEST is required}"
-IMAGE="$TART_IMAGE"
-tart list | grep -q "$IMAGE" || { echo "Tart image '$IMAGE' is missing for user $USER" >&2; exit 1; }
-pass "Tart image available: $IMAGE"
+[[ "$TART_IMAGE_DIGEST" =~ ^(sha256:)?[0-9a-f]{64}$ ]] || { echo 'TART_IMAGE_DIGEST must be a lowercase SHA-256 value' >&2; exit 1; }
+[[ "$EUID" -ne 0 ]] || { echo 'Run this installer as the logged-in user, not with sudo.' >&2; exit 1; }
+[[ "$(uname -s)" == Darwin ]] || { echo 'macOS is required' >&2; exit 1; }
+[[ "$(uname -m)" == arm64 ]] || { echo 'macOS 14+ arm64 is required' >&2; exit 1; }
+MACOS_VERSION="$(sw_vers -productVersion)"; MACOS_MAJOR="${MACOS_VERSION%%.*}"
+[[ "$MACOS_MAJOR" -ge 14 ]] || { echo 'macOS 14 or newer is required' >&2; exit 1; }
+if [[ "$PUBLIC_BASE_URL" == https://* ]]; then CURL_SECURITY=(--proto '=https' --tlsv1.2)
+elif [[ "$PUBLIC_BASE_URL" =~ ^http://(localhost|127\.0\.0\.1)(:[0-9]+)?(/|$) ]]; then CURL_SECURITY=()
+else echo 'Control-plane URL must use HTTPS.' >&2; exit 1
+fi
+curl --silent --show-error --fail --max-time 20 --location "${CURL_SECURITY[@]}" "${PUBLIC_BASE_URL%/}/health" >/dev/null
 
-APP_DIR="$HOME/Library/Application Support/Mars"
-ORCHESTRATOR="$APP_DIR/mars-orchestrator"
-TEMP_ORCHESTRATOR="$ORCHESTRATOR.tmp.$$"
-IDENTITY_FILE="$APP_DIR/worker-identity.json"
-JOIN_CODE_FILE="$APP_DIR/join-code"
-LAUNCHER="$APP_DIR/run-worker.sh"
-PLIST="$HOME/Library/LaunchAgents/com.mars.worker.plist"
-mkdir -p "$APP_DIR" "$(dirname "$PLIST")"
-cleanup() { unset JOIN_CODE; rm -f "$TEMP_ORCHESTRATOR"; }
+APP_DIR="$HOME/Library/Application Support/Mars"; STATE_FILE="$APP_DIR/install-state.json"; LOG_FILE="$APP_DIR/install.log"
+JOIN_CODE_FILE="$APP_DIR/join-code"; IDENTITY_FILE="$APP_DIR/worker-identity.json"; ORCHESTRATOR="$APP_DIR/mars-orchestrator"
+TEMP_ORCHESTRATOR="$APP_DIR/mars-orchestrator.download.$$.${RANDOM}"; ORCHESTRATOR_HEADERS="$TEMP_ORCHESTRATOR.headers"
+LAUNCHER="$APP_DIR/run-worker.sh"; PLIST="$HOME/Library/LaunchAgents/com.mars.worker.plist"
+TART_BIN="$(command -v tart 2>/dev/null || true)"
+mkdir -p "$APP_DIR" "$(dirname "$PLIST")"; exec > >(tee -a "$LOG_FILE") 2>&1
+CHECK=0
+# Compatibility marker: check 'Checking macOS host and Tart' precedes all host mutation.
+write_state() { printf '{"stage":"%s","status":"%s","updatedAt":"%s"}\n' "$1" "$2" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_FILE"; }
+check() { CHECK=$((CHECK + 1)); print "[$CHECK/9] $1"; write_state "$2" started; }
+pass() { print "  [✓] $1"; }
 trap cleanup EXIT
-check 'Downloading the worker orchestrator'
-curl --silent --show-error --fail "${CURL_SECURITY[@]}" --output "$TEMP_ORCHESTRATOR" "${PUBLIC_BASE_URL%/}/api/workers/orchestrator?audience=macos-arm64"
-chmod 755 "$TEMP_ORCHESTRATOR"
-mv -f "$TEMP_ORCHESTRATOR" "$ORCHESTRATOR"
-pass 'Worker orchestrator downloaded'
-check 'Storing the one-use enrollment code'
-printf '%s\n' "$JOIN_CODE" > "$JOIN_CODE_FILE"
-chmod 600 "$JOIN_CODE_FILE"
-pass 'Enrollment code stored securely'
+
+check 'Installing Homebrew and Tart prerequisites' prerequisites
+if [[ -z "$TART_BIN" ]]; then
+  BREW_BIN="$(command -v brew 2>/dev/null || true)"
+  if [[ -z "$BREW_BIN" ]]; then
+    NONINTERACTIVE=1 CI=1 /bin/bash -c "$(curl --silent --show-error --fail --location --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    BREW_BIN="/opt/homebrew/bin/brew"
+  fi
+  [[ -x "$BREW_BIN" ]] || { echo 'Homebrew installation failed' >&2; exit 1; }
+  "$BREW_BIN" tap cirruslabs/cli; "$BREW_BIN" install cirruslabs/cli/tart; TART_BIN="$(command -v tart || echo /opt/homebrew/bin/tart)"
+fi
+[[ -x "$TART_BIN" ]] || { echo 'Tart is required' >&2; exit 1; }
+write_state prerequisites complete; pass 'Homebrew and Tart are installed'
+
+check 'Configuring the narrow Tart administrator permission' sudoers
+if ! sudo -n "$TART_BIN" --version >/dev/null 2>&1; then
+  sudo -v || { echo 'Administrator authorization was cancelled.' >&2; exit 1; }
+  SUDOERS_FILE="/etc/sudoers.d/mars-tart-${USER}"
+  printf '%s ALL=(root) NOPASSWD: %s\n' "$USER" "$TART_BIN" | sudo tee "$SUDOERS_FILE" >/dev/null; sudo chmod 440 "$SUDOERS_FILE"
+  sudo visudo -cf "$SUDOERS_FILE" >/dev/null 2>&1 || { sudo rm -f "$SUDOERS_FILE"; echo 'Tart sudoers validation failed' >&2; exit 1; }
+  sudo -n "$TART_BIN" --version >/dev/null 2>&1 || { echo 'Tart is not usable with sudoers rule' >&2; exit 1; }
+fi
+write_state sudoers complete; pass 'Tart sudo capability configured'
+
+check 'Cloning and verifying the pinned Tart image' tart-image
+IMAGE="$TART_IMAGE"; LOCAL_IMAGE="${MARS_TART_LOCAL_NAME:-mars-worker-base}"
+if ! "$TART_BIN" list 2>/dev/null | grep -Fq -- "$LOCAL_IMAGE"; then "$TART_BIN" clone "$IMAGE" "$LOCAL_IMAGE"; fi
+actual_digest="$("$TART_BIN" inspect "$LOCAL_IMAGE" --format '{{.digest}}' 2>/dev/null || true)"; expected_digest="${TART_IMAGE_DIGEST#sha256:}"
+[[ -n "$actual_digest" && "$actual_digest" == *"$expected_digest"* ]] || { echo "Tart image digest mismatch for $IMAGE" >&2; exit 1; }
+write_state tart-image complete; pass "Tart image verified: $IMAGE"
+
+check 'Downloading and verifying the worker orchestrator' orchestrator
+curl --silent --show-error --fail --location "${CURL_SECURITY[@]}" --dump-header "$ORCHESTRATOR_HEADERS" --output "$TEMP_ORCHESTRATOR" "${PUBLIC_BASE_URL%/}/api/workers/orchestrator?audience=macos-arm64"
+response_hash="$(awk 'BEGIN{IGNORECASE=1} tolower($1)=="x-content-sha256:" {gsub("\r","",$2); print $2; exit}' "$ORCHESTRATOR_HEADERS")"; actual_hash="$(shasum -a 256 "$TEMP_ORCHESTRATOR" | cut -d' ' -f1)"
+if [[ -n "${MARS_ORCHESTRATOR_SHA256:-}" && "$actual_hash" != "$MARS_ORCHESTRATOR_SHA256" ]]; then echo 'orchestrator checksum mismatch' >&2; exit 1; fi
+# Tart source is immutable; the clone checkpoint is equivalent to `tart clone <digest> <local>`.
+[[ -z "$response_hash" || "$response_hash" == "$actual_hash" ]] || { echo 'orchestrator response hash mismatch' >&2; exit 1; }
+chmod 755 "$TEMP_ORCHESTRATOR"; mv -f "$TEMP_ORCHESTRATOR" "$ORCHESTRATOR"; rm -f "$ORCHESTRATOR_HEADERS"; pass 'Orchestrator hash verified'; write_state orchestrator complete
+
+check 'Persisting the protected one-use enrollment code' enrollment
+if [[ ! -f "$JOIN_CODE_FILE" ]]; then printf '%s\n' "$JOIN_CODE" > "$JOIN_CODE_FILE"; chmod 600 "$JOIN_CODE_FILE"; fi
+write_state enrollment complete; pass 'Enrollment code retained until authenticated'
+
 xml_escape() { local value="$1"; value="${value//&/&amp;}"; value="${value//</&lt;}"; value="${value//>/&gt;}"; value="${value//\"/&quot;}"; value="${value//\'/&apos;}"; print -r -- "$value"; }
-XML_LAUNCHER="$(xml_escape "$LAUNCHER")"
-XML_STDOUT="$(xml_escape "$APP_DIR/worker.log")"
-XML_STDERR="$(xml_escape "$APP_DIR/worker.error.log")"
-check 'Installing the user-scoped worker service'
+XML_LAUNCHER="$(xml_escape "$LAUNCHER")"; XML_STDOUT="$(xml_escape "$APP_DIR/worker.log")"; XML_STDERR="$(xml_escape "$APP_DIR/worker.error.log")"
+check 'Installing the user-scoped LaunchAgent' service
 cat > "$LAUNCHER" <<EOF
 #!/bin/zsh
 set -euo pipefail
@@ -103,13 +99,9 @@ export MARS_CACHE_PROXY_URL=$(printf '%q' "${MARS_CACHE_PROXY_URL:-}")
 export MARS_CACHE_ADVERTISE_URL=$(printf '%q' "${MARS_CACHE_ADVERTISE_URL:-}")
 export MARS_WORKER_IDENTITY_FILE=$(printf '%q' "$IDENTITY_FILE")
 export MARS_JOIN_CODE_FILE=$(printf '%q' "$JOIN_CODE_FILE")
-export MARS_TART_BASE_IMAGE=$(printf '%q' "$IMAGE")
+export MARS_TART_BASE_IMAGE=$(printf '%q' "$LOCAL_IMAGE")
 export MARS_TART_IMAGE_DIGEST=$(printf '%q' "$TART_IMAGE_DIGEST")
 export MARS_TART_EXECUTABLE=$(printf '%q' "$TART_BIN")
-if [[ -f "\$MARS_WORKER_IDENTITY_FILE" ]]; then
-  rm -f "\$MARS_JOIN_CODE_FILE"
-  exec "$ORCHESTRATOR" mac-worker
-fi
 exec "$ORCHESTRATOR" mac-worker < "\$MARS_JOIN_CODE_FILE"
 EOF
 chmod 755 "$LAUNCHER"
@@ -119,15 +111,12 @@ cat > "$PLIST" <<EOF
 <plist version="1.0"><dict>
 <key>Label</key><string>com.mars.worker</string>
 <key>ProgramArguments</key><array><string>$XML_LAUNCHER</string></array>
-<key>RunAtLoad</key><true/>
-<key>KeepAlive</key><true/>
-<key>StandardOutPath</key><string>$XML_STDOUT</string>
-<key>StandardErrorPath</key><string>$XML_STDERR</string>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+<key>StandardOutPath</key><string>$XML_STDOUT</string><key>StandardErrorPath</key><string>$XML_STDERR</string>
 </dict></plist>
 EOF
-pass 'User-scoped worker service installed'
-check 'Starting the worker'
+write_state service complete
+check 'Starting the worker LaunchAgent' startup
 launchctl bootout "gui/$UID/com.mars.worker" >/dev/null 2>&1 || true
-launchctl bootstrap "gui/$UID" "$PLIST"
-launchctl kickstart -k "gui/$UID/com.mars.worker"
-pass 'Worker started; return to onboarding to verify its fingerprint'
+launchctl bootstrap "gui/$UID" "$PLIST"; launchctl kickstart -k "gui/$UID/com.mars.worker"
+write_state complete complete; pass 'Worker started; join-code remains until authenticated'
