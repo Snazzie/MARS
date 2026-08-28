@@ -1,10 +1,14 @@
 import { createHmac, generateKeyPairSync, sign } from "node:crypto";
 import { GitHubAppService } from "../apps/control-plane/src/github-app.ts";
 import { SecretBox } from "../apps/control-plane/src/auth.ts";
-import { createControlPlaneApp } from "../apps/control-plane/src/http/app.ts";
-import { fakeHttpDeps } from "../apps/control-plane/src/http/test-deps.ts";
-import { createControlPlaneGateway, type ControlPlaneSocketData } from "../apps/control-plane/src/control-plane-gateway.ts";
-import { WorkerCommandDispatcher } from "../apps/control-plane/src/worker-dispatch.ts";
+import { startControlPlane } from "../apps/control-plane/src/index.ts";
+import type { ControlPlaneStartOptions } from "../apps/control-plane/src/index.ts";
+
+type MemorySetupState = { purpose: "oauth" | "manifest" | "install" | "organization_install"; userId: string | null; organizationId: string | null; idempotencyKey: string | null; encryptedState?: string; encryptedPkceVerifier?: string; expiresAt: number; consumedAt?: number };
+type MemoryInstallation = { organizationId: string; githubInstallationId: number; state: "pending" | "approved" | "suspended"; repositorySelection: "all" | "selected" | null; githubAccountId?: number };
+type MemoryRepository = { id: string; installationId: number; organizationId?: string; fullName: string; visibility: "private" | "internal" | "public"; available: boolean };
+type MemoryAppConfig = { id: number; slug: string; clientId?: string; pem: string; clientSecret: string; webhookSecret: string };
+type MemoryDb = { setupStates: Map<string, MemorySetupState>; installations: Map<number, MemoryInstallation>; repositories: Map<string, MemoryRepository>; appConfig?: MemoryAppConfig };
 
 const providerOrigin = "https://example-name.ts.net";
 const organizationId = "00000000-0000-4000-8000-000000000001";
@@ -12,8 +16,6 @@ const workerId = "11111111-1111-4111-8111-111111111111";
 const deliveryId = "smoke-delivery-1";
 const webhookSecret = "smoke-webhook-secret";
 
-type MemorySetupState = { purpose: "oauth" | "manifest" | "install" | "organization_install"; userId: string | null; organizationId: string | null; idempotencyKey: string | null; encryptedState?: string; encryptedPkceVerifier?: string; expiresAt: number; consumedAt?: number };
-type MemoryDb = { setupStates: Map<string, MemorySetupState>; installations: Map<number, unknown>; repositories: Map<string, unknown>; appConfig?: { id: number; slug: string; pem: string; clientSecret: string; webhookSecret: string } };
 type SqlStub = ((strings: TemplateStringsArray, ...values: readonly unknown[]) => Promise<unknown[]>) & { begin: (callback: (tx: SqlStub) => Promise<unknown>) => Promise<unknown>; json: (value: unknown) => string };
 type Delivery = { installationId: number; payload: string; eventName: string; state: "received" | "processing" | "completed" | "failed" };
 
@@ -53,21 +55,24 @@ async function main(): Promise<void> {
   }) as SqlStub;
   sqlDb.begin = async callback => callback(sqlDb);
   sqlDb.json = value => JSON.stringify(value);
-
   const secretBox = new SecretBox(Buffer.alloc(32, 7).toString("base64"));
-  memoryDb.appConfig = { id: 7, slug: "mars", pem: secretBox.encrypt("unused-pem"), clientSecret: secretBox.encrypt("unused-client-secret"), webhookSecret: secretBox.encrypt(webhookSecret) };
+  memoryDb.appConfig = { id: 7, slug: "mars", pem: secretBox.encrypt("unused-pem"), clientId: "client-id", clientSecret: secretBox.encrypt("unused-client-secret"), webhookSecret: secretBox.encrypt(webhookSecret) };
   const githubApp = new GitHubAppService({ db: memoryDb, secretBox, publicOrigin: () => providerOrigin });
   const setupCalls: string[] = [];
-  const app = createControlPlaneApp(fakeHttpDeps({
-    db: sqlDb as never, secretBox, githubApp,
-    setup: { publicOrigin: () => providerOrigin, publicOriginManaged: () => true, configure: async origin => { setupCalls.push(origin); assert(origin === providerOrigin, "setup route receives provider HTTPS origin"); return origin; }, authenticate: async () => ({ userId: "admin", firstAdmin: true }) },
+  const started = await startControlPlane({
+    publicOrigin: providerOrigin,
+    db: sqlDb as unknown as NonNullable<ControlPlaneStartOptions["db"]>,
+    setupOverride: {
+      masterKey: Buffer.alloc(32, 7).toString("base64"),
+      setup: { publicOrigin: () => providerOrigin, publicOriginManaged: () => true, configure: async origin => { setupCalls.push(origin); assert(origin === providerOrigin, "setup route receives provider HTTPS origin"); return origin; }, authenticate: async () => ({ userId: "admin", firstAdmin: true }) },
+    },
+    secretBox,
+    githubApp,
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
-  }));
-  const dispatcher = new WorkerCommandDispatcher(15_000);
-  const gateway = createControlPlaneGateway({ db: sqlDb as never, httpFetch: request => app.fetch(request), current: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }), requestSource: () => "smoke", dispatcher, triggerReconciliation: async () => undefined, requestId: () => "smoke-request" });
-
-  let upstream!: ReturnType<typeof Bun.serve<ControlPlaneSocketData>>;
-  upstream = Bun.serve<ControlPlaneSocketData>({ port: 0, fetch: (request, server) => gateway.fetch(request, server), websocket: gateway.websocket });
+    skipBackgroundTasks: true,
+    port: 0,
+  });
+  const upstream = started.server;
   type ProxyData = { upstream?: WebSocket; queued: Array<string | ArrayBuffer>; path: string };
   const proxy = Bun.serve<ProxyData>({
     port: 0,
@@ -86,17 +91,16 @@ async function main(): Promise<void> {
     websocket: {
       open(ws) {
         const upstreamSocket = new WebSocket(`ws://127.0.0.1:${upstream.port}${ws.data.path}`); ws.data.upstream = upstreamSocket;
-        upstreamSocket.addEventListener("open", () => { for (const message of ws.data.queued) upstreamSocket.send(message); ws.data.queued = []; });
-        upstreamSocket.addEventListener("message", event => ws.send(event.data)); upstreamSocket.addEventListener("close", event => ws.close(event.code, event.reason)); upstreamSocket.addEventListener("error", () => ws.close(1011, "upstream websocket failed"));
+        upstreamSocket.addEventListener("open", () => { for (const message of ws.data.queued) upstreamSocket.send(String(message)); ws.data.queued = []; });
+        upstreamSocket.addEventListener("message", event => ws.send(String(event.data))); upstreamSocket.addEventListener("close", event => ws.close(event.code, event.reason)); upstreamSocket.addEventListener("error", () => ws.close(1011, "upstream websocket failed"));
       },
-      message(ws, message) { if (ws.data.upstream?.readyState === WebSocket.OPEN) ws.data.upstream.send(message); else ws.data.queued.push(message); },
+      message(ws, message) { if (ws.data.upstream?.readyState === WebSocket.OPEN) ws.data.upstream.send(String(message)); else ws.data.queued.push(String(message)); },
       close(ws) { ws.data.upstream?.close(); },
     },
   });
-
   const baseUrl = `http://127.0.0.1:${proxy.port}`;
   try {
-    const gatewayError = await gateway.fetch(new Request(`${baseUrl}/api/v1/workers/connect`, { headers: { upgrade: "websocket" } }), upstream);
+    const gatewayError = await started.gateway.fetch(new Request(`${baseUrl}/api/v1/workers/connect`, { headers: { upgrade: "websocket" } }), upstream);
     assert(gatewayError !== undefined && gatewayError.status === 400, "gateway rejected missing worker id");
     assert(gatewayError.headers.get("cache-control") === "no-store", "gateway JSON errors disable caching");
     const setupResponse = await fetch(`${baseUrl}/api/setup/github-app`, { method: "POST", headers: { "content-type": "application/json", "idempotency-key": "smoke-manifest" }, body: JSON.stringify({ publicBaseUrl: providerOrigin }) });
