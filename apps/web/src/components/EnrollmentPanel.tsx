@@ -16,8 +16,14 @@ export function connectedEnrollmentWorker(snapshot: WorkerConnectionSnapshot, wo
 function quoteShell(value: string): string { return `'${value.replaceAll("'", "'\"'\"'")}'`; }
 function quotePowerShell(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
 
-type WindowsRuntime = "vm" | "container";
-export function buildInstallerCommand(installer: string, audience: RuntimePlatform, code?: string, windowsRuntime: WindowsRuntime = "container", connectOrigin?: string): string {
+const WORKER_RELEASE_BASE_URL = "https://github.com/Snazzie/Mars/releases/download/worker-v0.1.0";
+const WORKER_RELEASE_ASSETS: Record<RuntimePlatform, string> = {
+  "linux-x64": "install-worker-linux-x64.sh",
+  "windows-x64": "install-worker-windows-x64.ps1",
+  "macos-arm64": "install-worker-macos-arm64.sh",
+};
+
+export function buildInstallerCommand(installer: string, audience: RuntimePlatform, code?: string, connectOrigin?: string): string {
   if (!["linux-x64", "windows-x64", "macos-arm64"].includes(audience)) throw new Error("Unsupported installer audience");
   const url = new URL(installer);
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("Installer URL must use HTTP or HTTPS");
@@ -25,21 +31,21 @@ export function buildInstallerCommand(installer: string, audience: RuntimePlatfo
   const protocol = url.protocol.slice(0, -1);
   const tls = protocol === "https" ? " --tlsv1.3" : "";
   if (audience === "windows-x64") {
-    url.searchParams.set("runtime", windowsRuntime);
-    url.searchParams.set("connectOrigin", selectedOrigin);
     const codeArg = code ? ` -Code ${quotePowerShell(code)}` : "";
-    const insecureArg = protocol === "http" ? " -AllowInsecureHttp" : "";
-    return `$marsInstaller = Join-Path $env:TEMP ("mars-installer-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${protocol}'${tls} --output $marsInstaller '${url}'\n  if ($LASTEXITCODE -ne 0) { throw "Installer download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $marsInstaller -WindowsRuntime ${quotePowerShell(windowsRuntime)}${windowsRuntime === "container" ? " -AllowLocalContainerImage" : ""}${codeArg}${insecureArg}\n} finally {\n  Remove-Item -Force -ErrorAction SilentlyContinue $marsInstaller\n}`;
+    const insecureArg = selectedOrigin.startsWith("http:") ? " -AllowInsecureHttp" : "";
+    return `$marsInstaller = Join-Path $env:TEMP ("mars-installer-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${protocol}'${tls} --output $marsInstaller '${url}'\n  if ($LASTEXITCODE -ne 0) { throw "Installer download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $marsInstaller -ControlPlaneUrl ${quotePowerShell(selectedOrigin)} -WindowsRuntime 'container'${codeArg}${insecureArg}\n} finally {\n  Remove-Item -LiteralPath $marsInstaller -Force -ErrorAction SilentlyContinue\n}`;
   }
-  url.searchParams.set("connectOrigin", selectedOrigin);
   const shell = audience === "macos-arm64" ? "zsh" : "bash";
   const codeArg = code ? ` --code ${quoteShell(code)}` : "";
-  return `set -e\nmarsInstaller="$(mktemp "\${TMPDIR:-/tmp}/mars-installer.XXXXXX")"\ntrap 'rm -f "$marsInstaller"' EXIT\ncurl --fail --proto '=${protocol}'${tls} --output "$marsInstaller" ${quoteShell(url.toString())}\n${shell} "$marsInstaller"${codeArg}`;
+  const controlPlaneArg = ` --control-plane-url ${quoteShell(selectedOrigin)}`;
+  const controlPlaneEnv = `PUBLIC_BASE_URL=${quoteShell(selectedOrigin)} `;
+  return `set -e\nmarsInstaller="$(mktemp "\${TMPDIR:-/tmp}/mars-installer.XXXXXX")"\ntrap 'rm -f "$marsInstaller"' EXIT\ncurl --fail --proto '=${protocol}'${tls} --output "$marsInstaller" ${quoteShell(url.toString())}\n${controlPlaneEnv}${shell} "$marsInstaller"${controlPlaneArg}${codeArg}`;
 }
-export function buildInstallerCommands(origin: string, audience: RuntimePlatform, code?: string, windowsRuntime: WindowsRuntime = "container"): { label: string; command: string }[] {
-  const labels: Record<RuntimePlatform, string> = { "linux-x64": "Linux x64", "windows-x64": `Windows x64 (${windowsRuntime === "container" ? "Hyper-V container" : "Hyper-V VM"})`, "macos-arm64": "macOS arm64" };
-  const installer = new URL(`/api/workers/installer?audience=${audience}`, `${origin.replace(/\/$/, "")}/`);
-  return [{ label: labels[audience], command: buildInstallerCommand(installer.toString(), audience, code, windowsRuntime, origin) }];
+export function buildInstallerCommands(origin: string, audience: RuntimePlatform, code?: string): { label: string; command: string }[] {
+  const labels: Record<RuntimePlatform, string> = { "linux-x64": "Linux x64", "windows-x64": "Windows x64 (container)", "macos-arm64": "macOS arm64" };
+  const selectedOrigin = new URL(origin).origin;
+  const installer = `${WORKER_RELEASE_BASE_URL}/${WORKER_RELEASE_ASSETS[audience]}`;
+  return [{ label: labels[audience], command: buildInstallerCommand(installer, audience, code, selectedOrigin) }];
 }
 export function normalizeControlPlaneUrls(values: readonly string[]): string[] {
   const valid = values.flatMap((value) => {
@@ -60,7 +66,6 @@ type EnrollmentPanelProps = {
 };
 
 export function EnrollmentPanel({ workers, onConnected, showRotation = true }: EnrollmentPanelProps) {
-  const [windowsRuntime, setWindowsRuntime] = useState<WindowsRuntime>("container");
   const [audience, setAudience] = useState<RuntimePlatform>("linux-x64");
   const [reveal, setReveal] = useState<Reveal | null>(null);
   const [status, setStatus] = useState<{ initialized: boolean } | null>(null);
@@ -95,7 +100,7 @@ export function EnrollmentPanel({ workers, onConnected, showRotation = true }: E
   }, [connectedWorkerId, onConnected, reveal, snapshot, workers]);
   const selectedUrl = controlPlaneUrl;
   const validSelectedUrl = controlPlaneUrls.includes(selectedUrl);
-  const commandBlocks = reveal && validSelectedUrl ? buildInstallerCommands(selectedUrl, audience, reveal.code, windowsRuntime) : [];
+  const commandBlocks = reveal && validSelectedUrl ? buildInstallerCommands(selectedUrl, audience, reveal.code) : [];
   async function create() {
     if (showRotation && status?.initialized && !window.confirm("Rotate the bootstrap code? The previous code will stop working immediately.")) return;
     setPending(true);
@@ -121,7 +126,6 @@ export function EnrollmentPanel({ workers, onConnected, showRotation = true }: E
     <h2 id="enrollment-title">Bring an appliance online</h2>
     {connectedWorkerId ? <div role="status"><h3>Worker connected</h3><p>The worker is ready for identity verification and selection.</p><Button label="Enroll another worker" variant="secondary" clickAction={reset} /></div> : <>
       <label>Target platform<select value={audience} onChange={(event) => setAudience(event.target.value as RuntimePlatform)}><option value="linux-x64">Linux x64</option><option value="windows-x64">Windows x64</option><option value="macos-arm64">macOS arm64</option></select></label>
-      {audience === "windows-x64" && <label>Windows runtime<select value={windowsRuntime} onChange={(event) => setWindowsRuntime(event.target.value as WindowsRuntime)}><option value="container">Hyper-V container (recommended)</option><option value="vm">Hyper-V VM</option></select></label>}
       <label>Control-plane URL<select value={controlPlaneUrl} onChange={(event) => setControlPlaneUrl(event.target.value)}>{controlPlaneUrls.map((url) => <option key={url} value={url}>{url}</option>)}</select></label>
       {reveal ? <div><p><strong>Bootstrap code (showing once)</strong></p><code>{reveal.code}</code><p>Copy the command below and run it on the target machine.</p>{commandBlocks.map(({ label, command: block }) => <div key={label}><h3>{label}</h3><pre>{block}</pre><Button label="Copy install command" variant="secondary" clickAction={() => void navigator.clipboard.writeText(block)} /></div>)}</div> : <div><p>Choose a target platform and approved control-plane URL, then generate a one-use bootstrap code.</p><Button label="Generate bootstrap code" variant="primary" clickAction={() => void create()} isDisabled={pending || !status || !validSelectedUrl} /></div>}
     </>}

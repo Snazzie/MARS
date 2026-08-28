@@ -171,18 +171,10 @@ describe("control-plane HTTP boundary", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
-  test("requires the Windows template only for VM installer mode", async () => {
-    const root = await mkdtemp(join(tmpdir(), "mars-windows-installers-"));
-    try {
-      await Bun.write(join(root, "install-worker.ps1"), "ready");
-      const response = await createControlPlaneApp(fakeHttpDeps({
-        workerInstallerRoot: pathToFileURL(`${root}/`),
-        defaultJobImages: { "windows-x64": "registry.example/windows@sha256:" + "a".repeat(64) },
-      })).request("/api/workers/installer?audience=windows-x64&runtime=vm&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
-      expect(response.status).toBe(503);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
+  test("rejects Windows VM installer requests in v1", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps()).request("/api/workers/installer?audience=windows-x64&runtime=vm&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ code: "unsupported_runtime", message: "Only the container runtime is supported in worker v1" });
   });
   test("injects split Tart runtime identity into the macOS installer", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-macos-installers-"));
@@ -655,49 +647,6 @@ test("generates complete platform installers from the immutable release manifest
     expect(response.status).toBe(200);
     const installer = await response.text();
     expect(installer).toContain("PUBLIC_BASE_URL='https://adapter.test'");
-    expect(installer).not.toContain("__");
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-test("reports unknown installer placeholders as unavailable artifacts", async () => {
-  const root = await mkdtemp(join(tmpdir(), "mars-placeholder-installer-"));
-  try {
-    await Bun.write(join(root, "install-worker.ps1"), "'__UNKNOWN_REQUIRED_VALUE__'");
-    await Bun.write(join(root, "windows-orchestrator"), "orchestrator");
-    await Bun.write(join(root, "service-host.exe"), "service-host");
-    const response = await createControlPlaneApp(fakeHttpDeps({
-      workerInstallerRoot: pathToFileURL(`${root}/`),
-      workerOrchestratorExecutables: { "windows-x64": pathToFileURL(join(root, "windows-orchestrator")) },
-      workerServiceHostExecutable: pathToFileURL(join(root, "service-host.exe")),
-      workerConnectionOrigins: () => ["https://control-plane.test"],
-    })).request("/api/workers/installer?audience=windows-x64&runtime=vm&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
-    expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({
-      code: "artifact_unavailable",
-      message: "Worker installer prerequisites are unavailable",
-      artifacts: ["installer:install-worker.ps1"],
-    });
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-test("materializes the Windows VM template URL separately from its local path", async () => {
-  const root = await mkdtemp(join(tmpdir(), "mars-vm-installer-"));
-  try {
-    await Bun.write(join(root, "install-worker.ps1"), "'__WINDOWS_TEMPLATE_URL__' '__WINDOWS_TEMPLATE_PATH__' '__WINDOWS_TEMPLATE_DIGEST__'");
-    await Bun.write(join(root, "windows-orchestrator"), "orchestrator");
-    await Bun.write(join(root, "service-host.exe"), "service-host");
-    const response = await createControlPlaneApp(fakeHttpDeps({
-      workerInstallerRoot: pathToFileURL(`${root}/`),
-      workerOrchestratorExecutables: { "windows-x64": pathToFileURL(join(root, "windows-orchestrator")) },
-      workerServiceHostExecutable: pathToFileURL(join(root, "service-host.exe")),
-      workerConnectionOrigins: () => ["https://control-plane.test"],
-    })).request("/api/workers/installer?audience=windows-x64&runtime=vm&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
-    const installer = await response.text();
-    expect(response.status).toBe(200);
-    expect(installer).toContain("'https://release.test/worker.vhdx'");
-    expect(installer).toContain("'C:\\ProgramData\\Mars\\worker-template.vhdx'");
     expect(installer).not.toContain("__");
   } finally {
     await rm(root, { recursive: true, force: true });

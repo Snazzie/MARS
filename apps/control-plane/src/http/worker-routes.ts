@@ -42,9 +42,9 @@ export function linuxInstallerValues(platform: LinuxWorkerRelease, connectOrigin
   };
 }
 
-export function windowsInstallerValues(platform: WindowsWorkerRelease, connectOrigin: string, runtime: "vm" | "container"): InstallerValues {
+export function windowsInstallerValues(platform: WindowsWorkerRelease, connectOrigin: string): InstallerValues {
   const values: InstallerValues = {
-    WINDOWS_RUNTIME: runtime,
+    WINDOWS_RUNTIME: "container",
     WINDOWS_ORCHESTRATOR_SHA256: platform.orchestratorSha256,
     WINDOWS_SERVICE_HOST_SHA256: platform.serviceHostSha256,
     WINDOWS_TEMPLATE_URL: platform.vmTemplateUrl,
@@ -204,7 +204,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const runtime = c.req.query("runtime") ?? "container";
     const file = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : audience === "macos-arm64" ? "install-worker-macos.sh" : null;
     if (!audience || !file) return c.json({ error: "unsupported installer audience" }, 400);
-    if (audience === "windows-x64" && runtime !== "vm" && runtime !== "container") return c.json({ error: "unsupported Windows runtime" }, 400);
+    if (runtime !== "container") return c.json({ code: "unsupported_runtime", message: "Only the container runtime is supported in worker v1" }, 400);
     let connectOrigin: string;
     try {
       const value = c.req.query("connectOrigin");
@@ -221,7 +221,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const values = audience === "linux-x64"
       ? linuxInstallerValues(release as LinuxWorkerRelease, connectOrigin)
       : audience === "windows-x64"
-        ? windowsInstallerValues(release as WindowsWorkerRelease, connectOrigin, runtime as "vm" | "container")
+        ? windowsInstallerValues(release as WindowsWorkerRelease, connectOrigin)
         : macosInstallerValues(release as MacosWorkerRelease, connectOrigin);
     const generated = injectInstallerOrigin(source, connectOrigin, values, audience === "windows-x64");
     if (generated.includes("__PLACEHOLDER__") || /__[A-Za-z0-9_]+__/.test(generated)) return unavailable(c, [`installer:${file}`]);

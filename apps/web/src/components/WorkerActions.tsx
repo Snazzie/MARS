@@ -9,19 +9,15 @@ const copy: Record<Action, { label: string; confirm: string; variant: "primary" 
  resume: { label: "Resume", confirm: "Resume this worker? It will become eligible for new leases after its configuration and runtime checks are ready.", variant: "primary" },
  remove: { label: "Remove", confirm: "Remove this worker? Pools will be disabled and the worker will be revoked after active leases finish.", variant: "destructive" },
 };
-export function buildWindowsUpgradeCommand(workerId: string, origin: string, runtime: "container" | "vm" = "container", connectOrigin: string = origin): string {
+const WORKER_WINDOWS_RELEASE_URL = "https://github.com/Snazzie/Mars/releases/download/worker-v0.1.0/install-worker-windows-x64.ps1";
+function quotePowerShell(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
+
+export function buildWindowsUpgradeCommand(workerId: string, origin: string, connectOrigin: string = origin): string {
  const selectedOrigin = new URL(connectOrigin).origin;
  if (selectedOrigin.startsWith("https:") === false && selectedOrigin.startsWith("http:") === false) throw new Error("Upgrade origin must use HTTP or HTTPS");
- const base = new URL(selectedOrigin);
- const protocol = base.protocol.slice(0, -1);
- const tls = protocol === "https" ? " --tlsv1.3" : "";
- const insecure = protocol === "http" ? " -AllowInsecureHttp" : "";
- const installer = new URL("/api/workers/installer", `${base.origin}/`);
- installer.searchParams.set("audience", "windows-x64");
- installer.searchParams.set("runtime", runtime);
- installer.searchParams.set("connectOrigin", selectedOrigin);
- const url = installer.toString();
- return `# Mars worker ${workerId}\n$script = Join-Path $env:TEMP ("mars-upgrade-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${protocol}'${tls}${insecure} --output $script '${url}'\n  if ($LASTEXITCODE -ne 0) { throw "Upgrade command download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Upgrade -WindowsRuntime '${runtime}'\n} finally {\n  Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n}`;
+ const controlPlane = quotePowerShell(selectedOrigin);
+ const insecure = selectedOrigin.startsWith("http:") ? " -AllowInsecureHttp" : "";
+ return `# Mars worker ${workerId}\n$script = Join-Path $env:TEMP ("mars-upgrade-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=https' --tlsv1.3 --output $script '${WORKER_WINDOWS_RELEASE_URL}'\n  if ($LASTEXITCODE -ne 0) { throw "Upgrade command download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -ControlPlaneUrl ${controlPlane} -Upgrade -WindowsRuntime 'container'${insecure}\n} finally {\n  Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n}`;
 }
 export function WorkerActions({ organizationId, workerId, admissionState, draining, activeSandboxes = 0, platform, runtimeMode, onComplete }: { organizationId: string; workerId: string; admissionState: string; draining: boolean; activeSandboxes?: number; platform?: string; runtimeMode?: "container" | "vm" | null; onComplete: () => void }) {
  const [action, setAction] = useState<Action | null>(null);
@@ -30,7 +26,7 @@ export function WorkerActions({ organizationId, workerId, admissionState, draini
  const [pending, setPending] = useState(false);
  const dialog = useRef<HTMLDialogElement>(null);
  function open(next: Action) { setError(null); setAction(next); dialog.current?.showModal(); }
- function openUpgrade() { setError(null); setUpgradeCommand(buildWindowsUpgradeCommand(workerId, window.location.origin, runtimeMode ?? "container", window.location.origin)); }
+ function openUpgrade() { setError(null); setUpgradeCommand(buildWindowsUpgradeCommand(workerId, window.location.origin, window.location.origin)); }
  function close() { dialog.current?.close(); setAction(null); setUpgradeCommand(null); }
  async function confirm() {
   if (!action) return;
