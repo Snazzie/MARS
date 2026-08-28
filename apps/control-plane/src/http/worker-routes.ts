@@ -14,7 +14,7 @@ type InstallerValues = Record<string, string>;
 type ArtifactPath = string | URL;
 function injectInstallerOrigin(source: string, baseUrl: string, extra: InstallerValues = {}, powershell = false): string {
   const values = { PUBLIC_BASE_URL: new URL(baseUrl).origin, ...extra };
-  if (powershell) return Object.entries(values).reduce((result, [key, value]) => result.replaceAll(`'__${key}__'`, powerShellQuote(value)), source).replaceAll(/__[A-Z0-9_]+__/g, "");
+  if (powershell) return Object.entries(values).reduce((result, [key, value]) => result.replaceAll(`'__${key}__'`, powerShellQuote(value)), source);
   const injected = Object.entries(values).flatMap(([key, value]) => [`${key}=${shellQuote(value)}`, `export ${key}`]).join("\n");
   const newline = source.indexOf("\n"); const insertAt = source.startsWith("#!") && newline >= 0 ? newline + 1 : 0;
   return `${source.slice(0, insertAt)}${injected}\n${source.slice(insertAt)}`;
@@ -35,7 +35,9 @@ export function linuxInstallerValues(platform: LinuxWorkerRelease, connectOrigin
     MARS_GOLDEN_BUNDLE: platform.goldenCosignBundleUrl,
     MARS_GOLDEN_DIGEST: `sha256:${platform.goldenImageSha256}`,
     MARS_COMPOSE_FILE: `${connectOrigin}/api/workers/linux-broker-compose`,
+    MARS_COMPOSE_SHA256: platform.composeSha256,
     MARS_DOMAIN_TEMPLATE: `${connectOrigin}/api/workers/linux-domain-template`,
+    MARS_DOMAIN_TEMPLATE_SHA256: platform.domainTemplateSha256,
     MARS_LIBVIRT_NETWORK: "default",
   };
 }
@@ -43,7 +45,8 @@ export function linuxInstallerValues(platform: LinuxWorkerRelease, connectOrigin
 export function windowsInstallerValues(platform: WindowsWorkerRelease, connectOrigin: string, runtime: "vm" | "container"): InstallerValues {
   const values: InstallerValues = {
     WINDOWS_RUNTIME: runtime,
-    WINDOWS_TEMPLATE_PATH: platform.vmTemplateUrl,
+    WINDOWS_TEMPLATE_URL: platform.vmTemplateUrl,
+    WINDOWS_TEMPLATE_PATH: "C:\\ProgramData\\Mars\\worker-template.vhdx",
     WINDOWS_TEMPLATE_DIGEST: `sha256:${platform.vmTemplateSha256}`,
     WINDOWS_CONTAINER_IMAGE: "mars/windows-job:local",
     WINDOWS_CONTAINER_BASE_IMAGE: platform.container.baseImage,
@@ -218,7 +221,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
         ? windowsInstallerValues(release as WindowsWorkerRelease, connectOrigin, runtime as "vm" | "container")
         : macosInstallerValues(release as MacosWorkerRelease, connectOrigin);
     const generated = injectInstallerOrigin(source, connectOrigin, values, audience === "windows-x64");
-    if (generated.includes("__PLACEHOLDER__") || /__[A-Z0-9_]+__/.test(generated)) return unavailable(c, [`installer:${file}`]);
+    if (generated.includes("__PLACEHOLDER__") || /__[A-Za-z0-9_]+__/.test(generated)) return unavailable(c, [`installer:${file}`]);
     return new Response(generated, { headers: noStore() });
   });
   app.get("/api/workers/orchestrator", async (c) => {

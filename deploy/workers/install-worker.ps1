@@ -3,9 +3,9 @@ param(
   [string]$ControlPlaneUrl = '__PUBLIC_BASE_URL__',
   [Alias('Code')][string]$JoinCode = '__JOIN_CODE__',
   [ValidateSet('vm','container')][string]$WindowsRuntime = 'vm',
+  [string]$WindowsTemplateUrl = '__WINDOWS_TEMPLATE_URL__',
   [string]$WindowsTemplatePath = '__WINDOWS_TEMPLATE_PATH__',
   [string]$WindowsTemplateDigest = '__WINDOWS_TEMPLATE_DIGEST__',
-  [string]$WindowsContainerImage = 'mars/windows-job:local',
   [string]$WindowsContainerBaseImage = '__WINDOWS_CONTAINER_BASE_IMAGE__',
   [string]$WindowsContainerRunnerUrl = '__WINDOWS_CONTAINER_RUNNER_URL__',
   [string]$WindowsContainerRunnerSha256 = '__WINDOWS_CONTAINER_RUNNER_SHA256__',
@@ -33,6 +33,9 @@ function Require-Administrator {
 }
 function Assert-HttpsUrl([string]$Url, [string]$Name) {
   if ($Url -notmatch '^https://' -and $Url -notmatch '^http://(localhost|127\.0\.0\.1)(:\d+)?/') { throw "$Name must use HTTPS." }
+}
+function Assert-StrictHttpsUrl([string]$Url, [string]$Name) {
+  if ($Url -notmatch '^https://') { throw "$Name must use HTTPS." }
 }
 function Resolve-CachePort([string]$Name, [int]$DefaultPort) {
   $raw = [Environment]::GetEnvironmentVariable($Name)
@@ -73,6 +76,22 @@ function Assert-Template([string]$Path, [string]$Digest) {
   Assert-Digest $Digest
   $actual = 'sha256:' + (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
   if ($actual -ne $Digest.ToLowerInvariant()) { throw "Windows Hyper-V template checksum mismatch: expected $Digest, got $actual" }
+}
+function Download-Template {
+  if ($WindowsTemplateUrl -match '^__' -or $WindowsTemplatePath -match '^__') { throw 'Windows Hyper-V template is not configured.' }
+  Assert-StrictHttpsUrl $WindowsTemplateUrl 'Windows Hyper-V template URL'
+  Assert-Digest $WindowsTemplateDigest
+  $parent = Split-Path -Parent $WindowsTemplatePath
+  New-Item -ItemType Directory -Force -Path $parent | Out-Null
+  $staged = "$WindowsTemplatePath.download.$([guid]::NewGuid().ToString('N'))"
+  try {
+    Invoke-WebRequest -Uri $WindowsTemplateUrl -OutFile $staged -UseBasicParsing -TimeoutSec 900
+    $actual = 'sha256:' + (Get-FileHash -Algorithm SHA256 -LiteralPath $staged).Hash.ToLowerInvariant()
+    if ($actual -ne $WindowsTemplateDigest.ToLowerInvariant()) { throw "Windows Hyper-V template checksum mismatch: expected $WindowsTemplateDigest, got $actual" }
+    Move-Item -LiteralPath $staged -Destination $WindowsTemplatePath -Force
+  } finally {
+    Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+  }
 }
 function Ensure-HyperV {
   $feature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -ErrorAction SilentlyContinue
@@ -177,6 +196,7 @@ if ($WindowsRuntime -eq 'container') {
   }
 } else {
   Ensure-HyperV
+  Download-Template
   Assert-Template $WindowsTemplatePath $WindowsTemplateDigest
 }
 Write-Host '[3/8] Checking control-plane connectivity'

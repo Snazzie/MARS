@@ -264,3 +264,23 @@ posixRuntimeTest("Linux installer rejects noninteractive URL checks before host 
   expect(accepted.exitCode).toBe(2);
   expect(malformed.exitCode).toBe(2);
 });
+test("Windows VM installer downloads and verifies its immutable template before use", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).toContain("[string]$WindowsTemplateUrl = '__WINDOWS_TEMPLATE_URL__'");
+  expect(source).toContain("Invoke-WebRequest -Uri $WindowsTemplateUrl -OutFile $staged");
+  expect(source).toContain("Get-FileHash -Algorithm SHA256 -LiteralPath $staged");
+  expect(source.indexOf("Invoke-WebRequest -Uri $WindowsTemplateUrl")).toBeLessThan(source.indexOf("Assert-Template $WindowsTemplatePath"));
+});
+test("Linux installer materializes and verifies remote worker assets before startup", async () => {
+  const source = await Bun.file(linux).text();
+  expect(source).toContain('MARS_GOLDEN_IMAGE:?set HTTPS golden image URL');
+  expect(source).toContain('MARS_GOLDEN_BUNDLE:?set HTTPS golden cosign bundle URL');
+  expect(source).toContain('MARS_COMPOSE_SHA256:?set compose SHA-256');
+  expect(source).toContain('MARS_DOMAIN_TEMPLATE_SHA256:?set domain template SHA-256');
+  expect(source).toContain("curl --silent --show-error --fail");
+  expect(source).toContain("sha256sum");
+  expect(source).toContain("cosign verify-blob --bundle");
+  expect(source).toContain("/var/lib/mars/install-state.json");
+  expect(source).toContain("/var/log/mars/install.log");
+  expect(source.indexOf("download_verified")).toBeLessThan(source.indexOf("docker compose"));
+});

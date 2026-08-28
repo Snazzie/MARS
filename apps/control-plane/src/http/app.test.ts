@@ -658,3 +658,46 @@ test("generates complete platform installers from the immutable release manifest
     await rm(root, { recursive: true, force: true });
   }
 });
+test("reports unknown installer placeholders as unavailable artifacts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-placeholder-installer-"));
+  try {
+    await Bun.write(join(root, "install-worker.ps1"), "'__UNKNOWN_REQUIRED_VALUE__'");
+    await Bun.write(join(root, "windows-orchestrator"), "orchestrator");
+    await Bun.write(join(root, "service-host.exe"), "service-host");
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      workerInstallerRoot: pathToFileURL(`${root}/`),
+      workerOrchestratorExecutables: { "windows-x64": pathToFileURL(join(root, "windows-orchestrator")) },
+      workerServiceHostExecutable: pathToFileURL(join(root, "service-host.exe")),
+      workerConnectionOrigins: () => ["https://control-plane.test"],
+    })).request("/api/workers/installer?audience=windows-x64&runtime=vm&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      code: "artifact_unavailable",
+      message: "Worker installer prerequisites are unavailable",
+      artifacts: ["installer:install-worker.ps1"],
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+test("materializes the Windows VM template URL separately from its local path", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-vm-installer-"));
+  try {
+    await Bun.write(join(root, "install-worker.ps1"), "'__WINDOWS_TEMPLATE_URL__' '__WINDOWS_TEMPLATE_PATH__' '__WINDOWS_TEMPLATE_DIGEST__'");
+    await Bun.write(join(root, "windows-orchestrator"), "orchestrator");
+    await Bun.write(join(root, "service-host.exe"), "service-host");
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      workerInstallerRoot: pathToFileURL(`${root}/`),
+      workerOrchestratorExecutables: { "windows-x64": pathToFileURL(join(root, "windows-orchestrator")) },
+      workerServiceHostExecutable: pathToFileURL(join(root, "service-host.exe")),
+      workerConnectionOrigins: () => ["https://control-plane.test"],
+    })).request("/api/workers/installer?audience=windows-x64&runtime=vm&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
+    const installer = await response.text();
+    expect(response.status).toBe(200);
+    expect(installer).toContain("'https://release.test/worker.vhdx'");
+    expect(installer).toContain("'C:\\ProgramData\\Mars\\worker-template.vhdx'");
+    expect(installer).not.toContain("__");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
