@@ -14,12 +14,18 @@ type InstallerValues = Record<string, string>;
 type ArtifactPath = string | URL;
 function injectInstallerOrigin(source: string, baseUrl: string, extra: InstallerValues = {}, powershell = false): string {
   if (powershell) {
+    const newline = source.includes("\r\n") ? "\r\n" : "\n";
     const values = { ControlPlaneUrl: new URL(baseUrl).origin, ...extra };
-    const injected = Object.entries(values).map(([key, value]) => `$${key} = ${powerShellQuote(value)}`).join("\n");
+    const injected = Object.entries(values).map(([key, value]) => `$${key} = ${powerShellQuote(value)}`).join(newline);
+    const cmdletBindingAttribute = source.match(/^[ \t]*\[CmdletBinding\(\)\][ \t]*\r?\n/m);
+    if (cmdletBindingAttribute) {
+      const insertAt = cmdletBindingAttribute.index! + cmdletBindingAttribute[0].length;
+      return `${source.slice(0, insertAt)}${injected}${newline}${source.slice(insertAt)}`;
+    }
     const parameterBlock = source.match(/^param\([\s\S]*?\)\r?\n/);
-    if (!parameterBlock) return `${injected}\n${source}`;
+    if (!parameterBlock) return `${injected}${newline}${source}`;
     const insertAt = parameterBlock.index! + parameterBlock[0].length;
-    return `${source.slice(0, insertAt)}${injected}\n${source.slice(insertAt)}`;
+    return `${source.slice(0, insertAt)}${injected}${newline}${source.slice(insertAt)}`;
   }
   const values = { PUBLIC_BASE_URL: new URL(baseUrl).origin, ...extra };
   const injected = Object.entries(values).flatMap(([key, value]) => [`${key}=${shellQuote(value)}`, `export ${key}`]).join("\n");
