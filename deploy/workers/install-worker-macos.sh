@@ -2,14 +2,36 @@
 set -euo pipefail
 umask 077
 
-usage() { echo "usage: $0 --code ENROLLMENT_CODE" >&2; exit 2; }
+usage() { echo "usage: $0 --code ENROLLMENT_CODE [--control-plane-url URL]" >&2; exit 2; }
 parse_args() {
   JOIN_CODE=""
-  if [[ $# -eq 2 && "$1" == "--code" ]]; then JOIN_CODE="$2"
-  elif [[ $# -eq 0 && -t 0 ]]; then read -r -s 'JOIN_CODE?Mars enrollment code: '; print >&2
-  else usage
+  CONTROL_PLANE_URL="${PUBLIC_BASE_URL:-}"
+  CONTROL_PLANE_URL_ARG=""
+  local had_args=$#
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --code)
+        [[ $# -ge 2 && -z "$JOIN_CODE" && -n "$2" ]] || usage
+        JOIN_CODE="$2"
+        shift 2
+        ;;
+      --control-plane-url)
+        [[ $# -ge 2 && -z "$CONTROL_PLANE_URL_ARG" && -n "$2" ]] || usage
+        CONTROL_PLANE_URL_ARG="$2"
+        shift 2
+        ;;
+      *) usage ;;
+    esac
+  done
+  if [[ -z "$JOIN_CODE" && "$had_args" -eq 0 && -t 0 ]]; then
+    read -r -s 'JOIN_CODE?Mars enrollment code: '
+    print >&2
   fi
-  [[ "$JOIN_CODE" =~ ^[A-Za-z0-9_-]{43}$ ]] || usage
+  [[ -n "$JOIN_CODE" && "$JOIN_CODE" =~ ^[A-Za-z0-9_-]{43}$ ]] || usage
+  if [[ -n "$CONTROL_PLANE_URL_ARG" ]]; then
+    CONTROL_PLANE_URL="$CONTROL_PLANE_URL_ARG"
+  fi
+  PUBLIC_BASE_URL="$CONTROL_PLANE_URL"
 }
 parse_args "$@"
 :

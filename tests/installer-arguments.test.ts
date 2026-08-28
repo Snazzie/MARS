@@ -24,13 +24,27 @@ for (const [script, runtimeTest] of [[linux, posixRuntimeTest], [mac, macosRunti
     const missing = await invoke(script, []);
     expect(missing.exitCode).toBe(2);
     expect(missing.stderr).toContain("usage:");
-    for (const args of [["--unknown"], ["--code"], ["--code", ""], ["--code", valid, "--code", valid], ["--code", "short"]]) {
+    for (const args of [["--unknown"], ["--code"], ["--code", ""], ["--code", valid, "--code", valid], ["--code", "short"], ["--control-plane-url", "https://control.example", "--code"], ["--control-plane-url", "https://control.example", "--code", "short"], ["--code", valid, "--control-plane-url"], ["--control-plane-url", "https://control.example", "--code", valid, "--unknown"]]) {
       const result = await invoke(script, args);
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("usage:");
     }
   });
+  runtimeTest(`${script} accepts an explicit control-plane URL with the enrollment code`, async () => {
+    const result = await invoke(script, ["--code", valid, "--control-plane-url", "https://control.example"], { PUBLIC_BASE_URL: "https://" });
+    expect(result.exitCode).not.toBe(2);
+    expect(result.stderr).not.toContain("usage:");
+  });
 }
+
+test("POSIX installers accept and apply an explicit control-plane URL", async () => {
+  const [linuxSource, macSource] = await Promise.all([Bun.file(linux).text(), Bun.file(mac).text()]);
+  for (const source of [linuxSource, macSource]) {
+    expect(source).toContain("--control-plane-url");
+    expect(source).toContain("CONTROL_PLANE_URL");
+    expect(source).toContain('PUBLIC_BASE_URL="$CONTROL_PLANE_URL"');
+  }
+});
 
 test("POSIX installers expose strict parser and stdin handoff", async () => {
   expect(await Bun.file(linux).text()).toContain("parse_args");

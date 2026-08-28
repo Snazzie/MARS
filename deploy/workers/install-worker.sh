@@ -3,14 +3,34 @@
 set -euo pipefail
 umask 077
 
-usage() { echo "usage: $0 --code ENROLLMENT_CODE" >&2; exit 2; }
+usage() { echo "usage: $0 --code ENROLLMENT_CODE [--control-plane-url URL]" >&2; exit 2; }
 parse_args() {
-  [[ $# -eq 2 && $1 == --code ]] || usage
-  JOIN_CODE=$2
-  [[ $JOIN_CODE =~ ^[A-Za-z0-9_-]{43}$ ]] || usage
+  JOIN_CODE=""
+  CONTROL_PLANE_URL="${PUBLIC_BASE_URL:-}"
+  CONTROL_PLANE_URL_ARG=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --code)
+        [[ $# -ge 2 && -z "$JOIN_CODE" && -n "$2" ]] || usage
+        JOIN_CODE="$2"
+        shift 2
+        ;;
+      --control-plane-url)
+        [[ $# -ge 2 && -z "$CONTROL_PLANE_URL_ARG" && -n "$2" ]] || usage
+        CONTROL_PLANE_URL_ARG="$2"
+        shift 2
+        ;;
+      *) usage ;;
+    esac
+  done
+  [[ -n "$JOIN_CODE" && "$JOIN_CODE" =~ ^[A-Za-z0-9_-]{43}$ ]] || usage
+  if [[ -n "$CONTROL_PLANE_URL_ARG" ]]; then
+    CONTROL_PLANE_URL="$CONTROL_PLANE_URL_ARG"
+  fi
+  PUBLIC_BASE_URL="$CONTROL_PLANE_URL"
 }
 parse_args "$@"
-trap 'unset JOIN_CODE' EXIT
+trap 'unset JOIN_CODE CONTROL_PLANE_URL_ARG' EXIT
 
 : "${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}"
 : "${MARS_BROKER_IMAGE:?set digest-pinned broker image}"
