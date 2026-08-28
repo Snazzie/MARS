@@ -10,12 +10,14 @@ PostgreSQL and the public ingress are operator-managed.
 Use a stable **public HTTPS origin** for `PUBLIC_BASE_URL`. It may be a
 provider-assigned hostname such as `https://example-name.ts.net` or a custom
 domain such as `https://control.example.com`. This is the browser and GitHub
-origin: GitHub App homepage, OAuth callback, setup URL, and webhook URL all use
-it. Do not use the local Unraid WebUI URL as this origin.
+origin: GitHub App homepage, OAuth callback, and setup URL use it. Mars creates
+the GitHub App without a webhook during onboarding; GitHub webhook delivery is
+optional and can be enabled later after a publicly reachable HTTPS endpoint is
+available. Do not use the local Unraid WebUI URL as this origin.
 
 `WORKER_BASE_URL` is optional and accepts one HTTPS origin for worker
 connections. When omitted, workers use `PUBLIC_BASE_URL`. It is never used
-for GitHub/browser or webhook URLs.
+for GitHub/browser URLs.
 
 
 Create `.env` with the external database and origin settings:
@@ -102,13 +104,13 @@ custom hostname to the control plane service:
 https://control.example.com/*  ->  http://control-plane:3000
 ```
 
-The route must forward all paths, preserve the original webhook headers and
-request body (including `X-Hub-Signature-256`), and permit WebSocket upgrades
-for both `/api/browser/invalidations` and `/api/v1/workers/connect`. Bypass
-Cloudflare Access/identity challenges for GitHub and worker endpoints so
-GitHub callbacks, webhook delivery, and worker bootstrap/WebSocket requests
-can reach Mars directly. Keep TLS termination at Cloudflare; the internal
-Compose hop remains HTTP.
+The route must forward all paths and permit WebSocket upgrades for both
+`/api/browser/invalidations` and `/api/v1/workers/connect`. If GitHub webhooks
+are enabled later, preserve the original webhook headers and request body
+(including `X-Hub-Signature-256`) and bypass Cloudflare Access/identity
+challenges for that endpoint. Also bypass identity challenges for GitHub
+callbacks and worker bootstrap/WebSocket requests. Keep TLS termination at
+Cloudflare; the internal Compose hop remains HTTP.
 
 Put the named tunnel token in `.env` and start the tunnel profile:
 
@@ -125,36 +127,37 @@ settings. The public origin remains the canonical browser/GitHub origin.
 
 On the Unraid host, use **Tailscale Serve** for a private worker
 connection. Set `WORKER_BASE_URL` to its HTTPS origin; leave it empty when
-workers can reach Mars through `PUBLIC_BASE_URL`. Serve is not a GitHub
-webhook origin.
+workers can reach Mars through `PUBLIC_BASE_URL`. Serve is a worker connection
+origin, not a required GitHub origin.
 
-
-GitHub webhook delivery requires a publicly reachable HTTPS endpoint. Use
-**Tailscale Funnel** (or Cloudflare/another separate public ingress) for
-`PUBLIC_BASE_URL`; Funnel exposes the stable public origin while Serve remains
-worker-only. A stable provider-assigned `https://example-name.ts.net` origin
-and a custom `https://control.example.com` domain are equally valid.
-Do not run a privileged Tailscale container; install and operate Tailscale
-on the Unraid host or use an external ingress.
+GitHub App setup and reconciliation polling do not require Tailscale Funnel,
+Cloudflare, or any webhook ingress. If webhook delivery is enabled later, use
+**Tailscale Funnel** (or Cloudflare/another public ingress) for a publicly
+reachable HTTPS webhook URL. Do not run a privileged Tailscale container;
+install and operate Tailscale on the Unraid host or use an external ingress.
 
 ## GitHub URLs and origin changes
 
-The GitHub App must use these paths on the current public origin:
+The GitHub App uses these paths on the current public origin:
 
 ```text
 Homepage:  https://<public-origin>/
 Callback:  https://<public-origin>/api/auth/github/callback
 Setup:     https://<public-origin>/api/github/app/setup
-Webhook:   https://<public-origin>/api/github/webhooks
 ```
+
+Mars creates the App without webhook configuration and uses reconciliation
+polling for GitHub state. An administrator may add the webhook later from the
+GitHub App settings; that URL must be publicly reachable over HTTPS and point
+to `/api/github/webhooks`.
 
 Changing `PUBLIC_BASE_URL` changes Mars's effective origin immediately at the
 next process startup. During the same maintenance window, update the existing
 GitHub App homepage, OAuth callback
-`/api/auth/github/callback`, setup `/api/github/app/setup`, and webhook
-`/api/github/webhooks` URLs to the new origin. Keep the old ingress available
-until those GitHub settings and the control-plane deployment agree; otherwise
-sign-in, App installation, and webhook delivery can fail.
+`/api/auth/github/callback`, and setup `/api/github/app/setup` URLs to the new
+origin. If a webhook was enabled, update `/api/github/webhooks` too. Keep the
+old ingress available until those GitHub settings and the control-plane
+deployment agree; otherwise sign-in or App installation can fail.
 
 ## Unraid
 
