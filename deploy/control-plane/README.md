@@ -1,100 +1,183 @@
-# Mars Control Plane Docker Deployment
+# Mars Control Plane on Unraid
 
-Mars means **Managed Action Runner(s)**: the control plane for managing
-GitHub Actions runners and worker execution.
+Mars (Managed Action Runner(s)) is the control plane for GitHub App
+installation, administrator sign-in, worker enrollment, and pending-worker
+configuration. This deployment runs the control plane in Docker on Unraid;
+PostgreSQL and the public ingress are operator-managed.
 
-This directory contains the Linux/amd64 Mars control-plane image and
-PostgreSQL-only Compose stack. PostgreSQL is external to this core file;
-Cloudflare Tunnel and ingress are operator-managed.
+## Deployment inputs
 
-## Prerequisites
+Use a stable **public HTTPS origin** for `PUBLIC_BASE_URL`. It may be a
+provider-assigned hostname such as `https://example-name.ts.net` or a custom
+domain such as `https://control.example.com`. This is the browser and GitHub
+origin: GitHub App homepage, OAuth callback, setup URL, and webhook URL all use
+it. Do not use the local Unraid WebUI URL as this origin.
 
-- Linux Docker Engine/Buildx and Docker Compose.
-- External PostgreSQL 17 (or compatible) reachable by `DATABASE_URL`.
-- An externally reachable HTTPS origin and a GitHub account for the first administrator.
+`CONTROL_PLANE_ADAPTER_URLS` is optional and is a comma-separated list of
+additional HTTPS origins for workers. These origins are not GitHub/browser or
+webhook origins. A worker may use one of the configured origins when its
+network path cannot reach the public origin.
 
-## First boot
-
-Create `.env` containing only the database DSN:
+Create `.env` with the external database and origin settings:
 
 ```bash
 cat > .env <<'EOF'
 DATABASE_URL=postgres://mars:password@db.example:5432/mars
+PUBLIC_BASE_URL=https://control.example.com
+# Optional private worker-only origins, comma-separated.
+CONTROL_PLANE_ADAPTER_URLS=https://worker.example.com
 EOF
 chmod 600 .env
 ```
 
-Start the control plane:
+Keep `.env` and the tunnel token out of source control. The Compose HTTP
+binding intentionally remains loopback-only at `127.0.0.1:3000`; ingress
+connects to this service rather than exposing a new Unraid port.
+
+## First boot and exact onboarding flow
+
+Start PostgreSQL separately, then start the control plane:
 
 ```bash
 docker compose --env-file .env -f deploy/control-plane/compose.yaml up -d control-plane
 docker compose --env-file .env -f deploy/control-plane/compose.yaml logs control-plane
 ```
 
-Open `/onboarding`, confirm the externally reachable HTTPS origin, and create the GitHub App. The flow then redirects to GitHub for the first administrator sign-in.
+Complete onboarding in this order:
 
-The control plane persists the generated encryption key at `${DATA_ROOT}/app_master_key` in the named `mars-data` volume. Operators should back up that file together with PostgreSQL. Losing either side makes encrypted GitHub credentials unrecoverable.
+1. Open the stable `PUBLIC_BASE_URL` in a browser and choose **Create GitHub
+   App** on `/onboarding`.
+2. Install the generated GitHub App in the intended account or organization.
+   Return through the exact OAuth callback
+   `https://<public-origin>/api/auth/github/callback` and sign in as the first
+   administrator.
+3. From the authenticated onboarding page, generate one worker bootstrap
+   code, select the server-approved connection origin and platform, and copy
+   the one-command handoff. Do not edit the generated command or reuse its
+   show-once code.
+4. Run that command on the supported worker host. The installer performs its
+   preflight and prerequisite/artifact checkpoints, then enrolls the worker.
+5. Wait for the worker to appear as an **online pending worker** in the
+   onboarding page. Review its machine/VM identity and displayed signing
+   fingerprint; compare it with the host identity before configuration.
+6. Explicitly fingerprint/approve and configure the pending worker. Mars does
+   not schedule work merely because enrollment succeeded.
 
-## Health checks
+The generated command is the primary worker handoff. Installer diagnostics
+are retained at these paths:
+
+| Platform | Persistent installer log | Persistent state |
+| --- | --- | --- |
+| Ubuntu Server 24.04 x64 | `/var/log/mars/install.log` | `/var/lib/mars/install-state.json` |
+| Windows 11 Pro/Enterprise 24H2 x64 | `C:\\ProgramData\\Mars\\install.log` | `C:\\ProgramData\\Mars\\install-state.json` |
+| macOS 14+ Apple Silicon | `~/Library/Application Support/Mars/install.log` | `~/Library/Application Support/Mars/install-state.json` |
+
+A failed installer keeps its state for an idempotent retry. The protected join
+code is retained only until enrollment authenticates; after the authenticated
+worker WebSocket handshake it is removed.
+
+## Health checks and persistence
 
 - `GET /api/livez`
 - `GET /api/readyz`
 - `GET /api/healthz`
 
-The Compose binding is loopback-only at `127.0.0.1:3000`. For Cloudflare Tunnel, route the public hostname to `http://control-plane:3000` and preserve WebSocket upgrades. The persisted canonical origin remains the public HTTPS hostname used for browser, API, callback, and webhook URLs.
+The `mars-data` volume contains control-plane data, including the generated
+`app_master_key`. Back up the complete persistent data directory **together
+with PostgreSQL** (for example, with `pg_dump`) before upgrades or migration.
+Losing either the data volume or its matching database makes encrypted GitHub
+credentials unrecoverable. Restore both as a pair; never regenerate
+`app_master_key` for an existing database.
 
-## Cloudflare Tunnel
+## Cloudflare named tunnel (public origin)
 
-Cloudflare Tunnel can expose the entire control plane without opening an inbound Unraid port. Create a remotely managed tunnel and configure one public hostname with service:
+A Cloudflare named tunnel can expose the entire stable hostname without an
+inbound Unraid port. In Cloudflare Zero Trust, route the complete provider or
+custom hostname to the control plane service:
 
 ```text
 https://control.example.com/*  ->  http://control-plane:3000
 ```
 
-This forwards `/`, `/api/*`, WebSockets, and `POST /api/github/webhooks` through the same tunnel. Put the tunnel token in `.env`:
+The route must forward all paths, preserve the original webhook headers and
+request body (including `X-Hub-Signature-256`), and permit WebSocket upgrades
+for both `/api/browser/invalidations` and `/api/v1/workers/connect`. Bypass
+Cloudflare Access/identity challenges for GitHub and worker endpoints so
+GitHub callbacks, webhook delivery, and worker bootstrap/WebSocket requests
+can reach Mars directly. Keep TLS termination at Cloudflare; the internal
+Compose hop remains HTTP.
+
+Put the named tunnel token in `.env` and start the tunnel profile:
 
 ```bash
 CLOUDFLARE_TUNNEL_TOKEN=eyJ...
-```
-
-Start the control plane and tunnel profile:
-
-```bash
 docker compose --env-file .env -f deploy/control-plane/compose.yaml --profile tunnel up -d
 docker compose --env-file .env -f deploy/control-plane/compose.yaml logs -f cloudflared
 ```
 
-Cloudflare terminates public HTTPS; the internal service remains HTTP. Enter `https://control.example.com` as the public origin during onboarding. Do not use `http://control-plane:3000` or a tunnel-specific hostname as the GitHub callback/webhook origin.
+Do not use `http://control-plane:3000` or a tunnel-internal hostname in GitHub
+settings. The public origin remains the canonical browser/GitHub origin.
 
-## GitHub webhook endpoint
+## Tailscale Serve and Funnel
 
-Configure the GitHub App webhook URL as:
+On the Unraid host, use **Tailscale Serve** for private worker adapters. Put a
+Serve HTTPS origin in `CONTROL_PLANE_ADAPTER_URLS` when tailnet-only workers
+need a direct route to Mars. Serve is not a GitHub webhook origin.
+
+GitHub webhook delivery requires a publicly reachable HTTPS endpoint. Use
+**Tailscale Funnel** (or Cloudflare/another separate public ingress) for
+`PUBLIC_BASE_URL`; Funnel exposes the stable public origin while Serve remains
+worker-only. A stable provider-assigned `https://example-name.ts.net` origin
+and a custom `https://control.example.com` domain are equally valid.
+Do not run a privileged Tailscale container; install and operate Tailscale
+on the Unraid host or use an external ingress.
+
+## GitHub URLs and origin changes
+
+The GitHub App must use these paths on the current public origin:
 
 ```text
-https://<your-control-plane-origin>/api/github/webhooks
+Homepage:  https://<public-origin>/
+Callback:  https://<public-origin>/api/auth/github/callback
+Setup:     https://<public-origin>/api/github/app/setup
+Webhook:   https://<public-origin>/api/github/webhooks
 ```
 
-The endpoint accepts `POST` requests from GitHub, validates `X-Hub-Signature-256` with the encrypted webhook secret, and handles installation and `workflow_job` events. Do not expose a separate tunnel URL; use the persisted canonical control-plane origin.
+Changing `PUBLIC_BASE_URL` changes Mars's effective origin immediately at the
+next process startup. During the same maintenance window, update the existing
+GitHub App homepage, OAuth callback
+`/api/auth/github/callback`, setup `/api/github/app/setup`, and webhook
+`/api/github/webhooks` URLs to the new origin. Keep the old ingress available
+until those GitHub settings and the control-plane deployment agree; otherwise
+sign-in, App installation, and webhook delivery can fail.
 
 ## Unraid
 
-Import `deploy/unraid/mars-control-plane.xml`. Required inputs are the external `DATABASE_URL`, HTTP port, and persistent data mount. No GitHub credentials or master-key file are entered in the template.
+Import `deploy/unraid/mars-control-plane.xml`. Keep the local Unraid WebUI URL
+for initial container access and health checks; it is not the public GitHub
+origin. Supply the external `DATABASE_URL`, persistent data path, required
+public HTTPS `PUBLIC_BASE_URL`, and optional worker adapter URLs. The template
+is unprivileged and preserves the loopback Compose port.
 
-## Worker releases
+## Worker release boundary
 
-Worker releases are independent of the control-plane image:
+The control-plane image packages the small runtime artifacts for all supported
+platforms: Linux x64 (linux/amd64) installer, compose/domain files and orchestrator; Windows
+x64 installer, orchestrator, service host and container build inputs; and
+Apple-Silicon macOS installer and orchestrator. Large VM/Tart/golden-image and
+broker assets remain immutable HTTPS/OCI references in the signed release
+manifest. A platform with unavailable manifest data is reported unavailable;
+it is never silently substituted with another platform.
+The worker execution runtimes remain outside the Unraid control-plane container.
 
-- Push a tag matching `windows-worker-*` to build and publish the supported Windows worker artifacts.
-- Use **Actions → Release Windows worker** for an artifact-only manual build.
-- Linux VM worker appliances are deferred.
-- Windows VM orchestration is deferred.
-
-The Windows workflow publishes release metadata containing the Mars contract version from `@mars/contracts`. Worker-local Windows container image dependencies are supplied by the worker build and are not required by the control-plane release.
+Supported host targets are Ubuntu Server 24.04 x64, Windows 11 Pro/Enterprise
+24H2 x64, and macOS 14+ arm64. Their release gates require real KVM,
+Hyper-V, and Tart support respectively; source-only or unsupported-host tests
+do not claim installation readiness.
 
 ## Upgrades and backups
 
-Operators should back up PostgreSQL with `pg_dump` and the persistent data volume before upgrades. Keep the same data volume and database across image changes. Restore both together; do not regenerate `app_master_key`.
-
-## Scope boundary
-
-The image is built and smoke-tested for `linux/amd64`. This deployment contract does not claim end-to-end worker execution readiness for every worker runtime; those remain separate release gates.
+Before an upgrade, back up PostgreSQL and the complete `mars-data` volume as a
+coordinated pair. Keep `app_master_key`, `DATABASE_URL`, and the database
+contents together. Restore the same key and data volume before starting a new
+image; do not delete the volume or regenerate the key.

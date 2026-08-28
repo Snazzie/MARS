@@ -4,36 +4,82 @@ import { dirname, join } from "node:path";
 
 const root = dirname(import.meta.dir);
 const read = (path: string) => readFile(join(root, path), "utf8");
+const parseEnv = (contents: string) =>
+  Object.fromEntries(
+    contents
+      .split(/\r?\n/)
+      .filter((line) => line && !line.startsWith("#"))
+      .map((line) => {
+        const separator = line.indexOf("=");
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
 
-test("production Compose requires only DATABASE_URL and keeps the data volume", async () => {
+const renderCompose = (contents: string, env: Record<string, string>) =>
+  contents.replace(/\$\{([A-Z0-9_]+)(?::(?:-|\?)[^}]*)?\}/g, (_, name: string) => env[name] ?? "");
+
+test("Compose renders base and tunnel profiles with HTTPS deployment fixture", async () => {
+  const fixture = parseEnv(await read("tests/fixtures/control-plane-deployment.env"));
+  expect(fixture).toMatchObject({
+    DATABASE_URL: "postgres://mars:test-password@db.example.test:5432/mars",
+    PUBLIC_BASE_URL: "https://control.example.test",
+    CONTROL_PLANE_ADAPTER_URLS: "https://worker.example.test",
+    CLOUDFLARE_TUNNEL_TOKEN: "test-token",
+  });
+
+  const compose = renderCompose(await read("deploy/control-plane/compose.yaml"), fixture);
+  expect(compose).toContain("PUBLIC_BASE_URL: https://control.example.test");
+  expect(compose).toContain("CONTROL_PLANE_ADAPTER_URLS: https://worker.example.test");
+  expect(compose).toContain('ports: ["127.0.0.1:3000:3000"]');
+  expect(compose).toContain("profiles: [tunnel]");
+  expect(compose).toContain("TUNNEL_TOKEN: test-token");
+  expect(compose).toContain("CLOUDFLARE_TUNNEL_TOKEN is required");
+});
+
+test("production Compose requires DATABASE_URL, optional origins, and keeps the data volume", async () => {
   const compose = await read("deploy/control-plane/compose.yaml");
+  const rootCompose = await read("compose.yaml");
   expect(compose).toContain("DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}");
   expect(compose).toContain("DATA_ROOT: /var/lib/mars");
+  expect(compose).toContain("PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}");
+  expect(compose).toContain("CONTROL_PLANE_ADAPTER_URLS: ${CONTROL_PLANE_ADAPTER_URLS:-}");
   expect(compose).toContain("mars-data:/var/lib/mars");
   expect(compose).not.toContain("postgres:");
   expect(compose).not.toContain("secrets:");
   expect(compose).toContain("profiles: [tunnel]");
   expect(compose).toContain("CLOUDFLARE_TUNNEL_TOKEN");
   expect(compose).not.toContain("POSTGRES_PASSWORD");
+  expect(rootCompose).toContain("PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}");
+  expect(rootCompose).toContain("CONTROL_PLANE_ADAPTER_URLS: ${CONTROL_PLANE_ADAPTER_URLS:-}");
+  expect(rootCompose).toContain("127.0.0.1:3000:3000");
 });
 
-test("deployment template documents the required database variable without secrets", async () => {
+test("deployment template documents required and optional variables without secrets", async () => {
   const compose = await read("deploy/control-plane/compose.yaml");
   const envExample = await read(".env.example");
   const variables = [...compose.matchAll(/\$\{([A-Z0-9_]+)(?::[^}]*)?\}/g)].map((match) => match[1]);
   for (const variable of new Set(variables)) expect(envExample).toContain(`${variable}=`);
+  expect(envExample).toContain("PUBLIC_BASE_URL=https://control.example.com");
+  expect(envExample).toContain("CONTROL_PLANE_ADAPTER_URLS=https://worker.example.com");
   expect(envExample).not.toMatch(/(ghp_|github_pat_|-----BEGIN [A-Z ]+ PRIVATE KEY-----)/i);
 });
-
-test("Unraid exposes only database, port, and persistent data inputs", async () => {
+test("Unraid exposes origin, database, port, and persistent data inputs", async () => {
   const template = await read("deploy/unraid/mars-control-plane.xml");
+  expect(template).toContain("<WebUI>http://[IP]:[PORT:3000]/</WebUI>");
   expect(template).toContain("Target=\"DATABASE_URL\"");
   expect(template).toContain("Target=\"3000\"");
   expect(template).toContain("Target=\"/var/lib/mars\"");
+  expect(template).toContain("Target=\"PUBLIC_BASE_URL\"");
+  expect(template).toContain("Target=\"CONTROL_PLANE_ADAPTER_URLS\"");
+  expect(template).toContain("Default=\"https://control.example.com\"");
+  expect(template).toContain("Default=\"https://worker.example.com\"");
+  expect(template).toContain("Public HTTPS");
+  expect(template).toContain("worker-only");
+  expect(template).toContain("app_master_key");
+  expect(template).toContain("PostgreSQL");
   expect(template).not.toContain("/run/secrets/app_master_key");
   expect(template).not.toContain("GITHUB_");
 });
-
 test("image persists production data-root contract", async () => {
   const dockerfile = await read("deploy/control-plane/Dockerfile");
   expect(dockerfile).toContain("ARG MARS_BUILD_ID=unknown");
@@ -42,11 +88,23 @@ test("image persists production data-root contract", async () => {
   expect(dockerfile).toContain("chmod 700 /var/lib/mars");
 });
 
-test("deployment guide documents first-run persistence and incomplete worker gates", async () => {
+test("deployment guide documents operational routing, onboarding, persistence, and platform gates", async () => {
   const readme = await read("deploy/control-plane/README.md");
-  for (const phrase of ["DATABASE_URL", "/onboarding", "/api/livez", "/api/readyz", "WebSocket", "Cloudflare Tunnel", "CLOUDFLARE_TUNNEL_TOKEN", "/api/github/webhooks", "back up", "linux/amd64", "worker execution"]) expect(readme).toContain(phrase);
+  for (const phrase of [
+    "DATABASE_URL", "/onboarding", "/api/livez", "/api/readyz", "WebSocket",
+    "Cloudflare named tunnel", "CLOUDFLARE_TUNNEL_TOKEN", "/api/github/webhooks",
+    "back up", "linux/amd64", "worker execution", "PUBLIC_BASE_URL",
+    "CONTROL_PLANE_ADAPTER_URLS", "preserve the original webhook headers",
+    "/api/browser/invalidations", "/api/v1/workers/connect", "identity challenges",
+    "Tailscale Serve", "Tailscale Funnel", "example-name.ts.net", "control.example.com",
+    "same maintenance window", "/api/auth/github/callback", "/api/github/app/setup",
+    "online pending worker", "fingerprint", "/var/log/mars/install.log",
+    "C:\\\\ProgramData\\\\Mars\\\\install.log", "Library/Application Support/Mars/install.log",
+    "app_master_key", "PostgreSQL", "Linux x64", "Windows", "Apple-Silicon",
+  ]) expect(readme).toContain(phrase);
+  expect(readme).toContain("Do not run a privileged Tailscale container");
+  expect(readme).toContain("127.0.0.1:3000");
 });
-
 test("schema-2 release fixture keeps unavailable platforms explicit", async () => {
   const manifest = JSON.parse(await read("deploy/control-plane/release-manifest.json"));
   expect(manifest).toMatchObject({

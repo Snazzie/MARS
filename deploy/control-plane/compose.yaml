@@ -5,6 +5,8 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
       DATA_ROOT: /var/lib/mars
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      CONTROL_PLANE_ADAPTER_URLS: ${CONTROL_PLANE_ADAPTER_URLS:-}
     healthcheck:
       test: ["CMD", "bun", "-e", "const response=await fetch('http://localhost:3000/api/readyz');process.exit(response.ok?0:1)"]
       interval: 10s
