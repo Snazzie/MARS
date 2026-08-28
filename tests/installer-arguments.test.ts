@@ -286,6 +286,12 @@ test("Windows VM installer downloads and verifies its immutable template before 
   expect(source).toContain("Get-FileHash -Algorithm SHA256 -LiteralPath $staged");
   expect(source.indexOf("Invoke-WebRequest -Uri $WindowsTemplateUrl")).toBeLessThan(source.indexOf("Assert-Template $WindowsTemplatePath"));
 });
+test("Linux installer normalizes manifest golden digest for orchestrator", async () => {
+  const source = await Bun.file(linux).text();
+  expect(source).toContain('MARS_GOLDEN_DIGEST="${MARS_GOLDEN_DIGEST:-sha256:$(manifest_value');
+  expect(source).toContain('validate_sha256 "$MARS_GOLDEN_DIGEST" "golden image"');
+  expect(source).toContain('MARS_GOLDEN_DIGEST:-');
+});
 test("Linux installer materializes and verifies remote worker assets before startup", async () => {
   const source = await Bun.file(linux).text();
   expect(source).toContain("RELEASE_MANIFEST_URL");

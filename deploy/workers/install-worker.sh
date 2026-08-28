@@ -59,7 +59,7 @@ load_release_metadata() {
   }
   MARS_BROKER_IMAGE="${MARS_BROKER_IMAGE:-$(manifest_value 'platforms.linux-x64.brokerImage')}"
   MARS_GOLDEN_IMAGE="${MARS_GOLDEN_IMAGE:-$(manifest_value 'platforms.linux-x64.goldenImageUrl')}"
-  MARS_GOLDEN_DIGEST="${MARS_GOLDEN_DIGEST:-$(manifest_value 'platforms.linux-x64.goldenImageSha256')}"
+  MARS_GOLDEN_DIGEST="${MARS_GOLDEN_DIGEST:-sha256:$(manifest_value 'platforms.linux-x64.goldenImageSha256')}"
   MARS_COMPOSE_SHA256="${MARS_COMPOSE_SHA256:-$(manifest_value 'platforms.linux-x64.composeSha256')}"
   MARS_DOMAIN_TEMPLATE_SHA256="${MARS_DOMAIN_TEMPLATE_SHA256:-$(manifest_value 'platforms.linux-x64.domainTemplateSha256')}"
 }
