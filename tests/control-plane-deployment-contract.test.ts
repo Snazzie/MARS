@@ -107,7 +107,7 @@ test("release workflow acquires and signs immutable large worker assets", async 
     "mars-worker-golden.qcow2",
     "mars-worker-golden.qcow2.bundle",
     "MARS_WINDOWS_VM_TEMPLATE_SOURCE_URL",
-    'Invoke-WebRequest -Uri $env:VM_TEMPLATE_SOURCE_URL -OutFile $vmTemplatePath',
+    'curl.exe --fail --location --retry 3 --proto "=https" --proto-redir "=https" --tlsv1.2 --output $vmTemplatePath $env:VM_TEMPLATE_SOURCE_URL',
     "mars-worker-template.vhdx",
     "mars-worker-template.vhdx.bundle",
     "MARS_MACOS_TART_SOURCE_IMAGE", "tart pull \"$TART_SOURCE_IMAGE\"",
@@ -118,15 +118,29 @@ test("release workflow acquires and signs immutable large worker assets", async 
   ]) expect(workflow).toContain(requirement);
   expect(workflow).not.toContain("MARS_LINUX_GOLDEN_IMAGE_PATH");
   expect(workflow).not.toContain("MARS_WINDOWS_VM_TEMPLATE_PATH");
+  expect(workflow).not.toContain("Invoke-WebRequest");
   expect(workflow).toMatch(/mars-worker-golden\.qcow2(?:\\|\s|,)/);
   expect(workflow).toMatch(/mars-worker-template\.vhdx(?:\\|\s|,)/);
   expect(workflow).toContain("@sha256:");
 
   const linux = workflow.slice(workflow.indexOf("\n  linux:"));
-  expect(linux.indexOf('curl --fail --location --retry 3 --proto "=https" --tlsv1.2 "$GOLDEN_IMAGE_SOURCE_URL"')).toBeGreaterThanOrEqual(0);
-  expect(linux.indexOf('curl --fail --location --retry 3 --proto "=https" --tlsv1.2 "$GOLDEN_IMAGE_SOURCE_URL"')).toBeLessThan(linux.indexOf('test -s "$GOLDEN_IMAGE_PATH"'));
+  const linuxDownload = linux.indexOf('curl --fail --location --retry 3 --proto "=https" --tlsv1.2 "$GOLDEN_IMAGE_SOURCE_URL"');
+  const linuxValidation = linux.indexOf('test "$actualGoldenSha256" = "$GOLDEN_IMAGE_SHA256"');
+  const linuxBundleSign = linux.indexOf("cosign sign-blob --yes --bundle dist/linux/mars-worker-golden.qcow2.bundle");
+  const brokerPublish = linux.indexOf("docker buildx build --push");
+  const brokerSign = linux.indexOf('cosign sign --yes "$BROKER_REPOSITORY@$brokerDigest"');
+  expect(linuxDownload).toBeGreaterThanOrEqual(0);
+  expect(linuxDownload).toBeLessThan(linuxValidation);
+  expect(linuxValidation).toBeLessThan(linuxBundleSign);
+  expect(linuxBundleSign).toBeLessThan(brokerPublish);
+  expect(brokerPublish).toBeLessThan(brokerSign);
+
   const windows = workflow.slice(workflow.indexOf("\n  windows:"));
-  expect(windows.indexOf('Invoke-WebRequest -Uri $env:VM_TEMPLATE_SOURCE_URL -OutFile $vmTemplatePath')).toBeLessThan(windows.indexOf('Test-Path -LiteralPath $vmTemplatePath -PathType Leaf'));
+  const windowsDownload = windows.indexOf('curl.exe --fail --location --retry 3 --proto "=https" --proto-redir "=https" --tlsv1.2 --output $vmTemplatePath $env:VM_TEMPLATE_SOURCE_URL');
+  const windowsValidation = windows.indexOf('Test-Path -LiteralPath $vmTemplatePath -PathType Leaf');
+  expect(windowsDownload).toBeGreaterThanOrEqual(0);
+  expect(windowsDownload).toBeLessThan(windowsValidation);
+  expect(windows).toContain('--proto-redir "=https"');
 });
 
 test("image smoke asserts complete runtime metadata and Windows container inputs", async () => {

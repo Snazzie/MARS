@@ -39,31 +39,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: sigstore/cosign-installer@v3
-      - name: Publish digest-pinned Linux broker image
-        env:
-          BROKER_REPOSITORY: ${{ vars.MARS_LINUX_BROKER_REPOSITORY }}
-        run: |
-          test -n "$BROKER_REPOSITORY"
-          docker buildx build --push -f deploy/workers/linux-broker.Dockerfile -t "$BROKER_REPOSITORY:$BUILD_ID" .
-          brokerDigest="$(docker buildx imagetools inspect "$BROKER_REPOSITORY:$BUILD_ID" --format '{{.Manifest.Digest}}')"
-          case "$brokerDigest" in sha256:[0-9a-fA-F][0-9a-fA-F]*) ;; *) echo "broker image digest missing" >&2; exit 1 ;; esac
-          cosign sign --yes "$BROKER_REPOSITORY@$brokerDigest"
-          echo "BROKER_IMAGE=$BROKER_REPOSITORY@$brokerDigest" >> "$GITHUB_ENV"
-      - name: Prepare and sign Linux release artifacts
+      - name: Acquire and validate Linux release artifacts
         env:
           GOLDEN_IMAGE_SOURCE_URL: ${{ vars.MARS_LINUX_GOLDEN_IMAGE_SOURCE_URL }}
           GOLDEN_IMAGE_URL: ${{ vars.MARS_LINUX_GOLDEN_IMAGE_URL }}
           GOLDEN_IMAGE_SHA256: ${{ vars.MARS_LINUX_GOLDEN_IMAGE_SHA256 }}
           GOLDEN_COSIGN_BUNDLE_URL: ${{ vars.MARS_LINUX_GOLDEN_COSIGN_BUNDLE_URL }}
-        id: metadata
         run: |
           set -euo pipefail
-          test -n "$GOLDEN_IMAGE_SOURCE_URL" -a -n "$GOLDEN_IMAGE_URL" -a -n "$GOLDEN_IMAGE_SHA256" -a -n "$GOLDEN_COSIGN_BUNDLE_URL" -a -n "$BROKER_IMAGE"
+          test -n "$GOLDEN_IMAGE_SOURCE_URL" -a -n "$GOLDEN_IMAGE_URL" -a -n "$GOLDEN_IMAGE_SHA256" -a -n "$GOLDEN_COSIGN_BUNDLE_URL"
           case "$GOLDEN_IMAGE_SOURCE_URL" in https://*) ;; *) echo "golden image source URL must use HTTPS" >&2; exit 1 ;; esac
           case "$GOLDEN_IMAGE_URL" in https://*) ;; *) echo "golden image URL must use HTTPS" >&2; exit 1 ;; esac
           case "$GOLDEN_COSIGN_BUNDLE_URL" in https://*) ;; *) echo "golden cosign bundle URL must use HTTPS" >&2; exit 1 ;; esac
           [[ "$GOLDEN_IMAGE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "golden image SHA-256 is invalid" >&2; exit 1; }
-          [[ "$BROKER_IMAGE" =~ ^.+@sha256:[0-9a-f]{64}$ ]] || { echo "broker image must be digest-pinned" >&2; exit 1; }
           GOLDEN_IMAGE_PATH=dist/linux/mars-worker-golden.qcow2
           curl --fail --location --retry 3 --proto "=https" --tlsv1.2 "$GOLDEN_IMAGE_SOURCE_URL" --output "$GOLDEN_IMAGE_PATH"
           test -s "$GOLDEN_IMAGE_PATH"
@@ -71,6 +59,28 @@ jobs:
           test "$actualGoldenSha256" = "$GOLDEN_IMAGE_SHA256"
           cosign sign-blob --yes --bundle dist/linux/mars-worker-golden.qcow2.bundle "$GOLDEN_IMAGE_PATH"
           test -s dist/linux/mars-worker-golden.qcow2.bundle
+      - name: Publish digest-pinned Linux broker image
+        env:
+          BROKER_REPOSITORY: ${{ vars.MARS_LINUX_BROKER_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          test -n "$BROKER_REPOSITORY"
+          docker buildx build --push -f deploy/workers/linux-broker.Dockerfile -t "$BROKER_REPOSITORY:$BUILD_ID" .
+          brokerDigest="$(docker buildx imagetools inspect "$BROKER_REPOSITORY:$BUILD_ID" --format '{{.Manifest.Digest}}')"
+          case "$brokerDigest" in sha256:[0-9a-fA-F][0-9a-fA-F]*) ;; *) echo "broker image digest missing" >&2; exit 1 ;; esac
+          cosign sign --yes "$BROKER_REPOSITORY@$brokerDigest"
+          echo "BROKER_IMAGE=$BROKER_REPOSITORY@$brokerDigest" >> "$GITHUB_ENV"
+      - name: Write Linux release metadata
+        env:
+          GOLDEN_IMAGE_URL: ${{ vars.MARS_LINUX_GOLDEN_IMAGE_URL }}
+          GOLDEN_IMAGE_SHA256: ${{ vars.MARS_LINUX_GOLDEN_IMAGE_SHA256 }}
+          GOLDEN_COSIGN_BUNDLE_URL: ${{ vars.MARS_LINUX_GOLDEN_COSIGN_BUNDLE_URL }}
+        id: metadata
+        run: |
+          set -euo pipefail
+          test -n "$GOLDEN_IMAGE_URL" -a -n "$GOLDEN_IMAGE_SHA256" -a -n "$GOLDEN_COSIGN_BUNDLE_URL" -a -n "$BROKER_IMAGE"
+          [[ "$GOLDEN_IMAGE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "golden image SHA-256 is invalid" >&2; exit 1; }
+          [[ "$BROKER_IMAGE" =~ ^.+@sha256:[0-9a-f]{64}$ ]] || { echo "broker image must be digest-pinned" >&2; exit 1; }
           sha256sum dist/linux/mars-orchestrator | cut -d' ' -f1 > dist/linux/orchestrator.sha256
           sha256sum dist/linux/linux-broker-compose.yaml | cut -d' ' -f1 > dist/linux/compose.sha256
           sha256sum dist/linux/worker-domain.xml | cut -d' ' -f1 > dist/linux/domain.sha256
@@ -128,7 +138,8 @@ jobs:
             if ($asset[0] -notmatch '^https://' -or $asset[1] -notmatch '^[0-9a-f]{64}$') { throw 'Windows dependency metadata is invalid' }
           }
           $vmTemplatePath = Join-Path $PWD 'dist/windows/mars-worker-template.vhdx'
-          Invoke-WebRequest -Uri $env:VM_TEMPLATE_SOURCE_URL -OutFile $vmTemplatePath
+          & curl.exe --fail --location --retry 3 --proto "=https" --proto-redir "=https" --tlsv1.2 --output $vmTemplatePath $env:VM_TEMPLATE_SOURCE_URL
+          if ($LASTEXITCODE -ne 0) { throw 'Windows VHDX template download failed' }
           if (-not (Test-Path -LiteralPath $vmTemplatePath -PathType Leaf)) { throw 'Windows VHDX template download failed' }
           $actualVmSha256 = (Get-FileHash $vmTemplatePath -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actualVmSha256 -ne $env:VM_TEMPLATE_SHA256) { throw 'Windows VHDX SHA-256 does not match metadata' }
