@@ -211,7 +211,10 @@ test("worker release workflow publishes current-tag assets before promoting the 
   expect(latest).toBeGreaterThan(publication);
   expect(promotion).toBeGreaterThan(latest);
   expect(promoteCommand).toBeGreaterThan(promotion);
-  expect(aggregate).toContain('-t "$CONTROL_PLANE_IMAGE:$BUILD_ID"');
+  expect(aggregate).toContain("CONTROL_PLANE_IMAGE_TAG: cp-${{ github.run_id }}-${{ github.run_attempt }}");
+  expect(aggregate).toContain('-t "$CONTROL_PLANE_IMAGE:$CONTROL_PLANE_IMAGE_TAG"');
+  expect(aggregate).toContain('imagetools inspect "$CONTROL_PLANE_IMAGE:$CONTROL_PLANE_IMAGE_TAG"');
+  expect(aggregate).not.toContain('-t "$CONTROL_PLANE_IMAGE:$BUILD_ID"');
   expect(aggregate).toContain('echo "digest=$imageDigest" >> "$GITHUB_OUTPUT"');
   expect(aggregate).toContain('test "$promotedDigest" = "$IMAGE_DIGEST"');
   expect(aggregate).not.toContain("if: startsWith(github.ref, 'refs/tags/')");

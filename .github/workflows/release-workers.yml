@@ -328,10 +328,12 @@ jobs:
         id: image
         env:
           CONTROL_PLANE_IMAGE: ghcr.io/snazzie/mars/control-plane
+          CONTROL_PLANE_IMAGE_TAG: cp-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          docker buildx build --push --build-arg MARS_BUILD_ID="$BUILD_ID" --build-arg MARS_RELEASE_MANIFEST=dist/worker-release-manifest.json --build-arg MARS_WINDOWS_SERVICE_HOST_ARTIFACT="dist/worker-windows-${{ github.sha }}/mars-service-host.exe" -f deploy/control-plane/Dockerfile -t "$CONTROL_PLANE_IMAGE:$BUILD_ID" .
-          imageDigest="$(docker buildx imagetools inspect "$CONTROL_PLANE_IMAGE:$BUILD_ID" --format '{{.Manifest.Digest}}')"
+          [[ "$CONTROL_PLANE_IMAGE_TAG" =~ ^cp-[0-9]+-[0-9]+$ ]] || { echo "control-plane image tag is not unique to this run attempt" >&2; exit 1; }
+          docker buildx build --push --build-arg MARS_BUILD_ID="$BUILD_ID" --build-arg MARS_RELEASE_MANIFEST=dist/worker-release-manifest.json --build-arg MARS_WINDOWS_SERVICE_HOST_ARTIFACT="dist/worker-windows-${{ github.sha }}/mars-service-host.exe" -f deploy/control-plane/Dockerfile -t "$CONTROL_PLANE_IMAGE:$CONTROL_PLANE_IMAGE_TAG" .
+          imageDigest="$(docker buildx imagetools inspect "$CONTROL_PLANE_IMAGE:$CONTROL_PLANE_IMAGE_TAG" --format '{{.Manifest.Digest}}')"
           [[ "$imageDigest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "control-plane image digest is unavailable" >&2; exit 1; }
           echo "digest=$imageDigest" >> "$GITHUB_OUTPUT"
       - name: Publish complete worker release
