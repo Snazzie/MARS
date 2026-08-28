@@ -147,6 +147,22 @@ test("control-plane image packages the exact Windows service-host release artifa
   expect(workflow).toContain("Get-FileHash dist/windows/mars-service-host.exe");
   expect(workflow).toContain("path: dist/windows");
 });
+test("CI builds and passes a real Windows service-host artifact explicitly", async () => {
+  const workflow = await read(".github/workflows/ci.yml");
+  const artifactBuild = workflow.indexOf("Build Windows service-host artifact for CI image");
+  const imageBuild = workflow.indexOf("Build immutable control-plane image");
+  expect(artifactBuild).toBeGreaterThanOrEqual(0);
+  expect(imageBuild).toBeGreaterThan(artifactBuild);
+  for (const requirement of [
+    "sudo apt-get install --no-install-recommends -y mingw-w64",
+    "rustup target add x86_64-pc-windows-gnu",
+    "cargo build --manifest-path apps/windows-service-host/Cargo.toml --release --target x86_64-pc-windows-gnu",
+    "dist/worker-windows-ci/mars-service-host.exe",
+    "--build-arg MARS_WINDOWS_SERVICE_HOST_ARTIFACT=dist/worker-windows-ci/mars-service-host.exe",
+  ]) expect(workflow).toContain(requirement);
+  expect(workflow).not.toContain("MARS_WINDOWS_SERVICE_HOST_ARTIFACT=development");
+});
+
 
 test("worker release workflow gates aggregate publication on all platforms", async () => {
   const workflow = await read(".github/workflows/release-workers.yml");
