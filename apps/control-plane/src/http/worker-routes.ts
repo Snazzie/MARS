@@ -12,20 +12,71 @@ function shellQuote(value: string): string { return `'${value.replaceAll("'", "'
 function powerShellQuote(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
 type InstallerValues = Record<string, string>;
 type ArtifactPath = string | URL;
+function powershellParamBlockEnd(source: string): number | undefined {
+  const paramStart = /(?:^|\r?\n)[ \t]*param[ \t]*\(/g;
+  const match = paramStart.exec(source);
+  if (!match) return undefined;
+  const open = source.indexOf("(", match.index + match[0].length - 1);
+  let depth = 0;
+  let quote: "'" | '"' | undefined;
+  let lineComment = false;
+  let blockComment = false;
+  for (let index = open; index < source.length; index += 1) {
+    const current = source[index];
+    const next = source[index + 1];
+    if (lineComment) {
+      if (current === "\n") lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (current === "#" && next === ">") {
+        blockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (quote === "'") {
+      if (current === "'" && next === "'") index += 1;
+      else if (current === "'") quote = undefined;
+      continue;
+    }
+    if (quote === '"') {
+      if (current === "`") index += 1;
+      else if (current === '"') quote = undefined;
+      continue;
+    }
+    if (current === "<" && next === "#") {
+      blockComment = true;
+      index += 1;
+    } else if (current === "#") {
+      lineComment = true;
+    } else if (current === "'" || current === '"') {
+      quote = current;
+    } else if (current === "(") {
+      depth += 1;
+    } else if (current === ")" && --depth === 0) {
+      return index + 1;
+    }
+  }
+  return undefined;
+}
 function injectInstallerOrigin(source: string, baseUrl: string, extra: InstallerValues = {}, powershell = false): string {
   if (powershell) {
     const newline = source.includes("\r\n") ? "\r\n" : "\n";
     const values = { ControlPlaneUrl: new URL(baseUrl).origin, ...extra };
     const injected = Object.entries(values).map(([key, value]) => `$${key} = ${powerShellQuote(value)}`).join(newline);
+    const parameterEnd = powershellParamBlockEnd(source);
+    if (parameterEnd !== undefined) {
+      const lineEnd = source.startsWith("\r\n", parameterEnd) ? 2 : source[parameterEnd] === "\n" ? 1 : 0;
+      const insertAt = parameterEnd + lineEnd;
+      return `${source.slice(0, insertAt)}${injected}${newline}${source.slice(insertAt)}`;
+    }
     const cmdletBindingAttribute = source.match(/^[ \t]*\[CmdletBinding\(\)\][ \t]*\r?\n/m);
     if (cmdletBindingAttribute) {
       const insertAt = cmdletBindingAttribute.index! + cmdletBindingAttribute[0].length;
       return `${source.slice(0, insertAt)}${injected}${newline}${source.slice(insertAt)}`;
     }
-    const parameterBlock = source.match(/^param\([\s\S]*?\)\r?\n/);
-    if (!parameterBlock) return `${injected}${newline}${source}`;
-    const insertAt = parameterBlock.index! + parameterBlock[0].length;
-    return `${source.slice(0, insertAt)}${injected}${newline}${source.slice(insertAt)}`;
+    return `${injected}${newline}${source}`;
   }
   const values = { PUBLIC_BASE_URL: new URL(baseUrl).origin, ...extra };
   const injected = Object.entries(values).flatMap(([key, value]) => [`${key}=${shellQuote(value)}`, `export ${key}`]).join("\n");

@@ -141,7 +141,7 @@ describe("control-plane HTTP boundary", () => {
   test("serves container-mode Windows installer with local image build inputs", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-windows-installers-"));
     try {
-      await Bun.write(join(root, "install-worker.ps1"), "[CmdletBinding()]\r\nparam([string]$WindowsContainerImage = 'mars/windows-job:local')\r\n");
+      await Bun.write(join(root, "install-worker.ps1"), "[CmdletBinding()]\r\nparam(\r\n  [string]$WindowsContainerImage = 'mars/windows-job:local',\r\n  [int]$WindowsContainerReadyTimeoutMs = 15000\r\n)\r\n$ErrorActionPreference = 'Stop'\r\n");
       await Bun.write(join(root, "windows-orchestrator"), "orchestrator");
       await Bun.write(join(root, "service-host.exe"), "service-host");
       const build = { baseImage: "mcr.microsoft.com/windows/server/ltsc2025@sha256:" + "a".repeat(64), runnerUrl: "https://example.test/runner.zip", runnerSha256: "b".repeat(64), gitUrl: "https://example.test/git.zip", gitSha256: "c".repeat(64), vcUrl: "https://example.test/vc.exe", vcSha256: "d".repeat(64), builderPath: join(root, "builder.ps1"), verifierPath: join(root, "verifier.ps1"), containerfilePath: join(root, "Containerfile"), entrypointPath: join(root, "entrypoint.ps1"), jobAgentPath: join(root, "job-agent.exe") };
@@ -151,12 +151,11 @@ describe("control-plane HTTP boundary", () => {
       const installer = await response.text();
       expect(response.status).toBe(200);
       const attribute = "[CmdletBinding()]\r\n";
+      const parameter = "param(\r\n  [string]$WindowsContainerImage = 'mars/windows-job:local',\r\n  [int]$WindowsContainerReadyTimeoutMs = 15000\r\n)\r\n";
       const injectedOrigin = "$ControlPlaneUrl = 'https://control.test'\r\n";
-      const parameter = "param([string]$WindowsContainerImage = 'mars/windows-job:local')";
-      expect(installer).toStartWith(`${attribute}${injectedOrigin}`);
-      expect(installer.indexOf(injectedOrigin)).toBeGreaterThan(installer.indexOf(attribute));
-      expect(installer.indexOf(injectedOrigin)).toBeLessThan(installer.indexOf(parameter));
-      expect(installer).toContain("'mars/windows-job:local'");
+      expect(installer).toStartWith(`${attribute}${parameter}${injectedOrigin}`);
+      expect(installer.indexOf(injectedOrigin)).toBeGreaterThan(installer.indexOf(parameter));
+      expect(installer.indexOf(injectedOrigin)).toBeLessThan(installer.indexOf("$ErrorActionPreference"));
       expect(installer).not.toContain("DEBUG_PRESERVE_LEASES");
     } finally {
       await rm(root, { recursive: true, force: true });
