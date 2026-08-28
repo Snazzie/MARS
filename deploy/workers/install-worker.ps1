@@ -6,6 +6,7 @@ param(
   [string]$WindowsTemplateUrl = '__WINDOWS_TEMPLATE_URL__',
   [string]$WindowsTemplatePath = '__WINDOWS_TEMPLATE_PATH__',
   [string]$WindowsTemplateDigest = '__WINDOWS_TEMPLATE_DIGEST__',
+  [string]$WindowsContainerImage = '__WINDOWS_CONTAINER_IMAGE__',
   [string]$WindowsContainerBaseImage = '__WINDOWS_CONTAINER_BASE_IMAGE__',
   [string]$WindowsContainerRunnerUrl = '__WINDOWS_CONTAINER_RUNNER_URL__',
   [string]$WindowsContainerRunnerSha256 = '__WINDOWS_CONTAINER_RUNNER_SHA256__',

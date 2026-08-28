@@ -89,6 +89,7 @@ macosRuntimeTest("macOS job image preparation preserves the original failure dur
 
 test("PowerShell installer supports VM and container runtime modes", async () => {
   const source = await Bun.file(powershell).text();
+  expect(source).toContain("[string]$WindowsContainerImage = '__WINDOWS_CONTAINER_IMAGE__'");
   expect(source).toContain("ValidateSet('vm','container')");
   expect(source).toContain("Ensure-HyperV");
   expect(source).toContain("Ensure-ContainerFeatures");

@@ -141,7 +141,7 @@ describe("control-plane HTTP boundary", () => {
   test("serves container-mode Windows installer with local image build inputs", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-windows-installers-"));
     try {
-      await Bun.write(join(root, "install-worker.ps1"), "'__WINDOWS_RUNTIME__' '__WINDOWS_CONTAINER_IMAGE__' '__WINDOWS_CONTAINER_BASE_IMAGE__' '__WINDOWS_CONTAINER_BUILDER_URL__'");
+      await Bun.write(join(root, "install-worker.ps1"), "param([string]$WindowsContainerImage = '__WINDOWS_CONTAINER_IMAGE__')\n'__WINDOWS_RUNTIME__' '__WINDOWS_CONTAINER_IMAGE__' '__WINDOWS_CONTAINER_BASE_IMAGE__' '__WINDOWS_CONTAINER_BUILDER_URL__'");
       await Bun.write(join(root, "windows-orchestrator"), "orchestrator");
       await Bun.write(join(root, "service-host.exe"), "service-host");
       const build = { baseImage: "mcr.microsoft.com/windows/server/ltsc2025@sha256:" + "a".repeat(64), runnerUrl: "https://example.test/runner.zip", runnerSha256: "b".repeat(64), gitUrl: "https://example.test/git.zip", gitSha256: "c".repeat(64), vcUrl: "https://example.test/vc.exe", vcSha256: "d".repeat(64), builderPath: join(root, "builder.ps1"), verifierPath: join(root, "verifier.ps1"), containerfilePath: join(root, "Containerfile"), entrypointPath: join(root, "entrypoint.ps1"), jobAgentPath: join(root, "job-agent.exe") };
@@ -151,6 +151,7 @@ describe("control-plane HTTP boundary", () => {
       const installer = await response.text();
       expect(response.status).toBe(200);
       expect(installer).toContain("'mars/windows-job:local'");
+      expect(installer).toContain("param([string]$WindowsContainerImage = 'mars/windows-job:local')");
       expect(installer).not.toContain("DEBUG_PRESERVE_LEASES");
     } finally {
       await rm(root, { recursive: true, force: true });
