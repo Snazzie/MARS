@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { ApiRequestError, getWorkerBootstrapStatus, getWorkerControlPlaneUrls, initializeWorkerBootstrap, rotateWorkerBootstrap } from "../api.ts";
+import { isLocalDevelopment } from "../environment.ts";
 
 type RuntimePlatform = "linux-x64" | "windows-x64" | "macos-arm64";
 type Reveal = { code: string; generation: number; createdAt: string };
@@ -41,7 +42,7 @@ export function buildInstallerCommand(installer: string, audience: RuntimePlatfo
   const controlPlaneEnv = `PUBLIC_BASE_URL=${quoteShell(selectedOrigin)} `;
   return `set -e\nmarsInstaller="$(mktemp "\${TMPDIR:-/tmp}/mars-installer.XXXXXX")"\ntrap 'rm -f "$marsInstaller"' EXIT\ncurl --fail --proto '=${protocol}'${tls} --output "$marsInstaller" ${quoteShell(url.toString())}\n${controlPlaneEnv}${shell} "$marsInstaller"${controlPlaneArg}${codeArg}`;
 }
-export function buildInstallerCommands(origin: string, audience: RuntimePlatform, code?: string, localDevelopment: boolean = import.meta.env?.DEV ?? false): { label: string; command: string }[] {
+export function buildInstallerCommands(origin: string, audience: RuntimePlatform, code?: string, localDevelopment: boolean = isLocalDevelopment()): { label: string; command: string }[] {
   const labels: Record<RuntimePlatform, string> = { "linux-x64": "Linux x64", "windows-x64": "Windows x64 (container)", "macos-arm64": "macOS arm64" };
   const selectedOrigin = new URL(origin).origin;
   const installer = localDevelopment

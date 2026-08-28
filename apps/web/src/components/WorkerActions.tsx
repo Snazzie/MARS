@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
-import { ApiRequestError, mutateWorker } from "../api.ts";
+import { ApiRequestError, getWorkerControlPlaneUrls, mutateWorker } from "../api.ts";
+import { isLocalDevelopment } from "../environment.ts";
 
 type Action = "reject" | "drain" | "resume" | "remove";
 const copy: Record<Action, { label: string; confirm: string; variant: "primary" | "secondary" | "destructive" }> = {
@@ -12,7 +13,7 @@ const copy: Record<Action, { label: string; confirm: string; variant: "primary" 
 const WORKER_WINDOWS_RELEASE_URL = "https://github.com/Snazzie/Mars/releases/latest/download/install-worker-windows-x64.ps1";
 function quotePowerShell(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
 
-export function buildWindowsUpgradeCommand(workerId: string, origin: string, connectOrigin: string = origin, localDevelopment: boolean = import.meta.env?.DEV ?? false): string {
+export function buildWindowsUpgradeCommand(workerId: string, origin: string, connectOrigin: string = origin, localDevelopment: boolean = isLocalDevelopment()): string {
  const selectedOrigin = new URL(connectOrigin || origin).origin;
  if (selectedOrigin.startsWith("https:") === false && selectedOrigin.startsWith("http:") === false) throw new Error("Upgrade origin must use HTTP or HTTPS");
  const controlPlane = quotePowerShell(selectedOrigin);
@@ -31,7 +32,17 @@ export function WorkerActions({ organizationId, workerId, admissionState, draini
  const [pending, setPending] = useState(false);
  const dialog = useRef<HTMLDialogElement>(null);
  function open(next: Action) { setError(null); setAction(next); dialog.current?.showModal(); }
- function openUpgrade() { setError(null); setUpgradeCommand(buildWindowsUpgradeCommand(workerId, window.location.origin, window.location.origin)); }
+ async function openUpgrade() {
+  setError(null);
+  try {
+   const localDevelopment = isLocalDevelopment();
+   const connectOrigin = localDevelopment ? (await getWorkerControlPlaneUrls())[0] : window.location.origin;
+   if (!connectOrigin) throw new Error("No worker connection origin is configured.");
+   setUpgradeCommand(buildWindowsUpgradeCommand(workerId, window.location.origin, connectOrigin, localDevelopment));
+  } catch (reason) {
+   setError(reason instanceof ApiRequestError ? reason.message : reason instanceof Error ? reason.message : "The upgrade command could not be prepared.");
+  }
+ }
  function close() { dialog.current?.close(); setAction(null); setUpgradeCommand(null); }
  async function confirm() {
   if (!action) return;
@@ -43,7 +54,7 @@ export function WorkerActions({ organizationId, workerId, admissionState, draini
  return <>
   <div className="worker-actions" aria-label="Worker actions">
    {admissionState === "pending" && <Button label="Reject" variant="destructive" clickAction={() => open("reject")} />}
-   {admissionState === "adopted" && <><Button label={draining ? "Resume" : "Drain"} variant="secondary" clickAction={() => open(draining ? "resume" : "drain")} />{platform === "windows-x64" && <Button label="Upgrade" variant="secondary" clickAction={openUpgrade} />}{<Button label="Remove" variant="destructive" clickAction={() => open("remove")} />}</>}
+   {admissionState === "adopted" && <><Button label={draining ? "Resume" : "Drain"} variant="secondary" clickAction={() => open(draining ? "resume" : "drain")} />{platform === "windows-x64" && <Button label="Upgrade" variant="secondary" clickAction={() => void openUpgrade()} />}{<Button label="Remove" variant="destructive" clickAction={() => open("remove")} />}</>}
   </div>
   {upgradeCommand && <dialog open className="confirm-dialog" aria-labelledby="worker-upgrade-title"><form method="dialog"><p className="panel-kicker">Manual upgrade</p><h2 id="worker-upgrade-title">Copy upgrade command</h2><p>Drain this worker and wait for zero active jobs before running this command in an Administrator PowerShell.</p><textarea aria-label="Windows worker upgrade command" readOnly value={upgradeCommand} /><div className="dialog-actions"><Button label="Close" variant="secondary" onClick={() => setUpgradeCommand(null)} /><Button label="Copy command" variant="primary" clickAction={() => void navigator.clipboard?.writeText(upgradeCommand)} /></div></form></dialog>}
   <dialog ref={dialog} className="confirm-dialog" onCancel={close} aria-labelledby="worker-confirm-title">

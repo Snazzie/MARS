@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { buildWindowsUpgradeCommand } from "./WorkerActions.tsx";
+import { isLocalDevelopment } from "../environment.ts";
 
 test("builds a Windows upgrade command from the immutable v1 release asset", () => {
   const command = buildWindowsUpgradeCommand("worker/id", "https://control.example/", "https://adapter.example");
@@ -31,6 +32,18 @@ test("uses the local installer endpoint for development upgrades", () => {
   expect(command).toContain("runtime=container");
   expect(command).toContain("connectOrigin=http%3A%2F%2Flocalhost%3A3000");
   expect(command).not.toContain("github.com/Snazzie/Mars/releases");
+});
+test("uses the control-plane origin instead of the Vite browser origin for local upgrades", () => {
+  const command = buildWindowsUpgradeCommand("worker/id", "http://localhost:5173", "http://localhost:3000", true);
+  expect(command).toContain("http://localhost:3000/api/workers/installer?");
+  expect(command).toContain("connectOrigin=http%3A%2F%2Flocalhost%3A3000");
+  expect(command).toContain("-ControlPlaneUrl 'http://localhost:3000'");
+  expect(command).not.toContain("localhost:5173");
+});
+
+test("uses a Bun-safe production default when no explicit mode override is provided", () => {
+  expect(isLocalDevelopment()).toBe(false);
+  expect(buildWindowsUpgradeCommand("worker/id", "https://control.example")).toContain("github.com/Snazzie/Mars/releases");
 });
 
 test("uses the GitHub release installer for production upgrades", () => {

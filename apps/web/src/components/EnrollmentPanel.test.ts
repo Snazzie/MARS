@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { buildInstallerCommand, buildInstallerCommands, connectedEnrollmentWorker, connectionSnapshot, normalizeControlPlaneUrls } from "./EnrollmentPanel.tsx";
+import { isLocalDevelopment } from "../environment.ts";
 const url = "https://github.com/Snazzie/Mars/releases/latest/download/install-worker-linux-x64.sh";
 test("bootstrap status contract includes initialization generation and timestamps", () => {
   const status = {
@@ -55,6 +56,10 @@ test("uses the local control-plane installer endpoint in development", () => {
 test("keeps the GitHub release installer URL in production", () => {
   const command = buildInstallerCommands("https://control.example", "windows-x64", "code", false)[0]?.command ?? "";
   expect(command).toContain("https://github.com/Snazzie/Mars/releases/latest/download/install-worker-windows-x64.ps1");
+});
+test("uses a Bun-safe production default when no explicit mode override is provided", () => {
+  expect(isLocalDevelopment()).toBe(false);
+  expect(buildInstallerCommands("https://control.example", "windows-x64", "code")[0]?.command).toContain("github.com/Snazzie/Mars/releases");
 });
 test("builds only the selected platform installer command", () => {
   const commands = buildInstallerCommands("https://control.example", "windows-x64", "one-use-code");
