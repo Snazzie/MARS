@@ -5,6 +5,12 @@ test("workers retain crash-safe enrollment replay evidence columns", () => {
   expect(workers.enrollmentCodeHash).toBeDefined();
   expect(workers.enrollmentAuthenticatedAt).toBeDefined();
 });
+test("webhook deliveries default to pending state for retention cleanup", () => {
+  expect(schemaSql).toContain(
+    "CREATE TABLE IF NOT EXISTS webhook_deliveries (delivery_id text PRIMARY KEY, installation_id bigint NOT NULL, payload jsonb NOT NULL, received_at timestamptz NOT NULL DEFAULT now(), state text NOT NULL DEFAULT 'pending');",
+  );
+});
+
 
 test("repository authorization is represented only by GitHub availability", () => {
   const repositoryDefinition = schemaSql.match(/CREATE TABLE IF NOT EXISTS dashboard_repositories \(([^;]+)\);/)?.[1];
