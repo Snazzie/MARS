@@ -28,6 +28,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
       DATA_ROOT: /var/lib/mars
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}
+      GITHUB_WEBHOOK_URL: ${GITHUB_WEBHOOK_URL:?set GITHUB_WEBHOOK_URL}
       WORKER_BASE_URL: ${WORKER_BASE_URL:-}
     depends_on:
       postgres:

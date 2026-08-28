@@ -23,12 +23,14 @@ test("Compose renders base and tunnel profiles with HTTPS deployment fixture", a
   expect(fixture).toMatchObject({
     DATABASE_URL: "postgres://mars:test-password@db.example.test:5432/mars",
     PUBLIC_BASE_URL: "https://control.example.test",
+    GITHUB_WEBHOOK_URL: "https://hooks.example.test",
     WORKER_BASE_URL: "https://worker.example.test",
     CLOUDFLARE_TUNNEL_TOKEN: "test-token",
   });
 
   const compose = renderCompose(await read("deploy/control-plane/compose.yaml"), fixture);
   expect(compose).toContain("PUBLIC_BASE_URL: https://control.example.test");
+  expect(compose).toContain("GITHUB_WEBHOOK_URL: https://hooks.example.test");
   expect(compose).toContain("WORKER_BASE_URL: https://worker.example.test");
   expect(compose).toContain('ports: ["127.0.0.1:3000:3000"]');
   expect(compose).toContain("profiles: [tunnel]");
@@ -37,12 +39,13 @@ test("Compose renders base and tunnel profiles with HTTPS deployment fixture", a
 });
 
 
-test("production Compose requires database and public origin, with optional worker origin", async () => {
+test("production Compose requires database, browser, and webhook origins, with optional worker origin", async () => {
   const compose = await read("deploy/control-plane/compose.yaml");
   const rootCompose = await read("compose.yaml");
   expect(compose).toContain("DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}");
   expect(compose).toContain("DATA_ROOT: /var/lib/mars");
   expect(compose).toContain("PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}");
+  expect(compose).toContain("GITHUB_WEBHOOK_URL: ${GITHUB_WEBHOOK_URL:?set GITHUB_WEBHOOK_URL}");
   expect(compose).toContain("WORKER_BASE_URL: ${WORKER_BASE_URL:-}");
   expect(compose).toContain("mars-data:/var/lib/mars");
   expect(compose).not.toContain("postgres:");
@@ -52,6 +55,7 @@ test("production Compose requires database and public origin, with optional work
   expect(compose).not.toContain("POSTGRES_PASSWORD");
   expect(rootCompose).toContain("DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}");
   expect(rootCompose).toContain("PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}");
+  expect(rootCompose).toContain("GITHUB_WEBHOOK_URL: ${GITHUB_WEBHOOK_URL:?set GITHUB_WEBHOOK_URL}");
   expect(rootCompose).toContain("WORKER_BASE_URL: ${WORKER_BASE_URL:-}");
   expect(rootCompose).toContain("127.0.0.1:3000:3000");
 });
@@ -62,7 +66,7 @@ test("deployment template documents only operator inputs without secrets or rele
   const envExample = await read(".env.example");
   const variables = [...compose.matchAll(/\$\{([A-Z0-9_]+)(?::[^}]*)?\}/g)].map((match) => match[1]);
   for (const variable of new Set(variables)) expect(envExample).toContain(`${variable}=`);
-  expect(envExample).toContain("PUBLIC_BASE_URL=https://control.example.com");
+  expect(envExample).toContain("PUBLIC_BASE_URL=http://localhost:3000");
   expect(envExample).toContain("WORKER_BASE_URL=");
   expect(envExample).not.toContain("CONTROL_PLANE_ADAPTER_URLS");
   expect(envExample).not.toMatch(/(MARS_|DEFAULT_JOB_IMAGE|BROWSER_BASE_URL)/);
@@ -75,18 +79,19 @@ test("Unraid exposes only database and origin inputs", async () => {
   expect(template).not.toContain("control-plane:v0.1.0");
   expect(template).toContain("Target=\"DATABASE_URL\"");
   expect(template).toContain("Target=\"3000\"");
-  expect(template).toContain("Target=\"/var/lib/mars\"");
   expect(template).toContain("Target=\"PUBLIC_BASE_URL\"");
+  expect(template).toContain("Target=\"/var/lib/mars\"");
+  expect(template).toContain("Target=\"GITHUB_WEBHOOK_URL\"");
   expect(template).toContain("Target=\"WORKER_BASE_URL\"");
   expect(template).not.toContain("CONTROL_PLANE_ADAPTER_URLS");
+  expect(template).toContain("Default=\"http://localhost:3000\"");
   expect(template).toContain("Default=\"https://control.example.com\"");
   expect(template).toContain("Default=\"\"");
-  expect(template).toContain("Public HTTPS");
+  expect(template).toContain("public HTTPS");
   expect(template).toContain("worker");
   expect(template).toContain("app_master_key");
   expect(template).toContain("PostgreSQL");
   expect(template).not.toContain("/run/secrets/app_master_key");
-  expect(template).not.toContain("GITHUB_");
 });
 test("image persists production data-root contract", async () => {
   const dockerfile = await read("deploy/control-plane/Dockerfile");
@@ -114,7 +119,7 @@ test("deployment guide documents operational routing, onboarding, persistence, a
   for (const phrase of [
     "DATABASE_URL", "/onboarding", "/api/livez", "/api/readyz", "WebSocket",
     "Cloudflare named tunnel", "CLOUDFLARE_TUNNEL_TOKEN", "/api/github/webhooks",
-    "WORKER_BASE_URL", "preserve the original webhook headers",
+    "WORKER_BASE_URL", "Preserve webhook",
     "/api/browser/invalidations", "/api/v1/workers/connect", "identity challenges",
     "Tailscale Serve", "Tailscale Funnel", "example-name.ts.net", "control.example.com",
     "same maintenance window", "/api/auth/github/callback", "/api/github/app/setup",
@@ -122,7 +127,7 @@ test("deployment guide documents operational routing, onboarding, persistence, a
     "C:\\\\ProgramData\\\\Mars\\\\install.log", "Library/Application Support/Mars/install.log",
     "app_master_key", "PostgreSQL", "Linux x64", "Windows", "Apple-Silicon",
   ]) expect(readme).toContain(phrase);
-  expect(readme).toContain("Do not run a privileged Tailscale container");
+  expect(readme).toContain("Do not run a privileged");
   expect(readme).toContain("127.0.0.1:3000");
   expect(readme).not.toContain("CONTROL_PLANE_ADAPTER_URLS");
   expect(readme).not.toMatch(/(?:DEFAULT_JOB_IMAGE|MARS_[A-Z0-9_]+)=/);

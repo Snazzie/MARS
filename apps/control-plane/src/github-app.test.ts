@@ -27,15 +27,16 @@ function service(fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Pr
     fetch: fetchImpl,
     secretBox: new SecretBox(masterKey),
     publicOrigin: () => "https://control-plane.test",
+    webhookOrigin: () => "https://hooks.example.test",
   } as never);
 }
 
 describe("GitHub App onboarding", () => {
-  test("omits webhook hook attributes from a public HTTPS manifest", async () => {
+  test("derives an active webhook from the configured public root while preserving browser callback URLs", async () => {
     const github = service(async () => Response.json({}));
     const launch = await github.createManifestLaunch("admin-1", organizationId, "public-https-key");
     const manifest = JSON.parse(launch.manifest);
-    expect(manifest.hook_attributes).toBeUndefined();
+    expect(manifest.hook_attributes).toEqual({ url: "https://hooks.example.test/api/github/webhooks", active: true });
     expect(manifest.url).toBe("https://control-plane.test");
     expect(manifest.redirect_url).toBe("https://control-plane.test/api/github/app/manifest/callback");
     expect(manifest.setup_url).toBe("https://control-plane.test/api/github/app/setup");
@@ -56,17 +57,17 @@ describe("GitHub App onboarding", () => {
     expect(manifest.default_events).toEqual(["workflow_job", "membership"]);
     expect(manifest.default_permissions.contents).toBe("write");
     expect(manifest.default_permissions.pull_requests).toBe("write");
-    expect(manifest.hook_attributes).toBeUndefined();
+    expect(manifest.hook_attributes).toEqual({ url: "https://hooks.example.test/api/github/webhooks", active: true });
     const replay = await github.createManifestLaunch("admin-1", organizationId, "manifest-key");
     expect(replay).toEqual(launch);
     await expect(github.completeManifestRegistration("wrong-user", "missing", "code")).rejects.toThrow();
     expect(calls).toHaveLength(0);
   });
+
   test("refuses installation until this control plane has registered its GitHub App", async () => {
     const github = service(async () => Response.json({}));
     await expect(github.beginInstallation("admin-1", organizationId, "install-key")).rejects.toThrow("github_app_unconfigured");
   });
-
 
   test("uses a public webhook tunnel without changing browser callback URLs", async () => {
     const github = new GitHubAppService({
@@ -74,10 +75,11 @@ describe("GitHub App onboarding", () => {
       fetch: async () => Response.json({}),
       secretBox: new SecretBox(masterKey),
       publicOrigin: () => "https://control-plane.test",
+      webhookOrigin: () => "https://hooks.example.test",
     } as never);
     const launch = await github.createManifestLaunch("admin-1", organizationId, "tunnel-key");
     const manifest = JSON.parse(launch.manifest);
-    expect(manifest.hook_attributes).toBeUndefined();
+    expect(manifest.hook_attributes).toEqual({ url: "https://hooks.example.test/api/github/webhooks", active: true });
     expect(manifest.redirect_url).toBe("https://control-plane.test/api/github/app/manifest/callback");
     expect(manifest.setup_url).toBe("https://control-plane.test/api/github/app/setup");
     expect(manifest.callback_urls).toEqual(["https://control-plane.test/api/auth/github/callback"]);

@@ -7,25 +7,28 @@ PostgreSQL and the public ingress are operator-managed.
 
 ## Deployment inputs
 
-Use a stable **public HTTPS origin** for `PUBLIC_BASE_URL`. It may be a
-provider-assigned hostname such as `https://example-name.ts.net` or a custom
-domain such as `https://control.example.com`. This is the browser and GitHub
-origin: GitHub App homepage, OAuth callback, and setup URL use it. Mars creates
-the GitHub App without a webhook during onboarding; GitHub webhook delivery is
-optional and can be enabled later after a publicly reachable HTTPS endpoint is
-available. Do not use the local Unraid WebUI URL as this origin.
+Use `PUBLIC_BASE_URL` as Mars's canonical browser origin. It may be
+`http://localhost:3000` for local OAuth/browser access, or an HTTPS provider
+hostname such as `https://example-name.ts.net` / custom domain such as
+`https://control.example.com`. GitHub App homepage, OAuth callback, and setup
+URLs use this origin. It is not required to be publicly reachable.
+
+Set `GITHUB_WEBHOOK_URL` to a separate, required public HTTPS origin root that
+GitHub can reach. Mars appends `/api/github/webhooks`; provide no path and do
+not use localhost or private hosts. This may be the same as `PUBLIC_BASE_URL`
+when that origin is public, or a distinct Cloudflare/Tailscale Funnel origin.
+Do not use the local Unraid WebUI URL for the webhook origin.
 
 `WORKER_BASE_URL` is optional and accepts one HTTPS origin for worker
 connections. When omitted, workers use `PUBLIC_BASE_URL`. It is never used
-for GitHub/browser URLs.
-
-
+for GitHub/browser URLs or webhook delivery.
 Create `.env` with the external database and origin settings:
 
 ```bash
 cat > .env <<'EOF'
 DATABASE_URL=postgres://mars:password@db.example:5432/mars
-PUBLIC_BASE_URL=https://control.example.com
+PUBLIC_BASE_URL=http://localhost:3000
+GITHUB_WEBHOOK_URL=https://control.example.com
 # Optional private worker-only origin; defaults to PUBLIC_BASE_URL.
 WORKER_BASE_URL=https://worker.example.com
 EOF
@@ -94,7 +97,7 @@ Losing either the data volume or its matching database makes encrypted GitHub
 credentials unrecoverable. Restore both as a pair; never regenerate
 `app_master_key` for an existing database.
 
-## Cloudflare named tunnel (public origin)
+## Cloudflare named tunnel (public ingress)
 
 A Cloudflare named tunnel can expose the entire stable hostname without an
 inbound Unraid port. In Cloudflare Zero Trust, route the complete provider or
@@ -104,13 +107,14 @@ custom hostname to the control plane service:
 https://control.example.com/*  ->  http://control-plane:3000
 ```
 
-The route must forward all paths and permit WebSocket upgrades for both
-`/api/browser/invalidations` and `/api/v1/workers/connect`. If GitHub webhooks
-are enabled later, preserve the original webhook headers and request body
-(including `X-Hub-Signature-256`) and bypass Cloudflare Access/identity
-challenges for that endpoint. Also bypass identity challenges for GitHub
-callbacks and worker bootstrap/WebSocket requests. Keep TLS termination at
-Cloudflare; the internal Compose hop remains HTTP.
+Set `GITHUB_WEBHOOK_URL` to that public HTTPS origin root (or another public
+ingress), without `/api/github/webhooks`; Mars appends the path itself. The
+route must forward all paths and permit WebSocket upgrades for both
+`/api/browser/invalidations` and `/api/v1/workers/connect`. Preserve webhook
+headers/body (including `X-Hub-Signature-256`) and bypass Cloudflare
+Access/identity challenges for webhook, GitHub callback, and worker
+bootstrap/WebSocket requests. Keep TLS termination at Cloudflare; the internal
+Compose hop remains HTTP.
 
 Put the named tunnel token in `.env` and start the tunnel profile:
 
@@ -120,54 +124,56 @@ docker compose --env-file .env -f deploy/control-plane/compose.yaml --profile tu
 docker compose --env-file .env -f deploy/control-plane/compose.yaml logs -f cloudflared
 ```
 
-Do not use `http://control-plane:3000` or a tunnel-internal hostname in GitHub
-settings. The public origin remains the canonical browser/GitHub origin.
-
-## Tailscale Serve and Funnel
+Do not use `http://control-plane:3000` or a tunnel-internal hostname for
+`GITHUB_WEBHOOK_URL`. `PUBLIC_BASE_URL` may remain `http://localhost:3000`
+when only local browser access is needed.
 
 On the Unraid host, use **Tailscale Serve** for a private worker
 connection. Set `WORKER_BASE_URL` to its HTTPS origin; leave it empty when
 workers can reach Mars through `PUBLIC_BASE_URL`. Serve is a worker connection
-origin, not a required GitHub origin.
+origin and must never be used for `GITHUB_WEBHOOK_URL`.
 
-GitHub App setup and reconciliation polling do not require Tailscale Funnel,
-Cloudflare, or any webhook ingress. If webhook delivery is enabled later, use
-**Tailscale Funnel** (or Cloudflare/another public ingress) for a publicly
-reachable HTTPS webhook URL. Do not run a privileged Tailscale container;
-install and operate Tailscale on the Unraid host or use an external ingress.
+For GitHub webhook delivery, use **Tailscale Funnel** (or Cloudflare/another
+public ingress) and set `GITHUB_WEBHOOK_URL` to its stable public HTTPS origin
+root. Mars appends `/api/github/webhooks`. GitHub App setup and reconciliation
+polling do not require Funnel when webhook delivery is not enabled, but this
+variable is still required at control-plane startup. Do not run a privileged
+Tailscale container; operate Tailscale on the Unraid host or use external
+ingress.
 
 ## GitHub URLs and origin changes
 
-The GitHub App uses these paths on the current public origin:
+The GitHub App uses these paths:
 
 ```text
-Homepage:  https://<public-origin>/
-Callback:  https://<public-origin>/api/auth/github/callback
-Setup:     https://<public-origin>/api/github/app/setup
+Homepage:  <PUBLIC_BASE_URL>/
+Callback:  <PUBLIC_BASE_URL>/api/auth/github/callback
+Setup:     <PUBLIC_BASE_URL>/api/github/app/setup
+Webhook:   <GITHUB_WEBHOOK_URL>/api/github/webhooks
 ```
 
-Mars creates the App without webhook configuration and uses reconciliation
-polling for GitHub state. An administrator may add the webhook later from the
-GitHub App settings; that URL must be publicly reachable over HTTPS and point
-to `/api/github/webhooks`.
+The manifest enables webhook delivery at the explicit `GITHUB_WEBHOOK_URL`;
+reconciliation polling remains enabled as a complementary recovery mechanism.
 
-Changing `PUBLIC_BASE_URL` changes Mars's effective origin immediately at the
-next process startup. During the same maintenance window, update the existing
-GitHub App homepage, OAuth callback
-`/api/auth/github/callback`, and setup `/api/github/app/setup` URLs to the new
-origin. If a webhook was enabled, update `/api/github/webhooks` too. Keep the
-old ingress available until those GitHub settings and the control-plane
-deployment agree; otherwise sign-in or App installation can fail.
+Changing `PUBLIC_BASE_URL` changes Mars's effective browser origin immediately
+at the next process startup. Changing `GITHUB_WEBHOOK_URL` changes the
+manifest's webhook destination. During the same maintenance window, update
+the existing GitHub App homepage, OAuth callback
+`/api/auth/github/callback`, setup `/api/github/app/setup`, and webhook
+`/api/github/webhooks` URLs to match the corresponding environment values.
+Keep the old ingress available until GitHub settings and the control-plane
+deployment agree; otherwise sign-in, App installation, or webhook delivery
+can fail.
 
 ## Unraid
 
 Import `deploy/unraid/mars-control-plane.xml`. Keep the local Unraid WebUI URL
-for initial container access and health checks; it is not the public GitHub
-origin. Supply the external `DATABASE_URL`, persistent data path, required
-public HTTPS `PUBLIC_BASE_URL`, and optional `WORKER_BASE_URL`. The worker
-origin is a single value and defaults to the public origin when omitted. The
-template is unprivileged and preserves the loopback Compose port.
-
+for initial container access and health checks. Supply the external
+`DATABASE_URL`, persistent data path, canonical `PUBLIC_BASE_URL` (which may
+be `http://localhost:3000` for local browser OAuth), required public HTTPS
+`GITHUB_WEBHOOK_URL`, and optional `WORKER_BASE_URL`. The worker origin is a
+single value and defaults to the public origin when omitted. The template is
+unprivileged and preserves the loopback Compose port.
 ## Worker release boundary
 
 The control-plane image is published as

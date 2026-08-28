@@ -20,14 +20,23 @@ import { ensureDefaultPools } from "./default-pools.ts";
 import { GithubRateLimitGate } from "./github-rate-limit.ts";
 import { fileURLToPath } from "node:url";
 import { initializeControlPlaneSetup } from "./control-plane-setup.ts";
-import { httpOrigin } from "./http-origin.ts";
+import { httpOrigin, publicHttpOrigin } from "./http-origin.ts";
 import { loadWorkerReleaseManifest } from "./worker-release.ts";
 import { createControlPlaneGateway, type ControlPlaneSocketData } from "./control-plane-gateway.ts";
+
+export function resolveWebhookOrigin(raw: string | undefined = Bun.env.GITHUB_WEBHOOK_URL): string {
+  if (!raw?.trim()) throw new Error("GITHUB_WEBHOOK_URL is required");
+  return publicHttpOrigin("GITHUB_WEBHOOK_URL", raw);
+}
 
 export type ControlPlaneStartOptions = {
   /** Test seams; production uses the normal environment-backed implementations. */
   db?: DashboardDb;
   setupOverride?: { setup: ControlPlaneSetup; masterKey: string };
+  /** Optional canonical browser origin seam; production uses PUBLIC_BASE_URL. */
+  publicOrigin?: string;
+  /** Optional public GitHub webhook origin seam; production uses GITHUB_WEBHOOK_URL. */
+  webhookOrigin?: string;
   workerOrigin?: string;
   /** Legacy test/internal seam; production uses WORKER_BASE_URL. */
   adapterUrls?: string[];
@@ -61,8 +70,10 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const production = Bun.env.NODE_ENV === "production";
   const dataRoot = Bun.env.DATA_ROOT?.trim() || "/var/lib/mars";
   const configuredPublicOriginRaw = options.publicOrigin?.trim() || Bun.env.PUBLIC_BASE_URL?.trim() || undefined;
-  if (!configuredPublicOriginRaw && !options.setupOverride) throw new Error("PUBLIC_BASE_URL is required");
   const configuredPublicOrigin = configuredPublicOriginRaw ? httpOrigin("PUBLIC_BASE_URL", configuredPublicOriginRaw) : undefined;
+  const configuredWebhookOrigin = options.webhookOrigin?.trim()
+    ? publicHttpOrigin("GITHUB_WEBHOOK_URL", options.webhookOrigin)
+    : resolveWebhookOrigin();
   const configuredWorkerOriginRaw = options.workerOrigin?.trim() || Bun.env.WORKER_BASE_URL?.trim();
   const configuredWorkerOrigins = configuredWorkerOriginRaw
     ? [httpOrigin("WORKER_BASE_URL", configuredWorkerOriginRaw)]
@@ -161,7 +172,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const discoveryIntervalMs = Number(Bun.env.DISCOVERY_INTERVAL_MS ?? 30_000);
   const reconciliationIntervalMs = Number(Bun.env.JOB_RECONCILIATION_INTERVAL_MS ?? 5_000);
   const discoveryHealth = new DiscoveryHealthMonitor(discoveryIntervalMs, Date.parse(startedAt));
-  const githubApp = options.githubApp ?? new GitHubAppService({ db, secretBox, publicOrigin: initialized.setup.publicOrigin });
+  const githubApp = options.githubApp ?? new GitHubAppService({ db, secretBox, publicOrigin: initialized.setup.publicOrigin, webhookOrigin: () => configuredWebhookOrigin });
   const githubRateLimits = new GithubRateLimitGate();
   let triggerReconciliation = () => Promise.resolve();
   const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerOrchestratorExecutables, workerServiceHostExecutable, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerAdopted: workerId => void dispatcher.replayConnected(workerId), health: () => ({ buildId: Bun.env.MARS_BUILD_ID ?? "dev", startedAt, discovery: discoveryHealth.snapshot() }) });
