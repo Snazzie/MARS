@@ -84,11 +84,12 @@ Import `deploy/unraid/mars-control-plane.xml`. Required inputs are the external 
 
 Worker releases are independent of the control-plane image:
 
-- Push a tag matching `linux-worker-*` to build and publish the Linux worker release.
-- Push a tag matching `windows-worker-*` to build and publish the Windows worker release.
-- Use **Actions → Release Linux worker** or **Actions → Release Windows worker** for an artifact-only manual build.
+- Push a tag matching `windows-worker-*` to build and publish the supported Windows worker artifacts.
+- Use **Actions → Release Windows worker** for an artifact-only manual build.
+- Linux VM worker appliances are deferred.
+- Windows VM orchestration is deferred.
 
-Both workflows publish worker release metadata containing the Mars contract version from `@mars/contracts`. Linux releases also publish the `ghcr.io/snazzie/mars/linux-broker` image. Worker-local Windows container image dependencies are supplied by the worker build and are not required by the control-plane release.
+The Windows workflow publishes release metadata containing the Mars contract version from `@mars/contracts`. Worker-local Windows container image dependencies are supplied by the worker build and are not required by the control-plane release.
 
 ## Upgrades and backups
 
