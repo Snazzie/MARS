@@ -13,10 +13,10 @@ domain such as `https://control.example.com`. This is the browser and GitHub
 origin: GitHub App homepage, OAuth callback, setup URL, and webhook URL all use
 it. Do not use the local Unraid WebUI URL as this origin.
 
-`CONTROL_PLANE_ADAPTER_URLS` is optional and is a comma-separated list of
-additional HTTPS origins for workers. These origins are not GitHub/browser or
-webhook origins. A worker may use one of the configured origins when its
-network path cannot reach the public origin.
+`WORKER_BASE_URL` is optional and accepts one HTTPS origin for worker
+connections. When omitted, workers use `PUBLIC_BASE_URL`. It is never used
+for GitHub/browser or webhook URLs.
+
 
 Create `.env` with the external database and origin settings:
 
@@ -24,15 +24,18 @@ Create `.env` with the external database and origin settings:
 cat > .env <<'EOF'
 DATABASE_URL=postgres://mars:password@db.example:5432/mars
 PUBLIC_BASE_URL=https://control.example.com
-# Optional private worker-only origins, comma-separated.
-CONTROL_PLANE_ADAPTER_URLS=https://worker.example.com
+# Optional private worker-only origin; defaults to PUBLIC_BASE_URL.
+WORKER_BASE_URL=https://worker.example.com
 EOF
-chmod 600 .env
 ```
 
+The deployment template exposes only these operator inputs (plus the optional
+tunnel token). Release artifact URLs, hashes, source paths, and image metadata
+are maintainer-owned GitHub Actions inputs and must not be added to `.env`.
 Keep `.env` and the tunnel token out of source control. The Compose HTTP
 binding intentionally remains loopback-only at `127.0.0.1:3000`; ingress
 connects to this service rather than exposing a new Unraid port.
+
 
 ## First boot and exact onboarding flow
 
@@ -120,9 +123,11 @@ settings. The public origin remains the canonical browser/GitHub origin.
 
 ## Tailscale Serve and Funnel
 
-On the Unraid host, use **Tailscale Serve** for private worker adapters. Put a
-Serve HTTPS origin in `CONTROL_PLANE_ADAPTER_URLS` when tailnet-only workers
-need a direct route to Mars. Serve is not a GitHub webhook origin.
+On the Unraid host, use **Tailscale Serve** for a private worker
+connection. Set `WORKER_BASE_URL` to its HTTPS origin; leave it empty when
+workers can reach Mars through `PUBLIC_BASE_URL`. Serve is not a GitHub
+webhook origin.
+
 
 GitHub webhook delivery requires a publicly reachable HTTPS endpoint. Use
 **Tailscale Funnel** (or Cloudflare/another separate public ingress) for
@@ -156,8 +161,9 @@ sign-in, App installation, and webhook delivery can fail.
 Import `deploy/unraid/mars-control-plane.xml`. Keep the local Unraid WebUI URL
 for initial container access and health checks; it is not the public GitHub
 origin. Supply the external `DATABASE_URL`, persistent data path, required
-public HTTPS `PUBLIC_BASE_URL`, and optional worker adapter URLs. The template
-is unprivileged and preserves the loopback Compose port.
+public HTTPS `PUBLIC_BASE_URL`, and optional `WORKER_BASE_URL`. The worker
+origin is a single value and defaults to the public origin when omitted. The
+template is unprivileged and preserves the loopback Compose port.
 
 ## Worker release boundary
 

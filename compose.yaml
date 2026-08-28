@@ -25,10 +25,10 @@ services:
         MARS_BUILD_ID: ${MARS_BUILD_ID:-local}
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-mars}:${POSTGRES_PASSWORD:-mars}@postgres:5432/${POSTGRES_DB:-mars}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
       DATA_ROOT: /var/lib/mars
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
-      CONTROL_PLANE_ADAPTER_URLS: ${CONTROL_PLANE_ADAPTER_URLS:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}
+      WORKER_BASE_URL: ${WORKER_BASE_URL:-}
     depends_on:
       postgres:
         condition: service_healthy

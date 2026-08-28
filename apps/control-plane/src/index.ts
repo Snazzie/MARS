@@ -28,7 +28,8 @@ export type ControlPlaneStartOptions = {
   /** Test seams; production uses the normal environment-backed implementations. */
   db?: DashboardDb;
   setupOverride?: { setup: ControlPlaneSetup; masterKey: string };
-  publicOrigin?: string;
+  workerOrigin?: string;
+  /** Legacy test/internal seam; production uses WORKER_BASE_URL. */
   adapterUrls?: string[];
   port?: number;
   skipBackgroundTasks?: boolean;
@@ -47,9 +48,12 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const production = Bun.env.NODE_ENV === "production";
   const dataRoot = Bun.env.DATA_ROOT?.trim() || "/var/lib/mars";
   const configuredPublicOriginRaw = options.publicOrigin?.trim() || Bun.env.PUBLIC_BASE_URL?.trim() || undefined;
+  if (!configuredPublicOriginRaw && !options.setupOverride) throw new Error("PUBLIC_BASE_URL is required");
   const configuredPublicOrigin = configuredPublicOriginRaw ? httpOrigin("PUBLIC_BASE_URL", configuredPublicOriginRaw) : undefined;
-  const configuredAdapterValues = options.adapterUrls ?? (Bun.env.CONTROL_PLANE_ADAPTER_URLS ?? "").split(",").map(value => value.trim()).filter(Boolean);
-  const controlPlaneAdapterUrls = configuredAdapterValues.map(value => httpOrigin("CONTROL_PLANE_ADAPTER_URLS", value));
+  const configuredWorkerOriginRaw = options.workerOrigin?.trim() || Bun.env.WORKER_BASE_URL?.trim();
+  const configuredWorkerOrigins = configuredWorkerOriginRaw
+    ? [httpOrigin("WORKER_BASE_URL", configuredWorkerOriginRaw)]
+    : options.adapterUrls?.map(value => httpOrigin("CONTROL_PLANE_ADAPTER_URLS", value)) ?? [];
   const env = {
     MACOS_TART_BASE_IMAGE: Bun.env.MARS_TART_BASE_IMAGE,
     DEFAULT_IMAGES: { "linux-x64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_X64, "windows-x64": Bun.env.DEFAULT_JOB_IMAGE_WINDOWS_X64, "macos-arm64": Bun.env.DEFAULT_JOB_IMAGE_MACOS_ARM64 },
@@ -120,7 +124,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const initialized = options.setupOverride ?? await initializeControlPlaneSetup(db, dataRoot, configuredPublicOrigin);
   const workerConnectionOrigins = (): string[] => {
     const canonical = initialized.setup.publicOrigin() ?? configuredPublicOrigin;
-    return [...new Set([canonical, ...controlPlaneAdapterUrls].filter((origin): origin is string => Boolean(origin)))];
+    return [...new Set([canonical, ...configuredWorkerOrigins].filter((origin): origin is string => Boolean(origin)))];
   };
   const secretBox = options.secretBox ?? new SecretBox(initialized.masterKey);
   const sessions = new Map<string, { state: string; verifier: string; createdAt: number }>();

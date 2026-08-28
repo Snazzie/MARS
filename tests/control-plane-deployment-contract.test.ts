@@ -23,47 +23,52 @@ test("Compose renders base and tunnel profiles with HTTPS deployment fixture", a
   expect(fixture).toMatchObject({
     DATABASE_URL: "postgres://mars:test-password@db.example.test:5432/mars",
     PUBLIC_BASE_URL: "https://control.example.test",
-    CONTROL_PLANE_ADAPTER_URLS: "https://worker.example.test",
+    WORKER_BASE_URL: "https://worker.example.test",
     CLOUDFLARE_TUNNEL_TOKEN: "test-token",
   });
 
   const compose = renderCompose(await read("deploy/control-plane/compose.yaml"), fixture);
   expect(compose).toContain("PUBLIC_BASE_URL: https://control.example.test");
-  expect(compose).toContain("CONTROL_PLANE_ADAPTER_URLS: https://worker.example.test");
+  expect(compose).toContain("WORKER_BASE_URL: https://worker.example.test");
   expect(compose).toContain('ports: ["127.0.0.1:3000:3000"]');
   expect(compose).toContain("profiles: [tunnel]");
   expect(compose).toContain("TUNNEL_TOKEN: test-token");
   expect(compose).toContain("CLOUDFLARE_TUNNEL_TOKEN is required");
 });
 
-test("production Compose requires DATABASE_URL, optional origins, and keeps the data volume", async () => {
+
+test("production Compose requires database and public origin, with optional worker origin", async () => {
   const compose = await read("deploy/control-plane/compose.yaml");
   const rootCompose = await read("compose.yaml");
   expect(compose).toContain("DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}");
   expect(compose).toContain("DATA_ROOT: /var/lib/mars");
-  expect(compose).toContain("PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}");
-  expect(compose).toContain("CONTROL_PLANE_ADAPTER_URLS: ${CONTROL_PLANE_ADAPTER_URLS:-}");
+  expect(compose).toContain("PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}");
+  expect(compose).toContain("WORKER_BASE_URL: ${WORKER_BASE_URL:-}");
   expect(compose).toContain("mars-data:/var/lib/mars");
   expect(compose).not.toContain("postgres:");
   expect(compose).not.toContain("secrets:");
   expect(compose).toContain("profiles: [tunnel]");
   expect(compose).toContain("CLOUDFLARE_TUNNEL_TOKEN");
   expect(compose).not.toContain("POSTGRES_PASSWORD");
-  expect(rootCompose).toContain("PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}");
-  expect(rootCompose).toContain("CONTROL_PLANE_ADAPTER_URLS: ${CONTROL_PLANE_ADAPTER_URLS:-}");
+  expect(rootCompose).toContain("DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}");
+  expect(rootCompose).toContain("PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}");
+  expect(rootCompose).toContain("WORKER_BASE_URL: ${WORKER_BASE_URL:-}");
   expect(rootCompose).toContain("127.0.0.1:3000:3000");
 });
 
-test("deployment template documents required and optional variables without secrets", async () => {
+
+test("deployment template documents only operator inputs without secrets or release metadata", async () => {
   const compose = await read("deploy/control-plane/compose.yaml");
   const envExample = await read(".env.example");
   const variables = [...compose.matchAll(/\$\{([A-Z0-9_]+)(?::[^}]*)?\}/g)].map((match) => match[1]);
   for (const variable of new Set(variables)) expect(envExample).toContain(`${variable}=`);
   expect(envExample).toContain("PUBLIC_BASE_URL=https://control.example.com");
-  expect(envExample).toContain("CONTROL_PLANE_ADAPTER_URLS=https://worker.example.com");
+  expect(envExample).toContain("WORKER_BASE_URL=");
+  expect(envExample).not.toContain("CONTROL_PLANE_ADAPTER_URLS");
+  expect(envExample).not.toMatch(/(MARS_|DEFAULT_JOB_IMAGE|BROWSER_BASE_URL)/);
   expect(envExample).not.toMatch(/(ghp_|github_pat_|-----BEGIN [A-Z ]+ PRIVATE KEY-----)/i);
 });
-test("Unraid exposes latest control-plane image and origin, database, port, and persistent data inputs", async () => {
+test("Unraid exposes only database and origin inputs", async () => {
   const template = await read("deploy/unraid/mars-control-plane.xml");
   expect(template).toContain("<WebUI>http://[IP]:[PORT:3000]/</WebUI>");
   expect(template).toContain("<Repository>ghcr.io/snazzie/mars/control-plane:latest</Repository>");
@@ -72,11 +77,12 @@ test("Unraid exposes latest control-plane image and origin, database, port, and 
   expect(template).toContain("Target=\"3000\"");
   expect(template).toContain("Target=\"/var/lib/mars\"");
   expect(template).toContain("Target=\"PUBLIC_BASE_URL\"");
-  expect(template).toContain("Target=\"CONTROL_PLANE_ADAPTER_URLS\"");
+  expect(template).toContain("Target=\"WORKER_BASE_URL\"");
+  expect(template).not.toContain("CONTROL_PLANE_ADAPTER_URLS");
   expect(template).toContain("Default=\"https://control.example.com\"");
   expect(template).toContain("Default=\"\"");
   expect(template).toContain("Public HTTPS");
-  expect(template).toContain("worker-only");
+  expect(template).toContain("worker");
   expect(template).toContain("app_master_key");
   expect(template).toContain("PostgreSQL");
   expect(template).not.toContain("/run/secrets/app_master_key");
@@ -95,8 +101,7 @@ test("deployment guide documents operational routing, onboarding, persistence, a
   for (const phrase of [
     "DATABASE_URL", "/onboarding", "/api/livez", "/api/readyz", "WebSocket",
     "Cloudflare named tunnel", "CLOUDFLARE_TUNNEL_TOKEN", "/api/github/webhooks",
-    "back up", "linux/amd64", "worker execution", "PUBLIC_BASE_URL",
-    "CONTROL_PLANE_ADAPTER_URLS", "preserve the original webhook headers",
+    "WORKER_BASE_URL", "preserve the original webhook headers",
     "/api/browser/invalidations", "/api/v1/workers/connect", "identity challenges",
     "Tailscale Serve", "Tailscale Funnel", "example-name.ts.net", "control.example.com",
     "same maintenance window", "/api/auth/github/callback", "/api/github/app/setup",
@@ -106,6 +111,8 @@ test("deployment guide documents operational routing, onboarding, persistence, a
   ]) expect(readme).toContain(phrase);
   expect(readme).toContain("Do not run a privileged Tailscale container");
   expect(readme).toContain("127.0.0.1:3000");
+  expect(readme).not.toContain("CONTROL_PLANE_ADAPTER_URLS");
+  expect(readme).not.toMatch(/(?:DEFAULT_JOB_IMAGE|MARS_[A-Z0-9_]+)=/);
 });
 test("schema-2 release fixture keeps unavailable platforms explicit", async () => {
   const manifest = JSON.parse(await read("deploy/control-plane/release-manifest.json"));
