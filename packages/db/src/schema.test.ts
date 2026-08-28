@@ -89,3 +89,70 @@ test("adds onboarding verification state in an append-only migration", () => {
   expect(onboardingVerificationMigrationSql).toContain("verification_pool_id");
   expect(onboardingVerificationMigrationSql).toContain("verification_github_run_id");
 });
+test("canonical and baseline schemas define control-plane setup state", () => {
+  for (const sql of [schemaSql, baselineSchemaSql]) {
+    expect(sql).toContain("CREATE TABLE IF NOT EXISTS control_plane_config (");
+    expect(sql).toContain("singleton boolean PRIMARY KEY DEFAULT true NOT NULL");
+    expect(sql).toContain("public_base_url text");
+    expect(sql).toContain("setup_code_hash bytea");
+    expect(sql).toContain("setup_completed_at timestamptz");
+    expect(sql).toContain("updated_at timestamptz NOT NULL DEFAULT now()");
+    expect(sql).toContain("CONSTRAINT control_plane_config_singleton_check CHECK (singleton)");
+  }
+});
+
+test("canonical and baseline schemas constrain GitHub run attempts", () => {
+  for (const sql of [schemaSql, baselineSchemaSql]) {
+    expect(sql).toContain(
+      "ALTER TABLE github_discovery_checkpoints ADD COLUMN IF NOT EXISTS completed_run_attempt integer NOT NULL DEFAULT 1;",
+    );
+    expect(sql).toContain(
+      "ALTER TABLE dashboard_runs ADD COLUMN IF NOT EXISTS run_attempt integer NOT NULL DEFAULT 1;",
+    );
+    expect(sql).toContain(
+      "ALTER TABLE dashboard_jobs ADD COLUMN IF NOT EXISTS run_attempt integer NOT NULL DEFAULT 1;",
+    );
+    expect(sql).toContain("github_discovery_checkpoints_completed_run_attempt_check");
+    expect(sql).toContain("dashboard_runs_run_attempt_check");
+    expect(sql).toContain("dashboard_jobs_run_attempt_check");
+    expect(sql).toContain("CHECK (completed_run_attempt > 0)");
+    expect(sql).toContain("CHECK (run_attempt > 0)");
+  }
+});
+
+test("canonical and baseline schemas define worker cache tables and indexes", () => {
+  for (const sql of [schemaSql, baselineSchemaSql]) {
+    expect(sql).toContain("CREATE TABLE IF NOT EXISTS worker_cache_status (");
+    expect(sql).toContain("worker_id uuid PRIMARY KEY REFERENCES workers(id) ON DELETE CASCADE");
+    expect(sql).toContain("size_bytes bigint NOT NULL DEFAULT 0 CHECK (size_bytes >= 0)");
+    expect(sql).toContain("entry_count bigint NOT NULL DEFAULT 0 CHECK (entry_count >= 0)");
+    expect(sql).toContain("CREATE TABLE IF NOT EXISTS worker_cache_entries (");
+    expect(sql).toContain("PRIMARY KEY (worker_id, entry_id)");
+    expect(sql).toContain(
+      "CREATE INDEX IF NOT EXISTS worker_cache_entries_order_idx ON worker_cache_entries(worker_id, last_accessed_at DESC, entry_id);",
+    );
+    expect(sql).toContain(
+      "CREATE INDEX IF NOT EXISTS worker_cache_entries_repository_idx ON worker_cache_entries(worker_id, github_repository_id);",
+    );
+    expect(sql).toContain("CREATE TABLE IF NOT EXISTS worker_cache_snapshot_entries (");
+    expect(sql).toContain("sequence integer NOT NULL CHECK (sequence >= 0)");
+    expect(sql).toContain(
+      "PRIMARY KEY (worker_id, snapshot_id, sequence, entry_id)",
+    );
+    expect(sql).toContain(
+      "CREATE INDEX IF NOT EXISTS worker_cache_snapshot_entries_idx ON worker_cache_snapshot_entries(worker_id, snapshot_id, sequence, entry_id);",
+    );
+    expect(sql).toContain(
+      "CREATE INDEX IF NOT EXISTS worker_cache_snapshot_entries_staged_at_idx ON worker_cache_snapshot_entries(staged_at);",
+    );
+  }
+});
+
+test("canonical and baseline schemas define enrollment replay columns", () => {
+  for (const sql of [schemaSql, baselineSchemaSql]) {
+    expect(sql).toContain("ALTER TABLE workers ADD COLUMN IF NOT EXISTS enrollment_code_hash bytea;");
+    expect(sql).toContain(
+      "ALTER TABLE workers ADD COLUMN IF NOT EXISTS enrollment_authenticated_at timestamptz;",
+    );
+  }
+});
