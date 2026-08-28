@@ -90,31 +90,25 @@ assert_release_artifacts() {
   '
 }
 
-seed_history() {
+seed_database() {
   local database=$1
-  local branch=$2
+  local baseline_hash
+  baseline_hash=$(sha256sum packages/db/src/migrations/0000_mars_baseline.sql | cut -d ' ' -f1)
   psql_db postgres -c "CREATE DATABASE \"$database\"" >/dev/null
-  psql_db "$database" < packages/db/src/migrations/0000_legacy_baseline.sql >/dev/null
-  psql_db "$database" < packages/db/src/migrations/0001_post_baseline.sql >/dev/null
-  psql_db "$database" <<'SQL' >/dev/null
+  psql_db "$database" < packages/db/src/migrations/0000_mars_baseline.sql >/dev/null
+  psql_db "$database" -v baseline_hash="$baseline_hash" <<'SQL' >/dev/null
 CREATE SCHEMA IF NOT EXISTS drizzle;
-CREATE TABLE drizzle.__drizzle_migrations (id serial primary key, hash text not null, created_at bigint);
-INSERT INTO drizzle.__drizzle_migrations(hash, created_at) VALUES ('baseline', 1700000000000), ('post-baseline', 1700000001000), ('historical-branch', 1700000002000);
-SQL
-  if [[ "$branch" == run-attempt ]]; then
-    psql_db "$database" < packages/db/src/migrations/0002_github_run_attempt.sql >/dev/null
-  else
-    psql_db "$database" <<'SQL' >/dev/null
-CREATE TABLE IF NOT EXISTS "control_plane_config" (
-  "singleton" boolean PRIMARY KEY DEFAULT true NOT NULL,
-  "public_base_url" text,
-  "setup_code_hash" bytea,
-  "setup_completed_at" timestamptz,
-  "updated_at" timestamptz DEFAULT now() NOT NULL,
-  CONSTRAINT "control_plane_config_singleton_check" CHECK (singleton)
+CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
+  id serial primary key,
+  hash text not null,
+  created_at bigint
+);
+INSERT INTO drizzle.__drizzle_migrations(hash, created_at)
+SELECT :'baseline_hash', 1700000000000
+WHERE NOT EXISTS (
+  SELECT 1 FROM drizzle.__drizzle_migrations WHERE created_at=1700000000000
 );
 SQL
-  fi
 }
 
 assert_converged_schema() {
@@ -153,10 +147,7 @@ start_control_plane mars
 psql_db mars -Atc "SELECT public_base_url FROM control_plane_config WHERE singleton=true" | grep -Fx 'http://127.0.0.1:3000' >/dev/null
 echo 'control-plane restart preserved setup state'
 
-for branch in run-attempt control-plane-config; do
-  database="history_${branch//-/_}"
-  seed_history "$database" "$branch"
-  start_control_plane "$database"
-  assert_converged_schema "$database"
-  echo "historical $branch upgrade converged"
-done
+seed_database history_baseline
+start_control_plane history_baseline
+assert_converged_schema history_baseline
+echo 'preseeded baseline schema converged'
