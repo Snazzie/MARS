@@ -334,12 +334,20 @@ test("fresh-host blocker fixes remain fail-closed and resumable", async () => {
     Bun.file(powershell).text(),
     Bun.file(mac).text(),
   ]);
-  expect(linuxSource).toContain("[[ -e /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]");
-  expect(linuxSource.indexOf("/dev/kvm")).toBeLessThan(linuxSource.indexOf("apt-get update"));
+  const sudoIndex = linuxSource.indexOf("exec sudo");
+  const kvmIndex = linuxSource.indexOf("[[ -e /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]");
+  expect(kvmIndex).toBeGreaterThan(sudoIndex);
+  expect(kvmIndex).toBeLessThan(linuxSource.indexOf("apt-get update"));
+  expect(linuxSource).toContain('chown root:10001 "$CONFIG_DIR" "$JOIN_CODE_FILE"');
+  expect(linuxSource).toContain('chmod 0640 "$JOIN_CODE_FILE"');
   expect(composeSource).toContain("MARS_JOIN_CODE_FILE: /var/lib/mars/config/join-code");
   expect(composeSource).toContain("${MARS_BROKER_CONFIG:?config directory required}:/var/lib/mars/config");
   expect(windowsSource).toContain("Install-DockerDesktop");
+  expect(windowsSource).toContain("Refresh-ProcessPath");
+  expect(windowsSource).toContain("[Environment]::GetEnvironmentVariable('Path', 'Machine')");
   expect(windowsSource).toContain("Switch-DockerWindowsEngine");
+  const wingetIndex = windowsSource.indexOf("winget install");
+  expect(windowsSource.indexOf("Refresh-ProcessPath", wingetIndex)).toBeGreaterThan(wingetIndex);
   expect(windowsSource).toContain("-WindowsServiceHostSha256");
   expect(windowsSource.lastIndexOf("Remove-ResumeTask")).toBeGreaterThan(windowsSource.indexOf("Start-Service MarsWorker"));
   expect(macSource).toContain("${PUBLIC_BASE_URL%/}/api/healthz");

@@ -72,8 +72,6 @@ preflight() {
   # shellcheck disable=SC1091
   . /etc/os-release
   [[ "$ID" == ubuntu && "$VERSION_ID" == 24.04 ]] || { echo 'Ubuntu 24.04 is required' >&2; exit 1; }
-  grep -Eq '(^|[[:space:]])(vmx|svm)([[:space:]]|$)' /proc/cpuinfo || { echo 'hardware virtualization is required' >&2; exit 1; }
-  [[ -e /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] || { echo '/dev/kvm is required and must be readable/writable' >&2; exit 1; }
   [[ "$MARS_BROKER_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo 'broker image must be digest pinned' >&2; exit 1; }
   command -v apt-get >/dev/null || { echo 'apt-get required' >&2; exit 1; }
   command -v curl >/dev/null || { echo 'curl required' >&2; exit 1; }
@@ -91,6 +89,12 @@ if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   exec sudo --preserve-env=PUBLIC_BASE_URL,MARS_BROKER_IMAGE,MARS_GOLDEN_IMAGE,MARS_GOLDEN_BUNDLE,MARS_GOLDEN_DIGEST,MARS_COMPOSE_FILE,MARS_COMPOSE_SHA256,MARS_DOMAIN_TEMPLATE,MARS_DOMAIN_TEMPLATE_SHA256,MARS_BROKER_CONFIG,MARS_LIBVIRT_NETWORK,MARS_COSIGN_VERSION,MARS_COSIGN_SHA256,MARS_ACTION_CACHE_ROOT,MARS_CACHE_PROXY_PORT,MARS_CACHE_DATA_PORT,MARS_CACHE_PROXY_URL,MARS_CACHE_ADVERTISE_URL "$0" "$@"
 fi
 
+check_kvm_access() {
+  grep -Eq '(^|[[:space:]])(vmx|svm)([[:space:]]|$)' /proc/cpuinfo || { echo 'hardware virtualization is required' >&2; exit 1; }
+  [[ -e /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] || { echo '/dev/kvm is required and must be readable/writable' >&2; exit 1; }
+}
+
+check_kvm_access
 preflight
 CONFIG_DIR=${MARS_BROKER_CONFIG:-/var/lib/mars}
 STATE_FILE=/var/lib/mars/install-state.json
@@ -157,9 +161,12 @@ write_state virtualization complete
 stage 'Persisting enrollment state' state
 if [[ ! -f "$JOIN_CODE_FILE" ]]; then
   printf '%s\n' "$JOIN_CODE" > "$JOIN_CODE_FILE"
-  chmod 600 "$JOIN_CODE_FILE"
 fi
-chmod 700 /var/lib/mars "$CONFIG_DIR"
+# The broker runs as UID/GID 10001. Keep the credential private to that
+# service group while allowing it to read and unlink the file after auth.
+chown root:10001 "$CONFIG_DIR" "$JOIN_CODE_FILE"
+chmod 0770 "$CONFIG_DIR"
+chmod 0640 "$JOIN_CODE_FILE"
 write_state state complete
 
 validate_download_url() { local url="$1" name="$2"; if [[ "$url" == https://* ]]; then validate_https_asset "$url" "$name"; return; fi; [[ "$url" =~ ^http://(localhost|127\.0\.0\.1)(:[0-9]+)?(/|$) ]] || { echo "$name must use HTTPS" >&2; exit 1; }; }

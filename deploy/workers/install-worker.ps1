@@ -47,17 +47,38 @@ function Write-State([string]$Stage, [string]$Status) {
   [ordered]@{ stage = $Stage; status = $Status; updatedAt = [DateTime]::UtcNow.ToString('o') } |
     ConvertTo-Json -Compress | Set-Content -LiteralPath $statePath -Encoding utf8
 }
+function Refresh-ProcessPath {
+  $entries = @()
+  foreach ($value in @(
+    $env:Path,
+    [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+    [Environment]::GetEnvironmentVariable('Path', 'User')
+  )) {
+    if (-not [string]::IsNullOrWhiteSpace($value)) { $entries += $value -split ';' }
+  }
+  # winget updates the machine PATH, but this PowerShell process keeps its
+  # inherited copy. Include Docker Desktop's stable install location too.
+  $entries += (Join-Path ${env:ProgramFiles} 'Docker\Docker\resources\bin')
+  $env:Path = ($entries | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique) -join ';'
+}
+
 function Install-DockerDesktop {
+  Refresh-ProcessPath
   if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) {
     if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) { throw 'winget is required to install Docker Desktop.' }
     winget install --id Docker.DockerDesktop --exact --silent --accept-package-agreements --accept-source-agreements
     if ($LASTEXITCODE -ne 0) { throw "Docker Desktop installation failed with exit code $LASTEXITCODE." }
+    Refresh-ProcessPath
   }
   $deadline = (Get-Date).AddMinutes(3)
-  while (-not (Get-Command docker.exe -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+  while (-not (Get-Command docker.exe -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
+    Refresh-ProcessPath
+    Start-Sleep -Seconds 2
+  }
   if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) { throw 'Docker Desktop did not install.' }
 }
 function Switch-DockerWindowsEngine {
+  Refresh-ProcessPath
   $dockerCli = Join-Path ${env:ProgramFiles} 'Docker\Docker\DockerCli.exe'
   if (-not (Test-Path -LiteralPath $dockerCli)) { throw 'DockerCli.exe is required to switch Docker Desktop to the Windows engine.' }
   & $dockerCli -SwitchWindowsEngine
