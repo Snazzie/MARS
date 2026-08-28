@@ -63,6 +63,8 @@ test("control-plane image packages every platform's small worker artifact", asyn
     "linux-broker-compose.yaml", "worker-domain.xml",
     "mars-orchestrator-linux-x64", "mars-orchestrator-windows-x64.exe",
     "mars-orchestrator-macos-arm64", "mars-service-host.exe",
+    "build-windows-container-image-local.ps1", "verify-runtime.ps1",
+    "Containerfile", "entrypoint.ps1", "mars-job-agent.exe",
     "release-manifest.json",
   ]) expect(dockerfile).toContain(artifact);
   expect(dockerfile).toContain("--target=bun-linux-x64");
