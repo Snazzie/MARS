@@ -44,13 +44,17 @@ jobs:
             '{schemaVersion: 1, product: "Mars", worker: "linux-x64", contractVersion: $contractVersion, buildId: $buildId}' \
             > images/worker-appliance/dist/mars-linux-worker-release.json
       - name: Package Linux worker release
-        run: tar -czf "images/worker-appliance/dist/mars-linux-worker-${{ github.sha }}.tar.gz" -C images/worker-appliance/dist .
+        run: |
+          mkdir -p release
+          tar -czf "release/mars-linux-worker-${{ github.sha }}.tar.gz" -C images/worker-appliance/dist .
       - uses: actions/upload-artifact@v4
         with:
           name: mars-linux-worker-${{ github.sha }}
-          path: images/worker-appliance/dist
+          path: |
+            images/worker-appliance/dist/*
+            release/*
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" images/worker-appliance/dist/* --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" images/worker-appliance/dist/* release/* --generate-notes
