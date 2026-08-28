@@ -62,6 +62,7 @@ assert_release_artifacts() {
     docker exec "$CONTROL_PLANE" test -f "$artifact"
   done
   docker exec "$CONTROL_PLANE" bun -e '
+    import { createHash } from "node:crypto";
     const value=JSON.parse(await Bun.file("/app/release-manifest.json").text());
     const hash=/^[0-9a-f]{64}$/;
     const oci=/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?::[0-9]+)?(?:\/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)*@sha256:[0-9a-f]{64}$/;
@@ -76,6 +77,8 @@ assert_release_artifacts() {
     if(platforms["windows-x64"]){
       const p=platforms["windows-x64"], c=p.container;
       if(!hash.test(p.orchestratorSha256)||!hash.test(p.serviceHostSha256)||!https(p.vmTemplateUrl)||!hash.test(p.vmTemplateSha256)||!c||!oci.test(c.baseImage)) process.exit(1);
+      const packagedServiceHost=createHash("sha256").update(Buffer.from(await Bun.file("/app/workers/mars-service-host.exe").arrayBuffer())).digest("hex");
+      if(packagedServiceHost!==p.serviceHostSha256) process.exit(1);
       for(const asset of [c.runner,c.git,c.vcRuntime]) if(!asset||!https(asset.url)||!hash.test(asset.sha256)) process.exit(1);
     }
     if(platforms["macos-arm64"]){

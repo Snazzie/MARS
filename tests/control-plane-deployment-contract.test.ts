@@ -228,7 +228,7 @@ test("image smoke asserts complete runtime metadata and Windows container inputs
   ]) expect(smoke).toContain(artifact);
   for (const field of [
     "goldenImageUrl", "goldenCosignBundleUrl", "vmTemplateUrl",
-    "asset.url", "asset.sha256", "vcRuntime", "tartImageDigest",
-    "__PLACEHOLDER__",
+    "serviceHostSha256", "packagedServiceHost", "asset.url", "asset.sha256",
+    "vcRuntime", "tartImageDigest", "__PLACEHOLDER__",
   ]) expect(smoke).toContain(field);
 });
