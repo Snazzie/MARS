@@ -152,21 +152,78 @@ jobs:
       - uses: sigstore/cosign-installer@v3
       - name: Build macOS worker binaries
         run: |
+          set -euo pipefail
           bun install --frozen-lockfile
           mkdir -p dist/macos
           bun build apps/orchestrator/src/index.ts --compile --target=bun-darwin-arm64 --outfile=dist/macos/mars-orchestrator
+          bun build apps/job-agent/src/index.ts --compile --target=bun-darwin-arm64 --outfile=dist/macos/mars-job-agent
           cp deploy/workers/install-worker-macos.sh dist/macos/
+      - name: Build and publish macOS Tart image
+        id: tart
+        env:
+          TART_IMAGE: ${{ vars.MARS_MACOS_TART_IMAGE }}
+          TART_SOURCE_IMAGE: ${{ vars.MARS_MACOS_TART_SOURCE_IMAGE }}
+          TART_REGISTRY_USERNAME: ${{ github.actor }}
+          TART_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for tool in tart docker jq cosign zsh shasum; do
+            command -v "$tool" >/dev/null || { echo "required macOS release tool is unavailable: $tool" >&2; exit 1; }
+          done
+          tart --version
+          docker buildx version >/dev/null
+          test -n "$TART_IMAGE" || { echo "MARS_MACOS_TART_IMAGE is required" >&2; exit 1; }
+          test -n "$TART_SOURCE_IMAGE" || { echo "MARS_MACOS_TART_SOURCE_IMAGE is required" >&2; exit 1; }
+          test -n "$TART_REGISTRY_USERNAME" -a -n "$TART_REGISTRY_PASSWORD" || {
+            echo "Tart registry credentials are required" >&2
+            exit 1
+          }
+          [[ "$TART_SOURCE_IMAGE" =~ ^[a-z0-9./:_-]+@sha256:[0-9a-f]{64}$ ]] || {
+            echo "Tart source image must be an immutable OCI reference" >&2
+            exit 1
+          }
+          if [[ "$TART_IMAGE" == *@sha256:* ]]; then
+            TART_REPOSITORY="${TART_IMAGE%@*}"
+          else
+            TART_REPOSITORY="$TART_IMAGE"
+          fi
+          [[ "$TART_REPOSITORY" =~ ^[a-z0-9.-]+/[a-z0-9._/-]+$ ]] || {
+            echo "MARS_MACOS_TART_IMAGE must name a registry repository" >&2
+            exit 1
+          }
+          TART_REGISTRY_HOSTNAME="${TART_REPOSITORY%%/*}"
+          export TART_REGISTRY_HOSTNAME
+          tart pull "$TART_SOURCE_IMAGE"
+          TARGET="mars-macos-worker-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh deploy/workers/prepare-macos-job-image.sh \
+            --source "$TART_SOURCE_IMAGE" \
+            --target "$TARGET" \
+            --job-agent dist/macos/mars-job-agent
+          PUBLISHED_REF="$TART_REPOSITORY:$BUILD_ID"
+          tart push "$TARGET" "$PUBLISHED_REF"
+          tartDigest="$(docker buildx imagetools inspect "$PUBLISHED_REF" --format '{{.Manifest.Digest}}')"
+          [[ "$tartDigest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "published Tart image digest is unavailable" >&2
+            exit 1
+          }
+          TART_IMAGE="$TART_REPOSITORY@$tartDigest"
+          tart clone "$TART_IMAGE" "${TARGET}-verify"
+          tart delete "${TARGET}-verify"
+          cosign sign --yes "$TART_IMAGE"
+          tart delete "$TARGET"
+          echo "image=$TART_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "digest=${tartDigest#sha256:}" >> "$GITHUB_OUTPUT"
       - name: Write macOS release metadata
         id: metadata
         env:
-          TART_IMAGE: ${{ vars.MARS_MACOS_TART_IMAGE }}
-          TART_IMAGE_DIGEST: ${{ vars.MARS_MACOS_TART_IMAGE_DIGEST }}
+          TART_IMAGE: ${{ steps.tart.outputs.image }}
+          TART_IMAGE_DIGEST: ${{ steps.tart.outputs.digest }}
         run: |
+          set -euo pipefail
           test -n "$TART_IMAGE" -a -n "$TART_IMAGE_DIGEST"
           [[ "$TART_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo "Tart image must be digest-pinned" >&2; exit 1; }
           [[ "$TART_IMAGE_DIGEST" =~ ^[0-9a-f]{64}$ ]] || { echo "Tart image digest is invalid" >&2; exit 1; }
           test "$TART_IMAGE" = "${TART_IMAGE%@*}@sha256:$TART_IMAGE_DIGEST"
-          cosign sign --yes "$TART_IMAGE"
           orchestratorSha256="$(shasum -a 256 dist/macos/mars-orchestrator | cut -d' ' -f1)"
           jq -cn --arg orchestratorSha256 "$orchestratorSha256" --arg tartImage "$TART_IMAGE" --arg tartImageDigest "$TART_IMAGE_DIGEST" '{orchestratorSha256:$orchestratorSha256,tartImage:$tartImage,tartImageDigest:$tartImageDigest}' > dist/macos/metadata.json
           echo "json=$(cat dist/macos/metadata.json)" >> "$GITHUB_OUTPUT"

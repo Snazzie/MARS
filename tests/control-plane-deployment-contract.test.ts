@@ -105,6 +105,9 @@ test("release workflow publishes signed immutable large worker assets", async ()
     "MARS_LINUX_GOLDEN_IMAGE_PATH", "mars-worker-golden.qcow2",
     "mars-worker-golden.qcow2.bundle", "MARS_WINDOWS_VM_TEMPLATE_PATH",
     "mars-worker-template.vhdx", "mars-worker-template.vhdx.bundle",
+    "MARS_MACOS_TART_SOURCE_IMAGE", "tart pull \"$TART_SOURCE_IMAGE\"",
+    "prepare-macos-job-image.sh", "tart push \"$TARGET\" \"$PUBLISHED_REF\"",
+    "imagetools inspect", "tart clone \"$TART_IMAGE\"",
     "TART_IMAGE_DIGEST", 'cosign sign --yes "$TART_IMAGE"',
     "cosign sign-blob", "gh release create",
   ]) expect(workflow).toContain(requirement);
