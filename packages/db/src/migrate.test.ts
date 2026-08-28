@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
+import { migrateDatabase } from "./migrate.ts";
+import type { RawDatabaseClient } from "./index.ts";
 import { schemaSql } from "./schema.ts";
 
 const migrationsUrl = new URL("./migrations/", import.meta.url);
@@ -33,4 +36,121 @@ test("migration directory contains exactly one journaled baseline", async () => 
       breakpoints: true,
     },
   ]);
+});
+type JournalRow = { hash: string; created_at: number };
+
+function fakeDatabase(input: {
+  applicationSchema: boolean;
+  migrationTable: boolean;
+  journal: JournalRow[];
+}): RawDatabaseClient {
+  const query = async <T extends readonly unknown[]>(
+    strings: TemplateStringsArray,
+    ..._values: readonly unknown[]
+  ) => {
+    const statement = strings.join(" ");
+    if (statement.includes("to_regclass")) {
+      return [
+        {
+          application_schema: input.applicationSchema ? "users" : null,
+          migration_table: input.migrationTable ? "drizzle.__drizzle_migrations" : null,
+        },
+      ] as unknown as T;
+    }
+    if (statement.includes("from drizzle.__drizzle_migrations")) return input.journal as unknown as T;
+    throw new Error(`unexpected query: ${statement}`);
+  };
+  return query as unknown as RawDatabaseClient;
+}
+
+async function baselineHash(): Promise<string> {
+  const baseline = await migration("0000_mars_baseline.sql");
+  return createHash("sha256").update(String(baseline)).digest("hex");
+}
+
+test("fresh database runs the baseline migration", async () => {
+  const calls: string[] = [];
+
+  await migrateDatabase(fakeDatabase({ applicationSchema: false, migrationTable: false, journal: [] }), {
+    runMigrations: async () => {
+      calls.push("migrate");
+    },
+  });
+
+  expect(calls).toEqual(["migrate"]);
+});
+
+test("current baseline journal remains idempotent", async () => {
+  const calls: string[] = [];
+  const db = fakeDatabase({
+    applicationSchema: true,
+    migrationTable: true,
+    journal: [{ hash: await baselineHash(), created_at: 1_700_000_000_000 }],
+  });
+
+  await migrateDatabase(db, {
+    runMigrations: async () => {
+      calls.push("migrate");
+    },
+  });
+  await migrateDatabase(db, {
+    runMigrations: async () => {
+      calls.push("migrate");
+    },
+  });
+
+  expect(calls).toEqual(["migrate", "migrate"]);
+});
+
+test("existing application schema without a journal is rejected", async () => {
+  const calls: string[] = [];
+
+  await expect(
+    migrateDatabase(
+      fakeDatabase({ applicationSchema: true, migrationTable: false, journal: [] }),
+      {
+        runMigrations: async () => {
+          calls.push("migrate");
+        },
+      },
+    ),
+  ).rejects.toThrow(/one-baseline reset/i);
+
+  expect(calls).toEqual([]);
+});
+
+test("an empty journal is treated as a fresh database", async () => {
+  const calls: string[] = [];
+
+  await migrateDatabase(
+    fakeDatabase({ applicationSchema: false, migrationTable: true, journal: [] }),
+    {
+      runMigrations: async () => {
+        calls.push("migrate");
+      },
+    },
+  );
+
+  expect(calls).toEqual(["migrate"]);
+});
+
+test("legacy journal is rejected without automatic baseline seeding", async () => {
+  const calls: string[] = [];
+
+  await expect(
+    migrateDatabase(
+      fakeDatabase({
+        applicationSchema: true,
+        migrationTable: true,
+        journal: [{ hash: "legacy-hash", created_at: 1_600_000_000_000 }],
+      }),
+      {
+        runMigrations: async () => {
+          calls.push("migrate");
+        },
+      },
+    ),
+  ).rejects.toThrow(/reset|stamp/i);
+
+  expect(calls).toEqual([]);
 });
