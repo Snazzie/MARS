@@ -221,7 +221,7 @@ test("release workflow validates SHA-256/HTTPS assets and publishes fixed releas
     "install-worker-linux-x64.sh", "install-worker-windows-x64.ps1", "install-worker-macos-arm64.sh",
     "worker-release-manifest.json", "linux-broker-compose.yaml", "worker-domain.xml",
     "mars-orchestrator-linux-x64", "mars-orchestrator-windows-x64.exe", "mars-orchestrator-macos-arm64",
-    "mars-job-agent-linux-x64", "mars-job-agent-macos-arm64", "mars-service-host.exe",
+    "mars-job-agent.exe", "mars-job-agent-linux-x64", "mars-job-agent-macos-arm64", "mars-service-host.exe",
     "mars-worker-golden.qcow2", "mars-worker-template.vhdx",
     "mars-windows-runner.zip", "mars-windows-git.zip", "mars-windows-vc-runtime.exe",
   ]) expect(workflow).toContain(`dist/release/${asset}`);

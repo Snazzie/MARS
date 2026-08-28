@@ -97,6 +97,7 @@ jobs:
           bun install --frozen-lockfile
           New-Item -ItemType Directory -Force dist/windows | Out-Null
           bun build apps/orchestrator/src/index.ts --compile --target=bun-windows-x64 --outfile=dist/windows/mars-orchestrator.exe
+          bun build apps/job-agent/src/index.ts --compile --target=bun-windows-x64 --outfile=dist/windows/mars-job-agent.exe
           Copy-Item deploy/workers/install-worker.ps1,deploy/workers/build-windows-container-image-local.ps1,images/jobs/windows/verify-runtime.ps1,images/jobs/windows/Containerfile,images/jobs/windows/entrypoint.ps1 dist/windows
           cargo build --manifest-path apps/windows-service-host/Cargo.toml --release --target x86_64-pc-windows-gnu
           Copy-Item apps/windows-service-host/target/x86_64-pc-windows-gnu/release/mars-service-host.exe dist/windows/mars-service-host.exe
@@ -291,6 +292,7 @@ jobs:
           cp dist/worker-linux-${{ github.sha }}/mars-job-agent dist/release/mars-job-agent-linux-x64
           cp dist/worker-linux-${{ github.sha }}/mars-worker-golden.qcow2 dist/release/mars-worker-golden.qcow2
           cp dist/worker-windows-${{ github.sha }}/mars-orchestrator.exe dist/release/mars-orchestrator-windows-x64.exe
+          cp dist/worker-windows-${{ github.sha }}/mars-job-agent.exe dist/release/mars-job-agent.exe
           cp dist/worker-windows-${{ github.sha }}/mars-service-host.exe dist/release/mars-service-host.exe
           cp dist/worker-windows-${{ github.sha }}/build-windows-container-image-local.ps1 dist/release/build-windows-container-image-local.ps1
           cp dist/worker-windows-${{ github.sha }}/verify-runtime.ps1 dist/release/verify-runtime.ps1
