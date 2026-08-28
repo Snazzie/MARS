@@ -54,6 +54,7 @@ export async function initializeControlPlaneSetup(db: DashboardDb, dataRoot: str
   if (!validKey(masterKey)) throw new Error("APP_MASTER_KEY must be base64-encoded 32 bytes");
   let config = await readConfig(db);
   if (!config) { await db`insert into control_plane_config (singleton) values (true) on conflict (singleton) do nothing`; config = await readConfig(db); }
+  await db`INSERT INTO system_onboarding (singleton) VALUES (true) ON CONFLICT (singleton) DO NOTHING`;
   config ??= { publicBaseUrl: null, setupCompletedAt: null };
   if (environmentOrigin) {
     await db`insert into control_plane_config (singleton, public_base_url) values (true, ${environmentOrigin}) on conflict (singleton) do update set public_base_url=excluded.public_base_url, updated_at=now()`;

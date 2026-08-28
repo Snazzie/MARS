@@ -3,6 +3,7 @@ import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeControlPlaneSetup, loadOrCreateMasterKey } from "./control-plane-setup.ts";
+import { getOnboardingStatus } from "@mars/db";
 
 describe("control-plane secret files", () => {
   test("creates a durable 0600 master key and reuses it", async () => {
@@ -112,4 +113,35 @@ test("upserts a returning GitHub user without granting administration after setu
   await expect(setup.authenticate({ id: 8, login: "returning-user" })).resolves.toEqual({ userId: "user-2", firstAdmin: false });
   expect(queries.some((query) => query.includes("update users set is_global_admin=true"))).toBe(false);
   expect(queries.some((query) => query.includes("update system_onboarding"))).toBe(false);
+});
+test("seeds the system onboarding singleton idempotently before status reads", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-setup-onboarding-"));
+  const queries: string[] = [];
+  let onboardingExists = false;
+  const db = (async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ").toLowerCase();
+    queries.push(query);
+    if (query.includes("select public_base_url")) {
+      return [{ publicBaseUrl: "https://control.example.com", setupCompletedAt: null }];
+    }
+    if (query.includes("insert into system_onboarding")) {
+      onboardingExists = true;
+      return [];
+    }
+    if (query.includes("from system_onboarding")) {
+      return onboardingExists
+        ? [{ adminUserId: null, workerId: null, organizationId: null, completedAt: null, publicBaseUrl: "https://control.example.com", originConfigured: true, githubAppConfigured: false }]
+        : [];
+    }
+    return [];
+  }) as never;
+
+  await initializeControlPlaneSetup(db, root, "https://control.example.com");
+  const { setup } = await initializeControlPlaneSetup(db, root, "https://control.example.com");
+  const inserts = queries.filter((query) => query.includes("insert into system_onboarding (singleton) values (true) on conflict (singleton) do nothing"));
+  expect(inserts).toHaveLength(2);
+  await expect(getOnboardingStatus(db, {}, { publicBaseUrlManaged: setup.publicOriginManaged() })).resolves.toMatchObject({
+    publicBaseUrl: "https://control.example.com",
+    publicBaseUrlManaged: true,
+  });
 });
