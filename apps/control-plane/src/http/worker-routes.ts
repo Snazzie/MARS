@@ -31,14 +31,10 @@ function unavailable(c: Context<ControlPlaneEnv>, artifacts: string[]) {
 export function linuxInstallerValues(platform: LinuxWorkerRelease, connectOrigin: string): InstallerValues {
   return {
     MARS_BROKER_IMAGE: platform.brokerImage,
-    MARS_GOLDEN_IMAGE: platform.goldenImageUrl,
-    MARS_GOLDEN_BUNDLE: platform.goldenCosignBundleUrl,
-    MARS_GOLDEN_DIGEST: `sha256:${platform.goldenImageSha256}`,
+    MARS_ORCHESTRATOR_URL: `${connectOrigin}/api/workers/orchestrator?audience=linux-x64`,
+    MARS_ORCHESTRATOR_SHA256: platform.orchestratorSha256,
     MARS_COMPOSE_FILE: `${connectOrigin}/api/workers/linux-broker-compose`,
     MARS_COMPOSE_SHA256: platform.composeSha256,
-    MARS_DOMAIN_TEMPLATE: `${connectOrigin}/api/workers/linux-domain-template`,
-    MARS_DOMAIN_TEMPLATE_SHA256: platform.domainTemplateSha256,
-    MARS_LIBVIRT_NETWORK: "default",
   };
 }
 
@@ -86,7 +82,7 @@ function installerArtifacts(deps: ControlPlaneHttpDeps, audience: string, runtim
       return missing;
     }
     const fields = audience === "linux-x64"
-      ? ["orchestratorSha256", "brokerImage", "goldenImageUrl", "goldenImageSha256", "goldenCosignBundleUrl", "composeSha256", "domainTemplateSha256"]
+      ? ["orchestratorSha256", "brokerImage", "composeSha256"]
       : audience === "windows-x64"
         ? ["orchestratorSha256", "serviceHostSha256", "vmTemplateUrl", "vmTemplateSha256"]
         : ["orchestratorSha256", "tartImage", "tartImageDigest"];
@@ -109,7 +105,6 @@ function installerArtifacts(deps: ControlPlaneHttpDeps, audience: string, runtim
     if (audience === "windows-x64" && !await artifactExists(deps.workerServiceHostExecutable)) missing.push("service-host:windows-x64");
     if (audience === "linux-x64") {
       if (!await artifactExists(pathFor(deps.workerInstallerRoot, "linux-broker-compose.yaml"))) missing.push("linux-broker-compose");
-      if (!await artifactExists(pathFor(deps.workerInstallerRoot, "worker-domain.xml"))) missing.push("linux-domain-template");
     } else if (audience === "windows-x64" && runtime === "container") {
       const files = deps.windowsContainerArtifacts ?? deps.windowsContainerBuild;
       const artifactNames: Array<[keyof NonNullable<typeof deps.windowsContainerArtifacts>, string]> = [

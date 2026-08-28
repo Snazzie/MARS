@@ -288,14 +288,11 @@ test("Windows VM installer downloads and verifies its immutable template before 
 });
 test("Linux installer materializes and verifies remote worker assets before startup", async () => {
   const source = await Bun.file(linux).text();
-  expect(source).toContain('MARS_GOLDEN_IMAGE:?set HTTPS golden image URL');
-  expect(source).toContain('MARS_GOLDEN_BUNDLE:?set HTTPS golden cosign bundle URL');
-  expect(source).toContain('MARS_COMPOSE_SHA256:?set compose SHA-256');
-  expect(source).toContain('MARS_DOMAIN_TEMPLATE_SHA256:?set domain template SHA-256');
+  expect(source).toContain('MARS_ORCHESTRATOR_URL:?set HTTPS GitHub orchestrator asset URL');
+  expect(source).toContain('MARS_ORCHESTRATOR_SHA256:?set orchestrator SHA-256');
+  expect(source).toContain('MARS_COMPOSE_SHA256:?set Compose SHA-256');
   expect(source).toContain("curl --silent --show-error --fail");
   expect(source).toContain("sha256sum");
-  expect(source).toContain("cosign verify-blob --bundle");
-  expect(source).toContain("--certificate-identity-regexp 'https://github\\.com/[^/]+/[^/]+/\\.github/workflows/release-workers\\.yml@.*'");
   expect(source).toContain("/var/lib/mars/install-state.json");
   expect(source).toContain("/var/log/mars/install.log");
   expect(source.indexOf("download_verified")).toBeLessThan(source.indexOf("docker compose"));
@@ -309,8 +306,9 @@ test("fresh-host installers gate supported host versions before mutation and per
   expect(linuxSource).toContain("Ubuntu 24.04");
   expect(linuxSource).toContain("sudo --preserve-env");
   expect(linuxSource).toContain("apt-get install");
-  expect(linuxSource).toContain("systemctl enable --now libvirtd");
-  expect(linuxSource).toContain("virsh net-autostart default");
+  expect(linuxSource).not.toContain("libvirt");
+  expect(linuxSource).not.toContain("qemu");
+  expect(linuxSource).not.toContain("/dev/kvm");
   expect(linuxSource).toContain("install-state.json");
   expect(linuxSource).toContain("join-code");
   expect(windowsSource).toContain("Windows 11");
@@ -352,9 +350,12 @@ test("fresh-host blocker fixes remain fail-closed and resumable", async () => {
     Bun.file(mac).text(),
   ]);
   const sudoIndex = linuxSource.indexOf("exec sudo");
-  const kvmIndex = linuxSource.indexOf("[[ -e /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]");
-  expect(kvmIndex).toBeGreaterThan(sudoIndex);
-  expect(kvmIndex).toBeLessThan(linuxSource.indexOf("apt-get update"));
+  const packageIndex = linuxSource.indexOf("apt-get update");
+  expect(packageIndex).toBeGreaterThan(sudoIndex);
+  expect(linuxSource).not.toContain("libvirt");
+  expect(linuxSource).not.toContain("virsh");
+  expect(linuxSource).not.toContain("qemu");
+  expect(linuxSource).not.toContain("/dev/kvm");
   expect(linuxSource).toContain('chown root:10001 "$CONFIG_DIR" "$JOIN_CODE_FILE"');
   expect(linuxSource).toContain('chmod 0640 "$JOIN_CODE_FILE"');
   expect(composeSource).toContain("MARS_JOIN_CODE_FILE: /var/lib/mars/config/join-code");
@@ -372,4 +373,29 @@ test("fresh-host blocker fixes remain fail-closed and resumable", async () => {
   expect(macSource).toContain("${PUBLIC_BASE_URL%/}/api/healthz");
   expect(macSource).toContain("cleanup() {");
   expect(macSource).toContain('if [[ -f "\\$MARS_JOIN_CODE_FILE" ]]');
+});
+test("Linux installer is container-only and uses GitHub release runtime assets", async () => {
+  const [source, compose] = await Promise.all([Bun.file(linux).text(), Bun.file(linuxCompose).text()]);
+  expect(source).toContain("--control-plane-url");
+  expect(source).toContain("--code");
+  expect(source).toContain("MARS_ORCHESTRATOR_URL");
+  expect(source).toContain("MARS_ORCHESTRATOR_SHA256");
+  expect(source).toContain("github.com");
+  expect(source).not.toContain("libvirt");
+  expect(source).not.toContain("virsh");
+  expect(source).not.toContain("qemu");
+  expect(source).not.toContain("qcow2");
+  expect(source).not.toContain("/dev/kvm");
+  expect(compose).toContain("MARS_ORCHESTRATOR");
+  expect(compose).toContain("docker.sock");
+  expect(compose).not.toContain("libvirt");
+  expect(compose).not.toContain("qemu");
+  expect(compose).not.toContain("qcow2");
+});
+
+test("Linux worker deletes the join code only after authenticated WebSocket", async () => {
+  const [installer, worker] = await Promise.all([Bun.file(linux).text(), Bun.file(join(root, "apps/orchestrator/src/linux-agent.ts")).text()]);
+  expect(installer).not.toContain("rm -f \"$JOIN_CODE_FILE\"");
+  expect(worker.indexOf('frame.type === "authenticated"')).toBeGreaterThanOrEqual(0);
+  expect(worker.indexOf('unlink(Bun.env.MARS_JOIN_CODE_FILE)')).toBeGreaterThan(worker.indexOf('frame.type === "authenticated"'));
 });

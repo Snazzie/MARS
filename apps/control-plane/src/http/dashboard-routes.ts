@@ -203,11 +203,11 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!worker) return { error: "not_found" as const };
     if (worker.admissionState !== "adopted" || worker.configurationState !== "ready" || worker.configurationRevision !== worker.appliedConfigurationRevision) return { error: "worker_not_ready" as const };
     if (!(Array.isArray(worker.guestPlatforms) ? worker.guestPlatforms : [worker.platform]).includes(body.guestPlatform)) return { error: "worker_guest_platform_unsupported" as const };
-    const driver = worker.platform === "linux-x64" ? "linux-libvirt-vm" : worker.platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm";
-    if (driver === "linux-libvirt-vm") {
+    const driver = worker.platform === "linux-x64" ? "linux-container" : worker.platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm";
+    if (driver === "linux-container") {
       const doctor = worker.doctor && typeof worker.doctor === "object" ? worker.doctor as Record<string, unknown> : {};
-      if (![doctor.runtimeReady, doctor.libvirtReady, doctor.networkReady, doctor.cloneStorageReady, doctor.imageSignatures, doctor.realVmSmoke].every((value) => value === true)) return { error: "worker_runtime_not_ready" };
-      if (doctor.artifactDigest !== body.imageDigest || doctor.smokeArtifactDigest !== body.imageDigest) return { error: "worker_image_mismatch" };
+      if (![doctor.runtimeReady, doctor.probe, doctor.egress, doctor.imageSignatures].every((value) => value === true)) return { error: "worker_runtime_not_ready" };
+      if (doctor.artifactDigest !== body.imageDigest) return { error: "worker_image_mismatch" };
     }
     return { driver };
   };
@@ -277,7 +277,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (w.platform === "linux-x64") return error(c, 422, "runtime_unsupported", "Linux runners are not available in this release");
     if (w.admissionState !== "adopted" || (deps.workerConnected ? !deps.workerConnected(body.workerId) : false) || w.configurationState !== "ready" || w.draining) return error(c, 422, "worker_not_ready", "Worker is not ready");
     if (!(Array.isArray(w.guestPlatforms) ? w.guestPlatforms : [w.platform]).includes(body.guestPlatform)) return error(c, 422, "worker_guest_platform_unsupported", "Worker does not support the requested guest platform");
-    const driver = w.platform === "linux-x64" ? "linux-libvirt-vm" : w.platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm";
+    const driver = w.platform === "linux-x64" ? "linux-container" : w.platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm";
     const labels = [body.triggerLabel];
     const [duplicate] = await deps.db`SELECT id,name,trigger_label AS "triggerLabel" FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel})`;
     if (body.poolId) {

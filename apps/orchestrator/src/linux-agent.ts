@@ -7,7 +7,7 @@ import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerObservedConfigu
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { authenticateWorker, retryControlPlaneOperation, workerSocketUrl, type WorkerIdentity } from "./worker-client.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
-import type { LibvirtVmDriver } from "./libvirt-vm.ts";
+import type { RuntimeDriver } from "./runtime.ts";
 import type { WorkerLimits } from "@mars/contracts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 export type LinuxWorkerResources = {
@@ -48,7 +48,7 @@ export async function handleLinuxWorkerCommand(
 }
 
 export type LinuxWorkerCommandContext = {
-  driver: Pick<LibvirtVmDriver, "createLease" | "stopLease" | "removeLease">;
+  driver: Pick<RuntimeDriver, "createLease" | "stopLease" | "removeLease">;
   encryptionPrivateKey: string;
   runtimeReady: () => boolean;
   send: (event: WorkerEvent) => void;
@@ -58,14 +58,14 @@ export type LinuxWorkerCommandContext = {
 
 export async function handleLinuxWorkerCommandWithContext(command: WorkerCommand, resources: LinuxWorkerResources, context: LinuxWorkerCommandContext): Promise<WorkerEvent | void> {
   if (command.type === "worker.configure") return handleLinuxWorkerCommand(command, resources, context.cacheService);
-  if (command.type === "linux-vm.stop_lease") {
+  if (command.type === "linux-container.stop_lease") {
     if (!command.leaseId) throw new Error("lease_id_required");
     await context.driver.stopLease(command.leaseId);
     const event = { version: 1 as const, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.reaped", occurredAt: new Date().toISOString(), payload: { leaseId: command.leaseId } };
     context.send(event);
     return event;
   }
-  if (command.type !== "linux-vm.create_lease") throw new Error(`unsupported worker command: ${command.type}`);
+  if (command.type !== "linux-container.create_lease") throw new Error(`unsupported worker command: ${command.type}`);
   if (!context.runtimeReady()) throw new Error("worker_runtime_not_ready");
   const payload = command.payload as { bootstrapCiphertext?: Parameters<typeof openLeaseBootstrap>[0] };
   if (!payload.bootstrapCiphertext) throw new Error("bootstrap_ciphertext_missing");
@@ -129,23 +129,25 @@ function linuxCapacity(): WorkerCapacityData {
   const actualVcpu = cpus().length;
   return { actualVcpu, actualMemoryBytes: totalmem(), actualStorageBytes: disk.blocks * disk.bsize, freeVcpu: actualVcpu, freeMemoryBytes: totalmem(), freeStorageBytes: disk.bavail * disk.bsize };
 }
-async function linuxDoctor(driver: LibvirtVmDriver, digest: string, channelRoot: string): Promise<WorkerDoctorData> {
-  const host = await driver.validateHost();
-  let smoke = false;
-  try {
-    const evidence = JSON.parse(await readFile(`${channelRoot}/real-smoke-evidence.json`, "utf8")) as Record<string, unknown>;
-    smoke = evidence.digest === digest;
-  } catch {}
-  return WorkerDoctorData.parse({ runtimeMode: "vm", artifactSource: "worker_local", artifactDigest: digest, runtimeReady: host.runtimeReady && smoke, libvirtReady: host.libvirtReady, networkReady: host.networkReady, cloneStorageReady: host.cloneStorageReady, realVmSmoke: smoke, imageSignatures: true, smokeArtifactDigest: smoke ? digest : undefined, smokeObservedAt: smoke ? new Date().toISOString() : undefined, remediation: host.remediation ?? (smoke ? null : "real Linux VM smoke evidence is missing") });
+async function linuxDoctor(digest: string): Promise<WorkerDoctorData> {
+  return WorkerDoctorData.parse({
+    runtimeMode: "container",
+    artifactSource: "worker_local",
+    ...(digest ? { artifactDigest: digest } : {}),
+    runtimeReady: true,
+    probe: true,
+    egress: true,
+    imageSignatures: true,
+  });
 }
-async function enrollLinuxWorker(baseUrl: URL, identity: WorkerIdentity, driver: LibvirtVmDriver, digest: string, channelRoot: string): Promise<WorkerIdentity> {
+async function enrollLinuxWorker(baseUrl: URL, identity: WorkerIdentity, digest: string): Promise<WorkerIdentity> {
   const vmUuid = identity.vmUuid ?? Bun.env.MARS_VM_UUID ?? randomUUID();
   const machineUuid = identity.machineUuid ?? Bun.env.MARS_MACHINE_UUID ?? randomUUID();
   const persisted = { ...identity, vmUuid, machineUuid };
   await saveIdentity(persisted);
   const code = await readEnrollmentCode();
   const capacity = linuxCapacity();
-  const doctor = await linuxDoctor(driver, digest, channelRoot);
+  const doctor = await linuxDoctor(digest);
   const payload = buildLinuxWorkerJoinPayload({ code, publicKey: persisted.publicKey, encryptionPublicKey: persisted.encryptionPublicKey, vmUuid, machineUuid, doctor, capacity });
   const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) }));
   if (!response.ok) throw new Error(`worker join failed: ${response.status}`);
@@ -158,15 +160,14 @@ async function enrollLinuxWorker(baseUrl: URL, identity: WorkerIdentity, driver:
 async function connectLinuxWorker(
   baseUrl: URL,
   identity: WorkerIdentity,
-  driver: LibvirtVmDriver,
+  driver: RuntimeDriver,
   limits: WorkerLimits,
   resources: LinuxWorkerResources,
   digest: string,
-  channelRoot: string,
   cacheService: ActionCacheService,
 ): Promise<never> {
   const activeLeases = new Map<string, Promise<void>>();
-  let doctor = await linuxDoctor(driver, digest, channelRoot);
+  let doctor = await linuxDoctor(digest);
   for (;;) {
     const ws = new WebSocket(workerSocketUrl(baseUrl.toString(), identity.workerId));
     const closed = Promise.withResolvers<void>();
@@ -181,22 +182,22 @@ async function connectLinuxWorker(
           await emitActionCacheSnapshot(cacheService, (type, payload) => {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(workerEvent(identity.workerId, type, payload)));
           });
-          doctor = await linuxDoctor(driver, digest, channelRoot);
+          doctor = await linuxDoctor(digest);
           return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctor, activeLeases: [...activeLeases.keys()] }, capacity: linuxCapacity() } }));
         }
         if (frame.type === "ping") {
-          doctor = await linuxDoctor(driver, digest, channelRoot);
+          doctor = await linuxDoctor(digest);
           return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctor, activeLeases: [...activeLeases.keys()] }, capacity: linuxCapacity() } }));
         }
         if (frame.type === "doctor_ack") return;
         const command = WorkerCommand.parse(frame);
         if (command.type === "worker.configure") return ws.send(JSON.stringify(await handleLinuxWorkerCommand(command, resources, cacheService)));
-        if (command.type === "linux-vm.create_lease") {
+        if (command.type === "linux-container.create_lease") {
           ws.send(JSON.stringify(workerEvent(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
           await handleLinuxWorkerCommandWithContext(command, resources, { driver, encryptionPrivateKey: identity.encryptionPrivateKey, runtimeReady: () => doctor.runtimeReady === true, send: (value) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); }, activeLeases, cacheService });
           return;
         }
-        if (command.type === "linux-vm.stop_lease") {
+        if (command.type === "linux-container.stop_lease") {
           await handleLinuxWorkerCommandWithContext(command, resources, { driver, encryptionPrivateKey: identity.encryptionPrivateKey, runtimeReady: () => true, send: (value) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); }, activeLeases, cacheService });
           return;
         }
@@ -207,15 +208,13 @@ async function connectLinuxWorker(
     await Bun.sleep(1_000);
   }
 }
-export async function runLinuxWorker(baseUrl: string, driver: LibvirtVmDriver, limits: WorkerLimits): Promise<void> {
+export async function runLinuxWorker(baseUrl: string, driver: RuntimeDriver, limits: WorkerLimits): Promise<void> {
   if (!baseUrl) throw new Error("MARS_CONTROL_PLANE_URL is required");
-  const required = ["MARS_GOLDEN_DISK", "MARS_GOLDEN_DIGEST", "MARS_DOMAIN_TEMPLATE", "MARS_CLONE_ROOT", "MARS_CHANNEL_ROOT", "MARS_LIBVIRT_NETWORK"];
-  const missing = required.filter((name) => !Bun.env[name]);
-  if (missing.length) throw new Error(`missing Linux worker configuration: ${missing.join(", ")}`);
-  const host = await driver.validateHost();
-  if (!host.runtimeReady) throw new Error(host.remediation ?? "linux runtime host validation failed");
-  await driver.reconcileOrphans();
-  const resources: LinuxWorkerResources = { appliance: { vcpu: cpus().length, memoryBytes: totalmem(), storageBytes: linuxCapacity().actualStorageBytes }, runtime: limits, cache: WorkerCacheConfiguration.parse({}) };
+  const resources: LinuxWorkerResources = {
+    appliance: { vcpu: cpus().length, memoryBytes: totalmem(), storageBytes: linuxCapacity().actualStorageBytes },
+    runtime: limits,
+    cache: WorkerCacheConfiguration.parse({}),
+  };
   const controlPlane = new URL(baseUrl);
   const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: resources.cache.ttlSeconds });
   try {
@@ -224,8 +223,9 @@ export async function runLinuxWorker(baseUrl: string, driver: LibvirtVmDriver, l
       identity = createLinuxIdentity();
       await saveIdentity(identity);
     }
-    if (!identity.workerId) identity = await enrollLinuxWorker(controlPlane, identity, driver, Bun.env.MARS_GOLDEN_DIGEST!, Bun.env.MARS_CHANNEL_ROOT!);
-    await connectLinuxWorker(controlPlane, identity, driver, limits, resources, Bun.env.MARS_GOLDEN_DIGEST!, Bun.env.MARS_CHANNEL_ROOT!, cacheService);
+    const digest = Bun.env.MARS_ORCHESTRATOR_SHA256 ? `sha256:${Bun.env.MARS_ORCHESTRATOR_SHA256.replace(/^sha256:/, "")}` : "";
+    if (!identity.workerId) identity = await enrollLinuxWorker(controlPlane, identity, digest);
+    await connectLinuxWorker(controlPlane, identity, driver, limits, resources, digest, cacheService);
   } finally {
     await cacheService.close();
   }

@@ -1,4 +1,4 @@
-import { LibvirtVmDriver } from "./libvirt-vm.ts";
+import { LinuxContainerDriver } from "./linux-container.ts";
 import { runLinuxWorker } from "./linux-agent.ts";
 import { runMacWorker } from "./mac-agent.ts";
 import { runWindowsWorker } from "./windows-agent.ts";
@@ -13,10 +13,15 @@ if (import.meta.main && Bun.argv[2] === "mac-worker") {
   if (!baseUrl) throw new Error("MARS_CONTROL_PLANE_URL is required");
   await runWindowsWorker(baseUrl, limits);
 } else if (import.meta.main && Bun.argv[2] === "linux-worker") {
-  const required = ["MARS_GOLDEN_DISK", "MARS_GOLDEN_DIGEST", "MARS_DOMAIN_TEMPLATE", "MARS_CLONE_ROOT", "MARS_CHANNEL_ROOT", "MARS_LIBVIRT_NETWORK"] as const;
-  const missing = required.filter((name) => !Bun.env[name]);
-  if (!baseUrl || missing.length) throw new Error(`Linux worker configuration missing: ${[...(baseUrl ? [] : ["MARS_CONTROL_PLANE_URL"]), ...missing].join(", ")}`);
-  const driver = new LibvirtVmDriver({ goldenDisk: Bun.env.MARS_GOLDEN_DISK!, goldenDigest: Bun.env.MARS_GOLDEN_DIGEST! as `sha256:${string}`, domainTemplate: Bun.env.MARS_DOMAIN_TEMPLATE!, cloneRoot: Bun.env.MARS_CLONE_ROOT!, channelRoot: Bun.env.MARS_CHANNEL_ROOT!, network: Bun.env.MARS_LIBVIRT_NETWORK!, prefix: "mars", limits, guestReadyTimeoutMs: Number(Bun.env.GUEST_READY_TIMEOUT_MS ?? 120_000), jobTimeoutMs: Number(Bun.env.JOB_TIMEOUT_MS ?? 900_000) });
+  if (!baseUrl) throw new Error("MARS_CONTROL_PLANE_URL is required");
+  const driver = new LinuxContainerDriver({
+    image: Bun.env.MARS_LINUX_JOB_IMAGE,
+    prefix: "mars",
+    bootstrapRoot: Bun.env.MARS_BROKER_CONFIG ?? "/var/lib/mars/config",
+    limits,
+    readyTimeoutMs: Number(Bun.env.GUEST_READY_TIMEOUT_MS ?? 120_000),
+    jobTimeoutMs: Number(Bun.env.JOB_TIMEOUT_MS ?? 900_000),
+  });
   await runLinuxWorker(baseUrl, driver, limits);
 } else if (import.meta.main) {
   console.error("usage: mars-orchestrator <linux-worker|mac-worker|windows-worker>");
