@@ -50,7 +50,7 @@ function EditableStep({ detail, index, onDone, onDiscard, onSelect, onCreate }: 
 }
 function ResourceStep({ detail, onDone, onDiscard, edit = false }: { detail: OnboardingDetail; onDone: () => void; onDiscard?: () => void; edit?: boolean }) { const w = detail.worker; if (!w) return <p>Select a worker first.</p>; return <><h3>Configure resources</h3>{w.configurationState === "ready" && !edit ? <p role="status">Configuring worker complete. Waiting for server progress…</p> : <WorkerConfigurationForm worker={w} onConfigured={onDone} onDiscard={onDiscard} />}</>; }
 function SetupCard({ status }: { status: OnboardingStatus }) {
-  const [publicBaseUrl, setPublicBaseUrl] = useState(status.publicBaseUrl ?? (typeof window === "undefined" ? "" : window.location.origin));
+  const [publicBaseUrl, setPublicBaseUrl] = useState(status.publicBaseUrlManaged ? status.publicBaseUrl ?? "" : (typeof window === "undefined" ? "" : window.location.origin));
   const [error, setError] = useState<string | null>(null);
   const setup = useMutation({
     mutationFn: beginControlPlaneSetup,

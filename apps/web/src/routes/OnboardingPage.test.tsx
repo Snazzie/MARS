@@ -45,6 +45,21 @@ test("managed public origin is rendered read-only and preserved for setup", () =
   expect(html).toMatch(/readonly(?:="")?/i);
   expect(html).toContain("Create GitHub App");
 });
+test("DB-managed public origin seeds the editable field from the browser origin", () => {
+  const browser = new Window({ url: "https://worker.example.ts.net/onboarding" });
+  const previousWindow = globalThis.window;
+  // @ts-expect-error Happy DOM provides the browser global React needs.
+  globalThis.window = browser;
+  try {
+    const html = markup({ version: 1, onboardingRequired: true, adminCreated: false, authenticated: false, canManage: false, step: "setup", publicBaseUrl: "https://stale.example.com", publicBaseUrlManaged: false });
+    expect(html).toContain('value="https://worker.example.ts.net"');
+    expect(html).not.toContain('value="https://stale.example.com"');
+    expect(html).not.toMatch(/readonly(?:="")?/i);
+  } finally {
+    // @ts-expect-error Restore the test environment's prior browser global.
+    globalThis.window = previousWindow;
+  }
+});
 
 test("first-admin sign-in copy explains administrator setup and links GitHub OAuth", () => {
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: false, authenticated: false, canManage: false, step: "admin" });
