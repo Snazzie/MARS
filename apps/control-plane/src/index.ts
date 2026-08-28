@@ -80,6 +80,11 @@ if (production) {
     windowsServiceHost: workerServiceHostExecutable,
     windowsOrchestrator: workerOrchestratorExecutables["windows-x64"],
     macosOrchestrator: workerOrchestratorExecutables["macos-arm64"],
+    windowsContainerBuilder: windowsContainerArtifacts?.builderPath,
+    windowsContainerVerifier: windowsContainerArtifacts?.verifierPath,
+    windowsContainerfile: windowsContainerArtifacts?.containerfilePath,
+    windowsContainerEntrypoint: windowsContainerArtifacts?.entrypointPath,
+    windowsContainerJobAgent: windowsContainerArtifacts?.jobAgentPath,
   };
   for (const [name, artifact] of Object.entries(requiredReleaseArtifacts)) {
     if (!artifact || !await Bun.file(artifact).exists()) throw new Error(`release artifact is unavailable: ${name}`);

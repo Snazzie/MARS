@@ -79,3 +79,48 @@ test("worker release workflow gates aggregate publication on all platforms", asy
   expect(workflow).toContain("worker-release-manifest.json");
   expect(workflow).not.toContain("windows-worker-*");
 });
+
+test("production startup checks every packaged Windows container input", async () => {
+  const source = await read("apps/control-plane/src/index.ts");
+  for (const artifact of [
+    "windowsContainerBuilder", "windowsContainerVerifier", "windowsContainerfile",
+    "windowsContainerEntrypoint", "windowsContainerJobAgent",
+  ]) expect(source).toContain(artifact);
+});
+
+test("aggregate release validation installs locked dependencies before importing contracts", async () => {
+  const workflow = await read(".github/workflows/release-workers.yml");
+  const aggregate = workflow.slice(workflow.indexOf("\n  aggregate:"));
+  const install = aggregate.indexOf("bun install --frozen-lockfile");
+  const validation = aggregate.indexOf("WorkerReleaseManifest");
+  expect(install).toBeGreaterThanOrEqual(0);
+  expect(validation).toBeGreaterThan(install);
+});
+
+test("release workflow publishes signed immutable large worker assets", async () => {
+  const workflow = await read(".github/workflows/release-workers.yml");
+  for (const requirement of [
+    "MARS_LINUX_GOLDEN_IMAGE_PATH", "mars-worker-golden.qcow2",
+    "mars-worker-golden.qcow2.bundle", "MARS_WINDOWS_VM_TEMPLATE_PATH",
+    "mars-worker-template.vhdx", "mars-worker-template.vhdx.bundle",
+    "TART_IMAGE_DIGEST", 'cosign sign --yes "$TART_IMAGE"',
+    "cosign sign-blob", "gh release create",
+  ]) expect(workflow).toContain(requirement);
+  expect(workflow).toMatch(/mars-worker-golden\.qcow2(?:\\|\s|,)/);
+  expect(workflow).toMatch(/mars-worker-template\.vhdx(?:\\|\s|,)/);
+  expect(workflow).toContain("@sha256:");
+});
+
+test("image smoke asserts complete runtime metadata and Windows container inputs", async () => {
+  const smoke = await read("tests/control-plane-image-smoke.sh");
+  for (const artifact of [
+    "/app/workers/build-windows-container-image-local.ps1",
+    "/app/workers/verify-runtime.ps1", "/app/workers/Containerfile",
+    "/app/workers/entrypoint.ps1", "/app/workers/mars-job-agent.exe",
+  ]) expect(smoke).toContain(artifact);
+  for (const field of [
+    "goldenImageUrl", "goldenCosignBundleUrl", "vmTemplateUrl",
+    "asset.url", "asset.sha256", "vcRuntime", "tartImageDigest",
+    "__PLACEHOLDER__",
+  ]) expect(smoke).toContain(field);
+});

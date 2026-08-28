@@ -51,12 +51,23 @@ jobs:
           echo "BROKER_IMAGE=$BROKER_REPOSITORY@$brokerDigest" >> "$GITHUB_ENV"
       - name: Prepare and sign Linux release artifacts
         env:
+          GOLDEN_IMAGE_PATH: ${{ vars.MARS_LINUX_GOLDEN_IMAGE_PATH }}
           GOLDEN_IMAGE_URL: ${{ vars.MARS_LINUX_GOLDEN_IMAGE_URL }}
           GOLDEN_IMAGE_SHA256: ${{ vars.MARS_LINUX_GOLDEN_IMAGE_SHA256 }}
           GOLDEN_COSIGN_BUNDLE_URL: ${{ vars.MARS_LINUX_GOLDEN_COSIGN_BUNDLE_URL }}
         id: metadata
         run: |
+          test -n "$GOLDEN_IMAGE_PATH" -a -f "$GOLDEN_IMAGE_PATH"
           test -n "$GOLDEN_IMAGE_URL" -a -n "$GOLDEN_IMAGE_SHA256" -a -n "$GOLDEN_COSIGN_BUNDLE_URL" -a -n "$BROKER_IMAGE"
+          case "$GOLDEN_IMAGE_URL" in https://*) ;; *) echo "golden image URL must use HTTPS" >&2; exit 1 ;; esac
+          case "$GOLDEN_COSIGN_BUNDLE_URL" in https://*) ;; *) echo "golden cosign bundle URL must use HTTPS" >&2; exit 1 ;; esac
+          [[ "$GOLDEN_IMAGE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "golden image SHA-256 is invalid" >&2; exit 1; }
+          [[ "$BROKER_IMAGE" =~ ^.+@sha256:[0-9a-f]{64}$ ]] || { echo "broker image must be digest-pinned" >&2; exit 1; }
+          actualGoldenSha256="$(sha256sum "$GOLDEN_IMAGE_PATH" | cut -d' ' -f1)"
+          test "$actualGoldenSha256" = "$GOLDEN_IMAGE_SHA256"
+          cp "$GOLDEN_IMAGE_PATH" dist/linux/mars-worker-golden.qcow2
+          cosign sign-blob --yes --bundle dist/linux/mars-worker-golden.qcow2.bundle dist/linux/mars-worker-golden.qcow2
+          test -s dist/linux/mars-worker-golden.qcow2.bundle
           sha256sum dist/linux/mars-orchestrator | cut -d' ' -f1 > dist/linux/orchestrator.sha256
           sha256sum dist/linux/linux-broker-compose.yaml | cut -d' ' -f1 > dist/linux/compose.sha256
           sha256sum dist/linux/worker-domain.xml | cut -d' ' -f1 > dist/linux/domain.sha256
@@ -86,10 +97,14 @@ jobs:
           Copy-Item deploy/workers/install-worker.ps1,deploy/workers/build-windows-container-image-local.ps1,images/jobs/windows/verify-runtime.ps1,images/jobs/windows/Containerfile,images/jobs/windows/entrypoint.ps1 dist/windows
           cargo build --manifest-path apps/windows-service-host/Cargo.toml --release --target x86_64-pc-windows-gnu
           Copy-Item apps/windows-service-host/target/x86_64-pc-windows-gnu/release/mars-service-host.exe dist/windows/mars-service-host.exe
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.1
       - name: Write Windows release metadata
         id: metadata
         shell: pwsh
         env:
+          VM_TEMPLATE_PATH: ${{ vars.MARS_WINDOWS_VM_TEMPLATE_PATH }}
           VM_TEMPLATE_URL: ${{ vars.MARS_WINDOWS_VM_TEMPLATE_URL }}
           VM_TEMPLATE_SHA256: ${{ vars.MARS_WINDOWS_VM_TEMPLATE_SHA256 }}
           BASE_IMAGE: ${{ vars.MARS_WINDOWS_CONTAINER_BASE_IMAGE }}
@@ -100,8 +115,20 @@ jobs:
           VC_URL: ${{ vars.MARS_WINDOWS_VC_RUNTIME_URL }}
           VC_SHA256: ${{ vars.MARS_WINDOWS_VC_RUNTIME_SHA256 }}
         run: |
-          $required = @($env:VM_TEMPLATE_URL,$env:VM_TEMPLATE_SHA256,$env:BASE_IMAGE,$env:RUNNER_URL,$env:RUNNER_SHA256,$env:GIT_URL,$env:GIT_SHA256,$env:VC_URL,$env:VC_SHA256)
+          $required = @($env:VM_TEMPLATE_PATH,$env:VM_TEMPLATE_URL,$env:VM_TEMPLATE_SHA256,$env:BASE_IMAGE,$env:RUNNER_URL,$env:RUNNER_SHA256,$env:GIT_URL,$env:GIT_SHA256,$env:VC_URL,$env:VC_SHA256)
           if ($required | Where-Object { [string]::IsNullOrWhiteSpace($_) }) { throw 'Windows release asset metadata is incomplete' }
+          if (-not (Test-Path -LiteralPath $env:VM_TEMPLATE_PATH -PathType Leaf)) { throw 'Windows VHDX template is unavailable' }
+          if ($env:VM_TEMPLATE_URL -notmatch '^https://') { throw 'Windows VHDX URL must use HTTPS' }
+          if ($env:VM_TEMPLATE_SHA256 -notmatch '^[0-9a-f]{64}$') { throw 'Windows VHDX SHA-256 is invalid' }
+          if ($env:BASE_IMAGE -notmatch '^.+@sha256:[0-9a-f]{64}$') { throw 'Windows base image must be digest-pinned' }
+          foreach ($asset in @(@($env:RUNNER_URL,$env:RUNNER_SHA256),@($env:GIT_URL,$env:GIT_SHA256),@($env:VC_URL,$env:VC_SHA256))) {
+            if ($asset[0] -notmatch '^https://' -or $asset[1] -notmatch '^[0-9a-f]{64}$') { throw 'Windows dependency metadata is invalid' }
+          }
+          $actualVmSha256 = (Get-FileHash $env:VM_TEMPLATE_PATH -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualVmSha256 -ne $env:VM_TEMPLATE_SHA256) { throw 'Windows VHDX SHA-256 does not match metadata' }
+          Copy-Item -LiteralPath $env:VM_TEMPLATE_PATH -Destination dist/windows/mars-worker-template.vhdx
+          cosign sign-blob --yes --bundle dist/windows/mars-worker-template.vhdx.bundle dist/windows/mars-worker-template.vhdx
+          if (-not (Test-Path dist/windows/mars-worker-template.vhdx.bundle -PathType Leaf)) { throw 'Windows VHDX signature bundle is unavailable' }
           $orchestrator = (Get-FileHash dist/windows/mars-orchestrator.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           $serviceHost = (Get-FileHash dist/windows/mars-service-host.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           $metadata = [ordered]@{ orchestratorSha256=$orchestrator; serviceHostSha256=$serviceHost; vmTemplateUrl=$env:VM_TEMPLATE_URL; vmTemplateSha256=$env:VM_TEMPLATE_SHA256; container=[ordered]@{ baseImage=$env:BASE_IMAGE; runner=[ordered]@{url=$env:RUNNER_URL;sha256=$env:RUNNER_SHA256}; git=[ordered]@{url=$env:GIT_URL;sha256=$env:GIT_SHA256}; vcRuntime=[ordered]@{url=$env:VC_URL;sha256=$env:VC_SHA256} } }
@@ -122,6 +149,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.20
+      - uses: sigstore/cosign-installer@v3
       - name: Build macOS worker binaries
         run: |
           bun install --frozen-lockfile
@@ -135,6 +163,10 @@ jobs:
           TART_IMAGE_DIGEST: ${{ vars.MARS_MACOS_TART_IMAGE_DIGEST }}
         run: |
           test -n "$TART_IMAGE" -a -n "$TART_IMAGE_DIGEST"
+          [[ "$TART_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo "Tart image must be digest-pinned" >&2; exit 1; }
+          [[ "$TART_IMAGE_DIGEST" =~ ^[0-9a-f]{64}$ ]] || { echo "Tart image digest is invalid" >&2; exit 1; }
+          test "$TART_IMAGE" = "${TART_IMAGE%@*}@sha256:$TART_IMAGE_DIGEST"
+          cosign sign --yes "$TART_IMAGE"
           orchestratorSha256="$(shasum -a 256 dist/macos/mars-orchestrator | cut -d' ' -f1)"
           jq -cn --arg orchestratorSha256 "$orchestratorSha256" --arg tartImage "$TART_IMAGE" --arg tartImageDigest "$TART_IMAGE_DIGEST" '{orchestratorSha256:$orchestratorSha256,tartImage:$tartImage,tartImageDigest:$tartImageDigest}' > dist/macos/metadata.json
           echo "json=$(cat dist/macos/metadata.json)" >> "$GITHUB_OUTPUT"
@@ -152,6 +184,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.20
+      - name: Install validation dependencies
+        run: bun install --frozen-lockfile
       - uses: actions/download-artifact@v4
         with:
           pattern: worker-*
@@ -185,4 +219,11 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" dist/worker-release-manifest.json dist/worker-release-manifest.json.bundle --generate-notes
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/worker-release-manifest.json dist/worker-release-manifest.json.bundle \
+            dist/worker-linux-${{ github.sha }}/mars-worker-golden.qcow2 \
+            dist/worker-linux-${{ github.sha }}/mars-worker-golden.qcow2.bundle \
+            dist/worker-windows-${{ github.sha }}/mars-worker-template.vhdx \
+            dist/worker-windows-${{ github.sha }}/mars-worker-template.vhdx.bundle \
+            --generate-notes
