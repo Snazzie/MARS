@@ -3,7 +3,8 @@ import { buildWindowsUpgradeCommand } from "./WorkerActions.tsx";
 
 test("builds a Windows upgrade command from the immutable v1 release asset", () => {
   const command = buildWindowsUpgradeCommand("worker/id", "https://control.example/", "https://adapter.example");
-  expect(command).toContain("https://github.com/Snazzie/Mars/releases/download/worker-v0.1.0/install-worker-windows-x64.ps1");
+  expect(command).toContain("https://github.com/Snazzie/Mars/releases/latest/download/install-worker-windows-x64.ps1");
+  expect(command).not.toContain("worker-v0.1.0");
   expect(command).toContain("-ControlPlaneUrl 'https://adapter.example'");
   expect(command).toContain("powershell.exe -NoProfile -ExecutionPolicy Bypass");
   expect(command).toContain("-Upgrade -WindowsRuntime 'container'");

@@ -32,7 +32,7 @@ parse_args() {
 parse_args "$@"
 trap 'unset JOIN_CODE CONTROL_PLANE_URL_ARG' EXIT
 
-RELEASE_BASE_URL='https://github.com/Snazzie/Mars/releases/download/worker-v0.1.0'
+RELEASE_BASE_URL='https://github.com/Snazzie/Mars/releases/latest/download'
 RELEASE_MANIFEST_URL="$RELEASE_BASE_URL/worker-release-manifest.json"
 MARS_COMPOSE_FILE="${MARS_COMPOSE_FILE:-$RELEASE_BASE_URL/linux-broker-compose.yaml}"
 MARS_DOMAIN_TEMPLATE="${MARS_DOMAIN_TEMPLATE:-$RELEASE_BASE_URL/worker-domain.xml}"

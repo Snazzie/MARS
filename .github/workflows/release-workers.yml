@@ -73,7 +73,7 @@ jobs:
           sha256sum dist/linux/mars-orchestrator | cut -d' ' -f1 > dist/linux/orchestrator.sha256
           sha256sum dist/linux/linux-broker-compose.yaml | cut -d' ' -f1 > dist/linux/compose.sha256
           sha256sum dist/linux/worker-domain.xml | cut -d' ' -f1 > dist/linux/domain.sha256
-          RELEASE_ASSET_BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/worker-v0.1.0"
+          RELEASE_ASSET_BASE="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download"
           jq -cn --arg orchestratorSha256 "$(cat dist/linux/orchestrator.sha256)" --arg brokerImage "$BROKER_IMAGE" --arg goldenImageUrl "$RELEASE_ASSET_BASE/mars-worker-golden.qcow2" --arg goldenImageSha256 "$GOLDEN_IMAGE_SHA256" --arg composeSha256 "$(cat dist/linux/compose.sha256)" --arg domainTemplateSha256 "$(cat dist/linux/domain.sha256)" '{orchestratorSha256:$orchestratorSha256,brokerImage:$brokerImage,goldenImageUrl:$goldenImageUrl,goldenImageSha256:$goldenImageSha256,composeSha256:$composeSha256,domainTemplateSha256:$domainTemplateSha256}' > dist/linux/metadata.json
           echo "json=$(cat dist/linux/metadata.json)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
@@ -140,7 +140,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Windows dependency download failed: $($asset.Name)" }
             if ((Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $asset.Hash) { throw "Windows dependency SHA-256 does not match metadata: $($asset.Name)" }
           }
-          $releaseAssetBase = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/worker-v0.1.0"
+          $releaseAssetBase = "https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download"
           $orchestrator = (Get-FileHash dist/windows/mars-orchestrator.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           $serviceHost = (Get-FileHash dist/windows/mars-service-host.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           $metadata = [ordered]@{ orchestratorSha256=$orchestrator; serviceHostSha256=$serviceHost; vmTemplateUrl="$releaseAssetBase/mars-worker-template.vhdx"; vmTemplateSha256=$env:VM_TEMPLATE_SHA256; container=[ordered]@{ baseImage=$env:BASE_IMAGE; runner=[ordered]@{url="$releaseAssetBase/mars-windows-runner.zip";sha256=$env:RUNNER_SHA256}; git=[ordered]@{url="$releaseAssetBase/mars-windows-git.zip";sha256=$env:GIT_SHA256}; vcRuntime=[ordered]@{url="$releaseAssetBase/mars-windows-vc-runtime.exe";sha256=$env:VC_SHA256} } }
@@ -306,7 +306,7 @@ jobs:
           cp dist/worker-macos-${{ github.sha }}/mars-job-agent dist/release/mars-job-agent-macos-arm64
       - name: Build control-plane image with the unsigned manifest
         run: |
-          docker buildx build --push --build-arg MARS_BUILD_ID="$BUILD_ID" --build-arg MARS_RELEASE_MANIFEST=dist/worker-release-manifest.json --build-arg MARS_WINDOWS_SERVICE_HOST_ARTIFACT="dist/worker-windows-${{ github.sha }}/mars-service-host.exe" -f deploy/control-plane/Dockerfile -t ghcr.io/${{ github.repository }}/control-plane:worker-${{ github.sha }} .
+          docker buildx build --push --build-arg MARS_BUILD_ID="$BUILD_ID" --build-arg MARS_RELEASE_MANIFEST=dist/worker-release-manifest.json --build-arg MARS_WINDOWS_SERVICE_HOST_ARTIFACT="dist/worker-windows-${{ github.sha }}/mars-service-host.exe" -f deploy/control-plane/Dockerfile -t ghcr.io/snazzie/mars/control-plane:latest .
       - uses: actions/upload-artifact@v4
         with:
           name: worker-release-assets-${{ github.sha }}
@@ -317,5 +317,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_NAME" = worker-v0.1.0
+          test "$GITHUB_REF_TYPE" = tag
+          [[ "$GITHUB_REF_NAME" == worker-* ]]
           gh release create "$GITHUB_REF_NAME" dist/release/* --generate-notes

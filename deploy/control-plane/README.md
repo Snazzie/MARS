@@ -161,11 +161,18 @@ is unprivileged and preserves the loopback Compose port.
 
 ## Worker release boundary
 
+The control-plane image is published as
+`ghcr.io/snazzie/mars/control-plane:latest`. Copied commands and installer
+metadata resolve the current worker release through GitHub's stable endpoint:
+`https://github.com/Snazzie/Mars/releases/latest/download/<asset>`. The
+platform asset names are `install-worker-linux-x64.sh`,
+`install-worker-windows-x64.ps1`, and `install-worker-macos-arm64.sh`.
+
 The control-plane image packages the small runtime artifacts for all supported
 platforms: Linux x64 (linux/amd64) installer, compose/domain files and orchestrator; Windows
 x64 installer, orchestrator, service host and container build inputs; and
 Apple-Silicon macOS installer and orchestrator. Large VM/Tart/golden-image and
-broker assets remain immutable HTTPS/OCI references in the signed release
+broker assets remain immutable HTTPS/OCI references in the worker release
 manifest. A platform with unavailable manifest data is reported unavailable;
 it is never silently substituted with another platform.
 The worker execution runtimes remain outside the Unraid control-plane container.

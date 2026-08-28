@@ -389,7 +389,8 @@ test("GitHub release installers are self-contained and placeholder-free", async 
   expect(macSource).toContain("--code");
   for (const source of [linuxSource, windowsSource, macSource]) {
     expect(source).not.toMatch(/__[A-Za-z0-9_]+__/);
-    expect(source).toContain("worker-v0.1.0");
+    expect(source).toContain("https://github.com/Snazzie/Mars/releases/latest/download");
+    expect(source).not.toContain("worker-v0.1.0");
   }
   for (const source of [linuxSource, macSource]) {
     expect(source).toContain("--control-plane-url");

@@ -9,7 +9,7 @@ const copy: Record<Action, { label: string; confirm: string; variant: "primary" 
  resume: { label: "Resume", confirm: "Resume this worker? It will become eligible for new leases after its configuration and runtime checks are ready.", variant: "primary" },
  remove: { label: "Remove", confirm: "Remove this worker? Pools will be disabled and the worker will be revoked after active leases finish.", variant: "destructive" },
 };
-const WORKER_WINDOWS_RELEASE_URL = "https://github.com/Snazzie/Mars/releases/download/worker-v0.1.0/install-worker-windows-x64.ps1";
+const WORKER_WINDOWS_RELEASE_URL = "https://github.com/Snazzie/Mars/releases/latest/download/install-worker-windows-x64.ps1";
 function quotePowerShell(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
 
 export function buildWindowsUpgradeCommand(workerId: string, origin: string, connectOrigin: string = origin): string {

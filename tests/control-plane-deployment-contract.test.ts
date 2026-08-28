@@ -63,9 +63,11 @@ test("deployment template documents required and optional variables without secr
   expect(envExample).toContain("CONTROL_PLANE_ADAPTER_URLS=https://worker.example.com");
   expect(envExample).not.toMatch(/(ghp_|github_pat_|-----BEGIN [A-Z ]+ PRIVATE KEY-----)/i);
 });
-test("Unraid exposes origin, database, port, and persistent data inputs", async () => {
+test("Unraid exposes latest control-plane image and origin, database, port, and persistent data inputs", async () => {
   const template = await read("deploy/unraid/mars-control-plane.xml");
   expect(template).toContain("<WebUI>http://[IP]:[PORT:3000]/</WebUI>");
+  expect(template).toContain("<Repository>ghcr.io/snazzie/mars/control-plane:latest</Repository>");
+  expect(template).not.toContain("control-plane:v0.1.0");
   expect(template).toContain("Target=\"DATABASE_URL\"");
   expect(template).toContain("Target=\"3000\"");
   expect(template).toContain("Target=\"/var/lib/mars\"");
@@ -197,7 +199,7 @@ test("aggregate release validation installs locked dependencies before importing
   expect(validation).toBeGreaterThan(install);
 });
 
-test("release workflow validates SHA-256/HTTPS assets and publishes fixed release URLs", async () => {
+test("release workflow validates SHA-256/HTTPS assets and publishes latest-release URLs", async () => {
   const workflow = await read(".github/workflows/release-workers.yml");
   for (const requirement of [
     "MARS_LINUX_GOLDEN_IMAGE_SOURCE_URL",
@@ -209,10 +211,12 @@ test("release workflow validates SHA-256/HTTPS assets and publishes fixed releas
     "MARS_MACOS_TART_SOURCE_IMAGE", "TART_SOURCE_REGISTRY_HOSTNAME", "docker login \"$TART_REGISTRY_HOSTNAME\"", "tart pull \"$TART_SOURCE_IMAGE\"",
     "prepare-macos-job-image.sh", "tart push \"$TARGET\" \"$PUBLISHED_REF\"",
     "imagetools inspect", "TART_IMAGE_DIGEST",
-    "https://github.com/$env:GITHUB_REPOSITORY/releases/download/worker-v0.1.0",
-    "https://github.com/${GITHUB_REPOSITORY}/releases/download/worker-v0.1.0",
+    "https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download",
+    "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download",
     "gh release create",
   ]) expect(workflow).toContain(requirement);
+  expect(workflow).not.toContain("worker-v0.1.0");
+  expect(workflow).toContain("ghcr.io/snazzie/mars/control-plane:latest");
   expect(workflow).not.toContain("MARS_LINUX_GOLDEN_IMAGE_PATH");
   expect(workflow).not.toContain("MARS_WINDOWS_VM_TEMPLATE_PATH");
   expect(workflow).not.toContain("Invoke-WebRequest");

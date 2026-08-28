@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { buildInstallerCommand, buildInstallerCommands, connectedEnrollmentWorker, connectionSnapshot, normalizeControlPlaneUrls } from "./EnrollmentPanel.tsx";
-const url = "https://github.com/Snazzie/Mars/releases/download/worker-v0.1.0/install-worker-linux-x64.sh";
+const url = "https://github.com/Snazzie/Mars/releases/latest/download/install-worker-linux-x64.sh";
 test("bootstrap status contract includes initialization generation and timestamps", () => {
   const status = {
     initialized: true,
@@ -14,13 +14,13 @@ test("bootstrap status contract includes initialization generation and timestamp
 
 test("installer commands include the one-use enrollment code and selected control-plane URL", () => {
   const command = buildInstallerCommand(url, "linux-x64", "Abc_-9", "https://control.example/");
-  expect(command).toContain("https://github.com/Snazzie/Mars/releases/download/worker-v0.1.0/install-worker-linux-x64.sh");
+  expect(command).toContain("https://github.com/Snazzie/Mars/releases/latest/download/install-worker-linux-x64.sh");
   expect(command).toContain("--control-plane-url 'https://control.example'");
   expect(command).toContain("--code 'Abc_-9'");
   expect(command).not.toContain("vcpu");
 });
 test("downloads the macOS release installer to a temporary file and cleans it after --code execution", () => {
-  const installer = "https://github.com/Snazzie/Mars/releases/download/worker-v0.1.0/install-worker-macos-arm64.sh";
+  const installer = "https://github.com/Snazzie/Mars/releases/latest/download/install-worker-macos-arm64.sh";
   const command = buildInstallerCommand(installer, "macos-arm64", "Abc_-9", "https://control.example");
   expect(command).toContain("mktemp");
   expect(command).toContain("zsh \"$marsInstaller\" --control-plane-url 'https://control.example' --code 'Abc_-9'");
@@ -29,16 +29,19 @@ test("downloads the macOS release installer to a temporary file and cleans it af
 });
 test("aborts before invoking Linux/macOS installer when curl fails", () => {
   for (const [audience, shell] of [["linux-x64", "bash"], ["macos-arm64", "zsh"]] as const) {
-    const command = buildInstallerCommand(`https://github.com/Snazzie/Mars/releases/download/worker-v0.1.0/install-worker-${audience}.sh`, audience, "Abc_-9", "https://control.example");
+    const command = buildInstallerCommand(`https://github.com/Snazzie/Mars/releases/latest/download/install-worker-${audience}.sh`, audience, "Abc_-9", "https://control.example");
+    expect(command).not.toContain("worker-v0.1.0");
     expect(command.startsWith("set -e\n")).toBe(true);
     expect(command.indexOf("\ncurl ")).toBeLessThan(command.indexOf(`\nPUBLIC_BASE_URL=`));
     expect(command.indexOf(`\nPUBLIC_BASE_URL=`)).toBeLessThan(command.indexOf(`${shell} "$marsInstaller"`));
   }
 });
 test("supports each immutable release installer asset", () => {
-  expect(buildInstallerCommands("https://control.example", "linux-x64", "code")[0]?.command).toContain("install-worker-linux-x64.sh");
-  expect(buildInstallerCommands("https://control.example", "windows-x64", "code")[0]?.command).toContain("install-worker-windows-x64.ps1");
-  expect(buildInstallerCommands("https://control.example", "macos-arm64", "code")[0]?.command).toContain("install-worker-macos-arm64.sh");
+  for (const audience of ["linux-x64", "windows-x64", "macos-arm64"] as const) {
+    const command = buildInstallerCommands("https://control.example", audience, "code")[0]?.command ?? "";
+    expect(command).toContain("https://github.com/Snazzie/Mars/releases/latest/download/");
+    expect(command).not.toContain("worker-v0.1.0");
+  }
 });
 test("builds only the selected platform installer command", () => {
   const commands = buildInstallerCommands("https://control.example", "windows-x64", "one-use-code");

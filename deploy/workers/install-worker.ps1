@@ -41,7 +41,7 @@ function Assert-HttpsUrl([string]$Url, [string]$Name) {
 function Assert-StrictHttpsUrl([string]$Url, [string]$Name) {
   if ($Url -notmatch '^https://') { throw "$Name must use HTTPS." }
 }
-$ReleaseBaseUrl = 'https://github.com/Snazzie/Mars/releases/download/worker-v0.1.0'
+$ReleaseBaseUrl = 'https://github.com/Snazzie/Mars/releases/latest/download'
 $ReleaseManifestUrl = "$ReleaseBaseUrl/worker-release-manifest.json"
 function Load-ReleaseMetadata {
   $needs = [string]::IsNullOrWhiteSpace($WindowsOrchestratorSha256) -or

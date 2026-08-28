@@ -16,7 +16,7 @@ export function connectedEnrollmentWorker(snapshot: WorkerConnectionSnapshot, wo
 function quoteShell(value: string): string { return `'${value.replaceAll("'", "'\"'\"'")}'`; }
 function quotePowerShell(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
 
-const WORKER_RELEASE_BASE_URL = "https://github.com/Snazzie/Mars/releases/download/worker-v0.1.0";
+const WORKER_RELEASE_BASE_URL = "https://github.com/Snazzie/Mars/releases/latest/download";
 const WORKER_RELEASE_ASSETS: Record<RuntimePlatform, string> = {
   "linux-x64": "install-worker-linux-x64.sh",
   "windows-x64": "install-worker-windows-x64.ps1",

@@ -34,7 +34,7 @@ parse_args() {
   PUBLIC_BASE_URL="$CONTROL_PLANE_URL"
 }
 parse_args "$@"
-RELEASE_BASE_URL='https://github.com/Snazzie/Mars/releases/download/worker-v0.1.0'
+RELEASE_BASE_URL='https://github.com/Snazzie/Mars/releases/latest/download'
 RELEASE_MANIFEST_URL="$RELEASE_BASE_URL/worker-release-manifest.json"
 load_release_metadata() {
   if [[ -n "${MARS_ORCHESTRATOR_SHA256:-}" && -n "${TART_IMAGE:-}" && -n "${TART_IMAGE_DIGEST:-}" ]]; then
