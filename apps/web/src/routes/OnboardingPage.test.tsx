@@ -39,11 +39,13 @@ test("setup step asks only for the public origin", () => {
   expect(html).not.toContain("password");
 });
 
-test("managed public origin is rendered read-only and preserved for setup", () => {
+test("managed public origin is informational and omits editable-origin copy", () => {
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: false, authenticated: false, canManage: false, step: "setup", publicBaseUrl: "https://control.example.com", publicBaseUrlManaged: true });
-  expect(html).toContain('value="https://control.example.com"');
-  expect(html).toMatch(/readonly(?:="")?/i);
+  expect(html).toContain("https://control.example.com");
   expect(html).toContain("Create GitHub App");
+  expect(html).not.toContain("Connect this control plane");
+  expect(html).not.toContain("Confirm the externally reachable HTTPS origin");
+  expect(html).not.toContain("Public URL");
 });
 test("DB-managed public origin seeds the editable field from the browser origin", () => {
   const browser = new Window({ url: "https://worker.example.ts.net/onboarding" });

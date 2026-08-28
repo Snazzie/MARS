@@ -59,10 +59,10 @@ function SetupCard({ status }: { status: OnboardingStatus }) {
   });
   const managedOrigin = status.publicBaseUrlManaged ? status.publicBaseUrl ?? "" : publicBaseUrl;
   return <main className="onboarding"><section className="onboarding-card">
-    <p className="eyebrow">FIRST-RUN SETUP</p><h1>Connect this control plane</h1>
-    <p>Confirm the externally reachable HTTPS origin to create the GitHub App.</p>
+    <p className="eyebrow">FIRST-RUN SETUP</p><h1>{status.publicBaseUrlManaged ? "Control plane origin configured" : "Connect this control plane"}</h1>
+    {status.publicBaseUrlManaged ? <p role="status">Configured origin: <code>{managedOrigin}</code></p> : <p>Confirm the externally reachable HTTPS origin to create the GitHub App.</p>}
     <form onSubmit={(event) => { event.preventDefault(); setError(null); setup.mutate({ publicBaseUrl: managedOrigin }); }}>
-      <label>Public URL<input aria-label="Public URL" type="url" value={managedOrigin} onChange={(event) => setPublicBaseUrl(event.target.value)} readOnly={status.publicBaseUrlManaged} required /></label>
+      {status.publicBaseUrlManaged ? <p>GitHub App setup will use the configured origin above.</p> : <label>Public URL<input aria-label="Public URL" type="url" value={managedOrigin} onChange={(event) => setPublicBaseUrl(event.target.value)} required /></label>}
       {error && <p role="alert" className="form-error">{error}</p>}
       <button type="submit" disabled={setup.isPending}>{setup.isPending ? "Creating GitHub App…" : "Create GitHub App"}</button>
     </form>
