@@ -96,6 +96,8 @@ describe("control-plane HTTP boundary", () => {
     const root = await mkdtemp(join(tmpdir(), "mars-installers-"));
     try {
       await Bun.write(join(root, "install-worker.sh"), '#!/usr/bin/env bash\n: "${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}"\n');
+      await Bun.write(join(root, "linux-broker-compose.yaml"), "compose");
+      await Bun.write(join(root, "worker-domain.xml"), "domain");
       const response = await createControlPlaneApp(fakeHttpDeps({
         baseUrl: "https://control.test",
         workerInstallerRoot: pathToFileURL(`${root}/`),
@@ -120,6 +122,8 @@ describe("control-plane HTTP boundary", () => {
     const root = await mkdtemp(join(tmpdir(), "mars-installers-"));
     try {
       await Bun.write(join(root, "install-worker.sh"), '#!/usr/bin/env bash\n: "${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}"\n');
+      await Bun.write(join(root, "linux-broker-compose.yaml"), "compose");
+      await Bun.write(join(root, "worker-domain.xml"), "domain");
       const response = await createControlPlaneApp(fakeHttpDeps({
         baseUrl: "http://localhost:3000",
         browserBaseUrl: "http://localhost:5173",
@@ -138,9 +142,11 @@ describe("control-plane HTTP boundary", () => {
     const root = await mkdtemp(join(tmpdir(), "mars-windows-installers-"));
     try {
       await Bun.write(join(root, "install-worker.ps1"), "'__WINDOWS_RUNTIME__' '__WINDOWS_CONTAINER_IMAGE__' '__WINDOWS_CONTAINER_BASE_IMAGE__' '__WINDOWS_CONTAINER_BUILDER_URL__'");
+      await Bun.write(join(root, "windows-orchestrator"), "orchestrator");
+      await Bun.write(join(root, "service-host.exe"), "service-host");
       const build = { baseImage: "mcr.microsoft.com/windows/server/ltsc2025@sha256:" + "a".repeat(64), runnerUrl: "https://example.test/runner.zip", runnerSha256: "b".repeat(64), gitUrl: "https://example.test/git.zip", gitSha256: "c".repeat(64), vcUrl: "https://example.test/vc.exe", vcSha256: "d".repeat(64), builderPath: join(root, "builder.ps1"), verifierPath: join(root, "verifier.ps1"), containerfilePath: join(root, "Containerfile"), entrypointPath: join(root, "entrypoint.ps1"), jobAgentPath: join(root, "job-agent.exe") };
       for (const path of Object.values(build).slice(7)) await Bun.write(path, "artifact");
-      const deps = { baseUrl: "https://control.test", workerInstallerRoot: pathToFileURL(`${root}/`), windowsContainerBuild: build };
+      const deps = { baseUrl: "https://control.test", workerInstallerRoot: pathToFileURL(`${root}/`), windowsContainerBuild: build, workerOrchestratorExecutables: { "windows-x64": pathToFileURL(join(root, "windows-orchestrator")) }, workerServiceHostExecutable: pathToFileURL(join(root, "service-host.exe")) };
       const response = await createControlPlaneApp(fakeHttpDeps(deps)).request("/api/workers/installer?audience=windows-x64&runtime=container&connectOrigin=https%3A%2F%2Fcontrol.test");
       const installer = await response.text();
       expect(response.status).toBe(200);
@@ -158,10 +164,8 @@ describe("control-plane HTTP boundary", () => {
         workerInstallerRoot: pathToFileURL(`${root}/`),
         windowsContainerBuild: undefined,
       })).request("/api/workers/installer?audience=windows-x64&runtime=container&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
-      const installer = await response.text();
-      expect(response.status).toBe(200);
-      expect(installer).toContain("'container'");
-      expect(installer).toContain("'mars/windows-job:local'");
+      expect(response.status).toBe(503);
+      expect((await response.json()).artifacts).toContain("windows-container-builder");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -182,18 +186,17 @@ describe("control-plane HTTP boundary", () => {
   test("injects split Tart runtime identity into the macOS installer", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-macos-installers-"));
     try {
+      await Bun.write(join(root, "macos-orchestrator"), "orchestrator");
       await Bun.write(join(root, "install-worker-macos.sh"), "#!/bin/zsh\nprint ready\n");
-      const digest = `mars-macos-job@sha256:${"b".repeat(64)}`;
       const response = await createControlPlaneApp(fakeHttpDeps({
         baseUrl: "http://localhost:3000",
         workerInstallerRoot: pathToFileURL(`${root}/`),
-        macosTartBaseImage: "mars-macos-smoke-v3",
-        defaultJobImages: { "macos-arm64": digest },
+        workerOrchestratorExecutable: pathToFileURL(join(root, "macos-orchestrator")),
       })).request("/api/workers/installer?audience=macos-arm64&connectOrigin=http%3A%2F%2Flocalhost%3A3000");
       const installer = await response.text();
       expect(response.status).toBe(200);
-      expect(installer).toContain("TART_IMAGE='mars-macos-smoke-v3'");
-      expect(installer).toContain(`TART_IMAGE_DIGEST='${digest}'`);
+      expect(installer).toContain(`TART_IMAGE='ghcr.io/mars/macos@sha256:${"a".repeat(64)}'`);
+      expect(installer).toContain(`TART_IMAGE_DIGEST='${"a".repeat(64)}'`);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -226,6 +229,7 @@ describe("control-plane HTTP boundary", () => {
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("windows-service-host-binary");
       expect(response.headers.get("content-disposition")).toContain("mars-service-host.exe");
+      expect(response.headers.get("X-Content-SHA256")).toBe("a".repeat(64));
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -622,4 +626,35 @@ test("starts GitHub installation for a non-onboarding organization", async () =>
   expect(response.status).toBe(200);
   expect(requestedOrganization).toBe("org-2");
   expect(await response.json()).toEqual({ location: "https://github.com/apps/mars/installations/new" });
+});
+test("generates complete platform installers from the immutable release manifest", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-release-installers-"));
+  const hash = "a".repeat(64);
+  try {
+    for (const file of ["install-worker.sh", "install-worker.ps1", "install-worker-macos.sh", "linux-broker-compose.yaml", "worker-domain.xml"]) {
+      await Bun.write(join(root, file), file.endsWith(".ps1") ? "'__PUBLIC_BASE_URL__' '__WINDOWS_RUNTIME__' '__WINDOWS_CONTAINER_BASE_IMAGE__' '__WINDOWS_CONTAINER_RUNNER_URL__' '__WINDOWS_CONTAINER_RUNNER_SHA256__' '__WINDOWS_TEMPLATE_PATH__' '__WINDOWS_TEMPLATE_DIGEST__'" : "#!/bin/sh\n$PUBLIC_BASE_URL");
+    }
+    const manifest = {
+      schemaVersion: 2 as const,
+      buildId: "build-1",
+      contractVersion: "0.1.0",
+      platforms: {
+        "linux-x64": { orchestratorSha256: hash, brokerImage: `ghcr.io/mars/broker@sha256:${hash}`, goldenImageUrl: "https://release.test/worker.qcow2", goldenImageSha256: hash, goldenCosignBundleUrl: "https://release.test/worker.qcow2.bundle", composeSha256: hash, domainTemplateSha256: hash },
+        "windows-x64": { orchestratorSha256: hash, serviceHostSha256: hash, vmTemplateUrl: "https://release.test/worker.vhdx", vmTemplateSha256: hash, container: { baseImage: `mcr.microsoft.com/windows@sha256:${hash}`, runner: { url: "https://release.test/runner.zip", sha256: hash }, git: { url: "https://release.test/git.zip", sha256: hash }, vcRuntime: { url: "https://release.test/vc.exe", sha256: hash } } },
+        "macos-arm64": { orchestratorSha256: hash, tartImage: `ghcr.io/mars/macos@sha256:${hash}`, tartImageDigest: hash },
+      },
+    };
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      workerInstallerRoot: pathToFileURL(`${root}/`),
+      workerReleaseManifest: manifest,
+      workerConnectionOrigins: () => ["https://adapter.test"],
+      workerOrchestratorExecutables: { "linux-x64": pathToFileURL(join(root, "linux-orchestrator")), "windows-x64": pathToFileURL(join(root, "windows-orchestrator")), "macos-arm64": pathToFileURL(join(root, "macos-orchestrator")) },
+    })).request("/api/workers/installer?audience=linux-x64&connectOrigin=https%3A%2F%2Fadapter.test");
+    expect(response.status).toBe(200);
+    const installer = await response.text();
+    expect(installer).toContain("PUBLIC_BASE_URL='https://adapter.test'");
+    expect(installer).not.toContain("__");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

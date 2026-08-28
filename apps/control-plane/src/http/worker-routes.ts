@@ -1,21 +1,130 @@
+import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { PendingWorkerRequest, WorkerConfiguration } from "@mars/contracts";
+import type { LinuxWorkerRelease, MacosWorkerRelease, WindowsWorkerRelease } from "@mars/contracts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { verifyWorkerBootstrap, initializeWorkerBootstrap, rotateWorkerBootstrap, getWorkerBootstrapStatus } from "../worker-bootstrap.ts";
 import { approvePendingWorker, configurePendingWorker, createRequestLimiter, hasMachineIdentity, parseApproveWorkerRequest, requestPendingWorker, rejectPendingWorker } from "../worker-requests.ts";
 import { httpOrigin } from "../http-origin.ts";
-
 function noStore(headers = new Headers()): Headers { headers.set("cache-control", "no-store"); return headers; }
 function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\"'\"'")}'`; }
 function powerShellQuote(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
-function injectInstallerOrigin(source: string, baseUrl: string, extra: Record<string, string> = {}, powershell = false): string {
+type InstallerValues = Record<string, string>;
+type ArtifactPath = string | URL;
+function injectInstallerOrigin(source: string, baseUrl: string, extra: InstallerValues = {}, powershell = false): string {
   const values = { PUBLIC_BASE_URL: new URL(baseUrl).origin, ...extra };
-  if (powershell) return Object.entries(values).reduce((result, [key, value]) => result.replaceAll(`'__${key}__'`, powerShellQuote(value)), source);
+  if (powershell) return Object.entries(values).reduce((result, [key, value]) => result.replaceAll(`'__${key}__'`, powerShellQuote(value)), source).replaceAll(/__[A-Z0-9_]+__/g, "");
   const injected = Object.entries(values).flatMap(([key, value]) => [`${key}=${shellQuote(value)}`, `export ${key}`]).join("\n");
   const newline = source.indexOf("\n"); const insertAt = source.startsWith("#!") && newline >= 0 ? newline + 1 : 0;
   return `${source.slice(0, insertAt)}${injected}\n${source.slice(insertAt)}`;
 }
+const hasValue = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
+const artifactExists = async (path: ArtifactPath | undefined): Promise<boolean> => Boolean(path && await Bun.file(path).exists());
+const pathFor = (root: URL, name: string): URL => new URL(name, root);
+async function fileSha256(path: ArtifactPath): Promise<string> {
+  return createHash("sha256").update(Buffer.from(await Bun.file(path).arrayBuffer())).digest("hex");
+}
+function unavailable(c: Context<ControlPlaneEnv>, artifacts: string[]) {
+  return c.json({ code: "artifact_unavailable", message: "Worker installer prerequisites are unavailable", artifacts }, 503, { "cache-control": "no-store" });
+}
+export function linuxInstallerValues(platform: LinuxWorkerRelease, connectOrigin: string): InstallerValues {
+  return {
+    MARS_BROKER_IMAGE: platform.brokerImage,
+    MARS_GOLDEN_IMAGE: platform.goldenImageUrl,
+    MARS_GOLDEN_BUNDLE: platform.goldenCosignBundleUrl,
+    MARS_GOLDEN_DIGEST: `sha256:${platform.goldenImageSha256}`,
+    MARS_COMPOSE_FILE: `${connectOrigin}/api/workers/linux-broker-compose`,
+    MARS_DOMAIN_TEMPLATE: `${connectOrigin}/api/workers/linux-domain-template`,
+    MARS_LIBVIRT_NETWORK: "default",
+  };
+}
+
+export function windowsInstallerValues(platform: WindowsWorkerRelease, connectOrigin: string, runtime: "vm" | "container"): InstallerValues {
+  const values: InstallerValues = {
+    WINDOWS_RUNTIME: runtime,
+    WINDOWS_TEMPLATE_PATH: platform.vmTemplateUrl,
+    WINDOWS_TEMPLATE_DIGEST: `sha256:${platform.vmTemplateSha256}`,
+    WINDOWS_CONTAINER_IMAGE: "mars/windows-job:local",
+    WINDOWS_CONTAINER_BASE_IMAGE: platform.container.baseImage,
+    WINDOWS_CONTAINER_RUNNER_URL: platform.container.runner.url,
+    WINDOWS_CONTAINER_RUNNER_SHA256: platform.container.runner.sha256,
+    WINDOWS_CONTAINER_GIT_URL: platform.container.git.url,
+    WINDOWS_CONTAINER_GIT_SHA256: platform.container.git.sha256,
+    WINDOWS_CONTAINER_VC_URL: platform.container.vcRuntime.url,
+    WINDOWS_CONTAINER_VC_SHA256: platform.container.vcRuntime.sha256,
+    WINDOWS_CONTAINER_BUILDER_URL: `${connectOrigin}/api/workers/windows-container-builder`,
+    WINDOWS_CONTAINER_VERIFIER_URL: `${connectOrigin}/api/workers/windows-container-verifier`,
+    WINDOWS_CONTAINERFILE_URL: `${connectOrigin}/api/workers/windows-containerfile`,
+    WINDOWS_CONTAINER_ENTRYPOINT_URL: `${connectOrigin}/api/workers/windows-container-entrypoint`,
+    WINDOWS_CONTAINER_JOB_AGENT_URL: `${connectOrigin}/api/workers/windows-container-job-agent`,
+    JOIN_CODE: "",
+  };
+  return values;
+}
+
+export function macosInstallerValues(platform: MacosWorkerRelease, connectOrigin: string): InstallerValues {
+  return {
+    PUBLIC_BASE_URL: new URL(connectOrigin).origin,
+    TART_IMAGE: platform.tartImage,
+    TART_IMAGE_DIGEST: platform.tartImageDigest,
+  };
+}
+
+function installerArtifacts(deps: ControlPlaneHttpDeps, audience: string, runtime: string, platform: LinuxWorkerRelease | WindowsWorkerRelease | MacosWorkerRelease | null | undefined): Promise<string[]> {
+  return (async () => {
+    const missing: string[] = [];
+    if (!deps.workerReleaseManifest) missing.push("release-manifest");
+    if (!platform) {
+      missing.push(`platform:${audience}`);
+      return missing;
+    }
+    const fields = audience === "linux-x64"
+      ? ["orchestratorSha256", "brokerImage", "goldenImageUrl", "goldenImageSha256", "goldenCosignBundleUrl", "composeSha256", "domainTemplateSha256"]
+      : audience === "windows-x64"
+        ? ["orchestratorSha256", "serviceHostSha256", "vmTemplateUrl", "vmTemplateSha256"]
+        : ["orchestratorSha256", "tartImage", "tartImageDigest"];
+    for (const field of fields) if (!hasValue((platform as unknown as Record<string, unknown>)[field])) missing.push(releaseField(audience, field));
+    if (audience === "windows-x64" && runtime === "container") {
+      const container = (platform as WindowsWorkerRelease).container as unknown as Record<string, unknown> | undefined;
+      for (const field of ["baseImage", "runner", "git", "vcRuntime"]) {
+        if (!container?.[field]) missing.push(releaseField(audience, `container.${field}`));
+      }
+      for (const [name, value] of [["runner", container?.runner], ["git", container?.git], ["vcRuntime", container?.vcRuntime]] as const) {
+        const asset = value as { url?: unknown; sha256?: unknown } | undefined;
+        if (!hasValue(asset?.url)) missing.push(releaseField(audience, `container.${name}.url`));
+        if (!hasValue(asset?.sha256)) missing.push(releaseField(audience, `container.${name}.sha256`));
+      }
+    }
+    const installerName = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : "install-worker-macos.sh";
+    if (!await artifactExists(pathFor(deps.workerInstallerRoot, installerName))) missing.push(`installer:${installerName}`);
+    const executable = deps.workerOrchestratorExecutables?.[audience as keyof NonNullable<ControlPlaneHttpDeps["workerOrchestratorExecutables"]>] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined);
+    if (audience !== "linux-x64" && !await artifactExists(executable)) missing.push(`orchestrator:${audience}`);
+    if (audience === "windows-x64" && !await artifactExists(deps.workerServiceHostExecutable)) missing.push("service-host:windows-x64");
+    if (audience === "linux-x64") {
+      if (!await artifactExists(pathFor(deps.workerInstallerRoot, "linux-broker-compose.yaml"))) missing.push("linux-broker-compose");
+      if (!await artifactExists(pathFor(deps.workerInstallerRoot, "worker-domain.xml"))) missing.push("linux-domain-template");
+    } else if (audience === "windows-x64" && runtime === "container") {
+      const files = deps.windowsContainerArtifacts ?? deps.windowsContainerBuild;
+      const artifactNames: Array<[keyof NonNullable<typeof deps.windowsContainerArtifacts>, string]> = [
+        ["builderPath", "windows-container-builder"], ["verifierPath", "windows-container-verifier"],
+        ["containerfilePath", "windows-containerfile"], ["entrypointPath", "windows-container-entrypoint"],
+        ["jobAgentPath", "windows-container-job-agent"],
+      ];
+      for (const [key, name] of artifactNames) if (!await artifactExists(files?.[key])) missing.push(name);
+    }
+    return missing;
+  })();
+}
+
+async function packagedResponse(path: ArtifactPath, filename: string, hash: string | undefined): Promise<Response> {
+  const headers = noStore();
+  headers.set("content-type", "application/octet-stream");
+  headers.set("content-disposition", `attachment; filename="${filename}"`);
+  if (hash) headers.set("X-Content-SHA256", hash);
+  return new Response(Bun.file(path), { headers });
+}
+function releaseField(platform: string, field: string): string { return `manifest:${platform}.${field}`; }
 export function pendingWorkerDto(row: Record<string, unknown>, workerConnected?: (workerId: string) => boolean) {
   if (!hasMachineIdentity(row) || typeof row.id !== "string" || typeof row.fingerprint !== "string") return null;
   const telemetry = (row.doctor && typeof row.doctor === "object" ? row.doctor : {}) as Record<string, unknown>;
@@ -50,68 +159,84 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   app.get("/api/workers/templates/:platform/manifest", async (c) => {
     const platform = c.req.param("platform") as "windows-x64" | "linux-x64";
     const path = deps.templateManifestPaths?.[platform];
-    if (!path || !await Bun.file(path).exists()) return c.json({ code: "artifact_unavailable", message: "Template manifest is unavailable", artifact: `template-manifest:${platform}` }, 503, { "cache-control": "no-store" });
+    if (!path || !await artifactExists(path)) return c.json({ code: "artifact_unavailable", message: "Template manifest is unavailable", artifact: `template-manifest:${platform}` }, 503, { "cache-control": "no-store" });
     return new Response(Bun.file(path), { headers: noStore() });
   });
   app.get("/api/workers/templates/:platform/artifact", async (c) => {
     const platform = c.req.param("platform") as "windows-x64" | "linux-x64";
     const path = deps.templateArtifactPaths?.[platform];
-    if (!path || !await Bun.file(path).exists()) return c.json({ code: "artifact_unavailable", message: "Template artifact is unavailable", artifact: `template:${platform}` }, 503, { "cache-control": "no-store" });
-    const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", `attachment; filename="${platform}.vhdx"`);
-    return new Response(Bun.file(path), { headers });
-  });
-  const buildArtifact = async (c: Context<ControlPlaneEnv>, key: keyof NonNullable<ControlPlaneHttpDeps["windowsContainerArtifacts"]>, filename: string) => {
-    const path = (deps.windowsContainerArtifacts ?? deps.windowsContainerBuild)?.[key];
-    if (!path || !await Bun.file(path).exists()) return c.json({ code: "artifact_unavailable", message: "Windows container build artifact is unavailable", artifact: `windows-container-${key}` }, 503, { "cache-control": "no-store" });
+    if (!path || !await artifactExists(path)) return c.json({ code: "artifact_unavailable", message: "Template artifact is unavailable", artifact: `template:${platform}` }, 503, { "cache-control": "no-store" });
     const headers = noStore();
     headers.set("content-type", "application/octet-stream");
-    headers.set("content-disposition", `attachment; filename="${filename}"`);
+    headers.set("content-disposition", `attachment; filename="${platform}.vhdx"`);
     return new Response(Bun.file(path), { headers });
+  });
+  const buildArtifact = async (c: Context<ControlPlaneEnv>, key: keyof NonNullable<typeof deps.windowsContainerArtifacts>, filename: string) => {
+    const path = (deps.windowsContainerArtifacts ?? deps.windowsContainerBuild)?.[key];
+    if (!path || !await artifactExists(path)) return c.json({ code: "artifact_unavailable", message: "Windows container build artifact is unavailable", artifact: `windows-container-${key}` }, 503, { "cache-control": "no-store" });
+    return packagedResponse(path, filename, await fileSha256(path));
   };
   app.get("/api/workers/windows-container-builder", (c) => buildArtifact(c, "builderPath", "build-windows-container-image-local.ps1"));
   app.get("/api/workers/windows-container-verifier", (c) => buildArtifact(c, "verifierPath", "verify-runtime.ps1"));
   app.get("/api/workers/windows-containerfile", (c) => buildArtifact(c, "containerfilePath", "Containerfile"));
   app.get("/api/workers/windows-container-entrypoint", (c) => buildArtifact(c, "entrypointPath", "entrypoint.ps1"));
   app.get("/api/workers/windows-container-job-agent", (c) => buildArtifact(c, "jobAgentPath", "mars-job-agent.exe"));
+  const packaged = async (c: Context<ControlPlaneEnv>, name: string, filename: string, hash: string | undefined) => {
+    const path = pathFor(deps.workerInstallerRoot, name);
+    if (!hash) return c.json({ code: "artifact_unavailable", message: "Worker artifact is unavailable", artifacts: [`manifest:linux-x64.${name === "linux-broker-compose.yaml" ? "composeSha256" : "domainTemplateSha256"}`] }, 503, { "cache-control": "no-store" });
+    if (!await artifactExists(path)) return c.json({ code: "artifact_unavailable", message: "Worker artifact is unavailable", artifacts: [name] }, 503, { "cache-control": "no-store" });
+    return packagedResponse(path, filename, hash);
+  };
+  const linuxCompose = (c: Context<ControlPlaneEnv>) => packaged(c, "linux-broker-compose.yaml", "linux-broker-compose.yaml", deps.workerReleaseManifest?.platforms["linux-x64"]?.composeSha256);
+  const linuxDomain = (c: Context<ControlPlaneEnv>) => packaged(c, "worker-domain.xml", "worker-domain.xml", deps.workerReleaseManifest?.platforms["linux-x64"]?.domainTemplateSha256);
+  app.get("/api/workers/linux-broker-compose", linuxCompose);
+  app.get("/api/workers/linux-compose", linuxCompose);
+  app.get("/api/workers/linux-domain-template", linuxDomain);
+  app.get("/api/workers/worker-domain", linuxDomain);
   app.get("/api/workers/installer", async (c) => {
-    const audience = c.req.query("audience");
+    const audience = c.req.query("audience") as "linux-x64" | "windows-x64" | "macos-arm64" | undefined;
     const runtime = c.req.query("runtime") ?? "container";
     const file = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : audience === "macos-arm64" ? "install-worker-macos.sh" : null;
-    if (!file) return c.json({ error: "unsupported installer audience" }, 400);
-    const connectOriginParam = c.req.query("connectOrigin");
+    if (!audience || !file) return c.json({ error: "unsupported installer audience" }, 400);
+    if (audience === "windows-x64" && runtime !== "vm" && runtime !== "container") return c.json({ error: "unsupported Windows runtime" }, 400);
     let connectOrigin: string;
     try {
-      if (!connectOriginParam) throw new Error("missing worker origin");
-      connectOrigin = httpOrigin("connectOrigin", connectOriginParam);
+      const value = c.req.query("connectOrigin");
+      if (!value) throw new Error("missing worker origin");
+      connectOrigin = httpOrigin("connectOrigin", value);
     } catch {
       return c.json({ code: "invalid_worker_origin", message: "Choose a configured worker connection origin" }, 400);
     }
     if (!deps.workerConnectionOrigins().includes(connectOrigin)) return c.json({ code: "invalid_worker_origin", message: "Choose a configured worker connection origin" }, 400);
-    const installer = Bun.file(new URL(file, deps.workerInstallerRoot));
-    if (audience === "windows-x64" && runtime !== "vm" && runtime !== "container") return c.json({ error: "unsupported Windows runtime" }, 400);
-    if (!await installer.exists()) return c.json({ code: "artifact_unavailable", message: "Worker installer is unavailable", artifact: file }, 503, { "cache-control": "no-store" });
-    const buildUrls = {
-      WINDOWS_CONTAINER_BUILDER_URL: `${connectOrigin}/api/workers/windows-container-builder`,
-      WINDOWS_CONTAINER_VERIFIER_URL: `${connectOrigin}/api/workers/windows-container-verifier`,
-      WINDOWS_CONTAINERFILE_URL: `${connectOrigin}/api/workers/windows-containerfile`,
-      WINDOWS_CONTAINER_ENTRYPOINT_URL: `${connectOrigin}/api/workers/windows-container-entrypoint`,
-      WINDOWS_CONTAINER_JOB_AGENT_URL: `${connectOrigin}/api/workers/windows-container-job-agent`,
-    };
-    const extra: Record<string, string> = audience === "windows-x64"
-      ? { WINDOWS_RUNTIME: runtime, WINDOWS_CONTAINER_IMAGE: "mars/windows-job:local", WINDOWS_TEMPLATE_PATH: deps.workerTemplatePaths?.["windows-x64"] ?? "", WINDOWS_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["windows-x64"] ?? "", LINUX_TEMPLATE_PATH: deps.workerTemplatePaths?.["linux-x64"] ?? "", LINUX_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["linux-x64"] ?? "", ...buildUrls }
-      : audience === "macos-arm64" ? { TART_IMAGE: deps.macosTartBaseImage ?? "", TART_IMAGE_DIGEST: deps.defaultJobImages["macos-arm64"] ?? "" } : {};
-    if (audience === "windows-x64" && runtime === "vm" && (!extra.WINDOWS_TEMPLATE_PATH || !extra.WINDOWS_TEMPLATE_DIGEST)) return c.json({ code: "artifact_unavailable", message: "Windows Hyper-V template is not configured", artifact: "windows-template" }, 503);
-    return new Response(injectInstallerOrigin(await installer.text(), connectOrigin, extra, audience === "windows-x64"), { headers: noStore() });
+    const release = deps.workerReleaseManifest?.platforms[audience];
+    const missing = await installerArtifacts(deps, audience, runtime, release);
+    if (missing.length) return unavailable(c, missing);
+    const source = await Bun.file(pathFor(deps.workerInstallerRoot, file)).text();
+    const values = audience === "linux-x64"
+      ? linuxInstallerValues(release as LinuxWorkerRelease, connectOrigin)
+      : audience === "windows-x64"
+        ? windowsInstallerValues(release as WindowsWorkerRelease, connectOrigin, runtime as "vm" | "container")
+        : macosInstallerValues(release as MacosWorkerRelease, connectOrigin);
+    const generated = injectInstallerOrigin(source, connectOrigin, values, audience === "windows-x64");
+    if (generated.includes("__PLACEHOLDER__") || /__[A-Z0-9_]+__/.test(generated)) return unavailable(c, [`installer:${file}`]);
+    return new Response(generated, { headers: noStore() });
   });
-  app.get("/api/workers/orchestrator", async (c) => { const audience = c.req.query("audience") as keyof NonNullable<typeof deps.workerOrchestratorExecutables>; const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined); if (!executable) return c.json({ code: "artifact_unavailable", message: "Orchestrator is unsupported", artifact: `orchestrator:${audience}` }, 503); if (!await Bun.file(executable).exists()) return c.json({ code: "artifact_unavailable", message: "Orchestrator is unavailable", artifact: `orchestrator:${audience}` }, 503, { "cache-control": "no-store" }); const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", 'attachment; filename="mars-orchestrator"'); return new Response(Bun.file(executable), { headers }); });
+  app.get("/api/workers/orchestrator", async (c) => {
+    const audience = c.req.query("audience") as keyof NonNullable<typeof deps.workerOrchestratorExecutables>;
+    const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined);
+    const hash = deps.workerReleaseManifest?.platforms[audience]?.orchestratorSha256;
+    if (!executable || !hash) return c.json({ code: "artifact_unavailable", message: "Orchestrator is unavailable", artifacts: [`orchestrator:${audience}`] }, 503, { "cache-control": "no-store" });
+    if (!await artifactExists(executable)) return c.json({ code: "artifact_unavailable", message: "Orchestrator is unavailable", artifacts: [`orchestrator:${audience}`] }, 503, { "cache-control": "no-store" });
+    const filename = audience === "windows-x64" ? "mars-orchestrator.exe" : "mars-orchestrator";
+    return packagedResponse(executable, filename, hash);
+  });
   app.get("/api/workers/service-host", async (c) => {
+    if (c.req.query("audience") !== "windows-x64") return c.json({ error: "unsupported service host audience" }, 400);
     const executable = deps.workerServiceHostExecutable;
-    if (c.req.query("audience") !== "windows-x64" || !executable) return c.json({ error: "unsupported service host audience" }, 400);
-    if (!await Bun.file(executable).exists()) return c.json({ error: "Windows service host is unavailable" }, 503, { "cache-control": "no-store" });
-    const headers = noStore();
-    headers.set("content-type", "application/octet-stream");
-    headers.set("content-disposition", 'attachment; filename="mars-service-host.exe"');
-    return new Response(Bun.file(executable), { headers });
+    const hash = deps.workerReleaseManifest?.platforms["windows-x64"]?.serviceHostSha256;
+    if (!hash) return c.json({ code: "artifact_unavailable", message: "Windows service host is unavailable", artifacts: ["manifest:windows-x64.serviceHostSha256"] }, 503, { "cache-control": "no-store" });
+    if (!executable || !await artifactExists(executable)) return c.json({ code: "artifact_unavailable", message: "Windows service host is unavailable", artifacts: ["service-host:windows-x64"] }, 503, { "cache-control": "no-store" });
+    return packagedResponse(executable, "mars-service-host.exe", hash);
   });
   app.post("/api/workers/join", async (c) => {
     const source = deps.requestSource(c.req.raw);
