@@ -27,10 +27,12 @@ import { canSubscribeToOrganization, loadBrowserInvalidations } from "./browser-
 import { GithubRateLimitGate } from "./github-rate-limit.ts";
 import { fileURLToPath } from "node:url";
 import { initializeControlPlaneSetup } from "./control-plane-setup.ts";
+import { httpOrigin } from "./http-origin.ts";
 const required = (name: string): string => { const value = Bun.env[name]; if (!value) throw new Error(`${name} is required`); return value; };
 const dataRoot = Bun.env.DATA_ROOT?.trim() || "/var/lib/mars";
-const configuredPublicOrigin = Bun.env.PUBLIC_BASE_URL?.trim() || undefined;
-const controlPlaneAdapterUrls = (Bun.env.CONTROL_PLANE_ADAPTER_URLS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+const configuredPublicOriginRaw = Bun.env.PUBLIC_BASE_URL?.trim() || undefined;
+const configuredPublicOrigin = configuredPublicOriginRaw ? httpOrigin("PUBLIC_BASE_URL", configuredPublicOriginRaw) : undefined;
+const controlPlaneAdapterUrls = (Bun.env.CONTROL_PLANE_ADAPTER_URLS ?? "").split(",").map((value) => value.trim()).filter(Boolean).map((value) => httpOrigin("CONTROL_PLANE_ADAPTER_URLS", value));
 const env = { DATABASE: required("DATABASE_URL"), MACOS_TART_BASE_IMAGE: Bun.env.MARS_TART_BASE_IMAGE, DEFAULT_IMAGES: { "linux-x64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_X64, "windows-x64": Bun.env.DEFAULT_JOB_IMAGE_WINDOWS_X64, "macos-arm64": Bun.env.DEFAULT_JOB_IMAGE_MACOS_ARM64 }, TEMPLATE_MANIFESTS: { "windows-x64": Bun.env.MARS_WINDOWS_TEMPLATE_MANIFEST, "linux-x64": Bun.env.MARS_LINUX_TEMPLATE_MANIFEST }, TEMPLATE_ARTIFACTS: { "windows-x64": Bun.env.MARS_WINDOWS_TEMPLATE_ARTIFACT, "linux-x64": Bun.env.MARS_LINUX_TEMPLATE_ARTIFACT }, WORKER_TEMPLATE_PATHS: { "windows-x64": Bun.env.MARS_WINDOWS_TEMPLATE_PATH, "linux-x64": Bun.env.MARS_LINUX_TEMPLATE_PATH }, WORKER_TEMPLATE_DIGESTS: { "windows-x64": Bun.env.MARS_WINDOWS_TEMPLATE_DIGEST, "linux-x64": Bun.env.MARS_LINUX_TEMPLATE_DIGEST } };
 const production = Bun.env.NODE_ENV === "production";
 const webRoot = new URL(Bun.env.WEB_ROOT ?? "../../web/dist/", import.meta.url);
@@ -77,6 +79,10 @@ if (production) {
 const db = createDb(env.DATABASE); await migrateDatabase(db); await ensureDefaultPools(db, env.DEFAULT_IMAGES);
 configureRunLifecycle(db);
 const initialized = await initializeControlPlaneSetup(db, dataRoot, configuredPublicOrigin);
+const workerConnectionOrigins = (): string[] => {
+  const canonical = initialized.setup.publicOrigin() ?? configuredPublicOrigin;
+  return [...new Set([canonical, ...controlPlaneAdapterUrls].filter((origin): origin is string => Boolean(origin)))];
+};
 const secretBox = new SecretBox(initialized.masterKey);
 const json = (data: unknown, status=200) => Response.json(data,{status,headers:{"cache-control":"no-store"}});
 const cookie = (value:string, maxAge:number) => `mars_session=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
@@ -135,7 +141,7 @@ const discoveryHealth = new DiscoveryHealthMonitor(discoveryIntervalMs, Date.par
 const githubApp = new GitHubAppService({ db, secretBox, publicOrigin: initialized.setup.publicOrigin });
 const githubRateLimits = new GithubRateLimitGate();
 let triggerReconciliation = () => Promise.resolve();
-const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerControlPlaneUrls: controlPlaneAdapterUrls, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, windowsContainerBuild, windowsContainerArtifacts, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerServiceHostExecutable, workerOrchestratorExecutables, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, workerConnected: (workerId) => dispatcher.isConnected(workerId), onWorkerAdopted: (workerId) => { dispatcher.replayConnected(workerId); void triggerReconciliation(); }, health: () => ({ buildId: Bun.env.MARS_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
+const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, windowsContainerBuild, windowsContainerArtifacts, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: (request) => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerServiceHostExecutable, workerOrchestratorExecutables, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, workerConnected: (workerId) => dispatcher.isConnected(workerId), onWorkerAdopted: (workerId) => { dispatcher.replayConnected(workerId); void triggerReconciliation(); }, health: () => ({ buildId: Bun.env.MARS_BUILD_ID ?? "development", startedAt, discovery: discoveryHealth.snapshot() }) });
 const discoveryDeps = { db, installationToken: (installationId: number) => githubApp.getInstallationToken(installationId), githubFetchForInstallation: (installationId: number) => githubRateLimits.scopedFetch(installationId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY };
 let lastQueuedDiscoveryAt = 0;
 let lastGithubLeaseReconciliationAt = 0;

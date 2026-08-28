@@ -17,6 +17,7 @@ export function fakeHttpDeps(overrides: TestOverrides = {}): ControlPlaneHttpDep
   return {
     db: fakeDb,
     setup: { ...fakeSetup, publicOrigin: () => publicOrigin },
+    workerConnectionOrigins: () => [publicOrigin],
     browserOrigin: () => browserOrigin,
     secretBox: new SecretBox(Buffer.alloc(32, 7).toString("base64")),
     githubApp: { getOAuthCredentials: async () => ({ clientId: "client-id", clientSecret: "client-secret" }), getWebhookSecret: async () => null } as never,

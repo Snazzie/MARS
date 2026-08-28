@@ -47,7 +47,7 @@ export type ControlPlaneHttpDeps = {
   workerTemplatePaths?: Partial<Record<"windows-x64" | "linux-x64", string>>;
   workerTemplateDigests?: Partial<Record<"windows-x64" | "linux-x64", string>>;
   macosTartBaseImage?: string;
-  workerControlPlaneUrls?: string[];
+  workerConnectionOrigins(): string[];
   currentUser(request: Request): Promise<SessionUser | null>;
   requestId(): string;
   requestSource(request: Request): string;

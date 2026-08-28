@@ -25,6 +25,15 @@ describe("control-plane HTTP boundary", () => {
     });
     expect((await app.request("/healthz")).status).toBe(404);
   });
+  test("returns ordered approved worker connection origins to global admins", async () => {
+    const member = { id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true };
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      currentUser: async () => member,
+      workerConnectionOrigins: () => ["https://control.example", "https://adapter.example"],
+    })).request("/api/workers/control-plane-urls");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(["https://control.example", "https://adapter.example"]);
+  });
 
   test("exposes the synchronized public origin and managed flag in onboarding status", async () => {
     const db = (async (strings: TemplateStringsArray) => {
@@ -78,6 +87,35 @@ describe("control-plane HTTP boundary", () => {
     const response = await createControlPlaneApp(fakeHttpDeps()).request("/api/workers/bootstrap/initialize", { method: "POST", headers: { "Idempotency-Key": "test" } });
     expect(response.status).toBe(401);
   });
+  test("requires a configured worker connection origin for installers", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps()).request("/api/workers/installer?audience=linux-x64");
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ code: "invalid_worker_origin", message: "Choose a configured worker connection origin" });
+  });
+  test("injects the selected adapter origin into the Linux installer", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mars-installers-"));
+    try {
+      await Bun.write(join(root, "install-worker.sh"), '#!/usr/bin/env bash\n: "${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}"\n');
+      const response = await createControlPlaneApp(fakeHttpDeps({
+        baseUrl: "https://control.test",
+        workerInstallerRoot: pathToFileURL(`${root}/`),
+        workerConnectionOrigins: () => ["https://control.test", "https://worker.test"],
+      })).request("/api/workers/installer?audience=linux-x64&connectOrigin=https%3A%2F%2Fworker.test");
+      const installer = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(installer).toContain("PUBLIC_BASE_URL='https://worker.test'");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  test("rejects an unconfigured worker connection origin", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      workerConnectionOrigins: () => ["https://control.test"],
+    })).request("/api/workers/installer?audience=linux-x64&connectOrigin=https%3A%2F%2Fevil.test");
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ code: "invalid_worker_origin", message: "Choose a configured worker connection origin" });
+  });
   test("injects the control-plane origin into the Linux installer", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-installers-"));
     try {
@@ -86,12 +124,12 @@ describe("control-plane HTTP boundary", () => {
         baseUrl: "http://localhost:3000",
         browserBaseUrl: "http://localhost:5173",
         workerInstallerRoot: pathToFileURL(`${root}/`),
-      })).request("/api/workers/installer?audience=linux-x64");
+      })).request("/api/workers/installer?audience=linux-x64&connectOrigin=http%3A%2F%2Flocalhost%3A3000");
       const installer = await response.text();
 
       expect(response.status).toBe(200);
       expect(installer).toStartWith("#!/usr/bin/env bash\n");
-      expect(installer).toContain("PUBLIC_BASE_URL='http://127.0.0.1:3000'");
+      expect(installer).toContain("PUBLIC_BASE_URL='http://localhost:3000'");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -103,7 +141,7 @@ describe("control-plane HTTP boundary", () => {
       const build = { baseImage: "mcr.microsoft.com/windows/server/ltsc2025@sha256:" + "a".repeat(64), runnerUrl: "https://example.test/runner.zip", runnerSha256: "b".repeat(64), gitUrl: "https://example.test/git.zip", gitSha256: "c".repeat(64), vcUrl: "https://example.test/vc.exe", vcSha256: "d".repeat(64), builderPath: join(root, "builder.ps1"), verifierPath: join(root, "verifier.ps1"), containerfilePath: join(root, "Containerfile"), entrypointPath: join(root, "entrypoint.ps1"), jobAgentPath: join(root, "job-agent.exe") };
       for (const path of Object.values(build).slice(7)) await Bun.write(path, "artifact");
       const deps = { baseUrl: "https://control.test", workerInstallerRoot: pathToFileURL(`${root}/`), windowsContainerBuild: build };
-      const response = await createControlPlaneApp(fakeHttpDeps(deps)).request("/api/workers/installer?audience=windows-x64&runtime=container");
+      const response = await createControlPlaneApp(fakeHttpDeps(deps)).request("/api/workers/installer?audience=windows-x64&runtime=container&connectOrigin=https%3A%2F%2Fcontrol.test");
       const installer = await response.text();
       expect(response.status).toBe(200);
       expect(installer).toContain("'mars/windows-job:local'");
@@ -119,7 +157,7 @@ describe("control-plane HTTP boundary", () => {
       const response = await createControlPlaneApp(fakeHttpDeps({
         workerInstallerRoot: pathToFileURL(`${root}/`),
         windowsContainerBuild: undefined,
-      })).request("/api/workers/installer?audience=windows-x64&runtime=container");
+      })).request("/api/workers/installer?audience=windows-x64&runtime=container&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
       const installer = await response.text();
       expect(response.status).toBe(200);
       expect(installer).toContain("'container'");
@@ -135,7 +173,7 @@ describe("control-plane HTTP boundary", () => {
       const response = await createControlPlaneApp(fakeHttpDeps({
         workerInstallerRoot: pathToFileURL(`${root}/`),
         defaultJobImages: { "windows-x64": "registry.example/windows@sha256:" + "a".repeat(64) },
-      })).request("/api/workers/installer?audience=windows-x64&runtime=vm");
+      })).request("/api/workers/installer?audience=windows-x64&runtime=vm&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
       expect(response.status).toBe(503);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -151,7 +189,7 @@ describe("control-plane HTTP boundary", () => {
         workerInstallerRoot: pathToFileURL(`${root}/`),
         macosTartBaseImage: "mars-macos-smoke-v3",
         defaultJobImages: { "macos-arm64": digest },
-      })).request("/api/workers/installer?audience=macos-arm64");
+      })).request("/api/workers/installer?audience=macos-arm64&connectOrigin=http%3A%2F%2Flocalhost%3A3000");
       const installer = await response.text();
       expect(response.status).toBe(200);
       expect(installer).toContain("TART_IMAGE='mars-macos-smoke-v3'");

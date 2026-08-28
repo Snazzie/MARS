@@ -13,11 +13,13 @@ test("bootstrap status contract includes initialization generation and timestamp
 });
 
 test("installer commands include the one-use enrollment code", () => { const command = buildInstallerCommand(url, "linux-x64", "Abc_-9"); expect(command).toContain("--code"); expect(command).toContain("Abc_-9"); expect(command).not.toContain("vcpu"); });
-test("streams the macOS installer into user-scoped zsh", () => {
+test("downloads the macOS installer to a temporary file and cleans it after --code execution", () => {
   const installer = "https://runner.example.com/api/workers/installer?audience=macos-arm64";
-  expect(buildInstallerCommand(installer, "macos-arm64", "Abc_-9")).toBe(
-    "curl --fail --proto '=https' --tlsv1.3 'https://runner.example.com/api/workers/installer?audience=macos-arm64' | zsh -s -- --code 'Abc_-9'",
-  );
+  const command = buildInstallerCommand(installer, "macos-arm64", "Abc_-9");
+  expect(command).toContain("mktemp");
+  expect(command).toContain("zsh \"$marsInstaller\" --code 'Abc_-9'");
+  expect(command).toContain("trap");
+  expect(command).toContain("connectOrigin=https%3A%2F%2Frunner.example.com");
 });
 test("supports each installer audience", () => { expect(buildInstallerCommand(url, "linux-x64")).toContain("bash"); expect(buildInstallerCommand(url, "windows-x64")).toContain("powershell.exe"); expect(buildInstallerCommand(url, "macos-arm64")).toContain("zsh"); });
 

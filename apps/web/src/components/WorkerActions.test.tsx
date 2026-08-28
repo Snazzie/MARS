@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { buildWindowsUpgradeCommand } from "./WorkerActions.tsx";
 
 test("builds a Windows upgrade command for the existing worker", () => {
-  const command = buildWindowsUpgradeCommand("worker/id", "https://control.example/", "container");
-  expect(command).toContain("https://control.example/api/workers/installer?audience=windows-x64&runtime=container");
+  const command = buildWindowsUpgradeCommand("worker/id", "https://control.example/", "container", "https://adapter.example");
+  expect(command).toContain("https://adapter.example/api/workers/installer?audience=windows-x64&runtime=container&connectOrigin=https%3A%2F%2Fadapter.example");
   expect(command).toContain("powershell.exe -NoProfile -ExecutionPolicy Bypass");
   expect(command).toContain("-Upgrade -WindowsRuntime 'container'");
 });

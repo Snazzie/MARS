@@ -4,6 +4,7 @@ import { PendingWorkerRequest, WorkerConfiguration } from "@mars/contracts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { verifyWorkerBootstrap, initializeWorkerBootstrap, rotateWorkerBootstrap, getWorkerBootstrapStatus } from "../worker-bootstrap.ts";
 import { approvePendingWorker, configurePendingWorker, createRequestLimiter, hasMachineIdentity, parseApproveWorkerRequest, requestPendingWorker, rejectPendingWorker } from "../worker-requests.ts";
+import { httpOrigin } from "../http-origin.ts";
 
 function noStore(headers = new Headers()): Headers { headers.set("cache-control", "no-store"); return headers; }
 function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\"'\"'")}'`; }
@@ -14,11 +15,6 @@ function injectInstallerOrigin(source: string, baseUrl: string, extra: Record<st
   const injected = Object.entries(values).flatMap(([key, value]) => [`${key}=${shellQuote(value)}`, `export ${key}`]).join("\n");
   const newline = source.indexOf("\n"); const insertAt = source.startsWith("#!") && newline >= 0 ? newline + 1 : 0;
   return `${source.slice(0, insertAt)}${injected}\n${source.slice(insertAt)}`;
-}
-function workerOrigin(baseUrl: string): string {
-  const url = new URL(baseUrl);
-  if (url.hostname === "localhost") url.hostname = "127.0.0.1";
-  return url.origin;
 }
 export function pendingWorkerDto(row: Record<string, unknown>, workerConnected?: (workerId: string) => boolean) {
   if (!hasMachineIdentity(row) || typeof row.id !== "string" || typeof row.fingerprint !== "string") return null;
@@ -49,8 +45,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const user = await auth(c);
     if (!user) return c.json({ error: "unauthorized" }, 401);
     if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403);
-    const values = (deps.workerControlPlaneUrls ?? []).map((value) => new URL(value).origin);
-    return c.json([...new Set(values)], { headers: noStore() });
+    return c.json(deps.workerConnectionOrigins(), { headers: noStore() });
   });
   app.get("/api/workers/templates/:platform/manifest", async (c) => {
     const platform = c.req.param("platform") as "windows-x64" | "linux-x64";
@@ -81,26 +76,32 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   app.get("/api/workers/installer", async (c) => {
     const audience = c.req.query("audience");
     const runtime = c.req.query("runtime") ?? "container";
-    const upgrade = c.req.query("upgrade") === "true";
     const file = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : audience === "macos-arm64" ? "install-worker-macos.sh" : null;
     if (!file) return c.json({ error: "unsupported installer audience" }, 400);
+    const connectOriginParam = c.req.query("connectOrigin");
+    let connectOrigin: string;
+    try {
+      if (!connectOriginParam) throw new Error("missing worker origin");
+      connectOrigin = httpOrigin("connectOrigin", connectOriginParam);
+    } catch {
+      return c.json({ code: "invalid_worker_origin", message: "Choose a configured worker connection origin" }, 400);
+    }
+    if (!deps.workerConnectionOrigins().includes(connectOrigin)) return c.json({ code: "invalid_worker_origin", message: "Choose a configured worker connection origin" }, 400);
     const installer = Bun.file(new URL(file, deps.workerInstallerRoot));
     if (audience === "windows-x64" && runtime !== "vm" && runtime !== "container") return c.json({ error: "unsupported Windows runtime" }, 400);
     if (!await installer.exists()) return c.json({ code: "artifact_unavailable", message: "Worker installer is unavailable", artifact: file }, 503, { "cache-control": "no-store" });
-    const origin = deps.setup.publicOrigin();
-    if (!origin) return c.json({ code: "setup_required", message: "Complete first-run setup" }, 503);
     const buildUrls = {
-      WINDOWS_CONTAINER_BUILDER_URL: `${origin}/api/workers/windows-container-builder`,
-      WINDOWS_CONTAINER_VERIFIER_URL: `${origin}/api/workers/windows-container-verifier`,
-      WINDOWS_CONTAINERFILE_URL: `${origin}/api/workers/windows-containerfile`,
-      WINDOWS_CONTAINER_ENTRYPOINT_URL: `${origin}/api/workers/windows-container-entrypoint`,
-      WINDOWS_CONTAINER_JOB_AGENT_URL: `${origin}/api/workers/windows-container-job-agent`,
+      WINDOWS_CONTAINER_BUILDER_URL: `${connectOrigin}/api/workers/windows-container-builder`,
+      WINDOWS_CONTAINER_VERIFIER_URL: `${connectOrigin}/api/workers/windows-container-verifier`,
+      WINDOWS_CONTAINERFILE_URL: `${connectOrigin}/api/workers/windows-containerfile`,
+      WINDOWS_CONTAINER_ENTRYPOINT_URL: `${connectOrigin}/api/workers/windows-container-entrypoint`,
+      WINDOWS_CONTAINER_JOB_AGENT_URL: `${connectOrigin}/api/workers/windows-container-job-agent`,
     };
     const extra: Record<string, string> = audience === "windows-x64"
       ? { WINDOWS_RUNTIME: runtime, WINDOWS_CONTAINER_IMAGE: "mars/windows-job:local", WINDOWS_TEMPLATE_PATH: deps.workerTemplatePaths?.["windows-x64"] ?? "", WINDOWS_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["windows-x64"] ?? "", LINUX_TEMPLATE_PATH: deps.workerTemplatePaths?.["linux-x64"] ?? "", LINUX_TEMPLATE_DIGEST: deps.workerTemplateDigests?.["linux-x64"] ?? "", ...buildUrls }
       : audience === "macos-arm64" ? { TART_IMAGE: deps.macosTartBaseImage ?? "", TART_IMAGE_DIGEST: deps.defaultJobImages["macos-arm64"] ?? "" } : {};
     if (audience === "windows-x64" && runtime === "vm" && (!extra.WINDOWS_TEMPLATE_PATH || !extra.WINDOWS_TEMPLATE_DIGEST)) return c.json({ code: "artifact_unavailable", message: "Windows Hyper-V template is not configured", artifact: "windows-template" }, 503);
-    return new Response(injectInstallerOrigin(await installer.text(), workerOrigin(origin), extra, audience === "windows-x64"), { headers: noStore() });
+    return new Response(injectInstallerOrigin(await installer.text(), connectOrigin, extra, audience === "windows-x64"), { headers: noStore() });
   });
   app.get("/api/workers/orchestrator", async (c) => { const audience = c.req.query("audience") as keyof NonNullable<typeof deps.workerOrchestratorExecutables>; const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined); if (!executable) return c.json({ code: "artifact_unavailable", message: "Orchestrator is unsupported", artifact: `orchestrator:${audience}` }, 503); if (!await Bun.file(executable).exists()) return c.json({ code: "artifact_unavailable", message: "Orchestrator is unavailable", artifact: `orchestrator:${audience}` }, 503, { "cache-control": "no-store" }); const headers = noStore(); headers.set("content-type", "application/octet-stream"); headers.set("content-disposition", 'attachment; filename="mars-orchestrator"'); return new Response(Bun.file(executable), { headers }); });
   app.get("/api/workers/service-host", async (c) => {
