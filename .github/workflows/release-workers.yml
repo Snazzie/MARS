@@ -11,6 +11,7 @@ permissions:
 
 env:
   BUILD_ID: ${{ github.sha }}
+  RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('worker-{0}', github.run_id) }}
   CONTRACT_VERSION: 0.1.0
 
 jobs:
@@ -73,7 +74,7 @@ jobs:
           sha256sum dist/linux/mars-orchestrator | cut -d' ' -f1 > dist/linux/orchestrator.sha256
           sha256sum dist/linux/linux-broker-compose.yaml | cut -d' ' -f1 > dist/linux/compose.sha256
           sha256sum dist/linux/worker-domain.xml | cut -d' ' -f1 > dist/linux/domain.sha256
-          RELEASE_ASSET_BASE="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download"
+          RELEASE_ASSET_BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/$RELEASE_TAG"
           jq -cn --arg orchestratorSha256 "$(cat dist/linux/orchestrator.sha256)" --arg brokerImage "$BROKER_IMAGE" --arg goldenImageUrl "$RELEASE_ASSET_BASE/mars-worker-golden.qcow2" --arg goldenImageSha256 "$GOLDEN_IMAGE_SHA256" --arg composeSha256 "$(cat dist/linux/compose.sha256)" --arg domainTemplateSha256 "$(cat dist/linux/domain.sha256)" '{orchestratorSha256:$orchestratorSha256,brokerImage:$brokerImage,goldenImageUrl:$goldenImageUrl,goldenImageSha256:$goldenImageSha256,composeSha256:$composeSha256,domainTemplateSha256:$domainTemplateSha256}' > dist/linux/metadata.json
           echo "json=$(cat dist/linux/metadata.json)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
@@ -140,7 +141,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Windows dependency download failed: $($asset.Name)" }
             if ((Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $asset.Hash) { throw "Windows dependency SHA-256 does not match metadata: $($asset.Name)" }
           }
-          $releaseAssetBase = "https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download"
+          $releaseAssetBase = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG"
           $orchestrator = (Get-FileHash dist/windows/mars-orchestrator.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           $serviceHost = (Get-FileHash dist/windows/mars-service-host.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           $metadata = [ordered]@{ orchestratorSha256=$orchestrator; serviceHostSha256=$serviceHost; vmTemplateUrl="$releaseAssetBase/mars-worker-template.vhdx"; vmTemplateSha256=$env:VM_TEMPLATE_SHA256; container=[ordered]@{ baseImage=$env:BASE_IMAGE; runner=[ordered]@{url="$releaseAssetBase/mars-windows-runner.zip";sha256=$env:RUNNER_SHA256}; git=[ordered]@{url="$releaseAssetBase/mars-windows-git.zip";sha256=$env:GIT_SHA256}; vcRuntime=[ordered]@{url="$releaseAssetBase/mars-windows-vc-runtime.exe";sha256=$env:VC_SHA256} } }
@@ -319,9 +320,20 @@ jobs:
             [[ "$REF_NAME" == worker-* ]] || { echo "worker release tags must start with worker-" >&2; exit 1; }
             releaseTag="$REF_NAME"
           else
-            releaseTag=worker-latest
+            releaseTag="worker-$GITHUB_RUN_ID"
           fi
+          test "$releaseTag" = "$RELEASE_TAG"
           echo "tag=$releaseTag" >> "$GITHUB_OUTPUT"
+      - name: Build control-plane image under immutable build tag
+        id: image
+        env:
+          CONTROL_PLANE_IMAGE: ghcr.io/snazzie/mars/control-plane
+        run: |
+          set -euo pipefail
+          docker buildx build --push --build-arg MARS_BUILD_ID="$BUILD_ID" --build-arg MARS_RELEASE_MANIFEST=dist/worker-release-manifest.json --build-arg MARS_WINDOWS_SERVICE_HOST_ARTIFACT="dist/worker-windows-${{ github.sha }}/mars-service-host.exe" -f deploy/control-plane/Dockerfile -t "$CONTROL_PLANE_IMAGE:$BUILD_ID" .
+          imageDigest="$(docker buildx imagetools inspect "$CONTROL_PLANE_IMAGE:$BUILD_ID" --format '{{.Manifest.Digest}}')"
+          [[ "$imageDigest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "control-plane image digest is unavailable" >&2; exit 1; }
+          echo "digest=$imageDigest" >> "$GITHUB_OUTPUT"
       - name: Publish complete worker release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -334,6 +346,13 @@ jobs:
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" dist/release/* --generate-notes --latest
           fi
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --latest
-      - name: Build control-plane image with the unsigned manifest
+      - name: Promote exact control-plane image to latest
+        env:
+          CONTROL_PLANE_IMAGE: ghcr.io/snazzie/mars/control-plane
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
         run: |
-          docker buildx build --push --build-arg MARS_BUILD_ID="$BUILD_ID" --build-arg MARS_RELEASE_MANIFEST=dist/worker-release-manifest.json --build-arg MARS_WINDOWS_SERVICE_HOST_ARTIFACT="dist/worker-windows-${{ github.sha }}/mars-service-host.exe" -f deploy/control-plane/Dockerfile -t ghcr.io/snazzie/mars/control-plane:latest .
+          set -euo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "control-plane image digest is unavailable" >&2; exit 1; }
+          docker buildx imagetools create --tag "$CONTROL_PLANE_IMAGE:latest" "$CONTROL_PLANE_IMAGE@$IMAGE_DIGEST"
+          promotedDigest="$(docker buildx imagetools inspect "$CONTROL_PLANE_IMAGE:latest" --format '{{.Manifest.Digest}}')"
+          test "$promotedDigest" = "$IMAGE_DIGEST"

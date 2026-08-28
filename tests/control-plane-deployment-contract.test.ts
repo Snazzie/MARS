@@ -181,29 +181,39 @@ test("worker release workflow gates unsigned aggregate publication on all platfo
     "install-worker-macos-arm64.sh",
   ]) expect(workflow).toContain(installer);
 });
-test("worker release workflow publishes latest assets for tag pushes and manual dispatch", async () => {
+test("worker release workflow publishes current-tag assets before promoting the exact image", async () => {
   const workflow = await read(".github/workflows/release-workers.yml");
   const aggregate = workflow.slice(workflow.indexOf("\n  aggregate:"));
   expect(workflow).toContain("workflow_dispatch:");
   expect(workflow).toContain("tags: ['worker-*']");
+  expect(workflow).toContain("RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('worker-{0}', github.run_id) }}");
   expect(aggregate).toContain("REF_TYPE: ${{ github.ref_type }}");
   expect(aggregate).toContain("REF_NAME: ${{ github.ref_name }}");
   expect(aggregate).toContain('if [[ "$REF_TYPE" == tag ]]; then');
   expect(aggregate).toContain('releaseTag="$REF_NAME"');
-  expect(aggregate).toContain("releaseTag=worker-latest");
-  expect(aggregate).toContain('gh release view "$RELEASE_TAG"');
+  expect(aggregate).toContain('releaseTag="worker-$GITHUB_RUN_ID"');
+  expect(aggregate).toContain('test "$releaseTag" = "$RELEASE_TAG"');
   expect(aggregate).toContain('gh release upload "$RELEASE_TAG"');
   expect(aggregate).toContain("--clobber");
   expect(aggregate).toContain('gh release create "$RELEASE_TAG"');
   expect(aggregate).toContain('--target "$GITHUB_SHA"');
   expect(aggregate).toContain('gh release edit "$RELEASE_TAG"');
   expect(aggregate).toContain("--latest");
+  const image = aggregate.indexOf("name: Build control-plane image under immutable build tag");
+  const immutableBuild = aggregate.indexOf('docker buildx build --push', image);
   const publication = aggregate.indexOf("name: Publish complete worker release");
   const latest = aggregate.indexOf('gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --latest');
-  const image = aggregate.indexOf("name: Build control-plane image with the unsigned manifest");
-  expect(publication).toBeGreaterThanOrEqual(0);
+  const promotion = aggregate.indexOf("name: Promote exact control-plane image to latest");
+  const promoteCommand = aggregate.indexOf('docker buildx imagetools create --tag "$CONTROL_PLANE_IMAGE:latest" "$CONTROL_PLANE_IMAGE@$IMAGE_DIGEST"');
+  expect(image).toBeGreaterThanOrEqual(0);
+  expect(immutableBuild).toBeGreaterThan(image);
+  expect(publication).toBeGreaterThan(immutableBuild);
   expect(latest).toBeGreaterThan(publication);
-  expect(image).toBeGreaterThan(latest);
+  expect(promotion).toBeGreaterThan(latest);
+  expect(promoteCommand).toBeGreaterThan(promotion);
+  expect(aggregate).toContain('-t "$CONTROL_PLANE_IMAGE:$BUILD_ID"');
+  expect(aggregate).toContain('echo "digest=$imageDigest" >> "$GITHUB_OUTPUT"');
+  expect(aggregate).toContain('test "$promotedDigest" = "$IMAGE_DIGEST"');
   expect(aggregate).not.toContain("if: startsWith(github.ref, 'refs/tags/')");
 });
 
@@ -215,7 +225,6 @@ test("production startup checks every packaged Windows container input", async (
     "windowsContainerEntrypoint", "windowsContainerJobAgent",
   ]) expect(source).toContain(artifact);
 });
-
 test("aggregate release validation installs locked dependencies before importing contracts", async () => {
   const workflow = await read(".github/workflows/release-workers.yml");
   const aggregate = workflow.slice(workflow.indexOf("\n  aggregate:"));
@@ -224,8 +233,7 @@ test("aggregate release validation installs locked dependencies before importing
   expect(install).toBeGreaterThanOrEqual(0);
   expect(validation).toBeGreaterThan(install);
 });
-
-test("release workflow validates SHA-256/HTTPS assets and publishes latest-release URLs", async () => {
+test("release workflow validates SHA-256/HTTPS assets and binds manifest URLs to the current release tag", async () => {
   const workflow = await read(".github/workflows/release-workers.yml");
   for (const requirement of [
     "MARS_LINUX_GOLDEN_IMAGE_SOURCE_URL",
@@ -237,12 +245,14 @@ test("release workflow validates SHA-256/HTTPS assets and publishes latest-relea
     "MARS_MACOS_TART_SOURCE_IMAGE", "TART_SOURCE_REGISTRY_HOSTNAME", "docker login \"$TART_REGISTRY_HOSTNAME\"", "tart pull \"$TART_SOURCE_IMAGE\"",
     "prepare-macos-job-image.sh", "tart push \"$TARGET\" \"$PUBLISHED_REF\"",
     "imagetools inspect", "TART_IMAGE_DIGEST",
-    "https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download",
-    "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download",
+    "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG",
+    "https://github.com/${GITHUB_REPOSITORY}/releases/download/$RELEASE_TAG",
     "gh release create",
   ]) expect(workflow).toContain(requirement);
   expect(workflow).not.toContain("worker-v0.1.0");
-  expect(workflow).toContain("ghcr.io/snazzie/mars/control-plane:latest");
+  expect(workflow).toContain('docker buildx build --push');
+  expect(workflow).toContain('docker buildx imagetools create --tag "$CONTROL_PLANE_IMAGE:latest"');
+  expect(workflow).not.toContain("/releases/latest/download");
   expect(workflow).not.toContain("MARS_LINUX_GOLDEN_IMAGE_PATH");
   expect(workflow).not.toContain("MARS_WINDOWS_VM_TEMPLATE_PATH");
   expect(workflow).not.toContain("Invoke-WebRequest");
