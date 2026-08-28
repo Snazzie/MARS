@@ -95,6 +95,19 @@ test("image persists production data-root contract", async () => {
   expect(dockerfile).toContain("ENV DATA_ROOT=/var/lib/mars");
   expect(dockerfile).toContain("chmod 700 /var/lib/mars");
 });
+test("active runtime and deployment surfaces use Mars identifiers", async () => {
+  const controlPlanePackage = await read("apps/control-plane/package.json");
+  const orchestratorPackage = await read("apps/orchestrator/package.json");
+  const compose = await read("compose.yaml");
+  const serviceInstaller = await read("deploy/workers/install-worker.ps1");
+  expect(controlPlanePackage).toContain('"name": "@mars/control-plane"');
+  expect(orchestratorPackage).toContain('"name": "@mars/orchestrator"');
+  expect(compose).toContain("container_name: mars-postgres-local");
+  expect(compose).toContain("name: mars-postgres-data");
+  expect(compose).toContain("name: mars-control-plane-data");
+  expect(serviceInstaller).toContain("'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\MarsWorker'");
+  expect(serviceInstaller).toContain("sc.exe failure MarsWorker");
+});
 
 test("deployment guide documents operational routing, onboarding, persistence, and platform gates", async () => {
   const readme = await read("deploy/control-plane/README.md");
