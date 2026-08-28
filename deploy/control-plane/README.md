@@ -80,6 +80,16 @@ The endpoint accepts `POST` requests from GitHub, validates `X-Hub-Signature-256
 
 Import `deploy/unraid/mars-control-plane.xml`. Required inputs are the external `DATABASE_URL`, HTTP port, and persistent data mount. No GitHub credentials or master-key file are entered in the template.
 
+## Worker releases
+
+Worker releases are independent of the control-plane image:
+
+- Push a tag matching `linux-worker-*` to build and publish the Linux worker release.
+- Push a tag matching `windows-worker-*` to build and publish the Windows worker release.
+- Use **Actions → Release Linux worker** or **Actions → Release Windows worker** for an artifact-only manual build.
+
+Both workflows publish worker release metadata containing the Mars contract version from `@mars/contracts`. Linux releases also publish the `ghcr.io/snazzie/mars/linux-broker` image. Worker-local Windows container image dependencies are supplied by the worker build and are not required by the control-plane release.
+
 ## Upgrades and backups
 
 Operators should back up PostgreSQL with `pg_dump` and the persistent data volume before upgrades. Keep the same data volume and database across image changes. Restore both together; do not regenerate `app_master_key`.
