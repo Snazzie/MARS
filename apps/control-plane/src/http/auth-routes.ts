@@ -13,6 +13,12 @@ function localReturnTo(value: string | undefined): string | null {
 function decodeReturnTo(value: string | null): string | null {
   try { return localReturnTo(value ? decodeURIComponent(value) : undefined); } catch { return null; }
 }
+function setupRequiredRedirect(accept: string | undefined, browserOrigin: string | null): string | null {
+  const acceptsHtml = accept?.split(",").some((mediaType) => mediaType.split(";", 1)[0]?.trim().toLowerCase() === "text/html") ?? false;
+  if (!acceptsHtml) return null;
+  return browserOrigin ? browserLocation(browserOrigin, "/onboarding") : "/onboarding";
+}
+
 const oauthStarts = new Map<string, number[]>();
 function allowOAuthStart(client: string): boolean {
   const now = Date.now(), cutoff = now - 60_000;
@@ -32,7 +38,11 @@ export function registerAuthRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlan
   app.get("/api/auth/github", async (c) => {
     const origin = deps.setup.publicOrigin();
     const credentials = await deps.githubApp?.getOAuthCredentials();
-    if (!origin || !credentials) return c.json({ code: "setup_required", message: "Complete first-run setup" }, 503);
+    if (!origin || !credentials) {
+      const redirect = setupRequiredRedirect(c.req.header("Accept"), deps.browserOrigin());
+      if (redirect) return c.redirect(redirect, 302);
+      return c.json({ code: "setup_required", message: "Complete first-run setup" }, 503);
+    }
     const client = deps.requestSource(c.req.raw);
     if (!allowOAuthStart(client)) return c.json({ code: "oauth_rate_limited", message: "Too many sign-in attempts" }, 429);
     const [outstanding] = await deps.db`SELECT count(*)::int AS count FROM github_setup_states WHERE purpose='oauth' AND consumed_at IS NULL AND expires_at>now()`;

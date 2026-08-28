@@ -239,6 +239,42 @@ describe("control-plane HTTP boundary", () => {
     expect(response.status).toBe(503);
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
+  test("redirects browser OAuth starts to onboarding when setup origin is unavailable", async () => {
+    const defaults = fakeHttpDeps();
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      browserBaseUrl: "http://localhost:5173",
+      setup: { ...defaults.setup, publicOrigin: () => null },
+    })).request("/api/auth/github", { headers: { Accept: "text/html" } });
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("http://localhost:5173/onboarding");
+  });
+  test("redirects browser OAuth starts to onboarding when OAuth credentials are unavailable", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      browserBaseUrl: "http://localhost:5173",
+      githubApp: undefined,
+    })).request("/api/auth/github", { headers: { Accept: "text/html" } });
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("http://localhost:5173/onboarding");
+  });
+
+  test("keeps setup-required JSON for API OAuth starts", async () => {
+    const defaults = fakeHttpDeps();
+    const depsList = [
+      fakeHttpDeps({ setup: { ...defaults.setup, publicOrigin: () => null } }),
+      fakeHttpDeps({ githubApp: undefined }),
+    ];
+    for (const deps of depsList) {
+      const response = await createControlPlaneApp(deps).request("/api/auth/github", {
+        headers: { Accept: "application/json" },
+      });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ code: "setup_required", message: "Complete first-run setup" });
+    }
+  });
+
+
 
 
 
