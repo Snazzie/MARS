@@ -4,7 +4,7 @@ import { OrganizationSummary, RepositorySummary, PoolSummary } from "./dashboard
 
 export const OnboardingStep = z.enum(["setup", "admin", "worker", "github", "labels", "complete"]);
 export type OnboardingStep = z.infer<typeof OnboardingStep>;
-export const OnboardingStatus = z.object({ version:z.literal(1), onboardingRequired:z.boolean(), adminCreated:z.boolean(), authenticated:z.boolean(), canManage:z.boolean(), step:OnboardingStep }).strict();
+export const OnboardingStatus = z.object({ version:z.literal(1), onboardingRequired:z.boolean(), adminCreated:z.boolean(), authenticated:z.boolean(), canManage:z.boolean(), step:OnboardingStep, publicBaseUrl:z.string().nullable(), publicBaseUrlManaged:z.boolean() }).strict();
 export type OnboardingStatus = z.infer<typeof OnboardingStatus>;
 export const ControlPlaneSetupRequest = z.object({ publicBaseUrl: z.string().min(1).max(2048) }).strict();
 export type ControlPlaneSetupRequest = z.infer<typeof ControlPlaneSetupRequest>;

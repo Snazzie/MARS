@@ -8,12 +8,12 @@ const hasKey = (c: { req: { header(name:string): string|undefined } }) => Boolea
 export function registerOnboardingRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
   app.get("/api/onboarding/status", async (c) => {
     const user = await deps.currentUser(c.req.raw);
-    const status = await getOnboardingStatus(deps.db, { authenticated:Boolean(user), canManage:Boolean(user?.isGlobalAdmin) });
+    const status = await getOnboardingStatus(deps.db, { authenticated:Boolean(user), canManage:Boolean(user?.isGlobalAdmin) }, { publicBaseUrlManaged: deps.setup.publicOriginManaged() });
     return c.json(OnboardingStatus.parse(status), { headers:{ "cache-control":"no-store" } });
   });
   app.get("/api/onboarding", async (c) => {
     const user = await deps.currentUser(c.req.raw); if (!user) return c.json({ error:"unauthorized" },401); if (!user.isGlobalAdmin) return c.json({ error:"forbidden" },403);
-    const detail = await getOnboardingDetail(deps.db, { authenticated: true, canManage: true });
+    const detail = await getOnboardingDetail(deps.db, { authenticated: true, canManage: true }, {}, { publicBaseUrlManaged: deps.setup.publicOriginManaged() });
     const hyperv = detail.worker?.platform === "windows-x64";
     const defaultImageDigests = {
       "linux-x64": hyperv ? deps.workerTemplateDigests?.["linux-x64"] ?? null : deps.defaultJobImages["linux-x64"] ?? null,
@@ -53,7 +53,7 @@ export function registerOnboardingRoutes(app: Hono<ControlPlaneEnv>, deps: Contr
     if (!deps.githubApp) return c.json({ code: "github_app_unavailable", message: "GitHub App service is unavailable" }, 503);
     const parsed = StartOnboardingVerificationRequest.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ code: "invalid_request", message: "Choose a repository workflow to verify" }, 400);
-    const detail = await getOnboardingDetail(deps.db, { authenticated: true, canManage: true });
+    const detail = await getOnboardingDetail(deps.db, { authenticated: true, canManage: true }, {}, { publicBaseUrlManaged: deps.setup.publicOriginManaged() });
     const organizationId = detail.github.organizationId;
     const pool = detail.pool;
     const repository = detail.github.repositories.find((candidate) => candidate.id === parsed.data.repositoryId && candidate.available);

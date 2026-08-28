@@ -25,12 +25,16 @@ const nullableObjectValue = (value: unknown): Record<string, unknown> | null => 
 };
 const numberValue = (value: unknown): number => typeof value === "number" ? value : Number(value ?? 0);
 
-export async function getOnboardingStatus(db: OnboardingDb, auth: { authenticated?: boolean; canManage?: boolean } = {}): Promise<OnboardingStatus> {
+type OnboardingAuth = { authenticated?: boolean; canManage?: boolean };
+type OnboardingSetup = { publicBaseUrlManaged: boolean };
+
+export async function getOnboardingStatus(db: OnboardingDb, auth: OnboardingAuth = {}, setup: OnboardingSetup = { publicBaseUrlManaged: false }): Promise<OnboardingStatus> {
   const row = first(await db`
     SELECT so.admin_user_id AS "adminUserId", so.worker_id AS "workerId",
       so.organization_id AS "organizationId", so.completed_at AS "completedAt",
       w.admission_state AS "workerAdmissionState",
       w.configuration_state AS "workerConfigurationState",
+      (SELECT c.public_base_url FROM control_plane_config c WHERE c.singleton=true) AS "publicBaseUrl",
       EXISTS (SELECT 1 FROM control_plane_config c WHERE c.singleton=true AND c.public_base_url IS NOT NULL) AS "originConfigured",
       EXISTS (SELECT 1 FROM github_app_config g WHERE g.singleton=true AND g.client_id IS NOT NULL) AS "githubAppConfigured",
       EXISTS (
@@ -56,23 +60,25 @@ export async function getOnboardingStatus(db: OnboardingDb, auth: { authenticate
   const githubReady = row.githubReady === true;
   const authenticated = auth.authenticated ?? false;
   const canManage = auth.canManage ?? false;
-  if (completed) return { version: 1, onboardingRequired: false, adminCreated: Boolean(adminUserId), authenticated, canManage, step: "complete" };
-  if (!originConfigured || !githubAppConfigured) return { version: 1, onboardingRequired: true, adminCreated: Boolean(adminUserId), authenticated, canManage, step: "setup" };
+  const base = { version: 1 as const, publicBaseUrl: stringValue(row.publicBaseUrl), publicBaseUrlManaged: setup.publicBaseUrlManaged, authenticated, canManage, adminCreated: Boolean(adminUserId) };
+  if (completed) return { ...base, onboardingRequired: false, step: "complete" };
+  if (!originConfigured || !githubAppConfigured) return { ...base, onboardingRequired: true, step: "setup" };
   let step: OnboardingStatus["step"] = "admin";
   if (adminUserId) {
     if (!workerId || admission !== "adopted" || configuration !== "ready") step = "worker";
     else if (!organizationId || !githubReady) step = "github";
     else step = "labels";
   }
-  return { version: 1, onboardingRequired: true, adminCreated: Boolean(adminUserId), authenticated, canManage, step };
+  return { ...base, onboardingRequired: true, step };
 }
 
 export async function getOnboardingDetail(
   db: OnboardingDb,
-  auth: { authenticated?: boolean; canManage?: boolean } = {},
+  auth: OnboardingAuth = {},
   extras: Partial<Pick<OnboardingDetail, "defaultImageDigests">> = {},
+  setup: OnboardingSetup = { publicBaseUrlManaged: false },
 ): Promise<OnboardingDetail> {
-  const status = await getOnboardingStatus(db, auth);
+  const status = await getOnboardingStatus(db, auth, setup);
   const selectedRow = first(await db`
     SELECT w.id,w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",
       w.connection_state AS "connectionState",w.configuration_state AS "configurationState",

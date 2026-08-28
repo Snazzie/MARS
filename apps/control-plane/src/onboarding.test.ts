@@ -112,7 +112,7 @@ describe("onboarding HTTP contract", () => {
 
   test("strict detail DTO rejects secret-like nested fields and invalid step", () => {
     const valid = {
-      version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "worker",
+      version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "worker", publicBaseUrl: null, publicBaseUrlManaged: false,
       worker: null, organizations: [], github: { appConfigured: false, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: null,
     };
     expect(OnboardingDetail.safeParse(valid).success).toBe(true);

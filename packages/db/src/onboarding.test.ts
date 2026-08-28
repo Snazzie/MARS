@@ -16,6 +16,11 @@ describe("onboarding state derivation", () => {
     expect(status).toMatchObject({ version: 1, onboardingRequired: true, adminCreated: false, step: "setup" });
   });
 
+  test("returns the persisted public origin and caller-supplied managed flag", async () => {
+    const status = await getOnboardingStatus(sql([{ adminUserId: null, workerId: null, organizationId: null, completedAt: null, publicBaseUrl: "https://control.example.com", originConfigured: true, githubAppConfigured: false }]), {}, { publicBaseUrlManaged: true });
+    expect(status).toMatchObject({ publicBaseUrl: "https://control.example.com", publicBaseUrlManaged: true });
+  });
+
   test("falls back to worker when selected worker is rejected or revoked", async () => {
     const status = await getOnboardingStatus(sql([{ adminUserId: "u1", workerId: "w1", organizationId: null, completedAt: null, originConfigured: true, githubAppConfigured: true, workerAdmissionState: "rejected" }]));
     expect(status.step).toBe("worker");

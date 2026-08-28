@@ -39,6 +39,13 @@ test("setup step asks only for the public origin", () => {
   expect(html).not.toContain("password");
 });
 
+test("managed public origin is rendered read-only and preserved for setup", () => {
+  const html = markup({ version: 1, onboardingRequired: true, adminCreated: false, authenticated: false, canManage: false, step: "setup", publicBaseUrl: "https://control.example.com", publicBaseUrlManaged: true });
+  expect(html).toContain('value="https://control.example.com"');
+  expect(html).toMatch(/readonly(?:="")?/i);
+  expect(html).toContain("Create GitHub App");
+});
+
 test("first-admin sign-in copy explains administrator setup and links GitHub OAuth", () => {
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: false, authenticated: false, canManage: false, step: "admin" });
   expect(html).toContain("Create your administrator account");

@@ -38,6 +38,7 @@ export async function loadOrCreateMasterKey(dataRoot: string, overridePath?: str
 
 export type ControlPlaneSetup = {
   publicOrigin(): string | null;
+  publicOriginManaged(): boolean;
   configure(candidateOrigin: string): Promise<string>;
   claimAdmin(githubUser: { id: number; login: string }): Promise<string>;
 };
@@ -46,15 +47,30 @@ async function readConfig(db: DashboardDb): Promise<ConfigRow | null> {
   const rows = await db<ConfigRow[]>`select public_base_url as "publicBaseUrl", setup_completed_at as "setupCompletedAt" from control_plane_config where singleton=true`;
   return rows[0] ?? null;
 }
-export async function initializeControlPlaneSetup(db: DashboardDb, dataRoot: string): Promise<{ setup: ControlPlaneSetup; masterKey: string }> {
+export async function initializeControlPlaneSetup(db: DashboardDb, dataRoot: string, configuredOrigin?: string): Promise<{ setup: ControlPlaneSetup; masterKey: string }> {
+  const environmentOrigin = configuredOrigin?.trim() ? httpOrigin("PUBLIC_BASE_URL", configuredOrigin) : undefined;
   await mkdir(dataRoot, { recursive: true, mode: 0o700 }); await chmod(dataRoot, 0o700);
   const masterKey = Bun.env.APP_MASTER_KEY?.trim() ?? await loadOrCreateMasterKey(dataRoot);
   if (!validKey(masterKey)) throw new Error("APP_MASTER_KEY must be base64-encoded 32 bytes");
   let config = await readConfig(db);
   if (!config) { await db`insert into control_plane_config (singleton) values (true) on conflict (singleton) do nothing`; config = await readConfig(db); }
+  config ??= { publicBaseUrl: null, setupCompletedAt: null };
+  if (environmentOrigin) {
+    await db`insert into control_plane_config (singleton, public_base_url) values (true, ${environmentOrigin}) on conflict (singleton) do update set public_base_url=excluded.public_base_url, updated_at=now()`;
+    config = { ...config, publicBaseUrl: environmentOrigin };
+  }
   const setup: ControlPlaneSetup = {
     publicOrigin: () => config?.publicBaseUrl ?? null,
-    configure: async candidateOrigin => { const origin = httpOrigin("publicBaseUrl", candidateOrigin); await db`update control_plane_config set public_base_url=${origin}, updated_at=now() where singleton=true and setup_completed_at is null`; config = { ...config!, publicBaseUrl: origin }; return origin; },
+    publicOriginManaged: () => Boolean(environmentOrigin),
+    configure: async candidateOrigin => {
+      const origin = httpOrigin("PUBLIC_BASE_URL", candidateOrigin);
+      if (environmentOrigin && origin !== environmentOrigin) throw new Error("configured_origin_mismatch");
+      const updated = await db<Array<{ publicBaseUrl: string | null }>>`update control_plane_config set public_base_url=${origin}, updated_at=now() where singleton=true and setup_completed_at is null returning public_base_url as "publicBaseUrl"`;
+      const persisted = updated[0]?.publicBaseUrl ?? null;
+      if (!updated[0]) throw new Error("setup_state_expired");
+      config = { ...config!, publicBaseUrl: persisted ?? origin };
+      return persisted ?? origin;
+    },
     claimAdmin: async githubUser => {
       const result = await db.begin(async (tx: TransactionSql) => {
         await tx`select pg_advisory_xact_lock(hashtext(${SETUP_LOCK}))`;

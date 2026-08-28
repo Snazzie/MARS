@@ -31,7 +31,7 @@ export function OnboardingPage() {
   const pool = useMutation({ mutationFn: createOnboardingPool, onSuccess: refresh, onError: (e) => setError(e instanceof Error ? e.message : "Pool creation failed") });
   if (status.isLoading) return <main className="onboarding"><p>Loading onboarding…</p></main>;
   if (status.error || !s) return <main className="onboarding"><h1>Onboarding unavailable</h1><p role="alert">{status.error instanceof Error ? status.error.message : "Could not load onboarding."}</p><button onClick={() => void status.refetch()}>Retry</button></main>;
-  if (s.step === "setup") return <SetupCard />;
+  if (s.step === "setup") return <SetupCard status={s} />;
   if (!s.authenticated) return <SignIn firstAdmin={!s.adminCreated} />;
   if (!s.canManage) return <main className="onboarding"><section className="onboarding-card"><h1>Administrator access required</h1><p>Your GitHub account is signed in, but it cannot configure this control plane.</p></section></main>;
   const d = detail.data;
@@ -49,19 +49,20 @@ function EditableStep({ detail, index, onDone, onDiscard, onSelect, onCreate }: 
   return <p>Administrator account is configured.</p>;
 }
 function ResourceStep({ detail, onDone, onDiscard, edit = false }: { detail: OnboardingDetail; onDone: () => void; onDiscard?: () => void; edit?: boolean }) { const w = detail.worker; if (!w) return <p>Select a worker first.</p>; return <><h3>Configure resources</h3>{w.configurationState === "ready" && !edit ? <p role="status">Configuring worker complete. Waiting for server progress…</p> : <WorkerConfigurationForm worker={w} onConfigured={onDone} onDiscard={onDiscard} />}</>; }
-function SetupCard() {
-  const [publicBaseUrl, setPublicBaseUrl] = useState(typeof window === "undefined" ? "" : window.location.origin);
+function SetupCard({ status }: { status: OnboardingStatus }) {
+  const [publicBaseUrl, setPublicBaseUrl] = useState(status.publicBaseUrl ?? (typeof window === "undefined" ? "" : window.location.origin));
   const [error, setError] = useState<string | null>(null);
   const setup = useMutation({
     mutationFn: beginControlPlaneSetup,
     onSuccess: submitGithubManifest,
     onError: (cause) => setError(cause instanceof Error ? cause.message : "Setup failed"),
   });
+  const managedOrigin = status.publicBaseUrlManaged ? status.publicBaseUrl ?? "" : publicBaseUrl;
   return <main className="onboarding"><section className="onboarding-card">
     <p className="eyebrow">FIRST-RUN SETUP</p><h1>Connect this control plane</h1>
     <p>Confirm the externally reachable HTTPS origin to create the GitHub App.</p>
-    <form onSubmit={(event) => { event.preventDefault(); setError(null); setup.mutate({ publicBaseUrl }); }}>
-      <label>Public URL<input aria-label="Public URL" type="url" value={publicBaseUrl} onChange={(event) => setPublicBaseUrl(event.target.value)} required /></label>
+    <form onSubmit={(event) => { event.preventDefault(); setError(null); setup.mutate({ publicBaseUrl: managedOrigin }); }}>
+      <label>Public URL<input aria-label="Public URL" type="url" value={managedOrigin} onChange={(event) => setPublicBaseUrl(event.target.value)} readOnly={status.publicBaseUrlManaged} required /></label>
       {error && <p role="alert" className="form-error">{error}</p>}
       <button type="submit" disabled={setup.isPending}>{setup.isPending ? "Creating GitHub App…" : "Create GitHub App"}</button>
     </form>

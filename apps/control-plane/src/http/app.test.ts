@@ -25,6 +25,20 @@ describe("control-plane HTTP boundary", () => {
     });
     expect((await app.request("/healthz")).status).toBe(404);
   });
+
+  test("exposes the synchronized public origin and managed flag in onboarding status", async () => {
+    const db = (async (strings: TemplateStringsArray) => {
+      const query = strings.join(" ").toLowerCase();
+      if (query.includes("from system_onboarding")) return [{ adminUserId: null, workerId: null, organizationId: null, completedAt: null, publicBaseUrl: "https://control.example.com", originConfigured: true, githubAppConfigured: false }];
+      return [];
+    }) as never;
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      db,
+      setup: { publicOrigin: () => "https://control.example.com", publicOriginManaged: () => true, configure: async origin => origin, claimAdmin: async () => "admin" },
+    })).request("/api/onboarding/status");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ publicBaseUrl: "https://control.example.com", publicBaseUrlManaged: true, step: "setup" });
+  });
   test("returns the authenticated operator for the dashboard session probe", async () => {
     const member = { id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true };
     const response = await createControlPlaneApp(fakeHttpDeps({ currentUser: async () => member })).request("/api/me");
