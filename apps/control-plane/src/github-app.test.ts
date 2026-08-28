@@ -31,6 +31,17 @@ function service(fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Pr
 }
 
 describe("GitHub App onboarding", () => {
+  test("omits webhook hook attributes from a public HTTPS manifest", async () => {
+    const github = service(async () => Response.json({}));
+    const launch = await github.createManifestLaunch("admin-1", organizationId, "public-https-key");
+    const manifest = JSON.parse(launch.manifest);
+    expect(manifest.hook_attributes).toBeUndefined();
+    expect(manifest.url).toBe("https://control-plane.test");
+    expect(manifest.redirect_url).toBe("https://control-plane.test/api/github/app/manifest/callback");
+    expect(manifest.setup_url).toBe("https://control-plane.test/api/github/app/setup");
+    expect(manifest.callback_urls).toEqual(["https://control-plane.test/api/auth/github/callback"]);
+  });
+
   test("manifest and install setup states are one-use and idempotent", async () => {
     const calls: Request[] = [];
     const github = service(async (input, init) => {
@@ -45,7 +56,7 @@ describe("GitHub App onboarding", () => {
     expect(manifest.default_events).toEqual(["workflow_job", "membership"]);
     expect(manifest.default_permissions.contents).toBe("write");
     expect(manifest.default_permissions.pull_requests).toBe("write");
-    expect(manifest.hook_attributes.url).toBe("https://control-plane.test/api/github/webhooks");
+    expect(manifest.hook_attributes).toBeUndefined();
     const replay = await github.createManifestLaunch("admin-1", organizationId, "manifest-key");
     expect(replay).toEqual(launch);
     await expect(github.completeManifestRegistration("wrong-user", "missing", "code")).rejects.toThrow();
@@ -66,7 +77,7 @@ describe("GitHub App onboarding", () => {
     } as never);
     const launch = await github.createManifestLaunch("admin-1", organizationId, "tunnel-key");
     const manifest = JSON.parse(launch.manifest);
-    expect(manifest.hook_attributes.url).toBe("https://control-plane.test/api/github/webhooks");
+    expect(manifest.hook_attributes).toBeUndefined();
     expect(manifest.redirect_url).toBe("https://control-plane.test/api/github/app/manifest/callback");
     expect(manifest.setup_url).toBe("https://control-plane.test/api/github/app/setup");
     expect(manifest.callback_urls).toEqual(["https://control-plane.test/api/auth/github/callback"]);

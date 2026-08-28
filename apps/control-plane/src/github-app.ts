@@ -104,7 +104,7 @@ export class GitHubAppService {
     const origin = this.publicOrigin();
     if (!origin) throw new Error("setup_required");
     const rawState = randomBytes(32).toString("base64url");
-    const manifest = JSON.stringify({ name: "mars", public: true, url: origin, hook_attributes: { url: `${origin}/api/github/webhooks`, active: true }, redirect_url: `${origin}/api/github/app/manifest/callback`, setup_url: `${origin}/api/github/app/setup`, description: "Mars self-hosted GitHub Actions runners", callback_urls: [`${origin}/api/auth/github/callback`], default_permissions: { actions: "read", contents: "write", members: "read", organization_self_hosted_runners: "write", pull_requests: "write", administration: "write" }, default_events: ["workflow_job", "membership"] });
+    const manifest = JSON.stringify({ name: "mars", public: true, url: origin, redirect_url: `${origin}/api/github/app/manifest/callback`, setup_url: `${origin}/api/github/app/setup`, description: "Mars self-hosted GitHub Actions runners", callback_urls: [`${origin}/api/auth/github/callback`], default_permissions: { actions: "read", contents: "write", members: "read", organization_self_hosted_runners: "write", pull_requests: "write", administration: "write" }, default_events: ["workflow_job", "membership"] });
     await this.saveState(rawState, { purpose: "manifest", userId, organizationId, idempotencyKey, encryptedState: this.box.encrypt(rawState), encryptedPkceVerifier: this.box.encrypt(manifest), expiresAt: Date.now() + 3_600_000 });
     return { action: `https://github.com/settings/apps/new?state=${rawState}`, manifest };
   }
