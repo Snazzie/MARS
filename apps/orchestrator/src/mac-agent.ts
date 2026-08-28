@@ -278,7 +278,6 @@ async function enrollMacWorker(controlPlane: URL, identity: MacWorkerIdentity): 
     if (typeof joined.workerId !== "string" || !joined.workerId) throw new Error("worker join response missing workerId");
     const enrolled = { ...identity, workerId: joined.workerId };
     await saveMacWorkerIdentity(enrolled);
-    if (Bun.env.MARS_JOIN_CODE_FILE) await unlink(Bun.env.MARS_JOIN_CODE_FILE).catch(() => {});
     return enrolled;
   } finally { codeBytes.fill(0); }
 }
@@ -299,6 +298,7 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           return;
         }
         if (frame.type === "authenticated") {
+          if (Bun.env.MARS_JOIN_CODE_FILE) await unlink(Bun.env.MARS_JOIN_CODE_FILE).catch(() => {});
           await emitActionCacheSnapshot(cacheService, (type, payload) => {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(workerEvent(identity.workerId, type, payload)));
           });

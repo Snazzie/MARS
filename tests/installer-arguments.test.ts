@@ -327,3 +327,22 @@ test("installer preflight runs before host mutation and preserves protected cred
   expect(macSource).toContain("if [[ ! -f \"$JOIN_CODE_FILE\" ]]");
   expect(macSource).not.toContain("rm -f \"$JOIN_CODE_FILE\"");
 });
+test("fresh-host blocker fixes remain fail-closed and resumable", async () => {
+  const [linuxSource, composeSource, windowsSource, macSource] = await Promise.all([
+    Bun.file(linux).text(),
+    Bun.file(linuxCompose).text(),
+    Bun.file(powershell).text(),
+    Bun.file(mac).text(),
+  ]);
+  expect(linuxSource).toContain("[[ -e /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]");
+  expect(linuxSource.indexOf("/dev/kvm")).toBeLessThan(linuxSource.indexOf("apt-get update"));
+  expect(composeSource).toContain("MARS_JOIN_CODE_FILE: /var/lib/mars/config/join-code");
+  expect(composeSource).toContain("${MARS_BROKER_CONFIG:?config directory required}:/var/lib/mars/config");
+  expect(windowsSource).toContain("Install-DockerDesktop");
+  expect(windowsSource).toContain("Switch-DockerWindowsEngine");
+  expect(windowsSource).toContain("-WindowsServiceHostSha256");
+  expect(windowsSource.lastIndexOf("Remove-ResumeTask")).toBeGreaterThan(windowsSource.indexOf("Start-Service MarsWorker"));
+  expect(macSource).toContain("${PUBLIC_BASE_URL%/}/api/healthz");
+  expect(macSource).toContain("cleanup() {");
+  expect(macSource).toContain('if [[ -f "\\$MARS_JOIN_CODE_FILE" ]]');
+});

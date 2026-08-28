@@ -73,6 +73,7 @@ preflight() {
   . /etc/os-release
   [[ "$ID" == ubuntu && "$VERSION_ID" == 24.04 ]] || { echo 'Ubuntu 24.04 is required' >&2; exit 1; }
   grep -Eq '(^|[[:space:]])(vmx|svm)([[:space:]]|$)' /proc/cpuinfo || { echo 'hardware virtualization is required' >&2; exit 1; }
+  [[ -e /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] || { echo '/dev/kvm is required and must be readable/writable' >&2; exit 1; }
   [[ "$MARS_BROKER_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo 'broker image must be digest pinned' >&2; exit 1; }
   command -v apt-get >/dev/null || { echo 'apt-get required' >&2; exit 1; }
   command -v curl >/dev/null || { echo 'curl required' >&2; exit 1; }
@@ -94,7 +95,7 @@ preflight
 CONFIG_DIR=${MARS_BROKER_CONFIG:-/var/lib/mars}
 STATE_FILE=/var/lib/mars/install-state.json
 LOG_FILE=/var/log/mars/install.log
-JOIN_CODE_FILE=/var/lib/mars/join-code
+JOIN_CODE_FILE="$CONFIG_DIR/join-code"
 mkdir -p "$CONFIG_DIR" /var/lib/mars /var/log/mars
 exec > >(tee -a "$LOG_FILE") 2>&1
 write_state() {

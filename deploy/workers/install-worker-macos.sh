@@ -12,7 +12,7 @@ parse_args() {
   [[ "$JOIN_CODE" =~ ^[A-Za-z0-9_-]{43}$ ]] || usage
 }
 parse_args "$@"
-trap 'unset JOIN_CODE' EXIT
+:
 
 : "${PUBLIC_BASE_URL:?installer origin missing}"
 : "${TART_IMAGE:?TART_IMAGE is required}"
@@ -27,13 +27,17 @@ if [[ "$PUBLIC_BASE_URL" == https://* ]]; then CURL_SECURITY=(--proto '=https' -
 elif [[ "$PUBLIC_BASE_URL" =~ ^http://(localhost|127\.0\.0\.1)(:[0-9]+)?(/|$) ]]; then CURL_SECURITY=()
 else echo 'Control-plane URL must use HTTPS.' >&2; exit 1
 fi
-curl --silent --show-error --fail --max-time 20 --location "${CURL_SECURITY[@]}" "${PUBLIC_BASE_URL%/}/health" >/dev/null
+curl --silent --show-error --fail --max-time 20 --location "${CURL_SECURITY[@]}" "${PUBLIC_BASE_URL%/}/api/healthz" >/dev/null
 
 APP_DIR="$HOME/Library/Application Support/Mars"; STATE_FILE="$APP_DIR/install-state.json"; LOG_FILE="$APP_DIR/install.log"
 JOIN_CODE_FILE="$APP_DIR/join-code"; IDENTITY_FILE="$APP_DIR/worker-identity.json"; ORCHESTRATOR="$APP_DIR/mars-orchestrator"
 TEMP_ORCHESTRATOR="$APP_DIR/mars-orchestrator.download.$$.${RANDOM}"; ORCHESTRATOR_HEADERS="$TEMP_ORCHESTRATOR.headers"
 LAUNCHER="$APP_DIR/run-worker.sh"; PLIST="$HOME/Library/LaunchAgents/com.mars.worker.plist"
 TART_BIN="$(command -v tart 2>/dev/null || true)"
+cleanup() {
+  rm -f "$TEMP_ORCHESTRATOR" "$ORCHESTRATOR_HEADERS"
+  unset JOIN_CODE
+}
 mkdir -p "$APP_DIR" "$(dirname "$PLIST")"; exec > >(tee -a "$LOG_FILE") 2>&1
 CHECK=0
 # Compatibility marker: check 'Checking macOS host and Tart' precedes all host mutation.
@@ -102,7 +106,11 @@ export MARS_JOIN_CODE_FILE=$(printf '%q' "$JOIN_CODE_FILE")
 export MARS_TART_BASE_IMAGE=$(printf '%q' "$LOCAL_IMAGE")
 export MARS_TART_IMAGE_DIGEST=$(printf '%q' "$TART_IMAGE_DIGEST")
 export MARS_TART_EXECUTABLE=$(printf '%q' "$TART_BIN")
-exec "$ORCHESTRATOR" mac-worker < "\$MARS_JOIN_CODE_FILE"
+if [[ -f "\$MARS_JOIN_CODE_FILE" ]]; then
+  exec "$ORCHESTRATOR" mac-worker < "\$MARS_JOIN_CODE_FILE"
+fi
+unset MARS_JOIN_CODE_FILE
+exec "$ORCHESTRATOR" mac-worker
 EOF
 chmod 755 "$LAUNCHER"
 cat > "$PLIST" <<EOF

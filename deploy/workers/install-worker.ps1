@@ -57,6 +57,19 @@ function Install-DockerDesktop {
   while (-not (Get-Command docker.exe -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
   if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) { throw 'Docker Desktop did not install.' }
 }
+function Switch-DockerWindowsEngine {
+  $dockerCli = Join-Path ${env:ProgramFiles} 'Docker\Docker\DockerCli.exe'
+  if (-not (Test-Path -LiteralPath $dockerCli)) { throw 'DockerCli.exe is required to switch Docker Desktop to the Windows engine.' }
+  & $dockerCli -SwitchWindowsEngine
+  if ($LASTEXITCODE -ne 0) { throw "Docker Desktop Windows engine switch failed with exit code $LASTEXITCODE." }
+  $deadline = (Get-Date).AddMinutes(3)
+  do {
+    try { $engine = (docker info --format '{{.OSType}}' 2>$null).Trim() } catch { $engine = '' }
+    if ($engine -eq 'windows') { return }
+    Start-Sleep -Seconds 2
+  } while ((Get-Date) -lt $deadline)
+  throw 'Docker Desktop did not become ready on the Windows engine.'
+}
 function Assert-HostPreflight {
   $os = Get-CimInstance Win32_OperatingSystem
   if ($os.Caption -notmatch '^Microsoft Windows 11 (Pro|Enterprise)') { throw 'Windows 11 Pro or Enterprise is required.' }
@@ -66,12 +79,50 @@ function Assert-HostPreflight {
   if (-not $cpu.VirtualizationFirmwareEnabled -or -not $cpu.SecondLevelAddressTranslationExtensions) { throw 'hardware virtualization is required.' }
   $localHttp = $ControlPlaneUrl -match '^http://(localhost|127\.0\.0\.1)(:\d+)?$'
   if ($ControlPlaneUrl -notmatch '^https://' -and -not $localHttp -and -not $AllowInsecureHttp) { throw 'Control-plane URL must use HTTPS.' }
-  Invoke-WebRequest -Uri "$ControlPlaneUrl/health" -Method Get -UseBasicParsing -TimeoutSec 30 | Out-Null
-  if ($JoinCode -notmatch '^__' -and $JoinCode -notmatch '^[A-Za-z0-9_-]{43}$' -and -not (Test-Path -LiteralPath $JoinCodeFile)) { throw 'Join code is not configured.' }
+  Invoke-WebRequest -Uri "$ControlPlaneUrl/api/healthz" -Method Get -UseBasicParsing -TimeoutSec 30 | Out-Null
+  $joinFileExists = Test-Path -LiteralPath $JoinCodeFile
+  if ($JoinCode -match '^__' -or [string]::IsNullOrWhiteSpace($JoinCode)) {
+    if (-not $joinFileExists) { throw 'Join code is not configured.' }
+  } elseif ($JoinCode -notmatch '^[A-Za-z0-9_-]{43}$') {
+    throw 'Join code is not configured.'
+  }
+}
+function Quote-TaskArgument([string]$Value) {
+  return "'" + $Value.Replace("'", "''") + "'"
 }
 function Register-ResumeTask {
   param([string]$ScriptPath)
-  $action = New-ScheduledTaskAction -Execute 'PowerShell.exe' -Argument "-NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -ControlPlaneUrl `"$ControlPlaneUrl`" -JoinCodeFile `"$JoinCodeFile`" -WindowsRuntime $WindowsRuntime"
+  $resumeParameters = @(
+    '-ControlPlaneUrl', $ControlPlaneUrl,
+    '-JoinCodeFile', $JoinCodeFile,
+    '-WindowsRuntime', $WindowsRuntime,
+    '-WindowsOrchestratorSha256', $WindowsOrchestratorSha256,
+    '-WindowsServiceHostSha256', $WindowsServiceHostSha256,
+    '-WindowsTemplateUrl', $WindowsTemplateUrl,
+    '-WindowsTemplatePath', $WindowsTemplatePath,
+    '-WindowsTemplateDigest', $WindowsTemplateDigest,
+    '-WindowsContainerImage', $WindowsContainerImage,
+    '-WindowsContainerBaseImage', $WindowsContainerBaseImage,
+    '-WindowsContainerRunnerUrl', $WindowsContainerRunnerUrl,
+    '-WindowsContainerRunnerSha256', $WindowsContainerRunnerSha256,
+    '-WindowsContainerGitUrl', $WindowsContainerGitUrl,
+    '-WindowsContainerGitSha256', $WindowsContainerGitSha256,
+    '-WindowsContainerVcUrl', $WindowsContainerVcUrl,
+    '-WindowsContainerVcSha256', $WindowsContainerVcSha256,
+    '-WindowsContainerBuilderUrl', $WindowsContainerBuilderUrl,
+    '-WindowsContainerVerifierUrl', $WindowsContainerVerifierUrl,
+    '-WindowsContainerfileUrl', $WindowsContainerfileUrl,
+    '-WindowsContainerEntrypointUrl', $WindowsContainerEntrypointUrl,
+    '-WindowsContainerJobAgentUrl', $WindowsContainerJobAgentUrl,
+    '-WindowsContainerPrefix', $WindowsContainerPrefix,
+    '-WindowsContainerReadyTimeoutMs', $WindowsContainerReadyTimeoutMs,
+    '-WindowsContainerJobTimeoutMs', $WindowsContainerJobTimeoutMs
+  )
+  if ($AllowInsecureHttp) { $resumeParameters += '-AllowInsecureHttp' }
+  if ($AllowLocalContainerImage) { $resumeParameters += '-AllowLocalContainerImage' }
+  if ($Upgrade) { $resumeParameters += '-Upgrade' }
+  $argumentText = ($resumeParameters | ForEach-Object { Quote-TaskArgument ([string]$_) }) -join ' '
+  $action = New-ScheduledTaskAction -Execute 'PowerShell.exe' -Argument "-NoLogo -NoProfile -ExecutionPolicy Bypass -File $(Quote-TaskArgument $ScriptPath) $argumentText"
   $trigger = New-ScheduledTaskTrigger -AtStartup
   $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
   Register-ScheduledTask -TaskName 'MarsWorkerInstallResume' -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
@@ -223,7 +274,7 @@ function Ensure-ContainerFeatures {
 function Ensure-ControlPlane {
   $localHttp = $ControlPlaneUrl -match '^http://(localhost|127\.0\.0\.1)(:\d+)?$'
   if ($ControlPlaneUrl -notmatch '^https://' -and -not $localHttp -and -not $AllowInsecureHttp) { throw 'Control-plane URL must use HTTPS.' }
-  Invoke-WebRequest -Uri "$ControlPlaneUrl/health" -Method Get -UseBasicParsing -TimeoutSec 30 | Out-Null
+  Invoke-WebRequest -Uri "$ControlPlaneUrl/api/healthz" -Method Get -UseBasicParsing -TimeoutSec 30 | Out-Null
 }
 function Verify-DownloadedFile([string]$Path, [string]$Expected, [string]$Name, $Response) {
   if ($Expected -match '^__' -or $Expected -notmatch '^[0-9a-f]{64}$') { throw "$Name SHA-256 is not configured." }
@@ -239,7 +290,9 @@ Write-Host '[2/8] Checking Windows 11 Pro/Enterprise 24H2 x64 host'
 Assert-HostPreflight
 $root = 'C:\ProgramData\Mars'; $bin = 'C:\Program Files\Mars'; $identityPath = Join-Path $root 'worker-identity.json'
 New-Item -ItemType Directory -Force -Path $root,$bin | Out-Null
-if ($JoinCode -match '^__' -and (Test-Path -LiteralPath $JoinCodeFile)) { $JoinCode = (Get-Content -LiteralPath $JoinCodeFile -Raw).Trim() }
+$transcriptStarted = $false
+try { Start-Transcript -LiteralPath (Join-Path $root 'install.log') -Append | Out-Null; $transcriptStarted = $true } catch { Write-Warning "Unable to start persistent installer log: $($_.Exception.Message)" }
+if (([string]::IsNullOrWhiteSpace($JoinCode) -or $JoinCode -match '^__') -and (Test-Path -LiteralPath $JoinCodeFile)) { $JoinCode = (Get-Content -LiteralPath $JoinCodeFile -Raw).Trim() }
 if (-not $Upgrade) {
   $joinCodePath = $JoinCodeFile
   if (-not (Test-Path -LiteralPath $joinCodePath)) {
@@ -257,6 +310,8 @@ if (Ensure-ContainerFeatures) {
   Restart-Computer -Force
   exit 0
 }
+Install-DockerDesktop
+Switch-DockerWindowsEngine
 if ($WindowsRuntime -eq 'container') {
   Assert-ImageDigest $WindowsContainerImage
   if ($Upgrade) {
@@ -349,5 +404,7 @@ try {
   }
   Write-Warning "MarsWorker recovered after initial startup failure: $startupError"
 }
+Remove-ResumeTask
 Write-State 'complete' 'complete'
+if ($transcriptStarted) { Stop-Transcript | Out-Null }
 Write-Output "Windows $WindowsRuntime worker setup complete; join-code remains until authenticated."

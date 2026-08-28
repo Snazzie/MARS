@@ -7,6 +7,7 @@ services:
       - "${LIBVIRT_SOCKET_GID:?libvirt socket gid required}"
     environment:
       MARS_CONTROL_PLANE_URL: ${MARS_CONTROL_PLANE_URL}
+      MARS_JOIN_CODE_FILE: /var/lib/mars/config/join-code
       MARS_GOLDEN_DISK: /var/lib/mars/golden/worker.qcow2
       MARS_GOLDEN_DIGEST: ${MARS_GOLDEN_DIGEST}
       MARS_DOMAIN_TEMPLATE: /etc/mars/worker-domain.xml

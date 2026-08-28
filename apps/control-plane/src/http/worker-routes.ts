@@ -45,6 +45,8 @@ export function linuxInstallerValues(platform: LinuxWorkerRelease, connectOrigin
 export function windowsInstallerValues(platform: WindowsWorkerRelease, connectOrigin: string, runtime: "vm" | "container"): InstallerValues {
   const values: InstallerValues = {
     WINDOWS_RUNTIME: runtime,
+    WINDOWS_ORCHESTRATOR_SHA256: platform.orchestratorSha256,
+    WINDOWS_SERVICE_HOST_SHA256: platform.serviceHostSha256,
     WINDOWS_TEMPLATE_URL: platform.vmTemplateUrl,
     WINDOWS_TEMPLATE_PATH: "C:\\ProgramData\\Mars\\worker-template.vhdx",
     WINDOWS_TEMPLATE_DIGEST: `sha256:${platform.vmTemplateSha256}`,
