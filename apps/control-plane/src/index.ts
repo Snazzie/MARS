@@ -1,4 +1,4 @@
-import { completeOnboardingIfReady, createDb, migrateDatabase, jsonParameter, type DashboardDb } from "@mars/db";
+import { completeOnboardingIfReady, createDb, ensureDatabase, migrateDatabase, jsonParameter, type DashboardDb } from "@mars/db";
 import { WorkerCommand as WorkerCommandSchema, type WorkerCommand, type WorkerReleaseManifest } from "@mars/contracts";
 import type { Server } from "bun";
 import { getSession, SecretBox, type SessionUser } from "./auth.ts";
@@ -42,6 +42,19 @@ export type ControlPlaneStartOptions = {
   webRoot?: URL;
   workerInstallerRoot?: URL;
 };
+
+type DatabaseBootstrapDependencies = {
+  ensureDatabase: (url: string) => Promise<void>;
+  createDb: (url: string) => DashboardDb;
+  migrateDatabase: (db: DashboardDb) => Promise<void>;
+};
+
+export async function initializeDatabase(url: string, dependencies: DatabaseBootstrapDependencies = { ensureDatabase, createDb, migrateDatabase }): Promise<DashboardDb> {
+  await dependencies.ensureDatabase(url);
+  const db = dependencies.createDb(url);
+  await dependencies.migrateDatabase(db);
+  return db;
+}
 
 export async function startControlPlane(options: ControlPlaneStartOptions = {}) {
   const required = (name: string): string => { const value = Bun.env[name]; if (!value) throw new Error(`${name} is required`); return value; };
@@ -115,9 +128,11 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
       if (!artifact || !await Bun.file(artifact).exists()) throw new Error(`release artifact is unavailable: ${name}`);
     }
   }
-  const db = options.db ?? createDb(required("DATABASE_URL"));
-  if (!options.db) {
-    await migrateDatabase(db);
+  let db: DashboardDb;
+  if (options.db) {
+    db = options.db;
+  } else {
+    db = await initializeDatabase(required("DATABASE_URL"));
     await ensureDefaultPools(db, env.DEFAULT_IMAGES);
     configureRunLifecycle(db);
   }
