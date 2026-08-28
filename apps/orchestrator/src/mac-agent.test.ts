@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { WorkerBootstrapRequest, type WorkerCommand } from "@mars/contracts";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { generateKeyPairSync, verify as verifySignature } from "node:crypto";
-import { applyWorkerConfigure, availableMacMemoryBytes, buildMacWorkerAuthentication, buildMacWorkerJoinPayload, parseMacWorkerIdentity, runMacLeaseLifecycle, startMacLeaseLifecycle } from "./mac-agent.ts";
+import { applyWorkerConfigure, availableMacMemoryBytes, buildMacWorkerAuthentication, buildMacWorkerJoinPayload, parseMacWorkerIdentity, runMacLeaseLifecycle, runWorkerJoin, startMacLeaseLifecycle } from "./mac-agent.ts";
 
 test("awaits the live cache TTL before acknowledging macOS worker configuration", async () => {
   const workerId = "00000000-0000-4000-8000-000000000001";
@@ -117,6 +120,66 @@ describe("worker identity persistence", () => {
   });
   test("rejects incomplete persisted identity", () => {
     expect(() => parseMacWorkerIdentity({ workerId: "worker-1" })).toThrow("worker identity is invalid");
+  });
+  test("reuses a persisted partial identity after a response-loss retry", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mars-mac-join-"));
+    const identityPath = join(root, "worker-identity.json");
+    const codePath = join(root, "join-code");
+    const identity = {
+      workerId: "",
+      publicKey: "persisted-signing-public",
+      privateKey: "persisted-signing-private",
+      encryptionPublicKey: "persisted-encryption-public",
+      encryptionPrivateKey: "persisted-encryption-private",
+      vmUuid: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+      machineUuid: "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB",
+    };
+    await writeFile(identityPath, `${JSON.stringify(identity)}\n`);
+    await writeFile(codePath, `${"A".repeat(43)}\n`);
+    const previousIdentityPath = Bun.env.MARS_WORKER_IDENTITY_FILE;
+    const previousJoinCodePath = Bun.env.MARS_JOIN_CODE_FILE;
+    const previousTartDigest = Bun.env.MARS_TART_IMAGE_DIGEST;
+    const previousSpawnSync = Bun.spawnSync;
+    const previousSleep = Bun.sleep;
+    const previousFetch = globalThis.fetch;
+    const requests: string[] = [];
+    let joinAttempts = 0;
+    try {
+      Bun.env.MARS_WORKER_IDENTITY_FILE = identityPath;
+      Bun.env.MARS_JOIN_CODE_FILE = codePath;
+      Bun.env.MARS_TART_IMAGE_DIGEST = `sha256:${"c".repeat(64)}`;
+      Object.defineProperty(Bun, "spawnSync", { value: () => ({ exitCode: 0, stdout: Buffer.from("System-wide memory free percentage: 50%"), stderr: Buffer.from("") }) });
+      Object.defineProperty(Bun, "sleep", { value: async () => {} });
+      globalThis.fetch = (async (input, init) => {
+        const url = String(input);
+        if (!url.endsWith("/api/workers/join")) return Response.json({});
+        requests.push(String(init?.body));
+        joinAttempts += 1;
+        if (joinAttempts === 1) throw new Error("response lost after server consumed enrollment");
+        return Response.json({ workerId: "worker-replayed" });
+      }) as typeof globalThis.fetch;
+
+      await runWorkerJoin("macos-arm64", "http://localhost:3000");
+      const saved = JSON.parse(await readFile(identityPath, "utf8"));
+      expect(saved).toMatchObject({ ...identity, workerId: "worker-replayed", vmUuid: identity.vmUuid.toLowerCase(), machineUuid: identity.machineUuid.toLowerCase(), preserveLeases: false });
+      expect(joinAttempts).toBe(2);
+      expect(requests).toHaveLength(2);
+      const firstPayload = WorkerBootstrapRequest.parse(JSON.parse(requests[0]!));
+      const secondPayload = WorkerBootstrapRequest.parse(JSON.parse(requests[1]!));
+      expect(secondPayload).toEqual(firstPayload);
+      expect(firstPayload).toMatchObject({ publicKey: identity.publicKey, encryptionPublicKey: identity.encryptionPublicKey, vmUuid: identity.vmUuid.toLowerCase(), machineUuid: identity.machineUuid.toLowerCase() });
+    } finally {
+      if (previousIdentityPath === undefined) delete Bun.env.MARS_WORKER_IDENTITY_FILE;
+      else Bun.env.MARS_WORKER_IDENTITY_FILE = previousIdentityPath;
+      if (previousJoinCodePath === undefined) delete Bun.env.MARS_JOIN_CODE_FILE;
+      else Bun.env.MARS_JOIN_CODE_FILE = previousJoinCodePath;
+      if (previousTartDigest === undefined) delete Bun.env.MARS_TART_IMAGE_DIGEST;
+      else Bun.env.MARS_TART_IMAGE_DIGEST = previousTartDigest;
+      Object.defineProperty(Bun, "spawnSync", { value: previousSpawnSync });
+      Object.defineProperty(Bun, "sleep", { value: previousSleep });
+      globalThis.fetch = previousFetch;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

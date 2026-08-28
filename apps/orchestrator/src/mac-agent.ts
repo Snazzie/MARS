@@ -1,5 +1,5 @@
 import { generateKeyPairSync, randomUUID, sign as signMessage } from "node:crypto";
-import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { statfsSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
@@ -170,7 +170,19 @@ function createKeyPair(): { privateKey: string; publicKey: string; encryptionPri
   encryptionPublicKey: encryption.publicKey.export({ format: "pem", type: "spki" }).toString(),
  };
 }
-async function readJoinCode(): Promise<Buffer> { const reader = Bun.stdin.stream().getReader(); const { value } = await reader.read(); reader.releaseLock(); const code = Buffer.from(value ?? []); if (!code.toString("utf8").trim()) throw new Error("join code required on stdin"); return code; }
+async function readJoinCode(): Promise<Buffer> {
+  const path = Bun.env.MARS_JOIN_CODE_FILE;
+  const codeBytes = path
+    ? Buffer.from((await readFile(path, "utf8")).trim(), "utf8")
+    : await (async () => {
+      const reader = Bun.stdin.stream().getReader();
+      const { value } = await reader.read();
+      reader.releaseLock();
+      return Buffer.from(value ?? []);
+    })();
+  if (!codeBytes.toString("utf8").trim()) throw new Error(path ? "join code required in file" : "join code required on stdin");
+  return codeBytes;
+}
 export function availableMacMemoryBytes(output: string, totalMemoryBytes: number): number {
   const percentage = output.match(/System-wide memory free percentage:\s*(\d+(?:\.\d+)?)%/)?.[1];
   if (percentage === undefined) throw new Error("macOS memory availability is unavailable");
@@ -272,9 +284,16 @@ async function loadMacWorkerIdentity(): Promise<MacWorkerIdentity | null> {
 
 async function saveMacWorkerIdentity(identity: MacWorkerIdentity): Promise<void> {
   const path = identityFilePath();
+  const temporaryPath = `${path}.${randomUUID()}.tmp`;
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await writeFile(path, `${JSON.stringify(identity)}\n`, { mode: 0o600 });
-  await chmod(path, 0o600);
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(identity)}\n`, { flag: "wx", mode: 0o600 });
+    await chmod(temporaryPath, 0o600);
+    await rename(temporaryPath, path);
+  } catch (error) {
+    await unlink(temporaryPath).catch(() => {});
+    throw error;
+  }
 }
 
 async function enrollMacWorker(controlPlane: URL, identity: MacWorkerIdentity): Promise<MacWorkerIdentity> {
@@ -353,10 +372,13 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
 export async function runWorkerJoin(platform: "macos-arm64" | "windows-x64", baseUrl: string): Promise<void> {
   if (platform !== "macos-arm64") throw new Error("Windows worker enrollment is not implemented");
   const controlPlane = validateControlPlaneUrl(baseUrl);
-  const machineUuid = (Bun.env.MARS_MACHINE_UUID ?? await macMachineUuid()).toLowerCase();
-  const identity: MacWorkerIdentity = { workerId: "", ...createKeyPair(), machineUuid, vmUuid: (Bun.env.MARS_VM_UUID ?? machineUuid).toLowerCase() };
-  await saveMacWorkerIdentity(identity);
-  await enrollMacWorker(controlPlane, identity);
+  let identity = await loadMacWorkerIdentity();
+  if (!identity) {
+    const machineUuid = (Bun.env.MARS_MACHINE_UUID ?? await macMachineUuid()).toLowerCase();
+    identity = { workerId: "", ...createKeyPair(), machineUuid, vmUuid: (Bun.env.MARS_VM_UUID ?? machineUuid).toLowerCase() };
+    await saveMacWorkerIdentity(identity);
+  }
+  if (!identity.workerId) await enrollMacWorker(controlPlane, identity);
 }
 export async function runMacWorker(baseUrl: string, limits: MacWorkerLimits, cache = WorkerCacheConfiguration.parse({})): Promise<never> {
   const controlPlane = validateControlPlaneUrl(baseUrl);
