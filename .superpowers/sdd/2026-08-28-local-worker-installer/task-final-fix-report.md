@@ -27,3 +27,15 @@
 ## Commit
 
 Final review fix committed; exact hash is supplied in the completion handoff.
+
+## Follow-up review fix
+
+The scoped re-review found that `openUpgrade()` caught API/origin failures into the shared action `error` state, but that state is only rendered inside the separate action-confirmation dialog. A missing server-approved origin could therefore leave the user with no upgrade command and no visible explanation.
+
+- Added dedicated `upgradeError` state.
+- Upgrade preparation clears and sets `upgradeError`; action confirmation continues to use its independent `error` state.
+- Rendered upgrade preparation failures as an inline `role="alert"` beside the worker actions, including when no upgrade dialog was opened.
+- Closing an upgrade dialog or opening another action clears stale upgrade errors.
+- Added a focused source regression test proving the dedicated alert is rendered outside the closed confirmation dialog.
+
+Follow-up focused result: **22 passed, 0 failed, 75 expect() calls**.

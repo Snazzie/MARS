@@ -29,21 +29,23 @@ export function WorkerActions({ organizationId, workerId, admissionState, draini
  const [action, setAction] = useState<Action | null>(null);
  const [upgradeCommand, setUpgradeCommand] = useState<string | null>(null);
  const [error, setError] = useState<string | null>(null);
+ const [upgradeError, setUpgradeError] = useState<string | null>(null);
  const [pending, setPending] = useState(false);
  const dialog = useRef<HTMLDialogElement>(null);
- function open(next: Action) { setError(null); setAction(next); dialog.current?.showModal(); }
+ function open(next: Action) { setError(null); setUpgradeError(null); setAction(next); dialog.current?.showModal(); }
  async function openUpgrade() {
   setError(null);
+  setUpgradeError(null);
   try {
    const localDevelopment = isLocalDevelopment();
    const connectOrigin = localDevelopment ? (await getWorkerControlPlaneUrls())[0] : window.location.origin;
    if (!connectOrigin) throw new Error("No worker connection origin is configured.");
    setUpgradeCommand(buildWindowsUpgradeCommand(workerId, window.location.origin, connectOrigin, localDevelopment));
   } catch (reason) {
-   setError(reason instanceof ApiRequestError ? reason.message : reason instanceof Error ? reason.message : "The upgrade command could not be prepared.");
+   setUpgradeError(reason instanceof ApiRequestError ? reason.message : reason instanceof Error ? reason.message : "The upgrade command could not be prepared.");
   }
  }
- function close() { dialog.current?.close(); setAction(null); setUpgradeCommand(null); }
+ function close() { dialog.current?.close(); setAction(null); setUpgradeCommand(null); setError(null); setUpgradeError(null); }
  async function confirm() {
   if (!action) return;
   setPending(true); setError(null);
@@ -56,7 +58,8 @@ export function WorkerActions({ organizationId, workerId, admissionState, draini
    {admissionState === "pending" && <Button label="Reject" variant="destructive" clickAction={() => open("reject")} />}
    {admissionState === "adopted" && <><Button label={draining ? "Resume" : "Drain"} variant="secondary" clickAction={() => open(draining ? "resume" : "drain")} />{platform === "windows-x64" && <Button label="Upgrade" variant="secondary" clickAction={() => void openUpgrade()} />}{<Button label="Remove" variant="destructive" clickAction={() => open("remove")} />}</>}
   </div>
-  {upgradeCommand && <dialog open className="confirm-dialog" aria-labelledby="worker-upgrade-title"><form method="dialog"><p className="panel-kicker">Manual upgrade</p><h2 id="worker-upgrade-title">Copy upgrade command</h2><p>Drain this worker and wait for zero active jobs before running this command in an Administrator PowerShell.</p><textarea aria-label="Windows worker upgrade command" readOnly value={upgradeCommand} /><div className="dialog-actions"><Button label="Close" variant="secondary" onClick={() => setUpgradeCommand(null)} /><Button label="Copy command" variant="primary" clickAction={() => void navigator.clipboard?.writeText(upgradeCommand)} /></div></form></dialog>}
+  {upgradeError && <p className="inline-error" role="alert">{upgradeError}</p>}
+  {upgradeCommand && <dialog open className="confirm-dialog" aria-labelledby="worker-upgrade-title"><form method="dialog"><p className="panel-kicker">Manual upgrade</p><h2 id="worker-upgrade-title">Copy upgrade command</h2><p>Drain this worker and wait for zero active jobs before running this command in an Administrator PowerShell.</p><textarea aria-label="Windows worker upgrade command" readOnly value={upgradeCommand} /><div className="dialog-actions"><Button label="Close" variant="secondary" onClick={() => { setUpgradeCommand(null); setUpgradeError(null); }} /><Button label="Copy command" variant="primary" clickAction={() => void navigator.clipboard?.writeText(upgradeCommand)} /></div></form></dialog>}
   <dialog ref={dialog} className="confirm-dialog" onCancel={close} aria-labelledby="worker-confirm-title">
    <form method="dialog" onSubmit={(event) => { event.preventDefault(); void confirm(); }}><p className="panel-kicker">Confirm action</p><h2 id="worker-confirm-title">{action ? copy[action].label : "Worker action"}</h2><p>{action ? copy[action].confirm : ""}</p>{error && <p className="inline-error" role="alert">{error}</p>}<div className="dialog-actions"><Button label="Cancel" variant="secondary" onClick={close} isDisabled={pending} /><Button label={action ? copy[action].label : "Confirm"} variant={action ? copy[action].variant : "primary"} type="submit" isLoading={pending} /></div></form>
   </dialog>

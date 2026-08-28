@@ -45,6 +45,11 @@ test("uses a Bun-safe production default when no explicit mode override is provi
   expect(isLocalDevelopment()).toBe(false);
   expect(buildWindowsUpgradeCommand("worker/id", "https://control.example")).toContain("github.com/Snazzie/Mars/releases");
 });
+test("renders upgrade preparation errors outside the closed action confirmation dialog", async () => {
+  const source = await Bun.file(new URL("./WorkerActions.tsx", import.meta.url)).text();
+  expect(source).toContain("upgradeError");
+  expect(source).toContain('{upgradeError && <p className="inline-error" role="alert">{upgradeError}</p>}');
+});
 
 test("uses the GitHub release installer for production upgrades", () => {
   const command = buildWindowsUpgradeCommand("worker/id", "https://control.example", "https://control.example", false);
