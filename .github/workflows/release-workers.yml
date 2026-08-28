@@ -311,12 +311,29 @@ jobs:
         with:
           name: worker-release-assets-${{ github.sha }}
           path: dist/release
-      - name: Publish complete worker release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Resolve worker release tag
+        id: release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_TYPE" = tag
-          [[ "$GITHUB_REF_NAME" == worker-* ]]
-          gh release create "$GITHUB_REF_NAME" dist/release/* --generate-notes
+          if [[ "$REF_TYPE" == tag ]]; then
+            [[ "$REF_NAME" == worker-* ]] || { echo "worker release tags must start with worker-" >&2; exit 1; }
+            releaseTag="$REF_NAME"
+          else
+            releaseTag=worker-latest
+          fi
+          echo "tag=$releaseTag" >> "$GITHUB_OUTPUT"
+      - name: Publish complete worker release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" dist/release/* --clobber
+          else
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" dist/release/* --generate-notes --latest
+          fi
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --latest

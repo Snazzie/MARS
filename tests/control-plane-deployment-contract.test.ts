@@ -181,6 +181,26 @@ test("worker release workflow gates unsigned aggregate publication on all platfo
     "install-worker-macos-arm64.sh",
   ]) expect(workflow).toContain(installer);
 });
+test("worker release workflow publishes latest assets for tag pushes and manual dispatch", async () => {
+  const workflow = await read(".github/workflows/release-workers.yml");
+  const aggregate = workflow.slice(workflow.indexOf("\n  aggregate:"));
+  expect(workflow).toContain("workflow_dispatch:");
+  expect(workflow).toContain("tags: ['worker-*']");
+  expect(aggregate).toContain("REF_TYPE: ${{ github.ref_type }}");
+  expect(aggregate).toContain("REF_NAME: ${{ github.ref_name }}");
+  expect(aggregate).toContain('if [[ "$REF_TYPE" == tag ]]; then');
+  expect(aggregate).toContain('releaseTag="$REF_NAME"');
+  expect(aggregate).toContain("releaseTag=worker-latest");
+  expect(aggregate).toContain('gh release view "$RELEASE_TAG"');
+  expect(aggregate).toContain('gh release upload "$RELEASE_TAG"');
+  expect(aggregate).toContain("--clobber");
+  expect(aggregate).toContain('gh release create "$RELEASE_TAG"');
+  expect(aggregate).toContain('--target "$GITHUB_SHA"');
+  expect(aggregate).toContain('gh release edit "$RELEASE_TAG"');
+  expect(aggregate).toContain("--latest");
+  expect(aggregate).not.toContain("if: startsWith(github.ref, 'refs/tags/')");
+});
+
 
 test("production startup checks every packaged Windows container input", async () => {
   const source = await read("apps/control-plane/src/index.ts");
