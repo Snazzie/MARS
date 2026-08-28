@@ -71,6 +71,13 @@
       "when": 1787873197031,
       "tag": "0009_mars_runner_labels",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787873200000,
+      "tag": "0010_worker_enrollment_replay",
+      "breakpoints": true
     }
   ]
 }

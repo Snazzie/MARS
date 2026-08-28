@@ -221,15 +221,15 @@ async function currentMacDoctor(): Promise<WorkerDoctorData> {
   const failures = [!probe && "Tart runtime probe failed", !egress && "GitHub egress probe failed", !immutableArtifact && "Immutable Tart image digest is missing"].filter(Boolean);
   return WorkerDoctorData.parse({ runtimeMode: "tart", artifactSource: "registry", ...(immutableArtifact ? { artifactDigest, artifactIdentity: artifactDigest } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
 }
-async function currentMacWorkerJoinPayload(code: string, publicKey: string, encryptionPublicKey: string): Promise<MacWorkerJoinPayload> {
-  const machineUuid = await macMachineUuid();
+async function currentMacWorkerJoinPayload(code: string, publicKey: string, encryptionPublicKey: string, vmUuid?: string, machineUuid?: string): Promise<MacWorkerJoinPayload> {
+  const stableMachineUuid = machineUuid ?? await macMachineUuid();
   const resources = capacity();
   return WorkerBootstrapRequest.parse(buildMacWorkerJoinPayload({
     code,
     publicKey,
     encryptionPublicKey,
-    machineUuid,
-    vmUuid: (Bun.env.MARS_VM_UUID ?? machineUuid).toLowerCase(),
+    machineUuid: stableMachineUuid,
+    vmUuid: (vmUuid ?? Bun.env.MARS_VM_UUID ?? stableMachineUuid).toLowerCase(),
     doctor: { ...await currentMacDoctor(), ...resources },
     capacity: resources,
   })) as MacWorkerJoinPayload;
@@ -241,7 +241,7 @@ function validateControlPlaneUrl(baseUrl: string): URL {
   if (url.protocol !== "https:" && !(loopback && url.protocol === "http:") && !allowInsecureHttp) throw new Error("control plane must use HTTPS (TLS 1.3) except explicit localhost development");
   return url;
 }
-type MacWorkerIdentity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string; preserveLeases?: boolean };
+type MacWorkerIdentity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string; vmUuid?: string; machineUuid?: string; preserveLeases?: boolean };
 
 function identityFilePath(): string {
   return Bun.env.MARS_WORKER_IDENTITY_FILE ?? `${Bun.env.HOME ?? "."}/Library/Application Support/Mars/worker-identity.json`;
@@ -250,7 +250,16 @@ export function parseMacWorkerIdentity(value: unknown): MacWorkerIdentity {
   if (!value || typeof value !== "object") throw new Error("worker identity is invalid");
   const record = value as Record<string, unknown>;
   if (typeof record.workerId !== "string" || typeof record.publicKey !== "string" || typeof record.privateKey !== "string" || typeof record.encryptionPublicKey !== "string" || typeof record.encryptionPrivateKey !== "string") throw new Error("worker identity is invalid");
-  return { workerId: record.workerId, publicKey: record.publicKey, privateKey: record.privateKey, encryptionPublicKey: record.encryptionPublicKey, encryptionPrivateKey: record.encryptionPrivateKey, preserveLeases: record.preserveLeases === true };
+  return {
+    workerId: record.workerId,
+    publicKey: record.publicKey,
+    privateKey: record.privateKey,
+    encryptionPublicKey: record.encryptionPublicKey,
+    encryptionPrivateKey: record.encryptionPrivateKey,
+    ...(typeof record.vmUuid === "string" ? { vmUuid: record.vmUuid } : {}),
+    ...(typeof record.machineUuid === "string" ? { machineUuid: record.machineUuid } : {}),
+    preserveLeases: record.preserveLeases === true,
+  };
 }
 
 async function loadMacWorkerIdentity(): Promise<MacWorkerIdentity | null> {
@@ -269,14 +278,18 @@ async function saveMacWorkerIdentity(identity: MacWorkerIdentity): Promise<void>
 }
 
 async function enrollMacWorker(controlPlane: URL, identity: MacWorkerIdentity): Promise<MacWorkerIdentity> {
+  const machineUuid = (identity.machineUuid ?? await macMachineUuid()).toLowerCase();
+  const vmUuid = (identity.vmUuid ?? Bun.env.MARS_VM_UUID ?? machineUuid).toLowerCase();
+  const persisted = { ...identity, vmUuid, machineUuid };
+  await saveMacWorkerIdentity(persisted);
   const codeBytes = await readJoinCode();
   try {
-    const payload = await currentMacWorkerJoinPayload(codeBytes.toString("utf8").trim(), identity.publicKey, identity.encryptionPublicKey);
+    const payload = await currentMacWorkerJoinPayload(codeBytes.toString("utf8").trim(), persisted.publicKey, persisted.encryptionPublicKey, vmUuid, machineUuid);
     const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", controlPlane), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) }));
     if (!response.ok) throw new Error(`worker join failed: ${response.status} ${await response.text()}`);
     const joined = await response.json() as { workerId?: string };
     if (typeof joined.workerId !== "string" || !joined.workerId) throw new Error("worker join response missing workerId");
-    const enrolled = { ...identity, workerId: joined.workerId };
+    const enrolled = { ...persisted, workerId: joined.workerId };
     await saveMacWorkerIdentity(enrolled);
     return enrolled;
   } finally { codeBytes.fill(0); }
@@ -340,26 +353,23 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
 export async function runWorkerJoin(platform: "macos-arm64" | "windows-x64", baseUrl: string): Promise<void> {
   if (platform !== "macos-arm64") throw new Error("Windows worker enrollment is not implemented");
   const controlPlane = validateControlPlaneUrl(baseUrl);
-  const key = createKeyPair();
-  const codeBytes = await readJoinCode();
-  try {
-    const payload = await currentMacWorkerJoinPayload(codeBytes.toString("utf8").trim(), key.publicKey, key.encryptionPublicKey);
-    const response = await fetch(new URL("/api/workers/join", controlPlane), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!response.ok) throw new Error(`worker join failed: ${response.status} ${await response.text()}`);
-  } finally { codeBytes.fill(0); }
+  const machineUuid = (Bun.env.MARS_MACHINE_UUID ?? await macMachineUuid()).toLowerCase();
+  const identity: MacWorkerIdentity = { workerId: "", ...createKeyPair(), machineUuid, vmUuid: (Bun.env.MARS_VM_UUID ?? machineUuid).toLowerCase() };
+  await saveMacWorkerIdentity(identity);
+  await enrollMacWorker(controlPlane, identity);
 }
 export async function runMacWorker(baseUrl: string, limits: MacWorkerLimits, cache = WorkerCacheConfiguration.parse({})): Promise<never> {
   const controlPlane = validateControlPlaneUrl(baseUrl);
   const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: cache.ttlSeconds });
   try {
     const driver = new TartVmDriver(createTartVmRuntime(), Bun.env.MARS_TART_BASE_IMAGE ?? "mars-macos-worker", "mars-job", limits, Bun.env.MARS_TART_IMAGE_DIGEST ?? Bun.env.MARS_TART_BASE_IMAGE ?? "mars-macos-worker");
-    const existing = await loadMacWorkerIdentity();
-    const identity = existing ?? await enrollMacWorker(controlPlane, { workerId: "", ...createKeyPair() });
+    let identity = await loadMacWorkerIdentity();
+    if (!identity) {
+      const machineUuid = (Bun.env.MARS_MACHINE_UUID ?? await macMachineUuid()).toLowerCase();
+      identity = { workerId: "", ...createKeyPair(), machineUuid, vmUuid: (Bun.env.MARS_VM_UUID ?? machineUuid).toLowerCase() };
+      await saveMacWorkerIdentity(identity);
+    }
+    if (!identity.workerId) identity = await enrollMacWorker(controlPlane, identity);
     return await connectMacWorker(controlPlane, identity, driver, limits, cache, cacheService);
   } finally {
     await cacheService.close();

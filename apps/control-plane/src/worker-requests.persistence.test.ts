@@ -22,6 +22,60 @@ describe("pending worker persistence", () => {
     expect(insertValues).toEqual(expect.arrayContaining([telemetry]));
   });
 });
+test("replays a response-lost enrollment only for the exact pending identity", async () => {
+  const code = "A".repeat(43);
+  const candidate = createHash("sha256").update(Buffer.from(code, "base64url")).digest();
+  const input = { code, platform: "linux-x64" as const, publicKey: "ed25519-public", encryptionPublicKey: "x25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
+  const queries: string[] = [];
+  const tx = (strings: TemplateStringsArray) => {
+    const query = strings.join(" ");
+    queries.push(query);
+    if (query.includes("consumed_at is not null")) return [{ codeHash: candidate, consumedAt: "2026-08-28T00:00:00.000Z" }];
+    if (query.includes("from workers")) return [{
+      id: "00000000-0000-4000-8000-000000000003",
+      vmUuid: input.vmUuid,
+      machineUuid: input.machineUuid,
+      fingerprint: createHash("sha256").update(input.publicKey).digest("hex"),
+      publicKey: input.publicKey,
+      encryptionPublicKey: input.encryptionPublicKey,
+      admissionState: "pending",
+      enrollmentCodeHash: candidate,
+      enrollmentAuthenticatedAt: null,
+    }];
+    return [];
+  };
+  const db = Object.assign(((strings: TemplateStringsArray) => []) as unknown as Sql<{}>, {
+    begin: async (fn: (tx: unknown) => unknown) => fn(tx),
+  });
+  await expect(requestPendingWorker(db, input)).resolves.toEqual({ status: "existing", workerId: "00000000-0000-4000-8000-000000000003" });
+  expect(queries.some(query => query.includes("set consumed_at=now()"))).toBe(false);
+});
+
+test("rejects consumed-code replay with a different key or machine identity", async () => {
+  const code = "A".repeat(43);
+  const candidate = createHash("sha256").update(Buffer.from(code, "base64url")).digest();
+  const input = { code, platform: "linux-x64" as const, publicKey: "ed25519-public", encryptionPublicKey: "x25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
+  const tx = (strings: TemplateStringsArray) => {
+    const query = strings.join(" ");
+    if (query.includes("consumed_at is not null")) return [{ codeHash: candidate, consumedAt: "2026-08-28T00:00:00.000Z" }];
+    if (query.includes("from workers")) return [{
+      id: "00000000-0000-4000-8000-000000000003",
+      vmUuid: input.vmUuid,
+      machineUuid: input.machineUuid,
+      fingerprint: createHash("sha256").update(input.publicKey).digest("hex"),
+      publicKey: input.publicKey,
+      encryptionPublicKey: "different-encryption-key",
+      admissionState: "pending",
+      enrollmentCodeHash: candidate,
+      enrollmentAuthenticatedAt: null,
+    }];
+    return [];
+  };
+  const db = Object.assign(((strings: TemplateStringsArray) => []) as unknown as Sql<{}>, {
+    begin: async (fn: (tx: unknown) => unknown) => fn(tx),
+  });
+  await expect(requestPendingWorker(db, input)).rejects.toMatchObject({ code: "identity_conflict", status: 409 });
+});
 
 test("replays completed configuration idempotency response without mutating", async () => {
   const result = { revision: "r", fingerprint: "f", commandId: "c" };

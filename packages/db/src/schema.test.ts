@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
 import { baselineSchemaSql, jobTimingMigrationSql, jsonShapeNormalizationMigrationSql, onboardingVerificationMigrationSql, schemaSql, workerConfigurationMigrationSql, workerJsonNormalizationMigrationSql } from "./schema.ts";
+import { workers } from "./drizzle-schema.ts";
+test("workers retain crash-safe enrollment replay evidence columns", () => {
+  expect(workers.enrollmentCodeHash).toBeDefined();
+  expect(workers.enrollmentAuthenticatedAt).toBeDefined();
+});
 
 test("repository authorization is represented only by GitHub availability", () => {
   const repositoryDefinition = schemaSql.match(/CREATE TABLE IF NOT EXISTS dashboard_repositories \(([^;]+)\);/)?.[1];

@@ -26,6 +26,24 @@ test("reconciles configuration before making a socket dispatchable", async () =>
   expect(workerSockets.get(workerId)).toBe(socket);
 });
 
+test("marks enrollment authenticated and clears the one-use hash atomically", async () => {
+  const queries: string[] = [];
+  const db = (async (strings: TemplateStringsArray) => {
+    queries.push(strings.join(" "));
+    return [];
+  }) as never;
+  await activateAuthenticatedWorkerConnection({
+    db,
+    workerId: "worker",
+    socket: { send: () => {}, close: () => {} },
+    workerSockets: new Map(),
+    reconcile: async () => ({ state: "ready", commandId: null }),
+    markAuthenticated: () => {},
+    dispatcher: { register: () => {} },
+  });
+  expect(queries.some(query => query.includes("enrollment_authenticated_at=now()") && query.includes("enrollment_code_hash=null"))).toBe(true);
+});
+
 test("does not persist connection state on authentication", async () => {
   const queries: string[] = [];
   await activateAuthenticatedWorkerConnection({
@@ -39,7 +57,6 @@ test("does not persist connection state on authentication", async () => {
   });
   expect(queries.join(" ")).not.toContain("connection_state");
 });
-
 test("does not expose a socket when reconciliation fails", async () => {
   const order: string[] = [];
   const workerSockets = new Map<string, { send: () => void; close: () => void }>();

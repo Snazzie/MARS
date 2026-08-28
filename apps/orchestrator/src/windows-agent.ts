@@ -12,11 +12,12 @@ import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheServi
 import { retryControlPlaneOperation } from "./worker-client.ts";
 
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
-type Identity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string; preserveLeases?: boolean };
+type Identity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string; vmUuid?: string; machineUuid?: string; preserveLeases?: boolean };
 const identityPath = () => Bun.env.MARS_WORKER_IDENTITY_FILE ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Mars", "worker-identity.json");
 const event = (workerId: string, type: string, payload: Record<string, unknown>): WorkerEvent => WorkerEvent.parse({ version: 1, id: randomUUID(), workerId, type, occurredAt: new Date().toISOString(), payload });
 const keys = () => { const signing = generateKeyPairSync("ed25519"), encryption = generateKeyPairSync("x25519"); return { workerId: "", publicKey: signing.publicKey.export({ format: "pem", type: "spki" }).toString(), privateKey: signing.privateKey.export({ format: "pem", type: "pkcs8" }).toString(), encryptionPublicKey: encryption.publicKey.export({ format: "pem", type: "spki" }).toString(), encryptionPrivateKey: encryption.privateKey.export({ format: "pem", type: "pkcs8" }).toString() }; };
-const machineUuid = async () => { const process = Bun.spawn(["powershell.exe", "-NoProfile", "-Command", "(Get-CimInstance Win32_ComputerSystemProduct).UUID"], { stdout: "pipe" }); return (await new Response(process.stdout).text()).trim(); };
+const machineUuid = async () => { if (Bun.env.MARS_MACHINE_UUID) return Bun.env.MARS_MACHINE_UUID; const process = Bun.spawn(["powershell.exe", "-NoProfile", "-Command", "(Get-CimInstance Win32_ComputerSystemProduct).UUID"], { stdout: "pipe" }); return (await new Response(process.stdout).text()).trim(); };
+const createIdentity = async (): Promise<Identity> => ({ ...keys(), vmUuid: Bun.env.MARS_VM_UUID ?? randomUUID(), machineUuid: await machineUuid() });
 const runPowerShellJson = async (command: string): Promise<Record<string, number>> => { const process = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command], { stdout: "pipe", stderr: "pipe" }); const output = (await new Response(process.stdout).text()).trim(); if (await process.exited !== 0) throw new Error(`Windows capacity query failed: ${output}`); const value = JSON.parse(output) as Record<string, number>; if (Object.values(value).some((entry) => !Number.isFinite(entry) || entry <= 0)) throw new Error("Windows capacity query returned invalid values"); return value; };
 const capacity = async (): Promise<WorkerCapacityData> => {
   const value = await runPowerShellJson("$system=Get-CimInstance Win32_ComputerSystem -ErrorAction Stop; $cpu=(Get-CimInstance Win32_Processor -ErrorAction Stop | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum; $available=(Get-Counter '\\Memory\\Available Bytes' -ErrorAction Stop).CounterSamples[0].CookedValue; $disk=Get-CimInstance Win32_LogicalDisk -ErrorAction Stop | Where-Object DeviceID -eq 'C:'; if (-not $disk) { throw 'C: drive not found' }; [pscustomobject]@{vcpu=[double]$cpu; memory=[double]$system.TotalPhysicalMemory; freeMemory=[double]$available; storage=[double]$disk.Size; freeStorage=[double]$disk.FreeSpace} | ConvertTo-Json -Compress");
@@ -72,7 +73,7 @@ export const windowsDoctor = async (preserveLeases = false): Promise<WorkerDocto
   return WorkerDoctorData.parse({ runtimeMode, preserveLeases, ...(runtimeMode === "container" ? { artifactSource: "worker_local", ...(artifactValue ? { artifactIdentity: artifactValue } : {}) } : { artifactSource: "template", ...(artifactDigest ? { artifactDigest } : {}) }), ...(artifactDigest ? { artifactDigest } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
 };
 const joinCode = async () => { const path = Bun.env.MARS_JOIN_CODE_FILE; if (path) return (await readFile(path, "utf8")).trim(); const reader = Bun.stdin.stream().getReader(); const { value } = await reader.read(); reader.releaseLock(); return Buffer.from(value ?? []).toString("utf8").trim(); };
-const save = async (identity: Identity) => { const path = identityPath(); await mkdir(dirname(path), { recursive: true }); await writeFile(path, JSON.stringify(identity) + "\n"); };
+const save = async (identity: Identity) => { const path = identityPath(); await mkdir(dirname(path), { recursive: true }); await writeFile(path, JSON.stringify(identity) + "\n", { mode: 0o600 }); };
 const load = async () => { try { return JSON.parse(await readFile(identityPath(), "utf8")) as Identity; } catch { return null; } };
 const auth = (nonce: string, identity: Identity) => ({ type: "authenticate", workerId: identity.workerId, encryptionPublicKey: identity.encryptionPublicKey, signature: signMessage(null, Buffer.from(`${nonce}\n${identity.workerId}\n${identity.encryptionPublicKey}`), identity.privateKey).toString("base64url") });
 async function runProcess(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -120,7 +121,19 @@ export async function buildWindowsImage(command: WorkerCommand, send: (event: Wo
     await rm(root, { recursive: true, force: true });
   }
 }
-async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> { const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), platform: "windows-x64", publicKey: identity.publicKey, encryptionPublicKey: identity.encryptionPublicKey, vmUuid: crypto.randomUUID(), machineUuid: await machineUuid(), doctor: await windowsDoctor(), capacity: await capacity() }); const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) })); if (!response.ok) throw new Error(`worker join failed: ${response.status}`); const joined = await response.json() as { workerId: string }; const result = { ...identity, workerId: joined.workerId }; await save(result); return result; }
+async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> {
+  const vmUuid = identity.vmUuid ?? Bun.env.MARS_VM_UUID ?? randomUUID();
+  const machine = identity.machineUuid ?? await machineUuid();
+  const persisted = { ...identity, vmUuid, machineUuid: machine };
+  await save(persisted);
+  const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), platform: "windows-x64", publicKey: persisted.publicKey, encryptionPublicKey: persisted.encryptionPublicKey, vmUuid, machineUuid: machine, doctor: await windowsDoctor(), capacity: await capacity() });
+  const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }));
+  if (!response.ok) throw new Error(`worker join failed: ${response.status}`);
+  const joined = await response.json() as { workerId: string };
+  const result = { ...persisted, workerId: joined.workerId };
+  await save(result);
+  return result;
+}
 type WindowsRuntimeDriver = Pick<RuntimeDriver, "reserveCapacity" | "createLease" | "stopLease" | "removeLease"> & { reconcileOrphans?: () => Promise<void> };
 export async function applyWindowsWorkerConfiguration(
   limits: Limits,
@@ -178,7 +191,12 @@ export function startWindowsLeaseLifecycle(
 
 async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache: WorkerCacheConfiguration, cacheService: ActionCacheService): Promise<never> {
   const controlPlane = new URL(baseUrl);
-  const identity = (await load()) ?? await enroll(controlPlane, keys());
+  let identity = await load();
+  if (!identity) {
+    identity = await createIdentity();
+    await save(identity);
+  }
+  if (!identity.workerId) identity = await enroll(controlPlane, identity);
   const mode = Bun.env.MARS_WINDOWS_RUNTIME ?? "vm";
   let driver: WindowsRuntimeDriver;
   if (mode === "container") {

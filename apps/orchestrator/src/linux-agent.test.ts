@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyLinuxWorkerConfigure, buildLinuxWorkerJoinPayload, handleLinuxWorkerCommand } from "./linux-agent.ts";
+import { applyLinuxWorkerConfigure, buildLinuxWorkerJoinPayload, createLinuxIdentity, handleLinuxWorkerCommand } from "./linux-agent.ts";
 import type { WorkerCommand } from "@mars/contracts";
 
 const workerId = "00000000-0000-4000-8000-000000000001";
@@ -54,4 +54,10 @@ test("builds a Linux enrollment payload with digest-bound VM evidence", () => {
   });
   expect(payload.platform).toBe("linux-x64");
   expect(payload.doctor.smokeArtifactDigest).toBe(payload.doctor.artifactDigest);
+});
+test("creates persisted identity with stable UUIDs before enrollment", () => {
+  const identity = createLinuxIdentity();
+  expect(identity.workerId).toBe("");
+  expect(identity.vmUuid).toMatch(/^[0-9a-f-]{36}$/i);
+  expect(identity.machineUuid).toMatch(/^[0-9a-f-]{36}$/i);
 });

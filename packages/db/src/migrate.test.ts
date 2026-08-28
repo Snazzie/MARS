@@ -24,6 +24,8 @@ test("migration lineage preserves released history and converges exactly once", 
     "0006_worker_action_cache",
     "0007_repair_worker_cache_snapshot_staging",
     "0008_repair_worker_cache_snapshot_status",
+    "0009_mars_runner_labels",
+    "0010_worker_enrollment_replay",
   ]);
   expect(new Set(journal.entries.map(entry => entry.tag.slice(0, 4))).size).toBe(journal.entries.length);
   expect(new Set(journal.entries.map(entry => entry.when)).size).toBe(journal.entries.length);
@@ -42,6 +44,12 @@ test("worker cache status repair migration restores snapshot lifecycle columns",
   expect(migrationText).toContain('ALTER TABLE "worker_cache_status" ADD COLUMN IF NOT EXISTS "active_snapshot_id" uuid;');
   expect(migrationText).toContain('ALTER TABLE "worker_cache_status" ADD COLUMN IF NOT EXISTS "active_snapshot_started_at" timestamptz;');
   expect(migrationText).toContain('ALTER TABLE "worker_cache_status" ADD COLUMN IF NOT EXISTS "last_completed_snapshot_id" uuid;');
+});
+
+test("worker enrollment replay migration adds nullable authentication evidence", async () => {
+  const migrationText = await migration("0010_worker_enrollment_replay.sql");
+  expect(migrationText).toContain('ALTER TABLE "workers" ADD COLUMN IF NOT EXISTS "enrollment_code_hash" bytea;');
+  expect(migrationText).toContain('ALTER TABLE "workers" ADD COLUMN IF NOT EXISTS "enrollment_authenticated_at" timestamptz;');
 });
 
 test("released run-attempt migration remains non-destructive", async () => {

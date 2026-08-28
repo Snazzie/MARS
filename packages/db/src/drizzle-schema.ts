@@ -109,6 +109,8 @@ export const workers = pgTable("workers", {
 	limits: jsonb(),
 	doctor: jsonb(),
 	vmUuid: text("vm_uuid"),
+	enrollmentCodeHash: bytea("enrollment_code_hash"),
+	enrollmentAuthenticatedAt: timestamp("enrollment_authenticated_at", { withTimezone: true, mode: 'string' }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	machineUuid: text("machine_uuid"),
 	lastRequestedAt: timestamp("last_requested_at", { withTimezone: true, mode: 'string' }),

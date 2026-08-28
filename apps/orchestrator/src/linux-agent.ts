@@ -93,7 +93,7 @@ export function buildLinuxWorkerJoinPayload(input: LinuxWorkerJoinInput): LinuxW
 function workerEvent(workerId: string, type: string, payload: Record<string, unknown>): WorkerEvent {
   return WorkerEvent.parse({ version: 1, id: randomUUID(), workerId, type, occurredAt: new Date().toISOString(), payload });
 }
-function createLinuxIdentity(): WorkerIdentity {
+export function createLinuxIdentity(): WorkerIdentity {
   const signing = generateKeyPairSync("ed25519");
   const encryption = generateKeyPairSync("x25519");
   return {
@@ -102,6 +102,8 @@ function createLinuxIdentity(): WorkerIdentity {
     privateKey: signing.privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
     encryptionPublicKey: encryption.publicKey.export({ format: "pem", type: "spki" }).toString(),
     encryptionPrivateKey: encryption.privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+    vmUuid: Bun.env.MARS_VM_UUID ?? randomUUID(),
+    machineUuid: Bun.env.MARS_MACHINE_UUID ?? randomUUID(),
   };
 }
 function identityPath(): string { return Bun.env.MARS_WORKER_IDENTITY_FILE ?? "/var/lib/mars/config/worker-identity.json"; }
@@ -137,15 +139,19 @@ async function linuxDoctor(driver: LibvirtVmDriver, digest: string, channelRoot:
   return WorkerDoctorData.parse({ runtimeMode: "vm", artifactSource: "worker_local", artifactDigest: digest, runtimeReady: host.runtimeReady && smoke, libvirtReady: host.libvirtReady, networkReady: host.networkReady, cloneStorageReady: host.cloneStorageReady, realVmSmoke: smoke, imageSignatures: true, smokeArtifactDigest: smoke ? digest : undefined, smokeObservedAt: smoke ? new Date().toISOString() : undefined, remediation: host.remediation ?? (smoke ? null : "real Linux VM smoke evidence is missing") });
 }
 async function enrollLinuxWorker(baseUrl: URL, identity: WorkerIdentity, driver: LibvirtVmDriver, digest: string, channelRoot: string): Promise<WorkerIdentity> {
+  const vmUuid = identity.vmUuid ?? Bun.env.MARS_VM_UUID ?? randomUUID();
+  const machineUuid = identity.machineUuid ?? Bun.env.MARS_MACHINE_UUID ?? randomUUID();
+  const persisted = { ...identity, vmUuid, machineUuid };
+  await saveIdentity(persisted);
   const code = await readEnrollmentCode();
   const capacity = linuxCapacity();
   const doctor = await linuxDoctor(driver, digest, channelRoot);
-  const payload = buildLinuxWorkerJoinPayload({ code, publicKey: identity.publicKey, encryptionPublicKey: identity.encryptionPublicKey, vmUuid: Bun.env.MARS_VM_UUID ?? randomUUID(), machineUuid: Bun.env.MARS_MACHINE_UUID ?? randomUUID(), doctor, capacity });
+  const payload = buildLinuxWorkerJoinPayload({ code, publicKey: persisted.publicKey, encryptionPublicKey: persisted.encryptionPublicKey, vmUuid, machineUuid, doctor, capacity });
   const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) }));
   if (!response.ok) throw new Error(`worker join failed: ${response.status}`);
   const joined = await response.json() as { workerId?: string };
   if (!joined.workerId) throw new Error("worker join response missing workerId");
-  const enrolled = { ...identity, workerId: joined.workerId };
+  const enrolled = { ...persisted, workerId: joined.workerId };
   await saveIdentity(enrolled);
   return enrolled;
 }
@@ -213,7 +219,12 @@ export async function runLinuxWorker(baseUrl: string, driver: LibvirtVmDriver, l
   const controlPlane = new URL(baseUrl);
   const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: resources.cache.ttlSeconds });
   try {
-    const identity = (await loadIdentity()) ?? await enrollLinuxWorker(controlPlane, createLinuxIdentity(), driver, Bun.env.MARS_GOLDEN_DIGEST!, Bun.env.MARS_CHANNEL_ROOT!);
+    let identity = await loadIdentity();
+    if (!identity) {
+      identity = createLinuxIdentity();
+      await saveIdentity(identity);
+    }
+    if (!identity.workerId) identity = await enrollLinuxWorker(controlPlane, identity, driver, Bun.env.MARS_GOLDEN_DIGEST!, Bun.env.MARS_CHANNEL_ROOT!);
     await connectLinuxWorker(controlPlane, identity, driver, limits, resources, Bun.env.MARS_GOLDEN_DIGEST!, Bun.env.MARS_CHANNEL_ROOT!, cacheService);
   } finally {
     await cacheService.close();
