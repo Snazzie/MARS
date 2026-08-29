@@ -22,11 +22,11 @@ async function invoke(script: string, args: string[], env: Record<string, string
   return { exitCode: await proc.exited, stdout: await new Response(proc.stdout).text(), stderr: await new Response(proc.stderr).text() };
 }
 
-async function invokeWindowsPreflight(source: string, scenario: "active-hypervisor" | "missing-firmware") {
+async function invokeWindowsPreflight(source: string, scenario: "active-hypervisor" | "missing-firmware" | "bare-metal-no-slat") {
   const tempDir = await mkdtemp(join(tmpdir(), "mars-installer-preflight-"));
   const scriptPath = join(tempDir, "preflight.ps1");
   const functionSource = source.slice(0, source.indexOf("\nWrite-Host '[1/8]"));
-  const virtualizationFirmwareEnabled = scenario === "active-hypervisor" ? "$true" : "$false";
+  const virtualizationFirmwareEnabled = scenario === "missing-firmware" ? "$false" : "$true";
   const hypervisorPresent = scenario === "active-hypervisor" ? "$true" : "$false";
   const script = `${functionSource}
 $mockCpu = [pscustomobject]@{
@@ -114,6 +114,10 @@ windowsRuntimeTest("Windows preflight trusts active hypervisor capability over f
   const missingFirmware = await invokeWindowsPreflight(source, "missing-firmware");
   expect(missingFirmware.exitCode).toBe(1);
   expect(missingFirmware.stderr).toContain("hardware virtualization is required.");
+
+  const bareMetalWithoutSlat = await invokeWindowsPreflight(source, "bare-metal-no-slat");
+  expect(bareMetalWithoutSlat.exitCode).toBe(1);
+  expect(bareMetalWithoutSlat.stderr).toContain("hardware virtualization is required.");
 });
 
 test("PowerShell host preflight checks authoritative hypervisor state", async () => {
