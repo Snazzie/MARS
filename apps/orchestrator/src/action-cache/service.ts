@@ -106,7 +106,11 @@ export function resolveActionCacheNetworkConfiguration(env: Environment = Bun.en
   if (!proxyOverride || !dataOverride) return { proxyPort, dataPort, overrideOrigins: null };
   const proxyUrl = parseAdvertiseOrigin(proxyOverride, "http:", "cache proxy URL");
   const dataUrl = parseAdvertiseOrigin(dataOverride, "https:", "cache advertise URL");
-  if (normalizedHostname(proxyUrl).toLowerCase() !== normalizedHostname(dataUrl).toLowerCase()) throw new Error("cache proxy and advertise URLs must use the same hostname");
+  const proxyHostname = normalizedHostname(proxyUrl).toLowerCase();
+  const dataHostname = normalizedHostname(dataUrl).toLowerCase();
+  if (proxyHostname !== dataHostname) throw new Error("cache proxy and advertise URLs must use the same hostname");
+  if (proxyHostname === "::1") proxyUrl.hostname = "127.0.0.1";
+  if (dataHostname === "::1") dataUrl.hostname = "127.0.0.1";
   return { proxyPort, dataPort, overrideOrigins: { proxyOrigin: proxyUrl.origin, cacheBaseUrl: dataUrl.origin } };
 }
 

@@ -115,6 +115,17 @@ test("requires paired, credential-free HTTP(S) advertise overrides on one hostna
     { MARS_CACHE_PROXY_URL: "http://cache.example.test", MARS_CACHE_ADVERTISE_URL: "https://cache.example.test:0" },
   ]) expect(() => resolveActionCacheNetworkConfiguration(env)).toThrow();
 });
+test("normalizes IPv6 loopback advertise overrides for IPv4 listeners", () => {
+  expect(resolveActionCacheNetworkConfiguration({
+    MARS_CACHE_PROXY_URL: "http://[::1]:19000",
+    MARS_CACHE_ADVERTISE_URL: "https://[::1]:19001",
+  })).toMatchObject({
+    overrideOrigins: {
+      proxyOrigin: "http://127.0.0.1:19000",
+      cacheBaseUrl: "https://127.0.0.1:19001",
+    },
+  });
+});
 
 test("discovers the worker advertise address from the control-plane route", async () => {
   const server = createServer();
