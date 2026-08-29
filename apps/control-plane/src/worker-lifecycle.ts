@@ -52,10 +52,10 @@ export async function handleAuthenticatedWorkerEvent(
 ): Promise<boolean> {
   const event = WorkerEvent.safeParse(input);
   if (!event.success) return false;
-  const payload = WorkerEventPayload.safeParse({ type: event.data.type, payload: event.data.payload });
-  if (!payload.success) return false;
   const cacheTelemetry = WorkerCacheTelemetry.safeParse({ type: event.data.type, payload: event.data.payload });
   if (cacheTelemetry.success) return await applyWorkerCacheTelemetry(db, { workerId: event.data.workerId, type: cacheTelemetry.data.type, payload: cacheTelemetry.data.payload });
+  const payload = WorkerEventPayload.safeParse({ type: event.data.type, payload: event.data.payload });
+  if (!payload.success) return false;
   if (payload.data.type === "diagnostic.chunk") {
     try {
       await persistDiagnosticChunk(event.data.workerId, payload.data.payload);

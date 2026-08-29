@@ -128,6 +128,30 @@ test("routes authenticated worker cache telemetry to durable cache storage", asy
   expect(insert?.query).toContain("INSERT INTO worker_cache_entries");
   expect(insert?.values).toContain(workerId);
 });
+test("accepts cache snapshot telemetry frames", async () => {
+  const base = acceptingDb();
+  const db = Object.assign(base.db, { begin: async (fn: (tx: typeof base.db) => unknown) => fn(base.db) }) as typeof base.db;
+  const accepted = await handleAuthenticatedWorkerEvent(
+    db,
+    { handleEvent() { return false; } },
+    event("worker.cache_snapshot_begin", {
+      snapshotId: crypto.randomUUID(),
+      status: {
+        generation: crypto.randomUUID(),
+        ready: true,
+        ttlSeconds: 3600,
+        proxyOrigin: "http://proxy.example.test",
+        cacheBaseUrl: "https://cache.example.test",
+        sizeBytes: "0",
+        entryCount: 0,
+        observedAt: new Date().toISOString(),
+        error: null,
+      },
+    }),
+    { send() {} },
+  );
+  expect(accepted).toBe(true);
+});
 
 
 test("persists authenticated lifecycle events independently of command acknowledgement state", async () => {
