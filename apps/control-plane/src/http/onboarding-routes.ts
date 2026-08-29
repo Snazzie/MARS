@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { OnboardingDetail, OnboardingStatus, SelectOnboardingWorkerRequest, StartOnboardingVerificationRequest, StartOnboardingVerificationResult, VerifyOnboardingRepositoriesResult } from "@mars/contracts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { dashboardMutation, completeOnboardingIfReady, getOnboardingDetail, getOnboardingRepositoryOrganization, getOnboardingStatus, getVerifiedOnboardingRepositories, invalidateDashboard, recordOnboardingVerification, selectOnboardingWorker } from "@mars/db";
+import { ensureDefaultPools } from "../default-pools.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 
 const hasKey = (c: { req: { header(name:string): string|undefined } }) => Boolean(c.req.header("Idempotency-Key")?.trim());
@@ -13,7 +14,16 @@ export function registerOnboardingRoutes(app: Hono<ControlPlaneEnv>, deps: Contr
   });
   app.get("/api/onboarding", async (c) => {
     const user = await deps.currentUser(c.req.raw); if (!user) return c.json({ error:"unauthorized" },401); if (!user.isGlobalAdmin) return c.json({ error:"forbidden" },403);
-    const detail = await getOnboardingDetail(deps.db, { authenticated: true, canManage: true }, {}, { publicBaseUrlManaged: deps.setup.publicOriginManaged() });
+    let detail = await getOnboardingDetail(deps.db, { authenticated: true, canManage: true }, {}, { publicBaseUrlManaged: deps.setup.publicOriginManaged() });
+    if (detail.step === "labels" && !detail.pool) {
+      const hyperv = detail.worker?.platform === "windows-x64";
+      await ensureDefaultPools(deps.db, {
+        "linux-x64": hyperv ? deps.workerTemplateDigests?.["linux-x64"] : deps.defaultJobImages["linux-x64"],
+        "windows-x64": hyperv ? deps.workerTemplateDigests?.["windows-x64"] : deps.defaultJobImages["windows-x64"],
+        "macos-arm64": deps.defaultJobImages["macos-arm64"],
+      });
+      detail = await getOnboardingDetail(deps.db, { authenticated: true, canManage: true }, {}, { publicBaseUrlManaged: deps.setup.publicOriginManaged() });
+    }
     const hyperv = detail.worker?.platform === "windows-x64";
     const defaultImageDigests = {
       "linux-x64": hyperv ? deps.workerTemplateDigests?.["linux-x64"] ?? null : deps.defaultJobImages["linux-x64"] ?? null,

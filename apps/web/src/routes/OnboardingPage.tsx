@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { beginControlPlaneSetup, beginOnboardingGithubInstall, beginOnboardingGithubManifest, createOnboardingPool, getOnboardingDetail, getOnboardingStatus, getRunnerWorkflowFiles, rejectPendingWorker, selectOnboardingWorker, skipOnboardingLabels, startOnboardingVerification, verifyOnboardingRepositories } from "../api.ts";
+import { beginControlPlaneSetup, beginOnboardingGithubInstall, beginOnboardingGithubManifest, getOnboardingDetail, getOnboardingStatus, getRunnerWorkflowFiles, rejectPendingWorker, selectOnboardingWorker, startOnboardingVerification, verifyOnboardingRepositories } from "../api.ts";
 import { EnrollmentPanel } from "../components/EnrollmentPanel.tsx";
 import { pendingWorkerQueryOptions } from "../components/PendingWorkerRequests.tsx";
 import { RunnerWorkflowPrModal } from "../components/RunnerWorkflowPrModal.tsx";
 import { WorkerConfigurationForm } from "../components/WorkerConfigurationForm.tsx";
 import { QueryState } from "../components/StateView.tsx";
-import type { CreatePoolRequest, OnboardingDetail, OnboardingStatus } from "@mars/contracts";
+import type { OnboardingDetail, OnboardingStatus } from "@mars/contracts";
 
 const steps = [["setup", "Control plane"], ["github", "GitHub"], ["admin", "Admin"], ["worker", "Worker"], ["labels", "Trigger labels"]] as const;
 const gib = (bytes: number) => Math.max(1, Math.round(bytes / 1024 ** 3));
@@ -27,9 +27,7 @@ export function OnboardingPage() {
   const [error, setError] = useState<string | null>(null);
   const [viewStep, setViewStep] = useState<number | null>(null);
   const refresh = () => { void client.invalidateQueries({ queryKey: ["onboarding"] }); void client.invalidateQueries({ queryKey: ["onboarding-status"] }); };
-  const skipLabels = useMutation({ mutationFn: skipOnboardingLabels, onSuccess: refresh, onError: (e) => setError(e instanceof Error ? e.message : "Could not skip trigger-label verification") });
   const select = useMutation({ mutationFn: selectOnboardingWorker, onSuccess: refresh, onError: (e) => setError(e instanceof Error ? e.message : "Worker selection failed") });
-  const pool = useMutation({ mutationFn: createOnboardingPool, onSuccess: refresh, onError: (e) => setError(e instanceof Error ? e.message : "Pool creation failed") });
   if (status.isLoading) return <main className="onboarding"><p>Loading onboarding…</p></main>;
   if (status.error || !s) return <main className="onboarding"><h1>Onboarding unavailable</h1><p role="alert">{status.error instanceof Error ? status.error.message : "Could not load onboarding."}</p><button onClick={() => void status.refetch()}>Retry</button></main>;
   if (s.step === "setup") return <SetupCard status={s} />;
@@ -41,12 +39,12 @@ export function OnboardingPage() {
   const currentIndex = steps.findIndex(([id]) => id === d.step);
   const activeStep = viewStep ?? currentIndex;
   const viewingPastStep = activeStep < currentIndex;
-  return <main className="onboarding"><header><p className="eyebrow">FIRST-RUN SETUP</p><h1>Get Mars ready</h1><p>Complete each verified step. Progress is saved on the control plane.</p></header>{error && <p role="alert" className="form-error">{error} <button onClick={() => setError(null)}>Dismiss</button></p>}<div className="onboarding-layout"><nav aria-label="Onboarding steps"><ol className="onboarding-steps">{steps.map(([id, label], index) => <li key={id} className={index === activeStep ? "is-current" : index < currentIndex ? "is-complete" : "is-locked"}><span>{index + 1}</span><strong>{label}</strong></li>)}</ol></nav><section className="onboarding-task" aria-live="polite"><h2>{steps[activeStep]?.[1]}</h2>{activeStep === 0 ? <p>Administrator account is configured.</p> : <EditableStep detail={d} index={activeStep} onDone={() => { refresh(); setViewStep(null); }} onDiscard={() => { refresh(); setViewStep(null); }} onSelect={(id) => select.mutate({ workerId: id })} onCreate={(input) => pool.mutate({ ...input, organizationId: d.github.organizationId ?? "" })} onSkip={(input) => { pool.mutate({ ...input, organizationId: d.github.organizationId ?? "" }, { onSuccess: () => skipLabels.mutate() }); }} />}{activeStep > 0 && <div className="onboarding-navigation"><button type="button" onClick={() => setViewStep(Math.max(0, activeStep - 1))} disabled={activeStep === 0}>Back</button><button type="button" onClick={() => setViewStep(Math.min(currentIndex, activeStep + 1))} disabled={!viewingPastStep}>Next</button></div>}</section></div></main>;
+  return <main className="onboarding"><header><p className="eyebrow">FIRST-RUN SETUP</p><h1>Get Mars ready</h1><p>Complete each verified step. Progress is saved on the control plane.</p></header>{error && <p role="alert" className="form-error">{error} <button onClick={() => setError(null)}>Dismiss</button></p>}<div className="onboarding-layout"><nav aria-label="Onboarding steps"><ol className="onboarding-steps">{steps.map(([id, label], index) => <li key={id} className={index === activeStep ? "is-current" : index < currentIndex ? "is-complete" : "is-locked"}><span>{index + 1}</span><strong>{label}</strong></li>)}</ol></nav><section className="onboarding-task" aria-live="polite"><h2>{steps[activeStep]?.[1]}</h2>{activeStep === 0 ? <p>Administrator account is configured.</p> : <EditableStep detail={d} index={activeStep} onDone={() => { refresh(); setViewStep(null); }} onDiscard={() => { refresh(); setViewStep(null); }} onSelect={(id) => select.mutate({ workerId: id })} />}{activeStep > 0 && <div className="onboarding-navigation"><button type="button" onClick={() => setViewStep(Math.max(0, activeStep - 1))} disabled={activeStep === 0}>Back</button><button type="button" onClick={() => setViewStep(Math.min(currentIndex, activeStep + 1))} disabled={!viewingPastStep}>Next</button></div>}</section></div></main>;
 }
-function EditableStep({ detail, index, onDone, onDiscard, onSelect, onCreate, onSkip }: { detail: OnboardingDetail; index: number; onDone: () => void; onDiscard: () => void; onSelect: (id: string) => void; onCreate: (input: CreatePoolRequest) => void; onSkip: (input: CreatePoolRequest) => void }) {
+function EditableStep({ detail, index, onDone, onDiscard, onSelect }: { detail: OnboardingDetail; index: number; onDone: () => void; onDiscard: () => void; onSelect: (id: string) => void }) {
   if (index === 1) return <GithubStep detail={detail} />;
   if (index === 3) return <WorkerSetupStep detail={detail} edit onSelect={onSelect} onDone={onDone} onDiscard={onDiscard} />;
-  if (index === 4) return <LabelsStep detail={detail} edit onCreate={onCreate} onSkip={onSkip} />;
+  if (index === 4) return <LabelsStep detail={detail} />;
   return <p>Administrator account is configured.</p>;
 }
 function ResourceStep({ detail, onDone, onDiscard, edit = false }: { detail: OnboardingDetail; onDone: () => void; onDiscard?: () => void; edit?: boolean }) { const w = detail.worker; if (!w) return <p>Select a worker first.</p>; return <><h3>Configure resources</h3>{w.configurationState === "ready" && !edit ? <p role="status">Configuring worker complete. Waiting for server progress…</p> : <WorkerConfigurationForm worker={w} onConfigured={onDone} onDiscard={onDiscard} />}</>; }
@@ -160,34 +158,11 @@ function WorkerSetupStep({ detail, onSelect, onDone, onDiscard, edit = false }: 
   return <div><h3>Worker enrollment</h3><p>Selected worker: {detail.worker.name ?? detail.worker.vmUuid}</p>{detail.worker.admissionState === "pending" && onDiscard && <button type="button" onClick={() => { if (window.confirm("Discard this pending worker and generate a new installation?")) discard.mutate(detail.worker!.id); }} disabled={discard.isPending}>Discard and reinstall</button>}{discard.error && <p role="alert">{discard.error instanceof Error ? discard.error.message : "Could not discard the pending worker."}</p>}<ResourceStep detail={detail} onDone={onDone} onDiscard={onDiscard} edit={edit} /></div>;
 }
 const canonicalRunnerLabel = (platform: "linux-x64" | "windows-x64" | "macos-arm64") => `mars-${platform}`;
-function LabelsStep({ detail, onCreate, onSkip, edit = false }: { detail: OnboardingDetail; onCreate: (input: CreatePoolRequest) => void; onSkip: (input: CreatePoolRequest) => void; edit?: boolean }) {
+function LabelsStep({ detail }: { detail: OnboardingDetail }) {
   if (detail.pool) return <OnboardingVerificationStep detail={detail} />;
-  return <PoolSetupStep detail={detail} onCreate={onCreate} onSkip={onSkip} edit={edit} />;
-}
-function PoolSetupStep({ detail, onCreate, onSkip, edit = false }: { detail: OnboardingDetail; onCreate: (input: CreatePoolRequest) => void; onSkip: (input: CreatePoolRequest) => void; edit?: boolean }) {
-  const worker = detail.worker;
-  const digestFor = (platform: "linux-x64" | "windows-x64" | "macos-arm64") => (detail.defaultImageDigests ?? {})[platform] ?? (worker?.platform === platform ? detail.defaultImageDigest : null);
-  const guestPlatforms = (worker?.guestPlatforms ?? (worker ? [worker.platform] : [])).filter((platform) => platform !== "linux-x64" && Boolean(digestFor(platform)));
-  const [guestPlatform, setGuestPlatform] = useState<"linux-x64" | "windows-x64" | "macos-arm64" | null>(detail.pool?.platform ?? null);
-  const selectedGuest = guestPlatform && guestPlatforms.includes(guestPlatform) ? guestPlatform : guestPlatforms[0] ?? null;
-  const [name, setName] = useState(detail.pool?.name ?? "default");
-  const [label, setLabel] = useState(detail.pool?.triggerLabel ?? canonicalRunnerLabel(selectedGuest ?? "linux-x64"));
-  const digest = selectedGuest ? digestFor(selectedGuest) : null;
-  if (!worker || !selectedGuest || !digest) return <p role="alert">No immutable job image is configured for this guest platform.</p>;
-  if (!worker.limits) return <div><p role="alert">Worker resource limits are not acknowledged yet. Return to Configure resources before creating a pool.</p><p>Configuring worker · resources in GiB</p><p>Trigger label: {label}</p><pre>runs-on: {label}</pre></div>;
-  const resources = { vcpu: worker.limits.maxVcpuPerPod, memoryBytes: worker.limits.maxMemoryBytesPerPod, storageBytes: worker.limits.maxStorageBytesPerPod, concurrency: worker.limits.maxConcurrentPods };
-  const input = { poolId: edit ? detail.pool?.id : undefined, workerId: worker.id, guestPlatform: selectedGuest, name, triggerLabel: label, imageDigest: digest, resources };
-  const defaultInput = { ...input, name: "default", triggerLabel: canonicalRunnerLabel(selectedGuest) };
-  return <form onSubmit={(e) => { e.preventDefault(); onCreate(input); }}>
-    <p>Configuring worker acknowledged. Resources are acknowledged; configure resources in GiB before creating the first enabled pool.</p>
-    {guestPlatforms.length > 1 && <label>Guest platform<select value={selectedGuest} onChange={(e) => { const platform = e.target.value as typeof selectedGuest; setGuestPlatform(platform); if (platform) setLabel(canonicalRunnerLabel(platform)); }}>{guestPlatforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}</select></label>}
-    <label>Pool name<input value={name} onChange={(e) => setName(e.target.value)} /></label>
-    <label>Trigger label<input value={label} onChange={(e) => setLabel(e.target.value)} pattern="[a-z0-9][a-z0-9._-]{0,62}" /></label>
-    <p>Effective label: <code>{label}</code></p>
-    <pre>runs-on: {label}</pre>
-    <button type="submit">Create pool</button>
-    <button type="button" onClick={() => onSkip(defaultInput)}>Skip label setup and use {defaultInput.triggerLabel}</button>
-  </form>;
+  const platforms = detail.worker?.guestPlatforms ?? (detail.worker ? [detail.worker.platform] : []);
+  const labels = platforms.map((platform) => canonicalRunnerLabel(platform));
+  return <div><h3>Trigger labels</h3><p role="status">Preparing the default runner pool for all configured workers…</p><p>Generated runner labels: <code>{labels.join(", ")}</code></p><pre>runs-on: {labels.join(", ")}</pre></div>;
 }
 function OnboardingVerificationStep({ detail }: { detail: OnboardingDetail }) {
   const client = useQueryClient();
