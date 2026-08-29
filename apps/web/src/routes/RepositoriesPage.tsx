@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RepositorySummary } from "@mars/contracts";
-import { beginOrganizationGithubInstall, getGithubRepositorySettings, getMe, getRepositories, recheckRepositoryDiscovery, refreshGithubConnection, uninstallOrganizationGithub } from "../api.ts";
+import { beginUnboundOnboardingGithubInstall, getGithubRepositorySettings, getMe, getRepositories, recheckRepositoryDiscovery, refreshGithubConnection, uninstallOrganizationGithub } from "../api.ts";
 import { Disclosure } from "../components/Disclosure.tsx";
 import { QueryState } from "../components/StateView.tsx";
 import { RunnerWorkflowPrModal } from "../components/RunnerWorkflowPrModal.tsx";
@@ -42,7 +42,7 @@ export function RepositoriesPage() {
   });
   const me = useQuery({ queryKey: ["me"], queryFn: getMe });
   const connect = useMutation({
-    mutationFn: () => beginOrganizationGithubInstall(connectOrganizationId),
+    mutationFn: beginUnboundOnboardingGithubInstall,
     onSuccess: ({ location }) => window.location.assign(location),
   });
   const refreshConnection = useMutation({
@@ -91,15 +91,9 @@ export function RepositoriesPage() {
         </div>
         <div className="repositories-actions">
           <div className="repositories-action-group repositories-connect-group">
-            <label>
-              Connect workspace
-              <select aria-label="Workspace to connect" value={connectOrganizationId} onChange={(event) => setConnectOrganizationId(event.target.value)} disabled={!canConnect}>
-                <option value="">Select workspace</option>
-                {organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
-              </select>
-            </label>
-            <button type="button" className="button" onClick={() => connect.mutate()} disabled={!canConnect || !connectOrganizationId || connect.isPending}>
-              {connect.isPending ? "Connecting…" : "Connect workspace"}
+            <p className="muted">GitHub will ask which account or organization should receive the Mars App.</p>
+            <button type="button" className="button" onClick={() => connect.mutate()} disabled={connect.isPending}>
+              {connect.isPending ? "Connecting…" : "Connect GitHub account"}
             </button>
           </div>
           <Disclosure label="GitHub connection" tone="danger">

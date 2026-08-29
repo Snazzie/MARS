@@ -40,6 +40,13 @@ test("repository table presents GitHub installation access without approval poli
   expect(html).not.toContain("Not approved");
   expect(html).not.toContain(">Remove<");
 });
+test("dashboard connects through the GitHub account picker and keeps reinstall controls", () => {
+  const html = markup();
+  expect(html).toContain("GitHub will ask which account or organization should receive the Mars App.");
+  expect(html).toContain(">Connect GitHub account<");
+  expect(html).toContain(">Sync installed repositories<");
+  expect(html).toContain(">Uninstall<");
+});
 
 test("available repositories enable workflow setup without a second authorization gate", () => {
   const html = markup();
