@@ -239,6 +239,29 @@ describe("control-plane HTTP boundary", () => {
     expect(response.status).toBe(503);
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
+  test("sets Content-Length for large Windows job-agent downloads", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mars-windows-job-agent-"));
+    try {
+      const payload = "windows-container-job-agent-fixture";
+      const jobAgentPath = join(root, "mars-job-agent.exe");
+      await Bun.write(jobAgentPath, payload);
+      const response = await createControlPlaneApp(fakeHttpDeps({
+        windowsContainerArtifacts: {
+          builderPath: jobAgentPath,
+          verifierPath: jobAgentPath,
+          containerfilePath: jobAgentPath,
+          entrypointPath: jobAgentPath,
+          jobAgentPath,
+        },
+      })).request("/api/workers/windows-container-job-agent");
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-length")).toBe(String(await Bun.file(jobAgentPath).size));
+      expect(await response.text()).toBe(payload);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   test("redirects browser OAuth starts to onboarding when setup origin is unavailable", async () => {
     const defaults = fakeHttpDeps();
     const response = await createControlPlaneApp(fakeHttpDeps({

@@ -185,11 +185,14 @@ function installerArtifacts(deps: ControlPlaneHttpDeps, audience: string, runtim
 }
 
 async function packagedResponse(path: ArtifactPath, filename: string, hash: string | undefined): Promise<Response> {
-  const headers = noStore();
-  headers.set("content-type", "application/octet-stream");
-  headers.set("content-disposition", `attachment; filename="${filename}"`);
-  if (hash) headers.set("X-Content-SHA256", hash);
-  return new Response(Bun.file(path), { headers });
+  const file = Bun.file(path);
+  const response = new Response(file);
+  noStore(response.headers);
+  response.headers.set("content-type", "application/octet-stream");
+  response.headers.set("content-disposition", `attachment; filename="${filename}"`);
+  response.headers.set("content-length", String(file.size));
+  if (hash) response.headers.set("X-Content-SHA256", hash);
+  return response;
 }
 function releaseField(platform: string, field: string): string { return `manifest:${platform}.${field}`; }
 export function pendingWorkerDto(row: Record<string, unknown>, workerConnected?: (workerId: string) => boolean) {

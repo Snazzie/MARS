@@ -21,11 +21,12 @@ export function createControlPlaneApp(deps: ControlPlaneHttpDeps) {
   const app = new Hono<ControlPlaneEnv>();
   app.use("*", async (c, next) => {
     await next();
-    c.header("X-Content-Type-Options", "nosniff");
-    c.header("Referrer-Policy", "no-referrer");
-    c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-    if (deps.setup.publicOrigin()?.startsWith("https://")) c.header("Strict-Transport-Security", "max-age=31536000");
-    c.header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss:; frame-ancestors 'none'; base-uri 'none'; form-action 'self' https://github.com");
+    const headers = c.res.headers;
+    headers.set("X-Content-Type-Options", "nosniff");
+    headers.set("Referrer-Policy", "no-referrer");
+    headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    if (deps.setup.publicOrigin()?.startsWith("https://")) headers.set("Strict-Transport-Security", "max-age=31536000");
+    headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss:; frame-ancestors 'none'; base-uri 'none'; form-action 'self' https://github.com");
   });
   app.get("/api/livez", (c) => c.json({ ok: true }));
   app.get("/api/readyz", async (c) => {
