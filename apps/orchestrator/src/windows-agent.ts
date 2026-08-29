@@ -211,7 +211,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
   } else {
     throw new Error(`Unsupported Windows runtime: ${mode}`);
   }
-  const doctorReport = await windowsDoctor(identity.preserveLeases === true);
+  let doctorReport = await windowsDoctor(identity.preserveLeases === true);
   const capacityReport = await capacity();
   const activeLeases = new Map<string, Promise<void>>();
   const loop = async (signal?: AbortSignal): Promise<never> => {
@@ -252,6 +252,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
           }
           if (command.type === "worker.build_image") {
             await buildWindowsImage(command, workerEvent => ws.send(JSON.stringify(workerEvent)));
+            doctorReport = await windowsDoctor(identity.preserveLeases === true);
             return;
           }
           if (command.type === "tart.stop_lease" || command.type === "windows-container.stop_lease" || command.type === "hyperv.stop_lease") {
