@@ -294,6 +294,12 @@ export async function verifyOnboardingRepositories() {
     headers: { "Idempotency-Key": crypto.randomUUID() },
   });
 }
+export async function skipOnboardingLabels() {
+  return request("/api/onboarding/skip-labels", DashboardOkResponse, {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
+}
 export async function startOnboardingVerification(input: StartOnboardingVerificationRequest) {
   return request("/api/onboarding/verification", StartOnboardingVerificationResult, {
     method: "POST",

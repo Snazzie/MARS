@@ -104,6 +104,11 @@ test("current step shows its editable form and navigation controls", () => {
   expect(html).toContain("Trigger labels");
   expect(html).toContain(">Back</button>");
 });
+test("trigger-label setup can be skipped with the generated default label", () => {
+  const windowsWorker = { ...worker, platform: "windows-x64", guestPlatforms: ["windows-x64"], limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_294_967_296, maxStorageBytesPerPod: 10_737_418_240, maxConcurrentPods: 1 } };
+  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "labels", worker: windowsWorker, organizations: [], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [] }, pool: null, defaultImageDigest: "windows@sha256:" + "a".repeat(64) });
+  expect(html).toContain("Skip label setup and use mars-windows-x64");
+});
 test("completed onboarding steps are informational and navigation uses Back and Next", () => {
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "worker", worker: { ...worker, configurationState: "unconfigured" }, organizations: [], github: { appConfigured: true, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "a".repeat(64) });
   expect(html).not.toContain("aria-label=\"Edit");

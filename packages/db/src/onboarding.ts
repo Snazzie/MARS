@@ -272,23 +272,34 @@ export async function recordOnboardingVerification(
 
 
 
-export async function completeOnboardingIfReady(db: OnboardingDb): Promise<boolean> {
+export async function completeOnboardingIfReady(db: OnboardingDb, options: { skipVerification?: boolean } = {}): Promise<boolean> {
   const row = first(await db`SELECT completed_at AS "completedAt",admin_user_id AS "adminUserId",worker_id AS "workerId",organization_id AS "organizationId",verification_pool_id AS "verificationPoolId",verification_github_run_id AS "verificationGithubRunId" FROM system_onboarding WHERE singleton=true`);
-  if (!row || row.completedAt != null || !row.adminUserId || !row.workerId || !row.organizationId || !row.verificationPoolId || !row.verificationGithubRunId) return false;
-  const ready = await db`
-    SELECT 1 FROM workers w
-    JOIN dashboard_runs r ON r.organization_id=${String(row.organizationId)}
-      AND r.github_run_id=${numberValue(row.verificationGithubRunId)}
-      AND r.status='completed' AND r.conclusion='success'
-    WHERE w.id=${String(row.workerId)} AND w.admission_state='adopted' AND w.configuration_state='ready'
-      AND EXISTS (
-        SELECT 1 FROM dashboard_jobs j
-        JOIN runner_leases l ON l.github_job_id=j.github_job_id
-        WHERE j.organization_id=r.organization_id AND j.run_id=r.id
-          AND l.pool_id=${String(row.verificationPoolId)} AND l.state='reaped'
-      )
-    LIMIT 1
-  `;
+  if (!row || row.completedAt != null || !row.adminUserId || !row.workerId || !row.organizationId) return false;
+  if (!options.skipVerification && (!row.verificationPoolId || !row.verificationGithubRunId)) return false;
+  const ready = options.skipVerification
+    ? await db`
+      SELECT 1 FROM workers w
+      WHERE w.id=${String(row.workerId)} AND w.admission_state='adopted' AND w.configuration_state='ready'
+        AND EXISTS (
+          SELECT 1 FROM runner_pools p
+          WHERE p.organization_id IS NULL AND p.enabled=true AND p.platform=ANY(SELECT jsonb_array_elements_text(w.guest_platforms))
+        )
+      LIMIT 1
+    `
+    : await db`
+      SELECT 1 FROM workers w
+      JOIN dashboard_runs r ON r.organization_id=${String(row.organizationId)}
+        AND r.github_run_id=${numberValue(row.verificationGithubRunId)}
+        AND r.status='completed' AND r.conclusion='success'
+      WHERE w.id=${String(row.workerId)} AND w.admission_state='adopted' AND w.configuration_state='ready'
+        AND EXISTS (
+          SELECT 1 FROM dashboard_jobs j
+          JOIN runner_leases l ON l.github_job_id=j.github_job_id
+          WHERE j.organization_id=r.organization_id AND j.run_id=r.id
+            AND l.pool_id=${String(row.verificationPoolId)} AND l.state='reaped'
+        )
+      LIMIT 1
+    `;
   if (!ready.length) return false;
   const updated = await db`UPDATE system_onboarding SET completed_at=now() WHERE singleton=true AND completed_at IS NULL RETURNING completed_at`;
   return updated.length === 1;

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { OnboardingDetail, OnboardingStatus, SelectOnboardingWorkerRequest, StartOnboardingVerificationRequest, StartOnboardingVerificationResult, VerifyOnboardingRepositoriesResult } from "@mars/contracts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { dashboardMutation, getOnboardingDetail, getOnboardingRepositoryOrganization, getOnboardingStatus, getVerifiedOnboardingRepositories, invalidateDashboard, recordOnboardingVerification, selectOnboardingWorker } from "@mars/db";
+import { dashboardMutation, completeOnboardingIfReady, getOnboardingDetail, getOnboardingRepositoryOrganization, getOnboardingStatus, getVerifiedOnboardingRepositories, invalidateDashboard, recordOnboardingVerification, selectOnboardingWorker } from "@mars/db";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 
 const hasKey = (c: { req: { header(name:string): string|undefined } }) => Boolean(c.req.header("Idempotency-Key")?.trim());
@@ -44,6 +44,16 @@ export function registerOnboardingRoutes(app: Hono<ControlPlaneEnv>, deps: Contr
     if (!verified) return c.json({ code: "repository_selection_required", message: "Select at least one repository in the GitHub App installation, then verify again" }, 409);
     await invalidateDashboard(deps.db, organizationId, ["onboarding", "repositories"]);
     return c.json(VerifyOnboardingRepositoriesResult.parse({ ok: true, ...verified }));
+  });
+  app.post("/api/onboarding/skip-labels", async (c) => {
+    const user = await deps.currentUser(c.req.raw);
+    if (!user) return c.json({ code: "unauthorized", message: "Authentication required" }, 401);
+    if (!user.isGlobalAdmin) return c.json({ code: "forbidden", message: "Administrator access required" }, 403);
+    if (!hasKey(c)) return c.json({ code: "invalid_request", message: "Idempotency-Key required" }, 400);
+    if (!(await completeOnboardingIfReady(deps.db, { skipVerification: true }))) {
+      return c.json({ code: "onboarding_not_ready", message: "Create an enabled default runner pool before skipping trigger-label verification" }, 409);
+    }
+    return c.json({ ok: true });
   });
   app.post("/api/onboarding/verification", async (c) => {
     const user = await deps.currentUser(c.req.raw);

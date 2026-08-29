@@ -81,6 +81,16 @@ describe("onboarding state derivation", () => {
       : []) as never;
     expect(await completeOnboardingIfReady(db)).toBe(false);
   });
+  test("completes after an enabled default pool without verification when requested", async () => {
+    const db = (async (strings: TemplateStringsArray) => {
+      const query = strings.join(" ");
+      if (query.includes("SELECT completed_at")) return [{ completedAt: null, adminUserId: "admin", workerId: "worker", organizationId: "org", verificationPoolId: null, verificationGithubRunId: null }];
+      if (query.includes("FROM workers w")) return [{ ready: 1 }];
+      if (query.includes("UPDATE system_onboarding SET completed_at")) return [{ completed_at: new Date() }];
+      return [];
+    }) as never;
+    expect(await completeOnboardingIfReady(db, { skipVerification: true })).toBe(true);
+  });
   test("normalizes repository discovery state in onboarding detail", async () => {
     const organizationId = "00000000-0000-4000-8000-000000000002";
     const installationId = "00000000-0000-4000-8000-000000000003";
