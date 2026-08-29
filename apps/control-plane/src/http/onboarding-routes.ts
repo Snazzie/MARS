@@ -6,7 +6,29 @@ import { ensureDefaultPools } from "../default-pools.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 
 const hasKey = (c: { req: { header(name:string): string|undefined } }) => Boolean(c.req.header("Idempotency-Key")?.trim());
+const onboardingGithubFailure = (cause: unknown): string | null => {
+  const code = cause instanceof Error ? cause.message : "";
+  return ["github_app_unconfigured", "github_installation_persist_failed", "github_token_missing"].includes(code) ? code : null;
+};
 export function registerOnboardingRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
+  app.post("/api/onboarding/github/install", async (c) => {
+    const user = await deps.currentUser(c.req.raw);
+    if (!user) return c.json({ code: "unauthorized", message: "Authentication required" }, 401);
+    if (!user.isGlobalAdmin) return c.json({ code: "forbidden", message: "Administrator access required" }, 403);
+    const key = c.req.header("Idempotency-Key")?.trim();
+    if (!key) return c.json({ code: "invalid_request", message: "Idempotency-Key required" }, 400);
+    if (!deps.githubApp) return c.json({ code: "github_app_unavailable", message: "GitHub App service is unavailable" }, 503);
+    try {
+      const result = await deps.githubApp.beginUnboundInstallation(user.id, key);
+      if (result.installCookie) c.header("Set-Cookie", `github_install_state=${result.installCookie}; HttpOnly; Secure; SameSite=Lax; Path=/api/github/app; Max-Age=600`);
+      return c.json({ location: result.location });
+    } catch (cause) {
+      const code = onboardingGithubFailure(cause);
+      if (code) return c.json({ code }, 409);
+      throw cause;
+    }
+  });
+
   app.get("/api/onboarding/status", async (c) => {
     const user = await deps.currentUser(c.req.raw);
     const status = await getOnboardingStatus(deps.db, { authenticated:Boolean(user), canManage:Boolean(user?.isGlobalAdmin) }, { publicBaseUrlManaged: deps.setup.publicOriginManaged() });

@@ -9,6 +9,7 @@ const setupFailure = (cause: unknown): string | null => {
   const code = cause instanceof Error ? cause.message : "";
   return ["setup_state_expired", "github_manifest_invalid", "github_app_unconfigured", "wrong_github_account", "wrong_organization", "github_token_missing", "repository_selection_required", "github_installation_persist_failed", "github_organization_already_connected"].includes(code) ? code : null;
 };
+const clearInstallCookie = (c: { header(name: string, value: string): void }) => c.header("Set-Cookie", "github_install_state=; HttpOnly; Secure; SameSite=Lax; Path=/api/github/app; Max-Age=0");
 
 export function registerGithubRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
   app.post("/api/setup/github-app", async (c) => {
@@ -75,12 +76,12 @@ export function registerGithubRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     if (!cookie || !installationId || !deps.githubApp) return c.json({ code: "invalid_request" }, 400);
     try {
       const onboarding = await deps.githubApp.completeInstallation(user.id, cookie, installationId);
-      c.header("Set-Cookie", "github_install_state=; HttpOnly; Secure; SameSite=Lax; Path=/api/github/app; Max-Age=0");
+      clearInstallCookie(c);
       return c.redirect(browserLocation(deps.browserOrigin() ?? "", onboarding ? "/onboarding" : "/"), 302);
     } catch (cause) {
       const setupCode = setupFailure(cause);
       if (setupCode === "repository_selection_required") {
-        c.header("Set-Cookie", "github_install_state=; HttpOnly; Secure; SameSite=Lax; Path=/api/github/app; Max-Age=0");
+        clearInstallCookie(c);
         return c.redirect(browserLocation(deps.browserOrigin() ?? "", "/onboarding?github=repository-selection-required"), 302);
       }
       if (setupCode) return c.json({ code: setupCode }, 409);

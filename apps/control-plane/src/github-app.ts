@@ -1,4 +1,4 @@
-import { createHash, createPrivateKey, createSign, randomBytes } from "node:crypto";
+import { createHash, createPrivateKey, createSign, randomBytes, randomUUID } from "node:crypto";
 import type { Sql } from "@mars/db";
 import type { SecretBox } from "./auth.ts";
 import { applyWorkflowMutation, discoverWorkflowFiles, previewWorkflowMutation, type WorkflowFilePreview, type WorkflowMutation } from "./workflow-pr.ts";
@@ -7,10 +7,11 @@ type SetupState = { purpose: "oauth" | "manifest" | "install" | "organization_in
 type Installation = { organizationId: string; githubInstallationId: number; state: "pending" | "approved" | "suspended"; repositorySelection: "all" | "selected" | null; githubAccountId?: number };
 type Repository = { id: string; installationId: number; organizationId?: string; fullName: string; visibility: "private" | "internal" | "public"; available: boolean };
 type AppConfig = { id: number; slug: string; clientId?: string; pem: string; clientSecret: string; webhookSecret: string };
-type Organization = { githubOrgId: number; githubAccountType?: "User" | "Organization" };
+type Organization = { githubOrgId: number; githubAccountType?: "User" | "Organization"; login?: string };
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type SqlDatabase = Sql<{}>;
-type MemoryDatabase = { setupStates: Map<string, SetupState>; installations: Map<number, Installation>; repositories: Map<string, Repository>; appConfig?: AppConfig; organizations?: Map<string, Organization> };
+type MemoryMembership = { organizationId: string; userId: string; role: "owner" | "member" };
+type MemoryDatabase = { setupStates: Map<string, SetupState>; installations: Map<number, Installation>; repositories: Map<string, Repository>; appConfig?: AppConfig; organizations?: Map<string, Organization>; memberships?: Map<string, MemoryMembership> };
 type Database = SqlDatabase | MemoryDatabase;
 
 type SetupRow = { purpose: SetupState["purpose"]; user_id: string | null; organization_id: string | null; idempotency_key: string | null; encrypted_state: string | null; encrypted_pkce_verifier: string | null; expires_at: Date | string; consumed_at: Date | string | null };
@@ -130,6 +131,25 @@ export class GitHubAppService {
     await this.reconcileInstallationRepositories({ installation: { id: installationId }, action: "uninstalled" });
   }
 
+  async beginUnboundInstallation(userId: string, idempotencyKey: string): Promise<{ location: string; installCookie?: string }> {
+    const config = await this.getConfig();
+    if (!config) throw new Error("github_app_unconfigured");
+    if (isSql(this.db)) {
+      const rows = await this.db<SetupRow[]>`SELECT purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at FROM github_setup_states WHERE purpose='organization_install' AND user_id=${userId} AND organization_id IS NULL AND idempotency_key=${idempotencyKey} AND consumed_at IS NULL AND expires_at>now()`;
+      const state = rows[0];
+      if (state?.encrypted_state) return { location: `https://github.com/apps/${config.slug}/installations/new`, installCookie: this.box.decrypt(state.encrypted_state) };
+    } else {
+      for (const state of this.db.setupStates.values()) {
+        if (state.purpose === "organization_install" && state.userId === userId && state.organizationId === null && state.idempotencyKey === idempotencyKey && !state.consumedAt && state.expiresAt > Date.now()) {
+          return { location: `https://github.com/apps/${config.slug}/installations/new`, installCookie: this.box.decrypt(state.encryptedState!) };
+        }
+      }
+    }
+    const cookie = randomBytes(32).toString("base64url");
+    await this.saveState(cookie, { purpose: "organization_install", userId, organizationId: null, idempotencyKey, encryptedState: this.box.encrypt(cookie), expiresAt: Date.now() + 600_000 });
+    return { location: `https://github.com/apps/${config.slug}/installations/new`, installCookie: cookie };
+  }
+
   async beginInstallation(userId: string, organizationId: string, idempotencyKey: string, bindOnboarding = true, purpose: SetupState["purpose"] = "install"): Promise<{ location: string; installCookie?: string }> {
     const config = await this.getConfig();
     if (!config) throw new Error("github_app_unconfigured");
@@ -223,6 +243,35 @@ export class GitHubAppService {
     const rows = await this.db<Array<{ github_org_id: number; github_account_type?: "User" | "Organization" }>>`SELECT github_org_id, github_account_type FROM organizations WHERE id=${organizationId}`;
     return rows[0] ? { id: Number(rows[0].github_org_id), type: rows[0].github_account_type ?? "Organization" } : null;
   }
+  private async findGithubAccount(githubAccountId: number, accountType: "User" | "Organization"): Promise<{ id: string; login: string } | null> {
+    if (!isSql(this.db)) {
+      for (const [id, organization] of this.db.organizations ?? []) {
+        if (organization.githubOrgId === githubAccountId && (organization.githubAccountType ?? "Organization") === accountType) {
+          return { id, login: organization.login ?? "" };
+        }
+      }
+      return null;
+    }
+    const rows = await this.db<Array<{ id: string; login: string }>>`SELECT id, login FROM organizations WHERE github_org_id=${githubAccountId} AND github_account_type=${accountType} LIMIT 1`;
+    return rows[0] ? { id: rows[0].id, login: rows[0].login } : null;
+  }
+
+  private async createGithubOrganization(userId: string, accountId: number, accountType: "User" | "Organization", login: string): Promise<string> {
+    if (!login.trim()) throw new Error("wrong_github_account");
+    if (!isSql(this.db)) {
+      const organizationId = randomUUID();
+      if (!this.db.organizations) this.db.organizations = new Map();
+      this.db.organizations.set(organizationId, { githubOrgId: accountId, githubAccountType: accountType, login });
+      if (!this.db.memberships) this.db.memberships = new Map();
+      this.db.memberships.set(`${organizationId}:${userId}`, { organizationId, userId, role: "owner" });
+      return organizationId;
+    }
+    const rows = await this.db<Array<{ id: string }>>`INSERT INTO organizations (github_org_id,login,github_account_type) VALUES (${accountId},${login},${accountType}) ON CONFLICT (github_org_id) DO UPDATE SET login=excluded.login WHERE organizations.github_account_type=excluded.github_account_type RETURNING id`;
+    const organizationId = rows[0]?.id;
+    if (!organizationId) throw new Error("github_installation_persist_failed");
+    await this.db`INSERT INTO memberships (organization_id,user_id,role) VALUES (${organizationId},${userId},'owner') ON CONFLICT (organization_id,user_id) DO UPDATE SET role='owner'`;
+    return organizationId;
+  }
 
   private async persistInstallation(organizationId: string, installationId: number, state: Installation["state"], repositorySelection: Installation["repositorySelection"], githubAccountId: number, repos: Repository[]): Promise<string> {
     if (!isSql(this.db)) {
@@ -241,22 +290,33 @@ export class GitHubAppService {
     const pending = await this.findState(installCookie);
     if (!pending || !["install", "organization_install"].includes(pending.purpose) || pending.userId !== userId || pending.consumedAt || pending.expiresAt < Date.now()) throw new Error("setup_state_expired");
     const accountInfo = await this.gh(`/app/installations/${installationId}`, {}, await this.appJwt());
-    const account = accountInfo.account && typeof accountInfo.account === "object" ? accountInfo.account as { type?: unknown; id?: unknown } : {};
+    const account = accountInfo.account && typeof accountInfo.account === "object" ? accountInfo.account as { type?: unknown; id?: unknown; login?: unknown } : {};
     const accountId = typeof account.id === "number" ? account.id : Number(account.id);
-    const expected = await this.organizationGithubAccount(pending.organizationId ?? "");
-    const accountType = account.type === "User" || account.type === "Organization" ? account.type : "Organization";
-    if (!expected || !Number.isSafeInteger(accountId) || accountType !== expected.type || accountId !== expected.id) throw new Error(accountType === "Organization" ? "wrong_organization" : "wrong_github_account");
-    const setup = await this.consume(installCookie, userId, pending.purpose);
+    const accountType = account.type === "User" || account.type === "Organization" ? account.type : null;
+    const mismatchCode = accountType === "User" ? "wrong_github_account" : "wrong_organization";
+    let organizationId: string;
+    if (pending.organizationId !== null) {
+      const expected = await this.organizationGithubAccount(pending.organizationId);
+      if (!expected || !Number.isSafeInteger(accountId) || accountId <= 0 || !accountType || accountType !== expected.type || accountId !== expected.id) throw new Error(mismatchCode);
+      organizationId = pending.organizationId;
+    } else {
+      if (!Number.isSafeInteger(accountId) || accountId <= 0 || !accountType) throw new Error("wrong_github_account");
+      const existing = await this.findGithubAccount(accountId, accountType);
+      organizationId = existing?.id ?? await this.createGithubOrganization(userId, accountId, accountType, typeof account.login === "string" ? account.login : "");
+    }
     const token = await this.gh(`/app/installations/${installationId}/access_tokens`, { method: "POST" }, await this.appJwt());
     const accessToken = typeof token.token === "string" ? token.token : "";
     if (!accessToken) throw new Error("github_token_missing");
+ 
     const reposResponse = await this.installationRepositories(accessToken);
     const repositorySelection = accountInfo.repository_selection === "all" || reposResponse.repositorySelection === "all" ? "all" : "selected";
     const repos = reposResponse.repositories.map((value) => ({ id: String(value.id), installationId, fullName: value.full_name, visibility: visibilityOf(value), available: true } satisfies Repository));
     const hasAllowed = repos.length > 0;
-    await this.persistInstallation(setup.organizationId!, installationId, hasAllowed ? "approved" : "pending", repositorySelection, accountId, repos);
-    if (setup.purpose === "install" && isSql(this.db)) await this.db`UPDATE system_onboarding SET organization_id=${setup.organizationId} WHERE singleton=true AND admin_user_id=${userId}`;
-    if (hasAllowed) return setup.purpose === "install";
+    await this.persistInstallation(organizationId, installationId, hasAllowed ? "approved" : "pending", repositorySelection, accountId, repos);
+    const setup = await this.consume(installCookie, userId, pending.purpose);
+    const onboarding = setup.purpose === "install" || setup.organizationId === null;
+    if (onboarding && isSql(this.db)) await this.db`UPDATE system_onboarding SET organization_id=${organizationId} WHERE singleton=true AND admin_user_id=${userId}`;
+    if (hasAllowed) return onboarding;
     throw new Error("repository_selection_required");
   }
 

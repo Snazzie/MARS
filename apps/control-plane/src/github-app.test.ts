@@ -6,19 +6,30 @@ import { GitHubAppService } from "./github-app.ts";
 const masterKey = Buffer.alloc(32, 7).toString("base64");
 const organizationId = "11111111-1111-4111-8111-111111111111";
 const testPem = generateKeyPairSync("rsa", { modulusLength: 2048, privateKeyEncoding: { type: "pkcs8", format: "pem" }, publicKeyEncoding: { type: "spki", format: "pem" } }).privateKey;
-const fakeDb: { setupStates: Map<string, unknown>; installations: Map<number, unknown>; repositories: Map<string, unknown>; organizations?: Map<string, { githubOrgId: number }>; appConfig?: { id: number; slug: string; pem: string; clientSecret: string; webhookSecret: string } } = {
+const fakeDb: {
+  setupStates: Map<string, unknown>;
+  installations: Map<number, unknown>;
+  repositories: Map<string, unknown>;
+  organizations?: Map<string, { githubOrgId: number; githubAccountType?: "User" | "Organization"; login?: string }>;
+  memberships?: Map<string, { organizationId: string; userId: string; role: "owner" | "member" }>;
+  appConfig?: { id: number; slug: string; pem: string; clientSecret: string; webhookSecret: string };
+} = {
   setupStates: new Map(),
   installations: new Map(),
   repositories: new Map(),
   organizations: new Map(),
+  memberships: new Map(),
 };
 
 function resetDb() {
   fakeDb.setupStates.clear();
   fakeDb.installations.clear();
   fakeDb.repositories.clear();
+  fakeDb.organizations?.clear();
+  fakeDb.memberships?.clear();
   delete fakeDb.appConfig;
 }
+
 
 function service(fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
   resetDb();
@@ -68,6 +79,38 @@ describe("GitHub App onboarding", () => {
     const github = service(async () => Response.json({}));
     await expect(github.beginInstallation("admin-1", organizationId, "install-key")).rejects.toThrow("github_app_unconfigured");
   });
+  test("starts an unbound onboarding installation", async () => {
+    const github = service(async () => Response.json({}));
+    fakeDb.appConfig = { id: 9, slug: "mars", pem: "encrypted", clientSecret: "encrypted", webhookSecret: "encrypted" };
+
+    const launch = await github.beginUnboundInstallation("admin-1", "unbound-key");
+
+    expect(launch.location).toContain("/installations/new");
+    const state = [...fakeDb.setupStates.values()][0] as { organizationId: string | null; purpose: string };
+    expect(state).toMatchObject({ organizationId: null, purpose: "organization_install" });
+  });
+
+  test("resolves an unbound installation by immutable account identity", async () => {
+    const github = service(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/app/installations/42")) return Response.json({ account: { id: 123, type: "Organization", login: "speedhq" } });
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/installation/repositories")) return Response.json({ repository_selection: "selected", repositories: [{ id: 8, full_name: "speedhq/private", visibility: "private" }] });
+      return Response.json({});
+    });
+    fakeDb.appConfig = { id: 9, slug: "mars", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "y" };
+
+    const launch = await github.beginUnboundInstallation("admin-1", "unbound-resolution-key");
+    await expect(github.completeInstallation("admin-1", launch.installCookie!, 42)).resolves.toBe(true);
+
+    const [resolvedOrganizationId, organization] = [...fakeDb.organizations!.entries()][0]!;
+    expect(organization).toMatchObject({ githubOrgId: 123, githubAccountType: "Organization", login: "speedhq" });
+    expect(fakeDb.memberships?.get(`${resolvedOrganizationId}:admin-1`)).toEqual({ organizationId: resolvedOrganizationId, userId: "admin-1", role: "owner" });
+    expect(fakeDb.installations.get(42)).toMatchObject({ organizationId: resolvedOrganizationId, githubAccountId: 123, state: "approved" });
+    expect(fakeDb.repositories.get("8")).toMatchObject({ organizationId: resolvedOrganizationId, fullName: "speedhq/private" });
+    expect([...fakeDb.setupStates.values()][0]).toMatchObject({ consumedAt: expect.any(Number) });
+  });
+
 
   test("uses a public webhook tunnel without changing browser callback URLs", async () => {
     const github = new GitHubAppService({

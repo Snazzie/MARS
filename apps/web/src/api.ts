@@ -307,6 +307,13 @@ export async function startOnboardingVerification(input: StartOnboardingVerifica
     body: JSON.stringify(input),
   });
 }
+export async function beginUnboundOnboardingGithubInstall() {
+  return request("/api/onboarding/github/install", DashboardLocationResponse, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: "{}",
+  });
+}
 export async function beginOnboardingGithubInstall(input: { organizationId: string }) {
   return request(`/api/github/app/install`, DashboardLocationResponse, {
     method: "POST",

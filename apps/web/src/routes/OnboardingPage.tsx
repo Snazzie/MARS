@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { beginControlPlaneSetup, beginOnboardingGithubInstall, beginOnboardingGithubManifest, getOnboardingDetail, getOnboardingStatus, getRunnerWorkflowFiles, rejectPendingWorker, selectOnboardingWorker, skipOnboardingLabels, startOnboardingVerification, verifyOnboardingRepositories } from "../api.ts";
+import { beginControlPlaneSetup, beginOnboardingGithubInstall, beginOnboardingGithubManifest, beginUnboundOnboardingGithubInstall, getOnboardingDetail, getOnboardingStatus, getRunnerWorkflowFiles, rejectPendingWorker, selectOnboardingWorker, skipOnboardingLabels, startOnboardingVerification, verifyOnboardingRepositories } from "../api.ts";
 import { EnrollmentPanel } from "../components/EnrollmentPanel.tsx";
 import { pendingWorkerQueryOptions } from "../components/PendingWorkerRequests.tsx";
 import { RunnerWorkflowPrModal } from "../components/RunnerWorkflowPrModal.tsx";
@@ -28,6 +28,7 @@ export function OnboardingPage() {
   const [viewStep, setViewStep] = useState<number | null>(null);
   const refresh = () => { void client.invalidateQueries({ queryKey: ["onboarding"] }); void client.invalidateQueries({ queryKey: ["onboarding-status"] }); };
   const skipLabels = useMutation({ mutationFn: skipOnboardingLabels, onSuccess: refresh, onError: (e) => setError(e instanceof Error ? e.message : "Could not continue to the dashboard") });
+  const select = useMutation({ mutationFn: selectOnboardingWorker, onSuccess: refresh, onError: (e) => setError(e instanceof Error ? e.message : "Could not select worker") });
   if (status.isLoading) return <main className="onboarding"><p>Loading onboarding…</p></main>;
   if (status.error || !s) return <main className="onboarding"><h1>Onboarding unavailable</h1><p role="alert">{status.error instanceof Error ? status.error.message : "Could not load onboarding."}</p><button onClick={() => void status.refetch()}>Retry</button></main>;
   if (s.step === "setup") return <SetupCard status={s} />;
@@ -126,18 +127,32 @@ function GithubStep({ detail }: { detail: OnboardingDetail }) {
       setConnectError(cause instanceof Error ? cause.message : "GitHub App setup failed");
     }
   };
+  const installUnbound = async () => {
+    setConnectError(null);
+    try {
+      const result = await beginUnboundOnboardingGithubInstall();
+      window.location.assign(result.location);
+    } catch (cause) {
+      setConnectError(cause instanceof Error ? cause.message : "GitHub App setup failed");
+    }
+  };
   return <div>
     <h3>Connect GitHub account</h3>
-    {!hasInstallation && <>
+    {!hasInstallation && !detail.github.appConfigured && <>
       <p>Choose the GitHub account where Mars should run jobs. These are accounts available to your signed-in GitHub user, not existing Mars App installations.</p>
-      {!detail.github.appConfigured && <p>Mars will create a GitHub App for this control plane before installing it in the selected account.</p>}
+      <p>Mars will create a GitHub App for this control plane before installing it in the selected account.</p>
       <label>GitHub account
         <select aria-label="GitHub account" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
           <option value="">Select account</option>
           {detail.organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
         </select>
       </label>
-      <button type="button" disabled={!organizationId} onClick={() => void connect()}>{detail.github.appConfigured ? "Install Mars GitHub App" : "Create Mars GitHub App"}</button>
+      <button type="button" disabled={!organizationId} onClick={() => void connect()}>Create Mars GitHub App</button>
+      {connectError && <p role="alert" className="form-error">{connectError}</p>}
+    </>}
+    {!hasInstallation && detail.github.appConfigured && <>
+      <p>GitHub will ask which account or organization should receive the Mars App.</p>
+      <button type="button" onClick={() => void installUnbound()}>Install Mars GitHub App</button>
       {connectError && <p role="alert" className="form-error">{connectError}</p>}
     </>}
     {hasInstallation && !hasUsableInstallation && <>

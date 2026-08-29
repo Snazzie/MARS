@@ -58,7 +58,6 @@ test("DB-managed public origin seeds the editable field from the browser origin"
     expect(html).not.toContain('value="https://stale.example.com"');
     expect(html).not.toMatch(/readonly(?:="")?/i);
   } finally {
-    // @ts-expect-error Restore the test environment's prior browser global.
     globalThis.window = previousWindow;
   }
 });
@@ -129,7 +128,8 @@ test("admin and sign-in states expose the appropriate GitHub action", () => {
 
 test("renders four-step progress with only the server current step enabled", () => {
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "github", worker, organizations: [], github: { appConfigured: true, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "a".repeat(64) });
-  expect(html).toContain("GitHub account");
+  expect(html).toContain("GitHub will ask which account or organization should receive the Mars App.");
+  expect(html).not.toContain('aria-label="GitHub account"');
   expect(html).toContain(">Back</button>");
 });
 test("worker step renders enrollment inline and requires explicit selection", () => {
@@ -179,6 +179,54 @@ test("repository selection remediation explains the GitHub setting and permits r
     Reflect.deleteProperty(globalThis, "window");
   }
 });
+test("launches the GitHub account picker for an unbound installation", async () => {
+  const browser = new Window({ url: "http://localhost/onboarding" });
+  const previousDocument = globalThis.document;
+  const previousWindow = globalThis.window;
+  const previousFetch = globalThis.fetch;
+  let assignedLocation: string | null = null;
+  Object.defineProperty(browser.location, "assign", { configurable: true, value: (location: string) => { assignedLocation = location; } });
+  // @ts-expect-error Happy DOM provides the browser globals React needs.
+  globalThis.document = browser.document;
+  // @ts-expect-error Happy DOM provides the browser global React needs.
+  globalThis.window = browser;
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const requests: Array<{ path: string; init?: RequestInit }> = [];
+  globalThis.fetch = (async (input, init) => {
+    requests.push({ path: String(input), init });
+    return Response.json({ location: "https://github.com/apps/mars/installations/new" });
+  }) as typeof globalThis.fetch;
+  const detail = { version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "github", worker, organizations: [], github: { appConfigured: true, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: null };
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  client.setQueryData(["onboarding-status"], detail);
+  client.setQueryData(["onboarding"], detail);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => { root.render(<QueryClientProvider client={client}><OnboardingPage /></QueryClientProvider>); });
+    expect(container.querySelector('select[aria-label="GitHub account"]')).toBeNull();
+    const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find((candidate) => candidate.textContent?.includes("Install Mars GitHub App"));
+    expect(button).not.toBeUndefined();
+    await act(async () => {
+      button!.click();
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, 0);
+      await promise;
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.path).toBe("/api/onboarding/github/install");
+    expect(new Headers(requests[0]?.init?.headers).get("Idempotency-Key")).toBeTruthy();
+    expect(assignedLocation as string | null).toBe("https://github.com/apps/mars/installations/new");
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+    globalThis.fetch = previousFetch;
+    globalThis.document = previousDocument;
+    globalThis.window = previousWindow;
+  }
+});
+
 test("registers an unconfigured GitHub App through the manifest flow", async () => {
   const browser = new Window({ url: "http://localhost/onboarding" });
   const previousDocument = globalThis.document;

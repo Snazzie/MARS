@@ -430,6 +430,59 @@ describe("control-plane HTTP boundary", () => {
     });
     expect(response.status).toBe(401);
   });
+  test("starts an unbound GitHub installation from onboarding", async () => {
+    let requestedUser = "";
+    let requestedKey = "";
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+      githubApp: {
+        beginUnboundInstallation: async (userId: string, key: string) => {
+          requestedUser = userId;
+          requestedKey = key;
+          return { location: "https://github.com/apps/mars/installations/new", installCookie: "state-cookie" };
+        },
+      } as never,
+    })).request("/api/onboarding/github/install", {
+      method: "POST",
+      headers: { "Idempotency-Key": "unbound-install" },
+    });
+    expect(response.status).toBe(200);
+    expect(requestedUser).toBe("admin");
+    expect(requestedKey).toBe("unbound-install");
+    expect(await response.json()).toEqual({ location: "https://github.com/apps/mars/installations/new" });
+    expect(response.headers.get("set-cookie")).toContain("github_install_state=state-cookie");
+  });
+
+  test("protects unbound GitHub installation launch", async () => {
+    const missingAuth = await createControlPlaneApp(fakeHttpDeps()).request("/api/onboarding/github/install", { method: "POST", headers: { "Idempotency-Key": "key" } });
+    expect(missingAuth.status).toBe(401);
+    const forbidden = await createControlPlaneApp(fakeHttpDeps({
+      currentUser: async () => ({ id: "member", githubUserId: 2, login: "member", isGlobalAdmin: false }),
+    })).request("/api/onboarding/github/install", { method: "POST", headers: { "Idempotency-Key": "key" } });
+    expect(forbidden.status).toBe(403);
+    const missingKey = await createControlPlaneApp(fakeHttpDeps({
+      currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+    })).request("/api/onboarding/github/install", { method: "POST" });
+    expect(missingKey.status).toBe(400);
+
+    const unavailable = await createControlPlaneApp(fakeHttpDeps({
+      currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+      githubApp: undefined,
+    })).request("/api/onboarding/github/install", { method: "POST", headers: { "Idempotency-Key": "key" } });
+    expect(unavailable.status).toBe(503);
+  });
+  test("preserves the install cookie when a bound callback rejects the GitHub account", async () => {
+    const response = await createControlPlaneApp(fakeHttpDeps({
+      currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+      githubApp: { completeInstallation: async () => { throw new Error("wrong_organization"); } } as never,
+    })).request("/api/github/app/setup?installation_id=42&setup_action=install", {
+      headers: { Cookie: "github_install_state=bound-state" },
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ code: "wrong_organization" });
+    expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
 
   test("rejects GitHub setup callbacks for missing or replayed install state", async () => {
     const first = await createControlPlaneApp(fakeHttpDeps()).request(
