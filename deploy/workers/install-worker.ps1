@@ -129,7 +129,15 @@ function Assert-HostPreflight {
   if ([int]$os.BuildNumber -lt 26100) { throw 'Windows 11 24H2 (build 26100 or newer) is required.' }
   if (-not [Environment]::Is64BitOperatingSystem) { throw 'Windows x64 is required.' }
   $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
-  if (-not $cpu.VirtualizationFirmwareEnabled -or -not $cpu.SecondLevelAddressTranslationExtensions) { throw 'hardware virtualization is required.' }
+  $computerSystem = Get-CimInstance Win32_ComputerSystem
+  $firmwareVirtualizationEnabled = [bool]$cpu.VirtualizationFirmwareEnabled
+  $hypervisorPresent = [bool]$computerSystem.HypervisorPresent
+  # When Windows is already running under Hyper-V, Win32_Processor can report
+  # SLAT/VM monitor support as false for the nested virtual CPU. Firmware
+  # virtualization remains a required host capability in either case.
+  if (-not $firmwareVirtualizationEnabled -or (-not $hypervisorPresent -and -not [bool]$cpu.SecondLevelAddressTranslationExtensions)) {
+    throw 'hardware virtualization is required.'
+  }
   $localHttp = $ControlPlaneUrl -match '^http://(localhost|127\.0\.0\.1)(:\d+)?$'
   if ($ControlPlaneUrl -notmatch '^https://' -and -not $localHttp -and -not $AllowInsecureHttp) { throw 'Control-plane URL must use HTTPS.' }
   Invoke-WebRequest -Uri "$ControlPlaneUrl/api/healthz" -Method Get -UseBasicParsing -TimeoutSec 30 | Out-Null

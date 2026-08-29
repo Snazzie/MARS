@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const root = join(import.meta.dir, "..");
 const linux = join(root, "deploy/workers/install-worker.sh");
@@ -11,12 +13,63 @@ const prepareWindowsTemplate = join(root, "deploy/workers/prepare-windows-hyperv
 const valid = "A".repeat(43);
 const posixRuntimeTest = process.platform === "win32" ? test.skip : test;
 const macosRuntimeTest = process.platform === "darwin" ? test : test.skip;
+const windowsRuntimeTest = process.platform === "win32" ? test : test.skip;
 
 async function invoke(script: string, args: string[], env: Record<string, string> = {}) {
   const proc = Bun.spawn(script.endsWith(".sh") ? [script, ...args] : ["zsh", script, ...args], {
     cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, ...env },
   });
   return { exitCode: await proc.exited, stdout: await new Response(proc.stdout).text(), stderr: await new Response(proc.stderr).text() };
+}
+
+async function invokeWindowsPreflight(source: string, scenario: "active-hypervisor" | "missing-firmware") {
+  const tempDir = await mkdtemp(join(tmpdir(), "mars-installer-preflight-"));
+  const scriptPath = join(tempDir, "preflight.ps1");
+  const functionSource = source.slice(0, source.indexOf("\nWrite-Host '[1/8]"));
+  const virtualizationFirmwareEnabled = scenario === "active-hypervisor" ? "$true" : "$false";
+  const hypervisorPresent = scenario === "active-hypervisor" ? "$true" : "$false";
+  const script = `${functionSource}
+$mockCpu = [pscustomobject]@{
+  VirtualizationFirmwareEnabled = ${virtualizationFirmwareEnabled}
+  SecondLevelAddressTranslationExtensions = $false
+  VMMonitorModeExtensions = $false
+}
+$mockComputerSystem = [pscustomobject]@{ HypervisorPresent = ${hypervisorPresent} }
+function Get-CimInstance([string]$ClassName) {
+  switch ($ClassName) {
+    'Win32_OperatingSystem' { return [pscustomobject]@{ Caption = 'Microsoft Windows 11 Pro'; BuildNumber = '26100' } }
+    'Win32_Processor' { return $mockCpu }
+    'Win32_ComputerSystem' { return $mockComputerSystem }
+    default { throw "Unexpected CIM class: $ClassName" }
+  }
+}
+function Invoke-WebRequest { return [pscustomobject]@{} }
+$ControlPlaneUrl = 'https://control.example'
+$JoinCode = ('A' * 43)
+try {
+  Assert-HostPreflight
+  Write-Output 'PREFLIGHT_OK'
+  exit 0
+} catch {
+  Write-Error $_
+  exit 1
+}
+`;
+  await Bun.write(scriptPath, script);
+  try {
+    const proc = Bun.spawn(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath], {
+      cwd: root,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return {
+      exitCode: await proc.exited,
+      stdout: await new Response(proc.stdout).text(),
+      stderr: await new Response(proc.stderr).text(),
+    };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 }
 
 for (const [script, runtimeTest] of [[linux, posixRuntimeTest], [mac, macosRuntimeTest]] as const) {
@@ -50,6 +103,24 @@ test("POSIX installers expose strict parser and stdin handoff", async () => {
   expect(await Bun.file(linux).text()).toContain("parse_args");
   expect(await Bun.file(mac).text()).toContain("--code");
   expect(await Bun.file(linux).text()).toContain("code=sys.stdin.readline()");
+});
+
+windowsRuntimeTest("Windows preflight trusts active hypervisor capability over false nested WMI flags", async () => {
+  const source = await Bun.file(powershell).text();
+  const activeHypervisor = await invokeWindowsPreflight(source, "active-hypervisor");
+  expect(activeHypervisor.exitCode).toBe(0);
+  expect(activeHypervisor.stdout).toContain("PREFLIGHT_OK");
+
+  const missingFirmware = await invokeWindowsPreflight(source, "missing-firmware");
+  expect(missingFirmware.exitCode).toBe(1);
+  expect(missingFirmware.stderr).toContain("hardware virtualization is required.");
+});
+
+test("PowerShell host preflight checks authoritative hypervisor state", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).toContain("Win32_ComputerSystem");
+  expect(source).toContain("HypervisorPresent");
+  expect(source).toContain("VirtualizationFirmwareEnabled");
 });
 test("macOS installer configures Tart sudo capability without switching to root", async () => {
   const source = await Bun.file(mac).text();
