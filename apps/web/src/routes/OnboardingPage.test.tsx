@@ -111,6 +111,10 @@ test("trigger-label setup is automatic and exposes the generated label", () => {
   expect(html).not.toContain("Skip label setup");
   expect(html).toContain("Preparing the default runner pool");
 });
+test("trigger-label setup can continue to the dashboard without verification", () => {
+  const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "labels", worker, organizations: [], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [] }, pool: { id: "pool-1", name: "default", triggerLabel: "mars-linux-x64", labels: ["mars-linux-x64"] }, verification: { state: "idle", repositoryId: null, poolId: null, workflowPath: null, githubRunId: null, runId: null, error: null }, defaultImageDigest: "ubuntu@sha256:" + "a".repeat(64) });
+  expect(html).toContain("Continue to dashboard");
+});
 test("completed onboarding steps are informational and navigation uses Back and Next", () => {
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "worker", worker: { ...worker, configurationState: "unconfigured" }, organizations: [], github: { appConfigured: true, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: "ubuntu@sha256:" + "a".repeat(64) });
   expect(html).not.toContain("aria-label=\"Edit");

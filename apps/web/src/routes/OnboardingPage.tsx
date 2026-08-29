@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { beginControlPlaneSetup, beginOnboardingGithubInstall, beginOnboardingGithubManifest, getOnboardingDetail, getOnboardingStatus, getRunnerWorkflowFiles, rejectPendingWorker, selectOnboardingWorker, startOnboardingVerification, verifyOnboardingRepositories } from "../api.ts";
+import { beginControlPlaneSetup, beginOnboardingGithubInstall, beginOnboardingGithubManifest, getOnboardingDetail, getOnboardingStatus, getRunnerWorkflowFiles, rejectPendingWorker, selectOnboardingWorker, skipOnboardingLabels, startOnboardingVerification, verifyOnboardingRepositories } from "../api.ts";
 import { EnrollmentPanel } from "../components/EnrollmentPanel.tsx";
 import { pendingWorkerQueryOptions } from "../components/PendingWorkerRequests.tsx";
 import { RunnerWorkflowPrModal } from "../components/RunnerWorkflowPrModal.tsx";
@@ -27,7 +27,7 @@ export function OnboardingPage() {
   const [error, setError] = useState<string | null>(null);
   const [viewStep, setViewStep] = useState<number | null>(null);
   const refresh = () => { void client.invalidateQueries({ queryKey: ["onboarding"] }); void client.invalidateQueries({ queryKey: ["onboarding-status"] }); };
-  const select = useMutation({ mutationFn: selectOnboardingWorker, onSuccess: refresh, onError: (e) => setError(e instanceof Error ? e.message : "Worker selection failed") });
+  const skipLabels = useMutation({ mutationFn: skipOnboardingLabels, onSuccess: refresh, onError: (e) => setError(e instanceof Error ? e.message : "Could not continue to the dashboard") });
   if (status.isLoading) return <main className="onboarding"><p>Loading onboarding…</p></main>;
   if (status.error || !s) return <main className="onboarding"><h1>Onboarding unavailable</h1><p role="alert">{status.error instanceof Error ? status.error.message : "Could not load onboarding."}</p><button onClick={() => void status.refetch()}>Retry</button></main>;
   if (s.step === "setup") return <SetupCard status={s} />;
@@ -39,12 +39,12 @@ export function OnboardingPage() {
   const currentIndex = steps.findIndex(([id]) => id === d.step);
   const activeStep = viewStep ?? currentIndex;
   const viewingPastStep = activeStep < currentIndex;
-  return <main className="onboarding"><header><p className="eyebrow">FIRST-RUN SETUP</p><h1>Get Mars ready</h1><p>Complete each verified step. Progress is saved on the control plane.</p></header>{error && <p role="alert" className="form-error">{error} <button onClick={() => setError(null)}>Dismiss</button></p>}<div className="onboarding-layout"><nav aria-label="Onboarding steps"><ol className="onboarding-steps">{steps.map(([id, label], index) => <li key={id} className={index === activeStep ? "is-current" : index < currentIndex ? "is-complete" : "is-locked"}><span>{index + 1}</span><strong>{label}</strong></li>)}</ol></nav><section className="onboarding-task" aria-live="polite"><h2>{steps[activeStep]?.[1]}</h2>{activeStep === 0 ? <p>Administrator account is configured.</p> : <EditableStep detail={d} index={activeStep} onDone={() => { refresh(); setViewStep(null); }} onDiscard={() => { refresh(); setViewStep(null); }} onSelect={(id) => select.mutate({ workerId: id })} />}{activeStep > 0 && <div className="onboarding-navigation"><button type="button" onClick={() => setViewStep(Math.max(0, activeStep - 1))} disabled={activeStep === 0}>Back</button><button type="button" onClick={() => setViewStep(Math.min(currentIndex, activeStep + 1))} disabled={!viewingPastStep}>Next</button></div>}</section></div></main>;
+  return <main className="onboarding"><header><p className="eyebrow">FIRST-RUN SETUP</p><h1>Get Mars ready</h1><p>Complete each verified step. Progress is saved on the control plane.</p></header>{error && <p role="alert" className="form-error">{error} <button onClick={() => setError(null)}>Dismiss</button></p>}<div className="onboarding-layout"><nav aria-label="Onboarding steps"><ol className="onboarding-steps">{steps.map(([id, label], index) => <li key={id} className={index === activeStep ? "is-current" : index < currentIndex ? "is-complete" : "is-locked"}><span>{index + 1}</span><strong>{label}</strong></li>)}</ol></nav><section className="onboarding-task" aria-live="polite"><h2>{steps[activeStep]?.[1]}</h2>{activeStep === 0 ? <p>Administrator account is configured.</p> : <EditableStep detail={d} index={activeStep} onDone={() => { refresh(); setViewStep(null); }} onDiscard={() => { refresh(); setViewStep(null); }} onSelect={(id) => select.mutate({ workerId: id })} onSkip={() => skipLabels.mutate()} />}{activeStep > 0 && <div className="onboarding-navigation"><button type="button" onClick={() => setViewStep(Math.max(0, activeStep - 1))} disabled={activeStep === 0}>Back</button><button type="button" onClick={() => setViewStep(Math.min(currentIndex, activeStep + 1))} disabled={!viewingPastStep}>Next</button></div>}</section></div></main>;
 }
-function EditableStep({ detail, index, onDone, onDiscard, onSelect }: { detail: OnboardingDetail; index: number; onDone: () => void; onDiscard: () => void; onSelect: (id: string) => void }) {
+function EditableStep({ detail, index, onDone, onDiscard, onSelect, onSkip }: { detail: OnboardingDetail; index: number; onDone: () => void; onDiscard: () => void; onSelect: (id: string) => void; onSkip: () => void }) {
   if (index === 1) return <GithubStep detail={detail} />;
   if (index === 3) return <WorkerSetupStep detail={detail} edit onSelect={onSelect} onDone={onDone} onDiscard={onDiscard} />;
-  if (index === 4) return <LabelsStep detail={detail} />;
+  if (index === 4) return <LabelsStep detail={detail} onSkip={onSkip} />;
   return <p>Administrator account is configured.</p>;
 }
 function ResourceStep({ detail, onDone, onDiscard, edit = false }: { detail: OnboardingDetail; onDone: () => void; onDiscard?: () => void; edit?: boolean }) { const w = detail.worker; if (!w) return <p>Select a worker first.</p>; return <><h3>Configure resources</h3>{w.configurationState === "ready" && !edit ? <p role="status">Configuring worker complete. Waiting for server progress…</p> : <WorkerConfigurationForm worker={w} onConfigured={onDone} onDiscard={onDiscard} />}</>; }
@@ -158,8 +158,8 @@ function WorkerSetupStep({ detail, onSelect, onDone, onDiscard, edit = false }: 
   return <div><h3>Worker enrollment</h3><p>Selected worker: {detail.worker.name ?? detail.worker.vmUuid}</p>{detail.worker.admissionState === "pending" && onDiscard && <button type="button" onClick={() => { if (window.confirm("Discard this pending worker and generate a new installation?")) discard.mutate(detail.worker!.id); }} disabled={discard.isPending}>Discard and reinstall</button>}{discard.error && <p role="alert">{discard.error instanceof Error ? discard.error.message : "Could not discard the pending worker."}</p>}<ResourceStep detail={detail} onDone={onDone} onDiscard={onDiscard} edit={edit} /></div>;
 }
 const canonicalRunnerLabel = (platform: "linux-x64" | "windows-x64" | "macos-arm64") => `mars-${platform}`;
-function LabelsStep({ detail }: { detail: OnboardingDetail }) {
-  if (detail.pool) return <OnboardingVerificationStep detail={detail} />;
+function LabelsStep({ detail, onSkip }: { detail: OnboardingDetail; onSkip: () => void }) {
+  if (detail.pool) return <div><OnboardingVerificationStep detail={detail} /><button type="button" onClick={onSkip}>Continue to dashboard</button></div>;
   const platforms = detail.worker?.guestPlatforms ?? (detail.worker ? [detail.worker.platform] : []);
   const labels = platforms.map((platform) => canonicalRunnerLabel(platform));
   return <div><h3>Trigger labels</h3><p role="status">Preparing the default runner pool for all configured workers…</p><p>Generated runner labels: <code>{labels.join(", ")}</code></p><pre>runs-on: {labels.join(", ")}</pre></div>;
