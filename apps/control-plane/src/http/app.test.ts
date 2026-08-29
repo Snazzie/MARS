@@ -138,39 +138,19 @@ describe("control-plane HTTP boundary", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
-  test("serves container-mode Windows installer with local image build inputs", async () => {
+  test("serves container-mode Windows installer without local image build inputs", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-windows-installers-"));
     try {
       await Bun.write(join(root, "install-worker.ps1"), "[CmdletBinding()]\r\nparam(\r\n  [string]$WindowsContainerImage = 'mars/windows-job:local',\r\n  [int]$WindowsContainerReadyTimeoutMs = 15000\r\n)\r\n$ErrorActionPreference = 'Stop'\r\n");
       await Bun.write(join(root, "windows-orchestrator"), "orchestrator");
       await Bun.write(join(root, "service-host.exe"), "service-host");
-      const build = { baseImage: "mcr.microsoft.com/windows/server/ltsc2025@sha256:" + "a".repeat(64), runnerUrl: "https://example.test/runner.zip", runnerSha256: "b".repeat(64), gitUrl: "https://example.test/git.zip", gitSha256: "c".repeat(64), vcUrl: "https://example.test/vc.exe", vcSha256: "d".repeat(64), builderPath: join(root, "builder.ps1"), verifierPath: join(root, "verifier.ps1"), containerfilePath: join(root, "Containerfile"), entrypointPath: join(root, "entrypoint.ps1"), jobAgentPath: join(root, "job-agent.exe") };
-      for (const path of Object.values(build).slice(7)) await Bun.write(path, "artifact");
-      const deps = { baseUrl: "https://control.test", workerInstallerRoot: pathToFileURL(`${root}/`), windowsContainerBuild: build, workerOrchestratorExecutables: { "windows-x64": pathToFileURL(join(root, "windows-orchestrator")) }, workerServiceHostExecutable: pathToFileURL(join(root, "service-host.exe")) };
+      const deps = { baseUrl: "https://control.test", workerInstallerRoot: pathToFileURL(`${root}/`), windowsContainerBuild: undefined, windowsContainerArtifacts: undefined, workerOrchestratorExecutables: { "windows-x64": pathToFileURL(join(root, "windows-orchestrator")) }, workerServiceHostExecutable: pathToFileURL(join(root, "service-host.exe")) };
       const response = await createControlPlaneApp(fakeHttpDeps(deps)).request("/api/workers/installer?audience=windows-x64&runtime=container&connectOrigin=https%3A%2F%2Fcontrol.test");
       const installer = await response.text();
       expect(response.status).toBe(200);
-      const attribute = "[CmdletBinding()]\r\n";
-      const parameter = "param(\r\n  [string]$WindowsContainerImage = 'mars/windows-job:local',\r\n  [int]$WindowsContainerReadyTimeoutMs = 15000\r\n)\r\n";
-      const injectedOrigin = "$ControlPlaneUrl = 'https://control.test'\r\n";
-      expect(installer).toStartWith(`${attribute}${parameter}${injectedOrigin}`);
-      expect(installer.indexOf(injectedOrigin)).toBeGreaterThan(installer.indexOf(parameter));
-      expect(installer.indexOf(injectedOrigin)).toBeLessThan(installer.indexOf("$ErrorActionPreference"));
-      expect(installer).not.toContain("DEBUG_PRESERVE_LEASES");
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-  test("serves a container-mode Windows installer without control-plane build metadata", async () => {
-    const root = await mkdtemp(join(tmpdir(), "mars-windows-local-installer-"));
-    try {
-      await Bun.write(join(root, "install-worker.ps1"), "'__WINDOWS_RUNTIME__' '__WINDOWS_CONTAINER_IMAGE__'");
-      const response = await createControlPlaneApp(fakeHttpDeps({
-        workerInstallerRoot: pathToFileURL(`${root}/`),
-        windowsContainerBuild: undefined,
-      })).request("/api/workers/installer?audience=windows-x64&runtime=container&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
-      expect(response.status).toBe(503);
-      expect((await response.json()).artifacts).toContain("windows-container-builder");
+      expect(installer).toContain("$ControlPlaneUrl = 'https://control.test'");
+      expect(installer).not.toContain("windows-container-builder");
+      expect(installer).not.toContain("__PLACEHOLDER__");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

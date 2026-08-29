@@ -233,7 +233,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
             await emitActionCacheSnapshot(cacheService, (type, payload) => {
               if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(event(identity.workerId, type, payload)));
             });
-            return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
+            return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: await capacity() } }));
           }
           if (frame.type === "ping") { ws.send("pong"); return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: await capacity() } })); }
           if (frame.type === "doctor_ack") return;

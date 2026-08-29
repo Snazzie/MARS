@@ -25,7 +25,9 @@ async function invoke(script: string, args: string[], env: Record<string, string
 async function invokeWindowsPreflight(source: string, scenario: "active-hypervisor" | "missing-firmware" | "bare-metal-no-slat") {
   const tempDir = await mkdtemp(join(tmpdir(), "mars-installer-preflight-"));
   const scriptPath = join(tempDir, "preflight.ps1");
-  const functionSource = source.slice(0, source.indexOf("\nWrite-Host '[1/8]"));
+  const stageMarker = source.match(/\nWrite-Host '\[1\/\d+\]/)?.[0];
+  if (!stageMarker) throw new Error("installer stage marker not found");
+  const functionSource = source.slice(0, source.indexOf(stageMarker));
   const virtualizationFirmwareEnabled = scenario === "missing-firmware" ? "$false" : "$true";
   const hypervisorPresent = scenario === "active-hypervisor" ? "$true" : "$false";
   const script = `${functionSource}
@@ -71,6 +73,94 @@ try {
     await rm(tempDir, { recursive: true, force: true });
   }
 }
+async function invokeWindowsInstallerHarness(source: string, body: string) {
+  const tempDir = await mkdtemp(join(tmpdir(), "mars-installer-credentials-"));
+  const scriptPath = join(tempDir, "harness.ps1");
+  const stageMarker = source.match(/\nWrite-Host '\[1\/\d+\]/)?.[0];
+  if (!stageMarker) throw new Error("installer stage marker not found");
+  const functionSource = source.slice(0, source.indexOf(stageMarker));
+  await Bun.write(scriptPath, `${functionSource}
+${body}
+`);
+  try {
+    const proc = Bun.spawn(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath], {
+      cwd: root,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return {
+      exitCode: await proc.exited,
+      stdout: await new Response(proc.stdout).text(),
+      stderr: await new Response(proc.stderr).text(),
+    };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+windowsRuntimeTest("Windows installer replaces identity only for non-upgrade installs", async () => {
+  const source = await Bun.file(powershell).text();
+  const result = await invokeWindowsInstallerHarness(source, `
+$dir = Join-Path $env:TEMP ('mars-credential-' + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $dir | Out-Null
+$identityPath = Join-Path $dir 'worker-identity.json'
+$identity = '{"workerId":"worker-123","machineUuid":"machine-456"}'
+[IO.File]::WriteAllText($identityPath, $identity)
+Reset-WorkerIdentity $identityPath $false
+if (Test-Path -LiteralPath $identityPath) { throw 'fresh install preserved worker identity' }
+[IO.File]::WriteAllText($identityPath, $identity)
+Reset-WorkerIdentity $identityPath $true
+if (-not (Test-Path -LiteralPath $identityPath)) { throw 'upgrade removed worker identity' }
+Write-Output 'IDENTITY_SEMANTICS_OK'
+`);
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("IDENTITY_SEMANTICS_OK");
+});
+
+windowsRuntimeTest("Windows installer preserves resume and upgrade credential semantics", async () => {
+  const source = await Bun.file(powershell).text();
+  const result = await invokeWindowsInstallerHarness(source, `
+$dir = Join-Path $env:TEMP ('mars-credential-' + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $dir | Out-Null
+$joinPath = Join-Path $dir 'join-code'
+$resumeCode = 'C' * 43
+[IO.File]::WriteAllText($joinPath, $resumeCode)
+function icacls.exe { $global:LASTEXITCODE = 0 }
+Set-WorkerJoinCredential $joinPath $resumeCode
+if ((Get-Content -LiteralPath $joinPath -Raw).Trim() -ne $resumeCode) { throw 'resume credential changed' }
+$Upgrade = $true
+if (-not $Upgrade) { Set-WorkerJoinCredential $joinPath ('D' * 43) }
+if ((Get-Content -LiteralPath $joinPath -Raw).Trim() -ne $resumeCode) { throw 'upgrade replaced credential state' }
+Write-Output 'CREDENTIAL_SEMANTICS_OK'
+`);
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("CREDENTIAL_SEMANTICS_OK");
+});
+
+windowsRuntimeTest("Windows installer waits for worker enrollment and rejects stopped or invalid workers", async () => {
+  const source = await Bun.file(powershell).text();
+  const result = await invokeWindowsInstallerHarness(source, `
+$dir = Join-Path $env:TEMP ('mars-enrollment-' + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $dir | Out-Null
+$identityPath = Join-Path $dir 'worker-identity.json'
+function Get-Service([string]$Name, [string]$ErrorAction) {
+  if ($global:mockServiceStatus -eq 'missing') { return $null }
+  return [pscustomobject]@{ Status = $global:mockServiceStatus }
+}
+$global:mockServiceStatus = 'Running'
+[IO.File]::WriteAllText($identityPath, '{"workerId":"worker-123"}')
+$global:mockServiceStatus = 'missing'
+try { Wait-WorkerEnrollment $identityPath 1; throw 'missing service was accepted' } catch { if ($_.Exception.Message -notmatch 'stopped before enrollment completed') { throw } }
+$global:mockServiceStatus = 'Stopped'
+try { Wait-WorkerEnrollment $identityPath 1; throw 'stopped service was accepted' } catch { if ($_.Exception.Message -notmatch 'stopped before enrollment completed') { throw } }
+$global:mockServiceStatus = 'Running'
+[IO.File]::WriteAllText($identityPath, '{"workerId":""}')
+try { Wait-WorkerEnrollment $identityPath 0; throw 'missing workerId was accepted' } catch { if ($_.Exception.Message -notmatch 'did not enroll within 0 seconds') { throw } }
+Write-Output 'ENROLLMENT_WAIT_OK'
+`);
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("ENROLLMENT_WAIT_OK");
+});
 
 for (const [script, runtimeTest] of [[linux, posixRuntimeTest], [mac, macosRuntimeTest]] as const) {
   runtimeTest(`${script} rejects missing or malformed code before host checks`, async () => {
@@ -182,12 +272,13 @@ test("PowerShell installer supports VM and container runtime modes", async () =>
   expect(source).toContain("ValidateSet('vm','container')");
   expect(source).toContain("Ensure-HyperV");
   expect(source).toContain("Ensure-ContainerFeatures");
-  expect(source).toContain("Ensure-WindowsContainerRuntime");
+  expect(source).toContain("Assert-WindowsContainerHost");
   expect(source).toContain("MARS_WINDOWS_RUNTIME");
   expect(source).toContain("MARS_WINDOWS_CONTAINER_IMAGE");
   expect(source).toContain("MARS_WINDOWS_TEMPLATE_PATH");
-  expect(source).not.toContain("Remove-Item -LiteralPath $identityPath -Force");
+  expect(source).toContain("Reset-WorkerIdentity $identityPath $false");
   expect(source).toContain("preserving identity and resuming checkpoints");
+  expect(source).toContain("replacing identity and runtime for a fresh enrollment");
   expect(source).toContain("Stop-Service MarsWorker");
   expect(source).toContain("New-Service -Name MarsWorker");
   expect(source).toContain("-StartupType Automatic");
@@ -286,35 +377,78 @@ test("Windows installer replaces duplicate worker cache firewall rules with one 
 test("Windows installer restricts only the join credential, not the template root", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).not.toContain("$acl.SetAccessRuleProtection");
-  expect(source).toContain("icacls.exe $joinCodePath /inheritance:r");
+  expect(source).toContain("function Set-WorkerJoinCredential");
+  expect(source).toContain("icacls.exe $Path /inheritance:r");
   expect(source).toContain("Failed to secure worker join credential");
 });
-test("Windows installer supports Docker mode with a fail-closed runtime probe", async () => {
+test("Windows installer validates artifacts before container prerequisites without building an image", async () => {
   const source = await Bun.file(powershell).text();
-  expect(source).toContain("Ensure-WindowsContainerRuntime");
-  expect(source).toContain("--isolation=hyperv");
-  expect(source).toContain("verify-runtime.ps1");
-  expect(source).toContain("-RequireNetwork");
-  expect(source).toContain("docker wait");
-  expect(source).toContain("docker logs");
-  expect(source).toContain("2000");
-  expect(source).toContain("MARS_WINDOWS_RUNTIME");
-  expect(source).toContain("MARS_WINDOWS_TEMPLATE_PATH");
+  const main = source.slice(source.indexOf("Write-Host '[1/"), source.indexOf("Write-Host '[7/"));
+  expect(source).toContain("Assert-WindowsContainerHost");
+  expect(source).not.toContain("Build-LocalWindowsImage");
+  expect(source).not.toContain("Ensure-WindowsContainerRuntime");
+  expect(source).not.toContain("docker create");
+  expect(source).not.toContain("docker wait");
+  expect(source).not.toContain("docker logs");
+  expect(main.indexOf("Verify-DownloadedFile")).toBeGreaterThanOrEqual(0);
+  expect(main.indexOf("Verify-DownloadedFile")).toBeLessThan(main.indexOf("Install-DockerDesktop"));
+  expect(main.indexOf("Set-WorkerJoinCredential")).toBeGreaterThan(main.lastIndexOf("Verify-DownloadedFile"));
+  expect(source).toContain("MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST");
+  expect(source).toContain("MARS_ALLOW_LOCAL_CONTAINER_IMAGE=true");
+});
+test("Windows installer uses seven ordered progress stages", async () => {
+  const source = await Bun.file(powershell).text();
+  for (const stage of [
+    "[1/7] Checking administrator privileges",
+    "[2/7] Checking Windows 11 Pro/Enterprise 24H2 x64 host",
+    "[3/7] Checking control-plane connectivity and validating worker artifacts",
+    "[4/7] Checking container runtime and installing prerequisites",
+    "[5/7] Preparing worker replacement",
+    "[6/7] Registering LocalSystem worker service",
+    "[7/7] Starting worker service and waiting for enrollment",
+  ]) expect(source).toContain(stage);
+});
+test("Windows installer removes obsolete image-build parameters", async () => {
+  const source = await Bun.file(powershell).text();
+  for (const name of [
+    "WindowsContainerBaseImage", "WindowsContainerRunnerUrl", "WindowsContainerRunnerSha256",
+    "WindowsContainerGitUrl", "WindowsContainerGitSha256", "WindowsContainerVcUrl",
+    "WindowsContainerVcSha256", "WindowsContainerBuilderUrl", "WindowsContainerVerifierUrl",
+    "WindowsContainerfileUrl", "WindowsContainerEntrypointUrl", "WindowsContainerJobAgentUrl",
+  ]) expect(source).not.toContain(`$${name}`);
+});
+test("Windows installer preserves runtime environment for deferred image build", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).toContain("Assert-ImageDigest $WindowsContainerImage");
+  expect(source).toContain("Install-DockerDesktop");
+  expect(source).toContain("Switch-DockerWindowsEngine");
+  expect(source).toContain("Assert-WindowsContainerHost");
+  expect(source).toContain("MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST=$windowsImageManifestPath");
 });
 test("Windows installer exposes identity-preserving upgrade mode", async () => {
   const source = await Bun.file(powershell).text();
   expect(source).toContain("[switch]$Upgrade");
+  expect(source).toContain("[switch]$Resume");
   expect(source).toContain("Upgrade requires an existing worker identity.");
   expect(source).toContain("if ($Upgrade -and -not $existingService)");
   expect(source).toContain("if (-not $Upgrade) {");
 });
-test("Windows container upgrades reuse the existing verified image", async () => {
+test("Windows fresh replacement clears identity and image manifest after prerequisites", async () => {
   const source = await Bun.file(powershell).text();
-  expect(source).toContain("if ($Upgrade) {");
-  expect(source).toContain("Assert-LocalImageManifest $windowsImageManifestPath $WindowsContainerImage");
-  expect(source).toContain("Ensure-WindowsContainerRuntime $WindowsContainerImage $WindowsContainerPrefix");
-  expect(source).toContain("elseif ($AllowLocalContainerImage -and (Test-Path -LiteralPath $windowsImageManifestPath))");
-  expect(source).toContain("Existing local Windows image state is stale; rebuilding");
+  const prerequisites = source.indexOf("Write-State 'prerequisites'");
+  const reset = source.indexOf("Reset-WorkerIdentity $identityPath $false");
+  const removeManifest = source.indexOf("Remove-Item -LiteralPath $windowsImageManifestPath");
+  const serviceRemoval = source.indexOf("Stop-Service MarsWorker");
+  expect(prerequisites).toBeGreaterThanOrEqual(0);
+  expect(reset).toBeGreaterThan(prerequisites);
+  expect(removeManifest).toBeGreaterThan(prerequisites);
+  expect(reset).toBeLessThan(serviceRemoval);
+  expect(removeManifest).toBeLessThan(serviceRemoval);
+});
+test("Windows installer does not require image-build metadata", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).not.toContain("WindowsContainerBaseImage");
+  expect(source).not.toContain("WindowsContainerBuilderUrl");
 });
 test("Windows guest service runs as a startup-available system service account task", async () => {
   const source = await Bun.file(prepareWindowsTemplate).text();

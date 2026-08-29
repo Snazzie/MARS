@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { initializeDatabase, resolveWebhookOrigin } from "./index.ts";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { initializeDatabase, configureErrorFileLogging, resolveWebhookOrigin } from "./index.ts";
 
 test("requires an explicit webhook origin at startup", () => {
   const previous = Bun.env.GITHUB_WEBHOOK_URL;
@@ -33,7 +36,23 @@ test("initializes the database only after ensuring it exists", async () => {
   expect(result).toBe(db);
   expect(calls).toEqual([
     "ensure:postgres://user:password@db.example/mars",
+
     "create:postgres://user:password@db.example/mars",
     "migrate:true",
   ]);
+});
+
+test("writes console errors to the configured control-plane log", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mars-control-plane-log-"));
+  const originalError = console.error;
+  try {
+    const logPath = configureErrorFileLogging(directory);
+    console.error("pending worker failed", new Error("capacity missing"));
+    const content = await readFile(logPath, "utf8");
+    expect(content).toContain("pending worker failed");
+    expect(content).toContain("capacity missing");
+  } finally {
+    console.error = originalError;
+    await rm(directory, { recursive: true, force: true });
+  }
 });

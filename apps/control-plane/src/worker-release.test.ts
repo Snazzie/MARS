@@ -46,8 +46,6 @@ test("loads a usable Windows release from local development artifacts", async ()
       container: { baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}` },
     });
     expect(manifest.platforms["windows-x64"]?.orchestratorSha256).not.toBe(hash);
-    const values = windowsInstallerValues(manifest.platforms["windows-x64"]!, "http://localhost:3000");
-    expect(values.WindowsContainerBaseImage).toBe(`mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}`);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

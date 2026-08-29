@@ -18,11 +18,29 @@ import type { ControlPlaneHttpDeps } from "./http/types.ts";
 import type { ControlPlaneSetup } from "./control-plane-setup.ts";
 import { ensureDefaultPools } from "./default-pools.ts";
 import { GithubRateLimitGate } from "./github-rate-limit.ts";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { initializeControlPlaneSetup } from "./control-plane-setup.ts";
 import { httpOrigin, publicHttpOrigin } from "./http-origin.ts";
 import { loadWorkerReleaseManifest, type DevelopmentWorkerRelease } from "./worker-release.ts";
 import { createControlPlaneGateway, type ControlPlaneSocketData } from "./control-plane-gateway.ts";
+
+export function configureErrorFileLogging(dataRoot: string): string {
+  const logDirectory = `${dataRoot.replace(/[\\/]+$/, "")}/logs`;
+  mkdirSync(logDirectory, { recursive: true });
+  const logPath = `${logDirectory}/control-plane-error.log`;
+  const originalError = console.error.bind(console);
+  console.error = (...args: unknown[]) => {
+    originalError(...args);
+    try {
+      const message = args.map(value => value instanceof Error ? value.stack ?? value.message : typeof value === "string" ? value : JSON.stringify(value)).join(" ");
+      appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`, "utf8");
+    } catch {
+      // Logging must not hide the original control-plane error.
+    }
+  };
+  return logPath;
+}
 
 export function resolveWebhookOrigin(raw: string | undefined = Bun.env.GITHUB_WEBHOOK_URL): string {
   if (!raw?.trim()) throw new Error("GITHUB_WEBHOOK_URL is required");
@@ -241,4 +259,12 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   return { server, gateway, httpApp, db, setup: initialized.setup };
 }
 
-if (import.meta.main) await startControlPlane();
+if (import.meta.main) {
+  configureErrorFileLogging(Bun.env.DATA_ROOT?.trim() || "/var/lib/mars");
+  try {
+    await startControlPlane();
+  } catch (error) {
+    console.error("Control plane startup failed", error);
+    process.exitCode = 1;
+  }
+}

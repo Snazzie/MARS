@@ -69,6 +69,26 @@ test("pending worker DTO ignores database-only columns", () => {
   });
 });
 
+test("pending worker DTO fails closed when legacy telemetry lacks capacity", () => {
+  const row = {
+    id: "00000000-0000-0000-0000-000000000003",
+    platform: "windows-x64" as const,
+    admissionState: "pending",
+    connectionState: "offline",
+    configurationState: "unconfigured",
+    publicKey: "ed25519-public",
+    fingerprint: "fingerprint",
+    vmUuid: "00000000-0000-0000-0000-000000000001",
+    machineUuid: "00000000-0000-0000-0000-000000000002",
+    limits: null,
+    doctor: { probe: true },
+  };
+  expect(pendingWorkerDto(row)).toMatchObject({
+    capacity: { actualVcpu: 0, actualMemoryBytes: 0, actualStorageBytes: 0, freeVcpu: 0, freeMemoryBytes: 0, freeStorageBytes: 0 },
+    doctor: { probe: true },
+  });
+});
+
 test("reused machine identity is not an exact reconnect", () => {
   const row = { vmUuid: "vm-original", machineUuid: "machine-original", fingerprint: "fp-original" };
   expect(matchesWorkerIdentity(row, { vmUuid: "vm-new", machineUuid: "machine-original" }, "fp-new")).toBe(false);

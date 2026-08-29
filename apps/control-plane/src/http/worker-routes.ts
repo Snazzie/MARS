@@ -114,18 +114,6 @@ export function windowsInstallerValues(platform: WindowsWorkerRelease, connectOr
     WindowsTemplatePath: "C:\\ProgramData\\Mars\\worker-template.vhdx",
     WindowsTemplateDigest: `sha256:${platform.vmTemplateSha256}`,
     WindowsContainerImage: "mars/windows-job:local",
-    WindowsContainerBaseImage: platform.container.baseImage,
-    WindowsContainerRunnerUrl: platform.container.runner.url,
-    WindowsContainerRunnerSha256: platform.container.runner.sha256,
-    WindowsContainerGitUrl: platform.container.git.url,
-    WindowsContainerGitSha256: platform.container.git.sha256,
-    WindowsContainerVcUrl: platform.container.vcRuntime.url,
-    WindowsContainerVcSha256: platform.container.vcRuntime.sha256,
-    WindowsContainerBuilderUrl: `${connectOrigin}/api/workers/windows-container-builder`,
-    WindowsContainerVerifierUrl: `${connectOrigin}/api/workers/windows-container-verifier`,
-    WindowsContainerfileUrl: `${connectOrigin}/api/workers/windows-containerfile`,
-    WindowsContainerEntrypointUrl: `${connectOrigin}/api/workers/windows-container-entrypoint`,
-    WindowsContainerJobAgentUrl: `${connectOrigin}/api/workers/windows-container-job-agent`,
   };
 }
 
@@ -152,17 +140,6 @@ function installerArtifacts(deps: ControlPlaneHttpDeps, audience: string, runtim
         ? ["orchestratorSha256", "serviceHostSha256", "vmTemplateUrl", "vmTemplateSha256"]
         : ["orchestratorSha256", "tartImage", "tartImageDigest"];
     for (const field of fields) if (!hasValue((platform as unknown as Record<string, unknown>)[field])) missing.push(releaseField(audience, field));
-    if (audience === "windows-x64" && runtime === "container") {
-      const container = (platform as WindowsWorkerRelease).container as unknown as Record<string, unknown> | undefined;
-      for (const field of ["baseImage", "runner", "git", "vcRuntime"]) {
-        if (!container?.[field]) missing.push(releaseField(audience, `container.${field}`));
-      }
-      for (const [name, value] of [["runner", container?.runner], ["git", container?.git], ["vcRuntime", container?.vcRuntime]] as const) {
-        const asset = value as { url?: unknown; sha256?: unknown } | undefined;
-        if (!hasValue(asset?.url)) missing.push(releaseField(audience, `container.${name}.url`));
-        if (!hasValue(asset?.sha256)) missing.push(releaseField(audience, `container.${name}.sha256`));
-      }
-    }
     const installerName = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : "install-worker-macos.sh";
     if (!await artifactExists(pathFor(deps.workerInstallerRoot, installerName))) missing.push(`installer:${installerName}`);
     const executable = deps.workerOrchestratorExecutables?.[audience as keyof NonNullable<ControlPlaneHttpDeps["workerOrchestratorExecutables"]>] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined);
@@ -171,14 +148,6 @@ function installerArtifacts(deps: ControlPlaneHttpDeps, audience: string, runtim
     if (audience === "linux-x64") {
       if (!await artifactExists(pathFor(deps.workerInstallerRoot, "linux-broker-compose.yaml"))) missing.push("linux-broker-compose");
       if (!await artifactExists(pathFor(deps.workerInstallerRoot, "worker-domain.xml"))) missing.push("linux-domain-template");
-    } else if (audience === "windows-x64" && runtime === "container") {
-      const files = deps.windowsContainerArtifacts ?? deps.windowsContainerBuild;
-      const artifactNames: Array<[keyof NonNullable<typeof deps.windowsContainerArtifacts>, string]> = [
-        ["builderPath", "windows-container-builder"], ["verifierPath", "windows-container-verifier"],
-        ["containerfilePath", "windows-containerfile"], ["entrypointPath", "windows-container-entrypoint"],
-        ["jobAgentPath", "windows-container-job-agent"],
-      ];
-      for (const [key, name] of artifactNames) if (!await artifactExists(files?.[key])) missing.push(name);
     }
     return missing;
   })();
@@ -197,9 +166,20 @@ async function packagedResponse(path: ArtifactPath, filename: string, hash: stri
 function releaseField(platform: string, field: string): string { return `manifest:${platform}.${field}`; }
 export function pendingWorkerDto(row: Record<string, unknown>, workerConnected?: (workerId: string) => boolean) {
   if (!hasMachineIdentity(row) || typeof row.id !== "string" || typeof row.fingerprint !== "string") return null;
-  const telemetry = (row.doctor && typeof row.doctor === "object" ? row.doctor : {}) as Record<string, unknown>;
+  const rawTelemetry = (row.doctor && typeof row.doctor === "object" ? row.doctor : {}) as Record<string, unknown>;
+  const telemetry = "doctor" in rawTelemetry || "capacity" in rawTelemetry ? rawTelemetry : { doctor: rawTelemetry, capacity: {} };
   const rawGuestPlatforms = typeof row.guestPlatforms === "string" ? (() => { try { return JSON.parse(row.guestPlatforms); } catch { return null; } })() : row.guestPlatforms;
   const guestPlatforms = Array.isArray(rawGuestPlatforms) ? rawGuestPlatforms : row.platform === "windows-x64" ? ["windows-x64"] : [row.platform];
+  const capacity = telemetry.capacity && typeof telemetry.capacity === "object" ? telemetry.capacity : {};
+  const normalizedCapacity = {
+    actualVcpu: 0,
+    actualMemoryBytes: 0,
+    actualStorageBytes: 0,
+    freeVcpu: 0,
+    freeMemoryBytes: 0,
+    freeStorageBytes: 0,
+    ...capacity as Record<string, unknown>,
+  };
   const pending = PendingWorkerRequest.parse({
     platform: row.platform,
     guestPlatforms,
@@ -211,7 +191,7 @@ export function pendingWorkerDto(row: Record<string, unknown>, workerConnected?:
     machineUuid: row.machineUuid,
     limits: row.limits,
     doctor: telemetry.doctor ?? {},
-    capacity: telemetry.capacity ?? {},
+    capacity: normalizedCapacity,
   });
   return { id: row.id, fingerprint: row.fingerprint, ...pending };
 }

@@ -90,7 +90,18 @@ export async function getOnboardingDetail(
   `);
   let worker: OnboardingWorker | null = null;
   if (selectedRow) {
-    const telemetry = objectValue(selectedRow.doctor);
+    const rawTelemetry = objectValue(selectedRow.doctor);
+    const telemetry = "doctor" in rawTelemetry || "capacity" in rawTelemetry ? rawTelemetry : { doctor: rawTelemetry, capacity: {} };
+    const rawCapacity = telemetry.capacity && typeof telemetry.capacity === "object" && !Array.isArray(telemetry.capacity) ? telemetry.capacity as Record<string, unknown> : {};
+    const capacity = {
+      actualVcpu: 0,
+      actualMemoryBytes: 0,
+      actualStorageBytes: 0,
+      freeVcpu: 0,
+      freeMemoryBytes: 0,
+      freeStorageBytes: 0,
+      ...rawCapacity,
+    };
     worker = {
       id: String(selectedRow.id), name: String(selectedRow.name), platform: selectedRow.platform as OnboardingWorker["platform"],
       guestPlatforms: Array.isArray(selectedRow.guestPlatforms) ? selectedRow.guestPlatforms as OnboardingWorker["guestPlatforms"] : [selectedRow.platform as OnboardingWorker["platform"]],
@@ -100,7 +111,7 @@ export async function getOnboardingDetail(
       publicKey: String(selectedRow.publicKey ?? ""), fingerprint: String(selectedRow.fingerprint ?? ""),
       vmUuid: String(selectedRow.vmUuid ?? ""), machineUuid: String(selectedRow.machineUuid ?? ""),
       doctor: objectValue(telemetry.doctor) as OnboardingWorker["doctor"],
-      capacity: objectValue(telemetry.capacity) as OnboardingWorker["capacity"],
+      capacity: capacity as OnboardingWorker["capacity"],
       limits: nullableObjectValue(selectedRow.limits) as OnboardingWorker["limits"],
       configurationRevision: stringValue(selectedRow.configurationRevision),
     };
