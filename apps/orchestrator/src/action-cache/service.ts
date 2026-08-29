@@ -506,9 +506,10 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
       catch (error) { console.error("Action cache sweep failed", error instanceof Error ? error.message : String(error)); }
     }, 60_000);
     const certificateAuthority = await loadOrCreateCertificateAuthority(store);
-    const advertiseHost = network.overrideOrigins
+    const resolvedAdvertiseHost = network.overrideOrigins
       ? normalizedHostname(new URL(network.overrideOrigins.cacheBaseUrl))
       : await retryControlPlaneOperation("action-cache route discovery", () => (options.discoverAdvertiseHost ?? discoverActionCacheAdvertiseHost)(controlPlane));
+    const advertiseHost = resolvedAdvertiseHost === "::1" ? "127.0.0.1" : resolvedAdvertiseHost;
     await certificateAuthority.issueLeaf("results-receiver.actions.githubusercontent.com", now());
     const dataCertificate = await certificateAuthority.issueLeaf(advertiseHost, now(), INTERCEPTED_CACHE_HOSTS);
     let handleCacheRequest: NodeActionCacheHandler | null = null;

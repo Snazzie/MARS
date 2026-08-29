@@ -157,6 +157,22 @@ test("keeps startup alive while route discovery is temporarily unavailable", asy
   expect(service.status().ready).toBe(true);
   expect(attempts).toBe(2);
 });
+test("normalizes IPv6 loopback discovery to the IPv4 listener", async () => {
+  const service = await startActionCacheService({
+    root: await root(),
+    controlPlaneOrigin: "https://control.example.test",
+    ttlSeconds: 3600,
+    proxyPort: 0,
+    dataPort: 0,
+    discoverAdvertiseHost: async () => "::1",
+  });
+  services.push(service);
+  const status = service.status();
+  expect(status.ready).toBe(true);
+  expect(status.proxyOrigin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+  expect(status.cacheBaseUrl).toMatch(/^https:\/\/127\.0\.0\.1:\d+$/);
+  expect(await probeHttps(status.cacheBaseUrl, service.transport("11111111-1111-4111-8111-111111111111", leaseExpiry()).caCertificatePem)).toBe(200);
+});
 
 
 
