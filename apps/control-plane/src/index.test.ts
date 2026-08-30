@@ -266,6 +266,44 @@ test("resolves Linux repository artifacts and macOS build artifacts independentl
   }
 });
 
+test("resolves complete macOS development artifacts from local Tart environment values", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-local-tart-artifacts-"));
+  const orchestrator = join(root, "mars-orchestrator");
+  const digest = "d".repeat(64);
+  try {
+    await Bun.write(orchestrator, "local-macos-orchestrator");
+    const artifacts = await resolveDevelopmentMacosArtifacts({
+      NODE_ENV: "development",
+      MARS_MACOS_ORCHESTRATOR_PATH: orchestrator,
+      MARS_TART_BASE_IMAGE: "mars-macos-dev",
+      MARS_TART_IMAGE_DIGEST: `ghcr.io/whitesmith/mars-macos:dev@sha256:${digest}`,
+    });
+
+    expect(artifacts).toEqual({
+      orchestrator: {
+        path: orchestrator,
+        sha256: createHash("sha256").update("local-macos-orchestrator").digest("hex"),
+      },
+      tartImage: "mars-macos-dev",
+      tartImageDigest: digest,
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  "D".repeat(64),
+  `sha256:${"D".repeat(64)}`,
+  `mars-macos-dev@sha256:${"D".repeat(64)}`,
+  `mars-macos-dev@sha256:${"d".repeat(63)}`,
+])("rejects invalid development Tart digest %s", async digest => {
+  expect(await resolveDevelopmentMacosArtifacts({
+    NODE_ENV: "development",
+    MARS_TART_IMAGE_DIGEST: digest,
+  })).toBeUndefined();
+});
+
 test("keeps missing Linux and macOS development artifacts platform-local", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-independent-platform-artifacts-"));
   const orchestrator = join(root, "mars-orchestrator");

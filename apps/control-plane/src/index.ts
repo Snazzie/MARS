@@ -174,8 +174,8 @@ export async function resolveDevelopmentWindowsArtifacts(environment: Developmen
 }
 
 const developmentDigest = (environment: DevelopmentEnvironment, names: string[]): string | undefined => {
-  const digest = trimmedEnvironmentValue(environment, names)?.replace(/^sha256:/, "").toLowerCase();
-  return digest && /^[0-9a-f]{64}$/.test(digest) ? digest : undefined;
+  const match = trimmedEnvironmentValue(environment, names)?.match(/^(?:[^@\s]+@sha256:|sha256:)?([0-9a-f]{64})$/);
+  return match?.[1];
 };
 
 export async function resolveDevelopmentLinuxArtifacts(environment: DevelopmentEnvironment = Bun.env): Promise<DevelopmentLinuxArtifacts | undefined> {
