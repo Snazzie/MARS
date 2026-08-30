@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { enqueueWorkerMessage } from "./control-plane-gateway.ts";
 
 const gatewaySource = await Bun.file(new URL("./control-plane-gateway.ts", import.meta.url)).text();
 
@@ -15,4 +15,30 @@ test("workers answer heartbeat pings with JSON frames", async () => {
     const source = await Bun.file(new URL(path, import.meta.url)).text();
     expect(source).toContain('ws.send(JSON.stringify({ version: 1, type: "pong", workerId: identity.workerId }))');
   }
+});
+
+test("serializes worker frames on one socket", async () => {
+  const tails = new WeakMap<object, Promise<void>>();
+  const socket = {};
+  const order: string[] = [];
+  let releaseFirst!: () => void;
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const first = new Promise<void>((resolve) => { releaseFirst = resolve; });
+
+  const firstRun = enqueueWorkerMessage(tails, socket, async () => {
+    order.push("begin");
+    markStarted();
+    await first;
+    order.push("begin-done");
+  });
+  const secondRun = enqueueWorkerMessage(tails, socket, async () => {
+    order.push("end");
+  });
+
+  await started;
+  expect(order).toEqual(["begin"]);
+  releaseFirst();
+  await Promise.all([firstRun, secondRun]);
+  expect(order).toEqual(["begin", "begin-done", "end"]);
 });
