@@ -20,6 +20,7 @@ import type { ControlPlaneSetup } from "./control-plane-setup.ts";
 import { ensureDefaultPools } from "./default-pools.ts";
 import { GithubRateLimitGate } from "./github-rate-limit.ts";
 import { appendFileSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { initializeControlPlaneSetup } from "./control-plane-setup.ts";
 import { httpOrigin, publicHttpOrigin } from "./http-origin.ts";
@@ -119,6 +120,49 @@ export function createDevelopmentWindowsArtifacts(environment: DevelopmentEnviro
     ["MARS_WINDOWS_CONTAINER_VC_URL"],
     ["MARS_WINDOWS_CONTAINER_VC_SHA256"],
   );
+  const baseImage = trimmedEnvironmentValue(environment, ["MARS_WINDOWS_CONTAINER_BASE_IMAGE"]);
+  if (!orchestrator || !serviceHost || !template || !runner || !git || !vcRuntime || !baseImage) return undefined;
+  return { orchestrator, serviceHost, template, container: { baseImage, runner, git, vcRuntime } };
+}
+
+const developmentDefaultArtifactPaths = {
+  orchestrator: "../../../apps/orchestrator/dist/mars-orchestrator.exe",
+  serviceHost: "../../../apps/windows-service-host/target/release/mars-service-host.exe",
+} as const;
+
+const localArtifactSha256 = async (path: string): Promise<string | undefined> => {
+  const file = Bun.file(path);
+  if (!await file.exists()) return undefined;
+  return createHash("sha256").update(Buffer.from(await file.arrayBuffer())).digest("hex");
+};
+
+const resolveDevelopmentArtifact = async (
+  environment: DevelopmentEnvironment,
+  paths: string[],
+  urls: string[],
+  hashes: string[],
+  fallbackPath?: string,
+): Promise<DevelopmentWindowsArtifact | undefined> => {
+  const configuredPath = trimmedEnvironmentValue(environment, paths);
+  const url = trimmedEnvironmentValue(environment, urls);
+  const path = configuredPath ?? (!url && fallbackPath ? fileURLToPath(new URL(fallbackPath, import.meta.url)) : undefined);
+  if (path && !await Bun.file(path).exists()) return undefined;
+  const configuredHash = trimmedEnvironmentValue(environment, hashes)?.replace(/^sha256:/, "");
+  const sha256 = configuredHash ?? (path ? await localArtifactSha256(path) : undefined);
+  if ((url && !developmentArtifactUrl(url)) || (!path && !url) || !sha256 || !/^[0-9a-f]{64}$/.test(sha256)) return undefined;
+  return { ...(path ? { path } : {}), ...(url ? { url } : {}), sha256 };
+};
+
+export async function resolveDevelopmentWindowsArtifacts(environment: DevelopmentEnvironment = Bun.env): Promise<DevelopmentWindowsArtifacts | undefined> {
+  if (environment.NODE_ENV === "production") return undefined;
+  const [orchestrator, serviceHost, template, runner, git, vcRuntime] = await Promise.all([
+    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_ORCHESTRATOR_PATH", "WORKER_ORCHESTRATOR_WINDOWS_X64"], ["MARS_WINDOWS_ORCHESTRATOR_URL"], ["MARS_WINDOWS_ORCHESTRATOR_SHA256", "WORKER_ORCHESTRATOR_WINDOWS_X64_SHA256"], developmentDefaultArtifactPaths.orchestrator),
+    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_SERVICE_HOST_PATH", "WORKER_SERVICE_HOST_EXECUTABLE"], ["MARS_WINDOWS_SERVICE_HOST_URL"], ["MARS_WINDOWS_SERVICE_HOST_SHA256", "WORKER_SERVICE_HOST_SHA256"], developmentDefaultArtifactPaths.serviceHost),
+    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_TEMPLATE_PATH"], ["MARS_WINDOWS_TEMPLATE_URL"], ["MARS_WINDOWS_TEMPLATE_SHA256", "MARS_WINDOWS_TEMPLATE_DIGEST"]),
+    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_RUNNER_PATH"], ["MARS_WINDOWS_CONTAINER_RUNNER_URL"], ["MARS_WINDOWS_CONTAINER_RUNNER_SHA256"]),
+    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_GIT_PATH"], ["MARS_WINDOWS_CONTAINER_GIT_URL"], ["MARS_WINDOWS_CONTAINER_GIT_SHA256"]),
+    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_VC_PATH"], ["MARS_WINDOWS_CONTAINER_VC_URL"], ["MARS_WINDOWS_CONTAINER_VC_SHA256"]),
+  ]);
   const baseImage = trimmedEnvironmentValue(environment, ["MARS_WINDOWS_CONTAINER_BASE_IMAGE"]);
   if (!orchestrator || !serviceHost || !template || !runner || !git || !vcRuntime || !baseImage) return undefined;
   return { orchestrator, serviceHost, template, container: { baseImage, runner, git, vcRuntime } };
@@ -235,8 +279,8 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
     return Object.values(artifacts).every(Boolean) ? artifacts as NonNullable<ControlPlaneHttpDeps["windowsContainerArtifacts"]> : undefined;
   };
   const windowsContainerArtifacts = loadWindowsContainerArtifacts();
-  const developmentWindowsArtifacts = createDevelopmentWindowsArtifacts(Bun.env);
-  const workerReleaseManifest = options.workerReleaseManifest ?? (production ? await loadWorkerReleaseManifest() : undefined);
+  const developmentWindowsArtifacts = await resolveDevelopmentWindowsArtifacts(Bun.env);
+  const workerReleaseManifest = production ? options.workerReleaseManifest ?? await loadWorkerReleaseManifest() : undefined;
   if (production && !options.skipArtifactChecks) {
     const requiredReleaseArtifacts = {
       webIndex: new URL("index.html", webRoot),
