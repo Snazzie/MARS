@@ -44,40 +44,54 @@ require_config() {
   [[ -n "${MARS_DOMAIN_TEMPLATE_SHA256:-}" ]] || { echo 'MARS_DOMAIN_TEMPLATE_SHA256 is required' >&2; exit 1; }
 }
 validate_url() {
-  python3 - "$1" "$2" "$3" <<'PY'
+  python3 - "$1" "$2" "$3" "${4:-$PUBLIC_BASE_URL}" <<'PY'
 import ipaddress
+import os
 import sys
 from urllib.parse import urlsplit
 
-raw, name, kind = sys.argv[1:]
-try:
-    parsed = urlsplit(raw)
-    host = parsed.hostname
-    parsed.port
-except ValueError:
-    parsed = None
-    host = None
+raw, name, kind, base_url = sys.argv[1:]
+mode = os.environ.get("MARS_ARTIFACT_MODE")
 
-loopback = host in {"localhost", "127.0.0.1", "::1"}
-if host and not loopback:
+def parse_http_url(value):
     try:
-        loopback = ipaddress.ip_address(host).is_loopback
+        parsed = urlsplit(value)
+        host = parsed.hostname
+        port = parsed.port
     except ValueError:
-        pass
-secure = bool(parsed and parsed.scheme == "https")
-local = bool(parsed and parsed.scheme == "http" and loopback)
-valid = bool(
-    parsed
-    and host
-    and (secure or local)
-    and not parsed.username
-    and not parsed.password
-    and not parsed.fragment
-)
-if kind == "origin" and parsed and (parsed.path not in {"", "/"} or parsed.query):
-    valid = False
-if not valid:
-    raise SystemExit(f"{name} must use HTTPS or loopback HTTP without credentials")
+        return None
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or "#" in value
+    ):
+        return None
+    if port is not None and not 1 <= port <= 65535:
+        return None
+    return parsed
+
+def origin(parsed):
+    host = parsed.hostname
+    try:
+        host = ipaddress.ip_address(host).compressed
+    except ValueError:
+        host = host.lower()
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return parsed.scheme, host, port
+
+parsed = parse_http_url(raw)
+if parsed is None:
+    raise SystemExit(f"{name} must use HTTP(S) without credentials or fragments")
+if kind == "origin" and (parsed.path not in {"", "/"} or "?" in raw):
+    raise SystemExit(f"{name} must be an HTTP(S) origin without a path, query, credentials, or fragment")
+if mode == "production" and parsed.scheme != "https":
+    raise SystemExit(f"{name} must use HTTPS in production")
+if mode == "local" and kind == "asset":
+    base = parse_http_url(base_url)
+    if base is None or origin(parsed) != origin(base):
+        raise SystemExit(f"{name} must use the same origin as PUBLIC_BASE_URL in local mode")
 PY
 }
 validate_sha256() { [[ "$1" =~ ^(sha256:)?[0-9a-f]{64}$ ]] || { echo "$2 must be a lowercase SHA-256 value" >&2; exit 1; }; }

@@ -41,18 +41,69 @@ require_config() {
   [[ -n "${TART_IMAGE:-}" ]] || { echo 'TART_IMAGE is required' >&2; exit 1; }
   [[ -n "${TART_IMAGE_DIGEST:-}" ]] || { echo 'TART_IMAGE_DIGEST is required' >&2; exit 1; }
 }
+validate_http_url() {
+  local raw="$1" name="$2" kind="$3" scheme rest authority suffix host port
+  local authority_pattern='^(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9._~-]+)(:([0-9]+))?$'
+  if [[ "$raw" == https://* ]]; then
+    scheme=https
+    rest="${raw#https://}"
+  elif [[ "$raw" == http://* ]]; then
+    scheme=http
+    rest="${raw#http://}"
+  else
+    echo "$name must use HTTP(S) without credentials or fragments" >&2
+    return 1
+  fi
+  authority="${rest%%[/?]*}"
+  suffix="${rest#$authority}"
+  if [[ -z "$authority" || "$authority" == *"@"* || "$raw" == *"#"* ]]; then
+    echo "$name must use HTTP(S) without credentials or fragments" >&2
+    return 1
+  fi
+  if ! [[ "$authority" =~ $authority_pattern ]]; then
+    echo "$name must use HTTP(S) without credentials or fragments" >&2
+    return 1
+  fi
+  host="$match[1]"
+  port="$match[3]"
+  if [[ "$kind" == origin && -n "$suffix" && "$suffix" != "/" ]]; then
+    echo "$name must be an HTTP(S) origin without a path, query, credentials, or fragment" >&2
+    return 1
+  fi
+  if [[ -z "$port" ]]; then
+    [[ "$scheme" == https ]] && port=443 || port=80
+  fi
+  URL_SCHEME="$scheme"
+  URL_ORIGIN="${scheme}://$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]'):${port}"
+}
 validate_config() {
   require_config
   [[ "$MARS_ARTIFACT_MODE" == local || "$MARS_ARTIFACT_MODE" == production ]] || { echo 'MARS_ARTIFACT_MODE must be local or production' >&2; exit 1; }
   PUBLIC_BASE_URL="${PUBLIC_BASE_URL%/}"
-  if [[ "$PUBLIC_BASE_URL" =~ ^https://(\[[0-9A-Fa-f:]+\]|[^/:@?#]+)(:[0-9]+)?$ ]]; then
-    CURL_SECURITY=(--proto '=https' --tlsv1.2)
-  elif [[ "$PUBLIC_BASE_URL" =~ ^http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?$ ]]; then
-    CURL_SECURITY=()
-  else
-    echo 'PUBLIC_BASE_URL must use HTTPS or loopback HTTP without credentials' >&2
+  validate_http_url "$PUBLIC_BASE_URL" "PUBLIC_BASE_URL" origin || exit 1
+  local public_origin="$URL_ORIGIN" public_scheme="$URL_SCHEME"
+  if [[ "$MARS_ARTIFACT_MODE" == production && "$public_scheme" != https ]]; then
+    echo 'PUBLIC_BASE_URL must use HTTPS in production' >&2
     exit 1
   fi
+  if [[ "$public_scheme" == https ]]; then
+    CURL_SECURITY=(--proto '=https' --tlsv1.2)
+  else
+    CURL_SECURITY=()
+  fi
+  case "$TART_IMAGE" in
+    http://*|https://*)
+      validate_http_url "$TART_IMAGE" "TART_IMAGE" asset || exit 1
+      if [[ "$MARS_ARTIFACT_MODE" == production && "$URL_SCHEME" != https ]]; then
+        echo 'TART_IMAGE must use HTTPS in production' >&2
+        exit 1
+      fi
+      if [[ "$MARS_ARTIFACT_MODE" == local && "$URL_ORIGIN" != "$public_origin" ]]; then
+        echo 'TART_IMAGE must use the same origin as PUBLIC_BASE_URL in local mode' >&2
+        exit 1
+      fi
+      ;;
+  esac
   [[ "$MARS_ORCHESTRATOR_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo 'MARS_ORCHESTRATOR_SHA256 must be a lowercase SHA-256 value' >&2; exit 1; }
   [[ "$TART_IMAGE_DIGEST" =~ ^(sha256:)?[0-9a-f]{64}$ ]] || { echo 'TART_IMAGE_DIGEST must be a lowercase SHA-256 value' >&2; exit 1; }
   if [[ "$MARS_ARTIFACT_MODE" == production ]]; then

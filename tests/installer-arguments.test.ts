@@ -23,6 +23,78 @@ async function invoke(script: string, args: string[], env: Record<string, string
   return { exitCode: await proc.exited, stdout: await new Response(proc.stdout).text(), stderr: await new Response(proc.stderr).text() };
 }
 
+async function invokeLinuxUrlValidation(
+  raw: string,
+  name: string,
+  kind: "origin" | "asset",
+  mode: "local" | "production",
+  baseUrl: string,
+) {
+  const source = await Bun.file(linux).text();
+  const validator = source.match(/validate_url\(\) \{\r?\n\s+python3 [^\n]+ <<'PY'\r?\n([\s\S]*?)\r?\nPY\r?\n\}/)?.[1];
+  if (!validator) throw new Error("Linux URL validator not found");
+  const proc = Bun.spawn(
+    [process.platform === "win32" ? "python" : "python3", "-c", validator, raw, name, kind, baseUrl],
+    {
+      cwd: root,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, MARS_ARTIFACT_MODE: mode, PUBLIC_BASE_URL: baseUrl },
+    },
+  );
+  return {
+    exitCode: await proc.exited,
+    stdout: await new Response(proc.stdout).text(),
+    stderr: await new Response(proc.stderr).text(),
+  };
+}
+
+async function invokePosixConfigValidation(script: string, env: Record<string, string>) {
+  const source = await Bun.file(script).text();
+  const cutoff = script === linux ? source.indexOf("\npreflight() {") : source.indexOf("\nvalidate_config\n");
+  if (cutoff < 0) throw new Error("installer validation boundary not found");
+  const tempDir = await mkdtemp(join(tmpdir(), "mars-installer-config-"));
+  const harness = join(tempDir, script === linux ? "validate-linux.sh" : "validate-macos.sh");
+  await Bun.write(harness, `${source.slice(0, cutoff)}\nvalidate_config\n`);
+  try {
+    const proc = Bun.spawn(
+      [script === linux ? "bash" : "zsh", harness, "--code", valid, "--control-plane-url", env.PUBLIC_BASE_URL],
+      { cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, ...env } },
+    );
+    return {
+      exitCode: await proc.exited,
+      stdout: await new Response(proc.stdout).text(),
+      stderr: await new Response(proc.stderr).text(),
+    };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+function posixArtifactEnv(script: string, mode: "local" | "production", baseUrl: string, assetBaseUrl = baseUrl) {
+  const hash = "a".repeat(64);
+  if (script === mac) {
+    return {
+      PUBLIC_BASE_URL: baseUrl,
+      MARS_ARTIFACT_MODE: mode,
+      MARS_ORCHESTRATOR_SHA256: hash,
+      TART_IMAGE: mode === "production" ? `ghcr.io/example/mars-worker@sha256:${hash}` : "mars-worker-local",
+      TART_IMAGE_DIGEST: `sha256:${hash}`,
+    };
+  }
+  return {
+    PUBLIC_BASE_URL: baseUrl,
+    MARS_ARTIFACT_MODE: mode,
+    MARS_BROKER_IMAGE: mode === "production" ? `ghcr.io/example/mars-broker@sha256:${hash}` : "mars-broker:local",
+    MARS_GOLDEN_IMAGE: `${assetBaseUrl}/api/workers/templates/linux-x64/artifact`,
+    MARS_GOLDEN_DIGEST: `sha256:${hash}`,
+    MARS_COMPOSE_FILE: `${assetBaseUrl}/api/workers/artifacts/linux-broker-compose`,
+    MARS_COMPOSE_SHA256: hash,
+    MARS_DOMAIN_TEMPLATE: `${assetBaseUrl}/api/workers/artifacts/linux-domain-template`,
+    MARS_DOMAIN_TEMPLATE_SHA256: hash,
+  };
+}
+
 async function invokeWindowsPreflight(source: string, scenario: "active-hypervisor" | "missing-firmware" | "bare-metal-no-slat") {
   const tempDir = await mkdtemp(join(tmpdir(), "mars-installer-preflight-"));
   const scriptPath = join(tempDir, "preflight.ps1");
@@ -595,14 +667,139 @@ Write-Output 'LOCAL_TEMPLATE_URL_OK'
     await rm(tempDir, { recursive: true, force: true });
   }
 });
-test("POSIX installers allow HTTP only for loopback control-plane URLs", async () => {
-  const [linuxSource, macSource] = await Promise.all([Bun.file(linux).text(), Bun.file(mac).text()]);
-  for (const source of [linuxSource, macSource]) {
-    const readablePattern = source.replaceAll("\\.", ".");
-    expect(readablePattern).toContain("localhost");
-    expect(readablePattern).toContain("127.0.0.1");
-    expect(readablePattern).toContain("::1");
-    expect(source).toContain("must use HTTPS or loopback HTTP");
+test("Linux URL policy accepts a same-origin LAN HTTP artifact in local mode", async () => {
+  const baseUrl = "http://192.168.50.7:3000";
+  const origin = await invokeLinuxUrlValidation(baseUrl, "PUBLIC_BASE_URL", "origin", "local", baseUrl);
+  const asset = await invokeLinuxUrlValidation(
+    `${baseUrl}/api/workers/templates/linux-x64/artifact`,
+    "MARS_GOLDEN_IMAGE",
+    "asset",
+    "local",
+    baseUrl,
+  );
+  expect(origin.exitCode).toBe(0);
+  expect(asset.exitCode).toBe(0);
+});
+
+test("Linux URL policy rejects artifact scheme, host, or port mismatches in local mode", async () => {
+  for (const artifactUrl of [
+    "https://192.168.50.7:3000/worker.qcow2",
+    "http://192.168.50.8:3000/worker.qcow2",
+    "http://192.168.50.7:3001/worker.qcow2",
+  ]) {
+    const result = await invokeLinuxUrlValidation(
+      artifactUrl,
+      "MARS_GOLDEN_IMAGE",
+      "asset",
+      "local",
+      "http://192.168.50.7:3000",
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("same origin as PUBLIC_BASE_URL");
+  }
+});
+
+test("Linux URL policy rejects HTTP origins and assets in production mode", async () => {
+  const origin = await invokeLinuxUrlValidation(
+    "http://control.example.test",
+    "PUBLIC_BASE_URL",
+    "origin",
+    "production",
+    "http://control.example.test",
+  );
+  const asset = await invokeLinuxUrlValidation(
+    "http://assets.example.test/worker.qcow2",
+    "MARS_GOLDEN_IMAGE",
+    "asset",
+    "production",
+    "https://control.example.test",
+  );
+  expect(origin.exitCode).toBe(1);
+  expect(origin.stderr).toContain("HTTPS");
+  expect(asset.exitCode).toBe(1);
+  expect(asset.stderr).toContain("HTTPS");
+});
+
+test("Linux URL policy rejects credentials and fragments", async () => {
+  const credentials = await invokeLinuxUrlValidation(
+    "https://user:secret@control.example.test",
+    "PUBLIC_BASE_URL",
+    "origin",
+    "local",
+    "https://control.example.test",
+  );
+  const fragment = await invokeLinuxUrlValidation(
+    "https://control.example.test/worker.qcow2#fragment",
+    "MARS_GOLDEN_IMAGE",
+    "asset",
+    "local",
+    "https://control.example.test",
+  );
+  expect(credentials.exitCode).toBe(1);
+  expect(fragment.exitCode).toBe(1);
+});
+
+for (const [script, runtimeTest] of [[linux, posixRuntimeTest], [mac, macosRuntimeTest]] as const) {
+  runtimeTest(`${script} local mode accepts a LAN HTTP control-plane origin`, async () => {
+    const env = posixArtifactEnv(script, "local", "http://192.168.50.7:3000");
+    const result = await invokePosixConfigValidation(script, env);
+    expect(result.exitCode).toBe(0);
+  });
+
+  runtimeTest(`${script} production mode rejects an HTTP control-plane origin`, async () => {
+    const env = posixArtifactEnv(script, "production", "http://192.168.50.7:3000");
+    const result = await invokePosixConfigValidation(script, env);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("HTTPS");
+  });
+
+  runtimeTest(`${script} rejects credentials and fragments in the control-plane origin`, async () => {
+    for (const baseUrl of ["http://user:secret@192.168.50.7:3000", "https://control.example.test/#fragment"]) {
+      const env = posixArtifactEnv(script, "local", baseUrl);
+      const result = await invokePosixConfigValidation(script, env);
+      expect(result.exitCode).toBe(1);
+    }
+  });
+}
+
+macosRuntimeTest("macOS local mode rejects an HTTP Tart image from a different origin", async () => {
+  const env = posixArtifactEnv(mac, "local", "http://192.168.50.7:3000");
+  env.TART_IMAGE = "http://192.168.50.8:3000/images/mars-worker";
+  const result = await invokePosixConfigValidation(mac, env);
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toContain("same origin as PUBLIC_BASE_URL");
+});
+
+macosRuntimeTest("macOS production mode rejects an HTTP Tart image URL", async () => {
+  const env = posixArtifactEnv(mac, "production", "https://control.example.test");
+  env.TART_IMAGE = `http://assets.example.test/mars-worker@sha256:${"a".repeat(64)}`;
+  const result = await invokePosixConfigValidation(mac, env);
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toContain("HTTPS");
+});
+
+posixRuntimeTest("Linux local mode rejects artifact URLs from a different origin", async () => {
+  const env = posixArtifactEnv(linux, "local", "http://192.168.50.7:3000", "http://192.168.50.8:3000");
+  const result = await invokePosixConfigValidation(linux, env);
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toContain("same origin as PUBLIC_BASE_URL");
+});
+
+posixRuntimeTest("Linux production mode rejects HTTP artifact URLs", async () => {
+  const env = posixArtifactEnv(linux, "production", "https://control.example.test", "http://control.example.test");
+  const result = await invokePosixConfigValidation(linux, env);
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toContain("HTTPS");
+});
+
+posixRuntimeTest("Linux local mode rejects credentials and fragments in artifact URLs", async () => {
+  for (const assetBaseUrl of [
+    "http://user:secret@192.168.50.7:3000",
+    "http://192.168.50.7:3000/#fragment",
+  ]) {
+    const env = posixArtifactEnv(linux, "local", "http://192.168.50.7:3000", assetBaseUrl);
+    const result = await invokePosixConfigValidation(linux, env);
+    expect(result.exitCode).toBe(1);
   }
 });
 posixRuntimeTest("Linux installer rejects noninteractive URL checks before host preflight", async () => {
