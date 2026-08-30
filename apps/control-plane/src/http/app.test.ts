@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { createDevelopmentWindowsArtifacts } from "../index.ts";
 import { createControlPlaneApp } from "./app.ts";
 import { fakeHttpDeps } from "./test-deps.ts";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 
@@ -988,6 +988,27 @@ test("generates complete platform installers from the immutable release manifest
 });
 
 describe("development worker artifact hardening", () => {
+  test("startup cleanup removes stale orphan snapshots without touching fresh snapshots", async () => {
+    const fresh = await mkdtemp(join(tmpdir(), "mars-worker-artifact-"));
+    const stale = await mkdtemp(join(tmpdir(), "mars-worker-artifact-"));
+    try {
+      await Bun.write(join(fresh, "artifact"), "active");
+      await Bun.write(join(stale, "artifact"), "orphan");
+      const staleTime = new Date(Date.now() - 4 * 60 * 60_000);
+      await utimes(stale, staleTime, staleTime);
+
+      // Cache-busted import exercises module startup after fixtures exist.
+      const { orphanCleanup: startupCleanup } = await import(`./worker-routes.ts?orphan-cleanup=${crypto.randomUUID()}`);
+      await startupCleanup;
+      const entries = await readdir(tmpdir());
+
+      expect(entries).toContain(basename(fresh));
+      expect(entries).not.toContain(basename(stale));
+    } finally {
+      await Promise.all([fresh, stale].map(path => rm(path, { recursive: true, force: true })));
+    }
+  });
+
   test("generates a container installer from only current local worker binaries", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-current-worker-binaries-"));
     const orchestrator = join(root, "mars-orchestrator.exe");

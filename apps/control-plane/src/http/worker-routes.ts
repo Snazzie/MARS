@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -258,12 +258,22 @@ class ArtifactAdmission {
 }
 
 const artifactTemporaryPrefix = "mars-worker-artifact-";
-const orphanCleanup = (async () => {
+const artifactOrphanAgeMs = 3 * 60 * 60_000;
+export const orphanCleanup = (async () => {
   try {
+    const now = Date.now();
     const entries = await readdir(tmpdir(), { withFileTypes: true });
     await Promise.all(entries
       .filter(entry => entry.isDirectory() && entry.name.startsWith(artifactTemporaryPrefix))
-      .map(entry => rm(join(tmpdir(), entry.name), { recursive: true, force: true })));
+      .map(async entry => {
+        const directory = join(tmpdir(), entry.name);
+        try {
+          const { mtimeMs } = await stat(directory);
+          if (now - mtimeMs > artifactOrphanAgeMs) {
+            await rm(directory, { recursive: true, force: true });
+          }
+        } catch {}
+      }));
   } catch {
     // Snapshot creation and per-response disposal remain the primary cleanup path.
   }
