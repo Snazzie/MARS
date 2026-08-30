@@ -332,7 +332,7 @@ describe("control-plane HTTP boundary", () => {
   });
   test("proxies configured local Windows artifact URLs through control plane routes", async () => {
     const upstream = Bun.serve({ port: 0, fetch: () => new Response("proxied-runner", { headers: { "content-type": "application/zip" } }) });
-    const hash = "e".repeat(64);
+    const hash = createHash("sha256").update("proxied-runner").digest("hex");
     try {
       const response = await createControlPlaneApp(fakeHttpDeps({
         workerReleaseManifest: undefined,
