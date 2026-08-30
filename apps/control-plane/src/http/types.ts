@@ -8,22 +8,35 @@ import type { DiscoveryHealthSnapshot } from "../discovery-health.ts";
 import type { WorkerReleaseManifest } from "@mars/contracts";
 export type ControlPlaneEnv = { Variables: { user: SessionUser } };
 
-export type DevelopmentWindowsArtifact = {
+export type DevelopmentArtifact = {
   path?: string;
   url?: string;
   sha256: string;
 };
 
 export type DevelopmentWindowsArtifacts = {
-  orchestrator: DevelopmentWindowsArtifact;
-  serviceHost: DevelopmentWindowsArtifact;
-  template?: DevelopmentWindowsArtifact;
+  orchestrator: DevelopmentArtifact;
+  serviceHost: DevelopmentArtifact;
+  template?: DevelopmentArtifact;
   container?: {
     baseImage: string;
-    runner: DevelopmentWindowsArtifact;
-    git: DevelopmentWindowsArtifact;
-    vcRuntime: DevelopmentWindowsArtifact;
+    runner: DevelopmentArtifact;
+    git: DevelopmentArtifact;
+    vcRuntime: DevelopmentArtifact;
   };
+};
+
+export type DevelopmentLinuxArtifacts = {
+  brokerImage?: string;
+  goldenImage?: DevelopmentArtifact;
+  compose?: DevelopmentArtifact;
+  domainTemplate?: DevelopmentArtifact;
+};
+
+export type DevelopmentMacosArtifacts = {
+  orchestrator?: DevelopmentArtifact;
+  tartImage?: string;
+  tartImageDigest?: string;
 };
 
 export type DevelopmentArtifactFetchOptions = RequestInit & {
@@ -59,6 +72,8 @@ export type ControlPlaneHttpDeps = {
   defaultJobImages: Partial<Record<"linux-x64" | "windows-x64" | "macos-arm64", string>>;
   workerReleaseManifest?: WorkerReleaseManifest;
   developmentWindowsArtifacts?: DevelopmentWindowsArtifacts;
+  developmentLinuxArtifacts?: DevelopmentLinuxArtifacts;
+  developmentMacosArtifacts?: DevelopmentMacosArtifacts;
   developmentArtifactProxy?: DevelopmentArtifactProxyOptions;
   windowsContainerBuild?: {
     baseImage: string;

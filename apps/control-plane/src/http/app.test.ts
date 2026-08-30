@@ -422,8 +422,23 @@ describe("control-plane HTTP boundary", () => {
     try {
       const executable = join(root, "mars-orchestrator");
       await Bun.write(executable, "macos-arm64-binary");
+      const hash = createHash("sha256").update("macos-arm64-binary").digest("hex");
       const response = await createControlPlaneApp(fakeHttpDeps({
         workerOrchestratorExecutable: pathToFileURL(executable),
+        workerReleaseManifest: {
+          schemaVersion: 2,
+          buildId: "macos-test",
+          contractVersion: "0.1.0",
+          platforms: {
+            "linux-x64": null,
+            "windows-x64": null,
+            "macos-arm64": {
+              orchestratorSha256: hash,
+              tartImage: `ghcr.io/mars/macos@sha256:${"a".repeat(64)}`,
+              tartImageDigest: "a".repeat(64),
+            },
+          },
+        },
       })).request("/api/workers/orchestrator?audience=macos-arm64");
 
       expect(response.status).toBe(200);
@@ -962,6 +977,7 @@ test("generates complete platform installers from the immutable release manifest
     for (const file of ["install-worker.sh", "install-worker.ps1", "install-worker-macos.sh", "linux-broker-compose.yaml", "worker-domain.xml"]) {
       await Bun.write(join(root, file), file.endsWith(".ps1") ? "'__PUBLIC_BASE_URL__' '__WINDOWS_RUNTIME__' '__WINDOWS_CONTAINER_BASE_IMAGE__' '__WINDOWS_CONTAINER_RUNNER_URL__' '__WINDOWS_CONTAINER_RUNNER_SHA256__' '__WINDOWS_TEMPLATE_PATH__' '__WINDOWS_TEMPLATE_DIGEST__'" : "#!/bin/sh\n$PUBLIC_BASE_URL");
     }
+    await Bun.write(join(root, "macos-orchestrator"), "packaged-macos-orchestrator");
     const manifest = {
       schemaVersion: 2 as const,
       buildId: "build-1",
@@ -972,16 +988,30 @@ test("generates complete platform installers from the immutable release manifest
         "macos-arm64": { orchestratorSha256: hash, tartImage: `ghcr.io/mars/macos@sha256:${hash}`, tartImageDigest: hash },
       },
     };
-    const response = await createControlPlaneApp(fakeHttpDeps({
+    const releaseApp = createControlPlaneApp(fakeHttpDeps({
       workerInstallerRoot: pathToFileURL(`${root}/`),
       workerReleaseManifest: manifest,
       workerConnectionOrigins: () => ["https://adapter.test"],
       workerOrchestratorExecutables: { "linux-x64": pathToFileURL(join(root, "linux-orchestrator")), "windows-x64": pathToFileURL(join(root, "windows-orchestrator")), "macos-arm64": pathToFileURL(join(root, "macos-orchestrator")) },
-    })).request("/api/workers/installer?audience=linux-x64&connectOrigin=https%3A%2F%2Fadapter.test");
+    }));
+    const response = await releaseApp.request("/api/workers/installer?audience=linux-x64&connectOrigin=https%3A%2F%2Fadapter.test");
     expect(response.status).toBe(200);
     const installer = await response.text();
-    expect(installer).toContain("PUBLIC_BASE_URL='https://adapter.test'");
+    expect(installer).toContain("MARS_ARTIFACT_MODE='production'");
+    expect(installer).toContain("MARS_GOLDEN_IMAGE='https://adapter.test/api/workers/linux-golden-image'");
+    expect(installer).toContain("MARS_COMPOSE_FILE='https://adapter.test/api/workers/linux-broker-compose'");
+    expect(installer).toContain("MARS_DOMAIN_TEMPLATE='https://adapter.test/api/workers/linux-domain-template'");
+    expect(installer).not.toContain("https://release.test/worker.qcow2");
     expect(installer).not.toContain("__");
+
+    const macosResponse = await releaseApp.request("/api/workers/installer?audience=macos-arm64&connectOrigin=https%3A%2F%2Fadapter.test");
+    const macosInstaller = await macosResponse.text();
+    expect(macosResponse.status).toBe(200);
+    expect(macosInstaller).toContain("MARS_ARTIFACT_MODE='production'");
+    expect(macosInstaller).toContain("PUBLIC_BASE_URL='https://adapter.test'");
+    expect(macosInstaller).toContain(`MARS_ORCHESTRATOR_SHA256='${hash}'`);
+    expect(macosInstaller).toContain(`TART_IMAGE='ghcr.io/mars/macos@sha256:${hash}'`);
+    expect(macosInstaller).toContain(`TART_IMAGE_DIGEST='${hash}'`);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1429,5 +1459,139 @@ describe("development worker artifact hardening", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Linux and macOS platform artifact sources", () => {
+  test("refreshes local Linux hashes at request time and injects only control-plane URLs", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mars-local-linux-artifacts-"));
+    const golden = join(root, "worker.qcow2");
+    const compose = join(root, "linux-broker-compose.yaml");
+    const domain = join(root, "worker-domain.xml");
+    try {
+      await Bun.write(join(root, "install-worker.sh"), "#!/bin/sh\nprintf ready\n");
+      await Bun.write(golden, "old-golden");
+      await Bun.write(compose, "old-compose");
+      await Bun.write(domain, "old-domain");
+      const localApp = createControlPlaneApp(fakeHttpDeps({
+        workerInstallerRoot: pathToFileURL(`${root}/`),
+        workerReleaseManifest: undefined,
+        workerConnectionOrigins: () => ["https://worker.test"],
+        developmentLinuxArtifacts: {
+          brokerImage: "mars/linux-broker:dev",
+          goldenImage: { path: golden, sha256: "a".repeat(64) },
+          compose: { path: compose, sha256: "b".repeat(64) },
+          domainTemplate: { path: domain, sha256: "c".repeat(64) },
+        },
+      }));
+      await Bun.write(golden, "current-golden");
+      await Bun.write(compose, "current-compose");
+      await Bun.write(domain, "current-domain");
+      const goldenHash = createHash("sha256").update("current-golden").digest("hex");
+      const composeHash = createHash("sha256").update("current-compose").digest("hex");
+      const domainHash = createHash("sha256").update("current-domain").digest("hex");
+
+      const installerResponse = await localApp.request("/api/workers/installer?audience=linux-x64&runtime=container&connectOrigin=https%3A%2F%2Fworker.test");
+      const installer = await installerResponse.text();
+      expect(installerResponse.status).toBe(200);
+      expect(installer).toContain("MARS_ARTIFACT_MODE='local'");
+      expect(installer).toContain("MARS_BROKER_IMAGE='mars/linux-broker:dev'");
+      expect(installer).toContain("MARS_GOLDEN_IMAGE='https://worker.test/api/workers/linux-golden-image'");
+      expect(installer).toContain(`MARS_GOLDEN_DIGEST='sha256:${goldenHash}'`);
+      expect(installer).toContain("MARS_COMPOSE_FILE='https://worker.test/api/workers/linux-broker-compose'");
+      expect(installer).toContain(`MARS_COMPOSE_SHA256='${composeHash}'`);
+      expect(installer).toContain("MARS_DOMAIN_TEMPLATE='https://worker.test/api/workers/linux-domain-template'");
+      expect(installer).toContain(`MARS_DOMAIN_TEMPLATE_SHA256='${domainHash}'`);
+      expect(installer).not.toContain("release.test");
+      expect(installer).not.toContain("github.com");
+
+      const artifactResponse = await localApp.request("/api/workers/linux-golden-image");
+      expect(artifactResponse.status).toBe(200);
+      expect(artifactResponse.headers.get("X-Content-SHA256")).toBe(goldenHash);
+      expect(await artifactResponse.text()).toBe("current-golden");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("serves a current local macOS build while an unavailable Linux platform remains a 503", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mars-local-macos-artifacts-"));
+    const orchestrator = join(root, "mars-orchestrator");
+    try {
+      await Bun.write(join(root, "install-worker-macos.sh"), "#!/bin/zsh\nprint ready\n");
+      await Bun.write(join(root, "install-worker.sh"), "#!/bin/sh\nprintf ready\n");
+      await Bun.write(orchestrator, "old-orchestrator");
+      const localApp = createControlPlaneApp(fakeHttpDeps({
+        workerInstallerRoot: pathToFileURL(`${root}/`),
+        workerReleaseManifest: undefined,
+        workerConnectionOrigins: () => ["http://localhost:3000"],
+        developmentMacosArtifacts: {
+          orchestrator: { path: orchestrator, sha256: "a".repeat(64) },
+          tartImage: "mars-macos-dev",
+          tartImageDigest: "d".repeat(64),
+        },
+      }));
+      await Bun.write(orchestrator, "current-orchestrator");
+      const orchestratorHash = createHash("sha256").update("current-orchestrator").digest("hex");
+
+      const macosResponse = await localApp.request("/api/workers/installer?audience=macos-arm64&runtime=container&connectOrigin=http%3A%2F%2Flocalhost%3A3000");
+      const macosInstaller = await macosResponse.text();
+      expect(macosResponse.status).toBe(200);
+      expect(macosInstaller).toContain("MARS_ARTIFACT_MODE='local'");
+      expect(macosInstaller).toContain("PUBLIC_BASE_URL='http://localhost:3000'");
+      expect(macosInstaller).toContain(`MARS_ORCHESTRATOR_SHA256='${orchestratorHash}'`);
+      expect(macosInstaller).toContain("TART_IMAGE='mars-macos-dev'");
+      expect(macosInstaller).toContain(`TART_IMAGE_DIGEST='${"d".repeat(64)}'`);
+      expect((await localApp.request("/api/workers/installer?audience=linux-x64&runtime=container&connectOrigin=http%3A%2F%2Flocalhost%3A3000")).status).toBe(503);
+
+      const artifactResponse = await localApp.request("/api/workers/orchestrator?audience=macos-arm64");
+      expect(artifactResponse.status).toBe(200);
+      expect(artifactResponse.headers.get("X-Content-SHA256")).toBe(orchestratorHash);
+      expect(await artifactResponse.text()).toBe("current-orchestrator");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("proxies the immutable production Linux golden image through the hardened boundary", async () => {
+    const body = "production-golden-image";
+    const hash = createHash("sha256").update(body).digest("hex");
+    const requested: string[] = [];
+    const fetcher = Object.assign(async (input: string | URL | Request) => {
+      requested.push(String(input));
+      return new Response(body, { headers: { "content-type": "application/octet-stream" } });
+    }, { preconnect: globalThis.fetch.preconnect });
+    const manifest = {
+      schemaVersion: 2 as const,
+      buildId: "production-build",
+      contractVersion: "0.1.0",
+      platforms: {
+        "linux-x64": {
+          orchestratorSha256: "a".repeat(64),
+          brokerImage: `ghcr.io/mars/broker@sha256:${"b".repeat(64)}`,
+          goldenImageUrl: "https://release.test/linux-golden.qcow2",
+          goldenImageSha256: hash,
+          composeSha256: "c".repeat(64),
+          domainTemplateSha256: "d".repeat(64),
+        },
+        "windows-x64": null,
+        "macos-arm64": null,
+      },
+    };
+    const productionApp = createControlPlaneApp(fakeHttpDeps({
+      workerReleaseManifest: manifest,
+      developmentLinuxArtifacts: undefined,
+      developmentMacosArtifacts: undefined,
+      developmentArtifactProxy: {
+        fetch: fetcher,
+        resolveHostname: async () => ["93.184.216.34"],
+      },
+    }));
+
+    const response = await productionApp.request("/api/workers/linux-golden-image");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("X-Content-SHA256")).toBe(hash);
+    expect(await response.text()).toBe(body);
+    expect(requested).toEqual(["https://93.184.216.34/linux-golden.qcow2"]);
   });
 });

@@ -15,7 +15,7 @@ import { startReconciliationScheduler } from "./reconcile-loop.ts";
 import { pruneExpiredData } from "./retention.ts";
 import { DiscoveryHealthMonitor, isDiscoveryCycleSuccessful } from "./discovery-health.ts";
 import { createControlPlaneApp } from "./http/app.ts";
-import type { ControlPlaneHttpDeps, DevelopmentWindowsArtifact, DevelopmentWindowsArtifacts } from "./http/types.ts";
+import type { ControlPlaneHttpDeps, DevelopmentArtifact, DevelopmentLinuxArtifacts, DevelopmentMacosArtifacts, DevelopmentWindowsArtifacts } from "./http/types.ts";
 import type { ControlPlaneSetup } from "./control-plane-setup.ts";
 import { ensureDefaultPools } from "./default-pools.ts";
 import { GithubRateLimitGate } from "./github-rate-limit.ts";
@@ -74,7 +74,7 @@ const developmentArtifact = (
   paths: string[],
   urls: string[],
   hashes: string[],
-): DevelopmentWindowsArtifact | undefined => {
+): DevelopmentArtifact | undefined => {
   const path = trimmedEnvironmentValue(environment, paths);
   const url = trimmedEnvironmentValue(environment, urls);
   const sha256 = trimmedEnvironmentValue(environment, hashes)?.replace(/^sha256:/, "");
@@ -127,8 +127,11 @@ export function createDevelopmentWindowsArtifacts(environment: DevelopmentEnviro
 }
 
 const developmentDefaultArtifactPaths = {
-  orchestrator: "../../../apps/orchestrator/dist/mars-orchestrator.exe",
-  serviceHost: "../../../apps/windows-service-host/target/release/mars-service-host.exe",
+  windowsOrchestrator: "../../../apps/orchestrator/dist/mars-orchestrator.exe",
+  windowsServiceHost: "../../../apps/windows-service-host/target/release/mars-service-host.exe",
+  linuxCompose: "../../../deploy/workers/linux-broker-compose.yaml",
+  linuxDomainTemplate: "../../../deploy/workers/worker-domain.xml",
+  macosOrchestrator: "../../../apps/orchestrator/dist/mars-orchestrator-macos-arm64",
 } as const;
 
 const localArtifactSha256 = async (path: string): Promise<string | undefined> => {
@@ -143,7 +146,7 @@ const resolveDevelopmentArtifact = async (
   urls: string[],
   hashes: string[],
   fallbackPath?: string,
-): Promise<DevelopmentWindowsArtifact | undefined> => {
+): Promise<DevelopmentArtifact | undefined> => {
   const configuredPath = trimmedEnvironmentValue(environment, paths);
   const url = trimmedEnvironmentValue(environment, urls);
   const candidatePath = configuredPath ?? (!url && fallbackPath ? fileURLToPath(new URL(fallbackPath, import.meta.url)) : undefined);
@@ -157,8 +160,8 @@ const resolveDevelopmentArtifact = async (
 export async function resolveDevelopmentWindowsArtifacts(environment: DevelopmentEnvironment = Bun.env): Promise<DevelopmentWindowsArtifacts | undefined> {
   if (environment.NODE_ENV === "production") return undefined;
   const [orchestrator, serviceHost, template, runner, git, vcRuntime] = await Promise.all([
-    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_ORCHESTRATOR_PATH", "WORKER_ORCHESTRATOR_WINDOWS_X64"], ["MARS_WINDOWS_ORCHESTRATOR_URL"], ["MARS_WINDOWS_ORCHESTRATOR_SHA256", "WORKER_ORCHESTRATOR_WINDOWS_X64_SHA256"], developmentDefaultArtifactPaths.orchestrator),
-    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_SERVICE_HOST_PATH", "WORKER_SERVICE_HOST_EXECUTABLE"], ["MARS_WINDOWS_SERVICE_HOST_URL"], ["MARS_WINDOWS_SERVICE_HOST_SHA256", "WORKER_SERVICE_HOST_SHA256"], developmentDefaultArtifactPaths.serviceHost),
+    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_ORCHESTRATOR_PATH", "WORKER_ORCHESTRATOR_WINDOWS_X64"], ["MARS_WINDOWS_ORCHESTRATOR_URL"], ["MARS_WINDOWS_ORCHESTRATOR_SHA256", "WORKER_ORCHESTRATOR_WINDOWS_X64_SHA256"], developmentDefaultArtifactPaths.windowsOrchestrator),
+    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_SERVICE_HOST_PATH", "WORKER_SERVICE_HOST_EXECUTABLE"], ["MARS_WINDOWS_SERVICE_HOST_URL"], ["MARS_WINDOWS_SERVICE_HOST_SHA256", "WORKER_SERVICE_HOST_SHA256"], developmentDefaultArtifactPaths.windowsServiceHost),
     resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_TEMPLATE_PATH"], ["MARS_WINDOWS_TEMPLATE_URL"], ["MARS_WINDOWS_TEMPLATE_SHA256", "MARS_WINDOWS_TEMPLATE_DIGEST"]),
     resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_RUNNER_PATH"], ["MARS_WINDOWS_CONTAINER_RUNNER_URL"], ["MARS_WINDOWS_CONTAINER_RUNNER_SHA256"]),
     resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_GIT_PATH"], ["MARS_WINDOWS_CONTAINER_GIT_URL"], ["MARS_WINDOWS_CONTAINER_GIT_SHA256"]),
@@ -168,6 +171,64 @@ export async function resolveDevelopmentWindowsArtifacts(environment: Developmen
   if (!orchestrator || !serviceHost) return undefined;
   const container = runner && git && vcRuntime && baseImage ? { baseImage, runner, git, vcRuntime } : undefined;
   return { orchestrator, serviceHost, ...(template ? { template } : {}), ...(container ? { container } : {}) };
+}
+
+const developmentDigest = (environment: DevelopmentEnvironment, names: string[]): string | undefined => {
+  const digest = trimmedEnvironmentValue(environment, names)?.replace(/^sha256:/, "").toLowerCase();
+  return digest && /^[0-9a-f]{64}$/.test(digest) ? digest : undefined;
+};
+
+export async function resolveDevelopmentLinuxArtifacts(environment: DevelopmentEnvironment = Bun.env): Promise<DevelopmentLinuxArtifacts | undefined> {
+  if (environment.NODE_ENV === "production") return undefined;
+  const [goldenImage, compose, domainTemplate] = await Promise.all([
+    resolveDevelopmentArtifact(
+      environment,
+      ["MARS_LINUX_GOLDEN_PATH"],
+      ["MARS_LINUX_GOLDEN_URL"],
+      ["MARS_LINUX_GOLDEN_SHA256", "MARS_LINUX_GOLDEN_DIGEST"],
+    ),
+    resolveDevelopmentArtifact(
+      environment,
+      ["MARS_LINUX_COMPOSE_PATH", "MARS_LINUX_BROKER_COMPOSE_PATH"],
+      ["MARS_LINUX_COMPOSE_URL", "MARS_LINUX_BROKER_COMPOSE_URL"],
+      ["MARS_LINUX_COMPOSE_SHA256", "MARS_LINUX_BROKER_COMPOSE_SHA256"],
+      developmentDefaultArtifactPaths.linuxCompose,
+    ),
+    resolveDevelopmentArtifact(
+      environment,
+      ["MARS_LINUX_DOMAIN_TEMPLATE_PATH", "MARS_LINUX_DOMAIN_PATH"],
+      ["MARS_LINUX_DOMAIN_TEMPLATE_URL", "MARS_LINUX_DOMAIN_URL"],
+      ["MARS_LINUX_DOMAIN_TEMPLATE_SHA256", "MARS_LINUX_DOMAIN_SHA256"],
+      developmentDefaultArtifactPaths.linuxDomainTemplate,
+    ),
+  ]);
+  const brokerImage = trimmedEnvironmentValue(environment, ["MARS_LINUX_BROKER_IMAGE"]);
+  if (!brokerImage && !goldenImage && !compose && !domainTemplate) return undefined;
+  return {
+    ...(brokerImage ? { brokerImage } : {}),
+    ...(goldenImage ? { goldenImage } : {}),
+    ...(compose ? { compose } : {}),
+    ...(domainTemplate ? { domainTemplate } : {}),
+  };
+}
+
+export async function resolveDevelopmentMacosArtifacts(environment: DevelopmentEnvironment = Bun.env): Promise<DevelopmentMacosArtifacts | undefined> {
+  if (environment.NODE_ENV === "production") return undefined;
+  const orchestrator = await resolveDevelopmentArtifact(
+    environment,
+    ["MARS_MACOS_ORCHESTRATOR_PATH", "WORKER_ORCHESTRATOR_MACOS_ARM64"],
+    ["MARS_MACOS_ORCHESTRATOR_URL"],
+    ["MARS_MACOS_ORCHESTRATOR_SHA256", "WORKER_ORCHESTRATOR_MACOS_ARM64_SHA256"],
+    developmentDefaultArtifactPaths.macosOrchestrator,
+  );
+  const tartImage = trimmedEnvironmentValue(environment, ["MARS_TART_BASE_IMAGE", "MARS_TART_IMAGE"]);
+  const tartImageDigest = developmentDigest(environment, ["MARS_TART_IMAGE_DIGEST", "MARS_TART_BASE_IMAGE_DIGEST"]);
+  if (!orchestrator && !tartImage && !tartImageDigest) return undefined;
+  return {
+    ...(orchestrator ? { orchestrator } : {}),
+    ...(tartImage ? { tartImage } : {}),
+    ...(tartImageDigest ? { tartImageDigest } : {}),
+  };
 }
 
 const windowsContainerBaseImagePattern = /^mcr\.microsoft\.com\/windows\/server:ltsc2025@sha256:[0-9a-f]{64}$/;
@@ -281,7 +342,11 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
     return Object.values(artifacts).every(Boolean) ? artifacts as NonNullable<ControlPlaneHttpDeps["windowsContainerArtifacts"]> : undefined;
   };
   const windowsContainerArtifacts = loadWindowsContainerArtifacts();
-  const developmentWindowsArtifacts = await resolveDevelopmentWindowsArtifacts(Bun.env);
+  const [developmentWindowsArtifacts, developmentLinuxArtifacts, developmentMacosArtifacts] = await Promise.all([
+    resolveDevelopmentWindowsArtifacts(Bun.env),
+    resolveDevelopmentLinuxArtifacts(Bun.env),
+    resolveDevelopmentMacosArtifacts(Bun.env),
+  ]);
   const workerReleaseManifest = production ? options.workerReleaseManifest ?? await loadWorkerReleaseManifest() : undefined;
   if (production && !options.skipArtifactChecks) {
     const requiredReleaseArtifacts = {
@@ -294,7 +359,6 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
       macosInstaller: new URL("install-worker-macos.sh", workerInstallerRoot),
       linuxCompose: new URL("linux-broker-compose.yaml", workerInstallerRoot),
       linuxDomainTemplate: new URL("worker-domain.xml", workerInstallerRoot),
-      linuxOrchestrator: workerOrchestratorExecutables["linux-x64"],
       windowsServiceHost: workerServiceHostExecutable,
       windowsOrchestrator: workerOrchestratorExecutables["windows-x64"],
       macosOrchestrator: workerOrchestratorExecutables["macos-arm64"],
@@ -347,7 +411,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const githubApp = options.githubApp ?? new GitHubAppService({ db, secretBox, publicOrigin: initialized.setup.publicOrigin, webhookOrigin: () => configuredWebhookOrigin });
   const githubRateLimits = new GithubRateLimitGate();
   let triggerReconciliation = () => Promise.resolve();
-  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, developmentWindowsArtifacts, windowsContainerBuild, windowsContainerArtifacts, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerOrchestratorExecutables, workerServiceHostExecutable, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerAdopted: workerId => void dispatcher.replayConnected(workerId), health: () => ({ buildId: Bun.env.MARS_BUILD_ID ?? "dev", startedAt, discovery: discoveryHealth.snapshot() }) });
+  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, developmentWindowsArtifacts, developmentLinuxArtifacts, developmentMacosArtifacts, windowsContainerBuild, windowsContainerArtifacts, templateManifestPaths: env.TEMPLATE_MANIFESTS, templateArtifactPaths: env.TEMPLATE_ARTIFACTS, workerTemplatePaths: env.WORKER_TEMPLATE_PATHS, workerTemplateDigests: env.WORKER_TEMPLATE_DIGESTS, macosTartBaseImage: env.MACOS_TART_BASE_IMAGE, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, workerInstallerRoot, workerOrchestratorExecutables, workerServiceHostExecutable, workerRequestLimiter: createRequestLimiter(), workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerAdopted: workerId => void dispatcher.replayConnected(workerId), health: () => ({ buildId: Bun.env.MARS_BUILD_ID ?? "dev", startedAt, discovery: discoveryHealth.snapshot() }) });
   let server!: Server<ControlPlaneSocketData>;
   const gateway = createControlPlaneGateway({ db, httpFetch: async request => await httpApp.fetch(request), current, requestSource: (request, activeServer) => { requestSources.set(request, activeServer.requestIP(request)?.address ?? "unknown"); return requestSources.get(request) ?? "unknown"; }, dispatcher, triggerReconciliation: () => triggerReconciliation(), requestId: () => crypto.randomUUID() });
   server = Bun.serve<ControlPlaneSocketData>({ port: options.port ?? Number(Bun.env.PORT ?? 3000), websocket: gateway.websocket, fetch: request => gateway.fetch(request, server) });

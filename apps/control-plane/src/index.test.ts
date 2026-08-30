@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initializeDatabase, configureErrorFileLogging, formatJobReconciliationReport, resolveWebhookOrigin, createDevelopmentWindowsContainerBuild, resolveDevelopmentWindowsArtifacts } from "./index.ts";
+import { initializeDatabase, configureErrorFileLogging, formatJobReconciliationReport, resolveWebhookOrigin, createDevelopmentWindowsContainerBuild, resolveDevelopmentWindowsArtifacts, resolveDevelopmentLinuxArtifacts, resolveDevelopmentMacosArtifacts } from "./index.ts";
 
 test("requires an explicit webhook origin at startup", () => {
   const previous = Bun.env.GITHUB_WEBHOOK_URL;
@@ -213,6 +213,81 @@ test("does not resolve a missing local worker artifact", async () => {
       MARS_WINDOWS_CONTAINER_VC_SHA256: hash,
     });
     expect(artifacts).toBeUndefined();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("resolves Linux repository artifacts and macOS build artifacts independently", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-platform-development-artifacts-"));
+  const golden = join(root, "worker.qcow2");
+  const orchestrator = join(root, "mars-orchestrator");
+  try {
+    await Bun.write(golden, "local-linux-golden");
+    await Bun.write(orchestrator, "local-macos-orchestrator");
+
+    const linux = await resolveDevelopmentLinuxArtifacts({
+      NODE_ENV: "development",
+      MARS_LINUX_BROKER_IMAGE: "mars/linux-broker:dev",
+      MARS_LINUX_GOLDEN_PATH: golden,
+    });
+    const macos = await resolveDevelopmentMacosArtifacts({
+      NODE_ENV: "development",
+      MARS_MACOS_ORCHESTRATOR_PATH: orchestrator,
+      MARS_TART_BASE_IMAGE: "mars-macos-dev",
+      MARS_TART_IMAGE_DIGEST: `sha256:${"b".repeat(64)}`,
+    });
+
+    expect(linux).toEqual({
+      brokerImage: "mars/linux-broker:dev",
+      goldenImage: {
+        path: golden,
+        sha256: createHash("sha256").update("local-linux-golden").digest("hex"),
+      },
+      compose: {
+        path: join(import.meta.dir, "../../../deploy/workers/linux-broker-compose.yaml"),
+        sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
+      domainTemplate: {
+        path: join(import.meta.dir, "../../../deploy/workers/worker-domain.xml"),
+        sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
+    });
+    expect(macos).toEqual({
+      orchestrator: {
+        path: orchestrator,
+        sha256: createHash("sha256").update("local-macos-orchestrator").digest("hex"),
+      },
+      tartImage: "mars-macos-dev",
+      tartImageDigest: "b".repeat(64),
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("keeps missing Linux and macOS development artifacts platform-local", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-independent-platform-artifacts-"));
+  const orchestrator = join(root, "mars-orchestrator");
+  try {
+    await Bun.write(orchestrator, "macos-ready");
+    const [linux, macos] = await Promise.all([
+      resolveDevelopmentLinuxArtifacts({
+        NODE_ENV: "development",
+        MARS_LINUX_BROKER_IMAGE: "mars/linux-broker:dev",
+        MARS_LINUX_GOLDEN_PATH: join(root, "missing.qcow2"),
+      }),
+      resolveDevelopmentMacosArtifacts({
+        NODE_ENV: "development",
+        MARS_MACOS_ORCHESTRATOR_PATH: orchestrator,
+        MARS_TART_BASE_IMAGE: "mars-macos-dev",
+        MARS_TART_IMAGE_DIGEST: "c".repeat(64),
+      }),
+    ]);
+
+    expect(linux?.goldenImage).toBeUndefined();
+    expect(macos?.orchestrator?.path).toBe(orchestrator);
+    expect(macos?.tartImage).toBe("mars-macos-dev");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
