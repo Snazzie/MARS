@@ -124,6 +124,27 @@ export function createDevelopmentWindowsArtifacts(environment: DevelopmentEnviro
   return { orchestrator, serviceHost, template, container: { baseImage, runner, git, vcRuntime } };
 }
 
+const windowsContainerBaseImagePattern = /^mcr\.microsoft\.com\/windows\/server:ltsc2025@sha256:[0-9a-f]{64}$/;
+
+export function createDevelopmentWindowsContainerBuild(input: {
+  publicOrigin: string | null;
+  artifacts?: Pick<DevelopmentWindowsArtifacts, "container">;
+  buildArtifacts?: NonNullable<ControlPlaneHttpDeps["windowsContainerArtifacts"]>;
+}): NonNullable<ControlPlaneHttpDeps["windowsContainerBuild"]> | undefined {
+  const container = input.artifacts?.container;
+  const buildArtifacts = input.buildArtifacts;
+  if (!input.publicOrigin || !container || !buildArtifacts || !windowsContainerBaseImagePattern.test(container.baseImage)) return undefined;
+  return {
+    baseImage: container.baseImage,
+    runnerUrl: new URL("/api/workers/windows-container-runner", input.publicOrigin).toString(),
+    runnerSha256: container.runner.sha256,
+    gitUrl: new URL("/api/workers/windows-container-git", input.publicOrigin).toString(),
+    gitSha256: container.git.sha256,
+    vcUrl: new URL("/api/workers/windows-container-vc-runtime", input.publicOrigin).toString(),
+    vcSha256: container.vcRuntime.sha256,
+    ...buildArtifacts,
+  };
+}
 
 export function resolveWebhookOrigin(raw: string | undefined = Bun.env.GITHUB_WEBHOOK_URL): string {
   if (!raw?.trim()) throw new Error("GITHUB_WEBHOOK_URL is required");
@@ -214,20 +235,6 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
     return Object.values(artifacts).every(Boolean) ? artifacts as NonNullable<ControlPlaneHttpDeps["windowsContainerArtifacts"]> : undefined;
   };
   const windowsContainerArtifacts = loadWindowsContainerArtifacts();
-  const windowsContainerConfig = {
-    baseImage: Bun.env.MARS_WINDOWS_CONTAINER_BASE_IMAGE?.trim(),
-    runnerUrl: Bun.env.MARS_WINDOWS_CONTAINER_RUNNER_URL?.trim(),
-    runnerSha256: Bun.env.MARS_WINDOWS_CONTAINER_RUNNER_SHA256?.trim(),
-    gitUrl: Bun.env.MARS_WINDOWS_CONTAINER_GIT_URL?.trim(),
-    gitSha256: Bun.env.MARS_WINDOWS_CONTAINER_GIT_SHA256?.trim(),
-    vcUrl: Bun.env.MARS_WINDOWS_CONTAINER_VC_URL?.trim(),
-    vcSha256: Bun.env.MARS_WINDOWS_CONTAINER_VC_SHA256?.trim(),
-  };
-  const windowsTemplateSha256 = Bun.env.MARS_WINDOWS_TEMPLATE_DIGEST?.trim().replace(/^sha256:/, "");
-  const hasWindowsContainerConfig = Object.values(windowsContainerConfig).every(value => Boolean(value)) && Boolean(windowsTemplateSha256);
-  const windowsContainerBuild = !production && hasWindowsContainerConfig && windowsContainerArtifacts
-    ? { ...windowsContainerConfig, ...windowsContainerArtifacts } as NonNullable<ControlPlaneHttpDeps["windowsContainerBuild"]>
-    : undefined;
   const developmentWindowsArtifacts = createDevelopmentWindowsArtifacts(Bun.env);
   const workerReleaseManifest = options.workerReleaseManifest ?? (production ? await loadWorkerReleaseManifest() : undefined);
   if (production && !options.skipArtifactChecks) {
@@ -264,6 +271,9 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
     configureRunLifecycle(db);
   }
   const initialized = options.setupOverride ?? await initializeControlPlaneSetup(db, dataRoot, configuredPublicOrigin);
+  const windowsContainerBuild = !production
+    ? createDevelopmentWindowsContainerBuild({ publicOrigin: initialized.setup.publicOrigin() ?? configuredPublicOrigin ?? null, artifacts: developmentWindowsArtifacts && { container: developmentWindowsArtifacts.container }, buildArtifacts: windowsContainerArtifacts })
+    : undefined;
   const workerConnectionOrigins = (): string[] => {
     const canonical = initialized.setup.publicOrigin() ?? configuredPublicOrigin;
     return [...new Set([canonical, ...configuredWorkerOrigins].filter((origin): origin is string => Boolean(origin)))];

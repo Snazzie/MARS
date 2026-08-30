@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { expect, test } from "bun:test";
 import { createWorkerImageBuildPayload } from "./windows-image-build.ts";
+import { createDevelopmentWindowsContainerBuild } from "./index.ts";
 
 test("binds the worker build command to the authoritative artifact bytes", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-image-payload-"));
@@ -37,6 +38,45 @@ test("binds the worker build command to the authoritative artifact bytes", async
     });
     expect(payload.contentSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(payload.contentSha256).not.toBe(payload.artifacts.entrypoint.sha256);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("parses a local development image build with proxied dependencies and preserved hashes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-local-image-payload-"));
+  try {
+    const files = ["builder.ps1", "verifier.ps1", "Containerfile", "entrypoint.ps1", "agent.exe"];
+    for (const name of files) await writeFile(join(root, name), name);
+    const hash = "a".repeat(64);
+    const build = createDevelopmentWindowsContainerBuild({
+      publicOrigin: "https://control.test",
+      artifacts: {
+        container: {
+          baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${"b".repeat(64)}`,
+          runner: { path: join(root, "runner.zip"), sha256: hash },
+          git: { path: join(root, "git.zip"), sha256: hash },
+          vcRuntime: { path: join(root, "vc-runtime.exe"), sha256: hash },
+        },
+      },
+      buildArtifacts: {
+        builderPath: join(root, "builder.ps1"),
+        verifierPath: join(root, "verifier.ps1"),
+        containerfilePath: join(root, "Containerfile"),
+        entrypointPath: join(root, "entrypoint.ps1"),
+        jobAgentPath: join(root, "agent.exe"),
+      },
+    });
+    expect(build).toBeDefined();
+    const payload = await createWorkerImageBuildPayload({
+      baseUrl: "https://control.test",
+      buildId: randomUUID(),
+      image: "mars/windows-job:local",
+      build: build!,
+    });
+    expect(payload.runner).toEqual({ url: "https://control.test/api/workers/windows-container-runner", sha256: hash });
+    expect(payload.git).toEqual({ url: "https://control.test/api/workers/windows-container-git", sha256: hash });
+    expect(payload.vcRuntime).toEqual({ url: "https://control.test/api/workers/windows-container-vc-runtime", sha256: hash });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -68,6 +68,7 @@ test("deployment template documents only operator inputs without secrets or rele
   for (const variable of new Set(variables)) expect(envExample).toContain(`${variable}=`);
   expect(envExample).toContain("PUBLIC_BASE_URL=http://localhost:3000");
   expect(envExample).toContain("WORKER_BASE_URL=");
+  expect(envExample).toMatch(/^MARS_WINDOWS_CONTAINER_BASE_IMAGE=mcr\.microsoft\.com\/windows\/server:ltsc2025@sha256:[0-9a-f]{64}$/m);
   expect(envExample).not.toContain("CONTROL_PLANE_ADAPTER_URLS");
   expect(envExample).not.toMatch(/(DEFAULT_JOB_IMAGE|BROWSER_BASE_URL)/);
   expect(envExample).not.toMatch(/(ghp_|github_pat_|-----BEGIN [A-Z ]+ PRIVATE KEY-----)/i);

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initializeDatabase, configureErrorFileLogging, formatJobReconciliationReport, resolveWebhookOrigin } from "./index.ts";
+import { initializeDatabase, configureErrorFileLogging, formatJobReconciliationReport, resolveWebhookOrigin, createDevelopmentWindowsContainerBuild } from "./index.ts";
 
 test("requires an explicit webhook origin at startup", () => {
   const previous = Bun.env.GITHUB_WEBHOOK_URL;
@@ -64,4 +64,37 @@ test("keeps deferred-only reconciliation quiet", () => {
 test("reports successful reservations and unexpected failures", () => {
   expect(formatJobReconciliationReport({ reserved: 2, deferred: 1, skipped: 3, failed: 0 })).toBe("Job reconciliation tick: reserved=2 deferred=1 failed=0 skipped=3");
   expect(formatJobReconciliationReport({ reserved: 0, deferred: 0, skipped: 1, failed: 1 })).toBe("Job reconciliation tick: reserved=0 deferred=0 failed=1 skipped=1");
+});
+
+
+test("builds development Windows image inputs from local artifacts behind control-plane routes", () => {
+  const hash = "a".repeat(64);
+  const build = createDevelopmentWindowsContainerBuild({
+    publicOrigin: "https://control.example/path",
+    artifacts: {
+      container: {
+        baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${"b".repeat(64)}`,
+        runner: { path: "C:\\mars\\runner.zip", sha256: hash },
+        git: { path: "C:\\mars\\git.zip", sha256: hash },
+        vcRuntime: { path: "C:\\mars\\vc-runtime.exe", sha256: hash },
+      },
+    },
+    buildArtifacts: {
+      builderPath: "C:\\mars\\builder.ps1",
+      verifierPath: "C:\\mars\\verifier.ps1",
+      containerfilePath: "C:\\mars\\Containerfile",
+      entrypointPath: "C:\\mars\\entrypoint.ps1",
+      jobAgentPath: "C:\\mars\\job-agent.exe",
+    },
+  });
+
+  expect(build).toMatchObject({
+    baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${"b".repeat(64)}`,
+    runnerUrl: "https://control.example/api/workers/windows-container-runner",
+    runnerSha256: hash,
+    gitUrl: "https://control.example/api/workers/windows-container-git",
+    gitSha256: hash,
+    vcUrl: "https://control.example/api/workers/windows-container-vc-runtime",
+    vcSha256: hash,
+  });
 });
