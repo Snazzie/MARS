@@ -130,13 +130,23 @@ export function windowsInstallerValues(platform: WindowsWorkerRelease | undefine
   }
   if (!platform) throw new Error("Windows release metadata is unavailable.");
   return {
+    WindowsArtifactMode: "production",
     WindowsRuntime: "container",
+    WindowsOrchestratorUrl: `${connectOrigin}/api/workers/orchestrator?audience=windows-x64`,
     WindowsOrchestratorSha256: platform.orchestratorSha256,
+    WindowsServiceHostUrl: `${connectOrigin}/api/workers/service-host?audience=windows-x64`,
     WindowsServiceHostSha256: platform.serviceHostSha256,
     WindowsTemplateUrl: platform.vmTemplateUrl,
     WindowsTemplatePath: "C:\\ProgramData\\Mars\\worker-template.vhdx",
     WindowsTemplateDigest: `sha256:${platform.vmTemplateSha256}`,
+    WindowsContainerBaseImage: platform.container.baseImage,
     WindowsContainerImage: "mars/windows-job:local",
+    WindowsContainerRunnerUrl: platform.container.runner.url,
+    WindowsContainerRunnerSha256: platform.container.runner.sha256,
+    WindowsContainerGitUrl: platform.container.git.url,
+    WindowsContainerGitSha256: platform.container.git.sha256,
+    WindowsContainerVcRuntimeUrl: platform.container.vcRuntime.url,
+    WindowsContainerVcRuntimeSha256: platform.container.vcRuntime.sha256,
   };
 }
 
