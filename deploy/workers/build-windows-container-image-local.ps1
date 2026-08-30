@@ -15,9 +15,19 @@ param(
   [Parameter(Mandatory = $true)][string]$EntrypointPath
 )
 $ErrorActionPreference = 'Stop'
+function Assert-LocalImageArtifactUrl([string]$Url, [string]$Name) {
+  $parsed = $null
+  if ($Url -match '\s' -or -not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$parsed) -or
+      ($parsed.Scheme -ne [Uri]::UriSchemeHttp -and $parsed.Scheme -ne [Uri]::UriSchemeHttps) -or
+      [string]::IsNullOrWhiteSpace($parsed.Host)) {
+    throw "$Name must be an absolute HTTP or HTTPS URL."
+  }
+  try { $null = $parsed.Port } catch { throw "$Name must be an absolute HTTP or HTTPS URL." }
+  if (-not [string]::IsNullOrEmpty($parsed.UserInfo)) { throw "$Name must not include credentials." }
+}
 if ($BaseImage -notmatch '^mcr\.microsoft\.com/windows/server:ltsc2025@sha256:[0-9a-f]{64}$') { throw 'BaseImage must be a digest-pinned mcr.microsoft.com/windows/server:ltsc2025 reference' }
 foreach ($url in @(@{ Value = $RunnerUrl; Name = 'RunnerUrl' }, @{ Value = $GitUrl; Name = 'GitUrl' }, @{ Value = $VcRuntimeUrl; Name = 'VcRuntimeUrl' })) {
-  if ($url.Value -notmatch '^https://') { throw "$($url.Name) must use HTTPS." }
+  Assert-LocalImageArtifactUrl $url.Value $url.Name
 }
 foreach ($hash in @(@{ Value = $RunnerSha256; Name = 'RunnerSha256' }, @{ Value = $GitSha256; Name = 'GitSha256' }, @{ Value = $VcRuntimeSha256; Name = 'VcRuntimeSha256' })) {
   if ($hash.Value -notmatch '^[0-9a-fA-F]{64}$') { throw "$($hash.Name) must be a SHA-256 hex digest" }

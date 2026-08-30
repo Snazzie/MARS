@@ -28,7 +28,17 @@ function Require-Administrator {
   if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Administrator privileges are required.' }
 }
 function Assert-HttpsUrl([string]$Url, [string]$Name) {
-  if ($Url -notmatch '^https://' -and $Url -notmatch '^http://(localhost|127\.0\.0\.1)(:\d+)?/') { throw "$Name must use HTTPS." }
+  $parsed = $null
+  if ($Url -match '\s' -or -not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$parsed) -or
+      ($parsed.Scheme -ne [Uri]::UriSchemeHttp -and $parsed.Scheme -ne [Uri]::UriSchemeHttps) -or
+      [string]::IsNullOrWhiteSpace($parsed.Host)) {
+    throw "$Name must be an absolute HTTP or HTTPS URL."
+  }
+  try { $null = $parsed.Port } catch { throw "$Name must be an absolute HTTP or HTTPS URL." }
+  if (-not [string]::IsNullOrEmpty($parsed.UserInfo)) { throw "$Name must not include credentials." }
+  if ($parsed.Scheme -eq [Uri]::UriSchemeHttp -and -not $parsed.IsLoopback -and -not $AllowInsecureHttp) {
+    throw "$Name must use HTTPS unless -AllowInsecureHttp is specified."
+  }
 }
 function Assert-ArtifactConfiguration {
   $missing = @()
