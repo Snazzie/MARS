@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createDevelopmentWindowsArtifacts } from "../index.ts";
 import { createControlPlaneApp } from "./app.ts";
 import { fakeHttpDeps } from "./test-deps.ts";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -8,6 +9,47 @@ import { pathToFileURL } from "node:url";
 
 const app = createControlPlaneApp(fakeHttpDeps());
 
+  test("assembles explicit local Windows development artifacts with checksums", () => {
+    const hash = "a".repeat(64);
+    expect(createDevelopmentWindowsArtifacts({
+      NODE_ENV: "development",
+      WORKER_ORCHESTRATOR_WINDOWS_X64: "C:\\mars\\mars-orchestrator.exe",
+      MARS_WINDOWS_ORCHESTRATOR_SHA256: hash,
+      WORKER_SERVICE_HOST_EXECUTABLE: "C:\\mars\\mars-service-host.exe",
+      MARS_WINDOWS_SERVICE_HOST_SHA256: hash,
+      MARS_WINDOWS_TEMPLATE_PATH: "C:\\mars\\worker-template.vhdx",
+      MARS_WINDOWS_TEMPLATE_DIGEST: `sha256:${hash}`,
+      MARS_WINDOWS_CONTAINER_BASE_IMAGE: `mcr.microsoft.com/windows@sha256:${hash}`,
+      MARS_WINDOWS_CONTAINER_RUNNER_PATH: "C:\\mars\\runner.zip",
+      MARS_WINDOWS_CONTAINER_RUNNER_URL: "http://localhost:3000/runner.zip",
+      MARS_WINDOWS_CONTAINER_RUNNER_SHA256: hash,
+      MARS_WINDOWS_CONTAINER_GIT_PATH: "C:\\mars\\git.zip",
+      MARS_WINDOWS_CONTAINER_GIT_URL: "http://localhost:3000/git.zip",
+      MARS_WINDOWS_CONTAINER_GIT_SHA256: hash,
+      MARS_WINDOWS_CONTAINER_VC_PATH: "C:\\mars\\vc.exe",
+      MARS_WINDOWS_CONTAINER_VC_URL: "http://localhost:3000/vc.exe",
+      MARS_WINDOWS_CONTAINER_VC_SHA256: hash,
+    })).toEqual({
+      orchestrator: { path: "C:\\mars\\mars-orchestrator.exe", sha256: hash },
+      serviceHost: { path: "C:\\mars\\mars-service-host.exe", sha256: hash },
+      template: { path: "C:\\mars\\worker-template.vhdx", sha256: hash },
+      container: {
+        baseImage: `mcr.microsoft.com/windows@sha256:${hash}`,
+        runner: { path: "C:\\mars\\runner.zip", url: "http://localhost:3000/runner.zip", sha256: hash },
+        git: { path: "C:\\mars\\git.zip", url: "http://localhost:3000/git.zip", sha256: hash },
+        vcRuntime: { path: "C:\\mars\\vc.exe", url: "http://localhost:3000/vc.exe", sha256: hash },
+      },
+    });
+  });
+
+  test("leaves development artifacts optional without release metadata", () => {
+    expect(createDevelopmentWindowsArtifacts({ NODE_ENV: "development" })).toBeUndefined();
+    expect(createDevelopmentWindowsArtifacts({
+      NODE_ENV: "production",
+      WORKER_ORCHESTRATOR_WINDOWS_X64: "C:\\mars\\mars-orchestrator.exe",
+      MARS_WINDOWS_ORCHESTRATOR_SHA256: "a".repeat(64),
+    })).toBeUndefined();
+  });
 describe("control-plane HTTP boundary", () => {
   test("serves build and discovery health only below /api", async () => {
     const response = await app.request("/api/healthz");
