@@ -42,7 +42,7 @@ test.skipIf(!databaseUrl)("queued webhook becomes a real lease and encrypted wor
     githubFetchForInstallation: () => async (_input, init) => { expect(init?.method).toBe("POST"); return Response.json({ encoded_jit_config: "encoded-jit-config" }); },
     dispatcher: { dispatch: async (command) => { dispatched.push(command); return {} as never; } },
   });
-  expect(result).toEqual({ reserved: 1, skipped: 0, failed: 0 });
+  expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
   expect(dispatched).toHaveLength(1);
   const [lease] = await db`select state, github_job_id, expires_at from runner_leases where github_job_id=987654321`;
   expect(lease.state).toBe('dispatched');

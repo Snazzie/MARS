@@ -75,7 +75,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
       report.reserved += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown";
-      if (message === "worker_capacity_exhausted") {
+      if (message === "worker_capacity_exhausted" || message === "pool_capacity_exhausted") {
         report.deferred += 1;
       } else {
         console.error(`Reconcile job ${queued.jobId} failed: ${message}`);
