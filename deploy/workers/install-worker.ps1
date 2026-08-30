@@ -226,6 +226,24 @@ function Ensure-ControlPlane {
   if ($ControlPlaneUrl -notmatch '^https://' -and -not $localHttp -and -not $AllowInsecureHttp) { throw 'Control-plane URL must use HTTPS.' }
   Invoke-WebRequest -Uri "$ControlPlaneUrl/api/healthz" -Method Get -UseBasicParsing -TimeoutSec 30 | Out-Null
 }
+function Download-WorkerArtifact([string]$Url, [string]$Destination, [int]$TimeoutSec = 120) {
+  $staged = "$Destination.download.$([guid]::NewGuid().ToString('N'))"
+  try {
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+      try {
+        $response = Invoke-WebRequest -Uri $Url -OutFile $staged -UseBasicParsing -TimeoutSec $TimeoutSec
+        Move-Item -LiteralPath $staged -Destination $Destination -Force
+        return $response
+      } catch {
+        Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+        if ($attempt -eq 3) { throw }
+        Start-Sleep -Seconds $attempt
+      }
+    }
+  } finally {
+    Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+  }
+}
 function Verify-DownloadedFile([string]$Path, [string]$Expected, [string]$Name, $Response) {
   if ([string]::IsNullOrWhiteSpace($Expected) -or $Expected -notmatch '^[0-9a-f]{64}$') { throw "$Name SHA-256 is not configured." }
   $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
@@ -276,8 +294,8 @@ $exe = Join-Path $bin 'mars-orchestrator.exe'
 $serviceHost = Join-Path $bin 'mars-service-host.exe'
 $stagedExe = Join-Path $root 'mars-orchestrator.download'
 $stagedServiceHost = Join-Path $root 'mars-service-host.download'
-$orchestratorResponse = Invoke-WebRequest -Uri $WindowsOrchestratorUrl -OutFile $stagedExe -TimeoutSec 120
-$serviceHostResponse = Invoke-WebRequest -Uri $WindowsServiceHostUrl -OutFile $stagedServiceHost -TimeoutSec 120
+$orchestratorResponse = Download-WorkerArtifact $WindowsOrchestratorUrl $stagedExe
+$serviceHostResponse = Download-WorkerArtifact $WindowsServiceHostUrl $stagedServiceHost
 Verify-DownloadedFile $stagedExe $WindowsOrchestratorSha256 'Windows orchestrator' $orchestratorResponse
 Verify-DownloadedFile $stagedServiceHost $WindowsServiceHostSha256 'Windows service host' $serviceHostResponse
 Write-State 'runtime-download' 'complete'

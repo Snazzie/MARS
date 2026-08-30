@@ -398,8 +398,8 @@ test("Windows installer stages runtime downloads before replacing a running serv
   const source = await Bun.file(powershell).text();
   expect(source).toContain("$stagedExe = Join-Path $root 'mars-orchestrator.download'");
   expect(source).toContain("$stagedServiceHost = Join-Path $root 'mars-service-host.download'");
-  expect(source).toContain('OutFile $stagedExe');
-  expect(source).toContain('OutFile $stagedServiceHost');
+  expect(source).toContain("Download-WorkerArtifact $WindowsOrchestratorUrl $stagedExe");
+  expect(source).toContain("Download-WorkerArtifact $WindowsServiceHostUrl $stagedServiceHost");
   expect(source).toContain("Move-Item -LiteralPath $stagedExe -Destination $exe -Force");
   expect(source.indexOf("Stop-Service MarsWorker")).toBeLessThan(source.indexOf("Move-Item -LiteralPath $stagedExe"));
 });
@@ -671,6 +671,27 @@ Write-Output 'LOCAL_TEMPLATE_URL_OK'
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+windowsRuntimeTest("Windows installer retries worker artifact downloads after transport closure", async () => {
+  const source = await Bun.file(powershell).text();
+  const destination = join(await mkdtemp(join(tmpdir(), "mars-artifact-download-")), "orchestrator.exe");
+  const result = await invokeWindowsInstallerHarness(source, `
+$global:downloadAttempts = 0
+function Invoke-WebRequest {
+  param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing, [int]$TimeoutSec)
+  $global:downloadAttempts++
+  if ($global:downloadAttempts -eq 1) { throw [IO.IOException]::new('The connection was closed.') }
+  [IO.File]::WriteAllText($OutFile, 'orchestrator')
+  return [pscustomobject]@{ Headers = @{} }
+}
+$response = Download-WorkerArtifact 'https://control.example/api/workers/orchestrator' '${destination.replace(/\\/g, "\\\\")}'
+if ($global:downloadAttempts -ne 2) { throw "expected two download attempts, got $global:downloadAttempts" }
+if ((Get-Content -LiteralPath '${destination.replace(/\\/g, "\\\\")}' -Raw) -ne 'orchestrator') { throw 'artifact was not downloaded' }
+if (-not $response) { throw 'download response was not returned' }
+Write-Output 'ARTIFACT_RETRY_OK'
+`);
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("ARTIFACT_RETRY_OK");
 });
 test("Linux URL policy accepts a same-origin LAN HTTP artifact in local mode", async () => {
   const baseUrl = "http://192.168.50.7:3000";
