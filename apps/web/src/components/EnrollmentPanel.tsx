@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { ApiRequestError, getWorkerBootstrapStatus, getWorkerControlPlaneUrls, initializeWorkerBootstrap, rotateWorkerBootstrap } from "../api.ts";
-import { isLocalDevelopment } from "../environment.ts";
 
 type RuntimePlatform = "linux-x64" | "windows-x64" | "macos-arm64";
 type Reveal = { code: string; generation: number; createdAt: string };
@@ -17,12 +16,6 @@ export function connectedEnrollmentWorker(snapshot: WorkerConnectionSnapshot, wo
 function quoteShell(value: string): string { return `'${value.replaceAll("'", "'\"'\"'")}'`; }
 function quotePowerShell(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
 
-const WORKER_RELEASE_BASE_URL = "https://github.com/Snazzie/Mars/releases/latest/download";
-const WORKER_RELEASE_ASSETS: Record<RuntimePlatform, string> = {
-  "linux-x64": "install-worker-linux-x64.sh",
-  "windows-x64": "install-worker-windows-x64.ps1",
-  "macos-arm64": "install-worker-macos-arm64.sh",
-};
 
 export function buildInstallerCommand(installer: string, audience: RuntimePlatform, code?: string, connectOrigin?: string): string {
   if (!["linux-x64", "windows-x64", "macos-arm64"].includes(audience)) throw new Error("Unsupported installer audience");
@@ -42,12 +35,10 @@ export function buildInstallerCommand(installer: string, audience: RuntimePlatfo
   const controlPlaneEnv = `PUBLIC_BASE_URL=${quoteShell(selectedOrigin)} `;
   return `set -e\nmarsInstaller="$(mktemp "\${TMPDIR:-/tmp}/mars-installer.XXXXXX")"\ntrap 'rm -f "$marsInstaller"' EXIT\ncurl --fail --proto '=${protocol}'${tls} --output "$marsInstaller" ${quoteShell(url.toString())}\n${controlPlaneEnv}${shell} "$marsInstaller"${controlPlaneArg}${codeArg}`;
 }
-export function buildInstallerCommands(origin: string, audience: RuntimePlatform, code?: string, localDevelopment: boolean = isLocalDevelopment()): { label: string; command: string }[] {
+export function buildInstallerCommands(origin: string, audience: RuntimePlatform, code?: string): { label: string; command: string }[] {
   const labels: Record<RuntimePlatform, string> = { "linux-x64": "Linux x64", "windows-x64": "Windows x64 (container)", "macos-arm64": "macOS arm64" };
   const selectedOrigin = new URL(origin).origin;
-  const installer = localDevelopment
-    ? `${selectedOrigin}/api/workers/installer?audience=${audience}&runtime=container&connectOrigin=${encodeURIComponent(selectedOrigin)}`
-    : `${WORKER_RELEASE_BASE_URL}/${WORKER_RELEASE_ASSETS[audience]}`;
+  const installer = `${selectedOrigin}/api/workers/installer?audience=${audience}&runtime=container&connectOrigin=${encodeURIComponent(selectedOrigin)}`;
   return [{ label: labels[audience], command: buildInstallerCommand(installer, audience, code, selectedOrigin) }];
 }
 export function normalizeControlPlaneUrls(values: readonly string[]): string[] {

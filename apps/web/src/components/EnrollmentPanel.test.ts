@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import { buildInstallerCommand, buildInstallerCommands, connectedEnrollmentWorker, connectionSnapshot, normalizeControlPlaneUrls } from "./EnrollmentPanel.tsx";
-import { isLocalDevelopment } from "../environment.ts";
-const url = "https://github.com/Snazzie/Mars/releases/latest/download/install-worker-linux-x64.sh";
+const url = "https://control.example/api/workers/installer?audience=linux-x64&runtime=container&connectOrigin=https%3A%2F%2Fcontrol.example";
 test("bootstrap status contract includes initialization generation and timestamps", () => {
   const status = {
     initialized: true,
@@ -15,13 +14,13 @@ test("bootstrap status contract includes initialization generation and timestamp
 
 test("installer commands include the one-use enrollment code and selected control-plane URL", () => {
   const command = buildInstallerCommand(url, "linux-x64", "Abc_-9", "https://control.example/");
-  expect(command).toContain("https://github.com/Snazzie/Mars/releases/latest/download/install-worker-linux-x64.sh");
+  expect(command).toContain(url);
   expect(command).toContain("--control-plane-url 'https://control.example'");
   expect(command).toContain("--code 'Abc_-9'");
   expect(command).not.toContain("vcpu");
 });
-test("downloads the macOS release installer to a temporary file and cleans it after --code execution", () => {
-  const installer = "https://github.com/Snazzie/Mars/releases/latest/download/install-worker-macos-arm64.sh";
+test("downloads the macOS control-plane installer to a temporary file and cleans it after --code execution", () => {
+  const installer = "https://control.example/api/workers/installer?audience=macos-arm64&runtime=container&connectOrigin=https%3A%2F%2Fcontrol.example";
   const command = buildInstallerCommand(installer, "macos-arm64", "Abc_-9", "https://control.example");
   expect(command).toContain("mktemp");
   expect(command).toContain("zsh \"$marsInstaller\" --control-plane-url 'https://control.example' --code 'Abc_-9'");
@@ -30,36 +29,36 @@ test("downloads the macOS release installer to a temporary file and cleans it af
 });
 test("aborts before invoking Linux/macOS installer when curl fails", () => {
   for (const [audience, shell] of [["linux-x64", "bash"], ["macos-arm64", "zsh"]] as const) {
-    const command = buildInstallerCommand(`https://github.com/Snazzie/Mars/releases/latest/download/install-worker-${audience}.sh`, audience, "Abc_-9", "https://control.example");
-    expect(command).not.toContain("worker-v0.1.0");
+    const command = buildInstallerCommand(`https://control.example/api/workers/installer?audience=${audience}&runtime=container&connectOrigin=https%3A%2F%2Fcontrol.example`, audience, "Abc_-9", "https://control.example");
+    expect(command).toContain("/api/workers/installer?");
     expect(command.startsWith("set -e\n")).toBe(true);
     expect(command.indexOf("\ncurl ")).toBeLessThan(command.indexOf(`\nPUBLIC_BASE_URL=`));
     expect(command.indexOf(`\nPUBLIC_BASE_URL=`)).toBeLessThan(command.indexOf(`${shell} "$marsInstaller"`));
   }
 });
-test("supports each immutable release installer asset", () => {
+test("uses the selected control-plane installer endpoint for every platform", () => {
   for (const audience of ["linux-x64", "windows-x64", "macos-arm64"] as const) {
     const command = buildInstallerCommands("https://control.example", audience, "code")[0]?.command ?? "";
-    expect(command).toContain("https://github.com/Snazzie/Mars/releases/latest/download/");
-    expect(command).not.toContain("worker-v0.1.0");
+    expect(command).toContain(`https://control.example/api/workers/installer?audience=${audience}&runtime=container&connectOrigin=https%3A%2F%2Fcontrol.example`);
+    expect(command).not.toContain("releases/latest/download");
   }
 });
-test("uses the local control-plane installer endpoint in development", () => {
-  const command = buildInstallerCommands("http://localhost:3000", "windows-x64", "code", true)[0]?.command ?? "";
+test("uses the control-plane installer endpoint in development", () => {
+  const command = buildInstallerCommands("http://localhost:3000", "windows-x64", "code")[0]?.command ?? "";
   expect(command).toContain("http://localhost:3000/api/workers/installer?");
   expect(command).toContain("audience=windows-x64");
   expect(command).toContain("runtime=container");
   expect(command).toContain("connectOrigin=http%3A%2F%2Flocalhost%3A3000");
   expect(command).toContain("-ControlPlaneUrl 'http://localhost:3000'");
-  expect(command).not.toContain("github.com/Snazzie/Mars/releases");
+  expect(command).not.toContain("releases/latest/download");
 });
-test("keeps the GitHub release installer URL in production", () => {
-  const command = buildInstallerCommands("https://control.example", "windows-x64", "code", false)[0]?.command ?? "";
-  expect(command).toContain("https://github.com/Snazzie/Mars/releases/latest/download/install-worker-windows-x64.ps1");
-});
-test("uses a Bun-safe production default when no explicit mode override is provided", () => {
-  expect(isLocalDevelopment()).toBe(false);
-  expect(buildInstallerCommands("https://control.example", "windows-x64", "code")[0]?.command).toContain("github.com/Snazzie/Mars/releases");
+test("uses the control-plane installer endpoint in production", () => {
+  const command = buildInstallerCommands("https://control.example", "windows-x64", "code")[0]?.command ?? "";
+  expect(command).toContain("https://control.example/api/workers/installer?");
+  expect(command).toContain("audience=windows-x64");
+  expect(command).toContain("runtime=container");
+  expect(command).toContain("connectOrigin=https%3A%2F%2Fcontrol.example");
+  expect(command).not.toContain("releases/latest/download");
 });
 test("builds only the selected platform installer command", () => {
   const commands = buildInstallerCommands("https://control.example", "windows-x64", "one-use-code");
