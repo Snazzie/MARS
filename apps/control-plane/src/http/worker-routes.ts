@@ -107,7 +107,7 @@ export function linuxInstallerValues(platform: LinuxWorkerRelease, connectOrigin
 
 export function windowsInstallerValues(platform: WindowsWorkerRelease | undefined, connectOrigin: string, development?: NonNullable<ControlPlaneHttpDeps["developmentWindowsArtifacts"]>): InstallerValues {
   if (development) {
-    const localUrl = (artifact: { url?: string }, path: string): string => artifact.url ?? `${connectOrigin}${path}`;
+    const localUrl = (path: string): string => `${connectOrigin}${path}`;
     return {
       WindowsArtifactMode: "local",
       WindowsRuntime: "container",
@@ -115,16 +115,16 @@ export function windowsInstallerValues(platform: WindowsWorkerRelease | undefine
       WindowsOrchestratorSha256: development.orchestrator.sha256,
       WindowsServiceHostUrl: `${connectOrigin}/api/workers/service-host?audience=windows-x64`,
       WindowsServiceHostSha256: development.serviceHost.sha256,
-      WindowsTemplateUrl: localUrl(development.template, "/api/workers/templates/windows-x64/artifact"),
+      WindowsTemplateUrl: localUrl("/api/workers/templates/windows-x64/artifact"),
       WindowsTemplatePath: "C:\\ProgramData\\Mars\\worker-template.vhdx",
       WindowsTemplateDigest: `sha256:${development.template.sha256}`,
       WindowsContainerBaseImage: development.container.baseImage,
       WindowsContainerImage: development.container.baseImage,
-      WindowsContainerRunnerUrl: localUrl(development.container.runner, "/api/workers/windows-container-runner"),
+      WindowsContainerRunnerUrl: localUrl("/api/workers/windows-container-runner"),
       WindowsContainerRunnerSha256: development.container.runner.sha256,
-      WindowsContainerGitUrl: localUrl(development.container.git, "/api/workers/windows-container-git"),
+      WindowsContainerGitUrl: localUrl("/api/workers/windows-container-git"),
       WindowsContainerGitSha256: development.container.git.sha256,
-      WindowsContainerVcRuntimeUrl: localUrl(development.container.vcRuntime, "/api/workers/windows-container-vc-runtime"),
+      WindowsContainerVcRuntimeUrl: localUrl("/api/workers/windows-container-vc-runtime"),
       WindowsContainerVcRuntimeSha256: development.container.vcRuntime.sha256,
     };
   }
@@ -209,6 +209,22 @@ async function packagedResponse(path: ArtifactPath, filename: string, hash: stri
   if (hash) response.headers.set("X-Content-SHA256", hash);
   return response;
 }
+async function proxyPackagedResponse(url: string, filename: string, hash: string): Promise<Response | undefined> {
+  try {
+    const upstream = await fetch(url);
+    if (!upstream.ok) return undefined;
+    const headers = noStore();
+    headers.set("content-type", upstream.headers.get("content-type") ?? "application/octet-stream");
+    headers.set("content-disposition", `attachment; filename="${filename}"`);
+    const contentLength = upstream.headers.get("content-length");
+    if (contentLength) headers.set("content-length", contentLength);
+    headers.set("X-Content-SHA256", hash);
+    return new Response(upstream.body, { status: 200, headers });
+  } catch {
+    return undefined;
+  }
+}
+
 function releaseField(platform: string, field: string): string { return `manifest:${platform}.${field}`; }
 export function pendingWorkerDto(row: Record<string, unknown>, workerConnected?: (workerId: string) => boolean) {
   if (!hasMachineIdentity(row) || typeof row.id !== "string" || typeof row.fingerprint !== "string") return null;
@@ -245,6 +261,17 @@ function idempotency(c: Context<ControlPlaneEnv>): boolean { return Boolean(c.re
 export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
   const approvalBody = async (c: Context<ControlPlaneEnv>) => { try { return parseApproveWorkerRequest(await c.req.json()); } catch { return null; } };
   const auth = async (c: Context<ControlPlaneEnv>) => deps.currentUser(c.req.raw);
+  const developmentPackaged = async (
+    c: Context<ControlPlaneEnv>,
+    artifact: { path?: string; url?: string; sha256: string } | undefined,
+    name: string,
+    filename: string,
+  ) => {
+    if (!artifact) return unavailable(c, [`development:${name}`]);
+    if (artifact.path && await artifactExists(artifact.path)) return packagedResponse(artifact.path, filename, artifact.sha256);
+    if (artifact.url) return await proxyPackagedResponse(artifact.url, filename, artifact.sha256) ?? unavailable(c, [`development:${name}`]);
+    return unavailable(c, [`development:${name}`]);
+  };
   const limiter = deps.workerRequestLimiter ?? createRequestLimiter();
   app.get("/api/workers/control-plane-urls", async (c) => {
     const user = await auth(c);
@@ -260,6 +287,9 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   });
   app.get("/api/workers/templates/:platform/artifact", async (c) => {
     const platform = c.req.param("platform") as "windows-x64" | "linux-x64";
+    if (platform === "windows-x64" && deps.developmentWindowsArtifacts) {
+      return developmentPackaged(c, deps.developmentWindowsArtifacts.template, "template", "windows-x64.vhdx");
+    }
     const path = deps.templateArtifactPaths?.[platform];
     if (!path || !await artifactExists(path)) return c.json({ code: "artifact_unavailable", message: "Template artifact is unavailable", artifact: `template:${platform}` }, 503, { "cache-control": "no-store" });
     const headers = noStore();
@@ -272,11 +302,19 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     if (!path || !await artifactExists(path)) return c.json({ code: "artifact_unavailable", message: "Windows container build artifact is unavailable", artifact: `windows-container-${key}` }, 503, { "cache-control": "no-store" });
     return packagedResponse(path, filename, await fileSha256(path));
   };
+  const developmentContainerArtifact = (
+    key: "runner" | "git" | "vcRuntime",
+    name: string,
+    filename: string,
+  ) => (c: Context<ControlPlaneEnv>) => developmentPackaged(c, deps.developmentWindowsArtifacts?.container[key], name, filename);
   app.get("/api/workers/windows-container-builder", (c) => buildArtifact(c, "builderPath", "build-windows-container-image-local.ps1"));
   app.get("/api/workers/windows-container-verifier", (c) => buildArtifact(c, "verifierPath", "verify-runtime.ps1"));
   app.get("/api/workers/windows-containerfile", (c) => buildArtifact(c, "containerfilePath", "Containerfile"));
   app.get("/api/workers/windows-container-entrypoint", (c) => buildArtifact(c, "entrypointPath", "entrypoint.ps1"));
   app.get("/api/workers/windows-container-job-agent", (c) => buildArtifact(c, "jobAgentPath", "mars-job-agent.exe"));
+  app.get("/api/workers/windows-container-runner", developmentContainerArtifact("runner", "container-runner", "runner.zip"));
+  app.get("/api/workers/windows-container-git", developmentContainerArtifact("git", "container-git", "git.zip"));
+  app.get("/api/workers/windows-container-vc-runtime", developmentContainerArtifact("vcRuntime", "container-vc-runtime", "vc-runtime.exe"));
   const packaged = async (c: Context<ControlPlaneEnv>, name: string, filename: string, hash: string | undefined) => {
     const path = pathFor(deps.workerInstallerRoot, name);
     if (!hash) return c.json({ code: "artifact_unavailable", message: "Worker artifact is unavailable", artifacts: [`manifest:linux-x64.${name === "linux-broker-compose.yaml" ? "composeSha256" : "domainTemplateSha256"}`] }, 503, { "cache-control": "no-store" });
@@ -320,6 +358,9 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   });
   app.get("/api/workers/orchestrator", async (c) => {
     const audience = c.req.query("audience") as keyof NonNullable<typeof deps.workerOrchestratorExecutables>;
+    if (audience === "windows-x64" && deps.developmentWindowsArtifacts) {
+      return developmentPackaged(c, deps.developmentWindowsArtifacts.orchestrator, "orchestrator", "mars-orchestrator.exe");
+    }
     const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined);
     const hash = deps.workerReleaseManifest?.platforms[audience]?.orchestratorSha256;
     if (!executable || !hash) return c.json({ code: "artifact_unavailable", message: "Orchestrator is unavailable", artifacts: [`orchestrator:${audience}`] }, 503, { "cache-control": "no-store" });
@@ -329,6 +370,9 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   });
   app.get("/api/workers/service-host", async (c) => {
     if (c.req.query("audience") !== "windows-x64") return c.json({ error: "unsupported service host audience" }, 400);
+    if (deps.developmentWindowsArtifacts) {
+      return developmentPackaged(c, deps.developmentWindowsArtifacts.serviceHost, "service-host", "mars-service-host.exe");
+    }
     const executable = deps.workerServiceHostExecutable;
     const hash = deps.workerReleaseManifest?.platforms["windows-x64"]?.serviceHostSha256;
     if (!hash) return c.json({ code: "artifact_unavailable", message: "Windows service host is unavailable", artifacts: ["manifest:windows-x64.serviceHostSha256"] }, 503, { "cache-control": "no-store" });
