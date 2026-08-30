@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { candidateWorkerFromRow, isDispatchableRunStatus } from "./job-reconciler.ts";
+import { candidateWorkerFromRow, isDispatchableRunStatus, runQueuedJobReconciliation } from "./job-reconciler.ts";
 import { fits, parseProvisionLabels, reason, type Candidate } from "./scheduler.ts";
 
 test("keeps queued jobs eligible while their workflow run is in progress", () => {
@@ -55,4 +55,15 @@ test("reports resource ceiling for a connected worker below the requested limits
   value.requestedLabels = ["mars-windows-x64", "10VCPU", "15G"];
   expect(fits(value)).toBe(false);
   expect(reason(value)).toBe("resource_ceiling");
+});
+
+test("returns a complete report when no queued jobs are available", async () => {
+  const db = (async () => []) as never;
+  const result = await runQueuedJobReconciliation({
+    db,
+    installationToken: async () => "",
+    dispatcher: { dispatch: async () => {} },
+    githubFetchForInstallation: () => fetch,
+  });
+  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 0 });
 });

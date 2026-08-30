@@ -86,7 +86,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       AND (${deps.repositoryFullName ?? ""}='' OR repo.full_name=${deps.repositoryFullName ?? ""})
     ORDER BY j.queued_at ASC, j.github_job_id ASC
     FOR UPDATE OF j SKIP LOCKED`;
-  if (!queuedRows.length) return { reserved: 0, skipped: 0, failed: 0 };
+  if (!queuedRows.length) return { reserved: 0, deferred: 0, skipped: 0, failed: 0 };
 
   const candidateRows = await deps.db`
     SELECT p.id AS "poolId", p.organization_id AS "organizationId", p.worker_id AS "poolWorkerId",
