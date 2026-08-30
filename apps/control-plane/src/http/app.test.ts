@@ -1195,37 +1195,71 @@ describe("development worker artifact hardening", () => {
     expect(oversizedResponse.status).toBe(503);
   });
 
-  test("propagates request cancellation to URL artifact staging", async () => {
-    let cancellationObserved = false;
+  test("keeps a digest fill alive when its miss owner aborts", async () => {
+    const body = "shared-artifact";
+    const hash = createHash("sha256").update(body).digest("hex");
+    const bytes = new TextEncoder().encode(body);
+    let calls = 0;
+    let bodyCancelled = false;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
     let markStarted!: () => void;
     const started = new Promise<void>(resolve => { markStarted = resolve; });
-    const fetcher = Object.assign((_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
-      markStarted();
-      init?.signal?.addEventListener("abort", () => {
-        cancellationObserved = true;
-        reject(init.signal?.reason);
-      }, { once: true });
-    }), { preconnect: globalThis.fetch.preconnect });
+    const fetcher = Object.assign(async () => {
+      calls += 1;
+      let sentFirst = false;
+      return new Response(new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          if (!sentFirst) {
+            sentFirst = true;
+            controller.enqueue(bytes.subarray(0, 4));
+            markStarted();
+            return;
+          }
+          await gate;
+          if (bodyCancelled) return;
+          controller.enqueue(bytes.subarray(4));
+          controller.close();
+        },
+        cancel() {
+          bodyCancelled = true;
+        },
+      }), { headers: { "content-length": String(bytes.byteLength) } });
+    }, { preconnect: globalThis.fetch.preconnect });
     const hardenedApp = createControlPlaneApp(fakeHttpDeps({
       workerReleaseManifest: undefined,
       developmentWindowsArtifacts: {
-        orchestrator: { url: "https://public.test/orchestrator", sha256: createHash("sha256").update("artifact").digest("hex") },
-        serviceHost: { url: "https://public.test/service-host", sha256: createHash("sha256").update("artifact").digest("hex") },
+        orchestrator: { url: "https://public.test/orchestrator", sha256: hash },
+        serviceHost: { url: "https://public.test/service-host", sha256: hash },
       },
       developmentArtifactProxy: {
         fetch: fetcher,
         resolveHostname: async () => ["93.184.216.34"],
         headerTimeoutMs: 500,
         totalTimeoutMs: 1_000,
+        maxConcurrent: 1,
+        maxQueued: 1,
       },
     }));
 
     const controller = new AbortController();
-    const cancelled = hardenedApp.request(new Request("https://control.test/api/workers/orchestrator?audience=windows-x64", { signal: controller.signal }));
+    const owner = hardenedApp.request(new Request("https://control.test/api/workers/orchestrator?audience=windows-x64", { signal: controller.signal }));
     await started;
+    const follower = hardenedApp.request("/api/workers/service-host?audience=windows-x64");
     controller.abort();
-    expect((await cancelled).status).toBe(503);
-    expect(cancellationObserved).toBe(true);
+    expect((await owner).status).toBe(503);
+    release();
+
+    const followed = await follower;
+    expect(followed.status).toBe(200);
+    expect(await followed.text()).toBe(body);
+    expect(bodyCancelled).toBe(false);
+    expect(calls).toBe(1);
+
+    const cached = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    expect(cached.status).toBe(200);
+    expect(await cached.text()).toBe(body);
+    expect(calls).toBe(1);
   });
 
   test("single-flights URL artifacts by digest and serves repeated cache hits", async () => {
