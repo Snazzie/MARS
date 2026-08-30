@@ -34,37 +34,39 @@ parse_args() {
   PUBLIC_BASE_URL="$CONTROL_PLANE_URL"
 }
 parse_args "$@"
-RELEASE_BASE_URL='https://github.com/Snazzie/Mars/releases/latest/download'
-RELEASE_MANIFEST_URL="$RELEASE_BASE_URL/worker-release-manifest.json"
-load_release_metadata() {
-  if [[ -n "${MARS_ORCHESTRATOR_SHA256:-}" && -n "${TART_IMAGE:-}" && -n "${TART_IMAGE_DIGEST:-}" ]]; then
-    return
-  fi
-  local manifest_path
-  manifest_path="$(mktemp "${TMPDIR:-/tmp}/mars-worker-release.XXXXXX")"
-  trap 'rm -f "$manifest_path"; unset JOIN_CODE CONTROL_PLANE_URL_ARG' EXIT
-  curl --silent --show-error --fail --location --proto '=https' --tlsv1.2 --output "$manifest_path" "$RELEASE_MANIFEST_URL"
-  manifest_value() { /usr/bin/plutil -extract "$1" raw -o - "$manifest_path"; }
-  MARS_ORCHESTRATOR_SHA256="${MARS_ORCHESTRATOR_SHA256:-$(manifest_value 'platforms.macos-arm64.orchestratorSha256')}"
-  TART_IMAGE="${TART_IMAGE:-$(manifest_value 'platforms.macos-arm64.tartImage')}"
-  TART_IMAGE_DIGEST="${TART_IMAGE_DIGEST:-$(manifest_value 'platforms.macos-arm64.tartImageDigest')}"
-  rm -f "$manifest_path"
-  trap - EXIT
+require_config() {
+  [[ -n "${PUBLIC_BASE_URL:-}" ]] || { echo 'PUBLIC_BASE_URL is required' >&2; exit 1; }
+  [[ -n "${MARS_ARTIFACT_MODE:-}" ]] || { echo 'MARS_ARTIFACT_MODE is required' >&2; exit 1; }
+  [[ -n "${MARS_ORCHESTRATOR_SHA256:-}" ]] || { echo 'MARS_ORCHESTRATOR_SHA256 is required' >&2; exit 1; }
+  [[ -n "${TART_IMAGE:-}" ]] || { echo 'TART_IMAGE is required' >&2; exit 1; }
+  [[ -n "${TART_IMAGE_DIGEST:-}" ]] || { echo 'TART_IMAGE_DIGEST is required' >&2; exit 1; }
 }
+validate_config() {
+  require_config
+  [[ "$MARS_ARTIFACT_MODE" == local || "$MARS_ARTIFACT_MODE" == production ]] || { echo 'MARS_ARTIFACT_MODE must be local or production' >&2; exit 1; }
+  PUBLIC_BASE_URL="${PUBLIC_BASE_URL%/}"
+  if [[ "$PUBLIC_BASE_URL" =~ ^https://(\[[0-9A-Fa-f:]+\]|[^/:@?#]+)(:[0-9]+)?$ ]]; then
+    CURL_SECURITY=(--proto '=https' --tlsv1.2)
+  elif [[ "$PUBLIC_BASE_URL" =~ ^http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?$ ]]; then
+    CURL_SECURITY=()
+  else
+    echo 'PUBLIC_BASE_URL must use HTTPS or loopback HTTP without credentials' >&2
+    exit 1
+  fi
+  [[ "$MARS_ORCHESTRATOR_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo 'MARS_ORCHESTRATOR_SHA256 must be a lowercase SHA-256 value' >&2; exit 1; }
+  [[ "$TART_IMAGE_DIGEST" =~ ^(sha256:)?[0-9a-f]{64}$ ]] || { echo 'TART_IMAGE_DIGEST must be a lowercase SHA-256 value' >&2; exit 1; }
+  if [[ "$MARS_ARTIFACT_MODE" == production ]]; then
+    [[ "$TART_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo 'TART_IMAGE must be digest-pinned in production' >&2; exit 1; }
+  fi
+}
+validate_config
+trap 'unset JOIN_CODE CONTROL_PLANE_URL_ARG' EXIT
 [[ "$EUID" -ne 0 ]] || { echo 'Run this installer as the logged-in user, not with sudo.' >&2; exit 1; }
 [[ "$(uname -s)" == Darwin ]] || { echo 'macOS is required' >&2; exit 1; }
 [[ "$(uname -m)" == arm64 ]] || { echo 'macOS 14+ arm64 is required' >&2; exit 1; }
 MACOS_VERSION="$(sw_vers -productVersion)"; MACOS_MAJOR="${MACOS_VERSION%%.*}"
 [[ "$MACOS_MAJOR" -ge 14 ]] || { echo 'macOS 14 or newer is required' >&2; exit 1; }
-if [[ "$PUBLIC_BASE_URL" == https://* ]]; then CURL_SECURITY=(--proto '=https' --tlsv1.2)
-elif [[ "$PUBLIC_BASE_URL" =~ ^http://(localhost|127\.0\.0\.1)(:[0-9]+)?(/|$) ]]; then CURL_SECURITY=()
-else echo 'Control-plane URL must use HTTPS.' >&2; exit 1
-fi
 curl --silent --show-error --fail --max-time 20 --location "${CURL_SECURITY[@]}" "${PUBLIC_BASE_URL%/}/api/healthz" >/dev/null
-load_release_metadata
-[[ "$MARS_ORCHESTRATOR_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo 'MARS_ORCHESTRATOR_SHA256 must be a lowercase SHA-256 value' >&2; exit 1; }
-[[ "$TART_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo 'TART_IMAGE must be digest-pinned' >&2; exit 1; }
-[[ "$TART_IMAGE_DIGEST" =~ ^(sha256:)?[0-9a-f]{64}$ ]] || { echo 'TART_IMAGE_DIGEST must be a lowercase SHA-256 value' >&2; exit 1; }
 
 APP_DIR="$HOME/Library/Application Support/Mars"; STATE_FILE="$APP_DIR/install-state.json"; LOG_FILE="$APP_DIR/install.log"
 JOIN_CODE_FILE="$APP_DIR/join-code"; IDENTITY_FILE="$APP_DIR/worker-identity.json"; ORCHESTRATOR="$APP_DIR/mars-orchestrator"
@@ -106,7 +108,7 @@ if ! sudo -n "$TART_BIN" --version >/dev/null 2>&1; then
 fi
 write_state sudoers complete; pass 'Tart sudo capability configured'
 
-check 'Cloning and verifying the pinned Tart image' tart-image
+check 'Cloning and verifying the configured Tart image' tart-image
 IMAGE="$TART_IMAGE"; LOCAL_IMAGE="${MARS_TART_LOCAL_NAME:-mars-worker-base}"
 if ! "$TART_BIN" list 2>/dev/null | grep -Fq -- "$LOCAL_IMAGE"; then "$TART_BIN" clone "$IMAGE" "$LOCAL_IMAGE"; fi
 actual_digest="$("$TART_BIN" inspect "$LOCAL_IMAGE" --format '{{.digest}}' 2>/dev/null || true)"; expected_digest="${TART_IMAGE_DIGEST#sha256:}"
@@ -117,7 +119,6 @@ check 'Downloading and verifying the worker orchestrator' orchestrator
 curl --silent --show-error --fail --location "${CURL_SECURITY[@]}" --dump-header "$ORCHESTRATOR_HEADERS" --output "$TEMP_ORCHESTRATOR" "${PUBLIC_BASE_URL%/}/api/workers/orchestrator?audience=macos-arm64"
 response_hash="$(awk 'BEGIN{IGNORECASE=1} tolower($1)=="x-content-sha256:" {gsub("\r","",$2); print $2; exit}' "$ORCHESTRATOR_HEADERS")"; actual_hash="$(shasum -a 256 "$TEMP_ORCHESTRATOR" | cut -d' ' -f1)"
 if [[ "$actual_hash" != "$MARS_ORCHESTRATOR_SHA256" ]]; then echo 'orchestrator checksum mismatch' >&2; exit 1; fi
-# Tart source is immutable; the clone checkpoint is equivalent to `tart clone <digest> <local>`.
 [[ -z "$response_hash" || "$response_hash" == "$actual_hash" ]] || { echo 'orchestrator response hash mismatch' >&2; exit 1; }
 chmod 755 "$TEMP_ORCHESTRATOR"; mv -f "$TEMP_ORCHESTRATOR" "$ORCHESTRATOR"; rm -f "$ORCHESTRATOR_HEADERS"; pass 'Orchestrator hash verified'; write_state orchestrator complete
 

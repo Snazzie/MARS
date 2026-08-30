@@ -179,6 +179,12 @@ for (const [script, runtimeTest] of [[linux, posixRuntimeTest], [mac, macosRunti
     expect(result.exitCode).not.toBe(2);
     expect(result.stderr).not.toContain("usage:");
   });
+  runtimeTest(`${script} rejects missing injected artifact config before host checks`, async () => {
+    const result = await invoke(script, ["--code", valid, "--control-plane-url", "https://control.example"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("MARS_ARTIFACT_MODE is required");
+    expect(result.stderr).not.toContain(script === linux ? "Linux is required" : "macOS is required");
+  });
 }
 
 test("POSIX installers accept and apply an explicit control-plane URL", async () => {
@@ -242,6 +248,19 @@ test("macOS installer provisions a persistent user-scoped worker service", async
   expect(source).toContain('export MARS_TART_IMAGE_DIGEST=$(printf');
   expect(source).toContain('export MARS_TART_EXECUTABLE=$(printf');
   expect(source).not.toContain('if [[ -n "\\${TART_IMAGE_DIGEST:-}" ]]');
+});
+test("macOS installer requires injected artifacts before mutation and verifies the control-plane download", async () => {
+  const source = await Bun.file(mac).text();
+  for (const name of ["PUBLIC_BASE_URL", "MARS_ARTIFACT_MODE", "MARS_ORCHESTRATOR_SHA256", "TART_IMAGE", "TART_IMAGE_DIGEST"]) {
+    expect(source).toContain(`${name} is required`);
+  }
+  expect(source).toContain('${PUBLIC_BASE_URL%/}/api/workers/orchestrator?audience=macos-arm64');
+  expect(source).toContain('"$actual_hash" != "$MARS_ORCHESTRATOR_SHA256"');
+  expect(source).toContain("orchestrator checksum mismatch");
+  expect(source).toContain('[[ "$MARS_ARTIFACT_MODE" == production ]]');
+  expect(source).toContain("TART_IMAGE must be digest-pinned in production");
+  expect(source.lastIndexOf("validate_config")).toBeLessThan(source.indexOf("brew install"));
+  expect(source.lastIndexOf("validate_config")).toBeLessThan(source.indexOf('mkdir -p "$APP_DIR"'));
 });
 test("macOS job image preparation is immutable, pinned, and emits split runtime identity", async () => {
   expect(await Bun.file(prepareMacImage).exists()).toBe(true);
@@ -576,11 +595,15 @@ Write-Output 'LOCAL_TEMPLATE_URL_OK'
     await rm(tempDir, { recursive: true, force: true });
   }
 });
-test("Linux installer accepts configured HTTP or HTTPS control-plane URLs", async () => {
-  const source = await Bun.file(linux).text();
-  expect(source).toContain("validate_control_plane_url");
-  expect(source).toContain('parsed.scheme not in {"https", "http"}');
-  expect(source).toContain("PUBLIC_BASE_URL must use HTTP or HTTPS");
+test("POSIX installers allow HTTP only for loopback control-plane URLs", async () => {
+  const [linuxSource, macSource] = await Promise.all([Bun.file(linux).text(), Bun.file(mac).text()]);
+  for (const source of [linuxSource, macSource]) {
+    const readablePattern = source.replaceAll("\\.", ".");
+    expect(readablePattern).toContain("localhost");
+    expect(readablePattern).toContain("127.0.0.1");
+    expect(readablePattern).toContain("::1");
+    expect(source).toContain("must use HTTPS or loopback HTTP");
+  }
 });
 posixRuntimeTest("Linux installer rejects noninteractive URL checks before host preflight", async () => {
   const rejected = await invoke(linux, [], { PUBLIC_BASE_URL: "https://" });
@@ -597,24 +620,34 @@ test("Windows VM installer downloads and verifies its immutable template before 
   expect(source).toContain("Get-FileHash -Algorithm SHA256 -LiteralPath $staged");
   expect(source.indexOf("Invoke-WebRequest -Uri $WindowsTemplateUrl")).toBeLessThan(source.indexOf("Assert-Template $WindowsTemplatePath"));
 });
-test("Linux installer normalizes manifest golden digest for orchestrator", async () => {
+test("Linux installer requires injected control-plane artifacts and verifies them before startup", async () => {
   const source = await Bun.file(linux).text();
-  expect(source).toContain('MARS_GOLDEN_DIGEST="${MARS_GOLDEN_DIGEST:-sha256:$(manifest_value');
-  expect(source).toContain('validate_sha256 "$MARS_GOLDEN_DIGEST" "golden image"');
-  expect(source).toContain('MARS_GOLDEN_DIGEST:-');
-});
-test("Linux installer materializes and verifies remote worker assets before startup", async () => {
-  const source = await Bun.file(linux).text();
-  expect(source).toContain("RELEASE_MANIFEST_URL");
-  expect(source).toContain("MARS_GOLDEN_IMAGE");
-  expect(source).toContain("MARS_COMPOSE_SHA256");
-  expect(source).toContain("MARS_DOMAIN_TEMPLATE_SHA256");
-  expect(source).toContain("curl --silent --show-error --fail");
+  for (const name of [
+    "MARS_ARTIFACT_MODE",
+    "MARS_BROKER_IMAGE",
+    "MARS_GOLDEN_IMAGE",
+    "MARS_GOLDEN_DIGEST",
+    "MARS_COMPOSE_FILE",
+    "MARS_COMPOSE_SHA256",
+    "MARS_DOMAIN_TEMPLATE",
+    "MARS_DOMAIN_TEMPLATE_SHA256",
+  ]) {
+    expect(source).toContain(`${name} is required`);
+  }
+  expect(source).toContain('download_asset "$MARS_GOLDEN_IMAGE" "$MARS_GOLDEN_DIGEST"');
+  expect(source).toContain('download_asset "$MARS_COMPOSE_FILE" "$MARS_COMPOSE_SHA256"');
+  expect(source).toContain('download_asset "$MARS_DOMAIN_TEMPLATE" "$MARS_DOMAIN_TEMPLATE_SHA256"');
+  expect(source).toContain('[[ "$actual" == "$expected_hex" ]]');
   expect(source).toContain("sha256sum");
   expect(source).not.toContain("cosign verify-blob");
   expect(source).toContain("/var/lib/mars/install-state.json");
   expect(source).toContain("/var/log/mars/install.log");
   expect(source.indexOf("download_verified")).toBeLessThan(source.indexOf("docker compose"));
+  expect(source.lastIndexOf("validate_config")).toBeLessThan(source.indexOf("check_kvm_access"));
+  expect(source.lastIndexOf("validate_config")).toBeLessThan(source.indexOf("apt-get update"));
+  expect(source).toContain('[[ "$MARS_ARTIFACT_MODE" == production ]]');
+  expect(source).toContain("MARS_BROKER_IMAGE must be digest-pinned in production");
+  expect(source).toContain('docker image inspect "$MARS_BROKER_IMAGE"');
 });
 test("fresh-host installers gate supported host versions before mutation and persist checkpoints", async () => {
   const [linuxSource, windowsSource, macSource] = await Promise.all([
@@ -637,7 +670,7 @@ test("fresh-host installers gate supported host versions before mutation and per
   expect(windowsSource).toContain("install-state.json");
   expect(macSource).toContain("sw_vers");
   expect(macSource).toContain("brew install");
-  expect(macSource).toContain("tart clone");
+  expect(macSource).toContain('"$TART_BIN" clone');
   expect(macSource).toContain("TART_IMAGE_DIGEST");
   expect(macSource).toContain("MARS_ORCHESTRATOR_SHA256");
   expect(macSource).toContain('"$actual_hash" != "$MARS_ORCHESTRATOR_SHA256"');
@@ -703,9 +736,12 @@ test("installers are self-contained and placeholder-free", async () => {
     expect(source).not.toContain("worker-v0.1.0");
   }
   for (const source of [linuxSource, macSource]) {
-    expect(source).toContain("https://github.com/Snazzie/Mars/releases/latest/download");
     expect(source).toContain("--control-plane-url");
-    expect(source).toContain("worker-release-manifest.json");
+    expect(source).not.toContain("RELEASE_BASE_URL");
+    expect(source).not.toContain("RELEASE_MANIFEST_URL");
+    expect(source).not.toContain("worker-release-manifest.json");
+    expect(source).not.toContain("https://github.com/Snazzie/Mars/releases");
+    expect(source).not.toContain("manifest_value");
   }
   expect(windowsSource).not.toContain("https://github.com/Snazzie/Mars/releases/latest/download");
   expect(windowsSource).not.toContain("worker-release-manifest.json");

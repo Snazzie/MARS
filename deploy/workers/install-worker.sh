@@ -32,43 +32,24 @@ parse_args() {
 parse_args "$@"
 trap 'unset JOIN_CODE CONTROL_PLANE_URL_ARG' EXIT
 
-RELEASE_BASE_URL='https://github.com/Snazzie/Mars/releases/latest/download'
-RELEASE_MANIFEST_URL="$RELEASE_BASE_URL/worker-release-manifest.json"
-MARS_COMPOSE_FILE="${MARS_COMPOSE_FILE:-$RELEASE_BASE_URL/linux-broker-compose.yaml}"
-MARS_DOMAIN_TEMPLATE="${MARS_DOMAIN_TEMPLATE:-$RELEASE_BASE_URL/worker-domain.xml}"
-manifest_json=""
-manifest_value() {
-  local path="$1"
-  python3 -c '
-import json, sys
-value = json.load(sys.stdin)
-for key in sys.argv[1].split("."):
-    value = value[key]
-if not isinstance(value, str) or not value:
-    raise SystemExit(1)
-print(value)
-' "$path" <<<"$manifest_json"
+require_config() {
+  [[ -n "${PUBLIC_BASE_URL:-}" ]] || { echo 'PUBLIC_BASE_URL is required' >&2; exit 1; }
+  [[ -n "${MARS_ARTIFACT_MODE:-}" ]] || { echo 'MARS_ARTIFACT_MODE is required' >&2; exit 1; }
+  [[ -n "${MARS_BROKER_IMAGE:-}" ]] || { echo 'MARS_BROKER_IMAGE is required' >&2; exit 1; }
+  [[ -n "${MARS_GOLDEN_IMAGE:-}" ]] || { echo 'MARS_GOLDEN_IMAGE is required' >&2; exit 1; }
+  [[ -n "${MARS_GOLDEN_DIGEST:-}" ]] || { echo 'MARS_GOLDEN_DIGEST is required' >&2; exit 1; }
+  [[ -n "${MARS_COMPOSE_FILE:-}" ]] || { echo 'MARS_COMPOSE_FILE is required' >&2; exit 1; }
+  [[ -n "${MARS_COMPOSE_SHA256:-}" ]] || { echo 'MARS_COMPOSE_SHA256 is required' >&2; exit 1; }
+  [[ -n "${MARS_DOMAIN_TEMPLATE:-}" ]] || { echo 'MARS_DOMAIN_TEMPLATE is required' >&2; exit 1; }
+  [[ -n "${MARS_DOMAIN_TEMPLATE_SHA256:-}" ]] || { echo 'MARS_DOMAIN_TEMPLATE_SHA256 is required' >&2; exit 1; }
 }
-load_release_metadata() {
-  if [[ -n "${MARS_BROKER_IMAGE:-}" && -n "${MARS_GOLDEN_IMAGE:-}" && -n "${MARS_GOLDEN_DIGEST:-}" && -n "${MARS_COMPOSE_SHA256:-}" && -n "${MARS_DOMAIN_TEMPLATE_SHA256:-}" ]]; then
-    return
-  fi
-  validate_https_asset "$RELEASE_MANIFEST_URL" "worker release manifest URL"
-  manifest_json="$(curl --silent --show-error --fail --location --proto '=https' --tlsv1.2 "$RELEASE_MANIFEST_URL")" || {
-    echo "worker release manifest could not be downloaded" >&2; exit 1;
-  }
-  MARS_BROKER_IMAGE="${MARS_BROKER_IMAGE:-$(manifest_value 'platforms.linux-x64.brokerImage')}"
-  MARS_GOLDEN_IMAGE="${MARS_GOLDEN_IMAGE:-$(manifest_value 'platforms.linux-x64.goldenImageUrl')}"
-  MARS_GOLDEN_DIGEST="${MARS_GOLDEN_DIGEST:-sha256:$(manifest_value 'platforms.linux-x64.goldenImageSha256')}"
-  MARS_COMPOSE_SHA256="${MARS_COMPOSE_SHA256:-$(manifest_value 'platforms.linux-x64.composeSha256')}"
-  MARS_DOMAIN_TEMPLATE_SHA256="${MARS_DOMAIN_TEMPLATE_SHA256:-$(manifest_value 'platforms.linux-x64.domainTemplateSha256')}"
-}
-
-validate_control_plane_url() {
-  python3 - "$PUBLIC_BASE_URL" <<'PY'
+validate_url() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import ipaddress
 import sys
 from urllib.parse import urlsplit
-raw = sys.argv[1]
+
+raw, name, kind = sys.argv[1:]
 try:
     parsed = urlsplit(raw)
     host = parsed.hostname
@@ -76,59 +57,70 @@ try:
 except ValueError:
     parsed = None
     host = None
-if not parsed or parsed.scheme not in {"https", "http"} or not host or parsed.username or parsed.password or parsed.query or parsed.fragment:
-    raise SystemExit("PUBLIC_BASE_URL must use HTTP or HTTPS with a non-empty host and no credentials")
+
+loopback = host in {"localhost", "127.0.0.1", "::1"}
+if host and not loopback:
+    try:
+        loopback = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        pass
+secure = bool(parsed and parsed.scheme == "https")
+local = bool(parsed and parsed.scheme == "http" and loopback)
+valid = bool(
+    parsed
+    and host
+    and (secure or local)
+    and not parsed.username
+    and not parsed.password
+    and not parsed.fragment
+)
+if kind == "origin" and parsed and (parsed.path not in {"", "/"} or parsed.query):
+    valid = False
+if not valid:
+    raise SystemExit(f"{name} must use HTTPS or loopback HTTP without credentials")
 PY
-}
-validate_https_asset() {
-  python3 - "$1" "$2" <<'PY'
-import sys
-from urllib.parse import urlsplit
-raw, name = sys.argv[1:]
-try:
-    parsed = urlsplit(raw)
-    parsed.port
-except ValueError:
-    parsed = None
-if not parsed or parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
-    raise SystemExit(f"{name} must use HTTPS without credentials")
-PY
-}
-validate_download_url() {
-  local url="$1" name="$2"
-  if [[ "$url" == https://* ]]; then validate_https_asset "$url" "$name"; return; fi
-  [[ "$url" =~ ^http://(localhost|127\.0\.0\.1)(:[0-9]+)?(/|$) ]] || { echo "$name must use HTTPS" >&2; exit 1; }
 }
 validate_sha256() { [[ "$1" =~ ^(sha256:)?[0-9a-f]{64}$ ]] || { echo "$2 must be a lowercase SHA-256 value" >&2; exit 1; }; }
+validate_config() {
+  require_config
+  [[ "$MARS_ARTIFACT_MODE" == local || "$MARS_ARTIFACT_MODE" == production ]] || { echo 'MARS_ARTIFACT_MODE must be local or production' >&2; exit 1; }
+  command -v python3 >/dev/null || { echo 'python3 required' >&2; exit 1; }
+  PUBLIC_BASE_URL="${PUBLIC_BASE_URL%/}"
+  validate_url "$PUBLIC_BASE_URL" "PUBLIC_BASE_URL" origin
+  validate_url "$MARS_GOLDEN_IMAGE" "MARS_GOLDEN_IMAGE" asset
+  validate_url "$MARS_COMPOSE_FILE" "MARS_COMPOSE_FILE" asset
+  validate_url "$MARS_DOMAIN_TEMPLATE" "MARS_DOMAIN_TEMPLATE" asset
+  validate_sha256 "$MARS_GOLDEN_DIGEST" "MARS_GOLDEN_DIGEST"
+  validate_sha256 "$MARS_COMPOSE_SHA256" "MARS_COMPOSE_SHA256"
+  validate_sha256 "$MARS_DOMAIN_TEMPLATE_SHA256" "MARS_DOMAIN_TEMPLATE_SHA256"
+  if [[ "$MARS_ARTIFACT_MODE" == production ]]; then
+    [[ "$MARS_BROKER_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo 'MARS_BROKER_IMAGE must be digest-pinned in production' >&2; exit 1; }
+  fi
+}
+validate_download_url() { validate_url "$1" "$2" asset; }
 
 preflight() {
-  validate_control_plane_url
-  validate_https_asset "$MARS_GOLDEN_IMAGE" "golden image URL"
-  validate_sha256 "$MARS_GOLDEN_DIGEST" "golden image"
-  validate_sha256 "$MARS_COMPOSE_SHA256" "compose"
-  validate_sha256 "$MARS_DOMAIN_TEMPLATE_SHA256" "domain template"
   [[ "$(uname -s)" == Linux ]] || { echo 'Linux is required' >&2; exit 1; }
   [[ "$(uname -m)" == x86_64 ]] || { echo 'Ubuntu 24.04 x64 is required' >&2; exit 1; }
   [[ -r /etc/os-release ]] || { echo '/etc/os-release is required' >&2; exit 1; }
   # shellcheck disable=SC1091
   . /etc/os-release
   [[ "$ID" == ubuntu && "$VERSION_ID" == 24.04 ]] || { echo 'Ubuntu 24.04 is required' >&2; exit 1; }
-  [[ "$MARS_BROKER_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo 'broker image must be digest pinned' >&2; exit 1; }
   command -v apt-get >/dev/null || { echo 'apt-get required' >&2; exit 1; }
   command -v curl >/dev/null || { echo 'curl required' >&2; exit 1; }
   local local_http=false
-  [[ "$PUBLIC_BASE_URL" =~ ^http://(localhost|127\.0\.0\.1)(:[0-9]+)?(/|$) ]] && local_http=true
+  [[ "$PUBLIC_BASE_URL" == http://* ]] && local_http=true
   if [[ "$local_http" == true ]]; then
     curl --silent --show-error --fail --max-time 15 --location "$PUBLIC_BASE_URL/api/healthz" >/dev/null
   else
     curl --silent --show-error --fail --max-time 15 --location --proto '=https' --tlsv1.2 "$PUBLIC_BASE_URL/api/healthz" >/dev/null
   fi
 }
-load_release_metadata
+validate_config
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   command -v sudo >/dev/null || { echo 'Root or sudo is required.' >&2; exit 1; }
-  exec sudo --preserve-env=PUBLIC_BASE_URL,RELEASE_BASE_URL,RELEASE_MANIFEST_URL,MARS_BROKER_IMAGE,MARS_GOLDEN_IMAGE,MARS_GOLDEN_DIGEST,MARS_COMPOSE_FILE,MARS_COMPOSE_SHA256,MARS_DOMAIN_TEMPLATE,MARS_DOMAIN_TEMPLATE_SHA256,MARS_BROKER_CONFIG,MARS_LIBVIRT_NETWORK,MARS_ACTION_CACHE_ROOT,MARS_CACHE_PROXY_PORT,MARS_CACHE_DATA_PORT,MARS_CACHE_PROXY_URL,MARS_CACHE_ADVERTISE_URL "$0" "$@"
+  exec sudo --preserve-env=PUBLIC_BASE_URL,MARS_ARTIFACT_MODE,MARS_BROKER_IMAGE,MARS_GOLDEN_IMAGE,MARS_GOLDEN_DIGEST,MARS_COMPOSE_FILE,MARS_COMPOSE_SHA256,MARS_DOMAIN_TEMPLATE,MARS_DOMAIN_TEMPLATE_SHA256,MARS_BROKER_CONFIG,MARS_LIBVIRT_NETWORK,MARS_ACTION_CACHE_ROOT,MARS_CACHE_PROXY_PORT,MARS_CACHE_DATA_PORT,MARS_CACHE_PROXY_URL,MARS_CACHE_ADVERTISE_URL "$0" "$@"
 fi
 
 check_kvm_access() {
@@ -199,7 +191,6 @@ chmod 0770 "$CONFIG_DIR"
 chmod 0640 "$JOIN_CODE_FILE"
 write_state state complete
 
-validate_download_url() { local url="$1" name="$2"; if [[ "$url" == https://* ]]; then validate_https_asset "$url" "$name"; return; fi; [[ "$url" =~ ^http://(localhost|127\.0\.0\.1)(:[0-9]+)?(/|$) ]] || { echo "$name must use HTTPS" >&2; exit 1; }; }
 download_asset() {
   local url="$1" expected="$2" destination="$3" name="$4"
   validate_download_url "$url" "$name"; validate_sha256 "$expected" "$name SHA-256"
@@ -240,7 +231,11 @@ EOF
 chmod 600 "$CONFIG_DIR/.env"; write_state configuration complete
 
 stage 'Starting the Mars broker' broker_starting
-docker manifest inspect "$MARS_BROKER_IMAGE" >/dev/null
+if [[ "$MARS_ARTIFACT_MODE" == local ]]; then
+  docker image inspect "$MARS_BROKER_IMAGE" >/dev/null
+else
+  docker manifest inspect "$MARS_BROKER_IMAGE" >/dev/null
+fi
 docker compose --env-file "$CONFIG_DIR/.env" -f "$COMPOSE_PATH" up -d
 write_state complete complete
 pass 'Linux broker installed; no job VM was started by installer'
