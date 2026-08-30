@@ -862,3 +862,25 @@ test("generates complete platform installers from the immutable release manifest
       MARS_WINDOWS_CONTAINER_VC_SHA256: hash,
     })).toBeUndefined();
   });
+  test.each([
+    "https://github.com/Snazzie/Mars/releases/latest/download/windows-worker.vhdx",
+    "https://github.com/Snazzie/Mars/releases/download/v1/windows-worker.vhdx",
+  ])("rejects development Windows artifacts configured with GitHub release URL %s", (url) => {
+    const hash = "a".repeat(64);
+    expect(createDevelopmentWindowsArtifacts({
+      NODE_ENV: "development",
+      WORKER_ORCHESTRATOR_WINDOWS_X64: "C:\\mars\\mars-orchestrator.exe",
+      MARS_WINDOWS_ORCHESTRATOR_SHA256: hash,
+      WORKER_SERVICE_HOST_EXECUTABLE: "C:\\mars\\mars-service-host.exe",
+      MARS_WINDOWS_SERVICE_HOST_SHA256: hash,
+      MARS_WINDOWS_TEMPLATE_URL: url,
+      MARS_WINDOWS_TEMPLATE_SHA256: hash,
+      MARS_WINDOWS_CONTAINER_BASE_IMAGE: `mcr.microsoft.com/windows@sha256:${hash}`,
+      MARS_WINDOWS_CONTAINER_RUNNER_URL: "http://localhost:3000/runner.zip",
+      MARS_WINDOWS_CONTAINER_RUNNER_SHA256: hash,
+      MARS_WINDOWS_CONTAINER_GIT_URL: "http://localhost:3000/git.zip",
+      MARS_WINDOWS_CONTAINER_GIT_SHA256: hash,
+      MARS_WINDOWS_CONTAINER_VC_URL: "http://localhost:3000/vc.exe",
+      MARS_WINDOWS_CONTAINER_VC_SHA256: hash,
+    })).toBeUndefined();
+  });
