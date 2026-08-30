@@ -10,7 +10,9 @@ export type DiscoveryReport = { repositories: number; discovered: number; update
 export async function syncCompletedJobLogsBestEffort(
   jobId: number,
   sync: () => Promise<unknown>,
-  onError: (jobId: number, error: string) => void = (id, error) => console.error("GitHub completed job log sync deferred", { jobId: id, error }),
+  onError: (jobId: number, error: string) => void = (id, error) => {
+    if (error !== "github_job_logs_not_ready") console.error("GitHub completed job log sync deferred", { jobId: id, error });
+  },
 ): Promise<boolean> {
   try {
     await sync();
@@ -64,7 +66,6 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
     if (run.status === "queued" || run.status === "in_progress") runs.set(`${run.id}:${run.runAttempt}`, run);
   }
   const [checkpoint] = await deps.db`SELECT completed_run_id AS "completedRunId",completed_run_attempt AS "completedRunAttempt" FROM github_discovery_checkpoints WHERE repository_id=${String(row.repositoryId)}`;
-  console.error(`GitHub discovery list ${fullName} completed`);
   const completed = await listCompletedRunsSince(
     page => client.listRuns(owner, repo, "completed", page),
     checkpoint?.completedRunId == null || checkpoint?.completedRunAttempt == null ? null : { runId: Number(checkpoint.completedRunId), runAttempt: Number(checkpoint.completedRunAttempt) },

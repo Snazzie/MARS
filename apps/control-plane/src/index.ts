@@ -243,12 +243,12 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
       try {
         const report = await discoverAvailableRepositoryJobs(discoveryDeps);
         if (isDiscoveryCycleSuccessful(report)) discoveryHealth.markSuccess();
-        if (report.discovered || report.failed) console.log(`GitHub job discovery: repositories=${report.repositories} discovered=${report.discovered} updated=${report.updated} failed=${report.failed}`);
+        if (report.failed) console.error(`GitHub job discovery: repositories=${report.repositories} discovered=${report.discovered} updated=${report.updated} failed=${report.failed}`);
       } catch (error) { console.error("GitHub job discovery failed", error); }
     }, discoveryIntervalMs);
     const reconciliationScheduler = startReconciliationScheduler(async () => {
       try {
-        if (Date.now() - lastQueuedDiscoveryAt >= Number(Bun.env.JOB_QUEUED_DISCOVERY_INTERVAL_MS ?? 30_000)) { lastQueuedDiscoveryAt = Date.now(); const pickup = await discoverQueuedRepositoryJobs(discoveryDeps); if (pickup.discovered || pickup.failed) console.log(`Queued GitHub job pickup: repositories=${pickup.repositories} discovered=${pickup.discovered} updated=${pickup.updated} failed=${pickup.failed}`); }
+        if (Date.now() - lastQueuedDiscoveryAt >= Number(Bun.env.JOB_QUEUED_DISCOVERY_INTERVAL_MS ?? 30_000)) { lastQueuedDiscoveryAt = Date.now(); const pickup = await discoverQueuedRepositoryJobs(discoveryDeps); if (pickup.failed) console.error(`Queued GitHub job pickup: repositories=${pickup.repositories} discovered=${pickup.discovered} updated=${pickup.updated} failed=${pickup.failed}`); }
         if (Date.now() - lastGithubLeaseReconciliationAt >= 60_000) { lastGithubLeaseReconciliationAt = Date.now(); const staleLeaseReport = await reconcileExpiredLeasesWithGithub({ db, installationToken: installationId => githubApp.getInstallationToken(installationId), githubFetchForInstallation: installationId => githubRateLimits.scopedFetch(installationId) }); if (staleLeaseReport.completed || staleLeaseReport.released || staleLeaseReport.skipped) console.log(`GitHub stale lease reconciliation: inspected=${staleLeaseReport.inspected} completed=${staleLeaseReport.completed} released=${staleLeaseReport.released} stillActive=${staleLeaseReport.stillActive} skipped=${staleLeaseReport.skipped}`); }
         const report = await runQueuedJobReconciliation({ db, installationToken: installationId => githubApp.getInstallationToken(installationId), githubFetchForInstallation: installationId => githubRateLimits.scopedFetch(installationId), dispatcher, installationBlocked: installationId => githubRateLimits.isCoolingDown(installationId), workerConnected: workerId => dispatcher.isConnected(workerId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY });
         const reconciliationMessage = formatJobReconciliationReport(report);

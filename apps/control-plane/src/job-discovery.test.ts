@@ -89,6 +89,19 @@ test("completed log backfill failure does not abort authoritative status discove
   expect(synced).toBe(false);
   expect(errors).toEqual([{ jobId: 96580319653, error: "github_job_logs_not_ready" }]);
 });
+test("does not log expected GitHub log preparation delays", async () => {
+  const originalError = console.error;
+  const errors: unknown[][] = [];
+  console.error = (...args: unknown[]) => errors.push(args);
+  try {
+    await syncCompletedJobLogsBestEffort(96580319653, async () => {
+      throw new Error("github_job_logs_not_ready");
+    });
+  } finally {
+    console.error = originalError;
+  }
+  expect(errors).toEqual([]);
+});
 test("pairs rerun attempts during repository discovery", async () => {
   const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
   const requests: string[] = [];

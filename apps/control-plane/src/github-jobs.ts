@@ -54,7 +54,7 @@ export class GithubJobsClient {
     headers.set("authorization", `Bearer ${await this.token()}`);
     const response = await this.fetcher(`${this.apiBase}${path}`, { headers, signal: AbortSignal.timeout(30_000) });
     if (!response.ok) {
-      console.error(`GitHub jobs request failed: ${response.status} ${path}`);
+      if (response.status !== 404) console.error(`GitHub jobs request failed: ${response.status} ${path}`);
       throw new Error(`github_${response.status}`);
     }
     const contentLength = Number(response.headers.get("content-length"));

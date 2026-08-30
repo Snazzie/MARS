@@ -363,12 +363,12 @@ test("run detail returns complete jobs and ordered steps", async () => {
 });
 
 
-test("log listings normalize PostgreSQL bigint sequences", async () => {
-  const db = (async () => [{ organizationId: "11111111-1111-4111-8111-111111111111", runId: "22222222-2222-4222-8222-222222222222", jobId: "33333333-3333-4333-8333-333333333333", sequence: "0", content: "output", hasMore: false, occurredAt: "2026-08-13T00:00:00.000Z" }]) as never;
+test("log listings normalize PostgreSQL bigint sequences and timestamps", async () => {
+  const db = (async () => [{ organizationId: "11111111-1111-4111-8111-111111111111", runId: "22222222-2222-4222-8222-222222222222", jobId: "33333333-3333-4333-8333-333333333333", sequence: "0", content: "output", hasMore: false, occurredAt: new Date("2026-08-13T00:00:00.000Z") }]) as never;
   const job = await listLogChunks(db, "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333");
   const step = await listStepLogChunks(db, "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444");
-  expect(LogChunk.parse(job.items[0]).sequence).toBe(0);
-  expect(LogChunk.parse(step.items[0]).sequence).toBe(0);
+  expect(LogChunk.parse(job.items[0])).toMatchObject({ sequence: 0, occurredAt: "2026-08-13T00:00:00.000Z" });
+  expect(LogChunk.parse(step.items[0])).toMatchObject({ sequence: 0, occurredAt: "2026-08-13T00:00:00.000Z" });
 });
 
 test("organization settings convert PostgreSQL numeric values to numbers", async () => {
