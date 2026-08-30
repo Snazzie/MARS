@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { PendingWorkerRequest, WorkerConfiguration } from "@mars/contracts";
 import type { LinuxWorkerRelease, MacosWorkerRelease, WindowsWorkerRelease } from "@mars/contracts";
-import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
+import type { ControlPlaneEnv, ControlPlaneHttpDeps, DevelopmentArtifactFetchOptions } from "./types.ts";
 import { verifyWorkerBootstrap, initializeWorkerBootstrap, rotateWorkerBootstrap, getWorkerBootstrapStatus } from "../worker-bootstrap.ts";
 import { approvePendingWorker, configurePendingWorker, createRequestLimiter, hasMachineIdentity, parseApproveWorkerRequest, requestPendingWorker, rejectPendingWorker } from "../worker-requests.ts";
 import { httpOrigin } from "../http-origin.ts";
@@ -166,22 +166,43 @@ const explicitlyLocalUrl = (url: URL): boolean => {
   return hostname === "localhost" || hostname.endsWith(".localhost") || (isIP(hostname) !== 0 && restrictedAddress(hostname));
 };
 
+async function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw signal.reason;
+  return await new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    void promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
 async function validateProxyDestination(
   url: URL,
   allowRestricted: boolean,
-  resolveHostname: (hostname: string) => Promise<readonly string[]>,
-): Promise<void> {
+  resolveHostname: (hostname: string, signal: AbortSignal) => Promise<readonly string[]>,
+  signal: AbortSignal,
+): Promise<string> {
   if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) throw new Error("invalid_artifact_url");
   const hostname = normalizedHostname(url);
   if (!allowRestricted && explicitlyLocalUrl(url)) throw new Error("restricted_artifact_destination");
-  const addresses = isIP(hostname) !== 0 ? [hostname] : await resolveHostname(hostname);
+  const addresses = isIP(hostname) !== 0
+    ? [hostname]
+    : await abortable(Promise.resolve(resolveHostname(hostname, signal)), signal);
   if (!addresses.length || addresses.some(address => isIP(address) === 0 || (!allowRestricted && restrictedAddress(address)))) {
     throw new Error("restricted_artifact_destination");
   }
+  return addresses[0]!;
 }
 
-class UpstreamSemaphore {
+function pinnedDestination(url: URL, address: string): URL {
+  const pinned = new URL(url);
+  const formattedAddress = isIP(address) === 6 ? `[${address}]` : address;
+  pinned.host = `${formattedAddress}${url.port ? `:${url.port}` : ""}`;
+  return pinned;
+}
+
+class ArtifactAdmission {
   readonly #limit: number;
+  readonly #maximumQueued: number;
   #active = 0;
   readonly #waiters: Array<{
     resolve: (release: () => void) => void;
@@ -190,8 +211,9 @@ class UpstreamSemaphore {
     abort: () => void;
   }> = [];
 
-  constructor(limit: number) {
+  constructor(limit: number, maximumQueued: number) {
     this.#limit = limit;
+    this.#maximumQueued = maximumQueued;
   }
 
   async acquire(signal: AbortSignal): Promise<() => void> {
@@ -200,6 +222,7 @@ class UpstreamSemaphore {
       this.#active += 1;
       return this.#release();
     }
+    if (this.#waiters.length >= this.#maximumQueued) throw new Error("artifact_admission_full");
     return await new Promise<() => void>((resolve, reject) => {
       const waiter = {
         resolve,
@@ -234,6 +257,18 @@ class UpstreamSemaphore {
   }
 }
 
+const artifactTemporaryPrefix = "mars-worker-artifact-";
+const orphanCleanup = (async () => {
+  try {
+    const entries = await readdir(tmpdir(), { withFileTypes: true });
+    await Promise.all(entries
+      .filter(entry => entry.isDirectory() && entry.name.startsWith(artifactTemporaryPrefix))
+      .map(entry => rm(join(tmpdir(), entry.name), { recursive: true, force: true })));
+  } catch {
+    // Snapshot creation and per-response disposal remain the primary cleanup path.
+  }
+})();
+
 type StreamReadResult = Awaited<ReturnType<ReadableStreamDefaultReader<Uint8Array>["read"]>>;
 
 async function streamRead(
@@ -252,7 +287,8 @@ async function streamRead(
 }
 
 async function snapshotStream(stream: ReadableStream<Uint8Array>, maximumBytes: number, signal: AbortSignal): Promise<ArtifactSnapshot> {
-  const directory = await mkdtemp(join(tmpdir(), "mars-worker-artifact-"));
+  await orphanCleanup;
+  const directory = await mkdtemp(join(tmpdir(), artifactTemporaryPrefix));
   const path = join(directory, "artifact");
   const writer = Bun.file(path).writer();
   const reader = stream.getReader();
@@ -290,32 +326,59 @@ async function snapshotStream(stream: ReadableStream<Uint8Array>, maximumBytes: 
   }
 }
 
-function snapshotResponse(snapshot: ArtifactSnapshot, filename: string, expectedHash: string = snapshot.sha256, contentType = "application/octet-stream"): Response {
+type SnapshotLifetime = {
+  signal: AbortSignal;
+  release(): void;
+};
+
+function snapshotResponse(
+  snapshot: ArtifactSnapshot,
+  filename: string,
+  lifetime: SnapshotLifetime,
+  expectedHash: string = snapshot.sha256,
+  contentType = "application/octet-stream",
+): Response {
   const reader = Bun.file(snapshot.path).stream().getReader();
-  let disposed = false;
-  const dispose = async () => {
-    if (disposed) return;
-    disposed = true;
-    await snapshot.dispose();
+  let finished = false;
+  const finish = async (cancelReader: boolean, reason?: unknown) => {
+    if (finished) return;
+    finished = true;
+    lifetime.signal.removeEventListener("abort", abort);
+    try {
+      if (cancelReader) await reader.cancel(reason).catch(() => undefined);
+      await snapshot.dispose();
+    } finally {
+      lifetime.release();
+    }
+  };
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const abort = () => {
+    if (finished) return;
+    controller?.error(lifetime.signal.reason);
+    void finish(true, lifetime.signal.reason);
   };
   const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
+    start(streamController) {
+      controller = streamController;
+      lifetime.signal.addEventListener("abort", abort, { once: true });
+      if (lifetime.signal.aborted) abort();
+    },
+    async pull(streamController) {
       try {
         const result = await reader.read();
         if (result.done) {
-          controller.close();
-          await dispose();
+          await finish(false);
+          streamController.close();
         } else {
-          controller.enqueue(result.value);
+          streamController.enqueue(result.value);
         }
       } catch (error) {
-        controller.error(error);
-        await dispose();
+        streamController.error(error);
+        await finish(true, error);
       }
     },
     async cancel(reason) {
-      await reader.cancel(reason);
-      await dispose();
+      await finish(true, reason);
     },
   });
   const headers = noStore();
@@ -454,13 +517,67 @@ async function packagedResponse(path: ArtifactPath, filename: string, hash: stri
   return response;
 }
 type ProxyPolicy = {
-  fetcher: typeof globalThis.fetch;
-  resolveHostname: (hostname: string) => Promise<readonly string[]>;
+  fetcher: (input: string | URL | Request, init?: DevelopmentArtifactFetchOptions) => Promise<Response>;
+  resolveHostname: (hostname: string, signal: AbortSignal) => Promise<readonly string[]>;
   headerTimeoutMs: number;
   totalTimeoutMs: number;
+  downstreamTimeoutMs: number;
   maxRedirects: number;
   maximumBytes: Record<ArtifactSizeClass, number>;
 };
+
+type ArtifactOperation = {
+  signal: AbortSignal;
+  response(snapshot: ArtifactSnapshot, filename: string, expectedHash?: string, contentType?: string): Response;
+  close(): void;
+};
+
+async function beginArtifactOperation(
+  requestSignal: AbortSignal,
+  policy: ProxyPolicy,
+  admission: ArtifactAdmission,
+): Promise<ArtifactOperation> {
+  const totalController = new AbortController();
+  const totalTimer = setTimeout(() => totalController.abort(new Error("artifact_total_timeout")), policy.totalTimeoutMs);
+  const signal = AbortSignal.any([requestSignal, totalController.signal]);
+  let release: (() => void) | undefined;
+  try {
+    release = await admission.acquire(signal);
+  } catch (error) {
+    clearTimeout(totalTimer);
+    throw error;
+  }
+  let transferred = false;
+  return {
+    signal,
+    response(snapshot, filename, expectedHash = snapshot.sha256, contentType = "application/octet-stream") {
+      if (transferred) throw new Error("artifact_operation_transferred");
+      transferred = true;
+      clearTimeout(totalTimer);
+      const downstreamController = new AbortController();
+      const downstreamTimer = setTimeout(
+        () => downstreamController.abort(new Error("artifact_downstream_timeout")),
+        policy.downstreamTimeoutMs,
+      );
+      let lifetimeReleased = false;
+      return snapshotResponse(snapshot, filename, {
+        signal: AbortSignal.any([requestSignal, downstreamController.signal]),
+        release: () => {
+          if (lifetimeReleased) return;
+          lifetimeReleased = true;
+          clearTimeout(downstreamTimer);
+          release?.();
+        },
+      }, expectedHash, contentType);
+    },
+    close() {
+      if (transferred) return;
+      transferred = true;
+      clearTimeout(totalTimer);
+      release?.();
+    },
+  };
+}
 
 async function proxyPackagedResponse(
   url: string,
@@ -469,28 +586,37 @@ async function proxyPackagedResponse(
   sizeClass: ArtifactSizeClass,
   requestSignal: AbortSignal,
   policy: ProxyPolicy,
-  semaphore: UpstreamSemaphore,
+  admission: ArtifactAdmission,
 ): Promise<Response | undefined> {
-  const totalController = new AbortController();
-  const totalTimer = setTimeout(() => totalController.abort(new Error("artifact_total_timeout")), policy.totalTimeoutMs);
-  const signal = AbortSignal.any([requestSignal, totalController.signal]);
-  let release: (() => void) | undefined;
+  let operation: ArtifactOperation | undefined;
   let upstream: Response | undefined;
   try {
-    release = await semaphore.acquire(signal);
-    let current = new URL(url);
-    const allowRestricted = explicitlyLocalUrl(current);
+    operation = await beginArtifactOperation(requestSignal, policy, admission);
+    const initial = new URL(url);
+    const restrictedOrigin = explicitlyLocalUrl(initial) ? initial.origin : undefined;
+    let current = initial;
     let redirects = 0;
     while (true) {
-      await validateProxyDestination(current, allowRestricted, policy.resolveHostname);
       const headerController = new AbortController();
       const headerTimer = setTimeout(() => headerController.abort(new Error("artifact_header_timeout")), policy.headerTimeoutMs);
       try {
-        upstream = await policy.fetcher(current, {
+        const hopSignal = AbortSignal.any([operation.signal, headerController.signal]);
+        const address = await validateProxyDestination(
+          current,
+          restrictedOrigin !== undefined && current.origin === restrictedOrigin,
+          policy.resolveHostname,
+          hopSignal,
+        );
+        const options: DevelopmentArtifactFetchOptions = {
           redirect: "manual",
-          signal: AbortSignal.any([signal, headerController.signal]),
-        });
-        if (signal.aborted || headerController.signal.aborted) throw signal.reason ?? headerController.signal.reason;
+          signal: hopSignal,
+          keepalive: false,
+          headers: { host: current.host },
+        };
+        const hostname = normalizedHostname(current);
+        if (current.protocol === "https:" && isIP(hostname) === 0) options.tls = { serverName: hostname };
+        upstream = await policy.fetcher(pinnedDestination(current, address), options);
+        if (hopSignal.aborted) throw hopSignal.reason;
       } finally {
         clearTimeout(headerTimer);
       }
@@ -509,16 +635,19 @@ async function proxyPackagedResponse(
       const declaredLength = Number(upstream.headers.get("content-length"));
       if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) throw new Error("artifact_too_large");
       const contentType = upstream.headers.get("content-type") ?? "application/octet-stream";
-      const snapshot = await snapshotStream(upstream.body, maximumBytes, signal);
+      const snapshot = await snapshotStream(upstream.body, maximumBytes, operation.signal);
       upstream = undefined;
-      return snapshotResponse(snapshot, filename, hash, contentType);
+      if (!/^[a-f0-9]{64}$/i.test(hash) || snapshot.sha256 !== hash.toLowerCase()) {
+        await snapshot.dispose();
+        throw new Error("artifact_digest_mismatch");
+      }
+      return operation.response(snapshot, filename, hash, contentType);
     }
   } catch {
     await upstream?.body?.cancel().catch(() => undefined);
     return undefined;
   } finally {
-    clearTimeout(totalTimer);
-    release?.();
+    operation?.close();
   }
 }
 
@@ -564,10 +693,11 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     return Math.min(maximum, Math.max(minimum, Math.floor(value!)));
   };
   const proxyPolicy: ProxyPolicy = {
-    fetcher: proxyOptions?.fetch ?? globalThis.fetch,
+    fetcher: proxyOptions?.fetch ?? ((input, init) => globalThis.fetch(input, init)),
     resolveHostname: proxyOptions?.resolveHostname ?? (async hostname => (await lookup(hostname, { all: true, verbatim: true })).map(result => result.address)),
     headerTimeoutMs: bounded(proxyOptions?.headerTimeoutMs, 10_000, 1, 60_000),
     totalTimeoutMs: bounded(proxyOptions?.totalTimeoutMs, 15 * 60_000, 1, 60 * 60_000),
+    downstreamTimeoutMs: bounded(proxyOptions?.downstreamTimeoutMs, 15 * 60_000, 1, 60 * 60_000),
     maxRedirects: bounded(proxyOptions?.maxRedirects, 3, 0, 10),
     maximumBytes: {
       template: bounded(proxyOptions?.maxBytes?.template, 128 * 1024 ** 3, 1, 512 * 1024 ** 3),
@@ -575,7 +705,10 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       binary: bounded(proxyOptions?.maxBytes?.binary, 1024 ** 3, 1, 4 * 1024 ** 3),
     },
   };
-  const upstreamSemaphore = new UpstreamSemaphore(bounded(proxyOptions?.maxConcurrent, 4, 1, 16));
+  const artifactAdmission = new ArtifactAdmission(
+    bounded(proxyOptions?.maxConcurrent, 4, 1, 16),
+    bounded(proxyOptions?.maxQueued, 16, 0, 64),
+  );
   const developmentPackaged = async (
     c: Context<ControlPlaneEnv>,
     artifact: { path?: string; url?: string; sha256: string } | undefined,
@@ -585,15 +718,19 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   ) => {
     if (!artifact) return unavailable(c, [`development:${name}`]);
     if (artifact.path && await artifactExists(artifact.path)) {
+      let operation: ArtifactOperation | undefined;
       try {
-        const snapshot = await snapshotStream(Bun.file(artifact.path).stream(), proxyPolicy.maximumBytes[sizeClass], c.req.raw.signal);
-        return snapshotResponse(snapshot, filename);
+        operation = await beginArtifactOperation(c.req.raw.signal, proxyPolicy, artifactAdmission);
+        const snapshot = await snapshotStream(Bun.file(artifact.path).stream(), proxyPolicy.maximumBytes[sizeClass], operation.signal);
+        return operation.response(snapshot, filename);
       } catch {
         return unavailable(c, [`development:${name}`]);
+      } finally {
+        operation?.close();
       }
     }
     if (artifact.url) {
-      return await proxyPackagedResponse(artifact.url, filename, artifact.sha256, sizeClass, c.req.raw.signal, proxyPolicy, upstreamSemaphore)
+      return await proxyPackagedResponse(artifact.url, filename, artifact.sha256, sizeClass, c.req.raw.signal, proxyPolicy, artifactAdmission)
         ?? unavailable(c, [`development:${name}`]);
     }
     return unavailable(c, [`development:${name}`]);
@@ -635,10 +772,15 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   const buildArtifact = async (c: Context<ControlPlaneEnv>, key: keyof NonNullable<typeof deps.windowsContainerArtifacts>, filename: string) => {
     const path = (deps.windowsContainerArtifacts ?? deps.windowsContainerBuild)?.[key];
     if (!path || !await artifactExists(path)) return c.json({ code: "artifact_unavailable", message: "Windows container build artifact is unavailable", artifact: `windows-container-${key}` }, 503, { "cache-control": "no-store" });
+    let operation: ArtifactOperation | undefined;
     try {
-      return snapshotResponse(await snapshotStream(Bun.file(path).stream(), proxyPolicy.maximumBytes.binary, c.req.raw.signal), filename);
+      operation = await beginArtifactOperation(c.req.raw.signal, proxyPolicy, artifactAdmission);
+      const snapshot = await snapshotStream(Bun.file(path).stream(), proxyPolicy.maximumBytes.binary, operation.signal);
+      return operation.response(snapshot, filename);
     } catch {
       return c.json({ code: "artifact_unavailable", message: "Windows container build artifact is unavailable", artifact: `windows-container-${key}` }, 503, { "cache-control": "no-store" });
+    } finally {
+      operation?.close();
     }
   };
   const developmentContainerArtifact = (

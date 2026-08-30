@@ -26,13 +26,21 @@ export type DevelopmentWindowsArtifacts = {
   };
 };
 
+export type DevelopmentArtifactFetchOptions = RequestInit & {
+  tls?: {
+    serverName?: string;
+  };
+};
+
 export type DevelopmentArtifactProxyOptions = {
-  fetch?: typeof globalThis.fetch;
-  resolveHostname?: (hostname: string) => Promise<readonly string[]>;
+  fetch?: (input: string | URL | Request, init?: DevelopmentArtifactFetchOptions) => Promise<Response>;
+  resolveHostname?: (hostname: string, signal: AbortSignal) => Promise<readonly string[]>;
   headerTimeoutMs?: number;
   totalTimeoutMs?: number;
+  downstreamTimeoutMs?: number;
   maxRedirects?: number;
   maxConcurrent?: number;
+  maxQueued?: number;
   maxBytes?: Partial<Record<"template" | "archive" | "binary", number>>;
 };
 

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createDevelopmentWindowsArtifacts } from "../index.ts";
 import { createControlPlaneApp } from "./app.ts";
 import { fakeHttpDeps } from "./test-deps.ts";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1048,7 +1048,7 @@ describe("development worker artifact hardening", () => {
 
     const response = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
     expect(response.status).toBe(503);
-    expect(calls).toEqual(["https://public.test/orchestrator"]);
+    expect(calls).toEqual(["https://93.184.216.34/orchestrator"]);
     expect(await response.json()).toMatchObject({ code: "artifact_unavailable" });
   });
 
@@ -1065,8 +1065,8 @@ describe("development worker artifact hardening", () => {
       const hardenedApp = createControlPlaneApp(fakeHttpDeps({
         workerReleaseManifest: undefined,
         developmentWindowsArtifacts: {
-          orchestrator: { url: `http://127.0.0.1:${upstream.port}/redirect`, sha256: "a".repeat(64) },
-          serviceHost: { url: `http://127.0.0.1:${upstream.port}/service-host`, sha256: "b".repeat(64) },
+          orchestrator: { url: `http://127.0.0.1:${upstream.port}/redirect`, sha256: createHash("sha256").update("local-artifact").digest("hex") },
+          serviceHost: { url: `http://127.0.0.1:${upstream.port}/service-host`, sha256: createHash("sha256").update("local-artifact").digest("hex") },
         },
       }));
 
@@ -1169,8 +1169,8 @@ describe("development worker artifact hardening", () => {
     const hardenedApp = createControlPlaneApp(fakeHttpDeps({
       workerReleaseManifest: undefined,
       developmentWindowsArtifacts: {
-        orchestrator: { url: "https://public.test/orchestrator", sha256: "a".repeat(64) },
-        serviceHost: { url: "https://public.test/service-host", sha256: "b".repeat(64) },
+        orchestrator: { url: "https://public.test/orchestrator", sha256: createHash("sha256").update("artifact").digest("hex") },
+        serviceHost: { url: "https://public.test/service-host", sha256: createHash("sha256").update("artifact").digest("hex") },
       },
       developmentArtifactProxy: {
         fetch: fetcher,
@@ -1196,11 +1196,217 @@ describe("development worker artifact hardening", () => {
     expect(maximumActive).toBe(2);
     const thirdStarted = new Promise<void>(resolve => startWaiters.push(resolve));
     pending.shift()?.();
+    const firstResponse = await requests[0]!;
+    await firstResponse.arrayBuffer();
     await thirdStarted;
     expect(active).toBe(2);
     while (pending.length) pending.shift()?.();
     const responses = await Promise.all(requests);
     expect(responses.map(response => response.status)).toEqual([200, 200, 200]);
-    await Promise.all(responses.map(response => response.arrayBuffer()));
+    await Promise.all(responses.slice(1).map(response => response.arrayBuffer()));
+  });
+
+  test("rejects a URL-backed artifact whose bytes do not match the configured digest", async () => {
+    const fetcher = Object.assign(async () => new Response("tampered-artifact"), { preconnect: globalThis.fetch.preconnect });
+    const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+      workerReleaseManifest: undefined,
+      developmentWindowsArtifacts: {
+        orchestrator: { url: "https://public.test/orchestrator", sha256: createHash("sha256").update("expected-artifact").digest("hex") },
+        serviceHost: { url: "https://public.test/service-host", sha256: "b".repeat(64) },
+      },
+      developmentArtifactProxy: {
+        fetch: fetcher,
+        resolveHostname: async () => ["93.184.216.34"],
+      },
+    }));
+
+    const response = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "artifact_unavailable" });
+  });
+
+  test("connects to the approved DNS address while preserving Host and TLS SNI", async () => {
+    const body = "dns-pinned-artifact";
+    const observed: { url?: string; host?: string | null; serverName?: string } = {};
+    const fetcher = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+      observed.url = String(input);
+      observed.host = new Headers(init?.headers).get("host");
+      observed.serverName = (init as RequestInit & { tls?: { serverName?: string } } | undefined)?.tls?.serverName;
+      return new Response(body);
+    }, { preconnect: globalThis.fetch.preconnect });
+    const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+      workerReleaseManifest: undefined,
+      developmentWindowsArtifacts: {
+        orchestrator: { url: "https://public.test:8443/download?build=1", sha256: createHash("sha256").update(body).digest("hex") },
+        serviceHost: { url: "https://public.test/service-host", sha256: "b".repeat(64) },
+      },
+      developmentArtifactProxy: {
+        fetch: fetcher,
+        resolveHostname: async () => ["93.184.216.34"],
+      },
+    }));
+
+    const response = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(body);
+    expect(observed).toEqual({
+      url: "https://93.184.216.34:8443/download?build=1",
+      host: "public.test:8443",
+      serverName: "public.test",
+    });
+  });
+
+  test("aborts DNS resolution at the per-hop timeout", async () => {
+    let dnsAborted = false;
+    const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+      workerReleaseManifest: undefined,
+      developmentWindowsArtifacts: {
+        orchestrator: { url: "https://slow-dns.test/orchestrator", sha256: "a".repeat(64) },
+        serviceHost: { url: "https://slow-dns.test/service-host", sha256: "b".repeat(64) },
+      },
+      developmentArtifactProxy: {
+        resolveHostname: (_hostname: string, signal: AbortSignal) => new Promise<readonly string[]>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            dnsAborted = true;
+            reject(signal.reason);
+          }, { once: true });
+        }),
+        headerTimeoutMs: 5,
+        totalTimeoutMs: 100,
+      },
+    }));
+
+    const response = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    expect(response.status).toBe(503);
+    expect(dnsAborted).toBe(true);
+  });
+
+  test("does not extend a local URL exception across a cross-origin private redirect", async () => {
+    const calls: string[] = [];
+    const fetcher = Object.assign(async (input: string | URL | Request) => {
+      calls.push(String(input));
+      return new Response(null, { status: 302, headers: { location: "http://127.0.0.1/private" } });
+    }, { preconnect: globalThis.fetch.preconnect });
+    const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+      workerReleaseManifest: undefined,
+      developmentWindowsArtifacts: {
+        orchestrator: { url: "http://localhost/start", sha256: "a".repeat(64) },
+        serviceHost: { url: "http://localhost/service-host", sha256: "b".repeat(64) },
+      },
+      developmentArtifactProxy: {
+        fetch: fetcher,
+        resolveHostname: async () => ["127.0.0.1"],
+      },
+    }));
+
+    const response = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    expect(response.status).toBe(503);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("rejects admission when the bounded artifact queue is full", async () => {
+    const body = "queued-artifact";
+    const completions: Array<() => void> = [];
+    const starts: Array<() => void> = [];
+    const fetcher = Object.assign(() => new Promise<Response>(resolve => {
+      starts.shift()?.();
+      completions.push(() => resolve(new Response(body)));
+    }), { preconnect: globalThis.fetch.preconnect });
+    const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+      workerReleaseManifest: undefined,
+      developmentWindowsArtifacts: {
+        orchestrator: { url: "https://public.test/orchestrator", sha256: createHash("sha256").update(body).digest("hex") },
+        serviceHost: { url: "https://public.test/service-host", sha256: createHash("sha256").update(body).digest("hex") },
+      },
+      developmentArtifactProxy: {
+        fetch: fetcher,
+        resolveHostname: async () => ["93.184.216.34"],
+        maxConcurrent: 1,
+        maxQueued: 1,
+        totalTimeoutMs: 1_000,
+      },
+    }));
+
+    const firstStarted = new Promise<void>(resolve => starts.push(resolve));
+    const first = hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    await firstStarted;
+    const secondStarted = new Promise<void>(resolve => starts.push(resolve));
+    const second = hardenedApp.request("/api/workers/service-host?audience=windows-x64");
+    const overflow = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    expect(overflow.status).toBe(503);
+    completions.shift()?.();
+    const firstResponse = await first;
+    expect(firstResponse.status).toBe(200);
+    await firstResponse.arrayBuffer();
+    await secondStarted;
+    completions.shift()?.();
+    const secondResponse = await second;
+    expect(secondResponse.status).toBe(200);
+    await secondResponse.arrayBuffer();
+  });
+
+  test("holds admission for local snapshots until their response body is consumed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mars-local-admission-"));
+    const artifact = join(root, "artifact.exe");
+    try {
+      await Bun.write(artifact, "local-snapshot");
+      const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+        workerReleaseManifest: undefined,
+        developmentWindowsArtifacts: {
+          orchestrator: { path: artifact, sha256: "a".repeat(64) },
+          serviceHost: { path: artifact, sha256: "b".repeat(64) },
+        },
+        developmentArtifactProxy: {
+          maxConcurrent: 1,
+          maxQueued: 0,
+        },
+      }));
+
+      const first = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+      expect(first.status).toBe(200);
+      const rejected = await hardenedApp.request("/api/workers/service-host?audience=windows-x64");
+      expect(rejected.status).toBe(503);
+      expect(await first.text()).toBe("local-snapshot");
+      const admitted = await hardenedApp.request("/api/workers/service-host?audience=windows-x64");
+      expect(admitted.status).toBe(200);
+      await admitted.arrayBuffer();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("expires an unconsumed response and removes its staged snapshot", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mars-response-lifetime-"));
+    const artifact = join(root, "artifact.exe");
+    const stagedDirectories = async () => (await readdir(tmpdir(), { withFileTypes: true }))
+      .filter(entry => entry.isDirectory() && entry.name.startsWith("mars-worker-artifact-")).length;
+    try {
+      await Bun.write(artifact, "slow-consumer");
+      const before = await stagedDirectories();
+      const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+        workerReleaseManifest: undefined,
+        developmentWindowsArtifacts: {
+          orchestrator: { path: artifact, sha256: "a".repeat(64) },
+          serviceHost: { path: artifact, sha256: "b".repeat(64) },
+        },
+        developmentArtifactProxy: {
+          maxConcurrent: 1,
+          maxQueued: 0,
+          downstreamTimeoutMs: 10,
+        },
+      }));
+
+      const abandoned = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+      expect(abandoned.status).toBe(200);
+      expect(await stagedDirectories()).toBe(before + 1);
+      // This integration path must let Bun's native stream and filesystem callbacks run after the real deadline.
+      await Bun.sleep(30);
+      expect(await stagedDirectories()).toBe(before);
+      const admitted = await hardenedApp.request("/api/workers/service-host?audience=windows-x64");
+      expect(admitted.status).toBe(200);
+      await admitted.arrayBuffer();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
