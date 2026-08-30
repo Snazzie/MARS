@@ -55,6 +55,7 @@ export type DevelopmentArtifactProxyOptions = {
   maxConcurrent?: number;
   maxQueued?: number;
   maxBytes?: Partial<Record<"template" | "archive" | "binary", number>>;
+  maxCacheBytes?: number;
 };
 
 export type ControlPlaneHealth = {

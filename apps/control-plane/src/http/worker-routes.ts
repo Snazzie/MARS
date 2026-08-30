@@ -109,9 +109,10 @@ function unavailable(c: Context<ControlPlaneEnv>, artifacts: string[]) {
 }
 type ArtifactSizeClass = "template" | "archive" | "binary";
 type ArtifactSnapshot = {
-  path: string;
+  path: ArtifactPath;
   sha256: string;
   size: number;
+  contentType?: string;
   dispose(): Promise<void>;
 };
 
@@ -259,6 +260,16 @@ class ArtifactAdmission {
 
 const artifactTemporaryPrefix = "mars-worker-artifact-";
 const artifactOrphanAgeMs = 3 * 60 * 60_000;
+const artifactOwnerAlive = (name: string): boolean => {
+  const owner = new RegExp(`^${artifactTemporaryPrefix}(\\d+)-`).exec(name);
+  if (!owner) return false;
+  try {
+    process.kill(Number(owner[1]), 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
 export const orphanCleanup = (async () => {
   try {
     const now = Date.now();
@@ -267,6 +278,7 @@ export const orphanCleanup = (async () => {
       .filter(entry => entry.isDirectory() && entry.name.startsWith(artifactTemporaryPrefix))
       .map(async entry => {
         const directory = join(tmpdir(), entry.name);
+        if (artifactOwnerAlive(entry.name)) return;
         try {
           const { mtimeMs } = await stat(directory);
           if (now - mtimeMs > artifactOrphanAgeMs) {
@@ -275,7 +287,7 @@ export const orphanCleanup = (async () => {
         } catch {}
       }));
   } catch {
-    // Snapshot creation and per-response disposal remain the primary cleanup path.
+    // Verified cache files remain bounded; stale process directories are recovered on startup.
   }
 })();
 
@@ -296,10 +308,46 @@ async function streamRead(
   });
 }
 
-async function snapshotStream(stream: ReadableStream<Uint8Array>, maximumBytes: number, signal: AbortSignal): Promise<ArtifactSnapshot> {
-  await orphanCleanup;
-  const directory = await mkdtemp(join(tmpdir(), artifactTemporaryPrefix));
-  const path = join(directory, "artifact");
+async function inspectLocalArtifact(
+  path: ArtifactPath,
+  maximumBytes: number,
+  signal: AbortSignal,
+): Promise<ArtifactSnapshot> {
+  const reader = Bun.file(path).stream().getReader();
+  const hash = createHash("sha256");
+  let size = 0;
+  try {
+    while (true) {
+      const result = await streamRead(reader, signal);
+      if (result.done) break;
+      size += result.value.byteLength;
+      if (size > maximumBytes) throw new Error("artifact_too_large");
+      hash.update(result.value);
+    }
+    return {
+      path,
+      sha256: hash.digest("hex"),
+      size,
+      dispose: async () => {},
+    };
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
+
+type CacheReservation = {
+  ensureBytes(bytes: number): void;
+};
+
+async function stageCachedStream(
+  stream: ReadableStream<Uint8Array>,
+  maximumBytes: number,
+  signal: AbortSignal,
+  path: string,
+  reservation: CacheReservation,
+): Promise<ArtifactSnapshot> {
   const writer = Bun.file(path).writer();
   const reader = stream.getReader();
   const hash = createHash("sha256");
@@ -310,6 +358,7 @@ async function snapshotStream(stream: ReadableStream<Uint8Array>, maximumBytes: 
       if (result.done) break;
       size += result.value.byteLength;
       if (size > maximumBytes) throw new Error("artifact_too_large");
+      reservation.ensureBytes(size);
       hash.update(result.value);
       writer.write(result.value);
     }
@@ -318,18 +367,16 @@ async function snapshotStream(stream: ReadableStream<Uint8Array>, maximumBytes: 
       path,
       sha256: hash.digest("hex"),
       size,
-      dispose: async () => {
-        await rm(directory, { recursive: true, force: true });
-      },
+      dispose: async () => {},
     };
   } catch (error) {
     await reader.cancel(error).catch(() => undefined);
     try {
       await writer.end();
     } catch {
-      // Preserve the original snapshot failure.
+      // Preserve the original staging failure.
     }
-    await rm(directory, { recursive: true, force: true });
+    await rm(path, { force: true });
     throw error;
   } finally {
     reader.releaseLock();
@@ -546,6 +593,73 @@ async function packagedResponse(path: ArtifactPath, filename: string, hash: stri
   if (hash) response.headers.set("X-Content-SHA256", hash);
   return response;
 }
+
+type CachedArtifactFactory = (path: string, reservation: CacheReservation) => Promise<ArtifactSnapshot>;
+
+class ArtifactCache {
+  readonly #maximumBytes: number;
+  #root?: Promise<string>;
+  readonly #artifacts = new Map<string, ArtifactSnapshot>();
+  readonly #flights = new Map<string, Promise<ArtifactSnapshot>>();
+  #cachedBytes = 0;
+  #stagedBytes = 0;
+
+  constructor(maximumBytes: number) {
+    this.#maximumBytes = maximumBytes;
+  }
+
+  async get(hash: string, create: CachedArtifactFactory): Promise<ArtifactSnapshot> {
+    const digest = hash.toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error("artifact_digest_invalid");
+    const cached = this.#artifacts.get(digest);
+    if (cached && await artifactExists(cached.path)) return cached;
+    if (cached) {
+      this.#artifacts.delete(digest);
+      this.#cachedBytes -= cached.size;
+    }
+    const existing = this.#flights.get(digest);
+    if (existing) return await existing;
+    const flight = this.#create(digest, create);
+    this.#flights.set(digest, flight);
+    try {
+      return await flight;
+    } finally {
+      this.#flights.delete(digest);
+    }
+  }
+
+  async #create(digest: string, create: CachedArtifactFactory): Promise<ArtifactSnapshot> {
+    this.#root ??= (async () => {
+      await orphanCleanup;
+      return await mkdtemp(join(tmpdir(), `${artifactTemporaryPrefix}${process.pid}-`));
+    })();
+    const path = join(await this.#root, digest);
+    let reserved = 0;
+    const reservation: CacheReservation = {
+      ensureBytes: bytes => {
+        if (bytes <= reserved) return;
+        const additional = bytes - reserved;
+        if (this.#cachedBytes + this.#stagedBytes + additional > this.#maximumBytes) {
+          throw new Error("artifact_cache_budget_exceeded");
+        }
+        reserved = bytes;
+        this.#stagedBytes += additional;
+      },
+    };
+    try {
+      const artifact = await create(path, reservation);
+      if (artifact.sha256 !== digest) throw new Error("artifact_digest_mismatch");
+      this.#stagedBytes -= reserved;
+      this.#cachedBytes += artifact.size;
+      this.#artifacts.set(digest, artifact);
+      return artifact;
+    } catch (error) {
+      this.#stagedBytes -= reserved;
+      await rm(path, { force: true });
+      throw error;
+    }
+  }
+}
 type ProxyPolicy = {
   fetcher: (input: string | URL | Request, init?: DevelopmentArtifactFetchOptions) => Promise<Response>;
   resolveHostname: (hostname: string, signal: AbortSignal) => Promise<readonly string[]>;
@@ -617,62 +731,64 @@ async function proxyPackagedResponse(
   requestSignal: AbortSignal,
   policy: ProxyPolicy,
   admission: ArtifactAdmission,
+  cache: ArtifactCache,
 ): Promise<Response | undefined> {
   let operation: ArtifactOperation | undefined;
   let upstream: Response | undefined;
   try {
     operation = await beginArtifactOperation(requestSignal, policy, admission);
-    const initial = new URL(url);
-    const restrictedOrigin = explicitlyLocalUrl(initial) ? initial.origin : undefined;
-    let current = initial;
-    let redirects = 0;
-    while (true) {
-      const headerController = new AbortController();
-      const headerTimer = setTimeout(() => headerController.abort(new Error("artifact_header_timeout")), policy.headerTimeoutMs);
-      try {
-        const hopSignal = AbortSignal.any([operation.signal, headerController.signal]);
-        const address = await validateProxyDestination(
-          current,
-          restrictedOrigin !== undefined && current.origin === restrictedOrigin,
-          policy.resolveHostname,
-          hopSignal,
-        );
-        const options: DevelopmentArtifactFetchOptions = {
-          redirect: "manual",
-          signal: hopSignal,
-          keepalive: false,
-          headers: { host: current.host },
-        };
-        const hostname = normalizedHostname(current);
-        if (current.protocol === "https:" && isIP(hostname) === 0) options.tls = { serverName: hostname };
-        upstream = await policy.fetcher(pinnedDestination(current, address), options);
-        if (hopSignal.aborted) throw hopSignal.reason;
-      } finally {
-        clearTimeout(headerTimer);
-      }
-      if ([301, 302, 303, 307, 308].includes(upstream.status)) {
-        if (redirects >= policy.maxRedirects) throw new Error("artifact_redirect_limit");
-        const location = upstream.headers.get("location");
-        if (!location) throw new Error("artifact_redirect_without_location");
-        await upstream.body?.cancel();
+    const snapshot = await cache.get(hash, async (path, reservation) => {
+      const initial = new URL(url);
+      const restrictedOrigin = explicitlyLocalUrl(initial) ? initial.origin : undefined;
+      let current = initial;
+      let redirects = 0;
+      while (true) {
+        const headerController = new AbortController();
+        const headerTimer = setTimeout(() => headerController.abort(new Error("artifact_header_timeout")), policy.headerTimeoutMs);
+        try {
+          const hopSignal = AbortSignal.any([operation!.signal, headerController.signal]);
+          const address = await validateProxyDestination(
+            current,
+            restrictedOrigin !== undefined && current.origin === restrictedOrigin,
+            policy.resolveHostname,
+            hopSignal,
+          );
+          const options: DevelopmentArtifactFetchOptions = {
+            redirect: "manual",
+            signal: hopSignal,
+            keepalive: false,
+            headers: { host: current.host },
+          };
+          const hostname = normalizedHostname(current);
+          if (current.protocol === "https:" && isIP(hostname) === 0) options.tls = { serverName: hostname };
+          upstream = await policy.fetcher(pinnedDestination(current, address), options);
+          if (hopSignal.aborted) throw hopSignal.reason;
+        } finally {
+          clearTimeout(headerTimer);
+        }
+        if ([301, 302, 303, 307, 308].includes(upstream.status)) {
+          if (redirects >= policy.maxRedirects) throw new Error("artifact_redirect_limit");
+          const location = upstream.headers.get("location");
+          if (!location) throw new Error("artifact_redirect_without_location");
+          await upstream.body?.cancel();
+          upstream = undefined;
+          current = new URL(location, current);
+          redirects += 1;
+          continue;
+        }
+        if (!upstream.ok || !upstream.body) throw new Error("artifact_upstream_unavailable");
+        const maximumBytes = policy.maximumBytes[sizeClass];
+        const declaredLength = Number(upstream.headers.get("content-length"));
+        if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) throw new Error("artifact_too_large");
+        if (Number.isFinite(declaredLength) && declaredLength > 0) reservation.ensureBytes(declaredLength);
+        const contentType = upstream.headers.get("content-type") ?? "application/octet-stream";
+        const staged = await stageCachedStream(upstream.body, maximumBytes, operation!.signal, path, reservation);
         upstream = undefined;
-        current = new URL(location, current);
-        redirects += 1;
-        continue;
+        staged.contentType = contentType;
+        return staged;
       }
-      if (!upstream.ok || !upstream.body) throw new Error("artifact_upstream_unavailable");
-      const maximumBytes = policy.maximumBytes[sizeClass];
-      const declaredLength = Number(upstream.headers.get("content-length"));
-      if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) throw new Error("artifact_too_large");
-      const contentType = upstream.headers.get("content-type") ?? "application/octet-stream";
-      const snapshot = await snapshotStream(upstream.body, maximumBytes, operation.signal);
-      upstream = undefined;
-      if (!/^[a-f0-9]{64}$/i.test(hash) || snapshot.sha256 !== hash.toLowerCase()) {
-        await snapshot.dispose();
-        throw new Error("artifact_digest_mismatch");
-      }
-      return operation.response(snapshot, filename, hash, contentType);
-    }
+    });
+    return operation.response(snapshot, filename, hash, snapshot.contentType);
   } catch {
     await upstream?.body?.cancel().catch(() => undefined);
     return undefined;
@@ -739,6 +855,9 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     bounded(proxyOptions?.maxConcurrent, 4, 1, 16),
     bounded(proxyOptions?.maxQueued, 16, 0, 64),
   );
+  const artifactCache = new ArtifactCache(
+    bounded(proxyOptions?.maxCacheBytes, 32 * 1024 ** 3, 1, 512 * 1024 ** 3),
+  );
   const localPackaged = async (
     c: Context<ControlPlaneEnv>,
     path: ArtifactPath,
@@ -751,7 +870,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     let snapshot: ArtifactSnapshot | undefined;
     try {
       operation = await beginArtifactOperation(c.req.raw.signal, proxyPolicy, artifactAdmission);
-      snapshot = await snapshotStream(Bun.file(path).stream(), proxyPolicy.maximumBytes[sizeClass], operation.signal);
+      snapshot = await inspectLocalArtifact(path, proxyPolicy.maximumBytes[sizeClass], operation.signal);
       if (expectedHash && (!/^[a-f0-9]{64}$/i.test(expectedHash) || snapshot.sha256 !== expectedHash.toLowerCase())) {
         await snapshot.dispose();
         snapshot = undefined;
@@ -777,7 +896,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       return localPackaged(c, artifact.path, `development:${name}`, filename, sizeClass);
     }
     if (artifact.url) {
-      return await proxyPackagedResponse(artifact.url, filename, artifact.sha256, sizeClass, c.req.raw.signal, proxyPolicy, artifactAdmission)
+      return await proxyPackagedResponse(artifact.url, filename, artifact.sha256, sizeClass, c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache)
         ?? unavailable(c, [`development:${name}`]);
     }
     return unavailable(c, [`development:${name}`]);
@@ -794,7 +913,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       return localPackaged(c, artifact.path, name, filename, sizeClass, artifact.sha256);
     }
     if (artifact.url) {
-      return await proxyPackagedResponse(artifact.url, filename, artifact.sha256, sizeClass, c.req.raw.signal, proxyPolicy, artifactAdmission)
+      return await proxyPackagedResponse(artifact.url, filename, artifact.sha256, sizeClass, c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache)
         ?? unavailable(c, [name]);
     }
     return unavailable(c, [name]);
@@ -836,16 +955,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   const buildArtifact = async (c: Context<ControlPlaneEnv>, key: keyof NonNullable<typeof deps.windowsContainerArtifacts>, filename: string) => {
     const path = (deps.windowsContainerArtifacts ?? deps.windowsContainerBuild)?.[key];
     if (!path || !await artifactExists(path)) return c.json({ code: "artifact_unavailable", message: "Windows container build artifact is unavailable", artifact: `windows-container-${key}` }, 503, { "cache-control": "no-store" });
-    let operation: ArtifactOperation | undefined;
-    try {
-      operation = await beginArtifactOperation(c.req.raw.signal, proxyPolicy, artifactAdmission);
-      const snapshot = await snapshotStream(Bun.file(path).stream(), proxyPolicy.maximumBytes.binary, operation.signal);
-      return operation.response(snapshot, filename);
-    } catch {
-      return c.json({ code: "artifact_unavailable", message: "Windows container build artifact is unavailable", artifact: `windows-container-${key}` }, 503, { "cache-control": "no-store" });
-    } finally {
-      operation?.close();
-    }
+    return localPackaged(c, path, `windows-container-${key}`, filename, "binary");
   };
   const developmentContainerArtifact = (
     key: "runner" | "git" | "vcRuntime",

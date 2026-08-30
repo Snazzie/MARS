@@ -1021,11 +1021,14 @@ describe("development worker artifact hardening", () => {
   test("startup cleanup removes stale orphan snapshots without touching fresh snapshots", async () => {
     const fresh = await mkdtemp(join(tmpdir(), "mars-worker-artifact-"));
     const stale = await mkdtemp(join(tmpdir(), "mars-worker-artifact-"));
+    const live = await mkdtemp(join(tmpdir(), `mars-worker-artifact-${process.pid}-`));
     try {
       await Bun.write(join(fresh, "artifact"), "active");
       await Bun.write(join(stale, "artifact"), "orphan");
+      await Bun.write(join(live, "artifact"), "live");
       const staleTime = new Date(Date.now() - 4 * 60 * 60_000);
       await utimes(stale, staleTime, staleTime);
+      await utimes(live, staleTime, staleTime);
 
       // Cache-busted import exercises module startup after fixtures exist.
       const { orphanCleanup: startupCleanup } = await import(`./worker-routes.ts?orphan-cleanup=${crypto.randomUUID()}`);
@@ -1034,8 +1037,9 @@ describe("development worker artifact hardening", () => {
 
       expect(entries).toContain(basename(fresh));
       expect(entries).not.toContain(basename(stale));
+      expect(entries).toContain(basename(live));
     } finally {
-      await Promise.all([fresh, stale].map(path => rm(path, { recursive: true, force: true })));
+      await Promise.all([fresh, stale, live].map(path => rm(path, { recursive: true, force: true })));
     }
   });
 
@@ -1191,31 +1195,16 @@ describe("development worker artifact hardening", () => {
     expect(oversizedResponse.status).toBe(503);
   });
 
-  test("propagates request cancellation and bounds concurrent upstream work", async () => {
-    let active = 0;
-    let maximumActive = 0;
+  test("propagates request cancellation to URL artifact staging", async () => {
     let cancellationObserved = false;
-    const pending: Array<() => void> = [];
-    const startWaiters: Array<() => void> = [];
-    const fetcher = Object.assign((_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
-      active += 1;
-      maximumActive = Math.max(maximumActive, active);
-      startWaiters.shift()?.();
-      let complete!: () => void;
-      const abort = () => {
-        const index = pending.indexOf(complete);
-        if (index >= 0) pending.splice(index, 1);
-        active -= 1;
+    let markStarted!: () => void;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    const fetcher = Object.assign((_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      markStarted();
+      init?.signal?.addEventListener("abort", () => {
         cancellationObserved = true;
-        reject(init?.signal?.reason);
-      };
-      init?.signal?.addEventListener("abort", abort, { once: true });
-      complete = () => {
-        init?.signal?.removeEventListener("abort", abort);
-        active -= 1;
-        resolve(new Response("artifact"));
-      };
-      pending.push(complete);
+        reject(init.signal?.reason);
+      }, { once: true });
     }), { preconnect: globalThis.fetch.preconnect });
     const hardenedApp = createControlPlaneApp(fakeHttpDeps({
       workerReleaseManifest: undefined,
@@ -1226,35 +1215,88 @@ describe("development worker artifact hardening", () => {
       developmentArtifactProxy: {
         fetch: fetcher,
         resolveHostname: async () => ["93.184.216.34"],
-        maxConcurrent: 2,
         headerTimeoutMs: 500,
         totalTimeoutMs: 1_000,
       },
     }));
 
-    const cancellationStarted = new Promise<void>(resolve => startWaiters.push(resolve));
     const controller = new AbortController();
     const cancelled = hardenedApp.request(new Request("https://control.test/api/workers/orchestrator?audience=windows-x64", { signal: controller.signal }));
-    await cancellationStarted;
+    await started;
     controller.abort();
     expect((await cancelled).status).toBe(503);
     expect(cancellationObserved).toBe(true);
+  });
 
-    const firstStarted = new Promise<void>(resolve => startWaiters.push(resolve));
-    const secondStarted = new Promise<void>(resolve => startWaiters.push(resolve));
-    const requests = Array.from({ length: 3 }, () => hardenedApp.request("/api/workers/orchestrator?audience=windows-x64"));
-    await Promise.all([firstStarted, secondStarted]);
-    expect(maximumActive).toBe(2);
-    const thirdStarted = new Promise<void>(resolve => startWaiters.push(resolve));
-    pending.shift()?.();
-    const firstResponse = await requests[0]!;
-    await firstResponse.arrayBuffer();
-    await thirdStarted;
-    expect(active).toBe(2);
-    while (pending.length) pending.shift()?.();
-    const responses = await Promise.all(requests);
-    expect(responses.map(response => response.status)).toEqual([200, 200, 200]);
-    await Promise.all(responses.slice(1).map(response => response.arrayBuffer()));
+  test("single-flights URL artifacts by digest and serves repeated cache hits", async () => {
+    const body = "single-flight-artifact";
+    const hash = createHash("sha256").update(body).digest("hex");
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let firstStarted!: () => void;
+    const started = new Promise<void>(resolve => { firstStarted = resolve; });
+    const fetcher = Object.assign(async () => {
+      calls += 1;
+      firstStarted();
+      await gate;
+      return new Response(body, { headers: { "content-length": String(body.length) } });
+    }, { preconnect: globalThis.fetch.preconnect });
+    const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+      workerReleaseManifest: undefined,
+      developmentWindowsArtifacts: {
+        orchestrator: { url: "https://public.test/orchestrator", sha256: hash },
+        serviceHost: { url: "https://public.test/service-host", sha256: hash },
+      },
+      developmentArtifactProxy: {
+        fetch: fetcher,
+        resolveHostname: async () => ["93.184.216.34"],
+      },
+    }));
+
+    const first = hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    await started;
+    const second = hardenedApp.request("/api/workers/service-host?audience=windows-x64");
+    for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+    expect(calls).toBe(1);
+    release();
+    const concurrent = await Promise.all([first, second]);
+    expect(await Promise.all(concurrent.map(response => response.text()))).toEqual([body, body]);
+
+    const cached = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    expect(cached.status).toBe(200);
+    expect(await cached.text()).toBe(body);
+    expect(calls).toBe(1);
+  });
+
+  test("rejects a distinct digest before the aggregate cache budget is exceeded", async () => {
+    const firstBody = "123456";
+    const secondBody = "abcdef";
+    const firstHash = createHash("sha256").update(firstBody).digest("hex");
+    const secondHash = createHash("sha256").update(secondBody).digest("hex");
+    const fetcher = Object.assign(async (input: string | URL | Request) => {
+      const body = new URL(String(input)).pathname.includes("service-host") ? secondBody : firstBody;
+      return new Response(body, { headers: { "content-length": String(body.length) } });
+    }, { preconnect: globalThis.fetch.preconnect });
+    const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+      workerReleaseManifest: undefined,
+      developmentWindowsArtifacts: {
+        orchestrator: { url: "https://public.test/orchestrator", sha256: firstHash },
+        serviceHost: { url: "https://public.test/service-host", sha256: secondHash },
+      },
+      developmentArtifactProxy: {
+        fetch: fetcher,
+        resolveHostname: async () => ["93.184.216.34"],
+        maxCacheBytes: 10,
+      },
+    }));
+
+    const admitted = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    expect(admitted.status).toBe(200);
+    expect(await admitted.text()).toBe(firstBody);
+    const rejected = await hardenedApp.request("/api/workers/service-host?audience=windows-x64");
+    expect(rejected.status).toBe(503);
+    expect(await rejected.json()).toMatchObject({ code: "artifact_unavailable" });
   });
 
   test("rejects a URL-backed artifact whose bytes do not match the configured digest", async () => {
@@ -1381,7 +1423,6 @@ describe("development worker artifact hardening", () => {
     const firstStarted = new Promise<void>(resolve => starts.push(resolve));
     const first = hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
     await firstStarted;
-    const secondStarted = new Promise<void>(resolve => starts.push(resolve));
     const second = hardenedApp.request("/api/workers/service-host?audience=windows-x64");
     const overflow = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
     expect(overflow.status).toBe(503);
@@ -1389,8 +1430,6 @@ describe("development worker artifact hardening", () => {
     const firstResponse = await first;
     expect(firstResponse.status).toBe(200);
     await firstResponse.arrayBuffer();
-    await secondStarted;
-    completions.shift()?.();
     const secondResponse = await second;
     expect(secondResponse.status).toBe(200);
     await secondResponse.arrayBuffer();
@@ -1426,13 +1465,15 @@ describe("development worker artifact hardening", () => {
     }
   });
 
-  test("expires an unconsumed response and removes its staged snapshot", async () => {
-    const root = await mkdtemp(join(tmpdir(), "mars-response-lifetime-"));
+  test("serves current local artifact bytes without creating temporary copies", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mars-local-zero-copy-"));
     const artifact = join(root, "artifact.exe");
     const stagedDirectories = async () => (await readdir(tmpdir(), { withFileTypes: true }))
       .filter(entry => entry.isDirectory() && entry.name.startsWith("mars-worker-artifact-")).length;
     try {
-      await Bun.write(artifact, "slow-consumer");
+      const body = "local-zero-copy";
+      await Bun.write(artifact, body);
+      const hash = createHash("sha256").update(body).digest("hex");
       const before = await stagedDirectories();
       const hardenedApp = createControlPlaneApp(fakeHttpDeps({
         workerReleaseManifest: undefined,
@@ -1440,22 +1481,18 @@ describe("development worker artifact hardening", () => {
           orchestrator: { path: artifact, sha256: "a".repeat(64) },
           serviceHost: { path: artifact, sha256: "b".repeat(64) },
         },
-        developmentArtifactProxy: {
-          maxConcurrent: 1,
-          maxQueued: 0,
-          downstreamTimeoutMs: 10,
-        },
       }));
 
-      const abandoned = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
-      expect(abandoned.status).toBe(200);
-      expect(await stagedDirectories()).toBe(before + 1);
-      // This integration path must let Bun's native stream and filesystem callbacks run after the real deadline.
-      await Bun.sleep(30);
+      const first = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+      expect(first.status).toBe(200);
+      expect(first.headers.get("X-Content-SHA256")).toBe(hash);
       expect(await stagedDirectories()).toBe(before);
-      const admitted = await hardenedApp.request("/api/workers/service-host?audience=windows-x64");
-      expect(admitted.status).toBe(200);
-      await admitted.arrayBuffer();
+      expect(await first.text()).toBe(body);
+
+      const repeated = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+      expect(repeated.status).toBe(200);
+      expect(await stagedDirectories()).toBe(before);
+      expect(await repeated.text()).toBe(body);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
