@@ -4,8 +4,9 @@ param(
 [Alias('Code')][string]$JoinCode = '',
 [string]$JoinCodeFile = 'C:\ProgramData\Mars\join-code',
   [ValidateSet('vm','container')][string]$WindowsRuntime = 'vm',
-[string]$WindowsOrchestratorSha256 = '',
-[string]$WindowsServiceHostSha256 = '',
+  [ValidateSet('production','local')][string]$WindowsArtifactMode = 'production',
+  [string]$WindowsOrchestratorSha256 = '',
+  [string]$WindowsServiceHostSha256 = '',
   [string]$WindowsTemplateUrl = '',
   [string]$WindowsTemplatePath = 'C:\ProgramData\Mars\worker-template.vhdx',
   [string]$WindowsTemplateDigest = '',
@@ -32,7 +33,21 @@ function Assert-StrictHttpsUrl([string]$Url, [string]$Name) {
 }
 $ReleaseBaseUrl = 'https://github.com/Snazzie/Mars/releases/latest/download'
 $ReleaseManifestUrl = "$ReleaseBaseUrl/worker-release-manifest.json"
+function Assert-LocalArtifactConfiguration {
+  $missing = @()
+  if ([string]::IsNullOrWhiteSpace($WindowsOrchestratorSha256)) { $missing += 'WindowsOrchestratorSha256' }
+  if ([string]::IsNullOrWhiteSpace($WindowsServiceHostSha256)) { $missing += 'WindowsServiceHostSha256' }
+  if ($WindowsRuntime -eq 'vm') {
+    if ([string]::IsNullOrWhiteSpace($WindowsTemplateUrl)) { $missing += 'WindowsTemplateUrl' }
+    if ([string]::IsNullOrWhiteSpace($WindowsTemplateDigest)) { $missing += 'WindowsTemplateDigest' }
+  }
+  if ($missing.Count -gt 0) { throw "Local Windows worker artifacts are not configured: $($missing -join ', ')." }
+}
 function Load-ReleaseMetadata {
+  if ($WindowsArtifactMode -eq 'local') {
+    Assert-LocalArtifactConfiguration
+    return
+  }
   $needs = [string]::IsNullOrWhiteSpace($WindowsOrchestratorSha256) -or
     [string]::IsNullOrWhiteSpace($WindowsServiceHostSha256) -or
     ($WindowsRuntime -eq 'vm' -and ([string]::IsNullOrWhiteSpace($WindowsTemplateUrl) -or [string]::IsNullOrWhiteSpace($WindowsTemplateDigest)))
@@ -122,6 +137,7 @@ function Register-ResumeTask {
     '-ControlPlaneUrl', $ControlPlaneUrl,
     '-JoinCodeFile', $JoinCodeFile,
     '-WindowsRuntime', $WindowsRuntime,
+    '-WindowsArtifactMode', $WindowsArtifactMode,
     '-WindowsOrchestratorSha256', $WindowsOrchestratorSha256,
     '-WindowsServiceHostSha256', $WindowsServiceHostSha256,
     '-WindowsTemplateUrl', $WindowsTemplateUrl,
@@ -171,7 +187,7 @@ function Assert-Template([string]$Path, [string]$Digest) {
 }
 function Download-Template {
   if ([string]::IsNullOrWhiteSpace($WindowsTemplateUrl) -or [string]::IsNullOrWhiteSpace($WindowsTemplatePath)) { throw 'Windows Hyper-V template is not configured.' }
-  Assert-StrictHttpsUrl $WindowsTemplateUrl 'Windows Hyper-V template URL'
+  if ($WindowsLocalArtifactMode -eq 'local') { Assert-HttpsUrl $WindowsTemplateUrl 'Windows Hyper-V template URL' } else { Assert-StrictHttpsUrl $WindowsTemplateUrl 'Windows Hyper-V template URL' }
   Assert-Digest $WindowsTemplateDigest
   $parent = Split-Path -Parent $WindowsTemplatePath
   New-Item -ItemType Directory -Force -Path $parent | Out-Null

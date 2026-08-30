@@ -480,6 +480,46 @@ test("Windows installer enforces HTTPS control-plane access", async () => {
   expect(source).toContain("Invoke-WebRequest");
   expect(source).toContain("-TimeoutSec 30");
 });
+windowsRuntimeTest("Windows local artifact mode rejects missing values without consulting GitHub metadata", async () => {
+  const source = await Bun.file(powershell).text();
+  const result = await invokeWindowsInstallerHarness(source, `
+$WindowsArtifactMode = 'local'
+$WindowsRuntime = 'vm'
+$WindowsOrchestratorSha256 = ''
+$WindowsServiceHostSha256 = ''
+$WindowsTemplateUrl = ''
+$WindowsTemplateDigest = ''
+function Invoke-RestMethod { throw 'release metadata fallback invoked' }
+try {
+  Load-ReleaseMetadata
+  throw 'local artifact validation unexpectedly passed'
+} catch {
+  if ($_.Exception.Message -notlike '*local Windows worker artifacts*') { throw }
+  Write-Output 'LOCAL_ARTIFACTS_REQUIRED'
+}
+`);
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("LOCAL_ARTIFACTS_REQUIRED");
+  expect(result.stdout).not.toContain("release metadata fallback invoked");
+});
+windowsRuntimeTest("Windows local artifact mode retains complete values without release metadata", async () => {
+  const source = await Bun.file(powershell).text();
+  const hash = "a".repeat(64);
+  const result = await invokeWindowsInstallerHarness(source, `
+$WindowsArtifactMode = 'local'
+$WindowsRuntime = 'vm'
+$WindowsOrchestratorSha256 = '${hash}'
+$WindowsServiceHostSha256 = '${hash}'
+$WindowsTemplateUrl = 'http://localhost:3000/api/workers/templates/windows-x64/artifact'
+$WindowsTemplateDigest = 'sha256:${hash}'
+function Invoke-RestMethod { throw 'release metadata fallback invoked' }
+Load-ReleaseMetadata
+Write-Output 'LOCAL_ARTIFACTS_COMPLETE'
+`);
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("LOCAL_ARTIFACTS_COMPLETE");
+  expect(result.stdout).not.toContain("release metadata fallback invoked");
+});
 test("Linux installer accepts configured HTTP or HTTPS control-plane URLs", async () => {
   const source = await Bun.file(linux).text();
   expect(source).toContain("validate_control_plane_url");
