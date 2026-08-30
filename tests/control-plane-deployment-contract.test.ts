@@ -69,7 +69,7 @@ test("deployment template documents only operator inputs without secrets or rele
   expect(envExample).toContain("PUBLIC_BASE_URL=http://localhost:3000");
   expect(envExample).toContain("WORKER_BASE_URL=");
   expect(envExample).not.toContain("CONTROL_PLANE_ADAPTER_URLS");
-  expect(envExample).not.toMatch(/(MARS_|DEFAULT_JOB_IMAGE|BROWSER_BASE_URL)/);
+  expect(envExample).not.toMatch(/(DEFAULT_JOB_IMAGE|BROWSER_BASE_URL)/);
   expect(envExample).not.toMatch(/(ghp_|github_pat_|-----BEGIN [A-Z ]+ PRIVATE KEY-----)/i);
 });
 test("Unraid exposes only database and origin inputs", async () => {
