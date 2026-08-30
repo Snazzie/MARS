@@ -5,8 +5,10 @@ param(
 [string]$JoinCodeFile = 'C:\ProgramData\Mars\join-code',
   [ValidateSet('vm','container')][string]$WindowsRuntime = 'vm',
   [ValidateSet('production','local')][string]$WindowsArtifactMode = 'production',
+  [string]$WindowsOrchestratorUrl = '',
   [string]$WindowsOrchestratorSha256 = '',
   [string]$WindowsServiceHostSha256 = '',
+  [string]$WindowsServiceHostUrl = '',
   [string]$WindowsTemplateUrl = '',
   [string]$WindowsTemplatePath = 'C:\ProgramData\Mars\worker-template.vhdx',
   [string]$WindowsTemplateDigest = '',
@@ -35,6 +37,8 @@ $ReleaseBaseUrl = 'https://github.com/Snazzie/Mars/releases/latest/download'
 $ReleaseManifestUrl = "$ReleaseBaseUrl/worker-release-manifest.json"
 function Assert-LocalArtifactConfiguration {
   $missing = @()
+  if ([string]::IsNullOrWhiteSpace($WindowsOrchestratorUrl)) { $missing += 'WindowsOrchestratorUrl' }
+  if ([string]::IsNullOrWhiteSpace($WindowsServiceHostUrl)) { $missing += 'WindowsServiceHostUrl' }
   if ([string]::IsNullOrWhiteSpace($WindowsOrchestratorSha256)) { $missing += 'WindowsOrchestratorSha256' }
   if ([string]::IsNullOrWhiteSpace($WindowsServiceHostSha256)) { $missing += 'WindowsServiceHostSha256' }
   if ($WindowsRuntime -eq 'vm') {
@@ -42,6 +46,8 @@ function Assert-LocalArtifactConfiguration {
     if ([string]::IsNullOrWhiteSpace($WindowsTemplateDigest)) { $missing += 'WindowsTemplateDigest' }
   }
   if ($missing.Count -gt 0) { throw "Local Windows worker artifacts are not configured: $($missing -join ', ')." }
+  Assert-HttpsUrl $WindowsOrchestratorUrl 'Windows orchestrator URL'
+  Assert-HttpsUrl $WindowsServiceHostUrl 'Windows service host URL'
 }
 function Load-ReleaseMetadata {
   if ($WindowsArtifactMode -eq 'local') {
@@ -138,6 +144,8 @@ function Register-ResumeTask {
     '-JoinCodeFile', $JoinCodeFile,
     '-WindowsRuntime', $WindowsRuntime,
     '-WindowsArtifactMode', $WindowsArtifactMode,
+    '-WindowsOrchestratorUrl', $WindowsOrchestratorUrl,
+    '-WindowsServiceHostUrl', $WindowsServiceHostUrl,
     '-WindowsOrchestratorSha256', $WindowsOrchestratorSha256,
     '-WindowsServiceHostSha256', $WindowsServiceHostSha256,
     '-WindowsTemplateUrl', $WindowsTemplateUrl,
@@ -187,7 +195,7 @@ function Assert-Template([string]$Path, [string]$Digest) {
 }
 function Download-Template {
   if ([string]::IsNullOrWhiteSpace($WindowsTemplateUrl) -or [string]::IsNullOrWhiteSpace($WindowsTemplatePath)) { throw 'Windows Hyper-V template is not configured.' }
-  if ($WindowsLocalArtifactMode -eq 'local') { Assert-HttpsUrl $WindowsTemplateUrl 'Windows Hyper-V template URL' } else { Assert-StrictHttpsUrl $WindowsTemplateUrl 'Windows Hyper-V template URL' }
+  if ($WindowsArtifactMode -eq 'local') { Assert-HttpsUrl $WindowsTemplateUrl 'Windows Hyper-V template URL' } else { Assert-StrictHttpsUrl $WindowsTemplateUrl 'Windows Hyper-V template URL' }
   Assert-Digest $WindowsTemplateDigest
   $parent = Split-Path -Parent $WindowsTemplatePath
   New-Item -ItemType Directory -Force -Path $parent | Out-Null
@@ -281,8 +289,10 @@ $exe = Join-Path $bin 'mars-orchestrator.exe'
 $serviceHost = Join-Path $bin 'mars-service-host.exe'
 $stagedExe = Join-Path $root 'mars-orchestrator.download'
 $stagedServiceHost = Join-Path $root 'mars-service-host.download'
-$orchestratorResponse = Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/orchestrator?audience=windows-x64" -OutFile $stagedExe -TimeoutSec 120
-$serviceHostResponse = Invoke-WebRequest -Uri "$ControlPlaneUrl/api/workers/service-host?audience=windows-x64" -OutFile $stagedServiceHost -TimeoutSec 120
+$orchestratorUrl = if ($WindowsArtifactMode -eq 'local') { $WindowsOrchestratorUrl } else { "$ControlPlaneUrl/api/workers/orchestrator?audience=windows-x64" }
+$serviceHostUrl = if ($WindowsArtifactMode -eq 'local') { $WindowsServiceHostUrl } else { "$ControlPlaneUrl/api/workers/service-host?audience=windows-x64" }
+$orchestratorResponse = Invoke-WebRequest -Uri $orchestratorUrl -OutFile $stagedExe -TimeoutSec 120
+$serviceHostResponse = Invoke-WebRequest -Uri $serviceHostUrl -OutFile $stagedServiceHost -TimeoutSec 120
 Verify-DownloadedFile $stagedExe $WindowsOrchestratorSha256 'Windows orchestrator' $orchestratorResponse
 Verify-DownloadedFile $stagedServiceHost $WindowsServiceHostSha256 'Windows service host' $serviceHostResponse
 Write-State 'runtime-download' 'complete'

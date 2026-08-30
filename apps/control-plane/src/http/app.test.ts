@@ -197,6 +197,56 @@ describe("control-plane HTTP boundary", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  test("generates local-only Windows installer values without release fallback", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mars-local-windows-installers-"));
+    const hash = "b".repeat(64);
+    try {
+      const paths = {
+        orchestrator: join(root, "orchestrator.exe"),
+        serviceHost: join(root, "service-host.exe"),
+        template: join(root, "template.vhdx"),
+        runner: join(root, "runner.zip"),
+        git: join(root, "git.zip"),
+        vcRuntime: join(root, "vc.exe"),
+      };
+      await Promise.all(Object.values(paths).map(path => Bun.write(path, path)));
+      await Bun.write(join(root, "install-worker.ps1"), "[CmdletBinding()]\r\nparam()\r\n");
+      const response = await createControlPlaneApp(fakeHttpDeps({
+        workerInstallerRoot: pathToFileURL(`${root}/`),
+        workerReleaseManifest: undefined,
+        workerOrchestratorExecutables: { "windows-x64": pathToFileURL(paths.orchestrator) },
+        workerServiceHostExecutable: pathToFileURL(paths.serviceHost),
+        developmentWindowsArtifacts: {
+          orchestrator: { path: paths.orchestrator, sha256: hash },
+          serviceHost: { path: paths.serviceHost, sha256: hash },
+          template: { path: paths.template, sha256: hash },
+          container: {
+            baseImage: `mcr.microsoft.com/windows@sha256:${hash}`,
+            runner: { path: paths.runner, sha256: hash },
+            git: { path: paths.git, sha256: hash },
+            vcRuntime: { path: paths.vcRuntime, sha256: hash },
+          },
+        },
+      })).request("/api/workers/installer?audience=windows-x64&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
+      const installer = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(installer).toContain("$WindowsArtifactMode = 'local'");
+      expect(installer).toContain("$WindowsOrchestratorUrl = 'https://control-plane.test/api/workers/orchestrator?audience=windows-x64'");
+      expect(installer).toContain("$WindowsServiceHostUrl = 'https://control-plane.test/api/workers/service-host?audience=windows-x64'");
+      expect(installer).toContain("$WindowsTemplateUrl = 'https://control-plane.test/api/workers/templates/windows-x64/artifact'");
+      expect(installer).toContain("$WindowsContainerRunnerUrl = 'https://control-plane.test/api/workers/windows-container-runner'");
+      expect(installer).toContain("$WindowsContainerGitUrl = 'https://control-plane.test/api/workers/windows-container-git'");
+      expect(installer).toContain("$WindowsContainerVcRuntimeUrl = 'https://control-plane.test/api/workers/windows-container-vc-runtime'");
+      expect(installer).toContain(`$WindowsOrchestratorSha256 = '${hash}'`);
+      expect(installer).toContain(`$WindowsServiceHostSha256 = '${hash}'`);
+      expect(installer).toContain(`$WindowsTemplateDigest = 'sha256:${hash}'`);
+      expect(installer).toContain(`$WindowsContainerImage = 'mcr.microsoft.com/windows@sha256:${hash}'`);
+      expect(installer).not.toContain("github.com/Snazzie/Mars/releases/latest");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   test("rejects Windows VM installer requests in v1", async () => {
     const response = await createControlPlaneApp(fakeHttpDeps()).request("/api/workers/installer?audience=windows-x64&runtime=vm&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
     expect(response.status).toBe(400);
@@ -790,3 +840,25 @@ test("generates complete platform installers from the immutable release manifest
     await rm(root, { recursive: true, force: true });
   }
 });
+  test.each([
+    "https://github.com/Snazzie/Mars/releases/latest/download/windows-worker.vhdx",
+    "https://github.com/Snazzie/Mars/releases/download/v1/windows-worker.vhdx",
+  ])("rejects development Windows artifacts configured with GitHub release URL %s", (url) => {
+    const hash = "a".repeat(64);
+    expect(createDevelopmentWindowsArtifacts({
+      NODE_ENV: "development",
+      WORKER_ORCHESTRATOR_WINDOWS_X64: "C:\\mars\\mars-orchestrator.exe",
+      MARS_WINDOWS_ORCHESTRATOR_SHA256: hash,
+      WORKER_SERVICE_HOST_EXECUTABLE: "C:\\mars\\mars-service-host.exe",
+      MARS_WINDOWS_SERVICE_HOST_SHA256: hash,
+      MARS_WINDOWS_TEMPLATE_URL: url,
+      MARS_WINDOWS_TEMPLATE_SHA256: hash,
+      MARS_WINDOWS_CONTAINER_BASE_IMAGE: `mcr.microsoft.com/windows@sha256:${hash}`,
+      MARS_WINDOWS_CONTAINER_RUNNER_URL: "http://localhost:3000/runner.zip",
+      MARS_WINDOWS_CONTAINER_RUNNER_SHA256: hash,
+      MARS_WINDOWS_CONTAINER_GIT_URL: "http://localhost:3000/git.zip",
+      MARS_WINDOWS_CONTAINER_GIT_SHA256: hash,
+      MARS_WINDOWS_CONTAINER_VC_URL: "http://localhost:3000/vc.exe",
+      MARS_WINDOWS_CONTAINER_VC_SHA256: hash,
+    })).toBeUndefined();
+  });

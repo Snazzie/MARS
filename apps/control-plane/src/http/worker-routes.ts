@@ -105,7 +105,30 @@ export function linuxInstallerValues(platform: LinuxWorkerRelease, connectOrigin
   };
 }
 
-export function windowsInstallerValues(platform: WindowsWorkerRelease, connectOrigin: string): InstallerValues {
+export function windowsInstallerValues(platform: WindowsWorkerRelease | undefined, connectOrigin: string, development?: NonNullable<ControlPlaneHttpDeps["developmentWindowsArtifacts"]>): InstallerValues {
+  if (development) {
+    const localUrl = (artifact: { url?: string }, path: string): string => artifact.url ?? `${connectOrigin}${path}`;
+    return {
+      WindowsArtifactMode: "local",
+      WindowsRuntime: "container",
+      WindowsOrchestratorUrl: `${connectOrigin}/api/workers/orchestrator?audience=windows-x64`,
+      WindowsOrchestratorSha256: development.orchestrator.sha256,
+      WindowsServiceHostUrl: `${connectOrigin}/api/workers/service-host?audience=windows-x64`,
+      WindowsServiceHostSha256: development.serviceHost.sha256,
+      WindowsTemplateUrl: localUrl(development.template, "/api/workers/templates/windows-x64/artifact"),
+      WindowsTemplatePath: "C:\\ProgramData\\Mars\\worker-template.vhdx",
+      WindowsTemplateDigest: `sha256:${development.template.sha256}`,
+      WindowsContainerBaseImage: development.container.baseImage,
+      WindowsContainerImage: development.container.baseImage,
+      WindowsContainerRunnerUrl: localUrl(development.container.runner, "/api/workers/windows-container-runner"),
+      WindowsContainerRunnerSha256: development.container.runner.sha256,
+      WindowsContainerGitUrl: localUrl(development.container.git, "/api/workers/windows-container-git"),
+      WindowsContainerGitSha256: development.container.git.sha256,
+      WindowsContainerVcRuntimeUrl: localUrl(development.container.vcRuntime, "/api/workers/windows-container-vc-runtime"),
+      WindowsContainerVcRuntimeSha256: development.container.vcRuntime.sha256,
+    };
+  }
+  if (!platform) throw new Error("Windows release metadata is unavailable.");
   return {
     WindowsRuntime: "container",
     WindowsOrchestratorSha256: platform.orchestratorSha256,
@@ -126,31 +149,54 @@ export function macosInstallerValues(platform: MacosWorkerRelease, connectOrigin
   };
 }
 
-function installerArtifacts(deps: ControlPlaneHttpDeps, audience: string, runtime: string, platform: LinuxWorkerRelease | WindowsWorkerRelease | MacosWorkerRelease | null | undefined): Promise<string[]> {
-  return (async () => {
-    const missing: string[] = [];
-    if (!deps.workerReleaseManifest) missing.push("release-manifest");
-    if (!platform) {
-      missing.push(`platform:${audience}`);
-      return missing;
+async function installerArtifacts(
+  deps: ControlPlaneHttpDeps,
+  audience: string,
+  runtime: string,
+  platform: LinuxWorkerRelease | WindowsWorkerRelease | MacosWorkerRelease | null | undefined,
+  development?: NonNullable<ControlPlaneHttpDeps["developmentWindowsArtifacts"]>,
+): Promise<string[]> {
+  const missing: string[] = [];
+  if (development) {
+    if (audience !== "windows-x64") return [`development:unsupported:${audience}`];
+    const artifacts = [
+      ["orchestrator", development.orchestrator],
+      ["service-host", development.serviceHost],
+      ["template", development.template],
+      ["container-runner", development.container.runner],
+      ["container-git", development.container.git],
+      ["container-vc-runtime", development.container.vcRuntime],
+    ] as const;
+    for (const [name, artifact] of artifacts) {
+      if (artifact.path && !await artifactExists(artifact.path)) missing.push(`development:${name}`);
     }
-    const fields = audience === "linux-x64"
-      ? ["orchestratorSha256", "brokerImage", "goldenImageUrl", "goldenImageSha256", "composeSha256", "domainTemplateSha256"]
-      : audience === "windows-x64"
-        ? ["orchestratorSha256", "serviceHostSha256", "vmTemplateUrl", "vmTemplateSha256"]
-        : ["orchestratorSha256", "tartImage", "tartImageDigest"];
-    for (const field of fields) if (!hasValue((platform as unknown as Record<string, unknown>)[field])) missing.push(releaseField(audience, field));
-    const installerName = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : "install-worker-macos.sh";
-    if (!await artifactExists(pathFor(deps.workerInstallerRoot, installerName))) missing.push(`installer:${installerName}`);
-    const executable = deps.workerOrchestratorExecutables?.[audience as keyof NonNullable<ControlPlaneHttpDeps["workerOrchestratorExecutables"]>] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined);
-    if (audience !== "linux-x64" && !await artifactExists(executable)) missing.push(`orchestrator:${audience}`);
-    if (audience === "windows-x64" && !await artifactExists(deps.workerServiceHostExecutable)) missing.push("service-host:windows-x64");
-    if (audience === "linux-x64") {
-      if (!await artifactExists(pathFor(deps.workerInstallerRoot, "linux-broker-compose.yaml"))) missing.push("linux-broker-compose");
-      if (!await artifactExists(pathFor(deps.workerInstallerRoot, "worker-domain.xml"))) missing.push("linux-domain-template");
-    }
+    if (!await artifactExists(pathFor(deps.workerInstallerRoot, "install-worker.ps1"))) missing.push("installer:install-worker.ps1");
     return missing;
-  })();
+  }
+  if (!deps.workerReleaseManifest) {
+    missing.push("release-manifest");
+    return missing;
+  }
+  if (!platform) {
+    missing.push(`platform:${audience}`);
+    return missing;
+  }
+  const fields = audience === "linux-x64"
+    ? ["orchestratorSha256", "brokerImage", "goldenImageUrl", "goldenImageSha256", "composeSha256", "domainTemplateSha256"]
+    : audience === "windows-x64"
+      ? ["orchestratorSha256", "serviceHostSha256", "vmTemplateUrl", "vmTemplateSha256"]
+      : ["orchestratorSha256", "tartImage", "tartImageDigest"];
+  for (const field of fields) if (!hasValue((platform as unknown as Record<string, unknown>)[field])) missing.push(releaseField(audience, field));
+  const installerName = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : "install-worker-macos.sh";
+  if (!await artifactExists(pathFor(deps.workerInstallerRoot, installerName))) missing.push(`installer:${installerName}`);
+  const executable = deps.workerOrchestratorExecutables?.[audience as keyof NonNullable<ControlPlaneHttpDeps["workerOrchestratorExecutables"]>] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined);
+  if (audience !== "linux-x64" && !await artifactExists(executable)) missing.push(`orchestrator:${audience}`);
+  if (audience === "windows-x64" && !await artifactExists(deps.workerServiceHostExecutable)) missing.push("service-host:windows-x64");
+  if (audience === "linux-x64") {
+    if (!await artifactExists(pathFor(deps.workerInstallerRoot, "linux-broker-compose.yaml"))) missing.push("linux-broker-compose");
+    if (!await artifactExists(pathFor(deps.workerInstallerRoot, "worker-domain.xml"))) missing.push("linux-domain-template");
+  }
+  return missing;
 }
 
 async function packagedResponse(path: ArtifactPath, filename: string, hash: string | undefined): Promise<Response> {
@@ -258,14 +304,15 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       return c.json({ code: "invalid_worker_origin", message: "Choose a configured worker connection origin" }, 400);
     }
     if (!deps.workerConnectionOrigins().includes(connectOrigin)) return c.json({ code: "invalid_worker_origin", message: "Choose a configured worker connection origin" }, 400);
+    const development = deps.developmentWindowsArtifacts;
     const release = deps.workerReleaseManifest?.platforms[audience];
-    const missing = await installerArtifacts(deps, audience, runtime, release);
+    const missing = await installerArtifacts(deps, audience, runtime, release, development);
     if (missing.length) return unavailable(c, missing);
     const source = await Bun.file(pathFor(deps.workerInstallerRoot, file)).text();
     const values = audience === "linux-x64"
       ? linuxInstallerValues(release as LinuxWorkerRelease, connectOrigin)
       : audience === "windows-x64"
-        ? windowsInstallerValues(release as WindowsWorkerRelease, connectOrigin)
+        ? windowsInstallerValues(release as WindowsWorkerRelease | undefined, connectOrigin, development)
         : macosInstallerValues(release as MacosWorkerRelease, connectOrigin);
     const generated = injectInstallerOrigin(source, connectOrigin, values, audience === "windows-x64");
     if (generated.includes("__PLACEHOLDER__") || /__[A-Za-z0-9_]+__/.test(generated)) return unavailable(c, [`installer:${file}`]);

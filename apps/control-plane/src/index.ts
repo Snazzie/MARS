@@ -57,6 +57,17 @@ const trimmedEnvironmentValue = (environment: DevelopmentEnvironment, names: str
   return undefined;
 };
 
+const developmentArtifactUrl = (value: string): boolean => {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  return !(parsed.hostname.toLowerCase() === "github.com" && /^\/[^/]+\/[^/]+\/releases(?:\/|$)/i.test(parsed.pathname));
+};
+
 const developmentArtifact = (
   environment: DevelopmentEnvironment,
   paths: string[],
@@ -66,7 +77,7 @@ const developmentArtifact = (
   const path = trimmedEnvironmentValue(environment, paths);
   const url = trimmedEnvironmentValue(environment, urls);
   const sha256 = trimmedEnvironmentValue(environment, hashes)?.replace(/^sha256:/, "");
-  if ((!path && !url) || !sha256 || !/^[0-9a-f]{64}$/.test(sha256)) return undefined;
+  if ((url && !developmentArtifactUrl(url)) || (!path && !url) || !sha256 || !/^[0-9a-f]{64}$/.test(sha256)) return undefined;
   return { ...(path ? { path } : {}), ...(url ? { url } : {}), sha256 };
 };
 

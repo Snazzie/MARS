@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { windowsInstallerValues } from "../apps/control-plane/src/http/worker-routes.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -510,6 +511,8 @@ $WindowsArtifactMode = 'local'
 $WindowsRuntime = 'vm'
 $WindowsOrchestratorSha256 = '${hash}'
 $WindowsServiceHostSha256 = '${hash}'
+$WindowsOrchestratorUrl = 'http://localhost:3000/api/workers/orchestrator?audience=windows-x64'
+$WindowsServiceHostUrl = 'http://localhost:3000/api/workers/service-host?audience=windows-x64'
 $WindowsTemplateUrl = 'http://localhost:3000/api/workers/templates/windows-x64/artifact'
 $WindowsTemplateDigest = 'sha256:${hash}'
 function Invoke-RestMethod { throw 'release metadata fallback invoked' }
@@ -519,6 +522,59 @@ Write-Output 'LOCAL_ARTIFACTS_COMPLETE'
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toContain("LOCAL_ARTIFACTS_COMPLETE");
   expect(result.stdout).not.toContain("release metadata fallback invoked");
+});
+windowsRuntimeTest("Windows local artifact mode requires explicit worker download URLs", async () => {
+  const source = await Bun.file(powershell).text();
+  const hash = "a".repeat(64);
+  const result = await invokeWindowsInstallerHarness(source, `
+$WindowsArtifactMode = 'local'
+$WindowsRuntime = 'container'
+$WindowsOrchestratorSha256 = '${hash}'
+$WindowsServiceHostSha256 = '${hash}'
+$WindowsOrchestratorUrl = ''
+$WindowsServiceHostUrl = ''
+function Invoke-RestMethod { throw 'release metadata fallback invoked' }
+try {
+  Load-ReleaseMetadata
+  throw 'local artifact URL validation unexpectedly passed'
+} catch {
+  if ($_.Exception.Message -notlike '*local Windows worker artifacts*') { throw }
+  Write-Output 'LOCAL_URLS_REQUIRED'
+}
+`);
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("LOCAL_URLS_REQUIRED");
+  expect(result.stdout).not.toContain("release metadata fallback invoked");
+});
+windowsRuntimeTest("Windows local artifact mode permits loopback template downloads", async () => {
+  const source = await Bun.file(powershell).text();
+  const tempDir = await mkdtemp(join(tmpdir(), "mars-local-template-"));
+  const templatePath = join(tempDir, "worker-template.vhdx");
+  const hash = "a".repeat(64);
+  try {
+    const result = await invokeWindowsInstallerHarness(source, `
+$WindowsArtifactMode = 'local'
+$WindowsTemplateUrl = 'http://localhost:3000/api/workers/templates/windows-x64/artifact'
+$WindowsTemplatePath = '${templatePath.replace(/\\/g, "\\\\")}'
+$WindowsTemplateDigest = 'sha256:${hash}'
+function Invoke-WebRequest {
+  param([string]$Uri, [string]$OutFile)
+  [IO.File]::WriteAllText($OutFile, 'template')
+  return [pscustomobject]@{}
+}
+function Get-FileHash {
+  param([string]$Algorithm, [string]$LiteralPath)
+  return [pscustomobject]@{ Hash = '${hash}' }
+}
+Download-Template
+if (-not (Test-Path -LiteralPath '${templatePath.replace(/\\/g, "\\\\")}')) { throw 'local template was not downloaded' }
+Write-Output 'LOCAL_TEMPLATE_URL_OK'
+`);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("LOCAL_TEMPLATE_URL_OK");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
 test("Linux installer accepts configured HTTP or HTTPS control-plane URLs", async () => {
   const source = await Bun.file(linux).text();
@@ -667,4 +723,34 @@ test("release installers apply passed control-plane URL and enrollment code", as
   expect(windowsSource).toContain("[Alias('Code')]");
   expect(macSource).toContain('PUBLIC_BASE_URL="$CONTROL_PLANE_URL"');
   expect(macSource).toContain("printf '%s\\n' \"$JOIN_CODE\"");
+});
+test("Windows local installer values define control-plane artifact endpoints", () => {
+  const hash = "b".repeat(64);
+  const values = windowsInstallerValues(undefined, "https://control.test", {
+    orchestrator: { sha256: hash },
+    serviceHost: { sha256: hash },
+    template: { sha256: hash },
+    container: {
+      baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}`,
+      runner: { sha256: hash },
+      git: { sha256: hash },
+      vcRuntime: { sha256: hash },
+    },
+  });
+
+  expect(values).toMatchObject({
+    WindowsArtifactMode: "local",
+    WindowsOrchestratorUrl: "https://control.test/api/workers/orchestrator?audience=windows-x64",
+    WindowsServiceHostUrl: "https://control.test/api/workers/service-host?audience=windows-x64",
+    WindowsTemplateUrl: "https://control.test/api/workers/templates/windows-x64/artifact",
+    WindowsContainerRunnerUrl: "https://control.test/api/workers/windows-container-runner",
+    WindowsContainerGitUrl: "https://control.test/api/workers/windows-container-git",
+    WindowsContainerVcRuntimeUrl: "https://control.test/api/workers/windows-container-vc-runtime",
+    WindowsOrchestratorSha256: hash,
+    WindowsServiceHostSha256: hash,
+    WindowsTemplateDigest: `sha256:${hash}`,
+    WindowsContainerRunnerSha256: hash,
+    WindowsContainerGitSha256: hash,
+    WindowsContainerVcRuntimeSha256: hash,
+  });
 });
