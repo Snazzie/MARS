@@ -318,7 +318,7 @@ test("Windows installer waits on a fresh service controller", async () => {
 });
 test("Windows installer downloads and registers the native SCM host", async () => {
   const source = await Bun.file(powershell).text();
-  expect(source).toContain("/api/workers/service-host?audience=windows-x64");
+  expect(source).toContain("$WindowsServiceHostUrl");
   expect(source).toContain("mars-service-host.exe");
   expect(source).toContain('-BinaryPathName "`"$serviceHost`"');
   expect(source).not.toContain("windows-worker --service");
@@ -492,10 +492,10 @@ $WindowsTemplateUrl = ''
 $WindowsTemplateDigest = ''
 function Invoke-RestMethod { throw 'release metadata fallback invoked' }
 try {
-  Load-ReleaseMetadata
+  Assert-ArtifactConfiguration
   throw 'local artifact validation unexpectedly passed'
 } catch {
-  if ($_.Exception.Message -notlike '*local Windows worker artifacts*') { throw }
+  if ($_.Exception.Message -notlike '*Windows worker artifacts*') { throw }
   Write-Output 'LOCAL_ARTIFACTS_REQUIRED'
 }
 `);
@@ -516,7 +516,7 @@ $WindowsServiceHostUrl = 'http://localhost:3000/api/workers/service-host?audienc
 $WindowsTemplateUrl = 'http://localhost:3000/api/workers/templates/windows-x64/artifact'
 $WindowsTemplateDigest = 'sha256:${hash}'
 function Invoke-RestMethod { throw 'release metadata fallback invoked' }
-Load-ReleaseMetadata
+Assert-ArtifactConfiguration
 Write-Output 'LOCAL_ARTIFACTS_COMPLETE'
 `);
   expect(result.exitCode).toBe(0);
@@ -535,10 +535,10 @@ $WindowsOrchestratorUrl = ''
 $WindowsServiceHostUrl = ''
 function Invoke-RestMethod { throw 'release metadata fallback invoked' }
 try {
-  Load-ReleaseMetadata
+  Assert-ArtifactConfiguration
   throw 'local artifact URL validation unexpectedly passed'
 } catch {
-  if ($_.Exception.Message -notlike '*local Windows worker artifacts*') { throw }
+  if ($_.Exception.Message -notlike '*Windows worker artifacts*') { throw }
   Write-Output 'LOCAL_URLS_REQUIRED'
 }
 `);
@@ -689,7 +689,7 @@ test("fresh-host blocker fixes remain fail-closed and resumable", async () => {
   expect(macSource).toContain("cleanup() {");
   expect(macSource).toContain('if [[ -f "\\$MARS_JOIN_CODE_FILE" ]]');
 });
-test("GitHub release installers are self-contained and placeholder-free", async () => {
+test("installers are self-contained and placeholder-free", async () => {
   const [linuxSource, windowsSource, macSource] = await Promise.all([
     Bun.file(linux).text(),
     Bun.file(powershell).text(),
@@ -700,15 +700,30 @@ test("GitHub release installers are self-contained and placeholder-free", async 
   expect(macSource).toContain("--code");
   for (const source of [linuxSource, windowsSource, macSource]) {
     expect(source).not.toMatch(/__[A-Za-z0-9_]+__/);
-    expect(source).toContain("https://github.com/Snazzie/Mars/releases/latest/download");
     expect(source).not.toContain("worker-v0.1.0");
   }
   for (const source of [linuxSource, macSource]) {
+    expect(source).toContain("https://github.com/Snazzie/Mars/releases/latest/download");
     expect(source).toContain("--control-plane-url");
+    expect(source).toContain("worker-release-manifest.json");
   }
-  expect(linuxSource).toContain("worker-release-manifest.json");
-  expect(windowsSource).toContain("worker-release-manifest.json");
-  expect(macSource).toContain("worker-release-manifest.json");
+  expect(windowsSource).not.toContain("https://github.com/Snazzie/Mars/releases/latest/download");
+  expect(windowsSource).not.toContain("worker-release-manifest.json");
+  expect(windowsSource).toContain("$WindowsOrchestratorUrl");
+  expect(windowsSource).toContain("$WindowsServiceHostUrl");
+  expect(windowsSource).toContain("$WindowsOrchestratorSha256");
+  expect(windowsSource).toContain("$WindowsServiceHostSha256");
+});
+test("Windows installer requires explicit artifact URLs and has no release-manifest fallback", async () => {
+  const source = await Bun.file(powershell).text();
+  expect(source).toContain("$WindowsArtifactMode");
+  expect(source).toContain("$WindowsOrchestratorUrl");
+  expect(source).toContain("$WindowsServiceHostUrl");
+  expect(source).toContain("$WindowsOrchestratorSha256");
+  expect(source).toContain("$WindowsServiceHostSha256");
+  expect(source).not.toContain("Invoke-RestMethod");
+  expect(source).not.toContain("worker-release-manifest.json");
+  expect(source).not.toContain("https://github.com/Snazzie/Mars/releases/latest/download");
 });
 test("release installers apply passed control-plane URL and enrollment code", async () => {
   const [linuxSource, windowsSource, macSource] = await Promise.all([
@@ -746,6 +761,57 @@ test("Windows local installer values define control-plane artifact endpoints", (
     WindowsContainerRunnerUrl: "https://control.test/api/workers/windows-container-runner",
     WindowsContainerGitUrl: "https://control.test/api/workers/windows-container-git",
     WindowsContainerVcRuntimeUrl: "https://control.test/api/workers/windows-container-vc-runtime",
+    WindowsOrchestratorSha256: hash,
+    WindowsServiceHostSha256: hash,
+    WindowsTemplateDigest: `sha256:${hash}`,
+    WindowsContainerRunnerSha256: hash,
+    WindowsContainerGitSha256: hash,
+    WindowsContainerVcRuntimeSha256: hash,
+  });
+});
+test("Windows local installer values never bypass control-plane artifact endpoints", () => {
+  const hash = "c".repeat(64);
+  const values = windowsInstallerValues(undefined, "https://control.test", {
+    orchestrator: { url: "https://external.test/orchestrator.exe", sha256: hash },
+    serviceHost: { url: "https://external.test/service-host.exe", sha256: hash },
+    template: { url: "https://external.test/template.vhdx", sha256: hash },
+    container: {
+      baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}`,
+      runner: { url: "https://external.test/runner.zip", sha256: hash },
+      git: { url: "https://external.test/git.zip", sha256: hash },
+      vcRuntime: { url: "https://external.test/vc.exe", sha256: hash },
+    },
+  });
+
+  expect(values.WindowsOrchestratorUrl).toBe("https://control.test/api/workers/orchestrator?audience=windows-x64");
+  expect(values.WindowsServiceHostUrl).toBe("https://control.test/api/workers/service-host?audience=windows-x64");
+  expect(values.WindowsTemplateUrl).toBe("https://control.test/api/workers/templates/windows-x64/artifact");
+  expect(values.WindowsContainerRunnerUrl).toBe("https://control.test/api/workers/windows-container-runner");
+  expect(values.WindowsContainerGitUrl).toBe("https://control.test/api/workers/windows-container-git");
+  expect(values.WindowsContainerVcRuntimeUrl).toBe("https://control.test/api/workers/windows-container-vc-runtime");
+});
+test("Windows release installer values include explicit artifact URLs", () => {
+  const hash = "d".repeat(64);
+  const values = windowsInstallerValues({
+    orchestratorSha256: hash,
+    serviceHostSha256: hash,
+    vmTemplateUrl: "https://release.test/worker-template.vhdx",
+    vmTemplateSha256: hash,
+    container: {
+      baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}`,
+      runner: { url: "https://release.test/runner.zip", sha256: hash },
+      git: { url: "https://release.test/git.zip", sha256: hash },
+      vcRuntime: { url: "https://release.test/vc.exe", sha256: hash },
+    },
+  }, "https://control.test");
+
+  expect(values).toMatchObject({
+    WindowsOrchestratorUrl: "https://control.test/api/workers/orchestrator?audience=windows-x64",
+    WindowsServiceHostUrl: "https://control.test/api/workers/service-host?audience=windows-x64",
+    WindowsTemplateUrl: "https://release.test/worker-template.vhdx",
+    WindowsContainerRunnerUrl: "https://release.test/runner.zip",
+    WindowsContainerGitUrl: "https://release.test/git.zip",
+    WindowsContainerVcRuntimeUrl: "https://release.test/vc.exe",
     WindowsOrchestratorSha256: hash,
     WindowsServiceHostSha256: hash,
     WindowsTemplateDigest: `sha256:${hash}`,

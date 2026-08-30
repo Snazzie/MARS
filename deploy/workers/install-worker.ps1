@@ -30,12 +30,7 @@ function Require-Administrator {
 function Assert-HttpsUrl([string]$Url, [string]$Name) {
   if ($Url -notmatch '^https://' -and $Url -notmatch '^http://(localhost|127\.0\.0\.1)(:\d+)?/') { throw "$Name must use HTTPS." }
 }
-function Assert-StrictHttpsUrl([string]$Url, [string]$Name) {
-  if ($Url -notmatch '^https://') { throw "$Name must use HTTPS." }
-}
-$ReleaseBaseUrl = 'https://github.com/Snazzie/Mars/releases/latest/download'
-$ReleaseManifestUrl = "$ReleaseBaseUrl/worker-release-manifest.json"
-function Assert-LocalArtifactConfiguration {
+function Assert-ArtifactConfiguration {
   $missing = @()
   if ([string]::IsNullOrWhiteSpace($WindowsOrchestratorUrl)) { $missing += 'WindowsOrchestratorUrl' }
   if ([string]::IsNullOrWhiteSpace($WindowsServiceHostUrl)) { $missing += 'WindowsServiceHostUrl' }
@@ -45,28 +40,10 @@ function Assert-LocalArtifactConfiguration {
     if ([string]::IsNullOrWhiteSpace($WindowsTemplateUrl)) { $missing += 'WindowsTemplateUrl' }
     if ([string]::IsNullOrWhiteSpace($WindowsTemplateDigest)) { $missing += 'WindowsTemplateDigest' }
   }
-  if ($missing.Count -gt 0) { throw "Local Windows worker artifacts are not configured: $($missing -join ', ')." }
+  if ($missing.Count -gt 0) { throw "Windows worker artifacts are not configured: $($missing -join ', ')." }
   Assert-HttpsUrl $WindowsOrchestratorUrl 'Windows orchestrator URL'
   Assert-HttpsUrl $WindowsServiceHostUrl 'Windows service host URL'
-}
-function Load-ReleaseMetadata {
-  if ($WindowsArtifactMode -eq 'local') {
-    Assert-LocalArtifactConfiguration
-    return
-  }
-  $needs = [string]::IsNullOrWhiteSpace($WindowsOrchestratorSha256) -or
-    [string]::IsNullOrWhiteSpace($WindowsServiceHostSha256) -or
-    ($WindowsRuntime -eq 'vm' -and ([string]::IsNullOrWhiteSpace($WindowsTemplateUrl) -or [string]::IsNullOrWhiteSpace($WindowsTemplateDigest)))
-  if ($needs) {
-    Assert-StrictHttpsUrl $ReleaseManifestUrl 'worker release manifest URL'
-    $manifest = Invoke-RestMethod -Uri $ReleaseManifestUrl -Method Get -UseBasicParsing -TimeoutSec 30
-    $platform = $manifest.platforms.'windows-x64'
-    if ($null -eq $platform) { throw 'Windows release metadata is unavailable.' }
-    if ([string]::IsNullOrWhiteSpace($WindowsOrchestratorSha256)) { $script:WindowsOrchestratorSha256 = [string]$platform.orchestratorSha256 }
-    if ([string]::IsNullOrWhiteSpace($WindowsServiceHostSha256)) { $script:WindowsServiceHostSha256 = [string]$platform.serviceHostSha256 }
-    if ([string]::IsNullOrWhiteSpace($WindowsTemplateUrl)) { $script:WindowsTemplateUrl = [string]$platform.vmTemplateUrl }
-    if ([string]::IsNullOrWhiteSpace($WindowsTemplateDigest)) { $script:WindowsTemplateDigest = "sha256:$([string]$platform.vmTemplateSha256)" }
-  }
+  if ($WindowsRuntime -eq 'vm') { Assert-HttpsUrl $WindowsTemplateUrl 'Windows Hyper-V template URL' }
 }
 function Write-State([string]$Stage, [string]$Status) {
   $statePath = 'C:\ProgramData\Mars\install-state.json'
@@ -195,7 +172,7 @@ function Assert-Template([string]$Path, [string]$Digest) {
 }
 function Download-Template {
   if ([string]::IsNullOrWhiteSpace($WindowsTemplateUrl) -or [string]::IsNullOrWhiteSpace($WindowsTemplatePath)) { throw 'Windows Hyper-V template is not configured.' }
-  if ($WindowsArtifactMode -eq 'local') { Assert-HttpsUrl $WindowsTemplateUrl 'Windows Hyper-V template URL' } else { Assert-StrictHttpsUrl $WindowsTemplateUrl 'Windows Hyper-V template URL' }
+  Assert-HttpsUrl $WindowsTemplateUrl 'Windows Hyper-V template URL'
   Assert-Digest $WindowsTemplateDigest
   $parent = Split-Path -Parent $WindowsTemplatePath
   New-Item -ItemType Directory -Force -Path $parent | Out-Null
@@ -276,7 +253,7 @@ Write-Host '[1/7] Checking administrator privileges'
 Require-Administrator
 Write-Host '[2/7] Checking Windows 11 Pro/Enterprise 24H2 x64 host'
 Assert-HostPreflight
-Load-ReleaseMetadata
+Assert-ArtifactConfiguration
 $root = 'C:\ProgramData\Mars'; $bin = 'C:\Program Files\Mars'; $identityPath = Join-Path $root 'worker-identity.json'; $persistentInstallerPath = Join-Path $root 'install-worker.ps1'
 New-Item -ItemType Directory -Force -Path $root,$bin | Out-Null
 $transcriptStarted = $false
@@ -289,10 +266,8 @@ $exe = Join-Path $bin 'mars-orchestrator.exe'
 $serviceHost = Join-Path $bin 'mars-service-host.exe'
 $stagedExe = Join-Path $root 'mars-orchestrator.download'
 $stagedServiceHost = Join-Path $root 'mars-service-host.download'
-$orchestratorUrl = if ($WindowsArtifactMode -eq 'local') { $WindowsOrchestratorUrl } else { "$ControlPlaneUrl/api/workers/orchestrator?audience=windows-x64" }
-$serviceHostUrl = if ($WindowsArtifactMode -eq 'local') { $WindowsServiceHostUrl } else { "$ControlPlaneUrl/api/workers/service-host?audience=windows-x64" }
-$orchestratorResponse = Invoke-WebRequest -Uri $orchestratorUrl -OutFile $stagedExe -TimeoutSec 120
-$serviceHostResponse = Invoke-WebRequest -Uri $serviceHostUrl -OutFile $stagedServiceHost -TimeoutSec 120
+$orchestratorResponse = Invoke-WebRequest -Uri $WindowsOrchestratorUrl -OutFile $stagedExe -TimeoutSec 120
+$serviceHostResponse = Invoke-WebRequest -Uri $WindowsServiceHostUrl -OutFile $stagedServiceHost -TimeoutSec 120
 Verify-DownloadedFile $stagedExe $WindowsOrchestratorSha256 'Windows orchestrator' $orchestratorResponse
 Verify-DownloadedFile $stagedServiceHost $WindowsServiceHostSha256 'Windows service host' $serviceHostResponse
 Write-State 'runtime-download' 'complete'
