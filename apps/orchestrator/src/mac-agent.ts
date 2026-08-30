@@ -336,7 +336,7 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           });
           return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
         }
-        if (frame.type === "ping") { ws.send("pong"); return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } })); }
+        if (frame.type === "ping") { ws.send(JSON.stringify({ version: 1, type: "pong", workerId: identity.workerId })); return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } })); }
         if (frame.type === "doctor_ack") return;
         const command = WorkerCommand.parse(frame);
         if (command.type === "worker.set_lease_preservation") {

@@ -260,7 +260,7 @@ try { Start-Transcript -LiteralPath (Join-Path $root 'install.log') -Append | Ou
 if (($Upgrade -or $Resume) -and [string]::IsNullOrWhiteSpace($JoinCode) -and (Test-Path -LiteralPath $JoinCodeFile)) { $JoinCode = (Get-Content -LiteralPath $JoinCodeFile -Raw).Trim() }
 Write-Host '[3/7] Checking control-plane connectivity and validating worker artifacts'
 Ensure-ControlPlane
-if ([string]::IsNullOrWhiteSpace($JoinCode) -or $JoinCode -notmatch '^[A-Za-z0-9_-]{43}$') { throw 'Join code is not configured.' }
+if (-not $Upgrade -and ([string]::IsNullOrWhiteSpace($JoinCode) -or $JoinCode -notmatch '^[A-Za-z0-9_-]{43}$')) { throw 'Join code is not configured.' }
 $exe = Join-Path $bin 'mars-orchestrator.exe'
 $serviceHost = Join-Path $bin 'mars-service-host.exe'
 $stagedExe = Join-Path $root 'mars-orchestrator.download'

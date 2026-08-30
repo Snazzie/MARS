@@ -185,6 +185,7 @@ async function connectLinuxWorker(
           return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctor, activeLeases: [...activeLeases.keys()] }, capacity: linuxCapacity() } }));
         }
         if (frame.type === "ping") {
+          ws.send(JSON.stringify({ version: 1, type: "pong", workerId: identity.workerId }));
           doctor = await linuxDoctor(driver, digest, channelRoot);
           return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctor, activeLeases: [...activeLeases.keys()] }, capacity: linuxCapacity() } }));
         }

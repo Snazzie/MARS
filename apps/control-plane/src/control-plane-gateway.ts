@@ -95,6 +95,8 @@ export function createControlPlaneGateway(options: GatewayOptions) {
             });
             if (!activated) return ws.close(4001, "superseded");
             ws.send(JSON.stringify({ version: 1, type: "authenticated", workerId: ws.data.workerId, admissionState: worker.admission_state }));
+            // Start the ping/pong chain. Workers only send subsequent heartbeats after a ping.
+            ws.send(JSON.stringify({ version: 1, type: "ping" }));
           } else if (frame.type === "doctor" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && frame.workerId === ws.data.workerId && frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload) && !containsSecret(frame.payload)) {
             const epoch = ws.data.connectionEpoch;
             if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;

@@ -433,6 +433,12 @@ test("Windows installer exposes identity-preserving upgrade mode", async () => {
   expect(source).toContain("if ($Upgrade -and -not $existingService)");
   expect(source).toContain("if (-not $Upgrade) {");
 });
+test("Windows upgrade does not require a fresh enrollment join code", async () => {
+  const source = await Bun.file(powershell).text();
+  const validation = "if (-not $Upgrade -and ([string]::IsNullOrWhiteSpace($JoinCode) -or $JoinCode -notmatch '^[A-Za-z0-9_-]{43}$'))";
+  expect(source).toContain(validation);
+  expect(source.indexOf(validation)).toBeGreaterThan(source.indexOf("Ensure-ControlPlane"));
+});
 test("Windows fresh replacement clears identity and image manifest after prerequisites", async () => {
   const source = await Bun.file(powershell).text();
   const prerequisites = source.indexOf("Write-State 'prerequisites'");

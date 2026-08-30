@@ -117,18 +117,6 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
   });
   const connectedCandidates = sqlCandidates.filter((candidate) => !deps.workerConnected || deps.workerConnected(candidate.worker.id)).map((candidate) => ({ ...candidate, worker: { ...candidate.worker, connectionState: "online" } }));
   const candidates = connectedCandidates;
-  const reasons = new Map<string, number>();
-  const schedulerAdmissible = new Set<string>();
-  for (const candidate of sqlCandidates) {
-    const connected = !deps.workerConnected || deps.workerConnected(candidate.worker.id);
-    for (const queued of queuedRows) {
-      const requestedLabels = stringArray(queued.labels);
-      const routingReason = connected ? reason({ ...candidate, requestedLabels }) : "worker_offline";
-      reasons.set(routingReason, (reasons.get(routingReason) ?? 0) + 1);
-      if (routingReason === "admissible") schedulerAdmissible.add(`${candidate.pool.id}:${candidate.worker.id}`);
-    }
-  }
-  console.log(`Routing summary ${JSON.stringify({ queued: queuedRows.length, sqlEligible: sqlCandidates.length, connected: connectedCandidates.length, schedulerAdmissible: schedulerAdmissible.size, reasons: Object.fromEntries(reasons) })}`);
 
   return reconcileQueuedJobs({
     queued: queuedRows.map((row) => {

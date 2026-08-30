@@ -46,7 +46,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
       return reserved + value.pool.active < value.pool.concurrency && fits({ ...value, requestedLabels });
     });
     if (blockedInstallations.has(queued.installationId)) { report.skipped += 1; continue; }
-    if (!candidate) { console.log(`No routing candidate for job ${queued.jobId}: ${requestedLabels.join(",")}`); report.skipped += 1; continue; }
+    if (!candidate) { report.skipped += 1; continue; }
     const [owner, repo] = queued.repository.split("/", 2);
     if (!owner || !repo) { report.failed += 1; continue; }
     let jitFailed = false;
