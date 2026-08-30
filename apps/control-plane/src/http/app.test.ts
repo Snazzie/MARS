@@ -1262,6 +1262,204 @@ describe("development worker artifact hardening", () => {
     expect(calls).toBe(1);
   });
 
+  test("keeps a cold-fill permit after its owner aborts", async () => {
+    const firstBody = "artifact-a";
+    const secondBody = "artifact-b";
+    const firstHash = createHash("sha256").update(firstBody).digest("hex");
+    const secondHash = createHash("sha256").update(secondBody).digest("hex");
+    const firstBytes = new TextEncoder().encode(firstBody);
+    let activeUpstreams = 0;
+    let maximumActiveUpstreams = 0;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve; });
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>(resolve => { markFirstStarted = resolve; });
+    const fetcher = Object.assign(async (input: string | URL | Request) => {
+      activeUpstreams += 1;
+      maximumActiveUpstreams = Math.max(maximumActiveUpstreams, activeUpstreams);
+      if (new URL(String(input)).pathname.includes("service-host")) {
+        activeUpstreams -= 1;
+        return new Response(secondBody);
+      }
+      let sentFirst = false;
+      return new Response(new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          if (!sentFirst) {
+            sentFirst = true;
+            controller.enqueue(firstBytes.subarray(0, 1));
+            markFirstStarted();
+            return;
+          }
+          await firstGate;
+          activeUpstreams -= 1;
+          controller.enqueue(firstBytes.subarray(1));
+          controller.close();
+        },
+        cancel() {
+          activeUpstreams -= 1;
+        },
+      }));
+    }, { preconnect: globalThis.fetch.preconnect });
+    const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+      workerReleaseManifest: undefined,
+      developmentWindowsArtifacts: {
+        orchestrator: { url: "https://public.test/orchestrator", sha256: firstHash },
+        serviceHost: { url: "https://public.test/service-host", sha256: secondHash },
+      },
+      developmentArtifactProxy: {
+        fetch: fetcher,
+        resolveHostname: async () => ["93.184.216.34"],
+        maxConcurrent: 1,
+        maxQueued: 0,
+        totalTimeoutMs: 1_000,
+      },
+    }));
+
+    const ownerController = new AbortController();
+    const owner = hardenedApp.request(new Request("https://control.test/api/workers/orchestrator?audience=windows-x64", { signal: ownerController.signal }));
+    await firstStarted;
+    ownerController.abort();
+    expect((await owner).status).toBe(503);
+
+    const distinct = await hardenedApp.request("/api/workers/service-host?audience=windows-x64");
+    const distinctStatus = distinct.status;
+    await distinct.arrayBuffer();
+    const follower = hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    releaseFirst();
+    const followed = await follower;
+    expect(followed.status).toBe(200);
+    expect(await followed.text()).toBe(firstBody);
+    expect(distinctStatus).toBe(503);
+    expect(maximumActiveUpstreams).toBe(1);
+  });
+
+  test("bounds and removes callers waiting on one digest flight", async () => {
+    const body = "bounded-flight";
+    const hash = createHash("sha256").update(body).digest("hex");
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let markStarted!: () => void;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    const fetcher = Object.assign(async () => {
+      markStarted();
+      await gate;
+      return new Response(body);
+    }, { preconnect: globalThis.fetch.preconnect });
+    const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+      workerReleaseManifest: undefined,
+      developmentWindowsArtifacts: {
+        orchestrator: { url: "https://public.test/orchestrator", sha256: hash },
+        serviceHost: { url: "https://public.test/service-host", sha256: hash },
+      },
+      developmentArtifactProxy: {
+        fetch: fetcher,
+        resolveHostname: async () => ["93.184.216.34"],
+        maxConcurrent: 1,
+        maxQueued: 1,
+        maxFlightWaiters: 2,
+        totalTimeoutMs: 1_000,
+      },
+    }));
+
+    const owner = hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    await started;
+    const followerController = new AbortController();
+    const follower = hardenedApp.request(new Request("https://control.test/api/workers/service-host?audience=windows-x64", { signal: followerController.signal }));
+    for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
+
+    const overflow = hardenedApp.request("/api/workers/service-host?audience=windows-x64");
+
+    followerController.abort();
+    expect((await follower).status).toBe(503);
+    for (let attempt = 0; attempt < 32; attempt += 1) {
+      const controller = new AbortController();
+      const pending = hardenedApp.request(new Request("https://control.test/api/workers/service-host?audience=windows-x64", { signal: controller.signal }));
+      await Promise.resolve();
+      controller.abort();
+      expect((await pending).status).toBe(503);
+    }
+
+    const finalFollower = hardenedApp.request("/api/workers/service-host?audience=windows-x64");
+    release();
+    const ownerResponse = await owner;
+    expect(ownerResponse.status).toBe(200);
+    await ownerResponse.arrayBuffer();
+    const overflowResponse = await overflow;
+    const overflowStatus = overflowResponse.status;
+    await overflowResponse.arrayBuffer();
+    const followerResponse = await finalFollower;
+    expect(followerResponse.status).toBe(200);
+    expect(await followerResponse.text()).toBe(body);
+    expect(overflowStatus).toBe(503);
+    const cached = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    expect(cached.status).toBe(200);
+    expect(await cached.text()).toBe(body);
+  });
+
+  test("keeps cached downstream responses admission-limited", async () => {
+    const body = "cached-admission";
+    const hash = createHash("sha256").update(body).digest("hex");
+    const fetcher = Object.assign(async () => new Response(body), { preconnect: globalThis.fetch.preconnect });
+    const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+      workerReleaseManifest: undefined,
+      developmentWindowsArtifacts: {
+        orchestrator: { url: "https://public.test/orchestrator", sha256: hash },
+        serviceHost: { url: "https://public.test/service-host", sha256: hash },
+      },
+      developmentArtifactProxy: {
+        fetch: fetcher,
+        resolveHostname: async () => ["93.184.216.34"],
+        maxConcurrent: 1,
+        maxQueued: 0,
+      },
+    }));
+
+    const fill = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    expect(fill.status).toBe(200);
+    await fill.arrayBuffer();
+    const held = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    expect(held.status).toBe(200);
+    const rejected = await hardenedApp.request("/api/workers/service-host?audience=windows-x64");
+    expect(rejected.status).toBe(503);
+    await held.arrayBuffer();
+    const admitted = await hardenedApp.request("/api/workers/service-host?audience=windows-x64");
+    expect(admitted.status).toBe(200);
+    expect(await admitted.text()).toBe(body);
+  });
+
+  test.each(["failure", "timeout"] as const)("releases a cold-flight permit after %s", async mode => {
+    const recoveredBody = `recovered-after-${mode}`;
+    const failedHash = createHash("sha256").update("never-produced").digest("hex");
+    const recoveredHash = createHash("sha256").update(recoveredBody).digest("hex");
+    const fetcher = Object.assign(async (input: string | URL | Request) => {
+      if (new URL(String(input)).pathname.includes("service-host")) return new Response(recoveredBody);
+      if (mode === "failure") throw new Error("upstream failed");
+      return new Response(new ReadableStream({ cancel() {} }));
+    }, { preconnect: globalThis.fetch.preconnect });
+    const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+      workerReleaseManifest: undefined,
+      developmentWindowsArtifacts: {
+        orchestrator: { url: "https://public.test/orchestrator", sha256: failedHash },
+        serviceHost: { url: "https://public.test/service-host", sha256: recoveredHash },
+      },
+      developmentArtifactProxy: {
+        fetch: fetcher,
+        resolveHostname: async () => ["93.184.216.34"],
+        maxConcurrent: 1,
+        maxQueued: 0,
+        headerTimeoutMs: 100,
+        // This case deliberately exercises the platform timeout that owns the flight permit.
+        totalTimeoutMs: 5,
+      },
+    }));
+
+    const failed = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    expect(failed.status).toBe(503);
+    const recovered = await hardenedApp.request("/api/workers/service-host?audience=windows-x64");
+    expect(recovered.status).toBe(200);
+    expect(await recovered.text()).toBe(recoveredBody);
+  });
+
   test("single-flights URL artifacts by digest and serves repeated cache hits", async () => {
     const body = "single-flight-artifact";
     const hash = createHash("sha256").update(body).digest("hex");
@@ -1432,18 +1630,25 @@ describe("development worker artifact hardening", () => {
   });
 
   test("rejects admission when the bounded artifact queue is full", async () => {
-    const body = "queued-artifact";
+    const bodies = {
+      orchestrator: "queued-orchestrator",
+      serviceHost: "queued-service-host",
+      template: "queued-template",
+    };
     const completions: Array<() => void> = [];
     const starts: Array<() => void> = [];
-    const fetcher = Object.assign(() => new Promise<Response>(resolve => {
+    const fetcher = Object.assign((input: string | URL | Request) => new Promise<Response>(resolve => {
       starts.shift()?.();
+      const path = new URL(String(input)).pathname;
+      const body = path.includes("service-host") ? bodies.serviceHost : path.includes("template") ? bodies.template : bodies.orchestrator;
       completions.push(() => resolve(new Response(body)));
     }), { preconnect: globalThis.fetch.preconnect });
     const hardenedApp = createControlPlaneApp(fakeHttpDeps({
       workerReleaseManifest: undefined,
       developmentWindowsArtifacts: {
-        orchestrator: { url: "https://public.test/orchestrator", sha256: createHash("sha256").update(body).digest("hex") },
-        serviceHost: { url: "https://public.test/service-host", sha256: createHash("sha256").update(body).digest("hex") },
+        orchestrator: { url: "https://public.test/orchestrator", sha256: createHash("sha256").update(bodies.orchestrator).digest("hex") },
+        serviceHost: { url: "https://public.test/service-host", sha256: createHash("sha256").update(bodies.serviceHost).digest("hex") },
+        template: { url: "https://public.test/template", sha256: createHash("sha256").update(bodies.template).digest("hex") },
       },
       developmentArtifactProxy: {
         fetch: fetcher,
@@ -1454,12 +1659,18 @@ describe("development worker artifact hardening", () => {
       },
     }));
 
-    const firstStarted = new Promise<void>(resolve => starts.push(resolve));
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>(resolve => { markFirstStarted = resolve; });
+    let markSecondStarted!: () => void;
+    const secondStarted = new Promise<void>(resolve => { markSecondStarted = resolve; });
+    starts.push(markFirstStarted, markSecondStarted);
     const first = hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
     await firstStarted;
     const second = hardenedApp.request("/api/workers/service-host?audience=windows-x64");
-    const overflow = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    const overflow = await hardenedApp.request("/api/workers/templates/windows-x64/artifact");
     expect(overflow.status).toBe(503);
+    completions.shift()?.();
+    await secondStarted;
     completions.shift()?.();
     const firstResponse = await first;
     expect(firstResponse.status).toBe(200);

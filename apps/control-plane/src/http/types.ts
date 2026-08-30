@@ -54,6 +54,7 @@ export type DevelopmentArtifactProxyOptions = {
   maxRedirects?: number;
   maxConcurrent?: number;
   maxQueued?: number;
+  maxFlightWaiters?: number;
   maxBytes?: Partial<Record<"template" | "archive" | "binary", number>>;
   maxCacheBytes?: number;
 };

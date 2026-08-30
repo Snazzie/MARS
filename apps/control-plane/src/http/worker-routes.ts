@@ -600,18 +600,34 @@ type CachedArtifactFactory = (
   signal: AbortSignal,
 ) => Promise<ArtifactSnapshot>;
 
+type ArtifactFlightWaiter = {
+  resolve: (snapshot: ArtifactSnapshot) => void;
+  reject: (reason?: unknown) => void;
+  signal: AbortSignal;
+  abort: () => void;
+};
+
+type ArtifactFlight = {
+  cancelTimeout(): void;
+  waiters: Set<ArtifactFlightWaiter>;
+};
+
 class ArtifactCache {
   readonly #maximumBytes: number;
   readonly #totalTimeoutMs: number;
+  readonly #admission: ArtifactAdmission;
+  readonly #maximumFlightWaiters: number;
   #root?: Promise<string>;
   readonly #artifacts = new Map<string, ArtifactSnapshot>();
-  readonly #flights = new Map<string, Promise<ArtifactSnapshot>>();
+  readonly #flights = new Map<string, ArtifactFlight>();
   #cachedBytes = 0;
   #stagedBytes = 0;
 
-  constructor(maximumBytes: number, totalTimeoutMs: number) {
+  constructor(maximumBytes: number, totalTimeoutMs: number, admission: ArtifactAdmission, maximumFlightWaiters: number) {
     this.#maximumBytes = maximumBytes;
     this.#totalTimeoutMs = totalTimeoutMs;
+    this.#admission = admission;
+    this.#maximumFlightWaiters = maximumFlightWaiters;
   }
 
   async get(hash: string, signal: AbortSignal, create: CachedArtifactFactory): Promise<ArtifactSnapshot> {
@@ -625,20 +641,71 @@ class ArtifactCache {
       this.#cachedBytes -= cached.size;
     }
     const existing = this.#flights.get(digest);
-    if (existing) return await abortable(existing, signal);
+    if (existing) return await this.#join(existing, signal);
 
     const controller = new AbortController();
     const timer = setTimeout(
       () => controller.abort(new Error("artifact_total_timeout")),
       this.#totalTimeoutMs,
     );
-    const flight = this.#create(digest, create, controller.signal).finally(() => clearTimeout(timer));
-    this.#flights.set(digest, flight);
-    const removeFlight = () => {
-      if (this.#flights.get(digest) === flight) this.#flights.delete(digest);
+    const flight: ArtifactFlight = {
+      cancelTimeout: () => clearTimeout(timer),
+      waiters: new Set(),
     };
-    void flight.then(removeFlight, removeFlight);
-    return await abortable(flight, signal);
+    this.#flights.set(digest, flight);
+    void this.#fill(digest, create, controller.signal).then(
+      snapshot => this.#settle(digest, flight, { snapshot }),
+      error => this.#settle(digest, flight, { error }),
+    );
+    return await this.#join(flight, signal);
+  }
+
+  async #join(flight: ArtifactFlight, signal: AbortSignal): Promise<ArtifactSnapshot> {
+    if (signal.aborted) throw signal.reason;
+    if (flight.waiters.size >= this.#maximumFlightWaiters) throw new Error("artifact_flight_full");
+    return await new Promise<ArtifactSnapshot>((resolve, reject) => {
+      const waiter: ArtifactFlightWaiter = {
+        resolve,
+        reject,
+        signal,
+        abort: () => {
+          flight.waiters.delete(waiter);
+          signal.removeEventListener("abort", waiter.abort);
+          reject(signal.reason);
+        },
+      };
+      signal.addEventListener("abort", waiter.abort, { once: true });
+      flight.waiters.add(waiter);
+    });
+  }
+
+  #settle(
+    digest: string,
+    flight: ArtifactFlight,
+    outcome: { snapshot: ArtifactSnapshot } | { error: unknown },
+  ): void {
+    flight.cancelTimeout();
+    if (this.#flights.get(digest) === flight) this.#flights.delete(digest);
+    const waiters = [...flight.waiters];
+    flight.waiters.clear();
+    for (const waiter of waiters) {
+      waiter.signal.removeEventListener("abort", waiter.abort);
+      if ("snapshot" in outcome) waiter.resolve(outcome.snapshot);
+      else waiter.reject(outcome.error);
+    }
+  }
+
+  async #fill(
+    digest: string,
+    create: CachedArtifactFactory,
+    signal: AbortSignal,
+  ): Promise<ArtifactSnapshot> {
+    const release = await this.#admission.acquire(signal);
+    try {
+      return await this.#create(digest, create, signal);
+    } finally {
+      release();
+    }
   }
 
   async #create(
@@ -755,8 +822,7 @@ async function proxyPackagedResponse(
 ): Promise<Response | undefined> {
   let operation: ArtifactOperation | undefined;
   try {
-    operation = await beginArtifactOperation(requestSignal, policy, admission, "admission");
-    const snapshot = await cache.get(hash, operation.signal, async (path, reservation, flightSignal) => {
+    const snapshot = await cache.get(hash, requestSignal, async (path, reservation, flightSignal) => {
       let upstream: Response | undefined;
       try {
         const initial = new URL(url);
@@ -813,6 +879,7 @@ async function proxyPackagedResponse(
         throw error;
       }
     });
+    operation = await beginArtifactOperation(requestSignal, policy, admission, "admission");
     return operation.response(snapshot, filename, hash, snapshot.contentType);
   } catch {
     return undefined;
@@ -882,6 +949,8 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   const artifactCache = new ArtifactCache(
     bounded(proxyOptions?.maxCacheBytes, 32 * 1024 ** 3, 1, 512 * 1024 ** 3),
     proxyPolicy.totalTimeoutMs,
+    artifactAdmission,
+    bounded(proxyOptions?.maxFlightWaiters, 16, 1, 64),
   );
   const localPackaged = async (
     c: Context<ControlPlaneEnv>,
