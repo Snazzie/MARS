@@ -362,10 +362,16 @@ function snapshotResponse(
     }
   };
   let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let bodyClosed = false;
+  const closeBody = () => {
+    if (bodyClosed) return;
+    bodyClosed = true;
+    controller?.close();
+  };
   const abort = () => {
     if (finished) return;
-    controller?.error(lifetime.signal.reason);
     void finish(true, lifetime.signal.reason);
+    closeBody();
   };
   const body = new ReadableStream<Uint8Array>({
     start(streamController) {
@@ -376,18 +382,25 @@ function snapshotResponse(
     async pull(streamController) {
       try {
         const result = await reader.read();
+        if (finished) {
+          closeBody();
+          return;
+        }
         if (result.done) {
           await finish(false);
-          streamController.close();
+          closeBody();
         } else {
           streamController.enqueue(result.value);
         }
       } catch (error) {
+        if (bodyClosed) return;
+        bodyClosed = true;
         streamController.error(error);
         await finish(true, error);
       }
     },
     async cancel(reason) {
+      bodyClosed = true;
       await finish(true, reason);
     },
   });
