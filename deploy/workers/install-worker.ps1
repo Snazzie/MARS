@@ -349,7 +349,7 @@ $serviceEnvironment = @(
   "MARS_JOIN_CODE_FILE=$joinCodePath"
   "MARS_WINDOWS_RUNTIME=$WindowsRuntime"
 )
-foreach ($name in @('MARS_ACTION_CACHE_ROOT','MARS_CACHE_PROXY_PORT','MARS_CACHE_DATA_PORT','MARS_CACHE_PROXY_URL','MARS_CACHE_ADVERTISE_URL')) {
+foreach ($name in @('MARS_ACTION_CACHE_ROOT','MARS_CACHE_PROXY_PORT','MARS_CACHE_DATA_PORT','MARS_CACHE_PROXY_URL','MARS_CACHE_ADVERTISE_URL','MARS_CACHE_TOKEN_ISSUER','MARS_CACHE_JWKS_URL')) {
   $value = [Environment]::GetEnvironmentVariable($name)
   if (-not [string]::IsNullOrWhiteSpace($value)) { $serviceEnvironment += "$name=$value" }
 }

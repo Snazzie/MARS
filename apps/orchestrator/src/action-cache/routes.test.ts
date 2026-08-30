@@ -30,7 +30,7 @@ function blockId(index: number): string {
   return bytes.toString("base64");
 }
 
-function fixture(githubRepositoryId = "1") {
+function fixture(githubRepositoryId = "1", permissions = 3) {
   const entries = new Map<string, { entryId: string; cacheKey: string; version: string; sizeBytes: string; archivePath: string; expiresAt: string }>();
   const parts = new Map<string, { partNumber: number; blockId: string; bytes: Uint8Array }[]>();
   let sequence = 0;
@@ -64,7 +64,7 @@ function fixture(githubRepositoryId = "1") {
   const route = createActionCacheRoutes({
     cacheBaseUrl: "https://cache.example.test",
     store: store as never,
-    authorize: async () => ({ githubRepositoryId, scopes: new Map([["refs/heads/main", 3]]) }),
+    authorize: async () => ({ githubRepositoryId, scopes: new Map([["refs/heads/main", permissions]]) }),
     signedUrl: (entryId, operation) => {
       const url = new URL(`/_apis/artifactcache/cache/${entryId}`, "https://cache.example.test");
       url.searchParams.set("op", operation);
@@ -78,29 +78,49 @@ function fixture(githubRepositoryId = "1") {
 
 test("rejects cache RPCs without a verified GitHub runtime token", async () => {
   const route = createActionCacheRoutes({ cacheBaseUrl: "https://cache.example.test", store: {} as never });
-  const response = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ metadata: { repository_id: "1", scope: [{ scope: "refs/heads/main", permission: "2" }] }, key: "linux-node", version: "v1" }) }));
+  const response = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "linux-node", version: "v1" }) }));
   expect(response.status).toBe(401);
   expect(await response.json()).toMatchObject({ code: "unauthenticated" });
 });
 
 test("finalizes an uploading entry and returns its immutable entry ID", async () => {
   const { route } = fixture();
-  await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ metadata: { repository_id: "1", scope: [{ scope: "refs/heads/main", permission: "2" }] }, key: "k", version: "v" }) }));
-  const response = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/FinalizeCacheEntryUpload", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ metadata: { repository_id: "1", scope: [{ scope: "refs/heads/main", permission: "2" }] }, key: "k", size_bytes: "0", version: "v" }) }));
+  await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "k", version: "v" }) }));
+  const response = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/FinalizeCacheEntryUpload", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "k", size_bytes: "0", version: "v" }) }));
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({ ok: true, entry_id: expect.stringMatching(/^[0-9a-f-]{36}$/i) });
 });
 
-test("rejects repository metadata that exceeds the runtime token", async () => {
-  const { route } = fixture();
-  const response = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ metadata: { repository_id: "2", scope: [{ scope: "refs/heads/main", permission: "2" }] }, key: "k", version: "v" }) }));
+test("ignores legacy metadata and uses verified token identity", async () => {
+  const { route, entries } = fixture();
+  const response = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ metadata: { repository_id: "2", scope: [{ scope: "refs/heads/other", permission: "2" }] }, key: "k", version: "v" }) }));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ ok: true });
+  expect([...entries.values()][0]).toMatchObject({ cacheKey: "k", version: "v" });
+});
+test("rejects create and finalize without a writable token scope", async () => {
+  const { route } = fixture("1", 1);
+  const request = (path: string, body: unknown) => route(new Request(`https://cache.example.test${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
+  expect((await request("/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry", { key: "k", version: "v" })).status).toBe(403);
+  expect((await request("/twirp/github.actions.results.api.v1.CacheService/FinalizeCacheEntryUpload", { key: "k", size_bytes: "0", version: "v" })).status).toBe(403);
+});
+
+test("rejects download without a readable token scope", async () => {
+  const { route } = fixture("1", 2);
+  const response = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/GetCacheEntryDownloadURL", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "missing", restore_keys: [], version: "v" }) }));
   expect(response.status).toBe(403);
-  expect(await response.json()).toMatchObject({ code: "permission_denied" });
+});
+
+test("returns a miss for an official metadata-free download request", async () => {
+  const { route } = fixture();
+  const response = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/GetCacheEntryDownloadURL", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "missing", restore_keys: [], version: "v" }) }));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ ok: false });
 });
 
 test("uploads Azure blocks and serves full, HEAD, and byte-range downloads", async () => {
   const { route, entries } = fixture();
-  const create = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ metadata: { repository_id: "1", scope: [{ scope: "refs/heads/main", permission: "2" }] }, key: "k", version: "v" }) }));
+  const create = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "k", version: "v" }) }));
   const uploadUrl = (await create.json()).signed_upload_url as string;
   const id0 = blockId(0);
   expect(new URL(uploadUrl).searchParams.get("sig")).not.toBeNull();
@@ -118,7 +138,7 @@ test("uploads Azure blocks and serves full, HEAD, and byte-range downloads", asy
   blockListUrl.searchParams.set("comp", "blocklist");
   expect((await route(new Request(blockListUrl, { method: "PUT", body: list }))).status).toBe(201);
   const entryId = [...entries.keys()][0]!;
-  const download = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/GetCacheEntryDownloadURL", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ metadata: { repository_id: "1", scope: [{ scope: "refs/heads/main", permission: "1" }] }, key: "k", restore_keys: [], version: "v" }) }));
+  const download = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/GetCacheEntryDownloadURL", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "k", restore_keys: [], version: "v" }) }));
   const downloadUrl = (await download.json()).signed_download_url as string;
   expect(await (await route(new Request(downloadUrl))).text()).toBe("abcdef");
   expect((await route(new Request(downloadUrl, { method: "HEAD" }))).headers.get("content-length")).toBe("6");
@@ -133,7 +153,7 @@ test("uploads Azure blocks and serves full, HEAD, and byte-range downloads", asy
 });
 test("rejects an oversized upload block before buffering its body", async () => {
   const { route } = fixture();
-  const create = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ metadata: { repository_id: "1", scope: [{ scope: "refs/heads/main", permission: "2" }] }, key: "large", version: "v1" }) }));
+  const create = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "large", version: "v1" }) }));
   const createBody: unknown = await create.json();
   if (!createBody || typeof createBody !== "object" || !("signed_upload_url" in createBody) || typeof createBody.signed_upload_url !== "string") throw new Error("cache create response missing upload URL");
   const uploadUrl = new URL(createBody.signed_upload_url);

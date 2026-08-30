@@ -31,35 +31,49 @@ function connectProxy(proxyUrl: string): Promise<string> {
   return promise;
 }
 
-function requestThroughProxy(proxyUrl: string, targetHost: string, ca: string, path: string): Promise<number> {
+function requestThroughProxy(proxyUrl: string, targetHost: string, ca: string, input: { method: string; path: string; headers?: Record<string, string>; body?: string }): Promise<{ status: number; headers: Record<string, string>; body: string }> {
   const proxy = new URL(proxyUrl);
   const credentials = proxy.username
     ? `Proxy-Authorization: Basic ${Buffer.from(`${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`).toString("base64")}\r\n`
     : "";
-  const { promise, resolve, reject } = Promise.withResolvers<number>();
+  const { promise, resolve, reject } = Promise.withResolvers<{ status: number; headers: Record<string, string>; body: string }>();
   const socket = connect(Number(proxy.port), proxy.hostname);
-  let response = "";
+  let connectResponse = "";
+  socket.setTimeout(5_000, () => { socket.destroy(); reject(new Error("proxy request timeout")); });
   socket.once("error", reject);
   socket.once("connect", () => socket.write(`CONNECT ${targetHost}:443 HTTP/1.1\r\nHost: ${targetHost}:443\r\n${credentials}\r\n`));
   const connected = (chunk: Buffer) => {
-    response += chunk.toString("latin1");
-    if (!response.includes("\r\n\r\n")) return;
+    connectResponse += chunk.toString("latin1");
+    if (!connectResponse.includes("\r\n\r\n")) return;
     socket.off("data", connected);
-    if (!response.startsWith("HTTP/1.1 200")) {
+    if (!connectResponse.startsWith("HTTP/1.1 200")) {
       socket.destroy();
-      reject(new Error(`proxy CONNECT failed: ${response.split("\r\n", 1)[0]}`));
+      reject(new Error(`proxy CONNECT failed: ${connectResponse.split("\r\n", 1)[0]}`));
       return;
     }
-    const secure = tlsConnect({ socket, servername: targetHost, ca }, () => {
-      secure.write(`GET ${path} HTTP/1.1\r\nHost: ${targetHost}\r\nConnection: close\r\n\r\n`, () => secure.end());
+    const secure = tlsConnect({ socket, servername: targetHost, ca });
+    secure.once("secureConnect", () => {
+      const request = httpsRequest({
+        host: targetHost,
+        servername: targetHost,
+        path: input.path,
+        method: input.method,
+        headers: { host: targetHost, ...input.headers },
+        agent: false,
+        createConnection: () => secure,
+      }, (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on("end", () => resolve({
+          status: response.statusCode ?? 0,
+          headers: Object.fromEntries(Object.entries(response.headers).map(([name, value]) => [name, Array.isArray(value) ? value.join(", ") : value ?? ""])),
+          body: Buffer.concat(chunks).toString("utf8"),
+        }));
+      });
+      request.once("error", reject);
+      if (input.body !== undefined) request.write(input.body);
+      request.end();
     });
-    let encryptedResponse = "";
-    secure.on("data", (data) => {
-      encryptedResponse += data.toString("latin1");
-      const status = /^HTTP\/\d\.\d (\d{3})/.exec(encryptedResponse)?.[1];
-      if (status) { socket.destroy(); resolve(Number(status)); }
-    });
-    secure.on("end", () => { if (!socket.destroyed) socket.destroy(); });
     secure.once("error", reject);
   };
   socket.on("data", connected);
@@ -244,6 +258,35 @@ test("forwards non-cache Results methods instead of handling them locally", asyn
   const response = await probeHttpsBody(service.status().cacheBaseUrl, "/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact", transport.caCertificatePem, { host: "results-receiver.actions.githubusercontent.com" });
   expect(response.status).toBe(204);
 });
+test("intercepts metadata-free cache requests through authenticated CONNECT", async () => {
+  let authorizationCalls = 0;
+  const service = await startActionCacheService({
+    root: await root(),
+    controlPlaneOrigin: "https://control.example.test",
+    ttlSeconds: 3600,
+    proxyPort: 0,
+    dataPort: 0,
+    discoverAdvertiseHost: async () => "127.0.0.1",
+    authorizeCacheRequest: async () => {
+      authorizationCalls += 1;
+      return { githubRepositoryId: "1", scopes: new Map([["refs/heads/main", 2]]) };
+    },
+  });
+  services.push(service);
+  const transport = service.transport("11111111-1111-4111-8111-111111111111", leaseExpiry());
+  const response = await requestThroughProxy(transport.proxyUrl, "results-receiver.actions.githubusercontent.com", transport.caCertificatePem, {
+    method: "POST",
+    path: "/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ key: "proxy-key", version: "proxy-version" }),
+  });
+  expect(authorizationCalls).toBe(1);
+  expect(response.status).toBe(200);
+  const body: unknown = JSON.parse(response.body);
+  expect(body).toMatchObject({ ok: true });
+  if (!body || typeof body !== "object" || !("signed_upload_url" in body) || typeof body.signed_upload_url !== "string") throw new Error("cache create response missing upload URL");
+  expect(new URL(body.signed_upload_url).origin).toBe(service.status().cacheBaseUrl);
+});
 test("reports live entry count and bytes after a cache fill", async () => {
   let now = new Date();
   let scheduledSweep: (() => Promise<void>) | undefined;
@@ -267,7 +310,7 @@ test("reports live entry count and bytes after a cache fill", async () => {
     method: "POST",
     path: "/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ metadata: { repository_id: "1", scope: [{ scope: "refs/heads/main", permission: "2" }] }, key: "summary-key", version: "v1" }),
+    body: JSON.stringify({ key: "summary-key", version: "v1" }),
   });
   const createBody: unknown = JSON.parse(create.body);
   if (!createBody || typeof createBody !== "object" || !("signed_upload_url" in createBody) || typeof createBody.signed_upload_url !== "string") throw new Error("cache create response missing upload URL");

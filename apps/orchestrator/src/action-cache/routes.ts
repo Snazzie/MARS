@@ -13,10 +13,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 
 type JsonObject = Record<string, unknown>;
 
-export type CacheMetadataWire = { repository_id: string; scope: Array<{ scope: string; permission: string }> };
-export type CreateCacheEntryRequestWire = { metadata: CacheMetadataWire; key: string; version: string };
-export type FinalizeCacheEntryUploadRequestWire = { metadata: CacheMetadataWire; key: string; size_bytes: string; version: string };
-export type GetCacheEntryDownloadURLRequestWire = { metadata: CacheMetadataWire; key: string; restore_keys: string[]; version: string };
+export type CreateCacheEntryRequestWire = { key: string; version: string };
+export type FinalizeCacheEntryUploadRequestWire = { key: string; size_bytes: string; version: string };
+export type GetCacheEntryDownloadURLRequestWire = { key: string; restore_keys: string[]; version: string };
 export type CacheAuthorization = {
   githubRepositoryId: string;
   scopes: ReadonlyMap<string, number>;
@@ -95,27 +94,18 @@ function decimalInt64(value: unknown, name: string, positive = false): string {
   if (parsed > MAX_INT64 || (positive && parsed < 1n)) throw new Error(`${name} is invalid`);
   return String(parsed);
 }
-function metadata(value: unknown): CacheMetadataWire {
-  if (!value || typeof value !== "object") throw new Error("metadata is invalid");
-  const raw = value as JsonObject;
-  const repository_id = decimalInt64(raw.repository_id, "repository_id", true);
-  if (!Array.isArray(raw.scope) || raw.scope.length === 0) throw new Error("scope is invalid");
-  const scope = raw.scope.map((item) => { if (!item || typeof item !== "object") throw new Error("scope is invalid"); const rawScope = item as JsonObject; return { scope: boundedText(rawScope.scope, "scope", 1024), permission: decimalInt64(rawScope.permission, "permission") }; });
-  return { repository_id, scope };
-}
-function parseCreate(value: unknown): CreateCacheEntryRequestWire { if (!value || typeof value !== "object") throw new Error("request is invalid"); const raw = value as JsonObject; return { metadata: metadata(raw.metadata), key: boundedText(raw.key, "key", 512), version: boundedText(raw.version, "version", 128) }; }
-function parseFinalize(value: unknown): FinalizeCacheEntryUploadRequestWire { if (!value || typeof value !== "object") throw new Error("request is invalid"); const raw = value as JsonObject; return { metadata: metadata(raw.metadata), key: boundedText(raw.key, "key", 512), size_bytes: decimalInt64(raw.size_bytes, "size_bytes"), version: boundedText(raw.version, "version", 128) }; }
-function parseDownload(value: unknown): GetCacheEntryDownloadURLRequestWire { if (!value || typeof value !== "object") throw new Error("request is invalid"); const raw = value as JsonObject; if (!Array.isArray(raw.restore_keys) || raw.restore_keys.length > 10) throw new Error("restore_keys is invalid"); return { metadata: metadata(raw.metadata), key: boundedText(raw.key, "key", 512), restore_keys: raw.restore_keys.map((item) => boundedText(item, "restore_key", 512)), version: boundedText(raw.version, "version", 128) }; }
+function parseCreate(value: unknown): CreateCacheEntryRequestWire { if (!value || typeof value !== "object") throw new Error("request is invalid"); const raw = value as JsonObject; return { key: boundedText(raw.key, "key", 512), version: boundedText(raw.version, "version", 128) }; }
+function parseFinalize(value: unknown): FinalizeCacheEntryUploadRequestWire { if (!value || typeof value !== "object") throw new Error("request is invalid"); const raw = value as JsonObject; return { key: boundedText(raw.key, "key", 512), size_bytes: decimalInt64(raw.size_bytes, "size_bytes"), version: boundedText(raw.version, "version", 128) }; }
+function parseDownload(value: unknown): GetCacheEntryDownloadURLRequestWire { if (!value || typeof value !== "object") throw new Error("request is invalid"); const raw = value as JsonObject; if (!Array.isArray(raw.restore_keys) || raw.restore_keys.length > 10) throw new Error("restore_keys is invalid"); return { key: boundedText(raw.key, "key", 512), restore_keys: raw.restore_keys.map((item) => boundedText(item, "restore_key", 512)), version: boundedText(raw.version, "version", 128) }; }
 function baseUrl(origin: string, entryId: string): string { return new URL(`/_apis/artifactcache/cache/${entryId}`, origin).toString(); }
 function signedUrl(dependencies: ActionCacheRouteDependencies, entryId: string, operation: CacheGrantOperation): string {
   return dependencies.signedUrl?.(entryId, operation) ?? baseUrl(dependencies.cacheBaseUrl, entryId);
 }
 async function parseJson(request: Request): Promise<unknown> { try { return await request.json(); } catch { throw new Error("request JSON is invalid"); } }
-function authorizedScopes(authorization: CacheAuthorization, value: CacheMetadataWire, permission: 1 | 2): string[] {
-  if (authorization.githubRepositoryId !== value.repository_id) return [];
-  return value.scope
-    .map((item) => item.scope)
-    .filter((scope, index, scopes) => scopes.indexOf(scope) === index && ((authorization.scopes.get(scope) ?? 0) & permission) !== 0);
+function authorizedScopes(authorization: CacheAuthorization, permission: 1 | 2): string[] {
+  return [...authorization.scopes.entries()]
+    .filter(([, permissions]) => (permissions & permission) !== 0)
+    .map(([scope]) => scope);
 }
 
 function decodeBlockId(blockId: string): number {
@@ -153,7 +143,7 @@ async function handleTwirp(request: Request, path: string, dependencies: ActionC
   try {
     if (path === CREATE) {
       const input = parseCreate(raw);
-      const scopes = authorizedScopes(authorization, input.metadata, 2);
+      const scopes = authorizedScopes(authorization, 2);
       if (!scopes.length) return permissionDenied();
       const reserved = await dependencies.store.reserveEntry({ githubRepositoryId: authorization.githubRepositoryId, scope: scopes[0]!, cacheKey: input.key, version: input.version });
       if (!reserved) return okJson({ ok: false, message: "cache entry already exists" });
@@ -161,7 +151,7 @@ async function handleTwirp(request: Request, path: string, dependencies: ActionC
     }
     if (path === FINALIZE) {
       const input = parseFinalize(raw);
-      const scopes = authorizedScopes(authorization, input.metadata, 2);
+      const scopes = authorizedScopes(authorization, 2);
       if (!scopes.length) return permissionDenied();
       const entry = await dependencies.store.findUploading({ githubRepositoryId: authorization.githubRepositoryId, scope: scopes[0]!, cacheKey: input.key, version: input.version });
       if (!entry) return okJson({ ok: false, message: "cache entry not found" });
@@ -169,7 +159,7 @@ async function handleTwirp(request: Request, path: string, dependencies: ActionC
       return okJson({ ok: true, entry_id: entry.entryId });
     }
     const input = parseDownload(raw);
-    const scopes = authorizedScopes(authorization, input.metadata, 1);
+    const scopes = authorizedScopes(authorization, 1);
     if (!scopes.length) return permissionDenied();
     const entry = await dependencies.store.findReady({ githubRepositoryId: authorization.githubRepositoryId, scopes, cacheKey: input.key, restoreKeys: input.restore_keys, version: input.version });
     if (!entry) return okJson({ ok: false });

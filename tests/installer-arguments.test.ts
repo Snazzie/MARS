@@ -423,10 +423,11 @@ test("Windows installer gives the service a fresh environment without rebooting"
   expect(source).toContain("-Name Environment -PropertyType MultiString");
 });
 test("worker installers propagate optional cache service environment", async () => {
-  const [windowsSource, macSource, composeSource] = await Promise.all([
+  const [windowsSource, macSource, composeSource, linuxSource] = await Promise.all([
     Bun.file(powershell).text(),
     Bun.file(mac).text(),
     Bun.file(linuxCompose).text(),
+    Bun.file(linux).text(),
   ]);
   for (const name of [
     "MARS_ACTION_CACHE_ROOT",
@@ -434,11 +435,15 @@ test("worker installers propagate optional cache service environment", async () 
     "MARS_CACHE_DATA_PORT",
     "MARS_CACHE_PROXY_URL",
     "MARS_CACHE_ADVERTISE_URL",
+    "MARS_CACHE_TOKEN_ISSUER",
+    "MARS_CACHE_JWKS_URL",
   ]) {
     expect(windowsSource).toContain(name);
     expect(macSource).toContain(name);
     expect(composeSource).toContain(name);
   }
+  expect(linuxSource).toContain("MARS_CACHE_TOKEN_ISSUER");
+  expect(linuxSource).toContain("MARS_CACHE_JWKS_URL");
   expect(composeSource).toContain("${MARS_CACHE_PROXY_PORT:-8788}:${MARS_CACHE_PROXY_PORT:-8788}");
   expect(composeSource).toContain("${MARS_CACHE_DATA_PORT:-8789}:${MARS_CACHE_DATA_PORT:-8789}");
   expect(composeSource).toContain("/var/lib/mars/action-cache");
