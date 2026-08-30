@@ -32,7 +32,7 @@ export function OutcomeBars({ outcomes, label = "Job outcomes" }: { outcomes: re
     marks: [barY(rows, { x: "outcome", y: "count", z: "platform", color: "platform", layout: stack({ order: platformOrder.map(({ key }) => key) }), radius: 2 })],
     x: { scale: () => scaleBand<OutcomeName>().padding(0.3), axis: { label: "Job outcome", format: (value: string) => outcomeLabels[value as OutcomeName] ?? value } },
     y: { scale: scaleLinear, nice: true, grid: true, axis: { label: "Jobs" } },
-    color: { scale: () => scaleOrdinal<Platform, string>().domain(platformOrder.map(({ key }) => key)).range(["#c9f47b", "#8bc9dc", "#e7835d", "#59635f"]), legend: colorLegend({ label: "Platform" }) },
+    color: { scale: () => scaleOrdinal<Platform, string>().domain(platformOrder.map(({ key }) => key)).range(["#e56b3f", "#d6a15f", "#8bc9dc", "#75615a"]), legend: colorLegend({ label: "Platform" }) },
     focus: "group-x",
     tooltip: { use: tooltip, anchor: "group-center", placement: ["top", "right", "left", "bottom"], sort: "color-domain" },
   }), [rows]);
