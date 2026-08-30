@@ -13,7 +13,7 @@ test("reserves a runner slot before requesting JIT config", async () => {
   });
   expect(result.reserved).toBe(1);
   expect(order).toEqual(["reserve", "jit", "dispatch"]);
-  expect(routingKey).toBe("acme/project:4:arm64,macos,self-hosted,mars-default");
+  expect(routingKey).toBe("acme/project:4:arm64,macos,mars-default,self-hosted");
 });
 
 test("does not reserve beyond active pool capacity", async () => {
@@ -42,7 +42,7 @@ test("uses every available pool slot for one installation", async () => {
     dispatch: async () => {},
   });
   expect(jitInstallations).toEqual([42, 42, 43]);
-  expect(result).toEqual({ reserved: 3, skipped: 0, failed: 0 });
+  expect(result).toEqual({ reserved: 3, deferred: 0, skipped: 0, failed: 0 });
 });
 
 test("does not block a later job when an earlier job is already claimed", async () => {
@@ -58,7 +58,7 @@ test("does not block a later job when an earlier job is already claimed", async 
     dispatch: async () => {},
   });
   expect(reservedJobs).toEqual([2]);
-  expect(result).toEqual({ reserved: 1, skipped: 0, failed: 1 });
+  expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 1 });
 });
 test("continues other installations after a rate-limited JIT attempt", async () => {
   const jitInstallations: number[] = [];
@@ -81,7 +81,7 @@ test("continues other installations after a rate-limited JIT attempt", async () 
   });
   expect(jitInstallations).toEqual([42, 43]);
   expect(reservedJobs).toEqual([1, 3]);
-  expect(result).toEqual({ reserved: 1, skipped: 1, failed: 1 });
+  expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 1, failed: 1 });
 });
  
 test("resumes routing after an installation cooldown clears", async () => {
@@ -98,10 +98,34 @@ test("resumes routing after an installation cooldown clears", async () => {
     dispatch: async () => { calls.push("dispatch"); },
   };
   const blockedResult = await reconcileQueuedJobs(deps);
-  expect(blockedResult).toEqual({ reserved: 0, skipped: 1, failed: 0 });
+  expect(blockedResult).toEqual({ reserved: 0, deferred: 0, skipped: 1, failed: 0 });
   expect(calls).toEqual([]);
   blocked = false;
   const resumedResult = await reconcileQueuedJobs(deps);
-  expect(resumedResult).toEqual({ reserved: 1, skipped: 0, failed: 0 });
+  expect(resumedResult).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
   expect(calls).toEqual(["reserve", "jit", "dispatch"]);
+});
+
+test("defers jobs when worker capacity is exhausted", async () => {
+  const calls: string[] = [];
+  const result = await reconcileQueuedJobs({
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "mars-default"] }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }],
+    reserve: async () => { throw new Error("worker_capacity_exhausted"); },
+    jit: async () => { calls.push("jit"); throw new Error("must not generate"); },
+    dispatch: async () => { calls.push("dispatch"); },
+  });
+  expect(result).toEqual({ reserved: 0, deferred: 1, skipped: 0, failed: 0 });
+  expect(calls).toEqual([]);
+});
+
+test("fails jobs when reservation fails unexpectedly", async () => {
+  const result = await reconcileQueuedJobs({
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "mars-default"] }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }],
+    reserve: async () => { throw new Error("unexpected_reservation_error"); },
+    jit: async () => { throw new Error("must not generate"); },
+    dispatch: async () => {},
+  });
+  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 1 });
 });

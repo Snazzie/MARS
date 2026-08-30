@@ -22,10 +22,10 @@ export type ReconcileDeps = {
   dispatch: (reservation: LeaseReservation, jit: RunnerJitConfig) => Promise<void>;
   release?: (reservation: LeaseReservation) => Promise<void>;
 };
-export type ReconcileReport = { reserved: number; skipped: number; failed: number };
+export type ReconcileReport = { reserved: number; deferred: number; skipped: number; failed: number };
 
 export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<ReconcileReport> {
-  const report: ReconcileReport = { reserved: 0, skipped: 0, failed: 0 };
+  const report: ReconcileReport = { reserved: 0, deferred: 0, skipped: 0, failed: 0 };
   const seen = new Set<number>();
   const reservedByPool = new Map<string, number>();
   const blockedInstallations = new Set<number>();
@@ -74,8 +74,13 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
       await deps.dispatch(claimed, jit);
       report.reserved += 1;
     } catch (error) {
-      console.error(`Reconcile job ${queued.jobId} failed: ${error instanceof Error ? error.message : "unknown"}`);
-      report.failed += 1;
+      const message = error instanceof Error ? error.message : "unknown";
+      if (message === "worker_capacity_exhausted") {
+        report.deferred += 1;
+      } else {
+        console.error(`Reconcile job ${queued.jobId} failed: ${message}`);
+        report.failed += 1;
+      }
       if (reservation) {
         const capacityKey = `${candidate.pool.id}:${candidate.worker.id}`;
         if (jitFailed) blockedInstallations.add(queued.installationId);
