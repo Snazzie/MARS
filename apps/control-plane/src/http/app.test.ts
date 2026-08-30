@@ -41,6 +41,28 @@ const app = createControlPlaneApp(fakeHttpDeps());
       },
     });
   });
+  test.each([
+    "https://github.com/Snazzie/Mars/releases/latest/download/windows-worker.vhdx",
+    "https://github.com/Snazzie/Mars/releases/download/v1/windows-worker.vhdx",
+  ])("rejects development Windows artifacts configured with GitHub release URL %s", (url) => {
+    const hash = "a".repeat(64);
+    expect(createDevelopmentWindowsArtifacts({
+      NODE_ENV: "development",
+      WORKER_ORCHESTRATOR_WINDOWS_X64: "C:\\mars\\mars-orchestrator.exe",
+      MARS_WINDOWS_ORCHESTRATOR_SHA256: hash,
+      WORKER_SERVICE_HOST_EXECUTABLE: "C:\\mars\\mars-service-host.exe",
+      MARS_WINDOWS_SERVICE_HOST_SHA256: hash,
+      MARS_WINDOWS_TEMPLATE_URL: url,
+      MARS_WINDOWS_TEMPLATE_SHA256: hash,
+      MARS_WINDOWS_CONTAINER_BASE_IMAGE: `mcr.microsoft.com/windows@sha256:${hash}`,
+      MARS_WINDOWS_CONTAINER_RUNNER_URL: "http://localhost:3000/runner.zip",
+      MARS_WINDOWS_CONTAINER_RUNNER_SHA256: hash,
+      MARS_WINDOWS_CONTAINER_GIT_URL: "http://localhost:3000/git.zip",
+      MARS_WINDOWS_CONTAINER_GIT_SHA256: hash,
+      MARS_WINDOWS_CONTAINER_VC_URL: "http://localhost:3000/vc.exe",
+      MARS_WINDOWS_CONTAINER_VC_SHA256: hash,
+    })).toBeUndefined();
+  });
 
   test("leaves development artifacts optional without release metadata", () => {
     expect(createDevelopmentWindowsArtifacts({ NODE_ENV: "development" })).toBeUndefined();
@@ -247,6 +269,125 @@ describe("control-plane HTTP boundary", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  test("serves configured local Windows artifacts with declared hashes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mars-local-windows-artifacts-"));
+    const hash = "c".repeat(64);
+    try {
+      const paths = {
+        orchestrator: join(root, "mars-orchestrator.exe"),
+        serviceHost: join(root, "mars-service-host.exe"),
+        template: join(root, "worker-template.vhdx"),
+        runner: join(root, "runner.zip"),
+        git: join(root, "git.zip"),
+        vcRuntime: join(root, "vc-runtime.exe"),
+      };
+      const contents = {
+        orchestrator: "local-orchestrator",
+        serviceHost: "local-service-host",
+        template: "local-template",
+        runner: "local-runner",
+        git: "local-git",
+        vcRuntime: "local-vc-runtime",
+      };
+      await Promise.all(Object.entries(paths).map(([name, path]) => Bun.write(path, contents[name as keyof typeof contents])));
+      const responseCases = [
+        ["/api/workers/orchestrator?audience=windows-x64", contents.orchestrator, "mars-orchestrator.exe"],
+        ["/api/workers/service-host?audience=windows-x64", contents.serviceHost, "mars-service-host.exe"],
+        ["/api/workers/templates/windows-x64/artifact", contents.template, "windows-x64.vhdx"],
+        ["/api/workers/windows-container-runner", contents.runner, "runner.zip"],
+        ["/api/workers/windows-container-git", contents.git, "git.zip"],
+        ["/api/workers/windows-container-vc-runtime", contents.vcRuntime, "vc-runtime.exe"],
+      ] as const;
+      const response = await createControlPlaneApp(fakeHttpDeps({
+        workerReleaseManifest: undefined,
+        developmentWindowsArtifacts: {
+          orchestrator: { path: paths.orchestrator, sha256: hash },
+          serviceHost: { path: paths.serviceHost, sha256: hash },
+          template: { path: paths.template, sha256: hash },
+          container: {
+            baseImage: `mcr.microsoft.com/windows@sha256:${hash}`,
+            runner: { path: paths.runner, sha256: hash },
+            git: { path: paths.git, sha256: hash },
+            vcRuntime: { path: paths.vcRuntime, sha256: hash },
+          },
+        },
+      }));
+
+      for (const [route, content, filename] of responseCases) {
+        const artifact = await response.request(route);
+        expect(artifact.status).toBe(200);
+        expect(await artifact.text()).toBe(content);
+        expect(artifact.headers.get("cache-control")).toBe("no-store");
+        expect(artifact.headers.get("X-Content-SHA256")).toBe(hash);
+        expect(artifact.headers.get("content-disposition")).toContain(`filename="${filename}"`);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  test("proxies configured local Windows artifact URLs through control plane routes", async () => {
+    const upstream = Bun.serve({ port: 0, fetch: () => new Response("proxied-runner", { headers: { "content-type": "application/zip" } }) });
+    const hash = "e".repeat(64);
+    try {
+      const response = await createControlPlaneApp(fakeHttpDeps({
+        workerReleaseManifest: undefined,
+        developmentWindowsArtifacts: {
+          orchestrator: { url: `http://127.0.0.1:${upstream.port}/orchestrator.exe`, sha256: hash },
+          serviceHost: { url: `http://127.0.0.1:${upstream.port}/service-host.exe`, sha256: hash },
+          template: { url: `http://127.0.0.1:${upstream.port}/template.vhdx`, sha256: hash },
+          container: {
+            baseImage: `mcr.microsoft.com/windows@sha256:${hash}`,
+            runner: { url: `http://127.0.0.1:${upstream.port}/runner.zip`, sha256: hash },
+            git: { url: `http://127.0.0.1:${upstream.port}/git.zip`, sha256: hash },
+            vcRuntime: { url: `http://127.0.0.1:${upstream.port}/vc-runtime.exe`, sha256: hash },
+          },
+        },
+      })).request("/api/workers/windows-container-runner");
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("proxied-runner");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("X-Content-SHA256")).toBe(hash);
+      expect(response.headers.get("content-disposition")).toContain('filename="runner.zip"');
+    } finally {
+      upstream.stop();
+    }
+  });
+
+
+  test("reports unavailable local Windows artifacts without release fallback", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mars-missing-local-windows-artifacts-"));
+    const hash = "d".repeat(64);
+    try {
+      const orchestrator = join(root, "mars-orchestrator.exe");
+      await Bun.write(orchestrator, "release-must-not-be-served");
+      const response = await createControlPlaneApp(fakeHttpDeps({
+        workerOrchestratorExecutables: { "windows-x64": pathToFileURL(orchestrator) },
+        developmentWindowsArtifacts: {
+          orchestrator: { path: join(root, "missing-orchestrator.exe"), sha256: hash },
+          serviceHost: { path: join(root, "missing-service-host.exe"), sha256: hash },
+          template: { path: join(root, "missing-template.vhdx"), sha256: hash },
+          container: {
+            baseImage: `mcr.microsoft.com/windows@sha256:${hash}`,
+            runner: { path: join(root, "missing-runner.zip"), sha256: hash },
+            git: { path: join(root, "missing-git.zip"), sha256: hash },
+            vcRuntime: { path: join(root, "missing-vc-runtime.exe"), sha256: hash },
+          },
+        },
+      })).request("/api/workers/orchestrator?audience=windows-x64");
+
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({
+        code: "artifact_unavailable",
+        message: "Worker installer prerequisites are unavailable",
+        artifacts: ["development:orchestrator"],
+      });
+      expect(response.headers.get("cache-control")).toBe("no-store");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("rejects Windows VM installer requests in v1", async () => {
     const response = await createControlPlaneApp(fakeHttpDeps()).request("/api/workers/installer?audience=windows-x64&runtime=vm&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
     expect(response.status).toBe(400);
@@ -840,47 +981,3 @@ test("generates complete platform installers from the immutable release manifest
     await rm(root, { recursive: true, force: true });
   }
 });
-  test.each([
-    "https://github.com/Snazzie/Mars/releases/latest/download/windows-worker.vhdx",
-    "https://github.com/Snazzie/Mars/releases/download/v1/windows-worker.vhdx",
-  ])("rejects development Windows artifacts configured with GitHub release URL %s", (url) => {
-    const hash = "a".repeat(64);
-    expect(createDevelopmentWindowsArtifacts({
-      NODE_ENV: "development",
-      WORKER_ORCHESTRATOR_WINDOWS_X64: "C:\\mars\\mars-orchestrator.exe",
-      MARS_WINDOWS_ORCHESTRATOR_SHA256: hash,
-      WORKER_SERVICE_HOST_EXECUTABLE: "C:\\mars\\mars-service-host.exe",
-      MARS_WINDOWS_SERVICE_HOST_SHA256: hash,
-      MARS_WINDOWS_TEMPLATE_URL: url,
-      MARS_WINDOWS_TEMPLATE_SHA256: hash,
-      MARS_WINDOWS_CONTAINER_BASE_IMAGE: `mcr.microsoft.com/windows@sha256:${hash}`,
-      MARS_WINDOWS_CONTAINER_RUNNER_URL: "http://localhost:3000/runner.zip",
-      MARS_WINDOWS_CONTAINER_RUNNER_SHA256: hash,
-      MARS_WINDOWS_CONTAINER_GIT_URL: "http://localhost:3000/git.zip",
-      MARS_WINDOWS_CONTAINER_GIT_SHA256: hash,
-      MARS_WINDOWS_CONTAINER_VC_URL: "http://localhost:3000/vc.exe",
-      MARS_WINDOWS_CONTAINER_VC_SHA256: hash,
-    })).toBeUndefined();
-  });
-  test.each([
-    "https://github.com/Snazzie/Mars/releases/latest/download/windows-worker.vhdx",
-    "https://github.com/Snazzie/Mars/releases/download/v1/windows-worker.vhdx",
-  ])("rejects development Windows artifacts configured with GitHub release URL %s", (url) => {
-    const hash = "a".repeat(64);
-    expect(createDevelopmentWindowsArtifacts({
-      NODE_ENV: "development",
-      WORKER_ORCHESTRATOR_WINDOWS_X64: "C:\\mars\\mars-orchestrator.exe",
-      MARS_WINDOWS_ORCHESTRATOR_SHA256: hash,
-      WORKER_SERVICE_HOST_EXECUTABLE: "C:\\mars\\mars-service-host.exe",
-      MARS_WINDOWS_SERVICE_HOST_SHA256: hash,
-      MARS_WINDOWS_TEMPLATE_URL: url,
-      MARS_WINDOWS_TEMPLATE_SHA256: hash,
-      MARS_WINDOWS_CONTAINER_BASE_IMAGE: `mcr.microsoft.com/windows@sha256:${hash}`,
-      MARS_WINDOWS_CONTAINER_RUNNER_URL: "http://localhost:3000/runner.zip",
-      MARS_WINDOWS_CONTAINER_RUNNER_SHA256: hash,
-      MARS_WINDOWS_CONTAINER_GIT_URL: "http://localhost:3000/git.zip",
-      MARS_WINDOWS_CONTAINER_GIT_SHA256: hash,
-      MARS_WINDOWS_CONTAINER_VC_URL: "http://localhost:3000/vc.exe",
-      MARS_WINDOWS_CONTAINER_VC_SHA256: hash,
-    })).toBeUndefined();
-  });
