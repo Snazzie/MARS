@@ -263,8 +263,9 @@ describe("control-plane HTTP boundary", () => {
       expect(installer).toContain(`$WindowsOrchestratorSha256 = '${hash}'`);
       expect(installer).toContain(`$WindowsServiceHostSha256 = '${hash}'`);
       expect(installer).toContain(`$WindowsTemplateDigest = 'sha256:${hash}'`);
-      expect(installer).toContain(`$WindowsContainerImage = 'mcr.microsoft.com/windows@sha256:${hash}'`);
-      expect(installer).not.toContain("github.com/Snazzie/Mars/releases/latest");
+      expect(installer).toContain("$WindowsContainerImage = 'mars/windows-job:local'");
+      expect(installer).not.toContain(`$WindowsContainerImage = 'mcr.microsoft.com/windows@sha256:${hash}'`);
+      expect(installer).not.toContain("github.com");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

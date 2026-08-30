@@ -119,7 +119,7 @@ export function windowsInstallerValues(platform: WindowsWorkerRelease | undefine
       WindowsTemplatePath: "C:\\ProgramData\\Mars\\worker-template.vhdx",
       WindowsTemplateDigest: `sha256:${development.template.sha256}`,
       WindowsContainerBaseImage: development.container.baseImage,
-      WindowsContainerImage: development.container.baseImage,
+      WindowsContainerImage: "mars/windows-job:local",
       WindowsContainerRunnerUrl: localUrl("/api/workers/windows-container-runner"),
       WindowsContainerRunnerSha256: development.container.runner.sha256,
       WindowsContainerGitUrl: localUrl("/api/workers/windows-container-git"),
