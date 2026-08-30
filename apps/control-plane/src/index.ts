@@ -8,8 +8,9 @@ import { WorkerCommandDispatcher, normalizeTimestamp } from "./worker-dispatch.t
 import { createRequestLimiter } from "./worker-requests.ts";
 import { GitHubAppService } from "./github-app.ts";
 import { runQueuedJobReconciliation } from "./job-reconciler.ts";
-import { reapPendingLeases } from "./lease-cleanup.ts";
+import type { ReconcileReport } from "./reconcile.ts";
 import { reconcileExpiredLeasesWithGithub } from "./lease-reconciliation.ts";
+import { reapPendingLeases } from "./lease-cleanup.ts";
 import { startReconciliationScheduler } from "./reconcile-loop.ts";
 import { pruneExpiredData } from "./retention.ts";
 import { DiscoveryHealthMonitor, isDiscoveryCycleSuccessful } from "./discovery-health.ts";
@@ -24,6 +25,11 @@ import { initializeControlPlaneSetup } from "./control-plane-setup.ts";
 import { httpOrigin, publicHttpOrigin } from "./http-origin.ts";
 import { loadWorkerReleaseManifest, type DevelopmentWorkerRelease } from "./worker-release.ts";
 import { createControlPlaneGateway, type ControlPlaneSocketData } from "./control-plane-gateway.ts";
+
+export function formatJobReconciliationReport(report: ReconcileReport): string | undefined {
+  if (report.reserved === 0 && report.failed === 0) return undefined;
+  return `Job reconciliation tick: reserved=${report.reserved} deferred=${report.deferred} failed=${report.failed} skipped=${report.skipped}`;
+}
 
 export function configureErrorFileLogging(dataRoot: string): string {
   const logDirectory = `${dataRoot.replace(/[\\/]+$/, "")}/logs`;
@@ -245,7 +251,8 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
         if (Date.now() - lastQueuedDiscoveryAt >= Number(Bun.env.JOB_QUEUED_DISCOVERY_INTERVAL_MS ?? 30_000)) { lastQueuedDiscoveryAt = Date.now(); const pickup = await discoverQueuedRepositoryJobs(discoveryDeps); if (pickup.discovered || pickup.failed) console.log(`Queued GitHub job pickup: repositories=${pickup.repositories} discovered=${pickup.discovered} updated=${pickup.updated} failed=${pickup.failed}`); }
         if (Date.now() - lastGithubLeaseReconciliationAt >= 60_000) { lastGithubLeaseReconciliationAt = Date.now(); const staleLeaseReport = await reconcileExpiredLeasesWithGithub({ db, installationToken: installationId => githubApp.getInstallationToken(installationId), githubFetchForInstallation: installationId => githubRateLimits.scopedFetch(installationId) }); if (staleLeaseReport.completed || staleLeaseReport.released || staleLeaseReport.skipped) console.log(`GitHub stale lease reconciliation: inspected=${staleLeaseReport.inspected} completed=${staleLeaseReport.completed} released=${staleLeaseReport.released} stillActive=${staleLeaseReport.stillActive} skipped=${staleLeaseReport.skipped}`); }
         const report = await runQueuedJobReconciliation({ db, installationToken: installationId => githubApp.getInstallationToken(installationId), githubFetchForInstallation: installationId => githubRateLimits.scopedFetch(installationId), dispatcher, installationBlocked: installationId => githubRateLimits.isCoolingDown(installationId), workerConnected: workerId => dispatcher.isConnected(workerId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY });
-        if (report.reserved || report.failed) console.log(`Job reconciliation tick: reserved=${report.reserved} failed=${report.failed} skipped=${report.skipped}`);
+        const reconciliationMessage = formatJobReconciliationReport(report);
+        if (reconciliationMessage) console.log(reconciliationMessage);
       } catch (error) { console.error("Job reconciliation failed", error); } finally {
         try { const cleanup = await reapPendingLeases({ db, dispatch: dispatcher.dispatch.bind(dispatcher), workerConnected: workerId => dispatcher.isConnected(workerId) }); if (cleanup.dispatched || cleanup.failed) console.log(`Lease cleanup tick: dispatched=${cleanup.dispatched} failed=${cleanup.failed} skipped=${cleanup.skipped}`); await completeOnboardingIfReady(db); } catch (error) { console.error("Lease cleanup failed", error); }
       }

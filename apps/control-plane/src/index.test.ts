@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initializeDatabase, configureErrorFileLogging, resolveWebhookOrigin } from "./index.ts";
+import { initializeDatabase, configureErrorFileLogging, formatJobReconciliationReport, resolveWebhookOrigin } from "./index.ts";
 
 test("requires an explicit webhook origin at startup", () => {
   const previous = Bun.env.GITHUB_WEBHOOK_URL;
@@ -55,4 +55,13 @@ test("writes console errors to the configured control-plane log", async () => {
     console.error = originalError;
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("keeps deferred-only reconciliation quiet", () => {
+  expect(formatJobReconciliationReport({ reserved: 0, deferred: 4, skipped: 0, failed: 0 })).toBeUndefined();
+});
+
+test("reports successful reservations and unexpected failures", () => {
+  expect(formatJobReconciliationReport({ reserved: 2, deferred: 1, skipped: 3, failed: 0 })).toBe("Job reconciliation tick: reserved=2 deferred=1 failed=0 skipped=3");
+  expect(formatJobReconciliationReport({ reserved: 0, deferred: 0, skipped: 1, failed: 1 })).toBe("Job reconciliation tick: reserved=0 deferred=0 failed=1 skipped=1");
 });
