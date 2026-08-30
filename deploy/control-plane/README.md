@@ -1,6 +1,6 @@
 # Mars Control Plane on Unraid
 
-Mars (Managed Action Runner(s)) is the control plane for GitHub App
+MARS (Managed Action Runner System) is the control plane for GitHub App
 installation, administrator sign-in, worker enrollment, and pending-worker
 configuration. This deployment runs the control plane in Docker on Unraid;
 PostgreSQL and the public ingress are operator-managed.
