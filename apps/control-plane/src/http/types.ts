@@ -17,13 +17,23 @@ export type DevelopmentWindowsArtifact = {
 export type DevelopmentWindowsArtifacts = {
   orchestrator: DevelopmentWindowsArtifact;
   serviceHost: DevelopmentWindowsArtifact;
-  template: DevelopmentWindowsArtifact;
-  container: {
+  template?: DevelopmentWindowsArtifact;
+  container?: {
     baseImage: string;
     runner: DevelopmentWindowsArtifact;
     git: DevelopmentWindowsArtifact;
     vcRuntime: DevelopmentWindowsArtifact;
   };
+};
+
+export type DevelopmentArtifactProxyOptions = {
+  fetch?: typeof globalThis.fetch;
+  resolveHostname?: (hostname: string) => Promise<readonly string[]>;
+  headerTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  maxRedirects?: number;
+  maxConcurrent?: number;
+  maxBytes?: Partial<Record<"template" | "archive" | "binary", number>>;
 };
 
 export type ControlPlaneHealth = {
@@ -41,6 +51,7 @@ export type ControlPlaneHttpDeps = {
   defaultJobImages: Partial<Record<"linux-x64" | "windows-x64" | "macos-arm64", string>>;
   workerReleaseManifest?: WorkerReleaseManifest;
   developmentWindowsArtifacts?: DevelopmentWindowsArtifacts;
+  developmentArtifactProxy?: DevelopmentArtifactProxyOptions;
   windowsContainerBuild?: {
     baseImage: string;
     runnerUrl: string;

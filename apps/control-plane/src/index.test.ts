@@ -134,6 +134,59 @@ test("defaults development worker artifacts to local files and derives their SHA
   }
 });
 
+test("resolves development worker binaries without optional template or image-build artifacts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-development-binaries-"));
+  const orchestrator = join(root, "mars-orchestrator.exe");
+  const serviceHost = join(root, "mars-service-host.exe");
+  try {
+    await Bun.write(orchestrator, "orchestrator");
+    await Bun.write(serviceHost, "service-host");
+
+    const artifacts = await resolveDevelopmentWindowsArtifacts({
+      NODE_ENV: "development",
+      MARS_WINDOWS_ORCHESTRATOR_PATH: orchestrator,
+      MARS_WINDOWS_SERVICE_HOST_PATH: serviceHost,
+    });
+
+    expect(artifacts).toEqual({
+      orchestrator: {
+        path: orchestrator,
+        sha256: createHash("sha256").update("orchestrator").digest("hex"),
+      },
+      serviceHost: {
+        path: serviceHost,
+        sha256: createHash("sha256").update("service-host").digest("hex"),
+      },
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("retains a configured artifact URL when its preferred local path is missing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-development-url-fallback-"));
+  const hash = "a".repeat(64);
+  const serviceHost = join(root, "mars-service-host.exe");
+  try {
+    await Bun.write(serviceHost, "service-host");
+
+    const artifacts = await resolveDevelopmentWindowsArtifacts({
+      NODE_ENV: "development",
+      MARS_WINDOWS_ORCHESTRATOR_PATH: join(root, "missing-orchestrator.exe"),
+      MARS_WINDOWS_ORCHESTRATOR_URL: "https://artifacts.test/mars-orchestrator.exe",
+      MARS_WINDOWS_ORCHESTRATOR_SHA256: hash,
+      MARS_WINDOWS_SERVICE_HOST_PATH: serviceHost,
+    });
+
+    expect(artifacts?.orchestrator).toEqual({
+      url: "https://artifacts.test/mars-orchestrator.exe",
+      sha256: hash,
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("does not resolve a missing local worker artifact", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-development-artifacts-"));
   const hash = "a".repeat(64);

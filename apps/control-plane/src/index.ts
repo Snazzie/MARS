@@ -121,8 +121,9 @@ export function createDevelopmentWindowsArtifacts(environment: DevelopmentEnviro
     ["MARS_WINDOWS_CONTAINER_VC_SHA256"],
   );
   const baseImage = trimmedEnvironmentValue(environment, ["MARS_WINDOWS_CONTAINER_BASE_IMAGE"]);
-  if (!orchestrator || !serviceHost || !template || !runner || !git || !vcRuntime || !baseImage) return undefined;
-  return { orchestrator, serviceHost, template, container: { baseImage, runner, git, vcRuntime } };
+  if (!orchestrator || !serviceHost) return undefined;
+  const container = runner && git && vcRuntime && baseImage ? { baseImage, runner, git, vcRuntime } : undefined;
+  return { orchestrator, serviceHost, ...(template ? { template } : {}), ...(container ? { container } : {}) };
 }
 
 const developmentDefaultArtifactPaths = {
@@ -145,10 +146,10 @@ const resolveDevelopmentArtifact = async (
 ): Promise<DevelopmentWindowsArtifact | undefined> => {
   const configuredPath = trimmedEnvironmentValue(environment, paths);
   const url = trimmedEnvironmentValue(environment, urls);
-  const path = configuredPath ?? (!url && fallbackPath ? fileURLToPath(new URL(fallbackPath, import.meta.url)) : undefined);
-  if (path && !await Bun.file(path).exists()) return undefined;
+  const candidatePath = configuredPath ?? (!url && fallbackPath ? fileURLToPath(new URL(fallbackPath, import.meta.url)) : undefined);
+  const path = candidatePath && await Bun.file(candidatePath).exists() ? candidatePath : undefined;
   const configuredHash = trimmedEnvironmentValue(environment, hashes)?.replace(/^sha256:/, "");
-  const sha256 = configuredHash ?? (path ? await localArtifactSha256(path) : undefined);
+  const sha256 = path ? await localArtifactSha256(path) : configuredHash;
   if ((url && !developmentArtifactUrl(url)) || (!path && !url) || !sha256 || !/^[0-9a-f]{64}$/.test(sha256)) return undefined;
   return { ...(path ? { path } : {}), ...(url ? { url } : {}), sha256 };
 };
@@ -164,8 +165,9 @@ export async function resolveDevelopmentWindowsArtifacts(environment: Developmen
     resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_VC_PATH"], ["MARS_WINDOWS_CONTAINER_VC_URL"], ["MARS_WINDOWS_CONTAINER_VC_SHA256"]),
   ]);
   const baseImage = trimmedEnvironmentValue(environment, ["MARS_WINDOWS_CONTAINER_BASE_IMAGE"]);
-  if (!orchestrator || !serviceHost || !template || !runner || !git || !vcRuntime || !baseImage) return undefined;
-  return { orchestrator, serviceHost, template, container: { baseImage, runner, git, vcRuntime } };
+  if (!orchestrator || !serviceHost) return undefined;
+  const container = runner && git && vcRuntime && baseImage ? { baseImage, runner, git, vcRuntime } : undefined;
+  return { orchestrator, serviceHost, ...(template ? { template } : {}), ...(container ? { container } : {}) };
 }
 
 const windowsContainerBaseImagePattern = /^mcr\.microsoft\.com\/windows\/server:ltsc2025@sha256:[0-9a-f]{64}$/;

@@ -1,4 +1,9 @@
 import { createHash } from "node:crypto";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { PendingWorkerRequest, WorkerConfiguration } from "@mars/contracts";
@@ -87,10 +92,238 @@ const hasValue = (value: unknown): value is string => typeof value === "string" 
 const artifactExists = async (path: ArtifactPath | undefined): Promise<boolean> => Boolean(path && await Bun.file(path).exists());
 const pathFor = (root: URL, name: string): URL => new URL(name, root);
 async function fileSha256(path: ArtifactPath): Promise<string> {
-  return createHash("sha256").update(Buffer.from(await Bun.file(path).arrayBuffer())).digest("hex");
+  const hash = createHash("sha256");
+  const reader = Bun.file(path).stream().getReader();
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) return hash.digest("hex");
+      hash.update(result.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 function unavailable(c: Context<ControlPlaneEnv>, artifacts: string[]) {
   return c.json({ code: "artifact_unavailable", message: "Worker installer prerequisites are unavailable", artifacts }, 503, { "cache-control": "no-store" });
+}
+type ArtifactSizeClass = "template" | "archive" | "binary";
+type ArtifactSnapshot = {
+  path: string;
+  sha256: string;
+  size: number;
+  dispose(): Promise<void>;
+};
+
+const privateIpv4 = (address: string): boolean => {
+  const octets = address.split(".").map(Number);
+  if (octets.length !== 4 || octets.some(value => !Number.isInteger(value) || value < 0 || value > 255)) return true;
+  const [first, second] = octets;
+  return first === 0
+    || first === 10
+    || first === 127
+    || (first === 100 && second >= 64 && second <= 127)
+    || (first === 169 && second === 254)
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && (second === 0 || second === 168))
+    || (first === 198 && (second === 18 || second === 19 || second === 51))
+    || (first === 203 && second === 0)
+    || first >= 224;
+};
+
+const restrictedAddress = (rawAddress: string): boolean => {
+  const address = rawAddress.toLowerCase().split("%", 1)[0];
+  if (isIP(address) === 4) return privateIpv4(address);
+  if (isIP(address) !== 6) return true;
+  if (address.startsWith("::ffff:")) {
+    const mapped = address.slice(7);
+    if (isIP(mapped) === 4) return privateIpv4(mapped);
+    const parts = mapped.split(":");
+    if (parts.length === 2) {
+      const high = Number.parseInt(parts[0], 16);
+      const low = Number.parseInt(parts[1], 16);
+      if (Number.isInteger(high) && Number.isInteger(low)) {
+        return privateIpv4(`${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`);
+      }
+    }
+    return true;
+  }
+  return address === "::"
+    || address === "::1"
+    || /^f[cd]/.test(address)
+    || /^fe[89ab]/.test(address)
+    || address.startsWith("ff")
+    || address.startsWith("2001:db8:")
+    || address.startsWith("2001:0:")
+    || address.startsWith("2001:2:")
+    || address.startsWith("2002:");
+};
+
+const normalizedHostname = (url: URL): string => url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+
+const explicitlyLocalUrl = (url: URL): boolean => {
+  const hostname = normalizedHostname(url);
+  return hostname === "localhost" || hostname.endsWith(".localhost") || (isIP(hostname) !== 0 && restrictedAddress(hostname));
+};
+
+async function validateProxyDestination(
+  url: URL,
+  allowRestricted: boolean,
+  resolveHostname: (hostname: string) => Promise<readonly string[]>,
+): Promise<void> {
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) throw new Error("invalid_artifact_url");
+  const hostname = normalizedHostname(url);
+  if (!allowRestricted && explicitlyLocalUrl(url)) throw new Error("restricted_artifact_destination");
+  const addresses = isIP(hostname) !== 0 ? [hostname] : await resolveHostname(hostname);
+  if (!addresses.length || addresses.some(address => isIP(address) === 0 || (!allowRestricted && restrictedAddress(address)))) {
+    throw new Error("restricted_artifact_destination");
+  }
+}
+
+class UpstreamSemaphore {
+  readonly #limit: number;
+  #active = 0;
+  readonly #waiters: Array<{
+    resolve: (release: () => void) => void;
+    reject: (reason?: unknown) => void;
+    signal: AbortSignal;
+    abort: () => void;
+  }> = [];
+
+  constructor(limit: number) {
+    this.#limit = limit;
+  }
+
+  async acquire(signal: AbortSignal): Promise<() => void> {
+    if (signal.aborted) throw signal.reason;
+    if (this.#active < this.#limit) {
+      this.#active += 1;
+      return this.#release();
+    }
+    return await new Promise<() => void>((resolve, reject) => {
+      const waiter = {
+        resolve,
+        reject,
+        signal,
+        abort: () => {
+          const index = this.#waiters.indexOf(waiter);
+          if (index >= 0) this.#waiters.splice(index, 1);
+          reject(signal.reason);
+        },
+      };
+      signal.addEventListener("abort", waiter.abort, { once: true });
+      this.#waiters.push(waiter);
+    });
+  }
+
+  #release(): () => void {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.#active -= 1;
+      while (this.#waiters.length) {
+        const waiter = this.#waiters.shift()!;
+        waiter.signal.removeEventListener("abort", waiter.abort);
+        if (waiter.signal.aborted) continue;
+        this.#active += 1;
+        waiter.resolve(this.#release());
+        break;
+      }
+    };
+  }
+}
+
+type StreamReadResult = Awaited<ReturnType<ReadableStreamDefaultReader<Uint8Array>["read"]>>;
+
+async function streamRead(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal,
+): Promise<StreamReadResult> {
+  if (signal.aborted) throw signal.reason;
+  return await new Promise<StreamReadResult>((resolve, reject) => {
+    const abort = () => {
+      void reader.cancel(signal.reason);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    void reader.read().then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
+async function snapshotStream(stream: ReadableStream<Uint8Array>, maximumBytes: number, signal: AbortSignal): Promise<ArtifactSnapshot> {
+  const directory = await mkdtemp(join(tmpdir(), "mars-worker-artifact-"));
+  const path = join(directory, "artifact");
+  const writer = Bun.file(path).writer();
+  const reader = stream.getReader();
+  const hash = createHash("sha256");
+  let size = 0;
+  try {
+    while (true) {
+      const result = await streamRead(reader, signal);
+      if (result.done) break;
+      size += result.value.byteLength;
+      if (size > maximumBytes) throw new Error("artifact_too_large");
+      hash.update(result.value);
+      writer.write(result.value);
+    }
+    await writer.end();
+    return {
+      path,
+      sha256: hash.digest("hex"),
+      size,
+      dispose: async () => {
+        await rm(directory, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    await reader.cancel(error).catch(() => undefined);
+    try {
+      await writer.end();
+    } catch {
+      // Preserve the original snapshot failure.
+    }
+    await rm(directory, { recursive: true, force: true });
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function snapshotResponse(snapshot: ArtifactSnapshot, filename: string, expectedHash: string = snapshot.sha256, contentType = "application/octet-stream"): Response {
+  const reader = Bun.file(snapshot.path).stream().getReader();
+  let disposed = false;
+  const dispose = async () => {
+    if (disposed) return;
+    disposed = true;
+    await snapshot.dispose();
+  };
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result = await reader.read();
+        if (result.done) {
+          controller.close();
+          await dispose();
+        } else {
+          controller.enqueue(result.value);
+        }
+      } catch (error) {
+        controller.error(error);
+        await dispose();
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason);
+      await dispose();
+    },
+  });
+  const headers = noStore();
+  headers.set("content-type", contentType);
+  headers.set("content-disposition", `attachment; filename="${filename}"`);
+  headers.set("content-length", String(snapshot.size));
+  headers.set("X-Content-SHA256", expectedHash);
+  return new Response(body, { status: 200, headers });
 }
 export function linuxInstallerValues(platform: LinuxWorkerRelease, connectOrigin: string): InstallerValues {
   return {
@@ -107,26 +340,30 @@ export function linuxInstallerValues(platform: LinuxWorkerRelease, connectOrigin
 
 export function windowsInstallerValues(platform: WindowsWorkerRelease | undefined, connectOrigin: string, development?: NonNullable<ControlPlaneHttpDeps["developmentWindowsArtifacts"]>): InstallerValues {
   if (development) {
-    const localUrl = (path: string): string => `${connectOrigin}${path}`;
-    return {
+    const values: InstallerValues = {
       WindowsArtifactMode: "local",
       WindowsRuntime: "container",
       WindowsOrchestratorUrl: `${connectOrigin}/api/workers/orchestrator?audience=windows-x64`,
       WindowsOrchestratorSha256: development.orchestrator.sha256,
       WindowsServiceHostUrl: `${connectOrigin}/api/workers/service-host?audience=windows-x64`,
       WindowsServiceHostSha256: development.serviceHost.sha256,
-      WindowsTemplateUrl: localUrl("/api/workers/templates/windows-x64/artifact"),
-      WindowsTemplatePath: "C:\\ProgramData\\Mars\\worker-template.vhdx",
-      WindowsTemplateDigest: `sha256:${development.template.sha256}`,
-      WindowsContainerBaseImage: development.container.baseImage,
-      WindowsContainerImage: "mars/windows-job:local",
-      WindowsContainerRunnerUrl: localUrl("/api/workers/windows-container-runner"),
-      WindowsContainerRunnerSha256: development.container.runner.sha256,
-      WindowsContainerGitUrl: localUrl("/api/workers/windows-container-git"),
-      WindowsContainerGitSha256: development.container.git.sha256,
-      WindowsContainerVcRuntimeUrl: localUrl("/api/workers/windows-container-vc-runtime"),
-      WindowsContainerVcRuntimeSha256: development.container.vcRuntime.sha256,
     };
+    if (development.template) {
+      values.WindowsTemplateUrl = `${connectOrigin}/api/workers/templates/windows-x64/artifact`;
+      values.WindowsTemplatePath = "C:\\ProgramData\\Mars\\worker-template.vhdx";
+      values.WindowsTemplateDigest = `sha256:${development.template.sha256}`;
+    }
+    if (development.container) {
+      values.WindowsContainerBaseImage = development.container.baseImage;
+      values.WindowsContainerImage = "mars/windows-job:local";
+      values.WindowsContainerRunnerUrl = `${connectOrigin}/api/workers/windows-container-runner`;
+      values.WindowsContainerRunnerSha256 = development.container.runner.sha256;
+      values.WindowsContainerGitUrl = `${connectOrigin}/api/workers/windows-container-git`;
+      values.WindowsContainerGitSha256 = development.container.git.sha256;
+      values.WindowsContainerVcRuntimeUrl = `${connectOrigin}/api/workers/windows-container-vc-runtime`;
+      values.WindowsContainerVcRuntimeSha256 = development.container.vcRuntime.sha256;
+    }
+    return values;
   }
   if (!platform) throw new Error("Windows release metadata is unavailable.");
   return {
@@ -172,13 +409,10 @@ async function installerArtifacts(
     const artifacts = [
       ["orchestrator", development.orchestrator],
       ["service-host", development.serviceHost],
-      ["template", development.template],
-      ["container-runner", development.container.runner],
-      ["container-git", development.container.git],
-      ["container-vc-runtime", development.container.vcRuntime],
     ] as const;
     for (const [name, artifact] of artifacts) {
-      if (artifact.path && !await artifactExists(artifact.path)) missing.push(`development:${name}`);
+      const localAvailable = artifact.path && await artifactExists(artifact.path);
+      if (!localAvailable && !artifact.url) missing.push(`development:${name}`);
     }
     if (!await artifactExists(pathFor(deps.workerInstallerRoot, "install-worker.ps1"))) missing.push("installer:install-worker.ps1");
     return missing;
@@ -219,19 +453,72 @@ async function packagedResponse(path: ArtifactPath, filename: string, hash: stri
   if (hash) response.headers.set("X-Content-SHA256", hash);
   return response;
 }
-async function proxyPackagedResponse(url: string, filename: string, hash: string): Promise<Response | undefined> {
+type ProxyPolicy = {
+  fetcher: typeof globalThis.fetch;
+  resolveHostname: (hostname: string) => Promise<readonly string[]>;
+  headerTimeoutMs: number;
+  totalTimeoutMs: number;
+  maxRedirects: number;
+  maximumBytes: Record<ArtifactSizeClass, number>;
+};
+
+async function proxyPackagedResponse(
+  url: string,
+  filename: string,
+  hash: string,
+  sizeClass: ArtifactSizeClass,
+  requestSignal: AbortSignal,
+  policy: ProxyPolicy,
+  semaphore: UpstreamSemaphore,
+): Promise<Response | undefined> {
+  const totalController = new AbortController();
+  const totalTimer = setTimeout(() => totalController.abort(new Error("artifact_total_timeout")), policy.totalTimeoutMs);
+  const signal = AbortSignal.any([requestSignal, totalController.signal]);
+  let release: (() => void) | undefined;
+  let upstream: Response | undefined;
   try {
-    const upstream = await fetch(url);
-    if (!upstream.ok) return undefined;
-    const headers = noStore();
-    headers.set("content-type", upstream.headers.get("content-type") ?? "application/octet-stream");
-    headers.set("content-disposition", `attachment; filename="${filename}"`);
-    const contentLength = upstream.headers.get("content-length");
-    if (contentLength) headers.set("content-length", contentLength);
-    headers.set("X-Content-SHA256", hash);
-    return new Response(upstream.body, { status: 200, headers });
+    release = await semaphore.acquire(signal);
+    let current = new URL(url);
+    const allowRestricted = explicitlyLocalUrl(current);
+    let redirects = 0;
+    while (true) {
+      await validateProxyDestination(current, allowRestricted, policy.resolveHostname);
+      const headerController = new AbortController();
+      const headerTimer = setTimeout(() => headerController.abort(new Error("artifact_header_timeout")), policy.headerTimeoutMs);
+      try {
+        upstream = await policy.fetcher(current, {
+          redirect: "manual",
+          signal: AbortSignal.any([signal, headerController.signal]),
+        });
+        if (signal.aborted || headerController.signal.aborted) throw signal.reason ?? headerController.signal.reason;
+      } finally {
+        clearTimeout(headerTimer);
+      }
+      if ([301, 302, 303, 307, 308].includes(upstream.status)) {
+        if (redirects >= policy.maxRedirects) throw new Error("artifact_redirect_limit");
+        const location = upstream.headers.get("location");
+        if (!location) throw new Error("artifact_redirect_without_location");
+        await upstream.body?.cancel();
+        upstream = undefined;
+        current = new URL(location, current);
+        redirects += 1;
+        continue;
+      }
+      if (!upstream.ok || !upstream.body) throw new Error("artifact_upstream_unavailable");
+      const maximumBytes = policy.maximumBytes[sizeClass];
+      const declaredLength = Number(upstream.headers.get("content-length"));
+      if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) throw new Error("artifact_too_large");
+      const contentType = upstream.headers.get("content-type") ?? "application/octet-stream";
+      const snapshot = await snapshotStream(upstream.body, maximumBytes, signal);
+      upstream = undefined;
+      return snapshotResponse(snapshot, filename, hash, contentType);
+    }
   } catch {
+    await upstream?.body?.cancel().catch(() => undefined);
     return undefined;
+  } finally {
+    clearTimeout(totalTimer);
+    release?.();
   }
 }
 
@@ -271,16 +558,54 @@ function idempotency(c: Context<ControlPlaneEnv>): boolean { return Boolean(c.re
 export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
   const approvalBody = async (c: Context<ControlPlaneEnv>) => { try { return parseApproveWorkerRequest(await c.req.json()); } catch { return null; } };
   const auth = async (c: Context<ControlPlaneEnv>) => deps.currentUser(c.req.raw);
+  const proxyOptions = deps.developmentArtifactProxy;
+  const bounded = (value: number | undefined, fallback: number, minimum: number, maximum: number): number => {
+    if (!Number.isFinite(value)) return fallback;
+    return Math.min(maximum, Math.max(minimum, Math.floor(value!)));
+  };
+  const proxyPolicy: ProxyPolicy = {
+    fetcher: proxyOptions?.fetch ?? globalThis.fetch,
+    resolveHostname: proxyOptions?.resolveHostname ?? (async hostname => (await lookup(hostname, { all: true, verbatim: true })).map(result => result.address)),
+    headerTimeoutMs: bounded(proxyOptions?.headerTimeoutMs, 10_000, 1, 60_000),
+    totalTimeoutMs: bounded(proxyOptions?.totalTimeoutMs, 15 * 60_000, 1, 60 * 60_000),
+    maxRedirects: bounded(proxyOptions?.maxRedirects, 3, 0, 10),
+    maximumBytes: {
+      template: bounded(proxyOptions?.maxBytes?.template, 128 * 1024 ** 3, 1, 512 * 1024 ** 3),
+      archive: bounded(proxyOptions?.maxBytes?.archive, 4 * 1024 ** 3, 1, 16 * 1024 ** 3),
+      binary: bounded(proxyOptions?.maxBytes?.binary, 1024 ** 3, 1, 4 * 1024 ** 3),
+    },
+  };
+  const upstreamSemaphore = new UpstreamSemaphore(bounded(proxyOptions?.maxConcurrent, 4, 1, 16));
   const developmentPackaged = async (
     c: Context<ControlPlaneEnv>,
     artifact: { path?: string; url?: string; sha256: string } | undefined,
     name: string,
     filename: string,
+    sizeClass: ArtifactSizeClass,
   ) => {
     if (!artifact) return unavailable(c, [`development:${name}`]);
-    if (artifact.path && await artifactExists(artifact.path)) return packagedResponse(artifact.path, filename, artifact.sha256);
-    if (artifact.url) return await proxyPackagedResponse(artifact.url, filename, artifact.sha256) ?? unavailable(c, [`development:${name}`]);
+    if (artifact.path && await artifactExists(artifact.path)) {
+      try {
+        const snapshot = await snapshotStream(Bun.file(artifact.path).stream(), proxyPolicy.maximumBytes[sizeClass], c.req.raw.signal);
+        return snapshotResponse(snapshot, filename);
+      } catch {
+        return unavailable(c, [`development:${name}`]);
+      }
+    }
+    if (artifact.url) {
+      return await proxyPackagedResponse(artifact.url, filename, artifact.sha256, sizeClass, c.req.raw.signal, proxyPolicy, upstreamSemaphore)
+        ?? unavailable(c, [`development:${name}`]);
+    }
     return unavailable(c, [`development:${name}`]);
+  };
+  const currentDevelopmentArtifact = async (
+    artifact: { path?: string; url?: string; sha256: string } | undefined,
+  ): Promise<{ path?: string; url?: string; sha256: string } | undefined> => {
+    if (!artifact) return undefined;
+    if (artifact.path && await artifactExists(artifact.path)) {
+      return { ...artifact, sha256: await fileSha256(artifact.path) };
+    }
+    return artifact.url ? { url: artifact.url, sha256: artifact.sha256 } : undefined;
   };
   const limiter = deps.workerRequestLimiter ?? createRequestLimiter();
   app.get("/api/workers/control-plane-urls", async (c) => {
@@ -298,7 +623,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   app.get("/api/workers/templates/:platform/artifact", async (c) => {
     const platform = c.req.param("platform") as "windows-x64" | "linux-x64";
     if (platform === "windows-x64" && deps.developmentWindowsArtifacts) {
-      return developmentPackaged(c, deps.developmentWindowsArtifacts.template, "template", "windows-x64.vhdx");
+      return developmentPackaged(c, deps.developmentWindowsArtifacts.template, "template", "windows-x64.vhdx", "template");
     }
     const path = deps.templateArtifactPaths?.[platform];
     if (!path || !await artifactExists(path)) return c.json({ code: "artifact_unavailable", message: "Template artifact is unavailable", artifact: `template:${platform}` }, 503, { "cache-control": "no-store" });
@@ -310,13 +635,17 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   const buildArtifact = async (c: Context<ControlPlaneEnv>, key: keyof NonNullable<typeof deps.windowsContainerArtifacts>, filename: string) => {
     const path = (deps.windowsContainerArtifacts ?? deps.windowsContainerBuild)?.[key];
     if (!path || !await artifactExists(path)) return c.json({ code: "artifact_unavailable", message: "Windows container build artifact is unavailable", artifact: `windows-container-${key}` }, 503, { "cache-control": "no-store" });
-    return packagedResponse(path, filename, await fileSha256(path));
+    try {
+      return snapshotResponse(await snapshotStream(Bun.file(path).stream(), proxyPolicy.maximumBytes.binary, c.req.raw.signal), filename);
+    } catch {
+      return c.json({ code: "artifact_unavailable", message: "Windows container build artifact is unavailable", artifact: `windows-container-${key}` }, 503, { "cache-control": "no-store" });
+    }
   };
   const developmentContainerArtifact = (
     key: "runner" | "git" | "vcRuntime",
     name: string,
     filename: string,
-  ) => (c: Context<ControlPlaneEnv>) => developmentPackaged(c, deps.developmentWindowsArtifacts?.container[key], name, filename);
+  ) => (c: Context<ControlPlaneEnv>) => developmentPackaged(c, deps.developmentWindowsArtifacts?.container?.[key], name, filename, key === "vcRuntime" ? "binary" : "archive");
   app.get("/api/workers/windows-container-builder", (c) => buildArtifact(c, "builderPath", "build-windows-container-image-local.ps1"));
   app.get("/api/workers/windows-container-verifier", (c) => buildArtifact(c, "verifierPath", "verify-runtime.ps1"));
   app.get("/api/workers/windows-containerfile", (c) => buildArtifact(c, "containerfilePath", "Containerfile"));
@@ -352,7 +681,19 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       return c.json({ code: "invalid_worker_origin", message: "Choose a configured worker connection origin" }, 400);
     }
     if (!deps.workerConnectionOrigins().includes(connectOrigin)) return c.json({ code: "invalid_worker_origin", message: "Choose a configured worker connection origin" }, 400);
-    const development = deps.developmentWindowsArtifacts;
+    const configuredDevelopment = deps.developmentWindowsArtifacts;
+    let development = configuredDevelopment;
+    if (configuredDevelopment) {
+      const [orchestrator, serviceHost] = await Promise.all([
+        currentDevelopmentArtifact(configuredDevelopment.orchestrator),
+        currentDevelopmentArtifact(configuredDevelopment.serviceHost),
+      ]);
+      development = {
+        ...configuredDevelopment,
+        orchestrator: orchestrator ?? configuredDevelopment.orchestrator,
+        serviceHost: serviceHost ?? configuredDevelopment.serviceHost,
+      };
+    }
     const release = deps.workerReleaseManifest?.platforms[audience];
     const missing = await installerArtifacts(deps, audience, runtime, release, development);
     if (missing.length) return unavailable(c, missing);
@@ -369,7 +710,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   app.get("/api/workers/orchestrator", async (c) => {
     const audience = c.req.query("audience") as keyof NonNullable<typeof deps.workerOrchestratorExecutables>;
     if (audience === "windows-x64" && deps.developmentWindowsArtifacts) {
-      return developmentPackaged(c, deps.developmentWindowsArtifacts.orchestrator, "orchestrator", "mars-orchestrator.exe");
+      return developmentPackaged(c, deps.developmentWindowsArtifacts.orchestrator, "orchestrator", "mars-orchestrator.exe", "binary");
     }
     const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined);
     const hash = deps.workerReleaseManifest?.platforms[audience]?.orchestratorSha256;
@@ -381,7 +722,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   app.get("/api/workers/service-host", async (c) => {
     if (c.req.query("audience") !== "windows-x64") return c.json({ error: "unsupported service host audience" }, 400);
     if (deps.developmentWindowsArtifacts) {
-      return developmentPackaged(c, deps.developmentWindowsArtifacts.serviceHost, "service-host", "mars-service-host.exe");
+      return developmentPackaged(c, deps.developmentWindowsArtifacts.serviceHost, "service-host", "mars-service-host.exe", "binary");
     }
     const executable = deps.workerServiceHostExecutable;
     const hash = deps.workerReleaseManifest?.platforms["windows-x64"]?.serviceHostSha256;

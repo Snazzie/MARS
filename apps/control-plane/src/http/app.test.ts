@@ -6,6 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createHash } from "node:crypto";
 
 const app = createControlPlaneApp(fakeHttpDeps());
 
@@ -44,9 +45,9 @@ const app = createControlPlaneApp(fakeHttpDeps());
   test.each([
     "https://github.com/Snazzie/Mars/releases/latest/download/windows-worker.vhdx",
     "https://github.com/Snazzie/Mars/releases/download/v1/windows-worker.vhdx",
-  ])("rejects development Windows artifacts configured with GitHub release URL %s", (url) => {
+  ])("omits a development artifact configured with GitHub release URL %s", (url) => {
     const hash = "a".repeat(64);
-    expect(createDevelopmentWindowsArtifacts({
+    const artifacts = createDevelopmentWindowsArtifacts({
       NODE_ENV: "development",
       WORKER_ORCHESTRATOR_WINDOWS_X64: "C:\\mars\\mars-orchestrator.exe",
       MARS_WINDOWS_ORCHESTRATOR_SHA256: hash,
@@ -61,7 +62,10 @@ const app = createControlPlaneApp(fakeHttpDeps());
       MARS_WINDOWS_CONTAINER_GIT_SHA256: hash,
       MARS_WINDOWS_CONTAINER_VC_URL: "http://localhost:3000/vc.exe",
       MARS_WINDOWS_CONTAINER_VC_SHA256: hash,
-    })).toBeUndefined();
+    });
+    expect(artifacts?.template).toBeUndefined();
+    expect(artifacts?.orchestrator.sha256).toBe(hash);
+    expect(artifacts?.serviceHost.sha256).toBe(hash);
   });
 
   test("leaves development artifacts optional without release metadata", () => {
@@ -260,8 +264,8 @@ describe("control-plane HTTP boundary", () => {
       expect(installer).toContain("$WindowsContainerRunnerUrl = 'https://control-plane.test/api/workers/windows-container-runner'");
       expect(installer).toContain("$WindowsContainerGitUrl = 'https://control-plane.test/api/workers/windows-container-git'");
       expect(installer).toContain("$WindowsContainerVcRuntimeUrl = 'https://control-plane.test/api/workers/windows-container-vc-runtime'");
-      expect(installer).toContain(`$WindowsOrchestratorSha256 = '${hash}'`);
-      expect(installer).toContain(`$WindowsServiceHostSha256 = '${hash}'`);
+      expect(installer).toContain(`$WindowsOrchestratorSha256 = '${createHash("sha256").update(paths.orchestrator).digest("hex")}'`);
+      expect(installer).toContain(`$WindowsServiceHostSha256 = '${createHash("sha256").update(paths.serviceHost).digest("hex")}'`);
       expect(installer).toContain(`$WindowsTemplateDigest = 'sha256:${hash}'`);
       expect(installer).toContain("$WindowsContainerImage = 'mars/windows-job:local'");
       expect(installer).not.toContain(`$WindowsContainerImage = 'mcr.microsoft.com/windows@sha256:${hash}'`);
@@ -292,12 +296,12 @@ describe("control-plane HTTP boundary", () => {
       };
       await Promise.all(Object.entries(paths).map(([name, path]) => Bun.write(path, contents[name as keyof typeof contents])));
       const responseCases = [
-        ["/api/workers/orchestrator?audience=windows-x64", contents.orchestrator, "mars-orchestrator.exe"],
-        ["/api/workers/service-host?audience=windows-x64", contents.serviceHost, "mars-service-host.exe"],
-        ["/api/workers/templates/windows-x64/artifact", contents.template, "windows-x64.vhdx"],
-        ["/api/workers/windows-container-runner", contents.runner, "runner.zip"],
-        ["/api/workers/windows-container-git", contents.git, "git.zip"],
-        ["/api/workers/windows-container-vc-runtime", contents.vcRuntime, "vc-runtime.exe"],
+        ["/api/workers/orchestrator?audience=windows-x64", contents.orchestrator, "mars-orchestrator.exe", createHash("sha256").update(contents.orchestrator).digest("hex")],
+        ["/api/workers/service-host?audience=windows-x64", contents.serviceHost, "mars-service-host.exe", createHash("sha256").update(contents.serviceHost).digest("hex")],
+        ["/api/workers/templates/windows-x64/artifact", contents.template, "windows-x64.vhdx", createHash("sha256").update(contents.template).digest("hex")],
+        ["/api/workers/windows-container-runner", contents.runner, "runner.zip", createHash("sha256").update(contents.runner).digest("hex")],
+        ["/api/workers/windows-container-git", contents.git, "git.zip", createHash("sha256").update(contents.git).digest("hex")],
+        ["/api/workers/windows-container-vc-runtime", contents.vcRuntime, "vc-runtime.exe", createHash("sha256").update(contents.vcRuntime).digest("hex")],
       ] as const;
       const response = await createControlPlaneApp(fakeHttpDeps({
         workerReleaseManifest: undefined,
@@ -314,12 +318,12 @@ describe("control-plane HTTP boundary", () => {
         },
       }));
 
-      for (const [route, content, filename] of responseCases) {
+      for (const [route, content, filename, expectedHash] of responseCases) {
         const artifact = await response.request(route);
         expect(artifact.status).toBe(200);
         expect(await artifact.text()).toBe(content);
         expect(artifact.headers.get("cache-control")).toBe("no-store");
-        expect(artifact.headers.get("X-Content-SHA256")).toBe(hash);
+        expect(artifact.headers.get("X-Content-SHA256")).toBe(expectedHash);
         expect(artifact.headers.get("content-disposition")).toContain(`filename="${filename}"`);
       }
     } finally {
@@ -981,4 +985,222 @@ test("generates complete platform installers from the immutable release manifest
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+describe("development worker artifact hardening", () => {
+  test("generates a container installer from only current local worker binaries", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mars-current-worker-binaries-"));
+    const orchestrator = join(root, "mars-orchestrator.exe");
+    const serviceHost = join(root, "mars-service-host.exe");
+    try {
+      await Bun.write(join(root, "install-worker.ps1"), "[CmdletBinding()]\r\nparam()\r\n");
+      await Bun.write(orchestrator, "rebuilt-orchestrator");
+      await Bun.write(serviceHost, "rebuilt-service-host");
+      const orchestratorHash = createHash("sha256").update("rebuilt-orchestrator").digest("hex");
+      const serviceHostHash = createHash("sha256").update("rebuilt-service-host").digest("hex");
+      const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+        workerInstallerRoot: pathToFileURL(`${root}/`),
+        workerReleaseManifest: undefined,
+        workerConnectionOrigins: () => ["https://control.test"],
+        developmentWindowsArtifacts: {
+          orchestrator: { path: orchestrator, sha256: "a".repeat(64) },
+          serviceHost: { path: serviceHost, sha256: "b".repeat(64) },
+        },
+      }));
+
+      const installerResponse = await hardenedApp.request("/api/workers/installer?audience=windows-x64&runtime=container&connectOrigin=https%3A%2F%2Fcontrol.test");
+      const installer = await installerResponse.text();
+      expect(installerResponse.status).toBe(200);
+      expect(installer).toContain(`$WindowsOrchestratorSha256 = '${orchestratorHash}'`);
+      expect(installer).toContain(`$WindowsServiceHostSha256 = '${serviceHostHash}'`);
+      expect(installer).not.toContain("$WindowsTemplateUrl =");
+      expect(installer).not.toContain("$WindowsContainerRunnerUrl =");
+
+      const artifactResponse = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+      expect(artifactResponse.status).toBe(200);
+      expect(artifactResponse.headers.get("X-Content-SHA256")).toBe(orchestratorHash);
+      expect(await artifactResponse.text()).toBe("rebuilt-orchestrator");
+
+      expect((await hardenedApp.request("/api/workers/templates/windows-x64/artifact")).status).toBe(503);
+      expect((await hardenedApp.request("/api/workers/windows-container-runner")).status).toBe(503);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("blocks a public artifact redirect to a private destination before fetching it", async () => {
+    const calls: string[] = [];
+    const fetcher = Object.assign(async (input: string | URL | Request) => {
+      calls.push(String(input));
+      return new Response(null, { status: 302, headers: { location: "http://127.0.0.1/internal" } });
+    }, { preconnect: globalThis.fetch.preconnect });
+    const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+      workerReleaseManifest: undefined,
+      developmentWindowsArtifacts: {
+        orchestrator: { url: "https://public.test/orchestrator", sha256: "a".repeat(64) },
+        serviceHost: { url: "https://public.test/service-host", sha256: "b".repeat(64) },
+      },
+      developmentArtifactProxy: {
+        fetch: fetcher,
+        resolveHostname: async hostname => hostname === "public.test" ? ["93.184.216.34"] : ["127.0.0.1"],
+      },
+    }));
+
+    const response = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    expect(response.status).toBe(503);
+    expect(calls).toEqual(["https://public.test/orchestrator"]);
+    expect(await response.json()).toMatchObject({ code: "artifact_unavailable" });
+  });
+
+  test("allows an explicitly local artifact source to follow local redirects", async () => {
+    const upstream = Bun.serve({
+      port: 0,
+      fetch(request) {
+        return new URL(request.url).pathname === "/redirect"
+          ? new Response(null, { status: 302, headers: { location: "/artifact" } })
+          : new Response("local-artifact");
+      },
+    });
+    try {
+      const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+        workerReleaseManifest: undefined,
+        developmentWindowsArtifacts: {
+          orchestrator: { url: `http://127.0.0.1:${upstream.port}/redirect`, sha256: "a".repeat(64) },
+          serviceHost: { url: `http://127.0.0.1:${upstream.port}/service-host`, sha256: "b".repeat(64) },
+        },
+      }));
+
+      const response = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("local-artifact");
+    } finally {
+      upstream.stop();
+    }
+  });
+
+  test("bounds artifact redirect chains", async () => {
+    let calls = 0;
+    const fetcher = Object.assign(async () => {
+      calls += 1;
+      return new Response(null, { status: 302, headers: { location: `/redirect-${calls}` } });
+    }, { preconnect: globalThis.fetch.preconnect });
+    const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+      workerReleaseManifest: undefined,
+      developmentWindowsArtifacts: {
+        orchestrator: { url: "https://public.test/start", sha256: "a".repeat(64) },
+        serviceHost: { url: "https://public.test/service-host", sha256: "b".repeat(64) },
+      },
+      developmentArtifactProxy: {
+        fetch: fetcher,
+        resolveHostname: async () => ["93.184.216.34"],
+        maxRedirects: 2,
+      },
+    }));
+
+    const response = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
+    expect(response.status).toBe(503);
+    expect(calls).toBe(3);
+  });
+
+  test("enforces upstream header and total timeouts and byte ceilings", async () => {
+    const makeApp = (fetcher: typeof fetch, overrides: Record<string, unknown>) => createControlPlaneApp(fakeHttpDeps({
+      workerReleaseManifest: undefined,
+      developmentWindowsArtifacts: {
+        orchestrator: { url: "https://public.test/orchestrator", sha256: "a".repeat(64) },
+        serviceHost: { url: "https://public.test/service-host", sha256: "b".repeat(64) },
+      },
+      developmentArtifactProxy: {
+        fetch: fetcher,
+        resolveHostname: async () => ["93.184.216.34"],
+        ...overrides,
+      },
+    }));
+    let headerAborted = false;
+    const slowHeaders = Object.assign(async (_input: string | URL | Request, init?: RequestInit) => {
+      init?.signal?.addEventListener("abort", () => { headerAborted = true; }, { once: true });
+      await Bun.sleep(40);
+      return new Response("late");
+    }, { preconnect: globalThis.fetch.preconnect });
+    const headerResponse = await makeApp(slowHeaders, { headerTimeoutMs: 5, totalTimeoutMs: 100 }).request("/api/workers/orchestrator?audience=windows-x64");
+    expect(headerResponse.status).toBe(503);
+    expect(headerAborted).toBe(true);
+
+    let bodyCancelled = false;
+    const stalledBody = Object.assign(async () => new Response(new ReadableStream({
+      cancel() {
+        bodyCancelled = true;
+      },
+    })), { preconnect: globalThis.fetch.preconnect });
+    const totalResponse = await makeApp(stalledBody, { headerTimeoutMs: 50, totalTimeoutMs: 10 }).request("/api/workers/orchestrator?audience=windows-x64");
+    expect(totalResponse.status).toBe(503);
+    expect(bodyCancelled).toBe(true);
+
+    const oversized = Object.assign(async () => new Response("12345"), { preconnect: globalThis.fetch.preconnect });
+    const oversizedResponse = await makeApp(oversized, { maxBytes: { binary: 4 } }).request("/api/workers/orchestrator?audience=windows-x64");
+    expect(oversizedResponse.status).toBe(503);
+  });
+
+  test("propagates request cancellation and bounds concurrent upstream work", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    let cancellationObserved = false;
+    const pending: Array<() => void> = [];
+    const startWaiters: Array<() => void> = [];
+    const fetcher = Object.assign((_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      startWaiters.shift()?.();
+      let complete!: () => void;
+      const abort = () => {
+        const index = pending.indexOf(complete);
+        if (index >= 0) pending.splice(index, 1);
+        active -= 1;
+        cancellationObserved = true;
+        reject(init?.signal?.reason);
+      };
+      init?.signal?.addEventListener("abort", abort, { once: true });
+      complete = () => {
+        init?.signal?.removeEventListener("abort", abort);
+        active -= 1;
+        resolve(new Response("artifact"));
+      };
+      pending.push(complete);
+    }), { preconnect: globalThis.fetch.preconnect });
+    const hardenedApp = createControlPlaneApp(fakeHttpDeps({
+      workerReleaseManifest: undefined,
+      developmentWindowsArtifacts: {
+        orchestrator: { url: "https://public.test/orchestrator", sha256: "a".repeat(64) },
+        serviceHost: { url: "https://public.test/service-host", sha256: "b".repeat(64) },
+      },
+      developmentArtifactProxy: {
+        fetch: fetcher,
+        resolveHostname: async () => ["93.184.216.34"],
+        maxConcurrent: 2,
+        headerTimeoutMs: 500,
+        totalTimeoutMs: 1_000,
+      },
+    }));
+
+    const cancellationStarted = new Promise<void>(resolve => startWaiters.push(resolve));
+    const controller = new AbortController();
+    const cancelled = hardenedApp.request(new Request("https://control.test/api/workers/orchestrator?audience=windows-x64", { signal: controller.signal }));
+    await cancellationStarted;
+    controller.abort();
+    expect((await cancelled).status).toBe(503);
+    expect(cancellationObserved).toBe(true);
+
+    const firstStarted = new Promise<void>(resolve => startWaiters.push(resolve));
+    const secondStarted = new Promise<void>(resolve => startWaiters.push(resolve));
+    const requests = Array.from({ length: 3 }, () => hardenedApp.request("/api/workers/orchestrator?audience=windows-x64"));
+    await Promise.all([firstStarted, secondStarted]);
+    expect(maximumActive).toBe(2);
+    const thirdStarted = new Promise<void>(resolve => startWaiters.push(resolve));
+    pending.shift()?.();
+    await thirdStarted;
+    expect(active).toBe(2);
+    while (pending.length) pending.shift()?.();
+    const responses = await Promise.all(requests);
+    expect(responses.map(response => response.status)).toEqual([200, 200, 200]);
+    await Promise.all(responses.map(response => response.arrayBuffer()));
+  });
 });
