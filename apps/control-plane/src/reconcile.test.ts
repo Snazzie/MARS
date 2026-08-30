@@ -118,6 +118,28 @@ test("defers jobs when worker capacity is exhausted", async () => {
   expect(result).toEqual({ reserved: 0, deferred: 1, skipped: 0, failed: 0 });
   expect(calls).toEqual([]);
 });
+test("recovers deferred work when worker capacity returns", async () => {
+  let reserveAttempts = 0;
+  const calls: string[] = [];
+  const queued = [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "mars-default"] }];
+  const candidates = [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted" as const, connectionState: "online" as const, configurationState: "ready" as const, runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }];
+  const deps = {
+    queued,
+    candidates,
+    reserve: async (input: { requested: { vcpu: number; memoryBytes: number; storageBytes: number; concurrency: number } }) => {
+      calls.push("reserve");
+      if (++reserveAttempts === 1) throw new Error("worker_capacity_exhausted");
+      return { id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested };
+    },
+    jit: async () => { calls.push("jit"); return { encodedJitConfig: "config", runnerName: "runner", labels: ["self-hosted"], expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
+    dispatch: async () => { calls.push("dispatch"); },
+  };
+  const first = await reconcileQueuedJobs(deps);
+  expect(first).toEqual({ reserved: 0, deferred: 1, skipped: 0, failed: 0 });
+  const second = await reconcileQueuedJobs(deps);
+  expect(second).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
+  expect(calls).toEqual(["reserve", "reserve", "jit", "dispatch"]);
+});
 
 test("fails jobs when reservation fails unexpectedly", async () => {
   const result = await reconcileQueuedJobs({

@@ -1,4 +1,6 @@
+import { generateKeyPairSync } from "node:crypto";
 import { expect, test } from "bun:test";
+import type { DatabaseClient } from "@mars/db";
 import { candidateWorkerFromRow, isDispatchableRunStatus, runQueuedJobReconciliation } from "./job-reconciler.ts";
 import { fits, parseProvisionLabels, reason, type Candidate } from "./scheduler.ts";
 
@@ -66,4 +68,59 @@ test("returns a complete report when no queued jobs are available", async () => 
     githubFetchForInstallation: () => fetch,
   });
   expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 0 });
+});
+
+test("reserves, requests JIT configuration, and dispatches an eligible queued job", async () => {
+  const events: string[] = [];
+  const { publicKey } = generateKeyPairSync("x25519");
+  const workerEncryptionPublicKey = publicKey.export({ format: "pem", type: "spki" }).toString();
+  let db: DatabaseClient;
+  db = Object.assign((async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ").toLowerCase();
+    if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels: ["mars-windows-x64"] }];
+    if (query.includes('p.id as "poolid"')) return [{
+      poolId: "pool",
+      organizationId: "org",
+      workerId: "worker",
+      enabled: true,
+      platform: "windows-x64",
+      driver: "windows-hyperv-container",
+      imageDigest: "sha256:image",
+      resources: { vcpu: 2, memoryBytes: 4, storageBytes: 8, concurrency: 1 },
+      labels: ["mars-windows-x64"],
+      triggerLabel: "mars-windows-x64",
+      admissionState: "adopted",
+      connectionState: "online",
+      configurationState: "ready",
+      configurationRevision: "current",
+      appliedConfigurationRevision: "current",
+      limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 },
+      doctor: { runtimeReady: true },
+      encryptionPublicKey: workerEncryptionPublicKey,
+      active: 0,
+    }];
+    if (query.includes("insert into runner_leases")) {
+      events.push("reserve");
+      return [{ id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, jobId: 42 }];
+    }
+    if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 2, memoryBytes: 4, storageBytes: 8, concurrency: 1 }, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 }, doctor: { capacity: { freeVcpu: 2, freeMemoryBytes: 4, freeStorageBytes: 8 } } }];
+    if (query.includes("from organization_settings")) return [];
+    if (query.includes("from runner_leases")) return [];
+    if (query.includes("select id from dashboard_jobs")) return [{ id: "dashboard-job" }];
+    return [];
+  }) as unknown as DatabaseClient, { begin: async (fn: (tx: DatabaseClient) => unknown) => fn(db) });
+  const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    events.push("jit");
+    expect(init?.method).toBe("POST");
+    return new Response(JSON.stringify({ encoded_jit_config: "encoded-config" }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const dispatcher = { dispatch: async () => { events.push("dispatch"); } };
+  const result = await runQueuedJobReconciliation({
+    db,
+    installationToken: async () => "token",
+    githubFetchForInstallation: () => fetcher,
+    dispatcher,
+  });
+  expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
+  expect(events).toEqual(["reserve", "jit", "dispatch"]);
 });
