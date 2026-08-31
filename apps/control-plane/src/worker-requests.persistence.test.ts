@@ -97,7 +97,7 @@ test("replays completed configuration idempotency response without mutating", as
 test("accepts independent per-job ceilings without multiplying by concurrency", async () => {
   const tx = (strings: TemplateStringsArray) => {
     const sql = strings.join(" ");
-    if (sql.includes("select id, doctor")) return [{ id: "worker", doctor: { capacity: { freeVcpu: 4, freeMemoryBytes: 4 * 1024 ** 3, freeStorageBytes: 30 * 1024 ** 3 } }, admissionState: "pending", platform: "macos-arm64", guestPlatforms: ["macos-arm64"], draining: false }];
+    if (sql.includes("select id, doctor")) return [{ id: "worker", doctor: { capacity: { freeVcpu: 1, freeMemoryBytes: 1, freeStorageBytes: 1 } }, admissionState: "pending", platform: "macos-arm64", guestPlatforms: ["macos-arm64"], draining: false }];
     return [];
   };
   const db = Object.assign(((strings: TemplateStringsArray) => []) as unknown as Sql<{}>, { begin: async (fn: (transaction: unknown) => unknown) => fn(tx) });

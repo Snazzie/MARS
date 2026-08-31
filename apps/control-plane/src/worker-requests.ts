@@ -110,9 +110,6 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, conf
       const [{ count }] = await tx<{ count: number }[]>`select count(*)::int as count from runner_leases where worker_id=${workerId} and state not in ('completed','reaped','failed')`;
       if (!row.draining || Number(count) !== 0) throw new Error("worker guest platform configuration requires drained worker");
     }
-    const telemetry = row.doctor && typeof row.doctor === "object" ? row.doctor as Record<string, unknown> : {};
-    const capacity = telemetry.capacity && typeof telemetry.capacity === "object" ? telemetry.capacity as Record<string, number> : {};
-    if (parsed.appliance.vcpu > (capacity.freeVcpu ?? 0) || parsed.appliance.memoryBytes > (capacity.freeMemoryBytes ?? 0) || parsed.appliance.storageBytes > (capacity.freeStorageBytes ?? 0)) throw new Error("worker configuration exceeds capacity");
     await tx`update workers set limits=${jsonParameter(tx, parsed.runtime)}::jsonb, guest_platforms=${jsonParameter(tx, parsed.guestPlatforms)}::jsonb, desired_configuration=${jsonParameter(tx, parsed)}::jsonb, admission_state='adopted', configuration_state='applying', configuration_revision=${revision}, configuration_command_id=${commandId} where id=${workerId}`;
     await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,'worker.configure',${workerId},null,now(),${jsonParameter(tx, payload)}::jsonb)`;
     await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.configured',${jsonParameter(tx, { workerId, revision, fingerprint: fp, guestPlatforms: parsed.guestPlatforms })}::jsonb)`;
