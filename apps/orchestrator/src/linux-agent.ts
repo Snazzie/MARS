@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { cpus, totalmem } from "node:os";
 import { statfsSync } from "node:fs";
 import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerObservedConfiguration, WorkerConfigurePayload, WorkerCommand, WorkerDoctorData, WorkerEvent, type WorkerCapacityData } from "@mars/contracts";
+import { z } from "zod";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { authenticateWorker, retryControlPlaneOperation, workerSocketUrl, type WorkerIdentity } from "./worker-client.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
@@ -83,7 +84,7 @@ export type LinuxWorkerJoinInput = {
   encryptionPublicKey: string;
   vmUuid: string;
   machineUuid: string;
-  doctor: WorkerDoctorData;
+  doctor: z.input<typeof WorkerDoctorData>;
   capacity: WorkerCapacityData;
 };
 export type LinuxWorkerJoinPayload = LinuxWorkerJoinInput & { platform: "linux-x64" };

@@ -1,7 +1,7 @@
 import { generateKeyPairSync, sign as signMessage, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
-import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerDoctorData, WorkerEvent, type WorkerCapacityData, type LeaseBootstrapEnvelope } from "@mars/contracts";
+import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerDoctorData, WorkerDoctorReport, WorkerEvent, type WorkerCapacityData, type WorkerContainerStatus, type LeaseBootstrapEnvelope } from "@mars/contracts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { createHyperVRuntime, HyperVDriver } from "./hyperv.ts";
 import { WindowsContainerDriver, isExpectedWindowsEntrypoint } from "./windows-container.ts";
@@ -134,7 +134,18 @@ async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> {
   await save(result);
   return result;
 }
-type WindowsRuntimeDriver = Pick<RuntimeDriver, "reserveCapacity" | "createLease" | "stopLease" | "removeLease"> & { reconcileOrphans?: () => Promise<void> };
+type WindowsRuntimeDriver = Pick<RuntimeDriver, "reserveCapacity" | "createLease" | "stopLease" | "removeLease"> & { listContainerStatuses: () => Promise<WorkerContainerStatus[]>; reconcileOrphans?: () => Promise<void> };
+export function buildWindowsDoctorReport(input: { doctor: WorkerDoctorData; capacity: WorkerCapacityData; containers: WorkerContainerStatus[]; activeLeases: string[]; preserveLeases: boolean }): WorkerDoctorReport {
+  return WorkerDoctorReport.parse({
+    doctor: {
+      ...input.doctor,
+      containers: input.containers,
+      activeLeases: input.activeLeases,
+      preserveLeases: input.preserveLeases,
+    },
+    capacity: input.capacity,
+  });
+}
 export async function applyWindowsWorkerConfiguration(
   limits: Limits,
   cache: WorkerCacheConfiguration,
@@ -212,8 +223,24 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
     throw new Error(`Unsupported Windows runtime: ${mode}`);
   }
   let doctorReport = await windowsDoctor(identity.preserveLeases === true);
-  const capacityReport = await capacity();
   const activeLeases = new Map<string, Promise<void>>();
+  const sendDoctor = async (ws: WebSocket): Promise<void> => {
+    try {
+      const [currentCapacity, containers] = await Promise.all([capacity(), driver.listContainerStatuses()]);
+      const report = buildWindowsDoctorReport({
+        doctor: doctorReport,
+        capacity: currentCapacity,
+        containers,
+        activeLeases: [...activeLeases.keys()],
+        preserveLeases: identity.preserveLeases === true,
+      });
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: report }));
+      }
+    } catch (error) {
+      console.error("Windows worker doctor collection failed", { workerId: identity.workerId, error: error instanceof Error ? error.message : String(error) });
+    }
+  };
   const loop = async (signal?: AbortSignal): Promise<never> => {
     for (;;) {
       if (signal?.aborted) throw new Error("worker stopped");
@@ -233,9 +260,14 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
             await emitActionCacheSnapshot(cacheService, (type, payload) => {
               if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(event(identity.workerId, type, payload)));
             });
-            return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: await capacity() } }));
+            await sendDoctor(ws);
+            return;
           }
-          if (frame.type === "ping") { ws.send(JSON.stringify({ version: 1, type: "pong", workerId: identity.workerId })); return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: await capacity() } })); }
+          if (frame.type === "ping") {
+            ws.send(JSON.stringify({ version: 1, type: "pong", workerId: identity.workerId }));
+            await sendDoctor(ws);
+            return;
+          }
           if (frame.type === "doctor_ack") return;
           const command = WorkerCommand.parse(frame);
           if (command.type === "worker.set_lease_preservation") {

@@ -1,6 +1,6 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { PoolResources } from "@mars/contracts";
+import type { PoolResources, WorkerContainerStatus } from "@mars/contracts";
 import type { Lease, RuntimeDriver, RuntimeLease } from "./runtime.ts";
 import { validateResources } from "./runtime.ts";
 
@@ -57,6 +57,9 @@ export class HyperVDriver implements RuntimeDriver {
   validatePool(resources: PoolResources): void { validateResources(resources, this.limits); }
   async reserveCapacity(resources: PoolResources): Promise<void> { this.validatePool(resources); await this.hyperv.verifyHost(); }
   async reconcileOrphans(): Promise<void> { await this.hyperv.reconcileOrphans(this.prefix); }
+  async listContainerStatuses(): Promise<WorkerContainerStatus[]> {
+    return [];
+  }
   async createLease(lease: Lease): Promise<RuntimeLease> {
     if (lease.imageDigest !== this.templateDigest) throw new Error("lease image digest does not match Hyper-V template");
     this.validatePool(lease.resources);

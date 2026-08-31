@@ -1,4 +1,5 @@
 import type { Server, ServerWebSocket } from "bun";
+import { WorkerDoctorReport } from "@mars/contracts";
 import { jsonParameter, type DashboardDb } from "@mars/db";
 import { canSubscribeToOrganization, loadBrowserInvalidations } from "./browser-invalidations.ts";
 import { reconcileWorkerInventory } from "./lease-reconciliation.ts";
@@ -137,15 +138,15 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         if (!activated) return ws.close(4001, "superseded");
         ws.send(JSON.stringify({ version: 1, type: "authenticated", workerId: ws.data.workerId, admissionState: worker.admission_state }));
         ws.send(JSON.stringify({ version: 1, type: "ping" }));
-      } else if (frame.type === "doctor" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && frame.workerId === ws.data.workerId && frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload) && !containsSecret(frame.payload)) {
+      } else if (frame.type === "doctor" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && frame.workerId === ws.data.workerId && frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload)) {
         const epoch = ws.data.connectionEpoch;
         if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
-        const doctorPayload = frame.payload as Record<string, unknown>;
+        if (containsSecret(frame.payload)) return;
+        const parsed = WorkerDoctorReport.safeParse(frame.payload);
+        if (!parsed.success) return;
+        const doctorPayload = parsed.data;
         await options.db`update workers set doctor=${jsonParameter(options.db, doctorPayload)}, doctor_observed_at=now(), last_heartbeat_at=now() where id=${ws.data.workerId}`;
-        const activeLeases = doctorPayload.doctor && typeof doctorPayload.doctor === "object" && !Array.isArray(doctorPayload.doctor) ? (doctorPayload.doctor as Record<string, unknown>).activeLeases : undefined;
-        if (Array.isArray(activeLeases) && activeLeases.every((value): value is string => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value))) {
-          await reconcileWorkerInventory(options.db, ws.data.workerId, activeLeases);
-        }
+        await reconcileWorkerInventory(options.db, ws.data.workerId, doctorPayload.doctor.activeLeases ?? []);
         if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
         ws.send(JSON.stringify({ version: 1, type: "doctor_ack", workerId: ws.data.workerId }));
       } else if (frame.type === "pong" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch) {

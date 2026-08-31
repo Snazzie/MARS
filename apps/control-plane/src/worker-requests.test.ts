@@ -61,7 +61,7 @@ test("pending worker DTO ignores database-only columns", () => {
     vmUuid: row.vmUuid,
     machineUuid: row.machineUuid,
     limits: null,
-    doctor: row.doctor.doctor,
+    doctor: { ...row.doctor.doctor, containers: [] },
     capacity: row.doctor.capacity,
     admissionState: "pending",
     connectionState: "offline",

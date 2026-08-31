@@ -1,7 +1,44 @@
 import { expect, test } from "bun:test";
-import { WorkerConfigurePayload, type LeaseBootstrapEnvelope, type WorkerCommand, type WorkerEvent } from "@mars/contracts";
+import { WorkerConfigurePayload, WorkerDoctorData, WorkerDoctorReport, type LeaseBootstrapEnvelope, type WorkerCapacityData, type WorkerCommand, type WorkerContainerStatus, type WorkerEvent } from "@mars/contracts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
-import { applyWindowsWorkerConfiguration, runWindowsLeaseCleanup, startWindowsLeaseLifecycle } from "./windows-agent.ts";
+import { applyWindowsWorkerConfiguration, buildWindowsDoctorReport, runWindowsLeaseCleanup, startWindowsLeaseLifecycle } from "./windows-agent.ts";
+const doctor = WorkerDoctorData.parse({ runtimeMode: "container", runtimeReady: true, probe: true, egress: true, imageSignatures: true });
+const capacity: WorkerCapacityData = { actualVcpu: 8, actualMemoryBytes: 16, actualStorageBytes: 32, freeVcpu: 7, freeMemoryBytes: 15, freeStorageBytes: 31 };
+const containerStatuses: WorkerContainerStatus[] = [{
+  containerId: "a".repeat(64),
+  name: "build-a",
+  leaseId: "22222222-2222-4222-8222-222222222222",
+  state: "running",
+  cpuUsagePercent: 12.5,
+  memoryWorkingSetBytes: 1024,
+  memoryLimitBytes: 2048,
+  diskUsageBytes: 4096,
+  sampledAt: "2026-08-31T12:00:00.000Z",
+}, {
+  containerId: "b".repeat(64),
+  name: "build-b",
+  leaseId: "33333333-3333-4333-8333-333333333333",
+  state: "exited",
+  cpuUsagePercent: null,
+  memoryWorkingSetBytes: null,
+  memoryLimitBytes: null,
+  diskUsageBytes: 8192,
+  sampledAt: "2026-08-31T12:00:00.000Z",
+}];
+
+test("builds a parsed Windows doctor report with the complete container inventory", () => {
+  const report = buildWindowsDoctorReport({
+    doctor,
+    capacity,
+    containers: containerStatuses,
+    activeLeases: ["44444444-4444-4444-8444-444444444444"],
+    preserveLeases: true,
+  });
+  expect(WorkerDoctorReport.parse(report)).toEqual({
+    doctor: { ...doctor, containers: containerStatuses, activeLeases: ["44444444-4444-4444-8444-444444444444"], preserveLeases: true },
+    capacity,
+  });
+});
 
 test("awaits the live cache TTL before acknowledging Windows configuration", async () => {
   const limits = { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 6 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 };

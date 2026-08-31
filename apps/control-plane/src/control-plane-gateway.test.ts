@@ -16,6 +16,17 @@ test("workers answer heartbeat pings with JSON frames", async () => {
     expect(source).toContain('ws.send(JSON.stringify({ version: 1, type: "pong", workerId: identity.workerId }))');
   }
 });
+test("validates worker doctor reports before persistence and acknowledgement", () => {
+  const doctorBranchStart = gatewaySource.indexOf('frame.type === "doctor"');
+  const pongBranchStart = gatewaySource.indexOf('frame.type === "pong"', doctorBranchStart);
+  const doctorBranch = gatewaySource.slice(doctorBranchStart, pongBranchStart);
+  expect(doctorBranch).toContain("WorkerDoctorReport.safeParse(frame.payload)");
+  expect(doctorBranch).toContain("if (!parsed.success) return;");
+  expect(doctorBranch).toContain("await options.db`update workers set doctor=");
+  expect(doctorBranch).toContain("await reconcileWorkerInventory(options.db, ws.data.workerId, doctorPayload.doctor.activeLeases ?? [])");
+  expect(doctorBranch).toContain('type: "doctor_ack"');
+});
+
 
 test("serializes worker frames on one socket", async () => {
   const tails = new WeakMap<object, Promise<void>>();

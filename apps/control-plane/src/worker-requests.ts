@@ -1,6 +1,7 @@
 import type { Sql } from "@mars/db";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, WorkerObservedConfiguration, validateWorkerGuestPlatforms, type GuestPlatform } from "@mars/contracts";
+import { z } from "zod";
 import { jsonParameter } from "@mars/db";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { fingerprint } from "./workers.ts";
@@ -20,7 +21,7 @@ export function parseWorkerBootstrapRequest(input: unknown): WorkerBootstrapRequ
 export function parsePendingWorkerRequest(input: unknown): PendingWorkerRequest { return PendingWorkerRequest.parse(input); }
 export function parseApproveWorkerRequest(input: unknown): ApproveWorkerRequest { return ApproveWorkerRequest.parse(input); }
 
-export async function requestPendingWorker(db: Sql<{}>, input: WorkerBootstrapRequest, source?: string, limiter?: RequestLimiter): Promise<WorkerRequestResult> {
+export async function requestPendingWorker(db: Sql<{}>, input: z.input<typeof WorkerBootstrapRequest>, source?: string, limiter?: RequestLimiter): Promise<WorkerRequestResult> {
   const parsed = WorkerBootstrapRequest.parse(input);
   if (source && limiter && !limiter.allow(source)) throw new WorkerRequestError("invalid_bootstrap");
   const fp = fingerprint(parsed.publicKey);

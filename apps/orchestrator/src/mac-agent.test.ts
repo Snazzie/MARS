@@ -100,7 +100,7 @@ describe("worker join payload", () => {
       encryptionPublicKey: "x25519",
       vmUuid,
       machineUuid,
-      doctor: { probe: true, egress: true },
+      doctor: { probe: true, egress: true, containers: [] },
       capacity,
     });
   });

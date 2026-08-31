@@ -10,7 +10,7 @@ describe("pending worker persistence", () => {
     const queryValues: unknown[][] = [];
     const tx = Object.assign((strings: TemplateStringsArray, ...values: unknown[]) => { const sql = strings.join(" "); queries.push(sql); queryValues.push(values); if (sql.includes("select code_hash")) return [{ codeHash: createHash("sha256").update(Buffer.from("A".repeat(43), "base64url")).digest() }]; if (sql.includes("select id,")) return []; if (sql.includes("returning id")) return [{ id: "00000000-0000-4000-8000-000000000003" }]; return []; }, { json: (value: unknown) => value });
     const input = { code: "A".repeat(43), platform: "linux-x64" as const, publicKey: "ed25519-public", encryptionPublicKey: "x25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
-    const telemetry = { doctor: input.doctor, capacity: input.capacity };
+    const telemetry = { doctor: { ...input.doctor, containers: [] }, capacity: input.capacity };
     const db = Object.assign(((strings: TemplateStringsArray, ...values: unknown[]) => { queries.push(strings.join(" ")); queryValues.push(values); return []; }) as unknown as Sql<{}>, { begin: async (fn: (tx: unknown) => unknown) => fn(tx) });
     const result = await requestPendingWorker(db, input);
     expect(result.status).toBe("created");

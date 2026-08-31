@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { statfsSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
 import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerDoctorData, WorkerEvent, type LeaseBootstrapEnvelope, type WorkerCacheProxy, type WorkerCapacityData } from "@mars/contracts";
+import { z } from "zod";
 import type { Lease, RuntimeLease } from "./runtime.ts";
 import { createTartVmRuntime, TartVmDriver } from "./tart.ts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
@@ -17,7 +18,7 @@ export interface MacWorkerJoinInput {
   encryptionPublicKey: string;
   vmUuid: string;
   machineUuid: string;
-  doctor: WorkerDoctorData;
+  doctor: z.input<typeof WorkerDoctorData>;
   capacity: WorkerCapacityData;
 }
 export type MacWorkerJoinPayload = MacWorkerJoinInput & { platform: "macos-arm64" };
