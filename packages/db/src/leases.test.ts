@@ -78,6 +78,16 @@ test("rejects a job when aggregate worker capacity is exhausted", async () => {
   const db = Object.assign(((strings: TemplateStringsArray) => []) as unknown as Sql<{}>, { begin: async (fn: (value: Sql<{}>) => unknown) => fn(tx) });
   await expect(reserveRoutingSlot(db, { organizationId: "org", poolId: "pool", workerId: "worker", routingKey: "org:pool:labels", requested: { vcpu: 5, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, ttlMs: 60_000 })).rejects.toThrow("worker_capacity_exhausted");
 });
+test("rejects a reservation when active leases plus request exceed actual capacity", async () => {
+  const tx = ((strings: TemplateStringsArray) => {
+    const query = strings.join(" ").toLowerCase();
+    if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 10, memoryBytes: 10, storageBytes: 10, concurrency: 10 }, limits: { maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10, maxStorageBytesPerPod: 10, maxConcurrentPods: 10 }, doctor: { capacity: { actualVcpu: 8, actualMemoryBytes: 8, actualStorageBytes: 8, freeVcpu: 8, freeMemoryBytes: 8, freeStorageBytes: 8 } } }];
+    if (query.includes("from runner_leases")) return [{ count: 1, vcpu: 7, memoryBytes: 7, storageBytes: 7 }];
+    return [];
+  }) as unknown as Sql<{}>;
+  const db = Object.assign(((strings: TemplateStringsArray) => []) as unknown as Sql<{}>, { begin: async (fn: (value: Sql<{}>) => unknown) => fn(tx) });
+  await expect(reserveRoutingSlot(db, { organizationId: "org", poolId: "pool", workerId: "worker", routingKey: "org:pool:labels", requested: { vcpu: 2, memoryBytes: 2, storageBytes: 2, concurrency: 1 }, ttlMs: 60_000 })).rejects.toThrow("worker_capacity_exhausted");
+});
 
 test("rejects a job when doctor-reported free memory is exhausted", async () => {
   const tx = ((strings: TemplateStringsArray) => {
