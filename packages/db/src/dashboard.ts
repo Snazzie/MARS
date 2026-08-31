@@ -1,5 +1,5 @@
 import type { DatabaseClient } from "./index.ts";
-import { CapacitySnapshot, ConnectionState, ConfigurationState, PoolSummary, RuntimeDriverName, RuntimePlatform, WorkerDoctor, WorkerLimits, WorkerState, GuestPlatform, WorkerCacheSummary, WorkerHealth } from "@mars/contracts";
+import { CapacitySnapshot, ConnectionState, ConfigurationState, PoolSummary, RuntimeDriverName, RuntimePlatform, WorkerContainerStatus, WorkerDoctor, WorkerLimits, WorkerState, GuestPlatform, WorkerCacheSummary, WorkerHealth } from "@mars/contracts";
 import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, OverviewTimeseriesPoint, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail, OrganizationSettings } from "@mars/contracts";
 import { jsonParameter } from "./json.ts";
 export type DashboardDb = DatabaseClient;
@@ -371,6 +371,26 @@ function healthJobId(value: unknown): number | null {
   const id = healthNumber(value, -1);
   return Number.isSafeInteger(id) && id >= 0 ? id : null;
 }
+function healthContainers(value: unknown): WorkerHealth["containers"] {
+  const parsed = jsonValue(value);
+  const wrapper = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+  const doctor = wrapper.doctor && typeof wrapper.doctor === "object" ? wrapper.doctor as Record<string, unknown> : wrapper;
+  if (!Array.isArray(doctor.containers)) return [];
+  const containers: WorkerHealth["containers"] = [];
+  for (const candidate of doctor.containers) {
+    const parsedContainer = WorkerContainerStatus.safeParse(candidate);
+    if (!parsedContainer.success) continue;
+    const container = parsedContainer.data;
+    containers.push({
+      ...container,
+      memoryWorkingSetBytes: container.memoryWorkingSetBytes === null ? null : String(container.memoryWorkingSetBytes),
+      memoryLimitBytes: container.memoryLimitBytes === null ? null : String(container.memoryLimitBytes),
+      diskUsageBytes: container.diskUsageBytes === null ? null : String(container.diskUsageBytes),
+    });
+  }
+  return containers.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : left.containerId < right.containerId ? -1 : left.containerId > right.containerId ? 1 : 0);
+}
+
 
 export async function getWorkerHealth(db: DashboardDb, workerId: string, workerConnected: (workerId: string) => boolean): Promise<WorkerHealth | null> {
   const [worker] = await db<Record<string, unknown>[]>`
@@ -443,6 +463,7 @@ export async function getWorkerHealth(db: DashboardDb, workerId: string, workerC
       observedAt: normalizeTimestamp(worker.cacheObservedAt),
       error: worker.cacheError == null ? null : String(worker.cacheError),
     },
+    containers: healthContainers(worker.doctor),
     jobs: leases.map((row, index) => {
       const startedAt = normalizeTimestamp(row.startedAt);
       return {

@@ -119,6 +119,86 @@ test("worker health projects complete cache and active lease telemetry", async (
   ]));
   expect(health?.jobs).toHaveLength(4);
 });
+test("worker health projects valid latest container observations and skips invalid legacy rows", async () => {
+  const worker = minimalWorkerHealthRow({
+    doctor: {
+      doctor: {
+        probe: true,
+        containers: [
+          {
+            containerId: "b".repeat(64),
+            name: "zulu",
+            leaseId: "22222222-2222-4222-8222-222222222222",
+            state: "exited",
+            cpuUsagePercent: null,
+            memoryWorkingSetBytes: null,
+            memoryLimitBytes: null,
+            diskUsageBytes: 987654321,
+            sampledAt: "2026-08-23T11:59:00.000Z",
+          },
+          {
+            containerId: "a".repeat(64),
+            name: "alpha",
+            leaseId: "33333333-3333-4333-8333-333333333333",
+            state: "running",
+            cpuUsagePercent: 12.3,
+            memoryWorkingSetBytes: 9007199254740991,
+            memoryLimitBytes: 9007199254740991,
+            diskUsageBytes: null,
+            sampledAt: "2026-08-23T11:59:01.000Z",
+          },
+          {
+            containerId: "c".repeat(64),
+            name: "invalid-state",
+            leaseId: "44444444-4444-4444-8444-444444444444",
+            state: "bogus",
+            cpuUsagePercent: null,
+            memoryWorkingSetBytes: null,
+            memoryLimitBytes: null,
+            diskUsageBytes: null,
+            sampledAt: "2026-08-23T11:59:02.000Z",
+          },
+        ],
+      },
+      capacity: { actualVcpu: 1, freeVcpu: 1, actualMemoryBytes: "1", freeMemoryBytes: "1", actualStorageBytes: "1", freeStorageBytes: "1" },
+    },
+  });
+  const db = workerHealthDb({ worker, leases: [] });
+
+  const health = await getWorkerHealth(db, worker.id, () => true);
+
+  expect(health?.containers).toEqual([
+    {
+      containerId: "a".repeat(64),
+      name: "alpha",
+      leaseId: "33333333-3333-4333-8333-333333333333",
+      state: "running",
+      cpuUsagePercent: 12.3,
+      memoryWorkingSetBytes: "9007199254740991",
+      memoryLimitBytes: "9007199254740991",
+      diskUsageBytes: null,
+      sampledAt: "2026-08-23T11:59:01.000Z",
+    },
+    {
+      containerId: "b".repeat(64),
+      name: "zulu",
+      leaseId: "22222222-2222-4222-8222-222222222222",
+      state: "exited",
+      cpuUsagePercent: null,
+      memoryWorkingSetBytes: null,
+      memoryLimitBytes: null,
+      diskUsageBytes: "987654321",
+      sampledAt: "2026-08-23T11:59:00.000Z",
+    },
+  ]);
+});
+
+test("worker health defaults missing legacy container inventory to an empty array", async () => {
+  const worker = minimalWorkerHealthRow();
+  const health = await getWorkerHealth(workerHealthDb({ worker, leases: [] }), worker.id, () => true);
+  expect(health?.containers).toEqual([]);
+});
+
 
 test("worker health connection state uses the live connection callback", async () => {
   const worker = minimalWorkerHealthRow({ connectionState: "online" });

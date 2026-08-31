@@ -10,6 +10,17 @@ const workerHealth = {
     pods: { actual: 2, reserved: 1, free: 1 },
   },
   cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: 3600, ready: true, generation: "11111111-1111-4111-8111-111111111111", sizeBytes: "20", entryCount: 2, observedAt: "2026-08-23T11:59:57.000Z", error: null },
+  containers: [{
+    containerId: "a".repeat(64),
+    name: "managed",
+    leaseId: "22222222-2222-4222-8222-222222222222",
+    state: "running",
+    cpuUsagePercent: 6.5,
+    memoryWorkingSetBytes: "40",
+    memoryLimitBytes: "80",
+    diskUsageBytes: "100",
+    sampledAt: "2026-08-23T11:59:55.000Z",
+  }],
   jobs: [{
     jobId: 7,
     repositoryFullName: "acme/repo",
@@ -35,10 +46,30 @@ test("loads worker health from the no-store endpoint and parses its contract", a
     expect(requested).toBe("/api/workers/worker-1/health");
     expect(cache).toBe("no-store");
     expect(result).toMatchObject({ connection: { state: "online" }, cache: { generation: "11111111-1111-4111-8111-111111111111" } });
+    expect(result.containers).toEqual(workerHealth.containers);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
+test("rejects worker health containers with unknown fields", async () => {
+  const originalFetch = globalThis.fetch;
+  const malformed = {
+    ...workerHealth,
+    containers: [{ ...workerHealth.containers[0], unexpected: true }],
+  };
+  globalThis.fetch = (async () => new Response(JSON.stringify(malformed), { status: 200 })) as unknown as typeof fetch;
+  try {
+    await getWorkerHealth("worker-1");
+    throw new Error("expected getWorkerHealth to reject");
+  } catch (error) {
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toMatchObject({ status: 200, code: "invalid_response" });
+    expect((error as ApiRequestError).message).toContain("containers.0");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 
 test("reports the worker health endpoint when its contract response is malformed", async () => {
   const originalFetch = globalThis.fetch;

@@ -51,7 +51,7 @@ function workerHealthApiDb(worker: Record<string, unknown> | null = {
   lastDoctorAt: new Date("2026-08-23T11:59:58.000Z"),
   observedAt: new Date("2026-08-23T12:00:00.000Z"),
   limits: { maxConcurrentPods: 2 },
-  doctor: { doctor: { probe: true }, capacity: { actualVcpu: 8, freeVcpu: 6, actualMemoryBytes: "100", freeMemoryBytes: "80", actualStorageBytes: "200", freeStorageBytes: "150" }, credentials: "do-not-return" },
+  doctor: { doctor: { probe: true, containers: [{ containerId: "b".repeat(64), name: "managed", leaseId: "33333333-3333-4333-8333-333333333333", state: "exited", cpuUsagePercent: null, memoryWorkingSetBytes: null, memoryLimitBytes: null, diskUsageBytes: 987654321, sampledAt: "2026-08-23T11:59:00.000Z" }] }, capacity: { actualVcpu: 8, freeVcpu: 6, actualMemoryBytes: "100", freeMemoryBytes: "80", actualStorageBytes: "200", freeStorageBytes: "150" }, credentials: "do-not-return" },
   desiredConfiguration: { cache: { ttlSeconds: 3600 } },
   cacheGeneration: "11111111-1111-4111-8111-111111111111",
   cacheReady: true,
@@ -80,7 +80,7 @@ function workerHealthApiDb(worker: Record<string, unknown> | null = {
 
 const member = { id: "u1", githubUserId: 1, login: "member", isGlobalAdmin: false };
 const admin = { id: "u2", githubUserId: 2, login: "admin", isGlobalAdmin: true };
-function appFor(user: typeof member | typeof admin | null = member, db = fakeDb()) { return createControlPlaneApp({ db, setup: { publicOrigin: () => "https://x", publicOriginManaged: () => false, configure: async (origin: string) => origin, authenticate: async () => ({ userId: "admin", firstAdmin: true }) }, browserOrigin: () => "https://x", workerConnectionOrigins: () => ["https://x"], githubApp: { getOAuthCredentials: async () => ({ clientId: "id", clientSecret: "secret" }), getWebhookSecret: async () => "webhook" } as never, secretBox: new SecretBox(Buffer.alloc(32, 7).toString("base64")), defaultJobImages: {}, requestId: () => "req", requestSource: () => "test", webRoot: new URL("file:///tmp/"), workerInstallerRoot: new URL("file:///tmp/"), workerOrchestratorExecutable: new URL("file:///tmp/mars-orchestrator"), onWorkerAdopted: () => undefined, currentUser: async () => user, health: () => ({ buildId: "test", startedAt: new Date().toISOString(), discovery: { lastAttemptAt: null, lastSuccessAt: null, stale: false, staleAfterMs: 60000 } }) }); }
+function appFor(user: typeof member | typeof admin | null = member, db = fakeDb()) { return createControlPlaneApp({ db, setup: { publicOrigin: () => "https://x", publicOriginManaged: () => false, configure: async (origin: string) => origin, authenticate: async () => ({ userId: "admin", firstAdmin: true }) }, browserOrigin: () => "https://x", workerConnectionOrigins: () => ["https://x"], githubApp: { getOAuthCredentials: async () => ({ clientId: "id", clientSecret: "secret" }), getWebhookSecret: async () => "webhook" } as never, secretBox: new SecretBox(Buffer.alloc(32, 7).toString("base64")), defaultJobImages: {}, requestId: () => "req", requestSource: () => "test", webRoot: new URL("file:///tmp/"), workerInstallerRoot: new URL("file:///tmp/"), workerOrchestratorExecutable: new URL("file:///tmp/mars-orchestrator"), workerConnected: () => true, onWorkerAdopted: () => undefined, currentUser: async () => user, health: () => ({ buildId: "test", startedAt: new Date().toISOString(), discovery: { lastAttemptAt: null, lastSuccessAt: null, stale: false, staleAfterMs: 60000 } }) }); }
 const sessionHeaders = { Cookie: "mars_session=test" };
 
 test("session lookup normalizes PostgreSQL bigint GitHub IDs", async () => {
@@ -319,6 +319,17 @@ test("global admins receive strict no-store worker health without secrets", asyn
       observedAt: "2026-08-23T11:59:50.000Z",
       error: null,
     },
+    containers: [{
+      containerId: "b".repeat(64),
+      name: "managed",
+      leaseId: "33333333-3333-4333-8333-333333333333",
+      state: "exited",
+      cpuUsagePercent: null,
+      memoryWorkingSetBytes: null,
+      memoryLimitBytes: null,
+      diskUsageBytes: "987654321",
+      sampledAt: "2026-08-23T11:59:00.000Z",
+    }],
     jobs: [{
       jobId: 42,
       repositoryFullName: "acme/project",
