@@ -329,10 +329,10 @@ test("retries inspect and omits only a container that disappeared", async () => 
   const disappearedId = "e".repeat(64);
   const docker: DockerRunner = async (args) => {
     if (args[0] === "ps") return { code: 0, stdout: `${firstId.slice(0, 12)}\n${secondId.slice(0, 12)}\n${disappearedId.slice(0, 12)}\n`, stderr: "" };
-    if (args[0] === "inspect" && args.length > 3) return { code: 1, stdout: "", stderr: `No such container: ${disappearedId.slice(0, 12)}` };
+    if (args[0] === "inspect" && args.length > 3) return { code: 1, stdout: "", stderr: `Error: No such object: ${disappearedId.slice(0, 12)}` };
     if (args[0] === "inspect") {
       const id = args.at(-1)!;
-      if (id === disappearedId.slice(0, 12)) return { code: 1, stdout: "", stderr: "No such container" };
+      if (id === disappearedId.slice(0, 12)) return { code: 1, stdout: "", stderr: "Error: No such object" };
       const fullId = id === firstId.slice(0, 12) ? firstId : secondId;
       return { code: 0, stdout: JSON.stringify([{ Id: fullId, Name: `/${id}`, Config: { Labels: { "mars.lease-id": id === firstId.slice(0, 12) ? "33333333-3333-4333-8333-333333333333" : "44444444-4444-4444-8444-444444444444" } }, State: { Status: "exited" }, SizeRw: 1 }]), stderr: "" };
     }
@@ -382,8 +382,8 @@ test("retries stats and omits only a running container that disappeared", async 
       ]),
       stderr: "",
     };
-    if (args[0] === "stats" && args.length > 5) return { code: 1, stdout: "", stderr: "No such container: gone" };
-    if (args[0] === "stats" && args.at(-1) === disappearedId) return { code: 1, stdout: "", stderr: "No such container" };
+    if (args[0] === "stats" && args.length > 5) return { code: 1, stdout: "", stderr: "Error: No such object: gone" };
+    if (args[0] === "stats" && args.at(-1) === disappearedId) return { code: 1, stdout: "", stderr: "Error: No such object" };
     if (args[0] === "stats") return { code: 0, stdout: JSON.stringify({ ID: firstId.slice(0, 12), CPUPerc: "1%", MemUsage: "1MiB / 1GiB" }), stderr: "" };
     return { code: 0, stdout: "", stderr: "" };
   };

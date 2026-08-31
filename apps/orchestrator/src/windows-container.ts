@@ -60,7 +60,7 @@ type DockerInspection = {
   SizeRw?: unknown;
 };
 type DockerStats = { ID?: unknown; Container?: unknown; CPUPerc?: unknown; MemUsage?: unknown };
-const dockerNotFound = /no such container|container .* not found|does not exist/i;
+const dockerNotFound = /no such container|no such object|container .* not found|does not exist/i;
 function isDockerNotFound(result: DockerResult): boolean {
   return dockerNotFound.test(`${result.stdout} ${result.stderr}`);
 }
@@ -189,6 +189,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
   private async collectContainerStats(ids: string[]): Promise<{ rows: DockerStats[]; disappeared: Set<string> }> {
     if (ids.length === 0) return { rows: [], disappeared: new Set() };
     const batch = await this.docker(["stats", "--no-stream", "--format", "{{json .}}", ...ids]);
+    if (batch.code === 0) return { rows: parseStatsOutput(checked(batch, "docker stats")), disappeared: new Set() };
     if (!isDockerNotFound(batch)) checked(batch, "docker stats");
     const rows: DockerStats[] = [];
     const disappeared = new Set<string>();
