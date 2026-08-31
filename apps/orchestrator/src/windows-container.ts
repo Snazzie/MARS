@@ -174,6 +174,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
   private async inspectManagedContainers(ids: string[]): Promise<DockerInspection[]> {
     const batch = await this.docker(["inspect", "--size", ...ids]);
     if (batch.code === 0) return parseInspectOutput(checked(batch, "docker inspect"));
+    if (!isDockerNotFound(batch)) checked(batch, "docker inspect");
     const rows: DockerInspection[] = [];
     for (const id of ids) {
       const result = await this.docker(["inspect", "--size", id]);
@@ -188,7 +189,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
   private async collectContainerStats(ids: string[]): Promise<{ rows: DockerStats[]; disappeared: Set<string> }> {
     if (ids.length === 0) return { rows: [], disappeared: new Set() };
     const batch = await this.docker(["stats", "--no-stream", "--format", "{{json .}}", ...ids]);
-    if (batch.code === 0) return { rows: parseStatsOutput(checked(batch, "docker stats")), disappeared: new Set() };
+    if (!isDockerNotFound(batch)) checked(batch, "docker stats");
     const rows: DockerStats[] = [];
     const disappeared = new Set<string>();
     for (const id of ids) {
@@ -230,6 +231,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
       const running = state === "running";
       const statsRow = running ? statsById.get(id.toLowerCase()) ?? statsById.get(id.slice(0, 12).toLowerCase()) : undefined;
       const memoryUsage = typeof statsRow?.MemUsage === "string" ? statsRow.MemUsage.split("/").map((part) => part.trim()) : [];
+      const memoryLimitBytes = statsRow ? optionalMemoryBytes(memoryUsage[1]) : null;
       const status = WorkerContainerStatus.parse({
         containerId: id,
         name: typeof inspection.Name === "string" ? inspection.Name.replace(/^\/+/, "") : "",
@@ -237,7 +239,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
         state,
         cpuUsagePercent: statsRow ? optionalCpuPercent(statsRow.CPUPerc) : null,
         memoryWorkingSetBytes: statsRow ? optionalMemoryBytes(memoryUsage[0]) : null,
-        memoryLimitBytes: statsRow ? optionalMemoryBytes(memoryUsage[1]) : null,
+        memoryLimitBytes: memoryLimitBytes !== null && memoryLimitBytes > 0 ? memoryLimitBytes : null,
         diskUsageBytes: inspectSize(inspection.SizeRw),
         sampledAt,
       });

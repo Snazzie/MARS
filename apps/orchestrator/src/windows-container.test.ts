@@ -345,12 +345,17 @@ test("retries inspect and omits only a container that disappeared", async () => 
 
 test("propagates non-not-found inspect failures", async () => {
   const id = "f".repeat(64);
+  let inspectCalls = 0;
   const docker: DockerRunner = async (args) => {
     if (args[0] === "ps") return { code: 0, stdout: `${id.slice(0, 12)}\n`, stderr: "" };
-    if (args[0] === "inspect") return { code: 1, stdout: "", stderr: "permission denied" };
+    if (args[0] === "inspect") {
+      inspectCalls++;
+      return { code: 1, stdout: "", stderr: "permission denied" };
+    }
     return { code: 0, stdout: "", stderr: "" };
   };
   await expect(new WindowsContainerDriver(collectorConfig, docker).listContainerStatuses()).rejects.toThrow("docker inspect failed");
+  expect(inspectCalls).toBe(1);
 });
 
 test("does not inspect or sample when no managed containers exist", async () => {
@@ -389,6 +394,7 @@ test("retries stats and omits only a running container that disappeared", async 
 
 test("propagates non-not-found stats failures", async () => {
   const id = "3".repeat(64);
+  let statsCalls = 0;
   const docker: DockerRunner = async (args) => {
     if (args[0] === "ps") return { code: 0, stdout: `${id.slice(0, 12)}\n`, stderr: "" };
     if (args[0] === "inspect") return {
@@ -396,8 +402,27 @@ test("propagates non-not-found stats failures", async () => {
       stdout: JSON.stringify([{ Id: id, Name: "/running", Config: { Labels: { "mars.lease-id": "77777777-7777-4777-8777-777777777777" } }, State: { Status: "running" }, SizeRw: 1 }]),
       stderr: "",
     };
-    if (args[0] === "stats") return { code: 1, stdout: "", stderr: "permission denied" };
+    if (args[0] === "stats") {
+      statsCalls++;
+      return { code: 1, stdout: "", stderr: "permission denied" };
+    }
     return { code: 0, stdout: "", stderr: "" };
   };
   await expect(new WindowsContainerDriver(collectorConfig, docker).listContainerStatuses()).rejects.toThrow("docker stats failed");
+  expect(statsCalls).toBe(1);
+});
+
+test("treats a zero Docker memory limit as unavailable", async () => {
+  const id = "4".repeat(64);
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "ps") return { code: 0, stdout: `${id.slice(0, 12)}\n`, stderr: "" };
+    if (args[0] === "inspect") return {
+      code: 0,
+      stdout: JSON.stringify([{ Id: id, Name: "/zero-limit", Config: { Labels: { "mars.lease-id": "88888888-8888-4888-8888-888888888888" } }, State: { Status: "running" }, SizeRw: 1 }]),
+      stderr: "",
+    };
+    if (args[0] === "stats") return { code: 0, stdout: JSON.stringify({ ID: id.slice(0, 12), CPUPerc: "1%", MemUsage: "1MiB / 0B" }), stderr: "" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  await expect((await new WindowsContainerDriver(collectorConfig, docker).listContainerStatuses())[0]).toMatchObject({ memoryWorkingSetBytes: 1024 ** 2, memoryLimitBytes: null });
 });
