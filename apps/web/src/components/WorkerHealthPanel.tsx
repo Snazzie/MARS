@@ -159,6 +159,43 @@ function JobsSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: str
 
 
 
+function formatContainerCpu(value: number | null): string {
+  return value == null ? "Not reported" : `${value.toFixed(1)}%`;
+}
+
+function formatContainerBytes(value: string | null): string {
+  return value == null ? "Not reported" : formatBytes(value);
+}
+
+function formatContainerAge(sampledAt: string): string {
+  const ageSeconds = Math.max(0, Math.round((Date.now() - Date.parse(sampledAt)) / 1000));
+  return ageSeconds < 60 ? `${ageSeconds}s ago` : `${Math.round(ageSeconds / 60)}m ago`;
+}
+
+function shortenContainerId(containerId: string): string {
+  return `${containerId.slice(0, 12)}…`;
+}
+
+function ContainersSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: string }) {
+  return <section className="worker-health-section" aria-labelledby={`${idPrefix}-containers-heading`}>
+    <h3 id={`${idPrefix}-containers-heading`}>Managed containers</h3>
+    {health.containers.length === 0 ? <p className="worker-health-empty">No managed containers reported.</p> : <div className="worker-health-table-wrap">
+      <table className="worker-health-table worker-health-container-table">
+        <caption>Current managed containers and resource usage</caption>
+        <thead><tr><th scope="col">Container</th><th scope="col">State</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Disk</th><th scope="col">Freshness</th></tr></thead>
+        <tbody>{health.containers.map((container) => <tr key={container.containerId}>
+          <th scope="row"><strong>{container.name}</strong><small><code tabIndex={0} title={container.containerId}>{shortenContainerId(container.containerId)}</code></small></th>
+          <td>{container.state}</td>
+          <td>{formatContainerCpu(container.cpuUsagePercent)}</td>
+          <td>{formatContainerBytes(container.memoryWorkingSetBytes)}<small>{container.memoryLimitBytes == null ? "Not reported" : `of ${formatBytes(container.memoryLimitBytes)}`}</small></td>
+          <td>{formatContainerBytes(container.diskUsageBytes)}<small>Writable-layer use</small></td>
+          <td><time dateTime={container.sampledAt}>{formatContainerAge(container.sampledAt)}</time></td>
+        </tr>)}</tbody>
+      </table>
+    </div>}
+  </section>;
+}
+
 export function WorkerHealthPanel({ workerId, health, loading = false, error, limits, showConnectionStatus = true }: WorkerHealthPanelProps) {
   const idPrefix = workerId ? `worker-health-${workerId}` : "worker-health";
   if (loading) return <section id={`${idPrefix}-panel`} className="worker-health-panel" role="status" aria-label="Live worker health"><p>Loading live health…</p></section>;
@@ -174,6 +211,7 @@ export function WorkerHealthPanel({ workerId, health, loading = false, error, li
     </div>}
     <UsageSection health={health} idPrefix={idPrefix} limits={limits} />
     <CacheSection health={health} idPrefix={idPrefix} />
+    <ContainersSection health={health} idPrefix={idPrefix} />
     <JobsSection health={health} idPrefix={idPrefix} />
   </section>;
 }

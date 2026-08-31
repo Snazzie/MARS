@@ -217,6 +217,17 @@ test("polls live health on mount without an expansion flag", async () => {
       connection: { state: "online", lastHeartbeatAt: null, lastDoctorAt: null, heartbeatAgeSeconds: null, doctorAgeSeconds: null },
       usage: { cpu: { actual: 1, reserved: 0, free: 1 }, memoryBytes: { actual: "1", reserved: "0", free: "1" }, storageBytes: { actual: "1", reserved: "0", free: "1" }, pods: { actual: 1, reserved: 0, free: 1 } },
       cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: null, ready: false, generation: null, sizeBytes: "0", entryCount: 0, observedAt: null, error: null },
+      containers: [{
+        containerId: "d".repeat(64),
+        name: "card-container",
+        leaseId: "66666666-6666-4666-8666-666666666666",
+        state: "running",
+        cpuUsagePercent: 7.5,
+        memoryWorkingSetBytes: "1048576",
+        memoryLimitBytes: "2097152",
+        diskUsageBytes: null,
+        sampledAt: new Date().toISOString(),
+      }],
       jobs: [],
     }), { status: 200, headers: { "content-type": "application/json" } });
   }) as unknown as typeof fetch;
@@ -227,6 +238,7 @@ test("polls live health on mount without an expansion flag", async () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
     expect(requested).toBe("/api/workers/86afd915-add3-407c-a6c1-1b46803ef713/health");
     expect(container.querySelector("#worker-health-86afd915-add3-407c-a6c1-1b46803ef713-panel")).not.toBeNull();
+    expect(container.querySelector(".worker-health-container-table")?.textContent).toContain("card-container");
   } finally {
     globalThis.fetch = originalFetch;
     await act(async () => { root.unmount(); });

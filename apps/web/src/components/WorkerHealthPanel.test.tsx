@@ -14,6 +14,7 @@ const healthFixture = (overrides: Partial<WorkerHealth> = {}): WorkerHealth => (
     pods: { actual: 2, reserved: 1, free: 1 },
   },
   cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: 3600, ready: true, generation: "11111111-1111-4111-8111-111111111111", sizeBytes: "20", entryCount: 2, observedAt: "2026-08-23T11:59:57.000Z", error: null },
+  containers: [],
   jobs: [{
     jobId: 7,
     repositoryFullName: "acme/repo",
@@ -133,4 +134,54 @@ test("prefixes panel and subsection IDs per worker", () => {
   expect(markup).toContain('aria-labelledby="worker-health-worker-42-usage-heading"');
   expect(markup).toContain('aria-labelledby="worker-health-worker-42-cache-heading"');
   expect(markup).toContain('aria-labelledby="worker-health-worker-42-jobs-heading"');
+});
+
+test("renders managed containers with lifecycle, metrics, writable disk, and freshness", () => {
+  const sampledRecently = new Date(Date.now() - 15_000).toISOString();
+  const sampledEarlier = new Date(Date.now() - 125_000).toISOString();
+  const markup = renderToStaticMarkup(<WorkerHealthPanel workerId="worker-42" health={healthFixture({
+    containers: [
+      { containerId: "a".repeat(64), name: "alpha", leaseId: "33333333-3333-4333-8333-333333333333", state: "running", cpuUsagePercent: 12.34, memoryWorkingSetBytes: "536870912", memoryLimitBytes: "1073741824", diskUsageBytes: "2147483648", sampledAt: sampledRecently },
+      { containerId: "b".repeat(64), name: "beta", leaseId: "44444444-4444-4444-8444-444444444444", state: "exited", cpuUsagePercent: null, memoryWorkingSetBytes: null, memoryLimitBytes: null, diskUsageBytes: "0", sampledAt: sampledEarlier },
+    ],
+  })} />);
+  expect(markup).toContain("Managed containers");
+  expect(markup).toContain("<caption>Current managed containers and resource usage</caption>");
+  for (const heading of ["Container", "State", "CPU", "Memory", "Disk", "Freshness"]) expect(markup).toContain(`<th scope="col">${heading}</th>`);
+  expect(markup).toContain("<strong>alpha</strong>");
+  expect(markup).toContain("<strong>beta</strong>");
+  expect(markup).toContain('title="' + "a".repeat(64) + '"');
+  expect(markup).toContain('tabindex="0"');
+  expect(markup).toContain("aaaaaaaaaaaa…");
+  expect(markup).toContain("running");
+  expect(markup).toContain("exited");
+  expect(markup).toContain("12.3%");
+  expect(markup).toContain("512 MiB");
+  expect(markup).toContain("of 1.0 GiB");
+  expect(markup).toContain("2.0 GiB");
+  expect(markup).toContain("Writable-layer use");
+  expect(markup).toContain("0 B");
+  expect(markup).toContain("Not reported");
+  expect(markup).toContain("15s ago");
+  expect(markup).toContain("2m ago");
+  expect(markup).toContain(`<time dateTime="${sampledRecently}">`);
+  expect(markup).toContain(`<time dateTime="${sampledEarlier}">`);
+});
+
+test("renders an explicit empty managed-container inventory", () => {
+  const markup = renderToStaticMarkup(<WorkerHealthPanel health={healthFixture({ containers: [] })} />);
+  expect(markup).toContain("No managed containers reported.");
+  expect(markup).not.toContain("Current managed containers and resource usage");
+});
+
+test("keeps managed-container section IDs distinct for each worker", () => {
+  const health = healthFixture({ containers: [{
+    containerId: "c".repeat(64), name: "gamma", leaseId: "55555555-5555-4555-8555-555555555555", state: "paused", cpuUsagePercent: null, memoryWorkingSetBytes: null, memoryLimitBytes: null, diskUsageBytes: null, sampledAt: new Date().toISOString(),
+  }] });
+  const first = renderToStaticMarkup(<WorkerHealthPanel workerId="worker-a" health={health} />);
+  const second = renderToStaticMarkup(<WorkerHealthPanel workerId="worker-b" health={health} />);
+  expect(first).toContain('id="worker-health-worker-a-containers-heading"');
+  expect(second).toContain('id="worker-health-worker-b-containers-heading"');
+  expect(first).not.toContain("worker-health-worker-b");
+  expect(second).not.toContain("worker-health-worker-a");
 });
