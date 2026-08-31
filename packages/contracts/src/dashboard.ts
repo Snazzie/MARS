@@ -133,12 +133,27 @@ export const WorkerHealthJob = dto(strict({
   requested: WorkerHealthJobRequest,
 }));
 export type WorkerHealthJob = z.infer<typeof WorkerHealthJob>;
+const workerHealthContainerId = z.string().regex(/^[0-9a-f]{64}$/);
+const workerHealthContainerState = z.enum(["created", "running", "paused", "restarting", "removing", "exited", "dead"]);
+export const WorkerHealthContainer = dto(strict({
+  containerId: workerHealthContainerId,
+  name: z.string().min(1),
+  leaseId: z.string().uuid(),
+  state: workerHealthContainerState,
+  cpuUsagePercent: z.number().min(0).max(100).nullable(),
+  memoryWorkingSetBytes: decimalBytes.nullable(),
+  memoryLimitBytes: decimalBytes.nullable(),
+  diskUsageBytes: decimalBytes.nullable(),
+  sampledAt: timestamp,
+}));
+export type WorkerHealthContainer = z.infer<typeof WorkerHealthContainer>;
 
 export const WorkerHealth = dto(strict({
   observedAt: timestamp.nullable(),
   connection: WorkerHealthConnection,
   usage: WorkerHealthUsage,
   cache: WorkerHealthCache,
+  containers: z.array(WorkerHealthContainer),
   jobs: z.array(WorkerHealthJob),
 }));
 export type WorkerHealth = z.infer<typeof WorkerHealth>;

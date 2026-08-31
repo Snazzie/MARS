@@ -27,6 +27,17 @@ const workerHealthFixture = {
     observedAt: null,
     error: null,
   },
+  containers: [{
+    containerId: "a".repeat(64),
+    name: "build",
+    leaseId: "11111111-1111-4111-8111-111111111111",
+    state: "running",
+    cpuUsagePercent: 42.5,
+    memoryWorkingSetBytes: "1024",
+    memoryLimitBytes: "2048",
+    diskUsageBytes: "4096",
+    sampledAt: "2026-08-23T12:00:00.000+00:00",
+  }],
   jobs: [{
     jobId: null,
     repositoryFullName: null,
@@ -64,6 +75,37 @@ test("parses a complete worker health response", () => {
   const parsed = WorkerHealth.parse(workerHealthFixture);
   expect(parsed.cache.generation).toBe("11111111-1111-4111-8111-111111111111");
   expect(parsed.usage.memoryBytes.actual).toBe("100000000000000000000");
+});
+test("parses partially unavailable worker container health", () => {
+  const parsed = WorkerHealth.parse({
+    ...workerHealthFixture,
+    containers: [{
+      ...workerHealthFixture.containers[0],
+      state: "exited",
+      cpuUsagePercent: null,
+      memoryWorkingSetBytes: null,
+      memoryLimitBytes: null,
+      diskUsageBytes: null,
+    }],
+  });
+  expect(parsed.containers[0]).toMatchObject({ state: "exited", cpuUsagePercent: null, memoryWorkingSetBytes: null, memoryLimitBytes: null, diskUsageBytes: null });
+});
+
+test("rejects invalid worker container health values", () => {
+  const invalidCases = [
+    { state: "unknown" },
+    { cpuUsagePercent: 101 },
+    { diskUsageBytes: "-1" },
+    { leaseId: "not-a-uuid" },
+    { memoryWorkingSetBytes: Number.MAX_SAFE_INTEGER + 1 },
+    { unexpected: true },
+  ];
+  for (const changes of invalidCases) {
+    expect(WorkerHealth.safeParse({
+      ...workerHealthFixture,
+      containers: [{ ...workerHealthFixture.containers[0], ...changes }],
+    }).success).toBe(false);
+  }
 });
 
 test("rejects unsafe numeric worker health values, including byte fields", () => {

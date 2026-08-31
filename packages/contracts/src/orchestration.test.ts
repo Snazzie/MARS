@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig, RuntimeTerminationEvidence, WorkerBuildImagePayload, WorkerDoctorData, WorkerImageBuildSpec, sanitizeDiagnosticText } from "./orchestration.ts";
+import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig, RuntimeTerminationEvidence, WorkerBuildImagePayload, WorkerContainerStatus, WorkerDoctorData, WorkerDoctorReport, WorkerImageBuildSpec, sanitizeDiagnosticText } from "./orchestration.ts";
 import * as orchestration from "./orchestration.ts";
 
 test("parses a GitHub JIT config with a one-time lease binding", () => {
@@ -80,6 +80,65 @@ test("accepts worker-reported active lease inventory", () => {
     runtimeMode: "tart",
     activeLeases: ["11111111-1111-4111-8111-111111111111"],
   }).activeLeases).toEqual(["11111111-1111-4111-8111-111111111111"]);
+});
+const workerContainerStatusFixture = {
+  containerId: "a".repeat(64),
+  name: "build",
+  leaseId: "11111111-1111-4111-8111-111111111111",
+  state: "running" as const,
+  cpuUsagePercent: 42.5,
+  memoryWorkingSetBytes: 1024,
+  memoryLimitBytes: 2048,
+  diskUsageBytes: 4096,
+  sampledAt: "2026-08-23T12:00:00.000+00:00",
+};
+
+const workerCapacityFixture = {
+  actualVcpu: 4,
+  actualMemoryBytes: 8192,
+  actualStorageBytes: 16384,
+  freeVcpu: 2,
+  freeMemoryBytes: 4096,
+  freeStorageBytes: 8192,
+};
+
+test("parses complete and partially unavailable worker container statuses", () => {
+  expect(WorkerContainerStatus.parse(workerContainerStatusFixture)).toEqual(workerContainerStatusFixture);
+  expect(WorkerContainerStatus.parse({
+    ...workerContainerStatusFixture,
+    state: "exited",
+    cpuUsagePercent: null,
+    memoryWorkingSetBytes: null,
+    memoryLimitBytes: null,
+    diskUsageBytes: null,
+  })).toMatchObject({ state: "exited", cpuUsagePercent: null, memoryWorkingSetBytes: null, memoryLimitBytes: null, diskUsageBytes: null });
+});
+
+test("defaults worker doctor container inventory to an empty array", () => {
+  expect(WorkerDoctorData.parse({}).containers).toEqual([]);
+});
+
+test("parses a strict worker doctor report with container inventory", () => {
+  const parsed = WorkerDoctorReport.parse({
+    doctor: { containers: [workerContainerStatusFixture] },
+    capacity: workerCapacityFixture,
+  });
+  expect(parsed.doctor.containers).toEqual([workerContainerStatusFixture]);
+  expect(WorkerDoctorReport.safeParse({ doctor: {}, capacity: workerCapacityFixture, unexpected: true }).success).toBe(false);
+});
+
+test("rejects invalid worker container status values", () => {
+  const invalidCases = [
+    { state: "unknown" },
+    { cpuUsagePercent: 101 },
+    { cpuUsagePercent: -1 },
+    { diskUsageBytes: -1 },
+    { leaseId: "not-a-uuid" },
+    { memoryWorkingSetBytes: Number.MAX_SAFE_INTEGER + 1 },
+  ];
+  for (const changes of invalidCases) {
+    expect(WorkerContainerStatus.safeParse({ ...workerContainerStatusFixture, ...changes }).success).toBe(false);
+  }
 });
 test("parses an immutable worker-local image build request", () => {
   const artifact = (name: string, hash: string) => ({ url: `https://control.test/api/workers/${name}`, sha256: hash.repeat(64) });
