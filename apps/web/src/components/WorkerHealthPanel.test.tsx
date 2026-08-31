@@ -137,7 +137,7 @@ test("prefixes panel and subsection IDs per worker", () => {
 });
 
 test("renders managed containers with lifecycle, metrics, writable disk, and freshness", () => {
-  const sampledRecently = new Date(Date.now() - 15_000).toISOString();
+  const sampledRecently = new Date(Date.now() - 59_500).toISOString();
   const sampledEarlier = new Date(Date.now() - 125_000).toISOString();
   const markup = renderToStaticMarkup(<WorkerHealthPanel workerId="worker-42" health={healthFixture({
     containers: [
@@ -158,11 +158,15 @@ test("renders managed containers with lifecycle, metrics, writable disk, and fre
   expect(markup).toContain("12.3%");
   expect(markup).toContain("512 MiB");
   expect(markup).toContain("of 1.0 GiB");
+  const text = markup.replace(/<[^>]+>/g, "");
+  expect(text).toContain("512 MiB of 1.0 GiB");
+  expect(text).toContain("2.0 GiB Writable-layer use");
   expect(markup).toContain("2.0 GiB");
   expect(markup).toContain("Writable-layer use");
   expect(markup).toContain("0 B");
   expect(markup).toContain("Not reported");
-  expect(markup).toContain("15s ago");
+  expect(markup).toContain("60s ago");
+  expect(markup).not.toContain("1m ago");
   expect(markup).toContain("2m ago");
   expect(markup).toContain(`<time dateTime="${sampledRecently}">`);
   expect(markup).toContain(`<time dateTime="${sampledEarlier}">`);

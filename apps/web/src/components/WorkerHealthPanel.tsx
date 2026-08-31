@@ -168,8 +168,9 @@ function formatContainerBytes(value: string | null): string {
 }
 
 function formatContainerAge(sampledAt: string): string {
-  const ageSeconds = Math.max(0, Math.round((Date.now() - Date.parse(sampledAt)) / 1000));
-  return ageSeconds < 60 ? `${ageSeconds}s ago` : `${Math.round(ageSeconds / 60)}m ago`;
+  const elapsedSeconds = Math.max(0, (Date.now() - Date.parse(sampledAt)) / 1000);
+  const roundedSeconds = Math.round(elapsedSeconds);
+  return elapsedSeconds < 60 ? `${roundedSeconds}s ago` : `${Math.round(elapsedSeconds / 60)}m ago`;
 }
 
 function shortenContainerId(containerId: string): string {
@@ -187,8 +188,8 @@ function ContainersSection({ health, idPrefix }: { health: WorkerHealth; idPrefi
           <th scope="row"><strong>{container.name}</strong><small><code tabIndex={0} title={container.containerId}>{shortenContainerId(container.containerId)}</code></small></th>
           <td>{container.state}</td>
           <td>{formatContainerCpu(container.cpuUsagePercent)}</td>
-          <td>{formatContainerBytes(container.memoryWorkingSetBytes)}<small>{container.memoryLimitBytes == null ? "Not reported" : `of ${formatBytes(container.memoryLimitBytes)}`}</small></td>
-          <td>{formatContainerBytes(container.diskUsageBytes)}<small>Writable-layer use</small></td>
+          <td>{formatContainerBytes(container.memoryWorkingSetBytes)}{" "}<small>{container.memoryLimitBytes == null ? "Not reported" : `of ${formatBytes(container.memoryLimitBytes)}`}</small></td>
+          <td>{formatContainerBytes(container.diskUsageBytes)}{" "}<small>Writable-layer use</small></td>
           <td><time dateTime={container.sampledAt}>{formatContainerAge(container.sampledAt)}</time></td>
         </tr>)}</tbody>
       </table>
