@@ -11,7 +11,7 @@ export type DevelopmentWorkerRelease = {
 };
 
 export type WorkerReleaseLoadOptions = {
-  fetch?: typeof fetch;
+  fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   controlPlaneVersion?: string;
 };
 
