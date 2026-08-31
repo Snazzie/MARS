@@ -170,6 +170,7 @@ export class TartVmDriver implements RuntimeDriver {
     const vmName = `${this.namePrefix}-${lease.id.slice(0, 8)}`;
     await this.tart.clone(this.baseImage, vmName);
     try {
+      await this.tart.setResources(vmName, lease.resources);
       await this.tart.startWithBootstrap(vmName, lease.encodedJitConfig, lease.workerCache);
       const execution = this.tart.startRunner(vmName);
       const runtime: RuntimeLease = { runtimeInstanceId: vmName, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: execution.completion, logs: execution.logs, sample: this.tart.sample ? () => this.tart.sample!(vmName) : undefined };
