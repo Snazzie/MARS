@@ -1,4 +1,4 @@
-FROM oven/bun:1.2.20 AS build
+FROM oven/bun:1.4.0 AS build
 WORKDIR /app
 COPY package.json bun.lock ./
 COPY apps ./apps
@@ -10,7 +10,7 @@ RUN rm -rf apps/*/node_modules packages/*/node_modules \
   && bun run --filter '@mars/web' build \
   && bun run --filter '@mars/control-plane' build
 
-FROM oven/bun:1.2.20-slim
+FROM oven/bun:1.4.0-slim
 ARG MARS_BUILD_ID=unknown
 ARG MARS_WORKER_CONTRACT_VERSION=0.1.0
 WORKDIR /app

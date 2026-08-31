@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.20
+          bun-version: 1.4.0
       - name: Build Linux worker binaries
         run: |
           bun install --frozen-lockfile
@@ -91,7 +91,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.20
+          bun-version: 1.4.0
       - name: Build Windows worker binaries
         shell: pwsh
         run: |
@@ -161,7 +161,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.20
+          bun-version: 1.4.0
       - name: Build macOS worker binaries
         run: |
           set -euo pipefail
@@ -258,7 +258,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.20
+          bun-version: 1.4.0
       - name: Install validation dependencies
         run: bun install --frozen-lockfile
       - uses: actions/download-artifact@v4
