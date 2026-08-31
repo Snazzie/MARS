@@ -146,7 +146,9 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         if (!parsed.success) return;
         const doctorPayload = parsed.data;
         await options.db`update workers set doctor=${jsonParameter(options.db, doctorPayload)}, doctor_observed_at=now(), last_heartbeat_at=now() where id=${ws.data.workerId}`;
-        await reconcileWorkerInventory(options.db, ws.data.workerId, doctorPayload.doctor.activeLeases ?? []);
+        if (doctorPayload.doctor.activeLeases) {
+          await reconcileWorkerInventory(options.db, ws.data.workerId, doctorPayload.doctor.activeLeases);
+        }
         if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
         ws.send(JSON.stringify({ version: 1, type: "doctor_ack", workerId: ws.data.workerId }));
       } else if (frame.type === "pong" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch) {

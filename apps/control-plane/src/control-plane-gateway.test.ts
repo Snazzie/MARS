@@ -23,7 +23,8 @@ test("validates worker doctor reports before persistence and acknowledgement", (
   expect(doctorBranch).toContain("WorkerDoctorReport.safeParse(frame.payload)");
   expect(doctorBranch).toContain("if (!parsed.success) return;");
   expect(doctorBranch).toContain("await options.db`update workers set doctor=");
-  expect(doctorBranch).toContain("await reconcileWorkerInventory(options.db, ws.data.workerId, doctorPayload.doctor.activeLeases ?? [])");
+  expect(doctorBranch).toContain("if (doctorPayload.doctor.activeLeases) {");
+  expect(doctorBranch).not.toContain("?? []");
   expect(doctorBranch).toContain('type: "doctor_ack"');
 });
 
