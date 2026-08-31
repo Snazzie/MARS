@@ -41,6 +41,23 @@ test("renders usage, cache health, and running jobs with accessible sections", (
   expect(markup).toContain("<time dateTime=\"2026-08-23T11:59:56.000Z\">");
 });
 
+test("splits requested job resources into separately scoped columns", () => {
+  const markup = renderToStaticMarkup(<WorkerHealthPanel health={healthFixture({
+    jobs: [{
+      ...healthFixture().jobs[0],
+      requested: { vcpu: 2, memoryBytes: "2147483648", storageBytes: "10737418240", concurrency: 3 },
+    }],
+  })} />);
+  for (const heading of ["vCPU", "Memory", "Storage", "Concurrency"]) {
+    expect(markup).toContain(`<th scope="col">${heading}</th>`);
+  }
+  expect(markup).toContain("<td>- / 2</td>");
+  expect(markup).toContain("<td>- / 2.0 GiB</td>");
+  expect(markup).toContain("<td>- / 10.0 GiB</td>");
+  expect(markup).toContain("<td>- / 3</td>");
+  expect(markup).not.toContain("Requested vCPU / memory / storage / concurrency");
+});
+
 test("formats very large decimal byte strings with safe binary units", () => {
   const huge = "900719925474099300000";
   const health = healthFixture({ usage: { ...healthFixture().usage, memoryBytes: { actual: huge, reserved: huge, free: huge } } });
