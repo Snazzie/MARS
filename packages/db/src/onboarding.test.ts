@@ -135,11 +135,11 @@ describe("onboarding state derivation", () => {
     const db = (async (strings: TemplateStringsArray) => {
       const query = strings.join(" ");
       if (query.includes('so.admin_user_id AS "adminUserId"')) return [{ adminUserId: "admin", workerId, organizationId: null, completedAt: null, workerAdmissionState: "pending", workerConfigurationState: "unconfigured" }];
-      if (query.includes("FROM workers w JOIN system_onboarding")) return [{ id: workerId, name: "windows-worker", platform: "windows-x64", guestPlatforms: ["windows-x64"], admissionState: "pending", connectionState: "offline", configurationState: "unconfigured", publicKey: "public", fingerprint: "fingerprint", vmUuid: workerId, machineUuid: workerId, doctor: { probe: true }, limits: null, configurationRevision: null }];
+      if (query.includes("FROM workers w JOIN system_onboarding")) return [{ id: workerId, name: "windows-worker", platform: "windows-x64", guestPlatforms: ["windows-x64"], admissionState: "pending", connectionState: "offline", configurationState: "unconfigured", publicKey: "public", fingerprint: "fingerprint", vmUuid: workerId, machineUuid: workerId, doctor: { probe: true, containers: [] }, limits: null, configurationRevision: null }];
       return [];
     }) as never;
     const detail = await getOnboardingDetail(db);
     expect(detail.worker?.capacity).toEqual({ actualVcpu: 0, actualMemoryBytes: 0, actualStorageBytes: 0, freeVcpu: 0, freeMemoryBytes: 0, freeStorageBytes: 0 });
-    expect(detail.worker?.doctor).toEqual({ probe: true });
+    expect(detail.worker?.doctor).toEqual({ probe: true, containers: [] });
   });
 });

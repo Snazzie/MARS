@@ -17,7 +17,7 @@ const worker = {
   fingerprint: "SHA256:worker",
   vmUuid: "22222222-2222-4222-8222-222222222222",
   machineUuid: "33333333-3333-4333-8333-333333333333",
-  doctor: { nestedKvm: true, probe: true },
+  doctor: { nestedKvm: true, probe: true, containers: [] },
   capacity: { actualVcpu: 8, actualMemoryBytes: 17179869184, actualStorageBytes: 214748364800, freeVcpu: 8, freeMemoryBytes: 17179869184, freeStorageBytes: 214748364800 },
   limits: null,
   configurationRevision: "rev-1",
