@@ -347,13 +347,16 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
     resolveDevelopmentLinuxArtifacts(Bun.env),
     resolveDevelopmentMacosArtifacts(Bun.env),
   ]);
-  const workerReleaseManifest = production ? options.workerReleaseManifest ?? await loadWorkerReleaseManifest() : undefined;
+  const workerReleaseManifestSource = production ? Bun.env.MARS_WORKER_RELEASE_MANIFEST_URL?.trim() || undefined : undefined;
+  const workerReleaseContractVersion = production ? Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() || undefined : undefined;
+  const workerReleaseManifest = production
+    ? options.workerReleaseManifest ?? await loadWorkerReleaseManifest(workerReleaseManifestSource, undefined, { controlPlaneVersion: workerReleaseContractVersion })
+    : undefined;
   if (production && !options.skipArtifactChecks) {
     const requiredReleaseArtifacts = {
       webIndex: new URL("index.html", webRoot),
       webScript: new URL("index.js", webRoot),
       webStyles: new URL("index.css", webRoot),
-      releaseManifest: Bun.env.WORKER_RELEASE_MANIFEST?.trim() || "/app/release-manifest.json",
       linuxInstaller: new URL("install-worker.sh", workerInstallerRoot),
       windowsInstaller: new URL("install-worker.ps1", workerInstallerRoot),
       macosInstaller: new URL("install-worker-macos.sh", workerInstallerRoot),
