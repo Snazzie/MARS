@@ -8,9 +8,13 @@ Publish a Linux/amd64 control-plane image for Unraid without shipping worker ass
 
 The image contains the control-plane API, dashboard, database migrations, and production runtime only. It does not contain worker installers, orchestrator binaries, job agents, broker compose files, domain templates, VM images, or a worker release manifest.
 
-At startup, the control plane fetches `worker-release-manifest.json` from the current GitHub release, validates it with the existing schema, and requires an exact match between the manifest `contractVersion` and the control plane's supported worker contract version (`0.1.0` initially). It also requires a non-null `linux-x64` release for Linux worker enrollment. A failed fetch, invalid manifest, contract mismatch, or missing Linux release is an explicit deployment/runtime error; no fallback to packaged development data is allowed in production.
+At startup, the control plane fetches `worker-release-manifest.json` from the current GitHub release, validates it with the existing schema, and applies semantic contract compatibility. A release is compatible only when it has the same major version and a minor version less than or equal to the control plane's supported minor version; any patch version under that compatible major/minor boundary is accepted. A higher minor version or different major version is rejected. The control plane also requires a non-null `linux-x64` release for Linux worker enrollment. A failed fetch, invalid manifest, malformed contract version, incompatible release, or missing Linux release is an explicit deployment/runtime error; no fallback to packaged development data is allowed in production.
 
 The validated manifest is cached for the process lifetime. Worker installer responses use URLs and hashes from the manifest. Large worker artifacts remain external HTTPS/OCI references and are downloaded by the worker installer/runtime, not by the control-plane image.
+
+## Compatibility policy
+
+Contract versions use `major.minor.patch` syntax. Given control-plane version `C` and worker-release version `W`, accept when `W.major === C.major` and `W.minor <= C.minor`; `W.patch` may be any non-negative value. Reject malformed versions, different majors, or higher worker minor versions. The control-plane supported version is configured independently from the release manifest and defaults to `0.1.0`.
 
 ## Build and release
 
