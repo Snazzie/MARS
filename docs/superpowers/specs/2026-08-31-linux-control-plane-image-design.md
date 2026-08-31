@@ -21,6 +21,9 @@ Contract versions use `major.minor.patch` syntax. Given control-plane version `C
 The control-plane Dockerfile builds only Linux/amd64 runtime outputs and no longer requires Windows service-host artifacts or any worker release artifact copied into the build context. The release workflow publishes an immutable image, verifies required control-plane files, runs the existing smoke test, and promotes the verified digest to `ghcr.io/snazzie/mars/control-plane:latest`.
 
 Worker release publication remains a separate concern. The control-plane release must not depend on Windows/macOS jobs or package their assets.
+## Versioned action runs
+
+Manual release runs expose a `patch`, `minor`, or `major` bump choice. The workflow finds the newest existing `vmajor.minor.patch` control-plane tag and applies the selected increment. If no matching tag exists, the baseline is `0.0.0`; therefore the first patch, minor, and major runs produce `0.0.1`, `0.1.0`, and `1.0.0` respectively. The calculated version becomes the image contract version and release tag. Existing tags are never overwritten.
 
 ## Configuration
 

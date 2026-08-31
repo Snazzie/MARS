@@ -1,19 +1,69 @@
 name: Release control plane
 
 on:
-  push:
-    tags: ['v*.*.*']
   workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
+concurrency:
+  group: release-control-plane
+  cancel-in-progress: false
+
 jobs:
-  release:
-    name: Publish immutable control-plane image
+  compute-version:
+    name: Compute release version
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Compute next version from released tags
+        id: bump
+        shell: bash
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          current="0.0.0"
+          while IFS= read -r tag; do
+            version="${tag#v}"
+            if [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              current="$version"
+              break
+            fi
+          done < <(git tag --list 'v*.*.*' --sort=-v:refname)
+          IFS=. read -r major minor patch <<< "$current"
+          case "$BUMP" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+            *) echo "unsupported bump: $BUMP" >&2; exit 1 ;;
+          esac
+          version="$major.$minor.$patch"
+          if git show-ref --tags --verify --quiet "refs/tags/v$version"; then
+            echo "release tag already exists: v$version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "::notice::Version bump: $current -> $version ($BUMP)"
+
+  publish:
+    name: Build and publish Linux control plane
+    needs: compute-version
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -25,57 +75,59 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: metadata
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/snazzie/mars/control-plane
-          tags: |
-            type=ref,event=tag
-            type=sha
-            type=raw,value=cp-${{ github.run_id }}-${{ github.run_attempt }}
       - id: image
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: deploy/control-plane/Dockerfile
           platforms: linux/amd64
           build-args: |
             MARS_BUILD_ID=${{ github.sha }}
+            MARS_WORKER_CONTRACT_VERSION=${{ needs.compute-version.outputs.version }}
           push: true
-          tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels }}
+          tags: |
+            ghcr.io/snazzie/mars/control-plane:v${{ needs.compute-version.outputs.version }}
+            ghcr.io/snazzie/mars/control-plane:cp-${{ github.run_id }}-${{ github.run_attempt }}
+          labels: org.opencontainers.image.version=${{ needs.compute-version.outputs.version }}
           provenance: true
           sbom: true
-      - name: Verify immutable release image
+      - name: Verify immutable image
         env:
           IMAGE: ghcr.io/snazzie/mars/control-plane
           DIGEST: ${{ steps.image.outputs.digest }}
         run: |
+          set -euo pipefail
           test -n "$DIGEST"
           case "$DIGEST" in sha256:????????????????????????????????????????????????????????????????) ;; *) echo "Invalid digest: $DIGEST" >&2; exit 1 ;; esac
           docker run --rm --entrypoint /bin/sh "$IMAGE@$DIGEST" -c 'test -f /app/index.js && test -f /app/web/index.html && test -f /app/web/index.js && test -f /app/web/index.css && test -f /app/migrations/0000_mars_baseline.sql && test -f /app/migrations/meta/_journal.json && test ! -e /app/workers'
-      - name: Smoke test immutable release image
+      - name: Smoke test immutable image
         env:
           IMAGE: ghcr.io/snazzie/mars/control-plane@${{ steps.image.outputs.digest }}
         run: bash tests/control-plane-image-smoke.sh
       - name: Promote verified digest to latest
-        if: success()
         env:
           IMAGE: ghcr.io/snazzie/mars/control-plane
           DIGEST: ${{ steps.image.outputs.digest }}
         run: docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE@$DIGEST"
+      - name: Create released tag and GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.compute-version.outputs.version }}
+        run: gh release create "v$VERSION" --target "$GITHUB_SHA" --title "Mars v$VERSION" --generate-notes
       - name: Publish release metadata
         env:
           IMAGE: ghcr.io/snazzie/mars/control-plane
           DIGEST: ${{ steps.image.outputs.digest }}
-          BUILD_ID: ${{ github.sha }}
+          VERSION: ${{ needs.compute-version.outputs.version }}
         run: |
           {
+            printf 'version=%s\n' "$VERSION"
             printf 'image=%s\n' "$IMAGE"
             printf 'digest=%s\n' "$DIGEST"
-            printf 'build_id=%s\n' "$BUILD_ID"
+            printf 'build_id=%s\n' "$GITHUB_SHA"
           } > control-plane-release.txt
           cat control-plane-release.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: control-plane-release-metadata
+          name: control-plane-release-metadata-v${{ needs.compute-version.outputs.version }}
           path: control-plane-release.txt

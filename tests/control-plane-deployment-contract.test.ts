@@ -234,6 +234,19 @@ test("worker release workflow publishes current-tag assets before promoting the 
   expect(aggregate).toContain('test "$promotedDigest" = "$IMAGE_DIGEST"');
   expect(aggregate).not.toContain("if: startsWith(github.ref, 'refs/tags/')");
 });
+test("control-plane action run bumps from the latest tag or 0.0.0", async () => {
+  const workflow = await read(".github/workflows/release-control-plane.yml");
+  expect(workflow).toContain('bump:');
+  expect(workflow).toContain('options:\n          - patch\n          - minor\n          - major');
+  expect(workflow).toContain('current="0.0.0"');
+  expect(workflow).toContain("git tag --list 'v*.*.*' --sort=-v:refname");
+  expect(workflow).toContain('major) major=$((major + 1)); minor=0; patch=0');
+  expect(workflow).toContain('minor) minor=$((minor + 1)); patch=0');
+  expect(workflow).toContain('patch) patch=$((patch + 1))');
+  expect(workflow).toContain('release tag already exists');
+  expect(workflow).toContain("MARS_WORKER_CONTRACT_VERSION=${{ needs.compute-version.outputs.version }}");
+  expect(workflow).toContain('gh release create "v$VERSION"');
+});
 
 
 test("production startup does not require packaged worker inputs", async () => {

@@ -193,6 +193,12 @@ is accepted. Incompatible or unavailable releases fail closed.
 Publish the worker release before deploying or restarting the control plane.
 The worker execution runtimes remain external to the Unraid control-plane
 container.
+To publish a new control-plane image, run the **Release control plane** GitHub
+Action and select `patch`, `minor`, or `major`. The action derives the next
+`vmajor.minor.patch` tag from the newest released control-plane tag. When no
+control-plane tag exists, it starts from `0.0.0`, so the first patch release is
+`v0.0.1`. It builds and smoke-tests Linux/amd64, then creates the release and
+promotes the verified image digest to `latest`.
 
 The control-plane image targets Linux x64 (linux/amd64). Supported worker
 hosts are Ubuntu Server 24.04 x64, Windows 11 Pro/Enterprise 24H2 x64, and
