@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 2,
+  "buildId": "ci-smoke",
+  "contractVersion": "0.1.0",
+  "platforms": {
+    "linux-x64": {
+      "orchestratorSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "brokerImage": "ghcr.io/snazzie/mars/broker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "goldenImageUrl": "https://downloads.example.test/mars-worker-golden.qcow2",
+      "goldenImageSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "composeSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "domainTemplateSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "windows-x64": null,
+    "macos-arm64": null
+  }
+}
