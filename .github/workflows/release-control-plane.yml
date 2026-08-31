@@ -32,11 +32,12 @@ jobs:
           tags: |
             type=ref,event=tag
             type=sha
+            type=raw,value=cp-${{ github.run_id }}-${{ github.run_attempt }}
       - id: image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: deploy/control-plane/Dockerfile
+          platforms: linux/amd64
           build-args: |
             MARS_BUILD_ID=${{ github.sha }}
           push: true
@@ -51,11 +52,17 @@ jobs:
         run: |
           test -n "$DIGEST"
           case "$DIGEST" in sha256:????????????????????????????????????????????????????????????????) ;; *) echo "Invalid digest: $DIGEST" >&2; exit 1 ;; esac
-          docker run --rm --entrypoint /bin/sh "$IMAGE@$DIGEST" -c 'test -f /app/index.js && test -f /app/web/index.html && test -f /app/web/index.js && test -f /app/web/index.css && test -f /app/migrations/0000_mars_baseline.sql && test -f /app/migrations/meta/_journal.json && test -f /app/workers/install-worker.ps1 && test -f /app/workers/mars-orchestrator.exe && test -f /app/workers/mars-service-host.exe'
+          docker run --rm --entrypoint /bin/sh "$IMAGE@$DIGEST" -c 'test -f /app/index.js && test -f /app/web/index.html && test -f /app/web/index.js && test -f /app/web/index.css && test -f /app/migrations/0000_mars_baseline.sql && test -f /app/migrations/meta/_journal.json && test ! -e /app/workers'
       - name: Smoke test immutable release image
         env:
           IMAGE: ghcr.io/snazzie/mars/control-plane@${{ steps.image.outputs.digest }}
         run: bash tests/control-plane-image-smoke.sh
+      - name: Promote verified digest to latest
+        if: success()
+        env:
+          IMAGE: ghcr.io/snazzie/mars/control-plane
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE@$DIGEST"
       - name: Publish release metadata
         env:
           IMAGE: ghcr.io/snazzie/mars/control-plane

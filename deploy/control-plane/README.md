@@ -177,23 +177,26 @@ unprivileged and preserves the loopback Compose port.
 ## Worker release boundary
 
 The control-plane image is published as
-`ghcr.io/snazzie/mars/control-plane:latest`. Copied commands and installer
-metadata resolve the current worker release through GitHub's stable endpoint:
-`https://github.com/Snazzie/Mars/releases/latest/download/<asset>`. The
-platform asset names are `install-worker-linux-x64.sh`,
-`install-worker-windows-x64.ps1`, and `install-worker-macos-arm64.sh`.
+`ghcr.io/snazzie/mars/control-plane:latest`. It contains only the API,
+dashboard, migrations, and production runtime. Worker installers, binaries,
+VM images, broker files, domain templates, and release manifests are not
+shipped in the control-plane image.
 
-The control-plane image packages the small runtime artifacts for all supported
-platforms: Linux x64 (linux/amd64) installer, compose/domain files and orchestrator; Windows
-x64 installer, orchestrator, service host and container build inputs; and
-Apple-Silicon macOS installer and orchestrator. Large VM/Tart/golden-image and
-broker assets remain immutable HTTPS/OCI references in the worker release
-manifest. A platform with unavailable manifest data is reported unavailable;
-it is never silently substituted with another platform.
-The worker execution runtimes remain outside the Unraid control-plane container.
+At startup, the control plane fetches the worker manifest from
+`https://github.com/Snazzie/Mars/releases/latest/download/worker-release-manifest.json`
+or the configured `MARS_WORKER_RELEASE_MANIFEST_URL`. It validates the schema,
+requires a non-null `linux-x64` release, and checks contract compatibility.
+For control-plane contract `major.minor.patch`, a worker release is accepted
+only when the major matches and the worker minor is no higher; any patch value
+is accepted. Incompatible or unavailable releases fail closed.
 
-Supported host targets are Ubuntu Server 24.04 x64, Windows 11 Pro/Enterprise
-24H2 x64, and macOS 14+ arm64. Their release gates require real KVM,
+Publish the worker release before deploying or restarting the control plane.
+The worker execution runtimes remain external to the Unraid control-plane
+container.
+
+The control-plane image targets Linux x64 (linux/amd64). Supported worker
+hosts are Ubuntu Server 24.04 x64, Windows 11 Pro/Enterprise 24H2 x64, and
+macOS 14+ arm64 (Apple-Silicon). Their release gates require real KVM,
 Hyper-V, and Tart support respectively; source-only or unsupported-host tests
 do not claim installation readiness.
 

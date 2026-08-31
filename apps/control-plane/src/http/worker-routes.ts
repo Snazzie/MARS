@@ -13,6 +13,7 @@ import { verifyWorkerBootstrap, initializeWorkerBootstrap, rotateWorkerBootstrap
 import { approvePendingWorker, configurePendingWorker, createRequestLimiter, hasMachineIdentity, parseApproveWorkerRequest, requestPendingWorker, rejectPendingWorker } from "../worker-requests.ts";
 import { httpOrigin } from "../http-origin.ts";
 function noStore(headers = new Headers()): Headers { headers.set("cache-control", "no-store"); return headers; }
+const workerReleaseAssetUrl = (name: string): string => `https://github.com/Snazzie/Mars/releases/latest/download/${name}`;
 function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\"'\"'")}'`; }
 function powerShellQuote(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
 type InstallerValues = Record<string, string>;
@@ -545,7 +546,7 @@ async function installerArtifacts(
 ): Promise<string[]> {
   const missing: string[] = [];
   const installerName = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : "install-worker-macos.sh";
-  if (!await artifactExists(pathFor(deps.workerInstallerRoot, installerName))) missing.push(`installer:${installerName}`);
+  if (!development && audience !== "linux-x64" && !await artifactExists(pathFor(deps.workerInstallerRoot, installerName))) missing.push(`installer:${installerName}`);
   if (development) {
     if (audience === "linux-x64") {
       const linux = development as DevelopmentLinuxArtifacts;
@@ -565,8 +566,8 @@ async function installerArtifacts(
     }
     return missing;
   }
-  if (!deps.workerReleaseManifest) return [...missing, "release-manifest"];
-  if (!platform) return [...missing, `platform:${audience}`];
+  if (!deps.workerReleaseManifest) return ["release-manifest"];
+  if (!platform) return [`platform:${audience}`];
   const fields = audience === "linux-x64"
     ? ["brokerImage", "goldenImageUrl", "goldenImageSha256", "composeSha256", "domainTemplateSha256"]
     : audience === "windows-x64"
@@ -575,11 +576,6 @@ async function installerArtifacts(
   for (const field of fields) if (!hasValue((platform as unknown as Record<string, unknown>)[field])) missing.push(releaseField(audience, field));
   const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined);
   if (audience !== "linux-x64" && !await artifactExists(executable)) missing.push(`orchestrator:${audience}`);
-  if (audience === "windows-x64" && !await artifactExists(deps.workerServiceHostExecutable)) missing.push("service-host:windows-x64");
-  if (audience === "linux-x64") {
-    if (!await artifactExists(pathFor(deps.workerInstallerRoot, "linux-broker-compose.yaml"))) missing.push("linux-broker-compose");
-    if (!await artifactExists(pathFor(deps.workerInstallerRoot, "worker-domain.xml"))) missing.push("linux-domain-template");
-  }
   return missing;
 }
 
@@ -1068,17 +1064,19 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     if (deps.developmentLinuxArtifacts) {
       return developmentPackaged(c, deps.developmentLinuxArtifacts.compose, "linux-broker-compose", "linux-broker-compose.yaml", "binary");
     }
-    const hash = deps.workerReleaseManifest?.platforms["linux-x64"]?.composeSha256;
-    if (!hash) return unavailable(c, ["manifest:linux-x64.composeSha256"]);
-    return localPackaged(c, pathFor(deps.workerInstallerRoot, "linux-broker-compose.yaml"), "linux-broker-compose.yaml", "linux-broker-compose.yaml", "binary", hash);
+    const release = deps.workerReleaseManifest?.platforms["linux-x64"];
+    if (!release?.composeSha256) return unavailable(c, ["manifest:linux-x64.composeSha256"]);
+    return await proxyPackagedResponse(workerReleaseAssetUrl("linux-broker-compose.yaml"), "linux-broker-compose.yaml", release.composeSha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache)
+      ?? unavailable(c, ["linux-broker-compose"]);
   };
   const linuxDomain = async (c: Context<ControlPlaneEnv>) => {
     if (deps.developmentLinuxArtifacts) {
       return developmentPackaged(c, deps.developmentLinuxArtifacts.domainTemplate, "linux-domain-template", "worker-domain.xml", "binary");
     }
-    const hash = deps.workerReleaseManifest?.platforms["linux-x64"]?.domainTemplateSha256;
-    if (!hash) return unavailable(c, ["manifest:linux-x64.domainTemplateSha256"]);
-    return localPackaged(c, pathFor(deps.workerInstallerRoot, "worker-domain.xml"), "worker-domain.xml", "worker-domain.xml", "binary", hash);
+    const release = deps.workerReleaseManifest?.platforms["linux-x64"];
+    if (!release?.domainTemplateSha256) return unavailable(c, ["manifest:linux-x64.domainTemplateSha256"]);
+    return await proxyPackagedResponse(workerReleaseAssetUrl("worker-domain.xml"), "worker-domain.xml", release.domainTemplateSha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache)
+      ?? unavailable(c, ["linux-domain-template"]);
   };
   app.get("/api/workers/linux-golden-image", async (c) => {
     if (deps.developmentLinuxArtifacts) {
@@ -1132,7 +1130,15 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const release = deps.workerReleaseManifest?.platforms[audience];
     const missing = await installerArtifacts(deps, audience, release, development);
     if (missing.length) return unavailable(c, missing);
-    const source = await Bun.file(pathFor(deps.workerInstallerRoot, file)).text();
+    const localInstallerPath = pathFor(deps.workerInstallerRoot, file);
+    let source: string;
+    if (audience === "linux-x64" && !development && !await artifactExists(localInstallerPath)) {
+      const response = await fetch(workerReleaseAssetUrl(file));
+      if (!response.ok) return unavailable(c, [`installer:${file}`]);
+      source = await response.text();
+    } else {
+      source = await Bun.file(localInstallerPath).text();
+    }
     let values: InstallerValues;
     if (audience === "linux-x64") {
       if (development) {

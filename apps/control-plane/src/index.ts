@@ -316,7 +316,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
     WORKER_TEMPLATE_DIGESTS: { "windows-x64": Bun.env.MARS_WINDOWS_TEMPLATE_DIGEST, "linux-x64": Bun.env.MARS_LINUX_TEMPLATE_DIGEST },
   };
   const webRoot = options.webRoot ?? new URL(Bun.env.WEB_ROOT ?? "../../web/dist/", import.meta.url);
-  const workerInstallerRoot = options.workerInstallerRoot ?? new URL(production ? required("WORKER_INSTALLER_ROOT") : Bun.env.WORKER_INSTALLER_ROOT ?? "../../../deploy/workers/", import.meta.url);
+  const workerInstallerRoot = options.workerInstallerRoot ?? new URL(production ? "file:///var/empty/" : Bun.env.WORKER_INSTALLER_ROOT ?? "../../../deploy/workers/", import.meta.url);
   const runtimeArtifact = (name: string, fallback: string): URL | undefined => {
     const configured = Bun.env[name];
     return configured ? new URL(configured, import.meta.url) : production ? undefined : new URL(fallback, import.meta.url);
@@ -357,22 +357,9 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
       webIndex: new URL("index.html", webRoot),
       webScript: new URL("index.js", webRoot),
       webStyles: new URL("index.css", webRoot),
-      linuxInstaller: new URL("install-worker.sh", workerInstallerRoot),
-      windowsInstaller: new URL("install-worker.ps1", workerInstallerRoot),
-      macosInstaller: new URL("install-worker-macos.sh", workerInstallerRoot),
-      linuxCompose: new URL("linux-broker-compose.yaml", workerInstallerRoot),
-      linuxDomainTemplate: new URL("worker-domain.xml", workerInstallerRoot),
-      windowsServiceHost: workerServiceHostExecutable,
-      windowsOrchestrator: workerOrchestratorExecutables["windows-x64"],
-      macosOrchestrator: workerOrchestratorExecutables["macos-arm64"],
-      windowsContainerBuilder: windowsContainerArtifacts?.builderPath,
-      windowsContainerVerifier: windowsContainerArtifacts?.verifierPath,
-      windowsContainerfile: windowsContainerArtifacts?.containerfilePath,
-      windowsContainerEntrypoint: windowsContainerArtifacts?.entrypointPath,
-      windowsContainerJobAgent: windowsContainerArtifacts?.jobAgentPath,
     };
     for (const [name, artifact] of Object.entries(requiredReleaseArtifacts)) {
-      if (!artifact || !await Bun.file(artifact).exists()) throw new Error(`release artifact is unavailable: ${name}`);
+      if (!await Bun.file(artifact).exists()) throw new Error(`release artifact is unavailable: ${name}`);
     }
   }
   let db: DashboardDb;

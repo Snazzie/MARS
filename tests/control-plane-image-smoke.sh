@@ -37,6 +37,7 @@ start_control_plane() {
   docker run -d --name "$CONTROL_PLANE" --network "$NETWORK" \
     -e DATABASE_URL="postgres://mars:ci-only@${POSTGRES}:5432/$1" \
     -e PUBLIC_BASE_URL="http://127.0.0.1:3000" \
+    -e GITHUB_WEBHOOK_URL="https://github.example.test" \
     -v "$DATA_VOLUME":/var/lib/mars \
     -p 127.0.0.1:3000:3000 \
     "$IMAGE" >/dev/null
@@ -45,49 +46,18 @@ start_control_plane() {
 
 assert_release_artifacts() {
   for artifact in \
-    /app/release-manifest.json \
-    /app/workers/install-worker.sh \
-    /app/workers/install-worker.ps1 \
-    /app/workers/install-worker-macos.sh \
-    /app/workers/linux-broker-compose.yaml \
-    /app/workers/worker-domain.xml \
-    /app/workers/mars-orchestrator \
-    /app/workers/mars-orchestrator.exe \
-    /app/workers/mars-orchestrator-macos-arm64 \
-    /app/workers/mars-service-host.exe \
-    /app/workers/build-windows-container-image-local.ps1 \
-    /app/workers/verify-runtime.ps1 \
-    /app/workers/Containerfile \
-    /app/workers/entrypoint.ps1 \
-    /app/workers/mars-job-agent.exe; do
+    /app/index.js \
+    /app/web/index.html \
+    /app/web/index.js \
+    /app/web/index.css \
+    /app/migrations/0000_mars_baseline.sql \
+    /app/migrations/meta/_journal.json; do
     docker exec "$CONTROL_PLANE" test -f "$artifact"
   done
-  docker exec "$CONTROL_PLANE" bun -e '
-    import { createHash } from "node:crypto";
-    const value=JSON.parse(await Bun.file("/app/release-manifest.json").text());
-    const hash=/^[0-9a-f]{64}$/;
-    const oci=/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?::[0-9]+)?(?:\/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)*@sha256:[0-9a-f]{64}$/;
-    const https=(url)=>typeof url==="string"&&url.startsWith("https://");
-    if(value.schemaVersion!==2||typeof value.buildId!=="string"||typeof value.contractVersion!=="string") process.exit(1);
-    const platforms=value.platforms;
-    for(const name of ["linux-x64","windows-x64","macos-arm64"]) if(!(name in platforms)) process.exit(1);
-    if(platforms["linux-x64"]){
-      const p=platforms["linux-x64"];
-      if(!hash.test(p.orchestratorSha256)||!oci.test(p.brokerImage)||!https(p.goldenImageUrl)||!hash.test(p.goldenImageSha256)||!hash.test(p.composeSha256)||!hash.test(p.domainTemplateSha256)) process.exit(1);
-    }
-    if(platforms["windows-x64"]){
-      const p=platforms["windows-x64"], c=p.container;
-      if(!hash.test(p.orchestratorSha256)||!hash.test(p.serviceHostSha256)||!https(p.vmTemplateUrl)||!hash.test(p.vmTemplateSha256)||!c||!oci.test(c.baseImage)) process.exit(1);
-      const packagedServiceHost=createHash("sha256").update(Buffer.from(await Bun.file("/app/workers/mars-service-host.exe").arrayBuffer())).digest("hex");
-      if(packagedServiceHost!==p.serviceHostSha256) process.exit(1);
-      for(const asset of [c.runner,c.git,c.vcRuntime]) if(!asset||!https(asset.url)||!hash.test(asset.sha256)) process.exit(1);
-    }
-    if(platforms["macos-arm64"]){
-      const p=platforms["macos-arm64"];
-      if(!hash.test(p.orchestratorSha256)||!oci.test(p.tartImage)||!hash.test(p.tartImageDigest)||p.tartImage!==p.tartImage.replace(/@.*/,"")+"@sha256:"+p.tartImageDigest) process.exit(1);
-    }
-    if(JSON.stringify(value).includes("__PLACEHOLDER__")) process.exit(1);
-  '
+  if docker exec "$CONTROL_PLANE" test -e /app/workers; then
+    echo "worker assets must not be packaged in the control-plane image" >&2
+    return 1
+  fi
 }
 
 seed_database() {

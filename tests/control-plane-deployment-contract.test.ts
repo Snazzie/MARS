@@ -142,38 +142,27 @@ test("schema-2 release fixture keeps unavailable platforms explicit", async () =
   expect(manifest).not.toHaveProperty("windowsContainerBuild");
 });
 
-test("control-plane image packages every platform's small worker artifact", async () => {
+test("control-plane image contains only control-plane runtime files", async () => {
   const dockerfile = await read("deploy/control-plane/Dockerfile");
-  for (const artifact of [
-    "install-worker.sh", "install-worker.ps1", "install-worker-macos.sh",
-    "linux-broker-compose.yaml", "worker-domain.xml",
-    "mars-orchestrator-linux-x64", "mars-orchestrator-windows-x64.exe",
-    "mars-orchestrator-macos-arm64", "mars-service-host.exe",
-    "build-windows-container-image-local.ps1", "verify-runtime.ps1",
-    "Containerfile", "entrypoint.ps1", "mars-job-agent.exe",
-    "release-manifest.json",
-  ]) expect(dockerfile).toContain(artifact);
-  expect(dockerfile).toContain("MARS_RELEASE_MANIFEST=deploy/control-plane/release-manifest.json");
-  expect(dockerfile).toContain("does not match packaged");
-  expect(dockerfile).toContain("createHash(\"sha256\")");
-  expect(dockerfile).toContain("--target=bun-linux-x64");
-  expect(dockerfile).toContain("--target=bun-windows-x64");
-  expect(dockerfile).toContain("--target=bun-darwin-arm64");
+  expect(dockerfile).toContain("COPY --from=build /app/apps/control-plane/dist/index.js ./index.js");
+  expect(dockerfile).toContain("COPY --from=build /app/packages/db/src/migrations ./migrations");
+  expect(dockerfile).toContain("COPY --from=build /app/apps/web/dist/index.html /app/web/index.html");
+  expect(dockerfile).not.toContain("/app/workers");
+  expect(dockerfile).not.toContain("MARS_WINDOWS_SERVICE_HOST_ARTIFACT");
+  expect(dockerfile).not.toContain("mars-orchestrator");
+  expect(dockerfile).not.toContain("install-worker");
+  expect(dockerfile).not.toContain("release-manifest.json");
+  expect(dockerfile).not.toContain("--target=bun-windows-x64");
+  expect(dockerfile).not.toContain("--target=bun-darwin-arm64");
 });
-test("control-plane image packages the exact Windows service-host release artifact", async () => {
-  const dockerfile = await read("deploy/control-plane/Dockerfile");
-  const workflow = await read(".github/workflows/release-workers.yml");
-  expect(dockerfile).toContain("ARG MARS_WINDOWS_SERVICE_HOST_ARTIFACT=");
-  expect(dockerfile).toContain("RUN --mount=type=bind,target=/release-context,readonly");
-  expect(dockerfile).toContain("MARS_WINDOWS_SERVICE_HOST_ARTIFACT is required");
-  expect(dockerfile).toContain("release artifact is unavailable: /release-context/$MARS_WINDOWS_SERVICE_HOST_ARTIFACT");
-  expect(dockerfile).toContain('cp "/release-context/$MARS_WINDOWS_SERVICE_HOST_ARTIFACT" /artifacts/mars-service-host.exe');
-  expect(dockerfile).toContain("COPY --from=build /artifacts/mars-service-host.exe /app/workers/mars-service-host.exe");
-  expect(dockerfile).not.toContain("FROM rust:");
-  expect(dockerfile).not.toContain("cargo build --manifest-path apps/windows-service-host/Cargo.toml");
-  expect(workflow).toContain('--build-arg MARS_WINDOWS_SERVICE_HOST_ARTIFACT="dist/worker-windows-${{ github.sha }}/mars-service-host.exe"');
-  expect(workflow).toContain("Get-FileHash dist/windows/mars-service-host.exe");
-  expect(workflow).toContain("path: dist/windows");
+test("control-plane release workflow publishes verified Linux image", async () => {
+  const workflow = await read(".github/workflows/release-control-plane.yml");
+  expect(workflow).toContain("platforms: linux/amd64");
+  expect(workflow).toContain("docker/build-push-action@v6");
+  expect(workflow).toContain("docker buildx imagetools create --tag \"$IMAGE:latest\"");
+  expect(workflow).toContain("test ! -e /app/workers");
+  expect(workflow).not.toContain("MARS_WINDOWS_SERVICE_HOST_ARTIFACT");
+  expect(workflow).not.toContain("MARS_RELEASE_MANIFEST");
 });
 test("CI builds and passes a real Windows service-host artifact explicitly", async () => {
   const workflow = await read(".github/workflows/ci.yml");
@@ -247,12 +236,11 @@ test("worker release workflow publishes current-tag assets before promoting the 
 });
 
 
-test("production startup checks every packaged Windows container input", async () => {
+test("production startup does not require packaged worker inputs", async () => {
   const source = await read("apps/control-plane/src/index.ts");
-  for (const artifact of [
-    "windowsContainerBuilder", "windowsContainerVerifier", "windowsContainerfile",
-    "windowsContainerEntrypoint", "windowsContainerJobAgent",
-  ]) expect(source).toContain(artifact);
+  expect(source).toContain("MARS_WORKER_RELEASE_MANIFEST_URL");
+  expect(source).toContain("MARS_WORKER_CONTRACT_VERSION");
+  expect(source).not.toContain('required("WORKER_INSTALLER_ROOT")');
 });
 test("aggregate release validation installs locked dependencies before importing contracts", async () => {
   const workflow = await read(".github/workflows/release-workers.yml");
@@ -297,17 +285,13 @@ test("release workflow validates SHA-256/HTTPS assets and binds manifest URLs to
   expect(workflow).toContain("@sha256:");
 });
 
-test("image smoke asserts complete unsigned runtime metadata and Windows container inputs", async () => {
+test("image smoke asserts control-plane files and excludes worker payload", async () => {
   const smoke = await read("tests/control-plane-image-smoke.sh");
   for (const artifact of [
-    "/app/workers/build-windows-container-image-local.ps1",
-    "/app/workers/verify-runtime.ps1", "/app/workers/Containerfile",
-    "/app/workers/entrypoint.ps1", "/app/workers/mars-job-agent.exe",
+    "/app/index.js", "/app/web/index.html", "/app/web/index.js",
+    "/app/web/index.css", "/app/migrations/0000_mars_baseline.sql",
+    "/app/migrations/meta/_journal.json",
   ]) expect(smoke).toContain(artifact);
-  for (const field of [
-    "goldenImageUrl", "goldenImageSha256", "vmTemplateUrl",
-    "serviceHostSha256", "packagedServiceHost", "asset.url", "asset.sha256",
-    "vcRuntime", "tartImageDigest", "__PLACEHOLDER__",
-  ]) expect(smoke).toContain(field);
-  expect(smoke).not.toMatch(/cosign|goldenCosignBundleUrl|\.bundle/);
+  expect(smoke).toContain("worker assets must not be packaged");
+  expect(smoke).not.toContain("/app/workers/");
 });
