@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { PoolResources, WorkerLimits } from "@mars/contracts";
+import { WorkerContainerStatus, type PoolResources, type WorkerContainerStatus as WorkerContainerStatusData, type WorkerLimits } from "@mars/contracts";
 import type { Lease, RuntimeDriver, RuntimeLease } from "./runtime.ts";
 import { validateResources } from "./runtime.ts";
 
@@ -50,6 +50,49 @@ function dockerSample(name: string, configuredMemoryBytes: number, docker: Docke
     const memoryLimitBytes = reportedLimitBytes >= configuredMemoryBytes ? reportedLimitBytes : configuredMemoryBytes;
     return { cpuUsagePercent, cpuTimeMs: 0, memoryWorkingSetBytes, memoryLimitBytes };
   };
+}
+
+type DockerInspection = {
+  Id?: unknown;
+  Name?: unknown;
+  Config?: { Labels?: Record<string, unknown> };
+  State?: { Status?: unknown };
+  SizeRw?: unknown;
+};
+type DockerStats = { ID?: unknown; Container?: unknown; CPUPerc?: unknown; MemUsage?: unknown };
+const dockerNotFound = /no such container|container .* not found|does not exist/i;
+function isDockerNotFound(result: DockerResult): boolean {
+  return dockerNotFound.test(`${result.stdout} ${result.stderr}`);
+}
+function parseInspectOutput(stdout: string): DockerInspection[] {
+  const parsed: unknown = JSON.parse(stdout);
+  if (!Array.isArray(parsed)) throw new Error("docker inspect returned invalid JSON");
+  return parsed as DockerInspection[];
+}
+function parseStatsOutput(stdout: string): DockerStats[] {
+  const rows: DockerStats[] = [];
+  for (const line of stdout.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)) {
+    const parsed: unknown = JSON.parse(line);
+    if (Array.isArray(parsed)) rows.push(...(parsed as DockerStats[]));
+    else if (parsed && typeof parsed === "object") rows.push(parsed as DockerStats);
+    else throw new Error("docker stats returned invalid JSON");
+  }
+  return rows;
+}
+function optionalMemoryBytes(value: unknown): number | null {
+  if (typeof value !== "string" || !/[\d.]+\s*([KMG]?i?B)/i.test(value)) return null;
+  const parsed = parseMemoryBytes(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+function optionalCpuPercent(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const parsed = Number.parseFloat(value.replace("%", "").trim());
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) : null;
+}
+function inspectSize(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error("docker inspect SizeRw is invalid");
+  return value;
 }
 const DIAGNOSTIC_LIMIT_BYTES = 10 * 1024 * 1024;
 function redactRunnerLog(text: string): string {
@@ -127,6 +170,80 @@ export class WindowsContainerDriver implements RuntimeDriver {
       throw new Error(`container job timed out after ${this.config.jobTimeoutMs}ms`);
     });
     return Promise.race([completion, timeout]);
+  }
+  private async inspectManagedContainers(ids: string[]): Promise<DockerInspection[]> {
+    const batch = await this.docker(["inspect", "--size", ...ids]);
+    if (batch.code === 0) return parseInspectOutput(checked(batch, "docker inspect"));
+    const rows: DockerInspection[] = [];
+    for (const id of ids) {
+      const result = await this.docker(["inspect", "--size", id]);
+      if (result.code !== 0) {
+        if (isDockerNotFound(result)) continue;
+        checked(result, "docker inspect");
+      }
+      rows.push(...parseInspectOutput(checked(result, "docker inspect")));
+    }
+    return rows;
+  }
+  private async collectContainerStats(ids: string[]): Promise<{ rows: DockerStats[]; disappeared: Set<string> }> {
+    if (ids.length === 0) return { rows: [], disappeared: new Set() };
+    const batch = await this.docker(["stats", "--no-stream", "--format", "{{json .}}", ...ids]);
+    if (batch.code === 0) return { rows: parseStatsOutput(checked(batch, "docker stats")), disappeared: new Set() };
+    const rows: DockerStats[] = [];
+    const disappeared = new Set<string>();
+    for (const id of ids) {
+      const result = await this.docker(["stats", "--no-stream", "--format", "{{json .}}", id]);
+      if (result.code !== 0) {
+        if (isDockerNotFound(result)) {
+          disappeared.add(id);
+          continue;
+        }
+        checked(result, "docker stats");
+      }
+      rows.push(...parseStatsOutput(checked(result, "docker stats")));
+    }
+    return { rows, disappeared };
+  }
+  async listContainerStatuses(): Promise<WorkerContainerStatusData[]> {
+    const listed = checked(await this.docker(["ps", "-a", "--filter", "label=mars.managed=true", "--format", "{{.ID}}"]), "docker ps")
+      .split(/\r?\n/)
+      .map((id) => id.trim())
+      .filter(Boolean);
+    if (listed.length === 0) return [];
+
+    const inspections = await this.inspectManagedContainers(listed);
+    const runningIds = inspections.flatMap((inspection) => inspection.State?.Status === "running" && typeof inspection.Id === "string" ? [inspection.Id] : []);
+    const stats = await this.collectContainerStats(runningIds);
+    const disappeared = new Set([...stats.disappeared].map((id) => id.toLowerCase()));
+    const statsById = new Map<string, DockerStats>();
+    for (const row of stats.rows) {
+      for (const candidate of [row.ID, row.Container]) {
+        if (typeof candidate === "string" && candidate.length > 0) statsById.set(candidate.toLowerCase(), row);
+      }
+    }
+    const sampledAt = new Date().toISOString();
+    const statuses: WorkerContainerStatusData[] = [];
+    for (const inspection of inspections) {
+      const id = typeof inspection.Id === "string" ? inspection.Id : "";
+      if (disappeared.has(id.toLowerCase()) || disappeared.has(id.slice(0, 12).toLowerCase())) continue;
+      const state = inspection.State?.Status;
+      const running = state === "running";
+      const statsRow = running ? statsById.get(id.toLowerCase()) ?? statsById.get(id.slice(0, 12).toLowerCase()) : undefined;
+      const memoryUsage = typeof statsRow?.MemUsage === "string" ? statsRow.MemUsage.split("/").map((part) => part.trim()) : [];
+      const status = WorkerContainerStatus.parse({
+        containerId: id,
+        name: typeof inspection.Name === "string" ? inspection.Name.replace(/^\/+/, "") : "",
+        leaseId: inspection.Config?.Labels?.["mars.lease-id"],
+        state,
+        cpuUsagePercent: statsRow ? optionalCpuPercent(statsRow.CPUPerc) : null,
+        memoryWorkingSetBytes: statsRow ? optionalMemoryBytes(memoryUsage[0]) : null,
+        memoryLimitBytes: statsRow ? optionalMemoryBytes(memoryUsage[1]) : null,
+        diskUsageBytes: inspectSize(inspection.SizeRw),
+        sampledAt,
+      });
+      statuses.push(status);
+    }
+    return statuses.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : a.containerId < b.containerId ? -1 : a.containerId > b.containerId ? 1 : 0);
   }
   async inspectLease(leaseId: string): Promise<RuntimeLease> { const lease = this.leases.get(leaseId); if (!lease) throw new Error("sandbox not found"); return lease.runtime; }
   async requestGracefulStop(leaseId: string, reason: "out_of_memory", message: string): Promise<boolean> {

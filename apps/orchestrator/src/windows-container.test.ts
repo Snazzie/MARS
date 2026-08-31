@@ -287,3 +287,117 @@ test("waits for Docker to become ready before validating the image", async () =>
   await driver.reserveCapacity({ vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 });
   expect(infoAttempts).toBe(2);
 });
+
+const collectorConfig = {
+  image: "repo@sha256:" + "a".repeat(64),
+  prefix: "mars",
+  bootstrapRoot: "C:\\mars-test",
+  limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 4 },
+  readyTimeoutMs: 100,
+  jobTimeoutMs: 100,
+};
+
+test("enumerates managed containers and joins live stats with inspect metadata", async () => {
+  const runningId = "a".repeat(64);
+  const stoppedId = "b".repeat(64);
+  const calls: string[][] = [];
+  const docker: DockerRunner = async (args) => {
+    calls.push(args);
+    if (args[0] === "ps") return { code: 0, stdout: `${stoppedId.slice(0, 12)}\n${runningId.slice(0, 12)}\n`, stderr: "" };
+    if (args[0] === "inspect") return {
+      code: 0,
+      stdout: JSON.stringify([
+        { Id: stoppedId, Name: "/alpha", Config: { Labels: { "mars.lease-id": "22222222-2222-4222-8222-222222222222" } }, State: { Status: "exited" }, SizeRw: 4096 },
+        { Id: runningId, Name: "/zeta", Config: { Labels: { "mars.lease-id": "11111111-1111-4111-8111-111111111111" } }, State: { Status: "running" }, SizeRw: 8192 },
+      ]),
+      stderr: "",
+    };
+    if (args[0] === "stats") return { code: 0, stdout: JSON.stringify({ ID: runningId.slice(0, 12), CPUPerc: "12.5%", MemUsage: "2MiB / 1GiB" }), stderr: "" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const statuses = await new WindowsContainerDriver(collectorConfig, docker).listContainerStatuses();
+  expect(statuses.map(({ name }) => name)).toEqual(["alpha", "zeta"]);
+  expect(statuses[0]).toMatchObject({ containerId: stoppedId, state: "exited", cpuUsagePercent: null, memoryWorkingSetBytes: null, memoryLimitBytes: null, diskUsageBytes: 4096 });
+  expect(statuses[1]).toMatchObject({ containerId: runningId, state: "running", cpuUsagePercent: 12.5, memoryWorkingSetBytes: 2 * 1024 ** 2, memoryLimitBytes: 1024 ** 3, diskUsageBytes: 8192 });
+  expect(new Set(statuses.map(({ sampledAt }) => sampledAt)).size).toBe(1);
+  expect(calls.find((args) => args[0] === "stats")).toEqual(["stats", "--no-stream", "--format", "{{json .}}", runningId]);
+});
+
+test("retries inspect and omits only a container that disappeared", async () => {
+  const firstId = "c".repeat(64);
+  const secondId = "d".repeat(64);
+  const disappearedId = "e".repeat(64);
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "ps") return { code: 0, stdout: `${firstId.slice(0, 12)}\n${secondId.slice(0, 12)}\n${disappearedId.slice(0, 12)}\n`, stderr: "" };
+    if (args[0] === "inspect" && args.length > 3) return { code: 1, stdout: "", stderr: `No such container: ${disappearedId.slice(0, 12)}` };
+    if (args[0] === "inspect") {
+      const id = args.at(-1)!;
+      if (id === disappearedId.slice(0, 12)) return { code: 1, stdout: "", stderr: "No such container" };
+      const fullId = id === firstId.slice(0, 12) ? firstId : secondId;
+      return { code: 0, stdout: JSON.stringify([{ Id: fullId, Name: `/${id}`, Config: { Labels: { "mars.lease-id": id === firstId.slice(0, 12) ? "33333333-3333-4333-8333-333333333333" : "44444444-4444-4444-8444-444444444444" } }, State: { Status: "exited" }, SizeRw: 1 }]), stderr: "" };
+    }
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const statuses = await new WindowsContainerDriver(collectorConfig, docker).listContainerStatuses();
+  expect(statuses).toHaveLength(2);
+  expect(statuses.map(({ containerId }) => containerId)).toEqual([firstId, secondId]);
+});
+
+test("propagates non-not-found inspect failures", async () => {
+  const id = "f".repeat(64);
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "ps") return { code: 0, stdout: `${id.slice(0, 12)}\n`, stderr: "" };
+    if (args[0] === "inspect") return { code: 1, stdout: "", stderr: "permission denied" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  await expect(new WindowsContainerDriver(collectorConfig, docker).listContainerStatuses()).rejects.toThrow("docker inspect failed");
+});
+
+test("does not inspect or sample when no managed containers exist", async () => {
+  const calls: string[][] = [];
+  const docker: DockerRunner = async (args) => {
+    calls.push(args);
+    if (args[0] === "ps") return { code: 0, stdout: "\n", stderr: "" };
+    throw new Error(`unexpected docker ${args[0]}`);
+  };
+  expect(await new WindowsContainerDriver(collectorConfig, docker).listContainerStatuses()).toEqual([]);
+  expect(calls).toEqual([["ps", "-a", "--filter", "label=mars.managed=true", "--format", "{{.ID}}"]]);
+});
+
+test("retries stats and omits only a running container that disappeared", async () => {
+  const firstId = "1".repeat(64);
+  const disappearedId = "2".repeat(64);
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "ps") return { code: 0, stdout: `${firstId.slice(0, 12)}\n${disappearedId.slice(0, 12)}\n`, stderr: "" };
+    if (args[0] === "inspect") return {
+      code: 0,
+      stdout: JSON.stringify([
+        { Id: firstId, Name: "/first", Config: { Labels: { "mars.lease-id": "55555555-5555-4555-8555-555555555555" } }, State: { Status: "running" }, SizeRw: 10 },
+        { Id: disappearedId, Name: "/gone", Config: { Labels: { "mars.lease-id": "66666666-6666-4666-8666-666666666666" } }, State: { Status: "running" }, SizeRw: 20 },
+      ]),
+      stderr: "",
+    };
+    if (args[0] === "stats" && args.length > 5) return { code: 1, stdout: "", stderr: "No such container: gone" };
+    if (args[0] === "stats" && args.at(-1) === disappearedId) return { code: 1, stdout: "", stderr: "No such container" };
+    if (args[0] === "stats") return { code: 0, stdout: JSON.stringify({ ID: firstId.slice(0, 12), CPUPerc: "1%", MemUsage: "1MiB / 1GiB" }), stderr: "" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const statuses = await new WindowsContainerDriver(collectorConfig, docker).listContainerStatuses();
+  expect(statuses).toHaveLength(1);
+  expect(statuses[0]).toMatchObject({ containerId: firstId, name: "first", cpuUsagePercent: 1 });
+});
+
+test("propagates non-not-found stats failures", async () => {
+  const id = "3".repeat(64);
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "ps") return { code: 0, stdout: `${id.slice(0, 12)}\n`, stderr: "" };
+    if (args[0] === "inspect") return {
+      code: 0,
+      stdout: JSON.stringify([{ Id: id, Name: "/running", Config: { Labels: { "mars.lease-id": "77777777-7777-4777-8777-777777777777" } }, State: { Status: "running" }, SizeRw: 1 }]),
+      stderr: "",
+    };
+    if (args[0] === "stats") return { code: 1, stdout: "", stderr: "permission denied" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  await expect(new WindowsContainerDriver(collectorConfig, docker).listContainerStatuses()).rejects.toThrow("docker stats failed");
+});
