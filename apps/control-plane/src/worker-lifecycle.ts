@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { jsonParameter, persistJobResourceSample, recordJobTimingSnapshot, applyWorkerCacheTelemetry, type DatabaseClient, type JobTimingSnapshotInput } from "@mars/db";
+import { jsonParameter, persistJobResourceSample, recordJobTimingSnapshot, applyWorkerCacheTelemetry, invalidateDashboard, type DatabaseClient, type JobTimingSnapshotInput } from "@mars/db";
 import { WorkerEvent, WorkerEventPayload, WorkerCacheTelemetry } from "@mars/contracts";
 import type { AuthenticatedWorkerSocket, WorkerCommandDispatcher } from "./worker-dispatch.ts";
 export type TimingBoundaryInputs = {
@@ -123,6 +123,21 @@ async function recordReapedJobTiming(db: DatabaseClient, leaseId: string, reaped
   if (Object.values(snapshot).some(value => value === "undefined" || (typeof value === "number" && !Number.isFinite(value)))) return;
   await recordJobTimingSnapshot(db, snapshot);
 }
+async function updateDashboardStatus(
+  db: DatabaseClient,
+  leaseId: string,
+  workerId: string,
+  nonce: string,
+  status: "in_progress" | "completed",
+  occurredAt: string,
+  conclusion: string | null,
+  stage: "running" | "completed" | "failed" = status === "in_progress" ? "running" : "completed",
+): Promise<void> {
+  const rows = await db`UPDATE dashboard_jobs j SET status=${status},stage=${stage},started_at=CASE WHEN ${status}='in_progress' THEN COALESCE(j.started_at,${occurredAt}) ELSE j.started_at END,completed_at=CASE WHEN ${status}<>'in_progress' THEN COALESCE(j.completed_at,${occurredAt}) ELSE j.completed_at END,conclusion=CASE WHEN ${status}='in_progress' THEN j.conclusion ELSE COALESCE(j.conclusion,${conclusion}) END FROM runner_leases l WHERE l.id=${leaseId} AND l.worker_id=${workerId} AND l.nonce=${nonce} AND j.organization_id=l.organization_id AND j.github_job_id=l.github_job_id AND j.status <> 'completed' RETURNING j.organization_id AS "organizationId"`;
+  await db`UPDATE dashboard_runs r SET status=${status},conclusion=CASE WHEN ${status}='in_progress' THEN r.conclusion ELSE COALESCE(r.conclusion,${conclusion}) END,started_at=CASE WHEN ${status}='in_progress' THEN COALESCE(r.started_at,${occurredAt}) ELSE r.started_at END,completed_at=CASE WHEN ${status}<>'in_progress' THEN COALESCE(r.completed_at,${occurredAt}) ELSE r.completed_at END WHERE EXISTS (SELECT 1 FROM dashboard_jobs j JOIN runner_leases l ON l.organization_id=j.organization_id AND l.github_job_id=j.github_job_id WHERE l.id=${leaseId} AND l.worker_id=${workerId} AND l.nonce=${nonce} AND r.organization_id=j.organization_id AND r.id=j.run_id) AND r.status <> 'completed'`;
+  const organizationId = rows[0]?.organizationId;
+  if (typeof organizationId === "string") await invalidateDashboard(db, organizationId, ["runs"]);
+}
 export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown): Promise<boolean> {
   const parsedEvent = WorkerEvent.safeParse(input);
   if (!parsedEvent.success) return false;
@@ -134,14 +149,18 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
     const payload = parsedPayload.data.payload;
     const rows = await db`UPDATE runner_leases SET state='sandbox_ready',runtime_instance_id=${payload.runtimeInstanceId},terminal_result=${jsonParameter(db, { observed: payload.observed })},expires_at=GREATEST(expires_at,now()+interval '10 minutes'),updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state='dispatched' RETURNING id`;
     if (!rows[0]) return false;
+    await updateDashboardStatus(db, payload.leaseId, event.workerId, payload.nonce, "in_progress", event.occurredAt, null);
     return true;
   }
   if (parsedPayload.data.type === "runner.finished") {
     const payload = parsedPayload.data.payload;
-    const state = payload.oom ? "failed" : payload.exitCode === 0 ? "completed" : "failed";
+    const failed = Boolean(payload.oom) || payload.exitCode !== 0;
+    const state = failed ? "failed" : "completed";
     const terminalResult = payload.oom ? { exitCode: payload.exitCode, reason: "out_of_memory", oom: payload.oom } : { exitCode: payload.exitCode };
     const rows = await db`UPDATE runner_leases SET state=${state},terminal_result=${jsonParameter(db, terminalResult)},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('sandbox_ready','online','busy') RETURNING id`;
-    return Boolean(rows[0]);
+    if (!rows[0]) return false;
+    await updateDashboardStatus(db, payload.leaseId, event.workerId, payload.nonce, "completed", event.occurredAt, failed ? "failure" : "success", failed ? "failed" : "completed");
+    return true;
   }
   if (parsedPayload.data.type === "lease.failed") {
     const payload = parsedPayload.data.payload;
@@ -151,11 +170,15 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
     }
     if (payload.reason === "debug_preserve") {
       const rows = await db`UPDATE runner_leases SET state='failed',terminal_result=${jsonParameter(db, { reason: payload.reason })},cleanup_state='debug_preserved',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed','sandbox_ready','online','busy') RETURNING id`;
-      return Boolean(rows[0]);
+      if (!rows[0]) return false;
+      await updateDashboardStatus(db, payload.leaseId, event.workerId, payload.nonce, "completed", event.occurredAt, "failure", "failed");
+      return true;
     }
     const terminalResult = payload.oom ? { reason: payload.reason, oom: payload.oom } : { reason: payload.reason };
     const rows = await db`UPDATE runner_leases SET state='failed',terminal_result=${jsonParameter(db, terminalResult)},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('dispatched','provisioning','sandbox_ready','online','busy') RETURNING id`;
-    return Boolean(rows[0]);
+    if (!rows[0]) return false;
+    await updateDashboardStatus(db, payload.leaseId, event.workerId, payload.nonce, "completed", event.occurredAt, "failure", "failed");
+    return true;
   }
   const payload = parsedPayload.data.payload;
   const rows = await db`UPDATE runner_leases SET state='reaped',cleanup_state='completed',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed') RETURNING id`;

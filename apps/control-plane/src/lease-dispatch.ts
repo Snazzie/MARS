@@ -39,5 +39,5 @@ export async function dispatchLeaseBootstrap(dispatcher: Dispatcher, input: Leas
     "windows-hyperv-container": "windows-container.create_lease",
     "tart-vm": "tart.create_lease",
   };
-  void dispatcher.dispatch({ workerId, leaseId: envelope.leaseId, type: commandByDriver[driver], payload: { bootstrapCiphertext: sealed } }).catch(() => undefined);
+  await dispatcher.dispatch({ workerId, leaseId: envelope.leaseId, type: commandByDriver[driver], payload: { bootstrapCiphertext: sealed } });
 }
