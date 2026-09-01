@@ -2,19 +2,22 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a default-enabled per-worker `runnerCacheEnabled` control and an authenticated per-worker purge action without affecting the GitHub Actions cache.
+**Goal:** Add default-enabled per-worker runner caching with user-configurable TTL and size cap, plus an authenticated per-worker purge action without affecting the GitHub Actions cache.
 
-**Architecture:** Extend the shared worker configuration contract with `cache.runnerCacheEnabled`, defaulting to `true`. Workers apply the setting live to the package-download cache while retaining the existing Actions cache. Add a durable worker command for purge, dispatched by the control plane and handled by each worker runtime; purge clears only package-cache objects and metadata.
+**Architecture:** Extend the shared worker configuration contract with `cache.runnerCacheEnabled`, `cache.ttlSeconds`, and `cache.runnerCacheMaxGiB`. Workers apply all three settings live to the package-download cache while retaining the existing Actions cache. Add a durable worker command for purge, dispatched by the control plane and handled by each worker runtime; purge clears only package-cache objects and metadata.
 
 **Tech Stack:** Bun, TypeScript, Zod contracts, PostgreSQL control-plane persistence, existing worker WebSocket command dispatcher, Bun SQLite package cache, React dashboard.
 
 ## Global Constraints
 
-- The public configuration field is exactly `cache.runnerCacheEnabled`.
+- The public configuration fields are exactly `cache.runnerCacheEnabled`, `cache.ttlSeconds`, and `cache.runnerCacheMaxGiB`.
 - `runnerCacheEnabled` defaults to `true` for existing and development workers.
+- `runnerCacheMaxGiB` defaults to `20` and is configured in whole GiB.
+- `ttlSeconds` is configurable per worker and applies to package entries through the existing shared TTL lifecycle.
+- When enabled, the package cache evicts least-recently-used ready packages to remain within `runnerCacheMaxGiB`; active fills are never evicted.
 - Disabling bypasses package caching but retains existing package objects.
 - Purge is per worker, authenticated, audited, idempotent, and never deletes the GitHub Actions cache.
-- Applying enable/disable does not restart proxy or HTTPS listeners.
+- Applying configuration does not restart proxy or HTTPS listeners.
 - Existing Actions-cache routes, status, snapshots, telemetry, and TTL behavior remain unchanged.
 - Live fills must not publish after a purge; active fills may finish safely.
 
@@ -27,16 +30,16 @@
 - Test: `packages/contracts/src/orchestration.test.ts`
 
 **Interfaces:**
-- Produce `WorkerCacheConfiguration` and `WorkerObservedConfiguration` with required `runnerCacheEnabled: boolean` in observed payloads.
-- Preserve `WorkerConfiguration` default parsing for old callers by defaulting `runnerCacheEnabled` to `true`.
+- Produce `WorkerCacheConfiguration` and `WorkerObservedConfiguration` with required `runnerCacheEnabled: boolean` and `runnerCacheMaxGiB: number` in observed payloads.
+- Preserve `WorkerConfiguration` default parsing for old callers by defaulting `runnerCacheEnabled` to `true`, `runnerCacheMaxGiB` to `20`, and `ttlSeconds` to `172800`.
 
-- [ ] Add tests proving omitted `runnerCacheEnabled` parses as `true`, explicit `false` parses correctly, and observed configuration rejects a missing field.
+- [ ] Add tests proving omitted fields parse as `{ ttlSeconds: 172800, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 }`, explicit values parse correctly, and observed configuration rejects missing fields.
 - [ ] Run `bun test packages/contracts/src/orchestration.test.ts` and verify the new assertions fail before implementation.
-- [ ] Update the Zod schemas so `WorkerCacheConfiguration` defaults to `{ ttlSeconds: 172800, runnerCacheEnabled: true }` and `RequiredWorkerCacheConfiguration` requires the boolean.
+- [ ] Update the Zod schemas so `WorkerCacheConfiguration` defaults all three fields and `RequiredWorkerCacheConfiguration` requires all three.
 - [ ] Run `bun test packages/contracts/src/orchestration.test.ts` and verify it passes.
-- [ ] Commit with `feat(contracts): add runner cache enable flag`.
+- [ ] Commit with `feat(contracts): add runner cache size cap`.
 
-### Task 2: Add package-cache runtime toggle and purge primitive
+### Task 2: Add package-cache policy and purge primitive
 
 **Files:**
 - Modify: `apps/orchestrator/src/action-cache/package-download-cache.ts`
@@ -45,16 +48,16 @@
 - Modify: `apps/orchestrator/src/action-cache/service.test.ts`
 
 **Interfaces:**
-- Extend `PackageDownloadCache` with `setEnabled(enabled: boolean): void` and `purge(): Promise<void>`.
-- `startActionCacheService` applies `runnerCacheEnabled` to package handling while preserving the existing default `true` for direct callers.
+- Extend `PackageDownloadCache` with `setEnabled(enabled: boolean): void`, `setMaxBytes(maxBytes: bigint): void`, and `purge(): Promise<void>`.
+- `startActionCacheService` applies `runnerCacheEnabled`, `ttlSeconds`, and `runnerCacheMaxGiB` while preserving defaults for direct callers.
 
-- [ ] Add tests for disabled pass-through, re-enable hit reuse, purge removing package rows/objects, purge idempotence, and Actions-cache object isolation.
+- [ ] Add tests for disabled pass-through, re-enable hit reuse, TTL refresh/expiry, size-cap LRU eviction, active-fill protection, purge removing package rows/objects, purge idempotence, and Actions-cache object isolation.
 - [ ] Run the focused package/service tests and verify the new tests fail before implementation.
-- [ ] Add an in-memory enabled flag checked before package eligibility; disabled requests call the configured upstream handler directly.
-- [ ] Add purge generation/state protection so fills started before purge cannot publish after purge; remove package rows and object files, retain the package SQLite/database layout, and make repeated purge safe.
-- [ ] Add service lifecycle wiring so `applyTtl` remains shared while enable state is independent and listener startup/closure is unchanged.
+- [ ] Add enabled state, positive safe GiB-to-byte validation, and LRU eviction after successful publication or configuration changes; never evict active fills.
+- [ ] Add purge generation/state protection so fills started before purge cannot publish after a purge; remove package rows and object files, retain the package SQLite/database layout, and make repeated purge safe.
+- [ ] Add service lifecycle wiring so TTL, enabled state, and size cap are independent controls and listener startup/closure is unchanged.
 - [ ] Run `bun test apps/orchestrator/src/action-cache/package-download-cache.test.ts apps/orchestrator/src/action-cache/service.test.ts` and verify all pass.
-- [ ] Commit with `feat(cache): support runner cache toggle and purge`.
+- [ ] Commit with `feat(cache): support runner cache policy and purge`.
 
 ### Task 3: Apply configuration on Linux, macOS, and Windows workers
 
@@ -63,18 +66,17 @@
 - Modify: `apps/orchestrator/src/mac-agent.ts`
 - Modify: `apps/orchestrator/src/windows-agent.ts`
 - Modify: corresponding `linux-agent.test.ts`, `mac-agent.test.ts`, and `windows-agent.test.ts`
-
 **Interfaces:**
-- Consume `WorkerConfigurePayload.cache.runnerCacheEnabled`.
-- Consume `ActionCacheService` runtime method for changing package-cache enabled state.
+- Consume `WorkerConfigurePayload.cache.runnerCacheEnabled`, `cache.ttlSeconds`, and `cache.runnerCacheMaxGiB`.
+- Consume `ActionCacheService` runtime methods for changing package-cache enabled state and size cap.
 - Continue calling `applyTtl` with `cache.ttlSeconds` and report the complete observed cache configuration.
 
-- [ ] Add platform tests asserting configure applies both TTL and `runnerCacheEnabled`, and the acknowledgement includes the exact observed value.
+- [ ] Add platform tests asserting configure applies TTL, enable state, and size cap, and the acknowledgement includes the exact observed values.
 - [ ] Run the three platform test files and verify new assertions fail before implementation.
-- [ ] Call the package-cache toggle through the service during each platform’s existing `worker.configure` path before emitting `worker.configured`.
+- [ ] Call the package-cache toggle and size-cap methods through the service during each platform’s existing `worker.configure` path before emitting `worker.configured`.
 - [ ] Keep platform resource and lease behavior unchanged.
 - [ ] Run `bun test apps/orchestrator/src/linux-agent.test.ts apps/orchestrator/src/mac-agent.test.ts apps/orchestrator/src/windows-agent.test.ts`.
-- [ ] Commit with `feat(worker): apply runner cache configuration`.
+- [ ] Commit with `feat(worker): apply runner cache policy`.
 
 ### Task 4: Add durable purge worker command
 

@@ -1,8 +1,6 @@
 # Runner Cache Control Design
 
-## Goal
-
-Enable transparent public npm tarball caching by default for development and allow control-plane users to disable or purge the package cache for an individual worker.
+Enable transparent public npm tarball caching by default for development, allow control-plane users to disable or purge the package cache for an individual worker, and let them configure its retention and size.
 
 ## Configuration
 
@@ -12,12 +10,13 @@ Extend the worker cache configuration:
 cache: {
   ttlSeconds: number;
   runnerCacheEnabled: boolean;
+  runnerCacheMaxGiB: number;
 }
 ```
 
-`runnerCacheEnabled` defaults to `true`, so existing development workers are enabled without environment changes. It controls transparent caching of dependencies downloaded by jobs on that worker. It does not disable the existing GitHub Actions cache protocol.
+`runnerCacheEnabled` defaults to `true`, so existing development workers are enabled without environment changes. `ttlSeconds` remains the shared cache TTL and is configurable per worker. `runnerCacheMaxGiB` is a positive safe integer GiB cap for package objects and defaults to `20`. It controls transparent caching of dependencies downloaded by jobs on that worker. It does not disable the existing GitHub Actions cache protocol.
 
-The setting is persisted in the worker's desired configuration, delivered through the existing `worker.configure` command, and acknowledged in the worker's observed configuration. Applying it does not restart listeners.
+The settings are persisted in the worker's desired configuration, delivered through the existing `worker.configure` command, and acknowledged in the worker's observed configuration. Applying them does not restart listeners.
 
 ## Runtime behavior
 
