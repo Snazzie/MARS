@@ -67,7 +67,6 @@ function requestThroughProxy(proxyUrl: string, targetHost: string, ca: string, i
       const headerEnd = response.indexOf(headerSeparator);
       if (headerEnd < 0) {
         reject(new Error("proxy response missing headers"));
-        return;
       }
       const lines = response.subarray(0, headerEnd).toString("latin1").split("\r\n");
       const status = Number(lines[0]?.match(/^HTTP\/\d\.\d (\d{3})(?: |$)/)?.[1] ?? 0);

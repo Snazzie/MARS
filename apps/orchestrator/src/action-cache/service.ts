@@ -566,8 +566,6 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
         response.end("Misdirected Request\n");
         return;
       }
-      response.on("finish", () => console.error("TRACE response finish", hostname));
-      response.on("close", () => console.error("TRACE response close", hostname));
       void handler(request, response).catch((error) => {
         if (!response.headersSent) response.writeHead(502, { "content-type": "text/plain", "cache-control": "no-store" });
         response.end(`cache transport request failed: ${error instanceof Error ? error.message : String(error)}\n`);
