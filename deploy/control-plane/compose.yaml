@@ -1,3 +1,5 @@
+# The image owns the immutable worker manifest URL and contract version.
+# Operators configure only the external database and public/worker origins.
 services:
   control-plane:
     image: ghcr.io/snazzie/mars/control-plane:latest
@@ -9,12 +11,14 @@ services:
       GITHUB_WEBHOOK_URL: ${GITHUB_WEBHOOK_URL:?set GITHUB_WEBHOOK_URL}
       WORKER_BASE_URL: ${WORKER_BASE_URL:-}
     healthcheck:
-      test: ["CMD", "bun", "-e", "const response=await fetch('http://localhost:3000/api/readyz');process.exit(response.ok?0:1)"]
+      test: ["CMD", "bun", "-e", "const response=await fetch('http://127.0.0.1:3000/api/readyz');process.exit(response.ok?0:1)"]
       interval: 10s
       timeout: 3s
       retries: 6
       start_period: 60s
     volumes: [mars-data:/var/lib/mars]
+    # Keep local Compose loopback-only. The Unraid XML uses bridge mode and
+    # publishes host port 3000 to LAN clients.
     ports: ["127.0.0.1:3000:3000"]
 
   cloudflared:
