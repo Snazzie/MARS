@@ -1015,6 +1015,10 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   app.get("/api/workers/templates/:platform/manifest", (c) => unavailable(c, [`template-manifest:${c.req.param("platform")}`]));
   app.get("/api/workers/templates/:platform/artifact", (c) => unavailable(c, [`template:${c.req.param("platform")}`]));
   const releaseContainerAsset = (key: "buildScript" | "verifyScript" | "containerfile" | "entrypoint" | "jobAgent" | "runner" | "git" | "vcRuntime", name: string, filename: string, sizeClass: ArtifactSizeClass) => async (c: Context<ControlPlaneEnv>) => {
+    const development = key === "jobAgent"
+      ? deps.developmentWindowsArtifacts?.jobAgent
+      : deps.developmentWindowsArtifacts?.container?.[key];
+    if (development) return developmentPackaged(c, development, name, filename, sizeClass);
     const release = deps.workerReleaseManifest?.platforms["windows-x64"];
     const asset = release && key === "jobAgent" ? release.jobAgent : release?.container?.[key as keyof typeof release.container];
     if (!asset || typeof asset === "string") return unavailable(c, [name]);

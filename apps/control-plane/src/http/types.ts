@@ -17,6 +17,7 @@ export type DevelopmentArtifact = {
 export type DevelopmentWindowsArtifacts = {
   orchestrator: DevelopmentArtifact;
   serviceHost: DevelopmentArtifact;
+  jobAgent?: DevelopmentArtifact;
   container?: {
     baseImage: string;
     runner: DevelopmentArtifact;
