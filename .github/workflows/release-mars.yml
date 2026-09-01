@@ -111,6 +111,7 @@ jobs:
           RUNNER_ARCHIVE_SHA256: ${{ steps.runner.outputs.sha256 }}
         run: |
           set -euo pipefail
+          export LIBGUESTFS_BACKEND=direct
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y libguestfs-tools qemu-utils
           UBUNTU_QCOW2_URL=https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img \
@@ -159,7 +160,6 @@ jobs:
       metadata: ${{ steps.metadata.outputs.json }}
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
@@ -184,7 +184,7 @@ jobs:
           $gitRelease = (curl.exe --fail --location --proto '=https' --tlsv1.2 'https://api.github.com/repos/git-for-windows/git/releases?per_page=30' | ConvertFrom-Json) | Where-Object { -not $_.draft -and -not $_.prerelease } | Select-Object -First 1
           $gitAsset = $gitRelease.assets | Where-Object name -Match '^MinGit-[0-9.]+-64-bit\.zip$' | Select-Object -First 1
           if (-not $gitAsset) { throw 'MinGit Windows asset was not found' }
-          $baseManifest = (docker buildx imagetools inspect mcr.microsoft.com/windows/server:ltsc2025 --raw | ConvertFrom-Json)
+          $baseManifest = (docker manifest inspect mcr.microsoft.com/windows/server:ltsc2025 | ConvertFrom-Json)
           $baseDigest = $baseManifest.manifests | Where-Object { $_.platform.os -eq 'windows' -and $_.platform.architecture -eq 'amd64' } | Select-Object -First 1 -ExpandProperty digest
           if ($baseDigest -notmatch '^sha256:[0-9a-f]{64}$') { throw 'Windows base image has no immutable windows/amd64 digest' }
           $baseImage = "mcr.microsoft.com/windows/server:ltsc2025@$baseDigest"
