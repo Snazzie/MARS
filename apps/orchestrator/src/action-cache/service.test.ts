@@ -31,7 +31,7 @@ function connectProxy(proxyUrl: string): Promise<string> {
   return promise;
 }
 
-function requestThroughProxy(proxyUrl: string, targetHost: string, ca: string, input: { method: string; path: string; headers?: Record<string, string>; body?: string }): Promise<{ status: number; headers: Record<string, string>; body: string }> {
+function requestThroughProxy(proxyUrl: string, targetHost: string, ca: string, input: { method: string; path: string; headers?: Record<string, string>; body?: string }): Promise<{ status: number; headers: Record<string, string>; body: string; bodyBytes: Buffer }> {
   const proxy = new URL(proxyUrl);
   const credentials = proxy.username
     ? `Proxy-Authorization: Basic ${Buffer.from(`${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`).toString("base64")}\r\n`
@@ -91,7 +91,7 @@ function requestThroughProxy(proxyUrl: string, targetHost: string, ca: string, i
         }
         responseBody = Buffer.concat(decoded);
       }
-      resolve({ status, headers: responseHeaders, body: responseBody.toString("utf8") });
+      resolve({ status, headers: responseHeaders, body: responseBody.toString("utf8"), bodyBytes: responseBody });
     });
     secure.once("error", reject);
   };
@@ -305,6 +305,74 @@ test("intercepts metadata-free cache requests through authenticated CONNECT", as
   expect(body).toMatchObject({ ok: true });
   if (!body || typeof body !== "object" || !("signed_upload_url" in body) || typeof body.signed_upload_url !== "string") throw new Error("cache create response missing upload URL");
   expect(new URL(body.signed_upload_url).origin).toBe(service.status().cacheBaseUrl);
+});
+test("caches anonymous npm tarballs and bypasses metadata and authorized downloads", async () => {
+  const packageBytes = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x53, 0x4f, 0x4d, 0x45, 0x00, 0x03, 0x53, 0x54, 0x55, 0x56, 0x00, 0xff]);
+  const tarballPath = "/is-number/-/is-number-7.0.0.tgz";
+  const metadataPath = "/is-number";
+  let anonymousTarballCalls = 0;
+  const forwarded: Array<{ url: string; authorization?: string }> = [];
+  const service = await startActionCacheService({
+    root: await root(),
+    controlPlaneOrigin: "https://control.example.test",
+    ttlSeconds: 3600,
+    proxyPort: 0,
+    dataPort: 0,
+    discoverAdvertiseHost: async () => "127.0.0.1",
+    forwardPackageRequest: async (request, response) => {
+      const url = request.url ?? "";
+      const authorization = request.headers.authorization;
+      if (url === tarballPath && !authorization) anonymousTarballCalls += 1;
+      forwarded.push(authorization ? { url, authorization } : { url });
+      response.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-length": String(packageBytes.length),
+        etag: '"package-v1"',
+      });
+      response.end(packageBytes);
+    },
+  });
+  services.push(service);
+  const transport = service.transport("11111111-1111-4111-8111-111111111111", leaseExpiry());
+  const first = await requestThroughProxy(transport.proxyUrl, "registry.npmjs.org", transport.caCertificatePem, {
+    method: "GET",
+    path: tarballPath,
+  });
+  const second = await requestThroughProxy(transport.proxyUrl, "registry.npmjs.org", transport.caCertificatePem, {
+    method: "GET",
+    path: tarballPath,
+  });
+  expect(first.status).toBe(200);
+  expect(second.status).toBe(200);
+  expect(first.bodyBytes).toEqual(packageBytes);
+  expect(second.bodyBytes).toEqual(packageBytes);
+  expect(first.headers["x-mars-package-cache"]).toBe("MISS");
+  expect(second.headers["x-mars-package-cache"]).toBe("HIT");
+  expect(anonymousTarballCalls).toBe(1);
+
+  const metadataFirst = await requestThroughProxy(transport.proxyUrl, "registry.npmjs.org", transport.caCertificatePem, { method: "GET", path: metadataPath });
+  const metadataSecond = await requestThroughProxy(transport.proxyUrl, "registry.npmjs.org", transport.caCertificatePem, { method: "GET", path: metadataPath });
+  const authorizedFirst = await requestThroughProxy(transport.proxyUrl, "registry.npmjs.org", transport.caCertificatePem, {
+    method: "GET",
+    path: tarballPath,
+    headers: { authorization: "Bearer private-token" },
+  });
+  const authorizedSecond = await requestThroughProxy(transport.proxyUrl, "registry.npmjs.org", transport.caCertificatePem, {
+    method: "GET",
+    path: tarballPath,
+    headers: { authorization: "Bearer private-token" },
+  });
+  expect(metadataFirst.headers["x-mars-package-cache"]).toBeUndefined();
+  expect(metadataSecond.headers["x-mars-package-cache"]).toBeUndefined();
+  expect(authorizedFirst.headers["x-mars-package-cache"]).toBeUndefined();
+  expect(authorizedSecond.headers["x-mars-package-cache"]).toBeUndefined();
+  expect(forwarded).toEqual([
+    { url: tarballPath },
+    { url: metadataPath },
+    { url: metadataPath },
+    { url: tarballPath, authorization: "Bearer private-token" },
+    { url: tarballPath, authorization: "Bearer private-token" },
+  ]);
 });
 test("preserves UTF-8 response bodies through authenticated CONNECT", async () => {
   const service = await startActionCacheService({
