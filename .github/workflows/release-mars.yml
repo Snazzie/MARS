@@ -114,6 +114,9 @@ jobs:
         run: |
           set -euo pipefail
           export LIBGUESTFS_BACKEND=direct
+          export LIBGUESTFS_BACKEND_SETTINGS=force_tcg
+          sudo chmod a+rx /boot
+          sudo chmod a+r /boot/vmlinuz-*
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y libguestfs-tools qemu-utils
           UBUNTU_QCOW2_URL=https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img \
