@@ -27,6 +27,8 @@ env:
   WORKER_VERSION: ${{ inputs.worker_version }}
   BUILD_ID: ${{ github.sha }}
   CONTRACT_VERSION_FILE: deploy/workers/contract-version.txt
+  APP_CANDIDATE_TAG: cp-${{ github.run_id }}-${{ github.run_attempt }}
+  BROKER_CANDIDATE_TAG: worker-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   validate-inputs:
@@ -97,7 +99,7 @@ jobs:
         id: runner
         run: |
           set -euo pipefail
-          runner_url=$(curl --fail --location --proto '=https' --tlsv1.2 https://api.github.com/repos/actions/runner/releases/latest | jq -r '[.assets[] | select(.name | test("^actions-runner-linux-x64-[0-9.]+\\.tar\\.gz$"))][0].browser_download_url')
+          runner_url=$(curl --fail --location --proto '=https' --tlsv1.2 'https://api.github.com/repos/actions/runner/releases?per_page=30' | jq -r '[.[] | select(.draft == false and .prerelease == false)][0].assets[] | select(.name | test("^actions-runner-linux-x64-[0-9.]+\\.tar\\.gz$")) | .browser_download_url')
           [[ "$runner_url" != null && "$runner_url" == https://* ]] || { echo 'Actions Runner Linux asset was not found' >&2; exit 1; }
           runner_sha256=$(curl --fail --location --proto '=https' --tlsv1.2 "$runner_url" | sha256sum | cut -d' ' -f1)
           echo "url=$runner_url" >> "$GITHUB_OUTPUT"
@@ -120,15 +122,23 @@ jobs:
         run: |
           set -euo pipefail
           docker buildx build --platform linux/amd64 --push -f deploy/workers/linux-broker.Dockerfile \
-            -t "$BROKER_IMAGE:worker-v$WORKER_VERSION" -t "$BROKER_IMAGE:worker-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" .
+            -t "$BROKER_IMAGE:worker-v$WORKER_VERSION" -t "$BROKER_IMAGE:$BROKER_CANDIDATE_TAG" .
           digest=$(docker buildx imagetools inspect "$BROKER_IMAGE:worker-v$WORKER_VERSION" --format '{{.Manifest.Digest}}')
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'broker digest is not immutable' >&2; exit 1; }
           [[ "$BROKER_IMAGE@$digest" =~ @sha256:[0-9a-f]{64}$ ]] || { echo 'broker image must be digest-pinned' >&2; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Verify broker image contents and non-root entrypoint
+        env:
+          BROKER_DIGEST: ${{ steps.broker.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint /bin/sh "$BROKER_IMAGE@$BROKER_DIGEST" -c 'test "$(id -u)" = 10001 && test -x /usr/local/bin/mars-orchestrator && test -d /var/lib/mars/config && test -d /var/lib/mars/action-cache'
       - id: metadata
         env:
           BROKER_DIGEST: ${{ steps.broker.outputs.digest }}
         run: |
           set -euo pipefail
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/worker-v$WORKER_VERSION"
           asset() { local file="$1" name="$2"; printf '{"url":"%s/%s","sha256":"%s"}' "$base" "$name" "$(sha256sum "$file" | cut -d' ' -f1)"; }
           jq -cn --argjson installer "$(asset dist/linux/install-worker.sh install-worker-linux-x64.sh)" \
             --argjson orchestrator "$(asset dist/linux/mars-orchestrator mars-orchestrator-linux-x64)" --argjson jobAgent "$(asset dist/linux/mars-job-agent mars-job-agent-linux-x64)" \
@@ -149,6 +159,7 @@ jobs:
       metadata: ${{ steps.metadata.outputs.json }}
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
@@ -160,18 +171,18 @@ jobs:
           bun build apps/orchestrator/src/index.ts --compile --target=bun-windows-x64 --outfile=dist/windows/mars-orchestrator.exe
           bun build apps/job-agent/src/index.ts --compile --target=bun-windows-x64 --outfile=dist/windows/mars-job-agent.exe
           Copy-Item deploy/workers/install-worker.ps1,deploy/workers/build-windows-container-image-local.ps1,images/jobs/windows/verify-runtime.ps1,images/jobs/windows/Containerfile,images/jobs/windows/entrypoint.ps1 dist/windows
+          rustup target add x86_64-pc-windows-gnu
           cargo build --manifest-path apps/windows-service-host/Cargo.toml --release --target x86_64-pc-windows-gnu
           Copy-Item apps/windows-service-host/target/x86_64-pc-windows-gnu/release/mars-service-host.exe dist/windows/mars-service-host.exe
       - name: Resolve and hash Windows container dependencies
-        id: dependencies
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $runner = (curl.exe --fail --location --proto '=https' --tlsv1.2 https://api.github.com/repos/actions/runner/releases/latest | ConvertFrom-Json)
-          $runnerAsset = $runner.assets | Where-Object name -Match '^actions-runner-win-x64-[0-9.]+\.zip$' | Select-Object -First 1
+          $runnerRelease = (curl.exe --fail --location --proto '=https' --tlsv1.2 'https://api.github.com/repos/actions/runner/releases?per_page=30' | ConvertFrom-Json) | Where-Object { -not $_.draft -and -not $_.prerelease } | Select-Object -First 1
+          $runnerAsset = $runnerRelease.assets | Where-Object name -Match '^actions-runner-win-x64-[0-9.]+\.zip$' | Select-Object -First 1
           if (-not $runnerAsset) { throw 'Actions Runner Windows asset was not found' }
-          $git = (curl.exe --fail --location --proto '=https' --tlsv1.2 https://api.github.com/repos/git-for-windows/git/releases/latest | ConvertFrom-Json)
-          $gitAsset = $git.assets | Where-Object name -Match '^MinGit-[0-9.]+-64-bit\.zip$' | Select-Object -First 1
+          $gitRelease = (curl.exe --fail --location --proto '=https' --tlsv1.2 'https://api.github.com/repos/git-for-windows/git/releases?per_page=30' | ConvertFrom-Json) | Where-Object { -not $_.draft -and -not $_.prerelease } | Select-Object -First 1
+          $gitAsset = $gitRelease.assets | Where-Object name -Match '^MinGit-[0-9.]+-64-bit\.zip$' | Select-Object -First 1
           if (-not $gitAsset) { throw 'MinGit Windows asset was not found' }
           $baseManifest = (docker buildx imagetools inspect mcr.microsoft.com/windows/server:ltsc2025 --raw | ConvertFrom-Json)
           $baseDigest = $baseManifest.manifests | Where-Object { $_.platform.os -eq 'windows' -and $_.platform.architecture -eq 'amd64' } | Select-Object -First 1 -ExpandProperty digest
@@ -192,6 +203,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $base = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/worker-v$env:WORKER_VERSION"
           function Asset($source, $releaseName) { $path = Join-Path $PWD "dist/windows/$source"; [ordered]@{ url="$base/$releaseName"; sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant() } }
           $deps = Get-Content dist/windows/dependencies.json -Raw | ConvertFrom-Json
           $container = [ordered]@{ baseImage=$deps.baseImage; runner=Asset 'mars-windows-runner.zip' 'mars-windows-runner.zip'; git=Asset 'mars-windows-git.zip' 'mars-windows-git.zip'; vcRuntime=Asset 'mars-windows-vc-runtime.exe' 'mars-windows-vc-runtime.exe'; buildScript=Asset 'build-windows-container-image-local.ps1' 'build-windows-container-image-local.ps1'; verifyScript=Asset 'verify-runtime.ps1' 'verify-runtime.ps1'; containerfile=Asset 'Containerfile' 'Containerfile'; entrypoint=Asset 'entrypoint.ps1' 'entrypoint.ps1' }
@@ -210,6 +222,7 @@ jobs:
     outputs:
       metadata: ${{ steps.metadata.outputs.json }}
     steps:
+      - uses: docker/setup-buildx-action@v3
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
@@ -312,7 +325,7 @@ jobs:
           set -euo pipefail
           if gh release view "worker-v$WORKER_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "worker-v$WORKER_VERSION" --repo "$GITHUB_REPOSITORY" dist/release/* --clobber
-            gh release edit "worker-v$WORKER_VERSION" --repo "$GITHUB_REPOSITORY" --prerelease --latest=false
+            gh release edit "worker-v$WORKER_VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=true --latest=false
           else
             gh release create "worker-v$WORKER_VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Mars workers v$WORKER_VERSION" dist/release/*
           fi
@@ -349,7 +362,7 @@ jobs:
             --build-arg MARS_BUILD_ID="$BUILD_ID" \
             --build-arg MARS_WORKER_RELEASE_MANIFEST_URL="${{ needs.validate-inputs.outputs.manifest_url }}" \
             --build-arg MARS_WORKER_CONTRACT_VERSION="${{ needs.validate-inputs.outputs.contract_version }}" \
-            -t "$APP_IMAGE:v$APP_VERSION" -t "$APP_IMAGE:cp-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" .
+            -t "$APP_IMAGE:v$APP_VERSION" -t "$APP_IMAGE:$APP_CANDIDATE_TAG" .
           digest=$(docker buildx imagetools inspect "$APP_IMAGE:v$APP_VERSION" --format '{{.Manifest.Digest}}')
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'control-plane digest is not immutable' >&2; exit 1; }
           echo "digest=$digest" >> "$GITHUB_OUTPUT"

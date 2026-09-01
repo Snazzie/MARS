@@ -39,10 +39,11 @@ test("worker release is schema 3, immutable, and observable before promotion", a
 
 test("candidate images are explicit amd64 builds and promotions are gated", async () => {
   const workflow = await read(".github/workflows/release-mars.yml");
-  expect(workflow).toContain("docker buildx build --platform linux/amd64 --push");
+  expect(workflow).toContain('echo "digest=$digest" >> "$GITHUB_OUTPUT"');
   expect(workflow).toContain("MARS_WORKER_RELEASE_MANIFEST_URL");
   expect(workflow).toContain("MARS_WORKER_CONTRACT_VERSION");
   expect(workflow).toContain("SMOKE_MANIFEST_URL: ''");
+  expect(workflow).toContain("rustup target add x86_64-pc-windows-gnu");
   expect(workflow).toContain('docker buildx imagetools create --tag "$BROKER_IMAGE:latest" "$BROKER_IMAGE@$broker_digest"');
   expect(workflow).toContain('docker buildx imagetools create --tag "$APP_IMAGE:latest" "$APP_IMAGE@$APP_DIGEST"');
   expect(workflow).toContain('--prerelease=false --latest=false');
