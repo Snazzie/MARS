@@ -61,32 +61,37 @@ function requestThroughProxy(proxyUrl: string, targetHost: string, ca: string, i
     const chunks: Buffer[] = [];
     secure.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
     secure.once("end", () => {
-      const response = Buffer.concat(chunks).toString("utf8");
-      const separator = response.indexOf("\r\n\r\n");
-      if (separator < 0) {
+      const response = Buffer.concat(chunks);
+      const headerSeparator = Buffer.from("\r\n\r\n");
+      const headerEnd = response.indexOf(headerSeparator);
+      if (headerEnd < 0) {
         reject(new Error("proxy response missing headers"));
         return;
       }
-      const lines = response.slice(0, separator).split("\r\n");
+      const lines = response.subarray(0, headerEnd).toString("latin1").split("\r\n");
       const status = Number(lines[0]?.match(/^HTTP\/\d\.\d (\d{3})(?: |$)/)?.[1] ?? 0);
       const responseHeaders = Object.fromEntries(lines.slice(1).map((line) => {
         const separator = line.indexOf(":");
         return [line.slice(0, separator).toLowerCase(), line.slice(separator + 1).trim()];
       }));
-      let responseBody = response.slice(separator + 4);
+      let responseBody = response.subarray(headerEnd + headerSeparator.length);
       if (responseHeaders["transfer-encoding"]?.toLowerCase() === "chunked") {
-        let decoded = "";
-        while (responseBody.length) {
-          const end = responseBody.indexOf("\r\n");
+        const decoded: Buffer[] = [];
+        let offset = 0;
+        while (offset < responseBody.length) {
+          const end = responseBody.indexOf("\r\n", offset);
           if (end < 0) break;
-          const size = Number.parseInt(responseBody.slice(0, end), 16);
+          const size = Number.parseInt(responseBody.subarray(offset, end).toString("ascii"), 16);
           if (!size) break;
-          decoded += responseBody.slice(end + 2, end + 2 + size);
-          responseBody = responseBody.slice(end + 4 + size);
+          const start = end + 2;
+          const finish = start + size;
+          if (finish + 2 > responseBody.length) break;
+          decoded.push(responseBody.subarray(start, finish));
+          offset = finish + 2;
         }
-        responseBody = decoded;
+        responseBody = Buffer.concat(decoded);
       }
-      resolve({ status, headers: responseHeaders, body: responseBody });
+      resolve({ status, headers: responseHeaders, body: responseBody.toString("utf8") });
     });
     secure.once("error", reject);
   };
@@ -300,6 +305,29 @@ test("intercepts metadata-free cache requests through authenticated CONNECT", as
   expect(body).toMatchObject({ ok: true });
   if (!body || typeof body !== "object" || !("signed_upload_url" in body) || typeof body.signed_upload_url !== "string") throw new Error("cache create response missing upload URL");
   expect(new URL(body.signed_upload_url).origin).toBe(service.status().cacheBaseUrl);
+});
+test("preserves UTF-8 response bodies through authenticated CONNECT", async () => {
+  const service = await startActionCacheService({
+    root: await root(),
+    controlPlaneOrigin: "https://control.example.test",
+    ttlSeconds: 3600,
+    proxyPort: 0,
+    dataPort: 0,
+    discoverAdvertiseHost: async () => "127.0.0.1",
+    forwardResultsRequest: async (_request, response) => {
+      response.writeHead(200, { "content-type": "text/plain", "transfer-encoding": "chunked" });
+      response.write("café");
+      response.end(" ☕");
+    },
+  });
+  services.push(service);
+  const transport = service.transport("11111111-1111-4111-8111-111111111111", leaseExpiry());
+  const response = await requestThroughProxy(transport.proxyUrl, "results-receiver.actions.githubusercontent.com", transport.caCertificatePem, {
+    method: "GET",
+    path: "/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact",
+  });
+  expect(response.status).toBe(200);
+  expect(response.body).toBe("café ☕");
 });
 test("reports live entry count and bytes after a cache fill", async () => {
   let now = new Date();
