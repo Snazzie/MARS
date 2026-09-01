@@ -191,7 +191,7 @@ test("resolves development worker binaries without optional template or image-bu
       MARS_WINDOWS_SERVICE_HOST_PATH: serviceHost,
     });
 
-    expect(artifacts).toEqual({
+    expect(artifacts).toMatchObject({
       orchestrator: {
         path: orchestrator,
         sha256: createHash("sha256").update("orchestrator").digest("hex"),

@@ -287,31 +287,25 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const webRoot = options.webRoot ?? new URL(Bun.env.WEB_ROOT ?? "../../web/dist/", import.meta.url);
   // Production never resolves worker binaries from the application image.
   const workerInstallerRoot = options.workerInstallerRoot ?? new URL(production ? "file:///var/empty/" : Bun.env.WORKER_INSTALLER_ROOT ?? "../../../deploy/workers/", import.meta.url);
-  const developmentPath = (name: string, fallback: string): string | undefined => {
-    if (production) return undefined;
-    const configured = Bun.env[name]?.trim();
-    if (!configured) return fileURLToPath(new URL(fallback, import.meta.url));
-    // Windows drive and UNC paths are filesystem paths, not URL references.
-    if (/^(?:[A-Za-z]:[\\/]|\\\\)/.test(configured)) return configured;
-    try {
-      const parsed = new URL(configured, import.meta.url);
-      return parsed.protocol === "file:" ? fileURLToPath(parsed) : configured;
-    } catch {
-      return configured;
-    }
-  };
-  const windowsContainerArtifacts = production ? undefined : {
-    builderPath: developmentPath("MARS_WINDOWS_CONTAINER_BUILDER", "../../../deploy/workers/build-windows-container-image-local.ps1")!,
-    verifierPath: developmentPath("MARS_WINDOWS_CONTAINER_VERIFIER", "../../../images/jobs/windows/verify-runtime.ps1")!,
-    containerfilePath: developmentPath("MARS_WINDOWS_CONTAINERFILE", "../../../images/jobs/windows/Containerfile")!,
-    entrypointPath: developmentPath("MARS_WINDOWS_CONTAINER_ENTRYPOINT", "../../../images/jobs/windows/entrypoint.ps1")!,
-    jobAgentPath: developmentPath("MARS_WINDOWS_CONTAINER_JOB_AGENT", "../../../apps/job-agent/dist/whitesmith-job-agent.exe")!,
-  };
   const [developmentWindowsArtifacts, developmentLinuxArtifacts, developmentMacosArtifacts] = await Promise.all([
     resolveDevelopmentWindowsArtifacts(Bun.env),
     resolveDevelopmentLinuxArtifacts(Bun.env),
     resolveDevelopmentMacosArtifacts(Bun.env),
   ]);
+  const developmentContainer = developmentWindowsArtifacts?.container;
+  const windowsContainerArtifacts = developmentContainer?.buildScript?.path
+    && developmentContainer.verifyScript?.path
+    && developmentContainer.containerfile?.path
+    && developmentContainer.entrypoint?.path
+    && developmentWindowsArtifacts.jobAgent?.path
+    ? {
+      builderPath: developmentContainer.buildScript.path,
+      verifierPath: developmentContainer.verifyScript.path,
+      containerfilePath: developmentContainer.containerfile.path,
+      entrypointPath: developmentContainer.entrypoint.path,
+      jobAgentPath: developmentWindowsArtifacts.jobAgent.path,
+    }
+    : undefined;
   const workerReleaseManifestSource = production ? Bun.env.MARS_WORKER_RELEASE_MANIFEST_URL?.trim() || undefined : undefined;
   const workerReleaseContractVersion = production ? Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() || undefined : undefined;
   const workerReleaseManifest = production
