@@ -17,12 +17,15 @@ export type DevelopmentArtifact = {
 export type DevelopmentWindowsArtifacts = {
   orchestrator: DevelopmentArtifact;
   serviceHost: DevelopmentArtifact;
-  template?: DevelopmentArtifact;
   container?: {
     baseImage: string;
     runner: DevelopmentArtifact;
     git: DevelopmentArtifact;
     vcRuntime: DevelopmentArtifact;
+    buildScript?: DevelopmentArtifact;
+    verifyScript?: DevelopmentArtifact;
+    containerfile?: DevelopmentArtifact;
+    entrypoint?: DevelopmentArtifact;
   };
 };
 
@@ -35,6 +38,8 @@ export type DevelopmentLinuxArtifacts = {
 
 export type DevelopmentMacosArtifacts = {
   orchestrator?: DevelopmentArtifact;
+  jobAgent?: DevelopmentArtifact;
+  imagePreparationScript?: DevelopmentArtifact;
   tartImage?: string;
   tartImageDigest?: string;
 };
@@ -77,6 +82,9 @@ export type ControlPlaneHttpDeps = {
   developmentLinuxArtifacts?: DevelopmentLinuxArtifacts;
   developmentMacosArtifacts?: DevelopmentMacosArtifacts;
   developmentArtifactProxy?: DevelopmentArtifactProxyOptions;
+  /** Development-only local source for installer scripts. */
+  workerInstallerRoot?: URL;
+  /** Development-only image builder seam; never populated by production startup. */
   windowsContainerBuild?: {
     baseImage: string;
     runnerUrl: string;
@@ -98,20 +106,13 @@ export type ControlPlaneHttpDeps = {
     entrypointPath: string;
     jobAgentPath: string;
   };
-  templateManifestPaths?: Partial<Record<"windows-x64" | "linux-x64", string>>;
-  templateArtifactPaths?: Partial<Record<"windows-x64" | "linux-x64", string>>;
-  workerTemplatePaths?: Partial<Record<"windows-x64" | "linux-x64", string>>;
+  /** Legacy local-only template seams retained for non-production tooling. */
   workerTemplateDigests?: Partial<Record<"windows-x64" | "linux-x64", string>>;
-  macosTartBaseImage?: string;
   workerConnectionOrigins(): string[];
   currentUser(request: Request): Promise<SessionUser | null>;
   requestId(): string;
   requestSource(request: Request): string;
   webRoot: URL;
-  workerInstallerRoot: URL;
-  workerOrchestratorExecutables?: Partial<Record<"linux-x64" | "windows-x64" | "macos-arm64", URL>>;
-  workerServiceHostExecutable?: URL;
-  workerOrchestratorExecutable?: URL;
   workerRequestLimiter?: RequestLimiter;
   workerDispatcher?: WorkerCommandDispatcher;
   workerConnected?: (workerId: string) => boolean;

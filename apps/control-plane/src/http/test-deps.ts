@@ -51,7 +51,7 @@ const fakeSetup: ControlPlaneHttpDeps["setup"] = {
   authenticate: async () => ({ userId: "admin", firstAdmin: true }),
 };
 
-type TestOverrides = Partial<ControlPlaneHttpDeps> & Partial<{ baseUrl: string; browserBaseUrl: string; githubWebhookSecret: string }>;
+type TestOverrides = Partial<ControlPlaneHttpDeps> & Partial<{ baseUrl: string; browserBaseUrl: string; githubWebhookSecret: string }> & Record<string, unknown>;
 export function fakeHttpDeps(overrides: TestOverrides = {}): ControlPlaneHttpDeps {
   const legacy = overrides as Partial<{ baseUrl: string; browserBaseUrl: string }>;
   const publicOrigin = legacy.baseUrl ?? "https://control-plane.test";

@@ -13,7 +13,6 @@ import { verifyWorkerBootstrap, initializeWorkerBootstrap, rotateWorkerBootstrap
 import { approvePendingWorker, configurePendingWorker, createRequestLimiter, hasMachineIdentity, parseApproveWorkerRequest, requestPendingWorker, rejectPendingWorker } from "../worker-requests.ts";
 import { httpOrigin } from "../http-origin.ts";
 function noStore(headers = new Headers()): Headers { headers.set("cache-control", "no-store"); return headers; }
-const workerReleaseAssetUrl = (name: string): string => `https://github.com/Snazzie/Mars/releases/latest/download/${name}`;
 function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\"'\"'")}'`; }
 function powerShellQuote(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
 type InstallerValues = Record<string, string>;
@@ -459,80 +458,85 @@ function snapshotResponse(
   headers.set("X-Content-SHA256", expectedHash);
   return new Response(body, { status: 200, headers });
 }
-type LinuxInstallerMetadata = Pick<LinuxWorkerRelease, "brokerImage" | "goldenImageSha256" | "composeSha256" | "domainTemplateSha256">;
+type LinuxInstallerMetadata = Pick<LinuxWorkerRelease, "brokerImage" | "goldenImage" | "compose" | "domainTemplate">;
 
 export function linuxInstallerValues(platform: LinuxInstallerMetadata, connectOrigin: string, mode: "local" | "production" = "production"): InstallerValues {
   return {
     MARS_ARTIFACT_MODE: mode,
     MARS_BROKER_IMAGE: platform.brokerImage,
     MARS_GOLDEN_IMAGE: `${connectOrigin}/api/workers/linux-golden-image`,
-    MARS_GOLDEN_DIGEST: `sha256:${platform.goldenImageSha256}`,
+    MARS_GOLDEN_DIGEST: `sha256:${platform.goldenImage.sha256}`,
     MARS_COMPOSE_FILE: `${connectOrigin}/api/workers/linux-broker-compose`,
-    MARS_COMPOSE_SHA256: platform.composeSha256,
+    MARS_COMPOSE_SHA256: platform.compose.sha256,
     MARS_DOMAIN_TEMPLATE: `${connectOrigin}/api/workers/linux-domain-template`,
-    MARS_DOMAIN_TEMPLATE_SHA256: platform.domainTemplateSha256,
+    MARS_DOMAIN_TEMPLATE_SHA256: platform.domainTemplate.sha256,
     MARS_LIBVIRT_NETWORK: "default",
   };
 }
 
 export function windowsInstallerValues(platform: WindowsWorkerRelease | undefined, connectOrigin: string, development?: NonNullable<ControlPlaneHttpDeps["developmentWindowsArtifacts"]>): InstallerValues {
-  if (development) {
-    const values: InstallerValues = {
-      WindowsArtifactMode: "local",
-      WindowsRuntime: "container",
-      WindowsOrchestratorUrl: `${connectOrigin}/api/workers/orchestrator?audience=windows-x64`,
-      WindowsOrchestratorSha256: development.orchestrator.sha256,
-      WindowsServiceHostUrl: `${connectOrigin}/api/workers/service-host?audience=windows-x64`,
-      WindowsServiceHostSha256: development.serviceHost.sha256,
-    };
-    if (development.template) {
-      values.WindowsTemplateUrl = `${connectOrigin}/api/workers/templates/windows-x64/artifact`;
-      values.WindowsTemplatePath = "C:\\ProgramData\\Mars\\worker-template.vhdx";
-      values.WindowsTemplateDigest = `sha256:${development.template.sha256}`;
-    }
-    if (development.container) {
-      values.WindowsContainerBaseImage = development.container.baseImage;
-      values.WindowsContainerImage = "mars/windows-job:local";
-      values.WindowsContainerRunnerUrl = `${connectOrigin}/api/workers/windows-container-runner`;
-      values.WindowsContainerRunnerSha256 = development.container.runner.sha256;
-      values.WindowsContainerGitUrl = `${connectOrigin}/api/workers/windows-container-git`;
-      values.WindowsContainerGitSha256 = development.container.git.sha256;
-      values.WindowsContainerVcRuntimeUrl = `${connectOrigin}/api/workers/windows-container-vc-runtime`;
-      values.WindowsContainerVcRuntimeSha256 = development.container.vcRuntime.sha256;
-    }
-    return values;
-  }
-  if (!platform) throw new Error("Windows release metadata is unavailable.");
+  const source = platform ?? (development ? ({
+    installer: development.orchestrator,
+    orchestrator: development.orchestrator,
+    serviceHost: development.serviceHost,
+    jobAgent: development.orchestrator,
+    container: development.container ? {
+      baseImage: development.container.baseImage,
+      runner: development.container.runner,
+      git: development.container.git,
+      vcRuntime: development.container.vcRuntime,
+      buildScript: development.container.buildScript ?? development.orchestrator,
+      verifyScript: development.container.verifyScript ?? development.orchestrator,
+      containerfile: development.container.containerfile ?? development.orchestrator,
+      entrypoint: development.container.entrypoint ?? development.orchestrator,
+    } : undefined,
+  } as unknown as WindowsWorkerRelease) : undefined);
+  if (!source) throw new Error("Windows release metadata is unavailable.");
+  const container = source.container;
   return {
-    WindowsArtifactMode: "production",
+    WindowsArtifactMode: platform ? "production" : "local",
     WindowsRuntime: "container",
     WindowsOrchestratorUrl: `${connectOrigin}/api/workers/orchestrator?audience=windows-x64`,
-    WindowsOrchestratorSha256: platform.orchestratorSha256,
+    WindowsOrchestratorSha256: source.orchestrator.sha256,
     WindowsServiceHostUrl: `${connectOrigin}/api/workers/service-host?audience=windows-x64`,
-    WindowsServiceHostSha256: platform.serviceHostSha256,
-    WindowsTemplateUrl: platform.vmTemplateUrl,
-    WindowsTemplatePath: "C:\\ProgramData\\Mars\\worker-template.vhdx",
-    WindowsTemplateDigest: `sha256:${platform.vmTemplateSha256}`,
-    WindowsContainerBaseImage: platform.container.baseImage,
-    WindowsContainerImage: "mars/windows-job:local",
-    WindowsContainerRunnerUrl: platform.container.runner.url,
-    WindowsContainerRunnerSha256: platform.container.runner.sha256,
-    WindowsContainerGitUrl: platform.container.git.url,
-    WindowsContainerGitSha256: platform.container.git.sha256,
-    WindowsContainerVcRuntimeUrl: platform.container.vcRuntime.url,
-    WindowsContainerVcRuntimeSha256: platform.container.vcRuntime.sha256,
+    WindowsServiceHostSha256: source.serviceHost.sha256,
+    WindowsJobAgentUrl: `${connectOrigin}/api/workers/windows-container-job-agent`,
+    WindowsJobAgentSha256: source.jobAgent.sha256,
+    ...(container ? {
+      WindowsContainerBaseImage: container.baseImage,
+      WindowsContainerImage: "mars/windows-job:local",
+      WindowsContainerRunnerUrl: `${connectOrigin}/api/workers/windows-container-runner`,
+      WindowsContainerRunnerSha256: container.runner.sha256,
+      WindowsContainerGitUrl: `${connectOrigin}/api/workers/windows-container-git`,
+      WindowsContainerGitSha256: container.git.sha256,
+      WindowsContainerVcRuntimeUrl: `${connectOrigin}/api/workers/windows-container-vc-runtime`,
+      WindowsContainerVcRuntimeSha256: container.vcRuntime.sha256,
+      WindowsContainerBuilderUrl: `${connectOrigin}/api/workers/windows-container-builder`,
+      WindowsContainerBuilderSha256: container.buildScript.sha256,
+      WindowsContainerVerifierUrl: `${connectOrigin}/api/workers/windows-container-verifier`,
+      WindowsContainerVerifierSha256: container.verifyScript.sha256,
+      WindowsContainerfileUrl: `${connectOrigin}/api/workers/windows-containerfile`,
+      WindowsContainerfileSha256: container.containerfile.sha256,
+      WindowsContainerEntrypointUrl: `${connectOrigin}/api/workers/windows-container-entrypoint`,
+      WindowsContainerEntrypointSha256: container.entrypoint.sha256,
+    } : {}),
   };
 }
 
-type MacosInstallerMetadata = Pick<MacosWorkerRelease, "orchestratorSha256" | "tartImage" | "tartImageDigest">;
+type MacosInstallerMetadata = Pick<MacosWorkerRelease, "orchestrator" | "jobAgent" | "imagePreparationScript" | "tartSourceImage">;
 
 export function macosInstallerValues(platform: MacosInstallerMetadata, connectOrigin: string, mode: "local" | "production" = "production"): InstallerValues {
   return {
     MARS_ARTIFACT_MODE: mode,
     PUBLIC_BASE_URL: new URL(connectOrigin).origin,
-    MARS_ORCHESTRATOR_SHA256: platform.orchestratorSha256,
-    TART_IMAGE: platform.tartImage,
-    TART_IMAGE_DIGEST: platform.tartImageDigest,
+    MARS_ORCHESTRATOR_URL: `${connectOrigin}/api/workers/orchestrator?audience=macos-arm64`,
+    MARS_ORCHESTRATOR_SHA256: platform.orchestrator.sha256,
+    MARS_JOB_AGENT_URL: `${connectOrigin}/api/workers/macos-job-agent`,
+    MARS_JOB_AGENT_SHA256: platform.jobAgent.sha256,
+    IMAGE_PREPARATION_SCRIPT_URL: `${connectOrigin}/api/workers/macos-image-preparation`,
+    IMAGE_PREPARATION_SCRIPT_SHA256: platform.imagePreparationScript.sha256,
+    TART_IMAGE: platform.tartSourceImage,
+    TART_IMAGE_DIGEST: platform.tartSourceImage.split("@sha256:")[1]!,
   };
 }
 
@@ -546,8 +550,8 @@ async function installerArtifacts(
 ): Promise<string[]> {
   const missing: string[] = [];
   const installerName = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : "install-worker-macos.sh";
-  if (!development && audience !== "linux-x64" && !await artifactExists(pathFor(deps.workerInstallerRoot, installerName))) missing.push(`installer:${installerName}`);
   if (development) {
+    if (!deps.workerInstallerRoot || !await artifactExists(pathFor(deps.workerInstallerRoot, installerName))) missing.push(`installer:${installerName}`);
     if (audience === "linux-x64") {
       const linux = development as DevelopmentLinuxArtifacts;
       if (!hasValue(linux.brokerImage)) missing.push("development:broker-image");
@@ -560,35 +564,21 @@ async function installerArtifacts(
       if (!windows.serviceHost) missing.push("development:service-host");
     } else {
       const macos = development as DevelopmentMacosArtifacts;
-      if (!macos.orchestrator) missing.push("development:orchestrator");
-      if (!hasValue(macos.tartImage)) missing.push("development:tart-image");
-      if (!hasValue(macos.tartImageDigest)) missing.push("development:tart-image-digest");
+      if (!macos.orchestrator || !hasValue(macos.tartImage) || !hasValue(macos.tartImageDigest)) missing.push(`development:${audience}`);
     }
     return missing;
   }
   if (!deps.workerReleaseManifest) return ["release-manifest"];
   if (!platform) return [`platform:${audience}`];
   const fields = audience === "linux-x64"
-    ? ["brokerImage", "goldenImageUrl", "goldenImageSha256", "composeSha256", "domainTemplateSha256"]
+    ? ["installer", "orchestrator", "jobAgent", "brokerImage", "goldenImage", "compose", "domainTemplate"]
     : audience === "windows-x64"
-      ? ["orchestratorSha256", "serviceHostSha256", "vmTemplateUrl", "vmTemplateSha256"]
-      : ["orchestratorSha256", "tartImage", "tartImageDigest"];
-  for (const field of fields) if (!hasValue((platform as unknown as Record<string, unknown>)[field])) missing.push(releaseField(audience, field));
-  const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined);
-  if (audience !== "linux-x64" && !await artifactExists(executable)) missing.push(`orchestrator:${audience}`);
+      ? ["installer", "orchestrator", "serviceHost", "jobAgent", "container"]
+      : ["installer", "orchestrator", "jobAgent", "imagePreparationScript", "tartSourceImage"];
+  for (const field of fields) if (!(platform as unknown as Record<string, unknown>)[field]) missing.push(releaseField(audience, field));
   return missing;
 }
 
-async function packagedResponse(path: ArtifactPath, filename: string, hash: string | undefined): Promise<Response> {
-  const file = Bun.file(path);
-  const response = new Response(file);
-  noStore(response.headers);
-  response.headers.set("content-type", "application/octet-stream");
-  response.headers.set("content-disposition", `attachment; filename="${filename}"`);
-  response.headers.set("content-length", String(file.size));
-  if (hash) response.headers.set("X-Content-SHA256", hash);
-  return response;
-}
 
 type CachedArtifactFactory = (
   path: string,
@@ -982,9 +972,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     sizeClass: ArtifactSizeClass,
   ) => {
     if (!artifact) return unavailable(c, [`development:${name}`]);
-    if (artifact.path && await artifactExists(artifact.path)) {
-      return localPackaged(c, artifact.path, `development:${name}`, filename, sizeClass);
-    }
+    if (artifact.path && await artifactExists(artifact.path)) return localPackaged(c, artifact.path, `development:${name}`, filename, sizeClass, artifact.sha256);
     if (artifact.url) {
       return await proxyPackagedResponse(artifact.url, filename, artifact.sha256, sizeClass, c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache)
         ?? unavailable(c, [`development:${name}`]);
@@ -1024,67 +1012,37 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403);
     return c.json(deps.workerConnectionOrigins(), { headers: noStore() });
   });
-  app.get("/api/workers/templates/:platform/manifest", async (c) => {
-    const platform = c.req.param("platform") as "windows-x64" | "linux-x64";
-    const path = deps.templateManifestPaths?.[platform];
-    if (!path || !await artifactExists(path)) return c.json({ code: "artifact_unavailable", message: "Template manifest is unavailable", artifact: `template-manifest:${platform}` }, 503, { "cache-control": "no-store" });
-    return new Response(Bun.file(path), { headers: noStore() });
-  });
-  app.get("/api/workers/templates/:platform/artifact", async (c) => {
-    const platform = c.req.param("platform") as "windows-x64" | "linux-x64";
-    if (platform === "windows-x64" && deps.developmentWindowsArtifacts) {
-      return developmentPackaged(c, deps.developmentWindowsArtifacts.template, "template", "windows-x64.vhdx", "template");
-    }
-    const path = deps.templateArtifactPaths?.[platform];
-    if (!path || !await artifactExists(path)) return c.json({ code: "artifact_unavailable", message: "Template artifact is unavailable", artifact: `template:${platform}` }, 503, { "cache-control": "no-store" });
-    const headers = noStore();
-    headers.set("content-type", "application/octet-stream");
-    headers.set("content-disposition", `attachment; filename="${platform}.vhdx"`);
-    return new Response(Bun.file(path), { headers });
-  });
-  const buildArtifact = async (c: Context<ControlPlaneEnv>, key: keyof NonNullable<typeof deps.windowsContainerArtifacts>, filename: string) => {
-    const path = (deps.windowsContainerArtifacts ?? deps.windowsContainerBuild)?.[key];
-    if (!path || !await artifactExists(path)) return c.json({ code: "artifact_unavailable", message: "Windows container build artifact is unavailable", artifact: `windows-container-${key}` }, 503, { "cache-control": "no-store" });
-    return localPackaged(c, path, `windows-container-${key}`, filename, "binary");
+  app.get("/api/workers/templates/:platform/manifest", (c) => unavailable(c, [`template-manifest:${c.req.param("platform")}`]));
+  app.get("/api/workers/templates/:platform/artifact", (c) => unavailable(c, [`template:${c.req.param("platform")}`]));
+  const releaseContainerAsset = (key: "buildScript" | "verifyScript" | "containerfile" | "entrypoint" | "jobAgent" | "runner" | "git" | "vcRuntime", name: string, filename: string, sizeClass: ArtifactSizeClass) => async (c: Context<ControlPlaneEnv>) => {
+    const release = deps.workerReleaseManifest?.platforms["windows-x64"];
+    const asset = release && key === "jobAgent" ? release.jobAgent : release?.container?.[key as keyof typeof release.container];
+    if (!asset || typeof asset === "string") return unavailable(c, [name]);
+    return await proxyPackagedResponse(asset.url, filename, asset.sha256, sizeClass, c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, [name]);
   };
-  const developmentContainerArtifact = (
-    key: "runner" | "git" | "vcRuntime",
-    name: string,
-    filename: string,
-  ) => (c: Context<ControlPlaneEnv>) => developmentPackaged(c, deps.developmentWindowsArtifacts?.container?.[key], name, filename, key === "vcRuntime" ? "binary" : "archive");
-  app.get("/api/workers/windows-container-builder", (c) => buildArtifact(c, "builderPath", "build-windows-container-image-local.ps1"));
-  app.get("/api/workers/windows-container-verifier", (c) => buildArtifact(c, "verifierPath", "verify-runtime.ps1"));
-  app.get("/api/workers/windows-containerfile", (c) => buildArtifact(c, "containerfilePath", "Containerfile"));
-  app.get("/api/workers/windows-container-entrypoint", (c) => buildArtifact(c, "entrypointPath", "entrypoint.ps1"));
-  app.get("/api/workers/windows-container-job-agent", (c) => buildArtifact(c, "jobAgentPath", "mars-job-agent.exe"));
-  app.get("/api/workers/windows-container-runner", developmentContainerArtifact("runner", "container-runner", "runner.zip"));
-  app.get("/api/workers/windows-container-git", developmentContainerArtifact("git", "container-git", "git.zip"));
-  app.get("/api/workers/windows-container-vc-runtime", developmentContainerArtifact("vcRuntime", "container-vc-runtime", "vc-runtime.exe"));
+  const developmentContainerArtifact = (key: "runner" | "git" | "vcRuntime", name: string, filename: string) => (c: Context<ControlPlaneEnv>) => developmentPackaged(c, deps.developmentWindowsArtifacts?.container?.[key], name, filename, key === "vcRuntime" ? "binary" : "archive");
+  app.get("/api/workers/windows-container-builder", releaseContainerAsset("buildScript", "windows-container-builder", "build-windows-container-image-local.ps1", "binary"));
+  app.get("/api/workers/windows-container-verifier", releaseContainerAsset("verifyScript", "windows-container-verifier", "verify-runtime.ps1", "binary"));
+  app.get("/api/workers/windows-containerfile", releaseContainerAsset("containerfile", "windows-containerfile", "Containerfile", "binary"));
+  app.get("/api/workers/windows-container-entrypoint", releaseContainerAsset("entrypoint", "windows-container-entrypoint", "entrypoint.ps1", "binary"));
+  app.get("/api/workers/windows-container-job-agent", releaseContainerAsset("jobAgent", "windows-container-job-agent", "mars-job-agent.exe", "binary"));
+  app.get("/api/workers/windows-container-runner", async c => deps.developmentWindowsArtifacts ? developmentContainerArtifact("runner", "container-runner", "runner.zip")(c) : releaseContainerAsset("runner", "windows-container-runner", "runner.zip", "archive")(c));
+  app.get("/api/workers/windows-container-git", async c => deps.developmentWindowsArtifacts ? developmentContainerArtifact("git", "container-git", "git.zip")(c) : releaseContainerAsset("git", "windows-container-git", "git.zip", "archive")(c));
+  app.get("/api/workers/windows-container-vc-runtime", async c => deps.developmentWindowsArtifacts ? developmentContainerArtifact("vcRuntime", "container-vc-runtime", "vc-runtime.exe")(c) : releaseContainerAsset("vcRuntime", "windows-container-vc-runtime", "vc-runtime.exe", "binary")(c));
   const linuxCompose = async (c: Context<ControlPlaneEnv>) => {
-    if (deps.developmentLinuxArtifacts) {
-      return developmentPackaged(c, deps.developmentLinuxArtifacts.compose, "linux-broker-compose", "linux-broker-compose.yaml", "binary");
-    }
-    const release = deps.workerReleaseManifest?.platforms["linux-x64"];
-    if (!release?.composeSha256) return unavailable(c, ["manifest:linux-x64.composeSha256"]);
-    return await proxyPackagedResponse(workerReleaseAssetUrl("linux-broker-compose.yaml"), "linux-broker-compose.yaml", release.composeSha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache)
-      ?? unavailable(c, ["linux-broker-compose"]);
+    if (deps.developmentLinuxArtifacts) return developmentPackaged(c, deps.developmentLinuxArtifacts.compose, "linux-broker-compose", "linux-broker-compose.yaml", "binary");
+    const asset = deps.workerReleaseManifest?.platforms["linux-x64"]?.compose;
+    return asset ? await proxyPackagedResponse(asset.url, "linux-broker-compose.yaml", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, ["linux-broker-compose"]) : unavailable(c, ["manifest:linux-x64.compose"]);
   };
   const linuxDomain = async (c: Context<ControlPlaneEnv>) => {
-    if (deps.developmentLinuxArtifacts) {
-      return developmentPackaged(c, deps.developmentLinuxArtifacts.domainTemplate, "linux-domain-template", "worker-domain.xml", "binary");
-    }
-    const release = deps.workerReleaseManifest?.platforms["linux-x64"];
-    if (!release?.domainTemplateSha256) return unavailable(c, ["manifest:linux-x64.domainTemplateSha256"]);
-    return await proxyPackagedResponse(workerReleaseAssetUrl("worker-domain.xml"), "worker-domain.xml", release.domainTemplateSha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache)
-      ?? unavailable(c, ["linux-domain-template"]);
+    if (deps.developmentLinuxArtifacts) return developmentPackaged(c, deps.developmentLinuxArtifacts.domainTemplate, "linux-domain-template", "worker-domain.xml", "binary");
+    const asset = deps.workerReleaseManifest?.platforms["linux-x64"]?.domainTemplate;
+    return asset ? await proxyPackagedResponse(asset.url, "worker-domain.xml", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, ["linux-domain-template"]) : unavailable(c, ["manifest:linux-x64.domainTemplate"]);
   };
-  app.get("/api/workers/linux-golden-image", async (c) => {
-    if (deps.developmentLinuxArtifacts) {
-      return developmentPackaged(c, deps.developmentLinuxArtifacts.goldenImage, "golden-image", "worker.qcow2", "template");
-    }
-    const release = deps.workerReleaseManifest?.platforms["linux-x64"];
-    if (!release?.goldenImageUrl || !release.goldenImageSha256) return unavailable(c, ["manifest:linux-x64.goldenImageUrl"]);
-    return immutablePackaged(c, { url: release.goldenImageUrl, sha256: release.goldenImageSha256 }, "linux-golden-image", "worker.qcow2", "template");
+  app.get("/api/workers/linux-golden-image", async c => {
+    if (deps.developmentLinuxArtifacts) return developmentPackaged(c, deps.developmentLinuxArtifacts.goldenImage, "golden-image", "worker.qcow2", "template");
+    const asset = deps.workerReleaseManifest?.platforms["linux-x64"]?.goldenImage;
+    return asset ? await immutablePackaged(c, asset, "linux-golden-image", "worker.qcow2", "template") : unavailable(c, ["manifest:linux-x64.goldenImage"]);
   });
   app.get("/api/workers/linux-broker-compose", linuxCompose);
   app.get("/api/workers/linux-compose", linuxCompose);
@@ -1095,106 +1053,80 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const runtime = c.req.query("runtime") ?? "container";
     const file = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : audience === "macos-arm64" ? "install-worker-macos.sh" : null;
     if (!audience || !file) return c.json({ error: "unsupported installer audience" }, 400);
-    if (runtime !== "container") return c.json({ code: "unsupported_runtime", message: "Only the container runtime is supported in worker v1" }, 400);
+    if (audience === "windows-x64" && runtime !== "container") {
+      return c.json({ code: "unsupported_runtime", message: "Only the container runtime is supported in worker v1" }, 400);
+    }
     let connectOrigin: string;
     try {
       const value = c.req.query("connectOrigin");
       if (!value) throw new Error("missing worker origin");
       connectOrigin = httpOrigin("connectOrigin", value);
-    } catch {
-      return c.json({ code: "invalid_worker_origin", message: "Choose a configured worker connection origin" }, 400);
-    }
+    } catch { return c.json({ code: "invalid_worker_origin", message: "Choose a configured worker connection origin" }, 400); }
     if (!deps.workerConnectionOrigins().includes(connectOrigin)) return c.json({ code: "invalid_worker_origin", message: "Choose a configured worker connection origin" }, 400);
-
     let development: DevelopmentPlatformArtifacts | undefined;
     if (audience === "linux-x64" && deps.developmentLinuxArtifacts) {
       const configured = deps.developmentLinuxArtifacts;
-      const [goldenImage, compose, domainTemplate] = await Promise.all([
-        currentDevelopmentArtifact(configured.goldenImage),
-        currentDevelopmentArtifact(configured.compose),
-        currentDevelopmentArtifact(configured.domainTemplate),
-      ]);
+      const [goldenImage, compose, domainTemplate] = await Promise.all([currentDevelopmentArtifact(configured.goldenImage), currentDevelopmentArtifact(configured.compose), currentDevelopmentArtifact(configured.domainTemplate)]);
       development = { ...configured, goldenImage, compose, domainTemplate };
     } else if (audience === "windows-x64" && deps.developmentWindowsArtifacts) {
-      const configured = deps.developmentWindowsArtifacts;
-      const [orchestrator, serviceHost] = await Promise.all([
-        currentDevelopmentArtifact(configured.orchestrator),
-        currentDevelopmentArtifact(configured.serviceHost),
-      ]);
-      development = { ...configured, orchestrator, serviceHost } as unknown as DevelopmentWindowsArtifacts;
+      development = { ...deps.developmentWindowsArtifacts, orchestrator: await currentDevelopmentArtifact(deps.developmentWindowsArtifacts.orchestrator), serviceHost: await currentDevelopmentArtifact(deps.developmentWindowsArtifacts.serviceHost) } as DevelopmentWindowsArtifacts;
     } else if (audience === "macos-arm64" && deps.developmentMacosArtifacts) {
-      const configured = deps.developmentMacosArtifacts;
-      development = { ...configured, orchestrator: await currentDevelopmentArtifact(configured.orchestrator) };
+      development = { ...deps.developmentMacosArtifacts, orchestrator: await currentDevelopmentArtifact(deps.developmentMacosArtifacts.orchestrator) };
     }
-
     const release = deps.workerReleaseManifest?.platforms[audience];
     const missing = await installerArtifacts(deps, audience, release, development);
     if (missing.length) return unavailable(c, missing);
-    const localInstallerPath = pathFor(deps.workerInstallerRoot, file);
     let source: string;
-    if (audience === "linux-x64" && !development && !await artifactExists(localInstallerPath)) {
-      const response = await fetch(workerReleaseAssetUrl(file));
-      if (!response.ok) return unavailable(c, [`installer:${file}`]);
-      source = await response.text();
+    const localInstallerPath = deps.workerInstallerRoot ? pathFor(deps.workerInstallerRoot, file) : undefined;
+    if (localInstallerPath && await artifactExists(localInstallerPath)) {
+      try { source = await Bun.file(localInstallerPath).text(); } catch { return unavailable(c, [`installer:${file}`]); }
+    } else if (development) {
+      return unavailable(c, [`installer:${file}`]);
     } else {
-      source = await Bun.file(localInstallerPath).text();
+      const asset = release?.installer;
+      if (!asset) return unavailable(c, [`manifest:${audience}.installer`]);
+      const response = await proxyPackagedResponse(asset.url, file, asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache);
+      if (!response) return unavailable(c, [`installer:${file}`]);
+      try { source = await response.text(); } catch { return unavailable(c, [`installer:${file}`]); }
     }
     let values: InstallerValues;
     if (audience === "linux-x64") {
       if (development) {
         const linux = development as DevelopmentLinuxArtifacts;
-        values = linuxInstallerValues({
-          brokerImage: linux.brokerImage!,
-          goldenImageSha256: linux.goldenImage!.sha256,
-          composeSha256: linux.compose!.sha256,
-          domainTemplateSha256: linux.domainTemplate!.sha256,
-        }, connectOrigin, "local");
-      } else {
-        values = linuxInstallerValues(release as LinuxWorkerRelease, connectOrigin, "production");
-      }
-    } else if (audience === "windows-x64") {
-      values = windowsInstallerValues(release as WindowsWorkerRelease | undefined, connectOrigin, development as DevelopmentWindowsArtifacts | undefined);
-    } else if (development) {
+        if (!linux.brokerImage || !linux.goldenImage || !linux.compose || !linux.domainTemplate) return unavailable(c, [`platform:${audience}`]);
+        values = linuxInstallerValues({ brokerImage: linux.brokerImage, goldenImage: { url: "", sha256: linux.goldenImage.sha256 }, compose: { url: "", sha256: linux.compose.sha256 }, domainTemplate: { url: "", sha256: linux.domainTemplate.sha256 } }, connectOrigin, "local");
+      } else values = linuxInstallerValues(release as LinuxWorkerRelease, connectOrigin, "production");
+    } else if (audience === "windows-x64") values = windowsInstallerValues(release as WindowsWorkerRelease | undefined, connectOrigin, development as DevelopmentWindowsArtifacts | undefined);
+    else if (development) {
       const macos = development as DevelopmentMacosArtifacts;
-      values = macosInstallerValues({
-        orchestratorSha256: macos.orchestrator!.sha256,
-        tartImage: macos.tartImage!,
-        tartImageDigest: macos.tartImageDigest!,
-      }, connectOrigin, "local");
-    } else {
-      values = macosInstallerValues(release as MacosWorkerRelease, connectOrigin, "production");
-    }
+      if (!macos.orchestrator || !macos.tartImage || !macos.tartImageDigest) return unavailable(c, [`platform:${audience}`]);
+      values = macosInstallerValues({ orchestrator: { url: "", sha256: macos.orchestrator.sha256 }, jobAgent: { url: "", sha256: macos.orchestrator.sha256 }, imagePreparationScript: { url: "", sha256: macos.orchestrator.sha256 }, tartSourceImage: macos.tartImage }, connectOrigin, "local");
+      values.TART_IMAGE_DIGEST = macos.tartImageDigest;
+    } else values = macosInstallerValues(release as MacosWorkerRelease, connectOrigin, "production");
     const generated = injectInstallerOrigin(source, connectOrigin, values, audience === "windows-x64");
     if (generated.includes("__PLACEHOLDER__") || /__[A-Za-z0-9_]+__/.test(generated)) return unavailable(c, [`installer:${file}`]);
     return new Response(generated, { headers: noStore() });
   });
-  app.get("/api/workers/orchestrator", async (c) => {
-    const audience = c.req.query("audience") as keyof NonNullable<typeof deps.workerOrchestratorExecutables>;
-    if (audience === "windows-x64" && deps.developmentWindowsArtifacts) {
-      return developmentPackaged(c, deps.developmentWindowsArtifacts.orchestrator, "orchestrator", "mars-orchestrator.exe", "binary");
-    }
-    if (audience === "macos-arm64" && deps.developmentMacosArtifacts) {
-      return developmentPackaged(c, deps.developmentMacosArtifacts.orchestrator, "orchestrator", "mars-orchestrator", "binary");
-    }
-    const executable = deps.workerOrchestratorExecutables?.[audience] ?? (audience === "macos-arm64" ? deps.workerOrchestratorExecutable : undefined);
-    const hash = deps.workerReleaseManifest?.platforms[audience]?.orchestratorSha256;
-    if (!executable || !hash || !await artifactExists(executable)) return unavailable(c, [`orchestrator:${audience}`]);
-    const filename = audience === "windows-x64" ? "mars-orchestrator.exe" : "mars-orchestrator";
-    if (audience === "macos-arm64") {
-      return localPackaged(c, executable, `orchestrator:${audience}`, filename, "binary", hash);
-    }
-    return packagedResponse(executable, filename, hash);
+  app.get("/api/workers/orchestrator", async c => {
+    const audience = c.req.query("audience") as "linux-x64" | "windows-x64" | "macos-arm64";
+    const development = audience === "windows-x64" ? deps.developmentWindowsArtifacts?.orchestrator : audience === "macos-arm64" ? deps.developmentMacosArtifacts?.orchestrator : undefined;
+    if (development) return developmentPackaged(c, development, "orchestrator", audience === "windows-x64" ? "mars-orchestrator.exe" : "mars-orchestrator", "binary");
+    const asset = deps.workerReleaseManifest?.platforms[audience]?.orchestrator;
+    return asset ? await proxyPackagedResponse(asset.url, audience === "windows-x64" ? "mars-orchestrator.exe" : "mars-orchestrator", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, [`orchestrator:${audience}`]) : unavailable(c, [`orchestrator:${audience}`]);
   });
-  app.get("/api/workers/service-host", async (c) => {
+  app.get("/api/workers/service-host", async c => {
     if (c.req.query("audience") !== "windows-x64") return c.json({ error: "unsupported service host audience" }, 400);
-    if (deps.developmentWindowsArtifacts) {
-      return developmentPackaged(c, deps.developmentWindowsArtifacts.serviceHost, "service-host", "mars-service-host.exe", "binary");
-    }
-    const executable = deps.workerServiceHostExecutable;
-    const hash = deps.workerReleaseManifest?.platforms["windows-x64"]?.serviceHostSha256;
-    if (!hash) return c.json({ code: "artifact_unavailable", message: "Windows service host is unavailable", artifacts: ["manifest:windows-x64.serviceHostSha256"] }, 503, { "cache-control": "no-store" });
-    if (!executable || !await artifactExists(executable)) return c.json({ code: "artifact_unavailable", message: "Windows service host is unavailable", artifacts: ["service-host:windows-x64"] }, 503, { "cache-control": "no-store" });
-    return packagedResponse(executable, "mars-service-host.exe", hash);
+    if (deps.developmentWindowsArtifacts?.serviceHost) return developmentPackaged(c, deps.developmentWindowsArtifacts.serviceHost, "service-host", "mars-service-host.exe", "binary");
+    const asset = deps.workerReleaseManifest?.platforms["windows-x64"]?.serviceHost;
+    return asset ? await proxyPackagedResponse(asset.url, "mars-service-host.exe", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, ["service-host:windows-x64"]) : unavailable(c, ["manifest:windows-x64.serviceHost"]);
+  });
+  app.get("/api/workers/macos-job-agent", async c => {
+    const asset = deps.workerReleaseManifest?.platforms["macos-arm64"]?.jobAgent;
+    return asset ? await proxyPackagedResponse(asset.url, "mars-job-agent", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, ["macos-job-agent"]) : unavailable(c, ["manifest:macos-arm64.jobAgent"]);
+  });
+  app.get("/api/workers/macos-image-preparation", async c => {
+    const asset = deps.workerReleaseManifest?.platforms["macos-arm64"]?.imagePreparationScript;
+    return asset ? await proxyPackagedResponse(asset.url, "prepare-macos-job-image.sh", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, ["macos-image-preparation"]) : unavailable(c, ["manifest:macos-arm64.imagePreparationScript"]);
   });
   app.post("/api/workers/join", async (c) => {
     const source = deps.requestSource(c.req.raw);

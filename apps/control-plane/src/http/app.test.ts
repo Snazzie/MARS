@@ -33,7 +33,6 @@ const app = createControlPlaneApp(fakeHttpDeps());
     })).toEqual({
       orchestrator: { path: "C:\\mars\\mars-orchestrator.exe", sha256: hash },
       serviceHost: { path: "C:\\mars\\mars-service-host.exe", sha256: hash },
-      template: { path: "C:\\mars\\worker-template.vhdx", sha256: hash },
       container: {
         baseImage: `mcr.microsoft.com/windows@sha256:${hash}`,
         runner: { path: "C:\\mars\\runner.zip", url: "http://localhost:3000/runner.zip", sha256: hash },
@@ -217,7 +216,7 @@ describe("control-plane HTTP boundary", () => {
       const installer = await response.text();
       expect(response.status).toBe(200);
       expect(installer).toContain("$ControlPlaneUrl = 'https://control.test'");
-      expect(installer).not.toContain("windows-container-builder");
+      expect(installer).toContain("windows-container-builder");
       expect(installer).not.toContain("__PLACEHOLDER__");
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -260,13 +259,11 @@ describe("control-plane HTTP boundary", () => {
       expect(installer).toContain("$WindowsArtifactMode = 'local'");
       expect(installer).toContain("$WindowsOrchestratorUrl = 'https://control-plane.test/api/workers/orchestrator?audience=windows-x64'");
       expect(installer).toContain("$WindowsServiceHostUrl = 'https://control-plane.test/api/workers/service-host?audience=windows-x64'");
-      expect(installer).toContain("$WindowsTemplateUrl = 'https://control-plane.test/api/workers/templates/windows-x64/artifact'");
       expect(installer).toContain("$WindowsContainerRunnerUrl = 'https://control-plane.test/api/workers/windows-container-runner'");
       expect(installer).toContain("$WindowsContainerGitUrl = 'https://control-plane.test/api/workers/windows-container-git'");
       expect(installer).toContain("$WindowsContainerVcRuntimeUrl = 'https://control-plane.test/api/workers/windows-container-vc-runtime'");
       expect(installer).toContain(`$WindowsOrchestratorSha256 = '${createHash("sha256").update(paths.orchestrator).digest("hex")}'`);
       expect(installer).toContain(`$WindowsServiceHostSha256 = '${createHash("sha256").update(paths.serviceHost).digest("hex")}'`);
-      expect(installer).toContain(`$WindowsTemplateDigest = 'sha256:${hash}'`);
       expect(installer).toContain("$WindowsContainerImage = 'mars/windows-job:local'");
       expect(installer).not.toContain(`$WindowsContainerImage = 'mcr.microsoft.com/windows@sha256:${hash}'`);
       expect(installer).not.toContain("github.com");
@@ -276,54 +273,42 @@ describe("control-plane HTTP boundary", () => {
   });
   test("serves configured local Windows artifacts with declared hashes", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-local-windows-artifacts-"));
-    const hash = "c".repeat(64);
     try {
       const paths = {
         orchestrator: join(root, "mars-orchestrator.exe"),
         serviceHost: join(root, "mars-service-host.exe"),
-        template: join(root, "worker-template.vhdx"),
         runner: join(root, "runner.zip"),
         git: join(root, "git.zip"),
         vcRuntime: join(root, "vc-runtime.exe"),
       };
-      const contents = {
-        orchestrator: "local-orchestrator",
-        serviceHost: "local-service-host",
-        template: "local-template",
-        runner: "local-runner",
-        git: "local-git",
-        vcRuntime: "local-vc-runtime",
-      };
+      const contents = { orchestrator: "local-orchestrator", serviceHost: "local-service-host", runner: "local-runner", git: "local-git", vcRuntime: "local-vc-runtime" };
       await Promise.all(Object.entries(paths).map(([name, path]) => Bun.write(path, contents[name as keyof typeof contents])));
       const responseCases = [
-        ["/api/workers/orchestrator?audience=windows-x64", contents.orchestrator, "mars-orchestrator.exe", createHash("sha256").update(contents.orchestrator).digest("hex")],
-        ["/api/workers/service-host?audience=windows-x64", contents.serviceHost, "mars-service-host.exe", createHash("sha256").update(contents.serviceHost).digest("hex")],
-        ["/api/workers/templates/windows-x64/artifact", contents.template, "windows-x64.vhdx", createHash("sha256").update(contents.template).digest("hex")],
-        ["/api/workers/windows-container-runner", contents.runner, "runner.zip", createHash("sha256").update(contents.runner).digest("hex")],
-        ["/api/workers/windows-container-git", contents.git, "git.zip", createHash("sha256").update(contents.git).digest("hex")],
-        ["/api/workers/windows-container-vc-runtime", contents.vcRuntime, "vc-runtime.exe", createHash("sha256").update(contents.vcRuntime).digest("hex")],
+        ["/api/workers/orchestrator?audience=windows-x64", contents.orchestrator, "mars-orchestrator.exe"],
+        ["/api/workers/service-host?audience=windows-x64", contents.serviceHost, "mars-service-host.exe"],
+        ["/api/workers/windows-container-runner", contents.runner, "runner.zip"],
+        ["/api/workers/windows-container-git", contents.git, "git.zip"],
+        ["/api/workers/windows-container-vc-runtime", contents.vcRuntime, "vc-runtime.exe"],
       ] as const;
       const response = await createControlPlaneApp(fakeHttpDeps({
         workerReleaseManifest: undefined,
         developmentWindowsArtifacts: {
-          orchestrator: { path: paths.orchestrator, sha256: hash },
-          serviceHost: { path: paths.serviceHost, sha256: hash },
-          template: { path: paths.template, sha256: hash },
+          orchestrator: { path: paths.orchestrator, sha256: createHash("sha256").update(contents.orchestrator).digest("hex") },
+          serviceHost: { path: paths.serviceHost, sha256: createHash("sha256").update(contents.serviceHost).digest("hex") },
           container: {
-            baseImage: `mcr.microsoft.com/windows@sha256:${hash}`,
-            runner: { path: paths.runner, sha256: hash },
-            git: { path: paths.git, sha256: hash },
-            vcRuntime: { path: paths.vcRuntime, sha256: hash },
+            baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${"c".repeat(64)}`,
+            runner: { path: paths.runner, sha256: createHash("sha256").update(contents.runner).digest("hex") },
+            git: { path: paths.git, sha256: createHash("sha256").update(contents.git).digest("hex") },
+            vcRuntime: { path: paths.vcRuntime, sha256: createHash("sha256").update(contents.vcRuntime).digest("hex") },
           },
         },
       }));
-
-      for (const [route, content, filename, expectedHash] of responseCases) {
+      for (const [route, content, filename] of responseCases) {
         const artifact = await response.request(route);
         expect(artifact.status).toBe(200);
         expect(await artifact.text()).toBe(content);
         expect(artifact.headers.get("cache-control")).toBe("no-store");
-        expect(artifact.headers.get("X-Content-SHA256")).toBe(expectedHash);
+        expect(artifact.headers.get("X-Content-SHA256")).toBe(createHash("sha256").update(content).digest("hex"));
         expect(artifact.headers.get("content-disposition")).toContain(`filename="${filename}"`);
       }
     } finally {
@@ -410,7 +395,7 @@ describe("control-plane HTTP boundary", () => {
       })).request("/api/workers/installer?audience=macos-arm64&connectOrigin=http%3A%2F%2Flocalhost%3A3000");
       const installer = await response.text();
       expect(response.status).toBe(200);
-      expect(installer).toContain(`TART_IMAGE='ghcr.io/mars/macos@sha256:${"a".repeat(64)}'`);
+      expect(installer).toContain(`TART_IMAGE='ghcr.io/cirruslabs/macos-sonoma-base@sha256:${"a".repeat(64)}'`);
       expect(installer).toContain(`MARS_ORCHESTRATOR_SHA256='${"a".repeat(64)}'`);
       expect(installer).toContain(`TART_IMAGE_DIGEST='${"a".repeat(64)}'`);
     } finally {
@@ -443,9 +428,7 @@ describe("control-plane HTTP boundary", () => {
         },
       })).request("/api/workers/orchestrator?audience=macos-arm64");
 
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe("macos-arm64-binary");
-      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.status).toBe(503);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -458,11 +441,7 @@ describe("control-plane HTTP boundary", () => {
       const response = await createControlPlaneApp(fakeHttpDeps({
         workerServiceHostExecutable: pathToFileURL(executable),
       })).request("/api/workers/service-host?audience=windows-x64");
-
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe("windows-service-host-binary");
-      expect(response.headers.get("content-disposition")).toContain("mars-service-host.exe");
-      expect(response.headers.get("X-Content-SHA256")).toBe("a".repeat(64));
+      expect(response.status).toBe(503);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -490,9 +469,7 @@ describe("control-plane HTTP boundary", () => {
         },
       })).request("/api/workers/windows-container-job-agent");
 
-      expect(response.status).toBe(200);
-      expect(response.headers.get("content-length")).toBe(String(await Bun.file(jobAgentPath).size));
-      expect(await response.text()).toBe(payload);
+      expect(response.status).toBe(503);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -1041,7 +1018,7 @@ test("generates complete platform installers from the immutable release manifest
     expect(macosInstaller).toContain("MARS_ARTIFACT_MODE='production'");
     expect(macosInstaller).toContain("PUBLIC_BASE_URL='https://adapter.test'");
     expect(macosInstaller).toContain(`MARS_ORCHESTRATOR_SHA256='${hash}'`);
-    expect(macosInstaller).toContain(`TART_IMAGE='ghcr.io/mars/macos@sha256:${hash}'`);
+    expect(macosInstaller).toContain(`TART_IMAGE='ghcr.io/cirruslabs/macos-sonoma-base@sha256:${hash}'`);
     expect(macosInstaller).toContain(`TART_IMAGE_DIGEST='${hash}'`);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -1089,8 +1066,8 @@ describe("development worker artifact hardening", () => {
         workerReleaseManifest: undefined,
         workerConnectionOrigins: () => ["https://control.test"],
         developmentWindowsArtifacts: {
-          orchestrator: { path: orchestrator, sha256: "a".repeat(64) },
-          serviceHost: { path: serviceHost, sha256: "b".repeat(64) },
+          orchestrator: { path: orchestrator, sha256: orchestratorHash },
+          serviceHost: { path: serviceHost, sha256: serviceHostHash },
         },
       }));
 
@@ -1719,8 +1696,8 @@ describe("development worker artifact hardening", () => {
       const hardenedApp = createControlPlaneApp(fakeHttpDeps({
         workerReleaseManifest: undefined,
         developmentWindowsArtifacts: {
-          orchestrator: { path: artifact, sha256: "a".repeat(64) },
-          serviceHost: { path: artifact, sha256: "b".repeat(64) },
+          orchestrator: { path: artifact, sha256: createHash("sha256").update("local-snapshot").digest("hex") },
+          serviceHost: { path: artifact, sha256: createHash("sha256").update("local-snapshot").digest("hex") },
         },
         developmentArtifactProxy: {
           maxConcurrent: 1,
@@ -1754,8 +1731,8 @@ describe("development worker artifact hardening", () => {
       const hardenedApp = createControlPlaneApp(fakeHttpDeps({
         workerReleaseManifest: undefined,
         developmentWindowsArtifacts: {
-          orchestrator: { path: artifact, sha256: "a".repeat(64) },
-          serviceHost: { path: artifact, sha256: "b".repeat(64) },
+          orchestrator: { path: artifact, sha256: hash },
+          serviceHost: { path: artifact, sha256: hash },
         },
       }));
 
@@ -1792,9 +1769,9 @@ describe("Linux and macOS platform artifact sources", () => {
         workerConnectionOrigins: () => ["https://worker.test"],
         developmentLinuxArtifacts: {
           brokerImage: "mars/linux-broker:dev",
-          goldenImage: { path: golden, sha256: "a".repeat(64) },
-          compose: { path: compose, sha256: "b".repeat(64) },
-          domainTemplate: { path: domain, sha256: "c".repeat(64) },
+          goldenImage: { path: golden, sha256: createHash("sha256").update("current-golden").digest("hex") },
+          compose: { path: compose, sha256: createHash("sha256").update("current-compose").digest("hex") },
+          domainTemplate: { path: domain, sha256: createHash("sha256").update("current-domain").digest("hex") },
         },
       }));
       await Bun.write(golden, "current-golden");
@@ -1839,7 +1816,7 @@ describe("Linux and macOS platform artifact sources", () => {
         workerReleaseManifest: undefined,
         workerConnectionOrigins: () => ["http://localhost:3000"],
         developmentMacosArtifacts: {
-          orchestrator: { path: orchestrator, sha256: "a".repeat(64) },
+          orchestrator: { path: orchestrator, sha256: createHash("sha256").update("current-orchestrator").digest("hex") },
           tartImage: "mars-macos-dev",
           tartImageDigest: "d".repeat(64),
         },
