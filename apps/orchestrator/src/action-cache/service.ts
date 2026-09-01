@@ -13,6 +13,7 @@ import {
 import { retryControlPlaneOperation } from "../worker-client.ts";
 import { loadOrCreateCertificateAuthority, type IssuedLeafCertificate, type WorkerCertificateAuthority } from "./certificates.ts";
 import { openActionCacheStore, type ActionCacheMutation, type ActionCacheStore } from "./store.ts";
+import { openPackageDownloadCache, type PackageDownloadCache, type PackageUpstreamHandler } from "./package-download-cache.ts";
 import { CREATE_CACHE_ENTRY_PATH, FINALIZE_CACHE_ENTRY_UPLOAD_PATH, GET_CACHE_ENTRY_DOWNLOAD_URL_PATH, createActionCacheRoutes, createGitHubCacheTokenVerifier, createNodeActionCacheHandler, type CacheTokenVerifier, type NodeActionCacheHandler } from "./routes.ts";
 
 type Environment = Record<string, string | undefined>;
@@ -41,6 +42,7 @@ export type StartActionCacheServiceOptions = {
   scheduleCertificateRenewal?: CertificateRenewalScheduler;
   authorizeCacheRequest?: CacheTokenVerifier;
   forwardResultsRequest?: NodeActionCacheHandler;
+  forwardPackageRequest?: PackageUpstreamHandler;
   scheduleSweep?: SweepScheduler;
 };
 
@@ -71,7 +73,16 @@ export async function emitActionCacheSnapshot(service: Pick<ActionCacheService, 
   service.setTelemetrySink(send);
   for (const event of queued) send(event.type, event.payload);
 }
-const INTERCEPTED_CACHE_HOSTS = ["results-receiver.actions.githubusercontent.com", "artifactcache.actions.githubusercontent.com"];
+const ACTION_CACHE_HOSTS = [
+  "results-receiver.actions.githubusercontent.com",
+  "artifactcache.actions.githubusercontent.com",
+] as const;
+const PACKAGE_CACHE_HOST = "registry.npmjs.org";
+const INTERCEPTED_TLS_HOSTS = [...ACTION_CACHE_HOSTS, PACKAGE_CACHE_HOST];
+
+function normalizedHostnameFromHeader(host: string | undefined): string {
+  try { return normalizedHostname(new URL(`https://${host ?? ""}`)).toLowerCase(); } catch { return ""; }
+}
 
 function normalizedHostname(url: URL): string {
   return url.hostname.startsWith("[") && url.hostname.endsWith("]") ? url.hostname.slice(1, -1) : url.hostname;
@@ -195,7 +206,6 @@ function scheduleSweep(callback: () => Promise<void>, intervalMs: number): Sweep
 const CACHE_RPC_PATHS = new Set([CREATE_CACHE_ENTRY_PATH, FINALIZE_CACHE_ENTRY_UPLOAD_PATH, GET_CACHE_ENTRY_DOWNLOAD_URL_PATH]);
 const CACHE_RPC_PREFIX = "/twirp/github.actions.results.api.v1.CacheService/";
 const CACHE_DATA_PREFIX = "/_apis/artifactcache/cache/";
-
 function forwardResultsRequest(request: Parameters<NodeActionCacheHandler>[0], response: Parameters<NodeActionCacheHandler>[1]): Promise<void> {
   const authority = request.headers.host ?? "";
   let target: URL;
@@ -205,7 +215,7 @@ function forwardResultsRequest(request: Parameters<NodeActionCacheHandler>[0], r
     return Promise.resolve();
   }
   const hostname = normalizedHostname(target).toLowerCase();
-  if (!INTERCEPTED_CACHE_HOSTS.includes(hostname)) {
+  if (!ACTION_CACHE_HOSTS.includes(hostname as (typeof ACTION_CACHE_HOSTS)[number])) {
     response.writeHead(403, { "content-type": "text/plain", "cache-control": "no-store" });
     response.end("Results forwarding target rejected\n");
     return Promise.resolve();
@@ -230,10 +240,8 @@ function forwardResultsRequest(request: Parameters<NodeActionCacheHandler>[0], r
 }
 
 function shouldHandleCacheLocally(host: string | undefined, path: string): boolean {
-  const hostname = (() => {
-    try { return normalizedHostname(new URL(`https://${host ?? ""}`)).toLowerCase(); } catch { return ""; }
-  })();
-  if (!INTERCEPTED_CACHE_HOSTS.includes(hostname)) return true;
+  const hostname = host?.toLowerCase() ?? "";
+  if (!ACTION_CACHE_HOSTS.includes(hostname as (typeof ACTION_CACHE_HOSTS)[number])) return false;
   return CACHE_RPC_PATHS.has(path) || path.startsWith(CACHE_RPC_PREFIX) || path.startsWith(CACHE_DATA_PREFIX);
 }
 
@@ -329,6 +337,7 @@ class CacheGrantSigner {
 
 class PersistentActionCacheService implements ActionCacheService {
   readonly #store: ActionCacheStore;
+  readonly #packageDownloadCache: PackageDownloadCache;
   readonly #proxyServer: HttpServer;
   #dataServer: HttpsServer;
   readonly #caCertificatePem: string;
@@ -351,6 +360,7 @@ class PersistentActionCacheService implements ActionCacheService {
 
   constructor(input: {
     store: ActionCacheStore;
+    packageDownloadCache: PackageDownloadCache;
     proxyServer: HttpServer;
     dataServer: HttpsServer;
     caCertificatePem: string;
@@ -368,6 +378,7 @@ class PersistentActionCacheService implements ActionCacheService {
     sweepHandle: SweepHandle;
   }) {
     this.#store = input.store;
+    this.#packageDownloadCache = input.packageDownloadCache;
     this.#proxyServer = input.proxyServer;
     this.#dataServer = input.dataServer;
     this.#caCertificatePem = input.caCertificatePem;
@@ -399,7 +410,7 @@ class PersistentActionCacheService implements ActionCacheService {
     this.#renewal = this.#scheduleRenewal(async () => {
       if (this.#closed) return;
       try {
-        const certificate: IssuedLeafCertificate = await this.#certificateAuthority.issueLeaf(this.#advertiseHost, this.#now(), INTERCEPTED_CACHE_HOSTS);
+        const certificate: IssuedLeafCertificate = await this.#certificateAuthority.issueLeaf(this.#advertiseHost, this.#now(), INTERCEPTED_TLS_HOSTS);
         if (this.#closed) return;
         this.#ready = false;
         const previous = this.#dataServer;
@@ -442,7 +453,7 @@ class PersistentActionCacheService implements ActionCacheService {
 
   async applyTtl(ttlSeconds: number): Promise<void> {
     if (this.#closed) throw new Error("action cache service is closed");
-    await this.#store.applyTtl(ttlSeconds);
+    await Promise.all([this.#store.applyTtl(ttlSeconds), this.#packageDownloadCache.applyTtl(ttlSeconds)]);
     this.#ttlSeconds = ttlSeconds;
   }
 
@@ -480,8 +491,10 @@ class PersistentActionCacheService implements ActionCacheService {
     this.#leaseCredentials.clear();
     const listeners = await Promise.allSettled([closeServer(this.#proxyServer), closeServer(this.#dataServer)]);
     const listenerFailure = listeners.find((result): result is PromiseRejectedResult => result.status === "rejected");
-    await this.#store.close();
+    const stores = await Promise.allSettled([this.#store.close(), this.#packageDownloadCache.close()]);
     if (listenerFailure) throw listenerFailure.reason;
+    const storeFailure = stores.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (storeFailure) throw storeFailure.reason;
   }
 }
 
@@ -499,15 +512,26 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
   });
   const forwardResults = options.forwardResultsRequest ?? forwardResultsRequest;
   let store: ActionCacheStore | null = null;
+  let packageDownloadCache: PackageDownloadCache | null = null;
   let proxyServer: HttpServer | null = null;
   let dataServer: HttpsServer | null = null;
   let sweepHandle: SweepHandle | null = null;
   try {
     store = await openActionCacheStore({ root: options.root, ttlSeconds: options.ttlSeconds, env, platform: options.platform, now });
     await store.probe();
+    packageDownloadCache = await openPackageDownloadCache({
+      root: store.root,
+      ttlSeconds: options.ttlSeconds,
+      now,
+      upstream: options.forwardPackageRequest,
+    });
+    await packageDownloadCache.probe();
     sweepHandle = (options.scheduleSweep ?? scheduleSweep)(async () => {
-      try { await store!.sweep(); }
-      catch (error) { console.error("Action cache sweep failed", error instanceof Error ? error.message : String(error)); }
+      try {
+        await Promise.all([store!.sweep(), packageDownloadCache!.sweep()]);
+      } catch (error) {
+        console.error("Action cache sweep failed", error instanceof Error ? error.message : String(error));
+      }
     }, 60_000);
     const certificateAuthority = await loadOrCreateCertificateAuthority(store);
     const resolvedAdvertiseHost = network.overrideOrigins
@@ -515,7 +539,7 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
       : await retryControlPlaneOperation("action-cache route discovery", () => (options.discoverAdvertiseHost ?? discoverActionCacheAdvertiseHost)(controlPlane));
     const advertiseHost = resolvedAdvertiseHost === "::1" ? "127.0.0.1" : resolvedAdvertiseHost;
     await certificateAuthority.issueLeaf("results-receiver.actions.githubusercontent.com", now());
-    const dataCertificate = await certificateAuthority.issueLeaf(advertiseHost, now(), INTERCEPTED_CACHE_HOSTS);
+    const dataCertificate = await certificateAuthority.issueLeaf(advertiseHost, now(), INTERCEPTED_TLS_HOSTS);
     let handleCacheRequest: NodeActionCacheHandler | null = null;
     const createDataServer = (certificate: IssuedLeafCertificate): HttpsServer => createHttpsServer({ key: certificate.privateKeyPem, cert: certificate.certificatePem }, (request, response) => {
       if (request.method === "GET" && request.url === "/healthz") {
@@ -529,7 +553,21 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
         return;
       }
       const path = (() => { try { return new URL(request.url ?? "/", "https://cache.invalid").pathname; } catch { return "/"; } })();
-      const handler = shouldHandleCacheLocally(request.headers.host, path) ? handleCacheRequest : forwardResults;
+      const hostname = normalizedHostnameFromHeader(request.headers.host);
+      const handler = hostname === PACKAGE_CACHE_HOST
+        ? packageDownloadCache!.handle.bind(packageDownloadCache)
+        : hostname === advertiseHost.toLowerCase() || shouldHandleCacheLocally(hostname, path)
+          ? handleCacheRequest
+          : ACTION_CACHE_HOSTS.includes(hostname as (typeof ACTION_CACHE_HOSTS)[number])
+            ? forwardResults
+            : null;
+      if (!handler) {
+        response.writeHead(421, { "content-type": "text/plain", "cache-control": "no-store" });
+        response.end("Misdirected Request\n");
+        return;
+      }
+      response.on("finish", () => console.error("TRACE response finish", hostname));
+      response.on("close", () => console.error("TRACE response close", hostname));
       void handler(request, response).catch((error) => {
         if (!response.headersSent) response.writeHead(502, { "content-type": "text/plain", "cache-control": "no-store" });
         response.end(`cache transport request failed: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -551,7 +589,7 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
       try { target = new URL(`http://${request.url ?? ""}`); } catch { socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"); return; }
       const targetHost = normalizedHostname(target).toLowerCase();
       const targetPort = target.port ? Number(target.port) : 443;
-      const intercept = INTERCEPTED_CACHE_HOSTS.includes(targetHost) || targetHost === advertiseHost.toLowerCase();
+      const intercept = INTERCEPTED_TLS_HOSTS.includes(targetHost) || targetHost === advertiseHost.toLowerCase();
       const upstream = netConnect({ host: intercept ? "127.0.0.1" : targetHost, port: intercept ? localDataPort : targetPort });
       upstream.once("connect", () => {
         socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
@@ -579,6 +617,7 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
     await probeDataEndpoint(cacheBaseUrl, certificateAuthority.certificatePem);
     return new PersistentActionCacheService({
       store,
+      packageDownloadCache,
       proxyServer,
       dataServer,
       caCertificatePem: certificateAuthority.certificatePem,
@@ -597,7 +636,7 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
     });
   } catch (error) {
     sweepHandle?.cancel();
-    await Promise.allSettled([closeServer(proxyServer), closeServer(dataServer), store?.close() ?? Promise.resolve()]);
+    await Promise.allSettled([closeServer(proxyServer), closeServer(dataServer), store?.close() ?? Promise.resolve(), packageDownloadCache?.close() ?? Promise.resolve()]);
     throw error;
   }
 }
