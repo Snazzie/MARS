@@ -14,6 +14,7 @@ UBUNTU_SHA256SUMS_URL="${UBUNTU_SHA256SUMS_URL:-https://cloud-images.ubuntu.com/
 command -v curl >/dev/null
 command -v virt-customize >/dev/null
 command -v qemu-img >/dev/null
+command -v virt-resize >/dev/null
 name=${1:-mars-worker}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -30,6 +31,12 @@ curl --fail --location --retry 3 --proto '=https' --tlsv1.2 "$RUNNER_ARCHIVE_URL
 echo "$RUNNER_ARCHIVE_SHA256  $work/runner.tar.gz" | sha256sum --check --status
 cp "$JOB_AGENT_BINARY" "$work/mars-job-agent"
 test -s "$work/mars-job-agent"
+# The Noble cloud image's root filesystem is too small for the offline
+# Actions Runner expansion. Grow the virtual disk and root partition before
+# adding the runner and job agent.
+qemu-img resize "$work/base.qcow2" +4G
+virt-resize --expand /dev/sda1 "$work/base.qcow2" "$work/expanded.qcow2"
+mv "$work/expanded.qcow2" "$work/base.qcow2"
 
 virt-customize -a "$work/base.qcow2" \
   --install ca-certificates,curl,tar \
