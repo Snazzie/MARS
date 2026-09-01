@@ -426,16 +426,18 @@ describe("control-plane HTTP boundary", () => {
       const response = await createControlPlaneApp(fakeHttpDeps({
         workerOrchestratorExecutable: pathToFileURL(executable),
         workerReleaseManifest: {
-          schemaVersion: 2,
+          schemaVersion: 3,
           buildId: "macos-test",
           contractVersion: "0.1.0",
           platforms: {
             "linux-x64": null,
             "windows-x64": null,
             "macos-arm64": {
-              orchestratorSha256: hash,
-              tartImage: `ghcr.io/mars/macos@sha256:${"a".repeat(64)}`,
-              tartImageDigest: "a".repeat(64),
+              installer: { url: "https://release.test/macos-installer.sh", sha256: hash },
+              orchestrator: { url: "https://release.test/macos-orchestrator", sha256: hash },
+              jobAgent: { url: "https://release.test/macos-job-agent", sha256: hash },
+              imagePreparationScript: { url: "https://release.test/prepare-macos-job-image.sh", sha256: hash },
+              tartSourceImage: `ghcr.io/cirruslabs/macos-sonoma-base@sha256:${"a".repeat(64)}`,
             },
           },
         },
@@ -979,13 +981,42 @@ test("generates complete platform installers from the immutable release manifest
     }
     await Bun.write(join(root, "macos-orchestrator"), "packaged-macos-orchestrator");
     const manifest = {
-      schemaVersion: 2 as const,
+      schemaVersion: 3 as const,
       buildId: "build-1",
       contractVersion: "0.1.0",
       platforms: {
-        "linux-x64": { orchestratorSha256: hash, brokerImage: `ghcr.io/mars/broker@sha256:${hash}`, goldenImageUrl: "https://release.test/worker.qcow2", goldenImageSha256: hash, composeSha256: hash, domainTemplateSha256: hash },
-        "windows-x64": { orchestratorSha256: hash, serviceHostSha256: hash, vmTemplateUrl: "https://release.test/worker.vhdx", vmTemplateSha256: hash, container: { baseImage: `mcr.microsoft.com/windows@sha256:${hash}`, runner: { url: "https://release.test/runner.zip", sha256: hash }, git: { url: "https://release.test/git.zip", sha256: hash }, vcRuntime: { url: "https://release.test/vc.exe", sha256: hash } } },
-        "macos-arm64": { orchestratorSha256: hash, tartImage: `ghcr.io/mars/macos@sha256:${hash}`, tartImageDigest: hash },
+        "linux-x64": {
+          installer: { url: "https://release.test/linux-installer.sh", sha256: hash },
+          orchestrator: { url: "https://release.test/linux-orchestrator", sha256: hash },
+          jobAgent: { url: "https://release.test/linux-job-agent", sha256: hash },
+          brokerImage: `ghcr.io/snazzie/mars/linux-broker@sha256:${hash}`,
+          goldenImage: { url: "https://release.test/worker.qcow2", sha256: hash },
+          compose: { url: "https://release.test/compose.yaml", sha256: hash },
+          domainTemplate: { url: "https://release.test/domain.xml", sha256: hash },
+        },
+        "windows-x64": {
+          installer: { url: "https://release.test/windows-installer.ps1", sha256: hash },
+          orchestrator: { url: "https://release.test/windows-orchestrator", sha256: hash },
+          serviceHost: { url: "https://release.test/windows-service-host", sha256: hash },
+          jobAgent: { url: "https://release.test/windows-job-agent", sha256: hash },
+          container: {
+            baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}`,
+            runner: { url: "https://release.test/runner.zip", sha256: hash },
+            git: { url: "https://release.test/git.zip", sha256: hash },
+            vcRuntime: { url: "https://release.test/vc.exe", sha256: hash },
+            buildScript: { url: "https://release.test/build.ps1", sha256: hash },
+            verifyScript: { url: "https://release.test/verify.ps1", sha256: hash },
+            containerfile: { url: "https://release.test/Containerfile", sha256: hash },
+            entrypoint: { url: "https://release.test/entrypoint.ps1", sha256: hash },
+          },
+        },
+        "macos-arm64": {
+          installer: { url: "https://release.test/macos-installer.sh", sha256: hash },
+          orchestrator: { url: "https://release.test/macos-orchestrator", sha256: hash },
+          jobAgent: { url: "https://release.test/macos-job-agent", sha256: hash },
+          imagePreparationScript: { url: "https://release.test/prepare-macos-job-image.sh", sha256: hash },
+          tartSourceImage: `ghcr.io/cirruslabs/macos-sonoma-base@sha256:${hash}`,
+        },
       },
     };
     const releaseApp = createControlPlaneApp(fakeHttpDeps({
@@ -1844,17 +1875,18 @@ describe("Linux and macOS platform artifact sources", () => {
       return new Response(body, { headers: { "content-type": "application/octet-stream" } });
     }, { preconnect: globalThis.fetch.preconnect });
     const manifest = {
-      schemaVersion: 2 as const,
+      schemaVersion: 3 as const,
       buildId: "production-build",
       contractVersion: "0.1.0",
       platforms: {
         "linux-x64": {
-          orchestratorSha256: "a".repeat(64),
-          brokerImage: `ghcr.io/mars/broker@sha256:${"b".repeat(64)}`,
-          goldenImageUrl: "https://release.test/linux-golden.qcow2",
-          goldenImageSha256: hash,
-          composeSha256: "c".repeat(64),
-          domainTemplateSha256: "d".repeat(64),
+          installer: { url: "https://release.test/linux-installer.sh", sha256: "a".repeat(64) },
+          orchestrator: { url: "https://release.test/linux-orchestrator", sha256: "a".repeat(64) },
+          jobAgent: { url: "https://release.test/linux-job-agent", sha256: "a".repeat(64) },
+          brokerImage: `ghcr.io/snazzie/mars/linux-broker@sha256:${"b".repeat(64)}`,
+          goldenImage: { url: "https://release.test/linux-golden.qcow2", sha256: hash },
+          compose: { url: "https://release.test/compose.yaml", sha256: "c".repeat(64) },
+          domainTemplate: { url: "https://release.test/domain.xml", sha256: "d".repeat(64) },
         },
         "windows-x64": null,
         "macos-arm64": null,

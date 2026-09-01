@@ -17,4 +17,10 @@
 ## Concerns / handoff notes
 
 - Existing control-plane and installer callers still reference schema 2 field names by design; later release-train tasks must migrate those callers to the schema 3 asset objects and immutable OCI fields.
-- The shared control-plane test dependency fixture is also schema 2-shaped and should be migrated alongside the control-plane route work, not used as a schema 3 production fallback.
+- The shared control-plane test dependency fixture has now been migrated; production control-plane loader and installer callers still require the later schema-3 implementation.
+
+## Follow-up fixture migration
+
+- Migrated the shared control-plane loader test, HTTP test dependency manifest, and HTTP app test manifests to schema 3 with deterministic HTTPS asset URLs, lowercase hashes, and digest-pinned OCI references.
+- Removed schema-2-only VHDX/Tart metadata from those manifest records and supplied all required Windows container build inputs plus macOS preparation metadata.
+- Focused loader test run after fixture migration: `bun test apps/control-plane/src/worker-release.test.ts` — 8 pass, 1 fail. The remaining failure is expected until the later control-plane loader change merges: the current schema-2 development override merger leaves the schema-3 Windows platform unavailable.

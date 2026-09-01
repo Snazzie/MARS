@@ -10,18 +10,20 @@ import {
 } from "./worker-release.ts";
 
 const hash = "a".repeat(64);
+const asset = (name: string) => ({ url: `https://downloads.example.test/${name}`, sha256: hash });
 
 const linuxRelease = {
-  orchestratorSha256: hash,
-  brokerImage: `ghcr.io/snazzie/mars/broker@sha256:${hash}`,
-  goldenImageUrl: "https://downloads.example.test/worker.qcow2",
-  goldenImageSha256: hash,
-  composeSha256: hash,
-  domainTemplateSha256: hash,
+  installer: asset("linux-installer.sh"),
+  orchestrator: asset("linux-orchestrator"),
+  jobAgent: asset("linux-job-agent"),
+  brokerImage: `ghcr.io/snazzie/mars/linux-broker@sha256:${hash}`,
+  goldenImage: asset("worker.qcow2"),
+  compose: asset("compose.yaml"),
+  domainTemplate: asset("domain.xml"),
 };
 
 const remoteManifest = (contractVersion = "0.1.0") => ({
-  schemaVersion: 2,
+  schemaVersion: 3,
   buildId: "release-build",
   contractVersion,
   platforms: { "linux-x64": linuxRelease, "windows-x64": null, "macos-arm64": null },
@@ -96,7 +98,7 @@ test("loads a usable Windows release from local development artifacts", async ()
 
     const manifestPath = join(root, "release-manifest.json");
     await Bun.write(manifestPath, JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       buildId: "development",
       contractVersion: "0.1.0",
       platforms: { "linux-x64": null, "windows-x64": null, "macos-arm64": null },
@@ -104,26 +106,31 @@ test("loads a usable Windows release from local development artifacts", async ()
 
     const manifest = await loadWorkerReleaseManifest(pathToFileURL(manifestPath), {
       windows: {
+        installer: asset("windows-installer.ps1"),
         orchestrator: pathToFileURL(orchestrator),
         serviceHost: pathToFileURL(serviceHost),
-        vmTemplateUrl: "https://github.com/Snazzie/Mars/releases/latest/download/windows-worker.vhdx",
-        vmTemplateSha256: hash,
+        jobAgent: asset("windows-job-agent.exe"),
         container: {
           baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}`,
-          runner: { url: "https://downloads.example.test/runner.zip", sha256: hash },
-          git: { url: "https://downloads.example.test/git.zip", sha256: hash },
-          vcRuntime: { url: "https://downloads.example.test/vc.exe", sha256: hash },
+          runner: asset("runner.zip"),
+          git: asset("git.zip"),
+          vcRuntime: asset("vc.exe"),
+          buildScript: asset("build.ps1"),
+          verifyScript: asset("verify.ps1"),
+          containerfile: asset("Containerfile"),
+          entrypoint: asset("entrypoint.ps1"),
         },
       },
     });
 
     expect(manifest.platforms["windows-x64"]).toMatchObject({
-      serviceHostSha256: expect.any(String),
-      orchestratorSha256: expect.any(String),
-      vmTemplateUrl: "https://github.com/Snazzie/Mars/releases/latest/download/windows-worker.vhdx",
+      installer: asset("windows-installer.ps1"),
+      serviceHost: { url: expect.stringContaining("service-host.exe"), sha256: expect.any(String) },
+      orchestrator: { url: expect.stringContaining("orchestrator.exe"), sha256: expect.any(String) },
+      jobAgent: asset("windows-job-agent.exe"),
       container: { baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}` },
     });
-    expect(manifest.platforms["windows-x64"]?.orchestratorSha256).not.toBe(hash);
+    expect(manifest.platforms["windows-x64"]?.orchestrator.sha256).not.toBe(hash);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

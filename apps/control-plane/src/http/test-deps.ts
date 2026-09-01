@@ -4,35 +4,43 @@ import type { WorkerReleaseManifest } from "@mars/contracts";
 
 const fakeDb = (() => []) as unknown as ControlPlaneHttpDeps["db"];
 const testHash = "a".repeat(64);
+const testAsset = (name: string) => ({ url: `https://release.test/${name}`, sha256: testHash });
 const testReleaseManifest: WorkerReleaseManifest = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   buildId: "test-build",
   contractVersion: "0.1.0",
   platforms: {
     "linux-x64": {
-      orchestratorSha256: testHash,
-      brokerImage: `ghcr.io/mars/broker@sha256:${testHash}`,
-      goldenImageUrl: "https://release.test/worker.qcow2",
-      goldenImageSha256: testHash,
-      composeSha256: testHash,
-      domainTemplateSha256: testHash,
+      installer: testAsset("linux-installer.sh"),
+      orchestrator: testAsset("linux-orchestrator"),
+      jobAgent: testAsset("linux-job-agent"),
+      brokerImage: `ghcr.io/snazzie/mars/linux-broker@sha256:${testHash}`,
+      goldenImage: testAsset("worker.qcow2"),
+      compose: testAsset("compose.yaml"),
+      domainTemplate: testAsset("domain.xml"),
     },
     "windows-x64": {
-      orchestratorSha256: testHash,
-      serviceHostSha256: testHash,
-      vmTemplateUrl: "https://release.test/worker.vhdx",
-      vmTemplateSha256: testHash,
+      installer: testAsset("windows-installer.ps1"),
+      orchestrator: testAsset("windows-orchestrator.exe"),
+      serviceHost: testAsset("windows-service-host.exe"),
+      jobAgent: testAsset("windows-job-agent.exe"),
       container: {
-        baseImage: `mcr.microsoft.com/windows@sha256:${testHash}`,
-        runner: { url: "https://release.test/runner.zip", sha256: testHash },
-        git: { url: "https://release.test/git.zip", sha256: testHash },
-        vcRuntime: { url: "https://release.test/vc.exe", sha256: testHash },
+        baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${testHash}`,
+        runner: testAsset("runner.zip"),
+        git: testAsset("git.zip"),
+        vcRuntime: testAsset("vc.exe"),
+        buildScript: testAsset("build.ps1"),
+        verifyScript: testAsset("verify.ps1"),
+        containerfile: testAsset("Containerfile"),
+        entrypoint: testAsset("entrypoint.ps1"),
       },
     },
     "macos-arm64": {
-      orchestratorSha256: testHash,
-      tartImage: `ghcr.io/mars/macos@sha256:${testHash}`,
-      tartImageDigest: testHash,
+      installer: testAsset("macos-installer.sh"),
+      orchestrator: testAsset("macos-orchestrator"),
+      jobAgent: testAsset("macos-job-agent"),
+      imagePreparationScript: testAsset("prepare-macos-job-image.sh"),
+      tartSourceImage: `ghcr.io/cirruslabs/macos-sonoma-base@sha256:${testHash}`,
     },
   },
 };
