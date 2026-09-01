@@ -103,6 +103,25 @@ test("requires an immutable baked worker release URL in production", async () =>
   }
 });
 
+test("accepts the immutable worker release URL emitted by GitHub", async () => {
+  const fetcher: typeof fetch = async (input) => {
+    expect(String(input)).toBe("https://github.com/Snazzie/MARS/releases/download/worker-v0.1.1/worker-release-manifest.json");
+    return new Response(JSON.stringify(remoteManifest()), { status: 200 });
+  };
+  const priorNode = Bun.env.NODE_ENV;
+  try {
+    Bun.env.NODE_ENV = "production";
+    const manifest = await loadWorkerReleaseManifest(
+      "https://github.com/Snazzie/MARS/releases/download/worker-v0.1.1/worker-release-manifest.json",
+      undefined,
+      { fetch: fetcher, controlPlaneVersion: "0.1.0" },
+    );
+    expect(manifest.buildId).toBe("release-build");
+  } finally {
+    if (priorNode === undefined) delete Bun.env.NODE_ENV; else Bun.env.NODE_ENV = priorNode;
+  }
+});
+
 
 test("loads a usable Windows release from local development artifacts", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-local-release-"));

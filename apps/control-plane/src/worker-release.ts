@@ -13,7 +13,7 @@ export type WorkerReleaseLoadOptions = {
 export const DEFAULT_WORKER_RELEASE_MANIFEST_URL = "";
 /** Development fallback only; production must provide the baked contract version. */
 export const DEFAULT_WORKER_CONTRACT_VERSION = "";
-const immutableManifestPath = /^https:\/\/github\.com\/Snazzie\/Mars\/releases\/download\/worker-v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\/worker-release-manifest\.json$/;
+const immutableManifestPath = /^https:\/\/github\.com\/Snazzie\/Mars\/releases\/download\/worker-v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\/worker-release-manifest\.json$/i;
 
 const configuredManifestUrl = (): string => Bun.env.MARS_WORKER_RELEASE_MANIFEST_URL?.trim() ?? "";
 const configuredContractVersion = (): string => Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "";
