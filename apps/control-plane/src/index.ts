@@ -290,8 +290,15 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const developmentPath = (name: string, fallback: string): string | undefined => {
     if (production) return undefined;
     const configured = Bun.env[name]?.trim();
-    const artifact = configured ? new URL(configured, import.meta.url) : new URL(fallback, import.meta.url);
-    return fileURLToPath(artifact);
+    if (!configured) return fileURLToPath(new URL(fallback, import.meta.url));
+    // Windows drive and UNC paths are filesystem paths, not URL references.
+    if (/^(?:[A-Za-z]:[\\/]|\\\\)/.test(configured)) return configured;
+    try {
+      const parsed = new URL(configured, import.meta.url);
+      return parsed.protocol === "file:" ? fileURLToPath(parsed) : configured;
+    } catch {
+      return configured;
+    }
   };
   const windowsContainerArtifacts = production ? undefined : {
     builderPath: developmentPath("MARS_WINDOWS_CONTAINER_BUILDER", "../../../deploy/workers/build-windows-container-image-local.ps1")!,
