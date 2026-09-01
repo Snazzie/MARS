@@ -51,6 +51,10 @@ virt-customize -a "$work/base.qcow2" \
   --run-command 'rm -rf /var/lib/cloud/instances/* /etc/ssh/ssh_host_* /var/log/*.log /var/cache/apt/*' \
   --run-command 'truncate -s 0 /etc/machine-id' \
   --run-command 'systemctl disable ssh || true'
+# Compress the sparse appliance before upload; GitHub release assets have a
+# 2 GiB limit while the virtual disk remains large enough for the worker.
+qemu-img convert -O qcow2 -c "$work/base.qcow2" "$work/compressed.qcow2"
+mv "$work/compressed.qcow2" "$work/base.qcow2"
 
 qemu-img check "$work/base.qcow2"
 mkdir -p dist
