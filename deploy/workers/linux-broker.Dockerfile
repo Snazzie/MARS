@@ -3,7 +3,9 @@ WORKDIR /app
 COPY package.json bun.lock tsconfig.json ./
 COPY packages ./packages
 COPY apps ./apps
-RUN bun install --frozen-lockfile --linker hoisted
+RUN rm -rf apps/*/node_modules packages/*/node_modules \
+  && bun install --frozen-lockfile --linker hoisted \
+  && bun install --cwd apps/orchestrator --frozen-lockfile --linker hoisted
 RUN mkdir -p packages/contracts/node_modules && rm -f /app/packages/contracts/node_modules/zod && ln -s /app/node_modules/zod /app/packages/contracts/node_modules/zod
 RUN bun build apps/orchestrator/src/index.ts --compile --outfile /out/mars-orchestrator
 
