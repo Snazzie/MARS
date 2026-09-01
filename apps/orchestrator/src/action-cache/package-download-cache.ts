@@ -126,29 +126,36 @@ function captureResponse(response: ServerResponse): { value: CapturedResponse; r
   }
   target.setHeader = ((name: string, header: string | number | readonly string[]) => {
     value.headers[name.toLowerCase()] = Array.isArray(header) ? [...header] : String(header);
-    return response;
+    return Reflect.apply(originalSetHeader, response, [name, header]) as ServerResponse;
   }) as unknown as typeof target.setHeader;
-  target.removeHeader = ((name: string) => { delete value.headers[name.toLowerCase()]; return response; }) as unknown as typeof target.removeHeader;
+  target.removeHeader = ((name: string) => {
+    delete value.headers[name.toLowerCase()];
+    return Reflect.apply(originalRemoveHeader, response, [name]) as ServerResponse;
+  }) as unknown as typeof target.removeHeader;
   target.writeHead = ((statusCode: number, reasonOrHeaders?: string | HeaderMap, maybeHeaders?: HeaderMap) => {
     value.statusCode = statusCode;
     const headers = typeof reasonOrHeaders === "string" ? maybeHeaders : reasonOrHeaders;
     if (headers) for (const [name, header] of Object.entries(headers)) {
       if (header !== undefined) value.headers[name.toLowerCase()] = Array.isArray(header) ? [...header] : String(header);
     }
-    return response;
+    const publishable = statusCode === 200 && !hasHeader(value.headers, "set-cookie");
+    if (publishable) value.headers["x-mars-package-cache"] = "MISS";
+    const outputHeaders = headers ? { ...headers, ...(publishable ? { "x-mars-package-cache": "MISS" } : {}) } : publishable ? { "x-mars-package-cache": "MISS" } : undefined;
+    const args = typeof reasonOrHeaders === "string"
+      ? [statusCode, reasonOrHeaders, outputHeaders]
+      : [statusCode, outputHeaders];
+    return Reflect.apply(originalWriteHead, response, args) as ServerResponse;
   }) as unknown as typeof target.writeHead;
   target.write = ((chunk: unknown, encoding?: BufferEncoding | ((error?: Error) => void), callback?: (error?: Error) => void) => {
     const bytes = chunkBuffer(chunk, typeof encoding === "string" ? encoding : "utf8");
     if (bytes) value.chunks.push(bytes);
-    (typeof encoding === "function" ? encoding : callback)?.();
-    return true;
+    return Reflect.apply(originalWrite, response, [chunk, encoding, callback]) as boolean;
   }) as unknown as typeof target.write;
   target.end = ((chunk?: unknown, encoding?: BufferEncoding | (() => void), callback?: () => void) => {
     const bytes = typeof chunk === "function" ? null : chunkBuffer(chunk, typeof encoding === "string" ? encoding : "utf8");
     if (bytes) value.chunks.push(bytes);
     value.ended = true;
-    (typeof encoding === "function" ? encoding : callback)?.();
-    return response;
+    return Reflect.apply(originalEnd, response, [chunk, encoding, callback]) as ServerResponse;
   }) as unknown as typeof target.end;
   return {
     value,
@@ -253,7 +260,6 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
     const objectPath = this.#objectPath(row.objectPathId);
     let objectStat;
     try { objectStat = await stat(objectPath); } catch { await this.#evict(row); return false; }
-    if (BigInt(objectStat.size) !== BigInt(row.sizeBytes)) { await this.#evict(row); return false; }
     try {
       this.#db.query("UPDATE package_entries SET last_accessed_at=?,expires_at=? WHERE url_hash=? AND state='ready'").run(this.#now().toISOString(), isoAfter(this.#now(), this.#ttlSeconds), row.urlHash);
     } catch { return false; }
@@ -267,7 +273,11 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
       response.writeHead(200, headers);
       stream.pipe(response);
     });
-    return true;
+  }
+  async #syncDirectory(path: string): Promise<void> {
+    if (process.platform === "win32") return;
+    const directory = await open(path, "r");
+    try { await directory.sync(); } finally { await directory.close(); }
   }
 
   async #publish(canonicalUrl: string, captured: CapturedResponse): Promise<boolean> {
@@ -295,13 +305,6 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
       return false;
     }
   }
-
-  async #syncDirectory(path: string): Promise<void> {
-    if (process.platform === "win32") return;
-    const directory = await open(path, "r");
-    try { await directory.sync(); } finally { await directory.close(); }
-  }
-
   async #fill(canonicalUrl: string, request: IncomingMessage, response: ServerResponse): Promise<FillResult> {
     const captured = captureResponse(response);
     try {
@@ -311,7 +314,7 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
       captured.restore();
     }
     const published = await this.#publish(canonicalUrl, captured.value);
-    replay(response, captured.value, published ? { "x-mars-package-cache": "MISS" } : {});
+    if (!response.writableEnded) replay(response, captured.value, published ? { "x-mars-package-cache": "MISS" } : {});
     return { published };
   }
 
