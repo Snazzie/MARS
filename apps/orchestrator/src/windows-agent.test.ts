@@ -42,7 +42,7 @@ test("builds a parsed Windows doctor report with the complete container inventor
 
 test("awaits the live cache TTL before acknowledging Windows configuration", async () => {
   const limits = { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 6 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 };
-  const cache = { ttlSeconds: 60 };
+  const cache = { ttlSeconds: 60, runnerCacheEnabled: true };
   const payload = WorkerConfigurePayload.parse({
     workerId: "11111111-1111-4111-8111-111111111111",
     revision: "a".repeat(64),
@@ -50,16 +50,18 @@ test("awaits the live cache TTL before acknowledging Windows configuration", asy
     appliance: { vcpu: 32, memoryBytes: 64 * 1024 ** 3, storageBytes: 1_000 * 1024 ** 3 },
     runtime: { maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 },
     guestPlatforms: ["windows-x64"],
-    cache: { ttlSeconds: 3600 },
+    cache: { ttlSeconds: 3600, runnerCacheEnabled: false },
   });
   let release!: () => void;
   const applied = new Promise<void>((resolve) => { release = resolve; });
-  const result = applyWindowsWorkerConfiguration(limits, cache, payload, { applyTtl: () => applied });
-  expect(cache).toEqual({ ttlSeconds: 60 });
+  const enabledStates: boolean[] = [];
+  const result = applyWindowsWorkerConfiguration(limits, cache, payload, { applyTtl: () => applied, setRunnerCacheEnabled: (enabled) => enabledStates.push(enabled) });
+  expect(cache).toEqual({ ttlSeconds: 60, runnerCacheEnabled: true });
   release();
   const observed = await result;
+  expect(enabledStates).toEqual([false]);
   expect(limits).toEqual({ maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 });
-  expect(cache).toEqual({ ttlSeconds: 3600 });
+  expect(cache).toEqual({ ttlSeconds: 3600, runnerCacheEnabled: false });
   expect(observed.cache).toEqual(payload.cache);
 });
 

@@ -21,11 +21,12 @@ export type LinuxWorkerResources = {
 export async function applyLinuxWorkerConfigure(
   command: WorkerCommand,
   resources: LinuxWorkerResources,
-  cacheService: Pick<ActionCacheService, "applyTtl">,
+  cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled">,
 ): Promise<WorkerEvent> {
   const payload = WorkerConfigurePayload.parse(command.payload);
   const observed = WorkerObservedConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms, cache: payload.cache });
   await cacheService.applyTtl(observed.cache.ttlSeconds);
+  cacheService.setRunnerCacheEnabled(observed.cache.runnerCacheEnabled);
   resources.appliance = observed.appliance;
   resources.runtime = observed.runtime;
   Object.assign(resources.cache, observed.cache);
@@ -42,7 +43,7 @@ export async function applyLinuxWorkerConfigure(
 export async function handleLinuxWorkerCommand(
   command: WorkerCommand,
   resources: LinuxWorkerResources,
-  cacheService: Pick<ActionCacheService, "applyTtl">,
+  cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled">,
 ): Promise<WorkerEvent> {
   if (command.type !== "worker.configure") throw new Error(`unsupported worker command: ${command.type}`);
   return applyLinuxWorkerConfigure(command, resources, cacheService);
@@ -54,7 +55,7 @@ export type LinuxWorkerCommandContext = {
   runtimeReady: () => boolean;
   send: (event: WorkerEvent) => void;
   activeLeases?: Map<string, Promise<void>>;
-  cacheService: Pick<ActionCacheService, "applyTtl" | "transport" | "unregisterLease">;
+  cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled" | "transport" | "unregisterLease">;
 };
 
 export async function handleLinuxWorkerCommandWithContext(command: WorkerCommand, resources: LinuxWorkerResources, context: LinuxWorkerCommandContext): Promise<WorkerEvent | void> {
@@ -219,7 +220,7 @@ export async function runLinuxWorker(baseUrl: string, driver: LibvirtVmDriver, l
   await driver.reconcileOrphans();
   const resources: LinuxWorkerResources = { appliance: { vcpu: cpus().length, memoryBytes: totalmem(), storageBytes: linuxCapacity().actualStorageBytes }, runtime: limits, cache: WorkerCacheConfiguration.parse({}) };
   const controlPlane = new URL(baseUrl);
-  const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: resources.cache.ttlSeconds });
+  const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: resources.cache.ttlSeconds, runnerCacheEnabled: resources.cache.runnerCacheEnabled });
   try {
     let identity = await loadIdentity();
     if (!identity) {

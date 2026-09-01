@@ -15,30 +15,32 @@ const command: WorkerCommand = {
     appliance: { vcpu: 8, memoryBytes: 16_000, storageBytes: 64_000 },
     runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_000, maxStorageBytesPerPod: 16_000, maxConcurrentPods: 4 },
     guestPlatforms: ["linux-x64"],
-    cache: { ttlSeconds: 7200 },
+    cache: { ttlSeconds: 7200, runnerCacheEnabled: false },
     revision: "a".repeat(64),
     fingerprint: "b".repeat(64),
   },
 };
 
 describe("Linux worker.configure", () => {
-  test("awaits the live cache TTL before emitting the acknowledged observation", async () => {
-    const resources = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }, cache: { ttlSeconds: 60 } };
+  test("applies TTL and runner cache state before acknowledging the observed configuration", async () => {
+    const resources = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }, cache: { ttlSeconds: 60, runnerCacheEnabled: true } };
     let release!: () => void;
     const applied = new Promise<void>((resolve) => { release = resolve; });
-    const result = applyLinuxWorkerConfigure(command, resources, { applyTtl: () => applied });
-    expect(resources.cache).toEqual({ ttlSeconds: 60 });
+    const enabledStates: boolean[] = [];
+    const result = applyLinuxWorkerConfigure(command, resources, { applyTtl: () => applied, setRunnerCacheEnabled: (enabled) => enabledStates.push(enabled) });
+    expect(resources.cache).toEqual({ ttlSeconds: 60, runnerCacheEnabled: true });
     release();
     const event = await result;
-    expect(resources).toEqual({ appliance: { vcpu: 8, memoryBytes: 16_000, storageBytes: 64_000 }, runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_000, maxStorageBytesPerPod: 16_000, maxConcurrentPods: 4 }, cache: { ttlSeconds: 7200 } });
+    expect(enabledStates).toEqual([false]);
+    expect(resources).toEqual({ appliance: { vcpu: 8, memoryBytes: 16_000, storageBytes: 64_000 }, runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_000, maxStorageBytesPerPod: 16_000, maxConcurrentPods: 4 }, cache: { ttlSeconds: 7200, runnerCacheEnabled: false } });
     expect(event.type).toBe("worker.configured");
     expect(event.workerId).toBe(workerId);
     expect(event.payload).toEqual({ commandId: command.id, workerId, revision: "a".repeat(64), observed: { appliance: resources.appliance, runtime: resources.runtime, guestPlatforms: ["linux-x64"], cache: resources.cache } });
   });
 
   test("consumes only worker.configure", async () => {
-    const resources = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }, cache: { ttlSeconds: 60 } };
-    await expect(handleLinuxWorkerCommand({ ...command, type: "doctor" }, resources, { applyTtl: async () => {} })).rejects.toThrow("unsupported worker command");
+    const resources = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }, cache: { ttlSeconds: 60, runnerCacheEnabled: true } };
+    await expect(handleLinuxWorkerCommand({ ...command, type: "doctor" }, resources, { applyTtl: async () => {}, setRunnerCacheEnabled: () => {} })).rejects.toThrow("unsupported worker command");
   });
 });
 

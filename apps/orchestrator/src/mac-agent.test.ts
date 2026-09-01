@@ -20,20 +20,22 @@ test("awaits the live cache TTL before acknowledging macOS worker configuration"
       appliance: { vcpu: 8, memoryBytes: 16_000, storageBytes: 64_000 },
       runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_000, maxStorageBytesPerPod: 16_000, maxConcurrentPods: 4 },
       guestPlatforms: ["macos-arm64"],
-      cache: { ttlSeconds: 5400 },
+      cache: { ttlSeconds: 5400, runnerCacheEnabled: false },
       revision: "a".repeat(64),
       fingerprint: "b".repeat(64),
     },
   };
   const limits = { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 };
-  const cache = { ttlSeconds: 60 };
+  const cache = { ttlSeconds: 60, runnerCacheEnabled: true };
   let release!: () => void;
   const applied = new Promise<void>((resolve) => { release = resolve; });
-  const result = applyWorkerConfigure(command, limits, cache, { applyTtl: () => applied });
-  expect(cache).toEqual({ ttlSeconds: 60 });
+  const enabledStates: boolean[] = [];
+  const result = applyWorkerConfigure(command, limits, cache, { applyTtl: () => applied, setRunnerCacheEnabled: (enabled) => enabledStates.push(enabled) });
+  expect(cache).toEqual({ ttlSeconds: 60, runnerCacheEnabled: true });
   release();
   const configured = await result;
-  expect(cache).toEqual({ ttlSeconds: 5400 });
+  expect(enabledStates).toEqual([false]);
+  expect(cache).toEqual({ ttlSeconds: 5400, runnerCacheEnabled: false });
   expect(configured.payload).toEqual({
     commandId: command.id,
     workerId,
@@ -42,7 +44,7 @@ test("awaits the live cache TTL before acknowledging macOS worker configuration"
       appliance: command.payload.appliance,
       runtime: command.payload.runtime,
       guestPlatforms: ["macos-arm64"],
-      cache: { ttlSeconds: 5400 },
+      cache: { ttlSeconds: 5400, runnerCacheEnabled: false },
     },
   });
 });

@@ -150,10 +150,11 @@ export async function applyWindowsWorkerConfiguration(
   limits: Limits,
   cache: WorkerCacheConfiguration,
   payload: WorkerConfigurePayload,
-  cacheService: Pick<ActionCacheService, "applyTtl">,
+  cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled">,
 ): Promise<WorkerObservedConfiguration> {
   const observed = WorkerObservedConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms, cache: payload.cache });
   await cacheService.applyTtl(observed.cache.ttlSeconds);
+  cacheService.setRunnerCacheEnabled(observed.cache.runnerCacheEnabled);
   Object.assign(limits, observed.runtime);
   Object.assign(cache, observed.cache);
   return observed;
@@ -315,7 +316,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
 
 export async function runWindowsWorker(baseUrl: string, limits: Limits, cache = WorkerCacheConfiguration.parse({})): Promise<never> {
   const controlPlane = new URL(baseUrl);
-  const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: cache.ttlSeconds });
+  const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: cache.ttlSeconds, runnerCacheEnabled: cache.runnerCacheEnabled });
   try {
     return await runWindowsWorkerWithCache(baseUrl, limits, cache, cacheService);
   } finally {
