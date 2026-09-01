@@ -13,12 +13,12 @@ Implemented and committed in this task-3 commit.
 - macOS installer verifies orchestrator, job agent, and preparation helper through route URLs/hashes before active-worker mutation; invokes the helper against the manifest's digest-pinned Tart source; installs LaunchAgent atomically only after local preparation and provenance succeed.
 - macOS preparation helper supports `--output-manifest`, content-addressed staging, exact provenance (source/digest, job-agent hash, runner URL/version/hash, preparation-script hash, local target, logical prepared digest), idempotent matching reuse, and rollback-safe target replacement. It has no credential inputs or registry-secret output.
 - WorkerActions now refuses upgrades for a reported non-container Windows runtime and keeps generated upgrades on `runtime=container`; focused regression test added.
-- Reworked `tests/installer-arguments.test.ts` to assert schema-3 target-host behavior rather than removed VM/VHDX and mutable-release behavior.
+- Development macOS route resolution now requires explicit orchestrator, job-agent, preparation helper, and digest-pinned Tart source assets; missing/partial local configuration returns structured unavailable responses instead of a nonfunctional 200 installer. Development macOS asset routes proxy those verified local files.
 
 ## Verification
 
 - `bun test tests/installer-arguments.test.ts apps/web/src/components/EnrollmentPanel.test.ts apps/web/src/components/WorkerActions.test.tsx tests/linux-broker-container-contract.test.ts tests/windows-container-image-contract.test.ts`
-- Result: **39 pass, 0 fail** (256 assertions).
+- Result: **40 pass, 0 fail** (258 assertions).
 - PowerShell parser checks passed for `deploy/workers/install-worker.ps1` and `deploy/workers/build-windows-container-image-local.ps1`.
 
 ## Concerns / limitations

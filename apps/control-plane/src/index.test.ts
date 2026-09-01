@@ -284,78 +284,45 @@ test("does not resolve a missing local worker artifact", async () => {
   }
 });
 
-test("resolves Linux repository artifacts and macOS build artifacts independently", async () => {
+test("resolves Linux repository artifacts and only complete immutable macOS artifacts", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-platform-development-artifacts-"));
   const golden = join(root, "worker.qcow2");
   const orchestrator = join(root, "mars-orchestrator");
+  const jobAgent = join(root, "mars-job-agent");
+  const preparation = join(root, "prepare-macos-job-image.sh");
+  const digest = "b".repeat(64);
   try {
     await Bun.write(golden, "local-linux-golden");
     await Bun.write(orchestrator, "local-macos-orchestrator");
-
+    await Bun.write(jobAgent, "local-macos-job-agent");
+    await Bun.write(preparation, "local-macos-preparation");
     const linux = await resolveDevelopmentLinuxArtifacts({
-      NODE_ENV: "development",
-      MARS_LINUX_BROKER_IMAGE: "mars/linux-broker:dev",
-      MARS_LINUX_GOLDEN_PATH: golden,
+      NODE_ENV: "development", MARS_LINUX_BROKER_IMAGE: "mars/linux-broker:dev", MARS_LINUX_GOLDEN_PATH: golden,
     });
     const macos = await resolveDevelopmentMacosArtifacts({
-      NODE_ENV: "development",
-      MARS_MACOS_ORCHESTRATOR_PATH: orchestrator,
-      MARS_TART_BASE_IMAGE: "mars-macos-dev",
-      MARS_TART_IMAGE_DIGEST: `sha256:${"b".repeat(64)}`,
+      NODE_ENV: "development", MARS_MACOS_ORCHESTRATOR_PATH: orchestrator, MARS_MACOS_JOB_AGENT_PATH: jobAgent,
+      MARS_MACOS_IMAGE_PREPARATION_PATH: preparation, MARS_TART_BASE_IMAGE: `ghcr.io/cirruslabs/macos-sonoma-base@sha256:${digest}`,
+      MARS_TART_IMAGE_DIGEST: `sha256:${digest}`,
     });
-
-    expect(linux).toEqual({
-      brokerImage: "mars/linux-broker:dev",
-      goldenImage: {
-        path: golden,
-        sha256: createHash("sha256").update("local-linux-golden").digest("hex"),
-      },
-      compose: {
-        path: join(import.meta.dir, "../../../deploy/workers/linux-broker-compose.yaml"),
-        sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
-      },
-      domainTemplate: {
-        path: join(import.meta.dir, "../../../deploy/workers/worker-domain.xml"),
-        sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
-      },
-    });
-    expect(macos).toEqual({
-      orchestrator: {
-        path: orchestrator,
-        sha256: createHash("sha256").update("local-macos-orchestrator").digest("hex"),
-      },
-      tartImage: "mars-macos-dev",
-      tartImageDigest: "b".repeat(64),
-    });
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+    expect(linux?.brokerImage).toBe("mars/linux-broker:dev");
+    expect(linux?.goldenImage?.path).toBe(golden);
+    expect(macos?.orchestrator?.path).toBe(orchestrator);
+    expect(macos?.jobAgent?.path).toBe(jobAgent);
+    expect(macos?.imagePreparationScript?.path).toBe(preparation);
+    expect(macos?.tartImage).toBe(`ghcr.io/cirruslabs/macos-sonoma-base@sha256:${digest}`);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("resolves complete macOS development artifacts from local Tart environment values", async () => {
+test("rejects incomplete local macOS configuration instead of generating a broken installer", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-local-tart-artifacts-"));
   const orchestrator = join(root, "mars-orchestrator");
-  const digest = "d".repeat(64);
   try {
     await Bun.write(orchestrator, "local-macos-orchestrator");
-    const artifacts = await resolveDevelopmentMacosArtifacts({
-      NODE_ENV: "development",
-      MARS_MACOS_ORCHESTRATOR_PATH: orchestrator,
-      MARS_TART_BASE_IMAGE: "mars-macos-dev",
-      MARS_TART_IMAGE_DIGEST: `ghcr.io/whitesmith/mars-macos:dev@sha256:${digest}`,
-    });
-
-    expect(artifacts).toEqual({
-      orchestrator: {
-        path: orchestrator,
-        sha256: createHash("sha256").update("local-macos-orchestrator").digest("hex"),
-      },
-      tartImage: "mars-macos-dev",
-      tartImageDigest: digest,
-    });
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+    expect(await resolveDevelopmentMacosArtifacts({
+      NODE_ENV: "development", MARS_MACOS_ORCHESTRATOR_PATH: orchestrator,
+      MARS_TART_BASE_IMAGE: "mars-macos-dev", MARS_TART_IMAGE_DIGEST: "d".repeat(64),
+    })).toBeUndefined();
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test.each([
@@ -365,34 +332,19 @@ test.each([
   `mars-macos-dev@sha256:${"d".repeat(63)}`,
 ])("rejects invalid development Tart digest %s", async digest => {
   expect(await resolveDevelopmentMacosArtifacts({
-    NODE_ENV: "development",
-    MARS_TART_IMAGE_DIGEST: digest,
+    NODE_ENV: "development", MARS_TART_IMAGE_DIGEST: digest,
   })).toBeUndefined();
 });
 
-test("keeps missing Linux and macOS development artifacts platform-local", async () => {
+test("keeps partial macOS development assets unavailable", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-independent-platform-artifacts-"));
   const orchestrator = join(root, "mars-orchestrator");
   try {
     await Bun.write(orchestrator, "macos-ready");
-    const [linux, macos] = await Promise.all([
-      resolveDevelopmentLinuxArtifacts({
-        NODE_ENV: "development",
-        MARS_LINUX_BROKER_IMAGE: "mars/linux-broker:dev",
-        MARS_LINUX_GOLDEN_PATH: join(root, "missing.qcow2"),
-      }),
-      resolveDevelopmentMacosArtifacts({
-        NODE_ENV: "development",
-        MARS_MACOS_ORCHESTRATOR_PATH: orchestrator,
-        MARS_TART_BASE_IMAGE: "mars-macos-dev",
-        MARS_TART_IMAGE_DIGEST: "c".repeat(64),
-      }),
-    ]);
-
-    expect(linux?.goldenImage).toBeUndefined();
-    expect(macos?.orchestrator?.path).toBe(orchestrator);
-    expect(macos?.tartImage).toBe("mars-macos-dev");
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+    const macos = await resolveDevelopmentMacosArtifacts({
+      NODE_ENV: "development", MARS_MACOS_ORCHESTRATOR_PATH: orchestrator,
+      MARS_TART_BASE_IMAGE: "mars-macos-dev", MARS_TART_IMAGE_DIGEST: "c".repeat(64),
+    });
+    expect(macos).toBeUndefined();
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

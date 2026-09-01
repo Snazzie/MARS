@@ -9,6 +9,7 @@ const windowsBuilder = await Bun.file("deploy/workers/build-windows-container-im
 const mac = await Bun.file("deploy/workers/install-worker-macos.sh").text();
 const macPreparation = await Bun.file("deploy/workers/prepare-macos-job-image.sh").text();
 const hash = "a".repeat(64);
+const windowsRuntimeTest = process.platform === "win32" ? test : test.skip;
 
 // Static assertions intentionally target the delivery contract, not incidental
 // implementation details. Runtime execution belongs on the documented hosts.
@@ -135,4 +136,22 @@ test("target-host installers are self-contained and contain no mutable release f
     expect(source).not.toContain("worker-release-manifest.json");
     expect(source).not.toMatch(/__[A-Za-z0-9_]+__/);
   }
+});
+windowsRuntimeTest("Windows downloaded-file verifier accepts exact bytes and rejects mismatches", async () => {
+  const start = windows.indexOf("function Assert-Sha256");
+  const end = windows.indexOf("\nfunction Download-Verified", start);
+  const functions = windows.slice(start, end);
+  const script = `${functions}
+$path = Join-Path $env:TEMP ('mars-verify-' + [guid]::NewGuid().ToString('N'))
+try {
+  [IO.File]::WriteAllText($path, 'payload')
+  $expected = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+  Verify-DownloadedFile $path $expected 'payload' $null
+  try { Verify-DownloadedFile $path ('b' * 64) 'payload' $null; throw 'mismatch accepted' } catch { if ($_.Exception.Message -notlike '*checksum mismatch*') { throw } }
+  Write-Output 'VERIFIER_OK'
+} finally { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+`;
+  const process = Bun.spawn(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], { stdout: "pipe", stderr: "pipe" });
+  expect(await process.exited).toBe(0);
+  expect(await new Response(process.stdout).text()).toContain("VERIFIER_OK");
 });

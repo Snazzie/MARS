@@ -564,7 +564,7 @@ async function installerArtifacts(
       if (!windows.serviceHost) missing.push("development:service-host");
     } else {
       const macos = development as DevelopmentMacosArtifacts;
-      if (!macos.orchestrator || !hasValue(macos.tartImage) || !hasValue(macos.tartImageDigest)) missing.push(`development:${audience}`);
+      if (!macos.orchestrator || !macos.jobAgent || !macos.imagePreparationScript || !hasValue(macos.tartImage) || !hasValue(macos.tartImageDigest)) missing.push(`development:${audience}`);
     }
     return missing;
   }
@@ -1075,7 +1075,8 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     } else if (audience === "windows-x64" && deps.developmentWindowsArtifacts) {
       development = { ...deps.developmentWindowsArtifacts, orchestrator: await currentDevelopmentArtifact(deps.developmentWindowsArtifacts.orchestrator), serviceHost: await currentDevelopmentArtifact(deps.developmentWindowsArtifacts.serviceHost) } as DevelopmentWindowsArtifacts;
     } else if (audience === "macos-arm64" && deps.developmentMacosArtifacts) {
-      development = { ...deps.developmentMacosArtifacts, orchestrator: await currentDevelopmentArtifact(deps.developmentMacosArtifacts.orchestrator) };
+      const configured = deps.developmentMacosArtifacts;
+      development = { ...configured, orchestrator: await currentDevelopmentArtifact(configured.orchestrator), jobAgent: await currentDevelopmentArtifact(configured.jobAgent), imagePreparationScript: await currentDevelopmentArtifact(configured.imagePreparationScript) };
     }
     const release = deps.workerReleaseManifest?.platforms[audience];
     const missing = await installerArtifacts(deps, audience, release, development);
@@ -1100,12 +1101,10 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
         if (!linux.brokerImage || !linux.goldenImage || !linux.compose || !linux.domainTemplate) return unavailable(c, [`platform:${audience}`]);
         values = linuxInstallerValues({ brokerImage: linux.brokerImage, goldenImage: { url: "", sha256: linux.goldenImage.sha256 }, compose: { url: "", sha256: linux.compose.sha256 }, domainTemplate: { url: "", sha256: linux.domainTemplate.sha256 } }, connectOrigin, "local");
       } else values = linuxInstallerValues(release as LinuxWorkerRelease, connectOrigin, "production");
-    } else if (audience === "windows-x64") values = windowsInstallerValues(release as WindowsWorkerRelease | undefined, connectOrigin, development as DevelopmentWindowsArtifacts | undefined);
-    else if (development) {
+    } else if (development) {
       const macos = development as DevelopmentMacosArtifacts;
-      if (!macos.orchestrator || !macos.tartImage || !macos.tartImageDigest) return unavailable(c, [`platform:${audience}`]);
-      values = macosInstallerValues({ orchestrator: { url: "", sha256: macos.orchestrator.sha256 }, jobAgent: { url: "", sha256: macos.orchestrator.sha256 }, imagePreparationScript: { url: "", sha256: macos.orchestrator.sha256 }, tartSourceImage: macos.tartImage }, connectOrigin, "local");
-      values.TART_IMAGE_DIGEST = macos.tartImageDigest;
+      if (!macos.orchestrator || !macos.jobAgent || !macos.imagePreparationScript || !macos.tartImage || !macos.tartImageDigest) return unavailable(c, [`platform:${audience}`]);
+      values = macosInstallerValues({ orchestrator: macos.orchestrator, jobAgent: macos.jobAgent, imagePreparationScript: macos.imagePreparationScript, tartSourceImage: macos.tartImage }, connectOrigin, "local");
     } else values = macosInstallerValues(release as MacosWorkerRelease, connectOrigin, "production");
     const generated = injectInstallerOrigin(source, connectOrigin, values, audience === "windows-x64");
     if (generated.includes("__PLACEHOLDER__") || /__[A-Za-z0-9_]+__/.test(generated)) return unavailable(c, [`installer:${file}`]);
@@ -1125,10 +1124,12 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     return asset ? await proxyPackagedResponse(asset.url, "mars-service-host.exe", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, ["service-host:windows-x64"]) : unavailable(c, ["manifest:windows-x64.serviceHost"]);
   });
   app.get("/api/workers/macos-job-agent", async c => {
+    if (deps.developmentMacosArtifacts?.jobAgent) return developmentPackaged(c, deps.developmentMacosArtifacts.jobAgent, "job-agent", "mars-job-agent", "binary");
     const asset = deps.workerReleaseManifest?.platforms["macos-arm64"]?.jobAgent;
     return asset ? await proxyPackagedResponse(asset.url, "mars-job-agent", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, ["macos-job-agent"]) : unavailable(c, ["manifest:macos-arm64.jobAgent"]);
   });
   app.get("/api/workers/macos-image-preparation", async c => {
+    if (deps.developmentMacosArtifacts?.imagePreparationScript) return developmentPackaged(c, deps.developmentMacosArtifacts.imagePreparationScript, "image-preparation", "prepare-macos-job-image.sh", "binary");
     const asset = deps.workerReleaseManifest?.platforms["macos-arm64"]?.imagePreparationScript;
     return asset ? await proxyPackagedResponse(asset.url, "prepare-macos-job-image.sh", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, ["macos-image-preparation"]) : unavailable(c, ["manifest:macos-arm64.imagePreparationScript"]);
   });

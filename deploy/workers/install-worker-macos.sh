@@ -73,7 +73,7 @@ download_verified() {
 download_verified "$MARS_ORCHESTRATOR_URL" "$MARS_ORCHESTRATOR_SHA256" "$ORCHESTRATOR_STAGE" orchestrator
 download_verified "$MARS_JOB_AGENT_URL" "$MARS_JOB_AGENT_SHA256" "$JOB_AGENT_STAGE" 'job agent'
 download_verified "$IMAGE_PREPARATION_SCRIPT_URL" "$IMAGE_PREPARATION_SCRIPT_SHA256" "$PREPARER_STAGE" 'image preparation script'
-TART_BIN="$(command -v tart 2>/dev/null || true)"; CHECK=0
+chmod +x "$ORCHESTRATOR_STAGE" "$JOB_AGENT_STAGE" "$PREPARER_STAGE"
 mkdir -p "$APP_DIR" "$(dirname "$HOME/Library/LaunchAgents/com.mars.worker.plist")"; exec > >(tee -a "$LOG_FILE") 2>&1
 write_state() { printf '{"stage":"%s","status":"%s","updatedAt":"%s"}\n' "$1" "$2" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_FILE"; }
 check() { CHECK=$((CHECK + 1)); print "[$CHECK/8] $1"; write_state "$2" started; }
@@ -85,8 +85,8 @@ check 'Configuring the narrow Tart administrator permission' sudoers
 if ! sudo -n "$TART_BIN" --version >/dev/null 2>&1; then sudo -v || { echo 'Administrator authorization was cancelled.' >&2; exit 1; }; SUDOERS_FILE="/etc/sudoers.d/mars-tart-${USER}"; printf '%s ALL=(root) NOPASSWD: %s\n' "$USER" "$TART_BIN" | sudo tee "$SUDOERS_FILE" >/dev/null; sudo chmod 440 "$SUDOERS_FILE"; sudo visudo -cf "$SUDOERS_FILE" >/dev/null 2>&1 || { sudo rm -f "$SUDOERS_FILE"; echo 'Tart sudoers validation failed' >&2; exit 1; }; sudo -n "$TART_BIN" --version >/dev/null 2>&1 || { echo 'Tart is not usable with sudoers rule' >&2; exit 1; }; fi
 write_state sudoers complete; pass 'Tart sudo capability configured'
 check 'Preparing and verifying the local Tart job image' tart-image
-LOCAL_IMAGE="${MARS_TART_LOCAL_NAME:-mars-worker-base-${TART_IMAGE_DIGEST#sha256:}}"; PREP_MANIFEST="$APP_DIR/macos-job-image-manifest.json"
-"$PREPARER_STAGE" --source "$TART_IMAGE" --target "$LOCAL_IMAGE" --job-agent "$JOB_AGENT_STAGE" --output-manifest "$PREP_MANIFEST"
+LOCAL_IMAGE="mars-worker-base-${TART_IMAGE_DIGEST#sha256:}"; PREP_MANIFEST="$APP_DIR/macos-job-image-manifest.json"
+TART_BIN="$TART_BIN" "$PREPARER_STAGE" --source "$TART_IMAGE" --target "$LOCAL_IMAGE" --job-agent "$JOB_AGENT_STAGE" --output-manifest "$PREP_MANIFEST"
 [[ -s "$PREP_MANIFEST" ]] || { echo 'macOS image preparation did not produce provenance' >&2; exit 1; }
 PREPARED_DIGEST="$(sed -n 's/.*"preparedDigest":"\([^"]*\)".*/\1/p' "$PREP_MANIFEST")"; [[ "$PREPARED_DIGEST" == mars-macos-job@sha256:* ]] || { echo 'macOS prepared image provenance is incomplete' >&2; exit 1; }
 write_state tart-image complete; pass "Prepared local Tart image: $LOCAL_IMAGE"

@@ -210,11 +210,18 @@ export async function resolveDevelopmentLinuxArtifacts(environment: DevelopmentE
 
 export async function resolveDevelopmentMacosArtifacts(environment: DevelopmentEnvironment = Bun.env): Promise<DevelopmentMacosArtifacts | undefined> {
   if (environment.NODE_ENV === "production") return undefined;
-  const orchestrator = await resolveDevelopmentArtifact(environment, ["MARS_MACOS_ORCHESTRATOR_PATH", "WORKER_ORCHESTRATOR_MACOS_ARM64"], ["MARS_MACOS_ORCHESTRATOR_URL"], ["MARS_MACOS_ORCHESTRATOR_SHA256", "WORKER_ORCHESTRATOR_MACOS_ARM64_SHA256"], developmentDefaultArtifactPaths.macosOrchestrator);
+  const [orchestrator, jobAgent, imagePreparationScript] = await Promise.all([
+    resolveDevelopmentArtifact(environment, ["MARS_MACOS_ORCHESTRATOR_PATH", "WORKER_ORCHESTRATOR_MACOS_ARM64"], ["MARS_MACOS_ORCHESTRATOR_URL"], ["MARS_MACOS_ORCHESTRATOR_SHA256", "WORKER_ORCHESTRATOR_MACOS_ARM64_SHA256"], developmentDefaultArtifactPaths.macosOrchestrator),
+    resolveDevelopmentArtifact(environment, ["MARS_MACOS_JOB_AGENT_PATH"], ["MARS_MACOS_JOB_AGENT_URL"], ["MARS_MACOS_JOB_AGENT_SHA256"]),
+    resolveDevelopmentArtifact(environment, ["MARS_MACOS_IMAGE_PREPARATION_PATH"], ["MARS_MACOS_IMAGE_PREPARATION_URL"], ["MARS_MACOS_IMAGE_PREPARATION_SHA256"]),
+  ]);
   const tartImage = trimmedEnvironmentValue(environment, ["MARS_TART_BASE_IMAGE", "MARS_TART_IMAGE"]);
   const tartImageDigest = developmentDigest(environment, ["MARS_TART_IMAGE_DIGEST", "MARS_TART_BASE_IMAGE_DIGEST"]);
-  if (!orchestrator && !tartImage && !tartImageDigest) return undefined;
-  return { ...(orchestrator ? { orchestrator } : {}), ...(tartImage ? { tartImage } : {}), ...(tartImageDigest ? { tartImageDigest } : {}) };
+  if (!orchestrator && !jobAgent && !imagePreparationScript && !tartImage && !tartImageDigest) return undefined;
+  // A development installer must be as complete and immutable as a released
+  // one. Partial local configuration is deliberately surfaced as unavailable.
+  if (!orchestrator || !jobAgent || !imagePreparationScript || !tartImage || !tartImageDigest || !/^[-a-z0-9./]+@sha256:[0-9a-f]{64}$/.test(tartImage)) return undefined;
+  return { orchestrator, jobAgent, imagePreparationScript, tartImage, tartImageDigest };
 }
 
 

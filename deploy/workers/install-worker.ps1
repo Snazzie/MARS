@@ -182,6 +182,7 @@ try {
   if (-not $Upgrade -and -not (Test-Path -LiteralPath $JoinCodeFile)) { Set-WorkerJoinCredential $JoinCodeFile $JoinCode }
   if (Ensure-ContainerFeatures) { New-Item -ItemType Directory -Force -Path $root | Out-Null; if ([IO.Path]::GetFullPath($PSCommandPath) -ne [IO.Path]::GetFullPath($persistentInstallerPath)) { Copy-Item -LiteralPath $PSCommandPath -Destination $persistentInstallerPath -Force }; Register-ResumeTask $persistentInstallerPath; Write-State 'reboot-required' 'pending'; Write-Host 'Windows features require a reboot; MarsWorkerInstallResume will continue automatically.'; Restart-Computer -Force; exit 0 }
   Install-DockerDesktop; Switch-DockerWindowsEngine; Assert-WindowsContainerHost
+  if (Test-Path -LiteralPath $windowsImageManifestPath) { Remove-Item -LiteralPath $windowsImageManifestPath -Force -ErrorAction Stop }
   & $paths.builder -BaseImage $WindowsContainerBaseImage -RunnerArchivePath $paths.runner -RunnerSha256 $WindowsContainerRunnerSha256 -GitArchivePath $paths.git -GitSha256 $WindowsContainerGitSha256 -VcRuntimePath $paths.vc -VcRuntimeSha256 $WindowsContainerVcRuntimeSha256 -JobAgent $paths.jobAgent -Image $WindowsContainerImage -ManifestPath $windowsImageManifestPath -VerifierPath $paths.verifier -ContainerfilePath $paths.containerfile -EntrypointPath $paths.entrypoint
   if ($LASTEXITCODE -ne 0) { throw "Windows job image build failed with exit code $LASTEXITCODE." }
   Write-State 'prerequisites' 'complete'
@@ -190,7 +191,7 @@ try {
   if ($Upgrade -and -not (Test-Path -LiteralPath $identityPath)) { throw 'Upgrade requires an existing worker identity.' }
   if ($existingInstall -and $Upgrade) { Write-Host 'Existing Windows worker installation detected; preserving identity and resuming checkpoints.' }; if ($existingInstall -and -not $Upgrade) { Write-Host 'Existing Windows worker installation detected; replacing identity and runtime for a fresh enrollment.' }
   if ($Upgrade -and -not $existingService) { Write-Warning 'MarsWorker service is missing; recreating it during upgrade.' }
-  if (-not $Upgrade) { Reset-WorkerIdentity $identityPath $false; if (Test-Path -LiteralPath $windowsImageManifestPath) { Remove-Item -LiteralPath $windowsImageManifestPath -Force -ErrorAction Stop }; Set-WorkerJoinCredential $JoinCodeFile $JoinCode }
+  if (-not $Upgrade) { Reset-WorkerIdentity $identityPath $false; Set-WorkerJoinCredential $JoinCodeFile $JoinCode }
   if ($existingService) { Stop-Service MarsWorker -Force -ErrorAction SilentlyContinue; $serviceDelete = & sc.exe delete MarsWorker 2>&1; if ($LASTEXITCODE -ne 0) { throw "Failed to remove existing MarsWorker service: $($serviceDelete -join ' ')" }; $deadline = (Get-Date).AddSeconds(15); while ((Get-Service MarsWorker -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }; if (Get-Service MarsWorker -ErrorAction SilentlyContinue) { throw 'Timed out removing existing MarsWorker service.' } }
   Write-Host '[6/7] Registering LocalSystem worker service'; New-Item -ItemType Directory -Force -Path $root,$bin | Out-Null
   Move-Item -LiteralPath $paths.orchestrator -Destination (Join-Path $bin 'mars-orchestrator.exe') -Force; Move-Item -LiteralPath $paths.serviceHost -Destination (Join-Path $bin 'mars-service-host.exe') -Force

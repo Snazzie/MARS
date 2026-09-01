@@ -27,11 +27,12 @@ while (( $# > 0 )); do
 done
 [[ -n "$SOURCE" && -n "$TARGET" && -n "$JOB_AGENT" && -n "$OUTPUT_MANIFEST" ]] || usage
 [[ "$SOURCE" =~ '^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$' ]] || { print -u2 "source must be a full lowercase digest-pinned OCI reference"; exit 2; }
-[[ "$TARGET" == [A-Za-z0-9._-]## ]] || { print -u2 "invalid target image"; exit 2; }
+SOURCE_DIGEST="${SOURCE##*@}"
+EXPECTED_TARGET="mars-worker-base-${SOURCE_DIGEST#sha256:}"
+[[ "$TARGET" == "$EXPECTED_TARGET" ]] || { print -u2 "target must be content-addressed as $EXPECTED_TARGET"; exit 2; }
 [[ "$JOB_AGENT" == /* && -x "$JOB_AGENT" ]] || { print -u2 "job agent must be a compiled executable"; exit 2; }
 
 function tart() { command "$TART_BIN" "$@"; }
-SOURCE_DIGEST="${SOURCE##*@}"
 PREPARATION_SCRIPT_SHA256="$(shasum -a 256 "$0" | cut -d ' ' -f 1)"
 JOB_AGENT_SHA256="$(shasum -a 256 "$JOB_AGENT" | cut -d ' ' -f 1)"
 PROVENANCE="{\"source\":\"$SOURCE\",\"sourceDigest\":\"$SOURCE_DIGEST\",\"jobAgentSha256\":\"$JOB_AGENT_SHA256\",\"runnerUrl\":\"$RUNNER_URL\",\"runnerVersion\":\"$RUNNER_VERSION\",\"runnerSha256\":\"$RUNNER_SHA256\",\"preparationScriptSha256\":\"$PREPARATION_SCRIPT_SHA256\",\"localTarget\":\"$TARGET\"}"
