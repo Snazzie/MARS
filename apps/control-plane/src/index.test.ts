@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initializeDatabase, configureErrorFileLogging, formatJobReconciliationReport, resolveWebhookOrigin, createDevelopmentWindowsContainerBuild, resolveDevelopmentWindowsArtifacts, resolveDevelopmentLinuxArtifacts, resolveDevelopmentMacosArtifacts } from "./index.ts";
+import { initializeDatabase, configureErrorFileLogging, configureTimestampedConsoleLogging, formatJobReconciliationReport, resolveWebhookOrigin, createDevelopmentWindowsContainerBuild, resolveDevelopmentWindowsArtifacts, resolveDevelopmentLinuxArtifacts, resolveDevelopmentMacosArtifacts } from "./index.ts";
 
 test("requires an explicit webhook origin at startup", () => {
   const previous = Bun.env.GITHUB_WEBHOOK_URL;
@@ -50,11 +50,54 @@ test("writes console errors to the configured control-plane log", async () => {
     const logPath = configureErrorFileLogging(directory);
     console.error("pending worker failed", new Error("capacity missing"));
     const content = await readFile(logPath, "utf8");
-    expect(content).toContain("pending worker failed");
+    expect(content).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z pending worker failed/);
     expect(content).toContain("capacity missing");
   } finally {
     console.error = originalError;
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("timestamps console logs and warnings while preserving structured arguments", () => {
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  const logCalls: unknown[][] = [];
+  const warnCalls: unknown[][] = [];
+  console.log = (...args) => logCalls.push(args);
+  console.warn = (...args) => warnCalls.push(args);
+  const restore = configureTimestampedConsoleLogging();
+  try {
+    const details = { workerId: "worker-1" };
+    console.log("worker connected", details);
+    console.warn("retrying");
+    expect(logCalls).toHaveLength(1);
+    expect(logCalls[0]?.[0]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z worker connected$/);
+    expect(logCalls[0]?.[1]).toBe(details);
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]?.[0]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z retrying$/);
+  } finally {
+    restore();
+    console.log = originalLog;
+    console.warn = originalWarn;
+    console.error = originalError;
+  }
+});
+
+test("restores console methods after timestamp logging cleanup", () => {
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  const restore = configureTimestampedConsoleLogging();
+  try {
+    restore();
+    expect(console.log).toBe(originalLog);
+    expect(console.warn).toBe(originalWarn);
+    expect(console.error).toBe(originalError);
+  } finally {
+    console.log = originalLog;
+    console.warn = originalWarn;
+    console.error = originalError;
   }
 });
 
