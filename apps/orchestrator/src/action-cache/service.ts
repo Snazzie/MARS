@@ -32,6 +32,7 @@ export type ActionCacheNetworkConfiguration = {
 export type StartActionCacheServiceOptions = {
   controlPlaneOrigin: string;
   ttlSeconds: number;
+  runnerCacheEnabled?: boolean;
   root?: string;
   proxyPort?: number;
   dataPort?: number;
@@ -49,6 +50,8 @@ export type StartActionCacheServiceOptions = {
 export interface ActionCacheService {
   status(): WorkerCacheStatus;
   applyTtl(ttlSeconds: number): Promise<void>;
+  setRunnerCacheEnabled(enabled: boolean): void;
+  purgeRunnerCache(): Promise<void>;
   transport(leaseId: string, expiresAt: string): WorkerCacheProxy;
   unregisterLease(leaseId: string): void;
   snapshotPages(pageSize: number): AsyncIterable<WorkerCacheEntryProjection[]>;
@@ -457,6 +460,16 @@ class PersistentActionCacheService implements ActionCacheService {
     this.#ttlSeconds = ttlSeconds;
   }
 
+  setRunnerCacheEnabled(enabled: boolean): void {
+    if (this.#closed) throw new Error("action cache service is closed");
+    this.#packageDownloadCache.setEnabled(enabled);
+  }
+
+  async purgeRunnerCache(): Promise<void> {
+    if (this.#closed) throw new Error("action cache service is closed");
+    await this.#packageDownloadCache.purge();
+  }
+
   transport(leaseId: string, expiresAt: string): WorkerCacheProxy {
     if (this.#closed || !this.#ready) throw new Error("action cache service is not ready");
     const expiry = Date.parse(expiresAt);
@@ -525,6 +538,7 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
       now,
       upstream: options.forwardPackageRequest,
     });
+    packageDownloadCache.setEnabled(options.runnerCacheEnabled ?? true);
     await packageDownloadCache.probe();
     sweepHandle = (options.scheduleSweep ?? scheduleSweep)(async () => {
       try {

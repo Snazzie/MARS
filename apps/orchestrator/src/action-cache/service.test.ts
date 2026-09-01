@@ -411,6 +411,57 @@ test("caches anonymous npm tarballs and bypasses metadata and authorized downloa
   ]);
 });
 
+test("runtime runner cache toggle and purge affect package cache without changing Actions cache", async () => {
+  const packageBytes = Buffer.from("package");
+  const tarballPath = "/pkg/-/pkg-1.0.0.tgz";
+  const cacheRoot = await root();
+  let calls = 0;
+  const service = await startActionCacheService({
+    root: cacheRoot,
+    controlPlaneOrigin: "https://control.example.test",
+    ttlSeconds: 3600,
+    runnerCacheEnabled: false,
+    proxyPort: 0,
+    dataPort: 0,
+    discoverAdvertiseHost: async () => "127.0.0.1",
+    forwardPackageRequest: async (_request, response) => {
+      calls += 1;
+      response.writeHead(200, { "content-type": "application/octet-stream", "content-length": String(packageBytes.length) });
+      response.end(packageBytes);
+    },
+  });
+  await Bun.write(join(cacheRoot, "archives", "actions-object.blob"), "actions");
+  services.push(service);
+  const transport = service.transport("11111111-1111-4111-8111-111111111111", leaseExpiry());
+  const disabled = await requestThroughProxy(transport.proxyUrl, "registry.npmjs.org", transport.caCertificatePem, {
+    method: "GET",
+    path: tarballPath,
+  });
+  service.setRunnerCacheEnabled(true);
+  const miss = await requestThroughProxy(transport.proxyUrl, "registry.npmjs.org", transport.caCertificatePem, {
+    method: "GET",
+    path: tarballPath,
+  });
+  service.setRunnerCacheEnabled(false);
+  const bypass = await requestThroughProxy(transport.proxyUrl, "registry.npmjs.org", transport.caCertificatePem, {
+    method: "GET",
+    path: tarballPath,
+  });
+  await service.purgeRunnerCache();
+  service.setRunnerCacheEnabled(true);
+  const afterPurge = await requestThroughProxy(transport.proxyUrl, "registry.npmjs.org", transport.caCertificatePem, {
+    method: "GET",
+    path: tarballPath,
+  });
+  expect(disabled.headers["x-mars-package-cache"]).toBeUndefined();
+  expect(miss.headers["x-mars-package-cache"]).toBe("MISS");
+  expect(bypass.headers["x-mars-package-cache"]).toBeUndefined();
+  expect(afterPurge.headers["x-mars-package-cache"]).toBe("MISS");
+  expect(await Bun.file(join(cacheRoot, "archives", "actions-object.blob")).text()).toBe("actions");
+  expect(calls).toBe(4);
+  expect(service.status()).toMatchObject({ entryCount: 0, sizeBytes: "0" });
+});
+
 test.skipIf(Bun.env.MARS_LIVE_NPM_CACHE !== "1")("installs the Bun fixture through the persistent worker package cache", async () => {
   const fixtureRoot = join(import.meta.dir, "../../../../tests/fixtures/bun-package-cache");
   const testRoot = await root();

@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
@@ -51,6 +51,100 @@ test("publishes public tarballs as MISS then serves byte-identical HIT", async (
     expect(second.response.headers.get("x-mars-package-cache")).toBe("HIT");
     expect(calls).toBe(1);
   } finally {
+    await cache.close();
+  }
+});
+
+test("disabled requests pass through and re-enable reuses retained package object", async () => {
+  const root = await temporaryRoot();
+  let calls = 0;
+  const body = new Uint8Array([4, 5, 6]);
+  const cache = await openPackageDownloadCache({
+    root,
+    ttlSeconds: 60,
+    upstream: async (_request, response) => {
+      calls += 1;
+      response.writeHead(200, { "content-type": "application/octet-stream", "content-length": String(body.byteLength) });
+      response.end(body);
+    },
+  });
+  try {
+    const first = await request(cache, "/pkg/-/pkg-1.0.0.tgz");
+    cache.setEnabled(false);
+    const disabled = await request(cache, "/pkg/-/pkg-1.0.0.tgz");
+    cache.setEnabled(true);
+    const reenabled = await request(cache, "/pkg/-/pkg-1.0.0.tgz");
+    expect(first.response.headers.get("x-mars-package-cache")).toBe("MISS");
+    expect(disabled.response.headers.get("x-mars-package-cache")).toBeNull();
+    expect(reenabled.response.headers.get("x-mars-package-cache")).toBe("HIT");
+    expect(disabled.bytes).toEqual(body);
+    expect(reenabled.bytes).toEqual(body);
+    expect(calls).toBe(2);
+  } finally {
+    await cache.close();
+  }
+});
+
+test("purge removes package rows and objects, is idempotent, and preserves unrelated objects", async () => {
+  const root = await temporaryRoot();
+  const cache = await openPackageDownloadCache({
+    root,
+    ttlSeconds: 60,
+    upstream: async (_request, response) => {
+      response.writeHead(200, { "content-length": "3" });
+      response.end("pkg");
+    },
+  });
+  const unrelatedPath = join(root, "actions-object.blob");
+  await Bun.write(unrelatedPath, "actions");
+  try {
+    await request(cache, "/pkg/-/pkg-1.0.0.tgz");
+    expect(await readdir(join(root, "packages", "objects"))).toHaveLength(1);
+    await cache.purge();
+    await cache.purge();
+    expect(await readdir(join(root, "packages", "objects"))).toHaveLength(0);
+    expect(await Bun.file(unrelatedPath).text()).toBe("actions");
+    const db = new Database(join(root, "packages", "cache.sqlite"), { readonly: true });
+    try {
+      expect(Number(db.query("SELECT COUNT(*) AS count FROM package_entries").get()?.count ?? 0)).toBe(0);
+    } finally {
+      db.close();
+    }
+  } finally {
+    await cache.close();
+  }
+});
+
+test("a fill started before purge cannot publish after purge", async () => {
+  const root = await temporaryRoot();
+  let calls = 0;
+  let started!: () => void;
+  const fillStarted = new Promise<void>((resolve) => { started = resolve; });
+  let release!: () => void;
+  const releaseFill = new Promise<void>((resolve) => { release = resolve; });
+  const cache = await openPackageDownloadCache({
+    root,
+    ttlSeconds: 60,
+    upstream: async (_request, response) => {
+      calls += 1;
+      started();
+      await releaseFill;
+      response.writeHead(200, { "content-type": "application/octet-stream", "content-length": "3" });
+      response.end("old");
+    },
+  });
+  try {
+    const pending = request(cache, "/pkg/-/pkg-1.0.0.tgz");
+    await fillStarted;
+    await cache.purge();
+    release();
+    const first = await pending;
+    const second = await request(cache, "/pkg/-/pkg-1.0.0.tgz");
+    expect(first.response.headers.get("x-mars-package-cache")).toBeNull();
+    expect(second.response.headers.get("x-mars-package-cache")).toBe("MISS");
+    expect(calls).toBe(2);
+  } finally {
+    release();
     await cache.close();
   }
 });

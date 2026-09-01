@@ -37,7 +37,7 @@ function chunkBuffer(chunk: unknown, encoding: BufferEncoding = "utf8"): Buffer 
   return Buffer.from(String(chunk), encoding);
 }
 
-type FillResult = { published: boolean };
+type FillResult = { published: boolean; generation: number };
 
 type CapturedResponse = {
   statusCode: number;
@@ -202,6 +202,8 @@ export const forwardPublicNpmRequest: PackageUpstreamHandler = async (request, r
 export interface PackageDownloadCache {
   handle(request: IncomingMessage, response: ServerResponse): Promise<void>;
   applyTtl(ttlSeconds: number): Promise<void>;
+  setEnabled(enabled: boolean): void;
+  purge(): Promise<void>;
   sweep(): Promise<void>;
   probe(): Promise<void>;
   close(): Promise<void>;
@@ -218,6 +220,8 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
   readonly #flights = new Map<string, Promise<FillResult>>();
   readonly #activeFills = new Set<Promise<FillResult>>();
   #ttlSeconds: number;
+  #enabled = true;
+  #generation = 0;
   #closed = false;
 
   constructor(root: string, db: Database, ttlSeconds: number, now: Clock, upstream: PackageUpstreamHandler) {
@@ -270,8 +274,8 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
     return true;
   }
 
-  async #publish(canonicalUrl: string, captured: CapturedResponse): Promise<boolean> {
-    if (captured.statusCode !== 200 || hasHeader(captured.headers, "set-cookie")) return false;
+  async #publish(canonicalUrl: string, captured: CapturedResponse, generation: number): Promise<boolean> {
+    if (generation !== this.#generation || captured.statusCode !== 200 || hasHeader(captured.headers, "set-cookie")) return false;
     const length = contentLength(captured.headers);
     const bytes = Buffer.concat(captured.chunks);
     if (length !== null && length !== BigInt(bytes.byteLength)) return false;
@@ -286,6 +290,11 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
       try { await file.write(bytes); await file.sync(); } finally { await file.close(); }
       await rename(stagingPath, objectPath);
       await this.#syncDirectory(this.#objects);
+      if (generation !== this.#generation) {
+        await rm(objectPath, { force: true });
+        this.#db.query("DELETE FROM package_entries WHERE url_hash=? AND state='filling'").run(urlHash);
+        return false;
+      }
       this.#db.query("UPDATE package_entries SET state='ready' WHERE url_hash=? AND state='filling'").run(urlHash);
       return true;
     } catch {
@@ -303,6 +312,7 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
   }
 
   async #fill(canonicalUrl: string, request: IncomingMessage, response: ServerResponse): Promise<FillResult> {
+    const generation = this.#generation;
     const captured = captureResponse(response);
     try {
       await this.#upstream(request, response);
@@ -310,13 +320,14 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
     } finally {
       captured.restore();
     }
-    const published = await this.#publish(canonicalUrl, captured.value);
+    const published = await this.#publish(canonicalUrl, captured.value, generation);
     replay(response, captured.value, published ? { "x-mars-package-cache": "MISS" } : {});
-    return { published };
+    return { published, generation };
   }
 
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     this.#assertOpen();
+    if (!this.#enabled) { await this.#upstream(request, response); return; }
     const canonicalUrl = canonicalUrlFor(request);
     if (!canonicalUrl) { await this.#upstream(request, response); return; }
     try {
@@ -326,6 +337,13 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
     if (existing) {
       const result = await existing;
       if (result.published && await this.#hit(canonicalUrl, response)) return;
+      if (result.generation !== this.#generation && this.#enabled) {
+        const fill = this.#fill(canonicalUrl, request, response);
+        this.#flights.set(canonicalUrl, fill);
+        this.#activeFills.add(fill);
+        try { await fill; } finally { this.#activeFills.delete(fill); this.#flights.delete(canonicalUrl); }
+        return;
+      }
       await this.#upstream(request, response);
       return;
     }
@@ -341,6 +359,26 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
     this.#ttlSeconds = ttlSeconds;
     this.#db.query("UPDATE package_entries SET expires_at=datetime(last_accessed_at, ? || ' seconds') WHERE state='ready'").run(`+${ttlSeconds}`);
     await this.sweep();
+  }
+  setEnabled(enabled: boolean): void {
+    this.#assertOpen();
+    this.#enabled = enabled;
+  }
+
+  async purge(): Promise<void> {
+    this.#assertOpen();
+    this.#generation += 1;
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      this.#db.exec("DELETE FROM package_entries");
+      this.#db.exec("COMMIT");
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
+    let files: string[];
+    try { files = await readdir(this.#objects); } catch { return; }
+    await Promise.all(files.map((fileName) => rm(join(this.#objects, fileName), { force: true })));
   }
 
   async sweep(): Promise<void> {
