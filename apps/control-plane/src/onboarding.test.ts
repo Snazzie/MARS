@@ -86,11 +86,11 @@ describe("onboarding HTTP contract", () => {
   });
 
 
-  test("uses the selected Windows worker template digest for pool creation", async () => {
+  test("uses the configured Windows container image digest for pool creation", async () => {
     const workerId = "00000000-0000-4000-8000-000000000001";
     const organizationId = "00000000-0000-4000-8000-000000000002";
     const installationId = "00000000-0000-4000-8000-000000000003";
-    const templateDigest = `sha256:${"a".repeat(64)}`;
+    const containerDigest = `sha256:${"a".repeat(64)}`;
     const db = (async (strings: TemplateStringsArray) => {
       const query = strings.join(" ");
       if (query.includes('so.admin_user_id AS "adminUserId"')) return [{ adminUserId: "admin", workerId, organizationId, completedAt: null, workerAdmissionState: "adopted", workerConfigurationState: "ready", githubReady: true }];
@@ -103,11 +103,10 @@ describe("onboarding HTTP contract", () => {
     const response = await createControlPlaneApp(fakeHttpDeps({
       db,
       currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
-      defaultJobImages: {},
-      workerTemplateDigests: { "windows-x64": templateDigest },
+      defaultJobImages: { "windows-x64": containerDigest },
     })).request("/api/onboarding");
     expect(response.status).toBe(200);
-    expect((await response.json()).defaultImageDigests["windows-x64"]).toBe(templateDigest);
+    expect((await response.json()).defaultImageDigests["windows-x64"]).toBe(containerDigest);
   });
 
   test("strict detail DTO rejects secret-like nested fields and invalid step", () => {

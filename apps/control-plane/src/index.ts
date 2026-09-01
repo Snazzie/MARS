@@ -277,6 +277,19 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const webRoot = options.webRoot ?? new URL(Bun.env.WEB_ROOT ?? "../../web/dist/", import.meta.url);
   // Production never resolves worker binaries from the application image.
   const workerInstallerRoot = options.workerInstallerRoot ?? new URL(production ? "file:///var/empty/" : Bun.env.WORKER_INSTALLER_ROOT ?? "../../../deploy/workers/", import.meta.url);
+  const developmentPath = (name: string, fallback: string): string | undefined => {
+    if (production) return undefined;
+    const configured = Bun.env[name]?.trim();
+    const artifact = configured ? new URL(configured, import.meta.url) : new URL(fallback, import.meta.url);
+    return fileURLToPath(artifact);
+  };
+  const windowsContainerArtifacts = production ? undefined : {
+    builderPath: developmentPath("MARS_WINDOWS_CONTAINER_BUILDER", "../../../deploy/workers/build-windows-container-image-local.ps1")!,
+    verifierPath: developmentPath("MARS_WINDOWS_CONTAINER_VERIFIER", "../../../images/jobs/windows/verify-runtime.ps1")!,
+    containerfilePath: developmentPath("MARS_WINDOWS_CONTAINERFILE", "../../../images/jobs/windows/Containerfile")!,
+    entrypointPath: developmentPath("MARS_WINDOWS_CONTAINER_ENTRYPOINT", "../../../images/jobs/windows/entrypoint.ps1")!,
+    jobAgentPath: developmentPath("MARS_WINDOWS_CONTAINER_JOB_AGENT", "../../../apps/job-agent/dist/whitesmith-job-agent.exe")!,
+  };
   const [developmentWindowsArtifacts, developmentLinuxArtifacts, developmentMacosArtifacts] = await Promise.all([
     resolveDevelopmentWindowsArtifacts(Bun.env),
     resolveDevelopmentLinuxArtifacts(Bun.env),
@@ -306,6 +319,13 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
     configureRunLifecycle(db);
   }
   const initialized = options.setupOverride ?? await initializeControlPlaneSetup(db, dataRoot, configuredPublicOrigin);
+  const windowsContainerBuild = !production
+    ? createDevelopmentWindowsContainerBuild({
+      publicOrigin: initialized.setup.publicOrigin() ?? configuredPublicOrigin ?? null,
+      artifacts: developmentWindowsArtifacts && { container: developmentWindowsArtifacts.container },
+      buildArtifacts: windowsContainerArtifacts,
+    })
+    : undefined;
   const workerConnectionOrigins = (): string[] => {
     const canonical = initialized.setup.publicOrigin() ?? configuredPublicOrigin;
     return [...new Set([canonical, ...configuredWorkerOrigins].filter((origin): origin is string => Boolean(origin)))];
@@ -332,8 +352,8 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const discoveryHealth = new DiscoveryHealthMonitor(discoveryIntervalMs, Date.parse(startedAt));
   const githubApp = options.githubApp ?? new GitHubAppService({ db, secretBox, publicOrigin: initialized.setup.publicOrigin, webhookOrigin: () => configuredWebhookOrigin });
   const githubRateLimits = new GithubRateLimitGate();
+  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, developmentWindowsArtifacts, developmentLinuxArtifacts, developmentMacosArtifacts, windowsContainerBuild, windowsContainerArtifacts, workerInstallerRoot, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, workerDispatcher: dispatcher, onWorkerAdopted: () => undefined, health: () => ({ buildId: "unknown", startedAt, discovery: discoveryHealth.snapshot() }), workerRequestLimiter: createRequestLimiter() });
   let triggerReconciliation = () => Promise.resolve();
-  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, developmentWindowsArtifacts, developmentLinuxArtifacts, developmentMacosArtifacts, workerInstallerRoot, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, workerDispatcher: dispatcher, onWorkerAdopted: () => undefined, health: () => ({ buildId: "unknown", startedAt, discovery: discoveryHealth.snapshot() }), workerRequestLimiter: createRequestLimiter() });
   const gateway = createControlPlaneGateway({ db, httpFetch: async request => await httpApp.fetch(request), current, requestSource: (request, activeServer) => { requestSources.set(request, activeServer.requestIP(request)?.address ?? "unknown"); return requestSources.get(request) ?? "unknown"; }, dispatcher, triggerReconciliation: () => triggerReconciliation(), requestId: () => crypto.randomUUID() });
   let server!: Server<ControlPlaneSocketData>;
   server = Bun.serve<ControlPlaneSocketData>({ port: options.port ?? Number(Bun.env.PORT ?? 3000), websocket: gateway.websocket, fetch: request => gateway.fetch(request, server) });

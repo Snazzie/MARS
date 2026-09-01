@@ -62,7 +62,6 @@ const app = createControlPlaneApp(fakeHttpDeps());
       MARS_WINDOWS_CONTAINER_VC_URL: "http://localhost:3000/vc.exe",
       MARS_WINDOWS_CONTAINER_VC_SHA256: hash,
     });
-    expect(artifacts?.template).toBeUndefined();
     expect(artifacts?.orchestrator.sha256).toBe(hash);
     expect(artifacts?.serviceHost.sha256).toBe(hash);
   });
@@ -229,7 +228,6 @@ describe("control-plane HTTP boundary", () => {
       const paths = {
         orchestrator: join(root, "orchestrator.exe"),
         serviceHost: join(root, "service-host.exe"),
-        template: join(root, "template.vhdx"),
         runner: join(root, "runner.zip"),
         git: join(root, "git.zip"),
         vcRuntime: join(root, "vc.exe"),
@@ -244,7 +242,6 @@ describe("control-plane HTTP boundary", () => {
         developmentWindowsArtifacts: {
           orchestrator: { path: paths.orchestrator, sha256: hash },
           serviceHost: { path: paths.serviceHost, sha256: hash },
-          template: { path: paths.template, sha256: hash },
           container: {
             baseImage: `mcr.microsoft.com/windows@sha256:${hash}`,
             runner: { path: paths.runner, sha256: hash },
@@ -324,7 +321,6 @@ describe("control-plane HTTP boundary", () => {
         developmentWindowsArtifacts: {
           orchestrator: { url: `http://127.0.0.1:${upstream.port}/orchestrator.exe`, sha256: hash },
           serviceHost: { url: `http://127.0.0.1:${upstream.port}/service-host.exe`, sha256: hash },
-          template: { url: `http://127.0.0.1:${upstream.port}/template.vhdx`, sha256: hash },
           container: {
             baseImage: `mcr.microsoft.com/windows@sha256:${hash}`,
             runner: { url: `http://127.0.0.1:${upstream.port}/runner.zip`, sha256: hash },
@@ -356,7 +352,6 @@ describe("control-plane HTTP boundary", () => {
         developmentWindowsArtifacts: {
           orchestrator: { path: join(root, "missing-orchestrator.exe"), sha256: hash },
           serviceHost: { path: join(root, "missing-service-host.exe"), sha256: hash },
-          template: { path: join(root, "missing-template.vhdx"), sha256: hash },
           container: {
             baseImage: `mcr.microsoft.com/windows@sha256:${hash}`,
             runner: { path: join(root, "missing-runner.zip"), sha256: hash },
@@ -1641,14 +1636,13 @@ describe("development worker artifact hardening", () => {
     const bodies = {
       orchestrator: "queued-orchestrator",
       serviceHost: "queued-service-host",
-      template: "queued-template",
     };
     const completions: Array<() => void> = [];
     const starts: Array<() => void> = [];
     const fetcher = Object.assign((input: string | URL | Request) => new Promise<Response>(resolve => {
       starts.shift()?.();
       const path = new URL(String(input)).pathname;
-      const body = path.includes("service-host") ? bodies.serviceHost : path.includes("template") ? bodies.template : bodies.orchestrator;
+      const body = path.includes("service-host") ? bodies.serviceHost : bodies.orchestrator;
       completions.push(() => resolve(new Response(body)));
     }), { preconnect: globalThis.fetch.preconnect });
     const hardenedApp = createControlPlaneApp(fakeHttpDeps({
@@ -1656,7 +1650,6 @@ describe("development worker artifact hardening", () => {
       developmentWindowsArtifacts: {
         orchestrator: { url: "https://public.test/orchestrator", sha256: createHash("sha256").update(bodies.orchestrator).digest("hex") },
         serviceHost: { url: "https://public.test/service-host", sha256: createHash("sha256").update(bodies.serviceHost).digest("hex") },
-        template: { url: "https://public.test/template", sha256: createHash("sha256").update(bodies.template).digest("hex") },
       },
       developmentArtifactProxy: {
         fetch: fetcher,

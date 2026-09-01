@@ -84,6 +84,8 @@ export type ControlPlaneHttpDeps = {
   developmentArtifactProxy?: DevelopmentArtifactProxyOptions;
   /** Development-only local source for installer scripts. */
   workerInstallerRoot?: URL;
+  /** Compatibility-only test seam; production never resolves this executable. */
+  workerOrchestratorExecutable?: URL;
   /** Development-only image builder seam; never populated by production startup. */
   windowsContainerBuild?: {
     baseImage: string;
@@ -106,8 +108,6 @@ export type ControlPlaneHttpDeps = {
     entrypointPath: string;
     jobAgentPath: string;
   };
-  /** Legacy local-only template seams retained for non-production tooling. */
-  workerTemplateDigests?: Partial<Record<"windows-x64" | "linux-x64", string>>;
   workerConnectionOrigins(): string[];
   currentUser(request: Request): Promise<SessionUser | null>;
   requestId(): string;

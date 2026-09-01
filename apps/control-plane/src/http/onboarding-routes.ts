@@ -38,18 +38,12 @@ export function registerOnboardingRoutes(app: Hono<ControlPlaneEnv>, deps: Contr
     const user = await deps.currentUser(c.req.raw); if (!user) return c.json({ error:"unauthorized" },401); if (!user.isGlobalAdmin) return c.json({ error:"forbidden" },403);
     let detail = await getOnboardingDetail(deps.db, { authenticated: true, canManage: true }, {}, { publicBaseUrlManaged: deps.setup.publicOriginManaged() });
     if (detail.step === "labels" && !detail.pool) {
-      const hyperv = detail.worker?.platform === "windows-x64";
-      await ensureDefaultPools(deps.db, {
-        "linux-x64": hyperv ? deps.workerTemplateDigests?.["linux-x64"] : deps.defaultJobImages["linux-x64"],
-        "windows-x64": hyperv ? deps.workerTemplateDigests?.["windows-x64"] : deps.defaultJobImages["windows-x64"],
-        "macos-arm64": deps.defaultJobImages["macos-arm64"],
-      });
+      await ensureDefaultPools(deps.db, deps.defaultJobImages);
       detail = await getOnboardingDetail(deps.db, { authenticated: true, canManage: true }, {}, { publicBaseUrlManaged: deps.setup.publicOriginManaged() });
     }
-    const hyperv = detail.worker?.platform === "windows-x64";
     const defaultImageDigests = {
-      "linux-x64": hyperv ? deps.workerTemplateDigests?.["linux-x64"] ?? null : deps.defaultJobImages["linux-x64"] ?? null,
-      "windows-x64": hyperv ? deps.workerTemplateDigests?.["windows-x64"] ?? null : deps.defaultJobImages["windows-x64"] ?? null,
+      "linux-x64": deps.defaultJobImages["linux-x64"] ?? null,
+      "windows-x64": deps.defaultJobImages["windows-x64"] ?? null,
       "macos-arm64": deps.defaultJobImages["macos-arm64"] ?? null,
     };
     return c.json(OnboardingDetail.parse({ ...detail, defaultImageDigests }), { headers: { "cache-control": "no-store" } });
