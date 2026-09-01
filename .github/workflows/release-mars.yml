@@ -462,6 +462,7 @@ jobs:
           broker_latest_changed=false
           app_latest_changed=false
           rollback() {
+            local failure_status=$?
             trap - ERR
             set +e
             local rollback_failed=0
@@ -485,10 +486,12 @@ jobs:
               echo "rollback failed restoring worker prerelease state" >&2
               rollback_failed=1
             fi
+            set -e
             if (( rollback_failed != 0 )); then
               echo "release rollback did not fully restore state" >&2
-              return 1
+              exit 1
             fi
+            exit "$failure_status"
           }
           trap rollback ERR
           broker_latest_changed=true
