@@ -35,6 +35,8 @@ test -s "$work/mars-job-agent"
 # Actions Runner expansion. Grow the virtual disk and root partition before
 # adding the runner and job agent.
 qemu-img resize "$work/base.qcow2" +4G
+expanded_size=$(qemu-img info --output=json "$work/base.qcow2" | jq -r '."virtual-size"')
+qemu-img create -f qcow2 "$work/expanded.qcow2" "$expanded_size"
 virt-resize --expand /dev/sda1 "$work/base.qcow2" "$work/expanded.qcow2"
 mv "$work/expanded.qcow2" "$work/base.qcow2"
 
