@@ -57,7 +57,7 @@ function requestThroughProxy(proxyUrl: string, targetHost: string, ca: string, i
       const body = input.body === undefined ? "" : input.body;
       const headers = { host: targetHost, connection: "close", ...input.headers, ...(input.body === undefined ? {} : { "content-length": String(Buffer.byteLength(body)) }) };
       const request = `${input.method} ${input.path} HTTP/1.1\r\n${Object.entries(headers).map(([name, value]) => `${name}: ${value}`).join("\r\n")}\r\n\r\n${body}`;
-      secure.end(request);
+      secure.write(request);
     });
     const chunks: Buffer[] = [];
     secure.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
