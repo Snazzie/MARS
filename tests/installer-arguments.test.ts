@@ -90,10 +90,11 @@ test("macOS installer consumes verified routes and only configures LaunchAgent a
   expect(mac).toContain("download_verified \"$MARS_ORCHESTRATOR_URL\"");
   expect(mac).toContain("download_verified \"$MARS_JOB_AGENT_URL\"");
   expect(mac).toContain("download_verified \"$IMAGE_PREPARATION_SCRIPT_URL\"");
-  expect(mac).toContain("--output-manifest \"$PREP_MANIFEST\"");
-  expect(mac).toContain("PREPARED_DIGEST");
+  expect(mac).toContain("chmod +x \"$ORCHESTRATOR_STAGE\" \"$JOB_AGENT_STAGE\" \"$PREPARER_STAGE\"");
+  expect(mac).toContain("TART_BIN=\"$TART_BIN\" \"$PREPARER_STAGE\"");
+  expect(mac).toContain("LOCAL_IMAGE=\"mars-worker-base-${TART_IMAGE_DIGEST#sha256:}\"");
   expect(mac).toContain("mv -f \"$PLIST_TMP\" \"$PLIST\"");
-  expect(mac).not.toContain('"$TART_BIN" clone');
+  expect(mac).not.toContain('\"$TART_BIN\" clone');
   expect(mac).toContain("MARS_TART_BASE_IMAGE");
   expect(mac).toContain("MARS_TART_IMAGE_DIGEST");
 });
