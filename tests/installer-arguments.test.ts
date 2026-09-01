@@ -156,3 +156,19 @@ try {
   expect(await process.exited).toBe(0);
   expect(await new Response(process.stdout).text()).toContain("VERIFIER_OK");
 });
+windowsRuntimeTest("Windows image build failure raises the intended error", async () => {
+  const failureLine = windows.split(/\r?\n/).find(line => line.includes("Windows job image build failed with exit code"));
+  expect(failureLine).toBeDefined();
+  const script = `$LASTEXITCODE = 23
+$paths = @{ manifest = Join-Path $env:TEMP 'mars-missing-image-manifest.json' }
+try {
+${failureLine}
+  throw 'build failure was swallowed'
+} catch {
+  if ($_.Exception.Message -notlike '*Windows job image build failed with exit code 23*') { throw }
+  Write-Output 'BUILD_FAILURE_OK'
+}`;
+  const process = Bun.spawn(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], { stdout: "pipe", stderr: "pipe" });
+  expect(await process.exited).toBe(0);
+  expect(await new Response(process.stdout).text()).toContain("BUILD_FAILURE_OK");
+});

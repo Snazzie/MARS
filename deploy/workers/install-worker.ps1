@@ -183,7 +183,7 @@ try {
   if (Ensure-ContainerFeatures) { New-Item -ItemType Directory -Force -Path $root | Out-Null; if ([IO.Path]::GetFullPath($PSCommandPath) -ne [IO.Path]::GetFullPath($persistentInstallerPath)) { Copy-Item -LiteralPath $PSCommandPath -Destination $persistentInstallerPath -Force }; Register-ResumeTask $persistentInstallerPath; Write-State 'reboot-required' 'pending'; Write-Host 'Windows features require a reboot; MarsWorkerInstallResume will continue automatically.'; Restart-Computer -Force; exit 0 }
   Install-DockerDesktop; Switch-DockerWindowsEngine; Assert-WindowsContainerHost
   & $paths.builder -BaseImage $WindowsContainerBaseImage -RunnerArchivePath $paths.runner -RunnerSha256 $WindowsContainerRunnerSha256 -GitArchivePath $paths.git -GitSha256 $WindowsContainerGitSha256 -VcRuntimePath $paths.vc -VcRuntimeSha256 $WindowsContainerVcRuntimeSha256 -JobAgent $paths.jobAgent -Image $WindowsContainerImage -ManifestPath $paths.manifest -VerifierPath $paths.verifier -ContainerfilePath $paths.containerfile -EntrypointPath $paths.entrypoint
-  if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $paths.manifest -PathType Leaf)) { throw \"Windows job image build failed with exit code $LASTEXITCODE.\" }
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $paths.manifest -PathType Leaf)) { throw "Windows job image build failed with exit code $LASTEXITCODE." }
   Move-Item -LiteralPath $paths.manifest -Destination $windowsImageManifestPath -Force
   Write-State 'prerequisites' 'complete'
   Write-Host '[5/7] Preparing worker replacement'

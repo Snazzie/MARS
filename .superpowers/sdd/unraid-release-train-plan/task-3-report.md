@@ -19,8 +19,8 @@ Implemented and committed in this task-3 commit.
 
 - `bun test tests/installer-arguments.test.ts apps/web/src/components/EnrollmentPanel.test.ts apps/web/src/components/WorkerActions.test.tsx tests/linux-broker-container-contract.test.ts tests/windows-container-image-contract.test.ts`
 - Result: **40 pass, 0 fail** (258 assertions).
-- Full Task 3-focused contract command (including contracts, control-plane startup/HTTP, and UI tests): **169 pass, 0 fail** (652 assertions).
-- PowerShell parser checks passed for `deploy/workers/install-worker.ps1` and `deploy/workers/build-windows-container-image-local.ps1`.
+- Full Task 3-focused contract command (including contracts, control-plane startup/HTTP, and UI tests): **170 pass, 0 fail** (655 assertions).
+- PowerShell parser checks passed for `deploy/workers/install-worker.ps1` and `deploy/workers/build-windows-container-image-local.ps1`; behavioral tests cover hash acceptance/rejection and build-failure error propagation.
 
 ## Concerns / limitations
 
