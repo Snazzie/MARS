@@ -440,14 +440,51 @@ jobs:
             printf 'build_sha=%s\nmanifest_url=%s\ncontract_version=%s\n' "$GITHUB_SHA" "${{ needs.validate-inputs.outputs.manifest_url }}" "${{ needs.validate-inputs.outputs.contract_version }}"
           } > mars-release-metadata.txt
           gh release upload "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" mars-release-metadata.txt --clobber
-          gh release edit "worker-v$WORKER_VERSION" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest=false
+          latest_digest() {
+            local image="$1" output
+            if output=$(docker buildx imagetools inspect "$image:latest" --format '{{.Manifest.Digest}}' 2>&1); then
+              if [[ "$output" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                printf '%s' "$output"
+              else
+                echo "unable to determine existing $image:latest digest" >&2
+                return 1
+              fi
+            elif [[ "$output" == *MANIFEST_UNKNOWN* || "$output" == *"manifest unknown"* || "$output" == *"no such manifest"* ]]; then
+              echo "unable to determine existing $image:latest digest: tag does not exist; aborting before promotion" >&2
+              return 1
+            else
+              echo "unable to determine existing $image:latest digest: $output" >&2
+              return 1
+            fi
+          }
+          previous_broker_digest=$(latest_digest "$BROKER_IMAGE")
+          previous_app_digest=$(latest_digest "$APP_IMAGE")
+          broker_latest_changed=false
+          app_latest_changed=false
+          rollback() {
+            trap - ERR
+            set +e
+            if [[ "$app_latest_changed" == true ]]; then
+              docker buildx imagetools create --tag "$APP_IMAGE:latest" "$APP_IMAGE@$previous_app_digest"
+            fi
+            if [[ "$broker_latest_changed" == true ]]; then
+              docker buildx imagetools create --tag "$BROKER_IMAGE:latest" "$BROKER_IMAGE@$previous_broker_digest"
+            fi
+            gh release edit "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" --draft=true --latest=false >/dev/null 2>&1
+            gh release edit "worker-v$WORKER_VERSION" --repo "$GITHUB_REPOSITORY" --prerelease=true --latest=false >/dev/null 2>&1
+          }
+          trap rollback ERR
           docker buildx imagetools create --tag "$BROKER_IMAGE:latest" "$BROKER_IMAGE@$broker_digest"
+          broker_latest_changed=true
           promoted_broker_digest=$(docker buildx imagetools inspect "$BROKER_IMAGE:latest" --format '{{.Manifest.Digest}}')
           [[ "$promoted_broker_digest" == "$broker_digest" ]] || { echo 'linux broker latest promotion changed digest' >&2; exit 1; }
           docker buildx imagetools create --tag "$APP_IMAGE:latest" "$APP_IMAGE@$APP_DIGEST"
+          app_latest_changed=true
           app_digest=$(docker buildx imagetools inspect "$APP_IMAGE:latest" --format '{{.Manifest.Digest}}')
           [[ "$app_digest" == "$APP_DIGEST" ]] || { echo 'control-plane latest promotion changed digest' >&2; exit 1; }
           gh release edit "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest=true
+          gh release edit "worker-v$WORKER_VERSION" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest=false
+          trap - ERR
       - uses: actions/upload-artifact@v4
         with:
           name: mars-release-metadata-${{ inputs.app_version }}

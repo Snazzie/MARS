@@ -178,8 +178,8 @@ test("release train observes immutable assets before ordered latest promotion", 
   const remoteSmoke = workflow.indexOf("Smoke test with baked remote worker manifest");
   const candidateObserve = workflow.indexOf("Gate anonymous GHCR candidate manifests");
   const promote = workflow.indexOf("name: Promote verified Mars release");
-  const brokerLatest = workflow.indexOf('imagetools create --tag "$BROKER_IMAGE:latest"');
-  const appLatest = workflow.indexOf('imagetools create --tag "$APP_IMAGE:latest"');
+  const brokerLatest = workflow.lastIndexOf('imagetools create --tag "$BROKER_IMAGE:latest"');
+  const appLatest = workflow.lastIndexOf('imagetools create --tag "$APP_IMAGE:latest"');
   const finalWorker = workflow.lastIndexOf('gh release edit "worker-v$WORKER_VERSION"');
   const appDraft = workflow.indexOf('gh release create "v$APP_VERSION"');
   const appUpload = workflow.indexOf('gh release upload "v$APP_VERSION"');
@@ -192,10 +192,13 @@ test("release train observes immutable assets before ordered latest promotion", 
   expect(promote).toBeGreaterThan(candidateObserve);
   expect(appDraft).toBeGreaterThan(promote);
   expect(appUpload).toBeGreaterThan(appDraft);
-  expect(finalWorker).toBeGreaterThan(appUpload);
-  expect(brokerLatest).toBeGreaterThan(finalWorker);
+  expect(brokerLatest).toBeGreaterThan(appUpload);
   expect(appLatest).toBeGreaterThan(brokerLatest);
   expect(appFinalize).toBeGreaterThan(appLatest);
+  expect(finalWorker).toBeGreaterThan(appFinalize);
+  expect(workflow).toContain("trap rollback ERR");
+  expect(workflow).not.toContain("imagetools rm");
+  expect(workflow).toContain("tag does not exist; aborting before promotion");
   expect(workflow).toContain("--clobber");
   expect(workflow).toContain("--latest=false");
   expect(workflow).toContain("@sha256:");

@@ -49,22 +49,34 @@ test("candidate images are anonymously observable before mutable promotion", asy
   expect(workflow.indexOf("Gate anonymous GHCR candidate manifests")).toBeLessThan(workflow.indexOf("Promote verified Mars release"));
 });
 
-test("stages the app release before mutable promotion and finalizes afterward", async () => {
+test("stages releases and rolls back before finalizing after promotion", async () => {
   const workflow = await read(".github/workflows/release-mars.yml");
   const appDraft = workflow.indexOf('gh release create "v$APP_VERSION"');
   const appUpload = workflow.indexOf('gh release upload "v$APP_VERSION"');
-  const workerFinalize = workflow.lastIndexOf('gh release edit "worker-v$WORKER_VERSION"');
-  const brokerPromotion = workflow.indexOf('docker buildx imagetools create --tag "$BROKER_IMAGE:latest"');
-  const appPromotion = workflow.indexOf('docker buildx imagetools create --tag "$APP_IMAGE:latest"');
+  const brokerPromotion = workflow.lastIndexOf('docker buildx imagetools create --tag "$BROKER_IMAGE:latest"');
+  const appPromotion = workflow.lastIndexOf('docker buildx imagetools create --tag "$APP_IMAGE:latest"');
   const appFinalize = workflow.indexOf('gh release edit "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest=true');
+  const workerFinalize = workflow.lastIndexOf('gh release edit "worker-v$WORKER_VERSION"');
   expect(workflow).toContain('--draft --latest=false --title "Mars v$APP_VERSION"');
-  expect(workflow).toContain('--draft=true --latest=false');
+  expect(workflow).toContain("trap rollback ERR");
+  expect(workflow).toContain("previous_broker_digest");
+  expect(workflow).not.toContain("imagetools rm");
+
   expect(appDraft).toBeGreaterThan(-1);
   expect(appUpload).toBeGreaterThan(appDraft);
-  expect(workerFinalize).toBeGreaterThan(appUpload);
-  expect(brokerPromotion).toBeGreaterThan(workerFinalize);
+  expect(brokerPromotion).toBeGreaterThan(appUpload);
   expect(appPromotion).toBeGreaterThan(brokerPromotion);
   expect(appFinalize).toBeGreaterThan(appPromotion);
+  expect(workerFinalize).toBeGreaterThan(appFinalize);
+});
+
+test("aborts safely when prior mutable tags cannot be inspected", async () => {
+  const workflow = await read(".github/workflows/release-mars.yml");
+  expect(workflow).toContain("latest_digest()");
+  expect(workflow).toContain("unable to determine existing");
+  expect(workflow).toContain("MANIFEST_UNKNOWN");
+  expect(workflow).toContain("tag does not exist; aborting before promotion");
+  expect(workflow).not.toContain("2>/dev/null || true");
 });
 
 test("candidate images are explicit amd64 builds and promotions are gated", async () => {
