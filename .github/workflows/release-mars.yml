@@ -464,24 +464,47 @@ jobs:
           rollback() {
             trap - ERR
             set +e
+            local rollback_failed=0
             if [[ "$app_latest_changed" == true ]]; then
-              docker buildx imagetools create --tag "$APP_IMAGE:latest" "$APP_IMAGE@$previous_app_digest"
+              if ! docker buildx imagetools create --tag "$APP_IMAGE:latest" "$APP_IMAGE@$previous_app_digest"; then
+                echo "rollback failed restoring $APP_IMAGE:latest" >&2
+                rollback_failed=1
+              fi
             fi
             if [[ "$broker_latest_changed" == true ]]; then
-              docker buildx imagetools create --tag "$BROKER_IMAGE:latest" "$BROKER_IMAGE@$previous_broker_digest"
+              if ! docker buildx imagetools create --tag "$BROKER_IMAGE:latest" "$BROKER_IMAGE@$previous_broker_digest"; then
+                echo "rollback failed restoring $BROKER_IMAGE:latest" >&2
+                rollback_failed=1
+              fi
             fi
-            gh release edit "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" --draft=true --latest=false >/dev/null 2>&1
-            gh release edit "worker-v$WORKER_VERSION" --repo "$GITHUB_REPOSITORY" --prerelease=true --latest=false >/dev/null 2>&1
+            if ! gh release edit "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" --draft=true --latest=false; then
+              echo "rollback failed restoring app release draft state" >&2
+              rollback_failed=1
+            fi
+            if ! gh release edit "worker-v$WORKER_VERSION" --repo "$GITHUB_REPOSITORY" --prerelease=true --latest=false; then
+              echo "rollback failed restoring worker prerelease state" >&2
+              rollback_failed=1
+            fi
+            if (( rollback_failed != 0 )); then
+              echo "release rollback did not fully restore state" >&2
+              return 1
+            fi
           }
           trap rollback ERR
-          docker buildx imagetools create --tag "$BROKER_IMAGE:latest" "$BROKER_IMAGE@$broker_digest"
           broker_latest_changed=true
+          docker buildx imagetools create --tag "$BROKER_IMAGE:latest" "$BROKER_IMAGE@$broker_digest"
           promoted_broker_digest=$(docker buildx imagetools inspect "$BROKER_IMAGE:latest" --format '{{.Manifest.Digest}}')
-          [[ "$promoted_broker_digest" == "$broker_digest" ]] || { echo 'linux broker latest promotion changed digest' >&2; exit 1; }
-          docker buildx imagetools create --tag "$APP_IMAGE:latest" "$APP_IMAGE@$APP_DIGEST"
+          if [[ "$promoted_broker_digest" != "$broker_digest" ]]; then
+            echo 'linux broker latest promotion changed digest' >&2
+            false
+          fi
           app_latest_changed=true
+          docker buildx imagetools create --tag "$APP_IMAGE:latest" "$APP_IMAGE@$APP_DIGEST"
           app_digest=$(docker buildx imagetools inspect "$APP_IMAGE:latest" --format '{{.Manifest.Digest}}')
-          [[ "$app_digest" == "$APP_DIGEST" ]] || { echo 'control-plane latest promotion changed digest' >&2; exit 1; }
+          if [[ "$app_digest" != "$APP_DIGEST" ]]; then
+            echo 'control-plane latest promotion changed digest' >&2
+            false
+          fi
           gh release edit "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest=true
           gh release edit "worker-v$WORKER_VERSION" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest=false
           trap - ERR

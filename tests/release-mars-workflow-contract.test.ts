@@ -61,7 +61,8 @@ test("stages releases and rolls back before finalizing after promotion", async (
   expect(workflow).toContain("trap rollback ERR");
   expect(workflow).toContain("previous_broker_digest");
   expect(workflow).not.toContain("imagetools rm");
-
+  expect(workflow).toContain("rollback did not fully restore state");
+  expect(workflow).not.toContain("latest promotion changed digest' >&2; exit 1");
   expect(appDraft).toBeGreaterThan(-1);
   expect(appUpload).toBeGreaterThan(appDraft);
   expect(brokerPromotion).toBeGreaterThan(appUpload);

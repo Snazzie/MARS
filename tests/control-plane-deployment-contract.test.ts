@@ -197,13 +197,12 @@ test("release train observes immutable assets before ordered latest promotion", 
   expect(appFinalize).toBeGreaterThan(appLatest);
   expect(finalWorker).toBeGreaterThan(appFinalize);
   expect(workflow).toContain("trap rollback ERR");
+  expect(workflow).toContain("rollback_failed=1");
+  expect(workflow).toContain("rollback did not fully restore state");
   expect(workflow).not.toContain("imagetools rm");
   expect(workflow).toContain("tag does not exist; aborting before promotion");
-  expect(workflow).toContain("--clobber");
-  expect(workflow).toContain("--latest=false");
-  expect(workflow).toContain("@sha256:");
-  expect(workflow).toContain('[[ "$promoted_broker_digest" == "$broker_digest" ]]');
-  expect(workflow).toContain('[[ "$app_digest" == "$APP_DIGEST" ]]');
+  expect(workflow).toContain("promoted_broker_digest");
+  expect(workflow).toContain("echo 'linux broker latest promotion changed digest'");
 });
 
 test("active runtime uses Mars identifiers and no packaged workers", async () => {

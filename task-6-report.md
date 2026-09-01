@@ -8,6 +8,7 @@
 - Made worker manifest loading enforce the exact `https://github.com/Snazzie/MARS/releases/download/worker-v<semver>/` path for every hashed platform payload URL. `releases/latest`, foreign repositories, foreign tags, credentials, query/fragment URLs, and nested paths are rejected after schema validation. GitHub host/repository casing remains accepted. Local development file manifests retain their existing override path.
 
 - Rollback safety requires both existing `:latest` tags to have a confirmed digest; explicit GHCR manifest-not-found and all transient/auth/invalid-digest lookup errors abort before any promotion. No unsupported Docker tag-removal command is used.
+- Rollback mutation flags are set before each tag write, digest mismatches fail through the ERR trap, and rollback errors are surfaced and cause the run to remain failed rather than being silently ignored.
 
 ## Focused verification
 
