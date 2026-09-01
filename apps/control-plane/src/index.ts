@@ -1,5 +1,5 @@
 import { completeOnboardingIfReady, createDb, ensureDatabase, migrateDatabase, jsonParameter, type DashboardDb } from "@mars/db";
-import { WorkerCommand as WorkerCommandSchema, type WorkerCommand, type WorkerReleaseManifest } from "@mars/contracts";
+import { WorkerCommand as WorkerCommandSchema, WorkerReleaseOciDigest, type WorkerCommand, type WorkerReleaseManifest } from "@mars/contracts";
 import type { Server } from "bun";
 import { getSession, SecretBox, type SessionUser } from "./auth.ts";
 import { configureRunLifecycle } from "./runs.ts";
@@ -220,8 +220,8 @@ export async function resolveDevelopmentMacosArtifacts(environment: DevelopmentE
   if (!orchestrator && !jobAgent && !imagePreparationScript && !tartImage && !tartImageDigest) return undefined;
   // A development installer must be as complete and immutable as a released
   // one. Partial local configuration is deliberately surfaced as unavailable.
-  if (!tartImage) return undefined;
-  const sourceDigest = tartImage.match(/@sha256:([0-9a-f]{64})$/)?.[1];
+  if (!tartImage || !WorkerReleaseOciDigest.safeParse(tartImage).success) return undefined;
+  const sourceDigest = tartImage.split("@sha256:")[1];
   if (!orchestrator || !jobAgent || !imagePreparationScript || !tartImageDigest || !sourceDigest || tartImageDigest !== sourceDigest) return undefined;
   return { orchestrator, jobAgent, imagePreparationScript, tartImage, tartImageDigest };
 }

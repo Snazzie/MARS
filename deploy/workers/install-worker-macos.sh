@@ -78,10 +78,10 @@ mkdir -p "$APP_DIR" "$(dirname "$HOME/Library/LaunchAgents/com.mars.worker.plist
 write_state() { printf '{"stage":"%s","status":"%s","updatedAt":"%s"}\n' "$1" "$2" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_FILE"; }
 check() { CHECK=$((CHECK + 1)); print "[$CHECK/8] $1"; write_state "$2" started; }
 pass() { print "  [ok] $1"; }
+TART_BIN="${TART_BIN:-$(command -v tart 2>/dev/null || true)}"
 check 'Installing Homebrew and Tart prerequisites' prerequisites
 if [[ -z "$TART_BIN" ]]; then BREW_BIN="$(command -v brew 2>/dev/null || true)"; if [[ -z "$BREW_BIN" ]]; then NONINTERACTIVE=1 CI=1 /bin/bash -c "$(curl --silent --show-error --fail --location --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; BREW_BIN=/opt/homebrew/bin/brew; fi; [[ -x "$BREW_BIN" ]] || { echo 'Homebrew installation failed' >&2; exit 1; }; "$BREW_BIN" tap cirruslabs/cli; "$BREW_BIN" install cirruslabs/cli/tart; TART_BIN="$(command -v tart || echo /opt/homebrew/bin/tart)"; fi
 [[ -x "$TART_BIN" ]] || { echo 'Tart is required' >&2; exit 1; }; write_state prerequisites complete; pass 'Homebrew and Tart are installed'
-check 'Configuring the narrow Tart administrator permission' sudoers
 if ! sudo -n "$TART_BIN" --version >/dev/null 2>&1; then sudo -v || { echo 'Administrator authorization was cancelled.' >&2; exit 1; }; SUDOERS_FILE="/etc/sudoers.d/mars-tart-${USER}"; printf '%s ALL=(root) NOPASSWD: %s\n' "$USER" "$TART_BIN" | sudo tee "$SUDOERS_FILE" >/dev/null; sudo chmod 440 "$SUDOERS_FILE"; sudo visudo -cf "$SUDOERS_FILE" >/dev/null 2>&1 || { sudo rm -f "$SUDOERS_FILE"; echo 'Tart sudoers validation failed' >&2; exit 1; }; sudo -n "$TART_BIN" --version >/dev/null 2>&1 || { echo 'Tart is not usable with sudoers rule' >&2; exit 1; }; fi
 write_state sudoers complete; pass 'Tart sudo capability configured'
 check 'Preparing and verifying the local Tart job image' tart-image

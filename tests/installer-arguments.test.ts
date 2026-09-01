@@ -62,10 +62,10 @@ test("Windows installer is container-only and validates every immutable input be
   expect(windows).toContain("Download-Verified $WindowsContainerBuilderUrl");
   expect(windows).toContain("Download-Verified $WindowsContainerfileUrl");
   expect(windows).toContain("Verify-DownloadedFile");
-  expect(windows.lastIndexOf("Download-Verified $WindowsOrchestratorUrl")).toBeLessThan(windows.indexOf("if (Ensure-ContainerFeatures)"));
-  expect(windows.indexOf("Ensure-ContainerFeatures")).toBeLessThan(windows.indexOf("Stop-Service MarsWorker"));
-  expect(windows).toContain("-RunnerArchivePath $paths.runner");
-  expect(windows).toContain("-BaseImage $WindowsContainerBaseImage");
+  expect(windows).toContain("-ManifestPath $paths.manifest");
+  expect(windows).toContain("Move-Item -LiteralPath $paths.manifest -Destination $windowsImageManifestPath -Force");
+  expect(windows.indexOf("Move-Item -LiteralPath $paths.manifest")).toBeGreaterThan(windows.indexOf("if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $paths.manifest"));
+  expect(windows).not.toContain("Remove-Item -LiteralPath $windowsImageManifestPath");
   expect(windows).toContain("MARS_WINDOWS_RUNTIME=container");
   expect(windows).toContain("Register-ResumeTask");
   expect(windows).toContain("Remove-ResumeTask");

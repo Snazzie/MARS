@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { PendingWorkerRequest, WorkerConfiguration } from "@mars/contracts";
+import { PendingWorkerRequest, WorkerConfiguration, WorkerReleaseOciDigest } from "@mars/contracts";
 import type { LinuxWorkerRelease, MacosWorkerRelease, WindowsWorkerRelease } from "@mars/contracts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps, DevelopmentArtifact, DevelopmentArtifactFetchOptions, DevelopmentLinuxArtifacts, DevelopmentMacosArtifacts, DevelopmentWindowsArtifacts } from "./types.ts";
 import { verifyWorkerBootstrap, initializeWorkerBootstrap, rotateWorkerBootstrap, getWorkerBootstrapStatus } from "../worker-bootstrap.ts";
@@ -89,6 +89,10 @@ function injectInstallerOrigin(source: string, baseUrl: string, extra: Installer
   return `${source.slice(0, insertAt)}${injected}\n${source.slice(insertAt)}`;
 }
 const hasValue = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
+const tartDigest = (value: unknown): string | undefined => {
+  if (typeof value !== "string" || !WorkerReleaseOciDigest.safeParse(value).success) return undefined;
+  return value.split("@sha256:")[1];
+};
 const artifactExists = async (path: ArtifactPath | undefined): Promise<boolean> => Boolean(path && await Bun.file(path).exists());
 const pathFor = (root: URL, name: string): URL => new URL(name, root);
 async function fileSha256(path: ArtifactPath): Promise<string> {
@@ -562,9 +566,13 @@ async function installerArtifacts(
       const windows = development as DevelopmentWindowsArtifacts;
       if (!windows.orchestrator) missing.push("development:orchestrator");
       if (!windows.serviceHost) missing.push("development:service-host");
+      if (!windows.jobAgent) missing.push("development:job-agent");
+      const container = windows.container;
+      if (!container || !WorkerReleaseOciDigest.safeParse(container.baseImage).success) missing.push("development:container");
+      else for (const field of ["runner", "git", "vcRuntime", "buildScript", "verifyScript", "containerfile", "entrypoint"] as const) if (!container[field]) missing.push(`development:container.${field}`);
     } else {
       const macos = development as DevelopmentMacosArtifacts;
-      if (!macos.orchestrator || !macos.jobAgent || !macos.imagePreparationScript || !hasValue(macos.tartImage) || !hasValue(macos.tartImageDigest)) missing.push(`development:${audience}`);
+      if (!macos.orchestrator || !macos.jobAgent || !macos.imagePreparationScript || !hasValue(macos.tartImage) || !hasValue(macos.tartImageDigest) || tartDigest(macos.tartImage) !== macos.tartImageDigest.replace(/^sha256:/, "")) missing.push(`development:${audience}`);
     }
     return missing;
   }
@@ -1101,9 +1109,11 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
         if (!linux.brokerImage || !linux.goldenImage || !linux.compose || !linux.domainTemplate) return unavailable(c, [`platform:${audience}`]);
         values = linuxInstallerValues({ brokerImage: linux.brokerImage, goldenImage: { url: "", sha256: linux.goldenImage.sha256 }, compose: { url: "", sha256: linux.compose.sha256 }, domainTemplate: { url: "", sha256: linux.domainTemplate.sha256 } }, connectOrigin, "local");
       } else values = linuxInstallerValues(release as LinuxWorkerRelease, connectOrigin, "production");
+    } else if (audience === "windows-x64") {
+      values = windowsInstallerValues(release as WindowsWorkerRelease | undefined, connectOrigin, development as DevelopmentWindowsArtifacts | undefined);
     } else if (development) {
       const macos = development as DevelopmentMacosArtifacts;
-      if (!macos.orchestrator || !macos.jobAgent || !macos.imagePreparationScript || !macos.tartImage || !macos.tartImageDigest) return unavailable(c, [`platform:${audience}`]);
+      if (!macos.orchestrator || !macos.jobAgent || !macos.imagePreparationScript || !macos.tartImage || !macos.tartImageDigest || tartDigest(macos.tartImage) !== macos.tartImageDigest.replace(/^sha256:/, "")) return unavailable(c, [`platform:${audience}`]);
       values = macosInstallerValues({ orchestrator: macos.orchestrator, jobAgent: macos.jobAgent, imagePreparationScript: macos.imagePreparationScript, tartSourceImage: macos.tartImage }, connectOrigin, "local");
     } else values = macosInstallerValues(release as MacosWorkerRelease, connectOrigin, "production");
     const generated = injectInstallerOrigin(source, connectOrigin, values, audience === "windows-x64");
@@ -1112,7 +1122,8 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   });
   app.get("/api/workers/orchestrator", async c => {
     const audience = c.req.query("audience") as "linux-x64" | "windows-x64" | "macos-arm64";
-    const development = audience === "windows-x64" ? deps.developmentWindowsArtifacts?.orchestrator : audience === "macos-arm64" ? deps.developmentMacosArtifacts?.orchestrator : undefined;
+    const configured = audience === "windows-x64" ? deps.developmentWindowsArtifacts?.orchestrator : audience === "macos-arm64" ? deps.developmentMacosArtifacts?.orchestrator : undefined;
+    const development = audience === "macos-arm64" ? await currentDevelopmentArtifact(configured) : configured;
     if (development) return developmentPackaged(c, development, "orchestrator", audience === "windows-x64" ? "mars-orchestrator.exe" : "mars-orchestrator", "binary");
     const asset = deps.workerReleaseManifest?.platforms[audience]?.orchestrator;
     return asset ? await proxyPackagedResponse(asset.url, audience === "windows-x64" ? "mars-orchestrator.exe" : "mars-orchestrator", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, [`orchestrator:${audience}`]) : unavailable(c, [`orchestrator:${audience}`]);
@@ -1124,12 +1135,16 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     return asset ? await proxyPackagedResponse(asset.url, "mars-service-host.exe", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, ["service-host:windows-x64"]) : unavailable(c, ["manifest:windows-x64.serviceHost"]);
   });
   app.get("/api/workers/macos-job-agent", async c => {
-    if (deps.developmentMacosArtifacts?.jobAgent) return developmentPackaged(c, deps.developmentMacosArtifacts.jobAgent, "job-agent", "mars-job-agent", "binary");
+    const configured = deps.developmentMacosArtifacts?.jobAgent;
+    const development = await currentDevelopmentArtifact(configured);
+    if (development) return developmentPackaged(c, development, "job-agent", "mars-job-agent", "binary");
     const asset = deps.workerReleaseManifest?.platforms["macos-arm64"]?.jobAgent;
     return asset ? await proxyPackagedResponse(asset.url, "mars-job-agent", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, ["macos-job-agent"]) : unavailable(c, ["manifest:macos-arm64.jobAgent"]);
   });
   app.get("/api/workers/macos-image-preparation", async c => {
-    if (deps.developmentMacosArtifacts?.imagePreparationScript) return developmentPackaged(c, deps.developmentMacosArtifacts.imagePreparationScript, "image-preparation", "prepare-macos-job-image.sh", "binary");
+    const configured = deps.developmentMacosArtifacts?.imagePreparationScript;
+    const development = await currentDevelopmentArtifact(configured);
+    if (development) return developmentPackaged(c, development, "image-preparation", "prepare-macos-job-image.sh", "binary");
     const asset = deps.workerReleaseManifest?.platforms["macos-arm64"]?.imagePreparationScript;
     return asset ? await proxyPackagedResponse(asset.url, "prepare-macos-job-image.sh", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, ["macos-image-preparation"]) : unavailable(c, ["manifest:macos-arm64.imagePreparationScript"]);
   });

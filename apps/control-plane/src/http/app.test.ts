@@ -204,66 +204,34 @@ describe("control-plane HTTP boundary", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
-  test("serves container-mode Windows installer without local image build inputs", async () => {
+  test("rejects a Windows installer when schema-3 container inputs are incomplete", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-windows-installers-"));
     try {
-      await Bun.write(join(root, "install-worker.ps1"), "[CmdletBinding()]\r\nparam(\r\n  [string]$WindowsContainerImage = 'mars/windows-job:local',\r\n  [int]$WindowsContainerReadyTimeoutMs = 15000\r\n)\r\n$ErrorActionPreference = 'Stop'\r\n");
+      await Bun.write(join(root, "install-worker.ps1"), "[CmdletBinding()]\r\nparam()\r\n");
       await Bun.write(join(root, "windows-orchestrator"), "orchestrator");
       await Bun.write(join(root, "service-host.exe"), "service-host");
-      const deps = { baseUrl: "https://control.test", workerInstallerRoot: pathToFileURL(`${root}/`), windowsContainerBuild: undefined, windowsContainerArtifacts: undefined, workerOrchestratorExecutables: { "windows-x64": pathToFileURL(join(root, "windows-orchestrator")) }, workerServiceHostExecutable: pathToFileURL(join(root, "service-host.exe")) };
+      const deps = { baseUrl: "https://control.test", workerReleaseManifest: undefined, workerInstallerRoot: pathToFileURL(`${root}/`), windowsContainerBuild: undefined, windowsContainerArtifacts: undefined, workerOrchestratorExecutables: { "windows-x64": pathToFileURL(join(root, "windows-orchestrator")) }, workerServiceHostExecutable: pathToFileURL(join(root, "service-host.exe")) };
       const response = await createControlPlaneApp(fakeHttpDeps(deps)).request("/api/workers/installer?audience=windows-x64&runtime=container&connectOrigin=https%3A%2F%2Fcontrol.test");
-      const installer = await response.text();
-      expect(response.status).toBe(200);
-      expect(installer).toContain("$ControlPlaneUrl = 'https://control.test'");
-      expect(installer).toContain("windows-container-builder");
-      expect(installer).not.toContain("__PLACEHOLDER__");
+      expect(response.status).toBe(503);
+      expect((await response.json()).code).toBe("artifact_unavailable");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
-  test("generates local-only Windows installer values without release fallback", async () => {
+  test("rejects incomplete local Windows schema-3 artifacts without release fallback", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-local-windows-installers-"));
-    const hash = "b".repeat(64);
     try {
-      const paths = {
-        orchestrator: join(root, "orchestrator.exe"),
-        serviceHost: join(root, "service-host.exe"),
-        runner: join(root, "runner.zip"),
-        git: join(root, "git.zip"),
-        vcRuntime: join(root, "vc.exe"),
-      };
-      await Promise.all(Object.values(paths).map(path => Bun.write(path, path)));
       await Bun.write(join(root, "install-worker.ps1"), "[CmdletBinding()]\r\nparam()\r\n");
       const response = await createControlPlaneApp(fakeHttpDeps({
         workerInstallerRoot: pathToFileURL(`${root}/`),
         workerReleaseManifest: undefined,
-        workerOrchestratorExecutables: { "windows-x64": pathToFileURL(paths.orchestrator) },
-        workerServiceHostExecutable: pathToFileURL(paths.serviceHost),
         developmentWindowsArtifacts: {
-          orchestrator: { path: paths.orchestrator, sha256: hash },
-          serviceHost: { path: paths.serviceHost, sha256: hash },
-          container: {
-            baseImage: `mcr.microsoft.com/windows@sha256:${hash}`,
-            runner: { path: paths.runner, sha256: hash },
-            git: { path: paths.git, sha256: hash },
-            vcRuntime: { path: paths.vcRuntime, sha256: hash },
-          },
+          orchestrator: { path: join(root, "orchestrator.exe"), sha256: "b".repeat(64) },
+          serviceHost: { path: join(root, "service-host.exe"), sha256: "b".repeat(64) },
         },
       })).request("/api/workers/installer?audience=windows-x64&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
-      const installer = await response.text();
-
-      expect(response.status).toBe(200);
-      expect(installer).toContain("$WindowsArtifactMode = 'local'");
-      expect(installer).toContain("$WindowsOrchestratorUrl = 'https://control-plane.test/api/workers/orchestrator?audience=windows-x64'");
-      expect(installer).toContain("$WindowsServiceHostUrl = 'https://control-plane.test/api/workers/service-host?audience=windows-x64'");
-      expect(installer).toContain("$WindowsContainerRunnerUrl = 'https://control-plane.test/api/workers/windows-container-runner'");
-      expect(installer).toContain("$WindowsContainerGitUrl = 'https://control-plane.test/api/workers/windows-container-git'");
-      expect(installer).toContain("$WindowsContainerVcRuntimeUrl = 'https://control-plane.test/api/workers/windows-container-vc-runtime'");
-      expect(installer).toContain(`$WindowsOrchestratorSha256 = '${createHash("sha256").update(paths.orchestrator).digest("hex")}'`);
-      expect(installer).toContain(`$WindowsServiceHostSha256 = '${createHash("sha256").update(paths.serviceHost).digest("hex")}'`);
-      expect(installer).toContain("$WindowsContainerImage = 'mars/windows-job:local'");
-      expect(installer).not.toContain(`$WindowsContainerImage = 'mcr.microsoft.com/windows@sha256:${hash}'`);
-      expect(installer).not.toContain("github.com");
+      expect(response.status).toBe(503);
+      expect((await response.json()).code).toBe("artifact_unavailable");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -1046,7 +1014,7 @@ describe("development worker artifact hardening", () => {
     }
   });
 
-  test("generates a container installer from only current local worker binaries", async () => {
+  test("rejects a container installer from only current local worker binaries", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-current-worker-binaries-"));
     const orchestrator = join(root, "mars-orchestrator.exe");
     const serviceHost = join(root, "mars-service-host.exe");
@@ -1057,34 +1025,20 @@ describe("development worker artifact hardening", () => {
       const orchestratorHash = createHash("sha256").update("rebuilt-orchestrator").digest("hex");
       const serviceHostHash = createHash("sha256").update("rebuilt-service-host").digest("hex");
       const hardenedApp = createControlPlaneApp(fakeHttpDeps({
-        workerInstallerRoot: pathToFileURL(`${root}/`),
-        workerReleaseManifest: undefined,
+        workerInstallerRoot: pathToFileURL(`${root}/`), workerReleaseManifest: undefined,
         workerConnectionOrigins: () => ["https://control.test"],
-        developmentWindowsArtifacts: {
-          orchestrator: { path: orchestrator, sha256: orchestratorHash },
-          serviceHost: { path: serviceHost, sha256: serviceHostHash },
-        },
+        developmentWindowsArtifacts: { orchestrator: { path: orchestrator, sha256: orchestratorHash }, serviceHost: { path: serviceHost, sha256: serviceHostHash } },
       }));
-
       const installerResponse = await hardenedApp.request("/api/workers/installer?audience=windows-x64&runtime=container&connectOrigin=https%3A%2F%2Fcontrol.test");
-      const installer = await installerResponse.text();
-      expect(installerResponse.status).toBe(200);
-      expect(installer).toContain(`$WindowsOrchestratorSha256 = '${orchestratorHash}'`);
-      expect(installer).toContain(`$WindowsServiceHostSha256 = '${serviceHostHash}'`);
-      expect(installer).not.toContain("$WindowsTemplateUrl =");
-      expect(installer).not.toContain("$WindowsContainerRunnerUrl =");
-
+      expect(installerResponse.status).toBe(503);
+      expect((await installerResponse.json()).code).toBe("artifact_unavailable");
       const artifactResponse = await hardenedApp.request("/api/workers/orchestrator?audience=windows-x64");
       expect(artifactResponse.status).toBe(200);
       expect(artifactResponse.headers.get("X-Content-SHA256")).toBe(orchestratorHash);
       expect(await artifactResponse.text()).toBe("rebuilt-orchestrator");
-
-      expect((await hardenedApp.request("/api/workers/templates/windows-x64/artifact")).status).toBe(503);
-      expect((await hardenedApp.request("/api/workers/windows-container-runner")).status).toBe(503);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
+
 
   test("blocks a public artifact redirect to a private destination before fetching it", async () => {
     const calls: string[] = [];
@@ -1797,7 +1751,7 @@ describe("Linux and macOS platform artifact sources", () => {
     }
   });
 
-  test("serves a current local macOS build while an unavailable Linux platform remains a 503", async () => {
+  test("rejects incomplete local macOS configuration while refreshing individual artifact hashes", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-local-macos-artifacts-"));
     const orchestrator = join(root, "mars-orchestrator");
     try {
@@ -1809,24 +1763,17 @@ describe("Linux and macOS platform artifact sources", () => {
         workerReleaseManifest: undefined,
         workerConnectionOrigins: () => ["http://localhost:3000"],
         developmentMacosArtifacts: {
-          orchestrator: { path: orchestrator, sha256: createHash("sha256").update("current-orchestrator").digest("hex") },
+          orchestrator: { path: orchestrator, sha256: createHash("sha256").update("old-orchestrator").digest("hex") },
           tartImage: "mars-macos-dev",
           tartImageDigest: "d".repeat(64),
         },
       }));
       await Bun.write(orchestrator, "current-orchestrator");
       const orchestratorHash = createHash("sha256").update("current-orchestrator").digest("hex");
-
       const macosResponse = await localApp.request("/api/workers/installer?audience=macos-arm64&runtime=container&connectOrigin=http%3A%2F%2Flocalhost%3A3000");
-      const macosInstaller = await macosResponse.text();
-      expect(macosResponse.status).toBe(200);
-      expect(macosInstaller).toContain("MARS_ARTIFACT_MODE='local'");
-      expect(macosInstaller).toContain("PUBLIC_BASE_URL='http://localhost:3000'");
-      expect(macosInstaller).toContain(`MARS_ORCHESTRATOR_SHA256='${orchestratorHash}'`);
-      expect(macosInstaller).toContain("TART_IMAGE='mars-macos-dev'");
-      expect(macosInstaller).toContain(`TART_IMAGE_DIGEST='${"d".repeat(64)}'`);
+      expect(macosResponse.status).toBe(503);
+      expect((await macosResponse.json()).code).toBe("artifact_unavailable");
       expect((await localApp.request("/api/workers/installer?audience=linux-x64&runtime=container&connectOrigin=http%3A%2F%2Flocalhost%3A3000")).status).toBe(503);
-
       const artifactResponse = await localApp.request("/api/workers/orchestrator?audience=macos-arm64");
       expect(artifactResponse.status).toBe(200);
       expect(artifactResponse.headers.get("X-Content-SHA256")).toBe(orchestratorHash);
