@@ -43,6 +43,8 @@ test("candidate images are explicit amd64 builds and promotions are gated", asyn
   expect(workflow).toContain("MARS_WORKER_RELEASE_MANIFEST_URL");
   expect(workflow).toContain("MARS_WORKER_CONTRACT_VERSION");
   expect(workflow).toContain("SMOKE_MANIFEST_URL: ''");
+  expect(workflow).toContain("SMOKE_NODE_ENV: development");
+  expect(workflow).toContain("SMOKE_NODE_ENV: production");
   expect(workflow).toContain("rustup target add x86_64-pc-windows-gnu");
   expect(workflow).toContain('docker buildx imagetools create --tag "$BROKER_IMAGE:latest" "$BROKER_IMAGE@$broker_digest"');
   expect(workflow).toContain('docker buildx imagetools create --tag "$APP_IMAGE:latest" "$APP_IMAGE@$APP_DIGEST"');

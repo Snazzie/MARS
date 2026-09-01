@@ -381,11 +381,13 @@ jobs:
       - name: Smoke test with local fixture
         env:
           IMAGE: ${{ env.APP_IMAGE }}@${{ steps.image.outputs.digest }}
+          SMOKE_NODE_ENV: development
         run: bash tests/control-plane-image-smoke.sh
       - name: Smoke test with baked remote worker manifest
         env:
           IMAGE: ${{ env.APP_IMAGE }}@${{ steps.image.outputs.digest }}
           SMOKE_MANIFEST_URL: ''
+          SMOKE_NODE_ENV: production
         run: bash tests/control-plane-image-smoke.sh
 
   promote:

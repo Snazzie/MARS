@@ -37,6 +37,10 @@ wait_ready() {
 start_control_plane() {
   docker rm -f "$CONTROL_PLANE" >/dev/null 2>&1 || true
   local manifest_args=()
+  local runtime_args=()
+  if [[ -n "${SMOKE_NODE_ENV:-}" ]]; then
+    runtime_args+=(-e "NODE_ENV=$SMOKE_NODE_ENV")
+  fi
   if [[ -n "$SMOKE_MANIFEST_URL" ]]; then
     manifest_args+=(-e "MARS_WORKER_RELEASE_MANIFEST_URL=$SMOKE_MANIFEST_URL")
     if [[ "$SMOKE_MANIFEST_URL" == file://* ]]; then
@@ -49,7 +53,7 @@ start_control_plane() {
     -e DATABASE_URL="postgres://mars:ci-only@${POSTGRES}:5432/$1" \
     -e PUBLIC_BASE_URL="http://127.0.0.1:3000" \
     -e GITHUB_WEBHOOK_URL="https://github.example.test" \
-    "${manifest_args[@]}" \
+    "${runtime_args[@]}" \
     -v "$DATA_VOLUME":/var/lib/mars \
     -p 127.0.0.1:3000:3000 \
     "$IMAGE" >/dev/null
