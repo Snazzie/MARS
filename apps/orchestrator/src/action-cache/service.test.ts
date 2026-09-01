@@ -53,26 +53,40 @@ function requestThroughProxy(proxyUrl: string, targetHost: string, ca: string, i
     }
     const secure = tlsConnect({ socket, servername: targetHost, ca });
     secure.once("secureConnect", () => {
-      const request = httpsRequest({
-        host: targetHost,
-        servername: targetHost,
-        path: input.path,
-        method: input.method,
-        headers: { host: targetHost, ...input.headers },
-        agent: false,
-        createConnection: () => secure,
-      }, (response) => {
-        const chunks: Buffer[] = [];
-        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-        response.on("end", () => resolve({
-          status: response.statusCode ?? 0,
-          headers: Object.fromEntries(Object.entries(response.headers).map(([name, value]) => [name, Array.isArray(value) ? value.join(", ") : value ?? ""])),
-          body: Buffer.concat(chunks).toString("utf8"),
-        }));
-      });
-      request.once("error", reject);
-      if (input.body !== undefined) request.write(input.body);
-      request.end();
+      const body = input.body === undefined ? "" : input.body;
+      const headers = { host: targetHost, connection: "close", ...input.headers, ...(input.body === undefined ? {} : { "content-length": String(Buffer.byteLength(body)) }) };
+      const request = `${input.method} ${input.path} HTTP/1.1\r\n${Object.entries(headers).map(([name, value]) => `${name}: ${value}`).join("\r\n")}\r\n\r\n${body}`;
+      secure.end(request);
+    });
+    const chunks: Buffer[] = [];
+    secure.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    secure.once("end", () => {
+      const response = Buffer.concat(chunks).toString("utf8");
+      const separator = response.indexOf("\r\n\r\n");
+      if (separator < 0) {
+        reject(new Error("proxy response missing headers"));
+        return;
+      }
+      const lines = response.slice(0, separator).split("\r\n");
+      const status = Number(lines[0]?.match(/^HTTP\/\d\.\d (\d{3})(?: |$)/)?.[1] ?? 0);
+      const responseHeaders = Object.fromEntries(lines.slice(1).map((line) => {
+        const separator = line.indexOf(":");
+        return [line.slice(0, separator).toLowerCase(), line.slice(separator + 1).trim()];
+      }));
+      let responseBody = response.slice(separator + 4);
+      if (responseHeaders["transfer-encoding"]?.toLowerCase() === "chunked") {
+        let decoded = "";
+        while (responseBody.length) {
+          const end = responseBody.indexOf("\r\n");
+          if (end < 0) break;
+          const size = Number.parseInt(responseBody.slice(0, end), 16);
+          if (!size) break;
+          decoded += responseBody.slice(end + 2, end + 2 + size);
+          responseBody = responseBody.slice(end + 4 + size);
+        }
+        responseBody = decoded;
+      }
+      resolve({ status, headers: responseHeaders, body: responseBody });
     });
     secure.once("error", reject);
   };
