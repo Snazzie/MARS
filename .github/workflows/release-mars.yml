@@ -68,7 +68,7 @@ jobs:
           contract_version=$(tr -d '[:space:]' < "$CONTRACT_VERSION_FILE")
           [[ "$contract_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'worker contract version is invalid' >&2; exit 1; }
           echo "contract_version=$contract_version" >> "$GITHUB_OUTPUT"
-          echo "manifest_url=https://github.com/$GITHUB_REPOSITORY/releases/download/worker-v$WORKER_VERSION/worker-release-manifest.json" >> "$GITHUB_OUTPUT"
+          echo "manifest_url=https://github.com/Snazzie/MARS/releases/download/worker-v$WORKER_VERSION/worker-release-manifest.json" >> "$GITHUB_OUTPUT"
 
   linux:
     name: Build Linux x64 worker assets
@@ -145,7 +145,7 @@ jobs:
           BROKER_DIGEST: ${{ steps.broker.outputs.digest }}
         run: |
           set -euo pipefail
-          base="https://github.com/$GITHUB_REPOSITORY/releases/download/worker-v$WORKER_VERSION"
+          base="https://github.com/Snazzie/MARS/releases/download/worker-v$WORKER_VERSION"
           asset() { local file="$1" name="$2"; printf '{"url":"%s/%s","sha256":"%s"}' "$base" "$name" "$(sha256sum "$file" | cut -d' ' -f1)"; }
           jq -cn --argjson installer "$(asset dist/linux/install-worker.sh install-worker-linux-x64.sh)" \
             --argjson orchestrator "$(asset dist/linux/mars-orchestrator mars-orchestrator-linux-x64)" --argjson jobAgent "$(asset dist/linux/mars-job-agent mars-job-agent-linux-x64)" \
@@ -211,7 +211,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $base = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/worker-v$env:WORKER_VERSION"
+          $base = "https://github.com/Snazzie/MARS/releases/download/worker-v$env:WORKER_VERSION"
           function Asset($source, $releaseName) { $path = Join-Path $PWD "dist/windows/$source"; [ordered]@{ url="$base/$releaseName"; sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant() } }
           $deps = Get-Content dist/windows/dependencies.json -Raw | ConvertFrom-Json
           $container = [ordered]@{ baseImage=$deps.baseImage; runner=Asset 'mars-windows-runner.zip' 'mars-windows-runner.zip'; git=Asset 'mars-windows-git.zip' 'mars-windows-git.zip'; vcRuntime=Asset 'mars-windows-vc-runtime.exe' 'mars-windows-vc-runtime.exe'; buildScript=Asset 'build-windows-container-image-local.ps1' 'build-windows-container-image-local.ps1'; verifyScript=Asset 'verify-runtime.ps1' 'verify-runtime.ps1'; containerfile=Asset 'Containerfile' 'Containerfile'; entrypoint=Asset 'entrypoint.ps1' 'entrypoint.ps1' }
@@ -259,7 +259,7 @@ jobs:
           TART_SOURCE: ${{ steps.source.outputs.source }}
         run: |
           set -euo pipefail
-          base="https://github.com/$GITHUB_REPOSITORY/releases/download/worker-v$WORKER_VERSION"
+          base="https://github.com/Snazzie/MARS/releases/download/worker-v$WORKER_VERSION"
           asset() { local file="$1" name="$2"; printf '{"url":"%s/%s","sha256":"%s"}' "$base" "$name" "$(sha256sum "$file" | cut -d' ' -f1)"; }
           jq -cn --argjson installer "$(asset dist/macos/install-worker-macos.sh install-worker-macos-arm64.sh)" --argjson orchestrator "$(asset dist/macos/mars-orchestrator mars-orchestrator-macos-arm64)" \
             --argjson jobAgent "$(asset dist/macos/mars-job-agent mars-job-agent-macos-arm64)" --argjson imagePreparationScript "$(asset dist/macos/prepare-macos-job-image.sh prepare-macos-job-image.sh)" \
@@ -339,7 +339,7 @@ jobs:
           fi
       - name: Gate anonymous worker asset observability
         env:
-          ASSET_PREFIX: https://github.com/${{ github.repository }}/releases/download/worker-v${{ inputs.worker_version }}/
+          ASSET_PREFIX: https://github.com/Snazzie/MARS/releases/download/worker-v${{ inputs.worker_version }}/
         run: |
           set -euo pipefail
           manifest_url="${ASSET_PREFIX}worker-release-manifest.json"
@@ -390,9 +390,26 @@ jobs:
           SMOKE_NODE_ENV: production
         run: bash tests/control-plane-image-smoke.sh
 
+  candidate-observability:
+    name: Gate anonymous GHCR candidate manifests
+    needs: [worker-release, control-plane]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - name: Pull and inspect candidate manifests anonymously
+        run: |
+          set -euo pipefail
+          docker_config=$(mktemp -d)
+          trap 'rm -rf "$docker_config"' EXIT
+          export DOCKER_CONFIG="$docker_config"
+          for image in "$APP_IMAGE:$APP_CANDIDATE_TAG" "$BROKER_IMAGE:$BROKER_CANDIDATE_TAG"; do
+            docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}'
+            docker manifest inspect "$image" >/dev/null
+          done
+
   promote:
     name: Promote verified Mars release
-    needs: [validate-inputs, worker-release, control-plane]
+    needs: [validate-inputs, worker-release, control-plane, candidate-observability]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -408,16 +425,9 @@ jobs:
           APP_DIGEST: ${{ needs.control-plane.outputs.digest }}
         run: |
           set -euo pipefail
-          manifest=$(curl --fail --location --proto '=https' --tlsv1.2 "https://github.com/$GITHUB_REPOSITORY/releases/download/worker-v$WORKER_VERSION/worker-release-manifest.json")
+          manifest=$(curl --fail --location --proto '=https' --tlsv1.2 "https://github.com/Snazzie/MARS/releases/download/worker-v$WORKER_VERSION/worker-release-manifest.json")
           broker_digest=$(jq -r '.platforms["linux-x64"].brokerImage | capture("@(?<digest>sha256:[0-9a-f]{64})").digest' <<<"$manifest")
           [[ "$broker_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'worker manifest broker digest is invalid' >&2; exit 1; }
-          docker buildx imagetools create --tag "$BROKER_IMAGE:latest" "$BROKER_IMAGE@$broker_digest"
-          promoted_broker_digest=$(docker buildx imagetools inspect "$BROKER_IMAGE:latest" --format '{{.Manifest.Digest}}')
-          [[ "$promoted_broker_digest" == "$broker_digest" ]] || { echo 'linux broker latest promotion changed digest' >&2; exit 1; }
-          docker buildx imagetools create --tag "$APP_IMAGE:latest" "$APP_IMAGE@$APP_DIGEST"
-          app_digest=$(docker buildx imagetools inspect "$APP_IMAGE:latest" --format '{{.Manifest.Digest}}')
-          [[ "$app_digest" == "$APP_DIGEST" ]] || { echo 'control-plane latest promotion changed digest' >&2; exit 1; }
-          gh release edit "worker-v$WORKER_VERSION" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest=false
           gh release create "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest --title "Mars v$APP_VERSION" --generate-notes
           {
             printf 'app_version=%s\nworker_version=%s\n' "$APP_VERSION" "$WORKER_VERSION"
@@ -426,6 +436,13 @@ jobs:
             printf 'build_sha=%s\nmanifest_url=%s\ncontract_version=%s\n' "$GITHUB_SHA" "${{ needs.validate-inputs.outputs.manifest_url }}" "${{ needs.validate-inputs.outputs.contract_version }}"
           } > mars-release-metadata.txt
           gh release upload "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" mars-release-metadata.txt --clobber
+          gh release edit "worker-v$WORKER_VERSION" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest=false
+          docker buildx imagetools create --tag "$BROKER_IMAGE:latest" "$BROKER_IMAGE@$broker_digest"
+          promoted_broker_digest=$(docker buildx imagetools inspect "$BROKER_IMAGE:latest" --format '{{.Manifest.Digest}}')
+          [[ "$promoted_broker_digest" == "$broker_digest" ]] || { echo 'linux broker latest promotion changed digest' >&2; exit 1; }
+          docker buildx imagetools create --tag "$APP_IMAGE:latest" "$APP_IMAGE@$APP_DIGEST"
+          app_digest=$(docker buildx imagetools inspect "$APP_IMAGE:latest" --format '{{.Manifest.Digest}}')
+          [[ "$app_digest" == "$APP_DIGEST" ]] || { echo 'control-plane latest promotion changed digest' >&2; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: mars-release-metadata-${{ inputs.app_version }}

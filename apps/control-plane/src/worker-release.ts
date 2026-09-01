@@ -13,7 +13,9 @@ export type WorkerReleaseLoadOptions = {
 export const DEFAULT_WORKER_RELEASE_MANIFEST_URL = "";
 /** Development fallback only; production must provide the baked contract version. */
 export const DEFAULT_WORKER_CONTRACT_VERSION = "";
-const immutableManifestPath = /^https:\/\/github\.com\/Snazzie\/Mars\/releases\/download\/worker-v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\/worker-release-manifest\.json$/i;
+const immutableVersion = "(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)";
+const immutableManifestPath = new RegExp(`^/Snazzie/MARS/releases/download/(worker-v${immutableVersion})/worker-release-manifest\\.json$`);
+const immutableReleaseOrigin = "https://github.com";
 
 const configuredManifestUrl = (): string => Bun.env.MARS_WORKER_RELEASE_MANIFEST_URL?.trim() ?? "";
 const configuredContractVersion = (): string => Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "";
@@ -40,6 +42,42 @@ const remoteUrl = (source: string | URL): URL | undefined => {
   let candidate: URL;
   try { candidate = source instanceof URL ? source : new URL(source); } catch { return undefined; }
   return candidate.protocol === "http:" || candidate.protocol === "https:" ? candidate : undefined;
+};
+
+const immutableWorkerTag = (url: URL): string | undefined => {
+  if (url.origin !== immutableReleaseOrigin || url.username || url.password || url.search || url.hash) return undefined;
+  return immutableManifestPath.exec(url.pathname)?.[1];
+};
+
+const hashedAssetEntries = (value: unknown, path: string): Array<[string, string]> => {
+  if (!value || typeof value !== "object") return [];
+  if ("url" in value && "sha256" in value && typeof value.url === "string" && typeof value.sha256 === "string") {
+    return [[path, value.url]];
+  }
+  return Object.entries(value).flatMap(([key, child]) => hashedAssetEntries(child, `${path}.${key}`));
+};
+
+const validateImmutableAssetUrls = (manifest: WorkerReleaseManifest, workerTag: string): void => {
+  const prefix = `/Snazzie/MARS/releases/download/${workerTag}/`;
+  for (const [platform, release] of Object.entries(manifest.platforms)) {
+    if (!release) continue;
+    for (const [field, assetUrl] of hashedAssetEntries(release, `${platform}`)) {
+      let candidate: URL;
+      try { candidate = new URL(assetUrl); } catch { throw new Error(`worker release asset URL for ${field} is invalid: ${assetUrl}`); }
+      const filename = candidate.pathname.startsWith(prefix) ? candidate.pathname.slice(prefix.length) : "";
+      if (
+        candidate.origin !== immutableReleaseOrigin
+        || candidate.username
+        || candidate.password
+        || candidate.search
+        || candidate.hash
+        || !filename
+        || filename.includes("/")
+      ) {
+        throw new Error(`worker release asset URL for ${field} is outside immutable ${workerTag} release: ${assetUrl}`);
+      }
+    }
+  }
 };
 
 const developmentAsset = async (value: unknown): Promise<{ url: string; sha256: string } | undefined> => {
@@ -97,12 +135,15 @@ export function loadWorkerReleaseManifest(
   const controlPlaneVersion = options.controlPlaneVersion ?? configuredContractVersion();
   const enforceCompatibility = production || options.controlPlaneVersion !== undefined || url !== undefined;
   const load = async (): Promise<WorkerReleaseManifest> => {
+    const workerTag = url ? immutableWorkerTag(url) : undefined;
     if (production) {
       if (!configuredManifestUrl() && source === undefined) throw new Error("MARS_WORKER_RELEASE_MANIFEST_URL is required");
       if (!configuredContractVersion() && options.controlPlaneVersion === undefined) throw new Error("MARS_WORKER_CONTRACT_VERSION is required");
-      if (!url || url.protocol !== "https:" || !immutableManifestPath.test(url.href)) {
+      if (!workerTag) {
         throw new Error(`worker release manifest URL must be the immutable worker-v<version> HTTPS release path: ${String(resolvedSource)}`);
       }
+    } else if (url && !workerTag) {
+      throw new Error(`worker release manifest URL must be the immutable worker-v<version> HTTPS release path: ${String(resolvedSource)}`);
     }
     let raw: unknown;
     if (url) {
@@ -118,6 +159,7 @@ export function loadWorkerReleaseManifest(
     }
     let manifest: WorkerReleaseManifest;
     try { manifest = WorkerReleaseManifest.parse(raw); } catch (error) { throw new Error(`worker release manifest schema validation failed: ${error instanceof Error ? error.message : String(error)}`); }
+    if (workerTag) validateImmutableAssetUrls(manifest, workerTag);
     if (enforceCompatibility) {
       const compatibilityVersion = controlPlaneVersion || manifest.contractVersion;
       try { parseContractVersion(compatibilityVersion); parseContractVersion(manifest.contractVersion); }

@@ -63,7 +63,7 @@ PostgreSQL service and does not manage PostgreSQL credentials.
 
 The control-plane image owns its worker release contract. Release builds bake
 an exact
-`https://github.com/Snazzie/Mars/releases/download/worker-v<worker-version>/worker-release-manifest.json`
+`https://github.com/Snazzie/MARS/releases/download/worker-v<worker-version>/worker-release-manifest.json`
 URL and the worker contract version from
 `deploy/workers/contract-version.txt` into the image. At startup the API
 fetches that immutable manifest, validates its schema and hashes, requires a

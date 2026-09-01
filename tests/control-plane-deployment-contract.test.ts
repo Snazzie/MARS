@@ -156,26 +156,44 @@ test("single release train separates app and worker versions and uses canonical 
   expect(workflow).not.toMatch(/MARS_WINDOWS_(?:VHDX|VM_TEMPLATE)/);
 });
 
+test("baked worker manifest examples use the exact canonical release path", async () => {
+  const [workflow, ci, readme] = await Promise.all([
+    read(".github/workflows/release-mars.yml"),
+    read(".github/workflows/ci.yml"),
+    read("deploy/control-plane/README.md"),
+  ]);
+  const canonical = "https://github.com/Snazzie/MARS/releases/download/";
+  expect(workflow).toContain(canonical);
+  expect(ci).toContain(`${canonical}worker-v0.1.1/worker-release-manifest.json`);
+  expect(readme).toContain(`${canonical}worker-v<worker-version>/worker-release-manifest.json`);
+  expect(ci).not.toContain("github.com/Snazzie/Mars/releases/download");
+  expect(readme).not.toContain("github.com/Snazzie/Mars/releases/download");
+});
+
 test("release train observes immutable assets before ordered latest promotion", async () => {
   const workflow = await read(".github/workflows/release-mars.yml");
   const worker = workflow.indexOf("name: Validate and publish worker prerelease");
   const observe = workflow.indexOf("Gate anonymous worker asset observability");
   const image = workflow.indexOf("name: Build and smoke-test control-plane candidate");
   const remoteSmoke = workflow.indexOf("Smoke test with baked remote worker manifest");
+  const candidateObserve = workflow.indexOf("Gate anonymous GHCR candidate manifests");
   const promote = workflow.indexOf("name: Promote verified Mars release");
   const brokerLatest = workflow.indexOf('imagetools create --tag "$BROKER_IMAGE:latest"');
   const appLatest = workflow.indexOf('imagetools create --tag "$APP_IMAGE:latest"');
   const finalWorker = workflow.lastIndexOf('gh release edit "worker-v$WORKER_VERSION"');
   const finalApp = workflow.indexOf('gh release create "v$APP_VERSION"');
+  const appUpload = workflow.indexOf('gh release upload "v$APP_VERSION"');
   expect(worker).toBeGreaterThanOrEqual(0);
   expect(observe).toBeGreaterThan(worker);
   expect(image).toBeGreaterThan(observe);
   expect(remoteSmoke).toBeGreaterThan(image);
-  expect(promote).toBeGreaterThan(remoteSmoke);
-  expect(brokerLatest).toBeGreaterThan(promote);
+  expect(candidateObserve).toBeGreaterThan(remoteSmoke);
+  expect(promote).toBeGreaterThan(candidateObserve);
+  expect(finalApp).toBeGreaterThan(promote);
+  expect(appUpload).toBeGreaterThan(finalApp);
+  expect(finalWorker).toBeGreaterThan(appUpload);
+  expect(brokerLatest).toBeGreaterThan(finalWorker);
   expect(appLatest).toBeGreaterThan(brokerLatest);
-  expect(finalWorker).toBeGreaterThan(appLatest);
-  expect(finalApp).toBeGreaterThan(finalWorker);
   expect(workflow).toContain("--clobber");
   expect(workflow).toContain("--latest=false");
   expect(workflow).toContain("@sha256:");

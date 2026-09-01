@@ -37,6 +37,33 @@ test("worker release is schema 3, immutable, and observable before promotion", a
   expect(workflow.indexOf("Gate anonymous worker asset observability")).toBeLessThan(workflow.indexOf("Build and smoke-test control-plane candidate"));
 });
 
+test("candidate images are anonymously observable before mutable promotion", async () => {
+  const workflow = await read(".github/workflows/release-mars.yml");
+  expect(workflow).toContain("Gate anonymous GHCR candidate manifests");
+  expect(workflow).toContain("Pull and inspect candidate manifests anonymously");
+  expect(workflow).toContain('"$APP_IMAGE:$APP_CANDIDATE_TAG"');
+  expect(workflow).toContain('"$BROKER_IMAGE:$BROKER_CANDIDATE_TAG"');
+  expect(workflow).toContain("docker buildx imagetools inspect");
+  expect(workflow).toContain("docker manifest inspect");
+  expect(workflow).toContain("DOCKER_CONFIG");
+  expect(workflow.indexOf("Gate anonymous GHCR candidate manifests")).toBeLessThan(workflow.indexOf("Promote verified Mars release"));
+});
+
+test("final release operations precede mutable latest image promotion", async () => {
+  const workflow = await read(".github/workflows/release-mars.yml");
+  const workerFinalize = workflow.indexOf('gh release edit "worker-v$WORKER_VERSION"');
+  const appUpload = workflow.indexOf('gh release upload "v$APP_VERSION"');
+  const brokerPromotion = workflow.indexOf('docker buildx imagetools create --tag "$BROKER_IMAGE:latest"');
+  const appPromotion = workflow.indexOf('docker buildx imagetools create --tag "$APP_IMAGE:latest"');
+  expect(workerFinalize).toBeGreaterThan(-1);
+  expect(appUpload).toBeGreaterThan(-1);
+  expect(brokerPromotion).toBeGreaterThan(-1);
+  expect(appPromotion).toBeGreaterThan(-1);
+  expect(appUpload).toBeLessThan(brokerPromotion);
+  expect(workerFinalize).toBeLessThan(brokerPromotion);
+  expect(brokerPromotion).toBeLessThan(appPromotion);
+});
+
 test("candidate images are explicit amd64 builds and promotions are gated", async () => {
   const workflow = await read(".github/workflows/release-mars.yml");
   expect(workflow).toContain('echo "digest=$digest" >> "$GITHUB_OUTPUT"');

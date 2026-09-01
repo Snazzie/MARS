@@ -32,16 +32,31 @@ function Assert-Throws([scriptblock]$Action, [string]$Pattern, [string]$Scenario
 }
 
 . (Get-FunctionDefinition $installerPath 'Assert-HttpsUrl')
+. (Get-FunctionDefinition $installerPath 'Assert-Sha256')
 . (Get-FunctionDefinition $installerPath 'Assert-ArtifactConfiguration')
-
 $hash = 'a' * 64
-$WindowsRuntime = 'vm'
+$WindowsRuntime = 'container'
 $WindowsOrchestratorUrl = 'http://192.168.1.25:3000/api/workers/orchestrator?audience=windows-x64'
-$WindowsServiceHostUrl = 'http://192.168.1.25:3000/api/workers/service-host?audience=windows-x64'
-$WindowsTemplateUrl = 'http://192.168.1.25:3000/api/workers/templates/windows-x64/artifact'
 $WindowsOrchestratorSha256 = $hash
+$WindowsServiceHostUrl = 'https://github.com/Snazzie/MARS/releases/download/worker-v0.1.1/mars-service-host.exe'
 $WindowsServiceHostSha256 = $hash
-$WindowsTemplateDigest = "sha256:$hash"
+$WindowsJobAgentUrl = 'https://github.com/Snazzie/MARS/releases/download/worker-v0.1.1/mars-job-agent-windows-x64.exe'
+$WindowsJobAgentSha256 = $hash
+$WindowsContainerBaseImage = "mcr.microsoft.com/windows/server:ltsc2025@sha256:$hash"
+$WindowsContainerRunnerUrl = 'https://github.com/Snazzie/MARS/releases/download/worker-v0.1.1/mars-windows-runner.zip'
+$WindowsContainerRunnerSha256 = $hash
+$WindowsContainerGitUrl = 'https://github.com/Snazzie/MARS/releases/download/worker-v0.1.1/mars-windows-git.zip'
+$WindowsContainerGitSha256 = $hash
+$WindowsContainerVcRuntimeUrl = 'https://github.com/Snazzie/MARS/releases/download/worker-v0.1.1/mars-windows-vc-runtime.exe'
+$WindowsContainerVcRuntimeSha256 = $hash
+$WindowsContainerBuilderUrl = 'https://github.com/Snazzie/MARS/releases/download/worker-v0.1.1/build-windows-container-image-local.ps1'
+$WindowsContainerBuilderSha256 = $hash
+$WindowsContainerVerifierUrl = 'https://github.com/Snazzie/MARS/releases/download/worker-v0.1.1/verify-runtime.ps1'
+$WindowsContainerVerifierSha256 = $hash
+$WindowsContainerfileUrl = 'https://github.com/Snazzie/MARS/releases/download/worker-v0.1.1/Containerfile'
+$WindowsContainerfileSha256 = $hash
+$WindowsContainerEntrypointUrl = 'https://github.com/Snazzie/MARS/releases/download/worker-v0.1.1/entrypoint.ps1'
+$WindowsContainerEntrypointSha256 = $hash
 $AllowInsecureHttp = $false
 Assert-Throws { Assert-ArtifactConfiguration } 'must use HTTPS' 'LAN HTTP installer artifacts without AllowInsecureHttp'
 $AllowInsecureHttp = $true

@@ -25,7 +25,7 @@ jobs:
       - run: bun test
       - run: bun run build
       - name: Build immutable control-plane image
-        run: docker buildx build --load --platform linux/amd64 --build-arg MARS_BUILD_ID=ci --build-arg MARS_WORKER_CONTRACT_VERSION=0.1.0 --build-arg MARS_WORKER_RELEASE_MANIFEST_URL=https://github.com/Snazzie/Mars/releases/download/worker-v0.1.1/worker-release-manifest.json -f deploy/control-plane/Dockerfile -t mars-control-plane:ci .
+        run: docker buildx build --load --platform linux/amd64 --build-arg MARS_BUILD_ID=ci --build-arg MARS_WORKER_CONTRACT_VERSION=0.1.0 --build-arg MARS_WORKER_RELEASE_MANIFEST_URL=https://github.com/Snazzie/MARS/releases/download/worker-v0.1.1/worker-release-manifest.json -f deploy/control-plane/Dockerfile -t mars-control-plane:ci .
       - name: Verify slim control-plane artifact set
         run: docker run --rm --entrypoint /bin/sh mars-control-plane:ci -c 'test -f /app/index.js && test -f /app/web/index.html && test -f /app/web/index.js && test -f /app/web/index.css && test -f /app/migrations/0000_mars_baseline.sql && test -f /app/migrations/meta/_journal.json && test ! -e /app/workers'
       - name: Smoke test control-plane startup
