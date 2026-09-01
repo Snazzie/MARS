@@ -32,6 +32,33 @@ export function formatJobReconciliationReport(report: ReconcileReport): string |
   return `Job reconciliation tick: reserved=${report.reserved} deferred=${report.deferred} failed=${report.failed} skipped=${report.skipped}`;
 }
 
+type ConsoleMethod = (...args: unknown[]) => void;
+
+const timestampedConsoleMethod = (original: ConsoleMethod): ConsoleMethod => (...args) => {
+  const timestamp = new Date().toISOString();
+  const [first, ...remaining] = args;
+  if (typeof first === "string") original(`${timestamp} ${first}`, ...remaining);
+  else if (args.length === 0) original(`${timestamp} `);
+  else original(timestamp, first, ...remaining);
+};
+
+export function configureTimestampedConsoleLogging(): () => void {
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  console.log = timestampedConsoleMethod(originalLog);
+  console.warn = timestampedConsoleMethod(originalWarn);
+  console.error = timestampedConsoleMethod(originalError);
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    console.log = originalLog;
+    console.warn = originalWarn;
+    console.error = originalError;
+  };
+}
+
 export function configureErrorFileLogging(dataRoot: string): string {
   const logDirectory = `${dataRoot.replace(/[\\/]+$/, "")}/logs`;
   mkdirSync(logDirectory, { recursive: true });
@@ -439,6 +466,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
 }
 
 if (import.meta.main) {
+  configureTimestampedConsoleLogging();
   configureErrorFileLogging(Bun.env.DATA_ROOT?.trim() || "/var/lib/mars");
   try {
     await startControlPlane();
