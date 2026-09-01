@@ -119,7 +119,8 @@ jobs:
           sudo chmod a+r /boot/vmlinuz-*
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y libguestfs-tools qemu-utils
-          UBUNTU_QCOW2_URL=https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img \
+          sudo -E env LIBGUESTFS_BACKEND=direct LIBGUESTFS_BACKEND_SETTINGS=force_tcg \
+            UBUNTU_QCOW2_URL=https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img \
             images/worker-appliance/build.sh mars-worker-golden
           mv dist/mars-worker-golden.qcow2 dist/linux/mars-worker-golden.qcow2
           mv dist/mars-worker-golden.qcow2.sha256 dist/linux/mars-worker-golden.qcow2.sha256
