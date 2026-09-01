@@ -1,12 +1,15 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)][string]$BaseImage,
-  [Parameter(Mandatory = $true)][string]$RunnerUrl,
+  [string]$RunnerUrl = '',
   [Parameter(Mandatory = $true)][string]$RunnerSha256,
-  [Parameter(Mandatory = $true)][string]$GitUrl,
+  [string]$RunnerArchivePath = '',
+  [string]$GitUrl = '',
   [Parameter(Mandatory = $true)][string]$GitSha256,
-  [Parameter(Mandatory = $true)][string]$VcRuntimeUrl,
+  [string]$GitArchivePath = '',
+  [string]$VcRuntimeUrl = '',
   [Parameter(Mandatory = $true)][string]$VcRuntimeSha256,
+  [string]$VcRuntimePath = '',
   [Parameter(Mandatory = $true)][string]$JobAgent,
   [Parameter(Mandatory = $true)][string]$Image,
   [Parameter(Mandatory = $true)][string]$ManifestPath,
@@ -27,12 +30,12 @@ function Assert-LocalImageArtifactUrl([string]$Url, [string]$Name) {
 }
 if ($BaseImage -notmatch '^mcr\.microsoft\.com/windows/server:ltsc2025@sha256:[0-9a-f]{64}$') { throw 'BaseImage must be a digest-pinned mcr.microsoft.com/windows/server:ltsc2025 reference' }
 foreach ($url in @(@{ Value = $RunnerUrl; Name = 'RunnerUrl' }, @{ Value = $GitUrl; Name = 'GitUrl' }, @{ Value = $VcRuntimeUrl; Name = 'VcRuntimeUrl' })) {
-  Assert-LocalImageArtifactUrl $url.Value $url.Name
+  if ($url.Value) { Assert-LocalImageArtifactUrl $url.Value $url.Name }
 }
 foreach ($hash in @(@{ Value = $RunnerSha256; Name = 'RunnerSha256' }, @{ Value = $GitSha256; Name = 'GitSha256' }, @{ Value = $VcRuntimeSha256; Name = 'VcRuntimeSha256' })) {
   if ($hash.Value -notmatch '^[0-9a-fA-F]{64}$') { throw "$($hash.Name) must be a SHA-256 hex digest" }
 }
-foreach ($path in @($JobAgent, $VerifierPath)) { if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Input not found: $path" } }
+foreach ($path in @($JobAgent, $VerifierPath, $ContainerfilePath, $EntrypointPath)) { if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Input not found: $path" } }
 $root = Split-Path -Parent $ManifestPath
 New-Item -ItemType Directory -Force -Path $root | Out-Null
 $temp = Join-Path $root ("image-build-" + [guid]::NewGuid().ToString('N'))
@@ -43,6 +46,13 @@ function Download-Verified([string]$Url, [string]$Hash, [string]$Destination, [s
   $actual = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash
   if ($actual -ine $Hash) { throw "$Name hash mismatch: expected $Hash, got $actual" }
 }
+function Stage-Verified([string]$Path, [string]$Url, [string]$Hash, [string]$Destination, [string]$Name) {
+  if ($Path) {
+    Copy-Item -LiteralPath $Path -Destination $Destination
+    $actual = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash
+    if ($actual -ine $Hash) { throw "$Name hash mismatch: expected $Hash, got $actual" }
+  } else { Download-Verified $Url $Hash $Destination $Name }
+}
 function Docker-Checked([string[]]$Arguments, [string]$Operation) {
   $output = & docker @Arguments 2>&1
   if ($LASTEXITCODE -ne 0) { throw "$Operation failed: $($output -join ' ' | ForEach-Object { $_.ToString() } | Out-String).Trim()" }
@@ -50,9 +60,9 @@ function Docker-Checked([string[]]$Arguments, [string]$Operation) {
 }
 try {
   New-Item -ItemType Directory -Force -Path $context | Out-Null
-  Download-Verified $RunnerUrl $RunnerSha256 (Join-Path $context 'runner.zip') 'Runner archive'
-  Download-Verified $GitUrl $GitSha256 (Join-Path $context 'git.zip') 'Git archive'
-  Download-Verified $VcRuntimeUrl $VcRuntimeSha256 (Join-Path $context 'vc_redist.x64.exe') 'VC runtime installer'
+  Stage-Verified $RunnerArchivePath $RunnerUrl $RunnerSha256 (Join-Path $context 'runner.zip') 'Runner archive'
+  Stage-Verified $GitArchivePath $GitUrl $GitSha256 (Join-Path $context 'git.zip') 'Git archive'
+  Stage-Verified $VcRuntimePath $VcRuntimeUrl $VcRuntimeSha256 (Join-Path $context 'vc_redist.x64.exe') 'VC runtime installer'
   Copy-Item -LiteralPath $JobAgent -Destination (Join-Path $context 'mars-job-agent.exe')
   Copy-Item -LiteralPath $VerifierPath -Destination (Join-Path $context 'verify-runtime.ps1')
   Copy-Item -LiteralPath $ContainerfilePath -Destination (Join-Path $context 'Containerfile')

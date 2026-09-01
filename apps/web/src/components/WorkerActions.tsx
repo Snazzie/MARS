@@ -11,8 +11,9 @@ const copy: Record<Action, { label: string; confirm: string; variant: "primary" 
 };
 function quotePowerShell(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
 
-export function buildWindowsUpgradeCommand(workerId: string, origin: string, connectOrigin: string = origin): string {
+export function buildWindowsUpgradeCommand(workerId: string, origin: string, connectOrigin: string = origin, runtimeMode: "container" | "vm" | null = "container"): string {
  const selectedOrigin = new URL(connectOrigin || origin).origin;
+ if (runtimeMode !== "container") throw new Error("Windows worker upgrades require the container runtime");
  if (selectedOrigin.startsWith("https:") === false && selectedOrigin.startsWith("http:") === false) throw new Error("Upgrade origin must use HTTP or HTTPS");
  const controlPlane = quotePowerShell(selectedOrigin);
  const insecure = selectedOrigin.startsWith("http:") ? " -AllowInsecureHttp" : "";
@@ -34,8 +35,7 @@ export function WorkerActions({ organizationId, workerId, admissionState, draini
   setUpgradeError(null);
   try {
    const connectOrigin = (await getWorkerControlPlaneUrls())[0];
-   if (!connectOrigin) throw new Error("No worker connection origin is configured.");
-   setUpgradeCommand(buildWindowsUpgradeCommand(workerId, window.location.origin, connectOrigin));
+   setUpgradeCommand(buildWindowsUpgradeCommand(workerId, window.location.origin, connectOrigin, runtimeMode));
   } catch (reason) {
    setUpgradeError(reason instanceof ApiRequestError ? reason.message : reason instanceof Error ? reason.message : "The upgrade command could not be prepared.");
   }
@@ -50,8 +50,7 @@ export function WorkerActions({ organizationId, workerId, admissionState, draini
  }
  return <>
   <div className="worker-actions" aria-label="Worker actions">
-   {admissionState === "pending" && <Button label="Reject" variant="destructive" clickAction={() => open("reject")} />}
-   {admissionState === "adopted" && <><Button label={draining ? "Resume" : "Drain"} variant="secondary" clickAction={() => open(draining ? "resume" : "drain")} />{platform === "windows-x64" && <Button label="Upgrade" variant="secondary" clickAction={() => void openUpgrade()} />}{<Button label="Remove" variant="destructive" clickAction={() => open("remove")} />}</>}
+   {admissionState === "adopted" && <><Button label={draining ? "Resume" : "Drain"} variant="secondary" clickAction={() => open(draining ? "resume" : "drain")} />{platform === "windows-x64" && runtimeMode === "container" && <Button label="Upgrade" variant="secondary" clickAction={() => void openUpgrade()} />}{<Button label="Remove" variant="destructive" clickAction={() => open("remove")} />}</>}
   </div>
   {upgradeError && <p className="inline-error" role="alert">{upgradeError}</p>}
   {upgradeCommand && <dialog open className="confirm-dialog" aria-labelledby="worker-upgrade-title"><form method="dialog"><p className="panel-kicker">Manual upgrade</p><h2 id="worker-upgrade-title">Copy upgrade command</h2><p>Drain this worker and wait for zero active jobs before running this command in an Administrator PowerShell.</p><textarea aria-label="Windows worker upgrade command" readOnly value={upgradeCommand} /><div className="dialog-actions"><Button label="Close" variant="secondary" onClick={() => { setUpgradeCommand(null); setUpgradeError(null); }} /><Button label="Copy command" variant="primary" clickAction={() => void navigator.clipboard?.writeText(upgradeCommand)} /></div></form></dialog>}

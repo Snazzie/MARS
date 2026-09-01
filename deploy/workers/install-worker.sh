@@ -134,7 +134,7 @@ validate_config
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   command -v sudo >/dev/null || { echo 'Root or sudo is required.' >&2; exit 1; }
-  exec sudo --preserve-env=PUBLIC_BASE_URL,MARS_ARTIFACT_MODE,MARS_BROKER_IMAGE,MARS_GOLDEN_IMAGE,MARS_GOLDEN_DIGEST,MARS_COMPOSE_FILE,MARS_COMPOSE_SHA256,MARS_DOMAIN_TEMPLATE,MARS_DOMAIN_TEMPLATE_SHA256,MARS_BROKER_CONFIG,MARS_LIBVIRT_NETWORK,MARS_ACTION_CACHE_ROOT,MARS_CACHE_PROXY_PORT,MARS_CACHE_DATA_PORT,MARS_CACHE_PROXY_URL,MARS_CACHE_ADVERTISE_URL,MARS_CACHE_TOKEN_ISSUER,MARS_CACHE_JWKS_URL "$0" "$@"
+  exec sudo --preserve-env=PUBLIC_BASE_URL,MARS_ARTIFACT_MODE,MARS_BROKER_IMAGE,MARS_GOLDEN_IMAGE,MARS_GOLDEN_DIGEST,MARS_COMPOSE_FILE,MARS_COMPOSE_SHA256,MARS_DOMAIN_TEMPLATE,MARS_DOMAIN_TEMPLATE_SHA256,MARS_BROKER_CONFIG,MARS_GOLDEN_ROOT,MARS_CLONE_ROOT,MARS_CHANNEL_ROOT,MARS_ACTION_CACHE_ROOT,MARS_LIBVIRT_NETWORK,MARS_CACHE_PROXY_PORT,MARS_CACHE_DATA_PORT,MARS_CACHE_PROXY_URL,MARS_CACHE_ADVERTISE_URL,MARS_CACHE_TOKEN_ISSUER,MARS_CACHE_JWKS_URL "$0" "$@"
 fi
 
 check_kvm_access() {
@@ -145,10 +145,14 @@ check_kvm_access() {
 check_kvm_access
 preflight
 CONFIG_DIR=${MARS_BROKER_CONFIG:-/var/lib/mars}
+GOLDEN_ROOT=${MARS_GOLDEN_ROOT:-$CONFIG_DIR/golden}
+CLONE_ROOT=${MARS_CLONE_ROOT:-$CONFIG_DIR/clones}
+CHANNEL_ROOT=${MARS_CHANNEL_ROOT:-$CONFIG_DIR/channels}
+ACTION_CACHE_ROOT=${MARS_ACTION_CACHE_ROOT:-$CONFIG_DIR/action-cache}
 STATE_FILE=/var/lib/mars/install-state.json
 LOG_FILE=/var/log/mars/install.log
 JOIN_CODE_FILE="$CONFIG_DIR/join-code"
-mkdir -p "$CONFIG_DIR" /var/lib/mars /var/log/mars
+mkdir -p "$CONFIG_DIR" "$GOLDEN_ROOT" "$CLONE_ROOT" "$CHANNEL_ROOT" "$ACTION_CACHE_ROOT" /var/lib/mars /var/log/mars
 exec > >(tee -a "$LOG_FILE") 2>&1
 write_state() {
   local stage="$1" status="$2"
@@ -221,14 +225,14 @@ download_asset() {
 }
 
 stage 'Downloading and verifying immutable worker assets' download_verified
-GOLDEN_ROOT=${MARS_GOLDEN_ROOT:-$CONFIG_DIR/golden}; GOLDEN_PATH="$GOLDEN_ROOT/worker.qcow2"; COMPOSE_PATH="$CONFIG_DIR/linux-broker-compose.yaml"; DOMAIN_PATH="$CONFIG_DIR/worker-domain.xml"
+GOLDEN_PATH="$GOLDEN_ROOT/worker.qcow2"; COMPOSE_PATH="$CONFIG_DIR/linux-broker-compose.yaml"; DOMAIN_PATH="$CONFIG_DIR/worker-domain.xml"
 download_asset "$MARS_GOLDEN_IMAGE" "$MARS_GOLDEN_DIGEST" "$GOLDEN_PATH" 'golden image'
 download_asset "$MARS_COMPOSE_FILE" "$MARS_COMPOSE_SHA256" "$COMPOSE_PATH" compose
 download_asset "$MARS_DOMAIN_TEMPLATE" "$MARS_DOMAIN_TEMPLATE_SHA256" "$DOMAIN_PATH" 'domain template'
 chmod 0444 "$GOLDEN_PATH"; pass 'Hashes and broker metadata verified'; write_state download_verified complete
 
 stage 'Writing broker configuration' configuration
-mkdir -p "$GOLDEN_ROOT" "${MARS_CLONE_ROOT:-$CONFIG_DIR/clones}" "${MARS_CHANNEL_ROOT:-$CONFIG_DIR/channels}"
+mkdir -p "$GOLDEN_ROOT" "$CLONE_ROOT" "$CHANNEL_ROOT" "$ACTION_CACHE_ROOT"
 cat > "$CONFIG_DIR/.env" <<EOF
 MARS_CONTROL_PLANE_URL=$PUBLIC_BASE_URL
 MARS_BROKER_IMAGE=$MARS_BROKER_IMAGE
@@ -236,13 +240,17 @@ MARS_GOLDEN_DIGEST=$MARS_GOLDEN_DIGEST
 MARS_BROKER_CONFIG=$CONFIG_DIR
 MARS_GOLDEN_ROOT=$GOLDEN_ROOT
 MARS_DOMAIN_TEMPLATE=$DOMAIN_PATH
-MARS_CLONE_ROOT=${MARS_CLONE_ROOT:-$CONFIG_DIR/clones}
-MARS_CHANNEL_ROOT=${MARS_CHANNEL_ROOT:-$CONFIG_DIR/channels}
+MARS_CLONE_ROOT=$CLONE_ROOT
+MARS_CHANNEL_ROOT=$CHANNEL_ROOT
+MARS_ACTION_CACHE_ROOT=$ACTION_CACHE_ROOT
 MARS_JOIN_CODE_FILE=$JOIN_CODE_FILE
 MARS_LIBVIRT_NETWORK=$network_name
 LIBVIRT_SOCKET_GID=$(stat -c '%g' /var/run/libvirt/libvirt-sock)
 EOF
-chmod 600 "$CONFIG_DIR/.env"; write_state configuration complete
+chmod 600 "$CONFIG_DIR/.env"
+# Every host path mounted into the non-root broker must be service-owned.
+chown -R 10001:10001 "$CONFIG_DIR" "$GOLDEN_ROOT" "$CLONE_ROOT" "$CHANNEL_ROOT" "$ACTION_CACHE_ROOT"
+chmod 0640 "$JOIN_CODE_FILE"; write_state configuration complete
 
 stage 'Starting the Mars broker' broker_starting
 if [[ "$MARS_ARTIFACT_MODE" == local ]]; then

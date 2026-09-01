@@ -10,45 +10,63 @@ CURL_BIN="${CURL_BIN:-curl}"
 SOURCE=""
 TARGET=""
 JOB_AGENT=""
+OUTPUT_MANIFEST=""
 
 usage() {
-  print -u2 "usage: $0 --source <immutable-tart-image> --target <new-local-name> --job-agent <compiled-binary>"
+  print -u2 "usage: $0 --source <digest-pinned-oci-image> --target <content-addressed-local-name> --job-agent <compiled-binary> --output-manifest <path>"
   exit 2
 }
-
 while (( $# > 0 )); do
   case "$1" in
     --source) (( $# >= 2 )) || usage; SOURCE="$2"; shift 2 ;;
     --target) (( $# >= 2 )) || usage; TARGET="$2"; shift 2 ;;
     --job-agent) (( $# >= 2 )) || usage; JOB_AGENT="$2"; shift 2 ;;
+    --output-manifest) (( $# >= 2 )) || usage; OUTPUT_MANIFEST="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
-
-[[ -n "$SOURCE" && -n "$TARGET" && -n "$JOB_AGENT" ]] || usage
-[[ "$SOURCE" == [A-Za-z0-9./:@_-]## ]] || { print -u2 "invalid source image"; exit 2; }
+[[ -n "$SOURCE" && -n "$TARGET" && -n "$JOB_AGENT" && -n "$OUTPUT_MANIFEST" ]] || usage
+[[ "$SOURCE" =~ '^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$' ]] || { print -u2 "source must be a full lowercase digest-pinned OCI reference"; exit 2; }
 [[ "$TARGET" == [A-Za-z0-9._-]## ]] || { print -u2 "invalid target image"; exit 2; }
-[[ -x "$JOB_AGENT" ]] || { print -u2 "job agent must be a compiled executable"; exit 2; }
+[[ "$JOB_AGENT" == /* && -x "$JOB_AGENT" ]] || { print -u2 "job agent must be a compiled executable"; exit 2; }
 
 function tart() { command "$TART_BIN" "$@"; }
+SOURCE_DIGEST="${SOURCE##*@}"
+PREPARATION_SCRIPT_SHA256="$(shasum -a 256 "$0" | cut -d ' ' -f 1)"
+JOB_AGENT_SHA256="$(shasum -a 256 "$JOB_AGENT" | cut -d ' ' -f 1)"
+PROVENANCE="{\"source\":\"$SOURCE\",\"sourceDigest\":\"$SOURCE_DIGEST\",\"jobAgentSha256\":\"$JOB_AGENT_SHA256\",\"runnerUrl\":\"$RUNNER_URL\",\"runnerVersion\":\"$RUNNER_VERSION\",\"runnerSha256\":\"$RUNNER_SHA256\",\"preparationScriptSha256\":\"$PREPARATION_SCRIPT_SHA256\",\"localTarget\":\"$TARGET\"}"
+PROVENANCE_DIGEST="$(print -rn -- "$PROVENANCE" | shasum -a 256 | cut -d ' ' -f 1)"
+PREPARED_DIGEST="mars-macos-job@sha256:${PROVENANCE_DIGEST}"
+EXPECTED_MANIFEST="{\"source\":\"$SOURCE\",\"sourceDigest\":\"$SOURCE_DIGEST\",\"jobAgentSha256\":\"$JOB_AGENT_SHA256\",\"runnerUrl\":\"$RUNNER_URL\",\"runnerVersion\":\"$RUNNER_VERSION\",\"runnerSha256\":\"$RUNNER_SHA256\",\"preparationScriptSha256\":\"$PREPARATION_SCRIPT_SHA256\",\"localTarget\":\"$TARGET\",\"preparedDigest\":\"$PREPARED_DIGEST\"}"
 
-while IFS= read -r image; do
-  [[ "$image" != "$TARGET" ]] || { print -u2 "target already exists: $TARGET"; exit 1; }
-done < <(tart list --source local --quiet)
+local_target_exists() { tart list --source local --quiet 2>/dev/null | grep -Fxq -- "$TARGET"; }
+# A complete manifest and local target are the reusable unit. No registry pull or
+# Tart mutation occurs when provenance still matches exactly.
+if [[ -f "$OUTPUT_MANIFEST" ]] && local_target_exists && [[ "$(cat "$OUTPUT_MANIFEST")" == "$EXPECTED_MANIFEST" ]]; then
+  print -r -- "MARS_TART_BASE_IMAGE=$TARGET"
+  print -r -- "MARS_TART_IMAGE_DIGEST=$PREPARED_DIGEST"
+  exit 0
+fi
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mars-image.XXXXXX")"
 RUNNER_ARCHIVE="$TMP_DIR/actions-runner.tar.gz"
 MANIFEST="$TMP_DIR/image-manifest.json"
+STAGING_TARGET="${TARGET}-staging-${PROVENANCE_DIGEST[1,12]}"
+BACKUP_TARGET="${TARGET}-previous-${RANDOM}"
 RUN_PID=""
 CREATED=0
-SUCCEEDED=0
+SWAPPED=0
 
 cleanup() {
   local exit_code=$?
-  if (( SUCCEEDED == 0 && CREATED == 1 )); then
-    tart stop "$TARGET" >/dev/null 2>&1 || true
-    [[ -z "$RUN_PID" ]] || wait "$RUN_PID" >/dev/null 2>&1 || true
+  if (( SWAPPED == 1 )); then
     tart delete "$TARGET" >/dev/null 2>&1 || true
+    tart rename "$BACKUP_TARGET" "$TARGET" >/dev/null 2>&1 || true
+  fi
+  if (( CREATED == 1 )); then
+    tart stop "$STAGING_TARGET" >/dev/null 2>&1 || true
+    [[ -z "$RUN_PID" ]] || wait "$RUN_PID" >/dev/null 2>&1 || true
+    tart delete "$STAGING_TARGET" >/dev/null 2>&1 || true
   fi
   rm -rf "$TMP_DIR"
   exit "$exit_code"
@@ -57,43 +75,45 @@ trap cleanup EXIT INT TERM
 
 "$CURL_BIN" --fail --location --silent --show-error "$RUNNER_URL" --output "$RUNNER_ARCHIVE"
 print -r -- "$RUNNER_SHA256  $RUNNER_ARCHIVE" | shasum -a 256 -c - >/dev/null
-JOB_AGENT_SHA256="$(shasum -a 256 "$JOB_AGENT" | cut -d ' ' -f 1)"
-printf '{"jobAgentSha256":"%s","runnerArchiveSha256":"%s","runnerVersion":"%s","source":"%s"}\n' \
-  "$JOB_AGENT_SHA256" "$RUNNER_SHA256" "$RUNNER_VERSION" "$SOURCE" > "$MANIFEST"
-MANIFEST_SHA256="$(shasum -a 256 "$MANIFEST" | cut -d ' ' -f 1)"
-LOGICAL_DIGEST="mars-macos-job@sha256:${MANIFEST_SHA256}"
+printf '%s\n' "$PROVENANCE" > "$MANIFEST"
 
-tart clone "$SOURCE" "$TARGET"
+# Build only a staging VM. The previously active target is untouched until the
+# full boot, injection, and runtime verification below succeeds.
+tart clone "$SOURCE" "$STAGING_TARGET"
 CREATED=1
-tart run --no-graphics "$TARGET" >"$TMP_DIR/tart-run.log" 2>&1 &
+tart run --no-graphics "$STAGING_TARGET" >"$TMP_DIR/tart-run.log" 2>&1 &
 RUN_PID=$!
-
 READY=0
 for _ in {1..120}; do
-  if tart exec "$TARGET" /usr/bin/true >/dev/null 2>&1; then READY=1; break; fi
+  if tart exec "$STAGING_TARGET" /usr/bin/true >/dev/null 2>&1; then READY=1; break; fi
   kill -0 "$RUN_PID" >/dev/null 2>&1 || { print -u2 "prepared image failed to boot"; exit 1; }
   sleep 2
 done
 (( READY == 1 )) || { print -u2 "timed out waiting for prepared image"; exit 1; }
-
-tart exec "$TARGET" /bin/test ! -e /opt/actions-runner
-tart exec -i "$TARGET" /bin/zsh -c 'set -euo pipefail; rm -rf /tmp/mars-actions-runner; mkdir -p /tmp/mars-actions-runner; /usr/bin/tar -xzf - -C /tmp/mars-actions-runner' < "$RUNNER_ARCHIVE"
-tart exec -i "$TARGET" /bin/zsh -c 'set -euo pipefail; umask 077; /bin/cat > /tmp/mars-job-agent' < "$JOB_AGENT"
-tart exec -i "$TARGET" /bin/zsh -c 'set -euo pipefail; umask 077; /bin/cat > /tmp/mars-image-manifest.json' < "$MANIFEST"
-tart exec "$TARGET" /usr/bin/sudo /bin/mkdir -p /opt /etc/mars /usr/local/bin
-tart exec "$TARGET" /usr/bin/sudo /bin/mv /tmp/mars-actions-runner /opt/actions-runner
-tart exec "$TARGET" /usr/bin/sudo /usr/bin/install -m 0755 /tmp/mars-job-agent /usr/local/bin/mars-job-agent
-tart exec "$TARGET" /usr/bin/sudo /usr/bin/install -m 0644 /tmp/mars-image-manifest.json /etc/mars/image-manifest.json
-tart exec "$TARGET" /bin/test -x /opt/actions-runner/run.sh
-tart exec "$TARGET" /bin/test -x /usr/local/bin/mars-job-agent
-tart exec "$TARGET" /opt/actions-runner/bin/Runner.Listener --version | while IFS= read -r version; do
-  [[ "$version" == "$RUNNER_VERSION" ]] || { print -u2 "unexpected Actions Runner version"; exit 1; }
-done
-
-tart stop "$TARGET"
+tart exec "$STAGING_TARGET" /bin/test ! -e /opt/actions-runner
+tart exec -i "$STAGING_TARGET" /bin/zsh -c 'set -euo pipefail; rm -rf /tmp/mars-actions-runner; mkdir -p /tmp/mars-actions-runner; /usr/bin/tar -xzf - -C /tmp/mars-actions-runner' < "$RUNNER_ARCHIVE"
+tart exec -i "$STAGING_TARGET" /bin/zsh -c 'set -euo pipefail; umask 077; /bin/cat > /tmp/mars-job-agent' < "$JOB_AGENT"
+tart exec -i "$STAGING_TARGET" /bin/zsh -c 'set -euo pipefail; umask 077; /bin/cat > /tmp/mars-image-manifest.json' < "$MANIFEST"
+tart exec "$STAGING_TARGET" /usr/bin/sudo /bin/mkdir -p /opt /etc/mars /usr/local/bin
+tart exec "$STAGING_TARGET" /usr/bin/sudo /bin/mv /tmp/mars-actions-runner /opt/actions-runner
+tart exec "$STAGING_TARGET" /usr/bin/sudo /usr/bin/install -m 0755 /tmp/mars-job-agent /usr/local/bin/mars-job-agent
+tart exec "$STAGING_TARGET" /usr/bin/sudo /usr/bin/install -m 0644 /tmp/mars-image-manifest.json /etc/mars/image-manifest.json
+tart exec "$STAGING_TARGET" /bin/test -x /opt/actions-runner/run.sh
+tart exec "$STAGING_TARGET" /bin/test -x /usr/local/bin/mars-job-agent
+tart exec "$STAGING_TARGET" /opt/actions-runner/bin/Runner.Listener --version | while IFS= read -r version; do [[ "$version" == "$RUNNER_VERSION" ]] || { print -u2 "unexpected Actions Runner version"; exit 1; }; done
+tart stop "$STAGING_TARGET"
 wait "$RUN_PID" >/dev/null 2>&1 || true
 RUN_PID=""
-SUCCEEDED=1
 
+manifest_parent="$(dirname "$OUTPUT_MANIFEST")"; mkdir -p "$manifest_parent"
+manifest_tmp="$OUTPUT_MANIFEST.tmp.$$"
+printf '%s\n' "$EXPECTED_MANIFEST" > "$manifest_tmp"
+if local_target_exists; then tart rename "$TARGET" "$BACKUP_TARGET"; fi
+SWAPPED=1
+tart rename "$STAGING_TARGET" "$TARGET"
+CREATED=0
+mv -f "$manifest_tmp" "$OUTPUT_MANIFEST"
+tart delete "$BACKUP_TARGET" >/dev/null 2>&1 || true
+SWAPPED=0
 print -r -- "MARS_TART_BASE_IMAGE=$TARGET"
-print -r -- "MARS_TART_IMAGE_DIGEST=$LOGICAL_DIGEST"
+print -r -- "MARS_TART_IMAGE_DIGEST=$PREPARED_DIGEST"

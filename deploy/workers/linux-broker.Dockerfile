@@ -8,7 +8,8 @@ RUN mkdir -p packages/contracts/node_modules && rm -f /app/packages/contracts/no
 RUN bun build apps/orchestrator/src/index.ts --compile --outfile /out/mars-orchestrator
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends libvirt-clients qemu-utils ca-certificates && rm -rf /var/lib/apt/lists/* && useradd --system --create-home --uid 10001 mars
+RUN apt-get update && apt-get install -y --no-install-recommends libvirt-clients qemu-utils ca-certificates && rm -rf /var/lib/apt/lists/* && groupadd --gid 10001 mars && useradd --system --create-home --uid 10001 --gid mars mars && mkdir -p /var/lib/mars/config /var/lib/mars/golden /var/lib/mars/clones /var/lib/mars/channels /var/lib/mars/action-cache && chown -R 10001:10001 /var/lib/mars
 COPY --from=build /out/mars-orchestrator /usr/local/bin/mars-orchestrator
 USER mars
+EXPOSE 8788 8789
 ENTRYPOINT ["/usr/local/bin/mars-orchestrator", "linux-worker"]

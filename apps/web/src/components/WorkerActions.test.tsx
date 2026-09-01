@@ -56,3 +56,7 @@ test("uses TLS for production control-plane installer downloads", () => {
   expect(command).toContain("--proto '=https' --tlsv1.3");
   expect(command).not.toContain("releases/latest/download");
 });
+test("refuses to generate a container upgrade for a non-container worker", () => {
+  expect(() => buildWindowsUpgradeCommand("worker/id", "https://control.example", "https://control.example", "vm")).toThrow("container runtime");
+  expect(() => buildWindowsUpgradeCommand("worker/id", "https://control.example", "https://control.example", null)).toThrow("container runtime");
+});
