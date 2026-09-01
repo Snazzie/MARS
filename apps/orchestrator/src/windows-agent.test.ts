@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { WorkerConfigurePayload, WorkerDoctorData, WorkerDoctorReport, type LeaseBootstrapEnvelope, type WorkerCapacityData, type WorkerCommand, type WorkerContainerStatus, type WorkerEvent } from "@mars/contracts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
-import { applyWindowsWorkerConfiguration, buildWindowsDoctorReport, runWindowsLeaseCleanup, startWindowsLeaseLifecycle } from "./windows-agent.ts";
+import { applyWindowsRunnerCachePurge, applyWindowsWorkerConfiguration, buildWindowsDoctorReport, runWindowsLeaseCleanup, startWindowsLeaseLifecycle } from "./windows-agent.ts";
 const doctor = WorkerDoctorData.parse({ runtimeMode: "container", runtimeReady: true, probe: true, egress: true, imageSignatures: true });
 const capacity: WorkerCapacityData = { actualVcpu: 8, actualMemoryBytes: 16, actualStorageBytes: 32, freeVcpu: 7, freeMemoryBytes: 15, freeStorageBytes: 31 };
 const containerStatuses: WorkerContainerStatus[] = [{
@@ -63,6 +63,16 @@ test("awaits the live cache TTL before acknowledging Windows configuration", asy
   expect(limits).toEqual({ maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 });
   expect(cache).toEqual({ ttlSeconds: 3600, runnerCacheEnabled: false });
   expect(observed.cache).toEqual(payload.cache);
+});
+
+test("purges the Windows runner cache before acknowledging", async () => {
+  const commandId = "44444444-4444-4444-8444-444444444444";
+  const command: WorkerCommand = { version: 1, id: commandId, type: "worker.runner_cache_purge", workerId, leaseId: null, occurredAt: new Date().toISOString(), payload: { workerId } };
+  let purges = 0;
+  const result = await applyWindowsRunnerCachePurge(command, { purgeRunnerCache: async () => { purges += 1; } });
+  expect(purges).toBe(1);
+  expect(result.type).toBe("command.accepted");
+  expect(result.payload).toEqual({ commandId, leaseId: null });
 });
 
 const workerId = "11111111-1111-4111-8111-111111111111";

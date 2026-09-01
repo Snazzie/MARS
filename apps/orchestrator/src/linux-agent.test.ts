@@ -44,6 +44,18 @@ describe("Linux worker.configure", () => {
   });
 });
 
+test("purges only the runner cache and acknowledges after completion", async () => {
+  let purges = 0;
+  const result = await handleLinuxWorkerCommand(
+    { ...command, id: "00000000-0000-4000-8000-000000000003", type: "worker.runner_cache_purge", payload: { workerId } },
+    { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }, cache: { ttlSeconds: 60, runnerCacheEnabled: true } },
+    { applyTtl: async () => {}, setRunnerCacheEnabled: () => {}, purgeRunnerCache: async () => { purges += 1; } },
+  );
+  expect(purges).toBe(1);
+  expect(result.type).toBe("command.accepted");
+  expect(result.payload).toEqual({ commandId: "00000000-0000-4000-8000-000000000003", leaseId: null });
+});
+
 test("builds a Linux enrollment payload with digest-bound VM evidence", () => {
   const payload = buildLinuxWorkerJoinPayload({
     code: "A".repeat(43),

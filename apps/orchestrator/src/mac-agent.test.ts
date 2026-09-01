@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateKeyPairSync, verify as verifySignature } from "node:crypto";
-import { applyWorkerConfigure, availableMacMemoryBytes, buildMacWorkerAuthentication, buildMacWorkerJoinPayload, parseMacWorkerIdentity, runMacLeaseLifecycle, runWorkerJoin, startMacLeaseLifecycle } from "./mac-agent.ts";
+import { applyWorkerConfigure, availableMacMemoryBytes, buildMacWorkerAuthentication, buildMacWorkerJoinPayload, handleMacWorkerCommand, parseMacWorkerIdentity, runMacLeaseLifecycle, runWorkerJoin, startMacLeaseLifecycle } from "./mac-agent.ts";
 
 test("awaits the live cache TTL before acknowledging macOS worker configuration", async () => {
   const workerId = "00000000-0000-4000-8000-000000000001";
@@ -47,6 +47,16 @@ test("awaits the live cache TTL before acknowledging macOS worker configuration"
       cache: { ttlSeconds: 5400, runnerCacheEnabled: false },
     },
   });
+});
+
+test("purges the macOS runner cache before acknowledging", async () => {
+  const workerId = "00000000-0000-4000-8000-000000000001";
+  const command: WorkerCommand = { version: 1, id: "00000000-0000-4000-8000-000000000003", type: "worker.runner_cache_purge", workerId, leaseId: null, occurredAt: "2026-08-23T00:00:00.000Z", payload: { workerId } };
+  let purges = 0;
+  const result = await handleMacWorkerCommand(command, {} as never, undefined, undefined, undefined, { applyTtl: async () => {}, setRunnerCacheEnabled: () => {}, purgeRunnerCache: async () => { purges += 1; } });
+  expect(purges).toBe(1);
+  expect(result.type).toBe("command.accepted");
+  expect(result.payload).toEqual({ commandId: command.id, leaseId: null });
 });
 
 describe("macOS memory availability", () => {

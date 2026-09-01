@@ -1,6 +1,6 @@
 import type { Sql } from "@mars/db";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, WorkerObservedConfiguration, validateWorkerGuestPlatforms, type GuestPlatform } from "@mars/contracts";
+import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, validateWorkerGuestPlatforms, type GuestPlatform } from "@mars/contracts";
 import { z } from "zod";
 import { jsonParameter } from "@mars/db";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
@@ -121,6 +121,34 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, conf
   await dispatcher?.replayConnected(workerId);
   return response;
 }
+export type WorkerRunnerCachePurgeResult = { workerId: string; commandId: string };
+export async function purgeWorkerRunnerCache(
+  db: Sql<{}>,
+  workerId: string,
+  adminId: string,
+  dispatcher?: Pick<WorkerCommandDispatcher, "replayConnected">,
+  idempotencyKey?: string,
+): Promise<WorkerRunnerCachePurgeResult> {
+  const commandId = randomUUID();
+  const response = await db.begin(async tx => {
+    if (idempotencyKey) {
+      await tx`select pg_advisory_xact_lock(hashtext(${`mars:runner-cache-purge:${workerId}:${idempotencyKey}`}))`;
+      const prior = await tx<{ response: WorkerRunnerCachePurgeResult | null }[]>`select response from worker_mutations where worker_id=${workerId} and idempotency_key=${idempotencyKey}`;
+      if (prior[0]?.response) return { result: prior[0].response, created: false };
+    }
+    const [worker] = await tx<{ id: string; admissionState: string }[]>`select id,admission_state as "admissionState" from workers where id=${workerId} for update`;
+    if (!worker || !["pending", "adopted"].includes(worker.admissionState)) throw new Error("worker purge conflict");
+    const payload = WorkerRunnerCachePurgePayload.parse({ workerId });
+    await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,'worker.runner_cache_purge',${workerId},null,now(),${jsonParameter(tx, payload)}::jsonb)`;
+    await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.runner_cache_purge_requested',${jsonParameter(tx, { workerId, commandId })}::jsonb)`;
+    const result = { workerId, commandId };
+    if (idempotencyKey) await tx`insert into worker_mutations (worker_id,idempotency_key,response) values (${workerId},${idempotencyKey},${jsonParameter(tx, result)}::jsonb)`;
+    return { result, created: true };
+  });
+  if (response.created) await dispatcher?.replayConnected(workerId);
+  return response.result;
+}
+
 export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event: { workerId: string; payload: unknown }): Promise<boolean> {
   const input = event.payload as Record<string, unknown>;
   const observed = WorkerObservedConfiguration.safeParse(input?.observed);

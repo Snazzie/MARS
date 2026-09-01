@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates, listJobResourceSamples, listWorkerCacheEntries, decodeWorkerCacheCursor, getWorkerHealth } from "@mars/db";
 import { adoptWorker } from "../workers.ts";
-import { configurePendingWorker } from "../worker-requests.ts";
+import { configurePendingWorker, purgeWorkerRunnerCache } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 import { createWorkerImageBuildPayload } from "../windows-image-build.ts";
 import { ApiError, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceSample, WorkerHealth } from "@mars/contracts";
@@ -142,6 +142,17 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const query = c.req.query("query") ?? "";
     if (query.length > 200) return error(c, 400, "invalid_cache_query", "Invalid cache query");
     return c.json(DashboardWorkerCachePage.parse(await listWorkerCacheEntries(deps.db, c.req.param("workerId"), { cursor: rawCursor ?? null, limit, query })));
+  }));
+  app.post("/api/workers/:workerId/cache/purge", safe(async (c) => {
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    const idem = requireMutation(c); if (idem) return idem;
+    if (!deps.workerDispatcher) return error(c, 503, "worker_dispatch_unavailable", "Worker command dispatch is unavailable");
+    const workerId = c.req.param("workerId");
+    const [worker] = await deps.db`SELECT id,admission_state AS "admissionState" FROM workers WHERE id=${workerId}`;
+    if (!worker) return error(c, 404, "not_found", "Resource not found");
+    if (!["pending", "adopted"].includes(worker.admissionState)) return error(c, 409, "worker_not_ready", "Worker is not available");
+    const result = await purgeWorkerRunnerCache(deps.db, workerId, c.get("user").id, deps.workerDispatcher, c.req.header("idempotency-key")!.trim());
+    return c.json(result, 202);
   }));
   app.get("/api/workers/:workerId/health", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");

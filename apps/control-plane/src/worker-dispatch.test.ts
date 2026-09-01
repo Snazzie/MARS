@@ -52,6 +52,22 @@ test("replays a command committed after socket authentication", async () => {
   expect(sent.map(data => JSON.parse(data).id)).toContain(commands[0]!.id);
 });
 
+test("replays a durable runner cache purge command after worker reconnect", async () => {
+  const purgeCommand: WorkerCommand = { ...command, id: "00000000-0000-4000-8000-000000000004", type: "worker.runner_cache_purge", leaseId: null, payload: { workerId } };
+  const sent: string[] = [];
+  const store = {
+    async save() {},
+    async listUnacknowledged() { return [purgeCommand]; },
+    async markSent() {},
+    async acknowledge() {},
+  };
+  const dispatcher = new WorkerCommandDispatcher(100, store);
+  dispatcher.register(workerId, { send(data: string) { sent.push(data); } });
+  await dispatcher.replayConnected(workerId);
+  expect(JSON.parse(sent[0]!).type).toBe("worker.runner_cache_purge");
+  expect(JSON.parse(sent[0]!).leaseId).toBeNull();
+});
+
 test("accepts the first acknowledgement for a newly persisted command", async () => {
   const sent: string[] = [];
   const acknowledged: string[] = [];

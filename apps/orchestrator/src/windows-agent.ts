@@ -1,7 +1,7 @@
 import { generateKeyPairSync, sign as signMessage, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
-import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerDoctorData, WorkerDoctorReport, WorkerEvent, type WorkerCapacityData, type WorkerContainerStatus, type LeaseBootstrapEnvelope } from "@mars/contracts";
+import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, WorkerDoctorData, WorkerDoctorReport, WorkerEvent, type WorkerCapacityData, type WorkerContainerStatus, type LeaseBootstrapEnvelope } from "@mars/contracts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { createHyperVRuntime, HyperVDriver } from "./hyperv.ts";
 import { WindowsContainerDriver, isExpectedWindowsEntrypoint } from "./windows-container.ts";
@@ -159,6 +159,12 @@ export async function applyWindowsWorkerConfiguration(
   Object.assign(cache, observed.cache);
   return observed;
 }
+export async function applyWindowsRunnerCachePurge(command: WorkerCommand, cacheService: Pick<ActionCacheService, "purgeRunnerCache">): Promise<WorkerEvent> {
+  const payload = WorkerRunnerCachePurgePayload.parse(command.payload);
+  if (payload.workerId !== command.workerId || command.leaseId !== null) throw new Error("runner cache purge command invalid");
+  await cacheService.purgeRunnerCache();
+  return event(command.workerId, "command.accepted", { commandId: command.id, leaseId: null });
+}
 
 
 export async function runWindowsLeaseCleanup(
@@ -283,6 +289,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
             const observed = await applyWindowsWorkerConfiguration(limits, cache, payload, cacheService);
             return ws.send(JSON.stringify(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed })));
           }
+          if (command.type === "worker.runner_cache_purge") return ws.send(JSON.stringify(await applyWindowsRunnerCachePurge(command, cacheService)));
           if (command.type === "worker.build_image") {
             await buildWindowsImage(command, workerEvent => ws.send(JSON.stringify(workerEvent)));
             doctorReport = await windowsDoctor(identity.preserveLeases === true);

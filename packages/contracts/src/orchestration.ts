@@ -201,6 +201,8 @@ export const WorkerCacheTelemetry = z.discriminatedUnion("type", [
   WorkerCacheSnapshotEndTelemetry,
 ]);
 export type WorkerCacheTelemetry = z.infer<typeof WorkerCacheTelemetry>;
+export const WorkerRunnerCachePurgePayload = z.object({ workerId: z.string().uuid() }).strict();
+export type WorkerRunnerCachePurgePayload = z.infer<typeof WorkerRunnerCachePurgePayload>;
 export const WorkerCommand = z.object({ version: z.literal(1), id: z.string().uuid(), type: z.string().min(1), workerId: z.string().uuid(), leaseId: z.string().uuid().nullable(), occurredAt: z.string().datetime(), payload: z.record(z.unknown()) });
 export const WorkerEvent = z.object({ version: z.literal(1), id: z.string().uuid(), workerId: z.string().uuid(), type: z.string().min(1), occurredAt: z.string().datetime(), payload: z.record(z.unknown()) });
 export const WorkerEventPayload = z.discriminatedUnion("type", [

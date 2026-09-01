@@ -3,7 +3,7 @@ import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { cpus, totalmem } from "node:os";
 import { statfsSync } from "node:fs";
-import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerObservedConfiguration, WorkerConfigurePayload, WorkerCommand, WorkerDoctorData, WorkerEvent, type WorkerCapacityData } from "@mars/contracts";
+import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerObservedConfiguration, WorkerConfigurePayload, WorkerRunnerCachePurgePayload, WorkerCommand, WorkerDoctorData, WorkerEvent, type WorkerCapacityData } from "@mars/contracts";
 import { z } from "zod";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { authenticateWorker, retryControlPlaneOperation, workerSocketUrl, type WorkerIdentity } from "./worker-client.ts";
@@ -43,8 +43,14 @@ export async function applyLinuxWorkerConfigure(
 export async function handleLinuxWorkerCommand(
   command: WorkerCommand,
   resources: LinuxWorkerResources,
-  cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled">,
+  cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled"> & Partial<Pick<ActionCacheService, "purgeRunnerCache">>,
 ): Promise<WorkerEvent> {
+  if (command.type === "worker.runner_cache_purge") {
+    const payload = WorkerRunnerCachePurgePayload.parse(command.payload);
+    if (payload.workerId !== command.workerId || command.leaseId !== null || !cacheService.purgeRunnerCache) throw new Error("runner cache purge command invalid");
+    await cacheService.purgeRunnerCache();
+    return { version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "command.accepted", occurredAt: new Date().toISOString(), payload: { commandId: command.id, leaseId: null } };
+  }
   if (command.type !== "worker.configure") throw new Error(`unsupported worker command: ${command.type}`);
   return applyLinuxWorkerConfigure(command, resources, cacheService);
 }
@@ -55,11 +61,11 @@ export type LinuxWorkerCommandContext = {
   runtimeReady: () => boolean;
   send: (event: WorkerEvent) => void;
   activeLeases?: Map<string, Promise<void>>;
-  cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled" | "transport" | "unregisterLease">;
+  cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled" | "transport" | "unregisterLease"> & Partial<Pick<ActionCacheService, "purgeRunnerCache">>;
 };
 
 export async function handleLinuxWorkerCommandWithContext(command: WorkerCommand, resources: LinuxWorkerResources, context: LinuxWorkerCommandContext): Promise<WorkerEvent | void> {
-  if (command.type === "worker.configure") return handleLinuxWorkerCommand(command, resources, context.cacheService);
+  if (command.type === "worker.configure" || command.type === "worker.runner_cache_purge") return handleLinuxWorkerCommand(command, resources, context.cacheService);
   if (command.type === "linux-vm.stop_lease") {
     if (!command.leaseId) throw new Error("lease_id_required");
     await context.driver.stopLease(command.leaseId);
@@ -187,13 +193,12 @@ async function connectLinuxWorker(
           return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctor, activeLeases: [...activeLeases.keys()] }, capacity: linuxCapacity() } }));
         }
         if (frame.type === "ping") {
-          ws.send(JSON.stringify({ version: 1, type: "pong", workerId: identity.workerId }));
           doctor = await linuxDoctor(driver, digest, channelRoot);
           return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctor, activeLeases: [...activeLeases.keys()] }, capacity: linuxCapacity() } }));
         }
         if (frame.type === "doctor_ack") return;
         const command = WorkerCommand.parse(frame);
-        if (command.type === "worker.configure") return ws.send(JSON.stringify(await handleLinuxWorkerCommand(command, resources, cacheService)));
+        if (command.type === "worker.configure" || command.type === "worker.runner_cache_purge") return ws.send(JSON.stringify(await handleLinuxWorkerCommand(command, resources, cacheService)));
         if (command.type === "linux-vm.create_lease") {
           ws.send(JSON.stringify(workerEvent(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
           await handleLinuxWorkerCommandWithContext(command, resources, { driver, encryptionPrivateKey: identity.encryptionPrivateKey, runtimeReady: () => doctor.runtimeReady === true, send: (value) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); }, activeLeases, cacheService });

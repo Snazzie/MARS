@@ -3,7 +3,7 @@ import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promi
 import { dirname } from "node:path";
 import { statfsSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
-import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerDoctorData, WorkerEvent, type LeaseBootstrapEnvelope, type WorkerCacheProxy, type WorkerCapacityData } from "@mars/contracts";
+import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, WorkerDoctorData, WorkerEvent, type LeaseBootstrapEnvelope, type WorkerCacheProxy, type WorkerCapacityData } from "@mars/contracts";
 import { z } from "zod";
 import type { Lease, RuntimeLease } from "./runtime.ts";
 import { createTartVmRuntime, TartVmDriver } from "./tart.ts";
@@ -139,7 +139,13 @@ export function startMacLeaseLifecycle(
   active.set(bootstrap.leaseId, lifecycle);
   return lifecycle;
 }
-export async function handleMacWorkerCommand(command: WorkerCommand, driver: TartVmDriver, limits?: MacWorkerLimits, encryptionPrivateKey?: string, cache?: WorkerCacheConfiguration, cacheService?: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled">): Promise<WorkerEvent> {
+export async function handleMacWorkerCommand(command: WorkerCommand, driver: TartVmDriver, limits?: MacWorkerLimits, encryptionPrivateKey?: string, cache?: WorkerCacheConfiguration, cacheService?: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled"> & Partial<Pick<ActionCacheService, "purgeRunnerCache">>): Promise<WorkerEvent> {
+  if (command.type === "worker.runner_cache_purge") {
+    const payload = WorkerRunnerCachePurgePayload.parse(command.payload);
+    if (payload.workerId !== command.workerId || command.leaseId !== null || !cacheService?.purgeRunnerCache) throw new Error("runner cache purge command invalid");
+    await cacheService.purgeRunnerCache();
+    return workerEvent(command.workerId, "command.accepted", { commandId: command.id, leaseId: null });
+  }
   if (command.type === "worker.configure") {
     if (!limits) throw new Error("worker limits unavailable");
     if (!cache) throw new Error("worker cache configuration unavailable");
