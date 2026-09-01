@@ -1,11 +1,19 @@
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { WorkerBuildImagePayload, workerBuildImageContentDescriptor } from "@mars/contracts";
 import type { ControlPlaneHttpDeps } from "./http/types.ts";
 
 type WindowsContainerBuild = NonNullable<ControlPlaneHttpDeps["windowsContainerBuild"]>;
 
 async function fileSha256(path: string): Promise<string> {
-  return createHash("sha256").update(Buffer.from(await Bun.file(path).arrayBuffer())).digest("hex");
+  let normalizedPath = path;
+  try {
+    const parsed = new URL(path);
+    if (parsed.protocol === "file:") normalizedPath = fileURLToPath(parsed);
+  } catch {
+    // Preserve raw Windows drive-letter and UNC filesystem paths.
+  }
+  return createHash("sha256").update(Buffer.from(await Bun.file(normalizedPath).arrayBuffer())).digest("hex");
 }
 
 export async function createWorkerImageBuildPayload(input: {

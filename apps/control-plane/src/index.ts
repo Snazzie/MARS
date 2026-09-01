@@ -96,13 +96,24 @@ const developmentArtifactUrl = (value: string): boolean => {
   return !(parsed.hostname.toLowerCase() === "github.com" && /^\/[^/]+\/[^/]+\/releases(?:\/|$)/i.test(parsed.pathname));
 };
 
+const normalizeDevelopmentFilesystemPath = (value: string): string => {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "file:" ? fileURLToPath(parsed) : value;
+  } catch {
+    // Raw drive-letter and UNC paths are filesystem paths, not URLs.
+    return value;
+  }
+};
+
 const developmentArtifact = (
   environment: DevelopmentEnvironment,
   paths: string[],
   urls: string[],
   hashes: string[],
 ): DevelopmentArtifact | undefined => {
-  const path = trimmedEnvironmentValue(environment, paths);
+  const configuredPath = trimmedEnvironmentValue(environment, paths);
+  const path = configuredPath ? normalizeDevelopmentFilesystemPath(configuredPath) : undefined;
   const url = trimmedEnvironmentValue(environment, urls);
   const sha256 = trimmedEnvironmentValue(environment, hashes)?.replace(/^sha256:/, "");
   if ((url && !developmentArtifactUrl(url)) || (!path && !url) || !sha256 || !/^[0-9a-f]{64}$/.test(sha256)) return undefined;
@@ -150,7 +161,9 @@ const resolveDevelopmentArtifact = async (
 ): Promise<DevelopmentArtifact | undefined> => {
   const configuredPath = trimmedEnvironmentValue(environment, paths);
   const url = trimmedEnvironmentValue(environment, urls);
-  const candidatePath = configuredPath ?? (!url && fallbackPath ? fileURLToPath(new URL(fallbackPath, import.meta.url)) : undefined);
+  const candidatePath = configuredPath
+    ? normalizeDevelopmentFilesystemPath(configuredPath)
+    : !url && fallbackPath ? fileURLToPath(new URL(fallbackPath, import.meta.url)) : undefined;
   const path = candidatePath && await Bun.file(candidatePath).exists() ? candidatePath : undefined;
   const configuredHash = trimmedEnvironmentValue(environment, hashes)?.replace(/^sha256:/, "");
   const sha256 = path ? await localArtifactSha256(path) : configuredHash;
@@ -223,7 +236,11 @@ export function createDevelopmentWindowsContainerBuild(input: {
     gitSha256: container.git.sha256,
     vcUrl: new URL("/api/workers/windows-container-vc-runtime", input.publicOrigin).toString(),
     vcSha256: container.vcRuntime.sha256,
-    ...buildArtifacts,
+    builderPath: normalizeDevelopmentFilesystemPath(buildArtifacts.builderPath),
+    verifierPath: normalizeDevelopmentFilesystemPath(buildArtifacts.verifierPath),
+    containerfilePath: normalizeDevelopmentFilesystemPath(buildArtifacts.containerfilePath),
+    entrypointPath: normalizeDevelopmentFilesystemPath(buildArtifacts.entrypointPath),
+    jobAgentPath: normalizeDevelopmentFilesystemPath(buildArtifacts.jobAgentPath),
   };
 }
 

@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { initializeDatabase, configureErrorFileLogging, configureTimestampedConsoleLogging, formatJobReconciliationReport, resolveWebhookOrigin, createDevelopmentWindowsContainerBuild, resolveDevelopmentWindowsArtifacts, resolveDevelopmentLinuxArtifacts, resolveDevelopmentMacosArtifacts } from "./index.ts";
 
 test("requires an explicit webhook origin at startup", () => {
@@ -200,6 +201,28 @@ test("resolves development worker binaries without optional template or image-bu
         path: serviceHost,
         sha256: createHash("sha256").update("service-host").digest("hex"),
       },
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+test("normalizes file URL Windows artifact overrides before local file reads", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-development-file-url-"));
+  const orchestrator = join(root, "mars-orchestrator.exe");
+  const serviceHost = join(root, "mars-service-host.exe");
+  try {
+    await Bun.write(orchestrator, "orchestrator");
+    await Bun.write(serviceHost, "service-host");
+
+    const artifacts = await resolveDevelopmentWindowsArtifacts({
+      NODE_ENV: "development",
+      MARS_WINDOWS_ORCHESTRATOR_PATH: pathToFileURL(orchestrator).toString(),
+      MARS_WINDOWS_SERVICE_HOST_PATH: pathToFileURL(serviceHost).toString(),
+    });
+
+    expect(artifacts).toMatchObject({
+      orchestrator: { path: orchestrator, sha256: createHash("sha256").update("orchestrator").digest("hex") },
+      serviceHost: { path: serviceHost, sha256: createHash("sha256").update("service-host").digest("hex") },
     });
   } finally {
     await rm(root, { recursive: true, force: true });

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { expect, test } from "bun:test";
 import { createWorkerImageBuildPayload } from "./windows-image-build.ts";
@@ -60,12 +61,19 @@ test("parses a local development image build with proxied dependencies and prese
         },
       },
       buildArtifacts: {
-        builderPath: join(root, "builder.ps1"),
-        verifierPath: join(root, "verifier.ps1"),
-        containerfilePath: join(root, "Containerfile"),
-        entrypointPath: join(root, "entrypoint.ps1"),
-        jobAgentPath: join(root, "agent.exe"),
+        builderPath: pathToFileURL(join(root, "builder.ps1")).toString(),
+        verifierPath: pathToFileURL(join(root, "verifier.ps1")).toString(),
+        containerfilePath: pathToFileURL(join(root, "Containerfile")).toString(),
+        entrypointPath: pathToFileURL(join(root, "entrypoint.ps1")).toString(),
+        jobAgentPath: pathToFileURL(join(root, "agent.exe")).toString(),
       },
+    });
+    expect(build).toMatchObject({
+      builderPath: join(root, "builder.ps1"),
+      verifierPath: join(root, "verifier.ps1"),
+      containerfilePath: join(root, "Containerfile"),
+      entrypointPath: join(root, "entrypoint.ps1"),
+      jobAgentPath: join(root, "agent.exe"),
     });
     expect(build).toBeDefined();
     const payload = await createWorkerImageBuildPayload({
