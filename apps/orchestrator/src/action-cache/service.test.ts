@@ -1,11 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { request as httpsRequest } from "node:https";
 import { connect, createServer } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discoverActionCacheAdvertiseHost, emitActionCacheSnapshot, resolveActionCacheNetworkConfiguration, startActionCacheService, type ActionCacheService } from "./service.ts";
+import { forwardPublicNpmRequest } from "./package-download-cache.ts";
 
 const roots: string[] = [];
 const services: ActionCacheService[] = [];
@@ -36,7 +37,7 @@ function requestThroughProxy(proxyUrl: string, targetHost: string, ca: string, i
   const credentials = proxy.username
     ? `Proxy-Authorization: Basic ${Buffer.from(`${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`).toString("base64")}\r\n`
     : "";
-  const { promise, resolve, reject } = Promise.withResolvers<{ status: number; headers: Record<string, string>; body: string }>();
+  const { promise, resolve, reject } = Promise.withResolvers<{ status: number; headers: Record<string, string>; body: string; bodyBytes: Buffer }>();
   const socket = connect(Number(proxy.port), proxy.hostname);
   let connectResponse = "";
   socket.setTimeout(5_000, () => { socket.destroy(); reject(new Error("proxy request timeout")); });
@@ -129,6 +130,42 @@ function requestHttps(origin: string, ca: string, input: { method: string; path:
   if (input.body !== undefined) request.write(input.body);
   request.end();
   return promise;
+}
+
+async function installedPackageBytes(projectRoot: string): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  const walk = async (directory: string, prefix: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) await walk(path, relativePath);
+      else files[relativePath] = (await readFile(path)).toString("base64");
+    }
+  };
+  await walk(join(projectRoot, "node_modules", "is-number"), "");
+  return files;
+}
+
+async function runFixtureBunInstall(projectRoot: string, packageCacheRoot: string, transport: { proxyUrl: string }, caPath: string): Promise<{ code: number; stdout: string; stderr: string }> {
+  const env: Record<string, string> = {
+    ...Bun.env,
+    BUN_INSTALL_CACHE_DIR: packageCacheRoot,
+    HTTP_PROXY: transport.proxyUrl,
+    http_proxy: transport.proxyUrl,
+    HTTPS_PROXY: transport.proxyUrl,
+    https_proxy: transport.proxyUrl,
+    NO_PROXY: "",
+    no_proxy: "",
+    NODE_EXTRA_CA_CERTS: caPath,
+    node_extra_ca_certs: caPath,
+  };
+  const child = Bun.spawn([process.execPath, "install", "--frozen-lockfile"], { cwd: projectRoot, env, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  return { code, stdout, stderr };
 }
 
 
@@ -373,6 +410,71 @@ test("caches anonymous npm tarballs and bypasses metadata and authorized downloa
     { url: tarballPath, authorization: "Bearer private-token" },
     { url: tarballPath, authorization: "Bearer private-token" },
   ]);
+});
+
+test.skipIf(Bun.env.MARS_LIVE_NPM_CACHE !== "1")("installs the Bun fixture through the persistent worker package cache", async () => {
+  const fixtureRoot = join(import.meta.dir, "../../../../tests/fixtures/bun-package-cache");
+  const testRoot = await root();
+  const cacheRoot = join(testRoot, "worker-cache");
+  const firstProject = join(testRoot, "first-project");
+  const secondProject = join(testRoot, "second-project");
+  const firstGuestCache = join(testRoot, "first-bun-cache");
+  const secondGuestCache = join(testRoot, "second-bun-cache");
+  const caPath = join(testRoot, "worker-ca.pem");
+  await Promise.all([
+    cp(fixtureRoot, firstProject, { recursive: true }),
+    cp(fixtureRoot, secondProject, { recursive: true }),
+  ]);
+  await Promise.all([
+    mkdir(firstGuestCache, { recursive: true }),
+    mkdir(secondGuestCache, { recursive: true }),
+  ]);
+
+  const tarballPath = "/is-number/-/is-number-7.0.0.tgz";
+  let rejectTarball = false;
+  let eligibleTarballCalls = 0;
+  const service = await startActionCacheService({
+    root: cacheRoot,
+    controlPlaneOrigin: "https://control.example.test",
+    ttlSeconds: 3600,
+    proxyPort: 0,
+    dataPort: 0,
+    discoverAdvertiseHost: async () => "127.0.0.1",
+    forwardPackageRequest: async (request, response) => {
+      const requestUrl = request.url ?? "";
+      const isEligibleTarball = request.method === "GET"
+        && requestUrl === tarballPath
+        && !request.headers.authorization
+        && !request.headers.cookie
+        && !request.headers.range;
+      if (isEligibleTarball) {
+        eligibleTarballCalls += 1;
+        if (rejectTarball) {
+          response.writeHead(503);
+          response.end("tarball upstream intentionally unavailable");
+          return;
+        }
+      }
+      await forwardPublicNpmRequest(request, response);
+    },
+  });
+  services.push(service);
+  const transport = service.transport("11111111-1111-4111-8111-111111111111", leaseExpiry());
+  await writeFile(caPath, transport.caCertificatePem, { mode: 0o600, flag: "wx" });
+
+  const first = await runFixtureBunInstall(firstProject, firstGuestCache, transport, caPath);
+  expect(first.code).toBe(0);
+  expect(JSON.parse(await readFile(join(firstProject, "node_modules", "is-number", "package.json"), "utf8"))).toMatchObject({ name: "is-number", version: "7.0.0" });
+  const firstPackageBytes = await installedPackageBytes(firstProject);
+  expect(Object.keys(firstPackageBytes).length).toBeGreaterThan(0);
+  expect(await readdir(join(cacheRoot, "packages", "objects"))).toHaveLength(1);
+
+  rejectTarball = true;
+  const second = await runFixtureBunInstall(secondProject, secondGuestCache, transport, caPath);
+  expect(second.code).toBe(0);
+  expect(JSON.parse(await readFile(join(secondProject, "node_modules", "is-number", "package.json"), "utf8"))).toMatchObject({ name: "is-number", version: "7.0.0" });
+  expect(await installedPackageBytes(secondProject)).toEqual(firstPackageBytes);
+  expect(eligibleTarballCalls).toBe(1);
 });
 test("preserves UTF-8 response bodies through authenticated CONNECT", async () => {
   const service = await startActionCacheService({

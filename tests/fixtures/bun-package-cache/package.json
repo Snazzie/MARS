@@ -1,0 +1,7 @@
+{
+  "name": "mars-bun-package-cache-fixture",
+  "private": true,
+  "dependencies": {
+    "is-number": "7.0.0"
+  }
+}
