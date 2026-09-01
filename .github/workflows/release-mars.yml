@@ -97,9 +97,11 @@ jobs:
           cp deploy/workers/install-worker.sh deploy/workers/linux-broker-compose.yaml deploy/workers/worker-domain.xml dist/linux/
       - name: Resolve and hash Linux Actions Runner
         id: runner
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          runner_url=$(curl --fail --location --proto '=https' --tlsv1.2 'https://api.github.com/repos/actions/runner/releases?per_page=30' | jq -r '[.[] | select(.draft == false and .prerelease == false)][0].assets[] | select(.name | test("^actions-runner-linux-x64-[0-9.]+\\.tar\\.gz$")) | .browser_download_url')
+          runner_url=$(curl --fail --location --proto '=https' --tlsv1.2 -H "Authorization: Bearer $GH_TOKEN" 'https://api.github.com/repos/actions/runner/releases?per_page=30' | jq -r '[.[] | select(.draft == false and .prerelease == false)][0].assets[] | select(.name | test("^actions-runner-linux-x64-[0-9.]+\\.tar\\.gz$")) | .browser_download_url')
           [[ "$runner_url" != null && "$runner_url" == https://* ]] || { echo 'Actions Runner Linux asset was not found' >&2; exit 1; }
           runner_sha256=$(curl --fail --location --proto '=https' --tlsv1.2 "$runner_url" | sha256sum | cut -d' ' -f1)
           echo "url=$runner_url" >> "$GITHUB_OUTPUT"
@@ -176,12 +178,14 @@ jobs:
           Copy-Item apps/windows-service-host/target/x86_64-pc-windows-gnu/release/mars-service-host.exe dist/windows/mars-service-host.exe
       - name: Resolve and hash Windows container dependencies
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $runnerRelease = (curl.exe --fail --location --proto '=https' --tlsv1.2 'https://api.github.com/repos/actions/runner/releases?per_page=30' | ConvertFrom-Json) | Where-Object { -not $_.draft -and -not $_.prerelease } | Select-Object -First 1
+          $runnerRelease = (curl.exe --fail --location --proto '=https' --tlsv1.2 -H "Authorization: Bearer $env:GH_TOKEN" 'https://api.github.com/repos/actions/runner/releases?per_page=30' | ConvertFrom-Json) | Where-Object { -not $_.draft -and -not $_.prerelease } | Select-Object -First 1
           $runnerAsset = $runnerRelease.assets | Where-Object name -Match '^actions-runner-win-x64-[0-9.]+\.zip$' | Select-Object -First 1
           if (-not $runnerAsset) { throw 'Actions Runner Windows asset was not found' }
-          $gitRelease = (curl.exe --fail --location --proto '=https' --tlsv1.2 'https://api.github.com/repos/git-for-windows/git/releases?per_page=30' | ConvertFrom-Json) | Where-Object { -not $_.draft -and -not $_.prerelease } | Select-Object -First 1
+          $gitRelease = (curl.exe --fail --location --proto '=https' --tlsv1.2 -H "Authorization: Bearer $env:GH_TOKEN" 'https://api.github.com/repos/git-for-windows/git/releases?per_page=30' | ConvertFrom-Json) | Where-Object { -not $_.draft -and -not $_.prerelease } | Select-Object -First 1
           $gitAsset = $gitRelease.assets | Where-Object name -Match '^MinGit-[0-9.]+-64-bit\.zip$' | Select-Object -First 1
           if (-not $gitAsset) { throw 'MinGit Windows asset was not found' }
           $baseManifest = (docker manifest inspect mcr.microsoft.com/windows/server:ltsc2025 | ConvertFrom-Json)
