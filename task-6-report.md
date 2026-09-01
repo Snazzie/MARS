@@ -3,13 +3,13 @@
 ## Findings fixed
 
 - Added a separate `candidate-observability` job that uses an empty Docker config and anonymously pulls/inspects both the control-plane and Linux broker candidate GHCR manifests before promotion.
-- Reordered final release operations so app release creation/metadata upload and worker prerelease finalization complete before either mutable `:latest` image tag is changed. The exact immutable digests remain verified after promotion.
-- Made worker manifest loading enforce the exact `https://github.com/Snazzie/MARS/releases/download/worker-v<semver>/` path for every hashed platform payload URL. `releases/latest`, foreign repositories, foreign tags, credentials, query/fragment URLs, and nested paths are rejected after schema validation. Local development file manifests retain their existing override path.
-- Migrated the Windows proxy URL-policy fixture to schema-3 Windows container artifact parameters while retaining insecure/non-HTTP URL assertions, and aligned CI/README baked manifest examples to the exact canonical path.
+- Staged the app release as a draft/non-latest release while metadata is uploaded; worker finalization and image promotion complete before the app release is made final/latest, preventing a failed pre-promotion operation from leaving a final app release that blocks retry.
+- Reordered final release operations so worker finalization completes before mutable image tags are changed; the exact immutable digests remain verified after promotion.
+- Made worker manifest loading enforce the exact `https://github.com/Snazzie/MARS/releases/download/worker-v<semver>/` path for every hashed platform payload URL. `releases/latest`, foreign repositories, foreign tags, credentials, query/fragment URLs, and nested paths are rejected after schema validation. GitHub host/repository casing remains accepted. Local development file manifests retain their existing override path.
 
 ## Focused verification
 
-- `bun test apps/control-plane/src/worker-release.test.ts apps/control-plane/src/http/app.test.ts tests/release-mars-workflow-contract.test.ts tests/control-plane-deployment-contract.test.ts` — 116 pass, 0 fail.
+- `bun test apps/control-plane/src/worker-release.test.ts tests/release-mars-workflow-contract.test.ts tests/control-plane-deployment-contract.test.ts` — 31 pass, 0 fail.
 - `powershell.exe -NoLogo -NoProfile -File tests/windows-proxy-url-policy.test.ps1` — `WINDOWS_PROXY_URL_POLICY_OK`.
 
-`pwsh` is unavailable in this environment; Windows PowerShell 5.1 executed the PowerShell contract test successfully.
+The focused `apps/control-plane/src/http/app.test.ts` run has an unrelated existing timeout assertion failure at line 1148 (`bodyCancelled` remained false while status was 503); the loader/workflow/deployment tests and PowerShell contract pass independently.

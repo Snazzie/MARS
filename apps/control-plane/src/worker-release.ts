@@ -14,7 +14,7 @@ export const DEFAULT_WORKER_RELEASE_MANIFEST_URL = "";
 /** Development fallback only; production must provide the baked contract version. */
 export const DEFAULT_WORKER_CONTRACT_VERSION = "";
 const immutableVersion = "(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)";
-const immutableManifestPath = new RegExp(`^/Snazzie/MARS/releases/download/(worker-v${immutableVersion})/worker-release-manifest\\.json$`);
+const immutableManifestPath = new RegExp(`^/Snazzie/MARS/releases/download/(worker-v${immutableVersion})/worker-release-manifest\\.json$`, "i");
 const immutableReleaseOrigin = "https://github.com";
 
 const configuredManifestUrl = (): string => Bun.env.MARS_WORKER_RELEASE_MANIFEST_URL?.trim() ?? "";
@@ -64,7 +64,7 @@ const validateImmutableAssetUrls = (manifest: WorkerReleaseManifest, workerTag: 
     for (const [field, assetUrl] of hashedAssetEntries(release, `${platform}`)) {
       let candidate: URL;
       try { candidate = new URL(assetUrl); } catch { throw new Error(`worker release asset URL for ${field} is invalid: ${assetUrl}`); }
-      const filename = candidate.pathname.startsWith(prefix) ? candidate.pathname.slice(prefix.length) : "";
+      const filename = candidate.pathname.toLowerCase().startsWith(prefix.toLowerCase()) ? candidate.pathname.slice(prefix.length) : "";
       if (
         candidate.origin !== immutableReleaseOrigin
         || candidate.username

@@ -428,7 +428,11 @@ jobs:
           manifest=$(curl --fail --location --proto '=https' --tlsv1.2 "https://github.com/Snazzie/MARS/releases/download/worker-v$WORKER_VERSION/worker-release-manifest.json")
           broker_digest=$(jq -r '.platforms["linux-x64"].brokerImage | capture("@(?<digest>sha256:[0-9a-f]{64})").digest' <<<"$manifest")
           [[ "$broker_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'worker manifest broker digest is invalid' >&2; exit 1; }
-          gh release create "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest --title "Mars v$APP_VERSION" --generate-notes
+          if gh release view "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft=true --latest=false --title "Mars v$APP_VERSION"
+          else
+            gh release create "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --latest=false --title "Mars v$APP_VERSION" --generate-notes
+          fi
           {
             printf 'app_version=%s\nworker_version=%s\n' "$APP_VERSION" "$WORKER_VERSION"
             printf 'app_image=%s\napp_digest=%s\n' "$APP_IMAGE" "$APP_DIGEST"
@@ -443,6 +447,7 @@ jobs:
           docker buildx imagetools create --tag "$APP_IMAGE:latest" "$APP_IMAGE@$APP_DIGEST"
           app_digest=$(docker buildx imagetools inspect "$APP_IMAGE:latest" --format '{{.Manifest.Digest}}')
           [[ "$app_digest" == "$APP_DIGEST" ]] || { echo 'control-plane latest promotion changed digest' >&2; exit 1; }
+          gh release edit "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest=true
       - uses: actions/upload-artifact@v4
         with:
           name: mars-release-metadata-${{ inputs.app_version }}

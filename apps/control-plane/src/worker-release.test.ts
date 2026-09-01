@@ -124,6 +124,12 @@ test("accepts the immutable worker release URL emitted by GitHub", async () => {
     if (priorNode === undefined) delete Bun.env.NODE_ENV; else Bun.env.NODE_ENV = priorNode;
   }
 });
+
+test("accepts GitHub repository casing variations", async () => {
+  const source = releaseManifestUrl.replace("/Snazzie/MARS/", "/snazzie/Mars/");
+  const fetcher: typeof fetch = async () => new Response(JSON.stringify(remoteManifest()), { status: 200 });
+  await expect(loadWorkerReleaseManifest(source, undefined, { fetch: fetcher, controlPlaneVersion: "0.1.0" })).resolves.toMatchObject({ buildId: "release-build" });
+});
 test("rejects payload URLs outside the exact immutable worker release", async () => {
   for (const url of [
     "https://github.com/Snazzie/MARS/releases/latest/download/linux-installer.sh",

@@ -49,19 +49,22 @@ test("candidate images are anonymously observable before mutable promotion", asy
   expect(workflow.indexOf("Gate anonymous GHCR candidate manifests")).toBeLessThan(workflow.indexOf("Promote verified Mars release"));
 });
 
-test("final release operations precede mutable latest image promotion", async () => {
+test("stages the app release before mutable promotion and finalizes afterward", async () => {
   const workflow = await read(".github/workflows/release-mars.yml");
-  const workerFinalize = workflow.indexOf('gh release edit "worker-v$WORKER_VERSION"');
+  const appDraft = workflow.indexOf('gh release create "v$APP_VERSION"');
   const appUpload = workflow.indexOf('gh release upload "v$APP_VERSION"');
+  const workerFinalize = workflow.lastIndexOf('gh release edit "worker-v$WORKER_VERSION"');
   const brokerPromotion = workflow.indexOf('docker buildx imagetools create --tag "$BROKER_IMAGE:latest"');
   const appPromotion = workflow.indexOf('docker buildx imagetools create --tag "$APP_IMAGE:latest"');
-  expect(workerFinalize).toBeGreaterThan(-1);
-  expect(appUpload).toBeGreaterThan(-1);
-  expect(brokerPromotion).toBeGreaterThan(-1);
-  expect(appPromotion).toBeGreaterThan(-1);
-  expect(appUpload).toBeLessThan(brokerPromotion);
-  expect(workerFinalize).toBeLessThan(brokerPromotion);
-  expect(brokerPromotion).toBeLessThan(appPromotion);
+  const appFinalize = workflow.indexOf('gh release edit "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest=true');
+  expect(workflow).toContain('--draft --latest=false --title "Mars v$APP_VERSION"');
+  expect(workflow).toContain('--draft=true --latest=false');
+  expect(appDraft).toBeGreaterThan(-1);
+  expect(appUpload).toBeGreaterThan(appDraft);
+  expect(workerFinalize).toBeGreaterThan(appUpload);
+  expect(brokerPromotion).toBeGreaterThan(workerFinalize);
+  expect(appPromotion).toBeGreaterThan(brokerPromotion);
+  expect(appFinalize).toBeGreaterThan(appPromotion);
 });
 
 test("candidate images are explicit amd64 builds and promotions are gated", async () => {
@@ -76,9 +79,10 @@ test("candidate images are explicit amd64 builds and promotions are gated", asyn
   expect(workflow).toContain('docker buildx imagetools create --tag "$BROKER_IMAGE:latest" "$BROKER_IMAGE@$broker_digest"');
   expect(workflow).toContain('docker buildx imagetools create --tag "$APP_IMAGE:latest" "$APP_IMAGE@$APP_DIGEST"');
   expect(workflow).toContain('--prerelease=false --latest=false');
-  expect(workflow).toContain('--latest --title "Mars v$APP_VERSION"');
+  expect(workflow).toContain('--draft --latest=false');
   expect(workflow.indexOf("Promote verified Mars release")).toBeGreaterThan(workflow.indexOf("Smoke test with baked remote worker manifest"));
 });
+
 
 test("appliance builder verifies Noble checksums and injects offline assets", async () => {
   const builder = await read("images/worker-appliance/build.sh");
