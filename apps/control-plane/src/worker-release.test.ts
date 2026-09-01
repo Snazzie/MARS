@@ -87,6 +87,22 @@ test("rejects remote manifests without linux-x64", async () => {
   await expect(loadWorkerReleaseManifest("https://manifest.example.test/release.json", undefined, { fetch: fetcher })).rejects.toThrow("linux-x64");
 });
 
+test("requires an immutable baked worker release URL in production", async () => {
+  const priorNode = Bun.env.NODE_ENV;
+  const priorManifest = Bun.env.MARS_WORKER_RELEASE_MANIFEST_URL;
+  const priorContract = Bun.env.MARS_WORKER_CONTRACT_VERSION;
+  try {
+    Bun.env.NODE_ENV = "production";
+    Bun.env.MARS_WORKER_RELEASE_MANIFEST_URL = "https://github.com/Snazzie/Mars/releases/latest/download/worker-release-manifest.json";
+    Bun.env.MARS_WORKER_CONTRACT_VERSION = "0.1.0";
+    await expect(loadWorkerReleaseManifest()).rejects.toThrow("immutable worker-v");
+  } finally {
+    if (priorNode === undefined) delete Bun.env.NODE_ENV; else Bun.env.NODE_ENV = priorNode;
+    if (priorManifest === undefined) delete Bun.env.MARS_WORKER_RELEASE_MANIFEST_URL; else Bun.env.MARS_WORKER_RELEASE_MANIFEST_URL = priorManifest;
+    if (priorContract === undefined) delete Bun.env.MARS_WORKER_CONTRACT_VERSION; else Bun.env.MARS_WORKER_CONTRACT_VERSION = priorContract;
+  }
+});
+
 
 test("loads a usable Windows release from local development artifacts", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-local-release-"));

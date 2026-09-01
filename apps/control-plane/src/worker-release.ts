@@ -81,6 +81,8 @@ const withDevelopmentWindowsRelease = async (manifest: WorkerReleaseManifest, de
   catch { return manifest; }
 };
 
+let loaded: Promise<WorkerReleaseManifest> | undefined;
+
 /** Load and validate one immutable worker release manifest. */
 export function loadWorkerReleaseManifest(
   source?: string | URL,
@@ -98,7 +100,7 @@ export function loadWorkerReleaseManifest(
     if (production) {
       if (!configuredManifestUrl() && source === undefined) throw new Error("MARS_WORKER_RELEASE_MANIFEST_URL is required");
       if (!configuredContractVersion() && options.controlPlaneVersion === undefined) throw new Error("MARS_WORKER_CONTRACT_VERSION is required");
-      if (!(resolvedSource instanceof URL) || resolvedSource.protocol !== "https:" || !immutableManifestPath.test(resolvedSource.href)) {
+      if (!url || url.protocol !== "https:" || !immutableManifestPath.test(url.href)) {
         throw new Error(`worker release manifest URL must be the immutable worker-v<version> HTTPS release path: ${String(resolvedSource)}`);
       }
     }
