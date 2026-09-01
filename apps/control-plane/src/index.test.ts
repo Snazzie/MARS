@@ -348,3 +348,16 @@ test("keeps partial macOS development assets unavailable", async () => {
     expect(macos).toBeUndefined();
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+test("rejects a development Tart digest that differs from the source reference", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-tart-digest-mismatch-"));
+  try {
+    const files = await Promise.all(["orchestrator", "job-agent", "preparation"].map(async name => {
+      const path = join(root, name); await Bun.write(path, name); return path;
+    }));
+    expect(await resolveDevelopmentMacosArtifacts({
+      NODE_ENV: "development", MARS_MACOS_ORCHESTRATOR_PATH: files[0], MARS_MACOS_JOB_AGENT_PATH: files[1],
+      MARS_MACOS_IMAGE_PREPARATION_PATH: files[2], MARS_TART_BASE_IMAGE: `ghcr.io/example/macos@sha256:${"a".repeat(64)}`,
+      MARS_TART_IMAGE_DIGEST: "b".repeat(64),
+    })).toBeUndefined();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

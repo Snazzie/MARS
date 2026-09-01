@@ -220,7 +220,9 @@ export async function resolveDevelopmentMacosArtifacts(environment: DevelopmentE
   if (!orchestrator && !jobAgent && !imagePreparationScript && !tartImage && !tartImageDigest) return undefined;
   // A development installer must be as complete and immutable as a released
   // one. Partial local configuration is deliberately surfaced as unavailable.
-  if (!orchestrator || !jobAgent || !imagePreparationScript || !tartImage || !tartImageDigest || !/^[-a-z0-9./]+@sha256:[0-9a-f]{64}$/.test(tartImage)) return undefined;
+  if (!tartImage) return undefined;
+  const sourceDigest = tartImage.match(/@sha256:([0-9a-f]{64})$/)?.[1];
+  if (!orchestrator || !jobAgent || !imagePreparationScript || !tartImageDigest || !sourceDigest || tartImageDigest !== sourceDigest) return undefined;
   return { orchestrator, jobAgent, imagePreparationScript, tartImage, tartImageDigest };
 }
 
