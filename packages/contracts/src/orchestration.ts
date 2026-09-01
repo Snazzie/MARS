@@ -227,10 +227,12 @@ const workerCacheTtlSeconds = z.number().int().positive().safe();
 const RequiredWorkerCacheConfiguration = z.object({
   ttlSeconds: workerCacheTtlSeconds,
   runnerCacheEnabled: z.boolean(),
+  runnerCacheMaxGiB: z.number().int().positive().safe(),
 }).strict();
 export const WorkerCacheConfiguration = z.object({
   ttlSeconds: workerCacheTtlSeconds.default(172800),
   runnerCacheEnabled: z.boolean().default(true),
+  runnerCacheMaxGiB: z.number().int().positive().safe().default(20),
 }).strict();
 export type WorkerCacheConfiguration = z.infer<typeof WorkerCacheConfiguration>;
 const workerConfigurationShape = {
@@ -241,7 +243,7 @@ const workerConfigurationShape = {
 export const WorkerConfiguration = z.object({
   ...workerConfigurationShape,
   guestPlatforms: WorkerGuestPlatforms.default(["macos-arm64"]),
-  cache: WorkerCacheConfiguration.default({ ttlSeconds: 172800, runnerCacheEnabled: true }),
+  cache: WorkerCacheConfiguration.default({ ttlSeconds: 172800, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 }),
 }).strict();
 export type WorkerConfiguration = z.infer<typeof WorkerConfiguration>;
 export const WorkerObservedConfiguration = z.object({

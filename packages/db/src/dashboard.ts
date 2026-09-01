@@ -313,6 +313,8 @@ function workerCache(row: Record<string, unknown>): WorkerCacheSummary {
   const cache = desiredObject.cache && typeof desiredObject.cache === "object" ? desiredObject.cache as Record<string, unknown> : {};
   return WorkerCacheSummary.parse({
     desiredTtlSeconds: Number(cache.ttlSeconds ?? 172800),
+    desiredRunnerCacheEnabled: cache.runnerCacheEnabled !== false,
+    desiredRunnerCacheMaxGiB: Number(cache.runnerCacheMaxGiB ?? 20),
     effectiveTtlSeconds: row.cacheTtlSeconds == null ? null : Number(row.cacheTtlSeconds),
     ready: row.cacheReady === true,
     proxyOrigin: row.cacheProxyOrigin == null ? null : String(row.cacheProxyOrigin),

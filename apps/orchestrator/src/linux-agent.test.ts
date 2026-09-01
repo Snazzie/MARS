@@ -15,7 +15,7 @@ const command: WorkerCommand = {
     appliance: { vcpu: 8, memoryBytes: 16_000, storageBytes: 64_000 },
     runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_000, maxStorageBytesPerPod: 16_000, maxConcurrentPods: 4 },
     guestPlatforms: ["linux-x64"],
-    cache: { ttlSeconds: 7200, runnerCacheEnabled: false },
+    cache: { ttlSeconds: 7200, runnerCacheEnabled: false, runnerCacheMaxGiB: 12 },
     revision: "a".repeat(64),
     fingerprint: "b".repeat(64),
   },
@@ -23,24 +23,26 @@ const command: WorkerCommand = {
 
 describe("Linux worker.configure", () => {
   test("applies TTL and runner cache state before acknowledging the observed configuration", async () => {
-    const resources = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }, cache: { ttlSeconds: 60, runnerCacheEnabled: true } };
+    const resources = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }, cache: { ttlSeconds: 60, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 } };
     let release!: () => void;
     const applied = new Promise<void>((resolve) => { release = resolve; });
     const enabledStates: boolean[] = [];
-    const result = applyLinuxWorkerConfigure(command, resources, { applyTtl: () => applied, setRunnerCacheEnabled: (enabled) => enabledStates.push(enabled) });
-    expect(resources.cache).toEqual({ ttlSeconds: 60, runnerCacheEnabled: true });
+    const maxCaps: number[] = [];
+    const result = applyLinuxWorkerConfigure(command, resources, { applyTtl: () => applied, setRunnerCacheEnabled: (enabled) => enabledStates.push(enabled), setRunnerCacheMaxGiB: (maxGiB) => maxCaps.push(maxGiB) });
+    expect(resources.cache).toEqual({ ttlSeconds: 60, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 });
     release();
     const event = await result;
     expect(enabledStates).toEqual([false]);
-    expect(resources).toEqual({ appliance: { vcpu: 8, memoryBytes: 16_000, storageBytes: 64_000 }, runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_000, maxStorageBytesPerPod: 16_000, maxConcurrentPods: 4 }, cache: { ttlSeconds: 7200, runnerCacheEnabled: false } });
+    expect(maxCaps).toEqual([12]);
+    expect(resources).toEqual({ appliance: { vcpu: 8, memoryBytes: 16_000, storageBytes: 64_000 }, runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_000, maxStorageBytesPerPod: 16_000, maxConcurrentPods: 4 }, cache: { ttlSeconds: 7200, runnerCacheEnabled: false, runnerCacheMaxGiB: 12 } });
     expect(event.type).toBe("worker.configured");
     expect(event.workerId).toBe(workerId);
     expect(event.payload).toEqual({ commandId: command.id, workerId, revision: "a".repeat(64), observed: { appliance: resources.appliance, runtime: resources.runtime, guestPlatforms: ["linux-x64"], cache: resources.cache } });
   });
 
   test("consumes only worker.configure", async () => {
-    const resources = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }, cache: { ttlSeconds: 60, runnerCacheEnabled: true } };
-    await expect(handleLinuxWorkerCommand({ ...command, type: "doctor" }, resources, { applyTtl: async () => {}, setRunnerCacheEnabled: () => {} })).rejects.toThrow("unsupported worker command");
+    const resources = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }, cache: { ttlSeconds: 60, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 } };
+    await expect(handleLinuxWorkerCommand({ ...command, type: "doctor" }, resources, { applyTtl: async () => {}, setRunnerCacheEnabled: () => {}, setRunnerCacheMaxGiB: () => {} })).rejects.toThrow("unsupported worker command");
   });
 });
 
@@ -48,8 +50,8 @@ test("purges only the runner cache and acknowledges after completion", async () 
   let purges = 0;
   const result = await handleLinuxWorkerCommand(
     { ...command, id: "00000000-0000-4000-8000-000000000003", type: "worker.runner_cache_purge", payload: { workerId } },
-    { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }, cache: { ttlSeconds: 60, runnerCacheEnabled: true } },
-    { applyTtl: async () => {}, setRunnerCacheEnabled: () => {}, purgeRunnerCache: async () => { purges += 1; } },
+    { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }, cache: { ttlSeconds: 60, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 } },
+    { applyTtl: async () => {}, setRunnerCacheEnabled: () => {}, setRunnerCacheMaxGiB: () => {}, purgeRunnerCache: async () => { purges += 1; } },
   );
   expect(purges).toBe(1);
   expect(result.type).toBe("command.accepted");

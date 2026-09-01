@@ -29,12 +29,13 @@ export async function applyWorkerConfigure(
   command: WorkerCommand,
   limits: MacWorkerLimits,
   cache: WorkerCacheConfiguration,
-  cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled">,
+  cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled" | "setRunnerCacheMaxGiB">,
 ): Promise<WorkerEvent> {
   const payload = WorkerConfigurePayload.parse(command.payload);
   const observed = WorkerObservedConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms, cache: payload.cache });
   await cacheService.applyTtl(observed.cache.ttlSeconds);
   cacheService.setRunnerCacheEnabled(observed.cache.runnerCacheEnabled);
+  cacheService.setRunnerCacheMaxGiB(observed.cache.runnerCacheMaxGiB);
   Object.assign(limits, payload.runtime);
   Object.assign(cache, observed.cache);
   return workerEvent(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed });
@@ -139,7 +140,7 @@ export function startMacLeaseLifecycle(
   active.set(bootstrap.leaseId, lifecycle);
   return lifecycle;
 }
-export async function handleMacWorkerCommand(command: WorkerCommand, driver: TartVmDriver, limits?: MacWorkerLimits, encryptionPrivateKey?: string, cache?: WorkerCacheConfiguration, cacheService?: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled"> & Partial<Pick<ActionCacheService, "purgeRunnerCache">>): Promise<WorkerEvent> {
+export async function handleMacWorkerCommand(command: WorkerCommand, driver: TartVmDriver, limits?: MacWorkerLimits, encryptionPrivateKey?: string, cache?: WorkerCacheConfiguration, cacheService?: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled" | "setRunnerCacheMaxGiB"> & Partial<Pick<ActionCacheService, "purgeRunnerCache">>): Promise<WorkerEvent> {
   if (command.type === "worker.runner_cache_purge") {
     const payload = WorkerRunnerCachePurgePayload.parse(command.payload);
     if (payload.workerId !== command.workerId || command.leaseId !== null || !cacheService?.purgeRunnerCache) throw new Error("runner cache purge command invalid");
@@ -390,7 +391,7 @@ export async function runWorkerJoin(platform: "macos-arm64" | "windows-x64", bas
 }
 export async function runMacWorker(baseUrl: string, limits: MacWorkerLimits, cache = WorkerCacheConfiguration.parse({})): Promise<never> {
   const controlPlane = validateControlPlaneUrl(baseUrl);
-  const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: cache.ttlSeconds, runnerCacheEnabled: cache.runnerCacheEnabled });
+  const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: cache.ttlSeconds, runnerCacheEnabled: cache.runnerCacheEnabled, runnerCacheMaxGiB: cache.runnerCacheMaxGiB });
   try {
     const driver = new TartVmDriver(createTartVmRuntime(), Bun.env.MARS_TART_BASE_IMAGE ?? "mars-macos-worker", "mars-job", limits, Bun.env.MARS_TART_IMAGE_DIGEST ?? Bun.env.MARS_TART_BASE_IMAGE ?? "mars-macos-worker");
     let identity = await loadMacWorkerIdentity();

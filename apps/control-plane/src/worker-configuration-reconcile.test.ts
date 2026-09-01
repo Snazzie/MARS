@@ -6,7 +6,7 @@ const desired = {
   appliance: { vcpu: 10, memoryBytes: 10 * 1024 ** 3, storageBytes: 30 * 1024 ** 3 },
   runtime: { maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 },
   guestPlatforms: ["windows-x64"],
-  cache: { ttlSeconds: 86400 },
+  cache: { ttlSeconds: 86400, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 },
 };
 
 function database(rows: { desiredConfiguration: unknown; configurationRevision: string | null; appliedConfigurationRevision?: string | null; configurationCommandId: string | null }, command: unknown[] = []) {
@@ -48,7 +48,7 @@ test("creates one applying command from durable desired state after reconnect", 
   expect(fixture.queries.some(query => query.includes("insert into commands"))).toBe(true);
   expect(fixture.values.flat()).toContain("worker.configure");
   expect(fixture.queries.some(query => query.includes("configuration_state='applying'"))).toBe(true);
-  expect(fixture.values.flat()).toContainEqual(expect.objectContaining({ cache: { ttlSeconds: 86400 } }));
+  expect(fixture.values.flat()).toContainEqual(expect.objectContaining({ cache: { ttlSeconds: 86400, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 } }));
 });
 
 test("reuses a pending command for the desired revision", async () => {

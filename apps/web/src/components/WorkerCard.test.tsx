@@ -35,6 +35,8 @@ const workerFixture = (overrides: Partial<WorkerDetail> = {}): WorkerDetail => (
 });
 type WorkerCacheSummary = {
   desiredTtlSeconds: number;
+  desiredRunnerCacheEnabled: boolean;
+  desiredRunnerCacheMaxGiB: number;
   effectiveTtlSeconds: number | null;
   ready: boolean;
   proxyOrigin: string | null;
@@ -47,6 +49,8 @@ type WorkerCacheSummary = {
 
 const cacheFixture = (overrides: Partial<WorkerCacheSummary> = {}): WorkerCacheSummary => ({
   desiredTtlSeconds: 172800,
+  desiredRunnerCacheEnabled: true,
+  desiredRunnerCacheMaxGiB: 20,
   effectiveTtlSeconds: 172800,
   ready: true,
   proxyOrigin: "https://worker.example.test",
@@ -81,6 +85,73 @@ test("keeps the cache inventory affordance for populated caches", () => {
   const markup = renderCard(cacheWorkerFixture({}, cacheFixture({ entryCount: 1 })));
   expect(markup).toContain("Browse cache inventory");
 });
+test("confirms runner cache purge and shows success feedback", async () => {
+  const browser = new Window();
+  // @ts-expect-error test DOM globals
+  globalThis.document = browser.document;
+  // @ts-expect-error test DOM globals
+  globalThis.window = browser;
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const originalFetch = globalThis.fetch;
+  const originalConfirm = window.confirm;
+  let requested = 0;
+  let confirmation = "";
+  window.confirm = (message) => { confirmation = message ?? ""; return true; };
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).endsWith("/cache/purge")) {
+      requested += 1;
+      return new Response(JSON.stringify({ workerId: "86afd915-add3-407c-a6c1-1b46803ef713", commandId: "00000000-0000-4000-8000-000000000001" }), { status: 202 });
+    }
+    return new Response("unavailable", { status: 503 });
+  }) as unknown as typeof fetch;
+  try {
+    await act(async () => { root.render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><WorkerCard worker={cacheWorkerFixture()} organizationId="all" onChange={() => {}} canManage /></QueryClientProvider>); });
+    const button = Array.from(container.querySelectorAll("button")).find((candidate) => candidate.textContent?.includes("Purge runner cache"))!;
+    await act(async () => { button.click(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(confirmation).toContain("Purge runner cache");
+    expect(requested).toBe(1);
+    expect(container.textContent).toContain("Runner cache purge requested.");
+  } finally {
+    globalThis.fetch = originalFetch;
+    window.confirm = originalConfirm;
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});
+
+test("shows runner cache purge failure feedback", async () => {
+  const browser = new Window();
+  // @ts-expect-error test DOM globals
+  globalThis.document = browser.document;
+  // @ts-expect-error test DOM globals
+  globalThis.window = browser;
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const originalFetch = globalThis.fetch;
+  const originalConfirm = window.confirm;
+  window.confirm = () => true;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).endsWith("/cache/purge")) return new Response(JSON.stringify({ code: "worker_unavailable", message: "Worker command dispatch is unavailable", requestId: "00000000-0000-4000-8000-000000000002" }), { status: 503 });
+    return new Response("unavailable", { status: 503 });
+  }) as unknown as typeof fetch;
+  try {
+    await act(async () => { root.render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><WorkerCard worker={cacheWorkerFixture()} organizationId="all" onChange={() => {}} canManage /></QueryClientProvider>); });
+    const button = Array.from(container.querySelectorAll("button")).find((candidate) => candidate.textContent?.includes("Purge runner cache"))!;
+    await act(async () => { button.click(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(Array.from(container.querySelectorAll('[role="alert"]')).some((alert) => alert.textContent?.includes("Worker command dispatch is unavailable"))).toBe(true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    window.confirm = originalConfirm;
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});
+
 
 test("lazy-loads a searchable paginated cache inventory", async () => {
   const browser = new Window();
@@ -171,7 +242,7 @@ test("shows applying configuration until the desired revision is acknowledged", 
   const worker = workerFixture({ configurationState: "applying", configurationRevision: "b".repeat(64), doctor: { egress: true } });
   const markup = renderCard(worker);
   expect(markup).toContain("Applying configuration");
-  expect(markup).toContain("Runtime checks pass");
+  expect(markup).toContain("Live worker health");
   expect(markup).not.toContain("Ready for dispatch");
   expect(markup).not.toContain("Configuration updated");
 });

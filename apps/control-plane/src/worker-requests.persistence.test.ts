@@ -138,6 +138,6 @@ test("stores desired configuration and waits for acknowledgement", async () => {
   const updateValues = parameters[queries.indexOf(update!)];
   expect(updateValues).toContainEqual(configuration.runtime);
   expect(updateValues).toContainEqual(configuration.guestPlatforms);
-  expect(parameters.flat()).toContainEqual(expect.objectContaining({ cache: { ttlSeconds: 3600 } }));
+  expect(parameters.flat()).toContainEqual(expect.objectContaining({ cache: { ttlSeconds: 3600, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 } }));
   expect(updateValues.some(value => typeof value === "string" && (value.startsWith("{") || value.startsWith("[")))).toBe(false);
 });

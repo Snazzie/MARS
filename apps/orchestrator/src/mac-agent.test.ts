@@ -20,22 +20,24 @@ test("awaits the live cache TTL before acknowledging macOS worker configuration"
       appliance: { vcpu: 8, memoryBytes: 16_000, storageBytes: 64_000 },
       runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_000, maxStorageBytesPerPod: 16_000, maxConcurrentPods: 4 },
       guestPlatforms: ["macos-arm64"],
-      cache: { ttlSeconds: 5400, runnerCacheEnabled: false },
+      cache: { ttlSeconds: 5400, runnerCacheEnabled: false, runnerCacheMaxGiB: 12 },
       revision: "a".repeat(64),
       fingerprint: "b".repeat(64),
     },
   };
   const limits = { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 };
-  const cache = { ttlSeconds: 60, runnerCacheEnabled: true };
+  const cache = { ttlSeconds: 60, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 };
   let release!: () => void;
   const applied = new Promise<void>((resolve) => { release = resolve; });
   const enabledStates: boolean[] = [];
-  const result = applyWorkerConfigure(command, limits, cache, { applyTtl: () => applied, setRunnerCacheEnabled: (enabled) => enabledStates.push(enabled) });
-  expect(cache).toEqual({ ttlSeconds: 60, runnerCacheEnabled: true });
+  const maxCaps: number[] = [];
+  const result = applyWorkerConfigure(command, limits, cache, { applyTtl: () => applied, setRunnerCacheEnabled: (enabled) => enabledStates.push(enabled), setRunnerCacheMaxGiB: (maxGiB) => maxCaps.push(maxGiB) });
+  expect(cache).toEqual({ ttlSeconds: 60, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 });
   release();
   const configured = await result;
   expect(enabledStates).toEqual([false]);
-  expect(cache).toEqual({ ttlSeconds: 5400, runnerCacheEnabled: false });
+  expect(maxCaps).toEqual([12]);
+  expect(cache).toEqual({ ttlSeconds: 5400, runnerCacheEnabled: false, runnerCacheMaxGiB: 12 });
   expect(configured.payload).toEqual({
     commandId: command.id,
     workerId,
@@ -44,7 +46,7 @@ test("awaits the live cache TTL before acknowledging macOS worker configuration"
       appliance: command.payload.appliance,
       runtime: command.payload.runtime,
       guestPlatforms: ["macos-arm64"],
-      cache: { ttlSeconds: 5400, runnerCacheEnabled: false },
+      cache: { ttlSeconds: 5400, runnerCacheEnabled: false, runnerCacheMaxGiB: 12 },
     },
   });
 });
@@ -53,7 +55,7 @@ test("purges the macOS runner cache before acknowledging", async () => {
   const workerId = "00000000-0000-4000-8000-000000000001";
   const command: WorkerCommand = { version: 1, id: "00000000-0000-4000-8000-000000000003", type: "worker.runner_cache_purge", workerId, leaseId: null, occurredAt: "2026-08-23T00:00:00.000Z", payload: { workerId } };
   let purges = 0;
-  const result = await handleMacWorkerCommand(command, {} as never, undefined, undefined, undefined, { applyTtl: async () => {}, setRunnerCacheEnabled: () => {}, purgeRunnerCache: async () => { purges += 1; } });
+  const result = await handleMacWorkerCommand(command, {} as never, undefined, undefined, undefined, { applyTtl: async () => {}, setRunnerCacheEnabled: () => {}, setRunnerCacheMaxGiB: () => {}, purgeRunnerCache: async () => { purges += 1; } });
   expect(purges).toBe(1);
   expect(result.type).toBe("command.accepted");
   expect(result.payload).toEqual({ commandId: command.id, leaseId: null });

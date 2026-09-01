@@ -163,19 +163,33 @@ test("parses an immutable worker-local image build request", () => {
   expect(WorkerBuildImagePayload.safeParse({ ...payload, contentSha256: "mutable" }).success).toBe(false);
 });
 
-test("defaults omitted runner cache enablement to true", () => {
+test("defaults omitted runner cache settings", () => {
   const configuration = orchestration.WorkerConfiguration.parse({
     appliance: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
     runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 3, maxConcurrentPods: 1 },
     guestPlatforms: ["linux-x64"],
   });
-  expect(configuration.cache).toEqual({ ttlSeconds: 172800, runnerCacheEnabled: true });
+  expect(configuration.cache).toEqual({ ttlSeconds: 172800, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 });
   expect(orchestration.WorkerConfiguration.parse({
     appliance: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
     runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 3, maxConcurrentPods: 1 },
     guestPlatforms: ["linux-x64"],
     cache: { ttlSeconds: 3600 },
-  }).cache).toEqual({ ttlSeconds: 3600, runnerCacheEnabled: true });
+  }).cache).toEqual({ ttlSeconds: 3600, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 });
+});
+
+test("parses explicit runner cache settings and rejects invalid caps", () => {
+  expect(orchestration.WorkerConfiguration.parse({
+    appliance: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
+    runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 3, maxConcurrentPods: 1 },
+    guestPlatforms: ["linux-x64"],
+    cache: { ttlSeconds: 3600, runnerCacheEnabled: false, runnerCacheMaxGiB: 7 },
+  }).cache).toEqual({ ttlSeconds: 3600, runnerCacheEnabled: false, runnerCacheMaxGiB: 7 });
+  expect(orchestration.WorkerCacheConfiguration.safeParse({ runnerCacheMaxGiB: 0 }).success).toBe(false);
+  expect(orchestration.WorkerCacheConfiguration.safeParse({ runnerCacheMaxGiB: 1.5 }).success).toBe(false);
+  expect(orchestration.WorkerCacheConfiguration.safeParse({ runnerCacheMaxGiB: Number.MAX_SAFE_INTEGER + 1 }).success).toBe(false);
+  expect(orchestration.WorkerCacheConfiguration.safeParse({ ttlSeconds: 0 }).success).toBe(false);
+  expect(orchestration.WorkerCacheConfiguration.safeParse({ ttlSeconds: 1, extra: true }).success).toBe(false);
 });
 
 test("parses an explicitly disabled runner cache", () => {
@@ -183,13 +197,11 @@ test("parses an explicitly disabled runner cache", () => {
     appliance: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
     runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 3, maxConcurrentPods: 1 },
     guestPlatforms: ["linux-x64"],
-    cache: { ttlSeconds: 3600, runnerCacheEnabled: false },
-  }).cache).toEqual({ ttlSeconds: 3600, runnerCacheEnabled: false });
-  expect(orchestration.WorkerCacheConfiguration.safeParse({ ttlSeconds: 0 }).success).toBe(false);
-  expect(orchestration.WorkerCacheConfiguration.safeParse({ ttlSeconds: 1, extra: true }).success).toBe(false);
+    cache: { ttlSeconds: 3600, runnerCacheEnabled: false, runnerCacheMaxGiB: 20 },
+  }).cache).toEqual({ ttlSeconds: 3600, runnerCacheEnabled: false, runnerCacheMaxGiB: 20 });
 });
 
-test("requires runner cache enablement in observed configuration", () => {
+test("requires runner cache settings in observed configuration", () => {
   const observed = {
     appliance: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
     runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 3, maxConcurrentPods: 1 },
@@ -200,9 +212,10 @@ test("requires runner cache enablement in observed configuration", () => {
     workerId: "22222222-2222-4222-8222-222222222222",
     revision: "a".repeat(64),
   };
-  expect(orchestration.WorkerConfiguredPayload.safeParse({ ...acknowledgement, observed: { ...observed, cache: { ttlSeconds: 172800 } } }).success).toBe(false);
-  expect(orchestration.WorkerConfiguredPayload.safeParse({ ...acknowledgement, observed: { ...observed, cache: { ttlSeconds: 172800, runnerCacheEnabled: true } } }).success).toBe(true);
+  expect(orchestration.WorkerConfiguredPayload.safeParse({ ...acknowledgement, observed: { ...observed, cache: { ttlSeconds: 172800, runnerCacheEnabled: true } } }).success).toBe(false);
+  expect(orchestration.WorkerConfiguredPayload.safeParse({ ...acknowledgement, observed: { ...observed, cache: { ttlSeconds: 172800, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 } } }).success).toBe(true);
 });
+
 
 test("keeps cache proxy material guest-only", () => {
   const cache = {

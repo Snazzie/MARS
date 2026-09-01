@@ -88,7 +88,12 @@ export async function approvePendingWorker(db: Sql<{}>, workerId: string, input:
     await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.approved',${jsonParameter(tx, { workerId, limits: parsed.limits })}::jsonb)`;
   });
 }
-export type WorkerConfigurationInput = { appliance: { vcpu: number; memoryBytes: number; storageBytes: number }; runtime: { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number }; guestPlatforms?: GuestPlatform[]; cache?: { ttlSeconds: number } };
+export type WorkerConfigurationInput = {
+  appliance: { vcpu: number; memoryBytes: number; storageBytes: number };
+  runtime: { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
+  guestPlatforms?: GuestPlatform[];
+  cache?: { ttlSeconds?: number; runnerCacheEnabled?: boolean; runnerCacheMaxGiB?: number };
+};
 function canonical(value: unknown): string { if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`; if (value && typeof value === "object") return `{${Object.entries(value).sort(([a],[b]) => a.localeCompare(b)).map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`).join(",")}}`; return JSON.stringify(value); }
 export async function configurePendingWorker(db: Sql<{}>, workerId: string, configuration: WorkerConfigurationInput, adminId: string, dispatcher?: WorkerCommandDispatcher, idempotencyKey?: string): Promise<{ revision: string; fingerprint: string; commandId?: string }> {
   const parsed = WorkerConfiguration.parse({ ...configuration, guestPlatforms: configuration.guestPlatforms ?? ["macos-arm64"] });

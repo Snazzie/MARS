@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import type { DashboardWorkerCacheEntry, WorkerDetail } from "@mars/contracts";
-import { getWorkerCache, setWorkerLeasePreservation } from "../api.ts";
+import { getWorkerCache, purgeWorkerCache, setWorkerLeasePreservation } from "../api.ts";
 import { Button } from "@astryxdesign/core/Button";
 import { WorkerActions } from "./WorkerActions.tsx";
 import { WorkerConfigurationForm } from "./WorkerConfigurationForm.tsx";
@@ -69,9 +69,23 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
     catch (cause) { setPreservationError(cause instanceof Error ? cause.message : "Preservation setting failed"); }
     finally { setPreservationPending(false); }
   };
+  const [purgePending, setPurgePending] = useState(false);
+  const [purgeError, setPurgeError] = useState<string | null>(null);
+  const [purgeSuccess, setPurgeSuccess] = useState(false);
+  const purge = async () => {
+    if (!window.confirm("Purge runner cache for this worker?")) return;
+    setPurgePending(true);
+    setPurgeError(null);
+    setPurgeSuccess(false);
+    try { await purgeWorkerCache(worker.id); setPurgeSuccess(true); onChange(); }
+    catch (cause) { setPurgeError(cause instanceof Error ? cause.message : "Runner cache purge failed."); }
+    finally { setPurgePending(false); }
+  };
   const effectiveConfigurationState = worker.configurationState === "ready" && worker.configurationRevision !== worker.appliedConfigurationRevision ? "applying" : worker.configurationState;
   const runtimeReady = worker.doctor?.runtimeReady === true && worker.doctor.probe === true && worker.doctor.egress === true && worker.doctor.imageSignatures === true;
   const cache = worker.cache;
+  const desiredRunnerCacheEnabled = cache && typeof cache === "object" && "runnerCacheEnabled" in cache && typeof cache.runnerCacheEnabled === "boolean" ? cache.runnerCacheEnabled : true;
+  const desiredRunnerCacheMaxGiB = cache && typeof cache === "object" && "runnerCacheMaxGiB" in cache && typeof cache.runnerCacheMaxGiB === "number" ? cache.runnerCacheMaxGiB : 20;
   const [cacheInventoryOpen, setCacheInventoryOpen] = useState(false);
   const readinessLabel = workerReadinessLabel(effectiveConfigurationState);
   const applied = worker.appliedConfigurationRevision && worker.configurationAppliedAt
@@ -113,9 +127,8 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
     {active && effectiveConfigurationState === "ready" && !runtimeReady && worker.doctor?.runtimeBuildState !== "building" && <p className="pending-note" role="status">Runtime image is not ready. Scheduling remains paused until the worker reports a verified local runtime.</p>}
     {active && effectiveConfigurationState === "error" && <p className="pending-note" role="alert">Configuration update failed.{applied ? <> Last applied <time dateTime={worker.configurationAppliedAt!}>{applied.at}</time> · revision <code>{applied.revision}</code>.</> : " No configuration has been acknowledged."}</p>}
     <WorkerHealthSection worker={worker} />
-    {active && <section className="worker-section worker-cache-panel" aria-label="Cache inventory"><div className="panel-kicker">Cache inventory</div>{cache?.ready && cache.entryCount > 0 ? <details onToggle={(event) => setCacheInventoryOpen(event.currentTarget.open)}><summary>Browse cache inventory</summary>{cacheInventoryOpen && cacheInventory(worker.id)}</details> : <p className="muted">{cache?.ready ? "No cache entries." : "Cache inventory unavailable."}</p>}</section>}
+    {active && <section className="worker-section worker-cache-panel" aria-label="Cache inventory"><div className="panel-kicker">Cache inventory</div>{cache?.ready && cache.entryCount > 0 ? <details onToggle={(event) => setCacheInventoryOpen(event.currentTarget.open)}><summary>Browse cache inventory</summary>{cacheInventoryOpen && cacheInventory(worker.id)}</details> : <p className="muted">{cache?.ready ? "No cache entries." : "Cache inventory unavailable."}</p>}{canManage && <div className="worker-cache-actions"><button type="button" className="control-button" onClick={() => { void purge(); }} disabled={purgePending}>{purgePending ? "Purging runner cache…" : "Purge runner cache"}</button>{purgeSuccess && <p role="status" className="pending-note">Runner cache purge requested.</p>}{purgeError && <p role="alert" className="form-error">Runner cache purge failed: {purgeError}</p>}</div>}</section>}
     {building && <dialog open className="worker-config-dialog" aria-label="Build local runtime image"><WorkerImageBuildForm organizationId={organizationId} workerId={worker.id} onComplete={() => { setBuilding(false); onChange(); }} onCancel={() => setBuilding(false)} /></dialog>}
-    {active && <WorkerDoctor doctor={worker.doctor} platform={worker.platform} dispatchReady={effectiveConfigurationState === "ready" && runtimeReady} />}
-    <dialog ref={dialog} className="worker-config-dialog" onCancel={closeConfiguration} aria-label="Configure worker">{configuring && <WorkerConfigurationForm worker={{ id: worker.id, admissionState: worker.admissionState, platform: worker.platform, guestPlatforms: worker.guestPlatforms, draining: worker.draining, activeSandboxes: worker.activeSandboxes, capacity: capacityData, limits: worker.limits, desiredCacheTtlSeconds: cache?.desiredTtlSeconds }} organizationId={organizationId} onConfigured={() => { closeConfiguration(); onChange(); }} />}</dialog>
+    <dialog ref={dialog} className="worker-config-dialog" onCancel={closeConfiguration} aria-label="Configure worker">{configuring && <WorkerConfigurationForm worker={{ id: worker.id, admissionState: worker.admissionState, platform: worker.platform, guestPlatforms: worker.guestPlatforms, draining: worker.draining, activeSandboxes: worker.activeSandboxes, capacity: capacityData, limits: worker.limits, desiredCacheTtlSeconds: cache?.desiredTtlSeconds, desiredRunnerCacheEnabled, desiredRunnerCacheMaxGiB }} organizationId={organizationId} onConfigured={() => { closeConfiguration(); onChange(); }} />}</dialog>
   </article>;
 }

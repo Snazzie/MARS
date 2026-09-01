@@ -106,7 +106,7 @@ test("purge removes package rows and objects, is idempotent, and preserves unrel
     expect(await Bun.file(unrelatedPath).text()).toBe("actions");
     const db = new Database(join(root, "packages", "cache.sqlite"), { readonly: true });
     try {
-      expect(Number(db.query("SELECT COUNT(*) AS count FROM package_entries").get()?.count ?? 0)).toBe(0);
+      expect(Number(db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM package_entries").get()?.count ?? 0)).toBe(0);
     } finally {
       db.close();
     }
@@ -145,6 +145,30 @@ test("a fill started before purge cannot publish after purge", async () => {
     expect(calls).toBe(2);
   } finally {
     release();
+    await cache.close();
+  }
+});
+test("enforces the byte cap with least-recently-used ready eviction", async () => {
+  const root = await temporaryRoot();
+  const body = new Uint8Array([1, 2, 3]);
+  const cache = await openPackageDownloadCache({
+    root,
+    ttlSeconds: 60,
+    upstream: async (request, response) => {
+      response.writeHead(200, { "content-type": "application/octet-stream", "content-length": String(body.byteLength) });
+      response.end(Buffer.from([Number(request.url?.includes("two") ? 2 : request.url?.includes("three") ? 3 : 1), ...body.slice(1)]));
+    },
+  });
+  try {
+    cache.setMaxBytes(6n);
+    await request(cache, "/one/-/one-1.0.0.tgz");
+    await request(cache, "/two/-/two-1.0.0.tgz");
+    expect(await readdir(join(root, "packages", "objects"))).toHaveLength(2);
+    expect((await request(cache, "/one/-/one-1.0.0.tgz")).response.headers.get("x-mars-package-cache")).toBe("HIT");
+    await request(cache, "/three/-/three-1.0.0.tgz");
+    expect((await request(cache, "/one/-/one-1.0.0.tgz")).response.headers.get("x-mars-package-cache")).toBe("HIT");
+    expect((await request(cache, "/two/-/two-1.0.0.tgz")).response.headers.get("x-mars-package-cache")).toBe("MISS");
+  } finally {
     await cache.close();
   }
 });

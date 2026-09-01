@@ -51,6 +51,9 @@ export type PackageUpstreamHandler = (request: IncomingMessage, response: Server
 function requireTtl(ttlSeconds: number): void {
   if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds <= 0) throw new Error("cache TTL must be a positive safe integer");
 }
+function requireMaxBytes(maxBytes: bigint): void {
+  if (typeof maxBytes !== "bigint" || maxBytes <= 0n) throw new Error("runner cache size cap must be a positive bigint");
+}
 
 function hostFor(request: IncomingMessage): string {
   const value = request.headers.host;
@@ -203,6 +206,7 @@ export interface PackageDownloadCache {
   handle(request: IncomingMessage, response: ServerResponse): Promise<void>;
   applyTtl(ttlSeconds: number): Promise<void>;
   setEnabled(enabled: boolean): void;
+  setMaxBytes(maxBytes: bigint): void;
   purge(): Promise<void>;
   sweep(): Promise<void>;
   probe(): Promise<void>;
@@ -220,6 +224,8 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
   readonly #flights = new Map<string, Promise<FillResult>>();
   readonly #activeFills = new Set<Promise<FillResult>>();
   #ttlSeconds: number;
+  #maxBytes = 20n * 1024n ** 3n;
+  #eviction: Promise<void> | null = null;
   #enabled = true;
   #generation = 0;
   #closed = false;
@@ -241,13 +247,31 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
   #row(canonicalUrl: string): PackageEntry | null {
     return this.#db.query<PackageEntry, [string]>(`SELECT url_hash AS urlHash,canonical_url AS canonicalUrl,object_path_id AS objectPathId,state,response_headers AS responseHeaders,size_bytes AS sizeBytes,created_at AS createdAt,last_accessed_at AS lastAccessedAt,expires_at AS expiresAt FROM package_entries WHERE url_hash=?`).get(hash(canonicalUrl)) ?? null;
   }
-
   async #evict(row: PackageEntry): Promise<void> {
     try {
       this.#db.query("UPDATE package_entries SET state='deleting' WHERE url_hash=? AND state IN ('ready','deleting')").run(row.urlHash);
       await rm(this.#objectPath(row.objectPathId), { force: true });
       this.#db.query("DELETE FROM package_entries WHERE url_hash=? AND state='deleting'").run(row.urlHash);
     } catch { /* leave deleting rows for a later sweep */ }
+  }
+
+  async #enforceMaxBytes(): Promise<void> {
+    const previous = this.#eviction;
+    let next!: Promise<void>;
+    next = (previous ?? Promise.resolve()).catch(() => undefined).then(async () => {
+      let total = BigInt(String(this.#db.query<{ total: string | number }, []>("SELECT COALESCE(SUM(CAST(size_bytes AS INTEGER)), 0) AS total FROM package_entries WHERE state='ready'").get()?.total ?? 0));
+      if (total <= this.#maxBytes) return;
+      const rows = this.#db.query<PackageEntry, []>(`SELECT url_hash AS urlHash,canonical_url AS canonicalUrl,object_path_id AS objectPathId,state,response_headers AS responseHeaders,size_bytes AS sizeBytes,created_at AS createdAt,last_accessed_at AS lastAccessedAt,expires_at AS expiresAt FROM package_entries WHERE state='ready' ORDER BY last_accessed_at ASC,created_at ASC`).all();
+      for (const row of rows) {
+        if (total <= this.#maxBytes) break;
+        await this.#evict(row);
+        total -= BigInt(row.sizeBytes);
+      }
+    }).finally(() => {
+      if (this.#eviction === next) this.#eviction = null;
+    });
+    this.#eviction = next;
+    await next;
   }
 
   async #hit(canonicalUrl: string, response: ServerResponse): Promise<boolean> {
@@ -296,11 +320,13 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
         return false;
       }
       this.#db.query("UPDATE package_entries SET state='ready' WHERE url_hash=? AND state='filling'").run(urlHash);
-      return true;
+      await this.#enforceMaxBytes();
+      const retained = this.#row(canonicalUrl);
+      return retained?.state === "ready";
     } catch {
       await rm(stagingPath, { force: true }).catch(() => undefined);
       await rm(objectPath, { force: true }).catch(() => undefined);
-      try { this.#db.query("DELETE FROM package_entries WHERE url_hash=? AND state='filling'").run(urlHash); } catch { /* fail-open */ }
+      try { this.#db.query("DELETE FROM package_entries WHERE url_hash=? AND state IN ('filling','ready')").run(urlHash); } catch { /* fail-open */ }
       return false;
     }
   }
@@ -364,6 +390,12 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
     this.#assertOpen();
     this.#enabled = enabled;
   }
+  setMaxBytes(maxBytes: bigint): void {
+    this.#assertOpen();
+    requireMaxBytes(maxBytes);
+    this.#maxBytes = maxBytes;
+    void this.#enforceMaxBytes().catch(() => undefined);
+  }
 
   async purge(): Promise<void> {
     this.#assertOpen();
@@ -376,8 +408,8 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
       this.#db.exec("ROLLBACK");
       throw error;
     }
-    let files: string[];
-    try { files = await readdir(this.#objects); } catch { return; }
+    let files: string[] = [];
+    try { files = await readdir(this.#objects); } catch { /* retry next sweep */ }
     await Promise.all(files.map((fileName) => rm(join(this.#objects, fileName), { force: true })));
   }
 
@@ -391,11 +423,12 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
     const cutoff = new Date(now.getTime() - FILL_MAX_AGE_MS).toISOString();
     this.#db.query("DELETE FROM package_entries WHERE state='filling' AND created_at<?").run(cutoff);
     let files: string[] = [];
-    try { files = await readdir(this.#staging); } catch { return; }
+    try { files = await readdir(this.#staging); } catch { /* retry next sweep */ }
     for (const fileName of files) {
       const filePath = join(this.#staging, fileName);
       try { if ((await stat(filePath)).mtimeMs < now.getTime() - FILL_MAX_AGE_MS) await rm(filePath, { force: true }); } catch { /* retry next sweep */ }
     }
+    await this.#enforceMaxBytes();
   }
 
   async probe(): Promise<void> {
@@ -420,6 +453,7 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
     if (this.#closed) return;
     this.#closed = true;
     await Promise.allSettled([...this.#activeFills]);
+    if (this.#eviction) await Promise.allSettled([this.#eviction]);
     this.#db.close(true);
   }
 }

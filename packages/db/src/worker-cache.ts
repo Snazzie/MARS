@@ -1,5 +1,5 @@
 import type { DatabaseClient } from "./index.ts";
-import type { DashboardWorkerCacheEntry, DashboardWorkerCachePage, WorkerCacheSummary } from "@mars/contracts";
+import { WorkerCacheSummary, type DashboardWorkerCacheEntry, type DashboardWorkerCachePage } from "@mars/contracts";
 
 type SqlDb = DatabaseClient;
 type CacheEntry = {
@@ -145,5 +145,6 @@ export async function listWorkerCacheEntries(db: SqlDb, workerId: string, option
 export async function getWorkerCacheSummary(db: SqlDb, workerId: string, desiredTtlSeconds = 172800): Promise<WorkerCacheSummary> {
   const [row] = await db<Record<string, unknown>[]>`SELECT desired_configuration AS "desiredConfiguration",s.generation,s.ready,s.ttl_seconds AS "ttlSeconds",s.proxy_origin AS "proxyOrigin",s.cache_base_url AS "cacheBaseUrl",s.size_bytes AS "sizeBytes",s.entry_count AS "entryCount",s.observed_at AS "observedAt",s.error FROM workers w LEFT JOIN worker_cache_status s ON s.worker_id=w.id WHERE w.id=${workerId}`;
   const desired = row?.desiredConfiguration && typeof row.desiredConfiguration === "object" ? (row.desiredConfiguration as Record<string, unknown>) : {};
-  return { desiredTtlSeconds: Number((desired.cache as Record<string, unknown> | undefined)?.ttlSeconds ?? desiredTtlSeconds), effectiveTtlSeconds: row?.ttlSeconds == null ? null : Number(row.ttlSeconds), ready: row?.ready === true, proxyOrigin: row?.proxyOrigin == null ? null : String(row.proxyOrigin), cacheBaseUrl: row?.cacheBaseUrl == null ? null : String(row.cacheBaseUrl), sizeBytes: decimal(row?.sizeBytes), entryCount: Number(row?.entryCount ?? 0), observedAt: row?.observedAt == null ? null : timestamp(row.observedAt), error: row?.error == null ? null : String(row.error) };
+  const cache = desired.cache && typeof desired.cache === "object" ? desired.cache as Record<string, unknown> : {};
+  return WorkerCacheSummary.parse({ desiredTtlSeconds: Number(cache.ttlSeconds ?? desiredTtlSeconds), desiredRunnerCacheEnabled: cache.runnerCacheEnabled !== false, desiredRunnerCacheMaxGiB: Number(cache.runnerCacheMaxGiB ?? 20), effectiveTtlSeconds: row?.ttlSeconds == null ? null : Number(row.ttlSeconds), ready: row?.ready === true, proxyOrigin: row?.proxyOrigin == null ? null : String(row.proxyOrigin), cacheBaseUrl: row?.cacheBaseUrl == null ? null : String(row.cacheBaseUrl), sizeBytes: decimal(row?.sizeBytes), entryCount: Number(row?.entryCount ?? 0), observedAt: row?.observedAt == null ? null : timestamp(row.observedAt), error: row?.error == null ? null : String(row.error) });
 }

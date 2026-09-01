@@ -33,6 +33,7 @@ export type StartActionCacheServiceOptions = {
   controlPlaneOrigin: string;
   ttlSeconds: number;
   runnerCacheEnabled?: boolean;
+  runnerCacheMaxGiB?: number;
   root?: string;
   proxyPort?: number;
   dataPort?: number;
@@ -51,6 +52,7 @@ export interface ActionCacheService {
   status(): WorkerCacheStatus;
   applyTtl(ttlSeconds: number): Promise<void>;
   setRunnerCacheEnabled(enabled: boolean): void;
+  setRunnerCacheMaxGiB(maxGiB: number): void;
   purgeRunnerCache(): Promise<void>;
   transport(leaseId: string, expiresAt: string): WorkerCacheProxy;
   unregisterLease(leaseId: string): void;
@@ -82,6 +84,10 @@ const ACTION_CACHE_HOSTS = [
 ] as const;
 const PACKAGE_CACHE_HOST = "registry.npmjs.org";
 const INTERCEPTED_TLS_HOSTS = [...ACTION_CACHE_HOSTS, PACKAGE_CACHE_HOST];
+function runnerCacheMaxBytes(maxGiB: number): bigint {
+  if (!Number.isSafeInteger(maxGiB) || maxGiB <= 0) throw new Error("runner cache size cap must be a positive safe integer GiB");
+  return BigInt(maxGiB) * 1024n ** 3n;
+}
 
 function normalizedHostnameFromHeader(host: string | undefined): string {
   try { return normalizedHostname(new URL(`https://${host ?? ""}`)).toLowerCase(); } catch { return ""; }
@@ -465,6 +471,11 @@ class PersistentActionCacheService implements ActionCacheService {
     this.#packageDownloadCache.setEnabled(enabled);
   }
 
+  setRunnerCacheMaxGiB(maxGiB: number): void {
+    if (this.#closed) throw new Error("action cache service is closed");
+    this.#packageDownloadCache.setMaxBytes(runnerCacheMaxBytes(maxGiB));
+  }
+
   async purgeRunnerCache(): Promise<void> {
     if (this.#closed) throw new Error("action cache service is closed");
     await this.#packageDownloadCache.purge();
@@ -539,6 +550,7 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
       upstream: options.forwardPackageRequest,
     });
     packageDownloadCache.setEnabled(options.runnerCacheEnabled ?? true);
+    packageDownloadCache.setMaxBytes(runnerCacheMaxBytes(options.runnerCacheMaxGiB ?? 20));
     await packageDownloadCache.probe();
     sweepHandle = (options.scheduleSweep ?? scheduleSweep)(async () => {
       try {

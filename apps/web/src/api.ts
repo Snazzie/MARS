@@ -172,6 +172,14 @@ export async function configureWorker(workerId: string, input: WorkerConfigurati
     body: JSON.stringify(input),
   });
 }
+const WorkerRunnerCachePurgeResponse = z.object({ workerId: z.string().min(1), commandId: z.string().uuid() }).strict();
+export function purgeWorkerCache(workerId: string) {
+  return request(`/api/workers/${workerId}/cache/purge`, WorkerRunnerCachePurgeResponse, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: "{}",
+  });
+}
 export function buildWorkerImage(workerId: string, spec: z.input<typeof WorkerImageBuildSpec>) {
   return request(`/api/workers/${workerId}/build-runtime`, DashboardBuildWorkerResponse, {
     method: "POST",
@@ -209,7 +217,7 @@ export type WorkerConfigurationInput = {
   appliance: z.infer<typeof WorkerConfiguration>["appliance"];
   runtime: z.infer<typeof WorkerConfiguration>["runtime"];
   guestPlatforms: z.infer<typeof WorkerConfiguration>["guestPlatforms"];
-  cache?: { ttlSeconds: number };
+  cache?: { ttlSeconds?: number; runnerCacheEnabled?: boolean; runnerCacheMaxGiB?: number };
 };
 export function getWorkerCache(workerId: string, { cursor, query = "", limit = 50 }: { cursor?: string | null; query?: string; limit?: number } = {}) {
   const params = new URLSearchParams();

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { ApiRequestError, configureWorker, getWorkerCache, getWorkerHealth, getWorkers } from "./api.ts";
+import { ApiRequestError, configureWorker, getWorkerCache, getWorkerHealth, getWorkers, purgeWorkerCache } from "./api.ts";
 import type { WorkerHealth } from "@mars/contracts";
 const workerHealth: WorkerHealth = {
   observedAt: "2026-08-23T12:00:00.000Z",
@@ -145,6 +145,26 @@ test("loads a worker cache inventory page with cursor, limit, and search", async
   try {
     await getWorkerCache("worker-1", { cursor: "next_page", query: "Acme", limit: 25 });
     expect(requested).toBe("/api/workers/worker-1/cache?cursor=next_page&limit=25&query=Acme");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+test("purges a worker runner cache through the authenticated endpoint", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested = "";
+  let method = "";
+  let idempotencyKey = "";
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    requested = String(input);
+    method = init?.method ?? "GET";
+    idempotencyKey = new Headers(init?.headers).get("Idempotency-Key") ?? "";
+    return new Response(JSON.stringify({ workerId: "worker-1", commandId: "00000000-0000-4000-8000-000000000001" }), { status: 202, headers: { "content-type": "application/json" } });
+  }) as unknown as typeof fetch;
+  try {
+    await expect(purgeWorkerCache("worker-1")).resolves.toEqual({ workerId: "worker-1", commandId: "00000000-0000-4000-8000-000000000001" });
+    expect(requested).toBe("/api/workers/worker-1/cache/purge");
+    expect(method).toBe("POST");
+    expect(idempotencyKey).not.toBe("");
   } finally {
     globalThis.fetch = originalFetch;
   }

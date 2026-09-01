@@ -2,7 +2,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
 import type { WorkerCapacityData, WorkerLimits } from "@mars/contracts";
 import { configurePendingWorker, configureWorker, rejectPendingWorker, type WorkerConfigurationInput } from "../api.ts";
-type Props = { worker: { id: string; admissionState: "pending" | "adopted" | "rejected" | "revoked"; platform?: "linux-x64" | "windows-x64" | "macos-arm64"; guestPlatforms?: ("linux-x64" | "windows-x64" | "macos-arm64")[]; draining?: boolean; activeSandboxes?: number; capacity: WorkerCapacityData; limits: WorkerLimits | null; desiredCacheTtlSeconds?: number }; organizationId?: string; onConfigured(): void; onDiscard?(): void };
+type Props = { worker: { id: string; admissionState: "pending" | "adopted" | "rejected" | "revoked"; platform?: "linux-x64" | "windows-x64" | "macos-arm64"; guestPlatforms?: ("linux-x64" | "windows-x64" | "macos-arm64")[]; draining?: boolean; activeSandboxes?: number; capacity: WorkerCapacityData; limits: WorkerLimits | null; desiredCacheTtlSeconds?: number; desiredRunnerCacheEnabled?: boolean; desiredRunnerCacheMaxGiB?: number }; organizationId?: string; onConfigured(): void; onDiscard?(): void };
 const GIB = 1024 ** 3;
 const initialGiB = (bytes: number) => { const value = Math.floor(bytes / GIB); return value > 0 ? String(value) : ""; };
 const parsePositiveInteger = (value: string) => { if (!/^\d+$/.test(value)) return null; const parsed = Number(value); return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null; };
@@ -25,6 +25,8 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
     const seconds = worker.desiredCacheTtlSeconds ?? 48 * 60 * 60;
     return Number.isSafeInteger(seconds) && seconds > 0 && seconds % (60 * 60) === 0 ? String(seconds / (60 * 60)) : "48";
   });
+  const [runnerCacheEnabled, setRunnerCacheEnabled] = useState(() => worker.desiredRunnerCacheEnabled ?? true);
+  const [runnerCacheMaxGiB, setRunnerCacheMaxGiB] = useState(() => String(worker.desiredRunnerCacheMaxGiB ?? 20));
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const capacityError = useMemo(() => c.freeMemoryBytes < GIB || c.freeStorageBytes < GIB ? "This worker reports less than 1 GiB of free RAM or disk; increase its capacity before configuring it." : null, [c.freeMemoryBytes, c.freeStorageBytes]);
@@ -39,8 +41,10 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
     const podStorage = toBytes(maxDisk);
     const maxConcurrentPods = parsePositiveInteger(concurrency);
     const ttlHours = parsePositiveInteger(cacheTtlHours);
-    if (!applianceVcpu || !applianceMemory || !applianceStorage || !podVcpu || !podMemory || !podStorage || !maxConcurrentPods || !ttlHours) return setError("All resource values and Cache TTL must be positive whole numbers.");
+    const maxGiB = parsePositiveInteger(runnerCacheMaxGiB);
+    if (!applianceVcpu || !applianceMemory || !applianceStorage || !podVcpu || !podMemory || !podStorage || !maxConcurrentPods || !ttlHours || !maxGiB) return setError("All resource values, Cache TTL, and runner cache size must be positive whole numbers.");
     if (ttlHours > Math.floor(Number.MAX_SAFE_INTEGER / (60 * 60))) return setError("Cache TTL is too large.");
+    if (maxGiB > Number.MAX_SAFE_INTEGER) return setError("Runner cache size is too large.");
     const ttlSeconds = ttlHours * 60 * 60;
     if (!Number.isSafeInteger(ttlSeconds)) return setError("Cache TTL is too large.");
     if (applianceVcpu > c.freeVcpu || applianceMemory > c.freeMemoryBytes || applianceStorage > c.freeStorageBytes) return setError("Appliance resources cannot exceed the worker's reported free capacity.");
@@ -50,7 +54,7 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
       appliance: { vcpu: applianceVcpu, memoryBytes: applianceMemory, storageBytes: applianceStorage },
       runtime: { maxVcpuPerPod: podVcpu, maxMemoryBytesPerPod: podMemory, maxStorageBytesPerPod: podStorage, maxConcurrentPods },
       guestPlatforms,
-      cache: { ttlSeconds },
+      cache: { ttlSeconds, runnerCacheEnabled, runnerCacheMaxGiB: maxGiB },
     };
     setError(null);
     setPending(true);
@@ -66,7 +70,7 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
       <fieldset><legend>Worker capacity</legend><p className="field-help">Reported free capacity: {c.freeVcpu} vCPU · {initialGiB(c.freeMemoryBytes)} GiB RAM · {initialGiB(c.freeStorageBytes)} GiB disk</p><div className="limit-grid"><label>vCPU<input name="vcpu" type="number" min="1" max={c.freeVcpu} step="1" value={vcpu} onChange={(e) => setVcpu(e.target.value)} required /><small>Maximum appliance allocation</small></label><label>RAM (GiB)<input name="memoryGiB" type="number" min="1" max={initialGiB(c.freeMemoryBytes)} step="1" value={ram} onChange={(e) => setRam(e.target.value)} required /><small>Maximum appliance allocation</small></label><label>Disk (GiB)<input name="storageGiB" type="number" min="1" max={initialGiB(c.freeStorageBytes)} step="1" value={disk} onChange={(e) => setDisk(e.target.value)} required /><small>Maximum appliance allocation</small></label></div></fieldset>
       <fieldset><legend>Per-job limits</legend><p className="field-help">Each job is isolated. These are independent per-job ceilings; the scheduler admits jobs dynamically as resources become available.</p><div className="limit-grid"><label>Max vCPU per job<input name="maxVcpuPerPod" type="number" min="1" step="1" value={maxVcpu} onChange={(e) => setMaxVcpu(e.target.value)} required /></label><label>Max RAM per job (GiB)<input name="maxMemoryGiBPerPod" type="number" min="1" step="1" value={maxRam} onChange={(e) => setMaxRam(e.target.value)} required /></label><label>Max disk per job (GiB)<input name="maxStorageGiBPerPod" type="number" min="1" step="1" value={maxDisk} onChange={(e) => setMaxDisk(e.target.value)} required /></label></div></fieldset>
       <fieldset><legend>Worker scheduling</legend><p className="field-help">Maximum jobs that may run concurrently. Jobs are admitted dynamically as worker resources become available.</p><label>Max concurrent jobs<input name="maxConcurrentPods" type="number" min="1" step="1" value={concurrency} onChange={(e) => setConcurrency(e.target.value)} required /></label></fieldset>
-      <fieldset><legend>Action cache</legend><p className="field-help">Cache entries expire after this many hours. This setting applies to the worker's local cache.</p><label>Cache TTL (hours)<input name="cacheTtlHours" type="number" min="1" step="1" value={cacheTtlHours} onChange={(e) => setCacheTtlHours(e.target.value)} required /></label></fieldset>
+      <fieldset><legend>Action cache</legend><p className="field-help">Cache entries expire after this many hours. This setting applies to the worker's local cache.</p><label>Cache TTL (hours)<input name="cacheTtlHours" type="number" min="1" step="1" value={cacheTtlHours} onChange={(e) => setCacheTtlHours(e.target.value)} required /></label><label>Runner cache size (GiB)<input name="runnerCacheMaxGiB" type="number" min="1" step="1" value={runnerCacheMaxGiB} onChange={(e) => setRunnerCacheMaxGiB(e.target.value)} required /></label><label className="checkbox-field"><input name="runnerCacheEnabled" type="checkbox" checked={runnerCacheEnabled} disabled={pending} onChange={(event) => setRunnerCacheEnabled(event.target.checked)} /> Enable runner package cache</label><p className="field-help">When disabled, package downloads bypass the local runner cache. Existing entries remain available if you re-enable it.</p></fieldset>
       <div className="worker-configuration-actions"><button className="control-button" type="submit" disabled={pending || Boolean(capacityError)}>{pending ? (adopted ? "Saving…" : "Approving and configuring…") : (adopted ? "Save configuration" : "Approve and configure worker")}</button></div>
     </form>
   </>;

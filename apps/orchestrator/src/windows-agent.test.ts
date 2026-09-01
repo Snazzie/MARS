@@ -42,7 +42,7 @@ test("builds a parsed Windows doctor report with the complete container inventor
 
 test("awaits the live cache TTL before acknowledging Windows configuration", async () => {
   const limits = { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 6 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 };
-  const cache = { ttlSeconds: 60, runnerCacheEnabled: true };
+  const cache = { ttlSeconds: 60, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 };
   const payload = WorkerConfigurePayload.parse({
     workerId: "11111111-1111-4111-8111-111111111111",
     revision: "a".repeat(64),
@@ -50,18 +50,20 @@ test("awaits the live cache TTL before acknowledging Windows configuration", asy
     appliance: { vcpu: 32, memoryBytes: 64 * 1024 ** 3, storageBytes: 1_000 * 1024 ** 3 },
     runtime: { maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 },
     guestPlatforms: ["windows-x64"],
-    cache: { ttlSeconds: 3600, runnerCacheEnabled: false },
+    cache: { ttlSeconds: 3600, runnerCacheEnabled: false, runnerCacheMaxGiB: 12 },
   });
   let release!: () => void;
   const applied = new Promise<void>((resolve) => { release = resolve; });
   const enabledStates: boolean[] = [];
-  const result = applyWindowsWorkerConfiguration(limits, cache, payload, { applyTtl: () => applied, setRunnerCacheEnabled: (enabled) => enabledStates.push(enabled) });
-  expect(cache).toEqual({ ttlSeconds: 60, runnerCacheEnabled: true });
+  const maxCaps: number[] = [];
+  const result = applyWindowsWorkerConfiguration(limits, cache, payload, { applyTtl: () => applied, setRunnerCacheEnabled: (enabled) => enabledStates.push(enabled), setRunnerCacheMaxGiB: (maxGiB) => maxCaps.push(maxGiB) });
+  expect(cache).toEqual({ ttlSeconds: 60, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 });
   release();
   const observed = await result;
   expect(enabledStates).toEqual([false]);
+  expect(maxCaps).toEqual([12]);
   expect(limits).toEqual({ maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 });
-  expect(cache).toEqual({ ttlSeconds: 3600, runnerCacheEnabled: false });
+  expect(cache).toEqual({ ttlSeconds: 3600, runnerCacheEnabled: false, runnerCacheMaxGiB: 12 });
   expect(observed.cache).toEqual(payload.cache);
 });
 
