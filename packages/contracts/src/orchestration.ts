@@ -224,9 +224,11 @@ export const WorkerApplianceConfiguration = z.object({ vcpu: positiveSafe, memor
 const workerCacheTtlSeconds = z.number().int().positive().safe();
 const RequiredWorkerCacheConfiguration = z.object({
   ttlSeconds: workerCacheTtlSeconds,
+  runnerCacheEnabled: z.boolean(),
 }).strict();
 export const WorkerCacheConfiguration = z.object({
   ttlSeconds: workerCacheTtlSeconds.default(172800),
+  runnerCacheEnabled: z.boolean().default(true),
 }).strict();
 export type WorkerCacheConfiguration = z.infer<typeof WorkerCacheConfiguration>;
 const workerConfigurationShape = {
@@ -237,7 +239,7 @@ const workerConfigurationShape = {
 export const WorkerConfiguration = z.object({
   ...workerConfigurationShape,
   guestPlatforms: WorkerGuestPlatforms.default(["macos-arm64"]),
-  cache: WorkerCacheConfiguration.default({ ttlSeconds: 172800 }),
+  cache: WorkerCacheConfiguration.default({ ttlSeconds: 172800, runnerCacheEnabled: true }),
 }).strict();
 export type WorkerConfiguration = z.infer<typeof WorkerConfiguration>;
 export const WorkerObservedConfiguration = z.object({
