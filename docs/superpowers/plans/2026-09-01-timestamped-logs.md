@@ -93,13 +93,13 @@ git commit -m "test: define timestamped control-plane logs"
 Implement a local helper that accepts a console method and returns a function. Use `new Date().toISOString()` at invocation time and bind each original method before wrapping. Keep non-string values and all additional arguments unchanged:
 
 ```ts
-const timestamp = new Date().toISOString();
-if (typeof first === "string") original(`${timestamp} ${first}`, ...remaining);
-else if (args.length === 0) original(`${timestamp} `);
-else original(timestamp, first, ...remaining);
+const prefix = `[${new Date().toISOString()}]`;
+if (typeof first === "string") original(`${prefix} ${first}`, ...remaining);
+else if (args.length === 0) original(`${prefix} `);
+else original(prefix, first, ...remaining);
 ```
 
-This makes string messages render on one timestamped line while structured first arguments remain structured values rather than being stringified. The zero-argument case still emits a timestamp with a trailing space.
+This makes string messages render on one bracketed, timestamped line while structured first arguments remain structured values rather than being stringified. The zero-argument case still emits a bracketed timestamp with a trailing space.
 
 - [ ] **Step 2: Implement `configureTimestampedConsoleLogging`**
 

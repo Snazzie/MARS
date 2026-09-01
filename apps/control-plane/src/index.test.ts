@@ -72,10 +72,10 @@ test("timestamps console logs and warnings while preserving structured arguments
     console.log("worker connected", details);
     console.warn("retrying");
     expect(logCalls).toHaveLength(1);
-    expect(logCalls[0]?.[0]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z worker connected$/);
+    expect(logCalls[0]?.[0]).toMatch(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\] worker connected$/);
     expect(logCalls[0]?.[1]).toBe(details);
     expect(warnCalls).toHaveLength(1);
-    expect(warnCalls[0]?.[0]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z retrying$/);
+    expect(warnCalls[0]?.[0]).toMatch(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\] retrying$/);
   } finally {
     restore();
     console.log = originalLog;

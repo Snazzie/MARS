@@ -26,12 +26,12 @@ The control plane emits runtime messages through direct `console.log`, `console.
 At control-plane startup, wrap the three console methods used by runtime logging: `console.log`, `console.warn`, and `console.error`. Each emitted entry receives a prefix generated immediately before forwarding the call:
 
 ```text
-2026-09-01T12:34:56.789Z <existing log arguments>
+[2026-09-01T12:34:56.789Z] <existing log arguments>
 ```
 
-The timestamp MUST be produced with `new Date().toISOString()` and MUST precede the original first argument. Existing additional arguments remain separate arguments so structured objects and errors retain their runtime inspection behavior.
+The timestamp MUST be produced with `new Date().toISOString()` and MUST precede the original first argument inside square brackets. Existing additional arguments remain separate arguments so structured objects and errors retain their runtime inspection behavior. For non-string first arguments, the bracketed timestamp is a separate first argument.
 
-The wrapper MUST forward to the original bound console method and MUST preserve the original `this` context. It MUST not throw if timestamp formatting or file persistence fails.
+The wrapper MUST forward to the original console method and MUST preserve the original `this` context. It MUST not throw if timestamp formatting or file persistence fails.
 
 ### Persisted errors
 

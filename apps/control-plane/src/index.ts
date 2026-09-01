@@ -37,18 +37,18 @@ type ConsoleMethod = (...args: unknown[]) => void;
 const timestampedConsoleMethod = (original: ConsoleMethod): ConsoleMethod => (...args) => {
   const timestamp = new Date().toISOString();
   const [first, ...remaining] = args;
-  if (typeof first === "string") original(`${timestamp} ${first}`, ...remaining);
-  else if (args.length === 0) original(`${timestamp} `);
-  else original(timestamp, first, ...remaining);
+  if (typeof first === "string") original(`[${timestamp}] ${first}`, ...remaining);
+  else if (args.length === 0) original(`[${timestamp}] `);
+  else original(`[${timestamp}]`, first, ...remaining);
 };
 
 export function configureTimestampedConsoleLogging(): () => void {
   const originalLog = console.log;
   const originalWarn = console.warn;
   const originalError = console.error;
-  console.log = timestampedConsoleMethod(originalLog);
-  console.warn = timestampedConsoleMethod(originalWarn);
-  console.error = timestampedConsoleMethod(originalError);
+  console.log = timestampedConsoleMethod(originalLog.bind(console));
+  console.warn = timestampedConsoleMethod(originalWarn.bind(console));
+  console.error = timestampedConsoleMethod(originalError.bind(console));
   let restored = false;
   return () => {
     if (restored) return;
