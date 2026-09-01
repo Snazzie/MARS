@@ -4,7 +4,7 @@
 
 **Goal:** Prefix control-plane `console.log`, `console.warn`, and `console.error` output with ISO 8601 timestamps while preserving existing arguments and error-file persistence.
 
-**Architecture:** Keep the existing error-file interceptor responsible only for forwarding and persisting errors. Add a small console timestamp installer in `apps/control-plane/src/index.ts` that captures the current methods, prepends an ISO timestamp, and returns a cleanup function for tests. In the executable startup path, install file logging first and timestamp wrappers second so terminal output is timestamped while file serialization receives the original error arguments and retains one timestamp.
+**Architecture:** Keep the existing error-file interceptor responsible only for forwarding and persisting errors. Add a small console timestamp installer in `apps/control-plane/src/index.ts` that captures the current methods, prepends an ISO timestamp, and returns a cleanup function for tests. In the executable startup path, install timestamp wrappers first and file logging second so terminal output is timestamped while file serialization receives the original error arguments and retains one timestamp.
 
 **Tech Stack:** Bun, TypeScript, `bun:test`, Node console APIs, existing `node:fs` logging code.
 
@@ -111,7 +111,7 @@ Do not change `configureErrorFileLogging`’s file path, error-only scope, seria
 
 - [ ] **Step 4: Install wrappers in executable startup order**
 
-At the `import.meta.main` block, call `configureErrorFileLogging(...)` first, then call `configureTimestampedConsoleLogging()`. This makes terminal errors timestamped while the file interceptor sees the original error arguments and writes exactly one ISO prefix. Ignore the returned cleanup in the long-running process.
+At the `import.meta.main` block, call `configureTimestampedConsoleLogging()` first, then call `configureErrorFileLogging(...)`. This makes terminal errors timestamped while the file interceptor sees the original error arguments and writes exactly one ISO prefix. Ignore the returned cleanup in the long-running process.
 
 - [ ] **Step 5: Run focused tests and verify the implementation**
 
