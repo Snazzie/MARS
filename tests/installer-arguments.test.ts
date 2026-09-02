@@ -70,6 +70,39 @@ test("Windows installer is container-only and validates every immutable input be
   expect(windows).toContain("Register-ResumeTask");
   expect(windows).toContain("Remove-ResumeTask");
 });
+test("Windows upgrade path downloads only worker binaries and restarts the existing service", () => {
+  expect(windows).toContain("function Invoke-WorkerUpgrade");
+  const upgradeStart = windows.indexOf("function Invoke-WorkerUpgrade");
+  const upgradeEnd = windows.indexOf("function Set-WorkerJoinCredential", upgradeStart);
+  expect(upgradeStart).toBeGreaterThan(-1);
+  expect(upgradeEnd).toBeGreaterThan(upgradeStart);
+  const upgrade = windows.slice(upgradeStart, upgradeEnd);
+  for (const artifact of [
+    "Download-Verified $WindowsOrchestratorUrl",
+    "Download-Verified $WindowsServiceHostUrl",
+    "Stop-Service MarsWorker",
+    "Start-Service MarsWorker",
+    "mars-orchestrator.exe",
+    "mars-service-host.exe",
+  ]) expect(upgrade).toContain(artifact);
+  for (const forbidden of [
+    "WindowsJobAgentUrl",
+    "WindowsContainerRunnerUrl",
+    "WindowsContainerGitUrl",
+    "WindowsContainerBuilderUrl",
+    "Install-DockerDesktop",
+    "Ensure-ContainerFeatures",
+    "Set-WorkerJoinCredential",
+    "Reset-WorkerIdentity",
+    "New-Service",
+    "sc.exe delete",
+    "docker build",
+    "windowsImageManifestPath",
+  ]) expect(upgrade).not.toContain(forbidden);
+  expect(windows).toContain("if ($Upgrade) {");
+  expect(windows.indexOf("if ($Upgrade) {")).toBeLessThan(windows.indexOf("Download-Verified $WindowsJobAgentUrl"));
+});
+
 
 test("Windows local image builder accepts staged verified assets and stays local", () => {
   expect(windowsBuilder).toContain("RunnerArchivePath");

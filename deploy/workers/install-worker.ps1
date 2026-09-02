@@ -54,6 +54,16 @@ function Assert-Sha256([string]$Hash, [string]$Name) {
   if ($Hash -notmatch '^[0-9a-f]{64}$') { throw "$Name must be a lowercase SHA-256 value." }
 }
 function Assert-ArtifactConfiguration {
+  if ($Upgrade) {
+    $required = @(
+      @('WindowsOrchestratorUrl', $WindowsOrchestratorUrl, $WindowsOrchestratorSha256),
+      @('WindowsServiceHostUrl', $WindowsServiceHostUrl, $WindowsServiceHostSha256)
+    )
+    $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace($_[1]) -or [string]::IsNullOrWhiteSpace($_[2]) } | ForEach-Object { $_[0] })
+    if ($missing.Count -gt 0) { throw "Windows worker upgrade artifacts are not configured: $($missing -join ', ')."}
+    foreach ($item in $required) { Assert-HttpsUrl $item[1] $item[0]; Assert-Sha256 $item[2] "$($item[0]) SHA-256" }
+    return
+  }
   $required = @(
     @('WindowsOrchestratorUrl', $WindowsOrchestratorUrl, $WindowsOrchestratorSha256),
     @('WindowsServiceHostUrl', $WindowsServiceHostUrl, $WindowsServiceHostSha256),
@@ -68,7 +78,7 @@ function Assert-ArtifactConfiguration {
   )
   $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace($_[1]) -or [string]::IsNullOrWhiteSpace($_[2]) } | ForEach-Object { $_[0] })
   if ([string]::IsNullOrWhiteSpace($WindowsContainerBaseImage)) { $missing += 'WindowsContainerBaseImage' }
-  if ($missing.Count -gt 0) { throw "Windows worker artifacts are not configured: $($missing -join ', ')." }
+  if ($missing.Count -gt 0) { throw "Windows worker artifacts are not configured: $($missing -join ', ')."}
   if ($WindowsContainerBaseImage -notmatch '^mcr\.microsoft\.com/windows/server:ltsc2025@sha256:[0-9a-f]{64}$') { throw 'WindowsContainerBaseImage must be a digest-pinned Windows Server LTSC 2025 reference.' }
   foreach ($item in $required) { Assert-HttpsUrl $item[1] $item[0]; Assert-Sha256 $item[2] "$($item[0]) SHA-256" }
 }
@@ -155,6 +165,56 @@ function Verify-DownloadedFile([string]$Path, [string]$Expected, [string]$Name, 
   if ($responseHash -and $responseHash -ne $Expected) { throw "$Name response hash mismatch." }
 }
 function Download-Verified([string]$Url, [string]$Hash, [string]$Destination, [string]$Name) { $response = Download-WorkerArtifact $Url $Destination 900; Verify-DownloadedFile $Destination $Hash $Name $response }
+function Invoke-WorkerUpgrade {
+  param([string]$Root, [string]$Bin)
+  $identityPath = Join-Path $Root 'worker-identity.json'
+  if (-not (Test-Path -LiteralPath $identityPath -PathType Leaf)) { throw 'Upgrade requires an existing worker identity.' }
+  $service = Get-Service MarsWorker -ErrorAction SilentlyContinue
+  if (-not $service) { throw 'Upgrade requires an existing MarsWorker service.' }
+  $orchestratorPath = Join-Path $Bin 'mars-orchestrator.exe'
+  $serviceHostPath = Join-Path $Bin 'mars-service-host.exe'
+  if (-not (Test-Path -LiteralPath $orchestratorPath -PathType Leaf) -or -not (Test-Path -LiteralPath $serviceHostPath -PathType Leaf)) { throw 'Upgrade requires both installed worker binaries.' }
+  $upgradeStaging = Join-Path ([IO.Path]::GetTempPath()) ('mars-worker-upgrade-' + [guid]::NewGuid().ToString('N'))
+  $stagedOrchestrator = Join-Path $upgradeStaging 'mars-orchestrator.exe'
+  $stagedServiceHost = Join-Path $upgradeStaging 'mars-service-host.exe'
+  $backupOrchestrator = Join-Path $upgradeStaging 'mars-orchestrator.exe.previous'
+  $backupServiceHost = Join-Path $upgradeStaging 'mars-service-host.exe.previous'
+  $orchestratorReplaced = $false
+  $serviceHostReplaced = $false
+  try {
+    New-Item -ItemType Directory -Force -Path $upgradeStaging | Out-Null
+    Download-Verified $WindowsOrchestratorUrl $WindowsOrchestratorSha256 $stagedOrchestrator 'Windows orchestrator'
+    Download-Verified $WindowsServiceHostUrl $WindowsServiceHostSha256 $stagedServiceHost 'Windows service host'
+    if (-not (Test-Path -LiteralPath $stagedOrchestrator -PathType Leaf) -or -not (Test-Path -LiteralPath $stagedServiceHost -PathType Leaf)) { throw 'Windows worker upgrade downloads were incomplete.' }
+    Write-Host 'Stopping MarsWorker for binary replacement'
+    Stop-Service MarsWorker -Force -ErrorAction Stop
+    $service = Get-Service MarsWorker -ErrorAction Stop
+    $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped,[TimeSpan]::FromSeconds(30))
+    Move-Item -LiteralPath $orchestratorPath -Destination $backupOrchestrator -Force
+    Move-Item -LiteralPath $serviceHostPath -Destination $backupServiceHost -Force
+    try {
+      Move-Item -LiteralPath $stagedOrchestrator -Destination $orchestratorPath -Force
+      $orchestratorReplaced = $true
+      Move-Item -LiteralPath $stagedServiceHost -Destination $serviceHostPath -Force
+      $serviceHostReplaced = $true
+      Write-Host 'Starting MarsWorker after binary replacement'
+      Start-Service MarsWorker -ErrorAction Stop
+      $service = Get-Service MarsWorker -ErrorAction Stop
+      $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running,[TimeSpan]::FromSeconds(30))
+    } catch {
+      $upgradeError = $_
+      if ($orchestratorReplaced -and (Test-Path -LiteralPath $orchestratorPath)) { Remove-Item -LiteralPath $orchestratorPath -Force -ErrorAction SilentlyContinue }
+      if ($serviceHostReplaced -and (Test-Path -LiteralPath $serviceHostPath)) { Remove-Item -LiteralPath $serviceHostPath -Force -ErrorAction SilentlyContinue }
+      if (Test-Path -LiteralPath $backupOrchestrator -PathType Leaf) { Move-Item -LiteralPath $backupOrchestrator -Destination $orchestratorPath -Force -ErrorAction SilentlyContinue }
+      if (Test-Path -LiteralPath $backupServiceHost -PathType Leaf) { Move-Item -LiteralPath $backupServiceHost -Destination $serviceHostPath -Force -ErrorAction SilentlyContinue }
+      try { Start-Service MarsWorker -ErrorAction SilentlyContinue } catch {}
+      throw $upgradeError
+    }
+    Write-Output 'Windows worker upgrade complete.'
+  } finally {
+    Remove-Item -LiteralPath $upgradeStaging -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
 function Set-WorkerJoinCredential([string]$Path, [string]$Code) {
   $parent = Split-Path -Parent $Path; New-Item -ItemType Directory -Force -Path $parent | Out-Null; [IO.File]::WriteAllText($Path, $Code)
   $joinCodeAcl = & icacls.exe $Path /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' 2>&1
@@ -171,9 +231,10 @@ Write-Host '[2/7] Checking Windows 11 Pro/Enterprise 24H2 x64 host'; Assert-Host
 $root = 'C:\ProgramData\Mars'; $bin = 'C:\Program Files\Mars'; $identityPath = Join-Path $root 'worker-identity.json'; $persistentInstallerPath = Join-Path $root 'install-worker.ps1'; $staging = Join-Path ([IO.Path]::GetTempPath()) ('mars-worker-' + [guid]::NewGuid().ToString('N'))
 $transcriptStarted = $false; try { Start-Transcript -LiteralPath (Join-Path $root 'install.log') -Append | Out-Null; $transcriptStarted = $true } catch { Write-Warning "Unable to start persistent installer log: $($_.Exception.Message)" }
 try {
-  if (($Upgrade -or $Resume) -and [string]::IsNullOrWhiteSpace($JoinCode) -and (Test-Path -LiteralPath $JoinCodeFile)) { $JoinCode = (Get-Content -LiteralPath $JoinCodeFile -Raw).Trim() }
   Write-Host '[3/7] Checking control-plane connectivity and validating worker artifacts'; Ensure-ControlPlane
-  if (-not $Upgrade -and ([string]::IsNullOrWhiteSpace($JoinCode) -or $JoinCode -notmatch '^[A-Za-z0-9_-]{43}$')) { throw 'Join code is not configured.' }
+  if ($Upgrade) { Invoke-WorkerUpgrade -Root $root -Bin $bin; exit 0 }
+  if (($Resume -and [string]::IsNullOrWhiteSpace($JoinCode)) -and (Test-Path -LiteralPath $JoinCodeFile)) { $JoinCode = (Get-Content -LiteralPath $JoinCodeFile -Raw).Trim() }
+  if ([string]::IsNullOrWhiteSpace($JoinCode) -or $JoinCode -notmatch '^[A-Za-z0-9_-]{43}$') { throw 'Join code is not configured.' }
   New-Item -ItemType Directory -Force -Path $staging | Out-Null
   $paths = [ordered]@{ orchestrator = Join-Path $staging 'mars-orchestrator.exe'; serviceHost = Join-Path $staging 'mars-service-host.exe'; jobAgent = Join-Path $staging 'mars-job-agent.exe'; runner = Join-Path $staging 'runner.zip'; git = Join-Path $staging 'git.zip'; vc = Join-Path $staging 'vc_redist.x64.exe'; builder = Join-Path $staging 'build-image.ps1'; verifier = Join-Path $staging 'verify-runtime.ps1'; containerfile = Join-Path $staging 'Containerfile'; entrypoint = Join-Path $staging 'entrypoint.ps1'; manifest = Join-Path $staging 'windows-job-image.json' }
   Download-Verified $WindowsOrchestratorUrl $WindowsOrchestratorSha256 $paths.orchestrator 'Windows orchestrator'; Download-Verified $WindowsServiceHostUrl $WindowsServiceHostSha256 $paths.serviceHost 'Windows service host'; Download-Verified $WindowsJobAgentUrl $WindowsJobAgentSha256 $paths.jobAgent 'Windows job agent'; Download-Verified $WindowsContainerRunnerUrl $WindowsContainerRunnerSha256 $paths.runner 'Actions Runner'; Download-Verified $WindowsContainerGitUrl $WindowsContainerGitSha256 $paths.git 'Git'; Download-Verified $WindowsContainerVcRuntimeUrl $WindowsContainerVcRuntimeSha256 $paths.vc 'VC runtime'; Download-Verified $WindowsContainerBuilderUrl $WindowsContainerBuilderSha256 $paths.builder 'Windows image builder'; Download-Verified $WindowsContainerVerifierUrl $WindowsContainerVerifierSha256 $paths.verifier 'Windows runtime verifier'; Download-Verified $WindowsContainerfileUrl $WindowsContainerfileSha256 $paths.containerfile 'Windows Containerfile'; Download-Verified $WindowsContainerEntrypointUrl $WindowsContainerEntrypointSha256 $paths.entrypoint 'Windows image entrypoint'
