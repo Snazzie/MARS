@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { LogChunk, OverviewDto, RepositorySummary, RunDetail, RunSummary, WorkerDetail, WorkerHealth } from "@mars/contracts";
-import { getOverview, getOrganizationSettings, getRunDetail, getWorkerHealth, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRepositories, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks, queueRepositoryDiscoveryRecheck } from "./dashboard.ts";
+import { getOverview, getOrganizationSettings, getRunDetail, getWorkerHealth, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRepositories, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks, queueRepositoryDiscoveryRecheck, type DashboardDb } from "./dashboard.ts";
 
 test("overview counts only GitHub job status and runtime leases", async () => {
   const queries: string[] = [];
@@ -274,7 +274,7 @@ function minimalWorkerHealthRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function workerHealthDb(options: { worker: Record<string, unknown> | null; leases: Record<string, unknown>[] }) {
+function workerHealthDb(options: { worker: Record<string, unknown> | null; leases: Record<string, unknown>[] }): DashboardDb & { queries: string[] } {
   const queries: string[] = [];
   const db = Object.assign(async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
@@ -283,7 +283,7 @@ function workerHealthDb(options: { worker: Record<string, unknown> | null; lease
     if (query.includes("FROM runner_leases l")) return options.leases;
     return [];
   }, { queries });
-  return db as never;
+  return db as unknown as DashboardDb & { queries: string[] };
 }
 
 test("pool listing normalizes PostgreSQL JSONB resources and labels", async () => {

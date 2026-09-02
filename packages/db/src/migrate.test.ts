@@ -165,7 +165,7 @@ test("previous final baseline receives runner cache upgrade in place", async () 
     }),
     { unsafe: async (sql: string) => calls.push(sql) },
   );
-  await migrateDatabase(db, { runMigrations: async () => calls.push("migrate") });
+  await migrateDatabase(db, { runMigrations: async () => { calls.push("migrate"); } });
   expect(calls[0]).toContain("runner_cache_enabled");
   expect(calls).toContain("migrate");
 });

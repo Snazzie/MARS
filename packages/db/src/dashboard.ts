@@ -338,7 +338,7 @@ function healthDecimal(value: unknown, fallback = "0"): string {
   return fallback;
 }
 function addHealthDecimals(values: unknown[]): string {
-  return values.reduce((total, value) => total + BigInt(healthDecimal(value)), 0n).toString();
+  return values.reduce<bigint>((total, value) => total + BigInt(healthDecimal(value)), 0n).toString();
 }
 function healthNumber(value: unknown, fallback = 0): number {
   const candidate = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : NaN;

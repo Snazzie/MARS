@@ -20,5 +20,6 @@ bun test packages/contracts/src/orchestration.test.ts packages/db/src/worker-cac
 ```
 
 Result: **78 passed, 0 failed** across five focused suites (285 expectations).
+- `bunx tsc -p packages/db/tsconfig.json --noEmit` reports only the pre-existing `migrate.test.ts:24` `NonSharedBuffer` typing diagnostic; Task 2/3 changed-file diagnostics in dashboard, worker-cache, and migration runner test were resolved.
 
 Project-wide formatters, linters, and tests were intentionally not run per the task brief.

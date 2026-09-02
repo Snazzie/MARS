@@ -30,7 +30,7 @@ function validStatus(value: unknown): value is CacheStatus {
 function validRunnerStatus(value: unknown): value is { generation: string; enabled: boolean; maxGiB: number; sizeBytes: string; entryCount: number; observedAt: string } {
   if (!value || typeof value !== "object") return false;
   const status = value as Record<string, unknown>;
-  return uuid(status.generation) && typeof status.enabled === "boolean" && Number.isSafeInteger(status.maxGiB) && status.maxGiB > 0 && typeof status.sizeBytes === "string" && /^(?:0|[1-9]\d*)$/.test(status.sizeBytes) && typeof status.entryCount === "number" && Number.isSafeInteger(status.entryCount) && status.entryCount >= 0 && typeof status.observedAt === "string" && Number.isFinite(Date.parse(status.observedAt));
+  return uuid(status.generation) && typeof status.enabled === "boolean" && typeof status.maxGiB === "number" && Number.isSafeInteger(status.maxGiB) && status.maxGiB > 0 && typeof status.sizeBytes === "string" && /^(?:0|[1-9]\d*)$/.test(status.sizeBytes) && typeof status.entryCount === "number" && Number.isSafeInteger(status.entryCount) && status.entryCount >= 0 && typeof status.observedAt === "string" && Number.isFinite(Date.parse(status.observedAt));
 }
 
 export async function sweepWorkerCacheSnapshots(db: SqlDb, maxAgeSeconds = 86_400): Promise<void> {
