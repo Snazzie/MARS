@@ -19,15 +19,89 @@ async function temporaryRoot(): Promise<string> {
   return root;
 }
 
-async function request(cache: PackageDownloadCache, path: string, headers: Record<string, string> = {}) {
+async function request(
+  cache: PackageDownloadCache,
+  path: string,
+  headers: Record<string, string> = {},
+  host = "registry.npmjs.org",
+) {
   const server = createServer((incoming, outgoing) => void cache.handle(incoming, outgoing));
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("server did not bind");
-  const response = await fetch(`http://127.0.0.1:${address.port}${path}`, { headers: { host: "registry.npmjs.org", ...headers } });
+  const response = await fetch(`http://127.0.0.1:${address.port}${path}`, { headers: { host, ...headers } });
   return { response, bytes: new Uint8Array(await response.arrayBuffer()) };
 }
+
+test("publishes Playwright archives for each supported host as MISS then byte-identical HIT", async () => {
+  const root = await temporaryRoot();
+  const body = new Uint8Array([9, 8, 7, 6]);
+  const requests: Array<{ host: string; path: string }> = [];
+  const archives = [
+    { host: "cdn.playwright.dev", path: "/builds/chromium/1187/chrome-linux.zip" },
+    { host: "cdn.playwright.dev", path: "/builds/chromium-headless-shell/1187/chrome-headless-shell-linux.zip" },
+    { host: "cdn.playwright.dev", path: "/builds/ffmpeg/1011/ffmpeg-linux.zip" },
+    { host: "playwright.download.prss.microsoft.com", path: "/dbazure/download/playwright/builds/winldd/1011/winldd-win64.zip" },
+  ];
+  const cache = await openPackageDownloadCache({
+    root,
+    ttlSeconds: 60,
+    upstream: async (request, response) => {
+      requests.push({ host: String(request.headers.host), path: request.url ?? "" });
+      response.writeHead(200, { "content-type": "application/zip", "content-length": String(body.byteLength), etag: '"archive"' });
+      response.end(body);
+    },
+  });
+  try {
+    for (const archive of archives) {
+      const first = await request(cache, archive.path, {}, archive.host);
+      const second = await request(cache, archive.path, {}, archive.host);
+      expect(first.bytes).toEqual(body);
+      expect(second.bytes).toEqual(body);
+      expect(first.response.headers.get("x-mars-package-cache")).toBe("MISS");
+      expect(second.response.headers.get("x-mars-package-cache")).toBe("HIT");
+    }
+    expect(requests).toEqual(archives);
+  } finally {
+    await cache.close();
+  }
+});
+
+test("bypasses non-archive, credentialed, and ranged Playwright requests", async () => {
+  const root = await temporaryRoot();
+  const body = new Uint8Array([1, 3, 3, 7]);
+  const requests: Array<{ host: string; path: string }> = [];
+  const bypasses = [
+    { host: "cdn.playwright.dev", path: "/builds/chromium/1187/metadata.json", headers: {} },
+    { host: "cdn.playwright.dev", path: "/builds/chromium/1187/chrome-linux.zip?download=1", headers: {} },
+    { host: "cdn.playwright.dev", path: "/builds/chromium/1187/chrome-linux.zip", headers: { authorization: "Bearer token" } },
+    { host: "cdn.playwright.dev", path: "/builds/chromium/1187/chrome-linux.zip", headers: { cookie: "session=secret" } },
+    { host: "playwright.download.prss.microsoft.com", path: "/dbazure/download/playwright/builds/winldd/1011/winldd-win64.zip", headers: { range: "bytes=0-1" } },
+  ];
+  const cache = await openPackageDownloadCache({
+    root,
+    ttlSeconds: 60,
+    upstream: async (request, response) => {
+      requests.push({ host: String(request.headers.host), path: request.url ?? "" });
+      response.writeHead(200, { "content-type": "application/zip", "content-length": String(body.byteLength) });
+      response.end(body);
+    },
+  });
+  try {
+    for (const bypass of bypasses) {
+      const first = await request(cache, bypass.path, bypass.headers, bypass.host);
+      const second = await request(cache, bypass.path, bypass.headers, bypass.host);
+      expect(first.bytes).toEqual(body);
+      expect(second.bytes).toEqual(body);
+      expect(first.response.headers.get("x-mars-package-cache")).toBeNull();
+      expect(second.response.headers.get("x-mars-package-cache")).toBeNull();
+    }
+    expect(requests).toEqual(bypasses.flatMap(({ host, path }) => [{ host, path }, { host, path }]));
+  } finally {
+    await cache.close();
+  }
+});
 
 test("publishes public tarballs as MISS then serves byte-identical HIT", async () => {
   const root = await temporaryRoot();

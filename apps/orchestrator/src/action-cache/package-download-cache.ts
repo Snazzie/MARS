@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { secureWorkerPrivatePath } from "./store.ts";
 
 const PACKAGE_HOST = "registry.npmjs.org";
+const PLAYWRIGHT_HOSTS = new Set(["cdn.playwright.dev", "playwright.download.prss.microsoft.com"]);
+const CACHEABLE_HOSTS = new Set([PACKAGE_HOST, ...PLAYWRIGHT_HOSTS]);
 const SCHEMA_VERSION = 1;
 const FILL_MAX_AGE_MS = 60 * 60 * 1_000;
 const CACHE_HEADERS = ["content-type", "content-length", "content-encoding", "etag", "last-modified", "cache-control"] as const;
@@ -77,15 +79,20 @@ function hostFor(request: IncomingMessage): string {
 }
 
 function canonicalUrlFor(request: IncomingMessage): string | null {
-  if (request.method?.toUpperCase() !== "GET" || hostFor(request) !== PACKAGE_HOST) return null;
+  if (request.method?.toUpperCase() !== "GET") return null;
+  const host = hostFor(request);
+  if (!CACHEABLE_HOSTS.has(host)) return null;
   const rawUrl = request.url ?? "";
   let url: URL;
-  try { url = new URL(rawUrl, `https://${PACKAGE_HOST}`); } catch { return null; }
-  if (url.hostname.toLowerCase() !== PACKAGE_HOST || url.username || url.password || url.search || url.hash) return null;
+  try { url = new URL(rawUrl, `https://${host}`); } catch { return null; }
+  if (url.hostname.toLowerCase() !== host || (url.port && url.port !== "443") || url.username || url.password || url.search || url.hash) return null;
   const pathname = url.pathname;
-  if (!/^\/(?:@[^/]+\/)?[^/]+\/-\/[^/]+\.tgz$/.test(pathname)) return null;
+  const validPath = host === PACKAGE_HOST
+    ? /^\/(?:@[^/]+\/)?[^/]+\/-\/[^/]+\.tgz$/.test(pathname)
+    : /^\/(?:builds|dbazure\/download\/playwright\/builds)\/.+\.zip$/.test(pathname);
+  if (!validPath) return null;
   if (["authorization", "cookie", "range"].some((name) => request.headers[name] !== undefined)) return null;
-  return `https://${PACKAGE_HOST}${pathname}`;
+  return `https://${host}${pathname}`;
 }
 
 function hash(value: string): string {
@@ -183,19 +190,25 @@ function replay(response: ServerResponse, captured: CapturedResponse, extraHeade
 
 function requestPath(request: IncomingMessage): string { return request.url || "/"; }
 
-function forwardHeaders(request: IncomingMessage): Record<string, string | string[]> {
+function forwardHeaders(request: IncomingMessage, host: string): Record<string, string | string[]> {
   const result: Record<string, string | string[]> = {};
   for (const [name, value] of Object.entries(request.headers)) {
     if (value === undefined || HOP_BY_HOP_HEADERS.has(name.toLowerCase()) || name.toLowerCase() === "host") continue;
     result[name] = Array.isArray(value) ? [...value] : value;
   }
-  result.host = PACKAGE_HOST;
+  result.host = host;
   return result;
 }
 
 export const forwardPublicNpmRequest: PackageUpstreamHandler = async (request, response) => {
+  const host = hostFor(request);
+  if (!host) {
+    response.writeHead(400, { "content-type": "text/plain", "cache-control": "no-store" });
+    response.end("invalid upstream host\n");
+    return;
+  }
   await new Promise<void>((resolve, reject) => {
-    const upstream = httpsRequest({ hostname: PACKAGE_HOST, port: 443, method: request.method, path: requestPath(request), headers: forwardHeaders(request) }, (incoming) => {
+    const upstream = httpsRequest({ hostname: host, port: 443, method: request.method, path: requestPath(request), headers: forwardHeaders(request, host) }, (incoming) => {
       const headers = headerMap(incoming.headers);
       response.writeHead(incoming.statusCode ?? 502, headers);
       incoming.on("error", reject);
