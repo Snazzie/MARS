@@ -13,7 +13,7 @@ const healthFixture = (overrides: Partial<WorkerHealth> = {}): WorkerHealth => (
     storageBytes: { actual: "1000", reserved: "400", free: "600" },
     pods: { actual: 2, reserved: 1, free: 1 },
   },
-  cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: 3600, ready: true, generation: "11111111-1111-4111-8111-111111111111", sizeBytes: "20", entryCount: 2, observedAt: "2026-08-23T11:59:57.000Z", error: null },
+  cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: 3600, effectiveRunnerCacheEnabled: true, effectiveRunnerCacheMaxGiB: 20, ready: true, generation: "11111111-1111-4111-8111-111111111111", sizeBytes: "20", entryCount: 2, runnerCacheSizeBytes: "30", runnerCacheEntryCount: 3, observedAt: "2026-08-23T11:59:57.000Z", runnerCacheObservedAt: "2026-08-23T11:59:56.000Z", error: null },
   containers: [],
   jobs: [{
     jobId: 7,
@@ -37,6 +37,13 @@ test("renders usage, cache health, and running jobs with accessible sections", (
   expect(markup).toContain("Desired TTL");
   expect(markup).toContain("acme/repo");
   expect(markup).toContain("512 MiB");
+  expect(markup).toContain("Actions entries");
+  expect(markup).toContain("Actions size");
+  expect(markup).toContain("Runner cache enabled");
+  expect(markup).toContain("Runner cache capacity");
+  expect(markup).toContain("Runner cache entries");
+  expect(markup).toContain("Runner cache size");
+  expect(markup).toContain("Runner cache observed");
   expect(markup).toContain("<caption>Running worker jobs</caption>");
   expect(markup).toContain("<time dateTime=\"2026-08-23T11:59:56.000Z\">");
 });

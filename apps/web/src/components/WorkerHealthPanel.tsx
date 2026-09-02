@@ -136,9 +136,14 @@ function CacheSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: st
       <div><dt>Desired TTL</dt><dd>{formatTtl(cache.desiredTtlSeconds)}</dd></div>
       <div><dt>Effective TTL</dt><dd>{formatTtl(cache.effectiveTtlSeconds)}</dd></div>
       <div><dt>Generation</dt><dd>{cache.generation ?? "No cache snapshot"}</dd></div>
-      <div><dt>Entries</dt><dd>{cache.entryCount}</dd></div>
-      <div><dt>Size</dt><dd>{formatBytes(cache.sizeBytes)}</dd></div>
-      <div><dt>Observed</dt><dd>{timestamp(cache.observedAt)}</dd></div>
+      <div><dt>Actions entries</dt><dd>{cache.entryCount}</dd></div>
+      <div><dt>Actions size</dt><dd>{formatBytes(cache.sizeBytes)}</dd></div>
+      <div><dt>Runner cache enabled</dt><dd>{cache.effectiveRunnerCacheEnabled == null ? "Not reported" : cache.effectiveRunnerCacheEnabled ? "Enabled" : "Disabled"}</dd></div>
+      <div><dt>Runner cache capacity</dt><dd>{cache.effectiveRunnerCacheMaxGiB == null ? "Not reported" : `${cache.effectiveRunnerCacheMaxGiB} GiB`}</dd></div>
+      <div><dt>Runner cache entries</dt><dd>{cache.runnerCacheEntryCount}</dd></div>
+      <div><dt>Runner cache size</dt><dd>{formatBytes(cache.runnerCacheSizeBytes)}</dd></div>
+      <div><dt>Runner cache observed</dt><dd>{timestamp(cache.runnerCacheObservedAt)}</dd></div>
+      <div><dt>Actions observed</dt><dd>{timestamp(cache.observedAt)}</dd></div>
       <div><dt>Proxy status</dt><dd>{cache.ready ? "Available" : "Unavailable"}</dd></div>
     </dl>
     <div className="worker-health-statuses" aria-label="Cache health status">

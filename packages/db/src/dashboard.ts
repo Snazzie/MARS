@@ -316,12 +316,17 @@ function workerCache(row: Record<string, unknown>): WorkerCacheSummary {
     desiredRunnerCacheEnabled: cache.runnerCacheEnabled !== false,
     desiredRunnerCacheMaxGiB: Number(cache.runnerCacheMaxGiB ?? 20),
     effectiveTtlSeconds: row.cacheTtlSeconds == null ? null : Number(row.cacheTtlSeconds),
+    effectiveRunnerCacheEnabled: row.runnerCacheEnabled == null ? null : row.runnerCacheEnabled === true,
+    effectiveRunnerCacheMaxGiB: row.runnerCacheMaxGiB == null ? null : Number(row.runnerCacheMaxGiB),
     ready: row.cacheReady === true,
     proxyOrigin: row.cacheProxyOrigin == null ? null : String(row.cacheProxyOrigin),
     cacheBaseUrl: row.cacheBaseUrl == null ? null : String(row.cacheBaseUrl),
     sizeBytes: String(row.cacheSizeBytes ?? "0"),
     entryCount: Number(row.cacheEntryCount ?? 0),
+    runnerCacheSizeBytes: String(row.runnerCacheSizeBytes ?? "0"),
+    runnerCacheEntryCount: Number(row.runnerCacheEntryCount ?? 0),
     observedAt: row.cacheObservedAt == null ? null : normalizeTimestamp(row.cacheObservedAt),
+    runnerCacheObservedAt: row.runnerCacheObservedAt == null ? null : normalizeTimestamp(row.runnerCacheObservedAt),
     error: row.cacheError == null ? null : String(row.cacheError),
   });
 }
@@ -403,7 +408,9 @@ export async function getWorkerHealth(db: DashboardDb, workerId: string, workerC
       GREATEST(0,EXTRACT(EPOCH FROM (now()-w.doctor_observed_at)))::int AS "doctorAgeSeconds",
       s.generation AS "cacheGeneration",s.ready AS "cacheReady",s.ttl_seconds AS "cacheTtlSeconds",
       s.size_bytes::text AS "cacheSizeBytes",s.entry_count AS "cacheEntryCount",
-      s.observed_at AS "cacheObservedAt",s.error AS "cacheError"
+      s.runner_cache_enabled AS "runnerCacheEnabled",s.runner_cache_max_gib AS "runnerCacheMaxGiB",
+      s.runner_cache_size_bytes::text AS "runnerCacheSizeBytes",s.runner_cache_entry_count AS "runnerCacheEntryCount",
+      s.observed_at AS "cacheObservedAt",s.runner_cache_observed_at AS "runnerCacheObservedAt",s.error AS "cacheError"
     FROM workers w
     LEFT JOIN worker_cache_status s ON s.worker_id=w.id
     WHERE w.id=${workerId}
@@ -458,11 +465,16 @@ export async function getWorkerHealth(db: DashboardDb, workerId: string, workerC
     cache: {
       desiredTtlSeconds: healthNumber(desiredCache.ttlSeconds, 172800),
       effectiveTtlSeconds: worker.cacheTtlSeconds == null ? null : healthNumber(worker.cacheTtlSeconds),
+      effectiveRunnerCacheEnabled: worker.runnerCacheEnabled == null ? null : worker.runnerCacheEnabled === true,
+      effectiveRunnerCacheMaxGiB: worker.runnerCacheMaxGiB == null ? null : healthNumber(worker.runnerCacheMaxGiB),
       ready: worker.cacheReady === true,
       generation: typeof worker.cacheGeneration === "string" ? worker.cacheGeneration : null,
       sizeBytes: healthDecimal(worker.cacheSizeBytes),
       entryCount: healthNumber(worker.cacheEntryCount),
+      runnerCacheSizeBytes: healthDecimal(worker.runnerCacheSizeBytes),
+      runnerCacheEntryCount: healthNumber(worker.runnerCacheEntryCount),
       observedAt: normalizeTimestamp(worker.cacheObservedAt),
+      runnerCacheObservedAt: normalizeTimestamp(worker.runnerCacheObservedAt),
       error: worker.cacheError == null ? null : String(worker.cacheError),
     },
     containers: healthContainers(worker.doctor),
@@ -521,12 +533,12 @@ function normalizeWorker(row: Record<string, unknown>, workerConnected?: (worker
   return worker;
 }
 export async function listWorkers(db: DashboardDb, organizationId: string, limit = 50, workerConnected?: (workerId: string) => boolean): Promise<CursorPage<WorkerDetail>> {
-  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.desired_configuration AS "desiredConfiguration",w.preserve_leases AS "preserveLeases",s.ttl_seconds AS "cacheTtlSeconds",s.ready AS "cacheReady",s.proxy_origin AS "cacheProxyOrigin",s.cache_base_url AS "cacheBaseUrl",s.size_bytes AS "cacheSizeBytes",s.entry_count AS "cacheEntryCount",s.observed_at AS "cacheObservedAt",s.error AS "cacheError",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w LEFT JOIN worker_cache_status s ON s.worker_id=w.id ORDER BY w.name LIMIT ${limit + 1}`;
+  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.desired_configuration AS "desiredConfiguration",w.preserve_leases AS "preserveLeases",s.ttl_seconds AS "cacheTtlSeconds",s.ready AS "cacheReady",s.proxy_origin AS "cacheProxyOrigin",s.cache_base_url AS "cacheBaseUrl",s.size_bytes AS "cacheSizeBytes",s.entry_count AS "cacheEntryCount",s.runner_cache_enabled AS "runnerCacheEnabled",s.runner_cache_max_gib AS "runnerCacheMaxGiB",s.runner_cache_size_bytes AS "runnerCacheSizeBytes",s.runner_cache_entry_count AS "runnerCacheEntryCount",s.observed_at AS "cacheObservedAt",s.runner_cache_observed_at AS "runnerCacheObservedAt",s.error AS "cacheError",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w LEFT JOIN worker_cache_status s ON s.worker_id=w.id ORDER BY w.name LIMIT ${limit + 1}`;
   const items = rows.slice(0, limit).map(row => normalizeWorker(row, workerConnected));
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }
 export async function listAllWorkers(db: DashboardDb, userId: string, limit = 50, includeInactive = false, workerConnected?: (workerId: string) => boolean): Promise<CursorPage<WorkerDetail>> {
-  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.desired_configuration AS "desiredConfiguration",w.preserve_leases AS "preserveLeases",s.ttl_seconds AS "cacheTtlSeconds",s.ready AS "cacheReady",s.proxy_origin AS "cacheProxyOrigin",s.cache_base_url AS "cacheBaseUrl",s.size_bytes AS "cacheSizeBytes",s.entry_count AS "cacheEntryCount",s.observed_at AS "cacheObservedAt",s.error AS "cacheError",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w LEFT JOIN worker_cache_status s ON s.worker_id=w.id WHERE (${includeInactive} OR w.admission_state NOT IN ('rejected','revoked')) ORDER BY w.name LIMIT ${limit + 1}`;
+  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.desired_configuration AS "desiredConfiguration",w.preserve_leases AS "preserveLeases",s.ttl_seconds AS "cacheTtlSeconds",s.ready AS "cacheReady",s.proxy_origin AS "cacheProxyOrigin",s.cache_base_url AS "cacheBaseUrl",s.size_bytes AS "cacheSizeBytes",s.entry_count AS "cacheEntryCount",s.runner_cache_enabled AS "runnerCacheEnabled",s.runner_cache_max_gib AS "runnerCacheMaxGiB",s.runner_cache_size_bytes AS "runnerCacheSizeBytes",s.runner_cache_entry_count AS "runnerCacheEntryCount",s.observed_at AS "cacheObservedAt",s.runner_cache_observed_at AS "runnerCacheObservedAt",s.error AS "cacheError",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w LEFT JOIN worker_cache_status s ON s.worker_id=w.id WHERE (${includeInactive} OR w.admission_state NOT IN ('rejected','revoked')) ORDER BY w.name LIMIT ${limit + 1}`;
   const items = rows.slice(0, limit).map(row => normalizeWorker(row, workerConnected));
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }

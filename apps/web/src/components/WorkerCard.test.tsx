@@ -38,12 +38,17 @@ type WorkerCacheSummary = {
   desiredRunnerCacheEnabled: boolean;
   desiredRunnerCacheMaxGiB: number;
   effectiveTtlSeconds: number | null;
+  effectiveRunnerCacheEnabled: boolean | null;
+  effectiveRunnerCacheMaxGiB: number | null;
   ready: boolean;
   proxyOrigin: string | null;
   cacheBaseUrl: string | null;
   sizeBytes: string;
   entryCount: number;
+  runnerCacheSizeBytes: string;
+  runnerCacheEntryCount: number;
   observedAt: string | null;
+  runnerCacheObservedAt: string | null;
   error: string | null;
 };
 
@@ -52,12 +57,17 @@ const cacheFixture = (overrides: Partial<WorkerCacheSummary> = {}): WorkerCacheS
   desiredRunnerCacheEnabled: true,
   desiredRunnerCacheMaxGiB: 20,
   effectiveTtlSeconds: 172800,
+  effectiveRunnerCacheEnabled: null,
+  effectiveRunnerCacheMaxGiB: null,
   ready: true,
   proxyOrigin: "https://worker.example.test",
   cacheBaseUrl: "https://worker.example.test/_apis/artifactcache",
   sizeBytes: "2147483648",
   entryCount: 0,
+  runnerCacheSizeBytes: "0",
+  runnerCacheEntryCount: 0,
   observedAt: "2026-08-16T12:02:00.000Z",
+  runnerCacheObservedAt: null,
   error: null,
   ...overrides,
 });
@@ -68,7 +78,7 @@ const renderCard = (worker: WorkerDetail) => renderToStaticMarkup(<QueryClientPr
 test("keeps worker health authoritative and cache inventory compact", () => {
   const markup = renderCard(cacheWorkerFixture());
   expect(markup).toContain("Cache inventory");
-  expect(markup).toContain("No cache entries");
+  expect(markup).toContain("No GitHub Actions cache entries.");
   expect(markup).not.toContain("Capacity / actual");
   expect(markup).not.toContain("Action cache");
   expect(markup).not.toContain("cache-summary-grid");
@@ -287,7 +297,7 @@ test("polls live health on mount without an expansion flag", async () => {
       observedAt: null,
       connection: { state: "online", lastHeartbeatAt: null, lastDoctorAt: null, heartbeatAgeSeconds: null, doctorAgeSeconds: null },
       usage: { cpu: { actual: 1, reserved: 0, free: 1 }, memoryBytes: { actual: "1", reserved: "0", free: "1" }, storageBytes: { actual: "1", reserved: "0", free: "1" }, pods: { actual: 1, reserved: 0, free: 1 } },
-      cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: null, ready: false, generation: null, sizeBytes: "0", entryCount: 0, observedAt: null, error: null },
+      cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: null, effectiveRunnerCacheEnabled: null, effectiveRunnerCacheMaxGiB: null, ready: false, generation: null, sizeBytes: "0", entryCount: 0, runnerCacheSizeBytes: "0", runnerCacheEntryCount: 0, observedAt: null, runnerCacheObservedAt: null, error: null },
       containers: [{
         containerId: "d".repeat(64),
         name: "card-container",

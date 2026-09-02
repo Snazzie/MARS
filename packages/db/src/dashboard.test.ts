@@ -93,6 +93,11 @@ test("worker health projects complete cache and active lease telemetry", async (
       cacheSizeBytes: "100000000000000000000",
       cacheEntryCount: 12,
       cacheObservedAt: new Date("2026-08-23T11:59:50.000Z"),
+      runnerCacheEnabled: true,
+      runnerCacheMaxGiB: 20,
+      runnerCacheSizeBytes: "300000000000000000000",
+      runnerCacheEntryCount: 34,
+      runnerCacheObservedAt: new Date("2026-08-23T11:59:51.000Z"),
       cacheError: null,
     },
     leases,
@@ -111,7 +116,7 @@ test("worker health projects complete cache and active lease telemetry", async (
       memoryBytes: { actual: "100000000000000000000", reserved: "100000000000000001500", free: "99999999999999999900" },
       storageBytes: { actual: "300000000000000000000", reserved: "200000000000000001800", free: "299999999999999999000" },
     },
-    cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: 1800, generation: cacheGeneration, sizeBytes: "100000000000000000000", entryCount: 12 },
+    cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: 1800, effectiveRunnerCacheEnabled: true, effectiveRunnerCacheMaxGiB: 20, generation: cacheGeneration, sizeBytes: "100000000000000000000", entryCount: 12, runnerCacheSizeBytes: "300000000000000000000", runnerCacheEntryCount: 34, runnerCacheObservedAt: "2026-08-23T11:59:51.000Z" },
   });
   expect(health?.jobs).toEqual(expect.arrayContaining([
     expect.objectContaining({ jobId: 42, repositoryFullName: "acme/project", repositoryName: "project", ageSeconds: 60 }),
@@ -238,7 +243,7 @@ test("worker health preserves exact large decimal byte strings", async () => {
 test("worker health tolerates missing cache telemetry while retaining desired TTL", async () => {
   const db = workerHealthDb({ worker: minimalWorkerHealthRow({ desiredConfiguration: { cache: { ttlSeconds: 7200 } } }), leases: [] });
   const health = await getWorkerHealth(db, "86afd915-add3-407c-a6c1-1b46803ef713", () => true);
-  expect(health?.cache).toEqual({ desiredTtlSeconds: 7200, effectiveTtlSeconds: null, ready: false, generation: null, sizeBytes: "0", entryCount: 0, observedAt: null, error: null });
+  expect(health?.cache).toEqual({ desiredTtlSeconds: 7200, effectiveTtlSeconds: null, effectiveRunnerCacheEnabled: null, effectiveRunnerCacheMaxGiB: null, ready: false, generation: null, sizeBytes: "0", entryCount: 0, runnerCacheSizeBytes: "0", runnerCacheEntryCount: 0, observedAt: null, runnerCacheObservedAt: null, error: null });
 });
 
 function minimalWorkerHealthRow(overrides: Record<string, unknown> = {}) {
@@ -259,6 +264,11 @@ function minimalWorkerHealthRow(overrides: Record<string, unknown> = {}) {
     cacheSizeBytes: null,
     cacheEntryCount: null,
     cacheObservedAt: null,
+    runnerCacheEnabled: null,
+    runnerCacheMaxGiB: null,
+    runnerCacheSizeBytes: null,
+    runnerCacheEntryCount: null,
+    runnerCacheObservedAt: null,
     cacheError: null,
     ...overrides,
   };

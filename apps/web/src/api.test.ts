@@ -10,7 +10,7 @@ const workerHealth: WorkerHealth = {
     storageBytes: { actual: "1000", reserved: "400", free: "600" },
     pods: { actual: 2, reserved: 1, free: 1 },
   },
-  cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: 3600, ready: true, generation: "11111111-1111-4111-8111-111111111111", sizeBytes: "20", entryCount: 2, observedAt: "2026-08-23T11:59:57.000Z", error: null },
+  cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: 3600, effectiveRunnerCacheEnabled: true, effectiveRunnerCacheMaxGiB: 20, ready: true, generation: "11111111-1111-4111-8111-111111111111", sizeBytes: "20", entryCount: 2, runnerCacheSizeBytes: "30", runnerCacheEntryCount: 3, observedAt: "2026-08-23T11:59:57.000Z", runnerCacheObservedAt: "2026-08-23T11:59:56.000Z", error: null },
   containers: [{
     containerId: "a".repeat(64),
     name: "managed",
