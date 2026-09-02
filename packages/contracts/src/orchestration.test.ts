@@ -215,6 +215,29 @@ test("requires runner cache settings in observed configuration", () => {
   expect(orchestration.WorkerConfiguredPayload.safeParse({ ...acknowledgement, observed: { ...observed, cache: { ttlSeconds: 172800, runnerCacheEnabled: true } } }).success).toBe(false);
   expect(orchestration.WorkerConfiguredPayload.safeParse({ ...acknowledgement, observed: { ...observed, cache: { ttlSeconds: 172800, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 } } }).success).toBe(true);
 });
+test("defaults missing runner cache policy fields in legacy configure payloads only", () => {
+  const payload = {
+    workerId: "11111111-1111-4111-8111-111111111111",
+    appliance: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
+    runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 3, maxConcurrentPods: 1 },
+    guestPlatforms: ["linux-x64"],
+    cache: { ttlSeconds: 3600 },
+    revision: "a".repeat(64),
+    fingerprint: "b".repeat(64),
+  };
+  expect(orchestration.WorkerConfigurePayload.parse(payload).cache).toEqual({
+    ttlSeconds: 3600,
+    runnerCacheEnabled: true,
+    runnerCacheMaxGiB: 20,
+  });
+  expect(orchestration.WorkerObservedConfiguration.safeParse({
+    appliance: payload.appliance,
+    runtime: payload.runtime,
+    guestPlatforms: payload.guestPlatforms,
+    cache: payload.cache,
+  }).success).toBe(false);
+});
+
 
 
 test("keeps cache proxy material guest-only", () => {

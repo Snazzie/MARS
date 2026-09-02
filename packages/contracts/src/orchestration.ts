@@ -251,7 +251,9 @@ export const WorkerObservedConfiguration = z.object({
   cache: RequiredWorkerCacheConfiguration,
 }).strict();
 export type WorkerObservedConfiguration = z.infer<typeof WorkerObservedConfiguration>;
+// Durable configure commands may predate newer cache policy fields; defaults apply only while parsing commands.
 export const WorkerConfigurePayload = WorkerObservedConfiguration.extend({
+  cache: WorkerCacheConfiguration,
   workerId: z.string().uuid(),
   revision: z.string().regex(/^[a-f0-9]{64}$/),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
