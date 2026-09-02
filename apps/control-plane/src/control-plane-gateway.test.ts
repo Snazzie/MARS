@@ -1,4 +1,22 @@
-import { enqueueWorkerMessage } from "./control-plane-gateway.ts";
+import { enqueueWorkerMessage, scheduleWorkerPing } from "./control-plane-gateway.ts";
+
+test("schedules worker heartbeat pings without sending immediately", () => {
+  let sendCount = 0;
+  let capturedCallback!: () => void;
+  let capturedDelay = 0;
+  scheduleWorkerPing(
+    () => { sendCount += 1; },
+    (callback, delayMs) => {
+      capturedCallback = callback;
+      capturedDelay = delayMs;
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    },
+  );
+  expect(sendCount).toBe(0);
+  expect(capturedDelay).toBe(30_000);
+  capturedCallback();
+  expect(sendCount).toBe(1);
+});
 
 const gatewaySource = await Bun.file(new URL("./control-plane-gateway.ts", import.meta.url)).text();
 
@@ -15,6 +33,13 @@ test("workers answer heartbeat pings with JSON frames", async () => {
     const source = await Bun.file(new URL(path, import.meta.url)).text();
     expect(source).toContain('ws.send(JSON.stringify({ version: 1, type: "pong", workerId: identity.workerId }))');
   }
+});
+test("schedules the next worker ping after pong", () => {
+  const pongBranchStart = gatewaySource.indexOf('frame.type === "pong"');
+  const nextBranchStart = gatewaySource.indexOf('} else if (ws.data.authenticated', pongBranchStart);
+  const pongBranch = gatewaySource.slice(pongBranchStart, nextBranchStart);
+  expect(pongBranch).toContain("scheduleWorkerPing");
+  expect(pongBranch).not.toContain('\n        ws.send(JSON.stringify({ version: 1, type: "ping" }))');
 });
 test("validates worker doctor reports before persistence and acknowledgement", () => {
   const doctorBranchStart = gatewaySource.indexOf('frame.type === "doctor"');

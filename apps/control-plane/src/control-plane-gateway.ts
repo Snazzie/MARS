@@ -11,10 +11,16 @@ import { activateAuthenticatedWorkerConnection } from "./worker-connection.ts";
 import { handleAuthenticatedWorkerEvent } from "./worker-lifecycle.ts";
 
 
-type WorkerSocketData = { actor: "worker"; workerId: string; challenge?: Buffer; authenticated: boolean; connectionEpoch?: number; authTimer?: ReturnType<typeof setTimeout> };
+type WorkerSocketData = { actor: "worker"; workerId: string; challenge?: Buffer; authenticated: boolean; connectionEpoch?: number; authTimer?: ReturnType<typeof setTimeout>; heartbeatTimer?: ReturnType<typeof setTimeout> };
 type BrowserSocketData = { actor: "browser"; organizationId: string; cursor: number };
 export type ControlPlaneSocketData = WorkerSocketData | BrowserSocketData;
 type GatewayServer = Server<ControlPlaneSocketData>;
+export const WORKER_HEARTBEAT_INTERVAL_MS = 30_000;
+type ScheduleTimeout = (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
+export function scheduleWorkerPing(sendPing: () => void, scheduleTimeout: ScheduleTimeout = setTimeout): ReturnType<typeof setTimeout> {
+  return scheduleTimeout(sendPing, WORKER_HEARTBEAT_INTERVAL_MS);
+}
+
 export function enqueueWorkerMessage(
   tails: WeakMap<object, Promise<void>>,
   socket: object,
@@ -94,6 +100,10 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           clearTimeout(ws.data.authTimer);
           ws.data.authTimer = undefined;
         }
+        if (ws.data.heartbeatTimer) {
+          clearTimeout(ws.data.heartbeatTimer);
+          ws.data.heartbeatTimer = undefined;
+        }
         options.dispatcher.unregister(ws.data.workerId, ws);
         const currentSocket = workerSockets.get(ws.data.workerId);
         if (currentSocket === ws) {
@@ -153,7 +163,13 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         ws.send(JSON.stringify({ version: 1, type: "doctor_ack", workerId: ws.data.workerId }));
       } else if (frame.type === "pong" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch) {
         await options.db`update workers set last_heartbeat_at=now() where id=${ws.data.workerId}`;
-        ws.send(JSON.stringify({ version: 1, type: "ping" }));
+        clearTimeout(workerData.heartbeatTimer);
+        const epoch = workerData.connectionEpoch;
+        workerData.heartbeatTimer = scheduleWorkerPing(() => {
+          workerData.heartbeatTimer = undefined;
+          if (!workerData.authenticated || workerSockets.get(workerData.workerId) !== ws || workerConnectionEpochs.get(workerData.workerId) !== epoch) return;
+          ws.send(JSON.stringify({ version: 1, type: "ping" }));
+        });
       } else if (ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch && frame.workerId === ws.data.workerId) {
         if (frame.type === "worker.configured") {
           const acknowledged = await applyWorkerConfigurationAcknowledgement(options.db, { workerId: ws.data.workerId, payload: frame.payload });
