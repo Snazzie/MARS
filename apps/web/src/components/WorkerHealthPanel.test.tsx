@@ -182,6 +182,7 @@ test("renders managed containers with their matching jobs and explicit unmatched
   const rows = [...markup.matchAll(/<tr>[\s\S]*?<\/tr>/g)].map(([row]) => row);
   const alphaRow = rows.find((row) => row.includes("<strong>alpha</strong>")) ?? "";
   expect(alphaRow).toContain("<td>42</td>");
+  expect(alphaRow).toContain("acme/project");
   expect(alphaRow).toContain("<td>created</td>");
   expect(alphaRow).toContain("<td>running</td>");
   expect(alphaRow).toContain("<td>- / 4</td>");
