@@ -9,7 +9,7 @@
 - Added an explicit in-place upgrade path for the prior final baseline journal in `migrateDatabase`: it applies the runner-column ALTERs transaction-safely/idempotently and stamps the journal with the current baseline hash while continuing to reject unknown or unsafe migration states.
 - Added contract coverage for valid runner status, strict unknown-field rejection, negative counts, invalid decimal byte values, and event payload parsing.
 - Added database coverage for matching-generation updates and stale-generation no-op behavior.
-- Added authenticated control-plane lifecycle coverage proving the runner status event is routed to durable persistence.
+- Added explicit exclusion for `worker.runner_cache_status` in direct lease-event handling so malformed dispatch cannot fall through to lease SQL; authenticated routing remains owned by `applyWorkerCacheTelemetry`.
 - Preserved unrelated existing modifications in `apps/control-plane/src/job-discovery.ts` and `job-discovery.test.ts`.
 
 ## Verification

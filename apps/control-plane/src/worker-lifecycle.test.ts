@@ -145,6 +145,11 @@ test("routes authenticated runner cache status telemetry to durable status colum
   expect(accepted).toBe(true);
   expect(calls.some(({ query }) => query.includes("UPDATE worker_cache_status SET runner_cache_enabled"))).toBe(true);
 });
+test("does not route runner cache status through lease lifecycle persistence", async () => {
+  const { db, calls } = acceptingDb();
+  expect(await applyWorkerLeaseEvent(db, event("worker.runner_cache_status", { generation, enabled: true, maxGiB: 20, sizeBytes: "1", entryCount: 0, observedAt: new Date().toISOString() }))).toBe(false);
+  expect(calls).toHaveLength(0);
+});
 test("accepts cache snapshot telemetry frames", async () => {
   const base = acceptingDb();
   const db = Object.assign(base.db, { begin: async (fn: (tx: typeof base.db) => unknown) => fn(base.db) }) as typeof base.db;
