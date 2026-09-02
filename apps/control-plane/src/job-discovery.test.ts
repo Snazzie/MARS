@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { discoverAvailableRepositoryJobs, discoverQueuedRepositoryJobs, listCompletedRunsSince, syncCompletedJobLogsBestEffort } from "./job-discovery.ts";
+import { discoverAvailableRepositoryJobs, discoverQueuedRepositoryJobs, listRunsSinceCompletedCheckpoint, syncCompletedJobLogsBestEffort } from "./job-discovery.ts";
 import { configureRunLifecycle } from "./runs.ts";
 import { GithubRateLimitError } from "./github-rate-limit.ts";
 import type { GithubRunSnapshot } from "./runs.ts";
@@ -25,7 +25,7 @@ function run(id: number, runAttempt: number): GithubRunSnapshot {
 describe("completed run recovery", () => {
   test("paginates until the persisted completed-run checkpoint pair", async () => {
     const requestedPages: number[] = [];
-    const result = await listCompletedRunsSince(async (page) => {
+    const result = await listRunsSinceCompletedCheckpoint(async (page) => {
       requestedPages.push(page);
       const pages = page === 1 ? [run(105, 1), run(104, 1)] : [run(103, 2), run(102, 1), run(101, 1)];
       return { totalCount: 5, runs: pages };
@@ -38,7 +38,7 @@ describe("completed run recovery", () => {
 
   test("does not stop on an older checkpoint attempt for the same run ID", async () => {
     const requestedPages: number[] = [];
-    const result = await listCompletedRunsSince(async (page) => {
+    const result = await listRunsSinceCompletedCheckpoint(async (page) => {
       requestedPages.push(page);
       const pages = page === 1 ? [run(32564909816, 2), run(32564909815, 1)] : [run(32564909816, 1), run(32564909814, 1)];
       return { totalCount: 4, runs: pages };
@@ -51,7 +51,7 @@ describe("completed run recovery", () => {
 
   test("stops pagination on an exact completed-run checkpoint pair", async () => {
     const requestedPages: number[] = [];
-    const result = await listCompletedRunsSince(async (page) => {
+    const result = await listRunsSinceCompletedCheckpoint(async (page) => {
       requestedPages.push(page);
       return { totalCount: 2, runs: page === 1 ? [run(32564909816, 2)] : [run(32564909816, 1)] };
     }, { runId: 32564909816, runAttempt: 1 });
@@ -63,7 +63,7 @@ describe("completed run recovery", () => {
 
   test("samples one page when no checkpoint exists", async () => {
     const requestedPages: number[] = [];
-    const result = await listCompletedRunsSince(async (page) => {
+    const result = await listRunsSinceCompletedCheckpoint(async (page) => {
       requestedPages.push(page);
       return { totalCount: 200, runs: [run(200, 1), run(199, 1)] };
     }, null);
@@ -73,11 +73,32 @@ describe("completed run recovery", () => {
     expect(result.newestCheckpoint).toEqual({ runId: 200, runAttempt: 1 });
   });
 
-  test("fails closed when the GitHub completed-run cap hides the checkpoint", async () => {
-    await expect(listCompletedRunsSince(async (page) => ({
-      totalCount: 2_000,
-      runs: Array.from({ length: 100 }, (_, index) => run(2_000 - ((page - 1) * 100) - index, 1)),
-    }), { runId: 500, runAttempt: 1 })).rejects.toThrow("completed_run_checkpoint_unreachable");
+  test("recovers a checkpoint beyond the filtered-result ceiling", async () => {
+    const requestedPages: number[] = [];
+    const result = await listRunsSinceCompletedCheckpoint(async (page) => {
+      requestedPages.push(page);
+      const runs = page < 12
+        ? Array.from({ length: 100 }, (_, index) => run(1_600 - ((page - 1) * 100) - index, 1))
+        : [run(500, 1)];
+      return { totalCount: 1_200, runs };
+    }, { runId: 500, runAttempt: 1 });
+
+    expect(requestedPages).toEqual(Array.from({ length: 12 }, (_, index) => index + 1));
+    expect(result.runs).toHaveLength(1_100);
+    expect(result.runs.map(({ id }) => id)).toEqual(Array.from({ length: 1_100 }, (_, index) => 1_600 - index));
+    expect(result.newestCheckpoint).toEqual({ runId: 1_600, runAttempt: 1 });
+  });
+
+  test("selects the first completed run when active runs lead a page", async () => {
+    const queued = { ...run(300, 1), status: "queued" as const, conclusion: null, startedAt: null, completedAt: null };
+    const inProgress = { ...run(299, 1), status: "in_progress" as const, conclusion: null, completedAt: null };
+    const result = await listRunsSinceCompletedCheckpoint(async () => ({
+      totalCount: 3,
+      runs: [queued, inProgress, run(298, 1)],
+    }), null);
+
+    expect(result.runs).toEqual([queued, inProgress, run(298, 1)]);
+    expect(result.newestCheckpoint).toEqual({ runId: 298, runAttempt: 1 });
   });
 });
 
@@ -157,6 +178,12 @@ test("pairs rerun attempts during repository discovery", async () => {
   expect(persistedRuns).toContainEqual({ runId: 32564909816, runAttempt: 2, status: "queued" });
   expect(persistedJobs).toContainEqual({ runId: 32564909816, githubJobId: 97018978327, runAttempt: 2, status: "queued" });
   expect(requests.some((url) => url === "https://api.github.com/repos/acme/repo/actions/runs/32564909816/attempts/2/jobs?per_page=100&page=1")).toBe(true);
+  const runRequests = requests.filter((url) => url.includes("/actions/runs?"));
+  expect(runRequests).toEqual([
+    "https://api.github.com/repos/acme/repo/actions/runs?per_page=100&page=1",
+    "https://api.github.com/repos/acme/repo/actions/runs?per_page=100&page=1",
+  ]);
+  expect(runRequests.every((url) => !url.includes("status=completed"))).toBe(true);
   expect(requests.some((url) => url.includes("/actions/runs/32564909816/jobs?filter=latest"))).toBe(false);
 });
 

@@ -32,26 +32,26 @@ async function pages<T>(load: (page: number) => Promise<{ totalCount: number; it
   }
   return result;
 }
-export async function listCompletedRunsSince(
+export async function listRunsSinceCompletedCheckpoint(
   load: (page: number) => Promise<{ totalCount: number; runs: GithubRunSnapshot[] }>,
   checkpoint: { runId: number; runAttempt: number } | null,
 ): Promise<{ runs: GithubRunSnapshot[]; newestCheckpoint: { runId: number; runAttempt: number } | null }> {
   const runs: GithubRunSnapshot[] = [];
   let newestCheckpoint: { runId: number; runAttempt: number } | null = null;
-  let totalCount = 0;
-  for (let page = 1; page <= 10; page += 1) {
+  let consumed = 0;
+  for (let page = 1;; page += 1) {
     const response = await load(page);
-    totalCount = response.totalCount;
-    if (!newestCheckpoint && response.runs[0]) newestCheckpoint = { runId: response.runs[0].id, runAttempt: response.runs[0].runAttempt };
+    consumed += response.runs.length;
     for (const run of response.runs) {
+      if (!newestCheckpoint && run.status === "completed") newestCheckpoint = { runId: run.id, runAttempt: run.runAttempt };
       if (checkpoint && run.id === checkpoint.runId && run.runAttempt === checkpoint.runAttempt) return { runs, newestCheckpoint };
       runs.push(run);
     }
-    if (checkpoint === null || runs.length >= Math.min(response.totalCount, 1000) || response.runs.length === 0) break;
+    if (checkpoint === null || response.runs.length === 0 || consumed >= response.totalCount) break;
   }
-  if (checkpoint !== null && totalCount > 1000 && runs.length >= 1000) throw new Error("completed_run_checkpoint_unreachable");
   return { runs, newestCheckpoint };
 }
+
 
 
 async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unknown>): Promise<{ discovered: number; updated: number }> {
@@ -66,8 +66,8 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
     if (run.status === "queued" || run.status === "in_progress") runs.set(`${run.id}:${run.runAttempt}`, run);
   }
   const [checkpoint] = await deps.db`SELECT completed_run_id AS "completedRunId",completed_run_attempt AS "completedRunAttempt" FROM github_discovery_checkpoints WHERE repository_id=${String(row.repositoryId)}`;
-  const completed = await listCompletedRunsSince(
-    page => client.listRuns(owner, repo, "completed", page),
+  const completed = await listRunsSinceCompletedCheckpoint(
+    page => client.listRuns(owner, repo, undefined, page),
     checkpoint?.completedRunId == null || checkpoint?.completedRunAttempt == null ? null : { runId: Number(checkpoint.completedRunId), runAttempt: Number(checkpoint.completedRunAttempt) },
   );
   for (const run of completed.runs) runs.set(`${run.id}:${run.runAttempt}`, run);

@@ -18,13 +18,13 @@ test("shows globally configurable workers without an organization filter", () =>
   expect(html).not.toContain("Select an organization to adopt and configure this worker.");
 });
 test("reusable resource form accepts worker capacity", () => { const html = formMarkup(); expect(html).toContain("vCPU"); expect(html).toContain("GiB"); expect(html).toContain("Approve and configure worker"); });
-test("does not offer an invalid zero-GiB default for insufficient capacity", () => {
+test("uses total capacity when free telemetry is insufficient", () => {
   const lowCapacity = { ...worker, capacity: { ...worker.capacity, freeMemoryBytes: 90 * 1024 ** 2 } };
   const html = formMarkup(lowCapacity);
-  expect(html).toContain("less than 1 GiB of free RAM");
+  expect(html).not.toContain("less than 1 GiB of free RAM");
   expect(html).toContain('name="memoryGiB"');
-  expect(html).toContain('value=""');
-  expect(html).toContain('disabled=""');
+  expect(html).toContain('value="16"');
+  expect(html).not.toContain('disabled=""');
 });
 test("polls for workers joined outside the browser", () => {
   expect(pendingWorkerQueryOptions().refetchInterval).toBe(2000);

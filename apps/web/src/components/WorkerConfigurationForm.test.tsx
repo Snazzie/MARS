@@ -24,6 +24,18 @@ const worker = {
   capacity,
   limits: null,
 };
+test("bounds appliance allocation by total capacity, not free telemetry", () => {
+  const client = new QueryClient();
+  const markup = renderToStaticMarkup(<QueryClientProvider client={client}><WorkerConfigurationForm worker={{ ...worker, capacity: { ...capacity, freeVcpu: 2, freeMemoryBytes: 2 * 1024 ** 3, freeStorageBytes: 4 * 1024 ** 3 } }} onConfigured={() => {}} /></QueryClientProvider>);
+  expect(markup).toContain('name="vcpu"');
+  expect(markup).toContain('max="8"');
+  expect(markup).toContain('max="16"');
+  expect(markup).toContain('max="32"');
+  expect(markup).toContain('value="8"');
+  expect(markup).toContain('value="16"');
+  expect(markup).toContain('value="32"');
+  expect(markup).not.toContain("less than 1 GiB");
+});
 
 test("defaults Cache TTL (hours) and runner cache settings", () => {
   const client = new QueryClient();
