@@ -82,6 +82,7 @@ test("snapshot end rejects an unknown snapshot without clearing live inventory",
 test("snapshot pages atomically replace only after complete and valid end", async () => {
   const { db, calls } = fakeDb();
   await applyWorkerCacheTelemetry(db, event("worker.cache_snapshot_begin", { snapshotId: generation, status }));
+  expect(calls.some((sql) => sql.includes("runner_cache_enabled=CASE WHEN worker_cache_status.generation IS DISTINCT FROM excluded.generation THEN NULL"))).toBe(true);
   await applyWorkerCacheTelemetry(db, event("worker.cache_snapshot_page", { snapshotId: generation, sequence: 0, entries: [entry] }));
   expect(await applyWorkerCacheTelemetry(db, event("worker.cache_snapshot_end", { snapshotId: generation, pageCount: 1, entryCount: 1, sizeBytes: "9007199254740993" }))).toBe(true);
   expect(calls.some((sql) => sql.includes("DELETE FROM worker_cache_entries"))).toBe(true);
