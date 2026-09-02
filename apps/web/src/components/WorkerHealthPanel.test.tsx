@@ -28,11 +28,12 @@ const healthFixture = (overrides: Partial<WorkerHealth> = {}): WorkerHealth => (
   ...overrides,
 });
 
-test("renders usage, cache health, and running jobs with accessible sections", () => {
+test("renders usage, cache health, and workload telemetry with accessible sections", () => {
   const markup = renderToStaticMarkup(<WorkerHealthPanel health={healthFixture()} />);
   expect(markup).toContain("System usage");
   expect(markup).toContain("Cache health");
-  expect(markup).toContain("Running jobs");
+  expect(markup).toContain("Managed containers");
+  expect(markup).toContain("Unassigned jobs");
   expect(markup).toContain("Actual");
   expect(markup).toContain("Desired TTL");
   expect(markup).toContain("acme/repo");
@@ -44,7 +45,6 @@ test("renders usage, cache health, and running jobs with accessible sections", (
   expect(markup).toContain("Runner cache entries");
   expect(markup).toContain("Runner cache size");
   expect(markup).toContain("Runner cache observed");
-  expect(markup).toContain("<caption>Running worker jobs</caption>");
   expect(markup).toContain("<time dateTime=\"2026-08-23T11:59:56.000Z\">");
 });
 
@@ -157,10 +157,11 @@ test("prefixes panel and subsection IDs per worker", () => {
   expect(markup).toContain('id="worker-health-worker-42-panel"');
   expect(markup).toContain('aria-labelledby="worker-health-worker-42-usage-heading"');
   expect(markup).toContain('aria-labelledby="worker-health-worker-42-cache-heading"');
-  expect(markup).toContain('aria-labelledby="worker-health-worker-42-jobs-heading"');
+  expect(markup).toContain('aria-labelledby="worker-health-worker-42-containers-heading"');
+  expect(markup).not.toContain('aria-labelledby="worker-health-worker-42-jobs-heading"');
 });
 
-test("renders managed containers with lifecycle, metrics, writable disk, and freshness", () => {
+test("renders managed containers with their matching jobs and explicit unmatched workload states", () => {
   const sampledRecently = new Date(Date.now() - 59_500).toISOString();
   const sampledEarlier = new Date(Date.now() - 125_000).toISOString();
   const markup = renderToStaticMarkup(<WorkerHealthPanel workerId="worker-42" health={healthFixture({
@@ -168,12 +169,28 @@ test("renders managed containers with lifecycle, metrics, writable disk, and fre
       { containerId: "a".repeat(64), name: "alpha", leaseId: "33333333-3333-4333-8333-333333333333", state: "running", cpuUsagePercent: 12.34, memoryWorkingSetBytes: "536870912", memoryLimitBytes: "1073741824", diskUsageBytes: "2147483648", sampledAt: sampledRecently },
       { containerId: "b".repeat(64), name: "beta", leaseId: "44444444-4444-4444-8444-444444444444", state: "exited", cpuUsagePercent: null, memoryWorkingSetBytes: null, memoryLimitBytes: null, diskUsageBytes: "0", sampledAt: sampledEarlier },
     ],
+    jobs: [
+      { jobId: 42, repositoryFullName: "acme/project", repositoryName: "project", leaseId: "33333333-3333-4333-8333-333333333333", state: "running", startedAt: "2026-08-23T11:59:56.000Z", ageSeconds: 3, requested: { vcpu: 2, memoryBytes: "1073741824", storageBytes: "2147483648", concurrency: 2 } },
+      { jobId: 99, repositoryFullName: "acme/unassigned", repositoryName: "unassigned", leaseId: "66666666-6666-4666-8666-666666666666", state: "queued", startedAt: null, ageSeconds: null, requested: { vcpu: 1, memoryBytes: "536870912", storageBytes: "100", concurrency: 1 } },
+    ],
   })} />);
   expect(markup).toContain("Managed containers");
   expect(markup).toContain("<caption>Current managed containers and resource usage</caption>");
-  for (const heading of ["Container", "State", "CPU", "Memory", "Disk", "Freshness"]) expect(markup).toContain(`<th scope="col">${heading}</th>`);
+  for (const heading of ["Container", "State", "CPU", "Memory", "Disk", "Freshness", "Job ID", "Repository / name", "Lease state", "Age", "vCPU", "Storage", "Concurrency"]) expect(markup).toContain(`<th scope="col">${heading}</th>`);
   expect(markup).toContain("<strong>alpha</strong>");
   expect(markup).toContain("<strong>beta</strong>");
+  const rows = [...markup.matchAll(/<tr>[\s\S]*?<\/tr>/g)].map(([row]) => row);
+  const alphaRow = rows.find((row) => row.includes("<strong>alpha</strong>")) ?? "";
+  expect(alphaRow).toContain("<td>42</td>");
+  expect(alphaRow).toContain("acme/project");
+  expect(alphaRow).not.toContain("acme/unassigned");
+  const betaRow = rows.find((row) => row.includes("<strong>beta</strong>")) ?? "";
+  expect(betaRow).toContain("No job assigned");
+  expect(betaRow).not.toContain("<td>42</td>");
+  expect(betaRow).not.toContain("acme/project");
+  expect(markup).toContain("Unassigned jobs");
+  expect(markup).toContain("<td>99</td>");
+  expect(markup).toContain("acme/unassigned");
   expect(markup).toContain('title="' + "a".repeat(64) + '"');
   expect(markup).toContain('tabindex="0"');
   expect(markup).toContain("aaaaaaaaaaaa…");
