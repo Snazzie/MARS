@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +32,38 @@ async function request(
   if (!address || typeof address === "string") throw new Error("server did not bind");
   const response = await fetch(`http://127.0.0.1:${address.port}${path}`, { headers: { host, ...headers } });
   return { response, bytes: new Uint8Array(await response.arrayBuffer()) };
+}
+
+async function rawRequest(
+  cache: PackageDownloadCache,
+  path: string,
+  headers: Record<string, string> = {},
+  host = "cdn.playwright.dev",
+) {
+  const server = createServer((incoming, outgoing) => void cache.handle(incoming, outgoing));
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("server did not bind");
+  return await new Promise<{ status: number; headers: Headers; bytes: Uint8Array }>((resolve, reject) => {
+    const client = httpRequest({
+      hostname: "127.0.0.1",
+      port: address.port,
+      path,
+      headers: { host, ...headers },
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.on("end", () => resolve({
+        status: response.statusCode ?? 0,
+        headers: new Headers(response.headers as Record<string, string>),
+        bytes: new Uint8Array(Buffer.concat(chunks)),
+      }));
+      response.on("error", reject);
+    });
+    client.on("error", reject);
+    client.end();
+  });
 }
 
 test("publishes Playwright archives for each supported host as MISS then byte-identical HIT", async () => {
@@ -98,6 +130,35 @@ test("bypasses non-archive, credentialed, and ranged Playwright requests", async
       expect(second.response.headers.get("x-mars-package-cache")).toBeNull();
     }
     expect(requests).toEqual(bypasses.flatMap(({ host, path }) => [{ host, path }, { host, path }]));
+  } finally {
+    await cache.close();
+  }
+});
+
+test("bypasses empty query and fragment delimiters instead of canonicalizing them away", async () => {
+  const root = await temporaryRoot();
+  const body = new Uint8Array([5, 4, 3, 2]);
+  const paths = ["/builds/chromium/1187/chrome-linux.zip?", "/builds/chromium/1187/chrome-linux.zip#fragment"];
+  const requests: string[] = [];
+  const cache = await openPackageDownloadCache({
+    root,
+    ttlSeconds: 60,
+    upstream: async (request, response) => {
+      requests.push(request.url ?? "");
+      response.writeHead(200, { "content-type": "application/zip", "content-length": String(body.byteLength) });
+      response.end(body);
+    },
+  });
+  try {
+    for (const path of paths) {
+      const first = await rawRequest(cache, path);
+      const second = await rawRequest(cache, path);
+      expect(first.bytes).toEqual(body);
+      expect(second.bytes).toEqual(body);
+      expect(first.headers.get("x-mars-package-cache")).toBeNull();
+      expect(second.headers.get("x-mars-package-cache")).toBeNull();
+    }
+    expect(requests).toEqual(paths.flatMap((path) => [path, path]));
   } finally {
     await cache.close();
   }

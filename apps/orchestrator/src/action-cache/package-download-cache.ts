@@ -83,6 +83,7 @@ function canonicalUrlFor(request: IncomingMessage): string | null {
   const host = hostFor(request);
   if (!CACHEABLE_HOSTS.has(host)) return null;
   const rawUrl = request.url ?? "";
+  if (rawUrl.includes("?") || rawUrl.includes("#")) return null;
   let url: URL;
   try { url = new URL(rawUrl, `https://${host}`); } catch { return null; }
   if (url.hostname.toLowerCase() !== host || (url.port && url.port !== "443") || url.username || url.password || url.search || url.hash) return null;
