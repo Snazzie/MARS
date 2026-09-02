@@ -20,6 +20,32 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Verify Windows package cache interception
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixture = Join-Path $pwd 'tests/fixtures/bun-package-cache'
+          $firstCache = Join-Path $env:RUNNER_TEMP 'mars-bun-package-cache-first'
+          $secondCache = Join-Path $env:RUNNER_TEMP 'mars-bun-package-cache-second'
+          $nodeModules = Join-Path $fixture 'node_modules'
+          Remove-Item -LiteralPath $firstCache, $secondCache, $nodeModules -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $firstCache, $secondCache | Out-Null
+          Push-Location $fixture
+          try {
+            $env:BUN_INSTALL_CACHE_DIR = $firstCache
+            bun install --frozen-lockfile
+            if ($LASTEXITCODE -ne 0) { throw "First isolated package install failed with exit code $LASTEXITCODE" }
+            Remove-Item -LiteralPath $nodeModules -Recurse -Force -ErrorAction SilentlyContinue
+            $env:BUN_INSTALL_CACHE_DIR = $secondCache
+            bun install --frozen-lockfile
+            if ($LASTEXITCODE -ne 0) { throw "Second isolated package install failed with exit code $LASTEXITCODE" }
+            if (-not (Test-Path -LiteralPath (Join-Path $nodeModules 'is-number'))) {
+              throw 'Second isolated package install did not materialize is-number'
+            }
+          } finally {
+            $env:BUN_INSTALL_CACHE_DIR = $null
+            Pop-Location
+          }
       - name: Typecheck
         run: bun run typecheck
       - name: Lint

@@ -57,6 +57,39 @@ cat "$NODE_EXTRA_CA_CERTS" >> '${outputPath}'
   expect(caPath).toBeTruthy();
   expect(await Bun.file(caPath).exists()).toBe(false);
 });
+test("Windows run.cmd descendant receives worker cache environment", async () => {
+  if (process.platform !== "win32") return;
+  const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
+  roots.push(root);
+  const outputPath = join(root, "cache-env.txt");
+  await writeFile(join(root, "run.cmd"), `@echo off
+>"${outputPath}" echo(%HTTP_PROXY%
+>>"${outputPath}" echo(%http_proxy%
+>>"${outputPath}" echo(%HTTPS_PROXY%
+>>"${outputPath}" echo(%https_proxy%
+>>"${outputPath}" echo(%NO_PROXY%
+>>"${outputPath}" echo(%no_proxy%
+>>"${outputPath}" echo(%NODE_EXTRA_CA_CERTS%
+>>"${outputPath}" echo(%node_extra_ca_certs%
+if exist "%NODE_EXTRA_CA_CERTS%" (
+  >>"${outputPath}" echo readable
+) else (
+  >>"${outputPath}" echo unreadable
+)
+>>"${outputPath}" type "%NODE_EXTRA_CA_CERTS%"
+exit /b 0
+`, { mode: 0o700 });
+
+  expect(await consumeGuestJitConfigWithWorkerCache("encoded-jit-config", root, "windows-x64", workerCache)).toBe(0);
+
+  const lines = (await Bun.file(outputPath).text()).split(/\r?\n/);
+  expect(lines.slice(0, 4)).toEqual(Array(4).fill(workerCache.proxyUrl));
+  expect(lines.slice(4, 6)).toEqual(["", ""]);
+  expect(lines[6]).toBe(lines[7]);
+  expect(lines[8]).toBe("readable");
+  expect(lines.slice(9).join("\n")).toContain(workerCache.caCertificatePem.trim());
+  expect(await Bun.file(lines[6]).exists()).toBe(false);
+});
 
 test("waits for the host to copy the guest bootstrap after startup", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
