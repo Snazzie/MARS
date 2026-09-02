@@ -193,12 +193,26 @@ export const WorkerCacheSnapshotEndTelemetry = z.object({
     sizeBytes: decimalInt64,
   }).strict(),
 }).strict();
+export const WorkerRunnerCacheStatus = z.object({
+  generation: z.string().uuid(),
+  enabled: z.boolean(),
+  maxGiB: z.number().int().positive().safe(),
+  sizeBytes: decimalInt64,
+  entryCount: z.number().int().nonnegative().safe(),
+  observedAt: z.string().datetime({ offset: true }),
+}).strict();
+export type WorkerRunnerCacheStatus = z.infer<typeof WorkerRunnerCacheStatus>;
+export const WorkerRunnerCacheStatusTelemetry = z.object({
+  type: z.literal("worker.runner_cache_status"),
+  payload: WorkerRunnerCacheStatus,
+}).strict();
 export const WorkerCacheTelemetry = z.discriminatedUnion("type", [
   WorkerCacheEntryUpsertTelemetry,
   WorkerCacheEntryDeletedTelemetry,
   WorkerCacheSnapshotBeginTelemetry,
   WorkerCacheSnapshotPageTelemetry,
   WorkerCacheSnapshotEndTelemetry,
+  WorkerRunnerCacheStatusTelemetry,
 ]);
 export type WorkerCacheTelemetry = z.infer<typeof WorkerCacheTelemetry>;
 export const WorkerRunnerCachePurgePayload = z.object({ workerId: z.string().uuid() }).strict();
@@ -221,6 +235,7 @@ export const WorkerEventPayload = z.discriminatedUnion("type", [
   WorkerCacheSnapshotBeginTelemetry,
   WorkerCacheSnapshotPageTelemetry,
   WorkerCacheSnapshotEndTelemetry,
+  WorkerRunnerCacheStatusTelemetry,
 ]);
 export const WorkerApplianceConfiguration = z.object({ vcpu: positiveSafe, memoryBytes: positiveSafe, storageBytes: positiveSafe }).strict();
 const workerCacheTtlSeconds = z.number().int().positive().safe();

@@ -301,6 +301,20 @@ test("parses strict lossless worker cache telemetry", () => {
     type: "worker.cache_snapshot_begin",
     payload: { snapshotId: "33333333-3333-4333-8333-333333333333", status },
   }).payload).toEqual({ snapshotId: "33333333-3333-4333-8333-333333333333", status });
+  const runnerStatus = {
+    generation: status.generation,
+    enabled: true,
+    maxGiB: 20,
+    sizeBytes: "9007199254740993",
+    entryCount: 1,
+    observedAt: "2026-08-23T12:01:00.000Z",
+  };
+  expect(orchestration.WorkerRunnerCacheStatus.parse(runnerStatus)).toEqual(runnerStatus);
+  expect(orchestration.WorkerCacheTelemetry.parse({ type: "worker.runner_cache_status", payload: runnerStatus }).payload).toEqual(runnerStatus);
+  expect(orchestration.WorkerEventPayload.parse({ type: "worker.runner_cache_status", payload: runnerStatus }).payload).toEqual(runnerStatus);
+  expect(orchestration.WorkerRunnerCacheStatus.safeParse({ ...runnerStatus, unknown: true }).success).toBe(false);
+  expect(orchestration.WorkerRunnerCacheStatus.safeParse({ ...runnerStatus, entryCount: -1 }).success).toBe(false);
+  expect(orchestration.WorkerRunnerCacheStatus.safeParse({ ...runnerStatus, sizeBytes: "12.5" }).success).toBe(false);
   expect(orchestration.WorkerCacheEntryProjection.safeParse({ ...entry, sizeBytes: 9_007_199_254_740_993 }).success).toBe(false);
   expect(orchestration.WorkerCacheEntryProjection.safeParse({ ...entry, githubRepositoryId: "9223372036854775808" }).success).toBe(false);
   expect(() => orchestration.WorkerCacheEntryProjection.safeParse({ ...entry, githubRepositoryId: "not-a-number" })).not.toThrow();

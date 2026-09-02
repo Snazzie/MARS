@@ -210,8 +210,18 @@ CREATE TABLE IF NOT EXISTS worker_cache_status (
   error text,
   active_snapshot_id uuid,
   active_snapshot_started_at timestamptz,
-  last_completed_snapshot_id uuid
+  last_completed_snapshot_id uuid,
+  runner_cache_enabled boolean,
+  runner_cache_max_gib integer,
+  runner_cache_size_bytes bigint CHECK (runner_cache_size_bytes >= 0),
+  runner_cache_entry_count bigint CHECK (runner_cache_entry_count >= 0),
+  runner_cache_observed_at timestamptz
 );
+ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_enabled boolean;
+ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_max_gib integer;
+ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_size_bytes bigint;
+ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_entry_count bigint;
+ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_observed_at timestamptz;
 CREATE TABLE IF NOT EXISTS worker_cache_entries (
   worker_id uuid NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
   entry_id uuid NOT NULL,

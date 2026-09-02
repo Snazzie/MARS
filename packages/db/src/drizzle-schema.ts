@@ -827,10 +827,17 @@ export const workerCacheStatus = pgTable("worker_cache_status", {
 	activeSnapshotId: uuid("active_snapshot_id"),
 	activeSnapshotStartedAt: timestamp("active_snapshot_started_at", { withTimezone: true, mode: 'string' }),
 	lastCompletedSnapshotId: uuid("last_completed_snapshot_id"),
+	runnerCacheEnabled: boolean("runner_cache_enabled"),
+	runnerCacheMaxGiB: integer("runner_cache_max_gib"),
+	runnerCacheSizeBytes: bigint("runner_cache_size_bytes", { mode: "number" }),
+	runnerCacheEntryCount: bigint("runner_cache_entry_count", { mode: "number" }),
+	runnerCacheObservedAt: timestamp("runner_cache_observed_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
 	foreignKey({ columns: [table.workerId], foreignColumns: [workers.id], name: "worker_cache_status_worker_id_fkey" }).onDelete("cascade"),
 	check("worker_cache_status_size_bytes_check", sql`size_bytes >= 0`),
 	check("worker_cache_status_entry_count_check", sql`entry_count >= 0`),
+	check("worker_cache_status_runner_size_bytes_check", sql`runner_cache_size_bytes IS NULL OR runner_cache_size_bytes >= 0`),
+	check("worker_cache_status_runner_entry_count_check", sql`runner_cache_entry_count IS NULL OR runner_cache_entry_count >= 0`),
 ]);
 
 export const workerCacheEntries = pgTable("worker_cache_entries", {

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { applyWorkerLeaseEvent, handleAuthenticatedWorkerEvent, timingDurations } from "./worker-lifecycle.ts";
 
 const workerId = "11111111-1111-4111-8111-111111111111";
+const generation = "22222222-2222-4222-8222-222222222222";
 const leaseId = "22222222-2222-4222-8222-222222222222";
 const nonce = "n".repeat(32);
 const event = (type: string, payload: Record<string, unknown>) => ({ version: 1, id: crypto.randomUUID(), workerId, type, occurredAt: new Date().toISOString(), payload });
@@ -126,6 +127,23 @@ test("routes authenticated worker cache telemetry to durable cache storage", asy
   const insert = calls.find((call) => call.query.includes("INSERT INTO worker_cache_entries"));
   expect(insert?.query).toContain("INSERT INTO worker_cache_entries");
   expect(insert?.values).toContain(workerId);
+});
+test("routes authenticated runner cache status telemetry to durable status columns", async () => {
+  const calls: Array<{ query: string; values: unknown[] }> = [];
+  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const query = strings.join(" ");
+    calls.push({ query, values });
+    return query.includes("SELECT generation FROM worker_cache_status") ? [{ generation }] : [];
+  }, {}) as never;
+  db.begin = async (fn: (tx: typeof db) => unknown) => fn(db);
+  const accepted = await handleAuthenticatedWorkerEvent(
+    db,
+    { handleEvent() { return false; } },
+    event("worker.runner_cache_status", { generation, enabled: true, maxGiB: 20, sizeBytes: "123", entryCount: 1, observedAt: new Date().toISOString() }),
+    { send() {} },
+  );
+  expect(accepted).toBe(true);
+  expect(calls.some(({ query }) => query.includes("UPDATE worker_cache_status SET runner_cache_enabled"))).toBe(true);
 });
 test("accepts cache snapshot telemetry frames", async () => {
   const base = acceptingDb();

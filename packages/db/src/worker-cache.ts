@@ -27,6 +27,11 @@ function validStatus(value: unknown): value is CacheStatus {
   const status = value as Record<string, unknown>;
   return uuid(status.generation) && typeof status.ready === "boolean" && Number.isSafeInteger(status.ttlSeconds) && Number(status.ttlSeconds) > 0 && typeof status.proxyOrigin === "string" && typeof status.cacheBaseUrl === "string" && typeof status.sizeBytes === "string" && typeof status.entryCount === "number" && Number.isSafeInteger(status.entryCount) && status.entryCount >= 0 && typeof status.observedAt === "string" && (status.error === null || typeof status.error === "string");
 }
+function validRunnerStatus(value: unknown): value is { generation: string; enabled: boolean; maxGiB: number; sizeBytes: string; entryCount: number; observedAt: string } {
+  if (!value || typeof value !== "object") return false;
+  const status = value as Record<string, unknown>;
+  return uuid(status.generation) && typeof status.enabled === "boolean" && Number.isSafeInteger(status.maxGiB) && status.maxGiB > 0 && typeof status.sizeBytes === "string" && /^(?:0|[1-9]\d*)$/.test(status.sizeBytes) && typeof status.entryCount === "number" && Number.isSafeInteger(status.entryCount) && status.entryCount >= 0 && typeof status.observedAt === "string" && Number.isFinite(Date.parse(status.observedAt));
+}
 
 export async function sweepWorkerCacheSnapshots(db: SqlDb, maxAgeSeconds = 86_400): Promise<void> {
   if (!Number.isSafeInteger(maxAgeSeconds) || maxAgeSeconds < 1) throw new Error("snapshot sweep age must be a positive safe integer");
@@ -43,6 +48,17 @@ async function refreshWorkerCacheSummary(db: SqlDb, workerId: string, generation
 export async function applyWorkerCacheTelemetry(db: SqlDb, input: TelemetryEvent): Promise<boolean> {
   const payload = input.payload ?? {};
   if (!uuid(input.workerId)) return false;
+  if (input.type === "worker.runner_cache_status") {
+    if (!validRunnerStatus(payload)) return false;
+    const status = payload;
+    if (!db.begin) return false;
+    return await db.begin(async (tx) => {
+      const [active] = await tx<{ generation?: unknown }[]>`SELECT generation FROM worker_cache_status WHERE worker_id=${input.workerId} FOR UPDATE`;
+      if (active?.generation !== status.generation) return false;
+      await tx`UPDATE worker_cache_status SET runner_cache_enabled=${status.enabled},runner_cache_max_gib=${status.maxGiB},runner_cache_size_bytes=${status.sizeBytes},runner_cache_entry_count=${status.entryCount},runner_cache_observed_at=${status.observedAt} WHERE worker_id=${input.workerId} AND generation=${status.generation}`;
+      return true;
+    });
+  }
   if (input.type === "worker.cache_entry_upsert") {
     const entry = payload.entry;
     if (!uuid(payload.generation) || !validEntry(entry)) return false;

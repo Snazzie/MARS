@@ -17,6 +17,7 @@ const entry = {
   expiresAt: "2026-08-25T12:01:00.000Z",
 };
 const status = { generation, ready: true, ttlSeconds: 172800, proxyOrigin: "http://worker.local:8788", cacheBaseUrl: "https://worker.local:8789", sizeBytes: "1", entryCount: 1, observedAt: "2026-08-23T12:01:00.000Z", error: null };
+const runnerStatus = { generation, enabled: true, maxGiB: 20, sizeBytes: "9007199254740993", entryCount: 1, observedAt: "2026-08-23T12:01:00.000Z" };
 const event = (type: string, payload: Record<string, unknown>) => ({ version: 1, id: crypto.randomUUID(), workerId, type, occurredAt: new Date().toISOString(), payload });
 
 function fakeDb(rows: Record<string, unknown>[] = []) {
@@ -56,6 +57,20 @@ test("worker cache upsert rejects a delta from an inactive generation", async ()
   const staleGeneration = "44444444-4444-4444-8444-444444444444";
   expect(await applyWorkerCacheTelemetry(db, event("worker.cache_entry_upsert", { generation: staleGeneration, entry }))).toBe(false);
   expect(calls.some((sql) => sql.includes("INSERT INTO worker_cache_entries"))).toBe(false);
+});
+test("runner cache status updates only the matching generation", async () => {
+  const { db, calls } = fakeDb();
+  expect(await applyWorkerCacheTelemetry(db, event("worker.runner_cache_status", runnerStatus))).toBe(true);
+  const update = calls.find((sql) => sql.includes("runner_cache_enabled"));
+  expect(update).toContain("runner_cache_max_gib");
+  expect(update).toContain("runner_cache_observed_at");
+});
+test("runner cache status rejects stale generations without touching Actions data", async () => {
+  const { db, calls } = fakeDb();
+  const stale = { ...runnerStatus, generation: "44444444-4444-4444-8444-444444444444" };
+  expect(await applyWorkerCacheTelemetry(db, event("worker.runner_cache_status", stale))).toBe(false);
+  expect(calls.some((sql) => sql.includes("UPDATE worker_cache_status SET runner_cache_"))).toBe(false);
+  expect(calls.some((sql) => sql.includes("worker_cache_entries"))).toBe(false);
 });
 
 test("snapshot end rejects an unknown snapshot without clearing live inventory", async () => {

@@ -127,6 +127,11 @@ test("canonical and baseline schemas define worker cache tables and indexes", ()
     expect(sql).toContain("worker_id uuid PRIMARY KEY REFERENCES workers(id) ON DELETE CASCADE");
     expect(sql).toContain("size_bytes bigint NOT NULL DEFAULT 0 CHECK (size_bytes >= 0)");
     expect(sql).toContain("entry_count bigint NOT NULL DEFAULT 0 CHECK (entry_count >= 0)");
+    expect(sql).toContain("runner_cache_enabled boolean");
+    expect(sql).toContain("runner_cache_max_gib integer");
+    expect(sql).toContain("runner_cache_size_bytes bigint");
+    expect(sql).toContain("runner_cache_entry_count bigint");
+    expect(sql).toContain("runner_cache_observed_at timestamptz");
     expect(sql).toContain("CREATE TABLE IF NOT EXISTS worker_cache_entries (");
     expect(sql).toContain("PRIMARY KEY (worker_id, entry_id)");
     expect(sql).toContain(
