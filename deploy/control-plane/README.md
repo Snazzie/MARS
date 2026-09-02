@@ -221,3 +221,21 @@ The template is unprivileged, targets Linux/amd64, keeps PostgreSQL external,
 and publishes host port 3000 in bridge mode. It intentionally has no worker
 manifest or worker contract inputs because those values belong to the
 released image.
+
+For a private Windows worker on the same tailnet, install Tailscale on
+Unraid and expose the local control plane without publishing another port:
+
+```bash
+tailscale serve --bg 3000
+tailscale serve status
+```
+
+Use the resulting HTTPS node URL as `WORKER_BASE_URL`, for example
+`https://megavault.koi-pleco.ts.net`. Keep `PUBLIC_BASE_URL` set to the
+browser-facing URL and `GITHUB_WEBHOOK_URL` set to a separate public HTTPS
+origin; neither should be replaced with the private Tailscale URL.
+
+After the container is healthy, open `PUBLIC_BASE_URL`, create/install the
+GitHub App, generate a worker bootstrap code, select the Windows container
+runtime, and run the generated PowerShell command on the Windows host. The
+command is single-use and must not be edited.
