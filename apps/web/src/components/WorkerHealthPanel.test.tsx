@@ -170,8 +170,8 @@ test("renders managed containers with their matching jobs and explicit unmatched
       { containerId: "b".repeat(64), name: "beta", leaseId: "44444444-4444-4444-8444-444444444444", state: "exited", cpuUsagePercent: null, memoryWorkingSetBytes: null, memoryLimitBytes: null, diskUsageBytes: "0", sampledAt: sampledEarlier },
     ],
     jobs: [
-      { jobId: 42, repositoryFullName: "acme/project", repositoryName: "project", leaseId: "33333333-3333-4333-8333-333333333333", state: "running", startedAt: "2026-08-23T11:59:56.000Z", ageSeconds: 3, requested: { vcpu: 2, memoryBytes: "1073741824", storageBytes: "2147483648", concurrency: 2 } },
-      { jobId: 99, repositoryFullName: "acme/unassigned", repositoryName: "unassigned", leaseId: "66666666-6666-4666-8666-666666666666", state: "queued", startedAt: null, ageSeconds: null, requested: { vcpu: 1, memoryBytes: "536870912", storageBytes: "100", concurrency: 1 } },
+      { jobId: 42, repositoryFullName: "acme/project", repositoryName: "project", leaseId: "33333333-3333-4333-8333-333333333333", state: "running", startedAt: "2026-08-23T11:59:56.000Z", ageSeconds: 3, requested: { vcpu: 4, memoryBytes: "3221225472", storageBytes: "4294967296", concurrency: 5 } },
+      { jobId: 99, repositoryFullName: "acme/project", repositoryName: "project", leaseId: "33333333-3333-4333-8333-333333333334", state: "running", startedAt: "2026-08-23T11:59:56.000Z", ageSeconds: 3, requested: { vcpu: 4, memoryBytes: "3221225472", storageBytes: "4294967296", concurrency: 5 } },
     ],
   })} />);
   expect(markup).toContain("Managed containers");
@@ -182,15 +182,27 @@ test("renders managed containers with their matching jobs and explicit unmatched
   const rows = [...markup.matchAll(/<tr>[\s\S]*?<\/tr>/g)].map(([row]) => row);
   const alphaRow = rows.find((row) => row.includes("<strong>alpha</strong>")) ?? "";
   expect(alphaRow).toContain("<td>42</td>");
-  expect(alphaRow).toContain("acme/project");
-  expect(alphaRow).not.toContain("acme/unassigned");
+  expect(alphaRow).toContain("<td>running</td>");
+  expect(alphaRow).toContain(">3s</time>");
+  expect(alphaRow).toContain("<td>- / 4</td>");
+  expect(alphaRow).toContain("<td>- / 3.0 GiB</td>");
+  expect(alphaRow).toContain("<td>- / 4.0 GiB</td>");
+  expect(alphaRow).toContain("<td>- / 5</td>");
+  expect(alphaRow).not.toContain("<td>99</td>");
   const betaRow = rows.find((row) => row.includes("<strong>beta</strong>")) ?? "";
   expect(betaRow).toContain("No job assigned");
   expect(betaRow).not.toContain("<td>42</td>");
+  expect(betaRow).not.toContain("<td>99</td>");
   expect(betaRow).not.toContain("acme/project");
-  expect(markup).toContain("Unassigned jobs");
-  expect(markup).toContain("<td>99</td>");
-  expect(markup).toContain("acme/unassigned");
+  const unassignedStart = markup.indexOf("Unassigned jobs");
+  expect(unassignedStart).toBeGreaterThan(-1);
+  const unassignedMarkup = markup.slice(unassignedStart);
+  expect(unassignedMarkup).toContain("<td>99</td>");
+  expect(unassignedMarkup).toContain("acme/project");
+  expect(unassignedMarkup).not.toContain("<td>42</td>");
+  expect(unassignedMarkup).not.toContain("No job assigned");
+  expect(markup).not.toContain("Running jobs");
+  expect(markup).not.toContain("Running worker jobs");
   expect(markup).toContain('title="' + "a".repeat(64) + '"');
   expect(markup).toContain('tabindex="0"');
   expect(markup).toContain("aaaaaaaaaaaa…");
