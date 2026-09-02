@@ -236,6 +236,56 @@ describe("control-plane HTTP boundary", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  test("serves a local Windows upgrade installer without container artifacts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mars-local-windows-upgrades-"));
+    try {
+      const orchestrator = join(root, "mars-orchestrator.exe");
+      const serviceHost = join(root, "mars-service-host.exe");
+      await Bun.write(join(root, "install-worker.ps1"), "[CmdletBinding()]\r\nparam()\r\n");
+      await Bun.write(orchestrator, "local-orchestrator");
+      await Bun.write(serviceHost, "local-service-host");
+      const response = await createControlPlaneApp(fakeHttpDeps({
+        baseUrl: "http://localhost:3000",
+        workerReleaseManifest: undefined,
+        workerInstallerRoot: pathToFileURL(`${root}/`),
+        developmentWindowsArtifacts: {
+          orchestrator: { path: orchestrator, sha256: "0".repeat(64) },
+          serviceHost: { path: serviceHost, sha256: "0".repeat(64) },
+        },
+      })).request("/api/workers/installer?audience=windows-x64&runtime=container&upgrade=true&connectOrigin=http://localhost:3000");
+      const installer = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(installer).toContain("$WindowsArtifactMode = 'local'");
+      expect(installer).toContain("$WindowsOrchestratorUrl = 'http://localhost:3000/api/workers/orchestrator?audience=windows-x64'");
+      expect(installer).toContain(`$WindowsOrchestratorSha256 = '${createHash("sha256").update("local-orchestrator").digest("hex")}'`);
+      expect(installer).toContain("$WindowsServiceHostUrl = 'http://localhost:3000/api/workers/service-host?audience=windows-x64'");
+      expect(installer).toContain(`$WindowsServiceHostSha256 = '${createHash("sha256").update("local-service-host").digest("hex")}'`);
+      expect(installer).toContain("$Upgrade = 'true'");
+      expect(installer).not.toContain("WindowsContainer");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  test("keeps requiring container artifacts for a fresh local Windows installer", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mars-local-windows-fresh-"));
+    try {
+      await Bun.write(join(root, "install-worker.ps1"), "[CmdletBinding()]\r\nparam()\r\n");
+      const response = await createControlPlaneApp(fakeHttpDeps({
+        workerReleaseManifest: undefined,
+        workerInstallerRoot: pathToFileURL(`${root}/`),
+        developmentWindowsArtifacts: {
+          orchestrator: { path: join(root, "orchestrator.exe"), sha256: "0".repeat(64) },
+          serviceHost: { path: join(root, "service-host.exe"), sha256: "0".repeat(64) },
+        },
+      })).request("/api/workers/installer?audience=windows-x64&runtime=container&connectOrigin=https://control-plane.test");
+
+      expect(response.status).toBe(503);
+      expect((await response.json()).artifacts).toContain("development:container");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   test("serves configured local Windows artifacts with declared hashes", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-local-windows-artifacts-"));
     try {
