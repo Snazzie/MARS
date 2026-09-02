@@ -4,7 +4,7 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { openPackageDownloadCache, type PackageDownloadCache } from "./package-download-cache.ts";
+import { openPackageDownloadCache, forwardPublicNpmRequest, type PackageDownloadCache } from "./package-download-cache.ts";
 
 const roots: string[] = [];
 const servers: ReturnType<typeof createServer>[] = [];
@@ -103,6 +103,26 @@ test("bypasses non-archive, credentialed, and ranged Playwright requests", async
   }
 });
 
+
+test("does not forward unsupported hosts", async () => {
+  let statusCode = 0;
+  const response = {
+    headersSent: false,
+    writeHead(status: number) {
+      statusCode = status;
+      this.headersSent = true;
+      return this;
+    },
+    end() {
+      return this;
+    },
+  } as unknown as ServerResponse;
+  await forwardPublicNpmRequest(
+    { method: "GET", url: "/package.tgz", headers: { host: "127.0.0.1" } } as unknown as IncomingMessage,
+    response,
+  );
+  expect(statusCode).toBe(421);
+});
 test("publishes public tarballs as MISS then serves byte-identical HIT", async () => {
   const root = await temporaryRoot();
   let calls = 0;

@@ -202,9 +202,9 @@ function forwardHeaders(request: IncomingMessage, host: string): Record<string, 
 
 export const forwardPublicNpmRequest: PackageUpstreamHandler = async (request, response) => {
   const host = hostFor(request);
-  if (!host) {
-    response.writeHead(400, { "content-type": "text/plain", "cache-control": "no-store" });
-    response.end("invalid upstream host\n");
+  if (!CACHEABLE_HOSTS.has(host)) {
+    response.writeHead(421, { "content-type": "text/plain", "cache-control": "no-store" });
+    response.end("unsupported upstream host\n");
     return;
   }
   await new Promise<void>((resolve, reject) => {
