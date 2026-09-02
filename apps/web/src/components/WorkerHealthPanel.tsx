@@ -155,6 +155,24 @@ function CacheSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: st
   </section>;
 }
 
+function formatContainerCpu(value: number | null): string {
+  return value == null ? "Not reported" : `${value.toFixed(1)}%`;
+}
+
+function formatContainerBytes(value: string | null): string {
+  return value == null ? "Not reported" : formatBytes(value);
+}
+
+function formatContainerAge(sampledAt: string): string {
+  const elapsedSeconds = Math.max(0, (Date.now() - Date.parse(sampledAt)) / 1000);
+  const roundedSeconds = Math.round(elapsedSeconds);
+  return elapsedSeconds < 60 ? `${roundedSeconds}s ago` : `${Math.round(elapsedSeconds / 60)}m ago`;
+}
+
+function shortenContainerId(containerId: string): string {
+  return `${containerId.slice(0, 12)}…`;
+}
+
 function JobCells({ job }: { job: WorkerHealth["jobs"][number] }) {
   return <>
     <td>{job.jobId ?? "Unavailable telemetry"}</td>
