@@ -72,7 +72,7 @@ test("bypasses non-archive, credentialed, and ranged Playwright requests", async
   const root = await temporaryRoot();
   const body = new Uint8Array([1, 3, 3, 7]);
   const requests: Array<{ host: string; path: string }> = [];
-  const bypasses = [
+  const bypasses: Array<{ host: string; path: string; headers: Record<string, string> }> = [
     { host: "cdn.playwright.dev", path: "/builds/chromium/1187/metadata.json", headers: {} },
     { host: "cdn.playwright.dev", path: "/builds/chromium/1187/chrome-linux.zip?download=1", headers: {} },
     { host: "cdn.playwright.dev", path: "/builds/chromium/1187/chrome-linux.zip", headers: { authorization: "Bearer token" } },
@@ -108,7 +108,7 @@ test("does not forward unsupported hosts", async () => {
   let statusCode = 0;
   const response = {
     headersSent: false,
-    writeHead(status: number) {
+    writeHead(this: { headersSent: boolean }, status: number) {
       statusCode = status;
       this.headersSent = true;
       return this;
