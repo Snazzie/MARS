@@ -155,50 +155,57 @@ function CacheSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: st
   </section>;
 }
 
-function JobsSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: string }) {
-  return <section className="worker-health-section" aria-labelledby={`${idPrefix}-jobs-heading`}>
-    <h3 id={`${idPrefix}-jobs-heading`}>Running jobs</h3>
-    {health.jobs.length === 0 ? <p className="worker-health-empty">No active jobs</p> : <div className="worker-health-table-wrap"><table className="worker-health-table"><caption>Running worker jobs</caption><thead><tr><th scope="col">Job ID</th><th scope="col">Repository / name</th><th scope="col">Lease state</th><th scope="col">Age</th><th scope="col">vCPU</th><th scope="col">Memory</th><th scope="col">Storage</th><th scope="col">Concurrency</th></tr></thead><tbody>{health.jobs.map((job) => <tr key={job.leaseId}><td>{job.jobId ?? "Unavailable telemetry"}</td><td>{job.repositoryFullName ?? job.repositoryName ?? "Unavailable telemetry"}</td><td>{job.state}</td><td>{ageDisplay(job.ageSeconds, job.startedAt)}{stale(job.ageSeconds) && <StatusBadge>Stale job telemetry</StatusBadge>}</td><td>- / {job.requested.vcpu}</td><td>- / {formatBytes(job.requested.memoryBytes)}</td><td>- / {formatBytes(job.requested.storageBytes)}</td><td>- / {job.requested.concurrency}</td></tr>)}</tbody></table></div>}
+function JobCells({ job }: { job: WorkerHealth["jobs"][number] }) {
+  return <>
+    <td>{job.jobId ?? "Unavailable telemetry"}</td>
+    <td>{job.repositoryFullName ?? job.repositoryName ?? "Unavailable telemetry"}</td>
+    <td>{job.state}</td>
+    <td>{ageDisplay(job.ageSeconds, job.startedAt)}{stale(job.ageSeconds) && <StatusBadge>Stale job telemetry</StatusBadge>}</td>
+    <td>- / {job.requested.vcpu}</td>
+    <td>- / {formatBytes(job.requested.memoryBytes)}</td>
+    <td>- / {formatBytes(job.requested.storageBytes)}</td>
+    <td>- / {job.requested.concurrency}</td>
+  </>;
+}
+
+function UnassignedJobsSection({ jobs, idPrefix }: { jobs: WorkerHealth["jobs"]; idPrefix: string }) {
+  return <section className="worker-health-subsection" aria-labelledby={`${idPrefix}-unassigned-jobs-heading`}>
+    <h4 id={`${idPrefix}-unassigned-jobs-heading`}>Unassigned jobs</h4>
+    <div className="worker-health-table-wrap">
+      <table className="worker-health-table">
+        <caption>Unassigned worker jobs</caption>
+        <thead><tr><th scope="col">Job ID</th><th scope="col">Repository / name</th><th scope="col">Lease state</th><th scope="col">Age</th><th scope="col">vCPU</th><th scope="col">Memory</th><th scope="col">Storage</th><th scope="col">Concurrency</th></tr></thead>
+        <tbody>{jobs.map((job) => <tr key={job.leaseId}><JobCells job={job} /></tr>)}</tbody>
+      </table>
+    </div>
   </section>;
 }
 
-
-
-function formatContainerCpu(value: number | null): string {
-  return value == null ? "Not reported" : `${value.toFixed(1)}%`;
-}
-
-function formatContainerBytes(value: string | null): string {
-  return value == null ? "Not reported" : formatBytes(value);
-}
-
-function formatContainerAge(sampledAt: string): string {
-  const elapsedSeconds = Math.max(0, (Date.now() - Date.parse(sampledAt)) / 1000);
-  const roundedSeconds = Math.round(elapsedSeconds);
-  return elapsedSeconds < 60 ? `${roundedSeconds}s ago` : `${Math.round(elapsedSeconds / 60)}m ago`;
-}
-
-function shortenContainerId(containerId: string): string {
-  return `${containerId.slice(0, 12)}…`;
-}
-
-function ContainersSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: string }) {
+function ManagedContainersSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: string }) {
+  const jobsByLeaseId = new Map(health.jobs.map((job) => [job.leaseId, job]));
+  const unassignedJobs = health.jobs.filter((job) => !health.containers.some((container) => container.leaseId === job.leaseId));
   return <section className="worker-health-section" aria-labelledby={`${idPrefix}-containers-heading`}>
     <h3 id={`${idPrefix}-containers-heading`}>Managed containers</h3>
     {health.containers.length === 0 ? <p className="worker-health-empty">No managed containers reported.</p> : <div className="worker-health-table-wrap">
       <table className="worker-health-table worker-health-container-table">
         <caption>Current managed containers and resource usage</caption>
-        <thead><tr><th scope="col">Container</th><th scope="col">State</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Disk</th><th scope="col">Freshness</th></tr></thead>
-        <tbody>{health.containers.map((container) => <tr key={container.containerId}>
-          <th scope="row"><strong>{container.name}</strong><small><code tabIndex={0} title={container.containerId}>{shortenContainerId(container.containerId)}</code></small></th>
-          <td>{container.state}</td>
-          <td>{formatContainerCpu(container.cpuUsagePercent)}</td>
-          <td>{formatContainerBytes(container.memoryWorkingSetBytes)}{" "}<small>{container.memoryLimitBytes == null ? "Not reported" : `of ${formatBytes(container.memoryLimitBytes)}`}</small></td>
-          <td>{formatContainerBytes(container.diskUsageBytes)}{" "}<small>Writable-layer use</small></td>
-          <td><time dateTime={container.sampledAt}>{formatContainerAge(container.sampledAt)}</time></td>
-        </tr>)}</tbody>
+        <thead><tr><th scope="col">Container</th><th scope="col">State</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Disk</th><th scope="col">Freshness</th><th scope="col">Job ID</th><th scope="col">Repository / name</th><th scope="col">Lease state</th><th scope="col">Age</th><th scope="col">vCPU</th><th scope="col">Memory</th><th scope="col">Storage</th><th scope="col">Concurrency</th></tr></thead>
+        <tbody>{health.containers.map((container) => {
+          const job = jobsByLeaseId.get(container.leaseId);
+          return <tr key={container.containerId}>
+            <th scope="row"><strong>{container.name}</strong><small><code tabIndex={0} title={container.containerId}>{shortenContainerId(container.containerId)}</code></small></th>
+            <td>{container.state}</td>
+            <td>{formatContainerCpu(container.cpuUsagePercent)}</td>
+            <td>{formatContainerBytes(container.memoryWorkingSetBytes)}{" "}<small>{container.memoryLimitBytes == null ? "Not reported" : `of ${formatBytes(container.memoryLimitBytes)}`}</small></td>
+            <td>{formatContainerBytes(container.diskUsageBytes)}{" "}<small>Writable-layer use</small></td>
+            <td><time dateTime={container.sampledAt}>{formatContainerAge(container.sampledAt)}</time></td>
+            {job ? <JobCells job={job} /> : <td colSpan={8}>No job assigned</td>}
+          </tr>;
+        })}</tbody>
       </table>
     </div>}
+    {health.jobs.length === 0 && <p className="worker-health-empty">No active jobs</p>}
+    {unassignedJobs.length > 0 && <UnassignedJobsSection jobs={unassignedJobs} idPrefix={idPrefix} />}
   </section>;
 }
 
@@ -217,7 +224,6 @@ export function WorkerHealthPanel({ workerId, health, loading = false, error, li
     </div>}
     <UsageSection health={health} idPrefix={idPrefix} limits={limits} />
     <CacheSection health={health} idPrefix={idPrefix} />
-    <ContainersSection health={health} idPrefix={idPrefix} />
-    <JobsSection health={health} idPrefix={idPrefix} />
+    <ManagedContainersSection health={health} idPrefix={idPrefix} />
   </section>;
 }
