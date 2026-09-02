@@ -17,3 +17,7 @@ Implemented the dashboard projection and UI separation between GitHub Actions ca
 `bun test packages/contracts/src/dashboard-api.test.ts packages/db/src/worker-cache.test.ts packages/db/src/dashboard.test.ts apps/web/src/api.test.ts apps/web/src/components/WorkerHealthPanel.test.tsx apps/web/src/components/WorkerCard.test.tsx`
 
 Result: 89 passing, 0 failing.
+
+`bun test apps/control-plane/src/dashboard-api.test.ts`
+
+Result: 23 passing, 0 failing.

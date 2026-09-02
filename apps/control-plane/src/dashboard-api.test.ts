@@ -312,11 +312,16 @@ test("global admins receive strict no-store worker health without secrets", asyn
     cache: {
       desiredTtlSeconds: 3600,
       effectiveTtlSeconds: 1800,
+      effectiveRunnerCacheEnabled: null,
+      effectiveRunnerCacheMaxGiB: null,
       ready: true,
       generation: "11111111-1111-4111-8111-111111111111",
       sizeBytes: "1000",
       entryCount: 12,
+      runnerCacheSizeBytes: "0",
+      runnerCacheEntryCount: 0,
       observedAt: "2026-08-23T11:59:50.000Z",
+      runnerCacheObservedAt: null,
       error: null,
     },
     containers: [{
