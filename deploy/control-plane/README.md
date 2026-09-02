@@ -33,7 +33,7 @@ Create `.env` with the external database and origin settings:
 
 ```bash
 cat > .env <<'EOF'
-DATABASE_URL=postgres://mars:password@db.example:5432/mars
+DATABASE_URL=postgres://postgres:postgres@db.example:5432/mars
 PUBLIC_BASE_URL=http://localhost:3000
 GITHUB_WEBHOOK_URL=https://control.example.com
 # Optional private worker-only origin; defaults to PUBLIC_BASE_URL.
