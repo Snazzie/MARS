@@ -46,6 +46,14 @@ type CapturedResponse = {
   ended: boolean;
 };
 
+export type PackageDownloadCacheMutation = {
+  type: "worker.runner_cache_status";
+  payload: { sizeBytes: string; entryCount: number };
+};
+export type PackageDownloadCacheTelemetrySink = (
+  type: PackageDownloadCacheMutation["type"],
+  payload: PackageDownloadCacheMutation["payload"],
+) => void;
 export type PackageUpstreamHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
 
 function requireTtl(ttlSeconds: number): void {
@@ -211,7 +219,7 @@ export interface PackageDownloadCache {
   sweep(): Promise<void>;
   probe(): Promise<void>;
   status(): { sizeBytes: string; entryCount: number };
-  setTelemetrySink(sink: (() => void) | null): void;
+  setTelemetrySink(sink: PackageDownloadCacheTelemetrySink | null): void;
   close(): Promise<void>;
 }
 
@@ -231,7 +239,7 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
   #enabled = true;
   #generation = 0;
   #closed = false;
-  #telemetrySink: (() => void) | null = null;
+  #telemetrySink: PackageDownloadCacheTelemetrySink | null = null;
 
   constructor(root: string, db: Database, ttlSeconds: number, now: Clock, upstream: PackageUpstreamHandler) {
     this.#root = root;
@@ -244,14 +252,20 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
     this.#upstream = upstream;
   }
 
-  setTelemetrySink(sink: (() => void) | null): void { this.#telemetrySink = sink; }
+  setTelemetrySink(sink: PackageDownloadCacheTelemetrySink | null): void { this.#telemetrySink = sink; }
   status(): { sizeBytes: string; entryCount: number } {
     const aggregate = this.#db.query<{ sizeBytes: string | number; entryCount: number }, []>(
       "SELECT COALESCE(SUM(CAST(size_bytes AS INTEGER)), 0) AS sizeBytes, COUNT(*) AS entryCount FROM package_entries WHERE state='ready'",
     ).get();
     return { sizeBytes: String(aggregate?.sizeBytes ?? 0), entryCount: Number(aggregate?.entryCount ?? 0) };
   }
-  #emitMutation(): void { this.#telemetrySink?.(); }
+  #emitMutation(): void {
+    try {
+      this.#telemetrySink?.("worker.runner_cache_status", this.status());
+    } catch {
+      // Telemetry is best effort and must not affect a committed cache mutation.
+    }
+  }
   #assertOpen(): void { if (this.#closed) throw new Error("package download cache is closed"); }
   #objectPath(pathId: string): string { return join(this.#objects, `${pathId}.blob`); }
 

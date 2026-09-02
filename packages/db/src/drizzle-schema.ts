@@ -828,7 +828,7 @@ export const workerCacheStatus = pgTable("worker_cache_status", {
 	activeSnapshotStartedAt: timestamp("active_snapshot_started_at", { withTimezone: true, mode: 'string' }),
 	lastCompletedSnapshotId: uuid("last_completed_snapshot_id"),
 	runnerCacheEnabled: boolean("runner_cache_enabled"),
-	runnerCacheMaxGiB: integer("runner_cache_max_gib"),
+	runnerCacheMaxGiB: bigint("runner_cache_max_gib", { mode: "number" }),
 	runnerCacheSizeBytes: bigint("runner_cache_size_bytes", { mode: "number" }),
 	runnerCacheEntryCount: bigint("runner_cache_entry_count", { mode: "number" }),
 	runnerCacheObservedAt: timestamp("runner_cache_observed_at", { withTimezone: true, mode: 'string' }),

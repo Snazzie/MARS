@@ -58,6 +58,7 @@ function fakeDatabase(input: {
       ] as unknown as T;
     }
     if (statement.includes("from drizzle.__drizzle_migrations")) return input.journal as unknown as T;
+    if (statement.includes("UPDATE drizzle.__drizzle_migrations")) return [] as unknown as T;
     throw new Error(`unexpected query: ${statement}`);
   };
   return query as unknown as RawDatabaseClient;
@@ -153,4 +154,18 @@ test("legacy journal is rejected without automatic baseline seeding", async () =
   ).rejects.toThrow(/reset|stamp/i);
 
   expect(calls).toEqual([]);
+});
+test("previous final baseline receives runner cache upgrade in place", async () => {
+  const calls: string[] = [];
+  const db = Object.assign(
+    fakeDatabase({
+      applicationSchema: true,
+      migrationTable: true,
+      journal: [{ hash: "24d85c25cfb2279005f02535ec5af93b65bc8d5ce543bd9963c4bea2e9cd1174", created_at: 1_700_000_000_000 }],
+    }),
+    { unsafe: async (sql: string) => calls.push(sql) },
+  );
+  await migrateDatabase(db, { runMigrations: async () => calls.push("migrate") });
+  expect(calls[0]).toContain("runner_cache_enabled");
+  expect(calls).toContain("migrate");
 });

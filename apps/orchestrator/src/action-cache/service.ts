@@ -422,7 +422,7 @@ class PersistentActionCacheService implements ActionCacheService {
     this.#sweepHandle = input.sweepHandle;
     this.#runnerCacheEnabled = input.runnerCacheEnabled;
     this.#runnerCacheMaxGiB = input.runnerCacheMaxGiB;
-    this.#packageDownloadCache.setTelemetrySink(() => this.#emitRunnerCacheStatus());
+    this.#packageDownloadCache.setTelemetrySink((type, payload) => this.#emitRunnerCacheStatus(type, payload));
     this.#lastStoredStatus = input.store.status();
     this.#proxyServer.on("error", (error: Error) => this.#listenerFailed(error));
     this.#dataServer.on("error", (error: Error) => this.#listenerFailed(error));
@@ -491,8 +491,8 @@ class PersistentActionCacheService implements ActionCacheService {
       observedAt: this.#now().toISOString(),
     };
   }
-  #emitRunnerCacheStatus(): void {
-    this.#telemetrySink?.("worker.runner_cache_status", this.runnerCacheStatus());
+  #emitRunnerCacheStatus(type: "worker.runner_cache_status" = "worker.runner_cache_status", _payload?: Record<string, unknown>): void {
+    this.#telemetrySink?.(type, this.runnerCacheStatus());
   }
 
   async applyTtl(ttlSeconds: number): Promise<void> {

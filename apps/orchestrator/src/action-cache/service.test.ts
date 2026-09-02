@@ -421,7 +421,9 @@ test("runtime runner cache toggle and purge affect package cache without changin
   const packageBytes = Buffer.from("package");
   const tarballPath = "/pkg/-/pkg-1.0.0.tgz";
   const cacheRoot = await root();
+  let current = new Date();
   let calls = 0;
+  const telemetry: Array<{ type: string; payload: Record<string, unknown> }> = [];
   const service = await startActionCacheService({
     root: cacheRoot,
     controlPlaneOrigin: "https://control.example.test",
@@ -430,6 +432,7 @@ test("runtime runner cache toggle and purge affect package cache without changin
     proxyPort: 0,
     dataPort: 0,
     discoverAdvertiseHost: async () => "127.0.0.1",
+    now: () => current,
     forwardPackageRequest: async (_request, response) => {
       calls += 1;
       response.writeHead(200, { "content-type": "application/octet-stream", "content-length": String(packageBytes.length) });
@@ -438,6 +441,7 @@ test("runtime runner cache toggle and purge affect package cache without changin
   });
   await Bun.write(join(cacheRoot, "archives", "actions-object.blob"), "actions");
   services.push(service);
+  service.setTelemetrySink((type, payload) => telemetry.push({ type, payload }));
   const transport = service.transport("11111111-1111-4111-8111-111111111111", leaseExpiry());
   const disabled = await requestThroughProxy(transport.proxyUrl, "registry.npmjs.org", transport.caCertificatePem, {
     method: "GET",
@@ -453,12 +457,31 @@ test("runtime runner cache toggle and purge affect package cache without changin
     method: "GET",
     path: tarballPath,
   });
+  const actionsBeforePurge = service.status();
   await service.purgeRunnerCache();
+  expect(service.runnerCacheStatus()).toMatchObject({ entryCount: 0, sizeBytes: "0" });
+  expect(service.status()).toMatchObject({
+    generation: actionsBeforePurge.generation,
+    entryCount: actionsBeforePurge.entryCount,
+    sizeBytes: actionsBeforePurge.sizeBytes,
+  });
+  expect(telemetry.some((event) => event.type === "worker.runner_cache_status" && event.payload.entryCount === 0 && event.payload.sizeBytes === "0")).toBe(true);
   service.setRunnerCacheEnabled(true);
   const afterPurge = await requestThroughProxy(transport.proxyUrl, "registry.npmjs.org", transport.caCertificatePem, {
     method: "GET",
     path: tarballPath,
   });
+  expect(service.runnerCacheStatus()).toMatchObject({ entryCount: 1, sizeBytes: String(packageBytes.length) });
+  const actionsBeforeTtl = service.status();
+  current = new Date(current.getTime() + 2 * 60 * 60 * 1000);
+  await service.applyTtl(60);
+  expect(service.runnerCacheStatus()).toMatchObject({ entryCount: 0, sizeBytes: "0" });
+  expect(service.status()).toMatchObject({
+    generation: actionsBeforeTtl.generation,
+    entryCount: actionsBeforeTtl.entryCount,
+    sizeBytes: actionsBeforeTtl.sizeBytes,
+  });
+  expect(telemetry.some((event) => event.type === "worker.runner_cache_status" && event.payload.entryCount === 0 && event.payload.sizeBytes === "0")).toBe(true);
   expect(disabled.headers["x-mars-package-cache"]).toBeUndefined();
   expect(miss.headers["x-mars-package-cache"]).toBe("MISS");
   expect(bypass.headers["x-mars-package-cache"]).toBeUndefined();

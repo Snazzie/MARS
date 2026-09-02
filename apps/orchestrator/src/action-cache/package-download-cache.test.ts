@@ -53,7 +53,33 @@ test("publishes public tarballs as MISS then serves byte-identical HIT", async (
     expect(second.response.headers.get("x-mars-package-cache")).toBe("HIT");
     expect(calls).toBe(1);
     expect(cache.status()).toEqual({ entryCount: 1, sizeBytes: String(body.byteLength) });
-    expect(events).toHaveLength(1);
+    expect(events).toEqual([{ type: "worker.runner_cache_status", payload: { entryCount: 1, sizeBytes: String(body.byteLength) } }]);
+  } finally {
+    await cache.close();
+  }
+});
+ 
+test("telemetry sink failures do not discard a successfully published package", async () => {
+  const root = await temporaryRoot();
+  let calls = 0;
+  const body = Buffer.from("package");
+  const cache = await openPackageDownloadCache({
+    root,
+    ttlSeconds: 60,
+    upstream: async (_request, response) => {
+      calls += 1;
+      response.writeHead(200, { "content-length": String(body.length) });
+      response.end(body);
+    },
+  });
+  cache.setTelemetrySink(() => { throw new Error("telemetry unavailable"); });
+  try {
+    const first = await request(cache, "/pkg/-/pkg-1.0.0.tgz");
+    const second = await request(cache, "/pkg/-/pkg-1.0.0.tgz");
+    expect(first.response.headers.get("x-mars-package-cache")).toBe("MISS");
+    expect(second.response.headers.get("x-mars-package-cache")).toBe("HIT");
+    expect(calls).toBe(1);
+    expect(cache.status()).toEqual({ entryCount: 1, sizeBytes: String(body.length) });
   } finally {
     await cache.close();
   }

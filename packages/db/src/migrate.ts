@@ -3,9 +3,10 @@ import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate as drizzleMigrate } from "drizzle-orm/postgres-js/migrator";
 import type { DatabaseClient, RawDatabaseClient } from "./index.ts";
-
+import { workerRunnerCacheUpgradeSql } from "./schema.ts";
 const migrationsFolder = fileURLToPath(new URL("./migrations", import.meta.url));
 const baselineCreatedAt = 1_700_000_000_000;
+const previousBaselineHash = "24d85c25cfb2279005f02535ec5af93b65bc8d5ce543bd9963c4bea2e9cd1174";
 const migrationHash = (sql: string) => createHash("sha256").update(sql).digest("hex");
 
 type MigrationJournalRow = {
@@ -46,6 +47,10 @@ function isFinalBaseline(journal: MigrationJournalRow[], baselineHash: string): 
   );
 }
 
+function isRunnerCacheUpgradeBaseline(journal: MigrationJournalRow[]): boolean {
+  const [entry] = journal;
+  return journal.length === 1 && entry?.hash === previousBaselineHash && Number(entry.created_at) === baselineCreatedAt;
+}
 function invalidMigrationStateError(): Error {
   return new Error(
     "Database has an existing application schema or non-final Drizzle migration journal. This database requires a one-baseline reset: reset the database or explicitly stamp the one baseline migration (0000_mars_baseline) before retrying; automatic conversion is disabled.",
@@ -66,7 +71,12 @@ export async function migrateDatabase(
     await Bun.file(new URL("./migrations/0000_mars_baseline.sql", import.meta.url)).text(),
   );
   const finalBaseline = isFinalBaseline(state.journal, baselineHash);
-  if ((!finalBaseline && state.applicationSchema) || (state.journal.length > 0 && !finalBaseline)) {
+  const runnerCacheUpgradeBaseline = isRunnerCacheUpgradeBaseline(state.journal);
+  if (runnerCacheUpgradeBaseline) {
+    await raw.unsafe(workerRunnerCacheUpgradeSql);
+    await raw`UPDATE drizzle.__drizzle_migrations SET hash=${baselineHash} WHERE hash=${previousBaselineHash} AND created_at=${baselineCreatedAt}`;
+  }
+  if ((!finalBaseline && !runnerCacheUpgradeBaseline && state.applicationSchema) || (state.journal.length > 0 && !finalBaseline && !runnerCacheUpgradeBaseline)) {
     throw invalidMigrationStateError();
   }
   await (options.runMigrations ?? defaultMigrationRunner)(raw);
