@@ -10,9 +10,10 @@ Implemented the dashboard projection and UI separation between GitHub Actions ca
 - Relabeled health metrics to `Actions entries` and `Actions size`; added runner enabled, capacity, entries, size, and observed-time fields. Proxy availability remains tied to listener readiness.
 - Changed empty inventory copy to `No GitHub Actions cache entries.` while retaining runner-cache configuration and purge controls.
 - Updated dashboard, API, health-panel, and worker-card fixtures/assertions for nullable pre-telemetry and populated runner status.
+- Updated `getWorkerCacheSummary` and dashboard API health fixtures so all API paths carry runner fields.
 
 ## Verification
 
-`bun test packages/db/src/dashboard.test.ts apps/web/src/api.test.ts apps/web/src/components/WorkerHealthPanel.test.tsx apps/web/src/components/WorkerCard.test.tsx`
+`bun test packages/contracts/src/dashboard-api.test.ts packages/db/src/worker-cache.test.ts packages/db/src/dashboard.test.ts apps/web/src/api.test.ts apps/web/src/components/WorkerHealthPanel.test.tsx apps/web/src/components/WorkerCard.test.tsx`
 
-Result: 66 passing, 0 failing.
+Result: 89 passing, 0 failing.

@@ -20,11 +20,16 @@ const workerHealthFixture = {
   cache: {
     desiredTtlSeconds: 172800,
     effectiveTtlSeconds: null,
+    effectiveRunnerCacheEnabled: null,
+    effectiveRunnerCacheMaxGiB: null,
     ready: true,
     generation: "11111111-1111-4111-8111-111111111111",
     sizeBytes: "100000000000000000000",
     entryCount: 0,
+    runnerCacheSizeBytes: "0",
+    runnerCacheEntryCount: 0,
     observedAt: null,
+    runnerCacheObservedAt: null,
     error: null,
   },
   containers: [{
