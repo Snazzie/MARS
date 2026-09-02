@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Mars PostgreSQL</Name>
+  <Repository>postgres:17</Repository>
+  <Registry>https://hub.docker.com/_/postgres</Registry>
+  <Network>bridge</Network>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/Snazzie/Mars</Support>
+  <Project>https://github.com/Snazzie/Mars</Project>
+  <Overview>PostgreSQL 17 database for the Mars control plane. MVP defaults use the postgres user, postgres password, and mars database. Change the password before production use.</Overview>
+  <Config Name="PostgreSQL Port" Target="5432" Default="5432" Mode="tcp" Description="PostgreSQL server port." Type="Port" Display="always" Required="true" Mask="false">5432</Config>
+  <Config Name="PostgreSQL data" Target="/var/lib/postgresql/data" Default="/mnt/user/appdata/mars-postgres" Mode="rw" Description="Persistent PostgreSQL data directory. Back up this directory with the Mars control-plane data directory." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/mars-postgres</Config>
+  <Config Name="PostgreSQL user" Target="POSTGRES_USER" Default="postgres" Description="Initial PostgreSQL administrator username." Type="Variable" Display="always" Required="true" Mask="false">postgres</Config>
+  <Config Name="PostgreSQL password" Target="POSTGRES_PASSWORD" Default="postgres" Description="Initial PostgreSQL administrator password. Change before production use." Type="Variable" Display="always" Required="true" Mask="true">postgres</Config>
+  <Config Name="Mars database" Target="POSTGRES_DB" Default="mars" Description="Database created for the Mars control plane." Type="Variable" Display="always" Required="true" Mask="false">mars</Config>
+</Container>

@@ -73,6 +73,20 @@ test("Unraid template keeps operator inputs and external database boundary", asy
   expect(template).not.toContain("/run/secrets/app_master_key");
 });
 
+test("Mars PostgreSQL template initializes a persistent mars database", async () => {
+  const template = await read("deploy/unraid/mars-postgres.xml");
+  expect(template).toContain("<Repository>postgres:17</Repository>");
+  expect(template).toContain("<Network>bridge</Network>");
+  expect(template).toContain('Target="5432"');
+  expect(template).toContain('Target="POSTGRES_USER"');
+  expect(template).toContain('Target="POSTGRES_PASSWORD"');
+  expect(template).toContain('Target="POSTGRES_DB"');
+  expect(template).toContain(">postgres</Config>");
+  expect(template).toContain(">mars</Config>");
+  expect(template).toContain("/var/lib/postgresql/data");
+  expect(template).toContain("/mnt/user/appdata/mars-postgres");
+
+});
 test("control-plane image is slim, immutable-contract aware, and healthy", async () => {
   const dockerfile = await read("deploy/control-plane/Dockerfile");
   expect(dockerfile).toContain("FROM oven/bun:1.4.0-slim");

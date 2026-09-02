@@ -222,6 +222,20 @@ and publishes host port 3000 in bridge mode. It intentionally has no worker
 manifest or worker contract inputs because those values belong to the
 released image.
 
+For the self-contained Unraid MVP, also import
+`deploy/unraid/mars-postgres.xml` as a separate container. Start it before
+Mars with the default `postgres:postgres` credentials and `mars` database,
+then set the control-plane `DATABASE_URL` to the Unraid host address:
+
+```text
+postgres://postgres:postgres@<unraid-host-ip>:5432/mars
+```
+
+The PostgreSQL template uses a new persistent data directory by default,
+avoiding inherited collation-version mismatches from an older PostgreSQL
+installation. Do not reuse an existing PostgreSQL data directory without
+performing its required collation maintenance.
+
 For a private Windows worker on the same tailnet, install Tailscale on
 Unraid and expose the local control plane without publishing another port:
 
