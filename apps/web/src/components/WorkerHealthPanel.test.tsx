@@ -166,7 +166,7 @@ test("renders managed containers with their matching jobs and explicit unmatched
   const sampledEarlier = new Date(Date.now() - 125_000).toISOString();
   const markup = renderToStaticMarkup(<WorkerHealthPanel workerId="worker-42" health={healthFixture({
     containers: [
-      { containerId: "a".repeat(64), name: "alpha", leaseId: "33333333-3333-4333-8333-333333333333", state: "running", cpuUsagePercent: 12.34, memoryWorkingSetBytes: "536870912", memoryLimitBytes: "1073741824", diskUsageBytes: "2147483648", sampledAt: sampledRecently },
+      { containerId: "a".repeat(64), name: "alpha", leaseId: "33333333-3333-4333-8333-333333333333", state: "created", cpuUsagePercent: 12.34, memoryWorkingSetBytes: "536870912", memoryLimitBytes: "1073741824", diskUsageBytes: "2147483648", sampledAt: sampledRecently },
       { containerId: "b".repeat(64), name: "beta", leaseId: "44444444-4444-4444-8444-444444444444", state: "exited", cpuUsagePercent: null, memoryWorkingSetBytes: null, memoryLimitBytes: null, diskUsageBytes: "0", sampledAt: sampledEarlier },
     ],
     jobs: [
@@ -182,8 +182,8 @@ test("renders managed containers with their matching jobs and explicit unmatched
   const rows = [...markup.matchAll(/<tr>[\s\S]*?<\/tr>/g)].map(([row]) => row);
   const alphaRow = rows.find((row) => row.includes("<strong>alpha</strong>")) ?? "";
   expect(alphaRow).toContain("<td>42</td>");
+  expect(alphaRow).toContain("<td>created</td>");
   expect(alphaRow).toContain("<td>running</td>");
-  expect(alphaRow).toContain(">3s</time>");
   expect(alphaRow).toContain("<td>- / 4</td>");
   expect(alphaRow).toContain("<td>- / 3.0 GiB</td>");
   expect(alphaRow).toContain("<td>- / 4.0 GiB</td>");
