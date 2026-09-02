@@ -33,6 +33,7 @@ test("publishes public tarballs as MISS then serves byte-identical HIT", async (
   const root = await temporaryRoot();
   let calls = 0;
   const body = new Uint8Array([0, 255, 1, 2, 3]);
+  const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
   const cache = await openPackageDownloadCache({
     root,
     ttlSeconds: 60,
@@ -42,6 +43,7 @@ test("publishes public tarballs as MISS then serves byte-identical HIT", async (
       response.end(body);
     },
   });
+  cache.setTelemetrySink((type, payload) => events.push({ type, payload }));
   try {
     const first = await request(cache, "/is-number/-/is-number-7.0.0.tgz");
     const second = await request(cache, "/is-number/-/is-number-7.0.0.tgz");
@@ -50,6 +52,8 @@ test("publishes public tarballs as MISS then serves byte-identical HIT", async (
     expect(first.response.headers.get("x-mars-package-cache")).toBe("MISS");
     expect(second.response.headers.get("x-mars-package-cache")).toBe("HIT");
     expect(calls).toBe(1);
+    expect(cache.status()).toEqual({ entryCount: 1, sizeBytes: String(body.byteLength) });
+    expect(events).toHaveLength(1);
   } finally {
     await cache.close();
   }
@@ -99,6 +103,7 @@ test("purge removes package rows and objects, is idempotent, and preserves unrel
   await Bun.write(unrelatedPath, "actions");
   try {
     await request(cache, "/pkg/-/pkg-1.0.0.tgz");
+    expect(cache.status()).toEqual({ entryCount: 1, sizeBytes: "3" });
     expect(await readdir(join(root, "packages", "objects"))).toHaveLength(1);
     await cache.purge();
     await cache.purge();
@@ -107,6 +112,7 @@ test("purge removes package rows and objects, is idempotent, and preserves unrel
     const db = new Database(join(root, "packages", "cache.sqlite"), { readonly: true });
     try {
       expect(Number(db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM package_entries").get()?.count ?? 0)).toBe(0);
+      expect(cache.status()).toEqual({ entryCount: 0, sizeBytes: "0" });
     } finally {
       db.close();
     }
@@ -168,6 +174,28 @@ test("enforces the byte cap with least-recently-used ready eviction", async () =
     await request(cache, "/three/-/three-1.0.0.tgz");
     expect((await request(cache, "/one/-/one-1.0.0.tgz")).response.headers.get("x-mars-package-cache")).toBe("HIT");
     expect((await request(cache, "/two/-/two-1.0.0.tgz")).response.headers.get("x-mars-package-cache")).toBe("MISS");
+  } finally {
+    await cache.close();
+  }
+});
+test("sweep evicts expired package entries and resets the aggregate", async () => {
+  const root = await temporaryRoot();
+  let current = new Date("2025-01-01T00:00:00.000Z");
+  const cache = await openPackageDownloadCache({
+    root,
+    ttlSeconds: 60,
+    now: () => current,
+    upstream: async (_request, response) => {
+      response.writeHead(200, { "content-length": "3" });
+      response.end("pkg");
+    },
+  });
+  try {
+    await request(cache, "/pkg/-/pkg-1.0.0.tgz");
+    expect(cache.status()).toEqual({ entryCount: 1, sizeBytes: "3" });
+    current = new Date("2025-01-01T00:01:01.000Z");
+    await cache.sweep();
+    expect(cache.status()).toEqual({ entryCount: 0, sizeBytes: "0" });
   } finally {
     await cache.close();
   }

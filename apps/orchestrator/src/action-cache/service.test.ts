@@ -275,8 +275,9 @@ test("emits a complete cache snapshot envelope for an empty cache", async () => 
   services.push(service);
   const frames: Array<{ type: string; payload: Record<string, unknown> }> = [];
   await emitActionCacheSnapshot(service, (type, payload) => frames.push({ type, payload }));
-  expect(frames.map((frame) => frame.type)).toEqual(["worker.cache_snapshot_begin", "worker.cache_snapshot_end"]);
+  expect(frames.map((frame) => frame.type)).toEqual(["worker.cache_snapshot_begin", "worker.cache_snapshot_end", "worker.runner_cache_status"]);
   expect(frames[1]?.payload).toMatchObject({ pageCount: 0, entryCount: 0, sizeBytes: "0" });
+  expect(frames[2]?.payload).toMatchObject({ enabled: true, maxGiB: 20, entryCount: 0, sizeBytes: "0" });
 });
 
 test("requires active per-lease credentials for proxy CONNECT", async () => {
@@ -347,6 +348,7 @@ test("caches anonymous npm tarballs and bypasses metadata and authorized downloa
   const tarballPath = "/is-number/-/is-number-7.0.0.tgz";
   const metadataPath = "/is-number";
   let anonymousTarballCalls = 0;
+  const telemetry: Array<{ type: string; payload: Record<string, unknown> }> = [];
   const forwarded: Array<{ url: string; authorization?: string }> = [];
   const service = await startActionCacheService({
     root: await root(),
@@ -369,6 +371,7 @@ test("caches anonymous npm tarballs and bypasses metadata and authorized downloa
     },
   });
   services.push(service);
+  service.setTelemetrySink((type, payload) => telemetry.push({ type, payload }));
   const transport = service.transport("11111111-1111-4111-8111-111111111111", leaseExpiry());
   const first = await requestThroughProxy(transport.proxyUrl, "registry.npmjs.org", transport.caCertificatePem, {
     method: "GET",
@@ -385,6 +388,9 @@ test("caches anonymous npm tarballs and bypasses metadata and authorized downloa
   expect(first.headers["x-mars-package-cache"]).toBe("MISS");
   expect(second.headers["x-mars-package-cache"]).toBe("HIT");
   expect(anonymousTarballCalls).toBe(1);
+  expect(service.status()).toMatchObject({ entryCount: 0, sizeBytes: "0" });
+  expect(service.runnerCacheStatus()).toMatchObject({ enabled: true, maxGiB: 20, entryCount: 1, sizeBytes: String(packageBytes.length) });
+  expect(telemetry.some((event) => event.type === "worker.runner_cache_status" && event.payload.entryCount === 1 && event.payload.sizeBytes === String(packageBytes.length))).toBe(true);
 
   const metadataFirst = await requestThroughProxy(transport.proxyUrl, "registry.npmjs.org", transport.caCertificatePem, { method: "GET", path: metadataPath });
   const metadataSecond = await requestThroughProxy(transport.proxyUrl, "registry.npmjs.org", transport.caCertificatePem, { method: "GET", path: metadataPath });

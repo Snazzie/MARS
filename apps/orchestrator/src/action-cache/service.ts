@@ -16,6 +16,17 @@ import { openActionCacheStore, type ActionCacheMutation, type ActionCacheStore }
 import { openPackageDownloadCache, type PackageDownloadCache, type PackageUpstreamHandler } from "./package-download-cache.ts";
 import { CREATE_CACHE_ENTRY_PATH, FINALIZE_CACHE_ENTRY_UPLOAD_PATH, GET_CACHE_ENTRY_DOWNLOAD_URL_PATH, createActionCacheRoutes, createGitHubCacheTokenVerifier, createNodeActionCacheHandler, type CacheTokenVerifier, type NodeActionCacheHandler } from "./routes.ts";
 
+export type WorkerRunnerCacheStatus = {
+  generation: string;
+  enabled: boolean;
+  maxGiB: number;
+  sizeBytes: string;
+  entryCount: number;
+  observedAt: string;
+};
+
+type ActionCacheTelemetrySink = (type: ActionCacheMutation["type"] | "worker.runner_cache_status", payload: Record<string, unknown>) => void;
+
 type Environment = Record<string, string | undefined>;
 type Clock = () => Date;
 type CertificateRenewalHandle = { cancel(): void };
@@ -50,6 +61,7 @@ export type StartActionCacheServiceOptions = {
 
 export interface ActionCacheService {
   status(): WorkerCacheStatus;
+  runnerCacheStatus(): WorkerRunnerCacheStatus;
   applyTtl(ttlSeconds: number): Promise<void>;
   setRunnerCacheEnabled(enabled: boolean): void;
   setRunnerCacheMaxGiB(maxGiB: number): void;
@@ -57,14 +69,14 @@ export interface ActionCacheService {
   transport(leaseId: string, expiresAt: string): WorkerCacheProxy;
   unregisterLease(leaseId: string): void;
   snapshotPages(pageSize: number): AsyncIterable<WorkerCacheEntryProjection[]>;
-  setTelemetrySink(sink: ((type: ActionCacheMutation["type"], payload: Record<string, unknown>) => void) | null): void;
+  setTelemetrySink(sink: ActionCacheTelemetrySink | null): void;
   close(): Promise<void>;
 }
 
-export async function emitActionCacheSnapshot(service: Pick<ActionCacheService, "status" | "snapshotPages" | "setTelemetrySink">, send: (type: string, payload: Record<string, unknown>) => void): Promise<void> {
+export async function emitActionCacheSnapshot(service: Pick<ActionCacheService, "status" | "runnerCacheStatus" | "snapshotPages" | "setTelemetrySink">, send: (type: string, payload: Record<string, unknown>) => void): Promise<void> {
   const snapshotId = randomUUID();
-  const queued: ActionCacheMutation[] = [];
-  service.setTelemetrySink((type, payload) => queued.push({ type, payload } as ActionCacheMutation));
+  const queued: Array<{ type: string; payload: Record<string, unknown> }> = [];
+  service.setTelemetrySink((type, payload) => queued.push({ type, payload }));
   const status = service.status();
   send("worker.cache_snapshot_begin", { snapshotId, status });
   let pageCount = 0;
@@ -75,6 +87,7 @@ export async function emitActionCacheSnapshot(service: Pick<ActionCacheService, 
     entryCount += entries.length;
   }
   send("worker.cache_snapshot_end", { snapshotId, pageCount, entryCount, sizeBytes: status.sizeBytes });
+  send("worker.runner_cache_status", service.runnerCacheStatus());
   service.setTelemetrySink(send);
   for (const event of queued) send(event.type, event.payload);
 }
@@ -360,11 +373,14 @@ class PersistentActionCacheService implements ActionCacheService {
   readonly #cacheBaseUrl: string;
   readonly #leaseCredentials: LeaseProxyCredentials;
   #ttlSeconds: number;
+  #runnerCacheEnabled: boolean;
+  #runnerCacheMaxGiB: number;
   #ready = true;
   #error: string | null = null;
   #closed = false;
   #renewal: CertificateRenewalHandle | null = null;
   readonly #sweepHandle: SweepHandle;
+  #telemetrySink: ActionCacheTelemetrySink | null = null;
   #lastStoredStatus: { sizeBytes: string; entryCount: number };
 
   constructor(input: {
@@ -385,6 +401,8 @@ class PersistentActionCacheService implements ActionCacheService {
     dataPort: number;
     leaseCredentials: LeaseProxyCredentials;
     sweepHandle: SweepHandle;
+    runnerCacheEnabled: boolean;
+    runnerCacheMaxGiB: number;
   }) {
     this.#store = input.store;
     this.#packageDownloadCache = input.packageDownloadCache;
@@ -402,6 +420,9 @@ class PersistentActionCacheService implements ActionCacheService {
     this.#dataPort = input.dataPort;
     this.#leaseCredentials = input.leaseCredentials;
     this.#sweepHandle = input.sweepHandle;
+    this.#runnerCacheEnabled = input.runnerCacheEnabled;
+    this.#runnerCacheMaxGiB = input.runnerCacheMaxGiB;
+    this.#packageDownloadCache.setTelemetrySink(() => this.#emitRunnerCacheStatus());
     this.#lastStoredStatus = input.store.status();
     this.#proxyServer.on("error", (error: Error) => this.#listenerFailed(error));
     this.#dataServer.on("error", (error: Error) => this.#listenerFailed(error));
@@ -459,21 +480,40 @@ class PersistentActionCacheService implements ActionCacheService {
       error: this.#error,
     });
   }
+  runnerCacheStatus(): WorkerRunnerCacheStatus {
+    const stored = this.#packageDownloadCache.status();
+    return {
+      generation: this.#store.generation,
+      enabled: this.#runnerCacheEnabled,
+      maxGiB: this.#runnerCacheMaxGiB,
+      sizeBytes: stored.sizeBytes,
+      entryCount: stored.entryCount,
+      observedAt: this.#now().toISOString(),
+    };
+  }
+  #emitRunnerCacheStatus(): void {
+    this.#telemetrySink?.("worker.runner_cache_status", this.runnerCacheStatus());
+  }
 
   async applyTtl(ttlSeconds: number): Promise<void> {
     if (this.#closed) throw new Error("action cache service is closed");
     await Promise.all([this.#store.applyTtl(ttlSeconds), this.#packageDownloadCache.applyTtl(ttlSeconds)]);
     this.#ttlSeconds = ttlSeconds;
+    this.#emitRunnerCacheStatus();
   }
 
   setRunnerCacheEnabled(enabled: boolean): void {
     if (this.#closed) throw new Error("action cache service is closed");
     this.#packageDownloadCache.setEnabled(enabled);
+    this.#runnerCacheEnabled = enabled;
+    this.#emitRunnerCacheStatus();
   }
 
   setRunnerCacheMaxGiB(maxGiB: number): void {
     if (this.#closed) throw new Error("action cache service is closed");
     this.#packageDownloadCache.setMaxBytes(runnerCacheMaxBytes(maxGiB));
+    this.#runnerCacheMaxGiB = maxGiB;
+    this.#emitRunnerCacheStatus();
   }
 
   async purgeRunnerCache(): Promise<void> {
@@ -499,7 +539,8 @@ class PersistentActionCacheService implements ActionCacheService {
   snapshotPages(pageSize: number): AsyncIterable<WorkerCacheEntryProjection[]> {
     return this.#store.snapshotPages(pageSize);
   }
-  setTelemetrySink(sink: ((type: ActionCacheMutation["type"], payload: Record<string, unknown>) => void) | null): void {
+  setTelemetrySink(sink: ActionCacheTelemetrySink | null): void {
+    this.#telemetrySink = sink;
     this.#store.setTelemetrySink(sink);
   }
 
@@ -657,6 +698,8 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
       cacheBaseUrl,
       leaseCredentials,
       sweepHandle,
+      runnerCacheEnabled: options.runnerCacheEnabled ?? true,
+      runnerCacheMaxGiB: options.runnerCacheMaxGiB ?? 20,
     });
   } catch (error) {
     sweepHandle?.cancel();

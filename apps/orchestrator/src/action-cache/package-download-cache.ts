@@ -210,6 +210,8 @@ export interface PackageDownloadCache {
   purge(): Promise<void>;
   sweep(): Promise<void>;
   probe(): Promise<void>;
+  status(): { sizeBytes: string; entryCount: number };
+  setTelemetrySink(sink: (() => void) | null): void;
   close(): Promise<void>;
 }
 
@@ -229,6 +231,7 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
   #enabled = true;
   #generation = 0;
   #closed = false;
+  #telemetrySink: (() => void) | null = null;
 
   constructor(root: string, db: Database, ttlSeconds: number, now: Clock, upstream: PackageUpstreamHandler) {
     this.#root = root;
@@ -241,6 +244,14 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
     this.#upstream = upstream;
   }
 
+  setTelemetrySink(sink: (() => void) | null): void { this.#telemetrySink = sink; }
+  status(): { sizeBytes: string; entryCount: number } {
+    const aggregate = this.#db.query<{ sizeBytes: string | number; entryCount: number }, []>(
+      "SELECT COALESCE(SUM(CAST(size_bytes AS INTEGER)), 0) AS sizeBytes, COUNT(*) AS entryCount FROM package_entries WHERE state='ready'",
+    ).get();
+    return { sizeBytes: String(aggregate?.sizeBytes ?? 0), entryCount: Number(aggregate?.entryCount ?? 0) };
+  }
+  #emitMutation(): void { this.#telemetrySink?.(); }
   #assertOpen(): void { if (this.#closed) throw new Error("package download cache is closed"); }
   #objectPath(pathId: string): string { return join(this.#objects, `${pathId}.blob`); }
 
@@ -249,7 +260,8 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
   }
   async #evict(row: PackageEntry): Promise<void> {
     try {
-      this.#db.query("UPDATE package_entries SET state='deleting' WHERE url_hash=? AND state IN ('ready','deleting')").run(row.urlHash);
+      const result = this.#db.query("UPDATE package_entries SET state='deleting' WHERE url_hash=? AND state IN ('ready','deleting')").run(row.urlHash);
+      if (row.state === "ready" && result.changes === 1) this.#emitMutation();
       await rm(this.#objectPath(row.objectPathId), { force: true });
       this.#db.query("DELETE FROM package_entries WHERE url_hash=? AND state='deleting'").run(row.urlHash);
     } catch { /* leave deleting rows for a later sweep */ }
@@ -319,7 +331,9 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
         this.#db.query("DELETE FROM package_entries WHERE url_hash=? AND state='filling'").run(urlHash);
         return false;
       }
-      this.#db.query("UPDATE package_entries SET state='ready' WHERE url_hash=? AND state='filling'").run(urlHash);
+      const result = this.#db.query("UPDATE package_entries SET state='ready' WHERE url_hash=? AND state='filling'").run(urlHash);
+      if (result.changes !== 1) return false;
+      this.#emitMutation();
       await this.#enforceMaxBytes();
       const retained = this.#row(canonicalUrl);
       return retained?.state === "ready";
@@ -411,6 +425,7 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
     let files: string[] = [];
     try { files = await readdir(this.#objects); } catch { /* retry next sweep */ }
     await Promise.all(files.map((fileName) => rm(join(this.#objects, fileName), { force: true })));
+    this.#emitMutation();
   }
 
   async sweep(): Promise<void> {
