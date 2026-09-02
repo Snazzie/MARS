@@ -96,7 +96,10 @@ const ACTION_CACHE_HOSTS = [
   "artifactcache.actions.githubusercontent.com",
 ] as const;
 const PACKAGE_CACHE_HOST = "registry.npmjs.org";
-const INTERCEPTED_TLS_HOSTS = [...ACTION_CACHE_HOSTS, PACKAGE_CACHE_HOST];
+const PLAYWRIGHT_CDN_HOST = "cdn.playwright.dev";
+const PLAYWRIGHT_DOWNLOAD_HOST = "playwright.download.prss.microsoft.com";
+const PLAYWRIGHT_CACHE_HOSTS = [PLAYWRIGHT_CDN_HOST, PLAYWRIGHT_DOWNLOAD_HOST] as const;
+const INTERCEPTED_TLS_HOSTS = [...ACTION_CACHE_HOSTS, PACKAGE_CACHE_HOST, ...PLAYWRIGHT_CACHE_HOSTS];
 function runnerCacheMaxBytes(maxGiB: number): bigint {
   if (!Number.isSafeInteger(maxGiB) || maxGiB <= 0) throw new Error("runner cache size cap must be a positive safe integer GiB");
   return BigInt(maxGiB) * 1024n ** 3n;
@@ -621,7 +624,7 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
       }
       const path = (() => { try { return new URL(request.url ?? "/", "https://cache.invalid").pathname; } catch { return "/"; } })();
       const hostname = normalizedHostnameFromHeader(request.headers.host);
-      const handler = hostname === PACKAGE_CACHE_HOST
+      const handler = PACKAGE_CACHE_HOST === hostname || PLAYWRIGHT_CACHE_HOSTS.includes(hostname as (typeof PLAYWRIGHT_CACHE_HOSTS)[number])
         ? packageDownloadCache!.handle.bind(packageDownloadCache)
         : hostname === advertiseHost.toLowerCase() || shouldHandleCacheLocally(hostname, path)
           ? handleCacheRequest

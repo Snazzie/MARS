@@ -416,6 +416,54 @@ test("caches anonymous npm tarballs and bypasses metadata and authorized downloa
     { url: tarballPath, authorization: "Bearer private-token" },
   ]);
 });
+test("caches Playwright archives through authenticated CONNECT on both hosts", async () => {
+  const archives = [
+    { host: "cdn.playwright.dev", path: "/builds/chromium/1187/chrome-linux.zip" },
+    { host: "cdn.playwright.dev", path: "/builds/chromium-headless-shell/1187/chrome-headless-shell-linux.zip" },
+    { host: "cdn.playwright.dev", path: "/builds/ffmpeg/1011/ffmpeg-linux.zip" },
+    { host: "playwright.download.prss.microsoft.com", path: "/dbazure/download/playwright/builds/winldd/1011/winldd-win64.zip" },
+  ];
+  const forwarded: Array<{ host: string | undefined; path: string }> = [];
+  const service = await startActionCacheService({
+    root: await root(),
+    controlPlaneOrigin: "https://control.example.test",
+    ttlSeconds: 3600,
+    proxyPort: 0,
+    dataPort: 0,
+    discoverAdvertiseHost: async () => "127.0.0.1",
+    forwardPackageRequest: async (request, response) => {
+      const host = typeof request.headers.host === "string" ? request.headers.host : undefined;
+      const path = request.url ?? "";
+      forwarded.push({ host, path });
+      const body = Buffer.from(`playwright:${host}:${path}`);
+      response.writeHead(200, { "content-type": "application/zip", "content-length": String(body.length), etag: `"${host}-${path}"` });
+      response.end(body);
+    },
+  });
+  services.push(service);
+  const transport = service.transport("11111111-1111-4111-8111-111111111111", leaseExpiry());
+
+  for (const archive of archives) {
+    const first = await requestThroughProxy(transport.proxyUrl, archive.host, transport.caCertificatePem, { method: "GET", path: archive.path });
+    const second = await requestThroughProxy(transport.proxyUrl, archive.host, transport.caCertificatePem, { method: "GET", path: archive.path });
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(first.headers["x-mars-package-cache"]).toBe("MISS");
+    expect(second.headers["x-mars-package-cache"]).toBe("HIT");
+    expect(second.bodyBytes).toEqual(first.bodyBytes);
+  }
+
+  const bypass = await requestThroughProxy(transport.proxyUrl, "cdn.playwright.dev", transport.caCertificatePem, {
+    method: "GET",
+    path: "/builds/chromium/1187/metadata.json",
+  });
+  expect(bypass.status).toBe(200);
+  expect(bypass.headers["x-mars-package-cache"]).toBeUndefined();
+  expect(forwarded).toEqual([
+    ...archives,
+    { host: "cdn.playwright.dev", path: "/builds/chromium/1187/metadata.json" },
+  ]);
+});
 
 test("runtime runner cache toggle and purge affect package cache without changing Actions cache", async () => {
   const packageBytes = Buffer.from("package");
