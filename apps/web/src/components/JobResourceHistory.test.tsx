@@ -10,7 +10,7 @@ import { TimingSummary } from "./TimingSummary.tsx";
 import { TimingToolbar } from "./TimingToolbar.tsx";
 import { JobResourceDetail } from "./JobResourceDetail.tsx";
 import { JobRunMeasurements } from "./JobRunMeasurements.tsx";
-import { CpuTrendChart, DurationTrendChart, MemoryTrendChart } from "./JobResourceCharts.tsx";
+import { CpuTrendChart, DurationTrendChart, MemoryTrendChart, retainChartFocus } from "./JobResourceCharts.tsx";
 import { defaultTimingFilters } from "../routes/timing-model.ts";
 
 const facets: JobResourceTrendResponse["filters"] = {
@@ -199,6 +199,7 @@ test("keeps same-named jobs in separate selectable options with repository and w
       selectedJobKey={repoTwoBuild.jobKey}
       hasNextPage={false}
       fetchingNextPage={false}
+      paginationKey="test"
       onSelect={noop}
       onLoadMore={noop}
     />,
@@ -219,6 +220,7 @@ test("formats job metrics and exposes partial coverage and delta direction witho
       selectedJobKey={repoOneBuild.jobKey}
       hasNextPage={false}
       fetchingNextPage={false}
+      paginationKey="test"
       onSelect={noop}
       onLoadMore={noop}
     />,
@@ -269,14 +271,15 @@ test("re-arms automatic pagination after each completed page and keeps the manua
   const root = createRoot(container);
   let loadCount = 0;
 
-  const renderList = async (fetchingNextPage: boolean) => {
+  const renderList = async (fetchingNextPage: boolean, jobs: readonly JobResourceTrendJob[] = [repoOneBuild]) => {
     await act(async () => {
       root.render(
         <JobResourceList
-          jobs={[repoOneBuild]}
+          jobs={jobs}
           selectedJobKey={repoOneBuild.jobKey}
           hasNextPage
           fetchingNextPage={fetchingNextPage}
+          paginationKey="test"
           onSelect={noop}
           onLoadMore={() => { loadCount += 1; }}
         />,
@@ -297,6 +300,10 @@ test("re-arms automatic pagination after each completed page and keeps the manua
 
     await renderList(true);
     await renderList(false);
+    expect(observerCallbacks).toHaveLength(1);
+    expect(loadCount).toBe(1);
+
+    await renderList(false, [repoOneBuild, repoTwoBuild]);
     expect(observerCallbacks).toHaveLength(2);
     await act(async () => { observerCallbacks[1]?.([entry], {} as IntersectionObserver); });
     expect(loadCount).toBe(2);
@@ -335,6 +342,7 @@ test("gives focused listbox options explicit identity and supports keyboard and 
           selectedJobKey={repoOneBuild.jobKey}
           hasNextPage={false}
           fetchingNextPage={false}
+          paginationKey="test"
           onSelect={(jobKey) => { selectedKeys.push(jobKey); }}
           onLoadMore={noop}
         />,
@@ -498,7 +506,30 @@ test("distinguishes failed, cancelled, and partial telemetry marks in every char
     expect(degraded?.getAttribute("fill")).toBe("#e76f9b");
     expect(document.body.textContent).toContain("Failed or cancelled run");
     expect(document.body.textContent).toContain("Partial telemetry (hollow mark)");
+    expect(document.querySelector(`[data-ts-key="${metric}-unavailable-markers"] circle`)).toBeNull();
+    if (metric === "duration") {
+      expect(document.querySelectorAll('[data-ts-key="duration-bars"] rect')[1]?.getAttribute("fill")).toBe("#d6a15f");
+    }
   }
+});
+
+test("keeps failed outcomes distinct when resource telemetry is unavailable", () => {
+  const failedWithoutTelemetry = resourcePoints.map((point) => (
+    point.runId === "run-2" ? { ...point, outcome: "failure" as const } : point
+  ));
+  for (const [metric, chart] of [
+    ["memory", <MemoryTrendChart points={failedWithoutTelemetry} selectedRunId={null} onSelectRun={noop} />],
+    ["duration", <DurationTrendChart points={failedWithoutTelemetry} selectedRunId={null} onSelectRun={noop} />],
+  ] as const) {
+    const document = new Window().document;
+    document.body.innerHTML = renderToStaticMarkup(chart);
+    expect(document.querySelector(`[data-ts-key="${metric}-outcome-markers"] circle[data-ts-key*="run-2"]`)).not.toBeNull();
+  }
+});
+
+test("keeps the last focused run bound to its adjacent Open run action", () => {
+  expect(retainChartFocus(resourcePoints[0]!, null)).toBe(resourcePoints[0]);
+  expect(retainChartFocus(resourcePoints[0]!, resourcePoints[2]!)).toBe(resourcePoints[2]);
 });
 
 test("aligns line-point and bar centers for one, two, three, and many runs", () => {
@@ -506,6 +537,7 @@ test("aligns line-point and bar centers for one, two, three, and many runs", () 
     ...resourcePoints[index % resourcePoints.length]!,
     runId: `alignment-run-${index + 1}`,
     jobId: `alignment-job-${index + 1}`,
+
     completedAt: `2026-09-0${index + 1}T10:00:00.000Z`,
     cpuAveragePercent: 20 + index,
     cpuPeakPercent: 40 + index,

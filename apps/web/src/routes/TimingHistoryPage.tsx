@@ -97,6 +97,52 @@ export function resourceHistoryJobsWithSelectedSummary(
   if (existingIndex < 0) return [detail.summary, ...jobs];
   return jobs.map((job, index) => index === existingIndex ? detail.summary : job);
 }
+export type ResourceHistoryCommittedView = {
+  organizationId: string;
+  generation: string;
+  filters: TimingFilters;
+  pages: ResourceTrendPage[];
+  selectedJob: ResourceTrendPage["selectedJob"];
+};
+
+type ResourceHistoryResponseState = {
+  organizationId: string;
+  generation: string;
+  filters: TimingFilters;
+  pages: readonly ResourceTrendPage[] | null;
+  summaryPlaceholder: boolean;
+  selectedJobKey: string | null;
+  detailResponse: ResourceTrendPage | undefined;
+  detailPlaceholder: boolean;
+};
+
+export function resourceHistoryViewAfterResponses(
+  current: ResourceHistoryCommittedView | null,
+  response: ResourceHistoryResponseState,
+): ResourceHistoryCommittedView | null {
+  const retained = current?.organizationId === response.organizationId ? current : null;
+  if (!response.pages || response.summaryPlaceholder) return retained;
+  let selectedJob = response.pages[0]?.selectedJob ?? null;
+  if (response.selectedJobKey !== null) {
+    if (!response.detailResponse || response.detailPlaceholder) {
+      if (retained?.generation !== response.generation) return retained;
+      return {
+        ...retained,
+        filters: response.filters,
+        pages: [...response.pages],
+      };
+    }
+    selectedJob = response.detailResponse.selectedJob;
+  }
+  return {
+    organizationId: response.organizationId,
+    generation: response.generation,
+    filters: response.filters,
+    pages: [...response.pages],
+    selectedJob,
+  };
+}
+
 
 export function resourceHistoryDisplayedDetail(
   jobs: readonly ResourceTrendPage["jobs"][number][],
@@ -186,6 +232,7 @@ export function TimingHistoryPage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [requestedAt, setRequestedAt] = useState(() => new Date());
 
+  const [committedView, setCommittedView] = useState<ResourceHistoryCommittedView | null>(null);
   useEffect(() => {
     if (filters.search === debouncedSearch) return;
     const timeout = window.setTimeout(() => {
@@ -204,6 +251,10 @@ export function TimingHistoryPage() {
     () => ({ ...filters, search: debouncedSearch }),
     [debouncedSearch, filters],
   );
+  const generation = useMemo(
+    () => JSON.stringify([organizationId, resourceTrendRequest(queryFilters, requestedAt)]),
+    [organizationId, queryFilters, requestedAt],
+  );
   const query = useInfiniteQuery(jobResourceTrendQueryOptions(
     organizationId,
     queryFilters,
@@ -215,25 +266,38 @@ export function TimingHistoryPage() {
     selectedJobKey,
     requestedAt,
   ));
-  const paginatedJobs = useMemo(() => query.data?.pages.flatMap((page) => page.jobs) ?? [], [query.data]);
-  const firstPage = query.data?.pages[0];
-  const requestedDetail = detailQuery.isPlaceholderData && !query.isPlaceholderData
-    ? null
-    : detailQuery.data?.selectedJob ?? null;
-  const detailForList = selectedJobKey === null ? firstPage?.selectedJob ?? null : requestedDetail ?? firstPage?.selectedJob ?? null;
-  const jobs = useMemo(
-    () => resourceHistoryJobsWithSelectedSummary(paginatedJobs, detailForList),
-    [detailForList, paginatedJobs],
-  );
-  const selectedJob = resourceHistoryDisplayedDetail(
-    jobs,
-    firstPage?.selectedJob ?? null,
-    requestedDetail,
+  useEffect(() => {
+    setCommittedView((current) => resourceHistoryViewAfterResponses(current, {
+      organizationId,
+      generation,
+      filters: queryFilters,
+      pages: query.data?.pages ?? null,
+      summaryPlaceholder: query.isPlaceholderData,
+      selectedJobKey,
+      detailResponse: detailQuery.data,
+      detailPlaceholder: detailQuery.isPlaceholderData,
+    }));
+  }, [
+    detailQuery.data,
+    detailQuery.isPlaceholderData,
+    generation,
+    organizationId,
+    query.data?.pages,
+    query.isPlaceholderData,
+    queryFilters,
     selectedJobKey,
+  ]);
+  const view = committedView?.organizationId === organizationId ? committedView : null;
+  const paginatedJobs = useMemo(() => view?.pages.flatMap((page) => page.jobs) ?? [], [view]);
+  const firstPage = view?.pages[0];
+  const jobs = useMemo(
+    () => resourceHistoryJobsWithSelectedSummary(paginatedJobs, view?.selectedJob ?? null),
+    [paginatedJobs, view?.selectedJob],
   );
+  const selectedJob = view?.selectedJob ?? null;
   const displayedSelectedJobKey = selectedJob?.summary.jobKey ?? null;
   const refreshing = query.isFetching && !query.isFetchingNextPage || detailQuery.isFetching;
-  const pageState = resourceHistoryPageState(paginatedJobs.length, queryFilters);
+  const pageState = resourceHistoryPageState(paginatedJobs.length, view?.filters ?? queryFilters);
   const queryRefreshError = resourceHistoryRefreshError(Boolean(firstPage), query.error, query.failureReason);
   const detailRefreshError = selectedJobKey === null
     ? null
@@ -320,9 +384,10 @@ export function TimingHistoryPage() {
             <div className="resource-history-workspace">
               <JobResourceList
                 jobs={jobs}
+                paginationKey={view?.generation ?? generation}
                 selectedJobKey={displayedSelectedJobKey}
-                hasNextPage={query.hasNextPage}
-                fetchingNextPage={query.isFetchingNextPage}
+                hasNextPage={view?.generation === generation && query.hasNextPage}
+                fetchingNextPage={view?.generation === generation && query.isFetchingNextPage}
                 onSelect={setSelectedJobKey}
                 onLoadMore={() => void query.fetchNextPage()}
               />

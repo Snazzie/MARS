@@ -11,6 +11,7 @@ import {
   resourceHistoryPageState,
   resourceHistoryRefreshError,
   resourceHistoryToolbarFacets,
+  resourceHistoryViewAfterResponses,
   selectedJobResourceTrendQueryOptions,
 } from "./TimingHistoryPage.tsx";
 
@@ -37,6 +38,23 @@ function trendJob(jobKey: string): JobResourceTrendJob {
     durationChangePercent: null,
     cpuChangePercent: null,
     memoryChangePercent: null,
+  };
+}
+
+function trendPage(job: JobResourceTrendJob): JobResourceTrendResponse {
+  return {
+    summary: {
+      jobCount: 1,
+      completedRunCount: 1,
+      medianExecutionDurationMs: 60_000,
+      telemetryCoveredRunCount: 1,
+      telemetryCoveragePercent: 100,
+    },
+    jobs: [job],
+    nextCursor: null,
+    selectedJob: { summary: job, points: [] },
+    filters: { platforms: [job.platform], vcpus: [job.latestRequestedVcpu], concurrencies: [job.latestEffectiveConcurrency] },
+    generatedAt: now.toISOString(),
   };
 }
 
@@ -134,6 +152,48 @@ test("keeps list selection and rendered detail consistent through pending, error
   const refreshedJobs = resourceHistoryJobsWithSelectedSummary([first], secondDetail);
   expect(refreshedJobs.map((job) => job.jobKey)).toEqual(["job-two", "job-one"]);
   expect(resourceHistoryDisplayedDetail(refreshedJobs, firstDetail, secondDetail, "job-two")).toBe(secondDetail);
+});
+
+test("commits summary and selected detail only from one request generation", () => {
+  const first = trendJob("job-one");
+  const second = { ...trendJob("job-two"), repositoryName: "acme/service" };
+  const oldPage = trendPage(first);
+  const nextPage = trendPage(second);
+  const current = {
+    organizationId: "org-1",
+    generation: "old",
+    pages: [oldPage],
+    selectedJob: oldPage.selectedJob,
+    filters: defaultTimingFilters,
+  };
+  const base = {
+    organizationId: "org-1",
+    generation: "new",
+    pages: [nextPage],
+    selectedJobKey: "job-two",
+    detailResponse: nextPage,
+    filters: { ...defaultTimingFilters, platform: "windows-x64" },
+  };
+
+  expect(resourceHistoryViewAfterResponses(current, { ...base, summaryPlaceholder: true, detailPlaceholder: false })).toBe(current);
+  expect(resourceHistoryViewAfterResponses(current, { ...base, summaryPlaceholder: false, detailPlaceholder: true })).toBe(current);
+  expect(resourceHistoryViewAfterResponses(current, { ...base, summaryPlaceholder: false, detailPlaceholder: false })).toMatchObject({
+    generation: "new",
+    selectedJob: { summary: { jobKey: "job-two" } },
+  });
+  const sameGeneration = { ...current, generation: "same" };
+  expect(resourceHistoryViewAfterResponses(sameGeneration, {
+    ...base,
+    generation: "same",
+    pages: [oldPage, nextPage],
+    detailResponse: undefined,
+    summaryPlaceholder: false,
+    detailPlaceholder: false,
+  })).toMatchObject({
+    pages: [{ jobs: [{ jobKey: "job-one" }] }, { jobs: [{ jobKey: "job-two" }] }],
+    selectedJob: { summary: { jobKey: "job-one" } },
+  });
+  expect(resourceHistoryViewAfterResponses(current, { ...base, organizationId: "org-2", summaryPlaceholder: true, detailPlaceholder: true })).toBeNull();
 });
 
 test("no-match facets retain active controlled filter options", () => {

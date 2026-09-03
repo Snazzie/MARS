@@ -7,6 +7,7 @@ export type JobResourceListProps = {
   selectedJobKey: string | null;
   hasNextPage: boolean;
   fetchingNextPage: boolean;
+  paginationKey: string;
   onSelect(jobKey: string): void;
   onLoadMore(): void;
 };
@@ -32,15 +33,20 @@ function DeltaIndicator({ label, value }: DeltaProps): ReactNode {
   );
 }
 
-export function JobResourceList({ jobs, selectedJobKey, hasNextPage, fetchingNextPage, onSelect, onLoadMore }: JobResourceListProps) {
+export function JobResourceList({ jobs, selectedJobKey, hasNextPage, fetchingNextPage, paginationKey, onSelect, onLoadMore }: JobResourceListProps) {
   const headingId = useId();
   const sentinelRef = useRef<HTMLDivElement>(null);
   const automaticLoadRequested = useRef(false);
+  const loadedPageState = useRef({ paginationKey, jobCount: jobs.length });
   const hasSelectedJob = selectedJobKey !== null && jobs.some((job) => job.jobKey === selectedJobKey);
 
   useEffect(() => {
-    if (!fetchingNextPage) automaticLoadRequested.current = false;
-  }, [fetchingNextPage]);
+    const previous = loadedPageState.current;
+    if (previous.paginationKey !== paginationKey || jobs.length > previous.jobCount) {
+      automaticLoadRequested.current = false;
+    }
+    loadedPageState.current = { paginationKey, jobCount: jobs.length };
+  }, [jobs.length, paginationKey]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;

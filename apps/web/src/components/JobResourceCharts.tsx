@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import type { JobResourceTrendPoint } from "@mars/contracts";
 import { barY, colorLegend, defineChart, dot, lineY } from "@tanstack/charts";
 import type { ChartMark, ChartPoint, ChartTooltipContent } from "@tanstack/charts";
@@ -168,17 +168,22 @@ function classifiedDotMarks<TRow extends MetricRow>(
   prefix: string,
   selectedRunId: string | null,
 ): ChartMark<TRow, string, number>[] {
-  const outcome = rows.filter((row) => isOutcomeDegraded(row.point) && row.telemetryState === "available");
+  const outcome = rows.filter((row) => isOutcomeDegraded(row.point) && row.telemetryState !== "partial");
   const partialOutcome = rows.filter((row) => isOutcomeDegraded(row.point) && row.telemetryState === "partial");
   const partial = rows.filter((row) => !isOutcomeDegraded(row.point) && row.telemetryState === "partial");
-  const unavailable = rows.filter((row) => row.telemetryState === "unavailable");
   return [
     dotMark(outcome, `${prefix}-outcome-markers`, DEGRADED, DEGRADED, selectedRunId),
     dotMark(partialOutcome, `${prefix}-partial-outcome-markers`, PANEL, DEGRADED, selectedRunId),
     dotMark(partial, `${prefix}-partial-markers`, PANEL, DEGRADED, selectedRunId),
-    dotMark(unavailable, `${prefix}-unavailable-markers`, PANEL, DEGRADED, selectedRunId),
   ];
 }
+export function retainChartFocus(
+  current: JobResourceTrendPoint | null,
+  next: JobResourceTrendPoint | null,
+): JobResourceTrendPoint | null {
+  return next ?? current;
+}
+
 
 function selectedPoint(points: readonly JobResourceTrendPoint[], selectedRunId: string | null): JobResourceTrendPoint | null {
   return selectedRunId === null ? null : points.find((point) => point.runId === selectedRunId) ?? null;
@@ -186,6 +191,7 @@ function selectedPoint(points: readonly JobResourceTrendPoint[], selectedRunId: 
 
 export function CpuTrendChart({ points, selectedRunId, onSelectRun }: ResourceChartProps): ReactNode {
   const [focusedPoint, setFocusedPoint] = useState<JobResourceTrendPoint | null>(null);
+  useEffect(() => setFocusedPoint(null), [selectedRunId]);
   const rows = useMemo<CpuRow[]>(() => {
     const result: CpuRow[] = [];
     let averageSegment = 0;
@@ -228,7 +234,7 @@ export function CpuTrendChart({ points, selectedRunId, onSelectRun }: ResourceCh
       {rows.length === 0
         ? <p className="chart-empty">CPU telemetry is unavailable for these runs.</p>
         : <div className="chart-frame"><Chart definition={definition} height={240} ariaLabel="CPU usage over completed runs" ariaDescription={summary}
-          onFocusChange={(point) => setFocusedPoint(point?.datum.point ?? null)}
+          onFocusChange={(point) => setFocusedPoint((current) => retainChartFocus(current, point?.datum.point ?? null))}
           onSelect={(point) => { if (point) { setFocusedPoint(point.datum.point); onSelectRun(point.datum.runId); } }} /></div>}
       <ChartRunDetails point={activePoint} focused={focusedPoint !== null} />
     </ChartPanel>
@@ -237,6 +243,7 @@ export function CpuTrendChart({ points, selectedRunId, onSelectRun }: ResourceCh
 
 export function MemoryTrendChart({ points, selectedRunId, onSelectRun }: ResourceChartProps): ReactNode {
   const [focusedPoint, setFocusedPoint] = useState<JobResourceTrendPoint | null>(null);
+  useEffect(() => setFocusedPoint(null), [selectedRunId]);
   const hasPeakTelemetry = points.some((point) => point.memoryPeakBytes !== null);
   const rows = useMemo<MemoryRow[]>(() => {
     const result: MemoryRow[] = [];
@@ -277,7 +284,7 @@ export function MemoryTrendChart({ points, selectedRunId, onSelectRun }: Resourc
     <ChartPanel label="Peak memory over completed runs">
       {!hasPeakTelemetry && <p className="chart-note">Memory telemetry is unavailable for these runs. Requested memory is shown.</p>}
       {points.length > 0 && <div className="chart-frame"><Chart definition={definition} height={240} ariaLabel="Peak memory over completed runs" ariaDescription={summary}
-        onFocusChange={(point) => setFocusedPoint(point?.datum.point ?? null)}
+        onFocusChange={(point) => setFocusedPoint((current) => retainChartFocus(current, point?.datum.point ?? null))}
         onSelect={(point) => { if (point) { setFocusedPoint(point.datum.point); onSelectRun(point.datum.runId); } }} /></div>}
       <ChartRunDetails point={activePoint} focused={focusedPoint !== null} />
     </ChartPanel>
@@ -286,6 +293,7 @@ export function MemoryTrendChart({ points, selectedRunId, onSelectRun }: Resourc
 
 export function DurationTrendChart({ points, selectedRunId, onSelectRun }: ResourceChartProps): ReactNode {
   const [focusedPoint, setFocusedPoint] = useState<JobResourceTrendPoint | null>(null);
+  useEffect(() => setFocusedPoint(null), [selectedRunId]);
   const rows = useMemo<DurationRow[]>(() => points.map((point, index) => ({ ...sharedRow(point, index), value: point.executionDurationMs })), [points]);
   const labels = useMemo(() => positionLabels(points), [points]);
   const definition = useMemo(() => {
@@ -296,8 +304,7 @@ export function DurationTrendChart({ points, selectedRunId, onSelectRun }: Resou
           id: "duration-bars",
           x: "position",
           y: "value",
-          key: "runId",
-          fill: (row) => isOutcomeDegraded(row.point) || row.telemetryState === "unavailable" ? DEGRADED : DURATION,
+          fill: (row) => isOutcomeDegraded(row.point) ? DEGRADED : DURATION,
           radius: 2,
         }),
         dotMark(normal, "duration-normal-markers", DURATION, DURATION, selectedRunId),
@@ -317,7 +324,7 @@ export function DurationTrendChart({ points, selectedRunId, onSelectRun }: Resou
       {rows.length === 0
         ? <p className="chart-empty">No completed runs in this window.</p>
         : <div className="chart-frame"><Chart definition={definition} height={240} ariaLabel="Execution duration over completed runs" ariaDescription={summary}
-          onFocusChange={(point) => setFocusedPoint(point?.datum.point ?? null)}
+          onFocusChange={(point) => setFocusedPoint((current) => retainChartFocus(current, point?.datum.point ?? null))}
           onSelect={(point) => { if (point) { setFocusedPoint(point.datum.point); onSelectRun(point.datum.runId); } }} /></div>}
       <ChartRunDetails point={activePoint} focused={focusedPoint !== null} />
     </ChartPanel>
