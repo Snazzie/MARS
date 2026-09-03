@@ -94,11 +94,14 @@ export function JobResourceList({ jobs, selectedJobKey, hasNextPage, fetchingNex
           {jobs.map((job, index) => {
             const selected = job.jobKey === selectedJobKey;
             const coverageIsPartial = job.telemetryCoveredRunCount < job.runCount;
+            const jobNameId = `${headingId}-job-${index}-name`;
+            const jobIdentityId = `${headingId}-job-${index}-identity`;
             return (
               <li
                 key={job.jobKey}
                 role="option"
                 aria-selected={selected}
+                aria-labelledby={`${jobNameId} ${jobIdentityId}`}
                 tabIndex={selected || (!hasSelectedJob && index === 0) ? 0 : -1}
                 data-job-key={job.jobKey}
                 data-option-text={`${job.jobName} ${job.repositoryName} ${job.workflowName}`.toLocaleLowerCase()}
@@ -110,8 +113,8 @@ export function JobResourceList({ jobs, selectedJobKey, hasNextPage, fetchingNex
                 onKeyDown={(event) => handleOptionKeyDown(event, job.jobKey)}
               >
                 <header>
-                  <strong>{job.jobName}</strong>
-                  <span>{job.repositoryName} · {job.workflowName}</span>
+                  <strong id={jobNameId}>{job.jobName}</strong>
+                  <span id={jobIdentityId}>{job.repositoryName} · {job.workflowName}</span>
                   <small>{job.platform}</small>
                 </header>
                 <dl className="resource-history-job-metrics">

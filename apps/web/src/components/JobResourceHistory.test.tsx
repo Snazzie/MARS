@@ -217,7 +217,7 @@ test("offers accessible manual pagination while the observer requests at most on
   }
 });
 
-test("supports listbox arrow keys and keeps pointer selection focused on the chosen row", async () => {
+test("gives focused listbox options explicit identity and supports keyboard and pointer selection", async () => {
   const originalDocument = globalThis.document;
   const originalWindow = globalThis.window;
   const window = new Window();
@@ -250,6 +250,10 @@ test("supports listbox arrow keys and keeps pointer selection focused on the cho
     options[0]?.focus();
     options[0]?.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }) as unknown as Event);
     expect(document.activeElement).toBe(options[1]);
+    const focusedOption = document.activeElement as HTMLElement;
+    const labelledBy = focusedOption.getAttribute("aria-labelledby")?.split(/\s+/) ?? [];
+    const accessibleIdentity = labelledBy.map((id) => document.getElementById(id)?.textContent?.trim()).join(" ");
+    expect(accessibleIdentity).toBe("build acme/service · CI");
     expect(selectedKeys.at(-1)).toBe(repoTwoBuild.jobKey);
 
     options[0]?.click();
