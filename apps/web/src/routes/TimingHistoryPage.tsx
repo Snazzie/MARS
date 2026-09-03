@@ -1,34 +1,226 @@
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { getJobTimingAggregates, getJobTimingHistory } from "../api.ts";
+import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { getJobResourceTrends } from "../api.ts";
+import { JobResourceDetail } from "../components/JobResourceDetail.tsx";
+import { JobResourceList } from "../components/JobResourceList.tsx";
 import { QueryState } from "../components/StateView.tsx";
+import { TimingSummary } from "../components/TimingSummary.tsx";
+import { TimingToolbar } from "../components/TimingToolbar.tsx";
+import { defaultTimingFilters, selectionAfterJobsChange, timingRangeBounds, type TimingFilters } from "./timing-model.ts";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
+
+type ResourceTrendPage = Awaited<ReturnType<typeof getJobResourceTrends>>;
+type ResourceHistoryPageState = "ready" | "empty" | "no-match";
+
+const emptyFacets: ResourceTrendPage["filters"] = {
+  platforms: [],
+  vcpus: [],
+  concurrencies: [],
+};
+
+export function jobResourceTrendQueryOptions(
+  organizationId: string,
+  filters: TimingFilters,
+  selectedJobKey: string | null,
+  now: Date = new Date(),
+) {
+  const request = {
+    ...timingRangeBounds(filters.range, now),
+    platform: filters.platform || undefined,
+    vcpu: filters.vcpu ? Number(filters.vcpu) : undefined,
+    concurrency: filters.concurrency ? Number(filters.concurrency) : undefined,
+    search: filters.search.trim() || undefined,
+    sort: filters.sort,
+    jobKey: selectedJobKey,
+  };
+
+  return {
+    queryKey: ["org", organizationId, "job-resource-trends", request] as const,
+    queryFn: ({ pageParam }: { pageParam: string | null }) => getJobResourceTrends(organizationId, {
+      ...request,
+      cursor: pageParam,
+      limit: 30,
+      pointLimit: 100,
+    }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page: ResourceTrendPage) => page.nextCursor ?? undefined,
+    enabled: Boolean(organizationId),
+    placeholderData: (previous: InfiniteData<ResourceTrendPage, string | null> | undefined) => previous,
+  };
+}
+
+export function resourceHistoryPageState(jobCount: number, filters: TimingFilters): ResourceHistoryPageState {
+  if (jobCount > 0) return "ready";
+  const hasActiveFilters = filters.range !== defaultTimingFilters.range
+    || filters.platform !== defaultTimingFilters.platform
+    || filters.vcpu !== defaultTimingFilters.vcpu
+    || filters.concurrency !== defaultTimingFilters.concurrency
+    || filters.search.trim() !== defaultTimingFilters.search
+    || filters.sort !== defaultTimingFilters.sort;
+  return hasActiveFilters ? "no-match" : "empty";
+}
+
+export function resourceHistoryRefreshError<T>(hasData: boolean, error: T | null, failureReason: T | null): T | null {
+  return hasData ? error ?? failureReason : null;
+}
+
+function ResourceHistorySkeleton() {
+  return (
+    <div className="resource-history-skeleton" role="status" aria-label="Loading job resource history">
+      <span className="sr-only">Loading job resource history</span>
+      <div className="resource-history-skeleton-summary">
+        {Array.from({ length: 4 }, (_, index) => <span key={index} />)}
+      </div>
+      <div className="resource-history-skeleton-workspace">
+        <span />
+        <span />
+      </div>
+    </div>
+  );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "The latest resource history could not be loaded.";
+}
+
 
 export function TimingHistoryPage() {
   const { organizationId } = useOrganizationFromRoute();
-  const [platform, setPlatform] = useState("");
-  const [vcpu, setVcpu] = useState("");
-  const [concurrency, setConcurrency] = useState("");
-  const filters = { platform: platform || undefined, vcpu: vcpu ? Number(vcpu) : undefined, concurrency: concurrency ? Number(concurrency) : undefined };
-  const history = useInfiniteQuery({
-    queryKey: ["org", organizationId, "job-timings", filters],
-    queryFn: ({ pageParam }: { pageParam: string | null }) => getJobTimingHistory(organizationId, { ...filters, cursor: pageParam }),
-    initialPageParam: null as string | null,
-    getNextPageParam: page => page.nextCursor ?? undefined,
-    enabled: Boolean(organizationId),
-  });
-  const aggregates = useQuery({ queryKey: ["org", organizationId, "job-timing-aggregates", filters], queryFn: () => getJobTimingAggregates(organizationId, filters), enabled: Boolean(organizationId) });
-  const items = history.data?.pages.flatMap(page => page.items) ?? [];
-  return <>
-    <header className="runs-heading"><div><p className="eyebrow">Runs</p><h1>Completed job timing history</h1><p>Correlation only; timing differences do not establish causation.</p></div></header>
-    <section className="filter-bar" aria-label="Timing history filters">
-      <label>Platform <select value={platform} onChange={event => setPlatform(event.target.value)}><option value="">All platforms</option><option value="windows-x64">Windows</option><option value="macos-arm64">macOS</option></select></label>
-      <label>vCPU <input inputMode="numeric" value={vcpu} onChange={event => setVcpu(event.target.value)} placeholder="All" /></label>
-      <label>Parallelism <input inputMode="numeric" value={concurrency} onChange={event => setConcurrency(event.target.value)} placeholder="All" /></label>
-    </section>
-    <QueryState error={history.error ?? aggregates.error} isLoading={history.isLoading || aggregates.isLoading} isEmpty={!history.isLoading && !history.error && items.length === 0} retry={() => { void history.refetch(); void aggregates.refetch(); }} operationLabel="timing history" />
-    {aggregates.data && <section aria-label="Timing comparisons" className="panel"><h2>Execution timing comparisons</h2><p>Completed samples grouped by platform.</p><table><thead><tr><th>Platform</th><th>Samples</th><th>Median</th><th>p95</th><th>Range</th></tr></thead><tbody>{aggregates.data.map(item => <tr key={item.group.platform}><td>{item.group.platform}</td><td>{item.sampleCount}</td><td>{item.p50Ms} ms</td><td>{item.p95Ms} ms</td><td>{item.minMs}–{item.maxMs} ms</td></tr>)}</tbody></table></section>}
-    {items.length > 0 && <section aria-label="Completed timing measurements" className="panel"><h2>Completed measurements</h2><table><thead><tr><th>Job</th><th>Completed</th><th>Execution</th><th>Total</th><th>CPU load</th><th>Memory peak</th><th>Resources</th></tr></thead><tbody>{items.map(item => <tr key={item.jobId}><td>{item.repositoryName} / {item.jobName}</td><td>{new Date(item.completedAt).toLocaleString()}</td><td>{item.executionDurationMs} ms</td><td>{item.totalDurationMs} ms</td><td>{item.telemetryState === "unavailable" ? "Telemetry unavailable" : `${item.cpuAveragePercent?.toFixed(1)}% avg / ${item.cpuP95Percent?.toFixed(1)}% p95 (${item.telemetrySampleCount} samples)`}</td><td>{item.memoryPeakBytes === null ? "Unavailable" : `${item.memoryPeakBytes} bytes`}</td><td>{item.requestedVcpu} vCPU / {item.effectiveConcurrency} parallel</td></tr>)}</tbody></table></section>}
-    {history.hasNextPage && <button type="button" className="button secondary load-more" onClick={() => void history.fetchNextPage()} disabled={history.isFetchingNextPage}>{history.isFetchingNextPage ? "Loading…" : "Load more timing records"}</button>}
-  </>;
+  const [filters, setFilters] = useState<TimingFilters>(defaultTimingFilters);
+  const [debouncedSearch, setDebouncedSearch] = useState(defaultTimingFilters.search);
+  const [selectedJobKey, setSelectedJobKey] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [requestedAt, setRequestedAt] = useState(() => new Date());
+
+  useEffect(() => {
+    if (filters.search === debouncedSearch) return;
+    const timeout = window.setTimeout(() => {
+      setDebouncedSearch(filters.search);
+      setRequestedAt((current) => new Date(Math.max(Date.now(), current.getTime() + 1)));
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [debouncedSearch, filters.search]);
+
+  const queryFilters = useMemo(
+    () => ({ ...filters, search: debouncedSearch }),
+    [debouncedSearch, filters],
+  );
+  const query = useInfiniteQuery(jobResourceTrendQueryOptions(
+    organizationId,
+    queryFilters,
+    selectedJobKey,
+    requestedAt,
+  ));
+  const jobs = useMemo(() => query.data?.pages.flatMap((page) => page.jobs) ?? [], [query.data]);
+  const firstPage = query.data?.pages[0];
+  const selectedJob = firstPage?.selectedJob ?? null;
+  const refreshing = query.isFetching && !query.isFetchingNextPage;
+  const pageState = resourceHistoryPageState(jobs.length, queryFilters);
+  const refreshError = resourceHistoryRefreshError(Boolean(firstPage), query.error, query.failureReason);
+
+  useEffect(() => {
+    setSelectedJobKey((current) => selectionAfterJobsChange(current, jobs));
+  }, [jobs]);
+
+  useEffect(() => {
+    const points = selectedJob?.points ?? [];
+    setSelectedRunId((current) => (
+      current !== null && points.some((point) => point.runId === current)
+        ? current
+        : points.at(-1)?.runId ?? null
+    ));
+  }, [selectedJob]);
+
+  const refresh = () => {
+    setRequestedAt((current) => new Date(Math.max(Date.now(), current.getTime() + 1)));
+  };
+
+  return (
+    <div className="resource-history">
+      <header className="resource-history-header runs-heading">
+        <div>
+          <p className="eyebrow">Runs / Resource analysis</p>
+          <h1>Job resource history</h1>
+          <p className="resource-history-intro">
+            Compare execution time, CPU, and memory across completed runs without losing the job context behind each measurement.
+          </p>
+        </div>
+        <details className="resource-history-disclosure">
+          <summary>How to read these metrics</summary>
+          <div>
+            <p>Trends are observational. A change in timing or resource use does not establish causation.</p>
+            <p>CPU and memory depend on worker telemetry coverage. Missing samples remain unavailable rather than being treated as zero. Disk telemetry is not collected.</p>
+          </div>
+        </details>
+      </header>
+
+      <TimingToolbar
+        filters={filters}
+        facets={firstPage?.filters ?? emptyFacets}
+        generatedAt={firstPage?.generatedAt ?? null}
+        refreshing={refreshing}
+        onChange={setFilters}
+        onRefresh={refresh}
+      />
+
+      {!firstPage && query.isLoading && <ResourceHistorySkeleton />}
+      <QueryState
+        error={!firstPage ? query.error : null}
+        isLoading={false}
+        isEmpty={Boolean(firstPage) && pageState === "empty"}
+        retry={() => void query.refetch()}
+        operationLabel="job resource history"
+      />
+
+      {firstPage && (
+        <div className={refreshing ? "resource-history-results is-updating" : "resource-history-results"} aria-busy={refreshing}>
+          <TimingSummary summary={firstPage.summary} />
+
+          {refreshError && (
+            <div className="resource-history-banner is-error" role="alert">
+              <div>
+                <strong>Resource history could not be refreshed.</strong>
+                <span>Showing the last successful response. {errorMessage(refreshError)}</span>
+              </div>
+              <button type="button" className="button secondary" onClick={() => void query.refetch()}>Retry</button>
+            </div>
+          )}
+          {!refreshError && query.isPlaceholderData && (
+            <div className="resource-history-banner is-stale" role="status">
+              <strong>Updating this view.</strong>
+              <span>Previous results remain visible until the latest response arrives.</span>
+            </div>
+          )}
+
+          {pageState === "no-match" ? (
+            <section className="resource-history-no-match" aria-labelledby="resource-history-no-match-title">
+              <p className="eyebrow">No matches</p>
+              <h2 id="resource-history-no-match-title">No jobs match these filters.</h2>
+              <p>Try a broader time range, remove a resource filter, or clear the job search.</p>
+              <button type="button" className="button secondary" onClick={() => setFilters(defaultTimingFilters)}>Reset filters</button>
+            </section>
+          ) : pageState === "ready" ? (
+            <div className="resource-history-workspace">
+              <JobResourceList
+                jobs={jobs}
+                selectedJobKey={selectedJobKey}
+                hasNextPage={query.hasNextPage}
+                fetchingNextPage={query.isFetchingNextPage}
+                onSelect={setSelectedJobKey}
+                onLoadMore={() => void query.fetchNextPage()}
+              />
+              {selectedJob && (
+                <JobResourceDetail
+                  organizationId={organizationId}
+                  job={selectedJob}
+                  selectedRunId={selectedRunId}
+                  onSelectRun={setSelectedRunId}
+                />
+              )}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
 }
