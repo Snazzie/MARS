@@ -4,6 +4,7 @@ import { PoolResources as PoolResourcesSchema, RuntimeDriverName, type PoolResou
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { dispatchLeaseBootstrap } from "./lease-dispatch.ts";
+import { isGithubRateLimitError } from "./github-rate-limit.ts";
 import { reconcileQueuedJobs, type ReconcileReport } from "./reconcile.ts";
 import { reason, type Candidate } from "./scheduler.ts";
 import { applyGithubJobSnapshot, markGithubJobMissing, type GithubJobSnapshot } from "./runs.ts";
@@ -100,24 +101,37 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     }
     return client;
   };
+  const blockedInstallations = new Set<number>();
+  let preflightSkipped = 0;
   const sourceQueuedRows: typeof queuedRows = [];
   let preflightFailures = 0;
   for (const row of queuedRows) {
     const jobId = Number(row.jobId);
     const organizationId = String(row.organizationId);
+    const installationId = Number(row.installationId);
     organizationByJob.set(jobId, organizationId);
+    if (blockedInstallations.has(installationId) || deps.installationBlocked?.(installationId)) {
+      preflightSkipped += 1;
+      continue;
+    }
     const [owner, repo] = String(row.repository).split("/", 2);
     if (!owner || !repo) {
       console.error(`Reconcile preflight job ${jobId} failed: github_repository_invalid`);
       preflightFailures += 1;
       continue;
     }
-    const client = clientForInstallation(Number(row.installationId));
+    const client = clientForInstallation(installationId);
     let githubJob: GithubJobSnapshot;
     try {
       githubJob = await client.getJob(owner, repo, jobId);
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown";
+      if (isGithubRateLimitError(error)) {
+        blockedInstallations.add(installationId);
+        console.error(`Reconcile preflight installation ${installationId} cooling down: ${message}`);
+        preflightFailures += 1;
+        continue;
+      }
       if (message === "github_404" || message === "github_410") {
         try {
           await markGithubJobMissing(deps.db, { organizationId, githubJobId: jobId, observedAt: new Date().toISOString() });
@@ -142,7 +156,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       }
       const run = await client.getRunAttempt(owner, repo, githubJob.runId, githubJob.runAttempt);
       await applyGithubJobSnapshot({
-        installationId: Number(row.installationId),
+        installationId,
         repository: { id: Number(row.githubRepositoryId), name: repo, fullName: String(row.repository) },
         run,
         job: githubJob,
@@ -150,11 +164,17 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown";
+      if (isGithubRateLimitError(error)) {
+        blockedInstallations.add(installationId);
+        console.error(`Reconcile preflight installation ${installationId} cooling down: ${message}`);
+        preflightFailures += 1;
+        continue;
+      }
       console.error(`Reconcile preflight job ${jobId} failed: ${message}`);
       preflightFailures += 1;
     }
   }
-  if (!sourceQueuedRows.length) return { reserved: 0, deferred: 0, skipped: 0, failed: preflightFailures };
+  if (!sourceQueuedRows.length) return { reserved: 0, deferred: 0, skipped: preflightSkipped, failed: preflightFailures };
 
   const candidateRows = await deps.db`
     SELECT p.id AS "poolId", p.organization_id AS "organizationId", p.worker_id AS "poolWorkerId",
@@ -206,5 +226,5 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     },
     release: async (reservation) => { await deps.db`UPDATE runner_leases SET state='failed', cleanup_state='pending', updated_at=now() WHERE id=${reservation.id} AND state='reserved'`; },
   });
-  return { ...reconciled, failed: reconciled.failed + preflightFailures };
+  return { ...reconciled, skipped: reconciled.skipped + preflightSkipped, failed: reconciled.failed + preflightFailures };
 }

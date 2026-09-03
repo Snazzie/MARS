@@ -208,3 +208,63 @@ test("fails closed when exact GitHub preflight returns an unknown status", async
   expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 1 });
   expect(events).toEqual([]);
 });
+
+test("skips all queued preflight requests while an installation is cooling down", async () => {
+  const calls: string[] = [];
+  const db = Object.assign((async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ").toLowerCase();
+    if (query.includes("from dashboard_jobs j")) return [
+      { jobId: 42, runId: "run-42", githubRunId: 77, runAttempt: 1, repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels: ["mars-windows-x64"] },
+      { jobId: 43, runId: "run-43", githubRunId: 78, runAttempt: 1, repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels: ["mars-windows-x64"] },
+    ];
+    if (query.includes("p.id as")) calls.push("candidates");
+    return [];
+  }) as unknown as DatabaseClient, { begin: async () => [] });
+
+  const result = await runQueuedJobReconciliation({
+    db,
+    installationToken: async () => "token",
+    githubFetchForInstallation: () => async () => {
+      calls.push("github");
+      throw new Error("must not fetch while cooling down");
+    },
+    installationBlocked: (installationId) => installationId === 7,
+    dispatcher: { dispatch: async () => { calls.push("dispatch"); } },
+  });
+
+  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 2, failed: 0 });
+  expect(calls).toEqual([]);
+});
+
+test("stops preflighting an installation after one rate-limit response", async () => {
+  const githubJobs: number[] = [];
+  const calls: string[] = [];
+  const rateLimitError = Object.assign(new Error("github_rate_limited"), { code: "github_rate_limited" });
+  const db = Object.assign((async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ").toLowerCase();
+    if (query.includes("from dashboard_jobs j")) return [
+      { jobId: 42, runId: "run-42", githubRunId: 77, runAttempt: 1, repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels: ["mars-windows-x64"] },
+      { jobId: 43, runId: "run-43", githubRunId: 78, runAttempt: 1, repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels: ["mars-windows-x64"] },
+      { jobId: 44, runId: "run-44", githubRunId: 79, runAttempt: 1, repositoryId: "repo", organizationId: "org", installationId: 8, repository: "acme/project", labels: ["mars-windows-x64"] },
+    ];
+    if (query.includes("p.id as")) calls.push("candidates");
+    return [];
+  }) as unknown as DatabaseClient, { begin: async () => [] });
+
+  const result = await runQueuedJobReconciliation({
+    db,
+    installationToken: async () => "token",
+    githubFetchForInstallation: (installationId) => async (input) => {
+      const jobId = Number(String(input).match(/actions\/jobs\/(\d+)$/)?.[1]);
+      githubJobs.push(jobId);
+      if (installationId === 7) throw rateLimitError;
+      return Response.json({ id: jobId, run_id: 79, run_attempt: 1, status: "queued", name: "build", labels: ["mars-windows-x64"], created_at: "2026-08-22T10:31:46Z" });
+    },
+    installationBlocked: () => false,
+    dispatcher: { dispatch: async () => { calls.push("dispatch"); } },
+  });
+
+  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 2, failed: 1 });
+  expect(githubJobs).toEqual([42, 44]);
+  expect(calls).toEqual(["candidates"]);
+});
