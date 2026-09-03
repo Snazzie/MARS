@@ -17,7 +17,6 @@ import {
   RunDetail,
   RunSummary,
   JobTimingSnapshot,
-  JobTimingAggregate,
   JobResourceSample,
   JobResourceTrendResponse,
   JobResourceTrendSort,
@@ -128,11 +127,6 @@ export function getJobTimingHistory(organizationId: string, params: { cursor?: s
   const query = new URLSearchParams({ limit: String(params.limit ?? 50) });
   for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null && key !== "limit") query.set(key, String(value));
   return request(`/api/organizations/${organizationId}/job-timings?${query}`, CursorPage(JobTimingSnapshot));
-}
-export function getJobTimingAggregates(organizationId: string, params: { from?: string; to?: string; platform?: string; vcpu?: number; concurrency?: number } = {}) {
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) if (value !== undefined) query.set(key, String(value));
-  return request(`/api/organizations/${organizationId}/job-timings/aggregates?${query}`, JobTimingAggregate.array());
 }
 export type JobResourceTrendRequest = {
   from: string;

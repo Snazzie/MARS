@@ -83,7 +83,7 @@ export function formatPercent(value: number | null, digits = 1): string {
 
 export function formatDeltaPercent(value: number | null, digits = 1): string {
   if (value === null) return "Unavailable";
-  if (value === 0) return formatPercent(0, digits);
+  if (Math.abs(value) < 0.5 * 10 ** -digits) return formatPercent(0, digits);
   const prefix = value > 0 ? "+" : "";
   return `${prefix}${formatPercent(value, digits)}`;
 }

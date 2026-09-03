@@ -77,6 +77,7 @@ test("formats percentages, deltas, and dates for people", () => {
   expect(formatDeltaPercent(-4.56)).toBe("-4.6%");
   expect(formatDeltaPercent(0)).toBe("0.0%");
   expect(formatDeltaPercent(-0)).toBe("0.0%");
+  expect(formatDeltaPercent(-0.01)).toBe("0.0%");
   expect(formatDate("2026-09-03T12:00:00.000Z")).toBe("Sep 3, 2026, 12:00 PM UTC");
 });
 
