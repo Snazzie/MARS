@@ -176,7 +176,10 @@ function normalizeRecommendation(row: RecommendationRow): JobLabelRecommendation
   });
   return {
     status: policy.status,
+    currentLabels: labelsValue(row.currentLabels ?? row.labels),
     currentWindowsLabel: current.windowsLabel,
+    workflowPath: null,
+    workflowJobId: null,
     recommendedVcpu: policy.vcpu,
     recommendedMemoryGiB: policy.memoryGiB,
     p95CpuPeakPercent,

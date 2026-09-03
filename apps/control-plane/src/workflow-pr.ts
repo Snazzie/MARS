@@ -1,5 +1,4 @@
 import YAML, { isMap, isScalar, isSeq, type Document } from "yaml";
-import { parseCurrentResourceLabels } from "@mars/db";
 
 export interface WorkflowJobPreview {
   id: string;
@@ -26,9 +25,13 @@ export interface WorkflowMutation {
 }
 
 const workflowPath = /^\.github\/workflows\/[^/]+\.(?:yml|yaml)$/;
+const windowsRoutingLabel = /^(?:mars-)?windows(?:[-_][a-z0-9._-]+)*$/i;
+const numericResourceLabel = /^(\d+)(VCPU|G)$/i;
 type JobData = { id: string; runsOn: string | readonly string[]; path: [string, string, "runs-on"] };
+type ParsedWorkflow = { document: Document; jobs: JobData[]; name: string | null };
 
-function parseWorkflow(path: string, content: string): { document: Document; jobs: JobData[] } {
+
+function parseWorkflow(path: string, content: string): ParsedWorkflow {
   if (!workflowPath.test(path)) throw new Error(`Invalid workflow path: ${path}`);
   let document: Document;
   try {
@@ -39,6 +42,8 @@ function parseWorkflow(path: string, content: string): { document: Document; job
   }
   const root = document.contents;
   if (!isMap(root)) throw new Error(`Unsupported workflow ${path}: root must be an object`);
+  const workflowNameNode = root.get("name", true);
+  const name = isScalar(workflowNameNode) && typeof workflowNameNode.value === "string" ? workflowNameNode.value : null;
   const jobsNode = root.get("jobs", true);
   if (!isMap(jobsNode)) throw new Error(`Unsupported workflow ${path}: jobs must be an object`);
   const jobs: JobData[] = [];
@@ -56,7 +61,33 @@ function parseWorkflow(path: string, content: string): { document: Document; job
       throw new Error(`Unsupported workflow ${path}, job ${id}: runs-on must be a string scalar or string sequence`);
     }
   }
-  return { document, jobs };
+  return { document, jobs, name };
+}
+
+export function resolveWorkflowJob(
+  files: readonly { path: string; content: string }[],
+  workflowName: string,
+  jobName: string,
+): { path: string; jobId: string; currentRunsOn: string | readonly string[] } {
+  const candidates: Array<{ path: string; jobId: string; currentRunsOn: string | readonly string[] }> = [];
+  for (const file of files) {
+    const parsed = parseWorkflow(file.path, file.content);
+    const fileName = file.path.split("/").at(-1)?.replace(/\.(?:yml|yaml)$/i, "");
+    if (parsed.name !== workflowName && fileName !== workflowName) continue;
+    for (const job of parsed.jobs) {
+      // GitHub reports the explicit job name when present, otherwise its YAML key.
+      const document = parsed.document;
+      const jobNode = document.getIn(job.path.slice(0, 2), true);
+      const configuredName = isMap(jobNode) && isScalar(jobNode.get("name", true)) && typeof jobNode.get("name", true)?.value === "string"
+        ? String(jobNode.get("name", true)?.value)
+        : job.id;
+      if (configuredName === jobName) candidates.push({ path: file.path, jobId: job.id, currentRunsOn: job.runsOn });
+    }
+  }
+  if (candidates.length !== 1) {
+    throw new Error(candidates.length === 0 ? "github_workflow_job_not_found" : "github_workflow_job_ambiguous");
+  }
+  return candidates[0];
 }
 
 export function discoverWorkflowFiles(files: readonly { path: string; content: string }[]): WorkflowFilePreview[] {
@@ -80,18 +111,63 @@ function selectedPaths(input: WorkflowSelection): string[] {
   return availablePaths.length ? [...availablePaths] : [];
 }
 
-function focusedLabels(labels: readonly string[]): string[] {
-  if (!labels.length) throw new Error("Cannot replace selected workflows: labels cannot be empty");
-  return labels.map((label) => {
-    const value = label.trim();
-    const routingLabel = parseCurrentResourceLabels([value]).windowsLabel;
-    if (routingLabel) return value;
-    const match = /^(\d+)(VCPU|G)$/i.exec(value);
-    if (!match) throw new Error(`Invalid focused resource label: ${label}`);
-    const amount = Number(match[1]);
-    if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error(`Invalid resource label: ${label}`);
-    return `${amount}${match[2].toUpperCase()}`;
-  });
+function normalized(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function resourceKind(label: string): "vcpu" | "memory" | null {
+  const match = numericResourceLabel.exec(label.trim());
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error(`Invalid focused resource label: ${label}`);
+  return match[2].toUpperCase() === "VCPU" ? "vcpu" : "memory";
+}
+
+function focusedLabels(currentRunsOn: string | readonly string[], labels: readonly string[]): string[] {
+  const current = runsOnValues(currentRunsOn).map((label) => label.trim());
+  const requested = labels.map((label) => label.trim());
+  if (!requested.length || requested.some((label) => !label)) throw new Error("Cannot replace selected workflows: labels cannot be empty");
+  const duplicate = (values: readonly string[]) => values.length !== new Set(values.map(normalized)).size;
+  if (duplicate(current)) throw new Error("Focused workflow labels contain duplicate labels");
+  if (duplicate(requested)) throw new Error("Focused workflow labels contain duplicate labels");
+  const currentRouting = current.filter((label) => windowsRoutingLabel.test(label));
+  const requestedRouting = requested.filter((label) => windowsRoutingLabel.test(label));
+  if (currentRouting.length !== 1 || requestedRouting.length !== 1) {
+    throw new Error("Focused workflow labels require exactly one Windows routing label");
+  }
+  if (normalized(currentRouting[0]) !== normalized(requestedRouting[0])) {
+    throw new Error("Focused workflow labels must preserve the selected Windows routing label");
+  }
+  const currentCustom = current.filter((label) => !windowsRoutingLabel.test(label) && !numericResourceLabel.test(label));
+  const requestedCustom = requested.filter((label) => !windowsRoutingLabel.test(label) && !numericResourceLabel.test(label));
+  if (currentCustom.length !== requestedCustom.length || currentCustom.some((label) => !requestedCustom.some((value) => normalized(value) === normalized(label)))) {
+    throw new Error("Focused workflow labels contain foreign or conflicting labels");
+  }
+  const requestedNumeric = new Map<"vcpu" | "memory", string>();
+  for (const label of requested) {
+    const kind = resourceKind(label);
+    if (!kind) continue;
+    if (requestedNumeric.has(kind)) throw new Error("Focused workflow labels contain duplicate resource labels");
+    const match = numericResourceLabel.exec(label)!;
+    requestedNumeric.set(kind, `${Number(match[1])}${kind === "vcpu" ? "VCPU" : "G"}`);
+  }
+  const currentNumeric = new Map<"vcpu" | "memory", string>();
+  for (const label of current) {
+    const kind = resourceKind(label);
+    if (!kind) {
+      if (/^\d+.*(?:VCPU|G)$/i.test(label)) throw new Error(`Invalid focused resource label: ${label}`);
+      continue;
+    }
+    if (currentNumeric.has(kind)) throw new Error("Focused workflow labels contain duplicate resource labels");
+    const match = numericResourceLabel.exec(label)!;
+    currentNumeric.set(kind, `${Number(match[1])}${kind === "vcpu" ? "VCPU" : "G"}`);
+  }
+  const result = current.filter((label) => !numericResourceLabel.test(label));
+  for (const kind of ["vcpu", "memory"] as const) {
+    const value = requestedNumeric.get(kind) ?? currentNumeric.get(kind);
+    if (value) result.push(value);
+  }
+  return result;
 }
 
 function runsOnValues(value: string | readonly string[]): string[] {
@@ -99,11 +175,7 @@ function runsOnValues(value: string | readonly string[]): string[] {
 }
 
 function proposedLabels(currentRunsOn: string | readonly string[], labels: readonly string[], focused: boolean): string[] {
-  const normalized = focused ? focusedLabels(labels) : [...labels];
-  if (!focused) return normalized;
-  const currentWindowsLabel = parseCurrentResourceLabels(runsOnValues(currentRunsOn)).windowsLabel;
-  if (!currentWindowsLabel || normalized.some((label) => label.toLowerCase() === currentWindowsLabel.toLowerCase())) return normalized;
-  return [currentWindowsLabel, ...normalized];
+  return focused ? focusedLabels(currentRunsOn, labels) : [...labels];
 }
 
 export function previewWorkflowMutation(input: WorkflowSelection & { files: readonly WorkflowFilePreview[] }): WorkflowMutation {

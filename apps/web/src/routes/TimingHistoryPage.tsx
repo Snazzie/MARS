@@ -3,6 +3,8 @@ import { useInfiniteQuery, useQuery, type InfiniteData } from "@tanstack/react-q
 import { useEffect, useMemo, useState } from "react";
 import { getJobResourceSamples, getJobResourceTrends } from "../api.ts";
 import { JobResourceDetail } from "../components/JobResourceDetail.tsx";
+import { RunnerWorkflowPrModal } from "../components/RunnerWorkflowPrModal.tsx";
+import type { JobLabelOptimizationRequest } from "../components/JobLabelOptimization.tsx";
 import { JobResourceList } from "../components/JobResourceList.tsx";
 import { QueryState, StateView } from "../components/StateView.tsx";
 import { TimingSummary } from "../components/TimingSummary.tsx";
@@ -269,6 +271,7 @@ export function TimingHistoryPage() {
   const [selectedJobKey, setSelectedJobKey] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [requestedAt, setRequestedAt] = useState(() => new Date());
+  const [pullRequest, setPullRequest] = useState<JobLabelOptimizationRequest | null>(null);
 
   const [committedView, setCommittedView] = useState<ResourceHistoryCommittedView | null>(null);
   useEffect(() => {
@@ -459,6 +462,7 @@ export function TimingHistoryPage() {
                     samples={samples}
                     samplesLoading={sampleQuery.isFetching}
                     samplesError={sampleQuery.error ?? sampleQuery.failureReason ?? null}
+                    onRequestPullRequest={setPullRequest}
                   />
                 ) : (
                   <section className="resource-history-detail resource-history-detail-pending" role="status">
@@ -470,6 +474,23 @@ export function TimingHistoryPage() {
             </div>
           )}
         </div>
+      )}
+      {pullRequest && (
+        <RunnerWorkflowPrModal
+          organizationId={organizationId}
+          repositoryId={pullRequest.repositoryId}
+          repositoryName={pullRequest.repositoryName}
+          workflowName={pullRequest.workflowName}
+          jobName={pullRequest.jobName}
+          open
+          onClose={() => setPullRequest(null)}
+          selectedPath={pullRequest.selectedPath}
+          selectedJobId={pullRequest.selectedJobId}
+          currentLabels={pullRequest.currentLabels}
+          p95CpuPeakPercent={pullRequest.p95CpuPeakPercent}
+          p95MemoryPeakBytes={pullRequest.p95MemoryPeakBytes}
+          successfulRunCount={pullRequest.successfulRunCount}
+        />
       )}
     </div>
   );

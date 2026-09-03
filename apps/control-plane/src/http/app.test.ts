@@ -983,6 +983,54 @@ test("returns scoped timing label recommendations and unavailable history", asyn
   expect(await unavailable.json()).toMatchObject({ status: "unavailable", reason: "insufficient_history" });
 });
 
+test("resolves YAML workflow metadata for timing recommendations", async () => {
+  const db = Object.assign((() => []) as unknown as (...args: never[]) => unknown, {
+    unsafe: async () => [{
+      currentLabels: ["mars-windows-x64", "8VCPU", "16G"],
+      successfulRunCount: "8",
+      coveredRunCount: "8",
+      p95CpuPeakPercent: "201",
+      p95MemoryPeakBytes: "5368709120",
+    }],
+  }) as never;
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    db,
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+    githubApp: {
+      resolveWorkflowJob: async () => ({
+        path: ".github/workflows/ci.yml",
+        jobId: "build",
+        currentRunsOn: ["self-hosted", "mars-windows-x64", "custom", "8VCPU", "16G"],
+      }),
+    } as never,
+  })).request("/api/organizations/org-1/job-timings/label-recommendation?from=2026-08-01T00:00:00.000Z&to=2026-09-01T00:00:00.000Z&repositoryId=11111111-1111-4111-8111-111111111111&workflowName=CI&jobName=build");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    workflowPath: ".github/workflows/ci.yml",
+    workflowJobId: "build",
+    currentLabels: ["self-hosted", "mars-windows-x64", "custom", "8VCPU", "16G"],
+  });
+});
+
+
+test("rejects focused label conflicts as workflow-invalid requests", async () => {
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+    githubApp: {
+      previewRepositoryRunnerPr: async () => { throw new Error("Focused workflow labels contain foreign or conflicting labels"); },
+    } as never,
+  })).request("/api/organizations/org-1/repositories/repo-1/runner-workflows/preview", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      selectedPath: ".github/workflows/ci.yml",
+      selectedJobId: "build",
+      labels: ["mars-windows-x64", "4VCPU", "8G", "foreign"],
+    }),
+  });
+  expect(response.status).toBe(422);
+  expect(await response.json()).toMatchObject({ code: "workflow_invalid" });
+});
   test("refreshes repositories from an existing GitHub installation", async () => {
     let refreshedOrganization = "";
     const response = await createControlPlaneApp(fakeHttpDeps({

@@ -14,8 +14,12 @@ export type JobLabelRecommendationRequest = {
 export type JobLabelOptimizationRange = Pick<JobLabelRecommendationRequest, "from" | "to">;
 
 export type JobLabelOptimizationRequest = {
+  repositoryId: string;
+  repositoryName: string;
+  workflowName: string;
+  jobName: string;
   selectedPath: string;
-  selectedJobId: string;
+  currentLabels: string[];
   labels: string[];
   p95CpuPeakPercent: number | null;
   p95MemoryPeakBytes: number | null;
@@ -44,12 +48,6 @@ export function isPositiveIntegerLabel(value: string): boolean {
   return Number.isSafeInteger(number) && number > 0;
 }
 
-function labelNumber(labels: readonly string[], pattern: RegExp): number | null {
-  const label = labels.find((value) => pattern.test(value));
-  if (!label) return null;
-  const value = Number(label.match(pattern)?.[1]);
-  return Number.isSafeInteger(value) && value > 0 ? value : null;
-}
 
 function unavailableReason(reason: string | null): string {
   switch (reason) {
@@ -68,21 +66,9 @@ function unavailableReason(reason: string | null): string {
   }
 }
 
-function currentLabelsFor(
-  recommendation: JobLabelRecommendation,
-  labels: readonly string[] | undefined,
-  currentVcpu: number | null | undefined,
-  currentMemoryGiB: number | null | undefined,
-): string[] {
-  const routeLabel = recommendation.currentWindowsLabel;
-  const existing = labels?.length ? [...labels] : [];
-  const vcpu = labelNumber(existing, /^(\d+)VCPU$/i) ?? currentVcpu ?? recommendation.recommendedVcpu;
-  const memoryGiB = labelNumber(existing, /^(\d+)G$/i) ?? currentMemoryGiB ?? recommendation.recommendedMemoryGiB;
-  const numeric = existing.filter((label) => !/^\d+(?:VCPU|G)$/i.test(label));
-  if (routeLabel && !numeric.includes(routeLabel)) numeric.unshift(routeLabel);
-  if (vcpu !== null && vcpu !== undefined) numeric.push(`${vcpu}VCPU`);
-  if (memoryGiB !== null && memoryGiB !== undefined) numeric.push(`${memoryGiB}G`);
-  return numeric;
+function currentLabelsFor(recommendation: JobLabelRecommendation, labels: readonly string[] | undefined): string[] {
+  const workflowLabels = recommendation.currentLabels?.length ? recommendation.currentLabels : labels ?? [];
+  return [...workflowLabels];
 }
 
 function proposedLabels(currentLabels: readonly string[], vcpu: string, memoryGiB: string): string[] {
@@ -104,8 +90,6 @@ export function JobLabelOptimization({
   selectedPath = null,
   selectedJobId = null,
   currentLabels,
-  currentVcpu,
-  currentMemoryGiB,
   onRequestPullRequest,
   onCreatePullRequest,
 }: JobLabelOptimizationProps) {
@@ -122,8 +106,8 @@ export function JobLabelOptimization({
   });
   const recommendation = query.data;
   const current = useMemo(
-    () => recommendation ? currentLabelsFor(recommendation, currentLabels, currentVcpu, currentMemoryGiB) : [],
-    [currentLabels, currentMemoryGiB, currentVcpu, recommendation],
+    () => recommendation ? currentLabelsFor(recommendation, currentLabels) : [],
+    [currentLabels, recommendation],
   );
   const [vcpuValue, setVcpuValue] = useState<string | null>(null);
   const [memoryValue, setMemoryValue] = useState<string | null>(null);
@@ -131,14 +115,21 @@ export function JobLabelOptimization({
     setVcpuValue(recommendation?.recommendedVcpu === null || recommendation?.recommendedVcpu === undefined ? null : String(recommendation.recommendedVcpu));
     setMemoryValue(recommendation?.recommendedMemoryGiB === null || recommendation?.recommendedMemoryGiB === undefined ? null : String(recommendation.recommendedMemoryGiB));
   }, [recommendation]);
-
   const vcpu = vcpuValue ?? (recommendation?.recommendedVcpu === null || recommendation?.recommendedVcpu === undefined ? "" : String(recommendation.recommendedVcpu));
   const memoryGiB = memoryValue ?? (recommendation?.recommendedMemoryGiB === null || recommendation?.recommendedMemoryGiB === undefined ? "" : String(recommendation.recommendedMemoryGiB));
   const validValues = isPositiveIntegerLabel(vcpu) && isPositiveIntegerLabel(memoryGiB);
   const proposed = recommendation && validValues ? proposedLabels(current, vcpu, memoryGiB) : [];
   const noOp = proposed.length > 0 && sameLabels(current, proposed);
-  const hasRecommendation = recommendation?.status === "available" && recommendation.currentWindowsLabel !== null && recommendation.recommendedVcpu !== null && recommendation.recommendedMemoryGiB !== null;
-  const hasRepositoryMetadata = Boolean(organizationId && repositoryId && repositoryName && workflowName && jobName && selectedPath && selectedJobId);
+  const resolvedPath = selectedPath ?? recommendation?.workflowPath ?? null;
+  const resolvedJobId = selectedJobId ?? recommendation?.workflowJobId ?? null;
+  const hasRecommendation = recommendation?.status === "available"
+    && recommendation.currentWindowsLabel !== null
+    && Boolean(recommendation.currentLabels?.length)
+    && Boolean(recommendation.workflowPath)
+    && Boolean(recommendation.workflowJobId)
+    && recommendation.recommendedVcpu !== null
+    && recommendation.recommendedMemoryGiB !== null;
+  const hasRepositoryMetadata = Boolean(organizationId && repositoryId && repositoryName && workflowName && jobName && resolvedPath && resolvedJobId);
   const canRequestPullRequest = Boolean(hasRecommendation && hasRepositoryMetadata && validValues && !noOp && (onRequestPullRequest || onCreatePullRequest));
   const requestPullRequest = onRequestPullRequest ?? onCreatePullRequest;
   const invalidMessage = !validValues ? "Enter positive whole numbers for VCPU and G labels." : noOp ? "The proposed labels are unchanged; there is no pull request to create." : null;
@@ -178,8 +169,8 @@ export function JobLabelOptimization({
           {invalidMessage && <p className="job-label-optimization-validation" role="status">{invalidMessage}</p>}
           {hasRepositoryMetadata && (onRequestPullRequest || onCreatePullRequest) && (
             <button type="button" className="button" disabled={!canRequestPullRequest} onClick={() => {
-              if (!canRequestPullRequest || !requestPullRequest || !recommendation || !selectedPath || !selectedJobId) return;
-              requestPullRequest({ selectedPath, selectedJobId, labels: proposed, p95CpuPeakPercent: recommendation.p95CpuPeakPercent, p95MemoryPeakBytes: recommendation.p95MemoryPeakBytes, successfulRunCount: recommendation.successfulRunCount });
+              if (!canRequestPullRequest || !requestPullRequest || !recommendation || !resolvedPath || !resolvedJobId) return;
+              requestPullRequest({ repositoryId: repositoryId!, repositoryName: repositoryName!, workflowName, jobName, selectedPath: resolvedPath, selectedJobId: resolvedJobId, labels: proposed, currentLabels: current, p95CpuPeakPercent: recommendation.p95CpuPeakPercent, p95MemoryPeakBytes: recommendation.p95MemoryPeakBytes, successfulRunCount: recommendation.successfulRunCount });
             }}>Review pull request</button>
           )}
         </div>

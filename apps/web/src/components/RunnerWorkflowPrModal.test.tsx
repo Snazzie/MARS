@@ -29,17 +29,12 @@ describe("RunnerWorkflowPrModal behavior contracts", () => {
     });
   });
 
-  test("validates focused resource labels and selected-job preview", () => {
-    expect(areRunnerWorkflowLabelsValid(["mars-windows-x64", "4VCPU", "8G"])).toBe(true);
-    expect(areRunnerWorkflowLabelsValid(["mars-windows-x64", "0VCPU", "8G"])).toBe(false);
-    expect(isRunnerWorkflowPrDisabled({
-      result: null,
-      hasPreview: true,
-      replacementCount: 1,
-      confirmed: true,
-      labelsValid: true,
-      focusedPreviewMatches: false,
-    })).toBe(true);
+  test("validates focused routing, duplicate, and custom-label conflicts", () => {
+    const current = ["self-hosted", "mars-windows-x64", "custom", "8VCPU", "16G"];
+    expect(areRunnerWorkflowLabelsValid(["self-hosted", "mars-windows-x64", "custom", "4VCPU", "8G"], current)).toBe(true);
+    expect(areRunnerWorkflowLabelsValid(["self-hosted", "windows-latest", "custom", "4VCPU", "8G"], current)).toBe(false);
+    expect(areRunnerWorkflowLabelsValid(["self-hosted", "mars-windows-x64", "custom", "4VCPU", "4VCPU", "8G"], current)).toBe(false);
+    expect(areRunnerWorkflowLabelsValid(["self-hosted", "mars-windows-x64", "foreign", "4VCPU", "8G"], current)).toBe(false);
   });
 
 

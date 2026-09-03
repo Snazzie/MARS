@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import type { JobLabelRecommendation } from "@mars/contracts";
 import { createRunnerWorkflowPr, getRunnerWorkflowFiles, previewRunnerWorkflowPr } from "../api.ts";
 
-type FocusedRecommendation = Partial<Pick<JobLabelRecommendation, "currentWindowsLabel" | "recommendedVcpu" | "recommendedMemoryGiB" | "p95CpuPeakPercent" | "p95MemoryPeakBytes" | "successfulRunCount">> & {
+type FocusedRecommendation = Partial<Pick<JobLabelRecommendation, "currentWindowsLabel" | "currentLabels" | "recommendedVcpu" | "recommendedMemoryGiB" | "p95CpuPeakPercent" | "p95MemoryPeakBytes" | "successfulRunCount">> & {
   labels?: readonly string[];
 };
 
@@ -11,12 +11,15 @@ export type RunnerWorkflowPrModalProps = {
   organizationId: string;
   repositoryId: string;
   repositoryName: string;
+  workflowName?: string;
+  jobName?: string;
   open: boolean;
   onClose: () => void;
   onCreated?: (url: string) => void;
   selectedPath?: string | null;
   selectedJobId?: string | null;
   labels?: readonly string[];
+  currentLabels?: readonly string[];
   recommendation?: FocusedRecommendation | null;
   p95CpuPeakPercent?: number | null;
   p95MemoryPeakBytes?: number | null;
@@ -50,18 +53,46 @@ function isWindowsRoutingLabel(value: string): boolean {
   return /^(?:mars-)?windows(?:[-_][a-z0-9._-]+)*$/i.test(value);
 }
 
-export function areRunnerWorkflowLabelsValid(labels: readonly string[]): boolean {
-  return labels.length > 0 && labels.every((label) => {
-    const value = label.trim();
-    if (!value) return false;
-    if (isWindowsRoutingLabel(value)) return true;
+export function areRunnerWorkflowLabelsValid(labels: readonly string[], expectedCurrentLabels?: readonly string[]): boolean {
+  const values = labels.map((label) => label.trim());
+  if (!values.length || values.some((value) => !value)) return false;
+  const normalized = values.map((value) => value.toLowerCase());
+  if (new Set(normalized).size !== values.length) return false;
+  const routes = values.filter(isWindowsRoutingLabel);
+  if (routes.length !== 1) return false;
+  const counts = { VCPU: 0, G: 0 };
+  for (const value of values) {
+    if (isWindowsRoutingLabel(value)) continue;
     const match = /^(\d+)(VCPU|G)$/i.exec(value);
-    return Boolean(match && Number.isSafeInteger(Number(match[1])) && Number(match[1]) > 0);
-  });
+    if (!match || !Number.isSafeInteger(Number(match[1])) || Number(match[1]) <= 0) {
+      const expected = expectedCurrentLabels?.map((label) => label.trim().toLowerCase()) ?? [];
+      if (!expected.includes(value.toLowerCase())) return false;
+      continue;
+    }
+    const kind = match[2].toUpperCase() as "VCPU" | "G";
+    counts[kind] += 1;
+    if (counts[kind] > 1) return false;
+  }
+  if (expectedCurrentLabels?.length) {
+    const expected = expectedCurrentLabels.map((label) => label.trim());
+    if (expected.some((label) => !label) || new Set(expected.map((label) => label.toLowerCase())).size !== expected.length) return false;
+    const currentRoute = expected.filter(isWindowsRoutingLabel);
+    if (currentRoute.length !== 1 || currentRoute[0].toLowerCase() !== routes[0].toLowerCase()) return false;
+    for (const label of expected) {
+      if (isWindowsRoutingLabel(label)) continue;
+      const match = /^(\d+)(VCPU|G)$/i.exec(label);
+      if (match && (!Number.isSafeInteger(Number(match[1])) || Number(match[1]) <= 0)) return false;
+    }
+    const currentCustom = expected.filter((label) => !isWindowsRoutingLabel(label) && !/^(\d+)(VCPU|G)$/i.test(label)).map((label) => label.toLowerCase());
+    const requestedCustom = values.filter((label) => !isWindowsRoutingLabel(label) && !/^(\d+)(VCPU|G)$/i.test(label)).map((label) => label.toLowerCase());
+    if (currentCustom.length !== requestedCustom.length || currentCustom.some((label) => !requestedCustom.includes(label))) return false;
+  }
+  return true;
 }
 
 function labelsFromRecommendation(recommendation: FocusedRecommendation | null | undefined): string[] {
   if (recommendation?.labels?.length) return recommendation.labels.map((label) => label.trim()).filter(Boolean);
+  if (recommendation?.currentLabels?.length) return recommendation.currentLabels.map((label) => label.trim()).filter(Boolean);
   if (!recommendation) return [];
   const labels = recommendation.currentWindowsLabel ? [recommendation.currentWindowsLabel] : [];
   if (recommendation.recommendedVcpu !== null && recommendation.recommendedVcpu !== undefined) labels.push(`${recommendation.recommendedVcpu}VCPU`);
@@ -73,12 +104,15 @@ export function RunnerWorkflowPrModal({
   organizationId,
   repositoryId,
   repositoryName,
+  workflowName,
+  jobName,
   open,
   onClose,
   onCreated,
   selectedPath = null,
   selectedJobId = null,
   labels,
+  currentLabels,
   recommendation = null,
   p95CpuPeakPercent,
   p95MemoryPeakBytes,
@@ -183,7 +217,7 @@ export function RunnerWorkflowPrModal({
     return allJobs.filter((job) => job.path === selectedPath && job.id === selectedJobId);
   }, [focused, preview.data, selectedJobId, selectedPath]);
   if (!open) return null;
-  const labelsValid = !focused || areRunnerWorkflowLabelsValid(editableLabels);
+  const labelsValid = !focused || areRunnerWorkflowLabelsValid(editableLabels, currentLabels);
   const focusedPreviewMatches = !focused || (focusedInputReady && jobs.length === 1);
   const invalid = isRunnerWorkflowPrDisabled({
     result,
@@ -198,7 +232,7 @@ export function RunnerWorkflowPrModal({
     focusedPreviewMatches,
   });
   return <div className="modal-backdrop" role="presentation"><section ref={dialogRef} tabIndex={-1} className="runner-workflow-modal" role="dialog" aria-modal="true" aria-labelledby="runner-workflow-title">
-    <header className="modal-header"><div><p className="eyebrow">Workflow migration</p><h2 id="runner-workflow-title">Use Mars runners</h2><p>{repositoryName}</p></div><button type="button" className="control-button control-button-secondary" aria-label="Close dialog" onClick={onClose}>Close</button></header>
+    <header className="modal-header"><div><p className="eyebrow">Workflow migration</p><h2 id="runner-workflow-title">Use Mars runners</h2><p>{repositoryName}{workflowName && jobName ? ` · ${workflowName} / ${jobName}` : ""}</p></div><button type="button" className="control-button control-button-secondary" aria-label="Close dialog" onClick={onClose}>Close</button></header>
     {error && <div role="alert" className="form-error">{error instanceof Error ? error.message : "Could not load workflow preview."}<button type="button" className="control-button" onClick={() => { create.reset(); void (files.error ? files.refetch() : preview.refetch()); }}>Refresh preview</button></div>}
     {files.isLoading && !focused && <p role="status">Loading workflow files…</p>}
     {files.data && !focused && <fieldset className="workflow-file-selection"><legend>Workflow files</legend>{files.data.length === 0 && <p>No eligible workflow files found.</p>}{files.data.map((file) => <label key={file.path}><input type="checkbox" checked={selected.includes(file.path)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, file.path] : current.filter((path) => path !== file.path))} /> <code>{file.path}</code></label>)}</fieldset>}

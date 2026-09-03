@@ -14,7 +14,10 @@ const request: JobLabelRecommendationRequest = {
 };
 const available: JobLabelRecommendation = {
   status: "available",
+  currentLabels: ["mars-windows-x64", "8VCPU", "16G"],
   currentWindowsLabel: "mars-windows-x64",
+  workflowPath: ".github/workflows/ci.yml",
+  workflowJobId: "build",
   recommendedVcpu: 3,
   recommendedMemoryGiB: 5,
   p95CpuPeakPercent: 201,

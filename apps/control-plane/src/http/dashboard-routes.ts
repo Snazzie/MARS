@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates, listJobResourceTrends, JobResourceTrendInputError, listJobResourceSamples, listWorkerCacheEntries, decodeWorkerCacheCursor, getWorkerHealth, getJobLabelRecommendation } from "@mars/db";
+import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates, listJobResourceTrends, JobResourceTrendInputError, listJobResourceSamples, listWorkerCacheEntries, decodeWorkerCacheCursor, getWorkerHealth, getJobLabelRecommendation, parseCurrentResourceLabels } from "@mars/db";
 import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker, purgeWorkerRunnerCache } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
@@ -18,9 +18,16 @@ const querySchema = z.object({
 }).strict();
 const periodSchema = z.enum(["24h", "7d", "30d"]);
 const timingQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50), cursor: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional(), from: z.string().datetime({ offset: true }).optional(), to: z.string().datetime({ offset: true }).optional(), repositoryId: z.string().uuid().optional(), workflow: z.string().max(200).optional(), jobName: z.string().max(200).optional(), platform: z.string().max(100).optional(), driver: z.string().max(100).optional(), vcpu: z.coerce.number().int().positive().optional(), concurrency: z.coerce.number().int().positive().optional(), outcome: z.enum(["success", "failure", "cancelled", "skipped", "neutral"]).optional() }).strict();
+const unixOrDateTimeSchema = z.preprocess((value) => {
+  if (typeof value !== "string" || !/^-?\d+$/.test(value)) return value;
+  const seconds = Number(value);
+  const milliseconds = seconds * 1000;
+  if (!Number.isSafeInteger(seconds) || !Number.isFinite(milliseconds) || Math.abs(milliseconds) > 8.64e15) return value;
+  return new Date(milliseconds).toISOString();
+}, z.string().datetime({ offset: true }));
 const jobResourceTrendQuerySchema = z.object({
-  from: z.string().datetime({ offset: true }),
-  to: z.string().datetime({ offset: true }),
+  from: unixOrDateTimeSchema,
+  to: unixOrDateTimeSchema,
   platform: z.string().max(100).optional(),
   vcpu: z.coerce.number().int().positive().optional(),
   concurrency: z.coerce.number().int().positive().optional(),
@@ -29,7 +36,7 @@ const jobResourceTrendQuerySchema = z.object({
   cursor: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   jobKey: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional(),
-  pointLimit: z.coerce.number().int().min(1).max(200).default(100),
+  pointLimit: z.coerce.number().int().min(2).max(200).default(100),
 }).strict().superRefine((value, ctx) => {
   const from = Date.parse(value.from), to = Date.parse(value.to);
   if (from >= to) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["to"], message: "to must be after from" });
@@ -92,7 +99,52 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (denied) return denied;
     const parsed = JobLabelRecommendationQuery.safeParse(c.req.query());
     if (!parsed.success) return error(c, 400, "invalid_label_recommendation_query", "Invalid label recommendation query", { issues: parsed.error.issues });
-    return c.json(JobLabelRecommendation.parse(await getJobLabelRecommendation(deps.db, org, parsed.data, c.get("user").id)));
+    const recommendation = await getJobLabelRecommendation(deps.db, org, parsed.data, c.get("user").id);
+    if (recommendation.status !== "available" || typeof deps.githubApp?.resolveWorkflowJob !== "function") {
+      return c.json(JobLabelRecommendation.parse(recommendation));
+    }
+    try {
+      const target = await deps.githubApp.resolveWorkflowJob({
+        organizationId: org,
+        repositoryId: parsed.data.repositoryId,
+        workflowName: parsed.data.workflowName,
+        jobName: parsed.data.jobName,
+      });
+      const currentLabels = typeof target.currentRunsOn === "string" ? [target.currentRunsOn] : [...target.currentRunsOn];
+      const currentWindowsLabel = parseCurrentResourceLabels(currentLabels).windowsLabel;
+      if (!currentWindowsLabel) {
+        return c.json(JobLabelRecommendation.parse({
+          ...recommendation,
+          status: "unavailable",
+          currentLabels,
+          currentWindowsLabel: null,
+          workflowPath: target.path,
+          workflowJobId: target.jobId,
+          recommendedVcpu: null,
+          recommendedMemoryGiB: null,
+          reason: "workflow_job_not_windows",
+        }));
+      }
+      return c.json(JobLabelRecommendation.parse({
+        ...recommendation,
+        currentLabels,
+        currentWindowsLabel,
+        workflowPath: target.path,
+        workflowJobId: target.jobId,
+      }));
+    } catch {
+      return c.json(JobLabelRecommendation.parse({
+        ...recommendation,
+        status: "unavailable",
+        currentLabels: [],
+        currentWindowsLabel: null,
+        workflowPath: null,
+        workflowJobId: null,
+        recommendedVcpu: null,
+        recommendedMemoryGiB: null,
+        reason: "workflow_job_not_resolved",
+      }));
+    }
   }));
   app.get("/api/organizations/:organizationId/job-timings/aggregates", safe(async (c) => {
     const org = c.req.param("organizationId");
@@ -104,12 +156,14 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   }));
   app.get("/api/organizations/:organizationId/job-resource-trends", safe(async (c) => {
     const org = c.req.param("organizationId");
-    const denied = await guard(c, deps, org);
-    if (denied) return denied;
+    if (org !== "all") {
+      const denied = await guard(c, deps, org);
+      if (denied) return denied;
+    }
     const parsed = jobResourceTrendQuerySchema.safeParse(c.req.query());
     if (!parsed.success) return error(c, 400, "invalid_resource_trend_query", "Invalid job resource trend query", { issues: parsed.error.issues });
     try {
-      return c.json(JobResourceTrendResponse.parse(await listJobResourceTrends(deps.db, org, parsed.data)));
+      return c.json(JobResourceTrendResponse.parse(await listJobResourceTrends(deps.db, org, parsed.data, c.get("user").id)));
     } catch (cause) {
       if (cause instanceof JobResourceTrendInputError) return error(c, 400, cause.code, cause.message);
       throw cause;
@@ -461,7 +515,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
       if (code === "github_repository_unavailable") return error(c, 404, "repository_unavailable", "Repository is unavailable");
       if (code === "github_403") return githubWorkflowPermissionError(c);
       if (code === "github_runner_pool_missing") return error(c, 422, "runner_pool_missing", "Runner pool is not configured");
-      if (/Invalid|Malformed|Unsupported|not discovered|no-op/i.test(code)) return error(c, 422, "workflow_invalid", code);
+      if (/Invalid|Malformed|Unsupported|not discovered|no-op|Focused workflow|resource label|duplicate labels|foreign or conflicting|Windows routing/i.test(code)) return error(c, 422, "workflow_invalid", code);
       throw cause;
     }
   }));
@@ -483,7 +537,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
       if (/github_workflow_head_stale/.test(code)) return error(c, 409, "workflow_head_stale", "Workflow files changed; refresh preview");
       if (code === "github_repository_unavailable") return error(c, 404, "repository_unavailable", "Repository is unavailable");
       if (code === "github_403") return githubWorkflowPermissionError(c);
-      if (/Invalid|Malformed|Unsupported|not discovered|no-op/i.test(code)) return error(c, 422, "workflow_invalid", code);
+      if (/Invalid|Malformed|Unsupported|not discovered|no-op|Focused workflow|resource label|duplicate labels|foreign or conflicting|Windows routing/i.test(code)) return error(c, 422, "workflow_invalid", code);
       throw cause;
     }
   }));

@@ -96,6 +96,9 @@ export const JobResourceTrendJob = dto(strict({
   repositoryId: id,
   repositoryName: z.string().min(1), workflowName: z.string().min(1), jobName: z.string().min(1),
   platform: z.string().min(1), runCount: positiveSafe, latestCompletedAt: timestamp,
+  latestRequestedVcpu: positiveSafe,
+  latestRequestedMemoryBytes: positiveSafe,
+  latestEffectiveConcurrency: positiveSafe,
   medianExecutionDurationMs: timingDuration,
   cpuPeakPercent: nullablePercent, memoryPeakBytes: nonnegativeSafe.nullable(),
   telemetryCoveredRunCount: nonnegativeSafe, telemetryCoveragePercent: z.number().min(0).max(100),
@@ -111,7 +114,7 @@ export const JobResourceTrendResponse = dto(strict({
     telemetryCoveragePercent: z.number().min(0).max(100),
   }),
   jobs: z.array(JobResourceTrendJob), nextCursor: cursor.nullable(),
-  selectedJob: strict({ jobKey: cursor, points: z.array(JobResourceTrendPoint) }).nullable(),
+  selectedJob: strict({ summary: JobResourceTrendJob, points: z.array(JobResourceTrendPoint) }).nullable(),
   filters: strict({ platforms: z.array(z.string().min(1)), vcpus: z.array(positiveSafe), concurrencies: z.array(positiveSafe) }),
   generatedAt: timestamp,
 }));
@@ -127,7 +130,10 @@ export type JobLabelRecommendationQuery = z.infer<typeof JobLabelRecommendationQ
 
 export const JobLabelRecommendation = dto(strict({
   status: z.enum(["available", "unavailable"]),
+  currentLabels: z.array(z.string().min(1)).optional(),
   currentWindowsLabel: z.string().min(1).nullable(),
+  workflowPath: z.string().regex(/^\.github\/workflows\/[^/]+\.(?:yml|yaml)$/).nullable().optional(),
+  workflowJobId: z.string().min(1).nullable().optional(),
   recommendedVcpu: positiveSafe.nullable(),
   recommendedMemoryGiB: positiveSafe.nullable(),
   p95CpuPeakPercent: z.number().nonnegative().finite().nullable(),

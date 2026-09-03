@@ -535,7 +535,7 @@ jobs:
     repositoryId: "repo-1",
     selectedPath: ".github/workflows/ci.yml",
     selectedJobId: "build",
-    labels: ["4VCPU", "8G"],
+    labels: ["mars-windows-x64", "4VCPU", "8G"],
     p95CpuPeakPercent: 201,
     p95MemoryPeakBytes: 5368709120,
     successfulRunCount: 8,

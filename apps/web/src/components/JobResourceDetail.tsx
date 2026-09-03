@@ -13,8 +13,7 @@ export type JobResourceDetailProps = {
   onSelectRun(runId: string): void;
   samples: readonly JobResourceSample[];
   samplesLoading: boolean;
-  samplesError: unknown | null;
-  selectedPath?: string | null;
+  samplesError?: unknown | null;
   onRequestPullRequest?: (request: JobLabelOptimizationRequest) => void;
 };
 export function JobResourceDetail({
@@ -25,8 +24,7 @@ export function JobResourceDetail({
   onSelectRun,
   samples,
   samplesLoading,
-  samplesError,
-  selectedPath,
+  samplesError = null,
   onRequestPullRequest,
 }: JobResourceDetailProps) {
   const headingId = useId();
@@ -68,10 +66,6 @@ export function JobResourceDetail({
           repositoryName={summary.repositoryName}
           workflowName={summary.workflowName}
           jobName={summary.jobName}
-          selectedPath={selectedPath}
-          selectedJobId={summary.jobName}
-          currentVcpu={summary.latestRequestedVcpu}
-          currentMemoryGiB={Math.max(1, Math.ceil(summary.latestRequestedMemoryBytes / 1024 ** 3))}
           onRequestPullRequest={onRequestPullRequest}
         />
       )}

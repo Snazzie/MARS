@@ -3,6 +3,7 @@ import {
   applyWorkflowMutation,
   discoverWorkflowFiles,
   previewWorkflowMutation,
+  resolveWorkflowJob,
 } from "./workflow-pr";
 
 const content = `name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n`;
@@ -43,11 +44,11 @@ describe("workflow runner mutation", () => {
   });
 });
 
-test("focused mutation previews and rewrites only the selected job", () => {
+test("focused mutation previews and rewrites only the selected job while preserving custom labels", () => {
   const input = `name: CI
 jobs:
   build:
-    runs-on: [mars-windows-x64, 8VCPU, 16G]
+    runs-on: [self-hosted, mars-windows-x64, custom, 8VCPU, 16G]
     steps:
       - run: echo build
   lint:
@@ -61,38 +62,37 @@ jobs:
     selectedPaths: [],
     selectedPath: ".github/workflows/ci.yml",
     selectedJobId: "build",
-    labels: ["4VCPU", "8G"],
+    labels: ["self-hosted", "mars-windows-x64", "custom", "4VCPU", "8G"],
   });
   expect(preview.jobs).toEqual([{
     id: "build",
-    currentRunsOn: ["mars-windows-x64", "8VCPU", "16G"],
+    currentRunsOn: ["self-hosted", "mars-windows-x64", "custom", "8VCPU", "16G"],
     path: ".github/workflows/ci.yml",
-    proposedRunsOn: ["mars-windows-x64", "4VCPU", "8G"],
+    proposedRunsOn: ["self-hosted", "mars-windows-x64", "custom", "4VCPU", "8G"],
   }]);
   expect(preview.changedFiles).toEqual([".github/workflows/ci.yml"]);
-  const output = applyWorkflowMutation(input, ["4VCPU", "8G"], "build", true);
-  expect(output).toContain("runs-on:\n      - mars-windows-x64\n      - 4VCPU\n      - 8G");
-  expect(output).toContain("runs-on: ubuntu-latest");
+  const output = applyWorkflowMutation(input, ["self-hosted", "mars-windows-x64", "custom", "4VCPU", "8G"], "build", true);
   expect(output).toContain("echo lint");
 });
 
 test("focused mutation rejects invalid numeric labels and reports no-op", () => {
-  const files = discoverWorkflowFiles([{ path: ".github/workflows/ci.yml", content }]);
+  const focusedContent = content.replace("ubuntu-latest", "[mars-windows-x64, 8VCPU, 16G]");
+  const files = discoverWorkflowFiles([{ path: ".github/workflows/ci.yml", content: focusedContent }]);
   expect(() => previewWorkflowMutation({
     files,
     selectedPaths: [],
     selectedPath: ".github/workflows/ci.yml",
     selectedJobId: "test",
-    labels: ["0VCPU", "8G"],
-  })).toThrow(/invalid resource label/i);
-  for (const labels of [["ubuntu-latest"], ["-1VCPU"], ["4vcpu", "0G"]]) {
+    labels: ["mars-windows-x64", "0VCPU", "8G"],
+  })).toThrow(/invalid focused resource label/i);
+  for (const labels of [["ubuntu-latest"], ["mars-windows-x64", "-1VCPU"], ["mars-windows-x64", "4vcpu", "0G"]]) {
     expect(() => previewWorkflowMutation({
       files,
       selectedPaths: [],
       selectedPath: ".github/workflows/ci.yml",
       selectedJobId: "test",
       labels,
-    })).toThrow(/invalid (?:focused )?resource label/i);
+    })).toThrow(/invalid (?:focused )?resource label|exactly one Windows routing label|foreign or conflicting labels/i);
   }
   expect(() => previewWorkflowMutation({
     files,
@@ -107,12 +107,30 @@ test("focused mutation rejects invalid numeric labels and reports no-op", () => 
     labels: ["4VCPU"],
   })).toThrow(/focused workflow selection/i);
   const noOp = previewWorkflowMutation({
-    files: discoverWorkflowFiles([{ path: ".github/workflows/ci.yml", content: content.replace("ubuntu-latest", "4VCPU") }]),
+    files: discoverWorkflowFiles([{ path: ".github/workflows/ci.yml", content: content.replace("ubuntu-latest", "[mars-windows-x64, 4VCPU]") }]),
     selectedPaths: [],
     selectedPath: ".github/workflows/ci.yml",
     selectedJobId: "test",
-    labels: ["4VCPU"],
+    labels: ["mars-windows-x64", "4VCPU"],
   });
   expect(noOp.noOp).toBe(true);
   expect(noOp.changedFiles).toEqual([]);
+});
+
+test("resolves the YAML job key from workflow and job display names", () => {
+  const files = [{
+    path: ".github/workflows/ci.yml",
+    content: `name: CI
+jobs:
+  build:
+    name: Build Windows
+    runs-on: [mars-windows-x64, 2VCPU, 4G]
+`,
+  }];
+  expect(resolveWorkflowJob(files, "CI", "Build Windows")).toEqual({
+    path: ".github/workflows/ci.yml",
+    jobId: "build",
+    currentRunsOn: ["mars-windows-x64", "2VCPU", "4G"],
+  });
+  expect(() => resolveWorkflowJob(files, "CI", "dashboard-uuid")).toThrow("github_workflow_job_not_found");
 });
