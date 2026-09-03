@@ -42,3 +42,10 @@ A web typecheck was also run. The changed Task 4 files produced no diagnostics. 
 
 - No backend or timing-panel files were changed.
 - Full integrated/browser verification is outside this task; the required focused modal tests pass.
+
+## Review follow-up
+
+- Review fix commit: `700d859` (`fix(web): restore focused PR modal controls`).
+- Restored confirmation, title, description, result status, and PR link controls for focused and repository-wide modes.
+- Expanded DOM flow verifies edited-label preview payload, selected-job-only diff, recommendation metadata/create serialization, confirmation gating, stale-head error refresh/reset, and successful PR URL rendering.
+- Updated acceptance output: `8 pass`, `0 fail`, `29 expect() calls`, across both modal test files.
