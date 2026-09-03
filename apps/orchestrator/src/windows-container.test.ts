@@ -118,6 +118,7 @@ test("discovers host DNS immediately before Docker create when no override is co
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
     jobTimeoutMs: 100,
+    platform: "win32" as const,
   };
   const driver = new WindowsContainerDriver(config, docker, powershell);
 
@@ -139,6 +140,44 @@ test("discovers host DNS immediately before Docker create when no override is co
   expect(calls[createIndex]!).toContainEqual("172.20.0.1");
   expect(calls[createIndex]!).toContainEqual("2001:db8::53");
   await driver.removeLease("66666666-6666-4666-8666-666666666666");
+});
+test("does not query host DNS on non-Windows platforms", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-non-windows-dns-"));
+  roots.push(root);
+  const calls: string[][] = [];
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
+    calls.push(args);
+    if (args[0] === "image") return { code: 0, stdout: JSON.stringify(["repo@sha256:" + "a".repeat(64)]), stderr: "" };
+    if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 1_000_000_000, Memory: 1024 } }]), stderr: "" };
+    return { code: 0, stdout: "0", stderr: "" };
+  };
+  const powershell: PowerShellRunner = async () => {
+    throw new Error("PowerShell must not run on non-Windows");
+  };
+  const config = {
+    image: "repo@sha256:" + "a".repeat(64),
+    prefix: "mars",
+    bootstrapRoot: root,
+    limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
+    readyTimeoutMs: 100,
+    jobTimeoutMs: 100,
+    platform: "linux" as const,
+  };
+  const driver = new WindowsContainerDriver(config, docker, powershell);
+
+  await driver.createLease({
+    id: "77777777-7777-4777-8777-777777777777",
+    jobId: "job",
+    imageDigest: config.image,
+    resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 },
+    nonce: "n".repeat(32),
+    encodedJitConfig: "config",
+  });
+
+  const createArgs = calls.find((args) => args[0] === "create")!;
+  expect(createArgs).not.toContain("--dns");
+  await driver.removeLease("77777777-7777-4777-8777-777777777777");
 });
 
 test("rejects a container when Docker applies different CPU or memory limits", async () => {

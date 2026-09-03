@@ -10,9 +10,9 @@ export type DockerResult = { code: number; stdout: string; stderr: string };
 export type DockerRunner = (args: string[]) => Promise<DockerResult>;
 export type PowerShellResult = { code: number; stdout: string; stderr: string };
 export type PowerShellRunner = (command: string) => Promise<PowerShellResult>;
-export type WindowsContainerConfig = { image: string; prefix: string; bootstrapRoot: string; limits: WorkerLimits; readyTimeoutMs: number; jobTimeoutMs: number; allowLocalImage?: boolean; imageManifestPath?: string; requireLocalImageManifest?: boolean; dnsServers?: string[] };
+export type WindowsContainerConfig = { image: string; prefix: string; bootstrapRoot: string; limits: WorkerLimits; readyTimeoutMs: number; jobTimeoutMs: number; allowLocalImage?: boolean; imageManifestPath?: string; requireLocalImageManifest?: boolean; dnsServers?: string[]; platform?: NodeJS.Platform };
 export function parseWindowsContainerDnsServers(value: string | undefined): string[] {
-  return (value ?? "").split(",").map((server) => server.trim()).filter((server) => isIP(server) !== 0);
+  return [...new Set((value ?? "").split(",").map((server) => server.trim()).filter((server) => isIP(server) !== 0))];
 }
 const hostDnsPowerShellCommand = "$active=@(Get-NetAdapter -ErrorAction Stop | Where-Object Status -eq 'Up' | Select-Object -ExpandProperty ifIndex); @(Get-DnsClientServerAddress -AddressFamily IPv4,IPv6 -ErrorAction Stop | Where-Object { $active -contains $_.InterfaceIndex } | Select-Object -ExpandProperty ServerAddresses) | ConvertTo-Json -Compress";
 async function defaultPowerShell(command: string): Promise<PowerShellResult> {
@@ -191,8 +191,12 @@ export class WindowsContainerDriver implements RuntimeDriver {
     const name = this.containerName(lease.id);
     try {
       const explicitDns = parseWindowsContainerDnsServers(this.config.dnsServers?.join(","));
-      const dnsServers = explicitDns.length > 0 ? explicitDns : await discoverWindowsHostDnsServers(this.powershell);
-      if (dnsServers.length === 0) throw new Error("No usable Windows host DNS servers were discovered and no explicit DNS servers are configured");
+      const dnsServers = explicitDns.length > 0
+        ? explicitDns
+        : (this.config.platform ?? process.platform) === "win32"
+          ? await discoverWindowsHostDnsServers(this.powershell)
+          : [];
+      if ((this.config.platform ?? process.platform) === "win32" && dnsServers.length === 0) throw new Error("No usable Windows host DNS servers were discovered and no explicit DNS servers are configured");
       const dnsArgs = dnsServers.flatMap((server) => ["--dns", server]);
       checked(await this.docker(["create", "--name", name, "--log-driver", "json-file", "--log-opt", "max-size=50m", "--log-opt", "max-file=3", "--isolation=hyperv", "--label", "mars.managed=true", "--label", `mars.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), "--storage-opt", `size=${lease.resources.storageBytes}`, "--mount", `type=bind,source=${root},target=C:\\ProgramData\\Mars\\bootstrap,readonly`, ...dnsArgs, this.config.image]), "docker create");
       checked(await this.docker(["start", name]), "docker start");
