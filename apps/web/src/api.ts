@@ -20,6 +20,7 @@ import {
   JobResourceSample,
   JobResourceTrendResponse,
   JobResourceTrendSort,
+  JobLabelRecommendation,
   OnboardingDetail,
   OnboardingStatus,
   ControlPlaneSetupRequest,
@@ -127,6 +128,24 @@ export function getJobTimingHistory(organizationId: string, params: { cursor?: s
   const query = new URLSearchParams({ limit: String(params.limit ?? 50) });
   for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null && key !== "limit") query.set(key, String(value));
   return request(`/api/organizations/${organizationId}/job-timings?${query}`, CursorPage(JobTimingSnapshot));
+}
+export type JobLabelRecommendationRequest = {
+  from: string;
+  to: string;
+  repositoryId: string;
+  workflowName: string;
+  jobName: string;
+};
+
+export function getJobLabelRecommendation(organizationId: string, params: JobLabelRecommendationRequest) {
+  const query = new URLSearchParams({
+    from: params.from,
+    to: params.to,
+    repositoryId: params.repositoryId,
+    workflowName: params.workflowName,
+    jobName: params.jobName,
+  });
+  return request(`/api/organizations/${organizationId}/job-timings/label-recommendation?${query}`, JobLabelRecommendation);
 }
 export type JobResourceTrendTimestamp = string | number;
 export type JobResourceTrendRequest = {

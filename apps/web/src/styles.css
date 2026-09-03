@@ -508,6 +508,142 @@
   flex: 0 1 24rem;
 }
 
+.job-label-optimization {
+  background: var(--rh-surface);
+  border: 1px solid var(--rh-border);
+  border-radius: var(--rh-radius);
+  display: grid;
+  gap: var(--rh-space-4);
+  padding: var(--rh-space-4);
+}
+
+.job-label-optimization-header {
+  align-items: start;
+  display: flex;
+  gap: var(--rh-space-4);
+  justify-content: space-between;
+}
+
+.job-label-optimization-header h3 {
+  font-size: 1rem;
+  margin: var(--rh-space-1) 0 0;
+}
+
+.job-label-optimization-caption,
+.job-label-optimization-status,
+.job-label-optimization-validation {
+  color: var(--rh-text-muted);
+  font-size: .78rem;
+  margin: 0;
+}
+
+.job-label-optimization-status.is-error,
+.job-label-optimization-validation {
+  color: var(--rh-danger);
+}
+
+.job-label-optimization-content {
+  display: grid;
+  gap: var(--rh-space-4);
+}
+
+.job-label-optimization-evidence {
+  background: var(--rh-border);
+  border: 1px solid var(--rh-border);
+  border-radius: var(--rh-radius-small);
+  display: grid;
+  gap: 1px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+}
+
+.job-label-optimization-evidence > div {
+  background: var(--rh-surface-raised);
+  padding: var(--rh-space-3);
+}
+
+.job-label-optimization-evidence dt {
+  color: var(--rh-text-faint);
+  font: .68rem "IBM Plex Mono", ui-monospace, monospace;
+  letter-spacing: .06em;
+}
+
+.job-label-optimization-evidence dd {
+  color: var(--rh-text);
+  font-weight: 600;
+  margin: var(--rh-space-1) 0 0;
+}
+
+.job-label-optimization-fields {
+  display: grid;
+  gap: var(--rh-space-3);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.job-label-optimization-fields label {
+  color: var(--rh-text-muted);
+  display: grid;
+  font-size: .78rem;
+  gap: var(--rh-space-2);
+}
+
+.job-label-optimization-fields input {
+  background: var(--rh-surface-raised);
+  border: 1px solid var(--rh-border);
+  border-radius: var(--rh-radius-small);
+  color: var(--rh-text);
+  font: inherit;
+  min-height: 40px;
+  padding: 0 var(--rh-space-3);
+}
+
+.job-label-optimization-fields input:focus-visible {
+  outline: 2px solid var(--rh-accent);
+  outline-offset: 2px;
+}
+
+.job-label-optimization-fields input[readonly] {
+  color: var(--rh-text-faint);
+  cursor: not-allowed;
+}
+
+.job-label-optimization-fields input[aria-invalid="true"] {
+  border-color: var(--rh-danger);
+}
+
+.job-label-optimization-diff {
+  align-items: center;
+  background: var(--rh-surface-raised);
+  border: 1px solid var(--rh-border);
+  border-radius: var(--rh-radius-small);
+  display: grid;
+  gap: var(--rh-space-3);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  padding: var(--rh-space-3);
+}
+
+.job-label-optimization-diff div {
+  display: grid;
+  gap: var(--rh-space-1);
+  min-width: 0;
+}
+
+.job-label-optimization-diff span {
+  color: var(--rh-text-faint);
+  font: .68rem "IBM Plex Mono", ui-monospace, monospace;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.job-label-optimization-diff code {
+  color: var(--rh-text);
+  overflow-wrap: anywhere;
+}
+
+.job-label-optimization-content > .button {
+  justify-self: start;
+}
+
 .resource-history-charts {
   display: grid;
   gap: var(--rh-space-4);
@@ -697,6 +833,10 @@
     max-height: 32rem;
     position: static;
   }
+  .job-label-optimization-evidence {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
 }
 
 @media (max-width: 600px) {
@@ -757,6 +897,25 @@
   .resource-history-detail,
   .resource-history-chart-panel {
     padding: var(--rh-space-3);
+  }
+  .job-label-optimization-header,
+  .job-label-optimization-fields {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .job-label-optimization-evidence {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .job-label-optimization-diff {
+    align-items: stretch;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .job-label-optimization-diff > span {
+    display: none;
   }
 
   .resource-history-job-metrics {

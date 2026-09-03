@@ -452,6 +452,8 @@ export function TimingHistoryPage() {
                 {selectedJob ? (
                   <JobResourceDetail
                     job={selectedJob}
+                    organizationId={organizationId}
+                    activeRange={timingRangeBounds(queryFilters.range, requestedAt)}
                     selectedRunId={selectedRunId}
                     onSelectRun={setSelectedRunId}
                     samples={samples}

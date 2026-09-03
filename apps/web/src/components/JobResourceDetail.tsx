@@ -2,25 +2,32 @@ import { useId } from "react";
 import type { JobResourceSample, JobResourceTrendResponse } from "@mars/contracts";
 import { CpuTrendChart, DurationTrendChart, JobResourceTimelineCharts, MemoryTrendChart } from "./JobResourceCharts.tsx";
 import { JobRunMeasurements } from "./JobRunMeasurements.tsx";
+import { JobLabelOptimization, type JobLabelOptimizationRange, type JobLabelOptimizationRequest } from "./JobLabelOptimization.tsx";
 import { formatBytes, formatDate } from "../routes/timing-model.ts";
-
 
 export type JobResourceDetailProps = {
   job: NonNullable<JobResourceTrendResponse["selectedJob"]>;
+  organizationId?: string;
+  activeRange?: JobLabelOptimizationRange;
   selectedRunId: string | null;
   onSelectRun(runId: string): void;
   samples: readonly JobResourceSample[];
   samplesLoading: boolean;
   samplesError: unknown | null;
+  selectedPath?: string | null;
+  onRequestPullRequest?: (request: JobLabelOptimizationRequest) => void;
 };
-
 export function JobResourceDetail({
   job,
+  organizationId = "",
+  activeRange = { from: "", to: "" },
   selectedRunId,
   onSelectRun,
   samples,
   samplesLoading,
   samplesError,
+  selectedPath,
+  onRequestPullRequest,
 }: JobResourceDetailProps) {
   const headingId = useId();
   const points = job.points;
@@ -53,6 +60,21 @@ export function JobResourceDetail({
           </p>
         )}
       </header>
+      {organizationId && activeRange.from && activeRange.to && (
+        <JobLabelOptimization
+          organizationId={organizationId}
+          activeRange={activeRange}
+          repositoryId={summary.repositoryId}
+          repositoryName={summary.repositoryName}
+          workflowName={summary.workflowName}
+          jobName={summary.jobName}
+          selectedPath={selectedPath}
+          selectedJobId={selectedPoint?.jobId ?? null}
+          currentVcpu={summary.latestRequestedVcpu}
+          currentMemoryGiB={Math.max(1, Math.ceil(summary.latestRequestedMemoryBytes / 1024 ** 3))}
+          onRequestPullRequest={onRequestPullRequest}
+        />
+      )}
 
       <p className="resource-history-sampling-note" role="note">
         Sampled charts can miss short-lived peaks between collected observations.
