@@ -187,3 +187,24 @@ test("does not reserve or dispatch when exact GitHub job preflight reports 404",
   expect(events[0]).toContain("/actions/jobs/42");
   expect(events).not.toContain("candidates");
 });
+test("fails closed when exact GitHub preflight returns an unknown status", async () => {
+  const events: string[] = [];
+  const db = Object.assign((async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ").toLowerCase();
+    if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", githubRunId: 77, runAttempt: 1, repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels: ["mars-windows-x64"] }];
+    if (query.includes('p.id as "poolid"')) events.push("candidates");
+    if (query.includes("insert into runner_leases")) events.push("reserve");
+    return [];
+  }) as unknown as DatabaseClient, { begin: async () => [] });
+  const fetcher = async () => Response.json({ id: 42, run_id: 77, run_attempt: 1, status: "waiting", name: "build", labels: ["mars-windows-x64"], created_at: "2026-08-22T10:31:46Z" });
+
+  const result = await runQueuedJobReconciliation({
+    db,
+    installationToken: async () => "token",
+    githubFetchForInstallation: () => fetcher,
+    dispatcher: { dispatch: async () => { events.push("dispatch"); } },
+  });
+
+  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 1 });
+  expect(events).toEqual([]);
+});

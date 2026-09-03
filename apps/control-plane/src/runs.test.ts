@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { applyGithubJobSnapshot, applyWorkflowJobWebhook, configureRunLifecycle, stageDurationMs, type GithubJobSnapshot, type GithubRunSnapshot, type GithubStepSnapshot } from "./runs.ts";
+import { applyGithubJobSnapshot, applyWorkflowJobWebhook, configureRunLifecycle, markGithubJobMissing, stageDurationMs, type GithubJobSnapshot, type GithubRunSnapshot, type GithubStepSnapshot } from "./runs.ts";
 import { runQueuedJobReconciliation } from "./job-reconciler.ts";
 
 type Row = Record<string, unknown>;
@@ -222,6 +222,23 @@ test("a completed workflow_job webhook does not terminalize a queued sibling", a
   expect(fake.jobs.get("org:1002")?.status).toBe("completed");
 });
 
+test("serializes the parent run before checking for remaining nonterminal jobs", async () => {
+  const queries: string[] = [];
+  const sql = Object.assign((strings: TemplateStringsArray, ...values: unknown[]) => {
+    const text = strings.join(" ");
+    const normalized = text.trimStart();
+    queries.push(text);
+    if (normalized.includes("UPDATE dashboard_jobs")) return [{ id: "job-99", run_id: "run-42" }];
+    if (normalized.includes("SELECT id FROM dashboard_runs")) return [{ id: "run-42" }];
+    return [];
+  }, { begin: async <T>(callback: (tx: typeof sql) => Promise<T>) => callback(sql) });
+
+  expect(await markGithubJobMissing(sql as never, { organizationId: "org", githubJobId: 99, observedAt: queuedAt })).toBe(true);
+  const lockIndex = queries.findIndex((query) => query.trimStart().startsWith("SELECT id FROM dashboard_runs") && query.includes("FOR UPDATE"));
+  const parentUpdateIndex = queries.findIndex((query) => query.trimStart().startsWith("UPDATE dashboard_runs"));
+  expect(lockIndex).toBeGreaterThanOrEqual(0);
+  expect(parentUpdateIndex).toBeGreaterThan(lockIndex);
+});
 test("step duration is monotonic-compatible for terminal timestamps", () => expect(stageDurationMs({ startedAt: "2026-08-13T00:01:00Z", completedAt: "2026-08-13T00:02:00Z" })).toBe(60_000));
 test("strict webhook step validation remains enforced", async () => { await expect(applyWorkflowJobWebhook({ installation: { id: 5 }, repository: { id: 123 }, workflow_job: { id: 99, run_id: 42, status: "queued", steps: [{ number: 0 }] } })).rejects.toThrow("github_payload_invalid"); });
 

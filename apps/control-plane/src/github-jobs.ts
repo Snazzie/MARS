@@ -7,7 +7,7 @@ export type GenerateJitConfigInput = { owner: string; repo: string; runnerName: 
 export type QueuedGithubJob = { id: number; runId: number; name: string; labels: string[]; status: "queued" | "in_progress" | "completed"; repository: string };
 
 const runStatus = (value: unknown): GithubRunSnapshot["status"] => value === "completed" ? "completed" : value === "in_progress" ? "in_progress" : "queued";
-const jobStatus = (value: unknown): GithubJobSnapshot["status"] => value === "completed" ? "completed" : value === "in_progress" ? "in_progress" : "queued";
+const jobStatus = (value: unknown): GithubJobSnapshot["status"] => value === "queued" ? "queued" : value === "completed" ? "completed" : value === "in_progress" ? "in_progress" : (() => { throw new Error("github_payload_invalid"); })();
 const stringValue = (value: unknown, fallback = "") => typeof value === "string" ? value : fallback;
 const nullableString = (value: unknown) => typeof value === "string" ? value : null;
 const positiveSafeInteger = (value: unknown): number => {

@@ -32,6 +32,11 @@ export async function markGithubJobMissing(sql: Sql<{}>, input: { organizationId
     `;
     if (!job) return false;
     await tx`
+      SELECT id FROM dashboard_runs
+      WHERE organization_id=${input.organizationId} AND id=${job.run_id}
+      FOR UPDATE
+    `;
+    await tx`
       UPDATE dashboard_runs
       SET status='completed',conclusion=${"cancelled"},completed_at=${input.observedAt}
       WHERE organization_id=${input.organizationId} AND id=${job.run_id}
