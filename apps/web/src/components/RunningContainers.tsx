@@ -19,7 +19,7 @@ function formatSampleAge(sampledAt: string | null): string {
   return ageSeconds < 60 ? `${ageSeconds}s ago` : `${Math.round(ageSeconds / 60)}m ago`;
 }
 
-function ContainerRow({ container, organizationId }: { container: RunningContainer; organizationId: string }) {
+function ContainerRow({ container }: { container: RunningContainer }) {
   return <tr>
     <th scope="row"><strong>{container.jobName}</strong><small>{container.repositoryName} · {container.workflowName}</small></th>
     <td><strong>{container.workerName}</strong><small>{container.runtime}</small></td>
@@ -27,13 +27,13 @@ function ContainerRow({ container, organizationId }: { container: RunningContain
     <td>{formatBytes(container.memoryWorkingSetBytes)}<small>{container.memoryLimitBytes === null ? "Not reported" : `of ${formatBytes(container.memoryLimitBytes)}`}</small></td>
     <td><span>Not reported</span><small>Disk telemetry unavailable</small></td>
     <td><span>{formatSampleAge(container.sampledAt)}</span><small>started {new Date(container.startedAt).toLocaleString()}</small></td>
-    <td><a href={jobDetailHref(container.runId, organizationId, container.jobId)} target="_blank" rel="noreferrer" aria-label={`Open job ${container.jobName} in a new tab`}>Open job</a></td>
+    <td><a href={jobDetailHref(container.runId, container.organizationId, container.jobId)} target="_blank" rel="noreferrer" aria-label={`Open job ${container.jobName} in a new tab`}>Open job</a></td>
   </tr>;
 }
 
-export function RunningContainers({ containers, organizationId }: { containers: readonly RunningContainer[]; organizationId: string }) {
+export function RunningContainers({ containers }: { containers: readonly RunningContainer[] }) {
   return <section className="running-containers-panel" aria-labelledby="running-containers-heading">
     <header className="running-containers-header"><div><div className="panel-kicker">Live workload</div><h2 id="running-containers-heading">Running containers</h2></div><p>CPU and memory use reflect the latest worker sample. Disk usage is not reported yet.</p></header>
-    {containers.length === 0 ? <p className="chart-empty">No containers are running.</p> : <div className="running-containers-table-wrap"><table className="running-containers-table"><caption className="sr-only">Current running containers and resource usage</caption><thead><tr><th scope="col">Container</th><th scope="col">Worker</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Disk</th><th scope="col">Freshness</th><th scope="col">Action</th></tr></thead><tbody>{containers.map((container) => <ContainerRow key={container.id} container={container} organizationId={organizationId} />)}</tbody></table></div>}
+    {containers.length === 0 ? <p className="chart-empty">No containers are running.</p> : <div className="running-containers-table-wrap"><table className="running-containers-table"><caption className="sr-only">Current running containers and resource usage</caption><thead><tr><th scope="col">Container</th><th scope="col">Worker</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Disk</th><th scope="col">Freshness</th><th scope="col">Action</th></tr></thead><tbody>{containers.map((container) => <ContainerRow key={container.id} container={container} />)}</tbody></table></div>}
   </section>;
 }
