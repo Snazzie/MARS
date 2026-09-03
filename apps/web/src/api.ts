@@ -19,6 +19,8 @@ import {
   JobTimingSnapshot,
   JobTimingAggregate,
   JobResourceSample,
+  JobResourceTrendResponse,
+  JobResourceTrendSort,
   OnboardingDetail,
   OnboardingStatus,
   ControlPlaneSetupRequest,
@@ -131,6 +133,31 @@ export function getJobTimingAggregates(organizationId: string, params: { from?: 
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) if (value !== undefined) query.set(key, String(value));
   return request(`/api/organizations/${organizationId}/job-timings/aggregates?${query}`, JobTimingAggregate.array());
+}
+export type JobResourceTrendRequest = {
+  from: string;
+  to: string;
+  platform?: string;
+  vcpu?: number;
+  concurrency?: number;
+  search?: string;
+  sort?: JobResourceTrendSort;
+  cursor?: string | null;
+  limit?: number;
+  jobKey?: string | null;
+  pointLimit?: number;
+};
+
+export function buildJobResourceTrendsUrl(organizationId: string, params: JobResourceTrendRequest): string {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+  }
+  return `/api/organizations/${organizationId}/job-resource-trends?${query}`;
+}
+
+export function getJobResourceTrends(organizationId: string, params: JobResourceTrendRequest) {
+  return request(buildJobResourceTrendsUrl(organizationId, params), JobResourceTrendResponse);
 }
 export const getJobResourceSamples = (organizationId: string, runId: string, jobId: string, after: string | null = null, limit = 100) => {
   const query = new URLSearchParams({ limit: String(limit) });
