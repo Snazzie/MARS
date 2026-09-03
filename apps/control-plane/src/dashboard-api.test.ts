@@ -77,6 +77,30 @@ function workerHealthApiDb(worker: Record<string, unknown> | null = {
     }];
   }, {}) as never;
 }
+const trendRepositoryId = "11111111-1111-4111-8111-111111111111";
+const trendJobKey = Buffer.from(JSON.stringify({ repositoryId: trendRepositoryId, workflowName: "CI", jobName: "build" })).toString("base64url");
+function trendDb() {
+  const unsafe = async (query: string) => {
+    if (query.includes('count(DISTINCT (repository_id, workflow_name, job_name))')) return [{
+      jobCount: 1, completedRunCount: 1, medianExecutionDurationMs: 60_000, telemetryCoveredRunCount: 1,
+    }];
+    if (query.includes("array_agg(DISTINCT platform")) return [{ platforms: ["windows-x64"], vcpus: [2], concurrencies: [1] }];
+    if (query.includes('FROM summaries')) return [{
+      repositoryId: trendRepositoryId, repositoryName: "acme/app", workflowName: "CI", jobName: "build",
+      platform: "windows-x64", runCount: 1, latestCompletedAt: new Date("2026-09-02T12:00:00.000Z"),
+      medianExecutionDurationMs: 60_000, cpuPeakPercent: 80, memoryPeakBytes: 2_147_483_648,
+      telemetryCoveredRunCount: 1, durationChangePercent: null, cpuChangePercent: null, memoryChangePercent: null,
+    }];
+    if (query.includes("FROM ordered JOIN targets")) return [{
+      organizationId: "org", runId: "run-1", jobId: "job-1", completedAt: new Date("2026-09-02T12:00:00.000Z"),
+      outcome: "success", executionDurationMs: 60_000, cpuAveragePercent: 40, cpuPeakPercent: 80,
+      memoryPeakBytes: 2_147_483_648, requestedVcpu: 2, requestedMemoryBytes: 4_294_967_296,
+      effectiveConcurrency: 1, telemetryState: "available", telemetrySampleCount: 10,
+    }];
+    return [];
+  };
+  return Object.assign(async (strings: TemplateStringsArray) => strings.join(" ").includes("FROM memberships") ? [{ ok: true }] : [], { unsafe }) as never;
+}
 
 const member = { id: "u1", githubUserId: 1, login: "member", isGlobalAdmin: false };
 const admin = { id: "u2", githubUserId: 2, login: "admin", isGlobalAdmin: true };
@@ -133,6 +157,62 @@ describe("dashboard API", () => {
     const db = (async (strings: TemplateStringsArray) => strings.join(" ").trim().startsWith("SELECT 1 FROM memberships") ? [{ ok: true }] : []) as never;
     const response = await appFor(member, db).request(`/api/organizations/org/job-timings?cursor=${cursor}`, { headers: sessionHeaders });
     expect({ status: response.status, body: await response.json() }).toEqual({ status: 200, body: { items: [], nextCursor: null } });
+  });
+  test("returns validated job resource trends to organization members", async () => {
+    const response = await appFor(member, trendDb()).request(
+      "/api/organizations/org/job-resource-trends?from=2026-08-27T00:00:00.000Z&to=2026-09-03T00:00:00.000Z&sort=memory&limit=50&pointLimit=100",
+      { headers: sessionHeaders },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ summary: { jobCount: 1 }, jobs: [{ jobName: "build" }] });
+  });
+  test("rejects invalid trend bounds and hides foreign organizations", async () => {
+    const invalid = await appFor().request("/api/organizations/org/job-resource-trends?from=nope", { headers: sessionHeaders });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({ code: "invalid_resource_trend_query" });
+    const foreign = await appFor(member, fakeDb([], false)).request(
+      "/api/organizations/foreign/job-resource-trends?from=2026-08-27T00:00:00.000Z&to=2026-09-03T00:00:00.000Z",
+      { headers: sessionHeaders },
+    );
+    expect(foreign.status).toBe(404);
+    expect(await foreign.json()).toMatchObject({ code: "not_found" });
+  });
+  test("strictly validates job resource trend query parameters", async () => {
+    const invalidQueries = [
+      "from=2026-09-03T00:00:00.000Z&to=2026-09-03T00:00:00.000Z",
+      "from=2026-09-03T00:00:00.000Z&to=2026-09-02T00:00:00.000Z",
+      "from=2026-06-04T23:59:59.999Z&to=2026-09-03T00:00:00.000Z",
+      "from=2026-08-27T00:00:00.000Z&to=2026-09-03T00:00:00.000Z&limit=101",
+      "from=2026-08-27T00:00:00.000Z&to=2026-09-03T00:00:00.000Z&pointLimit=201",
+      "from=2026-08-27T00:00:00.000Z&to=2026-09-03T00:00:00.000Z&sort=disk",
+      "from=2026-08-27T00:00:00.000Z&to=2026-09-03T00:00:00.000Z&unexpected=true",
+    ];
+    for (const query of invalidQueries) {
+      const response = await appFor(member, trendDb()).request(`/api/organizations/org/job-resource-trends?${query}`, { headers: sessionHeaders });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ code: "invalid_resource_trend_query" });
+    }
+  });
+  test("uses the static trend sorts and validates opaque cursors and keys through the database codec", async () => {
+    const base = "from=2026-08-27T00:00:00.000Z&to=2026-09-03T00:00:00.000Z";
+    for (const sort of ["latest", "duration", "cpu", "memory", "runs"]) {
+      const sortValue = sort === "latest" ? "2026-09-02T12:00:00.000Z" : 1;
+      const cursor = Buffer.from(JSON.stringify({ sortValue, jobKey: trendJobKey })).toString("base64url");
+      const response = await appFor(member, trendDb()).request(
+        `/api/organizations/org/job-resource-trends?${base}&sort=${sort}&cursor=${cursor}&jobKey=${trendJobKey}`,
+        { headers: sessionHeaders },
+      );
+      expect(response.status).toBe(200);
+    }
+    for (const parameter of ["cursor", "jobKey"]) {
+      const invalidOpaqueValue = Buffer.from("not-json").toString("base64url");
+      const response = await appFor(member, trendDb()).request(
+        `/api/organizations/org/job-resource-trends?${base}&${parameter}=${invalidOpaqueValue}`,
+        { headers: sessionHeaders },
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ code: "invalid_resource_trend_query" });
+    }
   });
   test("forwards repository cursors to the database query", async () => {
     const cursor = "11111111-1111-4111-8111-111111111111";

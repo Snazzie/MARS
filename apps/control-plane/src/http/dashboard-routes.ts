@@ -2,12 +2,12 @@ import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates, listJobResourceSamples, listWorkerCacheEntries, decodeWorkerCacheCursor, getWorkerHealth } from "@mars/db";
+import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates, listJobResourceTrends, JobResourceTrendInputError, listJobResourceSamples, listWorkerCacheEntries, decodeWorkerCacheCursor, getWorkerHealth } from "@mars/db";
 import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker, purgeWorkerRunnerCache } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 import { createWorkerImageBuildPayload } from "../windows-image-build.ts";
-import { ApiError, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceSample, WorkerHealth } from "@mars/contracts";
+import { ApiError, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth } from "@mars/contracts";
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
@@ -18,6 +18,23 @@ const querySchema = z.object({
 }).strict();
 const periodSchema = z.enum(["24h", "7d", "30d"]);
 const timingQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50), cursor: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional(), from: z.string().datetime({ offset: true }).optional(), to: z.string().datetime({ offset: true }).optional(), repositoryId: z.string().uuid().optional(), workflow: z.string().max(200).optional(), jobName: z.string().max(200).optional(), platform: z.string().max(100).optional(), driver: z.string().max(100).optional(), vcpu: z.coerce.number().int().positive().optional(), concurrency: z.coerce.number().int().positive().optional(), outcome: z.enum(["success", "failure", "cancelled", "skipped", "neutral"]).optional() }).strict();
+const jobResourceTrendQuerySchema = z.object({
+  from: z.string().datetime({ offset: true }),
+  to: z.string().datetime({ offset: true }),
+  platform: z.string().max(100).optional(),
+  vcpu: z.coerce.number().int().positive().optional(),
+  concurrency: z.coerce.number().int().positive().optional(),
+  search: z.string().max(200).default(""),
+  sort: JobResourceTrendSort.default("latest"),
+  cursor: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  jobKey: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional(),
+  pointLimit: z.coerce.number().int().min(1).max(200).default(100),
+}).strict().superRefine((value, ctx) => {
+  const from = Date.parse(value.from), to = Date.parse(value.to);
+  if (from >= to) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["to"], message: "to must be after from" });
+  if (to - from > 90 * 24 * 60 * 60 * 1000) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["from"], message: "range must not exceed 90 days" });
+});
 const logSchema = z.object({ after: z.coerce.number().int().min(-1).default(-1), limit: z.coerce.number().int().min(1).max(100).default(100) }).strict();
 const mutationSchema = z.object({}).strict();
 
@@ -76,6 +93,19 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const parsed = timingQuerySchema.omit({ limit: true, cursor: true }).safeParse(c.req.query());
     if (!parsed.success) return error(c, 400, "invalid_timing_query", "Invalid timing aggregate query", { issues: parsed.error.issues });
     return c.json(JobTimingAggregate.array().parse(await getJobTimingAggregates(deps.db, org, parsed.data, c.get("user").id)));
+  }));
+  app.get("/api/organizations/:organizationId/job-resource-trends", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const denied = await guard(c, deps, org);
+    if (denied) return denied;
+    const parsed = jobResourceTrendQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) return error(c, 400, "invalid_resource_trend_query", "Invalid job resource trend query", { issues: parsed.error.issues });
+    try {
+      return c.json(JobResourceTrendResponse.parse(await listJobResourceTrends(deps.db, org, parsed.data)));
+    } catch (cause) {
+      if (cause instanceof JobResourceTrendInputError) return error(c, 400, cause.code, cause.message);
+      throw cause;
+    }
   }));
   app.get("/api/organizations/:organizationId/pools", safe(async (c) => {
     const org = c.req.param("organizationId");
