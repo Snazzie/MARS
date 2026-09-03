@@ -125,6 +125,7 @@ foreach ($name in @('MARS_ACTION_CACHE_ROOT','MARS_CACHE_PROXY_PORT','MARS_CACHE
   Remove-Item "Env:$name" -ErrorAction SilentlyContinue
 }
 ${dnsSetup}
+$env:MARS_CACHE_PROXY_PORT = '9000'
 ${serviceEnvironment}
 $serviceEnvironment | ConvertTo-Json -Compress
 `;
@@ -133,8 +134,14 @@ $serviceEnvironment | ConvertTo-Json -Compress
     return JSON.parse(await new Response(process.stdout).text()) as string[];
   };
 
-  expect(await runServiceEnvironment("10.36.172.244,10.36.172.245")).toContain("MARS_WINDOWS_CONTAINER_DNS_SERVERS=10.36.172.244,10.36.172.245");
-  expect(await runServiceEnvironment()).not.toContain(expect.stringContaining("MARS_WINDOWS_CONTAINER_DNS_SERVERS="));
+  const configured = await runServiceEnvironment("10.36.172.244,10.36.172.245");
+  expect(configured).toEqual(expect.arrayContaining([
+    "MARS_CACHE_PROXY_PORT=9000",
+    "MARS_WINDOWS_CONTAINER_DNS_SERVERS=10.36.172.244,10.36.172.245",
+  ]));
+  const unset = await runServiceEnvironment();
+  expect(unset).toContain("MARS_CACHE_PROXY_PORT=9000");
+  expect(unset).not.toContain(expect.stringContaining("MARS_WINDOWS_CONTAINER_DNS_SERVERS="));
 });
 
 
