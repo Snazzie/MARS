@@ -447,14 +447,8 @@ export async function getWorkerHealth(db: DashboardDb, workerId: string, workerC
   const desired = jsonValue(worker.desiredConfiguration);
   const desiredObject = desired && typeof desired === "object" ? desired as Record<string, unknown> : {};
   const desiredCache = desiredObject.cache && typeof desiredObject.cache === "object" ? desiredObject.cache as Record<string, unknown> : {};
-  const runtimeMode = (() => {
-    const doctor = jsonValue(worker.doctor);
-    const value = doctor && typeof doctor === "object" ? (doctor as Record<string, unknown>).runtimeMode : undefined;
-    return value === "container" || value === "vm" || value === "tart" ? value : null;
-  })();
   return WorkerHealth.parse({
     observedAt,
-    ...(runtimeMode ? { runtimeMode } : {}),
     connection: {
       state: workerConnected(workerId) ? "online" : "offline",
       lastHeartbeatAt: normalizeTimestamp(worker.lastHeartbeatAt),
