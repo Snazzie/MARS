@@ -128,6 +128,12 @@ describe("dashboard API", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ code: "invalid_query" });
   });
+  test("accepts opaque job timing cursors", async () => {
+    const cursor = Buffer.from("2026-09-03T12:00:00.000Z").toString("base64url");
+    const db = (async (strings: TemplateStringsArray) => strings.join(" ").trim().startsWith("SELECT 1 FROM memberships") ? [{ ok: true }] : []) as never;
+    const response = await appFor(member, db).request(`/api/organizations/org/job-timings?cursor=${cursor}`, { headers: sessionHeaders });
+    expect({ status: response.status, body: await response.json() }).toEqual({ status: 200, body: { items: [], nextCursor: null } });
+  });
   test("forwards repository cursors to the database query", async () => {
     const cursor = "11111111-1111-4111-8111-111111111111";
     const values: unknown[] = [];

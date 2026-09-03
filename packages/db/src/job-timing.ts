@@ -50,6 +50,16 @@ const asIso = (value: unknown) => {
   return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : value;
 };
 const asNumber = (value: unknown) => Number(value ?? 0);
+const encodeCursor = (value: string) => Buffer.from(value, "utf8").toString("base64url");
+const decodeCursor = (value: string | null | undefined) => {
+  if (!value) return null;
+  try {
+    const decoded = Buffer.from(value, "base64url").toString("utf8");
+    return Number.isFinite(Date.parse(decoded)) ? decoded : null;
+  } catch {
+    return null;
+  }
+};
 function normalizeTiming(row: Record<string, unknown>): JobTimingSnapshot {
   return {
     ...row,
@@ -58,6 +68,7 @@ function normalizeTiming(row: Record<string, unknown>): JobTimingSnapshot {
     cleanupDurationMs: asNumber(row.cleanupDurationMs), totalDurationMs: asNumber(row.totalDurationMs),
     requestedVcpu: asNumber(row.requestedVcpu), requestedMemoryBytes: asNumber(row.requestedMemoryBytes),
     requestedStorageBytes: asNumber(row.requestedStorageBytes), requestedConcurrency: asNumber(row.requestedConcurrency),
+    effectiveConcurrency: asNumber(row.effectiveConcurrency),
     telemetryState: row.telemetryState === "available" || row.telemetryState === "partial" ? row.telemetryState : "unavailable",
     telemetrySampleCount: asNumber(row.telemetrySampleCount),
     cpuAveragePercent: row.cpuAveragePercent == null ? null : asNumber(row.cpuAveragePercent),
@@ -99,12 +110,12 @@ export async function listJobTimingHistory(db: JobTimingDb, organizationId: stri
       AND (${query.vcpu ?? null}::bigint IS NULL OR requested_vcpu=${query.vcpu ?? null})
       AND (${query.concurrency ?? null}::bigint IS NULL OR effective_concurrency=${query.concurrency ?? null})
       AND (${query.outcome ?? null}::text IS NULL OR outcome=${query.outcome ?? null})
-      AND (${query.cursor ?? null}::timestamptz IS NULL OR (completed_at, job_id) < (${query.cursor ?? null}::timestamptz, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid))
+      AND (${decodeCursor(query.cursor)}::timestamptz IS NULL OR (completed_at, job_id) < (${decodeCursor(query.cursor)}::timestamptz, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid))
     ORDER BY completed_at DESC, job_id DESC
     LIMIT ${limit + 1}
   `;
   const items = rows.slice(0, limit).map(normalizeTiming);
-  return { items, nextCursor: rows.length > limit ? items.at(-1)?.completedAt ?? null : null };
+  return { items, nextCursor: rows.length > limit ? encodeCursor(items.at(-1)?.completedAt ?? "") : null };
 }
 
 export async function getJobTimingAggregates(db: JobTimingDb, organizationId: string, query: Omit<JobTimingHistoryQuery, "cursor" | "limit"> = {}, userId?: string): Promise<JobTimingAggregate[]> {

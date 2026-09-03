@@ -17,7 +17,7 @@ const querySchema = z.object({
   visibility: z.enum(["public", "private", "internal"]).optional(),
 }).strict();
 const periodSchema = z.enum(["24h", "7d", "30d"]);
-const timingQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50), cursor: z.string().datetime({ offset: true }).optional(), from: z.string().datetime({ offset: true }).optional(), to: z.string().datetime({ offset: true }).optional(), repositoryId: z.string().uuid().optional(), workflow: z.string().max(200).optional(), jobName: z.string().max(200).optional(), platform: z.string().max(100).optional(), driver: z.string().max(100).optional(), vcpu: z.coerce.number().int().positive().optional(), concurrency: z.coerce.number().int().positive().optional(), outcome: z.enum(["success", "failure", "cancelled", "skipped", "neutral"]).optional() }).strict();
+const timingQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50), cursor: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional(), from: z.string().datetime({ offset: true }).optional(), to: z.string().datetime({ offset: true }).optional(), repositoryId: z.string().uuid().optional(), workflow: z.string().max(200).optional(), jobName: z.string().max(200).optional(), platform: z.string().max(100).optional(), driver: z.string().max(100).optional(), vcpu: z.coerce.number().int().positive().optional(), concurrency: z.coerce.number().int().positive().optional(), outcome: z.enum(["success", "failure", "cancelled", "skipped", "neutral"]).optional() }).strict();
 const logSchema = z.object({ after: z.coerce.number().int().min(-1).default(-1), limit: z.coerce.number().int().min(1).max(100).default(100) }).strict();
 const mutationSchema = z.object({}).strict();
 
@@ -186,8 +186,12 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     mutationSchema.parse(await c.req.json().catch(() => ({})));
     if (action === "adopt") await adoptWorker(deps.db, id, c.get("user").id);
     else if (action === "reject") await deps.db`UPDATE workers SET admission_state='rejected' WHERE id=${id} AND admission_state='pending'`;
-    else if (action === "drain") await deps.db`UPDATE workers SET draining=true WHERE id=${id}`;
-    else if (action === "resume") {
+    else if (action === "drain") {
+      await deps.db`UPDATE workers SET draining=true WHERE id=${id}`;
+      await deps.db`UPDATE runner_leases SET state='failed',terminal_result=${jsonParameter(deps.db, { reason: "worker_drained" })}::jsonb,cleanup_state='pending',updated_at=now() WHERE worker_id=${id} AND state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')`;
+      await deps.db`UPDATE dashboard_jobs j SET status='completed',stage='completed',conclusion=COALESCE(j.conclusion,'failure'),completed_at=COALESCE(j.completed_at,now()) FROM runner_leases l WHERE l.worker_id=${id} AND l.github_job_id=j.github_job_id AND l.state='failed' AND l.terminal_result->>'reason'='worker_drained' AND j.status <> 'completed'`;
+      await deps.db`UPDATE dashboard_runs r SET status='completed',conclusion=COALESCE(r.conclusion,'failure'),completed_at=COALESCE(r.completed_at,now()) WHERE EXISTS (SELECT 1 FROM dashboard_jobs j JOIN runner_leases l ON l.organization_id=j.organization_id AND l.github_job_id=j.github_job_id WHERE l.worker_id=${id} AND l.state='failed' AND l.terminal_result->>'reason'='worker_drained' AND r.organization_id=j.organization_id AND r.id=j.run_id) AND r.status <> 'completed'`;
+    } else if (action === "resume") {
       if (value.admissionState !== "adopted" || value.configurationState !== "ready") return error(c, 409, "worker_not_ready", "Worker must be adopted and configured before resume");
       await deps.db`UPDATE workers SET draining=false WHERE id=${id} AND admission_state='adopted' AND configuration_state='ready'`;
     } else {

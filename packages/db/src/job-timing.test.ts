@@ -42,3 +42,12 @@ test("normalizes PostgreSQL timestamp strings in timing history", async () => {
     createdAt: "2026-08-16T00:00:10.000Z",
   });
 });
+test("normalizes bigint effective concurrency and emits a safe cursor", async () => {
+  const db = fakeDb([[
+    { ...input, effectiveConcurrency: "3", completedAt: "2026-08-16 00:00:10+00", jobId: "job-1" },
+    { ...input, effectiveConcurrency: "4", completedAt: "2026-08-16 00:00:09+00", jobId: "job-2" },
+  ]]);
+  const result = await listJobTimingHistory(db, "org-1", { limit: 1 });
+  expect(result.items[0]?.effectiveConcurrency).toBe(3);
+  expect(result.nextCursor).toMatch(/^[A-Za-z0-9_-]+$/);
+});
