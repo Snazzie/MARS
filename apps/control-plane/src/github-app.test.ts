@@ -536,6 +536,9 @@ jobs:
     selectedPath: ".github/workflows/ci.yml",
     selectedJobId: "build",
     labels: ["4VCPU", "8G"],
+    p95CpuPeakPercent: 201,
+    p95MemoryPeakBytes: 5368709120,
+    successfulRunCount: 8,
     expectedHeadSha: "head-sha",
   });
   expect(result.changedFiles).toEqual([".github/workflows/ci.yml"]);
@@ -545,7 +548,11 @@ jobs:
   expect(blobBody.content).toContain("4VCPU");
   expect(blobBody.content).toContain("runs-on: ubuntu-latest");
   const pull = requests.find((request) => request.url.endsWith("/pulls"));
-  expect(JSON.parse(await pull!.text()).body).toContain("mars-windows-x64, 4VCPU, 8G");
+  const pullBody = JSON.parse(await pull!.text()).body as string;
+  expect(pullBody).toContain("P95 CPU peak: 201%");
+  expect(pullBody).toContain("P95 memory peak: 5368709120 bytes");
+  expect(pullBody).toContain("Successful samples: 8");
+  expect(pullBody).toContain("Labels: mars-windows-x64, 4VCPU, 8G");
 });
 
 test("focused runner PR rejects a stale workflow head", async () => {

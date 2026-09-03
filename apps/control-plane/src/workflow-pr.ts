@@ -67,11 +67,14 @@ export function discoverWorkflowFiles(files: readonly { path: string; content: s
 }
 
 function selectedPaths(input: WorkflowSelection): string[] {
-  if (input.selectedPath) {
-    if (input.selectedPaths.length && !input.selectedPaths.includes(input.selectedPath)) {
+  const hasPath = input.selectedPath !== undefined;
+  const hasJob = input.selectedJobId !== undefined;
+  if (hasPath !== hasJob) throw new Error("Focused workflow selection requires selectedPath and selectedJobId");
+  if (hasPath && hasJob) {
+    if (input.selectedPaths.length && !input.selectedPaths.includes(input.selectedPath!)) {
       throw new Error("selectedPath must be included in selectedPaths");
     }
-    return [input.selectedPath];
+    return [input.selectedPath!];
   }
   return input.selectedPaths.length ? [...input.selectedPaths] : [];
 }
@@ -80,8 +83,10 @@ function focusedLabels(labels: readonly string[]): string[] {
   if (!labels.length) throw new Error("Cannot replace selected workflows: labels cannot be empty");
   return labels.map((label) => {
     const value = label.trim();
+    const routingLabel = parseCurrentResourceLabels([value]).windowsLabel;
+    if (routingLabel) return value;
     const match = /^(\d+)(VCPU|G)$/i.exec(value);
-    if (!match) return value;
+    if (!match) throw new Error(`Invalid focused resource label: ${label}`);
     const amount = Number(match[1]);
     if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error(`Invalid resource label: ${label}`);
     return `${amount}${match[2].toUpperCase()}`;
@@ -104,11 +109,11 @@ export function previewWorkflowMutation(input: WorkflowSelection & { files: read
   const selected = selectedPaths(input);
   const paths = selected.length ? selected : input.files.map((file) => file.path);
   const known = new Set(input.files.map((file) => file.path));
+  const focused = input.selectedPath !== undefined;
   for (const path of paths) {
     if (!workflowPath.test(path)) throw new Error(`Invalid selected workflow path: ${path}`);
     if (!known.has(path)) throw new Error(`Selected workflow path not discovered: ${path}`);
   }
-  const focused = Boolean(input.selectedPath || input.selectedJobId);
   if (!input.labels.length) throw new Error(`Cannot replace selected workflows (${paths.join(", ")}): labels cannot be empty`);
   const jobs = input.files
     .filter((file) => paths.includes(file.path))

@@ -543,7 +543,7 @@ export class GitHubAppService {
     });
   }
 
-  async createRepositoryRunnerPr(input: { organizationId: string; repositoryId: string; selectedPaths?: string[]; selectedPath?: string; selectedJobId?: string; labels?: string[]; expectedHeadSha: string; title?: string; body?: string }): Promise<{ url: string; number: number; branch: string; changedFiles: string[]; replacementCount: number }> {
+  async createRepositoryRunnerPr(input: { organizationId: string; repositoryId: string; selectedPaths?: string[]; selectedPath?: string; selectedJobId?: string; labels?: string[]; p95CpuPeakPercent?: number; p95MemoryPeakBytes?: number; successfulRunCount?: number; expectedHeadSha: string; title?: string; body?: string }): Promise<{ url: string; number: number; branch: string; changedFiles: string[]; replacementCount: number }> {
     const ctx = await this.workflowContext(input.organizationId, input.repositoryId);
     return this.repositoryOperation(input.organizationId, input.repositoryId, async () => {
       const listing = await this.listRepositoryWorkflowsWithToken(ctx.owner, ctx.name, ctx.token);
@@ -552,7 +552,7 @@ export class GitHubAppService {
       if (headSha !== input.expectedHeadSha) throw new Error("github_workflow_head_stale");
       const files = discoverWorkflowFiles(listing.files);
       const labels = input.labels ?? ctx.repo.labels;
-      const focused = Boolean(input.selectedPath || input.selectedJobId);
+      const focused = input.selectedPath !== undefined;
       const mutation = previewWorkflowMutation({
         files,
         selectedPaths: input.selectedPaths ?? [],
@@ -569,9 +569,16 @@ export class GitHubAppService {
       const blobs = await Promise.all(changed.map(async (file) => ({ path: file.path, mode: "100644", type: "blob", sha: (await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/blobs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: file.content, encoding: "utf-8" }) }, ctx.token)).sha as string })));
       const tree = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/trees`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ base_tree: headSha, tree: blobs }) }, ctx.token);
       const commit = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/commits`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: "Configure Mars runners", tree: tree.sha, parents: [headSha] }) }, ctx.token);
+      await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/refs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: commit.sha }) }, ctx.token);
       const resultLabels = mutation.jobs[0]?.proposedRunsOn ? [...mutation.jobs[0].proposedRunsOn] : labels;
       const generatedBody = focused
-        ? `Configure GitHub Actions workflows to use Mars runners with labels: ${resultLabels.join(", ")}.`
+        ? [
+          "Configure GitHub Actions workflows to use Mars runners.",
+          `P95 CPU peak: ${input.p95CpuPeakPercent === undefined ? "unknown" : `${input.p95CpuPeakPercent}%`}`,
+          `P95 memory peak: ${input.p95MemoryPeakBytes === undefined ? "unknown" : `${input.p95MemoryPeakBytes} bytes`}`,
+          `Successful samples: ${input.successfulRunCount ?? "unknown"}`,
+          `Labels: ${resultLabels.join(", ")}`,
+        ].join("\n")
         : "Configure GitHub Actions workflows to use Mars runners.";
       const pr = await this.gh(`/repos/${ctx.owner}/${ctx.name}/pulls`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: input.title?.trim() || "Use Mars runners", body: input.body?.trim() || generatedBody, head: branch, base: listing.defaultBranch }) }, ctx.token);
       return { url: String(pr.html_url ?? ""), number: Number(pr.number ?? 0), branch, changedFiles: mutation.changedFiles, replacementCount: mutation.replacementCount };

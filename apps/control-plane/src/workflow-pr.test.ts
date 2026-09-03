@@ -85,6 +85,27 @@ test("focused mutation rejects invalid numeric labels and reports no-op", () => 
     selectedJobId: "test",
     labels: ["0VCPU", "8G"],
   })).toThrow(/invalid resource label/i);
+  for (const labels of [["ubuntu-latest"], ["-1VCPU"], ["4vcpu", "0G"]]) {
+    expect(() => previewWorkflowMutation({
+      files,
+      selectedPaths: [],
+      selectedPath: ".github/workflows/ci.yml",
+      selectedJobId: "test",
+      labels,
+    })).toThrow(/invalid (?:focused )?resource label/i);
+  }
+  expect(() => previewWorkflowMutation({
+    files,
+    selectedPaths: [],
+    selectedPath: ".github/workflows/ci.yml",
+    labels: ["4VCPU"],
+  })).toThrow(/focused workflow selection/i);
+  expect(() => previewWorkflowMutation({
+    files,
+    selectedPaths: [],
+    selectedJobId: "test",
+    labels: ["4VCPU"],
+  })).toThrow(/focused workflow selection/i);
   const noOp = previewWorkflowMutation({
     files: discoverWorkflowFiles([{ path: ".github/workflows/ci.yml", content: content.replace("ubuntu-latest", "4VCPU") }]),
     selectedPaths: [],
