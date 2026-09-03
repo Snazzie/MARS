@@ -51,9 +51,9 @@ const renderView = (data = detail) => renderToStaticMarkup(
   </QueryClientProvider>,
 );
 
-test("constructs encoded job detail links", () => {
-  expect(jobDetailHref("run-1", "job-1")).toBe("/runs/run-1#job-job-1");
-  expect(jobDetailHref("run/1", "job#1")).toBe("/runs/run%2F1#job-job%231");
+test("constructs organization-aware encoded job detail links", () => {
+  expect(jobDetailHref("run-1", "org-1", "job-1")).toBe("/runs/run-1?organizationId=org-1#job-job-1");
+  expect(jobDetailHref("run/1", "org&1", "job#1")).toBe("/runs/run%2F1?organizationId=org%261#job-job%231");
 });
 
 test("maps real run facts and names missing values explicitly", () => {
@@ -84,7 +84,7 @@ test("renders only semantic Logs and Metrics tabs with complete run context", ()
   expect(markup).toContain("abcdef012345");
   expect(markup).toContain("status-success");
   expect(markup).toContain('id="job-job-1"');
-  expect(markup).toContain('/runs/run-1#job-job-1');
+  expect(markup).toContain('/runs/run-1?organizationId=org-1#job-job-1');
   expect(markup).toContain('target="_blank"');
   expect(markup).toContain('rel="noreferrer"');
   expect(markup).toContain('aria-label="Open job macOS smoke in a new tab"');
@@ -138,6 +138,7 @@ test("switches to Metrics without rendering log viewers", async () => {
   await new Promise((resolve) => setTimeout(resolve, 20));
   expect(metricsTab?.getAttribute("aria-selected")).toBe("true");
   expect(container.querySelector('[role="tabpanel"]#run-metrics-panel')).not.toBeNull();
+  expect(container.querySelector('a[href="/runs/run-1?organizationId=org-1#job-job-1"]')).not.toBeNull();
   expect(container.querySelector(".log-panel")).toBeNull();
   root.unmount();
 });

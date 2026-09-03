@@ -7,8 +7,8 @@ import { RunTelemetry, formatDuration, lifecycleMetrics } from "./RunTelemetry.t
 import { RunTimeline } from "./RunTimeline.tsx";
 type RunDetailFacts = { started: string; repository: string; runner: string; duration: string };
 
-export function jobDetailHref(runId: string, jobId: string): string {
-  return `/runs/${encodeURIComponent(runId)}#job-${encodeURIComponent(jobId)}`;
+export function jobDetailHref(runId: string, organizationId: string, jobId: string): string {
+  return `/runs/${encodeURIComponent(runId)}?organizationId=${encodeURIComponent(organizationId)}#job-${encodeURIComponent(jobId)}`;
 }
 
 function formatTimestamp(value: string): string {
@@ -82,12 +82,12 @@ function OomNotice({ job }: { job: RunJob }) {
         <button type="button" role="tab" id="run-metrics-tab" aria-selected={selectedTab === "metrics"} aria-controls="run-metrics-panel" tabIndex={selectedTab === "metrics" ? 0 : -1} onClick={() => setSelectedTab("metrics")}>Metrics</button>
       </div>
       {selectedTab === "logs" ? <section id="run-logs-panel" role="tabpanel" aria-labelledby="run-logs-tab" className="run-tab-panel">
-        {data.jobs.map((job) => <section className="run-job-logs" id={`job-${job.id}`} key={job.id}><header className="job-heading"><div><h2><a href={jobDetailHref(data.id, job.id)} target="_blank" rel="noreferrer" aria-label={`Open job ${job.name} in a new tab`}>{job.name}</a></h2><JobBadges job={job} /></div><span className={`status ${job.failureReason === "out_of_memory" ? "status-failure" : `status-${job.conclusion ?? job.status}`}`}>{jobStatusLabel(job)}</span></header><OomNotice job={job} /><LogViewer organizationId={organizationId} runId={data.id} jobId={job.id} logsState={job.logsState} steps={job.steps} /></section>)}
+        {data.jobs.map((job) => <section className="run-job-logs" id={`job-${job.id}`} key={job.id}><header className="job-heading"><div><h2><a href={jobDetailHref(data.id, organizationId, job.id)} target="_blank" rel="noreferrer" aria-label={`Open job ${job.name} in a new tab`}>{job.name}</a></h2><JobBadges job={job} /></div><span className={`status ${job.failureReason === "out_of_memory" ? "status-failure" : `status-${job.conclusion ?? job.status}`}`}>{jobStatusLabel(job)}</span></header><OomNotice job={job} /><LogViewer organizationId={organizationId} runId={data.id} jobId={job.id} logsState={job.logsState} steps={job.steps} /></section>)}
       </section> : <section id="run-metrics-panel" role="tabpanel" aria-labelledby="run-metrics-tab" className="run-tab-panel">
         <RunTelemetry queuedAt={data.queuedAt} startedAt={data.startedAt} completedAt={data.completedAt} />
         <RunTimeline jobs={data.jobs} durations={stageDurations} />
         <ActionGraph graph={data.actionGraph} />
-        {data.jobs.map((job) => <section className="job-panel" id={`job-${job.id}`} key={job.id}><header className="job-heading"><div><h2><a href={jobDetailHref(data.id, job.id)} target="_blank" rel="noreferrer" aria-label={`Open job ${job.name} in a new tab`}>{job.name}</a></h2><JobBadges job={job} /></div><DetailBadges values={job.requestedLabels} /></header><ResourceTable job={job} /></section>)}
+        {data.jobs.map((job) => <section className="job-panel" id={`job-${job.id}`} key={job.id}><header className="job-heading"><div><h2><a href={jobDetailHref(data.id, organizationId, job.id)} target="_blank" rel="noreferrer" aria-label={`Open job ${job.name} in a new tab`}>{job.name}</a></h2><JobBadges job={job} /></div><DetailBadges values={job.requestedLabels} /></header><ResourceTable job={job} /></section>)}
       </section>}
     </div>
   </div>;

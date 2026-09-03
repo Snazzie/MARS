@@ -6,6 +6,18 @@ import { QueryState } from "../components/StateView.tsx";
 import { RunDetailView } from "../components/RunDetailView.tsx";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
 
+export function scrollToJobFragment(hash: string, targetDocument: Pick<Document, "getElementById">): void {
+  if (!hash.startsWith("#job-")) return;
+  const encodedJobId = hash.slice(1);
+  let jobId: string;
+  try {
+    jobId = decodeURIComponent(encodedJobId);
+  } catch {
+    return;
+  }
+  targetDocument.getElementById(jobId)?.scrollIntoView?.({ block: "start" });
+}
+
 export function RunDetailPage() {
   const { runId } = useParams({ from: "/_authenticated/runs/$runId" });
   const search = useSearch({ from: "/_authenticated/runs/$runId" });
@@ -19,16 +31,7 @@ export function RunDetailPage() {
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined" || !query.data) return;
-    const hash = window.location.hash;
-    if (!hash.startsWith("#job-")) return;
-    const encodedJobId = hash.slice(1);
-    let jobId: string;
-    try {
-      jobId = decodeURIComponent(encodedJobId);
-    } catch {
-      return;
-    }
-    document.getElementById(jobId)?.scrollIntoView?.({ block: "start" });
+    scrollToJobFragment(window.location.hash, document);
   }, [query.data, runId]);
 
   return <>
