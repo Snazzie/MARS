@@ -81,6 +81,18 @@ test("formats percentages, deltas, and dates for people", () => {
   expect(formatDate("2026-09-03T12:00:00.000Z")).toBe("Sep 3, 2026, 12:00 PM UTC");
 });
 
+test("uses truncated precision when normalizing negative zero", () => {
+  expect(formatDeltaPercent(-0.04, 1.5)).toBe("0.0%");
+});
+
+test("uses clamped minimum precision when normalizing delta signs", () => {
+  expect(formatDeltaPercent(1, -1)).toBe("+1%");
+});
+
+test("uses clamped maximum precision when normalizing negative zero", () => {
+  expect(formatDeltaPercent(-4e-21, 21)).toBe("0.00000000000000000000%");
+});
+
 test("preserves selection until filters remove it", () => {
   const jobs = [{ jobKey: "first" }, { jobKey: "second" }] as JobResourceTrendJob[];
   expect(selectionAfterJobsChange("second", jobs)).toBe("second");

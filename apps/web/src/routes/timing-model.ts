@@ -41,15 +41,18 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
   timeZoneName: "short",
 });
 
-function decimalFormatter(digits: number): Intl.NumberFormat {
-  const normalizedDigits = Math.max(0, Math.min(20, Math.trunc(digits)));
-  const existing = percentFormatters.get(normalizedDigits);
+function normalizePrecision(digits: number): number {
+  return Math.max(0, Math.min(20, Math.trunc(digits)));
+}
+
+function decimalFormatter(precision: number): Intl.NumberFormat {
+  const existing = percentFormatters.get(precision);
   if (existing) return existing;
   const formatter = new Intl.NumberFormat("en-US", {
-    minimumFractionDigits: normalizedDigits,
-    maximumFractionDigits: normalizedDigits,
+    minimumFractionDigits: precision,
+    maximumFractionDigits: precision,
   });
-  percentFormatters.set(normalizedDigits, formatter);
+  percentFormatters.set(precision, formatter);
   return formatter;
 }
 
@@ -78,14 +81,15 @@ export function formatBytes(bytes: number | null): string {
 }
 
 export function formatPercent(value: number | null, digits = 1): string {
-  return value === null ? "Unavailable" : `${decimalFormatter(digits).format(value)}%`;
+  return value === null ? "Unavailable" : `${decimalFormatter(normalizePrecision(digits)).format(value)}%`;
 }
 
 export function formatDeltaPercent(value: number | null, digits = 1): string {
   if (value === null) return "Unavailable";
-  if (Math.abs(value) < 0.5 * 10 ** -digits) return formatPercent(0, digits);
+  const precision = normalizePrecision(digits);
+  if (Math.abs(value) < 0.5 * 10 ** -precision) return `${decimalFormatter(precision).format(0)}%`;
   const prefix = value > 0 ? "+" : "";
-  return `${prefix}${formatPercent(value, digits)}`;
+  return `${prefix}${decimalFormatter(precision).format(value)}%`;
 }
 
 export function formatDate(iso: string): string {
