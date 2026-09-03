@@ -430,9 +430,25 @@ export async function createOnboardingPool(input: CreatePoolRequest & { organiza
     body: JSON.stringify({ workerId: input.workerId, guestPlatform: input.guestPlatform, name: input.name, resources: input.resources, triggerLabel: input.triggerLabel, imageDigest: input.imageDigest }),
   });
 }
+export type RunnerWorkflowPreviewInput = string[] | {
+  selectedPaths?: readonly string[];
+  selectedPath?: string;
+  selectedJobId?: string;
+  labels?: readonly string[];
+};
+export function runnerWorkflowPreviewPayload(input: RunnerWorkflowPreviewInput): Record<string, unknown> {
+  if (Array.isArray(input)) return { selectedPaths: input };
+  return {
+    ...(input.selectedPaths !== undefined ? { selectedPaths: input.selectedPaths } : {}),
+    ...(input.selectedPath !== undefined ? { selectedPath: input.selectedPath } : {}),
+    ...(input.selectedJobId !== undefined ? { selectedJobId: input.selectedJobId } : {}),
+    ...(input.labels !== undefined ? { labels: input.labels } : {}),
+  };
+}
 export const getRunnerWorkflowFiles = (organizationId: string, repositoryId: string) =>
   request(`/api/organizations/${organizationId}/repositories/${repositoryId}/runner-workflows`, RunnerWorkflowFile.array());
-export const previewRunnerWorkflowPr = (organizationId: string, repositoryId: string, selectedPaths: string[]) =>
-  request(`/api/organizations/${organizationId}/repositories/${repositoryId}/runner-workflows/preview`, RunnerWorkflowPreview, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selectedPaths }) });
-export const createRunnerWorkflowPr = (organizationId: string, repositoryId: string, input: RunnerWorkflowPrRequest) =>
+export const previewRunnerWorkflowPr = (organizationId: string, repositoryId: string, input: RunnerWorkflowPreviewInput) =>
+  request(`/api/organizations/${organizationId}/repositories/${repositoryId}/runner-workflows/preview`, RunnerWorkflowPreview, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(runnerWorkflowPreviewPayload(input)) });
+export type RunnerWorkflowPrInput = Omit<RunnerWorkflowPrRequest, "selectedPaths"> & { selectedPaths?: RunnerWorkflowPrRequest["selectedPaths"] };
+export const createRunnerWorkflowPr = (organizationId: string, repositoryId: string, input: RunnerWorkflowPrInput) =>
   request(`/api/organizations/${organizationId}/repositories/${repositoryId}/runner-workflows/pr`, RunnerWorkflowPrResult, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify(input) });

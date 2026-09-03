@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { formatRunnerWorkflowRunsOn, handleRunnerWorkflowEscape, isRunnerWorkflowPrDisabled } from "./RunnerWorkflowPrModal.tsx";
+import { runnerWorkflowPreviewPayload } from "../api.ts";
+import { areRunnerWorkflowLabelsValid, formatRunnerWorkflowRunsOn, handleRunnerWorkflowEscape, isRunnerWorkflowPrDisabled } from "./RunnerWorkflowPrModal.tsx";
 
 describe("RunnerWorkflowPrModal behavior contracts", () => {
   test("formats current and proposed runs-on values", () => {
@@ -19,6 +20,28 @@ describe("RunnerWorkflowPrModal behavior contracts", () => {
     expect(preview.headSha).toBe("abc1234");
     expect(preview.jobs[0].proposedRunsOn).not.toContain("editable");
   });
+  test("serializes focused preview fields without changing migration payloads", () => {
+    expect(runnerWorkflowPreviewPayload([".github/workflows/ci.yml"])).toEqual({ selectedPaths: [".github/workflows/ci.yml"] });
+    expect(runnerWorkflowPreviewPayload({ selectedPath: ".github/workflows/ci.yml", selectedJobId: "build", labels: ["mars-windows-x64", "4VCPU", "8G"] })).toEqual({
+      selectedPath: ".github/workflows/ci.yml",
+      selectedJobId: "build",
+      labels: ["mars-windows-x64", "4VCPU", "8G"],
+    });
+  });
+
+  test("validates focused resource labels and selected-job preview", () => {
+    expect(areRunnerWorkflowLabelsValid(["mars-windows-x64", "4VCPU", "8G"])).toBe(true);
+    expect(areRunnerWorkflowLabelsValid(["mars-windows-x64", "0VCPU", "8G"])).toBe(false);
+    expect(isRunnerWorkflowPrDisabled({
+      result: null,
+      hasPreview: true,
+      replacementCount: 1,
+      confirmed: true,
+      labelsValid: true,
+      focusedPreviewMatches: false,
+    })).toBe(true);
+  });
+
 
   test("Escape closes an open dialog", () => {
     let closed = false;
