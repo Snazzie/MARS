@@ -1,12 +1,16 @@
 import { expect, test } from "bun:test";
-import type { JobResourceTrendJob, JobResourceTrendResponse } from "@mars/contracts";
-import React, { act } from "react";
+import type { JobResourceTrendJob, JobResourceTrendPoint, JobResourceTrendResponse } from "@mars/contracts";
+import React, { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Window } from "happy-dom";
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
 import { JobResourceList } from "./JobResourceList.tsx";
 import { TimingSummary } from "./TimingSummary.tsx";
 import { TimingToolbar } from "./TimingToolbar.tsx";
+import { JobResourceDetail } from "./JobResourceDetail.tsx";
+import { JobRunMeasurements } from "./JobRunMeasurements.tsx";
+import { CpuTrendChart, MemoryTrendChart } from "./JobResourceCharts.tsx";
 import { defaultTimingFilters } from "../routes/timing-model.ts";
 
 const facets: JobResourceTrendResponse["filters"] = {
@@ -58,7 +62,81 @@ const repoTwoBuild: JobResourceTrendJob = {
   cpuChangePercent: null,
 };
 
+const resourcePoints: readonly JobResourceTrendPoint[] = [
+  {
+    organizationId: "org-1",
+    runId: "run-1",
+    jobId: "job-1",
+    completedAt: "2026-09-01T10:00:00.000Z",
+    outcome: "failure",
+    executionDurationMs: 65_432,
+    cpuAveragePercent: 42.5,
+    cpuPeakPercent: 84.5,
+    memoryPeakBytes: 1_932_735_283,
+    requestedVcpu: 4,
+    requestedMemoryBytes: 2_147_483_648,
+    effectiveConcurrency: 3,
+    telemetryState: "partial",
+    telemetrySampleCount: 5,
+  },
+  {
+    organizationId: "org-1",
+    runId: "run-2",
+    jobId: "job-2",
+    completedAt: "2026-09-02T10:00:00.000Z",
+    outcome: "success",
+    executionDurationMs: 58_000,
+    cpuAveragePercent: null,
+    cpuPeakPercent: null,
+    memoryPeakBytes: null,
+    requestedVcpu: 4,
+    requestedMemoryBytes: 2_147_483_648,
+    effectiveConcurrency: 3,
+    telemetryState: "unavailable",
+    telemetrySampleCount: 0,
+  },
+  {
+    organizationId: "org-1",
+    runId: "run-3",
+    jobId: "job-3",
+    completedAt: "2026-09-03T10:00:00.000Z",
+    outcome: "cancelled",
+    executionDurationMs: 10_000,
+    cpuAveragePercent: 20,
+    cpuPeakPercent: 30,
+    memoryPeakBytes: 1_073_741_824,
+    requestedVcpu: 4,
+    requestedMemoryBytes: 2_147_483_648,
+    effectiveConcurrency: 3,
+    telemetryState: "available",
+    telemetrySampleCount: 8,
+  },
+];
+
+const selectedJob: NonNullable<JobResourceTrendResponse["selectedJob"]> = {
+  jobKey: repoOneBuild.jobKey,
+  points: [...resourcePoints],
+};
+
 const noop = () => {};
+
+function createTestRouter(content: ReactNode) {
+  const rootRoute = createRootRoute({ component: () => content });
+  const runRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "runs/$runId",
+    component: () => null,
+  });
+  return createRouter({
+    routeTree: rootRoute.addChildren([runRoute]),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+}
+
+function renderWithRouter(content: ReactNode): string {
+  const router = createTestRouter(content);
+  return renderToStaticMarkup(<RouterContextProvider router={router}>{content}</RouterContextProvider>);
+}
 
 function renderToolbar(filters = defaultTimingFilters) {
   return renderToStaticMarkup(
@@ -259,6 +337,141 @@ test("gives focused listbox options explicit identity and supports keyboard and 
     options[0]?.click();
     expect(document.activeElement).toBe(options[0]);
     expect(selectedKeys.at(-1)).toBe(repoOneBuild.jobKey);
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+    globalThis.document = originalDocument;
+    globalThis.window = originalWindow;
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
+  }
+});
+
+test("renders aligned resource charts and a complete accessible measurements table", async () => {
+  const html = await renderWithRouter(
+    <JobResourceDetail
+      organizationId="org-1"
+      job={selectedJob}
+      selectedRunId="run-1"
+      onSelectRun={noop}
+    />,
+  );
+
+  expect(html).toContain("CPU usage over completed runs");
+  expect(html).toContain("Peak memory over completed runs");
+  expect(html).toContain("Execution duration over completed runs");
+  expect(html).toContain("<svg");
+  for (const heading of [
+    "Completed",
+    "Outcome",
+    "Execution duration",
+    "CPU average",
+    "CPU peak",
+    "Memory peak",
+    "Requested vCPU / memory",
+    "Parallelism",
+    "Telemetry",
+  ]) {
+    expect(html).toContain(heading);
+  }
+  expect(html).toContain("1m 5s");
+  expect(html).toContain("42.5%");
+  expect(html).toContain("84.5%");
+  expect(html).toContain("1.8 GiB");
+  expect(html).toContain("4 vCPU / 2.0 GiB");
+  expect(html).toContain("3");
+  expect(html).toContain("Failure");
+  expect(html).toContain("Cancelled");
+  expect(html).toContain("Partial · 5 samples");
+  expect(html).toContain('href="/runs/run-1"');
+  expect(html).toContain('aria-pressed="true"');
+  expect(html).toContain('aria-label="Select run completed Sep 1, 2026, 10:00 AM UTC"');
+  expect(html).toContain("Partial telemetry coverage: 2 of 3 runs");
+  expect(html).not.toContain("1932735283 B");
+  expect(html).not.toContain("65432 ms");
+});
+
+test("keeps unavailable resource telemetry unavailable without dropping duration history", async () => {
+  const unavailablePoints = resourcePoints.map((point) => ({
+    ...point,
+    cpuAveragePercent: null,
+    cpuPeakPercent: null,
+    memoryPeakBytes: null,
+    telemetryState: "unavailable" as const,
+    telemetrySampleCount: 0,
+  }));
+  const html = await renderWithRouter(
+    <JobResourceDetail
+      organizationId="org-1"
+      job={{ jobKey: selectedJob.jobKey, points: unavailablePoints }}
+      selectedRunId={null}
+      onSelectRun={noop}
+    />,
+  );
+
+  expect(html).toContain("CPU telemetry is unavailable for these runs.");
+  expect(html).toContain("Memory telemetry is unavailable for these runs.");
+  expect(html).toContain("Execution duration over completed runs");
+  expect(html).toContain("1m 5s");
+  expect(html).toContain("Unavailable");
+  expect(html).not.toContain(">0%</");
+  expect(html).not.toContain(">0 B<");
+});
+
+test("leaves visible gaps where a completed run has null resource measurements", () => {
+  const cpuDocument = new Window().document;
+  cpuDocument.body.innerHTML = renderToStaticMarkup(
+    <CpuTrendChart points={resourcePoints} selectedRunId={null} onSelectRun={noop} />,
+  );
+  const connectedCpuPaths = Array.from(cpuDocument.querySelectorAll(".ts-chart__line path"))
+    .filter((path) => path.getAttribute("d")?.includes("L"));
+  expect(connectedCpuPaths).toHaveLength(0);
+  expect(cpuDocument.querySelectorAll("[data-ts-key^='x-tick-rule']")).toHaveLength(3);
+
+  const memoryDocument = new Window().document;
+  memoryDocument.body.innerHTML = renderToStaticMarkup(
+    <MemoryTrendChart
+      points={resourcePoints}
+      requestedMemoryBytes={2_147_483_648}
+      selectedRunId={null}
+      onSelectRun={noop}
+    />,
+  );
+  const connectedMemoryPaths = Array.from(memoryDocument.querySelectorAll(".ts-chart__line path"))
+    .filter((path) => path.getAttribute("d")?.includes("L"));
+  expect(connectedMemoryPaths).toHaveLength(1);
+});
+
+test("keeps durable run selection in the accessible measurements table", async () => {
+  const originalDocument = globalThis.document;
+  const originalWindow = globalThis.window;
+  const window = new Window();
+  // @ts-expect-error happy-dom supplies the DOM surface React needs for this focused component test.
+  globalThis.document = window.document;
+  // @ts-expect-error happy-dom's Window is structurally compatible at runtime.
+  globalThis.window = window;
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const selections: string[] = [];
+
+  try {
+    const measurements = (
+      <JobRunMeasurements
+        points={resourcePoints}
+        selectedRunId="run-1"
+        onSelectRun={(runId) => { selections.push(runId); }}
+      />
+    );
+    const router = createTestRouter(measurements);
+    await act(async () => {
+      root.render(<RouterContextProvider router={router}>{measurements}</RouterContextProvider>);
+    });
+
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("tbody button"));
+    expect(buttons.map((button) => button.getAttribute("aria-pressed"))).toEqual(["true", "false", "false"]);
+    await act(async () => { buttons[2]?.click(); });
+    expect(selections).toEqual(["run-3"]);
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();
