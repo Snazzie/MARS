@@ -61,6 +61,7 @@ const trendResponse = {
     jobKey: "eyJyZXBvc2l0b3J5SWQiOiJyZXBvLTEiLCJ3b3JrZmxvd05hbWUiOiJDSSIsImpvYk5hbWUiOiJidWlsZCJ9",
     repositoryId: "repo-1", repositoryName: "acme/app", workflowName: "CI", jobName: "build",
     platform: "windows-x64", runCount: 2, latestCompletedAt: "2026-09-03T12:00:00.000Z",
+    latestRequestedVcpu: 2, latestRequestedMemoryBytes: 4294967296, latestEffectiveConcurrency: 1,
     medianExecutionDurationMs: 62000, cpuPeakPercent: 84.5, memoryPeakBytes: 2147483648,
     telemetryCoveredRunCount: 2, telemetryCoveragePercent: 100,
     durationChangePercent: 12.5, cpuChangePercent: null, memoryChangePercent: -4.2,
@@ -68,13 +69,22 @@ const trendResponse = {
     jobKey: "eyJyZXBvc2l0b3J5SWQiOiJyZXBvLTIiLCJ3b3JrZmxvd05hbWUiOiJDSSIsImpvYk5hbWUiOiJidWlsZCJ9",
     repositoryId: "repo-2", repositoryName: "acme/service", workflowName: "CI", jobName: "build",
     platform: "windows-x64", runCount: 1, latestCompletedAt: "2026-09-03T11:00:00.000Z",
+    latestRequestedVcpu: 4, latestRequestedMemoryBytes: 8589934592, latestEffectiveConcurrency: 3,
     medianExecutionDurationMs: 58000, cpuPeakPercent: null, memoryPeakBytes: null,
     telemetryCoveredRunCount: 0, telemetryCoveragePercent: 0,
     durationChangePercent: null, cpuChangePercent: null, memoryChangePercent: null,
   }],
   nextCursor: null,
   selectedJob: {
-    jobKey: "eyJyZXBvc2l0b3J5SWQiOiJyZXBvLTEiLCJ3b3JrZmxvd05hbWUiOiJDSSIsImpvYk5hbWUiOiJidWlsZCJ9",
+    summary: {
+      jobKey: "eyJyZXBvc2l0b3J5SWQiOiJyZXBvLTEiLCJ3b3JrZmxvd05hbWUiOiJDSSIsImpvYk5hbWUiOiJidWlsZCJ9",
+      repositoryId: "repo-1", repositoryName: "acme/app", workflowName: "CI", jobName: "build",
+      platform: "windows-x64", runCount: 2, latestCompletedAt: "2026-09-03T12:00:00.000Z",
+      latestRequestedVcpu: 2, latestRequestedMemoryBytes: 4294967296, latestEffectiveConcurrency: 1,
+      medianExecutionDurationMs: 62000, cpuPeakPercent: 84.5, memoryPeakBytes: 2147483648,
+      telemetryCoveredRunCount: 2, telemetryCoveragePercent: 100,
+      durationChangePercent: 12.5, cpuChangePercent: null, memoryChangePercent: -4.2,
+    },
     points: [{
       organizationId: "org-1", runId: "run-1", jobId: "job-1", completedAt: "2026-09-03T12:00:00.000Z",
       outcome: "success", executionDurationMs: 62000, cpuAveragePercent: 42.5, cpuPeakPercent: 84.5,
@@ -93,6 +103,7 @@ test("accepts job resource trend values and nullable missing telemetry", () => {
     { jobKey: trendResponse.jobs[1].jobKey, repositoryId: "repo-2", jobName: "build" },
   ]);
   expect(parsed.selectedJob?.points[0]?.cpuPeakPercent).toBe(84.5);
+  expect(parsed.selectedJob?.summary).toEqual(parsed.jobs[0]);
   expect(JobResourceTrendResponse.parse({
     ...trendResponse,
     selectedJob: { ...trendResponse.selectedJob, points: [{ ...trendResponse.selectedJob.points[0], cpuAveragePercent: null, cpuPeakPercent: null, memoryPeakBytes: null, telemetryState: "unavailable", telemetrySampleCount: 0 }] },

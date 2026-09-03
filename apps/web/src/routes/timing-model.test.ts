@@ -126,6 +126,14 @@ test("builds a complete trends URL while omitting empty filters", () => {
   })).toBe("/api/organizations/org-1/job-resource-trends?from=2026-08-27T12%3A00%3A00.000Z&to=2026-09-03T12%3A00%3A00.000Z");
 });
 
+test("rejects a trend point limit that cannot preserve earliest and latest runs", () => {
+  expect(() => buildJobResourceTrendsUrl("org-1", {
+    from: "2026-08-27T12:00:00.000Z",
+    to: "2026-09-03T12:00:00.000Z",
+    pointLimit: 1,
+  })).toThrow("pointLimit must be between 2 and 200");
+});
+
 test("validates trend responses through the shared contract", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response(JSON.stringify({ jobs: [] }), { status: 200 })) as unknown as typeof fetch;

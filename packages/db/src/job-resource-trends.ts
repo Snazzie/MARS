@@ -86,6 +86,9 @@ const GROUPED_CTES = `${FILTERED_CTE}, ranked AS (
   SELECT repository_id AS "repositoryId", max(repository_name) FILTER (WHERE identity_ordinal=1) AS "repositoryName",
     workflow_name AS "workflowName", job_name AS "jobName", max(platform) FILTER (WHERE identity_ordinal=1) AS platform,
     count(*)::bigint AS "runCount", max(completed_at) AS "latestCompletedAt",
+    max(requested_vcpu) FILTER (WHERE identity_ordinal=1)::bigint AS "latestRequestedVcpu",
+    max(requested_memory_bytes) FILTER (WHERE identity_ordinal=1)::bigint AS "latestRequestedMemoryBytes",
+    max(effective_concurrency) FILTER (WHERE identity_ordinal=1)::bigint AS "latestEffectiveConcurrency",
     percentile_cont(0.5) WITHIN GROUP (ORDER BY execution_duration_ms)::bigint AS "medianExecutionDurationMs",
     max(cpu_peak_percent) AS "cpuPeakPercent", max(memory_peak_bytes)::bigint AS "memoryPeakBytes",
     count(*) FILTER (WHERE telemetry_sample_count > 0)::bigint AS "telemetryCoveredRunCount",
@@ -98,14 +101,16 @@ const GROUPED_CTES = `${FILTERED_CTE}, ranked AS (
   FROM ranked GROUP BY repository_id, workflow_name, job_name
 ), summaries AS (
   SELECT "repositoryId", "repositoryName", "workflowName", "jobName", platform,
-    "runCount", "latestCompletedAt", "medianExecutionDurationMs", "cpuPeakPercent", "memoryPeakBytes", "telemetryCoveredRunCount",
+    "runCount", "latestCompletedAt", "latestRequestedVcpu", "latestRequestedMemoryBytes", "latestEffectiveConcurrency",
+    "medianExecutionDurationMs", "cpuPeakPercent", "memoryPeakBytes", "telemetryCoveredRunCount",
     CASE WHEN latest_duration IS NULL OR previous_duration IS NULL OR previous_duration=0 THEN NULL ELSE (latest_duration - previous_duration)::numeric / previous_duration * 100 END AS "durationChangePercent",
     CASE WHEN latest_cpu IS NULL OR previous_cpu IS NULL OR previous_cpu=0 THEN NULL ELSE (latest_cpu - previous_cpu) / previous_cpu * 100 END AS "cpuChangePercent",
     CASE WHEN latest_memory IS NULL OR previous_memory IS NULL OR previous_memory=0 THEN NULL ELSE (latest_memory - previous_memory)::numeric / previous_memory * 100 END AS "memoryChangePercent"
   FROM grouped
 )`;
 const SUMMARY_COLUMNS = `SELECT "repositoryId", "repositoryName", "workflowName", "jobName", platform,
-  "runCount", "latestCompletedAt", "medianExecutionDurationMs", "cpuPeakPercent", "memoryPeakBytes", "telemetryCoveredRunCount",
+  "runCount", "latestCompletedAt", "latestRequestedVcpu", "latestRequestedMemoryBytes", "latestEffectiveConcurrency",
+  "medianExecutionDurationMs", "cpuPeakPercent", "memoryPeakBytes", "telemetryCoveredRunCount",
   "durationChangePercent", "cpuChangePercent", "memoryChangePercent" FROM summaries`;
 const identityAfterCursor = `("repositoryId", "workflowName", "jobName") > ($10::uuid, $11::text, $12::text)`;
 const SUMMARY_SQL: Record<JobResourceTrendSort, string> = {
@@ -115,6 +120,10 @@ const SUMMARY_SQL: Record<JobResourceTrendSort, string> = {
   memory: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $8::boolean OR coalesce("memoryPeakBytes", -1) < $9::numeric OR (coalesce("memoryPeakBytes", -1) = $9::numeric AND ${identityAfterCursor})\nORDER BY coalesce("memoryPeakBytes", -1) DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $13`,
   runs: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $8::boolean OR "runCount" < $9::numeric OR ("runCount" = $9::numeric AND ${identityAfterCursor})\nORDER BY "runCount" DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $13`,
 };
+const SELECTED_SUMMARY_SQL = `${GROUPED_CTES}
+${SUMMARY_COLUMNS}
+WHERE "repositoryId"=$8::uuid AND "workflowName"=$9 AND "jobName"=$10
+LIMIT 1`;
 const POINTS_SQL = `${FILTERED_CTE}, ordered AS (
   SELECT organization_id AS "organizationId", run_id AS "runId", job_id AS "jobId", completed_at AS "completedAt", outcome,
     execution_duration_ms AS "executionDurationMs", cpu_average_percent AS "cpuAveragePercent", cpu_peak_percent AS "cpuPeakPercent",
@@ -123,7 +132,7 @@ const POINTS_SQL = `${FILTERED_CTE}, ordered AS (
     row_number() OVER (ORDER BY completed_at, job_id) AS ordinal, count(*) OVER () AS total
   FROM filtered WHERE repository_id=$8 AND workflow_name=$9 AND job_name=$10
 ), targets AS (
-  SELECT DISTINCT CASE WHEN total <= $11 THEN target_index WHEN $11=1 THEN 1
+  SELECT DISTINCT CASE WHEN total <= $11 THEN target_index
     ELSE round(1 + (target_index - 1) * (total - 1)::numeric / ($11 - 1))::bigint END AS ordinal
   FROM (SELECT max(total)::bigint AS total FROM ordered) counts
   CROSS JOIN LATERAL generate_series(1::bigint, least(total, $11::bigint)) AS generated(target_index)
@@ -143,10 +152,10 @@ type ValidatedQuery = {
 };
 function positiveInteger(value: unknown): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value > 0; }
 const uuid = (value: string): boolean => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-function normalizeLimit(value: number | undefined, fallback: number, maximum: number): number {
+function normalizeLimit(value: number | undefined, fallback: number, minimum: number, maximum: number): number {
   if (value === undefined) return fallback;
-  if (!Number.isFinite(value)) throw new JobResourceTrendInputError();
-  return Math.max(1, Math.min(maximum, Math.floor(value)));
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new JobResourceTrendInputError();
+  return value;
 }
 function searchPattern(value: string): string { return value ? `%${value.replace(/[\\%_]/g, match => `\\${match}`)}%` : ""; }
 function validateQuery(query: JobResourceTrendQuery): ValidatedQuery {
@@ -175,7 +184,7 @@ function validateQuery(query: JobResourceTrendQuery): ValidatedQuery {
   return {
     from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString(), platform: query.platform ?? null,
     vcpu: query.vcpu ?? null, concurrency: query.concurrency ?? null, searchPattern: searchPattern(query.search ?? ""), sort, cursor,
-    limit: normalizeLimit(query.limit, 50, 100), requestedIdentity, pointLimit: normalizeLimit(query.pointLimit, 100, 200),
+    limit: normalizeLimit(query.limit, 50, 1, 100), requestedIdentity, pointLimit: normalizeLimit(query.pointLimit, 100, 2, 200),
   };
 }
 type SqlParameter = string | number | boolean | null;
@@ -197,7 +206,11 @@ function normalizeJob(row: Record<string, unknown>): JobResourceTrendJob {
   return {
     jobKey: encodeJobResourceKey(identityFromRow(row)), repositoryId: String(row.repositoryId), repositoryName: String(row.repositoryName),
     workflowName: String(row.workflowName), jobName: String(row.jobName), platform: String(row.platform), runCount,
-    latestCompletedAt: asIso(row.latestCompletedAt), medianExecutionDurationMs: asNumber(row.medianExecutionDurationMs),
+    latestCompletedAt: asIso(row.latestCompletedAt),
+    latestRequestedVcpu: asNumber(row.latestRequestedVcpu),
+    latestRequestedMemoryBytes: asNumber(row.latestRequestedMemoryBytes),
+    latestEffectiveConcurrency: asNumber(row.latestEffectiveConcurrency),
+    medianExecutionDurationMs: asNumber(row.medianExecutionDurationMs),
     cpuPeakPercent: asNullableNumber(row.cpuPeakPercent), memoryPeakBytes: asNullableNumber(row.memoryPeakBytes), telemetryCoveredRunCount,
     telemetryCoveragePercent: runCount === 0 ? 0 : telemetryCoveredRunCount / runCount * 100,
     durationChangePercent: asNullableNumber(row.durationChangePercent), cpuChangePercent: asNullableNumber(row.cpuChangePercent), memoryChangePercent: asNullableNumber(row.memoryChangePercent),
@@ -223,6 +236,29 @@ async function loadPoints(db: DatabaseClient, filterParams: SqlParameter[], iden
   const rows = await db.unsafe<Record<string, unknown>[]>(POINTS_SQL, [...filterParams, identity.repositoryId, identity.workflowName, identity.jobName, pointLimit]);
   return rows.map(normalizePoint).sort((left, right) => left.completedAt.localeCompare(right.completedAt) || left.jobId.localeCompare(right.jobId)).slice(0, pointLimit);
 }
+async function loadSummary(db: DatabaseClient, filterParams: SqlParameter[], identity: JobResourceIdentity): Promise<JobResourceTrendJob | null> {
+  const rows = await db.unsafe<Record<string, unknown>[]>(SELECTED_SUMMARY_SQL, [
+    ...filterParams,
+    identity.repositoryId,
+    identity.workflowName,
+    identity.jobName,
+  ]);
+  return rows[0] ? normalizeJob(rows[0]) : null;
+}
+
+function summaryMatchesIdentity(summary: JobResourceTrendJob, identity: JobResourceIdentity): boolean {
+  return summary.repositoryId === identity.repositoryId
+    && summary.workflowName === identity.workflowName
+    && summary.jobName === identity.jobName;
+}
+
+function identityFromSummary(summary: JobResourceTrendJob): JobResourceIdentity {
+  return {
+    repositoryId: summary.repositoryId,
+    workflowName: summary.workflowName,
+    jobName: summary.jobName,
+  };
+}
 
 export async function listJobResourceTrends(db: DatabaseClient, organizationId: string, query: JobResourceTrendQuery): Promise<JobResourceTrendResponse> {
   const validated = validateQuery(query), filters = filterParameters(organizationId, validated), cursor = validated.cursor;
@@ -238,16 +274,20 @@ export async function listJobResourceTrends(db: DatabaseClient, organizationId: 
   const nextCursor = summaryRows.length > validated.limit && lastJob
     ? encodeJobResourceCursor({ sortValue: cursorSortValue(lastJob, validated.sort), jobKey: lastJob.jobKey }) : null;
   let selectedJob: JobResourceTrendResponse["selectedJob"] = null;
-  const firstIdentity = summaryRows[0] ? identityFromRow(summaryRows[0]) : null;
-  let selectedIdentity = validated.requestedIdentity ?? firstIdentity;
-  if (selectedIdentity) {
-    let points = await loadPoints(db, filters, selectedIdentity, validated.pointLimit);
-    if (validated.requestedIdentity && points.length === 0 && firstIdentity
-      && encodeJobResourceKey(selectedIdentity) !== encodeJobResourceKey(firstIdentity)) {
-      selectedIdentity = firstIdentity;
-      points = await loadPoints(db, filters, selectedIdentity, validated.pointLimit);
+  const firstSummary = jobs[0] ?? null;
+  let selectedSummary = firstSummary;
+  if (validated.requestedIdentity) {
+    selectedSummary = jobs.find((job) => summaryMatchesIdentity(job, validated.requestedIdentity!))
+      ?? await loadSummary(db, filters, validated.requestedIdentity)
+      ?? firstSummary;
+  }
+  if (selectedSummary) {
+    let points = await loadPoints(db, filters, identityFromSummary(selectedSummary), validated.pointLimit);
+    if (validated.requestedIdentity && points.length === 0 && firstSummary && selectedSummary.jobKey !== firstSummary.jobKey) {
+      selectedSummary = firstSummary;
+      points = await loadPoints(db, filters, identityFromSummary(selectedSummary), validated.pointLimit);
     }
-    if (points.length > 0 || firstIdentity) selectedJob = { jobKey: encodeJobResourceKey(selectedIdentity), points };
+    selectedJob = { summary: selectedSummary, points };
   }
   const facets = facetRows[0] ?? {};
   const uniqueStrings = (values: unknown): string[] => [...new Set(Array.isArray(values) ? values.map(String) : [])].sort();

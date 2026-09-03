@@ -39,6 +39,10 @@ export function JobResourceList({ jobs, selectedJobKey, hasNextPage, fetchingNex
   const hasSelectedJob = selectedJobKey !== null && jobs.some((job) => job.jobKey === selectedJobKey);
 
   useEffect(() => {
+    if (!fetchingNextPage) automaticLoadRequested.current = false;
+  }, [fetchingNextPage]);
+
+  useEffect(() => {
     const sentinel = sentinelRef.current;
     if (!sentinel || !hasNextPage || fetchingNextPage || automaticLoadRequested.current || typeof IntersectionObserver === "undefined") return;
 
@@ -94,14 +98,18 @@ export function JobResourceList({ jobs, selectedJobKey, hasNextPage, fetchingNex
           {jobs.map((job, index) => {
             const selected = job.jobKey === selectedJobKey;
             const coverageIsPartial = job.telemetryCoveredRunCount < job.runCount;
-            const jobNameId = `${headingId}-job-${index}-name`;
-            const jobIdentityId = `${headingId}-job-${index}-identity`;
+            const itemId = `${headingId}-job-${job.jobKey}`;
+            const jobNameId = `${itemId}-name`;
+            const jobIdentityId = `${itemId}-identity`;
+            const metricsId = `${itemId}-metrics`;
+            const warningId = `${itemId}-coverage`;
             return (
               <li
                 key={job.jobKey}
                 role="option"
                 aria-selected={selected}
                 aria-labelledby={`${jobNameId} ${jobIdentityId}`}
+                aria-describedby={`${metricsId}${coverageIsPartial ? ` ${warningId}` : ""}`}
                 tabIndex={selected || (!hasSelectedJob && index === 0) ? 0 : -1}
                 data-job-key={job.jobKey}
                 data-option-text={`${job.jobName} ${job.repositoryName} ${job.workflowName}`.toLocaleLowerCase()}
@@ -117,7 +125,7 @@ export function JobResourceList({ jobs, selectedJobKey, hasNextPage, fetchingNex
                   <span id={jobIdentityId}>{job.repositoryName} · {job.workflowName}</span>
                   <small>{job.platform}</small>
                 </header>
-                <dl className="resource-history-job-metrics">
+                <dl id={metricsId} className="resource-history-job-metrics">
                   <div><dt>Runs</dt><dd>{job.runCount} {job.runCount === 1 ? "run" : "runs"}</dd></div>
                   <div><dt>Latest completion</dt><dd><time dateTime={job.latestCompletedAt}>{formatDate(job.latestCompletedAt)}</time></dd></div>
                   <div><dt>Median duration</dt><dd>{formatDuration(job.medianExecutionDurationMs)}</dd></div>
@@ -128,7 +136,7 @@ export function JobResourceList({ jobs, selectedJobKey, hasNextPage, fetchingNex
                   <DeltaIndicator label="Memory peak change" value={job.memoryChangePercent} />
                 </dl>
                 {coverageIsPartial && (
-                  <p className="resource-history-coverage-warning" role="note">
+                  <p id={warningId} className="resource-history-coverage-warning" role="note">
                     Partial telemetry coverage: {job.telemetryCoveredRunCount} of {job.runCount} {job.runCount === 1 ? "run" : "runs"} include CPU and memory telemetry.
                   </p>
                 )}

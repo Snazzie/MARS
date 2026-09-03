@@ -162,7 +162,7 @@ Accepted query parameters:
 - `sort`, one of `latest`, `duration`, `cpu`, `memory`, or `runs`; default `latest`.
 - `cursor` and `limit` for job summaries; default 50 and maximum 100.
 - `jobKey` for the selected job.
-- `pointLimit` for selected-job measurements; default 100 and maximum 200. When more measurements exist, retain evenly distributed points while always preserving the earliest and latest runs in the range.
+- `pointLimit` for selected-job measurements; minimum 2, default 100, and maximum 200. When more measurements exist, retain evenly distributed points while always preserving the earliest and latest runs in the range.
 
 The response contains:
 

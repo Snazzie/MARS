@@ -36,6 +36,9 @@ const repoOneBuild: JobResourceTrendJob = {
   platform: "windows-x64",
   runCount: 3,
   latestCompletedAt: "2026-09-03T12:00:00.000Z",
+  latestRequestedVcpu: 4,
+  latestRequestedMemoryBytes: 4_294_967_296,
+  latestEffectiveConcurrency: 3,
   medianExecutionDurationMs: 65_432,
   cpuPeakPercent: 84.5,
   memoryPeakBytes: 2_147_483_648,
@@ -106,7 +109,7 @@ const resourcePoints: readonly JobResourceTrendPoint[] = [
     cpuPeakPercent: 30,
     memoryPeakBytes: 1_073_741_824,
     requestedVcpu: 4,
-    requestedMemoryBytes: 2_147_483_648,
+    requestedMemoryBytes: 4_294_967_296,
     effectiveConcurrency: 3,
     telemetryState: "available",
     telemetrySampleCount: 8,
@@ -114,7 +117,12 @@ const resourcePoints: readonly JobResourceTrendPoint[] = [
 ];
 
 const selectedJob: NonNullable<JobResourceTrendResponse["selectedJob"]> = {
-  jobKey: repoOneBuild.jobKey,
+  summary: {
+    ...repoOneBuild,
+    runCount: 300,
+    telemetryCoveredRunCount: 200,
+    telemetryCoveragePercent: 200 / 3,
+  },
   points: [...resourcePoints],
 };
 
@@ -230,12 +238,12 @@ test("formats job metrics and exposes partial coverage and delta direction witho
   expect(html).not.toContain("65432 ms");
 });
 
-test("offers accessible manual pagination while the observer requests at most one automatic page", async () => {
+test("re-arms automatic pagination after each completed page and keeps the manual fallback", async () => {
   const originalDocument = globalThis.document;
   const originalWindow = globalThis.window;
   const originalObserver = globalThis.IntersectionObserver;
   const window = new Window();
-  let observerCallback: IntersectionObserverCallback | undefined;
+  const observerCallbacks: IntersectionObserverCallback[] = [];
   let observedElement: Element | undefined;
 
   class TestIntersectionObserver implements IntersectionObserver {
@@ -243,7 +251,7 @@ test("offers accessible manual pagination while the observer requests at most on
     readonly rootMargin = "0px";
     readonly scrollMargin = "0px";
     readonly thresholds = [0];
-    constructor(callback: IntersectionObserverCallback) { observerCallback = callback; }
+    constructor(callback: IntersectionObserverCallback) { observerCallbacks.push(callback); }
     disconnect() {}
     observe(target: Element) { observedElement = target; }
     takeRecords(): IntersectionObserverEntry[] { return []; }
@@ -261,30 +269,40 @@ test("offers accessible manual pagination while the observer requests at most on
   const root = createRoot(container);
   let loadCount = 0;
 
-  try {
+  const renderList = async (fetchingNextPage: boolean) => {
     await act(async () => {
       root.render(
         <JobResourceList
           jobs={[repoOneBuild]}
           selectedJobKey={repoOneBuild.jobKey}
           hasNextPage
-          fetchingNextPage={false}
+          fetchingNextPage={fetchingNextPage}
           onSelect={noop}
           onLoadMore={() => { loadCount += 1; }}
         />,
       );
     });
+  };
+
+  try {
+    await renderList(false);
 
     const fallback = container.querySelector<HTMLButtonElement>("button.load-more");
     expect(fallback?.textContent).toBe("Load more jobs");
     expect(observedElement).not.toBeUndefined();
     const entry = { isIntersecting: true, target: observedElement } as IntersectionObserverEntry;
-    await act(async () => { observerCallback?.([entry], {} as IntersectionObserver); });
-    await act(async () => { observerCallback?.([entry], {} as IntersectionObserver); });
+    await act(async () => { observerCallbacks[0]?.([entry], {} as IntersectionObserver); });
+    await act(async () => { observerCallbacks[0]?.([entry], {} as IntersectionObserver); });
     expect(loadCount).toBe(1);
 
-    await act(async () => { fallback?.click(); });
+    await renderList(true);
+    await renderList(false);
+    expect(observerCallbacks).toHaveLength(2);
+    await act(async () => { observerCallbacks[1]?.([entry], {} as IntersectionObserver); });
     expect(loadCount).toBe(2);
+
+    await act(async () => { fallback?.click(); });
+    expect(loadCount).toBe(3);
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();
@@ -332,6 +350,14 @@ test("gives focused listbox options explicit identity and supports keyboard and 
     const labelledBy = focusedOption.getAttribute("aria-labelledby")?.split(/\s+/) ?? [];
     const accessibleIdentity = labelledBy.map((id) => document.getElementById(id)?.textContent?.trim()).join(" ");
     expect(accessibleIdentity).toBe("build acme/service · CI");
+    const describedBy = focusedOption.getAttribute("aria-describedby")?.split(/\s+/) ?? [];
+    const accessibleDescription = describedBy.map((id) => document.getElementById(id)?.textContent?.trim()).join(" ");
+    expect(accessibleDescription).toContain("1 run");
+    expect(accessibleDescription).toContain("Latest completion");
+    expect(accessibleDescription).toContain("Median duration");
+    expect(accessibleDescription).toContain("CPU peak");
+    expect(accessibleDescription).toContain("Memory peak");
+    expect(accessibleDescription).toContain("Partial telemetry coverage: 0 of 1 run");
     expect(selectedKeys.at(-1)).toBe(repoTwoBuild.jobKey);
 
     options[0]?.click();
@@ -349,7 +375,6 @@ test("gives focused listbox options explicit identity and supports keyboard and 
 test("renders aligned resource charts and a complete accessible measurements table", async () => {
   const html = await renderWithRouter(
     <JobResourceDetail
-      organizationId="org-1"
       job={selectedJob}
       selectedRunId="run-1"
       onSelectRun={noop}
@@ -383,9 +408,18 @@ test("renders aligned resource charts and a complete accessible measurements tab
   expect(html).toContain("Cancelled");
   expect(html).toContain("Partial · 5 samples");
   expect(html).toContain('href="/runs/run-1"');
+  expect(html).toContain('href="/runs/run-1?organizationId=org-1"');
   expect(html).toContain('aria-pressed="true"');
   expect(html).toContain('aria-label="Select run completed Sep 1, 2026, 10:00 AM UTC"');
-  expect(html).toContain("Partial telemetry coverage: 2 of 3 runs");
+  expect(html).toContain("build");
+  expect(html).toContain("acme/app · CI");
+  expect(html).toContain("windows-x64");
+  expect(html).toContain("300 completed runs");
+  expect(html).toContain("3 sampled runs shown");
+  expect(html).toContain("Latest request 4 vCPU / 4.0 GiB · Parallelism 3");
+  expect(html).toContain("Partial telemetry coverage: 200 of 300 runs");
+  expect(html).toContain("Sampled charts can miss short-lived peaks between collected observations.");
+  expect(html.match(/Open run/g)?.length).toBeGreaterThanOrEqual(3);
   expect(html).not.toContain("1932735283 B");
   expect(html).not.toContain("65432 ms");
 });
@@ -401,8 +435,10 @@ test("keeps unavailable resource telemetry unavailable without dropping duration
   }));
   const html = await renderWithRouter(
     <JobResourceDetail
-      organizationId="org-1"
-      job={{ jobKey: selectedJob.jobKey, points: unavailablePoints }}
+      job={{
+        summary: { ...selectedJob.summary, telemetryCoveredRunCount: 0, telemetryCoveragePercent: 0 },
+        points: unavailablePoints,
+      }}
       selectedRunId={null}
       onSelectRun={noop}
     />,
@@ -431,7 +467,6 @@ test("leaves visible gaps where a completed run has null resource measurements",
   memoryDocument.body.innerHTML = renderToStaticMarkup(
     <MemoryTrendChart
       points={resourcePoints}
-      requestedMemoryBytes={2_147_483_648}
       selectedRunId={null}
       onSelectRun={noop}
     />,
@@ -439,6 +474,31 @@ test("leaves visible gaps where a completed run has null resource measurements",
   const connectedMemoryPaths = Array.from(memoryDocument.querySelectorAll(".ts-chart__line path"))
     .filter((path) => path.getAttribute("d")?.includes("L"));
   expect(connectedMemoryPaths).toHaveLength(1);
+  expect(memoryDocument.body.innerHTML).toContain("requested 4.0 GiB");
+});
+
+test("distinguishes failed, cancelled, and partial telemetry marks in every chart", () => {
+  const chartDocuments = [
+    ["cpu", <CpuTrendChart points={resourcePoints} selectedRunId={null} onSelectRun={noop} />],
+    ["memory", <MemoryTrendChart points={resourcePoints} selectedRunId={null} onSelectRun={noop} />],
+    ["duration", <DurationTrendChart points={resourcePoints} selectedRunId={null} onSelectRun={noop} />],
+  ] as const;
+
+  for (const [metric, chart] of chartDocuments) {
+    const document = new Window().document;
+    document.body.innerHTML = renderToStaticMarkup(chart);
+    const hollowDegraded = document.querySelector(
+      `[data-ts-key="${metric}-partial-outcome-markers"] circle`,
+    );
+    const degraded = document.querySelector(
+      `[data-ts-key="${metric}-outcome-markers"] circle`,
+    );
+    expect(hollowDegraded?.getAttribute("fill")).toBe("#211917");
+    expect(hollowDegraded?.getAttribute("stroke")).toBe("#e76f9b");
+    expect(degraded?.getAttribute("fill")).toBe("#e76f9b");
+    expect(document.body.textContent).toContain("Failed or cancelled run");
+    expect(document.body.textContent).toContain("Partial telemetry (hollow mark)");
+  }
 });
 
 test("aligns line-point and bar centers for one, two, three, and many runs", () => {
@@ -450,6 +510,8 @@ test("aligns line-point and bar centers for one, two, three, and many runs", () 
     cpuAveragePercent: 20 + index,
     cpuPeakPercent: 40 + index,
     memoryPeakBytes: 1_073_741_824 + index * 134_217_728,
+    outcome: "success",
+    telemetryState: "available",
   }));
 
   type AttributeElement = { getAttribute(name: string): string | null };
@@ -467,7 +529,7 @@ test("aligns line-point and bar centers for one, two, three, and many runs", () 
     );
     const memoryDocument = new Window().document;
     memoryDocument.body.innerHTML = renderToStaticMarkup(
-      <MemoryTrendChart points={points} requestedMemoryBytes={2_147_483_648} selectedRunId={null} onSelectRun={noop} />,
+      <MemoryTrendChart points={points} selectedRunId={null} onSelectRun={noop} />,
     );
     const durationDocument = new Window().document;
     durationDocument.body.innerHTML = renderToStaticMarkup(
@@ -476,8 +538,8 @@ test("aligns line-point and bar centers for one, two, three, and many runs", () 
 
     const lineCenter = (element: AttributeElement) => Number(element.getAttribute("cx"));
     const barCenter = (element: AttributeElement) => Number(element.getAttribute("x")) + Number(element.getAttribute("width")) / 2;
-    const cpuCenters = normalizedCenters(cpuDocument.querySelector('[data-ts-key="x-axis"]'), Array.from(cpuDocument.querySelectorAll("g.ts-chart__line[data-ts-key*='Average-0'] > circle")), lineCenter);
-    const memoryCenters = normalizedCenters(memoryDocument.querySelector('[data-ts-key="x-axis"]'), Array.from(memoryDocument.querySelectorAll("g.ts-chart__line[data-ts-key*='Peak-0'] > circle")), lineCenter);
+    const cpuCenters = normalizedCenters(cpuDocument.querySelector('[data-ts-key="x-axis"]'), Array.from(cpuDocument.querySelectorAll('[data-ts-key="cpu-average-markers"] > circle')), lineCenter);
+    const memoryCenters = normalizedCenters(memoryDocument.querySelector('[data-ts-key="x-axis"]'), Array.from(memoryDocument.querySelectorAll('[data-ts-key="memory-peak-markers"] > circle')), lineCenter);
     const durationCenters = normalizedCenters(durationDocument.querySelector('[data-ts-key="x-axis"]'), Array.from(durationDocument.querySelectorAll(".ts-chart__bar > rect")), barCenter);
 
     expect(cpuCenters).toHaveLength(count);

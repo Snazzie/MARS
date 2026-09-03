@@ -1,13 +1,12 @@
 import { useId } from "react";
-import type { JobResourceTrendPoint } from "@mars/contracts";
+import type { JobResourceTrendResponse } from "@mars/contracts";
 import { CpuTrendChart, DurationTrendChart, MemoryTrendChart } from "./JobResourceCharts.tsx";
 import { JobRunMeasurements } from "./JobRunMeasurements.tsx";
-import { formatDate } from "../routes/timing-model.ts";
+import { formatBytes, formatDate } from "../routes/timing-model.ts";
 
 
 export type JobResourceDetailProps = {
-  organizationId: string;
-  job: { jobKey: string; points: readonly JobResourceTrendPoint[] };
+  job: NonNullable<JobResourceTrendResponse["selectedJob"]>;
   selectedRunId: string | null;
   onSelectRun(runId: string): void;
 };
@@ -15,9 +14,8 @@ export type JobResourceDetailProps = {
 export function JobResourceDetail({ job, selectedRunId, onSelectRun }: JobResourceDetailProps) {
   const headingId = useId();
   const points = job.points;
-  const coveredRunCount = points.filter((point) => point.telemetryState !== "unavailable").length;
-  const coverageIsPartial = coveredRunCount < points.length;
-  const latestPoint = points.at(-1);
+  const summary = job.summary;
+  const coverageIsPartial = summary.telemetryCoveredRunCount < summary.runCount;
   const chartProps = { points, selectedRunId, onSelectRun };
 
   return (
@@ -25,22 +23,32 @@ export function JobResourceDetail({ job, selectedRunId, onSelectRun }: JobResour
       <header className="resource-history-detail-header">
         <div>
           <p className="eyebrow">Selected job</p>
-          <h2 id={headingId}>Resource history</h2>
+          <h2 id={headingId}>{summary.jobName}</h2>
+          <p className="detail-identity">{summary.repositoryName} · {summary.workflowName}</p>
           <p className="detail-meta">
-            {points.length} completed {points.length === 1 ? "run" : "runs"}
-            {latestPoint ? <> · Latest {formatDate(latestPoint.completedAt)}</> : null}
+            {summary.platform} · Latest request {summary.latestRequestedVcpu} vCPU / {formatBytes(summary.latestRequestedMemoryBytes)}
+            {" · "}Parallelism {summary.latestEffectiveConcurrency}
+          </p>
+          <p className="detail-meta">
+            {summary.runCount} completed {summary.runCount === 1 ? "run" : "runs"}
+            {" · "}{points.length} sampled {points.length === 1 ? "run" : "runs"} shown
+            {" · "}Latest {formatDate(summary.latestCompletedAt)}
           </p>
         </div>
         {coverageIsPartial && (
           <p className="resource-history-coverage-warning" role="note">
-            Partial telemetry coverage: {coveredRunCount} of {points.length} {points.length === 1 ? "run" : "runs"} include CPU or memory telemetry.
+            Partial telemetry coverage: {summary.telemetryCoveredRunCount} of {summary.runCount} {summary.runCount === 1 ? "run" : "runs"} include CPU or memory telemetry.
           </p>
         )}
       </header>
 
+      <p className="resource-history-sampling-note" role="note">
+        Sampled charts can miss short-lived peaks between collected observations.
+      </p>
+
       <div className="resource-history-charts">
         <CpuTrendChart {...chartProps} />
-        <MemoryTrendChart {...chartProps} requestedMemoryBytes={latestPoint?.requestedMemoryBytes ?? null} />
+        <MemoryTrendChart {...chartProps} />
         <DurationTrendChart {...chartProps} />
       </div>
 

@@ -30,7 +30,8 @@ const validIdentityTwo = { repositoryId: "00000000-0000-4000-8000-000000000002",
 
 const summaryRow = (overrides: Record<string, unknown> = {}) => ({
   repositoryId: "repo-1", repositoryName: "acme/one", workflowName: "CI", jobName: "build", platform: "windows-x64",
-  runCount: "3", latestCompletedAt: "2026-09-03 12:00:00+00", medianExecutionDurationMs: "1200",
+  runCount: "3", latestCompletedAt: "2026-09-03 12:00:00+00", latestRequestedVcpu: "2",
+  latestRequestedMemoryBytes: "16384", latestEffectiveConcurrency: "3", medianExecutionDurationMs: "1200",
   cpuPeakPercent: "84.50", memoryPeakBytes: "4096", telemetryCoveredRunCount: "2",
   durationChangePercent: "20.5", cpuChangePercent: null, memoryChangePercent: "-10", ...overrides,
 });
@@ -95,6 +96,16 @@ describe("listJobResourceTrends", () => {
     }
   });
 
+  test("rejects a point limit that cannot preserve both range endpoints", async () => {
+    const db = fakeDatabase([]);
+
+    await expect(listJobResourceTrends(db, "org-1", { ...baseQuery, pointLimit: 1 })).rejects.toMatchObject({
+      name: JobResourceTrendInputError.name,
+      code: "invalid_resource_trend_query",
+    });
+    expect(db.calls).toHaveLength(0);
+  });
+
   test("normalizes filtered totals, facets, distinct identities, and selected points", async () => {
     const db = fakeDatabase([
       [{ jobCount: "2", completedRunCount: "5", medianExecutionDurationMs: "1100", telemetryCoveredRunCount: "3" }],
@@ -113,8 +124,16 @@ describe("listJobResourceTrends", () => {
       { repositoryId: "repo-1", runCount: 3, cpuPeakPercent: 84.5, memoryPeakBytes: 4096 },
       { repositoryId: "repo-2", runCount: 3, cpuPeakPercent: null, memoryPeakBytes: null },
     ]);
-    expect(result.jobs[0]).toMatchObject({ telemetryCoveragePercent: 2 / 3 * 100, durationChangePercent: 20.5, cpuChangePercent: null, memoryChangePercent: -10 });
-    expect(result.selectedJob?.jobKey).toBe(encodeJobResourceKey(identity));
+    expect(result.jobs[0]).toMatchObject({
+      latestRequestedVcpu: 2,
+      latestRequestedMemoryBytes: 16384,
+      latestEffectiveConcurrency: 3,
+      telemetryCoveragePercent: 2 / 3 * 100,
+      durationChangePercent: 20.5,
+      cpuChangePercent: null,
+      memoryChangePercent: -10,
+    });
+    expect(result.selectedJob?.summary).toEqual(result.jobs[0]);
     expect(result.selectedJob?.points.map(point => point.completedAt)).toEqual(["2026-09-01T00:00:01.000Z", "2026-09-01T00:00:02.000Z"]);
     expect(result.selectedJob?.points[0]).toMatchObject({ executionDurationMs: 1001, requestedVcpu: 2, requestedMemoryBytes: 16384, effectiveConcurrency: 3, telemetrySampleCount: 4 });
     expect(result.selectedJob?.points[1]).toMatchObject({ cpuAveragePercent: null, cpuPeakPercent: null, memoryPeakBytes: null });
@@ -152,7 +171,10 @@ describe("listJobResourceTrends", () => {
       [summaryRow({ repositoryId: validIdentity.repositoryId })], [], [pointRow(1)],
     ]);
     const result = await listJobResourceTrends(db, "org-1", { ...baseQuery, jobKey: encodeJobResourceKey(validIdentityTwo) });
-    expect(result.selectedJob).toEqual({ jobKey: encodeJobResourceKey(validIdentity), points: [expect.objectContaining({ jobId: "job-1" })] });
+    expect(result.selectedJob).toEqual({
+      summary: expect.objectContaining({ jobKey: encodeJobResourceKey(validIdentity), repositoryId: validIdentity.repositoryId }),
+      points: [expect.objectContaining({ jobId: "job-1" })],
+    });
     expect(db.calls).toHaveLength(5);
   });
 
@@ -162,11 +184,15 @@ describe("listJobResourceTrends", () => {
       [{ jobCount: "1", completedRunCount: "1", medianExecutionDurationMs: "1000", telemetryCoveredRunCount: "1" }],
       [{ platforms: ["windows-x64"], vcpus: ["2"], concurrencies: ["1"] }],
       [],
+      [summaryRow({ repositoryId: validIdentityTwo.repositoryId, repositoryName: "acme/two" })],
       [pointRow(1)],
     ]);
     const result = await listJobResourceTrends(db, "org-1", { ...baseQuery, jobKey: requestedKey });
-    expect(result.selectedJob).toEqual({ jobKey: requestedKey, points: [expect.objectContaining({ jobId: "job-1" })] });
-    expect(db.calls).toHaveLength(4);
+    expect(result.selectedJob).toEqual({
+      summary: expect.objectContaining({ jobKey: requestedKey, repositoryId: validIdentityTwo.repositoryId }),
+      points: [expect.objectContaining({ jobId: "job-1" })],
+    });
+    expect(db.calls).toHaveLength(5);
   });
 
   for (const total of [0, 1, 2, 201, 1000]) {

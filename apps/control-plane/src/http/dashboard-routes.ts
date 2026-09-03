@@ -29,7 +29,7 @@ const jobResourceTrendQuerySchema = z.object({
   cursor: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   jobKey: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional(),
-  pointLimit: z.coerce.number().int().min(1).max(200).default(100),
+  pointLimit: z.coerce.number().int().min(2).max(200).default(100),
 }).strict().superRefine((value, ctx) => {
   const from = Date.parse(value.from), to = Date.parse(value.to);
   if (from >= to) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["to"], message: "to must be after from" });
