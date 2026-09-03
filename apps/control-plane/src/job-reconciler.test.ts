@@ -128,7 +128,7 @@ test("reserves, requests JIT configuration, and dispatches an eligible queued jo
     dispatcher,
   });
   expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
-  expect(events).toEqual(["preflight", "jit", "dispatch"]);
+  expect(events).toEqual(["preflight", "reserve", "jit", "dispatch"]);
 });
 
 test("does not reserve or dispatch when exact GitHub job preflight reports 404", async () => {
@@ -139,7 +139,9 @@ test("does not reserve or dispatch when exact GitHub job preflight reports 404",
   db = Object.assign((async (strings: TemplateStringsArray) => {
     const query = strings.join(" ").toLowerCase();
     if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", githubRunId: 77, runAttempt: 1, repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels: ["mars-windows-x64"] }];
-    if (query.includes('p.id as "poolid"')) return [{
+    if (query.includes('p.id as "poolid"')) {
+      events.push("candidates");
+      return [{
       poolId: "pool",
       organizationId: "org",
       workerId: "worker",
@@ -160,6 +162,7 @@ test("does not reserve or dispatch when exact GitHub job preflight reports 404",
       encryptionPublicKey: workerEncryptionPublicKey,
       active: 0,
     }];
+    }
     if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 2, memoryBytes: 4, storageBytes: 8, concurrency: 1 }, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 }, doctor: { capacity: { freeVcpu: 2, freeMemoryBytes: 4, freeStorageBytes: 8 } } }];
     if (query.includes("from organization_settings") || query.includes("from runner_leases")) return [];
     if (query.includes("insert into runner_leases")) {
@@ -179,7 +182,7 @@ test("does not reserve or dispatch when exact GitHub job preflight reports 404",
     dispatcher: { dispatch: async () => { events.push("dispatch"); } },
   });
 
-  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 1 });
+  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 0 });
   expect(events).toHaveLength(1);
   expect(events[0]).toContain("/actions/jobs/42");
 });
