@@ -576,7 +576,7 @@ export class GitHubAppService {
           "Configure GitHub Actions workflows to use Mars runners.",
           `P95 CPU peak: ${input.p95CpuPeakPercent === undefined ? "unknown" : `${input.p95CpuPeakPercent}%`}`,
           `P95 memory peak: ${input.p95MemoryPeakBytes === undefined ? "unknown" : `${input.p95MemoryPeakBytes} bytes`}`,
-          `Successful samples: ${input.successfulRunCount ?? "unknown"}`,
+          `Successful sample count: ${input.successfulRunCount ?? "unknown"}`,
           `Labels: ${resultLabels.join(", ")}`,
         ].join("\n")
         : "Configure GitHub Actions workflows to use Mars runners.";

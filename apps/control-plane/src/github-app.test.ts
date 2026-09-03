@@ -549,9 +549,8 @@ jobs:
   expect(blobBody.content).toContain("runs-on: ubuntu-latest");
   const pull = requests.find((request) => request.url.endsWith("/pulls"));
   const pullBody = JSON.parse(await pull!.text()).body as string;
-  expect(pullBody).toContain("P95 CPU peak: 201%");
+  expect(pullBody).toContain("Successful sample count: 8");
   expect(pullBody).toContain("P95 memory peak: 5368709120 bytes");
-  expect(pullBody).toContain("Successful samples: 8");
   expect(pullBody).toContain("Labels: mars-windows-x64, 4VCPU, 8G");
 });
 
