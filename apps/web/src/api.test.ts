@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { ApiRequestError, configureWorker, getWorkerCache, getWorkerHealth, getWorkers, purgeWorkerCache } from "./api.ts";
+import { ApiRequestError, configureWorker, getJobResourceSamples, getWorkerCache, getWorkerHealth, getWorkers, purgeWorkerCache } from "./api.ts";
 import type { WorkerHealth } from "@mars/contracts";
 const workerHealth: WorkerHealth = {
   observedAt: "2026-08-23T12:00:00.000Z",
@@ -165,6 +165,20 @@ test("purges a worker runner cache through the authenticated endpoint", async ()
     expect(requested).toBe("/api/workers/worker-1/cache/purge");
     expect(method).toBe("POST");
     expect(idempotencyKey).not.toBe("");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+test("loads job resource samples with organization, run, job, cursor, and limit", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requested = String(input);
+    return new Response(JSON.stringify({ items: [], nextCursor: null }), { status: 200 });
+  }) as unknown as typeof fetch;
+  try {
+    await getJobResourceSamples("org-1", "run-1", "job-1", "next_page", 100);
+    expect(requested).toBe("/api/organizations/org-1/runs/run-1/jobs/job-1/resource-samples?limit=100&after=next_page");
   } finally {
     globalThis.fetch = originalFetch;
   }

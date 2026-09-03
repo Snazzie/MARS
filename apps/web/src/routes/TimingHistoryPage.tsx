@@ -1,16 +1,56 @@
-import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
+import type { JobResourceSample, JobResourceTrendResponse } from "@mars/contracts";
+import { useInfiniteQuery, useQuery, type InfiniteData } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { getJobResourceTrends } from "../api.ts";
+import { getJobResourceSamples, getJobResourceTrends } from "../api.ts";
 import { JobResourceDetail } from "../components/JobResourceDetail.tsx";
 import { JobResourceList } from "../components/JobResourceList.tsx";
-import { QueryState } from "../components/StateView.tsx";
+import { QueryState, StateView } from "../components/StateView.tsx";
 import { TimingSummary } from "../components/TimingSummary.tsx";
 import { TimingToolbar } from "../components/TimingToolbar.tsx";
-import { defaultTimingFilters, selectionAfterJobsChange, timingRangeBounds, type TimingFilters } from "./timing-model.ts";
+import { defaultTimingFilters, timingRangeBounds, type TimingFilters } from "./timing-model.ts";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
 
-type ResourceTrendPage = Awaited<ReturnType<typeof getJobResourceTrends>>;
+type ResourceTrendPage = JobResourceTrendResponse;
+type SelectedResourceTrend = NonNullable<ResourceTrendPage["selectedJob"]>;
 type ResourceHistoryPageState = "ready" | "empty" | "no-match";
+
+type JobResourceSamplePage = { items: readonly JobResourceSample[]; nextCursor: string | null };
+
+export function flattenJobResourceSamplePages(pages: readonly JobResourceSamplePage[]): JobResourceSample[] {
+  return pages.flatMap((page) => page.items).sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
+}
+
+export function resourceSampleElapsedMs(sample: JobResourceSample, completedAt: string, executionDurationMs: number): number {
+  return new Date(sample.occurredAt).getTime() - (new Date(completedAt).getTime() - executionDurationMs);
+}
+
+export function jobResourceSampleOrganizationId(
+  routeOrganizationId: string,
+  selectedPoint: Pick<NonNullable<JobResourceTrendResponse["selectedJob"]>["points"][number], "organizationId"> | null,
+): string {
+  return selectedPoint?.organizationId ?? routeOrganizationId;
+}
+
+export function jobResourceSamplesQueryOptions(
+  organizationId: string,
+  selectedRunId: string | null,
+  selectedJobId: string | null,
+) {
+  return {
+    queryKey: ["org", organizationId, "job-resource-samples", selectedRunId, selectedJobId] as const,
+    queryFn: ({ pageParam }: { pageParam: string | null }) => getJobResourceSamples(
+      organizationId,
+      selectedRunId!,
+      selectedJobId!,
+      pageParam,
+      100,
+    ),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page: JobResourceSamplePage) => page.nextCursor ?? undefined,
+    enabled: Boolean(organizationId && selectedRunId && selectedJobId),
+  };
+}
+
 
 const emptyFacets: ResourceTrendPage["filters"] = {
   platforms: [],
@@ -18,22 +58,23 @@ const emptyFacets: ResourceTrendPage["filters"] = {
   concurrencies: [],
 };
 
-export function jobResourceTrendQueryOptions(
-  organizationId: string,
-  filters: TimingFilters,
-  selectedJobKey: string | null,
-  now: Date = new Date(),
-) {
-  const request = {
+function resourceTrendRequest(filters: TimingFilters, now: Date) {
+  return {
     ...timingRangeBounds(filters.range, now),
     platform: filters.platform || undefined,
     vcpu: filters.vcpu ? Number(filters.vcpu) : undefined,
     concurrency: filters.concurrency ? Number(filters.concurrency) : undefined,
     search: filters.search.trim() || undefined,
     sort: filters.sort,
-    jobKey: selectedJobKey,
   };
+}
 
+export function jobResourceTrendQueryOptions(
+  organizationId: string,
+  filters: TimingFilters,
+  now: Date = new Date(),
+) {
+  const request = resourceTrendRequest(filters, now);
   return {
     queryKey: ["org", organizationId, "job-resource-trends", request] as const,
     queryFn: ({ pageParam }: { pageParam: string | null }) => getJobResourceTrends(organizationId, {
@@ -52,6 +93,28 @@ export function jobResourceTrendQueryOptions(
   };
 }
 
+export function selectedJobResourceTrendQueryOptions(
+  organizationId: string,
+  filters: TimingFilters,
+  selectedJobKey: string | null,
+  now: Date = new Date(),
+) {
+  const request = { ...resourceTrendRequest(filters, now), jobKey: selectedJobKey };
+  return {
+    queryKey: ["org", organizationId, "job-resource-trend-detail", request] as const,
+    queryFn: () => getJobResourceTrends(organizationId, {
+      ...request,
+      limit: 1,
+      pointLimit: 100,
+    }),
+    enabled: Boolean(organizationId && selectedJobKey),
+    placeholderData: (
+      previous: ResourceTrendPage | undefined,
+      previousQuery: { queryKey: readonly unknown[] } | undefined,
+    ) => previousQuery?.queryKey[0] === "org" && previousQuery.queryKey[1] === organizationId ? previous : undefined,
+  };
+}
+
 export function resourceHistoryPageState(jobCount: number, filters: TimingFilters): ResourceHistoryPageState {
   if (jobCount > 0) return "ready";
   const hasActiveFilters = filters.range !== defaultTimingFilters.range
@@ -63,14 +126,71 @@ export function resourceHistoryPageState(jobCount: number, filters: TimingFilter
   return hasActiveFilters ? "no-match" : "empty";
 }
 
-export function resourceHistorySelectionAfterRefresh(
-  current: string | null,
-  jobs: ResourceTrendPage["jobs"],
-  selectedDetailJobKey: string | null,
-): string | null {
-  const summarySelection = selectionAfterJobsChange(current, jobs);
-  if (summarySelection === current || selectedDetailJobKey === current) return current;
-  return selectionAfterJobsChange(selectedDetailJobKey, jobs);
+export function resourceHistoryJobsWithSelectedSummary(
+  jobs: readonly ResourceTrendPage["jobs"][number][],
+  detail: ResourceTrendPage["selectedJob"],
+): ResourceTrendPage["jobs"] {
+  if (!detail) return [...jobs];
+  const existingIndex = jobs.findIndex((job) => job.jobKey === detail.summary.jobKey);
+  if (existingIndex < 0) return [detail.summary, ...jobs];
+  return jobs.map((job, index) => index === existingIndex ? detail.summary : job);
+}
+export type ResourceHistoryCommittedView = {
+  organizationId: string;
+  generation: string;
+  filters: TimingFilters;
+  pages: ResourceTrendPage[];
+  selectedJob: ResourceTrendPage["selectedJob"];
+};
+
+type ResourceHistoryResponseState = {
+  organizationId: string;
+  generation: string;
+  filters: TimingFilters;
+  pages: readonly ResourceTrendPage[] | null;
+  summaryPlaceholder: boolean;
+  selectedJobKey: string | null;
+  detailResponse: ResourceTrendPage | undefined;
+  detailPlaceholder: boolean;
+};
+
+export function resourceHistoryViewAfterResponses(
+  current: ResourceHistoryCommittedView | null,
+  response: ResourceHistoryResponseState,
+): ResourceHistoryCommittedView | null {
+  const retained = current?.organizationId === response.organizationId ? current : null;
+  if (!response.pages || response.summaryPlaceholder) return retained;
+  let selectedJob = response.pages[0]?.selectedJob ?? null;
+  if (response.selectedJobKey !== null) {
+    if (!response.detailResponse || response.detailPlaceholder) {
+      if (retained?.generation !== response.generation) return retained;
+      return {
+        ...retained,
+        filters: response.filters,
+        pages: [...response.pages],
+      };
+    }
+    selectedJob = response.detailResponse.selectedJob;
+  }
+  return {
+    organizationId: response.organizationId,
+    generation: response.generation,
+    filters: response.filters,
+    pages: [...response.pages],
+    selectedJob,
+  };
+}
+
+
+export function resourceHistoryDisplayedDetail(
+  jobs: readonly ResourceTrendPage["jobs"][number][],
+  firstPageDetail: ResourceTrendPage["selectedJob"],
+  requestedDetail: ResourceTrendPage["selectedJob"],
+  requestedJobKey: string | null,
+): SelectedResourceTrend | null {
+  const candidate = requestedJobKey === null ? firstPageDetail : requestedDetail ?? firstPageDetail;
+  if (!candidate) return null;
+  return jobs.some((job) => job.jobKey === candidate.summary.jobKey) ? candidate : null;
 }
 
 export function resourceHistoryToolbarFacets(
@@ -94,6 +214,35 @@ export function resourceHistoryRefreshError<T>(hasData: boolean, error: T | null
   return hasData ? error ?? failureReason : null;
 }
 
+export function ResourceHistoryHeader() {
+  return (
+    <header className="resource-history-header runs-heading">
+      <div>
+        <p className="eyebrow">Runs / Resource analysis</p>
+        <h1>Resource history</h1>
+        <p className="resource-history-intro">CPU, memory, and execution time for completed jobs.</p>
+      </div>
+      <details className="resource-history-disclosure">
+        <summary>About these metrics</summary>
+        <div>
+          <p>Resource values are sampled. Peaks are the highest observed samples, not exact process-level peaks.</p>
+          <p>Missing telemetry is not treated as zero. This view includes CPU, memory, and execution duration; disk telemetry is not collected.</p>
+        </div>
+      </details>
+    </header>
+  );
+}
+
+export function ResourceHistoryEmptyState() {
+  return (
+    <StateView
+      kind="empty"
+      title="No completed job history yet"
+      message="Records appear after completed jobs provide timing data."
+    />
+  );
+}
+
 function ResourceHistorySkeleton() {
   return (
     <div className="resource-history-skeleton" role="status" aria-label="Loading job resource history">
@@ -113,7 +262,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "The latest resource history could not be loaded.";
 }
 
-
 export function TimingHistoryPage() {
   const { organizationId } = useOrganizationFromRoute();
   const [filters, setFilters] = useState<TimingFilters>(defaultTimingFilters);
@@ -122,6 +270,7 @@ export function TimingHistoryPage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [requestedAt, setRequestedAt] = useState(() => new Date());
 
+  const [committedView, setCommittedView] = useState<ResourceHistoryCommittedView | null>(null);
   useEffect(() => {
     if (filters.search === debouncedSearch) return;
     const timeout = window.setTimeout(() => {
@@ -131,30 +280,93 @@ export function TimingHistoryPage() {
     return () => window.clearTimeout(timeout);
   }, [debouncedSearch, filters.search]);
 
+  useEffect(() => {
+    setSelectedJobKey(null);
+    setSelectedRunId(null);
+  }, [organizationId]);
+
   const queryFilters = useMemo(
     () => ({ ...filters, search: debouncedSearch }),
     [debouncedSearch, filters],
   );
+  const generation = useMemo(
+    () => JSON.stringify([organizationId, resourceTrendRequest(queryFilters, requestedAt)]),
+    [organizationId, queryFilters, requestedAt],
+  );
   const query = useInfiniteQuery(jobResourceTrendQueryOptions(
+    organizationId,
+    queryFilters,
+    requestedAt,
+  ));
+  const detailQuery = useQuery(selectedJobResourceTrendQueryOptions(
     organizationId,
     queryFilters,
     selectedJobKey,
     requestedAt,
   ));
-  const jobs = useMemo(() => query.data?.pages.flatMap((page) => page.jobs) ?? [], [query.data]);
-  const firstPage = query.data?.pages[0];
-  const selectedJob = firstPage?.selectedJob ?? null;
-  const refreshing = query.isFetching && !query.isFetchingNextPage;
-  const pageState = resourceHistoryPageState(jobs.length, queryFilters);
-  const refreshError = resourceHistoryRefreshError(Boolean(firstPage), query.error, query.failureReason);
+  useEffect(() => {
+    setCommittedView((current) => resourceHistoryViewAfterResponses(current, {
+      organizationId,
+      generation,
+      filters: queryFilters,
+      pages: query.data?.pages ?? null,
+      summaryPlaceholder: query.isPlaceholderData,
+      selectedJobKey,
+      detailResponse: detailQuery.data,
+      detailPlaceholder: detailQuery.isPlaceholderData,
+    }));
+  }, [
+    detailQuery.data,
+    detailQuery.isPlaceholderData,
+    generation,
+    organizationId,
+    query.data?.pages,
+    query.isPlaceholderData,
+    queryFilters,
+    selectedJobKey,
+  ]);
+  const view = committedView?.organizationId === organizationId ? committedView : null;
+  const paginatedJobs = useMemo(() => view?.pages.flatMap((page) => page.jobs) ?? [], [view]);
+  const firstPage = view?.pages[0];
+  const jobs = useMemo(
+    () => resourceHistoryJobsWithSelectedSummary(paginatedJobs, view?.selectedJob ?? null),
+    [paginatedJobs, view?.selectedJob],
+  );
+  const selectedJob = view?.selectedJob ?? null;
+  const displayedSelectedJobKey = selectedJob?.summary.jobKey ?? null;
+  const selectedRunPoint = useMemo(
+    () => selectedJob?.points.find((point) => point.runId === selectedRunId) ?? null,
+    [selectedJob, selectedRunId],
+  );
+  const sampleQuery = useInfiniteQuery(jobResourceSamplesQueryOptions(
+    jobResourceSampleOrganizationId(organizationId, selectedRunPoint),
+    selectedRunId,
+    selectedRunPoint?.jobId ?? null,
+  ));
+  useEffect(() => {
+    if (!sampleQuery.hasNextPage || sampleQuery.isFetchingNextPage) return;
+    void sampleQuery.fetchNextPage();
+  }, [sampleQuery.fetchNextPage, sampleQuery.hasNextPage, sampleQuery.isFetchingNextPage]);
+  const samples = useMemo(
+    () => flattenJobResourceSamplePages(sampleQuery.data?.pages ?? []),
+    [sampleQuery.data?.pages],
+  );
+  const refreshing = query.isFetching && !query.isFetchingNextPage || detailQuery.isFetching;
+  const pageState = resourceHistoryPageState(paginatedJobs.length, view?.filters ?? queryFilters);
+  const queryRefreshError = resourceHistoryRefreshError(Boolean(firstPage), query.error, query.failureReason);
+  const detailRefreshError = selectedJobKey === null
+    ? null
+    : resourceHistoryRefreshError(Boolean(selectedJob), detailQuery.error, detailQuery.failureReason);
+  const refreshError = queryRefreshError ?? detailRefreshError;
   const toolbarFacets = useMemo(
     () => resourceHistoryToolbarFacets(firstPage?.filters ?? emptyFacets, filters),
     [filters, firstPage?.filters],
   );
 
   useEffect(() => {
-    setSelectedJobKey((current) => resourceHistorySelectionAfterRefresh(current, jobs, selectedJob?.jobKey ?? null));
-  }, [jobs, selectedJob?.jobKey]);
+    const returnedKey = detailQuery.data?.selectedJob?.summary.jobKey;
+    if (!detailQuery.isPlaceholderData && returnedKey && returnedKey !== selectedJobKey) setSelectedJobKey(returnedKey);
+  }, [detailQuery.data, detailQuery.isPlaceholderData, selectedJobKey]);
 
   useEffect(() => {
     const points = selectedJob?.points ?? [];
@@ -167,26 +379,17 @@ export function TimingHistoryPage() {
 
   const refresh = () => {
     setRequestedAt((current) => new Date(Math.max(Date.now(), current.getTime() + 1)));
+    if (selectedRunId !== null && selectedRunPoint?.jobId) void sampleQuery.refetch();
+  };
+  const retry = () => {
+    void query.refetch();
+    if (selectedJobKey !== null) void detailQuery.refetch();
+    if (selectedRunId !== null && selectedRunPoint?.jobId) void sampleQuery.refetch();
   };
 
   return (
     <div className="resource-history">
-      <header className="resource-history-header runs-heading">
-        <div>
-          <p className="eyebrow">Runs / Resource analysis</p>
-          <h1>Job resource history</h1>
-          <p className="resource-history-intro">
-            Compare execution time, CPU, and memory across completed runs without losing the job context behind each measurement.
-          </p>
-        </div>
-        <details className="resource-history-disclosure">
-          <summary>How to read these metrics</summary>
-          <div>
-            <p>Trends are observational. A change in timing or resource use does not establish causation.</p>
-            <p>CPU and memory depend on worker telemetry coverage. Missing samples remain unavailable rather than being treated as zero. Disk telemetry is not collected.</p>
-          </div>
-        </details>
-      </header>
+      <ResourceHistoryHeader />
 
       <TimingToolbar
         filters={filters}
@@ -201,8 +404,7 @@ export function TimingHistoryPage() {
       <QueryState
         error={!firstPage ? query.error : null}
         isLoading={false}
-        isEmpty={Boolean(firstPage) && pageState === "empty"}
-        retry={() => void query.refetch()}
+        retry={retry}
         operationLabel="job resource history"
       />
 
@@ -214,45 +416,57 @@ export function TimingHistoryPage() {
             <div className="resource-history-banner is-error" role="alert">
               <div>
                 <strong>Resource history could not be refreshed.</strong>
-                <span>Showing the last successful response. {errorMessage(refreshError)}</span>
+                <span>Showing the last successful, internally consistent response. {errorMessage(refreshError)}</span>
               </div>
-              <button type="button" className="button secondary" onClick={() => void query.refetch()}>Retry</button>
+              <button type="button" className="button secondary" onClick={retry}>Retry</button>
             </div>
           )}
-          {!refreshError && query.isPlaceholderData && (
+          {!refreshError && (query.isPlaceholderData || detailQuery.isPlaceholderData) && (
             <div className="resource-history-banner is-stale" role="status">
               <strong>Updating this view.</strong>
               <span>Previous results remain visible until the latest response arrives.</span>
             </div>
           )}
 
-          {pageState === "no-match" ? (
+          {pageState === "empty" ? (
+            <ResourceHistoryEmptyState />
+          ) : pageState === "no-match" ? (
             <section className="resource-history-no-match" aria-labelledby="resource-history-no-match-title">
               <p className="eyebrow">No matches</p>
               <h2 id="resource-history-no-match-title">No jobs match these filters.</h2>
               <p>Try a broader time range, remove a resource filter, or clear the job search.</p>
               <button type="button" className="button secondary" onClick={() => setFilters(defaultTimingFilters)}>Reset filters</button>
             </section>
-          ) : pageState === "ready" ? (
+          ) : (
             <div className="resource-history-workspace">
               <JobResourceList
                 jobs={jobs}
-                selectedJobKey={selectedJobKey}
-                hasNextPage={query.hasNextPage}
-                fetchingNextPage={query.isFetchingNextPage}
+                paginationKey={view?.generation ?? generation}
+                selectedJobKey={displayedSelectedJobKey}
+                hasNextPage={view?.generation === generation && query.hasNextPage}
+                fetchingNextPage={view?.generation === generation && query.isFetchingNextPage}
                 onSelect={setSelectedJobKey}
                 onLoadMore={() => void query.fetchNextPage()}
               />
-              {selectedJob && (
-                <JobResourceDetail
-                  organizationId={organizationId}
-                  job={selectedJob}
-                  selectedRunId={selectedRunId}
-                  onSelectRun={setSelectedRunId}
-                />
-              )}
+              <div className="resource-history-detail-column" aria-busy={selectedJobKey !== null && detailQuery.isFetching}>
+                {selectedJob ? (
+                  <JobResourceDetail
+                    job={selectedJob}
+                    selectedRunId={selectedRunId}
+                    onSelectRun={setSelectedRunId}
+                    samples={samples}
+                    samplesLoading={sampleQuery.isFetching}
+                    samplesError={sampleQuery.error ?? sampleQuery.failureReason ?? null}
+                  />
+                ) : (
+                  <section className="resource-history-detail resource-history-detail-pending" role="status">
+                    <h2>Loading selected job</h2>
+                    <p>The existing selection will update after its matching summary and measurements arrive.</p>
+                  </section>
+                )}
+              </div>
             </div>
-          ) : null}
+          )}
         </div>
       )}
     </div>

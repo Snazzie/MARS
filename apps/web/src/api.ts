@@ -128,9 +128,10 @@ export function getJobTimingHistory(organizationId: string, params: { cursor?: s
   for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null && key !== "limit") query.set(key, String(value));
   return request(`/api/organizations/${organizationId}/job-timings?${query}`, CursorPage(JobTimingSnapshot));
 }
+export type JobResourceTrendTimestamp = string | number;
 export type JobResourceTrendRequest = {
-  from: string;
-  to: string;
+  from: JobResourceTrendTimestamp;
+  to: JobResourceTrendTimestamp;
   platform?: string;
   vcpu?: number;
   concurrency?: number;
@@ -143,6 +144,9 @@ export type JobResourceTrendRequest = {
 };
 
 export function buildJobResourceTrendsUrl(organizationId: string, params: JobResourceTrendRequest): string {
+  if (params.pointLimit !== undefined && (!Number.isSafeInteger(params.pointLimit) || params.pointLimit < 2 || params.pointLimit > 200)) {
+    throw new RangeError("pointLimit must be between 2 and 200");
+  }
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
