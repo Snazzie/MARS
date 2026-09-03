@@ -42,3 +42,56 @@ describe("workflow runner mutation", () => {
     expect(() => previewWorkflowMutation({ files: noRuns, selectedPaths: [".github/workflows/missing.yml"], labels: ["self-hosted"] })).toThrow(/not discovered/i);
   });
 });
+
+test("focused mutation previews and rewrites only the selected job", () => {
+  const input = `name: CI
+jobs:
+  build:
+    runs-on: [mars-windows-x64, 8VCPU, 16G]
+    steps:
+      - run: echo build
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo lint
+`;
+  const files = discoverWorkflowFiles([{ path: ".github/workflows/ci.yml", content: input }]);
+  const preview = previewWorkflowMutation({
+    files,
+    selectedPaths: [],
+    selectedPath: ".github/workflows/ci.yml",
+    selectedJobId: "build",
+    labels: ["4VCPU", "8G"],
+  });
+  expect(preview.jobs).toEqual([{
+    id: "build",
+    currentRunsOn: ["mars-windows-x64", "8VCPU", "16G"],
+    path: ".github/workflows/ci.yml",
+    proposedRunsOn: ["mars-windows-x64", "4VCPU", "8G"],
+  }]);
+  expect(preview.changedFiles).toEqual([".github/workflows/ci.yml"]);
+  const output = applyWorkflowMutation(input, ["4VCPU", "8G"], "build", true);
+  expect(output).toContain("runs-on:\n      - mars-windows-x64\n      - 4VCPU\n      - 8G");
+  expect(output).toContain("runs-on: ubuntu-latest");
+  expect(output).toContain("echo lint");
+});
+
+test("focused mutation rejects invalid numeric labels and reports no-op", () => {
+  const files = discoverWorkflowFiles([{ path: ".github/workflows/ci.yml", content }]);
+  expect(() => previewWorkflowMutation({
+    files,
+    selectedPaths: [],
+    selectedPath: ".github/workflows/ci.yml",
+    selectedJobId: "test",
+    labels: ["0VCPU", "8G"],
+  })).toThrow(/invalid resource label/i);
+  const noOp = previewWorkflowMutation({
+    files: discoverWorkflowFiles([{ path: ".github/workflows/ci.yml", content: content.replace("ubuntu-latest", "4VCPU") }]),
+    selectedPaths: [],
+    selectedPath: ".github/workflows/ci.yml",
+    selectedJobId: "test",
+    labels: ["4VCPU"],
+  });
+  expect(noOp.noOp).toBe(true);
+  expect(noOp.changedFiles).toEqual([]);
+});

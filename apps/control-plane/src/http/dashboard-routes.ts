@@ -2,12 +2,12 @@ import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates, listJobResourceTrends, JobResourceTrendInputError, listJobResourceSamples, listWorkerCacheEntries, decodeWorkerCacheCursor, getWorkerHealth } from "@mars/db";
+import { listOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, getOrganizationSettings, updateOrganizationSettings, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates, listJobResourceTrends, JobResourceTrendInputError, listJobResourceSamples, listWorkerCacheEntries, decodeWorkerCacheCursor, getWorkerHealth, getJobLabelRecommendation } from "@mars/db";
 import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker, purgeWorkerRunnerCache } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 import { createWorkerImageBuildPayload } from "../windows-image-build.ts";
-import { ApiError, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth } from "@mars/contracts";
+import { ApiError, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth, JobLabelRecommendation, JobLabelRecommendationQuery } from "@mars/contracts";
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
@@ -85,6 +85,14 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const parsed = timingQuerySchema.safeParse(c.req.query());
     if (!parsed.success) return error(c, 400, "invalid_timing_query", "Invalid timing history query", { issues: parsed.error.issues });
     return c.json(CursorPage(JobTimingSnapshot).parse(await listJobTimingHistory(deps.db, org, parsed.data, c.get("user").id)));
+  }));
+  app.get("/api/organizations/:organizationId/job-timings/label-recommendation", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const denied = await guard(c, deps, org);
+    if (denied) return denied;
+    const parsed = JobLabelRecommendationQuery.safeParse(c.req.query());
+    if (!parsed.success) return error(c, 400, "invalid_label_recommendation_query", "Invalid label recommendation query", { issues: parsed.error.issues });
+    return c.json(JobLabelRecommendation.parse(await getJobLabelRecommendation(deps.db, org, parsed.data, c.get("user").id)));
   }));
   app.get("/api/organizations/:organizationId/job-timings/aggregates", safe(async (c) => {
     const org = c.req.param("organizationId");
@@ -432,9 +440,29 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const org = c.req.param("organizationId"); const denied = await guard(c, deps, org); if (denied) return denied;
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
-    const body = z.object({ selectedPaths: z.array(z.string()).default([]) }).strict().parse(await c.req.json());
-    try { return c.json(RunnerWorkflowPreview.parse(await deps.githubApp.previewRepositoryRunnerPr({ organizationId: org, repositoryId: c.req.param("repositoryId"), selectedPaths: body.selectedPaths }))); }
-    catch (cause) { const code = cause instanceof Error ? cause.message : ""; if (code === "github_repository_unavailable") return error(c, 404, "repository_unavailable", "Repository is unavailable"); if (code === "github_403") return githubWorkflowPermissionError(c); if (code === "github_runner_pool_missing") return error(c, 422, "runner_pool_missing", "Runner pool is not configured"); if (/Invalid|Malformed|Unsupported|not discovered|no-op/i.test(code)) return error(c, 422, "workflow_invalid", code); throw cause; }
+    const body = z.object({
+      selectedPaths: z.array(z.string()).default([]),
+      selectedPath: z.string().optional(),
+      selectedJobId: z.string().trim().min(1).optional(),
+      labels: z.array(z.string().trim().min(1)).min(1).optional(),
+    }).strict().parse(await c.req.json());
+    try {
+      return c.json(RunnerWorkflowPreview.parse(await deps.githubApp.previewRepositoryRunnerPr({
+        organizationId: org,
+        repositoryId: c.req.param("repositoryId"),
+        selectedPaths: body.selectedPaths,
+        selectedPath: body.selectedPath,
+        selectedJobId: body.selectedJobId,
+        labels: body.labels,
+      })));
+    } catch (cause) {
+      const code = cause instanceof Error ? cause.message : "";
+      if (code === "github_repository_unavailable") return error(c, 404, "repository_unavailable", "Repository is unavailable");
+      if (code === "github_403") return githubWorkflowPermissionError(c);
+      if (code === "github_runner_pool_missing") return error(c, 422, "runner_pool_missing", "Runner pool is not configured");
+      if (/Invalid|Malformed|Unsupported|not discovered|no-op/i.test(code)) return error(c, 422, "workflow_invalid", code);
+      throw cause;
+    }
   }));
   app.post("/api/organizations/:organizationId/repositories/:repositoryId/runner-workflows/pr", safe(async (c) => {
     const org = c.req.param("organizationId"); const denied = await guard(c, deps, org); if (denied) return denied;

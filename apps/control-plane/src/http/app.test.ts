@@ -927,6 +927,38 @@ test("uninstalls an organization through the authenticated GitHub route", async 
     });
   });
 
+test("returns scoped timing label recommendations and unavailable history", async () => {
+  const recommendation = {
+    currentLabels: ["mars-windows-x64", "4VCPU", "8G"],
+    successfulRunCount: "8",
+    coveredRunCount: "8",
+    p95CpuPeakPercent: "201",
+    p95MemoryPeakBytes: "5368709120",
+  };
+  const makeDb = (row: unknown) => Object.assign((() => []) as unknown as (...args: never[]) => unknown, {
+    unsafe: async () => [row],
+  }) as never;
+  const query = "?from=2026-08-01T00:00:00.000Z&to=2026-09-01T00:00:00.000Z&repositoryId=11111111-1111-4111-8111-111111111111&workflowName=CI&jobName=build";
+  const available = await createControlPlaneApp(fakeHttpDeps({
+    db: makeDb(recommendation),
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+  })).request(`/api/organizations/org-1/job-timings/label-recommendation${query}`);
+  expect(available.status).toBe(200);
+  expect(await available.json()).toMatchObject({
+    status: "available",
+    currentWindowsLabel: "mars-windows-x64",
+    recommendedVcpu: 3,
+    recommendedMemoryGiB: 7,
+  });
+
+  const unavailable = await createControlPlaneApp(fakeHttpDeps({
+    db: makeDb({ successfulRunCount: "2", coveredRunCount: "2" }),
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+  })).request(`/api/organizations/org-1/job-timings/label-recommendation${query}`);
+  expect(unavailable.status).toBe(200);
+  expect(await unavailable.json()).toMatchObject({ status: "unavailable", reason: "insufficient_history" });
+});
+
   test("refreshes repositories from an existing GitHub installation", async () => {
     let refreshedOrganization = "";
     const response = await createControlPlaneApp(fakeHttpDeps({

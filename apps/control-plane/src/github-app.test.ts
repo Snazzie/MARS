@@ -479,3 +479,108 @@ test.each([403, 429, 500])("repository workflow setup preserves availability aft
   await expect(github.previewRepositoryRunnerPr({ organizationId, repositoryId: "repo-1", selectedPaths: [] })).rejects.toThrow(`github_${status}`);
   expect(fakeDb.repositories.get("repo-1")).toMatchObject({ available: true });
 });
+
+test("focused runner PR mutates one job and includes preserved labels in generated body", async () => {
+  const box = new SecretBox(masterKey);
+  const sql = (async (strings: TemplateStringsArray) => {
+    const query = strings.join("?");
+    if (query.includes("FROM github_app_config")) {
+      return [{ app_id: 9, slug: "mars", client_id: null, encrypted_pem: box.encrypt(testPem), encrypted_client_secret: "x", encrypted_webhook_secret: "x" }];
+    }
+    if (query.includes("FROM dashboard_repositories r")) {
+      return [{ installation_id: 42, full_name: "acme/private", labels: ["self-hosted"] }];
+    }
+    return [];
+  }) as never;
+  const content = `name: CI
+jobs:
+  build:
+    runs-on: [mars-windows-x64, 8VCPU, 16G]
+    steps:
+      - run: echo build
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo lint
+`;
+  const requests: Request[] = [];
+  const github = new GitHubAppService({
+    db: sql,
+    secretBox: box,
+    publicOrigin: () => "https://control-plane.test",
+    fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      requests.push(request);
+      const url = request.url;
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/git/trees/") && request.method === "GET") return Response.json({
+        tree: [
+          { type: "blob", path: ".github/workflows/ci.yml", sha: "blob-sha" },
+        ],
+      });
+      if (url.includes("/git/blobs/blob-sha")) return Response.json({ content: Buffer.from(content).toString("base64") });
+      if (url.includes("/git/ref/heads/")) return Response.json({ object: { sha: "head-sha" } });
+      if (url.endsWith("/git/blobs")) return Response.json({ sha: "new-blob-sha" });
+      if (url.endsWith("/git/trees")) return Response.json({ sha: "new-tree-sha" });
+      if (url.endsWith("/git/commits")) return Response.json({ sha: "new-commit-sha" });
+      if (url.endsWith("/git/refs")) return Response.json({});
+      if (url.endsWith("/pulls")) return Response.json({ html_url: "https://github.com/acme/private/pull/1", number: 1 });
+      if (url.endsWith("/repos/acme/private")) return Response.json({ default_branch: "main" });
+      return Response.json({});
+    },
+  } as never);
+
+  const result = await github.createRepositoryRunnerPr({
+    organizationId,
+    repositoryId: "repo-1",
+    selectedPath: ".github/workflows/ci.yml",
+    selectedJobId: "build",
+    labels: ["4VCPU", "8G"],
+    expectedHeadSha: "head-sha",
+  });
+  expect(result.changedFiles).toEqual([".github/workflows/ci.yml"]);
+  const blob = requests.find((request) => request.url.endsWith("/git/blobs") && request.method === "POST");
+  const blobBody = JSON.parse(await blob!.text()) as { content: string };
+  expect(blobBody.content).toContain("mars-windows-x64");
+  expect(blobBody.content).toContain("4VCPU");
+  expect(blobBody.content).toContain("runs-on: ubuntu-latest");
+  const pull = requests.find((request) => request.url.endsWith("/pulls"));
+  expect(JSON.parse(await pull!.text()).body).toContain("mars-windows-x64, 4VCPU, 8G");
+});
+
+test("focused runner PR rejects a stale workflow head", async () => {
+  const box = new SecretBox(masterKey);
+  const sql = (async (strings: TemplateStringsArray) => {
+    const query = strings.join("?");
+    if (query.includes("FROM github_app_config")) {
+      return [{ app_id: 9, slug: "mars", client_id: null, encrypted_pem: box.encrypt(testPem), encrypted_client_secret: "x", encrypted_webhook_secret: "x" }];
+    }
+    if (query.includes("FROM dashboard_repositories r")) {
+      return [{ installation_id: 42, full_name: "acme/private", labels: ["self-hosted"] }];
+    }
+    return [];
+  }) as never;
+  const github = new GitHubAppService({
+    db: sql,
+    secretBox: box,
+    publicOrigin: () => "https://control-plane.test",
+    fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      const url = request.url;
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/git/trees/") && request.method === "GET") return Response.json({ tree: [{ type: "blob", path: ".github/workflows/ci.yml", sha: "blob-sha" }] });
+      if (url.includes("/git/blobs/blob-sha")) return Response.json({ content: Buffer.from("jobs:\n  build:\n    runs-on: ubuntu-latest\n").toString("base64") });
+      if (url.includes("/git/ref/heads/")) return Response.json({ object: { sha: "actual-head" } });
+      if (url.endsWith("/repos/acme/private")) return Response.json({ default_branch: "main" });
+      return Response.json({});
+    },
+  } as never);
+  await expect(github.createRepositoryRunnerPr({
+    organizationId,
+    repositoryId: "repo-1",
+    selectedPath: ".github/workflows/ci.yml",
+    selectedJobId: "build",
+    labels: ["4VCPU", "8G"],
+    expectedHeadSha: "stale-head",
+  })).rejects.toThrow("github_workflow_head_stale");
+});

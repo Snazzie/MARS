@@ -521,19 +521,29 @@ export class GitHubAppService {
   }
 
 
-  async previewRepositoryRunnerPr(input: { organizationId: string; repositoryId: string; selectedPaths: string[] }): Promise<WorkflowMutation & { defaultBranch: string; headSha: string; labels: string[] }> {
+  async previewRepositoryRunnerPr(input: { organizationId: string; repositoryId: string; selectedPaths?: string[]; selectedPath?: string; selectedJobId?: string; labels?: string[] }): Promise<WorkflowMutation & { defaultBranch: string; headSha: string; labels: string[] }> {
     const ctx = await this.workflowContext(input.organizationId, input.repositoryId);
     return this.repositoryOperation(input.organizationId, input.repositoryId, async () => {
       const listing = await this.listRepositoryWorkflowsWithToken(ctx.owner, ctx.name, ctx.token);
       const files = discoverWorkflowFiles(listing.files);
-      const mutation = previewWorkflowMutation({ files, selectedPaths: input.selectedPaths, labels: ctx.repo.labels });
+      const labels = input.labels ?? ctx.repo.labels;
+      const focused = Boolean(input.selectedPath || input.selectedJobId);
+      const mutation = previewWorkflowMutation({
+        files,
+        selectedPaths: input.selectedPaths ?? [],
+        selectedPath: input.selectedPath,
+        selectedJobId: input.selectedJobId,
+        labels,
+      });
       const ref = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/ref/heads/${encodeURIComponent(listing.defaultBranch)}`, {}, ctx.token);
       const headSha = ref.object && typeof ref.object === "object" && typeof (ref.object as { sha?: unknown }).sha === "string" ? (ref.object as { sha: string }).sha : "";
-      return { ...mutation, defaultBranch: listing.defaultBranch, headSha, labels: ctx.repo.labels };
+      const firstProposedLabels = mutation.jobs[0]?.proposedRunsOn;
+      const resultLabels = firstProposedLabels ? [...firstProposedLabels] : labels;
+      return { ...mutation, defaultBranch: listing.defaultBranch, headSha, labels: resultLabels };
     });
   }
 
-  async createRepositoryRunnerPr(input: { organizationId: string; repositoryId: string; selectedPaths: string[]; expectedHeadSha: string; title?: string; body?: string }): Promise<{ url: string; number: number; branch: string; changedFiles: string[]; replacementCount: number }> {
+  async createRepositoryRunnerPr(input: { organizationId: string; repositoryId: string; selectedPaths?: string[]; selectedPath?: string; selectedJobId?: string; labels?: string[]; expectedHeadSha: string; title?: string; body?: string }): Promise<{ url: string; number: number; branch: string; changedFiles: string[]; replacementCount: number }> {
     const ctx = await this.workflowContext(input.organizationId, input.repositoryId);
     return this.repositoryOperation(input.organizationId, input.repositoryId, async () => {
       const listing = await this.listRepositoryWorkflowsWithToken(ctx.owner, ctx.name, ctx.token);
@@ -541,14 +551,29 @@ export class GitHubAppService {
       const headSha = ref.object && typeof ref.object === "object" && typeof (ref.object as { sha?: unknown }).sha === "string" ? (ref.object as { sha: string }).sha : "";
       if (headSha !== input.expectedHeadSha) throw new Error("github_workflow_head_stale");
       const files = discoverWorkflowFiles(listing.files);
-      const mutation = previewWorkflowMutation({ files, selectedPaths: input.selectedPaths, labels: ctx.repo.labels });
-      const changed = listing.files.filter((file) => mutation.changedFiles.includes(file.path)).map((file) => ({ ...file, content: applyWorkflowMutation(file.content, ctx.repo.labels) }));
+      const labels = input.labels ?? ctx.repo.labels;
+      const focused = Boolean(input.selectedPath || input.selectedJobId);
+      const mutation = previewWorkflowMutation({
+        files,
+        selectedPaths: input.selectedPaths ?? [],
+        selectedPath: input.selectedPath,
+        selectedJobId: input.selectedJobId,
+        labels,
+      });
+      if (mutation.noOp) throw new Error("Workflow mutation would be a no-op");
+      const changed = listing.files.filter((file) => mutation.changedFiles.includes(file.path)).map((file) => ({
+        ...file,
+        content: applyWorkflowMutation(file.content, labels, input.selectedJobId, focused),
+      }));
       const branch = `mars/use-runners-${randomBytes(6).toString("hex")}`;
       const blobs = await Promise.all(changed.map(async (file) => ({ path: file.path, mode: "100644", type: "blob", sha: (await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/blobs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: file.content, encoding: "utf-8" }) }, ctx.token)).sha as string })));
       const tree = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/trees`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ base_tree: headSha, tree: blobs }) }, ctx.token);
       const commit = await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/commits`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: "Configure Mars runners", tree: tree.sha, parents: [headSha] }) }, ctx.token);
-      await this.gh(`/repos/${ctx.owner}/${ctx.name}/git/refs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: commit.sha }) }, ctx.token);
-      const pr = await this.gh(`/repos/${ctx.owner}/${ctx.name}/pulls`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: input.title?.trim() || "Use Mars runners", body: input.body?.trim() || "Configure GitHub Actions workflows to use Mars runners.", head: branch, base: listing.defaultBranch }) }, ctx.token);
+      const resultLabels = mutation.jobs[0]?.proposedRunsOn ? [...mutation.jobs[0].proposedRunsOn] : labels;
+      const generatedBody = focused
+        ? `Configure GitHub Actions workflows to use Mars runners with labels: ${resultLabels.join(", ")}.`
+        : "Configure GitHub Actions workflows to use Mars runners.";
+      const pr = await this.gh(`/repos/${ctx.owner}/${ctx.name}/pulls`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: input.title?.trim() || "Use Mars runners", body: input.body?.trim() || generatedBody, head: branch, base: listing.defaultBranch }) }, ctx.token);
       return { url: String(pr.html_url ?? ""), number: Number(pr.number ?? 0), branch, changedFiles: mutation.changedFiles, replacementCount: mutation.replacementCount };
     });
   }

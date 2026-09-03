@@ -1,4 +1,5 @@
-import YAML, { isMap, isScalar, isSeq, type Document, type YAMLMap } from "yaml";
+import YAML, { isMap, isScalar, isSeq, type Document } from "yaml";
+import { parseCurrentResourceLabels } from "@mars/db";
 
 export interface WorkflowJobPreview {
   id: string;
@@ -12,6 +13,8 @@ export interface WorkflowFilePreview {
 
 export interface WorkflowSelection {
   selectedPaths: readonly string[];
+  selectedPath?: string;
+  selectedJobId?: string;
   labels: readonly string[];
 }
 
@@ -23,7 +26,6 @@ export interface WorkflowMutation {
 }
 
 const workflowPath = /^\.github\/workflows\/[^/]+\.(?:yml|yaml)$/;
-
 type JobData = { id: string; runsOn: string | readonly string[]; path: [string, string, "runs-on"] };
 
 function parseWorkflow(path: string, content: string): { document: Document; jobs: JobData[] } {
@@ -64,25 +66,72 @@ export function discoverWorkflowFiles(files: readonly { path: string; content: s
   });
 }
 
-export function previewWorkflowMutation(input: { files: readonly WorkflowFilePreview[]; selectedPaths: readonly string[]; labels: readonly string[] }): WorkflowMutation {
-  const selected = input.selectedPaths.length ? [...input.selectedPaths] : input.files.map((file) => file.path);
+function selectedPaths(input: WorkflowSelection): string[] {
+  if (input.selectedPath) {
+    if (input.selectedPaths.length && !input.selectedPaths.includes(input.selectedPath)) {
+      throw new Error("selectedPath must be included in selectedPaths");
+    }
+    return [input.selectedPath];
+  }
+  return input.selectedPaths.length ? [...input.selectedPaths] : [];
+}
+
+function focusedLabels(labels: readonly string[]): string[] {
+  if (!labels.length) throw new Error("Cannot replace selected workflows: labels cannot be empty");
+  return labels.map((label) => {
+    const value = label.trim();
+    const match = /^(\d+)(VCPU|G)$/i.exec(value);
+    if (!match) return value;
+    const amount = Number(match[1]);
+    if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error(`Invalid resource label: ${label}`);
+    return `${amount}${match[2].toUpperCase()}`;
+  });
+}
+
+function runsOnValues(value: string | readonly string[]): string[] {
+  return typeof value === "string" ? [value] : [...value];
+}
+
+function proposedLabels(currentRunsOn: string | readonly string[], labels: readonly string[], focused: boolean): string[] {
+  const normalized = focused ? focusedLabels(labels) : [...labels];
+  if (!focused) return normalized;
+  const currentWindowsLabel = parseCurrentResourceLabels(runsOnValues(currentRunsOn)).windowsLabel;
+  if (!currentWindowsLabel || normalized.some((label) => label.toLowerCase() === currentWindowsLabel.toLowerCase())) return normalized;
+  return [currentWindowsLabel, ...normalized];
+}
+
+export function previewWorkflowMutation(input: WorkflowSelection & { files: readonly WorkflowFilePreview[] }): WorkflowMutation {
+  const selected = selectedPaths(input);
+  const paths = selected.length ? selected : input.files.map((file) => file.path);
   const known = new Set(input.files.map((file) => file.path));
-  for (const path of selected) {
+  for (const path of paths) {
     if (!workflowPath.test(path)) throw new Error(`Invalid selected workflow path: ${path}`);
     if (!known.has(path)) throw new Error(`Selected workflow path not discovered: ${path}`);
   }
-  if (!input.labels.length) throw new Error(`Cannot replace selected workflows (${selected.join(", ")}): labels cannot be empty`);
-  const jobs = input.files.filter((file) => selected.includes(file.path)).flatMap((file) => file.jobs.map((job) => ({ ...job, path: file.path, proposedRunsOn: [...input.labels] })));
+  const focused = Boolean(input.selectedPath || input.selectedJobId);
+  if (!input.labels.length) throw new Error(`Cannot replace selected workflows (${paths.join(", ")}): labels cannot be empty`);
+  const jobs = input.files
+    .filter((file) => paths.includes(file.path))
+    .flatMap((file) => file.jobs
+      .filter((job) => !input.selectedJobId || job.id === input.selectedJobId)
+      .map((job) => ({ ...job, path: file.path, proposedRunsOn: proposedLabels(job.currentRunsOn, input.labels, focused) })));
   if (!jobs.length) {
-    throw new Error(`No selected job has runs-on in ${selected.join(", ")}; mutation would be a no-op`);
+    const target = input.selectedJobId ? `job ${input.selectedJobId}` : "job";
+    throw new Error(`No selected ${target} has runs-on in ${paths.join(", ")}; mutation would be a no-op`);
   }
-  return { changedFiles: [...new Set(jobs.map((job) => job.path))], jobs, replacementCount: jobs.length, noOp: false };
+  const changed = jobs.filter((job) => JSON.stringify(runsOnValues(job.currentRunsOn)) !== JSON.stringify(job.proposedRunsOn));
+  return {
+    changedFiles: [...new Set(changed.map((job) => job.path))],
+    jobs,
+    replacementCount: changed.length,
+    noOp: changed.length === 0,
+  };
 }
 
-export function applyWorkflowMutation(content: string, labels: readonly string[]): string {
+export function applyWorkflowMutation(content: string, labels: readonly string[], selectedJobId?: string, preserveWindowsRouting = Boolean(selectedJobId)): string {
   const { document, jobs } = parseWorkflow(".github/workflows/workflow.yml", content);
-  if (!jobs.length) throw new Error("No workflow job has runs-on; mutation would be a no-op");
-  if (!labels.length) throw new Error("Cannot replace runs-on with an empty label sequence");
-  for (const job of jobs) document.setIn(job.path, [...labels]);
+  const selected = jobs.filter((job) => !selectedJobId || job.id === selectedJobId);
+  if (!selected.length) throw new Error(`No selected job has runs-on; mutation would be a no-op`);
+  for (const job of selected) document.setIn(job.path, proposedLabels(job.runsOn, labels, preserveWindowsRouting));
   return String(document);
 }
