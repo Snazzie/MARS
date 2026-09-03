@@ -8,21 +8,25 @@ const container: OverviewDto["runningContainers"][number] = {
 };
 
 test("renders identity and resource columns for running containers", () => {
-  const html = renderToStaticMarkup(<RunningContainers containers={[container]} />);
+  const html = renderToStaticMarkup(<RunningContainers containers={[container]} organizationId="org-1" />);
   expect(html).toContain("Running containers");
   expect(html).toContain("acme/project");
   expect(html).toContain("42.5%");
   expect(html).toContain("2.0 GiB");
   expect(html).toContain("Disk telemetry unavailable");
+  expect(html).toContain("/runs/run-1?organizationId=org-1#job-job-1");
+  expect(html).toContain('target="_blank"');
+  expect(html).toContain('rel="noreferrer"');
+  expect(html).toContain('aria-label="Open job build in a new tab"');
 });
 
 test("renders unavailable telemetry without converting it to zero", () => {
-  const html = renderToStaticMarkup(<RunningContainers containers={[{ ...container, cpuUsagePercent: null, memoryWorkingSetBytes: null, memoryLimitBytes: null, sampledAt: null }]} />);
+  const html = renderToStaticMarkup(<RunningContainers containers={[{ ...container, cpuUsagePercent: null, memoryWorkingSetBytes: null, memoryLimitBytes: null, sampledAt: null }]} organizationId="org-1" />);
   expect(html).toContain("No telemetry sample");
   expect(html.match(/Not reported/g)?.length).toBeGreaterThanOrEqual(3);
   expect(html).not.toContain("0.0%");
 });
 
 test("renders an empty state", () => {
-  expect(renderToStaticMarkup(<RunningContainers containers={[]} />)).toContain("No containers are running.");
+  expect(renderToStaticMarkup(<RunningContainers containers={[]} organizationId="org-1" />)).toContain("No containers are running.");
 });
