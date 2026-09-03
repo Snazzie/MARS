@@ -25,7 +25,8 @@ function fakeDatabase(resultSets: unknown[][]): FakeDatabase {
 }
 
 const identity = { repositoryId: "repo-1", workflowName: "CI", jobName: "build" };
-const identityTwo = { repositoryId: "repo-2", workflowName: "CI", jobName: "build" };
+const validIdentity = { repositoryId: "00000000-0000-4000-8000-000000000001", workflowName: "CI", jobName: "build" };
+const validIdentityTwo = { repositoryId: "00000000-0000-4000-8000-000000000002", workflowName: "CI", jobName: "build" };
 
 const summaryRow = (overrides: Record<string, unknown> = {}) => ({
   repositoryId: "repo-1", repositoryName: "acme/one", workflowName: "CI", jobName: "build", platform: "windows-x64",
@@ -69,6 +70,22 @@ describe("listJobResourceTrends", () => {
       { ...baseQuery, cursor: "not-json" },
       { ...baseQuery, cursor: encodeJobResourceCursor({ sortValue: 1, jobKey: "not-a-job-key" }) },
     ]) {
+      const db = fakeDatabase([]);
+      await expect(listJobResourceTrends(db, "org-1", query)).rejects.toMatchObject({
+        name: JobResourceTrendInputError.name,
+        code: "invalid_resource_trend_query",
+      });
+      expect(db.calls).toHaveLength(0);
+    }
+  });
+
+  test("rejects decoded non-UUID repository identities before issuing SQL", async () => {
+    const nonUuidJobKey = encodeJobResourceKey(identity);
+    const queries = [
+      { ...baseQuery, jobKey: nonUuidJobKey },
+      { ...baseQuery, sort: "duration" as const, cursor: encodeJobResourceCursor({ sortValue: 1, jobKey: nonUuidJobKey }) },
+    ];
+    for (const query of queries) {
       const db = fakeDatabase([]);
       await expect(listJobResourceTrends(db, "org-1", query)).rejects.toMatchObject({
         name: JobResourceTrendInputError.name,
@@ -132,15 +149,15 @@ describe("listJobResourceTrends", () => {
     const db = fakeDatabase([
       [{ jobCount: "1", completedRunCount: "1", medianExecutionDurationMs: "1000", telemetryCoveredRunCount: "1" }],
       [{ platforms: ["windows-x64"], vcpus: ["2"], concurrencies: ["1"] }],
-      [summaryRow()], [], [pointRow(1)],
+      [summaryRow({ repositoryId: validIdentity.repositoryId })], [], [pointRow(1)],
     ]);
-    const result = await listJobResourceTrends(db, "org-1", { ...baseQuery, jobKey: encodeJobResourceKey(identityTwo) });
-    expect(result.selectedJob).toEqual({ jobKey: encodeJobResourceKey(identity), points: [expect.objectContaining({ jobId: "job-1" })] });
+    const result = await listJobResourceTrends(db, "org-1", { ...baseQuery, jobKey: encodeJobResourceKey(validIdentityTwo) });
+    expect(result.selectedJob).toEqual({ jobKey: encodeJobResourceKey(validIdentity), points: [expect.objectContaining({ jobId: "job-1" })] });
     expect(db.calls).toHaveLength(5);
   });
 
   test("loads a requested filtered identity when the summary page is empty", async () => {
-    const requestedKey = encodeJobResourceKey(identityTwo);
+    const requestedKey = encodeJobResourceKey(validIdentityTwo);
     const db = fakeDatabase([
       [{ jobCount: "1", completedRunCount: "1", medianExecutionDurationMs: "1000", telemetryCoveredRunCount: "1" }],
       [{ platforms: ["windows-x64"], vcpus: ["2"], concurrencies: ["1"] }],
@@ -175,6 +192,7 @@ describe("listJobResourceTrends", () => {
       expect(pointSql).toContain("count(*) OVER ()");
       expect(pointSql).toContain("round(1 + (target_index - 1) * (total - 1)::numeric");
       expect(pointSql).toContain('ORDER BY ordered."completedAt", ordered."jobId"');
+      expect(pointSql).not.toContain("AS generated(target_index) ON true");
       expect(pointSql).toContain("LIMIT");
     });
   }

@@ -126,7 +126,7 @@ const POINTS_SQL = `${FILTERED_CTE}, ordered AS (
   SELECT DISTINCT CASE WHEN total <= $11 THEN target_index WHEN $11=1 THEN 1
     ELSE round(1 + (target_index - 1) * (total - 1)::numeric / ($11 - 1))::bigint END AS ordinal
   FROM (SELECT max(total)::bigint AS total FROM ordered) counts
-  CROSS JOIN LATERAL generate_series(1::bigint, least(total, $11::bigint)) AS generated(target_index) ON true
+  CROSS JOIN LATERAL generate_series(1::bigint, least(total, $11::bigint)) AS generated(target_index)
   WHERE total > 0
 )
 SELECT "organizationId", "runId", "jobId", "completedAt", outcome, "executionDurationMs", "cpuAveragePercent", "cpuPeakPercent",
@@ -142,6 +142,7 @@ type ValidatedQuery = {
   limit: number; requestedIdentity: JobResourceIdentity | null; pointLimit: number;
 };
 function positiveInteger(value: unknown): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value > 0; }
+const uuid = (value: string): boolean => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 function normalizeLimit(value: number | undefined, fallback: number, maximum: number): number {
   if (value === undefined) return fallback;
   if (!Number.isFinite(value)) throw new JobResourceTrendInputError();
@@ -160,12 +161,12 @@ function validateQuery(query: JobResourceTrendQuery): ValidatedQuery {
   let requestedIdentity: JobResourceIdentity | null = null;
   if (query.jobKey !== undefined) {
     requestedIdentity = decodeJobResourceKey(query.jobKey);
-    if (!requestedIdentity) throw new JobResourceTrendInputError("Invalid job resource key");
+    if (!requestedIdentity || !uuid(requestedIdentity.repositoryId)) throw new JobResourceTrendInputError("Invalid job resource key");
   }
   let cursor: ValidatedQuery["cursor"] = null;
   if (query.cursor !== undefined && query.cursor !== null) {
     const decoded = decodeJobResourceCursor(query.cursor), identity = decoded && decodeJobResourceKey(decoded.jobKey);
-    if (!decoded || !identity) throw new JobResourceTrendInputError("Invalid job resource cursor");
+    if (!decoded || !identity || !uuid(identity.repositoryId)) throw new JobResourceTrendInputError("Invalid job resource cursor");
     if (sort === "latest") {
       if (typeof decoded.sortValue !== "string" || !Number.isFinite(Date.parse(decoded.sortValue))) throw new JobResourceTrendInputError("Invalid job resource cursor");
     } else if (typeof decoded.sortValue !== "number" || !Number.isFinite(decoded.sortValue)) throw new JobResourceTrendInputError("Invalid job resource cursor");
