@@ -48,10 +48,14 @@ export async function reserveRoutingSlot(sql: DatabaseClient, input: LeaseReserv
     const inserted = await tx`INSERT INTO runner_leases (id,organization_id,pool_id,worker_id,routing_key,github_job_id,state,requested,nonce,expires_at)
       VALUES (${id},${input.organizationId},${input.poolId},${input.workerId},${input.routingKey},${input.githubJobId ?? null},'reserved',${jsonParameter(tx, input.requested)},${nonce},${expiresAt})
       ON CONFLICT (github_job_id) DO UPDATE SET organization_id=EXCLUDED.organization_id,pool_id=EXCLUDED.pool_id,worker_id=EXCLUDED.worker_id,routing_key=EXCLUDED.routing_key,state='reserved',requested=EXCLUDED.requested,nonce=EXCLUDED.nonce,expires_at=EXCLUDED.expires_at,cleanup_state='none',terminal_result=null,updated_at=now()
-      WHERE runner_leases.state IN ('failed','reaped')
+      WHERE runner_leases.state='reaped'
       RETURNING id,github_job_id AS "jobId",nonce,worker_id AS "workerId",pool_id AS "poolId",requested,expires_at AS "expiresAt"`;
-    if (inserted[0] && input.githubJobId !== undefined) await tx`UPDATE dashboard_jobs SET requested=${jsonParameter(tx, input.requested)}::jsonb WHERE github_job_id=${input.githubJobId}`;
     if (!inserted[0]) throw new Error("job_already_claimed");
+    await tx`UPDATE commands SET state='failed'
+      WHERE lease_id=${inserted[0].id}
+        AND type IN ('linux-vm.create_lease','windows-container.create_lease','hyperv.create_lease','tart.create_lease')
+        AND state IN ('pending','sent')`;
+    if (input.githubJobId !== undefined) await tx`UPDATE dashboard_jobs SET requested=${jsonParameter(tx, input.requested)}::jsonb WHERE github_job_id=${input.githubJobId}`;
     return inserted;
   });
   const row = rows[0];

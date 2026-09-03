@@ -113,6 +113,7 @@ async function reconcileAbsentJobs(
       }
       throw error;
     }
+    if (!run && (job.runId !== runId || job.runAttempt !== runAttempt)) continue;
     discovered += 1;
     const applied = await applyGithubJobSnapshot({
       installationId: Number(row.installationId),

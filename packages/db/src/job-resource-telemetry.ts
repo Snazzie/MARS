@@ -31,7 +31,7 @@ export async function persistJobResourceSample(db: JobResourceTelemetryDb, worke
   if (inserted[0] && occurredMs >= now - LEASE_HEARTBEAT_TTL_MS) {
     await db`UPDATE runner_leases SET expires_at=GREATEST(expires_at,${new Date(now + LEASE_HEARTBEAT_TTL_MS).toISOString()}),updated_at=now()
       WHERE id=${sample.leaseId} AND worker_id=${workerId}
-        AND state IN ('sandbox_ready','online','busy')`;
+        AND state IN ('online','busy')`;
   }
   return inserted[0] ? "stored" : "duplicate";
 }

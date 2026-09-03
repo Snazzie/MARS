@@ -33,7 +33,12 @@ export async function reapPendingLeases(input: {
   const report: LeaseCleanupReport = { dispatched: 0, skipped: 0, failed: 0 };
   for (const lease of leases) {
     if (!lease.cleanupType) {
-      report.skipped += 1;
+      const reaped = await input.db`UPDATE runner_leases SET state='reaped', cleanup_state='completed', updated_at=now()
+        WHERE id=${lease.leaseId} AND nonce=${lease.nonce}
+          AND state IN ('completed','failed')
+          AND cleanup_state IN ('pending','failed')
+        RETURNING id`;
+      if (!reaped[0]) report.skipped += 1;
       continue;
     }
     try {

@@ -1,6 +1,6 @@
 import type { DatabaseClient } from "@mars/db";
 import { jsonParameter } from "@mars/db";
-import { applyGithubJobSnapshot, type GithubJobSnapshot } from "./runs.ts";
+import { applyGithubJobSnapshot, markGithubJobMissing, type GithubJobSnapshot } from "./runs.ts";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { isGithubRateLimitError } from "./github-rate-limit.ts";
 
@@ -12,8 +12,10 @@ type StaleLeaseRow = {
   workerId: string;
   nonce: string;
   leaseState: string;
+  leaseExpired: boolean;
   githubJobId: number | string;
   githubRunId: number | string;
+  githubRunAttempt: number | string;
   githubRepositoryId: number | string;
   repositoryName: string;
   repositoryFullName: string;
@@ -71,10 +73,44 @@ export async function reconcileWorkerInventory(db: DatabaseClient, workerId: str
       `;
   return rows.length;
 }
+async function markMissingLease(deps: StaleLeaseReconciliationDeps, row: StaleLeaseRow): Promise<boolean> {
+  return deps.db.begin(async tx => {
+    await markGithubJobMissing(tx, {
+      organizationId: row.organizationId,
+      githubJobId: Number(row.githubJobId),
+      observedAt: new Date().toISOString(),
+    });
+    const updated = await tx`
+      UPDATE runner_leases
+      SET state='failed',
+          cleanup_state='pending',
+          terminal_result=${jsonParameter(tx, { reason: "github_job_not_found" })}::jsonb,
+          updated_at=now()
+      WHERE id=${row.leaseId} AND nonce=${row.nonce}
+        AND state NOT IN ('completed','failed','reaped')
+      RETURNING id`;
+    return Boolean(updated[0]);
+  });
+}
+
+async function failStartupLease(deps: StaleLeaseReconciliationDeps, row: StaleLeaseRow): Promise<boolean> {
+  const updated = await deps.db`
+    UPDATE runner_leases
+    SET state='failed',
+        cleanup_state='pending',
+        terminal_result=${jsonParameter(deps.db, { reason: "startup_timeout" })}::jsonb,
+        updated_at=now()
+    WHERE id=${row.leaseId} AND nonce=${row.nonce}
+      AND state IN ('reserved','requested','dispatched','sandbox_ready')
+    RETURNING id`;
+  return Boolean(updated[0]);
+}
 export async function reconcileExpiredLeasesWithGithub(deps: StaleLeaseReconciliationDeps): Promise<StaleLeaseReconciliationReport> {
   const rows = await deps.db<StaleLeaseRow[]>`
-    SELECT l.id AS "leaseId", l.organization_id AS "organizationId", l.worker_id AS "workerId", l.nonce, l.state AS "leaseState",
-      l.github_job_id AS "githubJobId", r.github_run_id AS "githubRunId", j.status AS "jobStatus", j.conclusion AS "jobConclusion",
+    SELECT l.id AS "leaseId", l.organization_id AS "organizationId", l.worker_id AS "workerId", l.nonce,
+      l.state AS "leaseState", l.expires_at < now() AS "leaseExpired",
+      l.github_job_id AS "githubJobId", r.github_run_id AS "githubRunId", r.run_attempt AS "githubRunAttempt",
+      j.status AS "jobStatus", j.conclusion AS "jobConclusion",
       repo.github_repository_id AS "githubRepositoryId", repo.name AS "repositoryName",
       repo.full_name AS "repositoryFullName", i.github_installation_id AS "installationId"
     FROM runner_leases l
@@ -82,36 +118,57 @@ export async function reconcileExpiredLeasesWithGithub(deps: StaleLeaseReconcili
     JOIN dashboard_runs r ON r.organization_id=j.organization_id AND r.id=j.run_id
     JOIN dashboard_repositories repo ON repo.organization_id=r.organization_id AND repo.id=r.repository_id
     JOIN dashboard_installations i ON i.organization_id=repo.organization_id AND i.id=repo.installation_id
-    WHERE l.expires_at < now()
-      AND l.state NOT IN ('completed','failed','reaped')
-      AND l.github_job_id IS NOT NULL
+    WHERE l.github_job_id IS NOT NULL
+      AND (
+        l.state='sandbox_ready'
+        OR (l.expires_at < now() AND l.state NOT IN ('completed','failed','reaped'))
+      )
     ORDER BY l.expires_at
     LIMIT 100
   `;
   const report: StaleLeaseReconciliationReport = { inspected: rows.length, completed: 0, released: 0, stillActive: 0, skipped: 0 };
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index]!;
-    if (row.leaseState === "reserved" || row.leaseState === "requested") {
-      await deps.db`UPDATE runner_leases SET state='failed', terminal_result=${jsonParameter(deps.db, { reason: "startup_timeout" })}::jsonb, cleanup_state='pending', updated_at=now() WHERE id=${row.leaseId} AND nonce=${row.nonce} AND state IN ('reserved','requested')`;
-      report.released += 1;
+    if (row.leaseExpired && (row.leaseState === "reserved" || row.leaseState === "requested")) {
+      if (await failStartupLease(deps, row)) report.released += 1;
+      else report.skipped += 1;
       continue;
     }
     const repository = splitRepository(String(row.repositoryFullName));
     const installationId = Number(row.installationId);
     const githubJobId = Number(row.githubJobId);
     const githubRunId = Number(row.githubRunId);
-    if (!repository || !Number.isSafeInteger(installationId) || !Number.isSafeInteger(githubJobId) || !Number.isSafeInteger(githubRunId)) {
+    const githubRunAttempt = Number(row.githubRunAttempt);
+    if (!repository || !Number.isSafeInteger(installationId) || !Number.isSafeInteger(githubJobId) ||
+        !Number.isSafeInteger(githubRunId) || !Number.isSafeInteger(githubRunAttempt)) {
       report.skipped += 1;
       continue;
     }
     try {
       const client = new GithubJobsClient({ token: () => deps.installationToken(installationId), fetch: deps.githubFetchForInstallation(installationId) });
-      const job = await client.getJob(repository.owner, repository.repo, githubJobId);
-      const run = await client.getRunAttempt(repository.owner, repository.repo, job.runId, job.runAttempt);
+      let job: GithubJobSnapshot;
+      try {
+        job = await client.getJob(repository.owner, repository.repo, githubJobId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message === "github_404" || message === "github_410") {
+          if (await markMissingLease(deps, row)) report.released += 1;
+          else report.skipped += 1;
+          continue;
+        }
+        throw error;
+      }
+      if (job.id !== githubJobId || job.runId !== githubRunId || job.runAttempt !== githubRunAttempt) throw new Error("github_payload_invalid");
       if (job.status !== "completed") {
-        report.stillActive += 1;
+        if (row.leaseExpired && (row.leaseState === "dispatched" || row.leaseState === "sandbox_ready")) {
+          if (await failStartupLease(deps, row)) report.released += 1;
+          else report.skipped += 1;
+        } else {
+          report.stillActive += 1;
+        }
         continue;
       }
+      const run = await client.getRunAttempt(repository.owner, repository.repo, job.runId, job.runAttempt);
       const applied = await applyGithubJobSnapshot({
         installationId,
         repository: { id: Number(row.githubRepositoryId), name: String(row.repositoryName), fullName: String(row.repositoryFullName) },
@@ -126,12 +183,13 @@ export async function reconcileExpiredLeasesWithGithub(deps: StaleLeaseReconcili
       await markTerminalLease(deps, row, job.conclusion);
       report.completed += 1;
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       if (isGithubRateLimitError(error)) {
         report.skipped += rows.length - index;
         break;
       }
       report.skipped += 1;
-      console.error("GitHub stale lease reconciliation failed", { leaseId: row.leaseId, error: error instanceof Error ? error.message : String(error) });
+      console.error("GitHub stale lease reconciliation failed", { leaseId: row.leaseId, error: message });
     }
   }
   return report;

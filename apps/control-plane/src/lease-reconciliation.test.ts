@@ -6,7 +6,7 @@ test("does not change an expired lease while GitHub still reports the job active
   const requests: string[] = [];
   const db = Object.assign((async (strings: TemplateStringsArray) => {
     queries.push(strings.join(" "));
-    return [{ leaseId: "lease-1", organizationId: "org-1", workerId: "worker-1", nonce: "nonce", githubJobId: 42, githubRunId: 7, githubRunAttempt: 2, githubRepositoryId: 99, repositoryName: "repo", repositoryFullName: "acme/repo", installationId: 123 }];
+    return [{ leaseId: "lease-1", organizationId: "org-1", workerId: "worker-1", nonce: "nonce", leaseState: "online", leaseExpired: true, githubJobId: 42, githubRunId: 7, githubRunAttempt: 2, githubRepositoryId: 99, repositoryName: "repo", repositoryFullName: "acme/repo", installationId: 123 }];
   }) as never, { begin: async () => [] }) as never;
   const fetcher = async (input: RequestInfo | URL): Promise<Response> => {
     const path = String(input);
@@ -17,7 +17,6 @@ test("does not change an expired lease while GitHub still reports the job active
   const report = await reconcileExpiredLeasesWithGithub({ db, installationToken: async () => "token", githubFetchForInstallation: () => fetcher });
   expect(report).toEqual({ inspected: 1, completed: 0, released: 0, stillActive: 1, skipped: 0 });
   expect(requests[0]).toContain("/actions/jobs/42");
-  expect(requests[1]).toContain("/actions/runs/7/attempts/2");
   expect(queries.some(query => query.includes("UPDATE runner_leases"))).toBe(false);
 });
 
@@ -86,7 +85,7 @@ test("fails an expired sandbox-ready lease with startup timeout while the job re
     calls.push({ query, values });
     if (query.includes("FROM runner_leases l")) return [{
       leaseId: "lease-timeout", organizationId: "org-1", workerId: "worker-1", nonce: "nonce-timeout", leaseState: "sandbox_ready", expiresAt: "2020-01-01T00:00:00.000Z",
-      githubJobId: 42, githubRunId: 7, githubRunAttempt: 2, githubRepositoryId: 99, repositoryName: "repo",
+      githubJobId: 42, githubRunId: 7, githubRunAttempt: 2, leaseExpired: true, githubRepositoryId: 99, repositoryName: "repo",
       repositoryFullName: "acme/repo", installationId: 123, jobStatus: "in_progress", jobConclusion: null,
     }];
     if (query.includes("UPDATE runner_leases")) return [{ id: "lease-timeout" }];
