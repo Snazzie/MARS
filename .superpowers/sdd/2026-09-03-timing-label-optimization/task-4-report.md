@@ -2,7 +2,7 @@
 
 ## Status
 
-Complete. Implementation commits: `27dc98c` (`feat(web): focus workflow PR modal on job labels`) and `db4970f` (`fix(web): preserve focused empty label state`). Report commit: `dae4f60`.
+Complete. Implementation commits: `27dc98c` (`feat(web): focus workflow PR modal on job labels`) and `db4970f` (`fix(web): preserve focused empty label state`). Report commits: `dae4f60` and the follow-up hash update.
 
 ## Files changed
 
