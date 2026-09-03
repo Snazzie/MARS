@@ -423,3 +423,40 @@ test("stops only the rate-limited installation's remaining repositories", async 
   expect(queries.some((query) => query.includes("discovery_error='github_403'"))).toBe(false);
   expect(report.failed).toBe(1);
 });
+
+test("confirms omitted jobs from a complete attempt-qualified listing before terminalizing them", async () => {
+  const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
+  const requests: string[] = [];
+  const updates: Array<{ query: string; values: unknown[] }> = [];
+  const execute = async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const query = strings.join(" ");
+    updates.push({ query, values });
+    if (query.includes("FROM dashboard_repositories repo")) return [repository];
+    if (query.includes("FROM dashboard_jobs j") && query.includes("github_run_id")) return [{ jobId: 42, organizationId: "org", repositoryId: repository.repositoryId, githubRunId: 77, runAttempt: 1, status: "queued" }];
+    if (query.includes("SET status='completed'")) return [{ id: "job-42" }];
+    return [];
+  };
+  const db = Object.assign(execute, { begin: async (callback: (tx: typeof execute) => Promise<unknown>) => callback(execute) }) as never;
+  configureRunLifecycle(db);
+  const githubFetch = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input);
+    requests.push(url);
+    if (url.endsWith("/actions/jobs/42")) return new Response(null, { status: 404 });
+    if (url.includes("/actions/runs/77/attempts/1/jobs")) return Response.json({ total_count: 0, jobs: [] });
+    if (url.includes("/actions/runs?")) return Response.json({
+      total_count: 1,
+      workflow_runs: [{
+        id: 77, run_number: 77, run_attempt: 1, name: "CI", event: "push", head_branch: "main", head_sha: "a".repeat(40),
+        actor: { login: "octocat" }, status: "queued", conclusion: null, created_at: "2026-08-22T10:31:46Z",
+        run_started_at: null, updated_at: "2026-08-22T10:31:46Z",
+      }],
+    });
+    throw new Error(`unexpected GitHub request: ${url}`);
+  };
+
+  const report = await discoverAvailableRepositoryJobs({ db, installationToken: async () => "token", githubFetchForInstallation: () => githubFetch });
+
+  expect(report).toMatchObject({ repositories: 1, discovered: 0, updated: 0, failed: 0 });
+  expect(requests.filter(url => url.endsWith("/actions/jobs/42"))).toHaveLength(1);
+  expect(updates.some(({ query, values }) => query.includes("SET status='completed'") && values.includes("cancelled"))).toBe(true);
+});
