@@ -88,7 +88,7 @@ export function RunnerWorkflowPrModal({
   const focusedInputReady = Boolean(selectedPath && selectedJobId);
   const focusedKey = `${selectedPath ?? ""}:${selectedJobId ?? ""}`;
   const initialLabels = useMemo(
-    () => labels?.length ? labels.map((label) => label.trim()).filter(Boolean) : labelsFromRecommendation(recommendation),
+    () => labels !== undefined ? labels.map((label) => label.trim()).filter(Boolean) : labelsFromRecommendation(recommendation),
     [labels, recommendation],
   );
   const dialogRef = useRef<HTMLElement>(null);
