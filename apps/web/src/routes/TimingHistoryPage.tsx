@@ -45,7 +45,10 @@ export function jobResourceTrendQueryOptions(
     initialPageParam: null as string | null,
     getNextPageParam: (page: ResourceTrendPage) => page.nextCursor ?? undefined,
     enabled: Boolean(organizationId),
-    placeholderData: (previous: InfiniteData<ResourceTrendPage, string | null> | undefined) => previous,
+    placeholderData: (
+      previous: InfiniteData<ResourceTrendPage, string | null> | undefined,
+      previousQuery: { queryKey: readonly unknown[] } | undefined,
+    ) => previousQuery?.queryKey[0] === "org" && previousQuery.queryKey[1] === organizationId ? previous : undefined,
   };
 }
 
@@ -58,6 +61,33 @@ export function resourceHistoryPageState(jobCount: number, filters: TimingFilter
     || filters.search.trim() !== defaultTimingFilters.search
     || filters.sort !== defaultTimingFilters.sort;
   return hasActiveFilters ? "no-match" : "empty";
+}
+
+export function resourceHistorySelectionAfterRefresh(
+  current: string | null,
+  jobs: ResourceTrendPage["jobs"],
+  selectedDetailJobKey: string | null,
+): string | null {
+  const summarySelection = selectionAfterJobsChange(current, jobs);
+  if (summarySelection === current || selectedDetailJobKey === current) return current;
+  return selectionAfterJobsChange(selectedDetailJobKey, jobs);
+}
+
+export function resourceHistoryToolbarFacets(
+  facets: ResourceTrendPage["filters"],
+  filters: TimingFilters,
+): ResourceTrendPage["filters"] {
+  const vcpu = filters.vcpu ? Number(filters.vcpu) : null;
+  const concurrency = filters.concurrency ? Number(filters.concurrency) : null;
+  return {
+    platforms: filters.platform && !facets.platforms.includes(filters.platform)
+      ? [...facets.platforms, filters.platform]
+      : facets.platforms,
+    vcpus: vcpu !== null && !facets.vcpus.includes(vcpu) ? [...facets.vcpus, vcpu] : facets.vcpus,
+    concurrencies: concurrency !== null && !facets.concurrencies.includes(concurrency)
+      ? [...facets.concurrencies, concurrency]
+      : facets.concurrencies,
+  };
 }
 
 export function resourceHistoryRefreshError<T>(hasData: boolean, error: T | null, failureReason: T | null): T | null {
@@ -117,10 +147,14 @@ export function TimingHistoryPage() {
   const refreshing = query.isFetching && !query.isFetchingNextPage;
   const pageState = resourceHistoryPageState(jobs.length, queryFilters);
   const refreshError = resourceHistoryRefreshError(Boolean(firstPage), query.error, query.failureReason);
+  const toolbarFacets = useMemo(
+    () => resourceHistoryToolbarFacets(firstPage?.filters ?? emptyFacets, filters),
+    [filters, firstPage?.filters],
+  );
 
   useEffect(() => {
-    setSelectedJobKey((current) => selectionAfterJobsChange(current, jobs));
-  }, [jobs]);
+    setSelectedJobKey((current) => resourceHistorySelectionAfterRefresh(current, jobs, selectedJob?.jobKey ?? null));
+  }, [jobs, selectedJob?.jobKey]);
 
   useEffect(() => {
     const points = selectedJob?.points ?? [];
@@ -156,7 +190,7 @@ export function TimingHistoryPage() {
 
       <TimingToolbar
         filters={filters}
-        facets={firstPage?.filters ?? emptyFacets}
+        facets={toolbarFacets}
         generatedAt={firstPage?.generatedAt ?? null}
         refreshing={refreshing}
         onChange={setFilters}

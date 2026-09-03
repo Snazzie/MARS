@@ -1,8 +1,30 @@
+import type { JobResourceTrendJob, JobResourceTrendResponse } from "@mars/contracts";
 import { expect, test } from "bun:test";
 import { defaultTimingFilters } from "./timing-model.ts";
-import { jobResourceTrendQueryOptions, resourceHistoryPageState, resourceHistoryRefreshError } from "./TimingHistoryPage.tsx";
+import { jobResourceTrendQueryOptions, resourceHistoryPageState, resourceHistoryRefreshError, resourceHistorySelectionAfterRefresh, resourceHistoryToolbarFacets } from "./TimingHistoryPage.tsx";
 
 const now = new Date("2026-09-03T12:00:00.000Z");
+
+function trendJob(jobKey: string): JobResourceTrendJob {
+  return {
+    jobKey,
+    repositoryId: "11111111-1111-4111-8111-111111111111",
+    repositoryName: "acme/app",
+    workflowName: "CI",
+    jobName: "build",
+    platform: "windows-x64",
+    runCount: 1,
+    latestCompletedAt: now.toISOString(),
+    medianExecutionDurationMs: 60_000,
+    cpuPeakPercent: 50,
+    memoryPeakBytes: 1_073_741_824,
+    telemetryCoveredRunCount: 1,
+    telemetryCoveragePercent: 100,
+    durationChangePercent: null,
+    cpuChangePercent: null,
+    memoryChangePercent: null,
+  };
+}
 
 test("resource history defaults to a seven-day bounded request", () => {
   const options = jobResourceTrendQueryOptions("org-1", defaultTimingFilters, null, now);
@@ -53,7 +75,14 @@ test("resource history preserves prior pages while a changed request refreshes",
   const options = jobResourceTrendQueryOptions("org-1", defaultTimingFilters, null, now);
   const prior = { pages: [], pageParams: [] } as Parameters<typeof options.placeholderData>[0];
 
-  expect(options.placeholderData(prior)).toBe(prior);
+  expect(options.placeholderData(prior, { queryKey: ["org", "org-1", "job-resource-trends"] } as never)).toBe(prior);
+});
+
+test("resource history never carries placeholder pages across organizations", () => {
+  const options = jobResourceTrendQueryOptions("org-2", defaultTimingFilters, null, now);
+  const prior = { pages: [], pageParams: [] } as Parameters<typeof options.placeholderData>[0];
+
+  expect(options.placeholderData(prior, { queryKey: ["org", "org-1", "job-resource-trends"] } as never)).toBeUndefined();
 });
 
 test("resource history query identity changes with the selected job", () => {
@@ -77,4 +106,22 @@ test("failed background attempts surface an error without discarding established
   expect(resourceHistoryRefreshError(true, null, failure)).toBe(failure);
   expect(resourceHistoryRefreshError(true, failure, null)).toBe(failure);
   expect(resourceHistoryRefreshError(false, failure, failure)).toBeNull();
+});
+
+test("page-two job selection survives a refreshed first summary page", () => {
+  const refreshedFirstPage = [trendJob("job-one")];
+
+  expect(resourceHistorySelectionAfterRefresh("job-two", refreshedFirstPage, "job-two")).toBe("job-two");
+  expect(resourceHistorySelectionAfterRefresh("job-two", refreshedFirstPage, "job-one")).toBe("job-one");
+});
+
+test("no-match facets retain active controlled filter options", () => {
+  const empty: JobResourceTrendResponse["filters"] = { platforms: [], vcpus: [], concurrencies: [] };
+  const filters = { ...defaultTimingFilters, platform: "windows-x64", vcpu: "4", concurrency: "3" };
+
+  expect(resourceHistoryToolbarFacets(empty, filters)).toEqual({
+    platforms: ["windows-x64"],
+    vcpus: [4],
+    concurrencies: [3],
+  });
 });

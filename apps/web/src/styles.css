@@ -716,6 +716,14 @@
     min-height: 44px;
   }
 
+  .resource-history-run-select,
+  .resource-history-table-scroll a {
+    align-items: center;
+    display: inline-flex;
+    min-block-size: 44px;
+    padding-inline: var(--rh-space-2);
+  }
+
   .resource-history-toolbar-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
