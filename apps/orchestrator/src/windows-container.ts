@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import { join } from "node:path";
 import { WorkerContainerStatus, type PoolResources, type WorkerContainerStatus as WorkerContainerStatusData, type WorkerLimits } from "@mars/contracts";
 import type { Lease, RuntimeDriver, RuntimeLease } from "./runtime.ts";
@@ -7,7 +8,10 @@ import { validateResources } from "./runtime.ts";
 
 export type DockerResult = { code: number; stdout: string; stderr: string };
 export type DockerRunner = (args: string[]) => Promise<DockerResult>;
-export type WindowsContainerConfig = { image: string; prefix: string; bootstrapRoot: string; limits: WorkerLimits; readyTimeoutMs: number; jobTimeoutMs: number; allowLocalImage?: boolean; imageManifestPath?: string; requireLocalImageManifest?: boolean };
+export type WindowsContainerConfig = { image: string; prefix: string; bootstrapRoot: string; limits: WorkerLimits; readyTimeoutMs: number; jobTimeoutMs: number; allowLocalImage?: boolean; imageManifestPath?: string; requireLocalImageManifest?: boolean; dnsServers?: string[] };
+export function parseWindowsContainerDnsServers(value: string | undefined): string[] {
+  return (value ?? "").split(",").map((server) => server.trim()).filter((server) => isIP(server) !== 0);
+}
 const digest = /^[^@\s]+@sha256:[0-9a-f]{64}$/;
 const localImage = "mars/windows-job:local";
 const expectedWindowsEntrypoint = ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", "C:/Mars/entrypoint.ps1"] as const;
@@ -146,8 +150,9 @@ export class WindowsContainerDriver implements RuntimeDriver {
     await mkdir(root, { recursive: true });
     await writeFile(join(root, "bootstrap.json"), JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig, ...(lease.workerCache ? { workerCache: lease.workerCache } : {}) }), { mode: 0o600, flag: "wx" });
     const name = this.containerName(lease.id);
+    const dnsArgs = parseWindowsContainerDnsServers(this.config.dnsServers?.join(",")).flatMap((server) => ["--dns", server]);
     try {
-      checked(await this.docker(["create", "--name", name, "--log-driver", "json-file", "--log-opt", "max-size=50m", "--log-opt", "max-file=3", "--isolation=hyperv", "--label", "mars.managed=true", "--label", `mars.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), "--storage-opt", `size=${lease.resources.storageBytes}`, "--mount", `type=bind,source=${root},target=C:\\ProgramData\\Mars\\bootstrap,readonly`, this.config.image]), "docker create");
+      checked(await this.docker(["create", "--name", name, "--log-driver", "json-file", "--log-opt", "max-size=50m", "--log-opt", "max-file=3", "--isolation=hyperv", "--label", "mars.managed=true", "--label", `mars.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), "--storage-opt", `size=${lease.resources.storageBytes}`, "--mount", `type=bind,source=${root},target=C:\\ProgramData\\Mars\\bootstrap,readonly`, ...dnsArgs, this.config.image]), "docker create");
       checked(await this.docker(["start", name]), "docker start");
       const inspect = JSON.parse(checked(await this.docker(["inspect", name]), "docker inspect")) as Array<{ HostConfig?: { Isolation?: string; NanoCpus?: number; Memory?: number } }>;
       if (inspect[0]?.HostConfig?.Isolation?.toLowerCase() !== "hyperv") throw new Error("container isolation is not Hyper-V");

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promise
 import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, WorkerDoctorData, WorkerDoctorReport, WorkerEvent, type WorkerCapacityData, type WorkerContainerStatus, type LeaseBootstrapEnvelope } from "@mars/contracts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { createHyperVRuntime, HyperVDriver } from "./hyperv.ts";
-import { WindowsContainerDriver, isExpectedWindowsEntrypoint } from "./windows-container.ts";
+import { WindowsContainerDriver, isExpectedWindowsEntrypoint, parseWindowsContainerDnsServers } from "./windows-container.ts";
 import { downloadWindowsImageBuildArtifacts } from "./windows-image-build.ts";
 import type { RuntimeDriver } from "./runtime.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
@@ -221,7 +221,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
   if (mode === "container") {
     const image = Bun.env.MARS_WINDOWS_CONTAINER_IMAGE;
     if (!image) throw new Error("MARS_WINDOWS_CONTAINER_IMAGE is required in container mode");
-    driver = new WindowsContainerDriver({ image, prefix: Bun.env.MARS_WINDOWS_CONTAINER_PREFIX ?? "mars", bootstrapRoot: Bun.env.ProgramData ? `${Bun.env.ProgramData}\\Mars\\leases` : "C:\\ProgramData\\Mars\\leases", limits, readyTimeoutMs: Number(Bun.env.MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS ?? 15_000), jobTimeoutMs: Number(Bun.env.MARS_WINDOWS_CONTAINER_JOB_TIMEOUT_MS ?? 900_000), allowLocalImage: Bun.env.MARS_ALLOW_LOCAL_CONTAINER_IMAGE === "true", imageManifestPath: Bun.env.MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST, requireLocalImageManifest: image === "mars/windows-job:local" });
+    driver = new WindowsContainerDriver({ image, prefix: Bun.env.MARS_WINDOWS_CONTAINER_PREFIX ?? "mars", bootstrapRoot: Bun.env.ProgramData ? `${Bun.env.ProgramData}\\Mars\\leases` : "C:\\ProgramData\\Mars\\leases", limits, readyTimeoutMs: Number(Bun.env.MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS ?? 15_000), jobTimeoutMs: Number(Bun.env.MARS_WINDOWS_CONTAINER_JOB_TIMEOUT_MS ?? 900_000), allowLocalImage: Bun.env.MARS_ALLOW_LOCAL_CONTAINER_IMAGE === "true", imageManifestPath: Bun.env.MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST, requireLocalImageManifest: image === "mars/windows-job:local", dnsServers: parseWindowsContainerDnsServers(Bun.env.MARS_WINDOWS_CONTAINER_DNS_SERVERS) });
   } else if (mode === "vm") {
     const templatePath = Bun.env.MARS_WINDOWS_TEMPLATE_PATH;
     const templateDigest = Bun.env.MARS_WINDOWS_TEMPLATE_DIGEST;

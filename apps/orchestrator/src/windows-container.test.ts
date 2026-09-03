@@ -47,6 +47,44 @@ test("includes worker cache descriptor in Windows container bootstrap", async ()
   await driver.createLease({ id: leaseId, jobId: "job", imageDigest: "repo@sha256:" + "a".repeat(64), resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config", workerCache });
   expect(JSON.parse(await readFile(join(root, leaseId, "bootstrap.json"), "utf8")).workerCache).toEqual(workerCache);
 });
+test("passes configured DNS servers to Docker create", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-windows-dns-"));
+  roots.push(root);
+  const calls: string[][] = [];
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
+    calls.push(args);
+    if (args[0] === "image") return { code: 0, stdout: JSON.stringify([config.image]), stderr: "" };
+    if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 1_000_000_000, Memory: 1024 } }]), stderr: "" };
+    return { code: 0, stdout: "0", stderr: "" };
+  };
+  const config = {
+    image: "repo@sha256:" + "a".repeat(64),
+    prefix: "mars",
+    bootstrapRoot: root,
+    limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
+    readyTimeoutMs: 100,
+    dnsServers: ["10.36.172.244", " 2001:4860:4860::8888 ", "not-a-dns-server", ""],
+    jobTimeoutMs: 100,
+  };
+  const driver = new WindowsContainerDriver(config, docker);
+
+  await driver.createLease({
+    id: "55555555-5555-4555-8555-555555555555",
+    jobId: "job",
+    imageDigest: config.image,
+    resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 },
+    nonce: "n".repeat(32),
+    encodedJitConfig: "config",
+  });
+
+  const createArgs = calls.find((args) => args[0] === "create")!;
+  expect(createArgs).toContainEqual("--dns");
+  expect(createArgs).toContainEqual("10.36.172.244");
+  expect(createArgs).toContainEqual("2001:4860:4860::8888");
+  expect(createArgs).not.toContain("not-a-dns-server");
+  await driver.removeLease("55555555-5555-4555-8555-555555555555");
+});
 
 test("rejects a container when Docker applies different CPU or memory limits", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-windows-resource-"));
@@ -108,6 +146,7 @@ test("fails completion when a containerized job stops making terminal progress",
     encodedJitConfig: "config",
   });
   const createArgs = calls.find((args) => args[0] === "create")!;
+  expect(createArgs).not.toContain("--dns");
   expect(createArgs).toContain("--cpus");
   expect(createArgs).toContain("2");
   expect(createArgs).toContain("--memory");
