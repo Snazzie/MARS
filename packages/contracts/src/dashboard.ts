@@ -116,6 +116,28 @@ export const JobResourceTrendResponse = dto(strict({
   generatedAt: timestamp,
 }));
 export type JobResourceTrendResponse = z.infer<typeof JobResourceTrendResponse>;
+export const JobLabelRecommendationQuery = dto(strict({
+  from: timestamp,
+  to: timestamp,
+  repositoryId: id,
+  workflowName: z.string().min(1),
+  jobName: z.string().min(1),
+}));
+export type JobLabelRecommendationQuery = z.infer<typeof JobLabelRecommendationQuery>;
+
+export const JobLabelRecommendation = dto(strict({
+  status: z.enum(["available", "unavailable"]),
+  currentWindowsLabel: z.string().min(1).nullable(),
+  recommendedVcpu: positiveSafe.nullable(),
+  recommendedMemoryGiB: positiveSafe.nullable(),
+  p95CpuPeakPercent: z.number().nonnegative().finite().nullable(),
+  p95MemoryPeakBytes: nonnegativeSafe.nullable(),
+  successfulRunCount: nonnegativeSafe,
+  telemetryCoveragePercent: z.number().min(0).max(100),
+  reason: z.string().min(1).nullable(),
+}));
+export type JobLabelRecommendation = z.infer<typeof JobLabelRecommendation>;
+
 export const JobResourceSample = dto(strict({ organizationId: id, runId: id, jobId: id, leaseId: id, occurredAt: timestamp, cpuUsagePercent: z.number().min(0).max(100), cpuTimeMs: positiveSafe.or(z.literal(0)), memoryWorkingSetBytes: positiveSafe.or(z.literal(0)), memoryLimitBytes: positiveSafe }));
 export type JobResourceSample = z.infer<typeof JobResourceSample>;
 export const LogChunk = dto(strict({ organizationId, runId: id, jobId: id, sequence: positiveSafe.or(z.literal(0)), content: z.string(), hasMore: z.boolean(), occurredAt: timestamp }));
