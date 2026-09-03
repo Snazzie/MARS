@@ -58,3 +58,20 @@ test("stores delayed telemetry without extending the lease", async () => {
   await expect(persistJobResourceSample(db, workerId, sampleEvent(), Date.parse("2026-08-18T12:11:00.000Z"))).resolves.toBe("stored");
   expect(queries.some(query => query.includes("UPDATE runner_leases SET expires_at"))).toBe(false);
 });
+
+test("does not extend the startup deadline for a sandbox-ready lease", async () => {
+  const queries: string[] = [];
+  const db = (async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ");
+    queries.push(query);
+    if (query.includes("SELECT j.organization_id")) return [{ organizationId: "org", runId: "run" }];
+    if (query.includes("INSERT INTO dashboard_job_resource_samples")) return [{ occurredAt }];
+    return [];
+  }) as unknown as Sql<{}>;
+
+  await expect(persistJobResourceSample(db, workerId, sampleEvent(), Date.parse(occurredAt))).resolves.toBe("stored");
+  const renewal = queries.find(query => query.includes("UPDATE runner_leases SET expires_at"));
+  expect(renewal).toBeDefined();
+  expect(renewal).not.toContain("sandbox_ready");
+  expect(renewal).toContain("state IN ('online','busy')");
+});

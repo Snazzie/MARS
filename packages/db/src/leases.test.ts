@@ -106,3 +106,52 @@ test("binds a GitHub job only once", async () => {
   await bindLeaseToJob(db, "lease", 123);
   expect(queries[0]).toContain("github_job_id");
 });
+
+test("does not reuse a merely failed lease for a new reservation", async () => {
+  const queries: string[] = [];
+  const tx = ((strings: TemplateStringsArray) => {
+    const query = strings.join(" ").toLowerCase();
+    queries.push(query);
+    if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, limits: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 } }];
+    if (query.includes("insert into runner_leases") && query.includes("state in ('failed','reaped')")) return [{ id: "failed-lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date().toISOString(), requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, jobId: 123 }];
+    return [];
+  }) as unknown as Sql<{}>;
+  const db = Object.assign(((strings: TemplateStringsArray) => []) as unknown as Sql<{}>, { begin: async (fn: (value: Sql<{}>) => unknown) => fn(tx) });
+
+  await expect(reserveRoutingSlot(db, {
+    organizationId: "org",
+    poolId: "pool",
+    workerId: "worker",
+    githubJobId: 123,
+    routingKey: "org:pool:labels",
+    requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 },
+    ttlMs: 60_000,
+  })).rejects.toThrow("job_already_claimed");
+  expect(queries.some(query => query.includes("insert into runner_leases"))).toBe(true);
+});
+
+test("invalidates pending and sent create commands when a reaped lease is reused", async () => {
+  const queries: string[] = [];
+  const tx = ((strings: TemplateStringsArray) => {
+    const query = strings.join(" ").toLowerCase();
+    queries.push(query);
+    if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, limits: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 } }];
+    if (query.includes("insert into runner_leases")) return [{ id: "reaped-lease", nonce: "new-nonce", workerId: "worker", poolId: "pool", expiresAt: new Date().toISOString(), requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, jobId: 123 }];
+    return [];
+  }) as unknown as Sql<{}>;
+  const db = Object.assign(((strings: TemplateStringsArray) => []) as unknown as Sql<{}>, { begin: async (fn: (value: Sql<{}>) => unknown) => fn(tx) });
+
+  await expect(reserveRoutingSlot(db, {
+    organizationId: "org",
+    poolId: "pool",
+    workerId: "worker",
+    githubJobId: 123,
+    routingKey: "org:pool:labels",
+    requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 },
+    ttlMs: 60_000,
+  })).resolves.toMatchObject({ id: "reaped-lease" });
+  const invalidation = queries.find(query => query.includes("update commands"));
+  expect(invalidation).toBeDefined();
+  expect(invalidation).toContain("state in ('pending','sent')");
+  expect(invalidation).toContain("create_lease");
+});
