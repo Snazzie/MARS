@@ -56,6 +56,17 @@ function positionLabels(points: readonly JobResourceTrendPoint[]): Map<string, s
   return new Map(points.map((point, index) => [String(index + 1), formatDate(point.completedAt)]));
 }
 
+const runBandPadding = 0.3;
+const runPointPadding = (1 + runBandPadding) / 2;
+
+function orderedRunPointScale(labels: ReadonlyMap<string, string>) {
+  return scalePoint<string>().domain(labels.keys()).padding(runPointPadding);
+}
+
+function orderedRunBandScale(labels: ReadonlyMap<string, string>) {
+  return scaleBand<string>().domain(labels.keys()).padding(runBandPadding);
+}
+
 function resourceTooltip<TRow extends SharedRow & { value: number }>(
   points: readonly ChartPoint<TRow, string, number>[],
   formatValue: (value: number) => string,
@@ -111,7 +122,7 @@ export function CpuTrendChart({ points, selectedRunId, onSelectRun }: ResourceCh
       points: true,
       states: selectedRunId === null ? undefined : [{ when: ({ datum }) => datum.runId === selectedRunId, style: { strokeWidth: 3, opacity: 1 } }],
     })],
-    x: { scale: scalePoint<string>().domain(labels.keys()).padding(0.4), axis: { label: "Completed runs", ticks: { format: (position: string) => labels.get(position) ?? position } } },
+    x: { scale: orderedRunPointScale(labels), axis: { label: "Completed runs", ticks: { format: (position: string) => labels.get(position) ?? position } } },
     y: { scale: scaleLinear, nice: true, grid: true, axis: { label: "CPU", ticks: { format: (value: number) => formatPercent(Number(value), 0) } } },
     color: {
       scale: () => scaleOrdinal<string, string>().domain(["Average", "Peak"]).range(["#4f83ff", "#8bc9dc"]),
@@ -161,7 +172,7 @@ export function MemoryTrendChart({ points, selectedRunId, onSelectRun, requested
       points: true,
       states: selectedRunId === null ? undefined : [{ when: ({ datum }) => datum.runId === selectedRunId, style: { strokeWidth: 3, opacity: 1 } }],
     })],
-    x: { scale: scalePoint<string>().domain(labels.keys()).padding(0.4), axis: { label: "Completed runs", ticks: { format: (position: string) => labels.get(position) ?? position } } },
+    x: { scale: orderedRunPointScale(labels), axis: { label: "Completed runs", ticks: { format: (position: string) => labels.get(position) ?? position } } },
     y: { scale: scaleLinear, nice: true, grid: true, axis: { label: "Memory", ticks: { format: (value: number) => formatBytes(Number(value)) } } },
     color: {
       scale: () => scaleOrdinal<string, string>().domain(["Peak", "Requested"]).range(["#8bc9dc", "#d6a15f"]),
@@ -199,7 +210,7 @@ export function DurationTrendChart({ points, selectedRunId, onSelectRun }: Resou
       radius: 2,
       states: selectedRunId === null ? undefined : [{ when: ({ datum }) => datum.runId === selectedRunId, style: { stroke: "#8bc9dc", strokeWidth: 3, opacity: 1 } }],
     })],
-    x: { scale: scaleBand<string>().domain(labels.keys()).padding(0.3), axis: { label: "Completed runs", ticks: { format: (position: string) => labels.get(position) ?? position } } },
+    x: { scale: orderedRunBandScale(labels), axis: { label: "Completed runs", ticks: { format: (position: string) => labels.get(position) ?? position } } },
     y: { scale: scaleLinear, nice: true, grid: true, axis: { label: "Duration", ticks: { format: (value: number) => formatDuration(Number(value)) } } },
     focus: "group-x",
     tooltip: {

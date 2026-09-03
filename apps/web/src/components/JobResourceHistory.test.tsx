@@ -10,7 +10,7 @@ import { TimingSummary } from "./TimingSummary.tsx";
 import { TimingToolbar } from "./TimingToolbar.tsx";
 import { JobResourceDetail } from "./JobResourceDetail.tsx";
 import { JobRunMeasurements } from "./JobRunMeasurements.tsx";
-import { CpuTrendChart, MemoryTrendChart } from "./JobResourceCharts.tsx";
+import { CpuTrendChart, DurationTrendChart, MemoryTrendChart } from "./JobResourceCharts.tsx";
 import { defaultTimingFilters } from "../routes/timing-model.ts";
 
 const facets: JobResourceTrendResponse["filters"] = {
@@ -439,6 +439,55 @@ test("leaves visible gaps where a completed run has null resource measurements",
   const connectedMemoryPaths = Array.from(memoryDocument.querySelectorAll(".ts-chart__line path"))
     .filter((path) => path.getAttribute("d")?.includes("L"));
   expect(connectedMemoryPaths).toHaveLength(1);
+});
+
+test("aligns line-point and bar centers for one, two, three, and many runs", () => {
+  const alignmentPoints: readonly JobResourceTrendPoint[] = Array.from({ length: 5 }, (_, index) => ({
+    ...resourcePoints[index % resourcePoints.length]!,
+    runId: `alignment-run-${index + 1}`,
+    jobId: `alignment-job-${index + 1}`,
+    completedAt: `2026-09-0${index + 1}T10:00:00.000Z`,
+    cpuAveragePercent: 20 + index,
+    cpuPeakPercent: 40 + index,
+    memoryPeakBytes: 1_073_741_824 + index * 134_217_728,
+  }));
+
+  type AttributeElement = { getAttribute(name: string): string | null };
+  function normalizedCenters(axis: AttributeElement | null, elements: readonly AttributeElement[], center: (element: AttributeElement) => number): number[] {
+    const start = Number(axis?.getAttribute("x1"));
+    const width = Number(axis?.getAttribute("x2")) - start;
+    return elements.map((element) => (center(element) - start) / width);
+  }
+
+  for (const count of [1, 2, 3, 5]) {
+    const points = alignmentPoints.slice(0, count);
+    const cpuDocument = new Window().document;
+    cpuDocument.body.innerHTML = renderToStaticMarkup(
+      <CpuTrendChart points={points} selectedRunId={null} onSelectRun={noop} />,
+    );
+    const memoryDocument = new Window().document;
+    memoryDocument.body.innerHTML = renderToStaticMarkup(
+      <MemoryTrendChart points={points} requestedMemoryBytes={2_147_483_648} selectedRunId={null} onSelectRun={noop} />,
+    );
+    const durationDocument = new Window().document;
+    durationDocument.body.innerHTML = renderToStaticMarkup(
+      <DurationTrendChart points={points} selectedRunId={null} onSelectRun={noop} />,
+    );
+
+    const lineCenter = (element: AttributeElement) => Number(element.getAttribute("cx"));
+    const barCenter = (element: AttributeElement) => Number(element.getAttribute("x")) + Number(element.getAttribute("width")) / 2;
+    const cpuCenters = normalizedCenters(cpuDocument.querySelector('[data-ts-key="x-axis"]'), Array.from(cpuDocument.querySelectorAll("g.ts-chart__line[data-ts-key*='Average-0'] > circle")), lineCenter);
+    const memoryCenters = normalizedCenters(memoryDocument.querySelector('[data-ts-key="x-axis"]'), Array.from(memoryDocument.querySelectorAll("g.ts-chart__line[data-ts-key*='Peak-0'] > circle")), lineCenter);
+    const durationCenters = normalizedCenters(durationDocument.querySelector('[data-ts-key="x-axis"]'), Array.from(durationDocument.querySelectorAll(".ts-chart__bar > rect")), barCenter);
+
+    expect(cpuCenters).toHaveLength(count);
+    expect(memoryCenters).toHaveLength(count);
+    expect(durationCenters).toHaveLength(count);
+    for (let index = 0; index < count; index += 1) {
+      expect(cpuCenters[index]).toBeCloseTo(durationCenters[index]!, 4);
+      expect(memoryCenters[index]).toBeCloseTo(durationCenters[index]!, 4);
+    }
+  }
 });
 
 test("keeps durable run selection in the accessible measurements table", async () => {
