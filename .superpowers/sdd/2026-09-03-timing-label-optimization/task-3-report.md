@@ -20,7 +20,7 @@ Implemented and committed as `bfd6092` (`feat(web): add timing label optimizatio
 - Compatibility smoke: `bun test apps/web/src/components/JobLabelOptimization.test.tsx apps/web/src/routes/TimingHistoryPage.test.tsx apps/web/src/components/JobResourceHistory.test.tsx`
   - **PASS** — 33 tests, 0 failures, 245 expectations.
 - `bun run --cwd apps/web typecheck`
-  - Existing unrelated workspace diagnostics remain in `JobResourceHistory.test.tsx` (legacy callers missing newly optional-compatible detail props were reported before compatibility fix in the focused test run) and `WorkerHealthPanel.tsx`/test (pre-existing `runtimeMode` contract mismatch). No diagnostics reported from the new optimization component, API helper, route, or detail integration after the fix.
+  - Existing unrelated diagnostics remain only in `WorkerHealthPanel.tsx` and `WorkerHealthPanel.test.tsx` because `runtimeMode` is not present in the current `WorkerHealth` contract. No diagnostics reported from the new optimization component, API helper, route, detail integration, or their tests.
 
 ## Concerns
 
