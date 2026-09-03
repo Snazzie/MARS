@@ -36,8 +36,12 @@ test("renders loading and unavailable recommendation states", () => {
   const unavailable = markup({ ...available, status: "unavailable", reason: "insufficient_history", recommendedVcpu: null, recommendedMemoryGiB: null });
   expect(unavailable).toContain("Label recommendation unavailable");
   expect(unavailable).toContain("At least five successful runs");
-});
+  const telemetryUnavailable = markup({ ...available, status: "unavailable", reason: "insufficient_telemetry_coverage", recommendedVcpu: null, recommendedMemoryGiB: null });
+  expect(telemetryUnavailable).toContain("At least 80% CPU and memory telemetry coverage");
+  const missingCpu = markup({ ...available, status: "unavailable", reason: "missing_cpu_telemetry", recommendedVcpu: null, recommendedMemoryGiB: null });
+  expect(missingCpu).toContain("CPU telemetry is not available");
 
+});
 test("renders evidence, preserves the Windows label, and emits an exact editable diff", () => {
   const html = markup(available);
   expect(html).toContain("Successful runs");

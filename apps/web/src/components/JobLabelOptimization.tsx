@@ -53,10 +53,18 @@ function labelNumber(labels: readonly string[], pattern: RegExp): number | null 
 
 function unavailableReason(reason: string | null): string {
   switch (reason) {
-    case "insufficient_history": return "At least five successful runs are required before labels can be recommended.";
-    case "insufficient_telemetry": return "At least 80% CPU and memory telemetry coverage is required before labels can be recommended.";
-    case "missing_telemetry": return "CPU or memory telemetry is not available for a safe recommendation.";
-    default: return "There is not enough reliable resource history to recommend labels yet.";
+    case "insufficient_history":
+      return "At least five successful runs are required before labels can be recommended.";
+    case "insufficient_telemetry_coverage":
+      return "At least 80% CPU and memory telemetry coverage is required before labels can be recommended.";
+    case "missing_resource_telemetry":
+      return "CPU and memory telemetry are not available for a safe recommendation.";
+    case "missing_cpu_telemetry":
+      return "CPU telemetry is not available for a safe recommendation.";
+    case "missing_memory_telemetry":
+      return "Memory telemetry is not available for a safe recommendation.";
+    default:
+      return "There is not enough reliable resource history to recommend labels yet.";
   }
 }
 

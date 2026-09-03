@@ -69,7 +69,7 @@ export function JobResourceDetail({
           workflowName={summary.workflowName}
           jobName={summary.jobName}
           selectedPath={selectedPath}
-          selectedJobId={selectedPoint?.jobId ?? null}
+          selectedJobId={summary.jobName}
           currentVcpu={summary.latestRequestedVcpu}
           currentMemoryGiB={Math.max(1, Math.ceil(summary.latestRequestedMemoryBytes / 1024 ** 3))}
           onRequestPullRequest={onRequestPullRequest}
