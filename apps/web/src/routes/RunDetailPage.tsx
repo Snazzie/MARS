@@ -6,7 +6,11 @@ import { QueryState } from "../components/StateView.tsx";
 import { RunDetailView } from "../components/RunDetailView.tsx";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
 
-export function scrollToJobFragment(hash: string, targetDocument: Pick<Document, "getElementById">): void {
+type FragmentTargetDocument = {
+  getElementById(id: string): { scrollIntoView?: (options?: ScrollIntoViewOptions) => void } | null;
+};
+
+export function scrollToJobFragment(hash: string, targetDocument: FragmentTargetDocument): void {
   if (!hash.startsWith("#job-")) return;
   const encodedJobId = hash.slice(1);
   let jobId: string;
