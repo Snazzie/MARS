@@ -56,7 +56,7 @@ test("terminalizes a sandbox-ready lease when exact GitHub job lookup returns 40
     const query = strings.join(" ");
     calls.push({ query, values });
     if (query.includes("FROM runner_leases l")) return [{
-      leaseId: "lease-404", organizationId: "org-1", workerId: "worker-1", nonce: "nonce-404", leaseState: "sandbox_ready",
+      leaseId: "lease-404", organizationId: "org-1", workerId: "worker-1", nonce: "nonce-404", leaseState: "sandbox_ready", expiresAt: "2099-01-01T00:00:00.000Z",
       githubJobId: 42, githubRunId: 7, githubRunAttempt: 2, githubRepositoryId: 99, repositoryName: "repo",
       repositoryFullName: "acme/repo", installationId: 123, jobStatus: "in_progress", jobConclusion: null,
     }];
@@ -70,7 +70,11 @@ test("terminalizes a sandbox-ready lease when exact GitHub job lookup returns 40
 
   const report = await reconcileExpiredLeasesWithGithub({ db, installationToken: async () => "token", githubFetchForInstallation: () => fetcher });
 
+  const selection = calls.find(({ query }) => query.includes("FROM runner_leases l"));
+  expect(selection?.query).toContain("sandbox_ready");
+  expect(selection?.query).toContain("expires_at < now()");
   expect(report).toEqual({ inspected: 1, completed: 0, released: 1, stillActive: 0, skipped: 0 });
+  expect(calls.some(({ query }) => query.includes("UPDATE dashboard_jobs") && query.includes("SET status='completed',stage='failed'"))).toBe(true);
   expect(calls.some(({ query }) => query.includes("UPDATE runner_leases") && query.includes("cleanup_state='pending'"))).toBe(true);
   expect(calls.some(({ values }) => values.some(value => value && typeof value === "object" && JSON.stringify(value).includes("github_job_not_found")))).toBe(true);
 });
@@ -81,7 +85,7 @@ test("fails an expired sandbox-ready lease with startup timeout while the job re
     const query = strings.join(" ");
     calls.push({ query, values });
     if (query.includes("FROM runner_leases l")) return [{
-      leaseId: "lease-timeout", organizationId: "org-1", workerId: "worker-1", nonce: "nonce-timeout", leaseState: "sandbox_ready",
+      leaseId: "lease-timeout", organizationId: "org-1", workerId: "worker-1", nonce: "nonce-timeout", leaseState: "sandbox_ready", expiresAt: "2020-01-01T00:00:00.000Z",
       githubJobId: 42, githubRunId: 7, githubRunAttempt: 2, githubRepositoryId: 99, repositoryName: "repo",
       repositoryFullName: "acme/repo", installationId: 123, jobStatus: "in_progress", jobConclusion: null,
     }];

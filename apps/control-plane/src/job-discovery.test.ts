@@ -454,13 +454,16 @@ test("confirms omitted jobs from a complete attempt-qualified listing before ter
     throw new Error(`unexpected GitHub request: ${url}`);
   };
 
-  const report = await discoverAvailableRepositoryJobs({ db, installationToken: async () => "token", githubFetchForInstallation: () => githubFetch });
+  const availableReport = await discoverAvailableRepositoryJobs({ db, installationToken: async () => "token", githubFetchForInstallation: () => githubFetch });
+  const queuedReport = await discoverQueuedRepositoryJobs({ db, installationToken: async () => "token", githubFetchForInstallation: () => githubFetch, repositoryFullName: repository.fullName });
 
-  expect(report).toMatchObject({ repositories: 1, discovered: 0, updated: 0, failed: 0 });
-  expect(requests.filter(url => url.endsWith("/actions/jobs/42"))).toHaveLength(1);
+  expect(availableReport).toMatchObject({ repositories: 1, discovered: 0, updated: 0, failed: 0 });
+  expect(queuedReport).toMatchObject({ repositories: 1, discovered: 0, updated: 0, failed: 0 });
+  expect(requests.filter(url => url.endsWith("/actions/jobs/42"))).toHaveLength(2);
   const terminalJobUpdate = updates.find(({ query }) => query.includes("UPDATE dashboard_jobs") && query.includes("SET status='completed',stage='failed',conclusion="));
   expect(terminalJobUpdate).toBeDefined();
   expect(terminalJobUpdate?.query).toContain("completed_at=");
   const terminalRunUpdate = updates.find(({ query }) => query.includes("UPDATE dashboard_runs") && query.includes("SET status='completed',conclusion="));
   expect(terminalRunUpdate?.query).toContain("NOT EXISTS");
+  expect(updates.some(({ query }) => query.includes("UPDATE dashboard_repositories SET available=false"))).toBe(false);
 });

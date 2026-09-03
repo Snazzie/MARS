@@ -150,8 +150,12 @@ test("invalidates pending and sent create commands when a reaped lease is reused
     requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 },
     ttlMs: 60_000,
   })).resolves.toMatchObject({ id: "reaped-lease" });
-  const invalidation = queries.find(query => query.includes("update commands"));
+  const insertIndex = queries.findIndex(query => query.includes("insert into runner_leases"));
+  const invalidationIndex = queries.findIndex(query => query.includes("update commands"));
+  const invalidation = queries[invalidationIndex];
   expect(invalidation).toBeDefined();
+  expect(invalidation).toContain("lease_id=");
   expect(invalidation).toContain("state in ('pending','sent')");
   expect(invalidation).toContain("create_lease");
+  expect(invalidationIndex).toBeGreaterThan(insertIndex);
 });

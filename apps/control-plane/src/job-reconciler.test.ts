@@ -185,4 +185,5 @@ test("does not reserve or dispatch when exact GitHub job preflight reports 404",
   expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 0 });
   expect(events).toHaveLength(1);
   expect(events[0]).toContain("/actions/jobs/42");
+  expect(events).not.toContain("candidates");
 });
