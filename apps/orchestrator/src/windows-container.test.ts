@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WindowsContainerDriver, type DockerRunner } from "./windows-container.ts";
+import { WindowsContainerDriver, parseWindowsHostDnsServers, type DockerRunner, type PowerShellRunner } from "./windows-container.ts";
 import type { WorkerCacheProxy } from "@mars/contracts";
 
 const workerCache: WorkerCacheProxy = { proxyUrl: "http://127.0.0.1:39123", cacheBaseUrl: "https://127.0.0.1:39443", caCertificatePem: "worker-ca", expiresAt: new Date(Date.now() + 60_000).toISOString() };
@@ -85,6 +85,61 @@ test("passes configured DNS servers to Docker create", async () => {
   expect(createArgs).not.toContain("not-a-dns-server");
   await driver.removeLease("55555555-5555-4555-8555-555555555555");
 });
+test("parses active adapter DNS output into unique valid IP addresses", () => {
+  const output = JSON.stringify([
+    { InterfaceAlias: "Wi-Fi", Status: "Up", ServerAddresses: ["192.168.1.1", "", "not-an-ip", "2001:db8::53"] },
+    { InterfaceAlias: "Ethernet", Status: "Down", ServerAddresses: ["10.0.0.1"] },
+    { InterfaceAlias: "VPN", Status: "Up", ServerAddresses: ["192.168.1.1", "2001:db8::53"] },
+  ]);
+
+  expect(parseWindowsHostDnsServers(output)).toEqual(["192.168.1.1", "2001:db8::53"]);
+});
+
+test("discovers host DNS immediately before Docker create when no override is configured", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-windows-discovered-dns-"));
+  roots.push(root);
+  const calls: string[][] = [];
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
+    calls.push(args);
+    if (args[0] === "image") return { code: 0, stdout: JSON.stringify([config.image]), stderr: "" };
+    if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 1_000_000_000, Memory: 1024 } }]), stderr: "" };
+    return { code: 0, stdout: "0", stderr: "" };
+  };
+  const powershellCalls: string[] = [];
+  const powershell: PowerShellRunner = async (command) => {
+    powershellCalls.push(command);
+    return { code: 0, stdout: JSON.stringify(["172.20.0.1", "2001:db8::53", "172.20.0.1", ""]), stderr: "" };
+  };
+  const config = {
+    image: "repo@sha256:" + "a".repeat(64),
+    prefix: "mars",
+    bootstrapRoot: root,
+    limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
+    readyTimeoutMs: 100,
+    jobTimeoutMs: 100,
+  };
+  const driver = new WindowsContainerDriver(config, docker, powershell);
+
+  await driver.createLease({
+    id: "66666666-6666-4666-8666-666666666666",
+    jobId: "job",
+    imageDigest: config.image,
+    resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 },
+    nonce: "n".repeat(32),
+    encodedJitConfig: "config",
+  });
+
+  expect(powershellCalls).toHaveLength(1);
+  expect(powershellCalls[0]).toContain("Get-DnsClientServerAddress");
+  expect(powershellCalls[0]).toContain("-AddressFamily IPv4,IPv6");
+  const createIndex = calls.findIndex((args) => args[0] === "create");
+  expect(createIndex).toBeGreaterThanOrEqual(0);
+  expect(calls[createIndex]!).toContainEqual("--dns");
+  expect(calls[createIndex]!).toContainEqual("172.20.0.1");
+  expect(calls[createIndex]!).toContainEqual("2001:db8::53");
+  await driver.removeLease("66666666-6666-4666-8666-666666666666");
+});
 
 test("rejects a container when Docker applies different CPU or memory limits", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-windows-resource-"));
@@ -146,7 +201,6 @@ test("fails completion when a containerized job stops making terminal progress",
     encodedJitConfig: "config",
   });
   const createArgs = calls.find((args) => args[0] === "create")!;
-  expect(createArgs).not.toContain("--dns");
   expect(createArgs).toContain("--cpus");
   expect(createArgs).toContain("2");
   expect(createArgs).toContain("--memory");

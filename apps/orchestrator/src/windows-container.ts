@@ -8,9 +8,48 @@ import { validateResources } from "./runtime.ts";
 
 export type DockerResult = { code: number; stdout: string; stderr: string };
 export type DockerRunner = (args: string[]) => Promise<DockerResult>;
+export type PowerShellResult = { code: number; stdout: string; stderr: string };
+export type PowerShellRunner = (command: string) => Promise<PowerShellResult>;
 export type WindowsContainerConfig = { image: string; prefix: string; bootstrapRoot: string; limits: WorkerLimits; readyTimeoutMs: number; jobTimeoutMs: number; allowLocalImage?: boolean; imageManifestPath?: string; requireLocalImageManifest?: boolean; dnsServers?: string[] };
 export function parseWindowsContainerDnsServers(value: string | undefined): string[] {
   return (value ?? "").split(",").map((server) => server.trim()).filter((server) => isIP(server) !== 0);
+}
+const hostDnsPowerShellCommand = "$active=@(Get-NetAdapter -ErrorAction Stop | Where-Object Status -eq 'Up' | Select-Object -ExpandProperty ifIndex); @(Get-DnsClientServerAddress -AddressFamily IPv4,IPv6 -ErrorAction Stop | Where-Object { $active -contains $_.InterfaceIndex } | Select-Object -ExpandProperty ServerAddresses) | ConvertTo-Json -Compress";
+async function defaultPowerShell(command: string): Promise<PowerShellResult> {
+  const process = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command], { stdout: "pipe", stderr: "pipe" });
+  return { code: await process.exited, stdout: await new Response(process.stdout).text(), stderr: await new Response(process.stderr).text() };
+}
+export function parseWindowsHostDnsServers(output: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    return [];
+  }
+  const entries = Array.isArray(parsed) ? parsed : [parsed];
+  const candidates: unknown[] = [];
+  for (const entry of entries) {
+    if (typeof entry === "string") {
+      candidates.push(entry);
+      continue;
+    }
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    const status = row.Status ?? row.InterfaceOperationalStatus ?? row.OperationalStatus;
+    if (typeof status === "string" && !["up", "active", "connected"].includes(status.toLowerCase())) continue;
+    const addresses = row.ServerAddresses ?? row.serverAddresses ?? row.DnsServers ?? row.dnsServers;
+    if (Array.isArray(addresses)) candidates.push(...addresses);
+    else candidates.push(addresses);
+  }
+  return [...new Set(candidates.filter((value): value is string => typeof value === "string").map((server) => server.trim()).filter((server) => isIP(server) !== 0))];
+}
+export async function discoverWindowsHostDnsServers(run: PowerShellRunner = defaultPowerShell): Promise<string[]> {
+  const result = await run(hostDnsPowerShellCommand);
+  if (result.code !== 0) {
+    const detail = `${result.stderr} ${result.stdout}`.replaceAll(/\r?\n/g, " ").trim().slice(0, 500);
+    throw new Error(`Windows host DNS discovery failed${detail ? `: ${detail}` : ""}`);
+  }
+  return parseWindowsHostDnsServers(result.stdout);
 }
 const digest = /^[^@\s]+@sha256:[0-9a-f]{64}$/;
 const localImage = "mars/windows-job:local";
@@ -129,7 +168,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
   readonly name = "windows-hyperv-container" as const;
   private readonly gracefulStops = new Set<string>();
   private readonly leases = new Map<string, { name: string; root: string; runtime: RuntimeLease }>();
-  constructor(private readonly config: WindowsContainerConfig, private readonly docker: DockerRunner = defaultDocker) {}
+  constructor(private readonly config: WindowsContainerConfig, private readonly docker: DockerRunner = defaultDocker, private readonly powershell: PowerShellRunner = defaultPowerShell) {}
   private containerName(leaseId: string): string { return `${this.config.prefix}-${leaseId}`; }
   private bootstrapPath(leaseId: string): string { return join(this.config.bootstrapRoot, leaseId); }
   validatePool(resources: PoolResources): void { validateResources(resources, this.config.limits); if (!digest.test(this.config.image) && !(this.config.allowLocalImage && this.config.image === localImage)) throw new Error("Windows container image must be digest pinned"); }
@@ -150,8 +189,11 @@ export class WindowsContainerDriver implements RuntimeDriver {
     await mkdir(root, { recursive: true });
     await writeFile(join(root, "bootstrap.json"), JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig, ...(lease.workerCache ? { workerCache: lease.workerCache } : {}) }), { mode: 0o600, flag: "wx" });
     const name = this.containerName(lease.id);
-    const dnsArgs = parseWindowsContainerDnsServers(this.config.dnsServers?.join(",")).flatMap((server) => ["--dns", server]);
     try {
+      const explicitDns = parseWindowsContainerDnsServers(this.config.dnsServers?.join(","));
+      const dnsServers = explicitDns.length > 0 ? explicitDns : await discoverWindowsHostDnsServers(this.powershell);
+      if (dnsServers.length === 0) throw new Error("No usable Windows host DNS servers were discovered and no explicit DNS servers are configured");
+      const dnsArgs = dnsServers.flatMap((server) => ["--dns", server]);
       checked(await this.docker(["create", "--name", name, "--log-driver", "json-file", "--log-opt", "max-size=50m", "--log-opt", "max-file=3", "--isolation=hyperv", "--label", "mars.managed=true", "--label", `mars.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), "--storage-opt", `size=${lease.resources.storageBytes}`, "--mount", `type=bind,source=${root},target=C:\\ProgramData\\Mars\\bootstrap,readonly`, ...dnsArgs, this.config.image]), "docker create");
       checked(await this.docker(["start", name]), "docker start");
       const inspect = JSON.parse(checked(await this.docker(["inspect", name]), "docker inspect")) as Array<{ HostConfig?: { Isolation?: string; NanoCpus?: number; Memory?: number } }>;
