@@ -71,6 +71,51 @@ export const JobTimingAggregate = dto(strict({
   minMs: timingDuration, maxMs: timingDuration, p50Ms: timingDuration, p95Ms: timingDuration,
 }));
 export type JobTimingAggregate = z.infer<typeof JobTimingAggregate>;
+export const JobResourceTrendSort = z.enum(["latest", "duration", "cpu", "memory", "runs"]);
+export type JobResourceTrendSort = z.infer<typeof JobResourceTrendSort>;
+
+const nullablePercent = z.number().min(0).max(100).nullable();
+const nullableDelta = z.number().finite().nullable();
+
+export const JobResourceTrendPoint = dto(strict({
+  organizationId, runId: id, jobId: id, completedAt: timestamp, outcome: timingOutcome,
+  executionDurationMs: timingDuration,
+  cpuAveragePercent: nullablePercent,
+  cpuPeakPercent: nullablePercent,
+  memoryPeakBytes: nonnegativeSafe.nullable(),
+  requestedVcpu: positiveSafe,
+  requestedMemoryBytes: positiveSafe,
+  effectiveConcurrency: positiveSafe,
+  telemetryState: z.enum(["available", "partial", "unavailable"]),
+  telemetrySampleCount: nonnegativeSafe,
+}));
+export type JobResourceTrendPoint = z.infer<typeof JobResourceTrendPoint>;
+
+export const JobResourceTrendJob = dto(strict({
+  jobKey: cursor,
+  repositoryId: id,
+  repositoryName: z.string().min(1), workflowName: z.string().min(1), jobName: z.string().min(1),
+  platform: z.string().min(1), runCount: positiveSafe, latestCompletedAt: timestamp,
+  medianExecutionDurationMs: timingDuration,
+  cpuPeakPercent: nullablePercent, memoryPeakBytes: nonnegativeSafe.nullable(),
+  telemetryCoveredRunCount: nonnegativeSafe, telemetryCoveragePercent: z.number().min(0).max(100),
+  durationChangePercent: nullableDelta, cpuChangePercent: nullableDelta, memoryChangePercent: nullableDelta,
+}));
+export type JobResourceTrendJob = z.infer<typeof JobResourceTrendJob>;
+
+export const JobResourceTrendResponse = dto(strict({
+  summary: strict({
+    jobCount: nonnegativeSafe, completedRunCount: nonnegativeSafe,
+    medianExecutionDurationMs: timingDuration,
+    telemetryCoveredRunCount: nonnegativeSafe,
+    telemetryCoveragePercent: z.number().min(0).max(100),
+  }),
+  jobs: z.array(JobResourceTrendJob), nextCursor: cursor.nullable(),
+  selectedJob: strict({ jobKey: cursor, points: z.array(JobResourceTrendPoint) }).nullable(),
+  filters: strict({ platforms: z.array(z.string().min(1)), vcpus: z.array(positiveSafe), concurrencies: z.array(positiveSafe) }),
+  generatedAt: timestamp,
+}));
+export type JobResourceTrendResponse = z.infer<typeof JobResourceTrendResponse>;
 export const JobResourceSample = dto(strict({ organizationId: id, runId: id, jobId: id, leaseId: id, occurredAt: timestamp, cpuUsagePercent: z.number().min(0).max(100), cpuTimeMs: positiveSafe.or(z.literal(0)), memoryWorkingSetBytes: positiveSafe.or(z.literal(0)), memoryLimitBytes: positiveSafe }));
 export type JobResourceSample = z.infer<typeof JobResourceSample>;
 export const LogChunk = dto(strict({ organizationId, runId: id, jobId: id, sequence: positiveSafe.or(z.literal(0)), content: z.string(), hasMore: z.boolean(), occurredAt: timestamp }));
