@@ -458,5 +458,9 @@ test("confirms omitted jobs from a complete attempt-qualified listing before ter
 
   expect(report).toMatchObject({ repositories: 1, discovered: 0, updated: 0, failed: 0 });
   expect(requests.filter(url => url.endsWith("/actions/jobs/42"))).toHaveLength(1);
-  expect(updates.some(({ query, values }) => query.includes("SET status='completed'") && values.includes("cancelled"))).toBe(true);
+  const terminalJobUpdate = updates.find(({ query }) => query.includes("UPDATE dashboard_jobs") && query.includes("SET status='completed',stage='failed',conclusion="));
+  expect(terminalJobUpdate).toBeDefined();
+  expect(terminalJobUpdate?.query).toContain("completed_at=");
+  const terminalRunUpdate = updates.find(({ query }) => query.includes("UPDATE dashboard_runs") && query.includes("SET status='completed',conclusion="));
+  expect(terminalRunUpdate?.query).toContain("NOT EXISTS");
 });

@@ -109,7 +109,13 @@ test("reserves, requests JIT configuration, and dispatches an eligible queued jo
     if (query.includes("select id from dashboard_jobs")) return [{ id: "dashboard-job" }];
     return [];
   }) as unknown as DatabaseClient, { begin: async (fn: (tx: DatabaseClient) => unknown) => fn(db) });
-  const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
+  const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/actions/jobs/42")) {
+      events.push("preflight");
+      expect(init?.method).toBeUndefined();
+      return Response.json({ id: 42, run_id: 77, run_attempt: 1, status: "queued", name: "build", labels: ["mars-windows-x64"], created_at: "2026-08-22T10:31:46Z" });
+    }
     events.push("jit");
     expect(init?.method).toBe("POST");
     return new Response(JSON.stringify({ encoded_jit_config: "encoded-config" }), { status: 200, headers: { "content-type": "application/json" } });
@@ -122,7 +128,7 @@ test("reserves, requests JIT configuration, and dispatches an eligible queued jo
     dispatcher,
   });
   expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
-  expect(events).toEqual(["reserve", "jit", "dispatch"]);
+  expect(events).toEqual(["preflight", "jit", "dispatch"]);
 });
 
 test("does not reserve or dispatch when exact GitHub job preflight reports 404", async () => {
