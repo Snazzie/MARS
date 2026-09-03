@@ -102,6 +102,41 @@ test("Windows upgrade path downloads only worker binaries and restarts the exist
   expect(windows).toContain("if ($Upgrade) {");
   expect(windows.indexOf("if ($Upgrade) {")).toBeLessThan(windows.indexOf("Download-Verified $WindowsJobAgentUrl"));
 });
+windowsRuntimeTest("Windows installer propagates configured container DNS servers into the service environment", async () => {
+  const start = windows.indexOf("  $serviceEnvironment = @(");
+  const end = windows.indexOf("\n  New-ItemProperty", start);
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  const serviceEnvironment = windows.slice(start, end);
+  const runServiceEnvironment = async (dnsServers?: string) => {
+    const dnsSetup = dnsServers === undefined
+      ? "Remove-Item Env:MARS_WINDOWS_CONTAINER_DNS_SERVERS -ErrorAction SilentlyContinue"
+      : `$env:MARS_WINDOWS_CONTAINER_DNS_SERVERS = '${dnsServers}'`;
+    const script = `
+$ControlPlaneUrl = 'https://control.example'
+$JoinCodeFile = 'C:\\ProgramData\\Mars\\join-code'
+$WindowsContainerImage = 'mars/windows-job:local'
+$WindowsContainerPrefix = 'mars'
+$WindowsContainerReadyTimeoutMs = 15000
+$WindowsContainerJobTimeoutMs = 900000
+$windowsImageManifestPath = 'C:\\ProgramData\\Mars\\windows-job-image.json'
+$AllowLocalContainerImage = $false
+foreach ($name in @('MARS_ACTION_CACHE_ROOT','MARS_CACHE_PROXY_PORT','MARS_CACHE_DATA_PORT','MARS_CACHE_PROXY_URL','MARS_CACHE_ADVERTISE_URL','MARS_CACHE_TOKEN_ISSUER','MARS_CACHE_JWKS_URL','MARS_WINDOWS_CONTAINER_DNS_SERVERS')) {
+  Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+}
+${dnsSetup}
+${serviceEnvironment}
+$serviceEnvironment | ConvertTo-Json -Compress
+`;
+    const process = Bun.spawn(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], { stdout: "pipe", stderr: "pipe" });
+    expect(await process.exited).toBe(0);
+    return JSON.parse(await new Response(process.stdout).text()) as string[];
+  };
+
+  expect(await runServiceEnvironment("10.36.172.244,10.36.172.245")).toContain("MARS_WINDOWS_CONTAINER_DNS_SERVERS=10.36.172.244,10.36.172.245");
+  expect(await runServiceEnvironment()).not.toContain(expect.stringContaining("MARS_WINDOWS_CONTAINER_DNS_SERVERS="));
+});
+
 
 
 test("Windows local image builder accepts staged verified assets and stays local", () => {
