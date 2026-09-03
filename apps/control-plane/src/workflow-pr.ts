@@ -12,7 +12,7 @@ export interface WorkflowFilePreview {
 }
 
 export interface WorkflowSelection {
-  selectedPaths: readonly string[];
+  selectedPaths?: readonly string[];
   selectedPath?: string;
   selectedJobId?: string;
   labels: readonly string[];
@@ -67,16 +67,17 @@ export function discoverWorkflowFiles(files: readonly { path: string; content: s
 }
 
 function selectedPaths(input: WorkflowSelection): string[] {
+  const availablePaths = input.selectedPaths ?? [];
   const hasPath = input.selectedPath !== undefined;
   const hasJob = input.selectedJobId !== undefined;
   if (hasPath !== hasJob) throw new Error("Focused workflow selection requires selectedPath and selectedJobId");
   if (hasPath && hasJob) {
-    if (input.selectedPaths.length && !input.selectedPaths.includes(input.selectedPath!)) {
+    if (availablePaths.length && !availablePaths.includes(input.selectedPath!)) {
       throw new Error("selectedPath must be included in selectedPaths");
     }
     return [input.selectedPath!];
   }
-  return input.selectedPaths.length ? [...input.selectedPaths] : [];
+  return availablePaths.length ? [...availablePaths] : [];
 }
 
 function focusedLabels(labels: readonly string[]): string[] {
