@@ -5,7 +5,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { RunDetail } from "@mars/contracts";
-import { RunDetailView, formatResourceValue, runDetailFacts } from "./RunDetailView.tsx";
+import { RunDetailView, formatResourceValue, jobDetailHref, runDetailFacts } from "./RunDetailView.tsx";
 
 const detail: RunDetail = {
   id: "run-1",
@@ -51,6 +51,11 @@ const renderView = (data = detail) => renderToStaticMarkup(
   </QueryClientProvider>,
 );
 
+test("constructs encoded job detail links", () => {
+  expect(jobDetailHref("run-1", "job-1")).toBe("/runs/run-1#job-job-1");
+  expect(jobDetailHref("run/1", "job#1")).toBe("/runs/run%2F1#job-job%231");
+});
+
 test("maps real run facts and names missing values explicitly", () => {
   expect(runDetailFacts(detail).runner).toBe("mars-lease-1");
   expect(runDetailFacts({ ...detail, startedAt: null, jobs: [{ ...detail.jobs[0], runnerName: null }] })).toMatchObject({
@@ -78,6 +83,11 @@ test("renders only semantic Logs and Metrics tabs with complete run context", ()
   expect(markup).toContain("arm64");
   expect(markup).toContain("abcdef012345");
   expect(markup).toContain("status-success");
+  expect(markup).toContain('id="job-job-1"');
+  expect(markup).toContain('/runs/run-1#job-job-1');
+  expect(markup).toContain('target="_blank"');
+  expect(markup).toContain('rel="noreferrer"');
+  expect(markup).toContain('aria-label="Open job macOS smoke in a new tab"');
 });
 test("labels concurrency as scheduler slots rather than vCPU", () => {
   expect(formatResourceValue(3, "slots")).toBe("3 slots");

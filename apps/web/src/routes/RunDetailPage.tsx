@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams, useSearch } from "@tanstack/react-router";
 import { getRun } from "../api.ts";
@@ -15,6 +16,20 @@ export function RunDetailPage() {
     queryFn: () => getRun(detailOrganizationId, runId),
     enabled: Boolean(detailOrganizationId && runId && detailOrganizationId !== "all"),
   });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined" || !query.data) return;
+    const hash = window.location.hash;
+    if (!hash.startsWith("#job-")) return;
+    const encodedJobId = hash.slice(1);
+    let jobId: string;
+    try {
+      jobId = decodeURIComponent(encodedJobId);
+    } catch {
+      return;
+    }
+    document.getElementById(jobId)?.scrollIntoView?.({ block: "start" });
+  }, [query.data, runId]);
 
   return <>
     <Link className="back-link" to="/runs">← Back to runs</Link>
