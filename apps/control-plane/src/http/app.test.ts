@@ -927,6 +927,30 @@ test("uninstalls an organization through the authenticated GitHub route", async 
     });
   });
 
+test("rejects partial focused workflow selections before mutation idempotency", async () => {
+  const app = createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+    githubApp: {
+      previewRepositoryRunnerPr: async () => { throw new Error("must not call GitHub"); },
+      createRepositoryRunnerPr: async () => { throw new Error("must not call GitHub"); },
+    } as never,
+  }));
+  const preview = await app.request("/api/organizations/org-1/repositories/repo-1/runner-workflows/preview", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ selectedPath: ".github/workflows/ci.yml", labels: ["4VCPU"] }),
+  });
+  expect(preview.status).toBe(422);
+  expect(await preview.json()).toMatchObject({ code: "workflow_invalid" });
+  const pr = await app.request("/api/organizations/org-1/repositories/repo-1/runner-workflows/pr", {
+    method: "POST",
+    headers: { "content-type": "application/json", "idempotency-key": "partial-focused" },
+    body: JSON.stringify({ selectedPath: ".github/workflows/ci.yml", expectedHeadSha: "abcdef1", labels: ["4VCPU"] }),
+  });
+  expect(pr.status).toBe(422);
+  expect(await pr.json()).toMatchObject({ code: "workflow_invalid" });
+});
+
 test("returns scoped timing label recommendations and unavailable history", async () => {
   const recommendation = {
     currentLabels: ["mars-windows-x64", "4VCPU", "8G"],

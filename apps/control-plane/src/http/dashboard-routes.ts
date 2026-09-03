@@ -446,6 +446,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
       selectedJobId: z.string().trim().min(1).optional(),
       labels: z.array(z.string().trim().min(1)).min(1).optional(),
     }).strict().parse(await c.req.json());
+    if ((body.selectedPath === undefined) !== (body.selectedJobId === undefined)) return error(c, 422, "workflow_invalid", "Focused workflow selection requires selectedPath and selectedJobId");
     try {
       return c.json(RunnerWorkflowPreview.parse(await deps.githubApp.previewRepositoryRunnerPr({
         organizationId: org,
@@ -468,7 +469,9 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const org = c.req.param("organizationId"); const denied = await guard(c, deps, org); if (denied) return denied;
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const idem = requireMutation(c); if (idem) return idem; if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
-    const body = RunnerWorkflowPrRequest.parse(await c.req.json()); const key = c.req.header("idempotency-key")!;
+    const body = RunnerWorkflowPrRequest.parse(await c.req.json());
+    if ((body.selectedPath === undefined) !== (body.selectedJobId === undefined)) return error(c, 422, "workflow_invalid", "Focused workflow selection requires selectedPath and selectedJobId");
+    const key = c.req.header("idempotency-key")!;
     const inserted = await deps.db`INSERT INTO dashboard_mutations (organization_id,idempotency_key) VALUES (${org},${key}) ON CONFLICT DO NOTHING RETURNING idempotency_key`;
     if (!inserted.length) { const [prior] = await deps.db`SELECT response FROM dashboard_mutations WHERE organization_id=${org} AND idempotency_key=${key}`; if (prior?.response) return c.json(RunnerWorkflowPrResult.parse(prior.response)); return error(c, 409, "mutation_in_progress", "Mutation is already in progress"); }
     try {
