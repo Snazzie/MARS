@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented and committed as `bfd6092` (`feat(web): add timing label optimization panel`).
+Implemented and committed as `bfd6092` (`feat(web): add timing label optimization panel`), with review fixes in `61b23ec` (`fix(web): target workflow job labels`).
 
 ## Files
 
@@ -26,3 +26,9 @@ Implemented and committed as `bfd6092` (`feat(web): add timing label optimizatio
 
 - Task 3 does not alter the existing PR modal/backend. The panel emits a focused `{ selectedPath, selectedJobId, labels, p95CpuPeakPercent, p95MemoryPeakBytes, successfulRunCount }` callback payload; the current timing route has no workflow-path mapping or modal integration yet, so it does not supply a PR callback/path and therefore correctly hides the action there until that metadata is available.
 - The recommendation contract exposes the current Windows label but not current numeric workflow labels. The panel uses selected-job requested VCPU/memory as the displayed numeric baseline, while preserving the recommendation's Windows routing label and any supplied non-numeric labels.
+
+## Review fixes
+
+- `61b23ec` forwards `summary.jobName` as the focused YAML `selectedJobId`; the sampled point `jobId` is a dashboard UUID and is not a workflow job identifier.
+- Added exact Task 1 reason handling for `insufficient_telemetry_coverage`, `missing_resource_telemetry`, `missing_cpu_telemetry`, and `missing_memory_telemetry`, with focused assertions.
+- Re-ran focused compatibility coverage: **PASS** — 33 tests, 0 failures, 247 expectations.
