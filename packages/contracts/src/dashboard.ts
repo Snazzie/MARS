@@ -28,7 +28,7 @@ export type OverviewTimeseriesPoint = z.infer<typeof OverviewTimeseriesPoint>;
 const OverviewJobOutcome = z.enum(["queued", "running", "completed", "failed"]);
 const OverviewJobOutcomePlatforms = strict({ macos: positiveSafe.or(z.literal(0)), ubuntu: positiveSafe.or(z.literal(0)), windows: positiveSafe.or(z.literal(0)), other: positiveSafe.or(z.literal(0)) });
 const nonnegativeSafe = z.number().int().nonnegative().safe();
-export const OverviewRunningContainer = dto(strict({ id, jobId: id, jobName: z.string().min(1), repositoryName: z.string().min(1), workflowName: z.string().min(1), workerName: z.string().min(1), runtime: z.string().min(1), startedAt: timestamp, cpuUsagePercent: z.number().min(0).max(100).nullable(), memoryWorkingSetBytes: nonnegativeSafe.nullable(), memoryLimitBytes: positiveSafe.nullable(), diskUsageBytes: nonnegativeSafe.nullable(), allocatedStorageBytes: nonnegativeSafe, sampledAt: timestamp.nullable() }));
+export const OverviewRunningContainer = dto(strict({ id, jobId: id, runId: id, jobName: z.string().min(1), repositoryName: z.string().min(1), workflowName: z.string().min(1), workerName: z.string().min(1), runtime: z.string().min(1), startedAt: timestamp, cpuUsagePercent: z.number().min(0).max(100).nullable(), memoryWorkingSetBytes: nonnegativeSafe.nullable(), memoryLimitBytes: positiveSafe.nullable(), diskUsageBytes: nonnegativeSafe.nullable(), allocatedStorageBytes: nonnegativeSafe, sampledAt: timestamp.nullable() }));
 export type OverviewRunningContainer = z.output<typeof OverviewRunningContainer>;
 export const OverviewDto = dto(strict({ organizationId, period: z.enum(["24h", "7d", "30d"]), queued: positiveSafe.or(z.literal(0)), running: positiveSafe.or(z.literal(0)), completed: positiveSafe.or(z.literal(0)), failed: positiveSafe.or(z.literal(0)), queueP50Ms: positiveSafe.or(z.literal(0)), queueP95Ms: positiveSafe.or(z.literal(0)), durationP50Ms: positiveSafe.or(z.literal(0)), durationP95Ms: positiveSafe.or(z.literal(0)), concurrency: positiveSafe.or(z.literal(0)), utilization: strict({ vcpu: z.number().min(0).max(1), memory: z.number().min(0).max(1), storage: z.number().min(0).max(1), pods: z.number().min(0).max(1) }), timeseries: z.array(OverviewTimeseriesPoint).default([]), jobOutcomes: z.array(strict({ outcome: OverviewJobOutcome, platforms: OverviewJobOutcomePlatforms })).default([]), runningContainers: z.array(OverviewRunningContainer).default([]) }));
 export type OverviewDto = z.output<typeof OverviewDto>;
@@ -200,6 +200,7 @@ export type WorkerHealthContainer = z.infer<typeof WorkerHealthContainer>;
 
 export const WorkerHealth = dto(strict({
   observedAt: timestamp.nullable(),
+  runtimeMode: z.enum(["container", "vm", "tart"]).nullable().optional(),
   connection: WorkerHealthConnection,
   usage: WorkerHealthUsage,
   cache: WorkerHealthCache,
