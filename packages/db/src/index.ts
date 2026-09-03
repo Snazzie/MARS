@@ -105,5 +105,6 @@ export * from "./dashboard.ts";
 export * from "./worker-cache.ts";
 export * from "./job-timing.ts";
 export * from "./job-resource-telemetry.ts";
+export * from "./job-resource-trends.ts";
 export * from "./onboarding.ts";
 export * from "./leases.ts";
