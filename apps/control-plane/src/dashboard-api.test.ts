@@ -88,6 +88,7 @@ function trendDb() {
     if (query.includes('FROM summaries')) return [{
       repositoryId: trendRepositoryId, repositoryName: "acme/app", workflowName: "CI", jobName: "build",
       platform: "windows-x64", runCount: 1, latestCompletedAt: new Date("2026-09-02T12:00:00.000Z"),
+      latestRequestedVcpu: 2, latestRequestedMemoryBytes: 4_294_967_296, latestEffectiveConcurrency: 1,
       medianExecutionDurationMs: 60_000, cpuPeakPercent: 80, memoryPeakBytes: 2_147_483_648,
       telemetryCoveredRunCount: 1, durationChangePercent: null, cpuChangePercent: null, memoryChangePercent: null,
     }];
@@ -183,6 +184,7 @@ describe("dashboard API", () => {
       "from=2026-09-03T00:00:00.000Z&to=2026-09-02T00:00:00.000Z",
       "from=2026-06-04T23:59:59.999Z&to=2026-09-03T00:00:00.000Z",
       "from=2026-08-27T00:00:00.000Z&to=2026-09-03T00:00:00.000Z&limit=101",
+      "from=2026-08-27T00:00:00.000Z&to=2026-09-03T00:00:00.000Z&pointLimit=1",
       "from=2026-08-27T00:00:00.000Z&to=2026-09-03T00:00:00.000Z&pointLimit=201",
       "from=2026-08-27T00:00:00.000Z&to=2026-09-03T00:00:00.000Z&sort=disk",
       "from=2026-08-27T00:00:00.000Z&to=2026-09-03T00:00:00.000Z&unexpected=true",

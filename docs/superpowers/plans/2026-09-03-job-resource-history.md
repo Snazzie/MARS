@@ -267,7 +267,7 @@ Run totals, facets, and job summaries concurrently after validating the query. F
 
 Select the requested valid identity, or the first summary identity when `jobKey` is omitted or filtered out. Query only that identity and the active filters. Keep numeric values nullable through normalization.
 
-Use SQL ordinal sampling rather than returning every row to Bun. A CTE assigns `row_number()` and total count, then retains ordinals nearest to evenly spaced target positions. Always retain ordinal 1 and the final ordinal; order the final rows by completion time ascending. Cap `pointLimit` to 1–200, defaulting to 100.
+Use SQL ordinal sampling rather than returning every row to Bun. A CTE assigns `row_number()` and total count, then retains ordinals nearest to evenly spaced target positions. Always retain ordinal 1 and the final ordinal; order the final rows by completion time ascending. Require `pointLimit` to be in the range 2–200, defaulting to 100.
 
 ```sql
 WITH ordered AS (
@@ -338,7 +338,7 @@ test("rejects invalid trend bounds and foreign organizations", async () => {
 });
 ```
 
-Also assert `from < to`, maximum 90-day span, `limit <= 100`, `pointLimit <= 200`, valid sort values, and valid opaque cursors/keys.
+Also assert `from < to`, maximum 90-day span, `limit <= 100`, `2 <= pointLimit <= 200`, valid sort values, and valid opaque cursors/keys.
 
 - [ ] **Step 2: Run the route tests and verify RED**
 
@@ -362,7 +362,7 @@ const jobResourceTrendQuerySchema = z.object({
   cursor: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   jobKey: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional(),
-  pointLimit: z.coerce.number().int().min(1).max(200).default(100),
+  pointLimit: z.coerce.number().int().min(2).max(200).default(100),
 }).strict().superRefine((value, ctx) => {
   const from = Date.parse(value.from), to = Date.parse(value.to);
   if (from >= to) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["to"], message: "to must be after from" });

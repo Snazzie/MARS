@@ -389,6 +389,10 @@ export function TimingHistoryPage() {
     if (selectedJobKey !== null) void detailQuery.refetch();
     if (selectedRunId !== null && selectedRunPoint?.jobId) void sampleQuery.refetch();
   };
+  const retry = () => {
+    void query.refetch();
+    if (selectedJobKey !== null) void detailQuery.refetch();
+  };
 
   return (
     <div className="resource-history">

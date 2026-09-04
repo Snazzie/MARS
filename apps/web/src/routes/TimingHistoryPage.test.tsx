@@ -73,6 +73,23 @@ function trendPage(job: JobResourceTrendJob): JobResourceTrendResponse {
   };
 }
 
+function trendPage(job: JobResourceTrendJob): JobResourceTrendResponse {
+  return {
+    summary: {
+      jobCount: 1,
+      completedRunCount: 1,
+      medianExecutionDurationMs: 60_000,
+      telemetryCoveredRunCount: 1,
+      telemetryCoveragePercent: 100,
+    },
+    jobs: [job],
+    nextCursor: null,
+    selectedJob: { summary: job, points: [] },
+    filters: { platforms: [job.platform], vcpus: [job.latestRequestedVcpu], concurrencies: [job.latestEffectiveConcurrency] },
+    generatedAt: now.toISOString(),
+  };
+}
+
 test("resource history defaults to a seven-day bounded request", () => {
   const options = jobResourceTrendQueryOptions("org-1", defaultTimingFilters, now);
 

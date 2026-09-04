@@ -92,6 +92,10 @@ export function JobResourceDetail({
         Across completed runs, trend charts show aggregate measurements; sampled peaks can miss short-lived peaks between observations.
       </p>
 
+      <p className="resource-history-sampling-note" role="note">
+        Sampled charts can miss short-lived peaks between collected observations.
+      </p>
+
       <div className="resource-history-charts">
         <CpuTrendChart {...chartProps} />
         <MemoryTrendChart {...chartProps} />
