@@ -19,6 +19,7 @@ export type JobLabelOptimizationRequest = {
   workflowName: string;
   jobName: string;
   selectedPath: string;
+  selectedJobId: string;
   currentLabels: string[];
   labels: string[];
   p95CpuPeakPercent: number | null;

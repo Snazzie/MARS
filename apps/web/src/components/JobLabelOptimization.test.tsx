@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { expect, test } from "bun:test";
 import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { JobLabelOptimization, isPositiveIntegerLabel, type JobLabelRecommendationRequest } from "./JobLabelOptimization.tsx";
+import { JobLabelOptimization, isPositiveIntegerLabel, type JobLabelOptimizationRequest, type JobLabelRecommendationRequest } from "./JobLabelOptimization.tsx";
 
 const request: JobLabelRecommendationRequest = {
   from: "2026-08-27T12:00:00.000Z",
@@ -27,6 +27,20 @@ const available: JobLabelRecommendation = {
   reason: null,
 };
 
+const focusedRequest: JobLabelOptimizationRequest = {
+  repositoryId: request.repositoryId,
+  repositoryName: "acme/app",
+  workflowName: request.workflowName,
+  jobName: request.jobName,
+  selectedPath: ".github/workflows/ci.yml",
+  selectedJobId: "build",
+  currentLabels: available.currentLabels ?? [],
+  labels: ["mars-windows-x64", "3VCPU", "5G"],
+  p95CpuPeakPercent: available.p95CpuPeakPercent,
+  p95MemoryPeakBytes: available.p95MemoryPeakBytes,
+  successfulRunCount: available.successfulRunCount,
+};
+
 function markup(data: JobLabelRecommendation | undefined, props: Partial<ComponentProps<typeof JobLabelOptimization>> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (data) client.setQueryData(["org", "org-1", "job-label-recommendation", request], data);
@@ -44,6 +58,10 @@ test("renders loading and unavailable recommendation states", () => {
   const missingCpu = markup({ ...available, status: "unavailable", reason: "missing_cpu_telemetry", recommendedVcpu: null, recommendedMemoryGiB: null });
   expect(missingCpu).toContain("CPU telemetry is not available");
 
+});
+
+test("optimization request contract carries the resolved workflow job id", () => {
+  expect(focusedRequest.selectedJobId).toBe("build");
 });
 test("renders evidence, preserves the Windows label, and emits an exact editable diff", () => {
   const html = markup(available);

@@ -951,6 +951,79 @@ test("rejects partial focused workflow selections before mutation idempotency", 
   expect(await pr.json()).toMatchObject({ code: "workflow_invalid" });
 });
 
+const recommendationQuery = "?from=2026-08-01T00:00:00.000Z&to=2026-09-01T00:00:00.000Z&repositoryId=11111111-1111-4111-8111-111111111111&workflowName=CI&jobName=build";
+const availableRecommendationRow = {
+  currentLabels: ["stale-windows-x64", "99VCPU", "99G"],
+  successfulRunCount: "8",
+  coveredRunCount: "8",
+  p95CpuPeakPercent: "201",
+  p95MemoryPeakBytes: "5368709120",
+};
+function recommendationDb(row: Record<string, unknown> = availableRecommendationRow) {
+  return Object.assign((() => []) as unknown as (...args: never[]) => unknown, {
+    unsafe: async () => [row],
+  }) as never;
+}
+
+async function requestRecommendation(
+  resolveWorkflowJob: () => Promise<unknown>,
+  row: Record<string, unknown> = availableRecommendationRow,
+) {
+  return createControlPlaneApp(fakeHttpDeps({
+    db: recommendationDb(row),
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+    githubApp: { resolveWorkflowJob } as never,
+  })).request(`/api/organizations/org-1/job-timings/label-recommendation${recommendationQuery}`);
+}
+
+test("uses resolved workflow labels for numeric recommendation fallback", async () => {
+  const response = await requestRecommendation(async () => ({
+    path: ".github/workflows/ci.yml",
+    jobId: "build",
+    currentRunsOn: ["self-hosted", "mars-windows-x64", "4VCPU", "8G"],
+  }), {
+    ...availableRecommendationRow,
+    currentLabels: ["stale-windows-x64", "99VCPU", "99G"],
+    p95CpuPeakPercent: null,
+    p95MemoryPeakBytes: null,
+  });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    currentLabels: ["self-hosted", "mars-windows-x64", "4VCPU", "8G"],
+    currentWindowsLabel: "mars-windows-x64",
+    recommendedVcpu: 4,
+    recommendedMemoryGiB: 8,
+  });
+});
+
+test.each(["github_workflow_job_not_found", "github_workflow_job_ambiguous"])("maps expected workflow resolution failure %s to unavailable", async (code) => {
+  const response = await requestRecommendation(async () => { throw new Error(code); });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ status: "unavailable", reason: "workflow_job_not_resolved", currentLabels: [] });
+});
+
+test("maps a non-Windows workflow job to unavailable", async () => {
+  const response = await requestRecommendation(async () => ({
+    path: ".github/workflows/ci.yml",
+    jobId: "build",
+    currentRunsOn: ["ubuntu-latest", "4VCPU", "8G"],
+  }));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ status: "unavailable", reason: "workflow_job_not_windows", currentWindowsLabel: null });
+});
+
+test.each([
+  ["github_403", 409, "github_app_permissions_missing"],
+  ["github_repository_unavailable", 404, "repository_unavailable"],
+  ["github_rate_limited", 500, "internal_error"],
+  ["github_app_unconfigured", 503, "github_app_unconfigured"],
+  ["github_runner_pool_missing", 422, "runner_pool_missing"],
+] as const)("preserves operational workflow resolution failure %s", async (code, status, apiCode) => {
+  const response = await requestRecommendation(async () => { throw new Error(code); });
+  expect(response.status).toBe(status);
+  expect(await response.json()).toMatchObject({ code: apiCode });
+});
+
 test("returns scoped timing label recommendations and unavailable history", async () => {
   const recommendation = {
     currentLabels: ["mars-windows-x64", "4VCPU", "8G"],

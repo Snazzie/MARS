@@ -111,7 +111,8 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
         jobName: parsed.data.jobName,
       });
       const currentLabels = typeof target.currentRunsOn === "string" ? [target.currentRunsOn] : [...target.currentRunsOn];
-      const currentWindowsLabel = parseCurrentResourceLabels(currentLabels).windowsLabel;
+      const currentResources = parseCurrentResourceLabels(currentLabels);
+      const currentWindowsLabel = currentResources.windowsLabel;
       if (!currentWindowsLabel) {
         return c.json(JobLabelRecommendation.parse({
           ...recommendation,
@@ -125,25 +126,41 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
           reason: "workflow_job_not_windows",
         }));
       }
+      const recommendedVcpu = recommendation.p95CpuPeakPercent === null
+        ? currentResources.vcpu
+        : recommendation.recommendedVcpu;
+      const recommendedMemoryGiB = recommendation.p95MemoryPeakBytes === null
+        ? currentResources.memoryGiB
+        : recommendation.recommendedMemoryGiB;
       return c.json(JobLabelRecommendation.parse({
         ...recommendation,
         currentLabels,
         currentWindowsLabel,
         workflowPath: target.path,
         workflowJobId: target.jobId,
+        recommendedVcpu,
+        recommendedMemoryGiB,
       }));
-    } catch {
-      return c.json(JobLabelRecommendation.parse({
-        ...recommendation,
-        status: "unavailable",
-        currentLabels: [],
-        currentWindowsLabel: null,
-        workflowPath: null,
-        workflowJobId: null,
-        recommendedVcpu: null,
-        recommendedMemoryGiB: null,
-        reason: "workflow_job_not_resolved",
-      }));
+    } catch (cause) {
+      const code = cause instanceof Error ? cause.message : "";
+      if (code === "github_workflow_job_not_found" || code === "github_workflow_job_ambiguous" || code === "workflow_job_not_windows") {
+        return c.json(JobLabelRecommendation.parse({
+          ...recommendation,
+          status: "unavailable",
+          currentLabels: [],
+          currentWindowsLabel: null,
+          workflowPath: null,
+          workflowJobId: null,
+          recommendedVcpu: null,
+          recommendedMemoryGiB: null,
+          reason: code === "workflow_job_not_windows" ? "workflow_job_not_windows" : "workflow_job_not_resolved",
+        }));
+      }
+      if (code === "github_repository_unavailable") return error(c, 404, "repository_unavailable", "Repository is unavailable");
+      if (code === "github_403") return githubWorkflowPermissionError(c);
+      if (code === "github_app_unconfigured") return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
+      if (code === "github_runner_pool_missing") return error(c, 422, "runner_pool_missing", "Runner pool is not configured");
+      throw cause;
     }
   }));
   app.get("/api/organizations/:organizationId/job-timings/aggregates", safe(async (c) => {
