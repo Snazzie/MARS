@@ -401,7 +401,7 @@ function healthContainers(value: unknown): WorkerHealth["containers"] {
 
 export async function getWorkerHealth(db: DashboardDb, workerId: string, workerConnected: (workerId: string) => boolean): Promise<WorkerHealth | null> {
   const [worker] = await db<Record<string, unknown>[]>`
-    SELECT w.id,w.connection_state AS "connectionState",w.last_heartbeat_at AS "lastHeartbeatAt",
+    SELECT w.id,w.platform,w.connection_state AS "connectionState",w.last_heartbeat_at AS "lastHeartbeatAt",
       w.doctor_observed_at AS "lastDoctorAt",w.doctor,w.limits,w.desired_configuration AS "desiredConfiguration",
       now() AS "observedAt",
       GREATEST(0,EXTRACT(EPOCH FROM (now()-w.last_heartbeat_at)))::int AS "heartbeatAgeSeconds",
@@ -447,8 +447,10 @@ export async function getWorkerHealth(db: DashboardDb, workerId: string, workerC
   const desired = jsonValue(worker.desiredConfiguration);
   const desiredObject = desired && typeof desired === "object" ? desired as Record<string, unknown> : {};
   const desiredCache = desiredObject.cache && typeof desiredObject.cache === "object" ? desiredObject.cache as Record<string, unknown> : {};
+  const doctor = workerDoctor(worker.doctor);
   return WorkerHealth.parse({
     observedAt,
+    runtimeMode: doctor?.runtimeMode ?? (String(worker.platform) === "macos-arm64" ? "tart" : null),
     connection: {
       state: workerConnected(workerId) ? "online" : "offline",
       lastHeartbeatAt: normalizeTimestamp(worker.lastHeartbeatAt),

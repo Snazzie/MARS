@@ -56,7 +56,10 @@ export function decodeJobResourceCursor(value: string): JobResourceCursor | null
 }
 
 const FILTER_PREDICATES = `
-  organization_id=$1
+  (
+    ($1 = 'all' AND organization_id IN (SELECT organization_id FROM memberships WHERE user_id=$8::uuid))
+    OR ($1 <> 'all' AND organization_id=$1::uuid)
+  )
   AND completed_at >= $2::timestamptz
   AND completed_at < $3::timestamptz
   AND ($4::text IS NULL OR platform=$4)
@@ -112,17 +115,17 @@ const SUMMARY_COLUMNS = `SELECT "repositoryId", "repositoryName", "workflowName"
   "runCount", "latestCompletedAt", "latestRequestedVcpu", "latestRequestedMemoryBytes", "latestEffectiveConcurrency",
   "medianExecutionDurationMs", "cpuPeakPercent", "memoryPeakBytes", "telemetryCoveredRunCount",
   "durationChangePercent", "cpuChangePercent", "memoryChangePercent" FROM summaries`;
-const identityAfterCursor = `("repositoryId", "workflowName", "jobName") > ($10::uuid, $11::text, $12::text)`;
+const identityAfterCursor = `("repositoryId", "workflowName", "jobName") > ($11::uuid, $12::text, $13::text)`;
 const SUMMARY_SQL: Record<JobResourceTrendSort, string> = {
-  latest: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $8::boolean OR "latestCompletedAt" < $9::timestamptz OR ("latestCompletedAt" = $9::timestamptz AND ${identityAfterCursor})\nORDER BY "latestCompletedAt" DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $13`,
-  duration: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $8::boolean OR "medianExecutionDurationMs" < $9::numeric OR ("medianExecutionDurationMs" = $9::numeric AND ${identityAfterCursor})\nORDER BY "medianExecutionDurationMs" DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $13`,
-  cpu: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $8::boolean OR coalesce("cpuPeakPercent", -1) < $9::numeric OR (coalesce("cpuPeakPercent", -1) = $9::numeric AND ${identityAfterCursor})\nORDER BY coalesce("cpuPeakPercent", -1) DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $13`,
-  memory: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $8::boolean OR coalesce("memoryPeakBytes", -1) < $9::numeric OR (coalesce("memoryPeakBytes", -1) = $9::numeric AND ${identityAfterCursor})\nORDER BY coalesce("memoryPeakBytes", -1) DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $13`,
-  runs: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $8::boolean OR "runCount" < $9::numeric OR ("runCount" = $9::numeric AND ${identityAfterCursor})\nORDER BY "runCount" DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $13`,
+  latest: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $9::boolean OR "latestCompletedAt" < $10::timestamptz OR ("latestCompletedAt" = $10::timestamptz AND ${identityAfterCursor})\nORDER BY "latestCompletedAt" DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $14`,
+  duration: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $9::boolean OR "medianExecutionDurationMs" < $10::numeric OR ("medianExecutionDurationMs" = $10::numeric AND ${identityAfterCursor})\nORDER BY "medianExecutionDurationMs" DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $14`,
+  cpu: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $9::boolean OR coalesce("cpuPeakPercent", -1) < $10::numeric OR (coalesce("cpuPeakPercent", -1) = $10::numeric AND ${identityAfterCursor})\nORDER BY coalesce("cpuPeakPercent", -1) DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $14`,
+  memory: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $9::boolean OR coalesce("memoryPeakBytes", -1) < $10::numeric OR (coalesce("memoryPeakBytes", -1) = $10::numeric AND ${identityAfterCursor})\nORDER BY coalesce("memoryPeakBytes", -1) DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $14`,
+  runs: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $9::boolean OR "runCount" < $10::numeric OR ("runCount" = $10::numeric AND ${identityAfterCursor})\nORDER BY "runCount" DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $14`,
 };
 const SELECTED_SUMMARY_SQL = `${GROUPED_CTES}
 ${SUMMARY_COLUMNS}
-WHERE "repositoryId"=$8::uuid AND "workflowName"=$9 AND "jobName"=$10
+WHERE "repositoryId"=$9::uuid AND "workflowName"=$10 AND "jobName"=$11
 LIMIT 1`;
 const POINTS_SQL = `${FILTERED_CTE}, ordered AS (
   SELECT organization_id AS "organizationId", run_id AS "runId", job_id AS "jobId", completed_at AS "completedAt", outcome,
@@ -130,20 +133,19 @@ const POINTS_SQL = `${FILTERED_CTE}, ordered AS (
     memory_peak_bytes AS "memoryPeakBytes", requested_vcpu AS "requestedVcpu", requested_memory_bytes AS "requestedMemoryBytes",
     effective_concurrency AS "effectiveConcurrency", telemetry_state AS "telemetryState", telemetry_sample_count AS "telemetrySampleCount",
     row_number() OVER (ORDER BY completed_at, job_id) AS ordinal, count(*) OVER () AS total
-  FROM filtered WHERE repository_id=$8 AND workflow_name=$9 AND job_name=$10
+  FROM filtered WHERE repository_id=$9 AND workflow_name=$10 AND job_name=$11
 ), targets AS (
-  SELECT DISTINCT CASE WHEN total <= $11 THEN target_index
-    ELSE round(1 + (target_index - 1) * (total - 1)::numeric / ($11 - 1))::bigint END AS ordinal
+  SELECT DISTINCT CASE WHEN total <= $12 THEN target_index
+    ELSE round(1 + (target_index - 1) * (total - 1)::numeric / ($12 - 1))::bigint END AS ordinal
   FROM (SELECT max(total)::bigint AS total FROM ordered) counts
-  CROSS JOIN LATERAL generate_series(1::bigint, least(total, $11::bigint)) AS generated(target_index)
+  CROSS JOIN LATERAL generate_series(1::bigint, least(total, $12::bigint)) AS generated(target_index)
   WHERE total > 0
 )
 SELECT "organizationId", "runId", "jobId", "completedAt", outcome, "executionDurationMs", "cpuAveragePercent", "cpuPeakPercent",
   "memoryPeakBytes", "requestedVcpu", "requestedMemoryBytes", "effectiveConcurrency", "telemetryState", "telemetrySampleCount"
 FROM ordered JOIN targets USING (ordinal)
 ORDER BY ordered."completedAt", ordered."jobId"
-LIMIT $11`;
-
+LIMIT $12`;
 type ValidatedQuery = {
   from: string; to: string; platform: string | null; vcpu: number | null; concurrency: number | null;
   searchPattern: string; sort: JobResourceTrendSort;
@@ -188,8 +190,8 @@ function validateQuery(query: JobResourceTrendQuery): ValidatedQuery {
   };
 }
 type SqlParameter = string | number | boolean | null;
-function filterParameters(organizationId: string, query: ValidatedQuery): SqlParameter[] {
-  return [organizationId, query.from, query.to, query.platform, query.vcpu, query.concurrency, query.searchPattern];
+function filterParameters(organizationId: string, query: ValidatedQuery, userId?: string): SqlParameter[] {
+  return [organizationId, query.from, query.to, query.platform, query.vcpu, query.concurrency, query.searchPattern, userId ?? null];
 }
 const asNumber = (value: unknown): number => Number(value ?? 0);
 const asNullableNumber = (value: unknown): number | null => value == null ? null : Number(value);
@@ -246,6 +248,7 @@ async function loadSummary(db: DatabaseClient, filterParams: SqlParameter[], ide
   return rows[0] ? normalizeJob(rows[0]) : null;
 }
 
+
 function summaryMatchesIdentity(summary: JobResourceTrendJob, identity: JobResourceIdentity): boolean {
   return summary.repositoryId === identity.repositoryId
     && summary.workflowName === identity.workflowName
@@ -260,8 +263,8 @@ function identityFromSummary(summary: JobResourceTrendJob): JobResourceIdentity 
   };
 }
 
-export async function listJobResourceTrends(db: DatabaseClient, organizationId: string, query: JobResourceTrendQuery): Promise<JobResourceTrendResponse> {
-  const validated = validateQuery(query), filters = filterParameters(organizationId, validated), cursor = validated.cursor;
+export async function listJobResourceTrends(db: DatabaseClient, organizationId: string, query: JobResourceTrendQuery, userId?: string): Promise<JobResourceTrendResponse> {
+  const validated = validateQuery(query), filters = filterParameters(organizationId, validated, userId), cursor = validated.cursor;
   const summaryParams = [...filters, cursor !== null, cursor?.sortValue ?? (validated.sort === "latest" ? new Date(0).toISOString() : 0),
     cursor?.identity.repositoryId ?? "00000000-0000-0000-0000-000000000000", cursor?.identity.workflowName ?? "", cursor?.identity.jobName ?? "", validated.limit + 1];
   const [totalRows, facetRows, summaryRows] = await Promise.all([

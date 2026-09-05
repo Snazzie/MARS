@@ -199,12 +199,23 @@ function UnassignedJobsSection({ jobs, idPrefix }: { jobs: WorkerHealth["jobs"];
   </section>;
 }
 
+function VmWorkloadsSection({ jobs }: { jobs: WorkerHealth["jobs"] }) {
+  return <div className="worker-health-table-wrap">
+    <table className="worker-health-table">
+      <caption>Managed VM workloads</caption>
+      <thead><tr><th scope="col">Job ID</th><th scope="col">Repository / name</th><th scope="col">Lease state</th><th scope="col">Age</th><th scope="col">vCPU</th><th scope="col">Memory</th><th scope="col">Storage</th><th scope="col">Concurrency</th></tr></thead>
+      <tbody>{jobs.map((job) => <tr key={job.leaseId}><JobCells job={job} /></tr>)}</tbody>
+    </table>
+  </div>;
+}
+
 function ManagedContainersSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: string }) {
   const jobsByLeaseId = new Map(health.jobs.map((job) => [job.leaseId, job]));
   const unassignedJobs = health.jobs.filter((job) => !health.containers.some((container) => container.leaseId === job.leaseId));
+  const vmMode = health.runtimeMode === "vm";
   return <section className="worker-health-section" aria-labelledby={`${idPrefix}-containers-heading`}>
-    <h3 id={`${idPrefix}-containers-heading`}>Managed containers</h3>
-    {health.containers.length === 0 ? <p className="worker-health-empty">No managed containers reported.</p> : <div className="worker-health-table-wrap">
+    <h3 id={`${idPrefix}-containers-heading`}>{vmMode ? "Managed workloads" : "Managed containers"}</h3>
+    {vmMode ? health.jobs.length > 0 ? <VmWorkloadsSection jobs={health.jobs} /> : <p className="worker-health-empty">No active workloads</p> : health.containers.length === 0 ? <p className="worker-health-empty">No managed containers reported.</p> : <div className="worker-health-table-wrap">
       <table className="worker-health-table worker-health-container-table">
         <caption>Current managed containers and resource usage</caption>
         <thead><tr><th scope="col">Container</th><th scope="col">State</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Disk</th><th scope="col">Freshness</th><th scope="col">Job ID</th><th scope="col">Repository / name</th><th scope="col">Lease state</th><th scope="col">Age</th><th scope="col">vCPU</th><th scope="col">Memory</th><th scope="col">Storage</th><th scope="col">Concurrency</th></tr></thead>
@@ -222,8 +233,8 @@ function ManagedContainersSection({ health, idPrefix }: { health: WorkerHealth; 
         })}</tbody>
       </table>
     </div>}
-    {health.jobs.length === 0 && <p className="worker-health-empty">No active jobs</p>}
-    {unassignedJobs.length > 0 && <UnassignedJobsSection jobs={unassignedJobs} idPrefix={idPrefix} />}
+    {!vmMode && health.jobs.length === 0 && <p className="worker-health-empty">No active jobs</p>}
+    {!vmMode && unassignedJobs.length > 0 && <UnassignedJobsSection jobs={unassignedJobs} idPrefix={idPrefix} />}
   </section>;
 }
 

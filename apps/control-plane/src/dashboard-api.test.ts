@@ -167,6 +167,20 @@ describe("dashboard API", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ summary: { jobCount: 1 }, jobs: [{ jobName: "build" }] });
   });
+  test("accepts Unix-second trend bounds", async () => {
+    const response = await appFor(member, trendDb()).request(
+      "/api/organizations/org/job-resource-trends?from=1787788800&to=1788393600",
+      { headers: sessionHeaders },
+    );
+    expect(response.status).toBe(200);
+  });
+  test("supports all-organization trend scope", async () => {
+    const response = await appFor(member, trendDb()).request(
+      "/api/organizations/all/job-resource-trends?from=1787788800&to=1788393600",
+      { headers: sessionHeaders },
+    );
+    expect(response.status).toBe(200);
+  });
   test("rejects invalid trend bounds and hides foreign organizations", async () => {
     const invalid = await appFor().request("/api/organizations/org/job-resource-trends?from=nope", { headers: sessionHeaders });
     expect(invalid.status).toBe(400);

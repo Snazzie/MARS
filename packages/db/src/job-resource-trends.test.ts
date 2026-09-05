@@ -159,9 +159,8 @@ describe("listJobResourceTrends", () => {
     expect(result.jobs).toHaveLength(1);
     expect(decodeJobResourceCursor(result.nextCursor!)).toEqual({ sortValue: 1200, jobKey: encodeJobResourceKey(identity) });
     expect(db.calls[2]?.values).toContain(2);
-    expect(db.calls[2]?.sql).toContain("repository_id, workflow_name, job_name");
-    expect(db.calls[2]?.sql).toContain("$10::uuid");
-    expect(db.calls[2]?.values[9]).toBe("00000000-0000-0000-0000-000000000000");
+    expect(db.calls[2]?.sql).toContain("$11::uuid");
+    expect(db.calls[2]?.values[10]).toBe("00000000-0000-0000-0000-000000000000");
   });
 
   test("falls back to the first summary when a valid selected identity is filtered out", async () => {
