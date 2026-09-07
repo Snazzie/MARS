@@ -791,6 +791,7 @@ test("returns a disconnected GitHub connection summary when no installation exis
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
   })).request("/api/organizations/org-1/github/connection");
   expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("no-store");
   expect(await response.json()).toEqual({ connected: false });
 });
 
@@ -803,6 +804,7 @@ test("returns a connected GitHub summary with account identity and management UR
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
   })).request("/api/organizations/org-1/github/connection");
   expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("no-store");
   expect(await response.json()).toEqual({
     connected: true,
     login: "acme",

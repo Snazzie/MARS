@@ -440,6 +440,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const org = c.req.param("organizationId");
     const denied = await guard(c, deps, org); if (denied) return denied;
     const [installation] = await deps.db`SELECT o.login, o.github_account_type AS "githubAccountType", i.github_installation_id AS "githubInstallationId" FROM organizations o LEFT JOIN dashboard_installations i ON i.organization_id=o.id AND i.state <> 'suspended' WHERE o.id=${org} ORDER BY i.created_at DESC NULLS LAST LIMIT 1`;
+    c.header("Cache-Control", "no-store");
     if (!installation || !Number.isSafeInteger(Number(installation.githubInstallationId))) return c.json(GithubConnectionSummary.parse({ connected: false }));
     const summary: Record<string, unknown> = { connected: true };
     if (typeof installation.login === "string" && installation.login) summary.login = installation.login;
