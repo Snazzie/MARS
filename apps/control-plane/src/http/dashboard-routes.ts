@@ -439,7 +439,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   app.get("/api/organizations/:organizationId/github/connection", safe(async (c) => {
     const org = c.req.param("organizationId");
     const denied = await guard(c, deps, org); if (denied) return denied;
-    const [installation] = await deps.db`SELECT o.login, o.github_account_type AS "githubAccountType", i.github_installation_id AS "githubInstallationId" FROM organizations o LEFT JOIN dashboard_installations i ON i.organization_id=o.id WHERE o.id=${org} ORDER BY i.created_at DESC NULLS LAST LIMIT 1`;
+    const [installation] = await deps.db`SELECT o.login, o.github_account_type AS "githubAccountType", i.github_installation_id AS "githubInstallationId" FROM organizations o LEFT JOIN dashboard_installations i ON i.organization_id=o.id AND i.state <> 'suspended' WHERE o.id=${org} ORDER BY i.created_at DESC NULLS LAST LIMIT 1`;
     if (!installation || !Number.isSafeInteger(Number(installation.githubInstallationId))) return c.json(GithubConnectionSummary.parse({ connected: false }));
     const summary: Record<string, unknown> = { connected: true };
     if (typeof installation.login === "string" && installation.login) summary.login = installation.login;
@@ -458,7 +458,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     try {
       return c.json(GithubRateLimitStats.parse(await deps.githubApp.getInstallationRateLimit(Number(installation.githubInstallationId))));
     } catch (cause) {
-      if (cause instanceof Error && cause.message === "github_installation_not_found") return error(c, 404, "not_found", "GitHub installation not found");
+      if (cause instanceof Error && (cause.message === "github_installation_not_found" || cause.message === "github_404")) return error(c, 404, "not_found", "GitHub installation not found");
       if (cause instanceof Error && cause.message === "github_app_unconfigured") return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
       throw cause;
     }

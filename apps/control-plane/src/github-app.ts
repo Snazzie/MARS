@@ -429,11 +429,14 @@ export class GitHubAppService {
       return value;
     };
     const reset = header("x-ratelimit-reset");
+    const resetMs = reset * 1000;
+    const resetDate = new Date(resetMs);
+    if (!Number.isFinite(resetMs) || resetMs > 8_640_000_000_000 || Number.isNaN(resetDate.getTime())) throw new Error("github_rate_limit_invalid");
     return {
       limit: header("x-ratelimit-limit"),
       remaining: header("x-ratelimit-remaining"),
       used: header("x-ratelimit-used"),
-      resetAt: new Date(reset * 1000).toISOString(),
+      resetAt: resetDate.toISOString(),
     };
   }
 

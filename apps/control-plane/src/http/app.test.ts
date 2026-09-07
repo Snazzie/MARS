@@ -811,6 +811,26 @@ test("returns a connected GitHub summary with account identity and management UR
     location: "https://github.com/organizations/acme/settings/installations/42",
   });
 });
+test("treats suspended GitHub installations as disconnected", async () => {
+  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("state <> 'suspended'") ? [] : [{ login: "stale", githubAccountType: "Organization", githubInstallationId: 42 }]) as never;
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    db,
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+  })).request("/api/organizations/org-1/github/connection");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ connected: false });
+});
+
+test("maps a stale GitHub installation token to not found", async () => {
+  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("dashboard_installations") ? [{ githubInstallationId: 42 }] : []) as never;
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    db,
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+    githubApp: { getInstallationRateLimit: async () => { throw new Error("github_404"); } } as never,
+  })).request("/api/organizations/org-1/github/rate-limit");
+  expect(response.status).toBe(404);
+  expect(await response.json()).toMatchObject({ code: "not_found" });
+});
 
 test("protects the GitHub connection summary with organization authorization", async () => {
   const response = await createControlPlaneApp(fakeHttpDeps({

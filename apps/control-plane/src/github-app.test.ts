@@ -398,6 +398,24 @@ describe("GitHub App onboarding", () => {
       resetAt: new Date(1790000000 * 1000).toISOString(),
     });
   });
+  test("rejects an out-of-range GitHub rate-limit reset epoch", async () => {
+    const github = service(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      return new Response("{}", {
+        status: 200,
+        headers: {
+          "x-ratelimit-limit": "5000",
+          "x-ratelimit-remaining": "4999",
+          "x-ratelimit-used": "1",
+          "x-ratelimit-reset": "8640000000001",
+        },
+      });
+    });
+    fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "all" });
+    fakeDb.appConfig = { id: 9, slug: "mars", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "x" };
+    await expect(github.getInstallationRateLimit(42)).rejects.toThrow("github_rate_limit_invalid");
+  });
 });
 test("workflow discovery authenticates every private repository read", async () => {
   const calls: Request[] = [];
