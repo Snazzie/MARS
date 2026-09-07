@@ -88,6 +88,7 @@ export function SettingsPage() {
   const [values, setValues] = useState<Record<string, FormValues>>({});
   const [validation, setValidation] = useState<Record<string, string[]>>({});
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
+  const [pendingSaves, setPendingSaves] = useState<Record<string, number>>({});
   const [githubActionError, setGithubActionError] = useState<unknown>(null);
 
   useEffect(() => {
@@ -108,6 +109,7 @@ export function SettingsPage() {
   const save = useMutation({
     mutationFn: ({ organizationId: id, settings }: SaveInput) => updateSettings(id, settings),
     onMutate: ({ organizationId: id }) => {
+      setPendingSaves((current) => ({ ...current, [id]: (current[id] ?? 0) + 1 }));
       setValidation((current) => ({ ...current, [id]: [] }));
       setSaveErrors((current) => { const next = { ...current }; delete next[id]; return next; });
     },
@@ -116,6 +118,12 @@ export function SettingsPage() {
       setValidation((current) => ({ ...current, [id]: [] }));
       void client.invalidateQueries({ queryKey: ["org", id, "settings"] });
     },
+    onSettled: (_, __, { organizationId: id }) => setPendingSaves((current) => {
+      const next = { ...current };
+      if ((next[id] ?? 0) <= 1) delete next[id];
+      else next[id] -= 1;
+      return next;
+    }),
   });
 
   const invalidateGithub = () => {
@@ -176,7 +184,7 @@ export function SettingsPage() {
           const query = settingsQueries[index];
           const settings = query?.data as SettingsValue | undefined;
           const rowValues = settings ? values[organization.id] ?? formValues(settings) : undefined;
-          const saving = save.isPending && save.variables?.organizationId === organization.id;
+          const saving = (pendingSaves[organization.id] ?? 0) > 0;
           if (query?.error) return <tr key={organization.id}><th scope="row">{organization.login}</th><td colSpan={4}><div className="form-error" role="alert"><p>Unable to load organization settings: {githubError(query.error, "Try again.")}</p><button className="button secondary" type="button" onClick={() => void query.refetch()}>Retry settings</button></div></td></tr>;
           if (query?.isLoading || !settings) return <tr key={organization.id}><th scope="row">{organization.login}</th><td colSpan={4}><span className="settings-status" role="status">Loading organization settings…</span></td></tr>;
           return <tr key={organization.id}><th scope="row">{organization.login}</th>{fields.map(([name, label, description]) => <td key={name}><label className="settings-table-field"><span className="sr-only">{label} for {organization.login}</span><input aria-label={`${organization.login} ${label}`} title={description} type="number" min={1} step={name.includes("GiB") ? 0.25 : 1} required value={rowValues?.[name] ?? 1} onChange={(event) => setValues((current) => ({ ...current, [organization.id]: { ...(current[organization.id] ?? rowValues), [name]: Number(event.target.value) } }))} /></label></td>)}<td><button className="button" type="button" onClick={() => submitRow(settings)} disabled={saving}>{saving ? "Saving…" : "Save"}</button></td></tr>;

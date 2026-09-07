@@ -110,11 +110,48 @@ test("settings saves an individual organization row with its existing vCPU contr
     const row = [...container.querySelectorAll("tbody tr")].find((candidate) => candidate.textContent?.includes("Acme"));
     const saveButton = row?.querySelector("button");
     if (!saveButton) throw new Error("Acme save button was not rendered");
-    await act(async () => { saveButton.dispatchEvent(new browserWindow.MouseEvent("click", { bubbles: true })); });
+    await act(async () => { saveButton.dispatchEvent(new browserWindow.MouseEvent("click", { bubbles: true }) as unknown as Event); });
     const mutationRequest = requests.find((request) => request.body.maxVcpuPerPod === 8);
     expect(mutationRequest).toBeDefined();
     expect(mutationRequest?.url).toContain("/api/organizations/org-2/settings");
     expect(mutationRequest?.body).toEqual({ maxVcpuPerPod: 8, maxMemoryBytesPerPod: 4294967296, maxStorageBytesPerPod: 21474836480, maxConcurrentPods: 5 });
+  } finally {
+    await act(async () => { root.unmount(); });
+    globalThis.document = previousDocument;
+    globalThis.window = previousWindow;
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("settings tracks pending saves independently for each organization row", async () => {
+  const browserWindow = new Window();
+  const previousDocument = globalThis.document;
+  const previousWindow = globalThis.window;
+  const previousFetch = globalThis.fetch;
+  const client = deploymentSettingsClient();
+  client.setDefaultOptions({ queries: { staleTime: Infinity, retry: false } });
+  // @ts-expect-error test DOM globals
+  globalThis.document = browserWindow.document;
+  // @ts-expect-error test DOM globals
+  globalThis.window = browserWindow;
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  globalThis.fetch = (() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => { root.render(<QueryClientProvider client={client}><SettingsPage /></QueryClientProvider>); });
+    const rows = [...container.querySelectorAll("tbody tr")];
+    const speedSave = rows.find((row) => row.textContent?.includes("SpeedHQ"))?.querySelector("button");
+    const acmeSave = rows.find((row) => row.textContent?.includes("Acme"))?.querySelector("button");
+    if (!speedSave || !acmeSave) throw new Error("organization save buttons were not rendered");
+    await act(async () => {
+      speedSave.dispatchEvent(new browserWindow.MouseEvent("click", { bubbles: true }) as unknown as Event);
+      acmeSave.dispatchEvent(new browserWindow.MouseEvent("click", { bubbles: true }) as unknown as Event);
+    });
+    expect(speedSave.disabled).toBe(true);
+    expect(acmeSave.disabled).toBe(true);
   } finally {
     await act(async () => { root.unmount(); });
     globalThis.document = previousDocument;
