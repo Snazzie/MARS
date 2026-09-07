@@ -13,3 +13,9 @@ Tests/output:
 Implemented disconnected and connected GitHub installation states, install/manage/sync/remove actions, query invalidation for connection/rate-limit/repositories/organizations after mutating actions, separate signed-in identity/sign-out, and rate-limit remaining/limit/used/reset metrics with refresh, loading, error, and disconnected states.
 
 Concerns: Browser smoke testing was not run in this focused task; no known functional concerns from focused tests or type validation.
+
+Review follow-up:
+
+- `ef7666c` hides cached rate-limit values when the rate-limit query errors and adds a regression test.
+- Latest verification: Settings + Repositories — 14 pass, 0 fail, 55 expect() calls; `bun run --filter '@mars/web' typecheck` — exit 0.
+- Backend `Cache-Control: no-store` for volatile rate-limit responses remains outside this frontend task's assigned scope.
