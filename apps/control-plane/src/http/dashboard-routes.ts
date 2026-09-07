@@ -464,7 +464,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
       if (cause instanceof Error && (cause.message === "github_installation_not_found" || cause.message === "github_404")) return error(c, 404, "not_found", "GitHub installation not found");
       if (cause instanceof Error && cause.message === "github_app_unconfigured") return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
       if (cause instanceof Error && cause.message === "github_rate_limit_invalid") return error(c, 502, "github_rate_limit_invalid", "GitHub returned invalid rate-limit statistics");
-      if (cause instanceof Error && /^github_(401|403|429)$/.test(cause.message)) return error(c, 502, "github_upstream_error", "GitHub API request failed");
+      if (cause instanceof Error && /^github_[45]\d\d$/.test(cause.message)) return error(c, 502, "github_upstream_error", "GitHub API request failed");
       throw cause;
     }
   }));
