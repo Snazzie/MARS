@@ -48,6 +48,7 @@ export function SettingsPage() {
   const [githubActionError, setGithubActionError] = useState<unknown>(null);
   const [validation, setValidation] = useState<string[]>([]);
   useEffect(() => { if (query.data) setValues({ maxVcpuPerPod: query.data.maxVcpuPerPod, maxMemoryGiB: bytesToGiB(query.data.maxMemoryBytesPerPod), maxStorageGiB: bytesToGiB(query.data.maxStorageBytesPerPod), maxConcurrentPods: query.data.maxConcurrentPods }); }, [query.data]);
+  useEffect(() => { setGithubActionError(null); }, [organizationId]);
   const invalidateGithub = () => {
     void client.invalidateQueries({ queryKey: ["org", organizationId, "github-connection"] });
     void client.invalidateQueries({ queryKey: ["org", organizationId, "github-rate-limit"] });
