@@ -396,7 +396,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   server = Bun.serve<ControlPlaneSocketData>({ port: options.port ?? Number(Bun.env.PORT ?? 3000), websocket: gateway.websocket, fetch: request => gateway.fetch(request, server) });
   console.log(`Mars control plane listening on ${server.url}`);
   if (!options.skipBackgroundTasks) {
-    const discoveryDeps = { db, installationToken: (installationId: number) => githubApp.getInstallationToken(installationId), githubFetchForInstallation: (installationId: number) => githubRateLimits.scopedFetch(installationId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY };
+    const discoveryDeps = { db, installationToken: (installationId: number) => githubApp.getInstallationToken(installationId), githubFetchForInstallation: (installationId: number) => githubRateLimits.scopedFetch(installationId), installationBlocked: (installationId: number) => githubRateLimits.isCoolingDown(installationId), repositoryFullName: Bun.env.JOB_DISCOVERY_REPOSITORY };
     let lastQueuedDiscoveryAt = 0;
     let lastGithubLeaseReconciliationAt = 0;
     startReconciliationScheduler(async () => {

@@ -467,3 +467,43 @@ test("confirms omitted jobs from a complete attempt-qualified listing before ter
   expect(terminalRunUpdate?.query).toContain("NOT EXISTS");
   expect(updates.some(({ query }) => query.includes("UPDATE dashboard_repositories SET available=false"))).toBe(false);
 });
+
+test("skips queued discovery before token or GitHub requests during installation cooldown", async () => {
+  const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
+  let tokenCalls = 0;
+  let fetchCalls = 0;
+  const db = (async (strings: TemplateStringsArray) => strings.join(" ").includes("FROM dashboard_repositories repo") ? [repository] : []) as never;
+
+  const report = await discoverQueuedRepositoryJobs({
+    db,
+    installationToken: async () => { tokenCalls += 1; return "token"; },
+    githubFetchForInstallation: () => { fetchCalls += 1; return async () => Response.json({}); },
+    installationBlocked: installationId => installationId === repository.installationId,
+    repositoryFullName: repository.fullName,
+  });
+
+  expect(report).toMatchObject({ repositories: 1, discovered: 0, updated: 0, failed: 0 });
+  expect(tokenCalls).toBe(0);
+  expect(fetchCalls).toBe(0);
+});
+
+test("skips all available repositories in a cooling installation group", async () => {
+  const rows = [
+    { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "one", fullName: "acme/one", installationId: 42 },
+    { repositoryId: "22222222-2222-4222-8222-222222222222", githubRepositoryId: 8, name: "two", fullName: "acme/two", installationId: 42 },
+  ];
+  let tokenCalls = 0;
+  let fetchCalls = 0;
+  const db = (async (strings: TemplateStringsArray) => strings.join(" ").includes("FROM dashboard_repositories repo") ? rows : []) as never;
+
+  const report = await discoverAvailableRepositoryJobs({
+    db,
+    installationToken: async () => { tokenCalls += 1; return "token"; },
+    githubFetchForInstallation: () => { fetchCalls += 1; return async () => Response.json({}); },
+    installationBlocked: installationId => installationId === 42,
+  });
+
+  expect(report).toMatchObject({ repositories: 2, discovered: 0, updated: 0, failed: 0 });
+  expect(tokenCalls).toBe(0);
+  expect(fetchCalls).toBe(0);
+});

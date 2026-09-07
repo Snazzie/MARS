@@ -5,7 +5,13 @@ import { applyGithubJobSnapshot, markGithubJobMissing, type GithubJobSnapshot, t
 import { GITHUB_LOG_FORMAT_VERSION, syncCompletedGithubJobLogs } from "./github-job-log-sync.ts";
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-export type DiscoveryDeps = { db: DatabaseClient; installationToken: (installationId: number) => Promise<string>; githubFetchForInstallation: (installationId: number) => Fetcher; repositoryFullName?: string };
+export type DiscoveryDeps = {
+  db: DatabaseClient;
+  installationToken: (installationId: number) => Promise<string>;
+  githubFetchForInstallation: (installationId: number) => Fetcher;
+  repositoryFullName?: string;
+  installationBlocked?: (installationId: number) => boolean;
+};
 export type DiscoveryReport = { repositories: number; discovered: number; updated: number; failed: number };
 export async function syncCompletedJobLogsBestEffort(
   jobId: number,
@@ -197,16 +203,18 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
   }
   return { discovered, updated };
 }
+
 export async function discoverQueuedRepositoryJobs(deps: DiscoveryDeps): Promise<DiscoveryReport> {
   if (!deps.repositoryFullName) return { repositories: 0, discovered: 0, updated: 0, failed: 0 };
   const rows = await deps.db`SELECT repo.id AS "repositoryId",repo.organization_id AS "organizationId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' AND (repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()) AND repo.full_name=${deps.repositoryFullName} ORDER BY repo.full_name`;
   const report: DiscoveryReport = { repositories: rows.length, discovered: 0, updated: 0, failed: 0 };
   for (const row of rows as Record<string, unknown>[]) {
     try {
+      const installationId = Number(row.installationId);
+      if (deps.installationBlocked?.(installationId)) continue;
       const fullName = String(row.fullName ?? "");
       const [owner, repo] = fullName.split("/", 2);
       if (!owner || !repo || fullName.split("/").length !== 2) throw new Error("repository_name_invalid");
-      const installationId = Number(row.installationId);
       const client = new GithubJobsClient({ token: () => deps.installationToken(installationId), fetch: deps.githubFetchForInstallation(installationId) });
       const active = await client.listRuns(owner, repo, undefined, 1);
       const runs = active.runs.filter(run => run.status === "queued" || run.status === "in_progress");
@@ -272,6 +280,7 @@ export async function discoverAvailableRepositoryJobs(deps: DiscoveryDeps): Prom
     for (;;) {
       const group = groups[cursor++];
       if (!group) return;
+      if (deps.installationBlocked?.(Number(group[0]?.installationId))) continue;
       for (const row of group) {
         try {
           const value = await discoverRepository(deps, row);
