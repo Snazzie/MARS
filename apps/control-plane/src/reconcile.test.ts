@@ -163,3 +163,62 @@ test("fails jobs when reservation fails unexpectedly", async () => {
   });
   expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 1 });
 });
+test("defers organization capacity exhaustion before preflight, JIT, or dispatch", async () => {
+  const calls: string[] = [];
+  const result = await reconcileQueuedJobs({
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "mars-default"] }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }],
+    reserve: async () => { calls.push("reserve"); throw new Error("organization_capacity_exhausted"); },
+    preflight: async () => { calls.push("preflight"); return true; },
+    jit: async () => { calls.push("jit"); throw new Error("must not generate"); },
+    dispatch: async () => { calls.push("dispatch"); },
+  });
+  expect(result).toEqual({ reserved: 0, deferred: 1, skipped: 0, failed: 0 });
+  expect(calls).toEqual(["reserve"]);
+});
+
+test("keeps organization resource ceiling rejection visible as a failure", async () => {
+  const calls: string[] = [];
+  const result = await reconcileQueuedJobs({
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "mars-default"] }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }],
+    reserve: async () => { calls.push("reserve"); throw new Error("organization_resource_ceiling_exceeded"); },
+    preflight: async () => { calls.push("preflight"); return true; },
+    jit: async () => { calls.push("jit"); throw new Error("must not generate"); },
+    dispatch: async () => { calls.push("dispatch"); },
+  });
+  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 1 });
+  expect(calls).toEqual(["reserve"]);
+});
+
+test("runs preflight after reserve and releases a reservation when preflight rejects", async () => {
+  const order: string[] = [];
+  const reservation = { id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 } };
+  const result = await reconcileQueuedJobs({
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "mars-default"] }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }],
+    reserve: async () => { order.push("reserve"); return reservation; },
+    preflight: async () => { order.push("preflight"); return false; },
+    jit: async () => { order.push("jit"); throw new Error("must not generate"); },
+    dispatch: async () => { order.push("dispatch"); },
+    release: async () => { order.push("release"); },
+  });
+  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 1, failed: 0 });
+  expect(order).toEqual(["reserve", "preflight", "release"]);
+});
+
+test("releases a reservation when preflight throws", async () => {
+  let released = false;
+  const reservation = { id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 } };
+  const result = await reconcileQueuedJobs({
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "mars-default"] }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }],
+    reserve: async () => reservation,
+    preflight: async () => { throw new Error("github_payload_invalid"); },
+    jit: async () => { throw new Error("must not generate"); },
+    dispatch: async () => {},
+    release: async () => { released = true; },
+  });
+  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 1 });
+  expect(released).toBe(true);
+});

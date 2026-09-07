@@ -128,7 +128,7 @@ test("reserves, requests JIT configuration, and dispatches an eligible queued jo
     dispatcher,
   });
   expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
-  expect(events).toEqual(["preflight", "reserve", "jit", "dispatch"]);
+  expect(events).toEqual(["reserve", "preflight", "jit", "dispatch"]);
 });
 
 test("does not reserve or dispatch when exact GitHub job preflight reports 404", async () => {
@@ -182,10 +182,12 @@ test("does not reserve or dispatch when exact GitHub job preflight reports 404",
     dispatcher: { dispatch: async () => { events.push("dispatch"); } },
   });
 
-  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 0 });
-  expect(events).toHaveLength(1);
-  expect(events[0]).toContain("/actions/jobs/42");
-  expect(events).not.toContain("candidates");
+  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 1, failed: 0 });
+  expect(events).toHaveLength(3);
+  expect(events[0]).toBe("candidates");
+  expect(events[1]).toBe("reserve");
+  expect(events[2]).toContain("/actions/jobs/42");
+  expect(events).not.toContain("dispatch");
 });
 test("fails closed when exact GitHub preflight returns an unknown status", async () => {
   const events: string[] = [];
@@ -205,8 +207,8 @@ test("fails closed when exact GitHub preflight returns an unknown status", async
     dispatcher: { dispatch: async () => { events.push("dispatch"); } },
   });
 
-  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 1 });
-  expect(events).toEqual([]);
+  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 1, failed: 0 });
+  expect(events).toEqual(["candidates"]);
 });
 
 test("skips all queued preflight requests while an installation is cooling down", async () => {
@@ -233,7 +235,7 @@ test("skips all queued preflight requests while an installation is cooling down"
   });
 
   expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 2, failed: 0 });
-  expect(calls).toEqual([]);
+  expect(calls).toEqual(["candidates"]);
 });
 
 test("stops preflighting an installation after one rate-limit response", async () => {
@@ -247,9 +249,30 @@ test("stops preflighting an installation after one rate-limit response", async (
       { jobId: 43, runId: "run-43", githubRunId: 78, runAttempt: 1, repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels: ["mars-windows-x64"] },
       { jobId: 44, runId: "run-44", githubRunId: 79, runAttempt: 1, repositoryId: "repo", organizationId: "org", installationId: 8, repository: "acme/project", labels: ["mars-windows-x64"] },
     ];
-    if (query.includes("p.id as")) calls.push("candidates");
+    if (query.includes("p.id as")) return [{
+      poolId: "pool",
+      workerId: "worker",
+      enabled: true,
+      platform: "windows-x64",
+      driver: "windows-hyperv-container",
+      imageDigest: "sha256:image",
+      resources: { vcpu: 2, memoryBytes: 4, storageBytes: 8, concurrency: 1 },
+      labels: ["mars-windows-x64"],
+      triggerLabel: "mars-windows-x64",
+      admissionState: "adopted",
+      connectionState: "online",
+      configurationState: "ready",
+      configurationRevision: "current",
+      appliedConfigurationRevision: "current",
+      limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 },
+      doctor: { runtimeReady: true },
+      encryptionPublicKey: "",
+      active: 0,
+    }];
+    if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 2, memoryBytes: 4, storageBytes: 8, concurrency: 1 }, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 }, doctor: { capacity: { freeVcpu: 2, freeMemoryBytes: 4, freeStorageBytes: 8 } } }];
+    if (query.includes("insert into runner_leases")) return [{ id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, jobId: 42 }];
     return [];
-  }) as unknown as DatabaseClient, { begin: async () => [] });
+  }) as unknown as DatabaseClient, { begin: async (fn: (tx: DatabaseClient) => unknown) => fn(db) });
 
   const result = await runQueuedJobReconciliation({
     db,
@@ -258,7 +281,7 @@ test("stops preflighting an installation after one rate-limit response", async (
       const jobId = Number(String(input).match(/actions\/jobs\/(\d+)$/)?.[1]);
       githubJobs.push(jobId);
       if (installationId === 7) throw rateLimitError;
-      return Response.json({ id: jobId, run_id: 79, run_attempt: 1, status: "queued", name: "build", labels: ["mars-windows-x64"], created_at: "2026-08-22T10:31:46Z" });
+      return Response.json({ id: jobId, run_id: 79, run_attempt: 1, status: "queued", name: "build", labels: installationId === 8 ? ["different"] : ["mars-windows-x64"], created_at: "2026-08-22T10:31:46Z" });
     },
     installationBlocked: () => false,
     dispatcher: { dispatch: async () => { calls.push("dispatch"); } },
@@ -266,5 +289,113 @@ test("stops preflighting an installation after one rate-limit response", async (
 
   expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 2, failed: 1 });
   expect(githubJobs).toEqual([42, 44]);
-  expect(calls).toEqual(["candidates"]);
+  expect(calls).toEqual([]);
+});
+test("defers queued jobs at organization capacity without GitHub requests", async () => {
+  const jobs = Array.from({ length: 10 }, (_, index) => ({
+    jobId: 100 + index,
+    runId: `run-${index}`,
+    githubRunId: 700 + index,
+    runAttempt: 1,
+    repositoryId: "repo",
+    organizationId: "org",
+    installationId: 7,
+    repository: "acme/project",
+    labels: ["mars-windows-x64"],
+  }));
+  const { publicKey } = generateKeyPairSync("x25519");
+  const workerEncryptionPublicKey = publicKey.export({ format: "pem", type: "spki" }).toString();
+  let tokenRequests = 0;
+  let githubRequests = 0;
+  const candidateRow = {
+    poolId: "pool",
+    workerId: "worker",
+    enabled: true,
+    platform: "windows-x64",
+    driver: "windows-hyperv-container",
+    imageDigest: "sha256:image",
+    resources: { vcpu: 2, memoryBytes: 4, storageBytes: 8, concurrency: 10 },
+    labels: ["mars-windows-x64"],
+    triggerLabel: "mars-windows-x64",
+    admissionState: "adopted",
+    connectionState: "online",
+    configurationState: "ready",
+    configurationRevision: "current",
+    appliedConfigurationRevision: "current",
+    limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 10 },
+    doctor: { runtimeReady: true },
+    encryptionPublicKey: workerEncryptionPublicKey,
+    active: 0,
+  };
+  const db = Object.assign((async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ").toLowerCase();
+    if (query.includes("from dashboard_jobs j")) return jobs;
+    if (query.includes("p.id as")) return [candidateRow];
+    if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: candidateRow.resources, limits: candidateRow.limits, doctor: { capacity: { freeVcpu: 2, freeMemoryBytes: 4, freeStorageBytes: 8 } } }];
+    if (query.includes("from organization_settings")) return [{ maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 }];
+    if (query.includes("from runner_leases") && query.includes("organization_id")) return [{ count: 1 }];
+    return [];
+  }) as unknown as DatabaseClient, { begin: async (fn: (tx: DatabaseClient) => unknown) => fn(db) });
+  const result = await runQueuedJobReconciliation({
+    db,
+    installationToken: async () => { tokenRequests += 1; return "token"; },
+    githubFetchForInstallation: () => async () => { githubRequests += 1; return Response.json({}); },
+    dispatcher: { dispatch: async () => { throw new Error("must not dispatch"); } },
+  });
+  expect(result).toEqual({ reserved: 0, deferred: 10, skipped: 0, failed: 0 });
+  expect(tokenRequests).toBe(0);
+  expect(githubRequests).toBe(0);
+});
+test("persists normalized labels and releases when GitHub queued labels change", async () => {
+  let updatedLabels: unknown;
+  const events: string[] = [];
+  const { publicKey } = generateKeyPairSync("x25519");
+  const workerEncryptionPublicKey = publicKey.export({ format: "pem", type: "spki" }).toString();
+  const candidateRow = {
+    poolId: "pool",
+    workerId: "worker",
+    enabled: true,
+    platform: "windows-x64",
+    driver: "windows-hyperv-container",
+    imageDigest: "sha256:image",
+    resources: { vcpu: 2, memoryBytes: 4, storageBytes: 8, concurrency: 1 },
+    labels: ["mars-windows-x64"],
+    triggerLabel: "mars-windows-x64",
+    admissionState: "adopted",
+    connectionState: "online",
+    configurationState: "ready",
+    configurationRevision: "current",
+    appliedConfigurationRevision: "current",
+    limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 },
+    doctor: { runtimeReady: true },
+    encryptionPublicKey: workerEncryptionPublicKey,
+    active: 0,
+  };
+  const db = Object.assign((async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const query = strings.join(" ").toLowerCase();
+    if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", githubRunId: 77, runAttempt: 1, repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels: ["mars-windows-x64"] }];
+    if (query.includes("p.id as")) return [candidateRow];
+    if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: candidateRow.resources, limits: candidateRow.limits, doctor: { capacity: { freeVcpu: 2, freeMemoryBytes: 4, freeStorageBytes: 8 } } }];
+    if (query.includes("from organization_settings") || query.includes("from runner_leases")) return [];
+    if (query.includes("insert into runner_leases")) {
+      events.push("reserve");
+      return [{ id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, jobId: 42 }];
+    }
+    if (query.includes("update dashboard_jobs set requested_labels")) updatedLabels = values[0];
+    if (query.includes("update runner_leases")) events.push("release");
+    return [];
+  }) as unknown as DatabaseClient, { begin: async (fn: (tx: DatabaseClient) => unknown) => fn(db) });
+  const result = await runQueuedJobReconciliation({
+    db,
+    installationToken: async () => "token",
+    githubFetchForInstallation: () => async (input) => {
+      events.push("preflight");
+      expect(String(input)).toContain("/actions/jobs/42");
+      return Response.json({ id: 42, run_id: 77, run_attempt: 1, status: "queued", name: "build", labels: ["Mars-Windows-X64", " Extra ", "mars-windows-x64"], created_at: "2026-08-22T10:31:46Z" });
+    },
+    dispatcher: { dispatch: async () => { throw new Error("must not dispatch"); } },
+  });
+  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 1, failed: 0 });
+  expect(updatedLabels).toEqual(["mars-windows-x64", "extra"]);
+  expect(events).toEqual(["reserve", "preflight", "release"]);
 });

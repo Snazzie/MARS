@@ -1,5 +1,5 @@
 import type { DatabaseClient } from "@mars/db";
-import { reserveRoutingSlot } from "@mars/db";
+import { jsonParameter, reserveRoutingSlot } from "@mars/db";
 import { PoolResources as PoolResourcesSchema, RuntimeDriverName, type PoolResources as PoolResourcesValue, type RuntimeDriverName as RuntimeDriverNameValue, type RunnerJitConfig, type LeaseBootstrapEnvelope } from "@mars/contracts";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { GithubJobsClient } from "./github-jobs.ts";
@@ -91,7 +91,8 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     FOR UPDATE OF j SKIP LOCKED`;
   if (!queuedRows.length) return { reserved: 0, deferred: 0, skipped: 0, failed: 0 };
 
-  const organizationByJob = new Map<number, string>();
+  const queuedByJob = new Map<number, typeof queuedRows[number]>();
+  for (const row of queuedRows) queuedByJob.set(Number(row.jobId), row);
   const githubByInstallation = new Map<number, GithubJobsClient>();
   const clientForInstallation = (installationId: number): GithubJobsClient => {
     let client = githubByInstallation.get(installationId);
@@ -102,80 +103,6 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     return client;
   };
   const blockedInstallations = new Set<number>();
-  let preflightSkipped = 0;
-  const sourceQueuedRows: typeof queuedRows = [];
-  let preflightFailures = 0;
-  for (const row of queuedRows) {
-    const jobId = Number(row.jobId);
-    const organizationId = String(row.organizationId);
-    const installationId = Number(row.installationId);
-    organizationByJob.set(jobId, organizationId);
-    if (blockedInstallations.has(installationId) || deps.installationBlocked?.(installationId)) {
-      preflightSkipped += 1;
-      continue;
-    }
-    const [owner, repo] = String(row.repository).split("/", 2);
-    if (!owner || !repo) {
-      console.error(`Reconcile preflight job ${jobId} failed: github_repository_invalid`);
-      preflightFailures += 1;
-      continue;
-    }
-    const client = clientForInstallation(installationId);
-    let githubJob: GithubJobSnapshot;
-    try {
-      githubJob = await client.getJob(owner, repo, jobId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "unknown";
-      if (isGithubRateLimitError(error)) {
-        blockedInstallations.add(installationId);
-        console.error(`Reconcile preflight installation ${installationId} cooling down: ${message}`);
-        preflightFailures += 1;
-        continue;
-      }
-      if (message === "github_404" || message === "github_410") {
-        try {
-          await markGithubJobMissing(deps.db, { organizationId, githubJobId: jobId, observedAt: new Date().toISOString() });
-        } catch (markError) {
-          const markMessage = markError instanceof Error ? markError.message : "unknown";
-          console.error(`Reconcile preflight job ${jobId} failed: ${markMessage}`);
-          preflightFailures += 1;
-        }
-        continue;
-      }
-      console.error(`Reconcile preflight job ${jobId} failed: ${message}`);
-      preflightFailures += 1;
-      continue;
-    }
-    try {
-      if (githubJob.id !== jobId || githubJob.runId !== Number(row.githubRunId) || githubJob.runAttempt !== Number(row.runAttempt)) {
-        throw new Error("github_payload_invalid");
-      }
-      if (githubJob.status === "queued") {
-        sourceQueuedRows.push({ ...row, labels: githubJob.labels });
-        continue;
-      }
-      const run = await client.getRunAttempt(owner, repo, githubJob.runId, githubJob.runAttempt);
-      await applyGithubJobSnapshot({
-        installationId,
-        repository: { id: Number(row.githubRepositoryId), name: repo, fullName: String(row.repository) },
-        run,
-        job: githubJob,
-        authoritative: true,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "unknown";
-      if (isGithubRateLimitError(error)) {
-        blockedInstallations.add(installationId);
-        console.error(`Reconcile preflight installation ${installationId} cooling down: ${message}`);
-        preflightFailures += 1;
-        continue;
-      }
-      console.error(`Reconcile preflight job ${jobId} failed: ${message}`);
-      preflightFailures += 1;
-    }
-  }
-  if (!sourceQueuedRows.length) return { reserved: 0, deferred: 0, skipped: preflightSkipped, failed: preflightFailures };
-
   const candidateRows = await deps.db`
     SELECT p.id AS "poolId", p.organization_id AS "organizationId", p.worker_id AS "poolWorkerId",
       w.id AS "workerId", p.enabled, p.platform, p.driver, p.image_digest AS "imageDigest", p.resources, p.labels, p.trigger_label AS "triggerLabel",
@@ -201,17 +128,70 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       pool: { id: poolId, enabled: Boolean(row.enabled), platform: String(row.platform), driver: String(row.driver), resources, concurrency, active: Number(row.active ?? 0), labels: stringArray(row.labels), triggerLabel: row.triggerLabel ? String(row.triggerLabel) : null },
     };
   });
-  const connectedCandidates = sqlCandidates.filter((candidate) => !deps.workerConnected || deps.workerConnected(candidate.worker.id)).map((candidate) => ({ ...candidate, worker: { ...candidate.worker, connectionState: "online" } }));
-  const candidates = connectedCandidates;
+  const candidates = sqlCandidates
+    .filter((candidate) => !deps.workerConnected || deps.workerConnected(candidate.worker.id))
+    .map((candidate) => ({ ...candidate, worker: { ...candidate.worker, connectionState: "online" } }));
 
+  const normalizedLabels = (labels: readonly string[]) => [...new Set(labels.map((label) => label.trim().toLowerCase()).filter(Boolean))];
   const reconciled = await reconcileQueuedJobs({
-    queued: sourceQueuedRows.map((row) => {
-      const jobId = Number(row.jobId);
-      return { installationId: Number(row.installationId), repositoryId: String(row.repositoryId), repository: String(row.repository), runId: String(row.runId), jobId, labels: stringArray(row.labels) };
-    }),
+    queued: queuedRows.map((row) => ({
+      installationId: Number(row.installationId),
+      repositoryId: String(row.repositoryId),
+      repository: String(row.repository),
+      runId: String(row.runId),
+      jobId: Number(row.jobId),
+      labels: stringArray(row.labels),
+    })),
     candidates,
-    installationBlocked: deps.installationBlocked,
-    reserve: (input) => reserveRoutingSlot(deps.db, { organizationId: organizationByJob.get(input.githubJobId)!, ...input, ttlMs: LEASE_STARTUP_TTL_MS }),
+    installationBlocked: (installationId) => blockedInstallations.has(installationId) || Boolean(deps.installationBlocked?.(installationId)),
+    preflight: async (job) => {
+      const row = queuedByJob.get(job.jobId);
+      if (!row) throw new Error("queued_job_missing");
+      const [owner, repo] = String(row.repository).split("/", 2);
+      if (!owner || !repo) throw new Error("github_repository_invalid");
+      const installationId = Number(row.installationId);
+      const client = clientForInstallation(installationId);
+      let githubJob: GithubJobSnapshot;
+      try {
+        githubJob = await client.getJob(owner, repo, job.jobId);
+      } catch (error) {
+        if (isGithubRateLimitError(error)) {
+          blockedInstallations.add(installationId);
+          throw error;
+        }
+        const message = error instanceof Error ? error.message : "unknown";
+        if (message === "github_404" || message === "github_410") {
+          await markGithubJobMissing(deps.db, { organizationId: String(row.organizationId), githubJobId: job.jobId, observedAt: new Date().toISOString() });
+          return false;
+        }
+        throw error;
+      }
+      if (githubJob.id !== job.jobId || githubJob.runId !== Number(row.githubRunId) || githubJob.runAttempt !== Number(row.runAttempt)) throw new Error("github_payload_invalid");
+      if (githubJob.status === "queued") {
+        const githubLabels = normalizedLabels(githubJob.labels);
+        const requestedLabels = normalizedLabels(stringArray(row.labels));
+        if (githubLabels.length !== requestedLabels.length || githubLabels.some((label, index) => label !== requestedLabels[index])) {
+          await deps.db`UPDATE dashboard_jobs SET requested_labels=${jsonParameter(deps.db, githubLabels)}::jsonb WHERE organization_id=${String(row.organizationId)} AND github_job_id=${job.jobId} AND run_attempt=${Number(row.runAttempt)}`;
+          return false;
+        }
+        return true;
+      }
+      try {
+        const run = await client.getRunAttempt(owner, repo, githubJob.runId, githubJob.runAttempt);
+        await applyGithubJobSnapshot({
+          installationId,
+          repository: { id: Number(row.githubRepositoryId), name: repo, fullName: String(row.repository) },
+          run,
+          job: githubJob,
+          authoritative: true,
+        });
+      } catch (error) {
+        if (isGithubRateLimitError(error)) blockedInstallations.add(installationId);
+        throw error;
+      }
+      return false;
+    },
+    reserve: (input) => reserveRoutingSlot(deps.db, { organizationId: String(queuedByJob.get(input.githubJobId)?.organizationId ?? ""), ...input, ttlMs: LEASE_STARTUP_TTL_MS }),
     jit: async (input) => {
       const client = clientForInstallation(input.installationId);
       return client.generateJitConfig({ owner: input.owner, repo: input.repo, runnerName: input.runnerName, workFolder: "_work", labels: input.labels });
@@ -226,5 +206,5 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     },
     release: async (reservation) => { await deps.db`UPDATE runner_leases SET state='failed', cleanup_state='pending', updated_at=now() WHERE id=${reservation.id} AND state='reserved'`; },
   });
-  return { ...reconciled, skipped: reconciled.skipped + preflightSkipped, failed: reconciled.failed + preflightFailures };
+  return reconciled;
 }
