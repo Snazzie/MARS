@@ -21,12 +21,15 @@ const nowMs = (value: Date | string | number) => value instanceof Date ? value.g
 const visibilityOf = (repo: { private?: unknown; visibility?: unknown }): Repository["visibility"] => repo.visibility === "private" || repo.visibility === "internal" || repo.visibility === "public" ? repo.visibility : repo.private === true ? "private" : "public";
 
 type WorkflowRepo = { installationId: number; fullName: string; defaultBranch: string; headSha: string; labels: string[] };
+type InstallationToken = { token: string; expiresAt: number };
 export class GitHubAppService {
   private readonly db: Database;
   private readonly fetcher: Fetcher;
   private readonly box: SecretBox;
   private readonly publicOrigin: () => string | null;
   private readonly webhookOrigin: () => string | null;
+  private readonly installationTokens = new Map<number, InstallationToken>();
+  private readonly installationTokenRequests = new Map<number, Promise<string>>();
 
   constructor(opts: { db: Database; fetch?: Fetcher; secretBox: SecretBox; publicOrigin: () => string | null; webhookOrigin?: () => string | null }) {
     this.db = opts.db;
@@ -416,11 +419,27 @@ export class GitHubAppService {
       ELSE 'pending'
     END WHERE i.id=${installation.id}`;
   }
-  async getInstallationToken(installationId: number): Promise<string> {
+  private async fetchInstallationToken(installationId: number): Promise<string> {
     const response = await this.gh(`/app/installations/${installationId}/access_tokens`, { method: "POST" }, await this.appJwt());
-    const token = typeof response.token === "string" ? response.token : "";
+    const token = typeof response.token === "string" && response.token.trim() ? response.token : "";
     if (!token) throw new Error("github_token_missing");
+    const expiresAt = typeof response.expires_at === "string" ? Date.parse(response.expires_at) : Number.NaN;
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) throw new Error("github_token_expiry_invalid");
+    this.installationTokens.set(installationId, { token, expiresAt });
     return token;
+  }
+  async getInstallationToken(installationId: number): Promise<string> {
+    const cached = this.installationTokens.get(installationId);
+    if (cached && cached.expiresAt - Date.now() > 5 * 60 * 1000) return cached.token;
+    const inFlight = this.installationTokenRequests.get(installationId);
+    if (inFlight) return inFlight;
+    const request = this.fetchInstallationToken(installationId);
+    this.installationTokenRequests.set(installationId, request);
+    try {
+      return await request;
+    } finally {
+      if (this.installationTokenRequests.get(installationId) === request) this.installationTokenRequests.delete(installationId);
+    }
   }
   async getInstallationRateLimit(installationId: number): Promise<{ limit: number; remaining: number; used: number; resetAt: string }> {
     const token = await this.getInstallationToken(installationId);

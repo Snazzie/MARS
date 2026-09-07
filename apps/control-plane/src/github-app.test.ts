@@ -6,6 +6,7 @@ import { GitHubAppService } from "./github-app.ts";
 const masterKey = Buffer.alloc(32, 7).toString("base64");
 const organizationId = "11111111-1111-4111-8111-111111111111";
 const testPem = generateKeyPairSync("rsa", { modulusLength: 2048, privateKeyEncoding: { type: "pkcs8", format: "pem" }, publicKeyEncoding: { type: "spki", format: "pem" } }).privateKey;
+const futureTokenExpiry = (offsetMs = 60 * 60 * 1000) => new Date(Date.now() + offsetMs).toISOString();
 const fakeDb: {
   setupStates: Map<string, unknown>;
   installations: Map<number, unknown>;
@@ -40,6 +41,11 @@ function service(fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Pr
     publicOrigin: () => "https://control-plane.test",
     webhookOrigin: () => "https://hooks.example.test",
   } as never);
+}
+function configuredService(fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
+  const github = service(fetchImpl);
+  fakeDb.appConfig = { id: 9, slug: "mars", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "x" };
+  return github;
 }
 
 describe("GitHub App onboarding", () => {
@@ -94,7 +100,7 @@ describe("GitHub App onboarding", () => {
     const github = service(async (input) => {
       const url = String(input);
       if (url.endsWith("/app/installations/42")) return Response.json({ account: { id: 123, type: "Organization", login: "speedhq" } });
-      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token", expires_at: futureTokenExpiry() });
       if (url.includes("/installation/repositories")) return Response.json({ repository_selection: "selected", repositories: [{ id: 8, full_name: "speedhq/private", visibility: "private" }] });
       return Response.json({});
     });
@@ -152,7 +158,7 @@ describe("GitHub App onboarding", () => {
     const github = service(async (input) => {
       const url = String(input);
       if (url.endsWith("/app/installations/42")) return Response.json({ account: { type: "Organization", id: 99 }, repository_selection: "all" });
-      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token", expires_at: futureTokenExpiry() });
       if (url.includes("/installation/repositories")) return Response.json({ repository_selection: "all", repositories: [{ id: 7, full_name: "acme/private", visibility: "private" }, { id: 8, full_name: "acme/public", visibility: "public" }] });
       return Response.json({});
     });
@@ -169,7 +175,7 @@ describe("GitHub App onboarding", () => {
     const github = service(async (input) => {
       const url = String(input);
       if (url.endsWith("/app/installations/42")) return Response.json({ account: { type: "Organization", id: 99 }, repository_selection: "all" });
-      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token", expires_at: futureTokenExpiry() });
       if (url.includes("/installation/repositories")) return Response.json({ repository_selection: "all", repositories: [{ id: 8, full_name: "acme/public", visibility: "public" }] });
       return Response.json({});
     });
@@ -185,7 +191,7 @@ describe("GitHub App onboarding", () => {
     const github = service(async (input) => {
       const url = String(input);
       if (url.endsWith("/app/installations/42")) return Response.json({ account: { type: "Organization", id: 99 }, repository_selection: "all" });
-      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token", expires_at: futureTokenExpiry() });
       if (url.includes("/installation/repositories")) {
         const page = Number(new URL(url).searchParams.get("page"));
         pages.push(page);
@@ -249,7 +255,7 @@ describe("GitHub App onboarding", () => {
     const github = new GitHubAppService({ db: sql, fetch: async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/app/installations/42")) return Response.json({ account: { type: "Organization", id: 99 }, repository_selection: "all" });
-      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token", expires_at: futureTokenExpiry() });
       if (url.includes("/installation/repositories")) return Response.json({ repository_selection: "all", repositories: [] });
       return Response.json({});
     }, secretBox: new SecretBox(masterKey), publicOrigin: () => "https://control-plane.test" } as never);
@@ -371,7 +377,7 @@ describe("GitHub App onboarding", () => {
     const github = service(async (input) => {
       const url = String(input);
       if (url.endsWith("/app/installations/42")) return Response.json({ account: { type: "User", id: 77 }, repository_selection: "selected" });
-      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token", expires_at: futureTokenExpiry() });
       if (url.includes("/installation/repositories")) return Response.json({ repository_selection: "selected", repositories: [{ id: 8, full_name: "snazzie/private", visibility: "private" }] });
       return Response.json({});
     });
@@ -385,7 +391,7 @@ describe("GitHub App onboarding", () => {
   test("converts authenticated GitHub rate-limit headers to dashboard stats", async () => {
     const github = service(async (input) => {
       const url = String(input);
-      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token", expires_at: futureTokenExpiry() });
       if (url.includes("/installation/repositories")) {
         return new Response("{}", {
           status: 200,
@@ -411,7 +417,7 @@ describe("GitHub App onboarding", () => {
   test("rejects an out-of-range GitHub rate-limit reset epoch", async () => {
     const github = service(async (input) => {
       const url = String(input);
-      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token", expires_at: futureTokenExpiry() });
       return new Response("{}", {
         status: 200,
         headers: {
@@ -432,7 +438,7 @@ test("workflow discovery authenticates every private repository read", async () 
   const github = service(async (input, init) => {
     const request = new Request(input, init); calls.push(request);
     const url = String(input);
-    if (url.endsWith("/access_tokens")) return Response.json({ token: "secret-installation-token" });
+    if (url.endsWith("/access_tokens")) return Response.json({ token: "secret-installation-token", expires_at: futureTokenExpiry() });
     if (url.includes("/git/trees/")) return Response.json({ tree: [{ type: "blob", path: ".github/workflows/ci.yml", sha: "blob-sha" }] });
     if (url.includes("/git/blobs/")) return Response.json({ content: Buffer.from("jobs:\n  test:\n    runs-on: ubuntu-latest\n").toString("base64") });
     return Response.json({ default_branch: "main" });
@@ -450,7 +456,7 @@ test("workflow dispatch returns the new GitHub workflow run identity", async () 
     const request = new Request(input, init);
     calls.push(request);
     const url = request.url;
-    if (url.endsWith("/access_tokens")) return Response.json({ token: "secret-installation-token" });
+    if (url.endsWith("/access_tokens")) return Response.json({ token: "secret-installation-token", expires_at: futureTokenExpiry() });
     if (url.endsWith("/repos/acme/private")) return Response.json({ default_branch: "main" });
     if (url.includes("/git/trees/")) return Response.json({ tree: [{ type: "blob", path: ".github/workflows/smoke.yml", sha: "blob-sha" }] });
     if (url.includes("/git/blobs/")) return Response.json({ content: Buffer.from("on: workflow_dispatch\njobs:\n  smoke:\n    runs-on: mars-windows-x64\n").toString("base64") });
@@ -490,7 +496,7 @@ test("workflow preview uses the current runner pool schema", async () => {
     publicOrigin: () => "https://control-plane.test",
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token", expires_at: futureTokenExpiry() });
       if (url.includes("/git/trees/")) return Response.json({ tree: [{ type: "blob", path: ".github/workflows/ci.yml", sha: "blob-sha" }] });
       if (url.includes("/git/blobs/")) return Response.json({ content: Buffer.from("jobs:\n  test:\n    runs-on: ubuntu-latest\n").toString("base64") });
       if (url.includes("/git/ref/heads/")) return Response.json({ object: { sha: "head-sha" } });
@@ -507,7 +513,7 @@ test("workflow preview uses the current runner pool schema", async () => {
 test("repository workflow setup retires a repository after GitHub 404", async () => {
   const github = service(async (input) => {
     const url = String(input);
-    if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+    if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token", expires_at: futureTokenExpiry() });
     if (url.includes("/repos/acme/repo")) return new Response(null, { status: 404 });
     return Response.json({});
   });
@@ -522,7 +528,7 @@ test("repository workflow setup retires a repository after GitHub 404", async ()
 test.each([403, 429, 500])("repository workflow setup preserves availability after GitHub %i", async (status) => {
   const github = service(async (input) => {
     const url = String(input);
-    if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+    if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token", expires_at: futureTokenExpiry() });
     if (url.includes("/repos/acme/repo")) return new Response(null, { status });
     return Response.json({});
   });
@@ -566,7 +572,7 @@ jobs:
       const request = new Request(input, init);
       requests.push(request);
       const url = request.url;
-      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token", expires_at: futureTokenExpiry() });
       if (url.includes("/git/trees/") && request.method === "GET") return Response.json({
         tree: [
           { type: "blob", path: ".github/workflows/ci.yml", sha: "blob-sha" },
@@ -627,7 +633,7 @@ test("focused runner PR rejects a stale workflow head", async () => {
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init);
       const url = request.url;
-      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token", expires_at: futureTokenExpiry() });
       if (url.includes("/git/trees/") && request.method === "GET") return Response.json({ tree: [{ type: "blob", path: ".github/workflows/ci.yml", sha: "blob-sha" }] });
       if (url.includes("/git/blobs/blob-sha")) return Response.json({ content: Buffer.from("jobs:\n  build:\n    runs-on: ubuntu-latest\n").toString("base64") });
       if (url.includes("/git/ref/heads/")) return Response.json({ object: { sha: "actual-head" } });
@@ -643,4 +649,105 @@ test("focused runner PR rejects a stale workflow head", async () => {
     labels: ["4VCPU", "8G"],
     expectedHeadSha: "stale-head",
   })).rejects.toThrow("github_workflow_head_stale");
+});
+describe("GitHub installation token reuse", () => {
+  test("reuses an unexpired token for sequential calls", async () => {
+    let requests = 0;
+    const github = configuredService(async (input) => {
+      if (String(input).endsWith("/access_tokens")) {
+        requests += 1;
+        return Response.json({ token: "cached-token", expires_at: futureTokenExpiry() });
+      }
+      return Response.json({});
+    });
+
+    await expect(github.getInstallationToken(42)).resolves.toBe("cached-token");
+    await expect(github.getInstallationToken(42)).resolves.toBe("cached-token");
+    expect(requests).toBe(1);
+  });
+
+  test("shares one in-flight acquisition between concurrent calls", async () => {
+    let requests = 0;
+    let release!: () => void;
+    let started!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const accessTokenRequestStarted = new Promise<void>((resolve) => { started = resolve; });
+    const github = configuredService(async (input) => {
+      if (String(input).endsWith("/access_tokens")) {
+        requests += 1;
+        started();
+        await blocked;
+        return Response.json({ token: "single-flight-token", expires_at: futureTokenExpiry() });
+      }
+      return Response.json({});
+    });
+
+    const first = github.getInstallationToken(42);
+    const second = github.getInstallationToken(42);
+    await accessTokenRequestStarted;
+    expect(requests).toBe(1);
+    release();
+    await expect(Promise.all([first, second])).resolves.toEqual(["single-flight-token", "single-flight-token"]);
+  });
+
+  test("refreshes a token at the five-minute expiry boundary", async () => {
+    let requests = 0;
+    const github = configuredService(async (input) => {
+      if (String(input).endsWith("/access_tokens")) {
+        requests += 1;
+        return Response.json({
+          token: `token-${requests}`,
+          expires_at: futureTokenExpiry(requests === 1 ? 4 * 60 * 1000 : 60 * 60 * 1000),
+        });
+      }
+      return Response.json({});
+    });
+
+    await expect(github.getInstallationToken(42)).resolves.toBe("token-1");
+    await expect(github.getInstallationToken(42)).resolves.toBe("token-2");
+    expect(requests).toBe(2);
+  });
+
+  test("does not cache failed acquisitions and retries", async () => {
+    let requests = 0;
+    const github = configuredService(async (input) => {
+      if (String(input).endsWith("/access_tokens")) {
+        requests += 1;
+        if (requests === 1) return new Response(null, { status: 500 });
+        return Response.json({ token: "retry-token", expires_at: futureTokenExpiry() });
+      }
+      return Response.json({});
+    });
+
+    await expect(github.getInstallationToken(42)).rejects.toThrow("github_500");
+    await expect(github.getInstallationToken(42)).resolves.toBe("retry-token");
+    expect(requests).toBe(2);
+  });
+
+  test("isolates tokens by installation ID", async () => {
+    let requests = 0;
+    const github = configuredService(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/access_tokens")) {
+        requests += 1;
+        const installationId = /installations\/(\d+)\//.exec(url)?.[1];
+        return Response.json({ token: `token-${installationId}`, expires_at: futureTokenExpiry() });
+      }
+      return Response.json({});
+    });
+
+    await expect(github.getInstallationToken(42)).resolves.toBe("token-42");
+    await expect(github.getInstallationToken(43)).resolves.toBe("token-43");
+    await expect(github.getInstallationToken(42)).resolves.toBe("token-42");
+    expect(requests).toBe(2);
+  });
+
+  test.each([
+    ["missing token", {}, "github_token_missing"],
+    ["missing expiry", { token: "token" }, "github_token_expiry_invalid"],
+    ["expired token", { token: "token", expires_at: futureTokenExpiry(-1_000) }, "github_token_expiry_invalid"],
+  ])("rejects %s metadata", async (_case, body, error) => {
+    const github = configuredService(async (input) => String(input).endsWith("/access_tokens") ? Response.json(body) : Response.json({}));
+    await expect(github.getInstallationToken(42)).rejects.toThrow(error);
+  });
 });
