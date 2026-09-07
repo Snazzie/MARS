@@ -456,7 +456,9 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!installation || !Number.isSafeInteger(Number(installation.githubInstallationId))) return error(c, 404, "not_found", "GitHub installation not found");
     if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
     try {
-      return c.json(GithubRateLimitStats.parse(await deps.githubApp.getInstallationRateLimit(Number(installation.githubInstallationId))));
+      const stats = await deps.githubApp.getInstallationRateLimit(Number(installation.githubInstallationId));
+      c.header("Cache-Control", "no-store");
+      return c.json(GithubRateLimitStats.parse(stats));
     } catch (cause) {
       if (cause instanceof Error && (cause.message === "github_installation_not_found" || cause.message === "github_404")) return error(c, 404, "not_found", "GitHub installation not found");
       if (cause instanceof Error && cause.message === "github_app_unconfigured") return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");

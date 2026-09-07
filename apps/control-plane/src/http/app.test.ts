@@ -865,6 +865,7 @@ test("returns live GitHub rate-limit stats for an installed organization", async
     } as never,
   })).request("/api/organizations/org-1/github/rate-limit");
   expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("no-store");
   expect(installationId).toBe(42);
   expect(await response.json()).toEqual({ limit: 5000, remaining: 4999, used: 1, resetAt: "2026-09-07T12:00:00.000Z" });
 });
