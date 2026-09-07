@@ -56,6 +56,16 @@ test("settings does not show cached connection or quota data after connection er
   expect(html).not.toContain("stale-login");
   expect(html).not.toContain("4,000");
 });
+test("settings does not show cached quota values after rate-limit error", () => {
+  const client = settingsClient({ connected: true, login: "acme-bot" }, { limit: 5000, remaining: 4000, used: 1000, resetAt: "2026-09-07T12:00:00.000Z" });
+  const query = client.getQueryCache().find({ queryKey: ["org", "org-1", "github-rate-limit"] });
+  if (!query) throw new Error("rate-limit query was not seeded");
+  query.setState({ ...query.state, status: "error", error: new Error("rate limit unavailable"), fetchStatus: "idle" });
+  const html = markup(client);
+  expect(html).toContain("GitHub rate limit unavailable");
+  expect(html).not.toContain("4,000");
+  expect(html).not.toContain("5,000");
+});
 
 test("settings exposes connected identity, management actions, and quota values", () => {
   const html = markup(
