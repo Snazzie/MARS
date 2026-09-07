@@ -45,6 +45,7 @@ export function SettingsPage() {
     enabled: connection.data?.connected === true,
   });
   const [values, setValues] = useState<FormValues>({ maxVcpuPerPod: 1, maxMemoryGiB: 1, maxStorageGiB: 1, maxConcurrentPods: 1 });
+  const [githubActionError, setGithubActionError] = useState<unknown>(null);
   const [validation, setValidation] = useState<string[]>([]);
   useEffect(() => { if (query.data) setValues({ maxVcpuPerPod: query.data.maxVcpuPerPod, maxMemoryGiB: bytesToGiB(query.data.maxMemoryBytesPerPod), maxStorageGiB: bytesToGiB(query.data.maxStorageBytesPerPod), maxConcurrentPods: query.data.maxConcurrentPods }); }, [query.data]);
   const invalidateGithub = () => {
@@ -55,24 +56,30 @@ export function SettingsPage() {
   };
   const install = useMutation({
     mutationFn: () => beginOrganizationGithubInstall(organizationId),
-    onSuccess: ({ location }) => window.location.assign(location),
+    onMutate: () => setGithubActionError(null),
+    onError: (error) => setGithubActionError(error),
+    onSuccess: ({ location }) => { setGithubActionError(null); window.location.assign(location); },
   });
   const manageInstallation = useMutation({
     mutationFn: () => getGithubOrganizationSettings(organizationId),
-    onSuccess: ({ location }) => window.location.assign(location),
+    onMutate: () => setGithubActionError(null),
+    onError: (error) => setGithubActionError(error),
+    onSuccess: ({ location }) => { setGithubActionError(null); window.location.assign(location); },
   });
   const sync = useMutation({
     mutationFn: () => refreshGithubConnection(organizationId),
-    onSuccess: invalidateGithub,
+    onMutate: () => setGithubActionError(null),
+    onError: (error) => setGithubActionError(error),
+    onSuccess: () => { setGithubActionError(null); invalidateGithub(); },
   });
   const remove = useMutation({
     mutationFn: () => uninstallOrganizationGithub(organizationId),
-    onSuccess: invalidateGithub,
+    onMutate: () => setGithubActionError(null),
+    onError: (error) => setGithubActionError(error),
+    onSuccess: () => { setGithubActionError(null); invalidateGithub(); },
   });
-  const [githubMutationError, githubMutationPending] = [
-    install.error ?? manageInstallation.error ?? sync.error ?? remove.error,
-    install.isPending || manageInstallation.isPending || sync.isPending || remove.isPending,
-  ];
+  const githubMutationPending = install.isPending || manageInstallation.isPending || sync.isPending || remove.isPending;
+  const githubActionMessage = githubActionError === null ? null : githubError(githubActionError, "GitHub connection action failed.");
   function submit(event: FormEvent) {
     event.preventDefault();
     const next: Values = { maxVcpuPerPod: values.maxVcpuPerPod, maxMemoryBytesPerPod: gibToBytes(values.maxMemoryGiB), maxStorageBytesPerPod: gibToBytes(values.maxStorageGiB), maxConcurrentPods: values.maxConcurrentPods };
@@ -88,29 +95,33 @@ export function SettingsPage() {
       <header className="page-header"><div><p className="eyebrow">Organization settings</p><h1>Set the fleet safety envelope.</h1><p className="page-description">These hard per-pod ceilings limit every runner pool in the selected organization.</p></div></header>
       <section className="settings-account" aria-labelledby="account-title"><h2 id="account-title">Signed-in identity</h2><p>{me.data ? `GitHub account: ${me.data.login}` : "Loading GitHub identity…"}</p><button className="button secondary" type="button" onClick={() => signOut.mutate()} disabled={signOut.isPending}>{signOut.isPending ? "Signing out…" : "Sign out"}</button>{signOut.error && <p className="form-error" role="alert">{signOut.error instanceof Error ? signOut.error.message : "Sign out failed."}</p>}</section>
       <section className="settings-github-card" aria-labelledby="github-connection-title">
-        <div className="panel-heading"><div><p className="eyebrow">Organization integration</p><h2 id="github-connection-title">GitHub connection</h2></div>{connection.data?.connected && <span className="status-ready">Connected</span>}</div>
+        <div className="panel-heading"><div><p className="eyebrow">Organization integration</p><h2 id="github-connection-title">GitHub connection</h2></div>{!connection.error && connection.data?.connected && <span className="status-ready">Connected</span>}</div>
         <p className="form-help">Repository access uses the GitHub App installation selected for this organization.</p>
-        {connection.isLoading && <p className="settings-status" role="status">Loading GitHub connection…</p>}
+        {!connection.error && connection.isLoading && <p className="settings-status" role="status">Loading GitHub connection…</p>}
         {connection.error && <div className="form-error" role="alert"><p>Unable to load GitHub connection: {githubError(connection.error, "Try again.")}</p><button className="button secondary" type="button" onClick={() => void connection.refetch()}>Retry connection</button></div>}
-        {connection.data?.connected === false && <div className="settings-github-disconnected"><p>No GitHub App installation is connected to this organization.</p><button className="button" type="button" onClick={() => install.mutate()} disabled={githubMutationPending}>{install.isPending ? "Opening GitHub…" : "Add GitHub connection"}</button></div>}
-        {connection.data?.connected && <div className="settings-github-connected">
+        {!connection.error && connection.data?.connected === false && <div className="settings-github-disconnected"><p>No GitHub App installation is connected to this organization.</p><button className="button" type="button" onClick={() => install.mutate()} disabled={githubMutationPending}>{install.isPending ? "Opening GitHub…" : "Add GitHub connection"}</button></div>}
+        {!connection.error && connection.data?.connected && <div className="settings-github-connected">
           <dl className="settings-github-details">
             <div><dt>GitHub account</dt><dd>{connection.data.login ?? "Unavailable"}</dd></div>
             <div><dt>Account type</dt><dd>{connection.data.accountType ?? "Unavailable"}</dd></div>
             <div><dt>Installation</dt><dd>{connection.data.installationId ? `#${connection.data.installationId}` : "Connected"}</dd></div>
           </dl>
-          <div className="settings-actions"><button className="button secondary" type="button" onClick={() => manageInstallation.mutate()} disabled={githubMutationPending}>{manageInstallation.isPending ? "Opening GitHub…" : "Manage installation"}</button><button className="button secondary" type="button" onClick={() => sync.mutate()} disabled={githubMutationPending}>{sync.isPending ? "Syncing…" : "Sync repositories"}</button><button className="button danger" type="button" onClick={() => remove.mutate()} disabled={githubMutationPending}>{remove.isPending ? "Removing…" : "Remove connection"}</button></div>
+          <div className="settings-actions">
+            <button className="button secondary" type="button" onClick={() => manageInstallation.mutate()} disabled={githubMutationPending}>{manageInstallation.isPending ? "Opening GitHub…" : "Manage installation"}</button>
+            <button className="button secondary" type="button" onClick={() => sync.mutate()} disabled={githubMutationPending}>{sync.isPending ? "Syncing…" : "Sync repositories"}</button>
+            <button className="button danger" type="button" onClick={() => { if (window.confirm("Uninstall Mars from this GitHub organization?")) remove.mutate(); }} disabled={githubMutationPending}>{remove.isPending ? "Removing…" : "Remove connection"}</button>
+          </div>
         </div>}
-        {githubMutationError && <p className="form-error" role="alert">{githubError(githubMutationError, "GitHub connection action failed.")}</p>}
+        {githubActionMessage && <p className="form-error" role="alert">{githubActionMessage}</p>}
       </section>
       <section className="settings-github-card" aria-labelledby="github-rate-limit-title">
         <div className="panel-heading"><div><p className="eyebrow">Live GitHub API usage</p><h2 id="github-rate-limit-title">GitHub API rate limit</h2></div></div>
-        {connection.data?.connected === false && <p className="settings-status" role="status">GitHub rate limit unavailable until a connection is added.</p>}
-        {connection.isLoading && <p className="settings-status" role="status">Checking GitHub connection before loading rate limit…</p>}
+        {!connection.error && connection.data?.connected === false && <p className="settings-status" role="status">GitHub rate limit unavailable until a connection is added.</p>}
+        {!connection.error && connection.isLoading && <p className="settings-status" role="status">Checking GitHub connection before loading rate limit…</p>}
         {connection.error && <p className="settings-status" role="status">GitHub rate limit unavailable because connection status could not be loaded.</p>}
-        {connection.data?.connected && rateLimit.isLoading && <p className="settings-status" role="status">Loading GitHub rate limit…</p>}
-        {connection.data?.connected && rateLimit.error && <div className="form-error" role="alert"><p>GitHub rate limit unavailable: {githubError(rateLimit.error, "Try again.")}</p><button className="button secondary" type="button" onClick={() => void rateLimit.refetch()}>Retry rate limit</button></div>}
-        {connection.data?.connected && rateLimit.data && <div className="settings-rate-limit">
+        {!connection.error && connection.data?.connected && rateLimit.isLoading && <p className="settings-status" role="status">Loading GitHub rate limit…</p>}
+        {!connection.error && connection.data?.connected && rateLimit.error && <div className="form-error" role="alert"><p>GitHub rate limit unavailable: {githubError(rateLimit.error, "Try again.")}</p><button className="button secondary" type="button" onClick={() => void rateLimit.refetch()}>Retry rate limit</button></div>}
+        {!connection.error && connection.data?.connected && rateLimit.data && <div className="settings-rate-limit">
           <dl className="settings-rate-limit-grid"><div><dt>Remaining</dt><dd className="settings-rate-limit-remaining">{number(rateLimit.data.remaining)}</dd></div><div><dt>Limit</dt><dd>{number(rateLimit.data.limit)}</dd></div><div><dt>Used</dt><dd>{number(rateLimit.data.used)}</dd></div><div><dt>Reset time</dt><dd><time dateTime={rateLimit.data.resetAt}>{new Date(rateLimit.data.resetAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time></dd></div></dl>
           <button className="button secondary" type="button" onClick={() => void rateLimit.refetch()} disabled={rateLimit.isFetching && !rateLimit.data}>Refresh rate limit</button>
         </div>}

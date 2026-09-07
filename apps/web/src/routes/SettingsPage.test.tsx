@@ -45,6 +45,17 @@ test("settings keeps quota state unknown while connection status is loading", ()
   expect(html).toContain("Checking GitHub connection before loading rate limit");
   expect(html).not.toContain("until a connection is added");
 });
+test("settings does not show cached connection or quota data after connection error", () => {
+  const client = settingsClient({ connected: true, login: "stale-login" }, { limit: 5000, remaining: 4000, used: 1000, resetAt: "2026-09-07T12:00:00.000Z" });
+  const query = client.getQueryCache().find({ queryKey: ["org", "org-1", "github-connection"] });
+  if (!query) throw new Error("connection query was not seeded");
+  query.setState({ ...query.state, status: "error", error: new Error("connection unavailable"), fetchStatus: "idle" });
+  const html = markup(client);
+  expect(html).toContain("Unable to load GitHub connection");
+  expect(html).toContain("connection status could not be loaded");
+  expect(html).not.toContain("stale-login");
+  expect(html).not.toContain("4,000");
+});
 
 test("settings exposes connected identity, management actions, and quota values", () => {
   const html = markup(
