@@ -21,6 +21,8 @@ import {
   JobResourceTrendResponse,
   JobResourceTrendSort,
   JobLabelRecommendation,
+  GithubConnectionSummary,
+  GithubRateLimitStats,
   OnboardingDetail,
   OnboardingStatus,
   ControlPlaneSetupRequest,
@@ -380,6 +382,10 @@ export async function beginOrganizationGithubInstall(organizationId: string) {
     body: "{}",
   });
 }
+export const getGithubConnection = (organizationId: string) =>
+  request(`/api/organizations/${organizationId}/github/connection`, GithubConnectionSummary);
+export const getGithubRateLimit = (organizationId: string) =>
+  request(`/api/organizations/${organizationId}/github/rate-limit`, GithubRateLimitStats);
 export const getGithubOrganizationSettings = (organizationId: string) =>
   request(`/api/organizations/${organizationId}/github/settings`, DashboardLocationResponse);
 export const getGithubRepositorySettings = (organizationId: string, repositoryId: string) =>

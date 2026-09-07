@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { ApiRequestError, configureWorker, getJobResourceSamples, getWorkerCache, getWorkerHealth, getWorkers, purgeWorkerCache } from "./api.ts";
+import { ApiRequestError, configureWorker, getGithubConnection, getGithubRateLimit, getJobResourceSamples, getWorkerCache, getWorkerHealth, getWorkers, purgeWorkerCache } from "./api.ts";
 import type { WorkerHealth } from "@mars/contracts";
 const workerHealth: WorkerHealth = {
   observedAt: "2026-08-23T12:00:00.000Z",
@@ -179,6 +179,35 @@ test("loads job resource samples with organization, run, job, cursor, and limit"
   try {
     await getJobResourceSamples("org-1", "run-1", "job-1", "next_page", 100);
     expect(requested).toBe("/api/organizations/org-1/runs/run-1/jobs/job-1/resource-samples?limit=100&after=next_page");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+test("loads the GitHub connection summary and preserves disconnected state", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requests.push(String(input));
+    return new Response(JSON.stringify({ connected: false }), { status: 200 });
+  }) as unknown as typeof fetch;
+  try {
+    await expect(getGithubConnection("org-1")).resolves.toEqual({ connected: false });
+    expect(requests).toEqual(["/api/organizations/org-1/github/connection"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("loads GitHub rate-limit stats with the organization URL", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requested = String(input);
+    return new Response(JSON.stringify({ limit: 5000, remaining: 4999, used: 1, resetAt: "2026-09-07T12:00:00.000Z" }), { status: 200 });
+  }) as unknown as typeof fetch;
+  try {
+    await expect(getGithubRateLimit("org-1")).resolves.toEqual({ limit: 5000, remaining: 4999, used: 1, resetAt: "2026-09-07T12:00:00.000Z" });
+    expect(requested).toBe("/api/organizations/org-1/github/rate-limit");
   } finally {
     globalThis.fetch = originalFetch;
   }

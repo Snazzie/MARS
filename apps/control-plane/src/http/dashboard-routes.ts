@@ -7,7 +7,7 @@ import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker, purgeWorkerRunnerCache } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 import { createWorkerImageBuildPayload } from "../windows-image-build.ts";
-import { ApiError, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth, JobLabelRecommendation, JobLabelRecommendationQuery } from "@mars/contracts";
+import { ApiError, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, OrganizationSettings, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth, JobLabelRecommendation, JobLabelRecommendationQuery, GithubConnectionSummary, GithubRateLimitStats } from "@mars/contracts";
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
@@ -435,6 +435,33 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!(await dashboardMutation(deps.db, org, key))) return c.json({ ok: true });
     await deps.db`UPDATE runner_pools SET enabled=${action === "enable"} WHERE organization_id=${org} AND id=${c.req.param("poolId")}`;
     await invalidateDashboard(deps.db, org, ["pools"]); return c.json({ ok: true });
+  }));
+  app.get("/api/organizations/:organizationId/github/connection", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const denied = await guard(c, deps, org); if (denied) return denied;
+    const [installation] = await deps.db`SELECT o.login, o.github_account_type AS "githubAccountType", i.github_installation_id AS "githubInstallationId" FROM organizations o LEFT JOIN dashboard_installations i ON i.organization_id=o.id WHERE o.id=${org} ORDER BY i.created_at DESC NULLS LAST LIMIT 1`;
+    if (!installation || !Number.isSafeInteger(Number(installation.githubInstallationId))) return c.json(GithubConnectionSummary.parse({ connected: false }));
+    const summary: Record<string, unknown> = { connected: true };
+    if (typeof installation.login === "string" && installation.login) summary.login = installation.login;
+    if (installation.githubAccountType === "User" || installation.githubAccountType === "Organization") summary.accountType = installation.githubAccountType;
+    summary.installationId = Number(installation.githubInstallationId);
+    const location = githubInstallationLocation(installation);
+    if (location) summary.location = location;
+    return c.json(GithubConnectionSummary.parse(summary));
+  }));
+  app.get("/api/organizations/:organizationId/github/rate-limit", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const denied = await guard(c, deps, org); if (denied) return denied;
+    const [installation] = await deps.db`SELECT i.github_installation_id AS "githubInstallationId" FROM dashboard_installations i WHERE i.organization_id=${org} AND i.state <> 'suspended' ORDER BY i.created_at DESC LIMIT 1`;
+    if (!installation || !Number.isSafeInteger(Number(installation.githubInstallationId))) return error(c, 404, "not_found", "GitHub installation not found");
+    if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
+    try {
+      return c.json(GithubRateLimitStats.parse(await deps.githubApp.getInstallationRateLimit(Number(installation.githubInstallationId))));
+    } catch (cause) {
+      if (cause instanceof Error && cause.message === "github_installation_not_found") return error(c, 404, "not_found", "GitHub installation not found");
+      if (cause instanceof Error && cause.message === "github_app_unconfigured") return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
+      throw cause;
+    }
   }));
   app.get("/api/organizations/:organizationId/github/settings", safe(async (c) => {
     const org = c.req.param("organizationId");

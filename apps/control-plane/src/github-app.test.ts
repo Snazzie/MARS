@@ -372,6 +372,32 @@ describe("GitHub App onboarding", () => {
     expect(fakeDb.installations.get(42)).toMatchObject({ githubAccountId: 77, state: "approved" });
   });
 
+  test("converts authenticated GitHub rate-limit headers to dashboard stats", async () => {
+    const github = service(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/installation/repositories")) {
+        return new Response("{}", {
+          status: 200,
+          headers: {
+            "x-ratelimit-limit": "5000",
+            "x-ratelimit-remaining": "4999",
+            "x-ratelimit-used": "1",
+            "x-ratelimit-reset": "1790000000",
+          },
+        });
+      }
+      return Response.json({});
+    });
+    fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "all" });
+    fakeDb.appConfig = { id: 9, slug: "mars", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "x" };
+    await expect(github.getInstallationRateLimit(42)).resolves.toEqual({
+      limit: 5000,
+      remaining: 4999,
+      used: 1,
+      resetAt: new Date(1790000000 * 1000).toISOString(),
+    });
+  });
 });
 test("workflow discovery authenticates every private repository read", async () => {
   const calls: Request[] = [];

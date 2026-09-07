@@ -83,13 +83,17 @@ export class GitHubAppService {
     await this.db`INSERT INTO github_app_config (singleton,app_id,slug,client_id,encrypted_pem,encrypted_client_secret,encrypted_webhook_secret) VALUES (true,${config.id},${config.slug},${config.clientId ?? null},${config.pem},${config.clientSecret},${config.webhookSecret}) ON CONFLICT (singleton) DO UPDATE SET app_id=excluded.app_id,slug=excluded.slug,client_id=excluded.client_id,encrypted_pem=excluded.encrypted_pem,encrypted_client_secret=excluded.encrypted_client_secret,encrypted_webhook_secret=excluded.encrypted_webhook_secret,updated_at=now()`;
   }
 
-  private async gh(path: string, init: RequestInit = {}, jwt?: string): Promise<Record<string, unknown>> {
+  private async githubResponse(path: string, init: RequestInit = {}, jwt?: string): Promise<Response> {
     const headers = new Headers(init.headers);
     headers.set("accept", "application/vnd.github+json");
     headers.set("x-github-api-version", "2026-03-10");
     if (jwt) headers.set("authorization", `Bearer ${jwt}`);
     const response = await this.fetcher(`${API}${path}`, { ...init, headers });
     if (!response.ok) throw new Error(`github_${response.status}`);
+    return response;
+  }
+  private async gh(path: string, init: RequestInit = {}, jwt?: string): Promise<Record<string, unknown>> {
+    const response = await this.githubResponse(path, init, jwt);
     if (response.status === 204) return {};
     const value: unknown = await response.json();
     return value && typeof value === "object" ? value as Record<string, unknown> : {};
@@ -408,12 +412,27 @@ export class GitHubAppService {
       ELSE 'pending'
     END WHERE i.id=${installation.id}`;
   }
-
   async getInstallationToken(installationId: number): Promise<string> {
     const response = await this.gh(`/app/installations/${installationId}/access_tokens`, { method: "POST" }, await this.appJwt());
     const token = typeof response.token === "string" ? response.token : "";
     if (!token) throw new Error("github_token_missing");
     return token;
+  }
+  async getInstallationRateLimit(installationId: number): Promise<{ limit: number; remaining: number; used: number; resetAt: string }> {
+    const token = await this.getInstallationToken(installationId);
+    const response = await this.githubResponse("/installation/repositories?per_page=1", {}, token);
+    const header = (name: string): number => {
+      const value = Number(response.headers.get(name)?.trim() ?? "");
+      if (!Number.isSafeInteger(value) || value < 0) throw new Error("github_rate_limit_invalid");
+      return value;
+    };
+    const reset = header("x-ratelimit-reset");
+    return {
+      limit: header("x-ratelimit-limit"),
+      remaining: header("x-ratelimit-remaining"),
+      used: header("x-ratelimit-used"),
+      resetAt: new Date(reset * 1000).toISOString(),
+    };
   }
 
   async getWebhookSecret(): Promise<string | null> {

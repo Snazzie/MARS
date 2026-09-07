@@ -246,6 +246,25 @@ export const PoolSummary = dto(strict({ id, organizationId: id.nullable(), worke
 export type PoolSummary = z.infer<typeof PoolSummary>;
 export const OrganizationSettings = dto(strict({ organizationId, maxVcpuPerPod: positiveSafe, maxMemoryBytesPerPod: positiveSafe, maxStorageBytesPerPod: positiveSafe, maxConcurrentPods: positiveSafe }));
 export type OrganizationSettings = z.infer<typeof OrganizationSettings>;
+const githubAccountType = z.enum(["User", "Organization"]);
+export const GithubConnectionSummary = dto(z.discriminatedUnion("connected", [
+  strict({ connected: z.literal(false) }),
+  strict({
+    connected: z.literal(true),
+    login: z.string().min(1).optional(),
+    accountType: githubAccountType.optional(),
+    installationId: positiveSafe.optional(),
+    location: z.string().url().optional(),
+  }),
+]));
+export type GithubConnectionSummary = z.infer<typeof GithubConnectionSummary>;
+export const GithubRateLimitStats = dto(strict({
+  limit: nonnegativeSafe,
+  remaining: nonnegativeSafe,
+  used: nonnegativeSafe,
+  resetAt: timestamp,
+}));
+export type GithubRateLimitStats = z.infer<typeof GithubRateLimitStats>;
 export const CursorPage = <T extends z.ZodTypeAny>(item: T) => dto(strict({ items: z.array(item), nextCursor: cursor.nullable() }));
 export type CursorPage<T> = { items: T[]; nextCursor: string | null };
 export const ApiError = dto(strict({ code: z.string().min(1), message: z.string().min(1), requestId: id, details: z.record(z.unknown()).optional() }));

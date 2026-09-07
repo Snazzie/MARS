@@ -786,6 +786,74 @@ describe("control-plane HTTP boundary", () => {
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe("http://localhost:5173/");
   });
+test("returns a disconnected GitHub connection summary when no installation exists", async () => {
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+  })).request("/api/organizations/org-1/github/connection");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ connected: false });
+});
+
+test("returns a connected GitHub summary with account identity and management URL", async () => {
+  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("dashboard_installations")
+    ? [{ login: "acme", githubAccountType: "Organization", githubInstallationId: 42 }]
+    : []) as never;
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    db,
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+  })).request("/api/organizations/org-1/github/connection");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    connected: true,
+    login: "acme",
+    accountType: "Organization",
+    installationId: 42,
+    location: "https://github.com/organizations/acme/settings/installations/42",
+  });
+});
+
+test("protects the GitHub connection summary with organization authorization", async () => {
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "member", githubUserId: 1, login: "member", isGlobalAdmin: false }),
+  })).request("/api/organizations/org-1/github/connection");
+  expect(response.status).toBe(404);
+});
+
+test("returns live GitHub rate-limit stats for an installed organization", async () => {
+  let installationId = 0;
+  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("dashboard_installations")
+    ? [{ githubInstallationId: 42 }]
+    : []) as never;
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    db,
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+    githubApp: {
+      getInstallationRateLimit: async (value: number) => {
+        installationId = value;
+        return { limit: 5000, remaining: 4999, used: 1, resetAt: "2026-09-07T12:00:00.000Z" };
+      },
+    } as never,
+  })).request("/api/organizations/org-1/github/rate-limit");
+  expect(response.status).toBe(200);
+  expect(installationId).toBe(42);
+  expect(await response.json()).toEqual({ limit: 5000, remaining: 4999, used: 1, resetAt: "2026-09-07T12:00:00.000Z" });
+});
+
+test("returns not found for a disconnected GitHub rate-limit request", async () => {
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+  })).request("/api/organizations/org-1/github/rate-limit");
+  expect(response.status).toBe(404);
+  expect(await response.json()).toMatchObject({ code: "not_found" });
+});
+
+test("protects the GitHub rate-limit endpoint with organization authorization", async () => {
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "member", githubUserId: 1, login: "member", isGlobalAdmin: false }),
+  })).request("/api/organizations/org-1/github/rate-limit");
+  expect(response.status).toBe(404);
+});
+
 test("repository GitHub removal route requires an existing installation", async () => {
   const response = await createControlPlaneApp(fakeHttpDeps({
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
