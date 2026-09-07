@@ -136,7 +136,8 @@ test("settings tracks pending saves independently for each organization row", as
   // @ts-expect-error test DOM globals
   globalThis.window = browserWindow;
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  globalThis.fetch = (() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+  let requestCount = 0;
+  globalThis.fetch = (() => { requestCount += 1; return new Promise<Response>(() => {}); }) as unknown as typeof fetch;
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -148,9 +149,11 @@ test("settings tracks pending saves independently for each organization row", as
     if (!speedSave || !acmeSave) throw new Error("organization save buttons were not rendered");
     await act(async () => {
       speedSave.dispatchEvent(new browserWindow.MouseEvent("click", { bubbles: true }) as unknown as Event);
+      speedSave.dispatchEvent(new browserWindow.MouseEvent("click", { bubbles: true }) as unknown as Event);
       acmeSave.dispatchEvent(new browserWindow.MouseEvent("click", { bubbles: true }) as unknown as Event);
     });
     expect(speedSave.disabled).toBe(true);
+    expect(requestCount).toBe(2);
     expect(acmeSave.disabled).toBe(true);
   } finally {
     await act(async () => { root.unmount(); });

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { OrganizationSettings } from "@mars/contracts";
 import {
@@ -89,6 +89,7 @@ export function SettingsPage() {
   const [validation, setValidation] = useState<Record<string, string[]>>({});
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
   const [pendingSaves, setPendingSaves] = useState<Record<string, number>>({});
+  const pendingSaveIds = useRef(new Set<string>());
   const [githubActionError, setGithubActionError] = useState<unknown>(null);
 
   useEffect(() => {
@@ -118,12 +119,15 @@ export function SettingsPage() {
       setValidation((current) => ({ ...current, [id]: [] }));
       void client.invalidateQueries({ queryKey: ["org", id, "settings"] });
     },
-    onSettled: (_, __, { organizationId: id }) => setPendingSaves((current) => {
-      const next = { ...current };
-      if ((next[id] ?? 0) <= 1) delete next[id];
-      else next[id] -= 1;
-      return next;
-    }),
+    onSettled: (_, __, { organizationId: id }) => {
+      pendingSaveIds.current.delete(id);
+      setPendingSaves((current) => {
+        const next = { ...current };
+        if ((next[id] ?? 0) <= 1) delete next[id];
+        else next[id] -= 1;
+        return next;
+      });
+    },
   });
 
   const invalidateGithub = () => {
@@ -161,7 +165,9 @@ export function SettingsPage() {
   const githubActionMessage = githubActionError === null ? null : githubError(githubActionError, "GitHub connection action failed.");
 
   function submitRow(settings: SettingsValue) {
-    const rowValues = values[settings.organizationId] ?? formValues(settings);
+    const id = settings.organizationId;
+    if (pendingSaveIds.current.has(id)) return;
+    const rowValues = values[id] ?? formValues(settings);
     const next = buildSettingsUpdate(settings, rowValues);
     const parsed = OrganizationSettings.safeParse({ organizationId: settings.organizationId, ...next });
     if (!parsed.success) {
@@ -169,7 +175,8 @@ export function SettingsPage() {
       return;
     }
     setValidation((current) => ({ ...current, [settings.organizationId]: [] }));
-    save.mutate({ organizationId: settings.organizationId, settings: next });
+    pendingSaveIds.current.add(id);
+    save.mutate({ organizationId: id, settings: next });
   }
 
   return (
