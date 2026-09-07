@@ -21,8 +21,9 @@ const helpByRoute: Record<(typeof links)[number][0], { label: string; text: stri
   "/repositories": { label: "About repository setup", text: "What: repositories available through the selected GitHub App installation. How: preview workflow label changes before opening a pull request. Fix: manage the installation when a repository is missing or access is stale." },
   "/workers": { label: "About worker readiness", text: "What: enrollment, connection, configuration, doctor checks, and free capacity. How: adopt a pending host, configure its supported runtime, then wait for the applied revision. Fix: follow the reported remediation and drain before removal." },
   "/pools": { label: "About shared pools", text: "What: global routing labels backed by compatible ready workers. How: keep labels canonical and only enable a pool after coverage is ready. Fix: disable the pool and wait for active leases before editing or deleting it." },
-  "/settings": { label: "About workspace limits", text: "What: per-job resource ceilings and maximum concurrent pods for the selected workspace. How: save limits lower than fleet capacity. Fix: reduce workflow requests or raise limits deliberately when admission rejects a job." },
+  "/settings": { label: "About deployment settings", text: "What: resource ceilings for every organization in this deployment. How: edit a row and save to apply limits for that organization. Fix: lower limits when admission rejects a job or raise them deliberately when fleet capacity allows." },
 };
+export function isSettingsRoute(pathname: string) { return pathname === "/settings" || pathname.startsWith("/settings/"); }
 export function AppShell() {
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const mobileNavigationRef = useRef<HTMLElement>(null);
@@ -38,6 +39,7 @@ export function AppShell() {
     : null;
   const currentLink = links.find(([to]) => to === location) ?? links.find(([to]) => location.startsWith(`${to}/`)) ?? links[0];
   const currentHelp = helpByRoute[currentLink[0]];
+  const settingsRoute = isSettingsRoute(location);
   useEffect(() => { setMobileMenuOpen(false); }, [location]);
   useEffect(() => {
     if (!mobileMenuOpen) return;
@@ -56,20 +58,21 @@ export function AppShell() {
       <aside className="rail">
         <div className="brand-lockup"><span className="brand-pip" aria-hidden="true" /><span>MARS</span></div>
         <p className="rail-caption">Runner operations / 01</p>
-        <label className="rail-org-picker">Workspace
+        {!settingsRoute && <label className="rail-org-picker">Workspace
           <select aria-label="Select workspace" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
             <option value="all">All workspaces</option>
             {organizations.data?.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
           </select>
-        </label>
+        </label>}
         <nav aria-label="Primary navigation">
           <p className="nav-label">Navigate</p>
-          {links.map(([to, label, number]) => (
+          {links.filter(([to]) => to !== "/settings").map(([to, label, number]) => (
             <Link key={to} to={to} className="nav-link" activeProps={{ className: "nav-link is-active" }}>
               <span className="nav-number">{number}</span><span>{label}</span>
             </Link>
           ))}
         </nav>
+        <div className="rail-settings"><p className="nav-label">Settings</p><Link to="/settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>General</span></Link></div>
         <div className="rail-footer" role="status" aria-live="polite"><span className={`online-dot ${health.data?.ok ? "" : "is-offline"}`} />Control plane <strong>{health.isLoading ? "checking" : health.data?.ok ? "connected" : health.error ? "unreachable" : "degraded"}</strong>{health.data?.discovery.stale && <small> Discovery stale</small>}</div>
       </aside>
       <div className="console-body">
@@ -82,15 +85,16 @@ export function AppShell() {
           </div>
           <div className="mobile-header-context">
             <span>{currentLink[1]}</span>
-            <label className="mobile-org-picker">Workspace
+            {!settingsRoute && <label className="mobile-org-picker">Workspace
               <select aria-label="Select workspace" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
                 <option value="all">All workspaces</option>
                 {organizations.data?.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
               </select>
-            </label>
+            </label>}
           </div>
           {mobileMenuOpen && <nav ref={mobileNavigationRef} id="mobile-navigation" className="mobile-navigation" aria-label="Mobile navigation">
-            {links.map(([to, label, number]) => <Link key={to} to={to} className="nav-link" activeProps={{ className: "nav-link is-active" }}><span className="nav-number">{number}</span><span>{label}</span></Link>)}
+            {links.filter(([to]) => to !== "/settings").map(([to, label, navNumber]) => <Link key={to} to={to} className="nav-link" activeProps={{ className: "nav-link is-active" }}><span className="nav-number">{navNumber}</span><span>{label}</span></Link>)}
+            <div className="mobile-settings-nav"><p className="nav-label">Settings</p><Link to="/settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>General</span></Link></div>
           </nav>}
         </header>
         <main id="main-content" className="workspace" data-path={location}>
