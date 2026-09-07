@@ -10,6 +10,7 @@ Implemented in deployment settings commit `c766739` with a follow-up concurrency
 - Preserved signed-in identity and GitHub connection/rate-limit cards in a clearly separated deployment integrations section. Existing organization-scoped GitHub APIs use the current organization when valid, otherwise the first organization.
 - Workspace selectors are hidden in both desktop and mobile AppShell contexts for `/settings` and settings subroutes only.
 - Settings navigation is standalone and exposes `General` without a numeric prefix.
+- Row saves use independent pending counters and synchronous per-organization duplicate guards so concurrent organizations do not mask one another and repeated clicks cannot race.
 - Added focused rendering, route detection, payload-preservation, row-save, and concurrent pending-save coverage.
 
 ## Verification
