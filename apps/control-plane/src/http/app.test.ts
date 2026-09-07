@@ -841,6 +841,16 @@ test("maps invalid GitHub rate-limit headers to an upstream error", async () => 
   expect(response.status).toBe(502);
   expect(await response.json()).toMatchObject({ code: "github_rate_limit_invalid" });
 });
+test.each(["github_401", "github_403", "github_429"])("maps GitHub installation request failure %s to an upstream error", async (code) => {
+  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("dashboard_installations") ? [{ githubInstallationId: 42 }] : []) as never;
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    db,
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+    githubApp: { getInstallationRateLimit: async () => { throw new Error(code); } } as never,
+  })).request("/api/organizations/org-1/github/rate-limit");
+  expect(response.status).toBe(502);
+  expect(await response.json()).toMatchObject({ code: "github_upstream_error", message: "GitHub API request failed" });
+});
 
 test("protects the GitHub connection summary with organization authorization", async () => {
   const response = await createControlPlaneApp(fakeHttpDeps({
