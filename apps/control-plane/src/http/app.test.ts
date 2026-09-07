@@ -786,6 +786,49 @@ describe("control-plane HTTP boundary", () => {
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe("http://localhost:5173/");
   });
+test("lists all organizations for global administrators without membership rows", async () => {
+  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("LEFT JOIN memberships")
+    ? [{
+      id: "org-1",
+      name: "Acme",
+      login: "acme",
+      role: "admin",
+      repositoryCount: 2,
+      workerCount: 1,
+    }]
+    : []) as never;
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    db,
+    currentUser: async () => ({ id: "global-admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+  })).request("/api/organizations");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual([{
+    id: "org-1",
+    name: "Acme",
+    login: "acme",
+    role: "admin",
+    repositoryCount: 2,
+    workerCount: 1,
+  }]);
+});
+test("keeps organization listing membership-scoped for non-admin users", async () => {
+  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("JOIN memberships m")
+    ? [{ id: "org-1", name: "Acme", login: "acme", role: "member", repositoryCount: 0, workerCount: 0 }]
+    : []) as never;
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    db,
+    currentUser: async () => ({ id: "member", githubUserId: 1, login: "member", isGlobalAdmin: false }),
+  })).request("/api/organizations");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual([{
+    id: "org-1",
+    name: "Acme",
+    login: "acme",
+    role: "member",
+    repositoryCount: 0,
+    workerCount: 0,
+  }]);
+});
 test("returns a disconnected GitHub connection summary when no installation exists", async () => {
   const response = await createControlPlaneApp(fakeHttpDeps({
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
