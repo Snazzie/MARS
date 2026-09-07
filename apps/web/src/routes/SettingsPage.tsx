@@ -105,7 +105,9 @@ export function SettingsPage() {
       </section>
       <section className="settings-github-card" aria-labelledby="github-rate-limit-title">
         <div className="panel-heading"><div><p className="eyebrow">Live GitHub API usage</p><h2 id="github-rate-limit-title">GitHub API rate limit</h2></div></div>
-        {!connection.data?.connected && <p className="settings-status" role="status">GitHub rate limit unavailable until a connection is added.</p>}
+        {connection.data?.connected === false && <p className="settings-status" role="status">GitHub rate limit unavailable until a connection is added.</p>}
+        {connection.isLoading && <p className="settings-status" role="status">Checking GitHub connection before loading rate limit…</p>}
+        {connection.error && <p className="settings-status" role="status">GitHub rate limit unavailable because connection status could not be loaded.</p>}
         {connection.data?.connected && rateLimit.isLoading && <p className="settings-status" role="status">Loading GitHub rate limit…</p>}
         {connection.data?.connected && rateLimit.error && <div className="form-error" role="alert"><p>GitHub rate limit unavailable: {githubError(rateLimit.error, "Try again.")}</p><button className="button secondary" type="button" onClick={() => void rateLimit.refetch()}>Retry rate limit</button></div>}
         {connection.data?.connected && rateLimit.data && <div className="settings-rate-limit">

@@ -3,12 +3,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SettingsPage } from "./SettingsPage.tsx";
 
-function settingsClient(connection: Record<string, unknown>, rateLimit?: Record<string, unknown>) {
+function settingsClient(connection?: Record<string, unknown>, rateLimit?: Record<string, unknown>) {
   const client = new QueryClient();
   client.setQueryData(["me"], { id: "user-1", githubUserId: 1, login: "operator" });
   client.setQueryData(["organizations"], [{ id: "org-1", name: "SpeedHQ", login: "SpeedHQ", role: "owner", repositoryCount: 1, workerCount: 1 }]);
   client.setQueryData(["org", "org-1", "settings"], { organizationId: "org-1", maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8589934592, maxStorageBytesPerPod: 107374182400, maxConcurrentPods: 2 });
-  client.setQueryData(["org", "org-1", "github-connection"], connection);
+  if (connection) client.setQueryData(["org", "org-1", "github-connection"], connection);
   if (rateLimit) client.setQueryData(["org", "org-1", "github-rate-limit"], rateLimit);
   return client;
 }
@@ -39,6 +39,11 @@ test("settings exposes disconnected GitHub connection and unavailable quota stat
   expect(html).toContain("GitHub rate limit unavailable");
   expect(html).toContain("Signed-in identity");
   expect(html).toContain("Sign out");
+});
+test("settings keeps quota state unknown while connection status is loading", () => {
+  const html = markup(settingsClient());
+  expect(html).toContain("Checking GitHub connection before loading rate limit");
+  expect(html).not.toContain("until a connection is added");
 });
 
 test("settings exposes connected identity, management actions, and quota values", () => {
