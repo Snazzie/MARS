@@ -422,8 +422,10 @@ export class GitHubAppService {
     const token = await this.getInstallationToken(installationId);
     const response = await this.githubResponse("/installation/repositories?per_page=1", {}, token);
     const header = (name: string): number => {
-      const value = Number(response.headers.get(name)?.trim() ?? "");
-      if (!Number.isSafeInteger(value) || value < 0) throw new Error("github_rate_limit_invalid");
+      const raw = response.headers.get(name)?.trim() ?? "";
+      if (!/^\d+$/.test(raw)) throw new Error("github_rate_limit_invalid");
+      const value = Number(raw);
+      if (!Number.isSafeInteger(value)) throw new Error("github_rate_limit_invalid");
       return value;
     };
     const reset = header("x-ratelimit-reset");
