@@ -177,19 +177,6 @@ test("defers organization capacity exhaustion before preflight, JIT, or dispatch
   expect(calls).toEqual(["reserve"]);
 });
 
-test("keeps organization resource ceiling rejection visible as a failure", async () => {
-  const calls: string[] = [];
-  const result = await reconcileQueuedJobs({
-    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "mars-default"] }],
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }],
-    reserve: async () => { calls.push("reserve"); throw new Error("organization_resource_ceiling_exceeded"); },
-    preflight: async () => { calls.push("preflight"); return true; },
-    jit: async () => { calls.push("jit"); throw new Error("must not generate"); },
-    dispatch: async () => { calls.push("dispatch"); },
-  });
-  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 1 });
-  expect(calls).toEqual(["reserve"]);
-});
 
 test("runs preflight after reserve and releases a reservation when preflight rejects", async () => {
   const order: string[] = [];

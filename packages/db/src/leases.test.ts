@@ -159,11 +159,12 @@ test("invalidates pending and sent create commands when a reaped lease is reused
   expect(invalidation).toContain("create_lease");
   expect(invalidationIndex).toBeGreaterThan(insertIndex);
 });
-test("rejects organization resource ceiling violations with a permanent error", async () => {
+test("ignores organization resource ceilings while reserving within worker and pool limits", async () => {
   const tx = ((strings: TemplateStringsArray) => {
     const query = strings.join(" ").toLowerCase();
     if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 4, memoryBytes: 4, storageBytes: 4, concurrency: 2 }, limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 4, maxConcurrentPods: 2 } }];
-    if (query.includes("from organization_settings")) return [{ maxVcpuPerPod: 1, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 4, maxConcurrentPods: 2 }];
+    if (query.includes("from organization_settings")) return [{ maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 2 }];
+    if (query.includes("insert into runner_leases")) return [{ id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date().toISOString(), requested: { vcpu: 2, memoryBytes: 2, storageBytes: 2, concurrency: 1 } }];
     return [];
   }) as unknown as Sql<{}>;
   const db = Object.assign(((strings: TemplateStringsArray, ...values: unknown[]) => []) as unknown as Sql<{}>, { begin: async (fn: (value: Sql<{}>) => unknown) => fn(tx) });
@@ -172,9 +173,9 @@ test("rejects organization resource ceiling violations with a permanent error", 
     poolId: "pool",
     workerId: "worker",
     routingKey: "org:pool:labels",
-    requested: { vcpu: 2, memoryBytes: 1, storageBytes: 1, concurrency: 1 },
+    requested: { vcpu: 2, memoryBytes: 2, storageBytes: 2, concurrency: 1 },
     ttlMs: 60_000,
-  })).rejects.toThrow("organization_resource_ceiling_exceeded");
+  })).resolves.toMatchObject({ id: "lease" });
 });
 
 test("rejects organization concurrency capacity with a deferred error", async () => {

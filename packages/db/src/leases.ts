@@ -24,8 +24,7 @@ export async function reserveRoutingSlot(sql: DatabaseClient, input: LeaseReserv
         AND p.enabled=true AND w.admission_state='adopted'
         AND w.configuration_state='ready' AND w.draining=false FOR UPDATE OF p, w`;
     if (!eligible[0]) throw new Error("worker_not_eligible");
-    const [organization] = await tx`SELECT max_vcpu_per_pod AS "maxVcpuPerPod", max_memory_bytes_per_pod AS "maxMemoryBytesPerPod", max_storage_bytes_per_pod AS "maxStorageBytesPerPod", max_concurrent_pods AS "maxConcurrentPods" FROM organization_settings WHERE organization_id=${input.organizationId}`;
-    if (organization && (input.requested.vcpu > Number(organization.maxVcpuPerPod) || input.requested.memoryBytes > Number(organization.maxMemoryBytesPerPod) || input.requested.storageBytes > Number(organization.maxStorageBytesPerPod))) throw new Error("organization_resource_ceiling_exceeded");
+    const [organization] = await tx`SELECT max_concurrent_pods AS "maxConcurrentPods" FROM organization_settings WHERE organization_id=${input.organizationId}`;
     if (organization) {
       const [activeOrganization] = await tx`SELECT count(*)::int AS count FROM runner_leases WHERE organization_id=${input.organizationId} AND state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')`;
       if (Number(activeOrganization?.count ?? 0) >= Number(organization.maxConcurrentPods)) throw new Error("organization_capacity_exhausted");
