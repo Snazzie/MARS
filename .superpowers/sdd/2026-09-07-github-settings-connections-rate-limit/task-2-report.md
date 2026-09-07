@@ -19,3 +19,4 @@ Review follow-up:
 - `ef7666c` hides cached rate-limit values when the rate-limit query errors and adds a regression test.
 - Latest verification: Settings + Repositories — 14 pass, 0 fail, 55 expect() calls; `bun run --filter '@mars/web' typecheck` — exit 0.
 - Backend `Cache-Control: no-store` for volatile rate-limit responses remains outside this frontend task's assigned scope.
+- `0746b6f` resets connection-action errors when the selected organization changes; verification remains 14 pass, 0 fail and typecheck exit 0.
