@@ -131,7 +131,11 @@ export class GitHubAppService {
       installationId = installation?.githubInstallationId ?? null;
     }
     if (!installationId) throw new Error("github_installation_not_found");
-    await this.gh(`/app/installations/${installationId}`, { method: "DELETE" }, await this.appJwt());
+    try {
+      await this.gh(`/app/installations/${installationId}`, { method: "DELETE" }, await this.appJwt());
+    } catch (cause) {
+      if (!(cause instanceof Error) || cause.message !== "github_404") throw cause;
+    }
     await this.reconcileInstallationRepositories({ installation: { id: installationId }, action: "uninstalled" });
   }
 

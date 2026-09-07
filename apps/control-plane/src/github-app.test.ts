@@ -334,6 +334,16 @@ describe("GitHub App onboarding", () => {
     expect(fakeDb.installations.get(42)).toMatchObject({ state: "suspended" });
     expect(fakeDb.repositories.get("1")).toMatchObject({ available: false });
   });
+  test("treats an already-removed GitHub installation as successfully uninstalled", async () => {
+    const github = service(async () => new Response(null, { status: 404 }));
+    fakeDb.appConfig = { id: 9, slug: "mars", pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "x" };
+    fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "selected", githubAccountId: 99 });
+    fakeDb.repositories.set("1", { id: "1", installationId: 42, fullName: "acme/private", visibility: "private", available: true });
+
+    await expect(github.uninstallOrganization(organizationId)).resolves.toBeUndefined();
+    expect(fakeDb.installations.get(42)).toMatchObject({ state: "suspended" });
+    expect(fakeDb.repositories.get("1")).toMatchObject({ available: false });
+  });
 
   test("starts a second organization installation without rebinding onboarding", async () => {
     const github = service(async () => Response.json({}));

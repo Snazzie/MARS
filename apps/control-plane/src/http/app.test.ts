@@ -956,9 +956,15 @@ test("does not return GitHub settings for unavailable repositories", async () =>
   })).request("/api/organizations/org-1/repositories/repo-1/github/settings");
   expect(response.status).toBe(404);
 });
-test("uninstalls an organization through the authenticated GitHub route", async () => {
+test("uninstalls an organization through the authenticated GitHub route without removing membership", async () => {
   let organization = "";
+  const queries: string[] = [];
+  const db = ((strings: TemplateStringsArray) => {
+    queries.push(strings.join("?"));
+    return [];
+  }) as never;
   const response = await createControlPlaneApp(fakeHttpDeps({
+    db,
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
     githubApp: { uninstallOrganization: async (organizationId: string) => { organization = organizationId; } } as never,
   })).request("/api/organizations/org-2/github/uninstall", {
@@ -967,6 +973,7 @@ test("uninstalls an organization through the authenticated GitHub route", async 
   });
   expect(response.status).toBe(200);
   expect(organization).toBe("org-2");
+  expect(queries.some(query => query.toLowerCase().includes("delete from memberships"))).toBe(false);
   expect(await response.json()).toEqual({ ok: true });
 });
 
@@ -1231,6 +1238,24 @@ test("rejects focused label conflicts as workflow-invalid requests", async () =>
     expect(refreshedOrganization).toBe("org-1");
     expect(await response.json()).toEqual({ ok: true });
   });
+test.each([
+  ["github_404", 404, "not_found"],
+  ["github_401", 502, "github_upstream_error"],
+  ["github_403", 502, "github_upstream_error"],
+  ["github_410", 502, "github_upstream_error"],
+  ["github_429", 502, "github_upstream_error"],
+  ["github_500", 502, "github_upstream_error"],
+])("maps GitHub refresh failure %s to status %s", async (failure, status, code) => {
+  const response = await createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+    githubApp: { refreshInstallationRepositories: async () => { throw new Error(failure); } } as never,
+  })).request("/api/organizations/org-1/github/refresh", {
+    method: "POST",
+    headers: { "Idempotency-Key": `github-refresh-${failure}` },
+  });
+  expect(response.status).toBe(status);
+  expect(await response.json()).toMatchObject({ code });
+});
 test("starts GitHub installation for a non-onboarding organization", async () => {
   let requestedOrganization = "";
   const response = await createControlPlaneApp(fakeHttpDeps({

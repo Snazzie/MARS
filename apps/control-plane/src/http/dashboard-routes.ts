@@ -483,7 +483,6 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
     try {
       await deps.githubApp.uninstallOrganization(org);
-      await deps.db`DELETE FROM memberships WHERE organization_id=${org} AND user_id=${c.get("user").id}`;
       await invalidateDashboard(deps.db, org, ["repositories", "organizations"]);
       return c.json({ ok: true });
     } catch (cause) {
@@ -520,9 +519,16 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const idem = requireMutation(c); if (idem) return idem;
     if (!deps.githubApp) return error(c, 503, "github_unconfigured", "GitHub App is not configured");
-    await deps.githubApp.refreshInstallationRepositories(org);
-    await invalidateDashboard(deps.db, org, ["repositories"]);
-    return c.json({ ok: true });
+    try {
+      await deps.githubApp.refreshInstallationRepositories(org);
+      await invalidateDashboard(deps.db, org, ["repositories"]);
+      return c.json({ ok: true });
+    } catch (cause) {
+      const code = cause instanceof Error ? cause.message : "";
+      if (code === "github_404" || code === "github_installation_not_found") return error(c, 404, "not_found", "GitHub installation not found");
+      if (/^github_[45]\d\d$/.test(code)) return error(c, 502, "github_upstream_error", "GitHub API request failed");
+      throw cause;
+    }
   }));
   app.get("/api/organizations/:organizationId/repositories/:repositoryId/runner-workflows", safe(async (c) => {
     const org = c.req.param("organizationId"); const denied = await guard(c, deps, org); if (denied) return denied;
