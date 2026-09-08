@@ -205,8 +205,9 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
 }
 
 export async function discoverQueuedRepositoryJobs(deps: DiscoveryDeps): Promise<DiscoveryReport> {
-  if (!deps.repositoryFullName) return { repositories: 0, discovered: 0, updated: 0, failed: 0 };
-  const rows = await deps.db`SELECT repo.id AS "repositoryId",repo.organization_id AS "organizationId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' AND (repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()) AND repo.full_name=${deps.repositoryFullName} ORDER BY repo.full_name`;
+  const rows = deps.repositoryFullName
+    ? await deps.db`SELECT repo.id AS "repositoryId",repo.organization_id AS "organizationId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' AND (repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()) AND repo.full_name=${deps.repositoryFullName} ORDER BY repo.full_name`
+    : await deps.db`SELECT repo.id AS "repositoryId",repo.organization_id AS "organizationId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' AND (repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()) ORDER BY repo.full_name`;
   const report: DiscoveryReport = { repositories: rows.length, discovered: 0, updated: 0, failed: 0 };
   for (const row of rows as Record<string, unknown>[]) {
     try {
