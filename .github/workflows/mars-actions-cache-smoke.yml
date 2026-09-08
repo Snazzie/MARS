@@ -10,7 +10,7 @@ on:
         type: string
 
 concurrency:
-  group: mars-actions-cache-smoke-${{ inputs.cache_key || hashFiles('bun.lock') }}
+  group: mars-actions-cache-smoke-${{ inputs.cache_key || 'automatic' }}
   cancel-in-progress: false
 
 jobs:
