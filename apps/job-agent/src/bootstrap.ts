@@ -8,9 +8,17 @@ export function cliArgument(argv: readonly string[], flag: string): string | und
   const index = argv.indexOf(flag);
   return index >= 0 ? argv[index + 1] : undefined;
 }
+async function runPowerShell(script: string): Promise<string> {
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  const process = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { stdout: "pipe", stderr: "pipe" });
+  const [exitCode, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
+  if (exitCode !== 0) throw new Error(`Windows trust operation failed: ${stderr.trim() || `exit ${exitCode}`}`);
+  return stdout.trim();
+}
 export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerRoot: string, platform: "windows-x64" | "linux-x64", workerCache?: WorkerCacheProxy, onOutput?: (stream: "stdout" | "stderr", content: string) => void): Promise<number> {
   RunnerJitConfig.shape.encodedJitConfig.parse(encodedJitConfig);
   let caDirectory: string | undefined;
+  let addedRootThumbprint: string | undefined;
   try {
     const env: Record<string, string> = { ...Bun.env, ACTIONS_RUNNER_INPUT_JITCONFIG: encodedJitConfig };
     if (workerCache) {
@@ -44,6 +52,11 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
       env.GIT_SSL_CAINFO = caPath;
       env.MARS_WORKER_CACHE_REGISTRATION_URL = proxy.registrationUrl;
       env.MARS_WORKER_CACHE_REGISTRATION_CHALLENGE = proxy.registrationChallenge;
+      if (platform === "windows-x64") {
+        const result = await runPowerShell(`$ErrorActionPreference='Stop';$cert=[System.Security.Cryptography.X509Certificates.X509Certificate2]::new('${caPath.replace(/'/g, "''")}');$store=[System.Security.Cryptography.X509Certificates.X509Store]::new('Root','LocalMachine');$store.Open('ReadWrite');$existing=$store.Certificates.Find('FindByThumbprint',$cert.Thumbprint,$false).Count -gt 0;if(-not $existing){$store.Add($cert);$added='1'}else{$added='0'};$store.Close();Write-Output ($cert.Thumbprint+'|'+$added)`);
+        const [thumbprint, added] = result.split("|");
+        if (added === "1") addedRootThumbprint = thumbprint;
+      }
     }
     const runnerCommand = Bun.env.MARS_RUNNER_COMMAND ?? (platform === "windows-x64" ? "run.cmd" : "./run.sh");
     const command = platform === "windows-x64" ? (runnerCommand.endsWith(".sh") ? ["bash", runnerCommand] : ["cmd.exe", "/c", runnerCommand]) : [runnerCommand];
@@ -63,6 +76,9 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
     await Promise.all([output(stdout, "stdout"), output(stderr, "stderr")]);
     return await runner.exited;
   } finally {
+    if (addedRootThumbprint && platform === "windows-x64") {
+      await runPowerShell(`$ErrorActionPreference='Stop';$store=[System.Security.Cryptography.X509Certificates.X509Store]::new('Root','LocalMachine');$store.Open('ReadWrite');$found=$store.Certificates.Find('FindByThumbprint','${addedRootThumbprint}', $false);if($found.Count -gt 0){$store.Remove($found[0])};$store.Close()`);
+    }
     if (caDirectory) await rm(caDirectory, { recursive: true, force: true });
   }
 }
