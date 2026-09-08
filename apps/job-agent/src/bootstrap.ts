@@ -26,11 +26,10 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
       caDirectory = await mkdtemp(join(tmpdir(), "mars-worker-cache-"));
       const caPath = join(caDirectory, "worker-ca.pem");
       const gitConfigPath = join(caDirectory, "git-ca.config");
-      await writeFile(caPath, proxy.caCertificatePem, { mode: 0o600, flag: "wx" });
       await writeFile(gitConfigPath, `[http]
 	sslBackend = openssl
 	sslVerify = true
-	sslCAInfo = ${caPath}
+	sslCAInfo = ${caPath.replaceAll("\\", "/")}
 `, { mode: 0o600, flag: "wx" });
       env.HTTP_PROXY = proxy.proxyUrl;
       env.http_proxy = proxy.proxyUrl;
