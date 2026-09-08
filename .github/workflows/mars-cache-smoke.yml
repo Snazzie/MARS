@@ -1,0 +1,74 @@
+name: Mars worker cache smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cache-smoke:
+    name: Verify worker-local tool and package cache
+    runs-on: mars-windows-x64
+    timeout-minutes: 20
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Verify Mars runner and worker proxy
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_OS -ne 'Windows') { throw "Expected Windows runner, got $env:RUNNER_OS" }
+          if ($env:RUNNER_NAME -notmatch '^mars-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') {
+            throw "Unexpected Mars runner name: $env:RUNNER_NAME"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:HTTP_PROXY) -or [string]::IsNullOrWhiteSpace($env:HTTPS_PROXY)) {
+            throw 'Mars worker HTTP(S) proxy was not passed into the job container'
+          }
+          Write-Host "Mars runner: $env:RUNNER_NAME"
+          Write-Host "HTTP proxy: $env:HTTP_PROXY"
+          Write-Host "HTTPS proxy: $env:HTTPS_PROXY"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install locked dependencies through worker cache
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $firstCache = Join-Path $env:RUNNER_TEMP 'mars-bun-cache-first'
+          $secondCache = Join-Path $env:RUNNER_TEMP 'mars-bun-cache-second'
+          $nodeModules = Join-Path $pwd 'node_modules'
+          Remove-Item -LiteralPath $firstCache, $secondCache, $nodeModules -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $firstCache, $secondCache | Out-Null
+          try {
+            $env:BUN_INSTALL_CACHE_DIR = $firstCache
+            bun install --frozen-lockfile
+            if ($LASTEXITCODE -ne 0) { throw "First locked install failed with exit code $LASTEXITCODE" }
+            Remove-Item -LiteralPath $nodeModules -Recurse -Force -ErrorAction SilentlyContinue
+            $env:BUN_INSTALL_CACHE_DIR = $secondCache
+            bun install --frozen-lockfile
+            if ($LASTEXITCODE -ne 0) { throw "Second locked install failed with exit code $LASTEXITCODE" }
+            if (-not (Test-Path -LiteralPath (Join-Path $nodeModules 'hono'))) {
+              throw 'Second locked install did not materialize hono'
+            }
+          } finally {
+            Remove-Item Env:BUN_INSTALL_CACHE_DIR -ErrorAction SilentlyContinue
+          }
+
+      - name: Report cache test inputs
+        shell: powershell
+        run: |
+          [ordered]@{
+            runner = $env:RUNNER_NAME
+            httpProxy = $env:HTTP_PROXY
+            httpsProxy = $env:HTTPS_PROXY
+            runnerTemp = $env:RUNNER_TEMP
+            bunVersion = (bun --version)
+            nodeVersion = (node --version)
+          } | ConvertTo-Json -Compress
