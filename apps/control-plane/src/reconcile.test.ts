@@ -44,6 +44,34 @@ test("uses every available pool slot for one installation", async () => {
   expect(jitInstallations).toEqual([42, 42, 43]);
   expect(result).toEqual({ reserved: 3, deferred: 0, skipped: 0, failed: 0 });
 });
+test("dispatches three jobs concurrently when bounded capacity allows it", async () => {
+  const queued = [1, 2, 3].map((jobId) => ({ installationId: 1, repositoryId: jobId, repository: `acme/project-${jobId}`, runId: jobId, jobId, labels: ["mars-windows-x64"] }));
+  const candidate = { requestedLabels: [], worker: { id: "worker", admissionState: "adopted" as const, connectionState: "online" as const, configurationState: "ready" as const, runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } };
+  let activePreflights = 0;
+  let maxActivePreflights = 0;
+  let releasePreflight!: () => void;
+  const preflightReleased = new Promise<void>((resolve) => { releasePreflight = resolve; });
+  let lease = 0;
+  const resultPromise = reconcileQueuedJobs({
+    queued,
+    candidates: [candidate],
+    maxConcurrent: 3,
+    reserve: async (input) => ({ id: `lease-${++lease}`, nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested }),
+    preflight: async () => {
+      activePreflights += 1;
+      maxActivePreflights = Math.max(maxActivePreflights, activePreflights);
+      if (activePreflights === 3) releasePreflight();
+      await preflightReleased;
+      activePreflights -= 1;
+      return true;
+    },
+    jit: async () => ({ encodedJitConfig: "config", runnerName: "runner", labels: ["mars-windows-x64"], expiresAt: new Date(Date.now() + 60_000).toISOString() }),
+    dispatch: async () => {},
+  });
+  const result = await resultPromise;
+  expect(maxActivePreflights).toBe(3);
+  expect(result).toEqual({ reserved: 3, deferred: 0, skipped: 0, failed: 0 });
+});
 
 test("does not block a later job when an earlier job is already claimed", async () => {
   const reservedJobs: number[] = [];
@@ -69,6 +97,7 @@ test("continues other installations after a rate-limited JIT attempt", async () 
       { installationId: 42, repositoryId: 2, repository: "acme/two", runId: 2, jobId: 2, labels: ["mars-windows-x64"] },
       { installationId: 43, repositoryId: 3, repository: "acme/three", runId: 3, jobId: 3, labels: ["mars-windows-x64"] },
     ],
+    maxConcurrent: 1,
     candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } }],
     reserve: async ({ githubJobId, requested }) => { reservedJobs.push(githubJobId); return { id: `lease-${githubJobId}`, nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested }; },
     jit: async ({ installationId }) => {
