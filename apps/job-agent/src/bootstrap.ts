@@ -26,6 +26,15 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
       env.no_proxy = "";
       env.NODE_EXTRA_CA_CERTS = caPath;
       env.node_extra_ca_certs = caPath;
+      env.GIT_CONFIG_COUNT = "3";
+      env.GIT_CONFIG_KEY_0 = "http.sslBackend";
+      env.GIT_CONFIG_VALUE_0 = "openssl";
+      env.GIT_CONFIG_KEY_1 = "http.sslVerify";
+      env.GIT_CONFIG_VALUE_1 = "true";
+      env.GIT_CONFIG_KEY_2 = "http.sslCAInfo";
+      env.GIT_CONFIG_VALUE_2 = caPath;
+      env.MARS_WORKER_CACHE_REGISTRATION_URL = proxy.registrationUrl;
+      env.MARS_WORKER_CACHE_REGISTRATION_CHALLENGE = proxy.registrationChallenge;
     }
     const runnerCommand = Bun.env.MARS_RUNNER_COMMAND ?? (platform === "windows-x64" ? "run.cmd" : "./run.sh");
     const command = platform === "windows-x64" ? (runnerCommand.endsWith(".sh") ? ["bash", runnerCommand] : ["cmd.exe", "/c", runnerCommand]) : [runnerCommand];

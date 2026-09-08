@@ -138,6 +138,20 @@ function Resolve-CachePort([string]$Name, [int]$DefaultPort) {
   $raw = [Environment]::GetEnvironmentVariable($Name); if ([string]::IsNullOrWhiteSpace($raw)) { return $DefaultPort }
   $port = 0; if (-not [int]::TryParse($raw, [ref]$port) -or $port -lt 1 -or $port -gt 65535) { throw "$Name must be an integer between 1 and 65535." }; return $port
 }
+function Resolve-ContainerCacheOrigins {
+  $proxy = [Environment]::GetEnvironmentVariable('MARS_CACHE_PROXY_URL')
+  $advertise = [Environment]::GetEnvironmentVariable('MARS_CACHE_ADVERTISE_URL')
+  if ((-not [string]::IsNullOrWhiteSpace($proxy)) -or (-not [string]::IsNullOrWhiteSpace($advertise))) {
+    if ([string]::IsNullOrWhiteSpace($proxy) -or [string]::IsNullOrWhiteSpace($advertise)) { throw 'MARS_CACHE_PROXY_URL and MARS_CACHE_ADVERTISE_URL must be configured together.' }
+    return @{ Proxy = $proxy.Trim(); Advertise = $advertise.Trim() }
+  }
+  $raw = & docker.exe network inspect nat --format '{{json .IPAM.Config}}' 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Unable to inspect Docker NAT network: $($raw -join ' ')" }
+  $config = ($raw -join '') | ConvertFrom-Json
+  $gateways = @($config | ForEach-Object { $_.Gateway } | Where-Object { $_ -match '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' -and $_ -notmatch '^127\.' })
+  if ($gateways.Count -ne 1) { throw "Docker NAT must expose exactly one non-loopback IPv4 gateway; found $($gateways -join ', ')." }
+  return @{ Proxy = "http://$($gateways[0]):8788"; Advertise = "https://$($gateways[0]):8789" }
+}
 function Ensure-ContainerFeatures {
   $restart = $false
   foreach ($featureName in @('Microsoft-Hyper-V-All','Containers')) { $feature = Get-WindowsOptionalFeature -Online -FeatureName $featureName -ErrorAction SilentlyContinue; if ($feature.State -ne 'Enabled') { $result = Enable-WindowsOptionalFeature -Online -FeatureName $featureName -All -NoRestart; if ($result.RestartNeeded) { $restart = $true } } }
@@ -256,13 +270,14 @@ try {
   if ($existingService) { Stop-Service MarsWorker -Force -ErrorAction SilentlyContinue; $serviceDelete = & sc.exe delete MarsWorker 2>&1; if ($LASTEXITCODE -ne 0) { throw "Failed to remove existing MarsWorker service: $($serviceDelete -join ' ')" }; $deadline = (Get-Date).AddSeconds(15); while ((Get-Service MarsWorker -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }; if (Get-Service MarsWorker -ErrorAction SilentlyContinue) { throw 'Timed out removing existing MarsWorker service.' } }
   Write-Host '[6/7] Registering LocalSystem worker service'; New-Item -ItemType Directory -Force -Path $root,$bin | Out-Null
   Move-Item -LiteralPath $paths.orchestrator -Destination (Join-Path $bin 'mars-orchestrator.exe') -Force; Move-Item -LiteralPath $paths.serviceHost -Destination (Join-Path $bin 'mars-service-host.exe') -Force
-  $exe = Join-Path $bin 'mars-orchestrator.exe'; $serviceHost = Join-Path $bin 'mars-service-host.exe'; $cacheProxyPort = Resolve-CachePort 'MARS_CACHE_PROXY_PORT' 8788; $cacheDataPort = Resolve-CachePort 'MARS_CACHE_DATA_PORT' 8789; $cacheFirewallPorts = @($cacheProxyPort,$cacheDataPort) | Sort-Object -Unique
   Get-NetFirewallRule -DisplayName 'Mars Worker Cache' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop; New-NetFirewallRule -DisplayName 'Mars Worker Cache' -Direction Inbound -Action Allow -Protocol TCP -LocalPort $cacheFirewallPorts -Program $exe -Profile Domain,Private -RemoteAddress LocalSubnet | Out-Null
   $workerLogPath = Join-Path $root 'logs\worker.log'; $previousWorkerLogPath = Join-Path $root 'logs\worker.previous.log'; if (Test-Path -LiteralPath $workerLogPath) { New-Item -ItemType Directory -Force -Path (Split-Path $previousWorkerLogPath) | Out-Null; Move-Item -LiteralPath $workerLogPath -Destination $previousWorkerLogPath -Force }
   $service = New-Service -Name MarsWorker -BinaryPathName "`"$serviceHost`" `"$exe`" windows-worker" -StartupType Automatic -ErrorAction Stop; $serviceDependency = & sc.exe config MarsWorker depend= docker 2>&1; if ($LASTEXITCODE -ne 0) { throw "Failed to configure Docker dependency: $($serviceDependency -join ' ')" }
   $serviceEnvironment = @("MARS_CONTROL_PLANE_URL=$ControlPlaneUrl","MARS_JOIN_CODE_FILE=$JoinCodeFile","MARS_WINDOWS_RUNTIME=container","MARS_WINDOWS_CONTAINER_IMAGE=$WindowsContainerImage","MARS_WINDOWS_CONTAINER_PREFIX=$WindowsContainerPrefix","MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS=$WindowsContainerReadyTimeoutMs","MARS_WINDOWS_CONTAINER_JOB_TIMEOUT_MS=$WindowsContainerJobTimeoutMs","MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST=$windowsImageManifestPath")
+  $cacheOrigins = Resolve-ContainerCacheOrigins
+  $serviceEnvironment += "MARS_CACHE_PROXY_URL=$($cacheOrigins.Proxy)","MARS_CACHE_ADVERTISE_URL=$($cacheOrigins.Advertise)"
   if ($AllowLocalContainerImage -or $WindowsContainerImage -eq 'mars/windows-job:local') { $serviceEnvironment += 'MARS_ALLOW_LOCAL_CONTAINER_IMAGE=true' }
-  foreach ($name in @('MARS_ACTION_CACHE_ROOT','MARS_CACHE_PROXY_PORT','MARS_CACHE_DATA_PORT','MARS_CACHE_PROXY_URL','MARS_CACHE_ADVERTISE_URL','MARS_CACHE_TOKEN_ISSUER','MARS_CACHE_JWKS_URL','MARS_WINDOWS_CONTAINER_DNS_SERVERS')) { $value = [Environment]::GetEnvironmentVariable($name); if (-not [string]::IsNullOrWhiteSpace($value)) { $serviceEnvironment += "$name=$value" } }
+  foreach ($name in @('MARS_ACTION_CACHE_ROOT','MARS_CACHE_PROXY_PORT','MARS_CACHE_DATA_PORT','MARS_CACHE_TOKEN_ISSUER','MARS_CACHE_JWKS_URL','MARS_WINDOWS_CONTAINER_DNS_SERVERS')) { $value = [Environment]::GetEnvironmentVariable($name); if (-not [string]::IsNullOrWhiteSpace($value)) { $serviceEnvironment += "$name=$value" } }
   New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\MarsWorker' -Name Environment -PropertyType MultiString -Value $serviceEnvironment -Force | Out-Null; $serviceFailure = & sc.exe failure MarsWorker 'reset= 86400' 'actions= restart/5000/restart/30000/none/0' 2>&1; if ($LASTEXITCODE -ne 0) { throw "Failed to configure MarsWorker recovery: $($serviceFailure -join ' ')" }
   Write-Host '[7/7] Starting worker service and waiting for enrollment'; try { Start-Service MarsWorker -ErrorAction Stop; $service = Get-Service MarsWorker -ErrorAction Stop; $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running,[TimeSpan]::FromSeconds(30)); Start-Sleep -Seconds 2; $service.Refresh(); if ($service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running) { throw "MarsWorker stopped immediately with status $($service.Status)." } } catch { $startupError = $_.Exception.Message; $recoveryDeadline = (Get-Date).AddSeconds(15); do { Start-Sleep -Milliseconds 500; $currentService = Get-Service MarsWorker -ErrorAction SilentlyContinue } while ($currentService -and $currentService.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running -and (Get-Date) -lt $recoveryDeadline); if (-not $currentService -or $currentService.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running) { throw "MarsWorker failed to reach Running. Startup error: $startupError" }; Write-Warning "MarsWorker recovered after initial startup failure: $startupError" }
   Wait-WorkerEnrollment $identityPath; Remove-ResumeTask; Write-State 'complete' 'complete'; Write-Output 'Windows container worker setup complete; join-code remains until authenticated.'
