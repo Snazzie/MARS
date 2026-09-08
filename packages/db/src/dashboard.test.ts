@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { LogChunk, OverviewDto, RepositorySummary, RunDetail, RunSummary, WorkerDetail, WorkerHealth } from "@mars/contracts";
 import { getAllOverview, getOverview, getOrganizationSettings, getRunDetail, getWorkerHealth, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRepositories, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks, queueRepositoryDiscoveryRecheck, type DashboardDb } from "./dashboard.ts";
 
-test("overview counts only GitHub job status and runtime leases", async () => {
+test("overview uses active runner leases for the load numerator", async () => {
   const queries: string[] = [];
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
@@ -27,7 +27,8 @@ test("overview counts only GitHub job status and runtime leases", async () => {
   const result = await getOverview(db, "org-1", "24h");
   expect(OverviewDto.parse(result)).toMatchObject({ running: 2, concurrency: 10, utilization: { pods: 0.2 }, timeseries: [{ bucket: "2026-08-12T10:00:00.000Z", pending: 2, running: 1 }], runningContainers: [{ organizationId: "org-1", jobName: "build", cpuUsagePercent: 42.5 }] });
   expect(queries.some((query) => query.includes("l.state IN ('sandbox_ready','online','busy')") && query.includes("j.status='in_progress'"))).toBe(true);
-  expect(queries.some((query) => query.includes("count(*) FILTER (WHERE j.status='queued')") && query.includes("count(*) FILTER (WHERE j.status='in_progress')"))).toBe(true);
+  expect(queries.some((query) => query.includes("count(*) FILTER (WHERE j.status='queued')") && query.includes("FROM dashboard_jobs j"))).toBe(true);
+  expect(queries.some((query) => query.includes("SELECT count(*)::int FROM runner_leases") && query.includes("l.state IN ('sandbox_ready','online','busy')"))).toBe(true);
 });
 test("aggregate overview preserves each running container organization", async () => {
   const queries: string[] = [];
