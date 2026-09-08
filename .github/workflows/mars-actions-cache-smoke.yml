@@ -1,0 +1,70 @@
+name: Mars Actions cache smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      cache_key:
+        description: Cache key to exercise; reuse it on the second run to verify a hit
+        required: true
+        default: mars-actions-cache-windows-v1
+        type: string
+
+concurrency:
+  group: mars-actions-cache-smoke-${{ inputs.cache_key }}
+  cancel-in-progress: false
+
+jobs:
+  actions-cache:
+    name: Verify actions/cache on Mars runner
+    runs-on: mars-windows-x64
+    timeout-minutes: 10
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Verify Mars runner and worker proxy
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_OS -ne 'Windows') { throw "Expected Windows runner, got $env:RUNNER_OS" }
+          if ($env:RUNNER_NAME -notmatch '^mars-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') {
+            throw "Unexpected Mars runner name: $env:RUNNER_NAME"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:HTTP_PROXY) -or [string]::IsNullOrWhiteSpace($env:HTTPS_PROXY)) {
+            throw 'Mars worker HTTP(S) proxy was not passed into the job container'
+          }
+          Write-Host "Mars runner: $env:RUNNER_NAME"
+          Write-Host "HTTP proxy: $env:HTTP_PROXY"
+          Write-Host "HTTPS proxy: $env:HTTPS_PROXY"
+
+      - name: Restore Actions cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: .mars-actions-cache
+          key: ${{ inputs.cache_key }}
+
+      - name: Verify cache result and seed miss
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $marker = Join-Path $pwd '.mars-actions-cache\marker.txt'
+          if ('${{ steps.cache.outputs.cache-hit }}' -eq 'true') {
+            if (-not (Test-Path -LiteralPath $marker)) { throw 'actions/cache reported a hit but marker.txt was not restored' }
+            if ((Get-Content -Raw -LiteralPath $marker).Trim() -ne 'mars-actions-cache') { throw 'actions/cache restored unexpected marker content' }
+            Write-Host 'Actions cache HIT verified.'
+          } else {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $marker) | Out-Null
+            Set-Content -LiteralPath $marker -Value 'mars-actions-cache' -NoNewline
+            Write-Host 'Actions cache MISS verified; post-job save will populate this key.'
+          }
+
+      - name: Report cache outcome
+        shell: powershell
+        run: |
+          [ordered]@{
+            cacheKey = '${{ inputs.cache_key }}'
+            cacheHit = '${{ steps.cache.outputs.cache-hit }}'
+            runner = $env:RUNNER_NAME
+            proxy = $env:HTTPS_PROXY
+          } | ConvertTo-Json -Compress
