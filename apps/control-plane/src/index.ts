@@ -367,6 +367,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
     const canonical = initialized.setup.publicOrigin() ?? configuredPublicOrigin;
     return [...new Set([canonical, ...configuredWorkerOrigins].filter((origin): origin is string => Boolean(origin)))];
   };
+  const secretBox = options.secretBox ?? new SecretBox(initialized.masterKey);
   const devToken = !production ? Bun.env.MARS_DEV_TOKEN?.trim() : undefined;
   const current = options.currentUser ?? (async (request: Request) => {
     const authorization = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
