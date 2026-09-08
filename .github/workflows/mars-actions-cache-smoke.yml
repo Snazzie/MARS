@@ -2,9 +2,15 @@ name: Mars Actions cache smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      cache_key:
+        description: Optional override; defaults to the lockfile-derived key
+        required: false
+        default: ''
+        type: string
 
 concurrency:
-  group: mars-actions-cache-smoke
+  group: mars-actions-cache-smoke-${{ inputs.cache_key || hashFiles('bun.lock') }}
   cancel-in-progress: false
 
 jobs:
@@ -36,7 +42,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .mars-actions-cache
-          key: mars-actions-cache-windows-${{ hashFiles('bun.lock') }}
+          key: ${{ inputs.cache_key || format('mars-actions-cache-windows-{0}', hashFiles('bun.lock')) }}
 
       - name: Verify cache result and seed miss
         shell: powershell
@@ -57,7 +63,8 @@ jobs:
         shell: powershell
         run: |
           [ordered]@{
-            cacheKey = "mars-actions-cache-windows-${{ hashFiles('bun.lock') }}"
+            cacheKey = "${{ inputs.cache_key || format('mars-actions-cache-windows-{0}', hashFiles('bun.lock')) }}"
+            cacheHit = '${{ steps.cache.outputs.cache-hit }}'
             runner = $env:RUNNER_NAME
             proxy = $env:HTTPS_PROXY
           } | ConvertTo-Json -Compress
