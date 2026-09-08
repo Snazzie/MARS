@@ -372,7 +372,11 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const current = options.currentUser ?? (async (request: Request) => {
     const authorization = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
     const supplied = authorization || request.headers.get("x-mars-dev-token")?.trim();
-    if (devToken && supplied === devToken) return { id: "00000000-0000-4000-8000-000000000001", githubUserId: 0, login: "dev-admin", isGlobalAdmin: true };
+    if (devToken && supplied === devToken) {
+      const [admin] = await db<{ id: string; githubUserId: number | string; login: string; isGlobalAdmin: boolean }[]>`SELECT id,github_user_id AS "githubUserId",login,is_global_admin AS "isGlobalAdmin" FROM users WHERE is_global_admin=true ORDER BY created_at ASC LIMIT 1`;
+      if (admin) return { id: admin.id, githubUserId: Number(admin.githubUserId), login: admin.login, isGlobalAdmin: true };
+      return { id: "00000000-0000-4000-8000-000000000001", githubUserId: 0, login: "dev-admin", isGlobalAdmin: true };
+    }
     return getSession(db, request.headers.get("cookie")?.match(/mars_session=([^;]+)/)?.[1]);
   });
   const commandStore = {
