@@ -17,7 +17,13 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
       const proxy = WorkerCacheProxy.parse(workerCache);
       caDirectory = await mkdtemp(join(tmpdir(), "mars-worker-cache-"));
       const caPath = join(caDirectory, "worker-ca.pem");
+      const gitConfigPath = join(caDirectory, "git-ca.config");
       await writeFile(caPath, proxy.caCertificatePem, { mode: 0o600, flag: "wx" });
+      await writeFile(gitConfigPath, `[http]
+	sslBackend = openssl
+	sslVerify = true
+	sslCAInfo = ${caPath}
+`, { mode: 0o600, flag: "wx" });
       env.HTTP_PROXY = proxy.proxyUrl;
       env.http_proxy = proxy.proxyUrl;
       env.HTTPS_PROXY = proxy.proxyUrl;
@@ -33,6 +39,7 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
       env.GIT_CONFIG_VALUE_1 = "true";
       env.GIT_CONFIG_KEY_2 = "http.sslCAInfo";
       env.GIT_CONFIG_VALUE_2 = caPath;
+      env.GIT_CONFIG_GLOBAL = gitConfigPath;
       env.GIT_SSL_BACKEND = "openssl";
       env.GIT_SSL_CAINFO = caPath;
       env.MARS_WORKER_CACHE_REGISTRATION_URL = proxy.registrationUrl;
