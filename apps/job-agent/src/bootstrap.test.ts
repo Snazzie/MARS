@@ -10,6 +10,8 @@ const workerCache = {
   cacheBaseUrl: "https://127.0.0.1:8443",
   caCertificatePem: "-----BEGIN CERTIFICATE-----\nworker-ca\n-----END CERTIFICATE-----\n",
   expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  registrationUrl: "https://127.0.0.1:8443/_mars/register",
+  registrationChallenge: "c".repeat(32),
 };
 
 afterEach(async () => {
@@ -41,6 +43,7 @@ test("official runner receives worker cache proxy variables and a temporary CA",
 printf '%s\n%s\n%s\n%s\n' "$HTTP_PROXY" "$http_proxy" "$HTTPS_PROXY" "$https_proxy" > '${outputPath}'
 printf '%s\n' "$NO_PROXY" "$no_proxy" >> '${outputPath}'
 printf '%s\n' "$NODE_EXTRA_CA_CERTS" "$node_extra_ca_certs" >> '${outputPath}'
+printf '%s\n' "$GIT_SSL_BACKEND" "$GIT_SSL_CAINFO" >> '${outputPath}'
 test -s "$NODE_EXTRA_CA_CERTS"
 cat "$NODE_EXTRA_CA_CERTS" >> '${outputPath}'
 `, { mode: 0o700 });
@@ -53,6 +56,7 @@ cat "$NODE_EXTRA_CA_CERTS" >> '${outputPath}'
   expect(new URL(workerCache.proxyUrl).username).not.toBe("");
   expect(new URL(workerCache.proxyUrl).password).not.toBe("");
   expect(output).toContain(`${workerCache.caCertificatePem}`);
+  expect(output).toContain("openssl\n");
   const caPath = output.split("\n")[6];
   expect(caPath).toBeTruthy();
   expect(await Bun.file(caPath).exists()).toBe(false);

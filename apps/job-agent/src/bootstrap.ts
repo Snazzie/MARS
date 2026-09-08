@@ -33,6 +33,8 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
       env.GIT_CONFIG_VALUE_1 = "true";
       env.GIT_CONFIG_KEY_2 = "http.sslCAInfo";
       env.GIT_CONFIG_VALUE_2 = caPath;
+      env.GIT_SSL_BACKEND = "openssl";
+      env.GIT_SSL_CAINFO = caPath;
       env.MARS_WORKER_CACHE_REGISTRATION_URL = proxy.registrationUrl;
       env.MARS_WORKER_CACHE_REGISTRATION_CHALLENGE = proxy.registrationChallenge;
     }
