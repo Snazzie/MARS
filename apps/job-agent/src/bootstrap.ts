@@ -24,8 +24,18 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
     if (workerCache) {
       const proxy = WorkerCacheProxy.parse(workerCache);
       caDirectory = await mkdtemp(join(tmpdir(), "mars-worker-cache-"));
-      const caPath = join(caDirectory, "worker-ca.pem");
-      await writeFile(caPath, proxy.caCertificatePem, { mode: 0o600, flag: "wx" });
+      const workerCaPath = join(caDirectory, "worker-ca.pem");
+      await writeFile(workerCaPath, proxy.caCertificatePem, { mode: 0o600, flag: "wx" });
+      const caPath = join(caDirectory, "combined-ca.pem");
+      let publicCa = "";
+      if (platform === "windows-x64") {
+        try {
+          publicCa = await readFile("C:\\Git\\mingw64\\etc\\ssl\\certs\\ca-bundle.crt", "utf8");
+        } catch {
+          publicCa = "";
+        }
+      }
+      await writeFile(caPath, `${publicCa}${publicCa.endsWith("\n") || !publicCa ? "" : "\n"}${proxy.caCertificatePem}`, { mode: 0o600, flag: "wx" });
       const gitConfigPath = join(caDirectory, "git-ca.config");
       await writeFile(gitConfigPath, `[http]
 	sslBackend = openssl
@@ -41,19 +51,8 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
       env.NODE_EXTRA_CA_CERTS = caPath;
       env.node_extra_ca_certs = caPath;
       env.GIT_CONFIG_COUNT = "3";
-      env.GIT_CONFIG_KEY_0 = "http.sslBackend";
-      env.GIT_CONFIG_VALUE_0 = "openssl";
-      env.GIT_CONFIG_KEY_1 = "http.sslVerify";
-      env.GIT_CONFIG_VALUE_1 = "true";
-      env.GIT_CONFIG_KEY_2 = "http.sslCAInfo";
-      env.GIT_CONFIG_VALUE_2 = caPath;
-      env.GIT_CONFIG_GLOBAL = gitConfigPath;
-      env.GIT_SSL_BACKEND = "openssl";
-      env.GIT_SSL_CAINFO = caPath;
-      env.MARS_WORKER_CACHE_REGISTRATION_URL = proxy.registrationUrl;
-      env.MARS_WORKER_CACHE_REGISTRATION_CHALLENGE = proxy.registrationChallenge;
       if (platform === "windows-x64") {
-        const result = await runPowerShell(`$ErrorActionPreference='Stop';$cert=[System.Security.Cryptography.X509Certificates.X509Certificate2]::new('${caPath.replace(/'/g, "''")}');$store=[System.Security.Cryptography.X509Certificates.X509Store]::new('Root','LocalMachine');$store.Open('ReadWrite');$existing=$store.Certificates.Find('FindByThumbprint',$cert.Thumbprint,$false).Count -gt 0;if(-not $existing){$store.Add($cert);$added='1'}else{$added='0'};$store.Close();Write-Output ($cert.Thumbprint+'|'+$added)`);
+        const result = await runPowerShell(`$ErrorActionPreference='Stop';$cert=[System.Security.Cryptography.X509Certificates.X509Certificate2]::new('${workerCaPath.replace(/'/g, "''")}');$store=[System.Security.Cryptography.X509Certificates.X509Store]::new('Root','LocalMachine');$store.Open('ReadWrite');$existing=$store.Certificates.Find('FindByThumbprint',$cert.Thumbprint,$false).Count -gt 0;if(-not $existing){$store.Add($cert);$added='1'}else{$added='0'};$store.Close();Write-Output ($cert.Thumbprint+'|'+$added)`);
         const [thumbprint, added] = result.split("|");
         if (added === "1") addedRootThumbprint = thumbprint;
       }
