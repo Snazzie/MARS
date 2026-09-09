@@ -28,7 +28,7 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command: ["test -n \"$$TUNNEL_TOKEN\" || { echo 'CLOUDFLARE_TUNNEL_TOKEN is required' >&2; exit 1; }; exec cloudflared tunnel --no-autoupdate run --token \"$$TUNNEL_TOKEN\""]
     environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN}
     depends_on:
       control-plane:
         condition: service_healthy
