@@ -90,7 +90,7 @@ test("uploads and finalizes one small Azure blob", async () => {
   expect((await route(new Request(uploadUrl, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob" }, body: "abc" }))).status).toBe(201);
   const response = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/FinalizeCacheEntryUpload", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "k", size_bytes: "3", version: "v" }) }));
   expect(response.status).toBe(200);
-  expect(await response.json()).toMatchObject({ ok: true, entry_id: expect.stringMatching(/^[0-9a-f-]{36}$/i) });
+  expect(await response.json()).toMatchObject({ ok: true, entry_id: "1" });
 });
 
 test("ignores legacy metadata and uses verified token identity", async () => {

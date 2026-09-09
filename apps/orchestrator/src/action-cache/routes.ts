@@ -160,7 +160,7 @@ async function handleTwirp(request: Request, path: string, dependencies: ActionC
       const actualSize = BigInt(Bun.file(archive).size);
       if (actualSize !== BigInt(input.size_bytes)) return badRequest("cache archive size does not match upload");
       await dependencies.store.markReady(entry.entryId, actualSize);
-      return okJson({ ok: true, entry_id: entry.entryId });
+      return okJson({ ok: true, entry_id: "1" });
     }
     const input = parseDownload(raw);
     const scopes = authorizedScopes(authorization, 1);
