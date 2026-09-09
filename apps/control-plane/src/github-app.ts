@@ -443,7 +443,9 @@ export class GitHubAppService {
   }
   async getInstallationRateLimit(installationId: number): Promise<{ limit: number; remaining: number; used: number; resetAt: string }> {
     const token = await this.getInstallationToken(installationId);
-    const response = await this.githubResponse("/installation/repositories?per_page=1", {}, token);
+    const headers = new Headers({ accept: "application/vnd.github+json", "x-github-api-version": "2026-03-10", authorization: `Bearer ${token}` });
+    const response = await this.fetcher(`${API}/installation/repositories?per_page=1`, { headers });
+    if (!response.ok && response.status !== 403 && response.status !== 429) throw new Error(`github_${response.status}`);
     const header = (name: string): number => {
       const raw = response.headers.get(name)?.trim() ?? "";
       if (!/^\d+$/.test(raw)) throw new Error("github_rate_limit_invalid");
