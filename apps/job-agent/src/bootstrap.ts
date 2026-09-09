@@ -15,7 +15,24 @@ async function runPowerShell(script: string): Promise<string> {
   if (exitCode !== 0) throw new Error(`Windows trust operation failed: ${stderr.trim() || `exit ${exitCode}`}`);
   return stdout.trim();
 }
-export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerRoot: string, platform: "windows-x64" | "linux-x64", workerCache?: WorkerCacheProxy, onOutput?: (stream: "stdout" | "stderr", content: string) => void): Promise<number> {
+export interface WindowsTrustAdapter {
+  addRoot(certificatePath: string): Promise<{ thumbprint: string; added: boolean }>;
+  removeRoot(thumbprint: string): Promise<void>;
+}
+
+const powerShellWindowsTrust: WindowsTrustAdapter = {
+  async addRoot(certificatePath) {
+    const result = await runPowerShell(`$ErrorActionPreference='Stop';$cert=[System.Security.Cryptography.X509Certificates.X509Certificate2]::new('${certificatePath.replace(/'/g, "''")}');$store=[System.Security.Cryptography.X509Certificates.X509Store]::new('Root','LocalMachine');try{$store.Open('ReadWrite');$existing=$store.Certificates.Find('FindByThumbprint',$cert.Thumbprint,$false).Count -gt 0;if(-not $existing){$store.Add($cert);$added='1'}else{$added='0'}}finally{$store.Close()};Write-Output ($cert.Thumbprint+'|'+$added)`);
+    const [thumbprint, added] = result.split("|");
+    if (!thumbprint) throw new Error("Windows trust operation returned no certificate thumbprint");
+    return { thumbprint, added: added === "1" };
+  },
+  async removeRoot(thumbprint) {
+    await runPowerShell(`$ErrorActionPreference='Stop';$store=[System.Security.Cryptography.X509Certificates.X509Store]::new('Root','LocalMachine');try{$store.Open('ReadWrite');$found=$store.Certificates.Find('FindByThumbprint','${thumbprint.replace(/'/g, "''")}',$false);if($found.Count -gt 0){$store.Remove($found[0])}}finally{$store.Close()}`);
+  },
+};
+
+export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerRoot: string, platform: "windows-x64" | "linux-x64", workerCache?: WorkerCacheProxy, onOutput?: (stream: "stdout" | "stderr", content: string) => void, windowsTrust: WindowsTrustAdapter = powerShellWindowsTrust): Promise<number> {
   RunnerJitConfig.shape.encodedJitConfig.parse(encodedJitConfig);
   let caDirectory: string | undefined;
   let addedRootThumbprint: string | undefined;
@@ -51,10 +68,20 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
       env.NODE_EXTRA_CA_CERTS = caPath;
       env.node_extra_ca_certs = caPath;
       env.GIT_CONFIG_COUNT = "3";
+      env.GIT_CONFIG_KEY_0 = "http.sslBackend";
+      env.GIT_CONFIG_VALUE_0 = "openssl";
+      env.GIT_CONFIG_KEY_1 = "http.sslVerify";
+      env.GIT_CONFIG_VALUE_1 = "true";
+      env.GIT_CONFIG_KEY_2 = "http.sslCAInfo";
+      env.GIT_CONFIG_VALUE_2 = caPath;
+      env.GIT_CONFIG_GLOBAL = gitConfigPath;
+      env.GIT_SSL_BACKEND = "openssl";
+      env.GIT_SSL_CAINFO = caPath;
+      env.MARS_WORKER_CACHE_REGISTRATION_URL = proxy.registrationUrl;
+      env.MARS_WORKER_CACHE_REGISTRATION_CHALLENGE = proxy.registrationChallenge;
       if (platform === "windows-x64") {
-        const result = await runPowerShell(`$ErrorActionPreference='Stop';$cert=[System.Security.Cryptography.X509Certificates.X509Certificate2]::new('${workerCaPath.replace(/'/g, "''")}');$store=[System.Security.Cryptography.X509Certificates.X509Store]::new('Root','LocalMachine');$store.Open('ReadWrite');$existing=$store.Certificates.Find('FindByThumbprint',$cert.Thumbprint,$false).Count -gt 0;if(-not $existing){$store.Add($cert);$added='1'}else{$added='0'};$store.Close();Write-Output ($cert.Thumbprint+'|'+$added)`);
-        const [thumbprint, added] = result.split("|");
-        if (added === "1") addedRootThumbprint = thumbprint;
+        const installed = await windowsTrust.addRoot(workerCaPath);
+        if (installed.added) addedRootThumbprint = installed.thumbprint;
       }
     }
     const runnerCommand = Bun.env.MARS_RUNNER_COMMAND ?? (platform === "windows-x64" ? "run.cmd" : "./run.sh");
@@ -76,7 +103,7 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
     return await runner.exited;
   } finally {
     if (addedRootThumbprint && platform === "windows-x64") {
-      await runPowerShell(`$ErrorActionPreference='Stop';$store=[System.Security.Cryptography.X509Certificates.X509Store]::new('Root','LocalMachine');$store.Open('ReadWrite');$found=$store.Certificates.Find('FindByThumbprint','${addedRootThumbprint}', $false);if($found.Count -gt 0){$store.Remove($found[0])};$store.Close()`);
+      await windowsTrust.removeRoot(addedRootThumbprint);
     }
     if (caDirectory) await rm(caDirectory, { recursive: true, force: true });
   }
@@ -103,8 +130,8 @@ async function consumeJitConfigFile(configPath: string, runnerRoot: string): Pro
     bytes.fill(0);
   }
 }
-export async function consumeGuestJitConfigWithWorkerCache(encoded: string, runnerRoot: string, platform: "windows-x64" | "linux-x64", workerCache: WorkerCacheProxy): Promise<number> {
-  return runRunnerWithWorkerCache(encoded, runnerRoot, platform, workerCache);
+export async function consumeGuestJitConfigWithWorkerCache(encoded: string, runnerRoot: string, platform: "windows-x64" | "linux-x64", workerCache: WorkerCacheProxy, windowsTrust: WindowsTrustAdapter = powerShellWindowsTrust): Promise<number> {
+  return runRunnerWithWorkerCache(encoded, runnerRoot, platform, workerCache, undefined, windowsTrust);
 }
 export async function runOneTimeJitBootstrap(configPath: string, runnerRoot: string): Promise<void> { try { if (await consumeJitConfigFile(configPath, runnerRoot) !== 0) throw new Error("runner exited unsuccessfully"); } finally { await unlink(configPath).catch(() => undefined); } }
 export async function waitForGuestBootstrap(

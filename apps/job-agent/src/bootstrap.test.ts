@@ -75,6 +75,17 @@ test("Windows run.cmd descendant receives worker cache environment", async () =>
 >>"${outputPath}" echo(%no_proxy%
 >>"${outputPath}" echo(%NODE_EXTRA_CA_CERTS%
 >>"${outputPath}" echo(%node_extra_ca_certs%
+>>"${outputPath}" echo(%GIT_SSL_BACKEND%
+>>"${outputPath}" echo(%GIT_SSL_CAINFO%
+>>"${outputPath}" echo(%GIT_CONFIG_COUNT%
+>>"${outputPath}" echo(%GIT_CONFIG_KEY_0%
+>>"${outputPath}" echo(%GIT_CONFIG_VALUE_0%
+>>"${outputPath}" echo(%GIT_CONFIG_KEY_1%
+>>"${outputPath}" echo(%GIT_CONFIG_VALUE_1%
+>>"${outputPath}" echo(%GIT_CONFIG_KEY_2%
+>>"${outputPath}" echo(%GIT_CONFIG_VALUE_2%
+>>"${outputPath}" echo(%MARS_WORKER_CACHE_REGISTRATION_URL%
+>>"${outputPath}" echo(%MARS_WORKER_CACHE_REGISTRATION_CHALLENGE%
 if exist "%NODE_EXTRA_CA_CERTS%" (
   >>"${outputPath}" echo readable
 ) else (
@@ -83,16 +94,30 @@ if exist "%NODE_EXTRA_CA_CERTS%" (
 >>"${outputPath}" type "%NODE_EXTRA_CA_CERTS%"
 exit /b 0
 `, { mode: 0o700 });
-
-  expect(await consumeGuestJitConfigWithWorkerCache("encoded-jit-config", root, "windows-x64", workerCache)).toBe(0);
+  const trustCalls: string[] = [];
+  const trust = {
+    addRoot: async (path: string) => {
+      trustCalls.push(`add:${path}`);
+      return { thumbprint: "worker-thumbprint", added: true };
+    },
+    removeRoot: async (thumbprint: string) => {
+      trustCalls.push(`remove:${thumbprint}`);
+    },
+  };
+  expect(await consumeGuestJitConfigWithWorkerCache("encoded-jit-config", root, "windows-x64", workerCache, trust)).toBe(0);
 
   const lines = (await Bun.file(outputPath).text()).split(/\r?\n/);
   expect(lines.slice(0, 4)).toEqual(Array(4).fill(workerCache.proxyUrl));
   expect(lines.slice(4, 6)).toEqual(["", ""]);
   expect(lines[6]).toBe(lines[7]);
-  expect(lines[8]).toBe("readable");
-  expect(lines.slice(9).join("\n")).toContain(workerCache.caCertificatePem.trim());
+  expect(lines[8]).toBe("openssl");
+  expect(lines[9]).toBe(lines[6]);
+  expect(lines.slice(10, 18)).toEqual(["3", "http.sslBackend", "openssl", "http.sslVerify", "true", "http.sslCAInfo", lines[6], workerCache.registrationUrl]);
+  expect(lines[18]).toBe(workerCache.registrationChallenge);
+  expect(lines[19]).toBe("readable");
+  expect(lines.slice(20).join("\n")).toContain(workerCache.caCertificatePem.trim());
   expect(await Bun.file(lines[6]).exists()).toBe(false);
+  expect(trustCalls).toEqual([expect.stringMatching(/^add:.*worker-ca\.pem$/), "remove:worker-thumbprint"]);
 });
 
 test("waits for the host to copy the guest bootstrap after startup", async () => {
