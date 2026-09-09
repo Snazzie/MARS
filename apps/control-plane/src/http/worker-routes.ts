@@ -504,7 +504,6 @@ export function windowsInstallerValues(platform: WindowsWorkerRelease | undefine
     WindowsOrchestratorSha256: source.orchestrator.sha256,
     WindowsServiceHostUrl: `${connectOrigin}/api/workers/service-host?audience=windows-x64`,
     WindowsServiceHostSha256: source.serviceHost.sha256,
-    ...(upgrade ? { Upgrade: "true" } : {}),
     ...(upgrade ? {} : {
       WindowsJobAgentUrl: `${connectOrigin}/api/workers/windows-container-job-agent`,
       WindowsJobAgentSha256: source.jobAgent.sha256,
@@ -1121,7 +1120,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     } else if (development) {
       const macos = development as DevelopmentMacosArtifacts;
       if (!macos.orchestrator || !macos.jobAgent || !macos.imagePreparationScript || !macos.tartImage || !macos.tartImageDigest || tartDigest(macos.tartImage) !== macos.tartImageDigest.replace(/^sha256:/, "")) return unavailable(c, [`platform:${audience}`]);
-      values = macosInstallerValues({ orchestrator: macos.orchestrator, jobAgent: macos.jobAgent, imagePreparationScript: macos.imagePreparationScript, tartSourceImage: macos.tartImage }, connectOrigin, "local");
+      values = macosInstallerValues({ orchestrator: { url: "", sha256: macos.orchestrator.sha256 }, jobAgent: { url: "", sha256: macos.jobAgent.sha256 }, imagePreparationScript: { url: "", sha256: macos.imagePreparationScript.sha256 }, tartSourceImage: macos.tartImage }, connectOrigin, "local");
     } else values = macosInstallerValues(release as MacosWorkerRelease, connectOrigin, "production");
     const generated = injectInstallerOrigin(source, connectOrigin, values, audience === "windows-x64");
     if (generated.includes("__PLACEHOLDER__") || /__[A-Za-z0-9_]+__/.test(generated)) return unavailable(c, [`installer:${file}`]);

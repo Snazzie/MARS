@@ -1,12 +1,11 @@
 import type { DatabaseClient } from "@mars/db";
-import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 
 type CleanupLease = { leaseId: string; workerId: string; nonce: string; cleanupType?: "linux-vm.stop_lease" | "tart.stop_lease" | "windows-container.stop_lease" | "hyperv.stop_lease" };
 export type LeaseCleanupReport = { dispatched: number; skipped: number; failed: number };
 
 export async function reapPendingLeases(input: {
   db: DatabaseClient;
-  dispatch: Pick<WorkerCommandDispatcher, "dispatch">["dispatch"];
+  dispatch: (command: { type: string; workerId: string; leaseId: string; payload: Record<string, unknown> }) => Promise<unknown>;
   workerConnected: (workerId: string) => boolean;
 }): Promise<LeaseCleanupReport> {
   const leases = await input.db<CleanupLease[]>`SELECT l.id AS "leaseId", l.worker_id AS "workerId", l.nonce,

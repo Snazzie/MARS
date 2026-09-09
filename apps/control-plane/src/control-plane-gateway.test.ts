@@ -1,3 +1,4 @@
+import { expect, test } from "bun:test";
 import { enqueueWorkerMessage, scheduleWorkerPing } from "./control-plane-gateway.ts";
 
 test("schedules worker heartbeat pings without sending immediately", () => {

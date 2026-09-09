@@ -1,3 +1,4 @@
+import type { DatabaseClient } from "@mars/db";
 import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -130,12 +131,12 @@ test("routes authenticated worker cache telemetry to durable cache storage", asy
 });
 test("routes authenticated runner cache status telemetry to durable status columns", async () => {
   const calls: Array<{ query: string; values: unknown[] }> = [];
-  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+  let db: DatabaseClient;
+  db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join(" ");
     calls.push({ query, values });
     return query.includes("SELECT generation FROM worker_cache_status") ? [{ generation }] : [];
-  }, {}) as never;
-  db.begin = async (fn: (tx: typeof db) => unknown) => fn(db);
+  }, { begin: async (fn: (tx: DatabaseClient) => unknown) => fn(db) }) as unknown as DatabaseClient;
   const accepted = await handleAuthenticatedWorkerEvent(
     db,
     { handleEvent() { return false; } },

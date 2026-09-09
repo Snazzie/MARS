@@ -319,17 +319,18 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
     resolveDevelopmentMacosArtifacts(Bun.env),
   ]);
   const developmentContainer = developmentWindowsArtifacts?.container;
+  const developmentJobAgentPath = developmentWindowsArtifacts?.jobAgent?.path;
   const windowsContainerArtifacts = developmentContainer?.buildScript?.path
     && developmentContainer.verifyScript?.path
     && developmentContainer.containerfile?.path
     && developmentContainer.entrypoint?.path
-    && developmentWindowsArtifacts.jobAgent?.path
+    && developmentJobAgentPath
     ? {
       builderPath: developmentContainer.buildScript.path,
       verifierPath: developmentContainer.verifyScript.path,
       containerfilePath: developmentContainer.containerfile.path,
       entrypointPath: developmentContainer.entrypoint.path,
-      jobAgentPath: developmentWindowsArtifacts.jobAgent.path,
+      jobAgentPath: developmentJobAgentPath,
     }
     : undefined;
   const workerReleaseManifestSource = production ? Bun.env.MARS_WORKER_RELEASE_MANIFEST_URL?.trim() || undefined : undefined;

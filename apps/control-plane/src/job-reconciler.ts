@@ -10,7 +10,7 @@ import { reason, type Candidate } from "./scheduler.ts";
 import { applyGithubJobSnapshot, markGithubJobMissing, type GithubJobSnapshot } from "./runs.ts";
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 const LEASE_STARTUP_TTL_MS = 10 * 60_000;
-type Dispatch = Pick<WorkerCommandDispatcher, "dispatch">;
+type Dispatch = { dispatch(input: { workerId: string; leaseId: string; type: string; payload: Record<string, unknown> }): Promise<unknown> };
 
 export interface JobReconciliationDeps {
   db: DatabaseClient;

@@ -50,7 +50,7 @@ test("accepts compatible worker contract boundaries", () => {
 });
 
 test("loads a valid HTTPS remote manifest", async () => {
-  const fetcher: typeof fetch = async () => new Response(JSON.stringify(remoteManifest()), { status: 200 });
+  const fetcher = async () => new Response(JSON.stringify(remoteManifest()), { status: 200 })
   const manifest = await loadWorkerReleaseManifest(releaseManifestUrl, undefined, {
     fetch: fetcher,
     controlPlaneVersion: "0.1.0",
@@ -60,25 +60,25 @@ test("loads a valid HTTPS remote manifest", async () => {
 });
 
 test("rejects remote HTTP failures", async () => {
-  const fetcher: typeof fetch = async () => new Response("unavailable", { status: 503, statusText: "Service Unavailable" });
+  const fetcher = async () => new Response("unavailable", { status: 503, statusText: "Service Unavailable" })
   await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, { fetch: fetcher })).rejects.toThrow("HTTP 503");
 });
 
 test("rejects remote network failures", async () => {
-  const fetcher: typeof fetch = async () => { throw new Error("connection refused"); };
+  const fetcher = async () => { throw new Error("connection refused"); }
   await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, { fetch: fetcher })).rejects.toThrow("connection refused");
 });
 
 test("rejects invalid remote JSON", async () => {
-  const fetcher: typeof fetch = async () => new Response("{", { status: 200 });
+  const fetcher = async () => new Response("{", { status: 200 })
   await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, { fetch: fetcher })).rejects.toThrow("invalid JSON");
 });
 
 test("rejects remote schema and compatibility failures", async () => {
-  const schemaFailure: typeof fetch = async () => new Response(JSON.stringify({ ...remoteManifest(), platforms: {} }), { status: 200 });
+  const schemaFailure = async () => new Response(JSON.stringify({ ...remoteManifest(), platforms: {} }), { status: 200 })
   await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, { fetch: schemaFailure })).rejects.toThrow("schema");
 
-  const incompatible: typeof fetch = async () => new Response(JSON.stringify(remoteManifest("0.2.0")), { status: 200 });
+  const incompatible = async () => new Response(JSON.stringify(remoteManifest("0.2.0")), { status: 200 })
   await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, {
     fetch: incompatible,
     controlPlaneVersion: "0.1.0",
@@ -86,7 +86,7 @@ test("rejects remote schema and compatibility failures", async () => {
 });
 
 test("rejects remote manifests without linux-x64", async () => {
-  const fetcher: typeof fetch = async () => new Response(JSON.stringify({ ...remoteManifest(), platforms: { ...remoteManifest().platforms, "linux-x64": null } }), { status: 200 });
+  const fetcher = async () => new Response(JSON.stringify({ ...remoteManifest(), platforms: { ...remoteManifest().platforms, "linux-x64": null } }), { status: 200 })
   await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, { fetch: fetcher })).rejects.toThrow("linux-x64");
 });
 
@@ -107,10 +107,10 @@ test("requires an immutable baked worker release URL in production", async () =>
 });
 
 test("accepts the immutable worker release URL emitted by GitHub", async () => {
-  const fetcher: typeof fetch = async (input) => {
+  const fetcher = async (input: RequestInfo | URL) => {
     expect(String(input)).toBe("https://github.com/Snazzie/MARS/releases/download/worker-v0.1.1/worker-release-manifest.json");
     return new Response(JSON.stringify(remoteManifest()), { status: 200 });
-  };
+  }
   const priorNode = Bun.env.NODE_ENV;
   try {
     Bun.env.NODE_ENV = "production";
@@ -127,7 +127,7 @@ test("accepts the immutable worker release URL emitted by GitHub", async () => {
 
 test("accepts GitHub repository casing variations", async () => {
   const source = releaseManifestUrl.replace("/Snazzie/MARS/", "/snazzie/Mars/");
-  const fetcher: typeof fetch = async () => new Response(JSON.stringify(remoteManifest()), { status: 200 });
+  const fetcher = async () => new Response(JSON.stringify(remoteManifest()), { status: 200 })
   await expect(loadWorkerReleaseManifest(source, undefined, { fetch: fetcher, controlPlaneVersion: "0.1.0" })).resolves.toMatchObject({ buildId: "release-build" });
 });
 test("rejects payload URLs outside the exact immutable worker release", async () => {
@@ -137,7 +137,7 @@ test("rejects payload URLs outside the exact immutable worker release", async ()
     "https://github.com/Snazzie/MARS/releases/download/worker-v0.1.2/linux-installer.sh",
   ]) {
     const manifest = { ...remoteManifest(), platforms: { ...remoteManifest().platforms, "linux-x64": { ...linuxRelease, installer: { url, sha256: hash } } } };
-    const fetcher: typeof fetch = async () => new Response(JSON.stringify(manifest), { status: 200 });
+    const fetcher = async () => new Response(JSON.stringify(manifest), { status: 200 })
     await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, { fetch: fetcher, controlPlaneVersion: "0.1.0" })).rejects.toThrow("outside immutable");
   }
 });

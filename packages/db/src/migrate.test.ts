@@ -21,7 +21,7 @@ test("Mars baseline materializes the canonical schema SQL", async () => {
 });
 
 test("migration directory contains exactly one journaled baseline", async () => {
-  const journal = JSON.parse(await readFile(new URL("./migrations/meta/_journal.json", import.meta.url))) as {
+  const journal = JSON.parse(await readFile(new URL("./migrations/meta/_journal.json", import.meta.url), "utf8")) as {
     entries: Array<{ idx: number; version: string; tag: string; when: number; breakpoints: boolean }>;
   };
   const files = (await readdir(migrationsUrl)).filter(file => file.endsWith(".sql"));

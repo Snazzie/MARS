@@ -261,7 +261,7 @@ describe("control-plane HTTP boundary", () => {
       expect(installer).toContain(`$WindowsOrchestratorSha256 = '${createHash("sha256").update("local-orchestrator").digest("hex")}'`);
       expect(installer).toContain("$WindowsServiceHostUrl = 'http://localhost:3000/api/workers/service-host?audience=windows-x64'");
       expect(installer).toContain(`$WindowsServiceHostSha256 = '${createHash("sha256").update("local-service-host").digest("hex")}'`);
-      expect(installer).toContain("$Upgrade = 'true'");
+      expect(installer).not.toContain("$Upgrade = 'true'");
       expect(installer).not.toContain("WindowsContainer");
     } finally {
       await rm(root, { recursive: true, force: true });

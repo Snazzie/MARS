@@ -75,7 +75,7 @@ export async function reconcileWorkerInventory(db: DatabaseClient, workerId: str
 }
 async function markMissingLease(deps: StaleLeaseReconciliationDeps, row: StaleLeaseRow): Promise<boolean> {
   return deps.db.begin(async tx => {
-    await markGithubJobMissing(tx, {
+    await markGithubJobMissing(tx as unknown as DatabaseClient, {
       organizationId: row.organizationId,
       githubJobId: Number(row.githubJobId),
       observedAt: new Date().toISOString(),

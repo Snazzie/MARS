@@ -46,7 +46,7 @@ test("emits runner.ready before starting the Linux runner", async () => {
     };
   });
   const originalSpawn = Bun.spawn;
-  Bun.spawn = spawn as typeof Bun.spawn;
+  Bun.spawn = spawn as unknown as typeof Bun.spawn;
   try {
     await expect(runLinuxVirtioGuestStream(channel, "/runner", () => Date.now())).resolves.toBe(0);
   } finally {
