@@ -3,7 +3,7 @@ import { buildWindowsUpgradeCommand } from "./WorkerActions.tsx";
 
 test("builds a Windows upgrade command from the selected control-plane installer", () => {
   const command = buildWindowsUpgradeCommand("worker/id", "https://control.example/", "https://adapter.example");
-  expect(command).toContain("https://adapter.example/api/workers/installer?audience=windows-x64&runtime=container&connectOrigin=https%3A%2F%2Fadapter.example");
+  expect(command).toContain("https://adapter.example/api/workers/installer?audience=windows-x64&runtime=container&upgrade=true&connectOrigin=https%3A%2F%2Fadapter.example");
   expect(command).not.toContain("releases/latest/download");
   expect(command).toContain("-ControlPlaneUrl 'https://adapter.example'");
   expect(command).toContain("powershell.exe -NoProfile -ExecutionPolicy Bypass");
@@ -42,7 +42,7 @@ test("uses the control-plane origin instead of the Vite browser origin for local
 
 test("uses the control-plane installer endpoint for production upgrades", () => {
   const command = buildWindowsUpgradeCommand("worker/id", "https://control.example");
-  expect(command).toContain("https://control.example/api/workers/installer?audience=windows-x64&runtime=container&connectOrigin=https%3A%2F%2Fcontrol.example");
+  expect(command).toContain("https://control.example/api/workers/installer?audience=windows-x64&runtime=container&upgrade=true&connectOrigin=https%3A%2F%2Fcontrol.example");
   expect(command).not.toContain("releases/latest/download");
 });
 test("renders upgrade preparation errors outside the closed action confirmation dialog", async () => {

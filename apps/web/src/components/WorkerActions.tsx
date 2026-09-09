@@ -17,7 +17,7 @@ export function buildWindowsUpgradeCommand(workerId: string, origin: string, con
  if (selectedOrigin.startsWith("https:") === false && selectedOrigin.startsWith("http:") === false) throw new Error("Upgrade origin must use HTTP or HTTPS");
  const controlPlane = quotePowerShell(selectedOrigin);
  const insecure = selectedOrigin.startsWith("http:") ? " -AllowInsecureHttp" : "";
- const installerUrl = `${selectedOrigin}/api/workers/installer?audience=windows-x64&runtime=container&connectOrigin=${encodeURIComponent(selectedOrigin)}`;
+ const installerUrl = `${selectedOrigin}/api/workers/installer?audience=windows-x64&runtime=container&upgrade=true&connectOrigin=${encodeURIComponent(selectedOrigin)}`;
  const installerProtocol = installerUrl.startsWith("http:") ? "http" : "https";
  const tls = installerProtocol === "https" ? " --tlsv1.3" : "";
  return `# Mars worker ${workerId}\n$script = Join-Path $env:TEMP ("mars-upgrade-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${installerProtocol}'${tls} --output $script '${installerUrl}'\n  if ($LASTEXITCODE -ne 0) { throw "Upgrade command download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -ControlPlaneUrl ${controlPlane} -Upgrade -WindowsRuntime 'container'${insecure}\n} finally {\n  Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n}`;
