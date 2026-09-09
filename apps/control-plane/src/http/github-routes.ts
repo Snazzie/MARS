@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { ControlPlaneSetupRequest } from "@mars/contracts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { readBody, validSignature, acceptDelivery, completeDelivery, failDelivery } from "../webhook.ts";

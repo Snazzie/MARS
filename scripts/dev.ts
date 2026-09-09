@@ -32,15 +32,23 @@ try {
   const buildExit = await build.exited;
   if (buildExit !== 0) process.exitCode = buildExit;
   else {
+    const commands = [
+      "bun run scripts/control-plane-dev.ts",
+      "bun run --filter @mars/web dev",
+    ];
+    const names = ["control-plane", "web"];
+    if (Bun.env.MARS_DEV_TUNNEL === "1" || Bun.env.CLOUDFLARE_TUNNEL_TOKEN?.trim()) {
+      names.push("tunnel");
+      commands.push("bun x wrangler tunnel run mars");
+    }
     const dev = Bun.spawn([
       "bun",
       "x",
       "concurrently",
       "--kill-others-on-fail",
       "--names",
-      "control-plane,web",
-      "bun run scripts/control-plane-dev.ts",
-      "bun run --filter @mars/web dev",
+      names.join(","),
+      ...commands,
     ], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
     process.exitCode = await dev.exited;
   }
