@@ -126,8 +126,7 @@ exit /b 0
 
   const lines = (await Bun.file(outputPath).text()).split(/\r?\n/);
   expect(lines.slice(0, 4)).toEqual(Array(4).fill(workerCache.proxyUrl));
-  expect(lines.slice(4, 6)).toEqual(["", ""]);
-  expect(lines[6]).toBe(lines[7]);
+  expect(lines.slice(4, 6)).toEqual(["127.0.0.1,localhost,::1", "127.0.0.1,localhost,::1"]);
   expect(lines[8]).toBe("openssl");
   expect(lines[9]).toBe(lines[6]);
   expect(lines.slice(10, 18)).toEqual(["3", "http.sslBackend", "openssl", "http.sslVerify", "true", "http.sslCAInfo", lines[6], workerCache.registrationUrl]);

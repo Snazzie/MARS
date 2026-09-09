@@ -98,8 +98,8 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
       env.http_proxy = proxy.proxyUrl;
       env.HTTPS_PROXY = proxy.proxyUrl;
       env.https_proxy = proxy.proxyUrl;
-      env.NO_PROXY = "";
-      env.no_proxy = "";
+      env.NO_PROXY = "127.0.0.1,localhost,::1";
+      env.no_proxy = "127.0.0.1,localhost,::1";
       env.NODE_EXTRA_CA_CERTS = caPath;
       env.node_extra_ca_certs = caPath;
       env.GIT_CONFIG_COUNT = "3";
