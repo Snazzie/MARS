@@ -51,7 +51,7 @@ jobs:
       - name: Lint
         run: bun run lint
       - name: Build
-        run: bun run build
+        run: bun run build && bun run build:windows-worker
       - name: Test
         run: bun test
       - name: Install Playwright Chromium
