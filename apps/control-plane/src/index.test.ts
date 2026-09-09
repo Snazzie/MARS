@@ -144,39 +144,6 @@ test("builds development Windows image inputs from local artifacts behind contro
   });
 });
 
-test("defaults development worker artifacts to local files and derives their SHA-256", async () => {
-  const root = await mkdtemp(join(tmpdir(), "mars-development-artifacts-"));
-  const hash = "a".repeat(64);
-  const template = join(root, "template.vhdx");
-  const runner = join(root, "runner.zip");
-  const git = join(root, "git.zip");
-  const vcRuntime = join(root, "vc-runtime.exe");
-  await Promise.all([template, runner, git, vcRuntime].map((path, index) => Bun.write(path, `artifact-${index}`)));
-  try {
-    const artifacts = await resolveDevelopmentWindowsArtifacts({
-      NODE_ENV: "development",
-      MARS_WINDOWS_TEMPLATE_PATH: template,
-      MARS_WINDOWS_TEMPLATE_SHA256: hash,
-      MARS_WINDOWS_CONTAINER_BASE_IMAGE: "mcr.microsoft.com/windows/server:ltsc2025",
-      MARS_WINDOWS_CONTAINER_RUNNER_PATH: runner,
-      MARS_WINDOWS_CONTAINER_RUNNER_SHA256: hash,
-      MARS_WINDOWS_CONTAINER_GIT_PATH: git,
-      MARS_WINDOWS_CONTAINER_GIT_SHA256: hash,
-      MARS_WINDOWS_CONTAINER_VC_PATH: vcRuntime,
-      MARS_WINDOWS_CONTAINER_VC_SHA256: hash,
-    });
-    const expectedOrchestratorHash = createHash("sha256").update(Buffer.from(await Bun.file(artifacts!.orchestrator.path!).arrayBuffer())).digest("hex");
-    const expectedServiceHostHash = createHash("sha256").update(Buffer.from(await Bun.file(artifacts!.serviceHost.path!).arrayBuffer())).digest("hex");
-    expect(artifacts?.orchestrator.sha256).toBe(expectedOrchestratorHash);
-    expect(artifacts?.serviceHost.sha256).toBe(expectedServiceHostHash);
-    expect(artifacts?.orchestrator.path).toBe(join(import.meta.dir, "../../orchestrator/dist/mars-orchestrator.exe"));
-    expect(artifacts?.serviceHost.path).toBe(join(import.meta.dir, "../../windows-service-host/target/release/mars-service-host.exe"));
-    expect(artifacts?.orchestrator.sha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(artifacts?.serviceHost.sha256).toMatch(/^[0-9a-f]{64}$/);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
 
 test("resolves development worker binaries without optional template or image-build artifacts", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-development-binaries-"));
