@@ -83,10 +83,12 @@ test("rejects cache RPCs without a verified GitHub runtime token", async () => {
   expect(await response.json()).toMatchObject({ code: "unauthenticated" });
 });
 
-test("finalizes an uploading entry and returns its immutable entry ID", async () => {
+test("uploads and finalizes one small Azure blob", async () => {
   const { route } = fixture();
-  await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "k", version: "v" }) }));
-  const response = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/FinalizeCacheEntryUpload", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "k", size_bytes: "0", version: "v" }) }));
+  const created = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "k", version: "v" }) }));
+  const uploadUrl = (await created.json()).signed_upload_url as string;
+  expect((await route(new Request(uploadUrl, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob" }, body: "abc" }))).status).toBe(201);
+  const response = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/FinalizeCacheEntryUpload", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "k", size_bytes: "3", version: "v" }) }));
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({ ok: true, entry_id: expect.stringMatching(/^[0-9a-f-]{36}$/i) });
 });
@@ -137,6 +139,8 @@ test("uploads Azure blocks and serves full, HEAD, and byte-range downloads", asy
   const blockListUrl = new URL(uploadUrl);
   blockListUrl.searchParams.set("comp", "blocklist");
   expect((await route(new Request(blockListUrl, { method: "PUT", body: list }))).status).toBe(201);
+  const finalized = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/FinalizeCacheEntryUpload", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "k", size_bytes: "6", version: "v" }) }));
+  expect(finalized.status).toBe(200);
   const entryId = [...entries.keys()][0]!;
   const download = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/GetCacheEntryDownloadURL", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "k", restore_keys: [], version: "v" }) }));
   const downloadUrl = (await download.json()).signed_download_url as string;

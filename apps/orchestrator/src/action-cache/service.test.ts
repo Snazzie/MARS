@@ -756,6 +756,13 @@ test("reports live entry count and bytes after a cache fill", async () => {
   uploadUrl.searchParams.set("comp", "blocklist");
   uploadUrl.searchParams.delete("blockid");
   await requestThroughProxy(transport.proxyUrl, cacheHost, "", { method: "PUT", path: `${uploadUrl.pathname}${uploadUrl.search}`, body: `<BlockList><Latest>${blockBytes.toString("base64")}</Latest></BlockList>` });
+  const finalize = await requestThroughProxy(transport.proxyUrl, cacheHost, "", {
+    method: "POST",
+    path: "/twirp/github.actions.results.api.v1.CacheService/FinalizeCacheEntryUpload",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ key: "summary-key", version: "v1", size_bytes: "3" }),
+  });
+  expect(finalize.status).toBe(200);
   expect(service.status()).toMatchObject({ entryCount: 1, sizeBytes: "3" });
   now = new Date(now.getTime() + 2 * 60 * 60 * 1000);
   await scheduledSweep!();

@@ -155,7 +155,11 @@ async function handleTwirp(request: Request, path: string, dependencies: ActionC
       if (!scopes.length) return permissionDenied();
       const entry = await dependencies.store.findUploading({ githubRepositoryId: authorization.githubRepositoryId, scope: scopes[0]!, cacheKey: input.key, version: input.version });
       if (!entry) return okJson({ ok: false, message: "cache entry not found" });
-      await dependencies.store.markReady(entry.entryId, BigInt(input.size_bytes));
+      const archive = await dependencies.store.archiveForEntry(entry.entryId);
+      if (!archive || !await Bun.file(archive).exists()) return badRequest("cache archive upload is incomplete");
+      const actualSize = BigInt(Bun.file(archive).size);
+      if (actualSize !== BigInt(input.size_bytes)) return badRequest("cache archive size does not match upload");
+      await dependencies.store.markReady(entry.entryId, actualSize);
       return okJson({ ok: true, entry_id: entry.entryId });
     }
     const input = parseDownload(raw);
@@ -203,9 +207,15 @@ async function handleData(request: Request, dependencies: ActionCacheRouteDepend
         const expected = [...parts].sort((a, b) => a.partNumber - b.partNumber);
         if (expected.some((part, index) => part.partNumber !== index + 1 || part.blockId !== ids[index])) return badRequest("block list must be contiguous and match uploaded blocks");
         await dependencies.store.assembleUpload(entryId, ids);
-        const archive = await dependencies.store.archiveForEntry(entryId);
-        if (!archive) return badRequest("upload entry not found");
-        await dependencies.store.markReady(entryId, BigInt(Bun.file(archive).size));
+        return new Response(null, { status: 201 });
+      }
+      if (comp === null) {
+        const contentLength = request.headers.get("content-length");
+        if (contentLength && (!/^\d+$/.test(contentLength) || BigInt(contentLength) > 128n * 1024n * 1024n)) return twirp(413, "resource_exhausted", "cache upload exceeds 128 MiB");
+        if (!request.body) return badRequest("cache upload body is required");
+        if ((await dependencies.store.listUploadParts(entryId)).length > 0) return badRequest("cache upload already exists");
+        await dependencies.store.writeUploadPartStream(entryId, 1, "single", request.body, 128 * 1024 * 1024);
+        await dependencies.store.assembleUpload(entryId, ["single"]);
         return new Response(null, { status: 201 });
       }
       return badRequest("unsupported Azure upload operation");
