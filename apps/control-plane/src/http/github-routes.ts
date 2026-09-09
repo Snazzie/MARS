@@ -89,7 +89,7 @@ export function registerGithubRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     }
   });
 
-  app.post("/api/github/webhooks", async (c) => {
+  const receiveWebhook = async (c: Context<ControlPlaneEnv>) => {
     const body = await readBody(c.req.raw);
     const secret = deps.githubApp ? await deps.githubApp.getWebhookSecret() : null;
     if (!secret || !validSignature(body, c.req.header("x-hub-signature-256") ?? null, secret)) return c.json({ error: "invalid signature" }, 401);
@@ -110,5 +110,7 @@ export function registerGithubRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       throw error;
     }
     return c.json({ accepted: true }, 202);
-  });
+  };
+  app.post("/api/github/webhooks", receiveWebhook);
+  app.post("/webhooks", receiveWebhook);
 }
