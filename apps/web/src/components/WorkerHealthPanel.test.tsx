@@ -119,7 +119,7 @@ test("formats each resource byte value with friendly binary units", () => {
 test("distinguishes stale, offline, empty, and unavailable telemetry states", () => {
   const health = healthFixture({
     connection: { state: "offline", lastHeartbeatAt: null, lastDoctorAt: null, heartbeatAgeSeconds: 301, doctorAgeSeconds: 601 },
-    cache: { ...healthFixture().cache, ready: false, generation: null, observedAt: null, entryCount: 0 },
+    cache: { ...healthFixture().cache, ready: false, generation: null, observedAt: null, sizeBytes: null, entryCount: null, runnerCacheObservedAt: null, runnerCacheSizeBytes: null, runnerCacheEntryCount: null },
     jobs: [],
   });
   const markup = renderToStaticMarkup(<WorkerHealthPanel health={health} />);
@@ -129,6 +129,7 @@ test("distinguishes stale, offline, empty, and unavailable telemetry states", ()
   expect(markup).toContain("No cache snapshot");
   expect(markup).toContain("No active jobs");
   expect(markup).toContain("Unavailable telemetry");
+  expect(markup.match(/Not reported/g)?.length).toBeGreaterThanOrEqual(4);
 });
 
 test("keeps jobs visible when cache reports an error", () => {

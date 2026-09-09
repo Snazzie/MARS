@@ -186,9 +186,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $runnerRelease = (curl.exe --fail --location --proto '=https' --tlsv1.2 -H "Authorization: Bearer $env:GH_TOKEN" 'https://api.github.com/repos/actions/runner/releases?per_page=30' | ConvertFrom-Json) | Where-Object { -not $_.draft -and -not $_.prerelease } | Select-Object -First 1
-          $runnerAsset = $runnerRelease.assets | Where-Object name -Match '^actions-runner-win-x64-[0-9.]+\.zip$' | Select-Object -First 1
-          if (-not $runnerAsset) { throw 'Actions Runner Windows asset was not found' }
+          & ./images/actions-runner/build-windows.ps1 -OutputPath dist/windows/mars-windows-runner.zip
+          $runner = @{ Url='https://github.com/actions/runner/commit/98aabcd429c4e8402406c56ce2d26387fed3b9ce'; Name='mars-windows-runner.zip'; Hash=(Get-FileHash -Algorithm SHA256 -LiteralPath dist/windows/mars-windows-runner.zip).Hash.ToLowerInvariant() }
           $gitRelease = (curl.exe --fail --location --proto '=https' --tlsv1.2 -H "Authorization: Bearer $env:GH_TOKEN" 'https://api.github.com/repos/git-for-windows/git/releases?per_page=30' | ConvertFrom-Json) | Where-Object { -not $_.draft -and -not $_.prerelease } | Select-Object -First 1
           $gitAsset = $gitRelease.assets | Where-Object name -Match '^MinGit-[0-9.]+-64-bit\.zip$' | Select-Object -First 1
           if (-not $gitAsset) { throw 'MinGit Windows asset was not found' }
@@ -197,11 +196,11 @@ jobs:
           if ($baseDigest -notmatch '^sha256:[0-9a-f]{64}$') { throw 'Windows base image has no immutable windows/amd64 digest' }
           $baseImage = "mcr.microsoft.com/windows/server:ltsc2025@$baseDigest"
           $support = @(
-            @{ Url=$runnerAsset.browser_download_url; Name='mars-windows-runner.zip' },
+            $runner,
             @{ Url=$gitAsset.browser_download_url; Name='mars-windows-git.zip' },
             @{ Url='https://aka.ms/vs/17/release/vc_redist.x64.exe'; Name='mars-windows-vc-runtime.exe' }
           )
-          foreach ($item in $support) {
+          foreach ($item in $support | Where-Object Name -ne 'mars-windows-runner.zip') {
             $path = Join-Path $PWD "dist/windows/$($item.Name)"
             curl.exe --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --output $path $item.Url
             $item.Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()

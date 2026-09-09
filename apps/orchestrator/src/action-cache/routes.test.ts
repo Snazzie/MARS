@@ -111,9 +111,9 @@ test("rejects download without a readable token scope", async () => {
   expect(response.status).toBe(403);
 });
 
-test("returns a miss for an official metadata-free download request", async () => {
+test("defaults omitted official restore keys to an empty list", async () => {
   const { route } = fixture();
-  const response = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/GetCacheEntryDownloadURL", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "missing", restore_keys: [], version: "v" }) }));
+  const response = await route(new Request("https://cache.example.test/twirp/github.actions.results.api.v1.CacheService/GetCacheEntryDownloadURL", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: "missing", version: "v" }) }));
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ ok: false });
 });

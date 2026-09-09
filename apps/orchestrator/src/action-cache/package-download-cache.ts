@@ -1,15 +1,17 @@
 import { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, createWriteStream, type WriteStream } from "node:fs";
 import { mkdir, open, readdir, rename, rm, stat } from "node:fs/promises";
 import { request as httpsRequest } from "node:https";
-import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
+import type { ClientRequest, IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
+import { Writable } from "node:stream";
+import { finished } from "node:stream/promises";
 import { secureWorkerPrivatePath } from "./store.ts";
 
 export const PUBLIC_DOWNLOAD_HOSTS = ["registry.npmjs.org", "cdn.playwright.dev", "playwright.download.prss.microsoft.com", "github.com", "nodejs.org"] as const;
 const PACKAGE_HOST = PUBLIC_DOWNLOAD_HOSTS[0];
-const PLAYWRIGHT_HOSTS = new Set(PUBLIC_DOWNLOAD_HOSTS.slice(1, 3));
+const GITHUB_RELEASE_REDIRECT_HOSTS = new Set(["release-assets.githubusercontent.com", "objects.githubusercontent.com", "github-releases.githubusercontent.com"]);
 const CACHEABLE_HOSTS = new Set(PUBLIC_DOWNLOAD_HOSTS);
 const SCHEMA_VERSION = 1;
 const FILL_MAX_AGE_MS = 60 * 60 * 1_000;
@@ -33,20 +35,14 @@ type PackageEntry = {
   lastAccessedAt: string;
   expiresAt: string;
 };
-function chunkBuffer(chunk: unknown, encoding: BufferEncoding = "utf8"): Buffer | null {
-  if (chunk === undefined || chunk === null) return null;
-  if (Buffer.isBuffer(chunk)) return Buffer.from(chunk);
-  if (chunk instanceof Uint8Array) return Buffer.from(chunk);
-  return Buffer.from(String(chunk), encoding);
-}
 
 type FillResult = { published: boolean; generation: number };
 
 type CapturedResponse = {
   statusCode: number;
   headers: HeaderMap;
-  chunks: Buffer[];
-  ended: boolean;
+  sizeBytes: number;
+  stagingPath: string;
 };
 
 export type PackageDownloadCacheMutation = {
@@ -91,11 +87,17 @@ function canonicalUrlFor(request: IncomingMessage): string | null {
   if (rawUrl.includes("/../") || rawUrl.includes("/./")) return null;
   const npmMatch = /^\/(?:@[^/]+\/)?([^/]+)\/-\/([^/]+)-([0-9]+\.[0-9]+\.[0-9]+)\.tgz$/.exec(pathname);
   const npm = npmMatch !== null && npmMatch[1] === npmMatch[2];
-  const bun = /^\/oven-sh\/bun\/releases\/download\/bun-v([0-9]+\.[0-9]+\.[0-9]+)\/bun-windows-(?:x64|x64-baseline|x64-profile|x64-baseline-profile|aarch64|aarch64-profile)\.zip$/.test(pathname);
-  const node = /^\/actions\/node-versions\/releases\/download\/([0-9]+\.[0-9]+\.[0-9]+)-[^/]+\/node-[0-9]+\.[0-9]+\.[0-9]+-win32-(?:x64|x86|arm64)\.7z$/.test(pathname)
-    || /^\/dist\/v([0-9]+\.[0-9]+\.[0-9]+)\/node-v[0-9]+\.[0-9]+\.[0-9]+-win-(?:x64|x86|arm64)\.(?:7z|zip)$/.test(pathname)
+  const bun = /^\/oven-sh\/bun\/releases\/download\/bun-v[0-9]+\.[0-9]+\.[0-9]+\/bun-windows-(?:x64|x64-baseline|x64-profile|x64-baseline-profile|aarch64|aarch64-profile)\.zip$/.test(pathname);
+  const githubNodeMatch = /^\/actions\/node-versions\/releases\/download\/([0-9]+\.[0-9]+\.[0-9]+)-[^/]+\/node-([0-9]+\.[0-9]+\.[0-9]+)-win32-(?:x64|x86|arm64)\.7z$/.exec(pathname);
+  const nodeDistMatch = /^\/dist\/v([0-9]+\.[0-9]+\.[0-9]+)\/node-v([0-9]+\.[0-9]+\.[0-9]+)-win-(?:x64|x86|arm64)\.(?:7z|zip)$/.exec(pathname);
+  const node = (githubNodeMatch !== null && githubNodeMatch[1] === githubNodeMatch[2])
+    || (nodeDistMatch !== null && nodeDistMatch[1] === nodeDistMatch[2])
     || /^\/dist\/v[0-9]+\.[0-9]+\.[0-9]+\/win-(?:x64|x86|arm64)\/node\.(?:exe|lib)$/.test(pathname);
-  const playwright = /^\/(?:builds|dbazure\/download\/playwright\/builds)\/.+\.(?:zip|tar\.gz)$/.test(pathname);
+  const playwright = host === "cdn.playwright.dev"
+    ? /^\/builds\/(?:chromium|chromium-headless-shell|firefox|webkit|ffmpeg|winldd)\/[1-9]\d*\/[A-Za-z0-9._-]+\.(?:zip|tar\.gz)$/.test(pathname)
+    : host === "playwright.download.prss.microsoft.com"
+      ? /^\/dbazure\/download\/playwright\/builds\/(?:chromium|chromium-headless-shell|firefox|webkit|ffmpeg|winldd)\/[1-9]\d*\/[A-Za-z0-9._-]+\.(?:zip|tar\.gz)$/.test(pathname)
+      : false;
   const validPath = host === PACKAGE_HOST ? npm : host === "github.com" ? (bun || node) : host === "nodejs.org" ? node : playwright;
   if (!validPath) return null;
   if (["authorization", "cookie", "range", "if-none-match", "if-modified-since"].some((name) => request.headers[name] !== undefined)) return null;
@@ -140,61 +142,91 @@ function contentLength(headers: HeaderMap): bigint | null {
   try { return BigInt(value); } catch { return null; }
 }
 
-function captureResponse(response: ServerResponse): { value: CapturedResponse; restore: () => void } {
-  const target = response as ServerResponse & Record<string, unknown>;
-  const originalWriteHead = target.writeHead;
-  const originalSetHeader = target.setHeader;
-  const originalRemoveHeader = target.removeHeader;
-  const originalWrite = target.write;
-  const originalEnd = target.end;
-  const value: CapturedResponse = { statusCode: response.statusCode || 200, headers: {}, chunks: [], ended: false };
-  for (const [name, header] of Object.entries(response.getHeaders())) {
-    if (header !== undefined) value.headers[name.toLowerCase()] = Array.isArray(header) ? [...header] : String(header);
-  }
-  target.setHeader = ((name: string, header: string | number | readonly string[]) => {
-    value.headers[name.toLowerCase()] = Array.isArray(header) ? [...header] : String(header);
-    return response;
-  }) as unknown as typeof target.setHeader;
-  target.removeHeader = ((name: string) => { delete value.headers[name.toLowerCase()]; return response; }) as unknown as typeof target.removeHeader;
-  target.writeHead = ((statusCode: number, reasonOrHeaders?: string | HeaderMap, maybeHeaders?: HeaderMap) => {
-    value.statusCode = statusCode;
-    const headers = typeof reasonOrHeaders === "string" ? maybeHeaders : reasonOrHeaders;
-    if (headers) for (const [name, header] of Object.entries(headers)) {
-      if (header !== undefined) value.headers[name.toLowerCase()] = Array.isArray(header) ? [...header] : String(header);
-    }
-    return response;
-  }) as unknown as typeof target.writeHead;
-  target.write = ((chunk: unknown, encoding?: BufferEncoding | ((error?: Error) => void), callback?: (error?: Error) => void) => {
-    const bytes = chunkBuffer(chunk, typeof encoding === "string" ? encoding : "utf8");
-    if (bytes) value.chunks.push(bytes);
-    (typeof encoding === "function" ? encoding : callback)?.();
-    return true;
-  }) as unknown as typeof target.write;
-  target.end = ((chunk?: unknown, encoding?: BufferEncoding | (() => void), callback?: () => void) => {
-    const bytes = typeof chunk === "function" ? null : chunkBuffer(chunk, typeof encoding === "string" ? encoding : "utf8");
-    if (bytes) value.chunks.push(bytes);
-    value.ended = true;
-    (typeof encoding === "function" ? encoding : callback)?.();
-    return response;
-  }) as unknown as typeof target.end;
-  return {
-    value,
-    restore: () => {
-      target.writeHead = originalWriteHead;
-      target.setHeader = originalSetHeader;
-      target.removeHeader = originalRemoveHeader;
-      target.write = originalWrite;
-      target.end = originalEnd;
-    },
-  };
-}
+class StreamingCaptureResponse extends Writable {
+  statusCode: number;
+  readonly headers: HeaderMap = {};
+  sizeBytes = 0;
+  readonly stagingPath: string;
+  readonly #client: ServerResponse;
+  readonly #staging: WriteStream;
 
-function replay(response: ServerResponse, captured: CapturedResponse, extraHeaders: HeaderMap = {}): void {
-  const headers: HeaderMap = { ...captured.headers, ...extraHeaders };
-  if (extraHeaders["x-mars-package-cache"] === undefined) delete headers["x-mars-package-cache"];
-  response.writeHead(captured.statusCode, headers);
-  for (const chunk of captured.chunks) response.write(chunk);
-  response.end();
+  constructor(client: ServerResponse, stagingPath: string) {
+    super();
+    this.#client = client;
+    this.stagingPath = stagingPath;
+    this.statusCode = client.statusCode || 200;
+    this.#staging = createWriteStream(stagingPath, { flags: "wx", mode: 0o600 });
+    for (const [name, header] of Object.entries(client.getHeaders())) {
+      if (header !== undefined) this.headers[name.toLowerCase()] = Array.isArray(header) ? [...header] : String(header);
+    }
+  }
+
+  setHeader(name: string, value: string | number | readonly string[]): this {
+    this.headers[name.toLowerCase()] = Array.isArray(value) ? [...value] : String(value);
+    this.#client.setHeader(name, value);
+    return this;
+  }
+
+  getHeader(name: string): string | string[] | undefined {
+    return this.headers[name.toLowerCase()];
+  }
+
+  getHeaders(): HeaderMap {
+    return { ...this.headers };
+  }
+
+  hasHeader(name: string): boolean {
+    return this.getHeader(name) !== undefined;
+  }
+
+  removeHeader(name: string): void {
+    delete this.headers[name.toLowerCase()];
+    this.#client.removeHeader(name);
+  }
+
+  writeHead(statusCode: number, reasonOrHeaders?: string | IncomingHttpHeaders, maybeHeaders?: IncomingHttpHeaders): this {
+    this.statusCode = statusCode;
+    const supplied = typeof reasonOrHeaders === "string" ? maybeHeaders : reasonOrHeaders;
+    if (supplied) {
+      for (const [name, value] of Object.entries(supplied)) {
+        if (value !== undefined) this.headers[name.toLowerCase()] = Array.isArray(value) ? [...value] : String(value);
+      }
+    }
+    const headers = { ...supplied, "x-mars-package-cache": "MISS" };
+    if (typeof reasonOrHeaders === "string") this.#client.writeHead(statusCode, reasonOrHeaders, headers);
+    else this.#client.writeHead(statusCode, headers);
+    return this;
+  }
+
+  #prepareClient(): void {
+    if (this.#client.headersSent) return;
+    this.#client.statusCode = this.statusCode;
+    this.#client.setHeader("x-mars-package-cache", "MISS");
+  }
+
+  _write(chunk: Buffer | string | Uint8Array, encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : chunk instanceof Uint8Array ? Buffer.from(chunk) : Buffer.from(chunk, encoding);
+    this.sizeBytes += bytes.length;
+    this.#prepareClient();
+    let pending = 2;
+    let failure: Error | null = null;
+    const complete = (error?: Error | null) => {
+      if (error && !failure) failure = error;
+      pending -= 1;
+      if (pending === 0) callback(failure);
+    };
+    this.#client.write(bytes, complete);
+    this.#staging.write(bytes, complete);
+  }
+
+  _final(callback: (error?: Error | null) => void): void {
+    this.#prepareClient();
+    this.#staging.end(callback);
+  }
+
+  captured(): CapturedResponse {
+    return { statusCode: this.statusCode, headers: this.headers, sizeBytes: this.sizeBytes, stagingPath: this.stagingPath };
+  }
 }
 
 function requestPath(request: IncomingMessage): string { return request.url || "/"; }
@@ -223,21 +255,45 @@ export const forwardPublicNpmRequest: PackageUpstreamHandler = async (request, r
     response.end("unsupported upstream host\n");
     return;
   }
-  await new Promise<void>((resolve, reject) => {
-    const upstream = httpsRequest({ hostname: host, port: 443, method: request.method, path: requestPath(request), headers: forwardHeaders(request, host) }, (incoming) => {
-      const headers = headerMap(incoming.headers);
-      response.writeHead(incoming.statusCode ?? 502, headers);
+  const anonymousGitHubDownload = request.method === "GET" && host === "github.com" && request.headers.authorization === undefined && request.headers.cookie === undefined;
+  let activeUpstream: ClientRequest | undefined;
+  request.once("aborted", () => activeUpstream?.destroy(new Error("downstream request aborted")));
+  const forward = (target: URL, redirectsRemaining: number, pipeRequestBody: boolean): Promise<void> => {
+    const { promise, resolve, reject } = Promise.withResolvers<void>();
+    const upstream = httpsRequest({
+      hostname: target.hostname,
+      port: target.port ? Number(target.port) : 443,
+      method: request.method,
+      path: `${target.pathname}${target.search}`,
+      headers: forwardHeaders(request, target.host),
+    }, (incoming) => {
+      const statusCode = incoming.statusCode ?? 502;
+      const location = incoming.headers.location;
+      if (anonymousGitHubDownload && redirectsRemaining > 0 && statusCode >= 300 && statusCode < 400 && typeof location === "string") {
+        let redirected: URL;
+        try { redirected = new URL(location, target); } catch { redirected = new URL("http://invalid"); }
+        if (redirected.protocol === "https:" && !redirected.username && !redirected.password && GITHUB_RELEASE_REDIRECT_HOSTS.has(redirected.hostname.toLowerCase())) {
+          incoming.resume();
+          incoming.once("error", reject);
+          incoming.once("end", () => forward(redirected, redirectsRemaining - 1, false).then(resolve, reject));
+          return;
+        }
+      }
+      response.writeHead(statusCode, headerMap(incoming.headers));
       incoming.on("error", reject);
       incoming.on("end", resolve);
       incoming.pipe(response);
     });
+    activeUpstream = upstream;
     upstream.on("error", (error) => {
       if (!response.headersSent) response.destroy(error);
       reject(error);
     });
-    request.on("aborted", () => upstream.destroy(new Error("downstream request aborted")));
-    request.pipe(upstream);
-  });
+    if (pipeRequestBody) request.pipe(upstream);
+    else upstream.end();
+    return promise;
+  };
+  await forward(new URL(requestPath(request), `https://${host}`), 5, true);
 };
 
 export interface PackageDownloadCache {
@@ -355,20 +411,24 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
   }
 
   async #publish(canonicalUrl: string, captured: CapturedResponse, generation: number): Promise<boolean> {
-    if (generation !== this.#generation || captured.statusCode !== 200 || hasHeader(captured.headers, "set-cookie")) return false;
+    if (generation !== this.#generation || captured.statusCode !== 200 || hasHeader(captured.headers, "set-cookie")) {
+      await rm(captured.stagingPath, { force: true }).catch(() => undefined);
+      return false;
+    }
     const length = contentLength(captured.headers);
-    const bytes = Buffer.concat(captured.chunks);
-    if (length !== null && length !== BigInt(bytes.byteLength)) return false;
+    if (length !== null && length !== BigInt(captured.sizeBytes)) {
+      await rm(captured.stagingPath, { force: true }).catch(() => undefined);
+      return false;
+    }
     const urlHash = hash(canonicalUrl);
     const objectPathId = randomUUID();
-    const stagingPath = join(this.#staging, `${randomUUID()}.tmp`);
     const now = this.#now().toISOString();
     const objectPath = this.#objectPath(objectPathId);
     try {
-      this.#db.query(`INSERT INTO package_entries(url_hash,canonical_url,object_path_id,state,response_headers,size_bytes,created_at,last_accessed_at,expires_at) VALUES (?,?,?,'filling',?,?,?,?,?)`).run(urlHash, canonicalUrl, objectPathId, JSON.stringify(selectedHeaders(captured.headers)), String(bytes.byteLength), now, now, isoAfter(this.#now(), this.#ttlSeconds));
-      const file = await open(stagingPath, "wx", 0o600);
-      try { await file.write(bytes); await file.sync(); } finally { await file.close(); }
-      await rename(stagingPath, objectPath);
+      this.#db.query(`INSERT INTO package_entries(url_hash,canonical_url,object_path_id,state,response_headers,size_bytes,created_at,last_accessed_at,expires_at) VALUES (?,?,?,'filling',?,?,?,?,?)`).run(urlHash, canonicalUrl, objectPathId, JSON.stringify(selectedHeaders(captured.headers)), String(captured.sizeBytes), now, now, isoAfter(this.#now(), this.#ttlSeconds));
+      const file = await open(captured.stagingPath, "r+");
+      try { await file.sync(); } finally { await file.close(); }
+      await rename(captured.stagingPath, objectPath);
       await this.#syncDirectory(this.#objects);
       if (generation !== this.#generation) {
         await rm(objectPath, { force: true });
@@ -376,13 +436,13 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
         return false;
       }
       const result = this.#db.query("UPDATE package_entries SET state='ready' WHERE url_hash=? AND state='filling'").run(urlHash);
-      if (result.changes !== 1) return false;
+      if (result.changes !== 1) throw new Error("package cache publication lost its reservation");
       this.#emitMutation();
       await this.#enforceMaxBytes();
       const retained = this.#row(canonicalUrl);
       return retained?.state === "ready";
     } catch {
-      await rm(stagingPath, { force: true }).catch(() => undefined);
+      await rm(captured.stagingPath, { force: true }).catch(() => undefined);
       await rm(objectPath, { force: true }).catch(() => undefined);
       try { this.#db.query("DELETE FROM package_entries WHERE url_hash=? AND state IN ('filling','ready')").run(urlHash); } catch { /* fail-open */ }
       return false;
@@ -397,15 +457,19 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
 
   async #fill(canonicalUrl: string, request: IncomingMessage, response: ServerResponse): Promise<FillResult> {
     const generation = this.#generation;
-    const captured = captureResponse(response);
+    const stagingPath = join(this.#staging, `${randomUUID()}.tmp`);
+    const capture = new StreamingCaptureResponse(response, stagingPath);
     try {
-      await this.#upstream(request, response);
-      if (!captured.value.ended) captured.value.ended = true;
-    } finally {
-      captured.restore();
+      await this.#upstream(request, capture as unknown as ServerResponse);
+      if (!capture.writableEnded) capture.end();
+      await finished(capture);
+    } catch (error) {
+      capture.destroy();
+      await rm(stagingPath, { force: true }).catch(() => undefined);
+      throw error;
     }
-    const published = await this.#publish(canonicalUrl, captured.value, generation);
-    replay(response, captured.value, published ? { "x-mars-package-cache": "MISS" } : {});
+    const published = await this.#publish(canonicalUrl, capture.captured(), generation);
+    response.end();
     return { published, generation };
   }
 

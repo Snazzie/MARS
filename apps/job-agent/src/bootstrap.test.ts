@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cliArgument, consumeGuestJitConfig, consumeGuestJitConfigWithWorkerCache, runGuestService, runOneTimeJitBootstrap, runnerCommandForPlatform, waitForGuestBootstrap } from "./bootstrap.ts";
+import { cliArgument, consumeGuestJitConfig, consumeGuestJitConfigWithWorkerCache, mergeBunInstallCa, runGuestService, runOneTimeJitBootstrap, runnerCommandForPlatform, waitForGuestBootstrap } from "./bootstrap.ts";
 
 const roots: string[] = [];
 const workerCache = {
@@ -13,10 +13,26 @@ const workerCache = {
   registrationUrl: "https://127.0.0.1:8443/_mars/register",
   registrationChallenge: "c".repeat(32),
 };
+const writeWorkerCacheCapability = (root: string) => writeFile(join(root, ".mars-capabilities.json"), JSON.stringify({ schemaVersion: 1, capabilities: ["mars-worker-cache-registration-v1"] }));
+
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
+test("merges a temporary Bun install CA without retaining conflicting CA settings", () => {
+  const merged = mergeBunInstallCa("[install]\nregistry = \"https://registry.npmjs.org\"\nca = \"old\"\ncafile = \"old.pem\"\n[run]\nshell = \"system\"\n", "C:\\cache\\combined-ca.pem");
+  expect(merged).toContain("[install]\ncafile = \"C:/cache/combined-ca.pem\"\nregistry = \"https://registry.npmjs.org\"");
+  expect(merged).not.toContain("ca = \"old\"");
+  expect(merged).not.toContain("cafile = \"old.pem\"");
+  expect(merged).toContain("[run]\nshell = \"system\"");
+});
+
+test("rejects an unpatched runner before installing guest trust", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
+  roots.push(root);
+  await expect(consumeGuestJitConfigWithWorkerCache("encoded-jit-config", root, "linux-x64", workerCache)).rejects.toThrow("mars-worker-cache-registration-v1");
+});
+
 
 test("starts run.sh from the supplied Actions Runner root", async () => {
   if (process.platform === "win32") return;
@@ -38,6 +54,7 @@ test("official runner receives worker cache proxy variables and a temporary CA",
   if (process.platform === "win32") return;
   const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
   roots.push(root);
+  await writeWorkerCacheCapability(root);
   const outputPath = join(root, "cache-env");
   await writeFile(join(root, "run.sh"), `#!/bin/sh
 printf '%s\n%s\n%s\n%s\n' "$HTTP_PROXY" "$http_proxy" "$HTTPS_PROXY" "$https_proxy" > '${outputPath}'
@@ -65,6 +82,7 @@ test("Windows run.cmd descendant receives worker cache environment", async () =>
   if (process.platform !== "win32") return;
   const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
   roots.push(root);
+  await writeWorkerCacheCapability(root);
   const outputPath = join(root, "cache-env.txt");
   await writeFile(join(root, "run.cmd"), `@echo off
 >"${outputPath}" echo(%HTTP_PROXY%
@@ -119,6 +137,25 @@ exit /b 0
   expect(await Bun.file(lines[6]).exists()).toBe(false);
   expect(trustCalls).toEqual([expect.stringMatching(/^add:.*worker-ca\.pem$/), "remove:worker-thumbprint"]);
 });
+test("removes temporary trust files when Windows root rollback fails", async () => {
+  if (process.platform !== "win32") return;
+  const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
+  roots.push(root);
+  await writeWorkerCacheCapability(root);
+  const outputPath = join(root, "ca-path.txt");
+  await writeFile(join(root, "run.cmd"), `@echo off
+>"${outputPath}" echo(%NODE_EXTRA_CA_CERTS%
+exit /b 0
+`, { mode: 0o700 });
+  const trust = {
+    addRoot: async () => ({ thumbprint: "worker-thumbprint", added: true }),
+    removeRoot: async () => { throw new Error("certificate rollback failed"); },
+  };
+  await expect(consumeGuestJitConfigWithWorkerCache("encoded-jit-config", root, "windows-x64", workerCache, trust)).rejects.toThrow("certificate rollback failed");
+  const caPath = (await Bun.file(outputPath).text()).trim();
+  expect(await Bun.file(caPath).exists()).toBe(false);
+});
+
 
 test("waits for the host to copy the guest bootstrap after startup", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
@@ -133,9 +170,9 @@ test("waits for the host to copy the guest bootstrap after startup", async () =>
   expect(JSON.parse(raw)).toMatchObject({ leaseId: "lease", encodedJitConfig: "jit" });
 });
 
-test("launches the Windows runner batch file through cmd.exe", () => {
-  expect(runnerCommandForPlatform("windows-x64")).toEqual(["cmd.exe", "/c", "run.cmd"]);
-  expect(runnerCommandForPlatform("linux-x64")).toEqual(["./run.sh"]);
+test("launches the runner with self-updates disabled", () => {
+  expect(runnerCommandForPlatform("windows-x64")).toEqual(["cmd.exe", "/c", "run.cmd", "--disableupdate"]);
+  expect(runnerCommandForPlatform("linux-x64")).toEqual(["./run.sh", "--disableupdate"]);
 });
 test("container completion exits instead of shutting down a guest", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));

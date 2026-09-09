@@ -28,7 +28,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Failed waiting for the runtime prerequisite probe.' }
   if ($exitCode -ne 0) { throw "Runtime prerequisite probe failed with exit code ${exitCode}: $(Get-ProbeLogs $prerequisiteName)" }
   $runtimeProbe = ((docker logs $prerequisiteName 2>&1) -join '').Trim() | ConvertFrom-Json
-  if (-not $runtimeProbe.mediaFoundation -or -not $runtimeProbe.dns -or -not $runtimeProbe.tcp443) { throw 'Runtime prerequisite probe did not verify Media Foundation, DNS, and TCP egress.' }
+  if (-not $runtimeProbe.mediaFoundation -or -not $runtimeProbe.runnerCacheRegistration -or -not $runtimeProbe.dns -or -not $runtimeProbe.tcp443) { throw 'Runtime prerequisite probe did not verify Media Foundation, patched runner cache registration, DNS, and TCP egress.' }
 } finally {
   docker rm -f $prerequisiteName 2>$null | Out-Null
 }

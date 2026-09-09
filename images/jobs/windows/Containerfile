@@ -4,10 +4,10 @@ FROM ${BASE_IMAGE}
 SHELL ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue';"]
 RUN $feature = Install-WindowsFeature -Name Server-Media-Foundation; if (-not $feature.Success -or $feature.RestartNeeded -eq 'Yes') { throw "Server-Media-Foundation installation failed or requires restart: $($feature | ConvertTo-Json -Compress)" }
 COPY verify-runtime.ps1 C:/Mars/verify-runtime.ps1
-RUN & C:/Mars/verify-runtime.ps1 | Write-Output
 WORKDIR C:/actions-runner
 COPY runner.zip C:/temp/runner.zip
 RUN Expand-Archive C:/temp/runner.zip C:/actions-runner; Remove-Item C:/temp/runner.zip
+RUN & C:/Mars/verify-runtime.ps1 | Write-Output
 COPY git.zip C:/temp/git.zip
 RUN Expand-Archive C:/temp/git.zip C:/Git; Remove-Item C:/temp/git.zip; & C:/Git/cmd/git.exe config --system core.autocrlf false; & C:/Git/cmd/git.exe config --system http.sslBackend openssl; & C:/Git/cmd/git.exe config --system http.sslVerify true
 COPY vc_redist.x64.exe C:/temp/vc_redist.x64.exe

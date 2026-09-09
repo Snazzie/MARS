@@ -31,6 +31,35 @@ const powerShellWindowsTrust: WindowsTrustAdapter = {
     await runPowerShell(`$ErrorActionPreference='Stop';$store=[System.Security.Cryptography.X509Certificates.X509Store]::new('Root','LocalMachine');try{$store.Open('ReadWrite');$found=$store.Certificates.Find('FindByThumbprint','${thumbprint.replace(/'/g, "''")}',$false);if($found.Count -gt 0){$store.Remove($found[0])}}finally{$store.Close()}`);
   },
 };
+const WORKER_CACHE_CAPABILITY = "mars-worker-cache-registration-v1";
+
+async function assertWorkerCacheRunnerCapability(runnerRoot: string): Promise<void> {
+  let value: unknown;
+  try {
+    value = JSON.parse(await readFile(join(runnerRoot, ".mars-capabilities.json"), "utf8"));
+  } catch {
+    throw new Error(`Actions Runner is missing required capability ${WORKER_CACHE_CAPABILITY}`);
+  }
+  if (!value || typeof value !== "object" || !("capabilities" in value) || !Array.isArray(value.capabilities) || !value.capabilities.includes(WORKER_CACHE_CAPABILITY)) {
+    throw new Error(`Actions Runner is missing required capability ${WORKER_CACHE_CAPABILITY}`);
+  }
+}
+
+export function mergeBunInstallCa(source: string, caPath: string): string {
+  const lines = source.replace(/\r\n/g, "\n").split("\n");
+  const installStart = lines.findIndex((line) => /^\s*\[install\]\s*(?:#.*)?$/.test(line));
+  const setting = `cafile = ${JSON.stringify(caPath.replaceAll("\\", "/"))}`;
+  if (installStart < 0) {
+    const prefix = source.length > 0 && !source.endsWith("\n") ? "\n" : "";
+    return `${source}${prefix}[install]\n${setting}\n`;
+  }
+  const nextSection = lines.findIndex((line, index) => index > installStart && /^\s*\[[^\]]+\]\s*(?:#.*)?$/.test(line));
+  const installEnd = nextSection < 0 ? lines.length : nextSection;
+  const merged = lines.filter((line, index) => index <= installStart || index >= installEnd || !/^\s*(?:ca|cafile)\s*=/.test(line));
+  merged.splice(installStart + 1, 0, setting);
+  return merged.join("\n");
+}
+
 
 export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerRoot: string, platform: "windows-x64" | "linux-x64", workerCache?: WorkerCacheProxy, onOutput?: (stream: "stdout" | "stderr", content: string) => void, windowsTrust: WindowsTrustAdapter = powerShellWindowsTrust): Promise<number> {
   RunnerJitConfig.shape.encodedJitConfig.parse(encodedJitConfig);
@@ -40,6 +69,7 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
     const env: Record<string, string> = { ...Bun.env, ACTIONS_RUNNER_INPUT_JITCONFIG: encodedJitConfig };
     if (workerCache) {
       const proxy = WorkerCacheProxy.parse(workerCache);
+      await assertWorkerCacheRunnerCapability(runnerRoot);
       caDirectory = await mkdtemp(join(tmpdir(), "mars-worker-cache-"));
       const workerCaPath = join(caDirectory, "worker-ca.pem");
       await writeFile(workerCaPath, proxy.caCertificatePem, { mode: 0o600, flag: "wx" });
@@ -53,6 +83,11 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
         }
       }
       await writeFile(caPath, `${publicCa}${publicCa.endsWith("\n") || !publicCa ? "" : "\n"}${proxy.caCertificatePem}`, { mode: 0o600, flag: "wx" });
+      const configuredBunRoot = Bun.env.XDG_CONFIG_HOME?.trim() || Bun.env.HOME?.trim() || Bun.env.USERPROFILE?.trim();
+      const existingBunfigPath = configuredBunRoot ? join(configuredBunRoot, ".bunfig.toml") : undefined;
+      const existingBunfig = existingBunfigPath ? await readFile(existingBunfigPath, "utf8").catch(() => "") : "";
+      await writeFile(join(caDirectory, ".bunfig.toml"), mergeBunInstallCa(existingBunfig, caPath), { mode: 0o600, flag: "wx" });
+      env.XDG_CONFIG_HOME = caDirectory;
       const gitConfigPath = join(caDirectory, "git-ca.config");
       await writeFile(gitConfigPath, `[http]
 	sslBackend = openssl
@@ -84,8 +119,12 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
         if (installed.added) addedRootThumbprint = installed.thumbprint;
       }
     }
-    const runnerCommand = Bun.env.MARS_RUNNER_COMMAND ?? (platform === "windows-x64" ? "run.cmd" : "./run.sh");
-    const command = platform === "windows-x64" ? (runnerCommand.endsWith(".sh") ? ["bash", runnerCommand] : ["cmd.exe", "/c", runnerCommand]) : [runnerCommand];
+    const configuredRunnerCommand = Bun.env.MARS_RUNNER_COMMAND;
+    const command = configuredRunnerCommand
+      ? platform === "windows-x64" && !configuredRunnerCommand.endsWith(".sh")
+        ? ["cmd.exe", "/c", configuredRunnerCommand, "--disableupdate"]
+        : [configuredRunnerCommand, "--disableupdate"]
+      : runnerCommandForPlatform(platform);
     const runner = Bun.spawn(command, { cwd: runnerRoot, env, stdout: onOutput ? "pipe" : "ignore", stderr: onOutput ? "pipe" : "ignore" });
     if (!onOutput) return await runner.exited;
     const stdout = runner.stdout;
@@ -102,10 +141,17 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
     await Promise.all([output(stdout, "stdout"), output(stderr, "stderr")]);
     return await runner.exited;
   } finally {
+    let trustCleanupError: unknown;
     if (addedRootThumbprint && platform === "windows-x64") {
-      await windowsTrust.removeRoot(addedRootThumbprint);
+      try { await windowsTrust.removeRoot(addedRootThumbprint); } catch (error) { trustCleanupError = error; }
     }
-    if (caDirectory) await rm(caDirectory, { recursive: true, force: true });
+    let caCleanupError: unknown;
+    if (caDirectory) {
+      try { await rm(caDirectory, { recursive: true, force: true }); } catch (error) { caCleanupError = error; }
+    }
+    if (trustCleanupError && caCleanupError) throw new AggregateError([trustCleanupError, caCleanupError], "Failed to remove worker cache trust");
+    if (trustCleanupError) throw trustCleanupError;
+    if (caCleanupError) throw caCleanupError;
   }
 }
 export async function consumeGuestJitConfig(encoded: string, runnerRoot: string, platform: "windows-x64" | "linux-x64" = process.platform === "win32" ? "windows-x64" : "linux-x64"): Promise<number> {
@@ -179,5 +225,5 @@ async function defaultGuestShutdown(platform: "windows-x64" | "linux-x64"): Prom
   Bun.spawn(command, { stdout: "ignore", stderr: "ignore" });
 }
 export function runnerCommandForPlatform(platform: "windows-x64" | "linux-x64"): string[] {
-  return platform === "windows-x64" ? ["cmd.exe", "/c", "run.cmd"] : ["./run.sh"];
+  return platform === "windows-x64" ? ["cmd.exe", "/c", "run.cmd", "--disableupdate"] : ["./run.sh", "--disableupdate"];
 }

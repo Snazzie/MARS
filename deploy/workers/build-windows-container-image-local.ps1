@@ -84,7 +84,7 @@ try {
     throw "Runtime probe failed with exit code ${exitCode}: $logs"
   }
   $runtimeProbe = ((& docker logs $probe 2>&1) -join '').Trim() | ConvertFrom-Json
-  if (-not $runtimeProbe.mediaFoundation -or -not $runtimeProbe.dns -or -not $runtimeProbe.tcp443) { throw 'Runtime probe did not verify Media Foundation, DNS, and TCP egress.' }
+  if (-not $runtimeProbe.mediaFoundation -or -not $runtimeProbe.runnerCacheRegistration -or -not $runtimeProbe.dns -or -not $runtimeProbe.tcp443) { throw 'Runtime probe did not verify Media Foundation, patched runner cache registration, DNS, and TCP egress.' }
   $imageId = (Docker-Checked @('image', 'inspect', '--format', '{{.Id}}', $Image) 'docker image inspect' | Select-Object -Last 1).Trim()
   $manifest = [ordered]@{ schemaVersion = 1; baseImage = $BaseImage; runnerSha256 = $RunnerSha256.ToLowerInvariant(); gitSha256 = $GitSha256.ToLowerInvariant(); vcRuntimeSha256 = $VcRuntimeSha256.ToLowerInvariant(); jobAgentSha256 = (Get-FileHash -LiteralPath $JobAgent -Algorithm SHA256).Hash.ToLowerInvariant(); image = $Image; imageId = $imageId; runtimeProbe = $runtimeProbe; builtAt = (Get-Date).ToUniversalTime().ToString('o') }
   $temporaryManifest = "$ManifestPath.tmp"

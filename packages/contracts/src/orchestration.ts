@@ -73,11 +73,17 @@ const authenticatedProxyUrl = z.string().url().refine((value) => {
   const url = new URL(value);
   return url.protocol === "http:" && url.username !== "" && url.password !== "" && url.pathname === "/" && url.search === "" && url.hash === "" && url.port !== "0";
 }, "Proxy URL must be an authenticated HTTP origin");
+export const registrationUrl = z.string().url().refine((value) => {
+  const url = new URL(value);
+  return url.protocol === "https:" && url.username === "" && url.password === "" && url.pathname !== "/" && url.search === "" && url.hash === "";
+}, "Registration URL must be a credential-free HTTPS endpoint");
 export const WorkerCacheProxy = z.object({
   proxyUrl: authenticatedProxyUrl,
   cacheBaseUrl: originUrl("https:", "Cache base URL"),
   caCertificatePem: z.string().min(1),
   expiresAt: z.string().datetime(),
+  registrationUrl,
+  registrationChallenge: z.string().min(32).max(256),
 }).strict();
 export type WorkerCacheProxy = z.infer<typeof WorkerCacheProxy>;
 export const LeaseBootstrapEnvelope = z.object({

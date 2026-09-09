@@ -44,6 +44,8 @@ test("passes authenticated worker cache transport and unregisters the lease", as
     cacheBaseUrl: "https://127.0.0.1:8443",
     caCertificatePem: "worker-ca",
     expiresAt: bootstrap.expiresAt,
+    registrationUrl: "https://127.0.0.1:8443/_mars/register",
+    registrationChallenge: "c".repeat(32),
   };
   let received: unknown;
   let unregistered: string | undefined;

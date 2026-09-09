@@ -25,13 +25,16 @@ async function request(
   headers: Record<string, string> = {},
   host = "registry.npmjs.org",
 ) {
-  const server = createServer((incoming, outgoing) => void cache.handle(incoming, outgoing));
+  let completion: Promise<void> = Promise.resolve();
+  const server = createServer((incoming, outgoing) => { completion = cache.handle(incoming, outgoing); });
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("server did not bind");
   const response = await fetch(`http://127.0.0.1:${address.port}${path}`, { headers: { host, ...headers } });
-  return { response, bytes: new Uint8Array(await response.arrayBuffer()) };
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  await completion;
+  return { response, bytes };
 }
 
 async function rawRequest(
@@ -100,7 +103,7 @@ test("publishes Playwright archives for each supported host as MISS then byte-id
   }
 });
 
-test("bypasses non-archive, credentialed, and ranged Playwright requests", async () => {
+test("bypasses inexact, credentialed, and ranged public download requests", async () => {
   const root = await temporaryRoot();
   const body = new Uint8Array([1, 3, 3, 7]);
   const requests: Array<{ host: string; path: string }> = [];
@@ -110,6 +113,9 @@ test("bypasses non-archive, credentialed, and ranged Playwright requests", async
     { host: "cdn.playwright.dev", path: "/builds/chromium/1187/chrome-linux.zip", headers: { authorization: "Bearer token" } },
     { host: "cdn.playwright.dev", path: "/builds/chromium/1187/chrome-linux.zip", headers: { cookie: "session=secret" } },
     { host: "playwright.download.prss.microsoft.com", path: "/dbazure/download/playwright/builds/winldd/1011/winldd-win64.zip", headers: { range: "bytes=0-1" } },
+    { host: "cdn.playwright.dev", path: "/builds/arbitrary/1187/file.zip", headers: {} },
+    { host: "github.com", path: "/actions/node-versions/releases/download/20.0.0-123/node-21.0.0-win32-x64.7z", headers: {} },
+    { host: "nodejs.org", path: "/dist/v20.0.0/node-v21.0.0-win-x64.zip", headers: {} },
   ];
   const cache = await openPackageDownloadCache({
     root,
@@ -327,7 +333,7 @@ test("a fill started before purge cannot publish after purge", async () => {
     release();
     const first = await pending;
     const second = await request(cache, "/pkg/-/pkg-1.0.0.tgz");
-    expect(first.response.headers.get("x-mars-package-cache")).toBeNull();
+    expect(first.response.headers.get("x-mars-package-cache")).toBe("MISS");
     expect(second.response.headers.get("x-mars-package-cache")).toBe("MISS");
     expect(calls).toBe(2);
   } finally {

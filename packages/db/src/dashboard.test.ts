@@ -257,7 +257,7 @@ test("worker health preserves exact large decimal byte strings", async () => {
 test("worker health tolerates missing cache telemetry while retaining desired TTL", async () => {
   const db = workerHealthDb({ worker: minimalWorkerHealthRow({ desiredConfiguration: { cache: { ttlSeconds: 7200 } } }), leases: [] });
   const health = await getWorkerHealth(db, "86afd915-add3-407c-a6c1-1b46803ef713", () => true);
-  expect(health?.cache).toEqual({ desiredTtlSeconds: 7200, effectiveTtlSeconds: null, effectiveRunnerCacheEnabled: null, effectiveRunnerCacheMaxGiB: null, ready: false, generation: null, sizeBytes: "0", entryCount: 0, runnerCacheSizeBytes: "0", runnerCacheEntryCount: 0, observedAt: null, runnerCacheObservedAt: null, error: null });
+  expect(health?.cache).toEqual({ desiredTtlSeconds: 7200, effectiveTtlSeconds: null, effectiveRunnerCacheEnabled: null, effectiveRunnerCacheMaxGiB: null, ready: false, generation: null, sizeBytes: null, entryCount: null, runnerCacheSizeBytes: null, runnerCacheEntryCount: null, observedAt: null, runnerCacheObservedAt: null, error: null });
 });
 
 function minimalWorkerHealthRow(overrides: Record<string, unknown> = {}) {

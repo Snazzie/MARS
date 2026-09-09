@@ -4,7 +4,7 @@ import * as tartModule from "./tart.ts";
 import type { WorkerCacheProxy } from "@mars/contracts";
 
 const resources = (storageBytes: number) => ({ vcpu: 4, memoryBytes: 4 * 1024 ** 3, storageBytes, concurrency: 1 });
-const workerCache: WorkerCacheProxy = { proxyUrl: "http://127.0.0.1:39123", cacheBaseUrl: "https://127.0.0.1:39443", caCertificatePem: "worker-ca", expiresAt: new Date(Date.now() + 60_000).toISOString() };
+const workerCache: WorkerCacheProxy = { proxyUrl: "http://127.0.0.1:39123", cacheBaseUrl: "https://127.0.0.1:39443", caCertificatePem: "worker-ca", expiresAt: new Date(Date.now() + 60_000).toISOString(), registrationUrl: "https://127.0.0.1:39443/_mars/register", registrationChallenge: "c".repeat(32) };
 
 test("does not ask Tart to shrink a cloned base-image disk", () => {
   expect(buildTartSetArguments("lease-vm", resources(20 * 1024 ** 3), 50)).toEqual([

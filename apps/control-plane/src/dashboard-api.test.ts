@@ -398,6 +398,7 @@ test("global admins receive strict no-store worker health without secrets", asyn
   const body = await response.json();
   expect(body).toEqual({
     observedAt: "2026-08-23T12:00:00.000Z",
+    runtimeMode: null,
     connection: {
       state: "online",
       lastHeartbeatAt: "2026-08-23T11:59:59.000Z",
@@ -420,8 +421,8 @@ test("global admins receive strict no-store worker health without secrets", asyn
       generation: "11111111-1111-4111-8111-111111111111",
       sizeBytes: "1000",
       entryCount: 12,
-      runnerCacheSizeBytes: "0",
-      runnerCacheEntryCount: 0,
+      runnerCacheSizeBytes: null,
+      runnerCacheEntryCount: null,
       observedAt: "2026-08-23T11:59:50.000Z",
       runnerCacheObservedAt: null,
       error: null,

@@ -48,6 +48,8 @@ export interface ActionCacheStore {
   assembleUpload(entryId: string, orderedBlockIds: string[]): Promise<void>;
   markReady(entryId: string, sizeBytes: bigint): Promise<void>;
   applyTtl(ttlSeconds: number): Promise<void>;
+  runnerCachePolicy(): { enabled: boolean; maxGiB: number } | null;
+  saveRunnerCachePolicy(policy: { enabled: boolean; maxGiB: number }): void;
   setTelemetrySink(sink: ((type: ActionCacheMutation["type"], payload: Record<string, unknown>) => void) | null): void;
   status(): { sizeBytes: string; entryCount: number };
   sweep(): Promise<void>;
@@ -408,6 +410,22 @@ class SqliteActionCacheStore implements ActionCacheStore {
       if (result.changes !== 1) throw new Error("cache entry finalization failed");
     });
     finish();
+  }
+
+  runnerCachePolicy(): { enabled: boolean; maxGiB: number } | null {
+    this.#assertOpen();
+    const enabled = this.#db.query<{ value: string }, [string]>("SELECT value FROM cache_metadata WHERE key=?").get("runner_cache_enabled")?.value;
+    const maxGiB = Number(this.#db.query<{ value: string }, [string]>("SELECT value FROM cache_metadata WHERE key=?").get("runner_cache_max_gib")?.value);
+    if (!["true", "false"].includes(enabled ?? "") || !Number.isSafeInteger(maxGiB) || maxGiB <= 0) return null;
+    return { enabled: enabled === "true", maxGiB };
+  }
+  saveRunnerCachePolicy(policy: { enabled: boolean; maxGiB: number }): void {
+    this.#assertOpen();
+    if (!Number.isSafeInteger(policy.maxGiB) || policy.maxGiB <= 0) throw new Error("runner cache size cap must be a positive safe integer GiB");
+    this.#db.transaction(() => {
+      this.#db.query("INSERT INTO cache_metadata(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run("runner_cache_enabled", String(policy.enabled));
+      this.#db.query("INSERT INTO cache_metadata(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run("runner_cache_max_gib", String(policy.maxGiB));
+    })();
   }
 
   async applyTtl(ttlSeconds: number): Promise<void> {

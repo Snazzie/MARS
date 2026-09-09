@@ -230,7 +230,7 @@ test("reports cleanup failure after runner completion without claiming reap", as
 });
 
 test("passes authenticated worker cache transport into macOS runtime and unregisters it", async () => {
-  const workerCache = { proxyUrl: "http://lease-user:lease-secret@127.0.0.1:3128", cacheBaseUrl: "https://127.0.0.1:8443", caCertificatePem: "worker-ca", expiresAt: new Date(Date.now() + 60_000).toISOString() };
+  const workerCache = { proxyUrl: "http://lease-user:lease-secret@127.0.0.1:3128", cacheBaseUrl: "https://127.0.0.1:8443", caCertificatePem: "worker-ca", expiresAt: new Date(Date.now() + 60_000).toISOString(), registrationUrl: "https://127.0.0.1:8443/_mars/register", registrationChallenge: "c".repeat(32) };
   let received: unknown;
   let unregistered: string | undefined;
   const driver = {

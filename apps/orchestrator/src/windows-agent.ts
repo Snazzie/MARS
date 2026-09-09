@@ -35,8 +35,8 @@ const localImageVerification = async (image: string): Promise<{ manifest: boolea
   if (image !== "mars/windows-job:local") return { manifest: false, entrypoint: false };
   const path = Bun.env.MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Mars", "windows-job-image.json");
   try {
-    const manifest = JSON.parse((await readFile(path, "utf8")).replace(/^\uFEFF/, "")) as { schemaVersion?: number; image?: string; imageId?: string; runtimeProbe?: { mediaFoundation?: boolean; dns?: boolean; tcp443?: boolean } };
-    if (manifest.schemaVersion !== 1 || manifest.image !== image || !manifest.imageId || !manifest.runtimeProbe?.mediaFoundation || !manifest.runtimeProbe.dns || !manifest.runtimeProbe.tcp443) return { manifest: false, entrypoint: false };
+    const manifest = JSON.parse((await readFile(path, "utf8")).replace(/^\uFEFF/, "")) as { schemaVersion?: number; image?: string; imageId?: string; runtimeProbe?: { mediaFoundation?: boolean; runnerCacheRegistration?: boolean; dns?: boolean; tcp443?: boolean } };
+    if (manifest.schemaVersion !== 1 || manifest.image !== image || !manifest.imageId || !manifest.runtimeProbe?.mediaFoundation || !manifest.runtimeProbe.runnerCacheRegistration || !manifest.runtimeProbe.dns || !manifest.runtimeProbe.tcp443) return { manifest: false, entrypoint: false };
     const imageIdProcess = Bun.spawn(["docker.exe", "image", "inspect", "--format", "{{.Id}}", image], { stdout: "pipe", stderr: "ignore" });
     const imageId = (await new Response(imageIdProcess.stdout).text()).trim();
     if (await imageIdProcess.exited !== 0 || imageId !== manifest.imageId) return { manifest: false, entrypoint: false };
@@ -109,8 +109,8 @@ export async function buildWindowsImage(command: WorkerCommand, send: (event: Wo
     const inspected = JSON.parse(imageInspection.stdout.trim()) as { Config?: { Entrypoint?: unknown }; Id?: string };
     if (!inspected.Id || !isExpectedWindowsEntrypoint(inspected.Config?.Entrypoint)) throw new Error("Windows image entrypoint is invalid");
     failureStage = "verify_manifest";
-    const manifest = JSON.parse(await readFile(manifestPath, "utf8").then((value) => value.replace(/^\uFEFF/, ""))) as { image?: string; imageId?: string; runtimeProbe?: { mediaFoundation?: boolean; dns?: boolean; tcp443?: boolean } };
-    if (manifest.image !== payload.image || manifest.imageId !== inspected.Id || !manifest.runtimeProbe?.mediaFoundation || !manifest.runtimeProbe.dns || !manifest.runtimeProbe.tcp443) throw new Error("Windows image manifest does not match the verified image");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8").then((value) => value.replace(/^\uFEFF/, ""))) as { image?: string; imageId?: string; runtimeProbe?: { mediaFoundation?: boolean; runnerCacheRegistration?: boolean; dns?: boolean; tcp443?: boolean } };
+    if (manifest.image !== payload.image || manifest.imageId !== inspected.Id || !manifest.runtimeProbe?.mediaFoundation || !manifest.runtimeProbe.runnerCacheRegistration || !manifest.runtimeProbe.dns || !manifest.runtimeProbe.tcp443) throw new Error("Windows image manifest does not match the verified image");
     console.log("Windows image build verified", { workerId: command.workerId, commandId: command.id, buildId: payload.buildId, image: payload.image, imageId: inspected.Id, contentSha256: payload.contentSha256 });
     send(event(command.workerId, "worker.build_completed", { commandId: command.id, buildId: payload.buildId, image: payload.image, imageId: inspected.Id, contentSha256: payload.contentSha256, runtimeReady: true, message: "Local image built and runtime probe passed" }));
   } catch (error) {

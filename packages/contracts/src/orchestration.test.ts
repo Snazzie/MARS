@@ -246,6 +246,8 @@ test("keeps cache proxy material guest-only", () => {
     cacheBaseUrl: "https://cache.worker.test",
     caCertificatePem: "-----BEGIN CERTIFICATE-----\npublic-ca\n-----END CERTIFICATE-----",
     expiresAt: "2026-08-23T12:00:00.000Z",
+    registrationUrl: "https://cache.worker.test/_mars/register",
+    registrationChallenge: "c".repeat(32),
   };
   expect(orchestration.WorkerCacheProxy.parse(cache)).toEqual(cache);
   const envelope = {

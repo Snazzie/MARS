@@ -1,11 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { request as httpsRequest } from "node:https";
-import { connect, createServer } from "node:net";
+import { connect, createServer, isIP } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverActionCacheAdvertiseHost, emitActionCacheSnapshot, resolveActionCacheNetworkConfiguration, startActionCacheService, type ActionCacheService } from "./service.ts";
+import { discoverActionCacheAdvertiseHost, emitActionCacheSnapshot, resolveActionCacheNetworkConfiguration, startActionCacheService as startActionCacheServiceProduction, type ActionCacheService, type StartActionCacheServiceOptions } from "./service.ts";
 import { forwardPublicNpmRequest } from "./package-download-cache.ts";
 
 const roots: string[] = [];
@@ -16,6 +16,13 @@ afterEach(async () => {
 });
 async function root(): Promise<string> { const value = await mkdtemp(join(tmpdir(), "mars-cache-service-")); roots.push(value); return value; }
 const leaseExpiry = (milliseconds = 60 * 60 * 1000): string => new Date(Date.now() + milliseconds).toISOString();
+const startActionCacheService = (options: StartActionCacheServiceOptions) => startActionCacheServiceProduction({ env: {}, ...options });
+const unsignedRuntimeToken = (repositoryId: string, scopes: Array<{ Scope: string; Permission: number }>) => [
+  Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url"),
+  Buffer.from(JSON.stringify({ repository_id: repositoryId, ac: scopes })).toString("base64url"),
+  "signature",
+].join(".");
+
 
 function connectProxy(proxyUrl: string): Promise<string> {
   const url = new URL(proxyUrl);
@@ -52,7 +59,7 @@ function requestThroughProxy(proxyUrl: string, targetHost: string, ca: string, i
       reject(new Error(`proxy CONNECT failed: ${connectResponse.split("\r\n", 1)[0]}`));
       return;
     }
-    const secure = tlsConnect({ socket, servername: targetHost, ca });
+    const secure = tlsConnect({ socket, ...(!isIP(targetHost) ? { servername: targetHost } : {}), ...(ca ? { ca } : { rejectUnauthorized: false }) });
     secure.once("secureConnect", () => {
       const body = input.body === undefined ? "" : input.body;
       const headers = { host: targetHost, connection: "close", ...input.headers, ...(input.body === undefined ? {} : { "content-length": String(Buffer.byteLength(body)) }) };
@@ -270,6 +277,19 @@ test("starts ready listeners and keeps credentials out of reported origins", asy
   expect(await Array.fromAsync(service.snapshotPages(100))).toEqual([]);
 });
 
+test("preserves the configured runner cache policy across service restarts", async () => {
+  const cacheRoot = await root();
+  const first = await startActionCacheService({ root: cacheRoot, controlPlaneOrigin: "https://control.example.test", ttlSeconds: 3600, runnerCacheEnabled: false, runnerCacheMaxGiB: 8, proxyPort: 0, dataPort: 0, discoverAdvertiseHost: async () => "127.0.0.1" });
+  services.push(first);
+  first.setRunnerCacheEnabled(true);
+  first.setRunnerCacheMaxGiB(12);
+  await first.close();
+  const second = await startActionCacheService({ root: cacheRoot, controlPlaneOrigin: "https://control.example.test", ttlSeconds: 60, runnerCacheEnabled: false, runnerCacheMaxGiB: 3, proxyPort: 0, dataPort: 0, discoverAdvertiseHost: async () => "127.0.0.1" });
+  services.push(second);
+  expect(second.status().ttlSeconds).toBe(3600);
+  expect(second.runnerCacheStatus()).toMatchObject({ enabled: true, maxGiB: 12 });
+});
+
 test("emits a complete cache snapshot envelope for an empty cache", async () => {
   const service = await startActionCacheService({ root: await root(), controlPlaneOrigin: "https://control.example.test", ttlSeconds: 3600, proxyPort: 0, dataPort: 0, discoverAdvertiseHost: async () => "127.0.0.1" });
   services.push(service);
@@ -286,6 +306,48 @@ test("requires active per-lease credentials for proxy CONNECT", async () => {
   const transport = service.transport("11111111-1111-4111-8111-111111111111", leaseExpiry());
   await expect(connectProxy(service.status().proxyOrigin)).resolves.toStartWith("HTTP/1.1 407");
   await expect(connectProxy(transport.proxyUrl)).resolves.toStartWith("HTTP/1.1 200");
+});
+test("binds cache v2 authorization to one authenticated lease tunnel", async () => {
+  const service = await startActionCacheService({ root: await root(), controlPlaneOrigin: "https://control.example.test", ttlSeconds: 3600, proxyPort: 0, dataPort: 0, discoverAdvertiseHost: async () => "127.0.0.1" });
+  services.push(service);
+  const transport = service.transport("11111111-1111-4111-8111-111111111111", leaseExpiry());
+  const targetHost = new URL(transport.cacheBaseUrl).hostname;
+  const runtimeToken = unsignedRuntimeToken("123", [{ Scope: "refs/heads/main", Permission: 3 }]);
+  expect(await connectProxy(transport.proxyUrl)).toStartWith("HTTP/1.1 200");
+  const create = () => requestThroughProxy(transport.proxyUrl, targetHost, "", {
+    method: "POST",
+    path: "/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry",
+    headers: { "content-type": "application/json", authorization: `Bearer ${runtimeToken}` },
+    body: JSON.stringify({ key: "lease-bound-key", version: "v1" }),
+  });
+  expect((await create()).status).toBe(401);
+  const registration = await requestThroughProxy(transport.proxyUrl, targetHost, "", {
+    method: "POST",
+    path: "/_mars/register",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ challenge: transport.registrationChallenge, runtimeToken, jobId: "22222222-2222-4222-8222-222222222222", repository: "Snazzie/MARS" }),
+  });
+  expect(registration.status).toBe(200);
+  expect(JSON.parse(registration.body)).toEqual({ cacheBaseUrl: transport.cacheBaseUrl, protocolVersion: "v2" });
+  expect(await connectProxy(transport.proxyUrl)).toStartWith("HTTP/1.1 200");
+  expect((await create()).status).toBe(200);
+  const replay = await requestThroughProxy(transport.proxyUrl, targetHost, "", {
+    method: "POST",
+    path: "/_mars/register",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ challenge: transport.registrationChallenge, runtimeToken, jobId: "22222222-2222-4222-8222-222222222222", repository: "Snazzie/MARS" }),
+  });
+  expect(replay.status).toBe(403);
+
+  const other = service.transport("33333333-3333-4333-8333-333333333333", leaseExpiry());
+  expect(await connectProxy(other.proxyUrl)).toStartWith("HTTP/1.1 200");
+  const crossLease = await requestThroughProxy(other.proxyUrl, targetHost, "", {
+    method: "POST",
+    path: "/twirp/github.actions.results.api.v1.CacheService/GetCacheEntryDownloadURL",
+    headers: { "content-type": "application/json", authorization: `Bearer ${runtimeToken}` },
+    body: JSON.stringify({ key: "lease-bound-key", version: "v1" }),
+  });
+  expect(crossLease.status).toBe(401);
 });
 
 test("mounts the cache protocol router on the persistent HTTPS listener", async () => {
@@ -676,7 +738,8 @@ test("reports live entry count and bytes after a cache fill", async () => {
   });
   services.push(service);
   const transport = service.transport("11111111-1111-4111-8111-111111111111", new Date(now.getTime() + 60 * 60 * 1000).toISOString());
-  const create = await requestHttps(service.status().cacheBaseUrl, transport.caCertificatePem, {
+  const cacheHost = new URL(service.status().cacheBaseUrl).hostname;
+  const create = await requestThroughProxy(transport.proxyUrl, cacheHost, "", {
     method: "POST",
     path: "/twirp/github.actions.results.api.v1.CacheService/CreateCacheEntry",
     headers: { "content-type": "application/json" },
@@ -689,10 +752,10 @@ test("reports live entry count and bytes after a cache fill", async () => {
   Buffer.from("0").copy(blockBytes, 36);
   uploadUrl.searchParams.set("comp", "block");
   uploadUrl.searchParams.set("blockid", blockBytes.toString("base64"));
-  await requestHttps(uploadUrl.origin, transport.caCertificatePem, { method: "PUT", path: `${uploadUrl.pathname}${uploadUrl.search}`, body: "abc" });
+  await requestThroughProxy(transport.proxyUrl, cacheHost, "", { method: "PUT", path: `${uploadUrl.pathname}${uploadUrl.search}`, body: "abc" });
   uploadUrl.searchParams.set("comp", "blocklist");
   uploadUrl.searchParams.delete("blockid");
-  await requestHttps(uploadUrl.origin, transport.caCertificatePem, { method: "PUT", path: `${uploadUrl.pathname}${uploadUrl.search}`, body: `<BlockList><Latest>${blockBytes.toString("base64")}</Latest></BlockList>` });
+  await requestThroughProxy(transport.proxyUrl, cacheHost, "", { method: "PUT", path: `${uploadUrl.pathname}${uploadUrl.search}`, body: `<BlockList><Latest>${blockBytes.toString("base64")}</Latest></BlockList>` });
   expect(service.status()).toMatchObject({ entryCount: 1, sizeBytes: "3" });
   now = new Date(now.getTime() + 2 * 60 * 60 * 1000);
   await scheduledSweep!();

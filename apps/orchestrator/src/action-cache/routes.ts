@@ -96,7 +96,7 @@ function decimalInt64(value: unknown, name: string, positive = false): string {
 }
 function parseCreate(value: unknown): CreateCacheEntryRequestWire { if (!value || typeof value !== "object") throw new Error("request is invalid"); const raw = value as JsonObject; return { key: boundedText(raw.key, "key", 512), version: boundedText(raw.version, "version", 128) }; }
 function parseFinalize(value: unknown): FinalizeCacheEntryUploadRequestWire { if (!value || typeof value !== "object") throw new Error("request is invalid"); const raw = value as JsonObject; return { key: boundedText(raw.key, "key", 512), size_bytes: decimalInt64(raw.size_bytes, "size_bytes"), version: boundedText(raw.version, "version", 128) }; }
-function parseDownload(value: unknown): GetCacheEntryDownloadURLRequestWire { if (!value || typeof value !== "object") throw new Error("request is invalid"); const raw = value as JsonObject; if (!Array.isArray(raw.restore_keys) || raw.restore_keys.length > 10) throw new Error("restore_keys is invalid"); return { key: boundedText(raw.key, "key", 512), restore_keys: raw.restore_keys.map((item) => boundedText(item, "restore_key", 512)), version: boundedText(raw.version, "version", 128) }; }
+function parseDownload(value: unknown): GetCacheEntryDownloadURLRequestWire { if (!value || typeof value !== "object") throw new Error("request is invalid"); const raw = value as JsonObject; const restoreKeys = raw.restore_keys ?? []; if (!Array.isArray(restoreKeys) || restoreKeys.length > 10) throw new Error("restore_keys is invalid"); return { key: boundedText(raw.key, "key", 512), restore_keys: restoreKeys.map((item) => boundedText(item, "restore_key", 512)), version: boundedText(raw.version, "version", 128) }; }
 function baseUrl(origin: string, entryId: string): string { return new URL(`/_apis/artifactcache/cache/${entryId}`, origin).toString(); }
 function signedUrl(dependencies: ActionCacheRouteDependencies, entryId: string, operation: CacheGrantOperation): string {
   return dependencies.signedUrl?.(entryId, operation) ?? baseUrl(dependencies.cacheBaseUrl, entryId);
@@ -227,7 +227,7 @@ async function handleData(request: Request, dependencies: ActionCacheRouteDepend
 }
 export function createActionCacheRoutes(dependencies: ActionCacheRouteDependencies): ActionCacheRoute { return async (request) => { const path = new URL(request.url).pathname; if (path === CREATE || path === FINALIZE || path === DOWNLOAD_URL) return handleTwirp(request, path, dependencies); if (path.startsWith("/_apis/artifactcache/cache/")) return handleData(request, dependencies); return unsupportedMethod(); }; }
 export const createActionCacheRouter = createActionCacheRoutes;
-export function createNodeActionCacheHandler(route: ActionCacheRoute): NodeActionCacheHandler {
+export function createNodeActionCacheHandler(route: ActionCacheRoute, contextualize?: (incoming: IncomingMessage, request: Request) => void): NodeActionCacheHandler {
   return async (request, response): Promise<void> => {
     const encrypted = "encrypted" in request.socket && request.socket.encrypted === true;
     const protocol = encrypted ? "https" : "http";
@@ -238,7 +238,9 @@ export function createNodeActionCacheHandler(route: ActionCacheRoute): NodeActio
     }
     const body = request.method === "GET" || request.method === "HEAD" ? undefined : Readable.toWeb(request) as unknown as BodyInit;
     const init: RequestInit & { duplex?: "half" } = { method: request.method, headers, body, ...(body ? { duplex: "half" } : {}) };
-    const result = await route(new Request(`${protocol}://${host}${request.url ?? "/"}`, init));
+    const webRequest = new Request(`${protocol}://${host}${request.url ?? "/"}`, init);
+    contextualize?.(request, webRequest);
+    const result = await route(webRequest);
     response.writeHead(result.status, Object.fromEntries(result.headers));
     if (result.body) Readable.fromWeb(result.body as never).pipe(response);
     else response.end();

@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { X509Certificate, createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { createServer as createHttpsServer, request as httpsRequest, type Server as HttpsServer } from "node:https";
 import { isIP, connect as netConnect, type AddressInfo, type Socket } from "node:net";
@@ -13,8 +13,8 @@ import {
 import { retryControlPlaneOperation } from "../worker-client.ts";
 import { loadOrCreateCertificateAuthority, type IssuedLeafCertificate, type WorkerCertificateAuthority } from "./certificates.ts";
 import { openActionCacheStore, type ActionCacheMutation, type ActionCacheStore } from "./store.ts";
-import { openPackageDownloadCache, type PackageDownloadCache, type PackageUpstreamHandler } from "./package-download-cache.ts";
-import { CREATE_CACHE_ENTRY_PATH, FINALIZE_CACHE_ENTRY_UPLOAD_PATH, GET_CACHE_ENTRY_DOWNLOAD_URL_PATH, createActionCacheRoutes, createGitHubCacheTokenVerifier, createNodeActionCacheHandler, type CacheTokenVerifier, type NodeActionCacheHandler } from "./routes.ts";
+import { openPackageDownloadCache, PUBLIC_DOWNLOAD_HOSTS, type PackageDownloadCache, type PackageUpstreamHandler } from "./package-download-cache.ts";
+import { CREATE_CACHE_ENTRY_PATH, FINALIZE_CACHE_ENTRY_UPLOAD_PATH, GET_CACHE_ENTRY_DOWNLOAD_URL_PATH, createActionCacheRoutes, createNodeActionCacheHandler, type CacheAuthorization, type CacheTokenVerifier, type NodeActionCacheHandler } from "./routes.ts";
 
 export type WorkerRunnerCacheStatus = {
   generation: string;
@@ -95,11 +95,7 @@ const ACTION_CACHE_HOSTS = [
   "results-receiver.actions.githubusercontent.com",
   "artifactcache.actions.githubusercontent.com",
 ] as const;
-const PACKAGE_CACHE_HOST = "registry.npmjs.org";
-const PLAYWRIGHT_CDN_HOST = "cdn.playwright.dev";
-const PLAYWRIGHT_DOWNLOAD_HOST = "playwright.download.prss.microsoft.com";
-const PLAYWRIGHT_CACHE_HOSTS = [PLAYWRIGHT_CDN_HOST, PLAYWRIGHT_DOWNLOAD_HOST] as const;
-const INTERCEPTED_TLS_HOSTS = [...ACTION_CACHE_HOSTS, PACKAGE_CACHE_HOST, ...PLAYWRIGHT_CACHE_HOSTS];
+const INTERCEPTED_TLS_HOSTS = [...ACTION_CACHE_HOSTS, ...PUBLIC_DOWNLOAD_HOSTS];
 function runnerCacheMaxBytes(maxGiB: number): bigint {
   if (!Number.isSafeInteger(maxGiB) || maxGiB <= 0) throw new Error("runner cache size cap must be a positive safe integer GiB");
   return BigInt(maxGiB) * 1024n ** 3n;
@@ -203,9 +199,14 @@ function originFor(protocol: "http:" | "https:", hostname: string, port: number)
   return `${protocol}//${host}:${port}`;
 }
 
-function probeDataEndpoint(cacheBaseUrl: string, ca: string): Promise<void> {
+function probeDataEndpoint(cacheBaseUrl: string, certificatePem: string): Promise<void> {
+  const certificate = new X509Certificate(certificatePem);
+  const currentTime = Date.now();
+  if (Date.parse(certificate.validFrom) > currentTime || Date.parse(certificate.validTo) <= currentTime) {
+    throw new Error("cache data certificate is not currently valid");
+  }
   const { promise, resolve, reject } = Promise.withResolvers<void>();
-  const request = httpsRequest(new URL("/healthz", cacheBaseUrl), { ca, timeout: 10_000 }, (response) => {
+  const request = httpsRequest(new URL("/healthz", cacheBaseUrl), { rejectUnauthorized: false, timeout: 10_000 }, (response) => {
     response.resume();
     response.on("end", () => response.statusCode === 200 ? resolve() : reject(new Error(`cache data readiness probe returned ${response.statusCode ?? "no status"}`)));
   });
@@ -270,7 +271,68 @@ function shouldHandleCacheLocally(host: string | undefined, path: string): boole
   return CACHE_RPC_PATHS.has(path) || path.startsWith(CACHE_RPC_PREFIX) || path.startsWith(CACHE_DATA_PREFIX);
 }
 
-type LeaseProxyCredential = { leaseId: string; username: string; token: string; expiresAt: number };
+type LeaseProxyCredential = {
+  leaseId: string;
+  username: string;
+  token: string;
+  registrationChallengeHash: string;
+  expiresAt: number;
+  runtimeTokenHash?: string;
+  authorization?: CacheAuthorization;
+  runnerJobId?: string;
+  repository?: string;
+};
+
+function cacheAuthorizationFromRuntimeToken(runtimeToken: string): CacheAuthorization | null {
+  const pieces = runtimeToken.split(".");
+  if (pieces.length !== 3 || !pieces[1] || runtimeToken.length > 16 * 1024) return null;
+  let payload: unknown;
+  try { payload = JSON.parse(Buffer.from(pieces[1], "base64url").toString("utf8")); } catch { return null; }
+  if (!payload || typeof payload !== "object" || !("repository_id" in payload) || !("ac" in payload)) return null;
+  const repositoryId = payload.repository_id;
+  const githubRepositoryId = typeof repositoryId === "number" && Number.isSafeInteger(repositoryId) && repositoryId > 0
+    ? String(repositoryId)
+    : typeof repositoryId === "string" && /^[1-9]\d*$/.test(repositoryId)
+      ? repositoryId
+      : null;
+  if (!githubRepositoryId) return null;
+  let access: unknown = payload.ac;
+  if (typeof access === "string") {
+    try { access = JSON.parse(access); } catch { return null; }
+  }
+  if (!Array.isArray(access) || access.length === 0) return null;
+  const scopes = new Map<string, number>();
+  for (const value of access) {
+    if (!value || typeof value !== "object") return null;
+    const scope = "Scope" in value ? value.Scope : "scope" in value ? value.scope : undefined;
+    const rawPermission = "Permission" in value ? value.Permission : "permission" in value ? value.permission : undefined;
+    const permission = Number(rawPermission);
+    if (typeof scope !== "string" || scope.length < 1 || scope.length > 1024 || /[\0\r\n]/u.test(scope) || !Number.isSafeInteger(permission) || permission < 1 || permission > 3) return null;
+    scopes.set(scope, (scopes.get(scope) ?? 0) | permission);
+  }
+  return { githubRepositoryId, scopes };
+}
+
+async function readCacheRegistration(request: Parameters<NodeActionCacheHandler>[0]): Promise<{ challenge: string; runtimeToken: string; runnerJobId: string; repository: string }> {
+  if (request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") throw new Error("registration content type must be application/json");
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += bytes.length;
+    if (size > 64 * 1024) throw new Error("registration request is too large");
+    chunks.push(bytes);
+  }
+  let value: unknown;
+  try { value = JSON.parse(Buffer.concat(chunks, size).toString("utf8")); } catch { throw new Error("registration request JSON is invalid"); }
+  if (!value || typeof value !== "object") throw new Error("registration request is invalid");
+  const challenge = "challenge" in value ? value.challenge : undefined;
+  const runtimeToken = "runtimeToken" in value ? value.runtimeToken : undefined;
+  const runnerJobId = "jobId" in value ? value.jobId : undefined;
+  const repository = "repository" in value ? value.repository : undefined;
+  if (typeof challenge !== "string" || typeof runtimeToken !== "string" || typeof runnerJobId !== "string" || typeof repository !== "string") throw new Error("registration request is invalid");
+  return { challenge, runtimeToken, runnerJobId, repository };
+}
 
 class LeaseProxyCredentials {
   readonly #byLease = new Map<string, LeaseProxyCredential>();
@@ -281,18 +343,20 @@ class LeaseProxyCredentials {
     this.#now = now;
   }
 
-  register(leaseId: string, expiresAt: number): LeaseProxyCredential {
+  register(leaseId: string, expiresAt: number): LeaseProxyCredential & { registrationChallenge: string } {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(leaseId)) throw new Error("cache transport lease ID must be a UUID");
     this.unregister(leaseId);
-    const credential = {
+    const registrationChallenge = randomBytes(32).toString("base64url");
+    const credential: LeaseProxyCredential = {
       leaseId,
       username: randomBytes(18).toString("base64url"),
       token: randomBytes(32).toString("base64url"),
+      registrationChallengeHash: createHash("sha256").update(registrationChallenge).digest("hex"),
       expiresAt,
     };
     this.#byLease.set(leaseId, credential);
     this.#byUsername.set(credential.username, credential);
-    return credential;
+    return { ...credential, registrationChallenge };
   }
 
   unregister(leaseId: string): void {
@@ -302,22 +366,48 @@ class LeaseProxyCredentials {
     this.#byUsername.delete(credential.username);
   }
 
-  authorize(header: string | undefined): boolean {
-    if (!header?.startsWith("Basic ")) return false;
+  authorize(header: string | undefined): LeaseProxyCredential | null {
+    if (!header?.startsWith("Basic ")) return null;
     let decoded: string;
-    try { decoded = Buffer.from(header.slice(6), "base64").toString("utf8"); } catch { return false; }
+    try { decoded = Buffer.from(header.slice(6), "base64").toString("utf8"); } catch { return null; }
     const separator = decoded.indexOf(":");
-    if (separator < 1) return false;
+    if (separator < 1) return null;
     const username = decoded.slice(0, separator);
     const token = decoded.slice(separator + 1);
     const credential = this.#byUsername.get(username);
     if (!credential || credential.expiresAt <= this.#now().getTime()) {
       if (credential) this.unregister(credential.leaseId);
-      return false;
+      return null;
     }
     const actual = Buffer.from(token);
     const expected = Buffer.from(credential.token);
-    return actual.length === expected.length && timingSafeEqual(actual, expected);
+    return actual.length === expected.length && timingSafeEqual(actual, expected) ? credential : null;
+  }
+
+  registerRuntime(credential: LeaseProxyCredential, input: { challenge: string; runtimeToken: string; runnerJobId: string; repository: string }): boolean {
+    if (this.#byLease.get(credential.leaseId) !== credential || !credential.registrationChallengeHash) return false;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.runnerJobId) || !/^[^/\s]+\/[^/\s]+$/.test(input.repository)) return false;
+    const challengeHash = createHash("sha256").update(input.challenge).digest("hex");
+    const actual = Buffer.from(challengeHash);
+    const expected = Buffer.from(credential.registrationChallengeHash);
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return false;
+    const authorization = cacheAuthorizationFromRuntimeToken(input.runtimeToken);
+    if (!authorization) return false;
+    credential.registrationChallengeHash = "";
+    credential.runtimeTokenHash = createHash("sha256").update(input.runtimeToken).digest("hex");
+    credential.authorization = authorization;
+    credential.runnerJobId = input.runnerJobId;
+    credential.repository = input.repository;
+    return true;
+  }
+
+  authorizeRuntime(credential: LeaseProxyCredential | undefined, request: Request): CacheAuthorization | null {
+    if (!credential || this.#byLease.get(credential.leaseId) !== credential || credential.expiresAt <= this.#now().getTime() || !credential.runtimeTokenHash || !credential.authorization) return null;
+    const match = /^Bearer ([A-Za-z0-9._~-]+)$/.exec(request.headers.get("authorization") ?? "");
+    if (!match) return null;
+    const actual = Buffer.from(createHash("sha256").update(match[1]!).digest("hex"));
+    const expected = Buffer.from(credential.runtimeTokenHash);
+    return actual.length === expected.length && timingSafeEqual(actual, expected) ? credential.authorization : null;
   }
 
   clear(): void {
@@ -454,7 +544,7 @@ class PersistentActionCacheService implements ActionCacheService {
         replacement.on("error", (listenerError: Error) => this.#listenerFailed(listenerError));
         this.#dataServer = replacement;
         if (this.#closed) { await closeServer(replacement); return; }
-        await probeDataEndpoint(this.#cacheBaseUrl, this.#caCertificatePem);
+        await probeDataEndpoint(this.#cacheBaseUrl, certificate.certificatePem);
         if (this.#closed) return;
         this.#ready = true;
         this.#error = null;
@@ -507,6 +597,7 @@ class PersistentActionCacheService implements ActionCacheService {
 
   setRunnerCacheEnabled(enabled: boolean): void {
     if (this.#closed) throw new Error("action cache service is closed");
+    this.#store.saveRunnerCachePolicy({ enabled, maxGiB: this.#runnerCacheMaxGiB });
     this.#packageDownloadCache.setEnabled(enabled);
     this.#runnerCacheEnabled = enabled;
     this.#emitRunnerCacheStatus();
@@ -514,6 +605,8 @@ class PersistentActionCacheService implements ActionCacheService {
 
   setRunnerCacheMaxGiB(maxGiB: number): void {
     if (this.#closed) throw new Error("action cache service is closed");
+    runnerCacheMaxBytes(maxGiB);
+    this.#store.saveRunnerCachePolicy({ enabled: this.#runnerCacheEnabled, maxGiB });
     this.#packageDownloadCache.setMaxBytes(runnerCacheMaxBytes(maxGiB));
     this.#runnerCacheMaxGiB = maxGiB;
     this.#emitRunnerCacheStatus();
@@ -523,7 +616,6 @@ class PersistentActionCacheService implements ActionCacheService {
     if (this.#closed) throw new Error("action cache service is closed");
     await this.#packageDownloadCache.purge();
   }
-
   transport(leaseId: string, expiresAt: string): WorkerCacheProxy {
     if (this.#closed || !this.#ready) throw new Error("action cache service is not ready");
     const expiry = Date.parse(expiresAt);
@@ -532,7 +624,8 @@ class PersistentActionCacheService implements ActionCacheService {
     const proxyUrl = new URL(this.#proxyOrigin);
     proxyUrl.username = credential.username;
     proxyUrl.password = credential.token;
-    return WorkerCacheProxySchema.parse({ proxyUrl: proxyUrl.toString(), cacheBaseUrl: this.#cacheBaseUrl, caCertificatePem: this.#caCertificatePem, expiresAt });
+    const registrationUrl = new URL("/_mars/register", this.#cacheBaseUrl).toString();
+    return WorkerCacheProxySchema.parse({ proxyUrl: proxyUrl.toString(), cacheBaseUrl: this.#cacheBaseUrl, caCertificatePem: this.#caCertificatePem, expiresAt, registrationUrl, registrationChallenge: credential.registrationChallenge });
   }
 
   unregisterLease(leaseId: string): void {
@@ -574,27 +667,30 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
   const dataPort = explicitPort(options.dataPort, network.dataPort, "cache data port");
   const now = options.now ?? (() => new Date());
   const leaseCredentials = new LeaseProxyCredentials(now);
-  const authorizeCacheRequest = options.authorizeCacheRequest ?? createGitHubCacheTokenVerifier({
-    issuer: env.MARS_CACHE_TOKEN_ISSUER,
-    jwksUrl: env.MARS_CACHE_JWKS_URL,
-  });
   const forwardResults = options.forwardResultsRequest ?? forwardResultsRequest;
   let store: ActionCacheStore | null = null;
   let packageDownloadCache: PackageDownloadCache | null = null;
   let proxyServer: HttpServer | null = null;
   let dataServer: HttpsServer | null = null;
   let sweepHandle: SweepHandle | null = null;
+  const principalByRequest = new WeakMap<Request, LeaseProxyCredential>();
+  const principalByTunnelPort = new Map<number, LeaseProxyCredential>();
   try {
     store = await openActionCacheStore({ root: options.root, ttlSeconds: options.ttlSeconds, env, platform: options.platform, now });
     await store.probe();
+    const runnerCachePolicy = store.runnerCachePolicy() ?? {
+      enabled: options.runnerCacheEnabled ?? true,
+      maxGiB: options.runnerCacheMaxGiB ?? 20,
+    };
+    store.saveRunnerCachePolicy(runnerCachePolicy);
     packageDownloadCache = await openPackageDownloadCache({
       root: store.root,
-      ttlSeconds: options.ttlSeconds,
+      ttlSeconds: store.ttlSeconds,
       now,
       upstream: options.forwardPackageRequest,
     });
-    packageDownloadCache.setEnabled(options.runnerCacheEnabled ?? true);
-    packageDownloadCache.setMaxBytes(runnerCacheMaxBytes(options.runnerCacheMaxGiB ?? 20));
+    packageDownloadCache.setEnabled(runnerCachePolicy.enabled);
+    packageDownloadCache.setMaxBytes(runnerCacheMaxBytes(runnerCachePolicy.maxGiB));
     await packageDownloadCache.probe();
     sweepHandle = (options.scheduleSweep ?? scheduleSweep)(async () => {
       try {
@@ -611,6 +707,8 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
     await certificateAuthority.issueLeaf("results-receiver.actions.githubusercontent.com", now());
     const dataCertificate = await certificateAuthority.issueLeaf(advertiseHost, now(), INTERCEPTED_TLS_HOSTS);
     let handleCacheRequest: NodeActionCacheHandler | null = null;
+    let cacheBaseUrl = "";
+    const authorizeCacheRequest = options.authorizeCacheRequest ?? (async (request: Request) => leaseCredentials.authorizeRuntime(principalByRequest.get(request), request));
     const createDataServer = (certificate: IssuedLeafCertificate): HttpsServer => createHttpsServer({ key: certificate.privateKeyPem, cert: certificate.certificatePem }, (request, response) => {
       if (request.method === "GET" && request.url === "/healthz") {
         response.writeHead(200, { "content-type": "text/plain", "cache-control": "no-store" });
@@ -623,8 +721,34 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
         return;
       }
       const path = (() => { try { return new URL(request.url ?? "/", "https://cache.invalid").pathname; } catch { return "/"; } })();
+      if (path === "/_mars/register") {
+        const credential = request.socket.remotePort === undefined ? undefined : principalByTunnelPort.get(request.socket.remotePort);
+        if (request.method !== "POST") {
+          response.writeHead(405, { "content-type": "application/json", "cache-control": "no-store" });
+          response.end(JSON.stringify({ error: "method_not_allowed" }));
+          return;
+        }
+        if (!credential || normalizedHostnameFromHeader(request.headers.host) !== advertiseHost.toLowerCase()) {
+          response.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
+          response.end(JSON.stringify({ error: "registration_not_authorized" }));
+          return;
+        }
+        void readCacheRegistration(request).then((input) => {
+          if (!leaseCredentials.registerRuntime(credential, input)) {
+            response.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
+            response.end(JSON.stringify({ error: "registration_not_authorized" }));
+            return;
+          }
+          response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+          response.end(JSON.stringify({ cacheBaseUrl, protocolVersion: "v2" }));
+        }).catch((error) => {
+          response.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+          response.end(JSON.stringify({ error: error instanceof Error ? error.message : "registration request is invalid" }));
+        });
+        return;
+      }
       const hostname = normalizedHostnameFromHeader(request.headers.host);
-      const handler = PACKAGE_CACHE_HOST === hostname || PLAYWRIGHT_CACHE_HOSTS.includes(hostname as (typeof PLAYWRIGHT_CACHE_HOSTS)[number])
+      const handler = PUBLIC_DOWNLOAD_HOSTS.includes(hostname as (typeof PUBLIC_DOWNLOAD_HOSTS)[number])
         ? packageDownloadCache!.handle.bind(packageDownloadCache)
         : hostname === advertiseHost.toLowerCase() || shouldHandleCacheLocally(hostname, path)
           ? handleCacheRequest
@@ -649,7 +773,8 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
     const proxy = proxyServer;
     let localDataPort = 0;
     proxy.on("connect", (request, socket, head) => {
-      if (!leaseCredentials.authorize(request.headers["proxy-authorization"])) {
+      const credential = leaseCredentials.authorize(request.headers["proxy-authorization"]);
+      if (!credential) {
         socket.end("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"Mars Worker Cache\"\r\nConnection: close\r\n\r\n");
         return;
       }
@@ -657,9 +782,14 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
       try { target = new URL(`http://${request.url ?? ""}`); } catch { socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"); return; }
       const targetHost = normalizedHostname(target).toLowerCase();
       const targetPort = target.port ? Number(target.port) : 443;
-      const intercept = INTERCEPTED_TLS_HOSTS.includes(targetHost) || targetHost === advertiseHost.toLowerCase();
+      const intercept = INTERCEPTED_TLS_HOSTS.includes(targetHost as (typeof INTERCEPTED_TLS_HOSTS)[number]) || targetHost === advertiseHost.toLowerCase();
       const upstream = netConnect({ host: intercept ? "127.0.0.1" : targetHost, port: intercept ? localDataPort : targetPort });
       upstream.once("connect", () => {
+        const tunnelPort = upstream.localPort;
+        if (intercept && tunnelPort !== undefined) {
+          principalByTunnelPort.set(tunnelPort, credential);
+          upstream.once("close", () => principalByTunnelPort.delete(tunnelPort));
+        }
         socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         if (head.length) upstream.write(head);
         socket.pipe(upstream);
@@ -673,16 +803,19 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
     const [boundProxyPort, boundDataPort] = await Promise.all([listen(proxyServer, proxyPort), listen(dataServer, dataPort)]);
     localDataPort = boundDataPort;
     const proxyOrigin = network.overrideOrigins?.proxyOrigin ?? originFor("http:", advertiseHost, boundProxyPort);
-    const cacheBaseUrl = network.overrideOrigins?.cacheBaseUrl ?? originFor("https:", advertiseHost, boundDataPort);
+    cacheBaseUrl = network.overrideOrigins?.cacheBaseUrl ?? originFor("https:", advertiseHost, boundDataPort);
     const grants = new CacheGrantSigner(cacheBaseUrl, now);
     handleCacheRequest = createNodeActionCacheHandler(createActionCacheRoutes({
       cacheBaseUrl,
       store,
       authorize: authorizeCacheRequest,
       signedUrl: (entryId, operation) => grants.signedUrl(entryId, operation),
-      verifyGrant: (request, entryId, operation) => grants.verify(request, entryId, operation),
-    }));
-    await probeDataEndpoint(cacheBaseUrl, certificateAuthority.certificatePem);
+      verifyGrant: (request, entryId, operation) => principalByRequest.has(request) && grants.verify(request, entryId, operation),
+    }), (incoming, request) => {
+      const credential = incoming.socket.remotePort === undefined ? undefined : principalByTunnelPort.get(incoming.socket.remotePort);
+      if (credential) principalByRequest.set(request, credential);
+    });
+    await probeDataEndpoint(cacheBaseUrl, dataCertificate.certificatePem);
     return new PersistentActionCacheService({
       store,
       packageDownloadCache,
@@ -701,8 +834,8 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
       cacheBaseUrl,
       leaseCredentials,
       sweepHandle,
-      runnerCacheEnabled: options.runnerCacheEnabled ?? true,
-      runnerCacheMaxGiB: options.runnerCacheMaxGiB ?? 20,
+      runnerCacheEnabled: runnerCachePolicy.enabled,
+      runnerCacheMaxGiB: runnerCachePolicy.maxGiB,
     });
   } catch (error) {
     sweepHandle?.cancel();

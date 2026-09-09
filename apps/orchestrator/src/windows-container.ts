@@ -73,10 +73,10 @@ async function waitForDockerEngine(docker: DockerRunner): Promise<string> {
 async function validateLocalManifest(config: WindowsContainerConfig, docker: DockerRunner): Promise<void> {
   if (!config.requireLocalImageManifest) return;
   if (!config.imageManifestPath) throw new Error("local Windows image manifest path is required");
-  let manifest: { schemaVersion?: number; image?: string; imageId?: string; runtimeProbe?: { mediaFoundation?: boolean; dns?: boolean; tcp443?: boolean } };
+  let manifest: { schemaVersion?: number; image?: string; imageId?: string; runtimeProbe?: { mediaFoundation?: boolean; runnerCacheRegistration?: boolean; dns?: boolean; tcp443?: boolean } };
   try { manifest = JSON.parse(await Bun.file(config.imageManifestPath).text()); } catch { throw new Error("local Windows image manifest is unavailable"); }
   if (manifest.schemaVersion !== 1 || manifest.image !== config.image || !manifest.imageId) throw new Error("local Windows image manifest is invalid");
-  if (!manifest.runtimeProbe?.mediaFoundation || !manifest.runtimeProbe.dns || !manifest.runtimeProbe.tcp443) throw new Error("local Windows image runtime probe is not verified");
+  if (!manifest.runtimeProbe?.mediaFoundation || !manifest.runtimeProbe.runnerCacheRegistration || !manifest.runtimeProbe.dns || !manifest.runtimeProbe.tcp443) throw new Error("local Windows image runtime probe is not verified");
   const imageId = checked(await docker(["image", "inspect", "--format", "{{.Id}}", config.image]), "image inspect");
   if (imageId !== manifest.imageId) throw new Error("local Windows image manifest image ID mismatch");
   const imageInspection = JSON.parse(checked(await docker(["image", "inspect", "--format", "{{json .}}", config.image]), "image inspect")) as { Config?: { Entrypoint?: unknown } };

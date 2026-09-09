@@ -9,6 +9,14 @@ foreach ($name in $dependencies) {
     throw "Missing Playwright Windows dependency: $name"
   }
 }
+$capabilityPath = 'C:\actions-runner\.mars-capabilities.json'
+if (-not (Test-Path -LiteralPath $capabilityPath -PathType Leaf)) {
+  throw 'Actions Runner capability manifest is missing.'
+}
+$runnerCapabilities = Get-Content -LiteralPath $capabilityPath -Raw | ConvertFrom-Json
+if (@($runnerCapabilities.capabilities) -notcontains 'mars-worker-cache-registration-v1') {
+  throw 'Actions Runner does not support Mars worker cache registration.'
+}
 $dns = $null
 $tcp443 = $null
 $client = $null
@@ -33,4 +41,4 @@ try {
 } finally {
   if ($null -ne $client) { $client.Dispose() }
 }
-[pscustomobject]@{ mediaFoundation = $true; dns = $dns; tcp443 = $tcp443 } | ConvertTo-Json -Compress
+[pscustomobject]@{ mediaFoundation = $true; runnerCacheRegistration = $true; dns = $dns; tcp443 = $tcp443 } | ConvertTo-Json -Compress

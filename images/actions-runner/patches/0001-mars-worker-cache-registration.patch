@@ -1,0 +1,114 @@
+diff --git a/src/Runner.Worker/Handlers/ContainerActionHandler.cs b/src/Runner.Worker/Handlers/ContainerActionHandler.cs
+index 099495c..69a4410 100644
+--- a/src/Runner.Worker/Handlers/ContainerActionHandler.cs
++++ b/src/Runner.Worker/Handlers/ContainerActionHandler.cs
+@@ -238,6 +238,11 @@ namespace GitHub.Runner.Worker.Handlers
+             {
+                 Environment["ACTIONS_RESULTS_URL"] = resultsUrl;
+             }
++            if (systemConnection.Data.TryGetValue("MarsCacheServiceV2", out var marsCacheServiceV2) &&
++                StringUtil.ConvertToBoolean(marsCacheServiceV2))
++            {
++                Environment["ACTIONS_CACHE_SERVICE_V2"] = bool.TrueString;
++            }
+ 
+             if (ExecutionContext.Global.Variables.TryGetValue("actions_cache_mode", out var cacheMode) && !string.IsNullOrEmpty(cacheMode))
+             {
+diff --git a/src/Runner.Worker/Handlers/NodeScriptActionHandler.cs b/src/Runner.Worker/Handlers/NodeScriptActionHandler.cs
+index 85ff327..d15577b 100644
+--- a/src/Runner.Worker/Handlers/NodeScriptActionHandler.cs
++++ b/src/Runner.Worker/Handlers/NodeScriptActionHandler.cs
+@@ -73,7 +73,9 @@ namespace GitHub.Runner.Worker.Handlers
+                 Environment["ACTIONS_RESULTS_URL"] = resultsUrl;
+             }
+ 
+-            if (ExecutionContext.Global.Variables.GetBoolean("actions_uses_cache_service_v2") ?? false)
++            if ((systemConnection.Data.TryGetValue("MarsCacheServiceV2", out var marsCacheServiceV2) &&
++                 StringUtil.ConvertToBoolean(marsCacheServiceV2)) ||
++                (ExecutionContext.Global.Variables.GetBoolean("actions_uses_cache_service_v2") ?? false))
+             {
+                 Environment["ACTIONS_CACHE_SERVICE_V2"] = bool.TrueString;
+             }
+diff --git a/src/Runner.Worker/JobExtension.cs b/src/Runner.Worker/JobExtension.cs
+index 0aeb981..10a9c87 100644
+--- a/src/Runner.Worker/JobExtension.cs
++++ b/src/Runner.Worker/JobExtension.cs
+@@ -7,6 +7,7 @@
+ using System.Net;
+ using System.Net.Http;
+ using System.Runtime.Serialization;
++using System.Text;
+ using System.Threading;
+ using System.Threading.Tasks;
+ using GitHub.DistributedTask.ObjectTemplating.Tokens;
+@@ -183,6 +183,8 @@ namespace GitHub.Runner.Worker
+                     ArgUtil.NotNull(repoFullName, nameof(repoFullName));
+                     context.Debug($"Primary repository: {repoFullName}");
+ 
++                    await RegisterMarsCacheAsync(context, message);
++
+                     // Print proxy setting information for better diagnostic experience
+                     if (!string.IsNullOrEmpty(HostContext.WebProxy.HttpProxyAddress))
+                     {
+@@ -1280,6 +1282,61 @@ namespace GitHub.Runner.Worker
+             }
+         }
+ 
++        private static async Task RegisterMarsCacheAsync(IExecutionContext context, Pipelines.AgentJobRequestMessage message)
++        {
++            var registrationUrl = Environment.GetEnvironmentVariable("MARS_WORKER_CACHE_REGISTRATION_URL");
++            var registrationChallenge = Environment.GetEnvironmentVariable("MARS_WORKER_CACHE_REGISTRATION_CHALLENGE");
++            if (string.IsNullOrEmpty(registrationUrl) && string.IsNullOrEmpty(registrationChallenge))
++            {
++                return;
++            }
++            if (!Uri.TryCreate(registrationUrl, UriKind.Absolute, out var endpoint) ||
++                endpoint.Scheme != Uri.UriSchemeHttps ||
++                string.IsNullOrEmpty(registrationChallenge))
++            {
++                throw new InvalidOperationException("Mars worker cache registration configuration is invalid.");
++            }
++
++            var systemConnection = message.Resources.Endpoints.Single(x => string.Equals(x.Name, WellKnownServiceEndpointNames.SystemVssConnection, StringComparison.OrdinalIgnoreCase));
++            if (systemConnection.Authorization == null ||
++                !systemConnection.Authorization.Parameters.TryGetValue(EndpointAuthorizationParameters.AccessToken, out var runtimeToken) ||
++                string.IsNullOrEmpty(runtimeToken))
++            {
++                throw new InvalidOperationException("GitHub Actions runtime token is unavailable for Mars worker cache registration.");
++            }
++
++            var payload = JsonConvert.SerializeObject(new
++            {
++                challenge = registrationChallenge,
++                runtimeToken,
++                jobId = message.JobId.ToString(),
++                repository = context.GetGitHubContext("repository"),
++            });
++            using var client = new HttpClient();
++            using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
++            {
++                Content = new StringContent(payload, Encoding.UTF8, "application/json"),
++            };
++            using var response = await client.SendAsync(request, context.CancellationToken);
++            response.EnsureSuccessStatusCode();
++            var responseBody = await response.Content.ReadAsStringAsync();
++            var registration = JsonConvert.DeserializeObject<Dictionary<string, string>>(responseBody);
++            if (registration == null ||
++                !registration.TryGetValue("cacheBaseUrl", out var cacheBaseUrl) ||
++                !Uri.TryCreate(cacheBaseUrl, UriKind.Absolute, out var cacheEndpoint) ||
++                cacheEndpoint.Scheme != Uri.UriSchemeHttps ||
++                cacheEndpoint.UserInfo.Length != 0 ||
++                cacheEndpoint.PathAndQuery != "/")
++            {
++                throw new InvalidOperationException("Mars worker cache registration returned an invalid cache endpoint.");
++            }
++
++            systemConnection.Data["CacheServerUrl"] = cacheEndpoint.AbsoluteUri;
++            systemConnection.Data["ResultsServiceUrl"] = cacheEndpoint.AbsoluteUri;
++            systemConnection.Data["MarsCacheServiceV2"] = bool.TrueString;
++            context.Output("Mars worker cache registration: ready");
++        }
++
+         private class CheckResult
+         {
+             public CheckResult()

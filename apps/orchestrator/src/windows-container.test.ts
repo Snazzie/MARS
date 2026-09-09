@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { WindowsContainerDriver, parseWindowsHostDnsServers, type DockerRunner, type PowerShellRunner } from "./windows-container.ts";
 import type { WorkerCacheProxy } from "@mars/contracts";
 
-const workerCache: WorkerCacheProxy = { proxyUrl: "http://127.0.0.1:39123", cacheBaseUrl: "https://127.0.0.1:39443", caCertificatePem: "worker-ca", expiresAt: new Date(Date.now() + 60_000).toISOString() };
+const workerCache: WorkerCacheProxy = { proxyUrl: "http://127.0.0.1:39123", cacheBaseUrl: "https://127.0.0.1:39443", caCertificatePem: "worker-ca", expiresAt: new Date(Date.now() + 60_000).toISOString(), registrationUrl: "https://127.0.0.1:39443/_mars/register", registrationChallenge: "c".repeat(32) };
 const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -14,7 +14,7 @@ test("rejects a local image without a verified matching manifest", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-windows-manifest-"));
   roots.push(root);
   const manifestPath = join(root, "windows-job-image.json");
-  await Bun.write(manifestPath, JSON.stringify({ schemaVersion: 1, image: "mars/windows-job:local", imageId: "sha256:old", runtimeProbe: { mediaFoundation: true, dns: true, tcp443: true } }));
+  await Bun.write(manifestPath, JSON.stringify({ schemaVersion: 1, image: "mars/windows-job:local", imageId: "sha256:old", runtimeProbe: { mediaFoundation: true, runnerCacheRegistration: true, dns: true, tcp443: true } }));
   const docker: DockerRunner = async (args) => {
     if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
     if (args[0] === "image" && args[1] === "inspect" && args.includes("{{.Id}}")) return { code: 0, stdout: "sha256:new\n", stderr: "" };

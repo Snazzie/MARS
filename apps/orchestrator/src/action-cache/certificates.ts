@@ -65,6 +65,7 @@ function certificateAuthorityFromPem(certificatePem: string, privateKeyPem: stri
         { name: "subjectAltName", altNames: alternativeNames },
       ]);
       certificate.sign(caPrivateKey, forge.md.sha256.create());
+      if (!caCertificate.verify(certificate)) throw new Error("worker cache leaf certificate signature verification failed");
       return { certificatePem: forge.pki.certificateToPem(certificate), privateKeyPem: forge.pki.privateKeyToPem(keyPair.privateKey), expiresAt };
     },
   };
