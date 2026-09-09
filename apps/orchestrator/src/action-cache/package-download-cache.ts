@@ -7,9 +7,10 @@ import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:
 import { join } from "node:path";
 import { secureWorkerPrivatePath } from "./store.ts";
 
-const PACKAGE_HOST = "registry.npmjs.org";
-const PLAYWRIGHT_HOSTS = new Set(["cdn.playwright.dev", "playwright.download.prss.microsoft.com"]);
-const CACHEABLE_HOSTS = new Set([PACKAGE_HOST, ...PLAYWRIGHT_HOSTS]);
+export const PUBLIC_DOWNLOAD_HOSTS = ["registry.npmjs.org", "cdn.playwright.dev", "playwright.download.prss.microsoft.com", "github.com", "nodejs.org"] as const;
+const PACKAGE_HOST = PUBLIC_DOWNLOAD_HOSTS[0];
+const PLAYWRIGHT_HOSTS = new Set(PUBLIC_DOWNLOAD_HOSTS.slice(1, 3));
+const CACHEABLE_HOSTS = new Set(PUBLIC_DOWNLOAD_HOSTS);
 const SCHEMA_VERSION = 1;
 const FILL_MAX_AGE_MS = 60 * 60 * 1_000;
 const CACHE_HEADERS = ["content-type", "content-length", "content-encoding", "etag", "last-modified", "cache-control"] as const;
@@ -77,22 +78,29 @@ function hostFor(request: IncomingMessage): string {
     return "";
   }
 }
-
 function canonicalUrlFor(request: IncomingMessage): string | null {
   if (request.method?.toUpperCase() !== "GET") return null;
   const host = hostFor(request);
-  if (!CACHEABLE_HOSTS.has(host)) return null;
+  if (!CACHEABLE_HOSTS.has(host as typeof PUBLIC_DOWNLOAD_HOSTS[number])) return null;
   const rawUrl = request.url ?? "";
-  if (rawUrl.includes("?") || rawUrl.includes("#")) return null;
+  if (rawUrl.includes("?") || rawUrl.includes("#") || rawUrl.includes("\\") || /%2f|%5c|%2e/i.test(rawUrl)) return null;
   let url: URL;
   try { url = new URL(rawUrl, `https://${host}`); } catch { return null; }
   if (url.hostname.toLowerCase() !== host || (url.port && url.port !== "443") || url.username || url.password || url.search || url.hash) return null;
   const pathname = url.pathname;
-  const validPath = host === PACKAGE_HOST
-    ? /^\/(?:@[^/]+\/)?[^/]+\/-\/[^/]+\.tgz$/.test(pathname)
-    : /^\/(?:builds|dbazure\/download\/playwright\/builds)\/.+\.zip$/.test(pathname);
+  if (rawUrl.includes("/../") || rawUrl.includes("/./")) return null;
+  const npmMatch = /^\/(?:@[^/]+\/)?([^/]+)\/-\/([^/]+)-([0-9]+\.[0-9]+\.[0-9]+)\.tgz$/.exec(pathname);
+  const npm = npmMatch !== null && npmMatch[1] === npmMatch[2];
+  const bun = /^\/oven-sh\/bun\/releases\/download\/bun-v([0-9]+\.[0-9]+\.[0-9]+)\/bun-windows-(?:x64|x64-baseline|x64-profile|x64-baseline-profile|aarch64|aarch64-profile)\.zip$/.test(pathname);
+  const node = /^\/actions\/node-versions\/releases\/download\/([0-9]+\.[0-9]+\.[0-9]+)-[^/]+\/node-[0-9]+\.[0-9]+\.[0-9]+-win32-(?:x64|x86|arm64)\.7z$/.test(pathname)
+    || /^\/dist\/v([0-9]+\.[0-9]+\.[0-9]+)\/node-v[0-9]+\.[0-9]+\.[0-9]+-win-(?:x64|x86|arm64)\.(?:7z|zip)$/.test(pathname)
+    || /^\/dist\/v[0-9]+\.[0-9]+\.[0-9]+\/win-(?:x64|x86|arm64)\/node\.(?:exe|lib)$/.test(pathname);
+  const playwright = /^\/(?:builds|dbazure\/download\/playwright\/builds)\/.+\.(?:zip|tar\.gz)$/.test(pathname);
+  const validPath = host === PACKAGE_HOST ? npm : host === "github.com" ? (bun || node) : host === "nodejs.org" ? node : playwright;
   if (!validPath) return null;
-  if (["authorization", "cookie", "range"].some((name) => request.headers[name] !== undefined)) return null;
+  if (["authorization", "cookie", "range", "if-none-match", "if-modified-since"].some((name) => request.headers[name] !== undefined)) return null;
+  const cacheControl = request.headers["cache-control"];
+  if (typeof cacheControl === "string" && /(?:^|,)\s*no-(?:cache|store)\s*(?:,|$)/i.test(cacheControl)) return null;
   return `https://${host}${pathname}`;
 }
 
@@ -192,9 +200,16 @@ function replay(response: ServerResponse, captured: CapturedResponse, extraHeade
 function requestPath(request: IncomingMessage): string { return request.url || "/"; }
 
 function forwardHeaders(request: IncomingMessage, host: string): Record<string, string | string[]> {
+  const connectionTokens = new Set(
+    String(request.headers.connection ?? "")
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean),
+  );
   const result: Record<string, string | string[]> = {};
   for (const [name, value] of Object.entries(request.headers)) {
-    if (value === undefined || HOP_BY_HOP_HEADERS.has(name.toLowerCase()) || name.toLowerCase() === "host") continue;
+    const lowerName = name.toLowerCase();
+    if (value === undefined || HOP_BY_HOP_HEADERS.has(lowerName) || connectionTokens.has(lowerName) || lowerName === "host" || lowerName === "proxy-authorization") continue;
     result[name] = Array.isArray(value) ? [...value] : value;
   }
   result.host = host;
@@ -203,7 +218,7 @@ function forwardHeaders(request: IncomingMessage, host: string): Record<string, 
 
 export const forwardPublicNpmRequest: PackageUpstreamHandler = async (request, response) => {
   const host = hostFor(request);
-  if (!CACHEABLE_HOSTS.has(host)) {
+  if (!CACHEABLE_HOSTS.has(host as typeof PUBLIC_DOWNLOAD_HOSTS[number])) {
     response.writeHead(421, { "content-type": "text/plain", "cache-control": "no-store" });
     response.end("unsupported upstream host\n");
     return;
@@ -220,7 +235,8 @@ export const forwardPublicNpmRequest: PackageUpstreamHandler = async (request, r
       if (!response.headersSent) response.destroy(error);
       reject(error);
     });
-    upstream.end();
+    request.on("aborted", () => upstream.destroy(new Error("downstream request aborted")));
+    request.pipe(upstream);
   });
 };
 

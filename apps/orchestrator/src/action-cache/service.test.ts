@@ -343,6 +343,37 @@ test("intercepts metadata-free cache requests through authenticated CONNECT", as
   if (!body || typeof body !== "object" || !("signed_upload_url" in body) || typeof body.signed_upload_url !== "string") throw new Error("cache create response missing upload URL");
   expect(new URL(body.signed_upload_url).origin).toBe(service.status().cacheBaseUrl);
 });
+test("passes Git smart-HTTP POST bodies through the public-download proxy", async () => {
+  const bodies: Buffer[] = [];
+  const service = await startActionCacheService({
+    root: await root(),
+    controlPlaneOrigin: "https://control.example.test",
+    ttlSeconds: 3600,
+    proxyPort: 0,
+    dataPort: 0,
+    discoverAdvertiseHost: async () => "127.0.0.1",
+    forwardPackageRequest: async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      bodies.push(Buffer.concat(chunks));
+      response.writeHead(200, { "content-type": "application/x-git-upload-pack-result", "content-length": "4" });
+      response.end("pack");
+    },
+  });
+  services.push(service);
+  const transport = service.transport("11111111-1111-4111-8111-111111111111", leaseExpiry());
+  const requestBody = "0012want deadbeef0000";
+  const response = await requestThroughProxy(transport.proxyUrl, "github.com", transport.caCertificatePem, {
+    method: "POST",
+    path: "/Snazzie/MARS/git-upload-pack",
+    headers: { "content-type": "application/x-git-upload-pack-request" },
+    body: requestBody,
+  });
+
+  expect(response.status).toBe(200);
+  expect(response.body).toBe("pack");
+  expect(bodies).toEqual([Buffer.from(requestBody)]);
+});
 test("caches anonymous npm tarballs and bypasses metadata and authorized downloads", async () => {
   const packageBytes = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x53, 0x4f, 0x4d, 0x45, 0x00, 0x03, 0x53, 0x54, 0x55, 0x56, 0x00, 0xff]);
   const tarballPath = "/is-number/-/is-number-7.0.0.tgz";
