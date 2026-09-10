@@ -47,4 +47,5 @@ jobs:
           DATABASE_URL: postgres://mars:ci@db.example:5432/mars
           PUBLIC_BASE_URL: https://control.example.test
           GITHUB_WEBHOOK_URL: https://github.example.test
+          CLOUDFLARE_TUNNEL_TOKEN: ci-only-dummy-token
         run: docker compose -f deploy/control-plane/compose.yaml config -q
