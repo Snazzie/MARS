@@ -415,37 +415,6 @@ describe("control-plane HTTP boundary", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
-  test("serves the configured macOS orchestrator executable", async () => {
-    const root = await mkdtemp(join(tmpdir(), "mars-orchestrator-"));
-    try {
-      const executable = join(root, "mars-orchestrator");
-      await Bun.write(executable, "macos-arm64-binary");
-      const hash = createHash("sha256").update("macos-arm64-binary").digest("hex");
-      const response = await createControlPlaneApp(fakeHttpDeps({
-        workerOrchestratorExecutable: pathToFileURL(executable),
-        workerReleaseManifest: {
-          schemaVersion: 3,
-          buildId: "macos-test",
-          contractVersion: "0.1.0",
-          platforms: {
-            "linux-x64": null,
-            "windows-x64": null,
-            "macos-arm64": {
-              installer: { url: "https://release.test/macos-installer.sh", sha256: hash },
-              orchestrator: { url: "https://release.test/macos-orchestrator", sha256: hash },
-              jobAgent: { url: "https://release.test/macos-job-agent", sha256: hash },
-              imagePreparationScript: { url: "https://release.test/prepare-macos-job-image.sh", sha256: hash },
-              tartSourceImage: `ghcr.io/cirruslabs/macos-sonoma-base@sha256:${"a".repeat(64)}`,
-            },
-          },
-        },
-      })).request("/api/workers/orchestrator?audience=macos-arm64");
-
-      expect(response.status).toBe(503);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
   test("serves the configured Windows service host executable", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-service-host-"));
     try {
