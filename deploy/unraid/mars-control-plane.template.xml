@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>Mars Control Plane</Name>
-  <Repository>ghcr.io/snazzie/mars/control-plane:latest</Repository>
+  <Repository>__MARS_CONTROL_PLANE_IMAGE__</Repository>
   <Registry>https://ghcr.io/</Registry>
   <Network>bridge</Network>
   <WebUI>http://[IP]:[PORT:3000]/</WebUI>

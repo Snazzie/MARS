@@ -1,62 +1,35 @@
 # Mars Implementation Status
 
-The repository is a working baseline, not the full approved platform.
+MARS is an active development baseline, not a production-ready platform.
 
-## Highest priority: real job execution
+## Linux/amd64 control-plane hosting MVP
 
-- Implement GitHub `workflow_job` webhook dispatch and durable outbox.
-- Implement lease state machine, FIFO/round-robin scheduling, retries, and reconciliation.
-- Replace the in-memory Kata driver stub in `apps/orchestrator/src/kata-k3s.ts` with real K3s/Kata Pod, PVC/block-volume, attestation, claim handoff, and cleanup.
-- Expand `apps/job-agent` from claim hashing to real job-agent WebSocket/JIT exchange and runner lifecycle.
+Issue #9 defines this milestone as control-plane hosting only: one immutable Linux/amd64 OCI image, operator-managed PostgreSQL 17, durable `DATA_ROOT` and `app_master_key`, health/dashboard identity, GitHub App onboarding, signed webhooks, browser and authenticated worker WebSockets through HTTPS ingress, immutable worker-release binding, deployment/restart/upgrade/rollback/recovery proof, SBOM, and keyless provenance.
 
-## Linux appliance
+Repository implementation for the automated gates is present, but release evidence is **pending** until the exact SHA passes CI and a candidate passes the published-digest Compose, ingress, upgrade/recovery, anonymous-pull, SBOM, and attestation gates. The protected environment and real staging observations are external blockers, not represented as completed here.
 
-- Build/sign the Ubuntu 24.04 appliance image.
-- Install and configure K3s, containerd, Kata runtime-rs, QEMU, CNI, Bun agent, and doctor.
-- Complete signed libvirt import, NoCloud seed handling, firstboot join, secure cleanup, and removal.
+## Explicit limitations
 
-## GitHub integration
-
-- Implement GitHub App Manifest creation/install/approval/suspension.
-- Add organization/repository/membership persistence and authorization.
-- Add JIT runner registration and automated runner removal.
-- Add webhook transition handling, job logs, retention, and search.
-
-## Windows and macOS production paths
-
-- Windows: implement real Hyper-V worker enrollment, isolated job containers, VHDX lifecycle, and claim injection.
-- macOS: Tart enrollment/connectivity and the manually registered smoke runner work. A `TartVmDriver` now clones, sizes, starts, stops, and deletes one VM per lease, and the worker handles lifecycle commands. Remaining work is control-plane dispatch, PTY job-agent claim handoff, exact read-back attestation, cleanup reconciliation, and LaunchDaemon packaging.
-
-## Dashboard/API
-
-- Add setup wizard and installation flow.
-- Add pools, repositories, jobs, logs, images, settings, drain/remove/key rotation.
-- Add charts, lifecycle details, pagination, tenant isolation, browser WebSocket invalidation, and error/security states.
-
-
-## Verification/release
-
-- Add end-to-end PostgreSQL/GitHub/Kata/libvirt/Hyper-V/Tart fixtures.
-- Add crash/replay/reconciliation tests.
-- Add secret persistence scans and protocol compatibility tests.
-- Produce signed multi-architecture OCI images, appliance artifacts, SBOMs, provenance, and CI release gates.
+- GitHub Actions job execution, Linux runner lifecycle, and issue #6 remain open.
+- Linux/arm64 and multi-architecture control-plane images are unsupported.
+- High availability and multi-replica control planes are unsupported.
+- PostgreSQL is never bundled in the production image or control-plane Compose stack.
+- Worker binaries are never bundled in the control-plane image.
+- Operators must not override the image-owned worker manifest or contract version.
+- No platform-wide “production-ready runner platform” claim is made.
 
 ## Current evidence
 
-- `apps/orchestrator/src/kata-k3s.ts`: `createLease()` creates an in-memory UUID rather than a Pod.
-- `apps/job-agent/src/index.ts`: only accepts and hashes a claim.
-- `apps/control-plane/src/github.ts`: OAuth helpers exist; GitHub App lifecycle is not complete.
-- `apps/orchestrator/src/tart.ts`: real Tart command lifecycle is implemented behind an injectable runtime; current tests use a fake runtime and do not create a 20+ GiB VM.
+- `apps/orchestrator/src/kata-k3s.ts` still contains the in-memory job-execution boundary; issue #6 owns that work.
+- `apps/job-agent/src/index.ts` accepts and hashes a claim but does not execute jobs.
+- `apps/control-plane/src/github.ts` contains OAuth and GitHub App integration boundaries; real GitHub staging remains required.
+- `deploy/control-plane/compose.yaml` requires an immutable image input and external PostgreSQL 17.
+- `tests/control-plane-compose-smoke.sh` and `tests/control-plane-upgrade-recovery-smoke.sh` are release-run gates; they have not been observed against a published candidate in this repository-only change.
 
-## Control-plane hosting readiness
+## External release blockers
 
-- The PostgreSQL-only Linux/amd64 control-plane image and Compose contract require only `DATABASE_URL`; persistent setup data lives in PostgreSQL plus the named data volume.
-- The first-run gate persists the canonical public origin, generates durable encryption material in `DATA_ROOT`, and collects GitHub App credentials through onboarding.
-- CI validates the image artifact set and live/readiness endpoints; release metadata records the Linux/amd64 image digest, SBOM, and provenance.
-- This proves control-plane hosting and the first-run gate only. Worker execution, GitHub workflow dispatch, and end-to-end runtime gates remain incomplete and the platform is not production-ready.
+A protected `control-plane-staging` environment, public GHCR package, clean Linux/amd64 host, operator-managed PostgreSQL 17, real DNS/TLS ingress, disposable GitHub App/account/repository, GitHub delivery/WebSocket observations, coordinated backup/restore evidence, and final release publication are still pending. Do not mark the milestone shipped until those observations and release evidence are attached.
 
 ## Database ownership
 
-- Drizzle ORM owns the PostgreSQL runtime client, generated schema, relations, and checked-in migrations.
-- Existing query modules execute through the Drizzle-backed database client while preserving their SQL semantics and result contracts.
-- The custom `schema_migrations` runner has been removed; existing installations are adopted by seeding the Drizzle baseline metadata before applying newer migrations.
+Drizzle ORM owns the PostgreSQL runtime client, generated schema, relations, and checked-in migrations. Existing query modules execute through the Drizzle-backed database client while preserving their SQL semantics and result contracts.

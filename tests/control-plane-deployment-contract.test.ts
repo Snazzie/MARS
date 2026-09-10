@@ -4,6 +4,13 @@ import { dirname, join } from "node:path";
 
 const root = dirname(import.meta.dir);
 const read = (path: string) => readFile(join(root, path), "utf8");
+
+type ReleaseWorkflow = {
+  on?: { workflow_dispatch?: { inputs?: Record<string, { required?: boolean; type?: string; options?: string[] }> } };
+  jobs: Record<string, { if?: string; needs?: string[]; permissions?: Record<string, string>; outputs?: Record<string, string> }>;
+};
+
+const parseWorkflow = (source: string) => Bun.YAML.parse(source) as ReleaseWorkflow;
 const parseEnv = (contents: string) =>
   Object.fromEntries(
     contents
@@ -18,48 +25,43 @@ const parseEnv = (contents: string) =>
 const renderCompose = (contents: string, env: Record<string, string>) =>
   contents.replace(/\$\{([A-Z0-9_]+)(?::(?:-|\?)[^}]*)?\}/g, (_, name: string) => env[name] ?? "");
 
-test("Compose renders loopback service and tunnel profile with HTTPS fixture", async () => {
+test("Compose renders immutable loopback service and tunnel profile with HTTPS fixture", async () => {
   const fixture = parseEnv(await read("tests/fixtures/control-plane-deployment.env"));
-  expect(fixture).toMatchObject({
-    DATABASE_URL: "postgres://mars:test-password@db.example.test:5432/mars",
-    PUBLIC_BASE_URL: "https://control.example.test",
-    GITHUB_WEBHOOK_URL: "https://hooks.example.test",
-    WORKER_BASE_URL: "https://worker.example.test",
-    CLOUDFLARE_TUNNEL_TOKEN: "test-token",
+  expect(fixture.MARS_CONTROL_PLANE_IMAGE).toMatch(/^ghcr\.io\/snazzie\/mars\/control-plane@sha256:[0-9a-f]{64}$/);
+  const rendered = renderCompose(await read("deploy/control-plane/compose.yaml"), fixture);
+  const compose = Bun.YAML.parse(rendered) as { services: Record<string, { image?: string; read_only?: boolean; ports?: string[]; environment?: Record<string, string>; profiles?: string[] }> };
+  const control = compose.services["control-plane"];
+  expect(control.image).toBe(fixture.MARS_CONTROL_PLANE_IMAGE);
+  expect(control.read_only).toBe(true);
+  expect(control.ports).toContain("127.0.0.1:3000:3000");
+  expect(control.environment).toMatchObject({ PUBLIC_BASE_URL: fixture.PUBLIC_BASE_URL, GITHUB_WEBHOOK_URL: fixture.GITHUB_WEBHOOK_URL, WORKER_BASE_URL: fixture.WORKER_BASE_URL });
+  expect(compose.services.cloudflared.profiles).toContain("tunnel");
+});
+
+test("production Compose requires immutable image, external database, and origins", async () => {
+  const composeText = await read("deploy/control-plane/compose.yaml");
+  const compose = Bun.YAML.parse(composeText) as { services: Record<string, { image?: string; read_only?: boolean; tmpfs?: string[]; environment?: Record<string, string>; volumes?: string[] }> };
+  const control = compose.services["control-plane"];
+  expect(control.image).toBe("${MARS_CONTROL_PLANE_IMAGE:?set MARS_CONTROL_PLANE_IMAGE to a v<semver> tag or repository@sha256 digest}");
+  expect(control.read_only).toBe(true);
+  expect(control.tmpfs).toContain("/tmp:rw,noexec,nosuid,size=64m");
+  expect(control.environment).toMatchObject({
+    DATABASE_URL: "${DATABASE_URL:?set DATABASE_URL}",
+    DATA_ROOT: "/var/lib/mars",
+    PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}",
+    GITHUB_WEBHOOK_URL: "${GITHUB_WEBHOOK_URL:?set GITHUB_WEBHOOK_URL}",
+    WORKER_BASE_URL: "${WORKER_BASE_URL:-}",
   });
-
-  const compose = renderCompose(await read("deploy/control-plane/compose.yaml"), fixture);
-  expect(compose).toContain("PUBLIC_BASE_URL: https://control.example.test");
-  expect(compose).toContain("GITHUB_WEBHOOK_URL: https://hooks.example.test");
-  expect(compose).toContain("WORKER_BASE_URL: https://worker.example.test");
-  expect(compose).toContain('ports: ["127.0.0.1:3000:3000"]');
-  expect(compose).toContain("profiles: [tunnel]");
-  expect(compose).toContain("TUNNEL_TOKEN: test-token");
-  expect(compose).toContain("CLOUDFLARE_TUNNEL_TOKEN is required");
+  expect(control.volumes).toEqual(["mars-data:/var/lib/mars"]);
+  expect(compose.services).not.toHaveProperty("postgres");
+  expect(composeText).not.toContain("MARS_WORKER_RELEASE_MANIFEST_URL");
+  expect(composeText).not.toContain("MARS_WORKER_CONTRACT_VERSION");
 });
 
-test("production Compose requires external database and origins", async () => {
-  const compose = await read("deploy/control-plane/compose.yaml");
-  const rootCompose = await read("compose.yaml");
-  expect(compose).toContain("DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}");
-  expect(compose).toContain("DATA_ROOT: /var/lib/mars");
-  expect(compose).toContain("PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}");
-  expect(compose).toContain("GITHUB_WEBHOOK_URL: ${GITHUB_WEBHOOK_URL:?set GITHUB_WEBHOOK_URL}");
-  expect(compose).toContain("WORKER_BASE_URL: ${WORKER_BASE_URL:-}");
-  expect(compose).toContain("mars-data:/var/lib/mars");
-  expect(compose).toContain("127.0.0.1:3000:3000");
-  expect(compose).not.toContain("MARS_WORKER_RELEASE_MANIFEST_URL");
-  expect(compose).not.toContain("MARS_WORKER_CONTRACT_VERSION");
-  expect(compose).not.toContain("postgres:");
-  expect(compose).not.toContain("POSTGRES_PASSWORD");
-  expect(rootCompose).toContain("DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}");
-  expect(rootCompose).toContain("127.0.0.1:3000:3000");
-});
-
-test("Unraid template keeps operator inputs and external database boundary", async () => {
-  const template = await read("deploy/unraid/mars-control-plane.xml");
+test("Unraid source template requires release rendering", async () => {
+  const template = await read("deploy/unraid/mars-control-plane.template.xml");
   expect(template).toContain("<WebUI>http://[IP]:[PORT:3000]/</WebUI>");
-  expect(template).toContain("<Repository>ghcr.io/snazzie/mars/control-plane:latest</Repository>");
+  expect(template).toContain("<Repository>__MARS_CONTROL_PLANE_IMAGE__</Repository>");
   expect(template).toContain("<Network>bridge</Network>");
   expect(template).toContain("Linux/amd64");
   expect(template).toContain("external PostgreSQL 17");
@@ -67,7 +69,7 @@ test("Unraid template keeps operator inputs and external database boundary", asy
     expect(template).toContain(`Target=\"${target}\"`);
   expect(template).not.toContain("MARS_WORKER_RELEASE_MANIFEST_URL");
   expect(template).not.toContain("MARS_WORKER_CONTRACT_VERSION");
-  expect(template).not.toContain("/releases/latest/download");
+  expect(template).not.toContain(":latest");
   expect(template).toContain("public HTTPS");
   expect(template).toContain("app_master_key");
   expect(template).not.toContain("/run/secrets/app_master_key");
@@ -127,13 +129,15 @@ test("deployment guide documents image-owned worker contract and operations", as
     "Linux/amd64", "external PostgreSQL 17", "maintenance database `postgres`", "create the target database",
     "applies pending migrations", "publicly readable", "anonymously", "worker-v<worker-version>",
     "worker-release-manifest.json", "image owns", "127.0.0.1:3000", "LAN-published", "bridge mode",
-    "/api/livez", "/api/readyz", "/api/healthz", "healthcheck", "pin", "roll back", "app_master_key",
+    "/api/livez", "/api/readyz", "/api/healthz", "healthcheck", "roll back", "app_master_key",
     "pg_dump", "coordinated pair", "/onboarding", "WebSocket", "Cloudflare named tunnel",
     "CLOUDFLARE_TUNNEL_TOKEN", "/api/github/webhooks", "WORKER_BASE_URL", "/api/browser/invalidations",
     "/api/v1/workers/connect", "identity challenges", "Tailscale Serve", "Tailscale Funnel",
     "/api/auth/github/callback", "/api/github/app/setup", "online pending worker", "fingerprint",
     "/var/log/mars/install.log", "ProgramData", "Library/Application Support/Mars/install.log",
   ]) expect(readme).toContain(phrase);
+  expect(readme).toContain("repository@sha256:<digest>");
+  expect(readme).toContain("exact previous control-plane digest");
   expect(readme).toContain("docker compose --env-file .env -f deploy/control-plane/compose.yaml ps -q control-plane");
   expect(readme).toContain("<container-id-or-name>");
   expect(readme).not.toContain("docker logs mars-control-plane");
@@ -152,22 +156,32 @@ test("schema-3 release fixture keeps unavailable platforms explicit", async () =
   expect(manifest).not.toHaveProperty("windowsContainerBuild");
 });
 
-test("single release train separates app and worker versions and uses canonical images", async () => {
-  const workflow = await read(".github/workflows/release-mars.yml");
-  expect(workflow).toContain("name: Release Mars");
-  expect(workflow).toContain("workflow_dispatch:");
-  expect(workflow).toContain("app_version:");
-  expect(workflow).toContain("worker_version:");
-  expect(workflow).toContain("APP_IMAGE: ghcr.io/snazzie/mars/control-plane");
-  expect(workflow).toContain("BROKER_IMAGE: ghcr.io/snazzie/mars/linux-broker");
-  expect(workflow).toContain("--platform linux/amd64");
-  expect(workflow).toContain("worker-v$WORKER_VERSION");
-  expect(workflow).toContain("$APP_IMAGE:v$APP_VERSION");
-  expect(workflow).toContain("worker-release-manifest.json");
-  expect(workflow).toContain("schemaVersion:3");
-  expect(workflow).not.toContain("releases/latest/download");
-  expect(workflow).not.toContain("MARS_LINUX_BROKER_REPOSITORY");
-  expect(workflow).not.toMatch(/MARS_WINDOWS_(?:VHDX|VM_TEMPLATE)/);
+test("release workflow encodes build/reuse DAG and evidence gates", async () => {
+  const workflow = parseWorkflow(await read(".github/workflows/release-mars.yml"));
+  const inputs = workflow.on?.workflow_dispatch?.inputs ?? {};
+  expect(inputs.app_version).toMatchObject({ required: true, type: "string" });
+  expect(inputs.worker_release_mode).toMatchObject({ required: true, type: "choice", options: ["build", "reuse"] });
+  expect(inputs.worker_version).toMatchObject({ required: false, type: "string" });
+  expect(inputs.worker_manifest_url).toMatchObject({ required: false, type: "string" });
+  for (const job of ["linux", "windows", "macos", "worker-release"]) expect(workflow.jobs[job].if).toContain("worker_release_mode == 'build'");
+  expect(workflow.jobs["worker-release"].needs).toEqual(["validate-inputs", "linux", "windows", "macos"]);
+  expect(workflow.jobs["worker-binding"].needs).toEqual(["validate-inputs", "worker-release"]);
+  expect(workflow.jobs["control-plane"].needs).toEqual(["validate-inputs", "worker-binding"]);
+  expect(workflow.jobs["candidate-compose-smoke"].needs).toContain("control-plane");
+  expect(workflow.jobs["release-evidence"].permissions).toMatchObject({ "id-token": "write", attestations: "write" });
+  expect(workflow.jobs["staging"].needs).toEqual(["release-evidence"]);
+  expect(workflow.jobs.promote.needs).toContain("staging");
+  const source = await read(".github/workflows/release-mars.yml");
+  expect(source).toContain("verify-worker-release.ts");
+  expect(source).toContain("MARS_CONTROL_PLANE_IMAGE");
+  expect(source).toContain("actions/attest@v4");
+  expect(source).toContain("subject-name: ghcr.io/snazzie/mars/control-plane");
+  expect(source).toContain("subject-digest:");
+  expect(source).toContain("control-plane-sbom.spdx.json");
+  expect(source).toContain("provenance_attestation_url");
+  expect(source).toContain("sbom_attestation_url");
+  expect(source).not.toContain("MARS_WORKER_RELEASE_MANIFEST_URL:");
+  expect(source).not.toContain("MARS_WORKER_CONTRACT_VERSION:");
 });
 
 test("baked worker manifest examples use the exact canonical release path", async () => {
@@ -178,45 +192,26 @@ test("baked worker manifest examples use the exact canonical release path", asyn
   ]);
   const canonical = "https://github.com/Snazzie/MARS/releases/download/";
   expect(workflow).toContain(canonical);
-  expect(ci).toContain(`${canonical}worker-v0.1.1/worker-release-manifest.json`);
   expect(readme).toContain(`${canonical}worker-v<worker-version>/worker-release-manifest.json`);
   expect(ci).not.toContain("github.com/Snazzie/Mars/releases/download");
   expect(readme).not.toContain("github.com/Snazzie/Mars/releases/download");
 });
 
-test("release train observes immutable assets before ordered latest promotion", async () => {
-  const workflow = await read(".github/workflows/release-mars.yml");
-  const worker = workflow.indexOf("name: Validate and publish worker prerelease");
-  const observe = workflow.indexOf("Gate anonymous worker asset observability");
-  const image = workflow.indexOf("name: Build and smoke-test control-plane candidate");
-  const remoteSmoke = workflow.indexOf("Smoke test with baked remote worker manifest");
-  const candidateObserve = workflow.indexOf("Gate anonymous GHCR candidate manifests");
-  const promote = workflow.indexOf("name: Promote verified Mars release");
-  const brokerLatest = workflow.lastIndexOf('imagetools create --tag "$BROKER_IMAGE:latest"');
-  const appLatest = workflow.lastIndexOf('imagetools create --tag "$APP_IMAGE:latest"');
-  const finalWorker = workflow.lastIndexOf('gh release edit "worker-v$WORKER_VERSION"');
-  const appDraft = workflow.indexOf('gh release create "v$APP_VERSION"');
-  const appUpload = workflow.indexOf('gh release upload "v$APP_VERSION"');
-  const appFinalize = workflow.indexOf('gh release edit "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest=true');
-  expect(worker).toBeGreaterThanOrEqual(0);
-  expect(observe).toBeGreaterThan(worker);
-  expect(image).toBeGreaterThan(observe);
-  expect(remoteSmoke).toBeGreaterThan(image);
-  expect(candidateObserve).toBeGreaterThan(remoteSmoke);
-  expect(promote).toBeGreaterThan(candidateObserve);
-  expect(appDraft).toBeGreaterThan(promote);
-  expect(appUpload).toBeGreaterThan(appDraft);
-  expect(brokerLatest).toBeGreaterThan(appUpload);
-  expect(appLatest).toBeGreaterThan(brokerLatest);
-  expect(appFinalize).toBeGreaterThan(appLatest);
-  expect(finalWorker).toBeGreaterThan(appFinalize);
-  expect(workflow).toContain("trap rollback ERR");
-  expect(workflow).toContain("rollback_failed=1");
-  expect(workflow).toContain("rollback did not fully restore state");
-  expect(workflow).not.toContain("imagetools rm");
-  expect(workflow).toContain("tag does not exist; aborting before promotion");
-  expect(workflow).toContain("promoted_broker_digest");
-  expect(workflow).toContain("echo 'linux broker latest promotion changed digest'");
+test("release evidence and recovery scripts are immutable and secret-safe", async () => {
+  const [workflow, composeSmoke, recovery, fixture] = await Promise.all([
+    read(".github/workflows/release-mars.yml"),
+    read("tests/control-plane-compose-smoke.sh"),
+    read("tests/control-plane-upgrade-recovery-smoke.sh"),
+    read("tests/control-plane-recovery-fixture.ts"),
+  ]);
+  expect(workflow).toContain("tests/control-plane-compose-smoke.sh");
+  expect(workflow).toContain("control-plane-upgrade-recovery-smoke.sh");
+  expect(composeSmoke).toContain("docker pull --platform linux/amd64");
+  expect(composeSmoke).toContain("ReadonlyRootfs");
+  expect(recovery).toContain("pg_dump --format=custom");
+  expect(recovery).toContain("pre-upgrade-data.tar.gz");
+  expect(fixture).toContain("SecretBox");
+  expect(fixture).not.toContain("console.log(\"recovery-pem\")");
 });
 
 test("active runtime uses Mars identifiers and no packaged workers", async () => {

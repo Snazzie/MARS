@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  enumerateWorkerReleaseAssets,
   isWorkerContractCompatible,
   loadWorkerReleaseManifest,
   parseContractVersion,
@@ -26,7 +27,7 @@ const linuxRelease = {
 };
 
 const remoteManifest = (contractVersion = "0.1.0") => ({
-  schemaVersion: 3,
+  schemaVersion: 3 as const,
   buildId: "release-build",
   contractVersion,
   platforms: { "linux-x64": linuxRelease, "windows-x64": null, "macos-arm64": null },
@@ -57,6 +58,23 @@ test("loads a valid HTTPS remote manifest", async () => {
   });
   expect(manifest.buildId).toBe("release-build");
   expect(manifest.platforms["linux-x64"]).toEqual(linuxRelease);
+});
+test("enumerates every hashed asset with stable field paths", () => {
+  const assets = enumerateWorkerReleaseAssets({ ...remoteManifest(), platforms: { ...remoteManifest().platforms, "linux-x64": linuxRelease } });
+  expect(assets).toHaveLength(6);
+  expect(assets.map(asset => asset.field)).toEqual([
+    "linux-x64.installer",
+    "linux-x64.orchestrator",
+    "linux-x64.jobAgent",
+    "linux-x64.goldenImage",
+    "linux-x64.compose",
+    "linux-x64.domainTemplate",
+  ]);
+  expect(assets.every(asset => asset.sha256 === hash)).toBe(true);
+});
+test("rejects malformed hashed asset metadata", async () => {
+  const malformed = { ...remoteManifest(), platforms: { ...remoteManifest().platforms, "linux-x64": { ...linuxRelease, installer: { ...linuxRelease.installer, sha256: "not-a-hash" } } } };
+  await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, { fetch: async () => new Response(JSON.stringify(malformed)), controlPlaneVersion: "0.1.0" })).rejects.toThrow("schema");
 });
 
 test("rejects remote HTTP failures", async () => {
@@ -153,7 +171,7 @@ test("loads a usable Windows release from local development artifacts", async ()
 
     const manifestPath = join(root, "release-manifest.json");
     await Bun.write(manifestPath, JSON.stringify({
-      schemaVersion: 3,
+      schemaVersion: 3 as const,
       buildId: "development",
       contractVersion: "0.1.0",
       platforms: { "linux-x64": null, "windows-x64": null, "macos-arm64": null },

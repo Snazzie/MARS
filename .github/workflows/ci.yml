@@ -32,6 +32,8 @@ jobs:
         env:
           IMAGE: mars-control-plane:ci
         run: bash tests/control-plane-image-smoke.sh
+      - name: Smoke test proxied control-plane ingress
+        run: bun run test:control-plane-proxy
 
   compose:
     name: Validate production Compose
@@ -39,9 +41,10 @@ jobs:
     needs: validate
     steps:
       - uses: actions/checkout@v4
-      - name: Validate Compose interpolation
+      - name: Validate immutable production Compose interpolation
         env:
+          MARS_CONTROL_PLANE_IMAGE: ghcr.io/snazzie/mars/control-plane:v0.0.1
           DATABASE_URL: postgres://mars:ci@db.example:5432/mars
           PUBLIC_BASE_URL: https://control.example.test
-          GITHUB_WEBHOOK_URL: https://github.example.test/webhooks/mars
+          GITHUB_WEBHOOK_URL: https://github.example.test
         run: docker compose -f deploy/control-plane/compose.yaml config -q

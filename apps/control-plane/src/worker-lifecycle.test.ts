@@ -135,6 +135,7 @@ test("routes authenticated runner cache status telemetry to durable status colum
   db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join(" ");
     calls.push({ query, values });
+    if (query.includes("UPDATE worker_cache_status SET runner_cache_") && values.includes(generation)) return [{ worker_id: workerId }];
     return query.includes("SELECT generation FROM worker_cache_status") ? [{ generation }] : [];
   }, { begin: async (fn: (tx: DatabaseClient) => unknown) => fn(db) }) as unknown as DatabaseClient;
   const accepted = await handleAuthenticatedWorkerEvent(

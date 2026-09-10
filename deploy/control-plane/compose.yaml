@@ -2,8 +2,11 @@
 # Operators configure only the external database and public/worker origins.
 services:
   control-plane:
-    image: ghcr.io/snazzie/mars/control-plane:latest
+    image: ${MARS_CONTROL_PLANE_IMAGE:?set MARS_CONTROL_PLANE_IMAGE to a v<semver> tag or repository@sha256 digest}
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
     environment:
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
       DATA_ROOT: /var/lib/mars
@@ -17,8 +20,6 @@ services:
       retries: 6
       start_period: 60s
     volumes: [mars-data:/var/lib/mars]
-    # Keep local Compose loopback-only. The Unraid XML uses bridge mode and
-    # publishes host port 3000 to LAN clients.
     ports: ["127.0.0.1:3000:3000"]
 
   cloudflared:

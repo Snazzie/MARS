@@ -20,12 +20,13 @@ const status = { generation, ready: true, ttlSeconds: 172800, proxyOrigin: "http
 const runnerStatus = { generation, enabled: true, maxGiB: 20, sizeBytes: "9007199254740993", entryCount: 1, observedAt: "2026-08-23T12:01:00.000Z" };
 const event = (type: string, payload: Record<string, unknown>) => ({ version: 1, id: crypto.randomUUID(), workerId, type, occurredAt: new Date().toISOString(), payload });
 
-function fakeDb(rows: Record<string, unknown>[] = []) {
+function fakeDb(rows: Record<string, unknown>[] = [], runnerUpdateRows: Record<string, unknown>[] = [{ worker_id: workerId }]) {
   const calls: string[] = [];
   let completed = false;
   const db = Object.assign((async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
     calls.push(query);
+    if (query.includes("UPDATE worker_cache_status SET runner_cache_")) return runnerUpdateRows;
     if (query.includes("SELECT generation FROM worker_cache_status")) return [{ generation }];
     if (query.includes("active_snapshot_id AS")) return completed ? [{ activeSnapshotId: null, lastCompletedSnapshotId: generation }] : [{ activeSnapshotId: generation, lastCompletedSnapshotId: null }];
     if (query.includes("SET size_bytes=")) completed = true;
@@ -64,12 +65,18 @@ test("runner cache status updates only the matching generation", async () => {
   const update = calls.find((sql) => sql.includes("runner_cache_enabled"));
   expect(update).toContain("runner_cache_max_gib");
   expect(update).toContain("runner_cache_observed_at");
+  expect(update).toContain("RETURNING worker_id");
+});
+test("runner cache status rejects missing workers without touching Actions data", async () => {
+  const { db, calls } = fakeDb([], []);
+  expect(await applyWorkerCacheTelemetry(db, event("worker.runner_cache_status", runnerStatus))).toBe(false);
+  expect(calls.some((sql) => sql.includes("worker_cache_entries"))).toBe(false);
 });
 test("runner cache status rejects stale generations without touching Actions data", async () => {
-  const { db, calls } = fakeDb();
+  const { db, calls } = fakeDb([], []);
   const stale = { ...runnerStatus, generation: "44444444-4444-4444-8444-444444444444" };
   expect(await applyWorkerCacheTelemetry(db, event("worker.runner_cache_status", stale))).toBe(false);
-  expect(calls.some((sql) => sql.includes("UPDATE worker_cache_status SET runner_cache_"))).toBe(false);
+  expect(calls.some((sql) => sql.includes("UPDATE worker_cache_status SET runner_cache_"))).toBe(true);
   expect(calls.some((sql) => sql.includes("worker_cache_entries"))).toBe(false);
 });
 

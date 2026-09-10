@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { migrateDatabase } from "./migrate.ts";
-import type { RawDatabaseClient } from "./index.ts";
+import type { DatabaseClient } from "./index.ts";
+import type { TransactionSql } from "postgres";
 import { schemaSql } from "./schema.ts";
 
 const migrationsUrl = new URL("./migrations/", import.meta.url);
@@ -18,6 +19,12 @@ test("Mars baseline materializes the canonical schema SQL", async () => {
   expect(baseline).toContain(
     "CREATE INDEX IF NOT EXISTS webhook_deliveries_state_idx ON webhook_deliveries(state, received_at);",
   );
+  for (const column of [
+    "hit_count bigint NOT NULL DEFAULT 0 CHECK (hit_count >= 0)",
+    "miss_count bigint NOT NULL DEFAULT 0 CHECK (miss_count >= 0)",
+    "runner_cache_hit_count bigint NOT NULL DEFAULT 0 CHECK (runner_cache_hit_count >= 0)",
+    "runner_cache_miss_count bigint NOT NULL DEFAULT 0 CHECK (runner_cache_miss_count >= 0)",
+  ]) expect(baseline).toContain(column);
 });
 
 test("migration directory contains exactly one journaled baseline", async () => {
@@ -43,7 +50,7 @@ function fakeDatabase(input: {
   applicationSchema: boolean;
   migrationTable: boolean;
   journal: JournalRow[];
-}): RawDatabaseClient {
+}): DatabaseClient {
   const query = async <T extends readonly unknown[]>(
     strings: TemplateStringsArray,
     ..._values: readonly unknown[]
@@ -61,7 +68,7 @@ function fakeDatabase(input: {
     if (statement.includes("UPDATE drizzle.__drizzle_migrations")) return [] as unknown as T;
     throw new Error(`unexpected query: ${statement}`);
   };
-  return query as unknown as RawDatabaseClient;
+  return query as unknown as DatabaseClient;
 }
 
 async function baselineHash(): Promise<string> {
@@ -155,17 +162,38 @@ test("legacy journal is rejected without automatic baseline seeding", async () =
 
   expect(calls).toEqual([]);
 });
-test("previous final baseline receives runner cache upgrade in place", async () => {
+test("previous final baseline receives complete runner cache upgrade transactionally", async () => {
   const calls: string[] = [];
-  const db = Object.assign(
+  let db: DatabaseClient;
+  const begin = (async (callback: (tx: TransactionSql) => Promise<unknown>): Promise<unknown> => callback(db as unknown as TransactionSql)) as DatabaseClient["begin"];
+  db = Object.assign(
     fakeDatabase({
       applicationSchema: true,
       migrationTable: true,
       journal: [{ hash: "24d85c25cfb2279005f02535ec5af93b65bc8d5ce543bd9963c4bea2e9cd1174", created_at: 1_700_000_000_000 }],
     }),
-    { unsafe: async (sql: string) => calls.push(sql) },
-  );
+    { begin, unsafe: async (sql: string) => calls.push(sql) },
+  ) as unknown as DatabaseClient;
   await migrateDatabase(db, { runMigrations: async () => { calls.push("migrate"); } });
-  expect(calls[0]).toContain("runner_cache_enabled");
+  expect(calls[0]).toContain("hit_count");
+  expect(calls[0]).toContain("miss_count");
+  expect(calls[0]).toContain("runner_cache_hit_count");
+  expect(calls[0]).toContain("runner_cache_miss_count");
   expect(calls).toContain("migrate");
+});
+test("failed published baseline upgrade never stamps the migration journal", async () => {
+  const calls: string[] = [];
+  const base = fakeDatabase({
+    applicationSchema: true,
+    migrationTable: true,
+    journal: [{ hash: "24d85c25cfb2279005f02535ec5af93b65bc8d5ce543bd9963c4bea2e9cd1174", created_at: 1_700_000_000_000 }],
+  });
+  let db: DatabaseClient;
+  const begin = (async (callback: (tx: TransactionSql) => Promise<unknown>): Promise<unknown> => callback(db as unknown as TransactionSql)) as DatabaseClient["begin"];
+  db = Object.assign(base, {
+    begin,
+    unsafe: async () => { calls.push("ddl"); throw new Error("ddl failed"); },
+  }) as unknown as DatabaseClient;
+  await expect(migrateDatabase(db)).rejects.toThrow("ddl failed");
+  expect(calls).toEqual(["ddl"]);
 });

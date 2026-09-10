@@ -380,10 +380,14 @@ ALTER TABLE system_onboarding ADD COLUMN IF NOT EXISTS verification_started_at t
 ALTER TABLE system_onboarding ADD COLUMN IF NOT EXISTS verification_error text;`;
 export const workerTelemetryMigrationSql = `ALTER TABLE workers ADD COLUMN IF NOT EXISTS last_heartbeat_at timestamptz;
 ALTER TABLE workers ADD COLUMN IF NOT EXISTS doctor_observed_at timestamptz;`;
-export const workerRunnerCacheUpgradeSql = `ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_enabled boolean;
+export const workerReleaseBaselineUpgradeSql = `ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS hit_count bigint NOT NULL DEFAULT 0 CHECK (hit_count >= 0);
+ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS miss_count bigint NOT NULL DEFAULT 0 CHECK (miss_count >= 0);
+ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_enabled boolean;
 ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_max_gib bigint;
 ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_size_bytes bigint;
 ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_entry_count bigint;
+ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_hit_count bigint NOT NULL DEFAULT 0 CHECK (runner_cache_hit_count >= 0);
+ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_miss_count bigint NOT NULL DEFAULT 0 CHECK (runner_cache_miss_count >= 0);
 ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_observed_at timestamptz;`;
 
 

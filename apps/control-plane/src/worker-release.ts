@@ -49,33 +49,35 @@ const immutableWorkerTag = (url: URL): string | undefined => {
   return immutableManifestPath.exec(url.pathname)?.[1];
 };
 
-const hashedAssetEntries = (value: unknown, path: string): Array<[string, string]> => {
+export type WorkerReleaseAsset = { field: string; url: string; sha256: string };
+const hashedAssetEntries = (value: unknown, path: string): WorkerReleaseAsset[] => {
   if (!value || typeof value !== "object") return [];
   if ("url" in value && "sha256" in value && typeof value.url === "string" && typeof value.sha256 === "string") {
-    return [[path, value.url]];
+    return [{ field: path, url: value.url, sha256: value.sha256 }];
   }
   return Object.entries(value).flatMap(([key, child]) => hashedAssetEntries(child, `${path}.${key}`));
 };
 
+export function enumerateWorkerReleaseAssets(manifest: WorkerReleaseManifest): WorkerReleaseAsset[] {
+  return Object.entries(manifest.platforms).flatMap(([platform, release]) => release ? hashedAssetEntries(release, platform) : []);
+}
+
 const validateImmutableAssetUrls = (manifest: WorkerReleaseManifest, workerTag: string): void => {
   const prefix = `/Snazzie/MARS/releases/download/${workerTag}/`;
-  for (const [platform, release] of Object.entries(manifest.platforms)) {
-    if (!release) continue;
-    for (const [field, assetUrl] of hashedAssetEntries(release, `${platform}`)) {
-      let candidate: URL;
-      try { candidate = new URL(assetUrl); } catch { throw new Error(`worker release asset URL for ${field} is invalid: ${assetUrl}`); }
-      const filename = candidate.pathname.toLowerCase().startsWith(prefix.toLowerCase()) ? candidate.pathname.slice(prefix.length) : "";
-      if (
-        candidate.origin !== immutableReleaseOrigin
-        || candidate.username
-        || candidate.password
-        || candidate.search
-        || candidate.hash
-        || !filename
-        || filename.includes("/")
-      ) {
-        throw new Error(`worker release asset URL for ${field} is outside immutable ${workerTag} release: ${assetUrl}`);
-      }
+  for (const { field, url: assetUrl } of enumerateWorkerReleaseAssets(manifest)) {
+    let candidate: URL;
+    try { candidate = new URL(assetUrl); } catch { throw new Error(`worker release asset URL for ${field} is invalid: ${assetUrl}`); }
+    const filename = candidate.pathname.toLowerCase().startsWith(prefix.toLowerCase()) ? candidate.pathname.slice(prefix.length) : "";
+    if (
+      candidate.origin !== immutableReleaseOrigin
+      || candidate.username
+      || candidate.password
+      || candidate.search
+      || candidate.hash
+      || !filename
+      || filename.includes("/")
+    ) {
+      throw new Error(`worker release asset URL for ${field} is outside immutable ${workerTag} release: ${assetUrl}`);
     }
   }
 };

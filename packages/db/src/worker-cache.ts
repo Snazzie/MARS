@@ -51,10 +51,9 @@ export async function applyWorkerCacheTelemetry(db: SqlDb, input: TelemetryEvent
   if (input.type === "worker.runner_cache_status") {
     if (!validRunnerStatus(payload)) return false;
     const status = payload;
-    if (!db.begin) return false;
     return await db.begin(async (tx) => {
-      await tx`UPDATE worker_cache_status SET runner_cache_enabled=${status.enabled},runner_cache_max_gib=${status.maxGiB},runner_cache_size_bytes=${status.sizeBytes},runner_cache_entry_count=${status.entryCount},runner_cache_hit_count=${status.hitCount ?? 0},runner_cache_miss_count=${status.missCount ?? 0},runner_cache_observed_at=${status.observedAt} WHERE worker_id=${input.workerId} AND generation=${status.generation}`;
-      return true;
+      const updated = await tx`UPDATE worker_cache_status SET runner_cache_enabled=${status.enabled},runner_cache_max_gib=${status.maxGiB},runner_cache_size_bytes=${status.sizeBytes},runner_cache_entry_count=${status.entryCount},runner_cache_hit_count=${status.hitCount ?? 0},runner_cache_miss_count=${status.missCount ?? 0},runner_cache_observed_at=${status.observedAt} WHERE worker_id=${input.workerId} AND generation=${status.generation} RETURNING worker_id`;
+      return updated.length > 0;
     });
   }
   if (input.type === "worker.cache_entry_upsert") {

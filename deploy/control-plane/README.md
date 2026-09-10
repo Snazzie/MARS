@@ -80,14 +80,12 @@ macOS prepares a local Tart base on the Apple-Silicon host. A Windows VM setup
 is not claimed by this release.
 
 GHCR packages must be publicly readable for an Unraid host to pull the image
-anonymously. No registry credentials belong in the template. For an upgrade,
-pin Compose to the published application tag (for example,
-`ghcr.io/snazzie/mars/control-plane:v0.0.1`) after checking the matching
-worker release; the Unraid template intentionally follows
-`ghcr.io/snazzie/mars/control-plane:latest`. To roll back, stop the service,
-restore the prior application tag, and keep the compatible worker release and
-data/database pair together. Never use a mutable worker `releases/latest`
-URL.
+anonymously. Set `MARS_CONTROL_PLANE_IMAGE` to the published versioned tag or,
+preferably, the exact `repository@sha256:<digest>` from release metadata. The
+Compose file has no default image and never accepts a worker-manifest override.
+To roll back, restore the coordinated pre-upgrade PostgreSQL and `DATA_ROOT`
+backup, then set the exact previous control-plane digest. Never use a mutable
+`latest` image for deployment or a `releases/latest` worker URL.
 
 ## Compose and Unraid networking
 
@@ -176,11 +174,10 @@ container, find the Docker-assigned ID/name from the running image and use
 that value for inspection and logs:
 
 ```bash
-docker ps --filter ancestor=ghcr.io/snazzie/mars/control-plane:latest --format 'table {{.ID}}\t{{.Names}}\t{{.Status}}'
+docker ps --filter ancestor=ghcr.io/snazzie/mars/control-plane --format 'table {{.ID}}\t{{.Names}}\t{{.Status}}'
 docker inspect --format '{{json .State.Health}}' <container-id-or-name>
 docker logs <container-id-or-name>
 ```
-
 The first-start diagnostic sequence is: confirm the image pulled anonymously,
 check PostgreSQL reachability/permissions and `DATABASE_URL`, inspect
 `/api/readyz` and container logs, then check public URL and webhook routing.
@@ -194,6 +191,62 @@ upgrades or migrations. Losing either the data volume or its matching database
 makes encrypted GitHub credentials unrecoverable. Restore PostgreSQL and
 `/mnt/user/appdata/mars-control-plane/data`, including `app_master_key`, as a
 coordinated pair; never regenerate the key for an existing database.
+## Backup, upgrade, rollback, and restore
+
+Run these commands with `set -euo pipefail` and record only checksums and
+health output; never print the dump, key, credentials, or ciphertext:
+
+```bash
+set -euo pipefail
+mkdir -p backups/$(date -u +%Y%m%dT%H%M%SZ)
+backup_dir="$(pwd)/backups/$(date -u +%Y%m%dT%H%M%SZ)"
+docker compose --env-file .env -f deploy/control-plane/compose.yaml stop control-plane
+pg_dump --format=custom --no-owner --no-acl "$DATABASE_URL" > "$backup_dir/mars.pre-upgrade.dump"
+tar --xattrs --acls -czf "$backup_dir/mars-data.pre-upgrade.tar.gz" -C /var/lib/mars .
+(cd "$backup_dir" && sha256sum mars.pre-upgrade.dump mars-data.pre-upgrade.tar.gz > checksums.txt)
+docker compose --env-file .env -f deploy/control-plane/compose.yaml up -d --wait control-plane
+curl --fail https://control.example.com/api/readyz
+```
+
+Upgrade by changing only `MARS_CONTROL_PLANE_IMAGE` to the candidate version or
+digest, then start the service and require `/api/readyz` and `/api/healthz` to
+report ready and the expected build SHA. A failed candidate is not a binary-only
+rollback: stop it, restore the coordinated PostgreSQL dump and complete
+`DATA_ROOT` archive, set the exact previous image digest, and start again.
+
+```bash
+set -euo pipefail
+pg_restore --clean --if-exists --no-owner --dbname "$DATABASE_URL" "$backup_dir/mars.pre-upgrade.dump"
+tar --xattrs --acls -xzf "$backup_dir/mars-data.pre-upgrade.tar.gz" -C /var/lib/mars
+docker compose --env-file .env -f deploy/control-plane/compose.yaml up -d --wait control-plane
+curl --fail https://control.example.com/api/livez
+curl --fail https://control.example.com/api/readyz
+curl --fail https://control.example.com/api/healthz
+```
+
+For a clean restore, restore both artifacts into a fresh PostgreSQL database
+and fresh data volume, set the candidate immutable image, then require the same
+ready state and successful encrypted GitHub App configuration check. Regenerating
+`app_master_key` for an existing database is unsupported.
+
+## Release evidence and trust model
+
+Release metadata names the exact control-plane digest, worker binding, SBOM URL
+and SHA-256, and both attestation URLs. Verify the published digest and
+keyless GitHub provenance/SBOM attestations anonymously:
+
+```bash
+gh attestation verify oci://ghcr.io/snazzie/mars/control-plane@sha256:<digest> -R Snazzie/MARS
+gh attestation verify oci://ghcr.io/snazzie/mars/control-plane@sha256:<digest> -R Snazzie/MARS --predicate-type https://spdx.dev/Document/v2.3
+curl --fail --location <sbom_url> -o control-plane-sbom.spdx.json
+printf '%s  %s\\n' '<sbom_sha256>' control-plane-sbom.spdx.json | sha256sum -c -
+```
+
+Attestations use GitHub Actions OIDC with Sigstore keyless signing and the
+repository/workflow/ref identity recorded by GitHub. No maintainer-held signing
+key is used; this deployment does not claim an independent cosign/keyed
+signature.
+
 
 ## GitHub URLs and origin changes
 
@@ -214,18 +267,20 @@ sign-in, App installation, or webhook delivery can fail.
 
 ## Unraid
 
-Import `deploy/unraid/mars-control-plane.xml`. Supply the external PostgreSQL
-17 `DATABASE_URL`, persistent appdata path, canonical `PUBLIC_BASE_URL`,
-required public HTTPS `GITHUB_WEBHOOK_URL`, and optional `WORKER_BASE_URL`.
-The template is unprivileged, targets Linux/amd64, keeps PostgreSQL external,
-and publishes host port 3000 in bridge mode. It intentionally has no worker
-manifest or worker contract inputs because those values belong to the
-released image.
 
-For the self-contained Unraid MVP, also import
-`deploy/unraid/mars-postgres.xml` as a separate container. Start it before
-Mars with the default `postgres:postgres` credentials and `mars` database,
-then set the control-plane `DATABASE_URL` to the Unraid host address:
+Import the versioned `mars-control-plane-v<app-version>.xml` asset attached to
+the GitHub release. The repository template
+`deploy/unraid/mars-control-plane.template.xml` is not an operator artifact;
+the release workflow renders its immutable image reference. Supply external
+PostgreSQL 17, persistent appdata, canonical `PUBLIC_BASE_URL`, required
+public HTTPS `GITHUB_WEBHOOK_URL`, and optional `WORKER_BASE_URL`.
+The template is unprivileged, targets Linux/amd64, keeps PostgreSQL external,
+and publishes host port 3000 in bridge mode. It has no worker-manifest or
+worker-contract inputs because those values belong to the released image.
+For external PostgreSQL, import `deploy/unraid/mars-postgres.xml` as a separate
+container. Start it before Mars with the default `postgres:postgres` credentials
+and `mars` database, then set the control-plane `DATABASE_URL` to the Unraid host
+address:
 
 ```text
 postgres://postgres:postgres@<unraid-host-ip>:5432/mars

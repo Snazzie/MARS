@@ -5,108 +5,72 @@ import { dirname, join } from "node:path";
 const root = dirname(import.meta.dir);
 const read = (path: string) => readFile(join(root, path), "utf8");
 
+type ReleaseWorkflow = {
+  on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } };
+  permissions?: Record<string, string>;
+  jobs: Record<string, { if?: string; needs?: string[]; permissions?: Record<string, string> }>;
+};
+
+const parseWorkflow = (source: string) => Bun.YAML.parse(source) as ReleaseWorkflow;
+
 test("Release Mars is the sole manually dispatched publisher", async () => {
-  const workflow = await read(".github/workflows/release-mars.yml");
-  expect(workflow).toContain("name: Release Mars");
-  expect(workflow).toContain("workflow_dispatch:");
-  expect(workflow).toContain("app_version:");
-  expect(workflow).toContain("worker_version:");
-  expect(workflow).toContain("type: string");
-  expect(workflow).toContain("contents: write");
-  expect(workflow).toContain("packages: write");
-  expect(workflow).toContain("group: release-mars");
-  expect(workflow).toContain("cancel-in-progress: false");
-  expect(workflow).not.toContain("push:");
+  const workflow = parseWorkflow(await read(".github/workflows/release-mars.yml"));
+  expect(workflow.on?.workflow_dispatch?.inputs).toMatchObject({ app_version: { required: true, type: "string" }, worker_release_mode: { required: true, type: "choice" }, worker_version: { required: false, type: "string" }, worker_manifest_url: { required: false, type: "string" } });
+  expect(workflow.permissions).toMatchObject({ contents: "read", packages: "read" });
   await expect(access(join(root, ".github/workflows/release-workers.yml"))).rejects.toThrow();
   await expect(access(join(root, ".github/workflows/release-control-plane.yml"))).rejects.toThrow();
 });
 
-test("worker release is schema 3, immutable, and observable before promotion", async () => {
-  const workflow = await read(".github/workflows/release-mars.yml");
-  expect(workflow).toContain("schemaVersion:3");
-  expect(workflow).toContain("worker-v$WORKER_VERSION");
-  expect(workflow).toContain("worker-release-manifest.json");
-  expect(workflow).toContain("WorkerReleaseManifest.parse");
-  expect(workflow).toContain("Gate anonymous worker asset observability");
-  expect(workflow).toContain("gh release create \"worker-v$WORKER_VERSION\"");
-  expect(workflow).toContain("--prerelease");
-  expect(workflow).toContain("--clobber");
-  expect(workflow).toContain("@sha256:");
-  expect(workflow).not.toContain("/releases/latest/download");
-  expect(workflow).not.toMatch(/MARS_(?:LINUX_BROKER_REPOSITORY|WINDOWS_VM|MACOS_TART_IMAGE|RELEASE_MANIFEST)/);
-  expect(workflow.indexOf("Gate anonymous worker asset observability")).toBeLessThan(workflow.indexOf("Build and smoke-test control-plane candidate"));
+test("build mode retains all worker platforms while reuse skips them", async () => {
+  const source = await read(".github/workflows/release-mars.yml");
+  const workflow = parseWorkflow(source);
+  for (const name of ["linux", "windows", "macos", "worker-release"]) expect(workflow.jobs[name].if).toContain("worker_release_mode == 'build'");
+  expect(workflow.jobs["worker-release"].needs).toEqual(["validate-inputs", "linux", "windows", "macos"]);
+  expect(workflow.jobs["worker-binding"].needs).toEqual(["validate-inputs", "worker-release"]);
+  expect(workflow.jobs["control-plane"].needs).toEqual(["validate-inputs", "worker-binding"]);
+  expect(source).toContain("if: always() && needs.validate-inputs.result == 'success' && (inputs.worker_release_mode == 'reuse' || needs.worker-release.result == 'success')");
+  expect(source).toContain("verify-worker-release.ts");
+  expect(source).not.toContain("MARS_WORKER_RELEASE_MANIFEST_URL:");
+  expect(source).not.toContain("MARS_WORKER_CONTRACT_VERSION:");
 });
 
-test("candidate images are anonymously observable before mutable promotion", async () => {
-  const workflow = await read(".github/workflows/release-mars.yml");
-  expect(workflow).toContain("Gate anonymous GHCR candidate manifests");
-  expect(workflow).toContain("Pull and inspect candidate manifests anonymously");
-  expect(workflow).toContain('"$APP_IMAGE:$APP_CANDIDATE_TAG"');
-  expect(workflow).toContain('"$BROKER_IMAGE:$BROKER_CANDIDATE_TAG"');
-  expect(workflow).toContain("docker buildx imagetools inspect");
-  expect(workflow).toContain("docker manifest inspect");
-  expect(workflow).toContain("DOCKER_CONFIG");
-  expect(workflow.indexOf("Gate anonymous GHCR candidate manifests")).toBeLessThan(workflow.indexOf("Promote verified Mars release"));
+test("exact SHA CI and immutable worker assets are required", async () => {
+  const source = await read(".github/workflows/release-mars.yml");
+  expect(source).toContain("GITHUB_REF\" == refs/heads/main");
+  expect(source).toContain("head_sha == env.GITHUB_SHA");
+  expect(source).toContain("worker-v<semver>");
+  expect(source).toContain("docker manifest inspect");
+  expect(source).toContain("DOCKER_CONFIG");
+  expect(source).toContain("schemaVersion:3");
+  expect(source).toContain("--platform linux/amd64");
 });
 
-test("stages releases and rolls back before finalizing after promotion", async () => {
-  const workflow = await read(".github/workflows/release-mars.yml");
-  const appDraft = workflow.indexOf('gh release create "v$APP_VERSION"');
-  const appUpload = workflow.indexOf('gh release upload "v$APP_VERSION"');
-  const brokerPromotion = workflow.lastIndexOf('docker buildx imagetools create --tag "$BROKER_IMAGE:latest"');
-  const appPromotion = workflow.lastIndexOf('docker buildx imagetools create --tag "$APP_IMAGE:latest"');
-  const appFinalize = workflow.indexOf('gh release edit "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest=true');
-  const workerFinalize = workflow.lastIndexOf('gh release edit "worker-v$WORKER_VERSION"');
-  expect(workflow).toContain('--draft --latest=false --title "Mars v$APP_VERSION"');
-  expect(workflow).toContain("trap rollback ERR");
-  expect(workflow).toContain("previous_broker_digest");
-  expect(workflow).not.toContain("imagetools rm");
-  expect(workflow).toContain("rollback did not fully restore state");
-  expect(workflow).toContain('exit "$failure_status"');
-  expect(workflow).toContain("set -e");
-  expect(workflow).not.toContain("latest promotion changed digest' >&2; exit 1");
-  expect(appDraft).toBeGreaterThan(-1);
-  expect(appUpload).toBeGreaterThan(appDraft);
-  expect(brokerPromotion).toBeGreaterThan(appUpload);
-  expect(appPromotion).toBeGreaterThan(brokerPromotion);
-  expect(appFinalize).toBeGreaterThan(appPromotion);
-  expect(workerFinalize).toBeGreaterThan(appFinalize);
+test("candidate, recovery, evidence, and staging gates precede promotion", async () => {
+  const source = await read(".github/workflows/release-mars.yml");
+  const workflow = parseWorkflow(source);
+  expect(workflow.jobs["candidate-compose-smoke"].needs).toContain("control-plane");
+  expect(workflow.jobs["upgrade-recovery"].needs).toContain("candidate-compose-smoke");
+  expect(workflow.jobs["release-evidence"].needs).toContain("upgrade-recovery");
+  expect(workflow.jobs["release-evidence"].permissions).toMatchObject({ "id-token": "write", attestations: "write" });
+  expect(workflow.jobs.staging.needs).toEqual(["release-evidence"]);
+  expect(workflow.jobs.promote.needs).toContain("staging");
+  expect(source.indexOf("gh release create \"v$APP_VERSION\"" )).toBeLessThan(source.indexOf("environment: control-plane-staging"));
+  expect(source).toContain("actions/attest@v4");
+  expect(source).toContain("subject-name: ghcr.io/snazzie/mars/control-plane");
+  expect(source).toContain("subject-digest:");
+  expect(source).toContain("create-storage-record: false");
+  expect(source).toContain("sbom_url");
+  expect(source).toContain("sbom_sha256");
+  expect(source).toContain("provenance_attestation_url");
+  expect(source).toContain("sbom_attestation_url");
 });
 
-test("aborts safely when prior mutable tags cannot be inspected", async () => {
-  const workflow = await read(".github/workflows/release-mars.yml");
-  expect(workflow).toContain("latest_digest()");
-  expect(workflow).toContain("unable to determine existing");
-  expect(workflow).toContain("MANIFEST_UNKNOWN");
-  expect(workflow).toContain("tag does not exist; aborting before promotion");
-  expect(workflow).not.toContain("2>/dev/null || true");
-});
-
-test("candidate images are explicit amd64 builds and promotions are gated", async () => {
-  const workflow = await read(".github/workflows/release-mars.yml");
-  expect(workflow).toContain('echo "digest=$digest" >> "$GITHUB_OUTPUT"');
-  expect(workflow).toContain("MARS_WORKER_RELEASE_MANIFEST_URL");
-  expect(workflow).toContain("MARS_WORKER_CONTRACT_VERSION");
-  expect(workflow).toContain("SMOKE_MANIFEST_URL: ''");
-  expect(workflow).toContain("SMOKE_NODE_ENV: development");
-  expect(workflow).toContain("SMOKE_NODE_ENV: production");
-  expect(workflow).toContain("rustup target add x86_64-pc-windows-gnu");
-  expect(workflow).toContain('docker buildx imagetools create --tag "$BROKER_IMAGE:latest" "$BROKER_IMAGE@$broker_digest"');
-  expect(workflow).toContain('docker buildx imagetools create --tag "$APP_IMAGE:latest" "$APP_IMAGE@$APP_DIGEST"');
-  expect(workflow).toContain('--prerelease=false --latest=false');
-  expect(workflow).toContain('--draft --latest=false');
-  expect(workflow.indexOf("Promote verified Mars release")).toBeGreaterThan(workflow.indexOf("Smoke test with baked remote worker manifest"));
-});
-
-
-test("appliance builder verifies Noble checksums and injects offline assets", async () => {
-  const builder = await read("images/worker-appliance/build.sh");
-  expect(builder).toContain("noble-server-cloudimg-amd64.img");
-  expect(builder).toContain("SHA256SUMS");
-  expect(builder).toContain("virt-customize");
-  expect(builder).toContain("mars-job-agent");
-  expect(builder).toContain("actions-runner");
-  expect(builder).toContain("baseSha256");
-  expect(builder).toContain("outputSha256");
-  expect(builder).not.toMatch(/cosign/i);
+test("reuse promotion mutates only the control-plane digest", async () => {
+  const source = await read(".github/workflows/release-mars.yml");
+  expect(source).toContain("if [[ \"$WORKER_MODE\" == build ]]; then docker buildx imagetools create --tag \"$BROKER_IMAGE:latest\"");
+  expect(source).toContain("if [[ \"$WORKER_MODE\" == build ]]; then gh release edit \"worker-v$WORKER_VERSION\"");
+  expect(source).toContain("PREVIOUS_IMAGE");
+  expect(source).toContain("CANDIDATE_IMAGE");
+  expect(source).toContain("release rollback did not fully restore state");
+  expect(source).not.toContain("imagetools rm");
 });

@@ -28,6 +28,26 @@ function waitForSocketMessage(socket: WebSocket, predicate: (message: string) =>
   });
 }
 
+async function runComposeSmoke(baseUrl: string): Promise<void> {
+  const endpoints = ["/api/livez", "/api/readyz", "/api/healthz", "/", "/index.js", "/index.css"];
+  for (const endpoint of endpoints) {
+    const response = await fetch(new URL(endpoint, baseUrl));
+    assert(response.ok, `Compose endpoint ${endpoint} returned ${response.status}`);
+  }
+  const health = await (await fetch(new URL("/api/healthz", baseUrl))).json() as { buildId?: string };
+  if (Bun.env.EXPECTED_BUILD_SHA) assert(health.buildId === Bun.env.EXPECTED_BUILD_SHA, "Compose health reports the release build SHA");
+  const invalid = await fetch(new URL("/api/github/webhooks", baseUrl), { method: "POST", headers: { "content-type": "application/json", "x-hub-signature-256": "sha256=invalid", "x-github-delivery": "compose-invalid", "x-github-event": "ping" }, body: "{}" });
+  assert(invalid.status === 401, "Compose rejects invalid webhook signatures");
+  await new Promise<void>((resolve, reject) => {
+    const socket = new WebSocket(`${baseUrl.replace(/^http/, "ws")}/api/v1/workers/connect?workerId=${workerId}`);
+    const timeout = setTimeout(() => { socket.close(); reject(new Error("Compose worker socket was not rejected")); }, 5_000);
+    socket.addEventListener("open", () => { clearTimeout(timeout); socket.close(); reject(new Error("unauthenticated Compose worker socket upgraded")); });
+    socket.addEventListener("close", () => { clearTimeout(timeout); resolve(); });
+    socket.addEventListener("error", () => { clearTimeout(timeout); resolve(); });
+  });
+  console.log("PASS published Compose health, dashboard assets, ingress, and worker authentication rejection");
+}
+
 async function main(): Promise<void> {
   const memoryDb: MemoryDb = { setupStates: new Map(), installations: new Map(), repositories: new Map() };
   const deliveries = new Map<string, Delivery>();
@@ -57,47 +77,50 @@ async function main(): Promise<void> {
   sqlDb.json = value => JSON.stringify(value);
   const secretBox = new SecretBox(Buffer.alloc(32, 7).toString("base64"));
   memoryDb.appConfig = { id: 7, slug: "mars", pem: secretBox.encrypt("unused-pem"), clientId: "client-id", clientSecret: secretBox.encrypt("unused-client-secret"), webhookSecret: secretBox.encrypt(webhookSecret) };
-  const githubApp = new GitHubAppService({ db: memoryDb, secretBox, publicOrigin: () => providerOrigin });
+  const githubApp = new GitHubAppService({ db: memoryDb, secretBox, publicOrigin: () => providerOrigin, webhookOrigin: () => providerOrigin });
   const setupCalls: string[] = [];
-  const started = await startControlPlane({
-    publicOrigin: providerOrigin,
-    db: sqlDb as unknown as NonNullable<ControlPlaneStartOptions["db"]>,
-    setupOverride: {
-      masterKey: Buffer.alloc(32, 7).toString("base64"),
-      setup: { publicOrigin: () => providerOrigin, publicOriginManaged: () => true, configure: async origin => { setupCalls.push(origin); assert(origin === providerOrigin, "setup route receives provider HTTPS origin"); return origin; }, authenticate: async () => ({ userId: "admin", firstAdmin: true }) },
-    },
-    secretBox,
-    githubApp,
-    currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
-    skipBackgroundTasks: true,
-    port: 0,
-  });
-  const upstream = started.server;
-  type ProxyData = { upstream?: WebSocket; queued: Array<string | ArrayBuffer>; path: string };
-  const proxy = Bun.serve<ProxyData>({
-    port: 0,
-    async fetch(request, server) {
-      const url = new URL(request.url);
-      if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
-        assert(url.pathname === "/api/browser/invalidations" || url.pathname === "/api/v1/workers/connect", "proxy only upgrades the two control-plane socket paths");
-        if (server.upgrade(request, { data: { queued: [], path: `${url.pathname}${url.search}` } })) return undefined;
-        return new Response("upgrade failed", { status: 400 });
-      }
-      const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
-      if (url.pathname === "/api/github/webhooks" && body) forwardedWebhookBody = new TextDecoder().decode(body);
-      const upstreamResponse = await fetch(`http://127.0.0.1:${upstream.port}${url.pathname}${url.search}`, { method: request.method, headers: request.headers, body });
-      return new Response(upstreamResponse.body, { status: upstreamResponse.status, headers: upstreamResponse.headers });
-    },
-    websocket: {
-      open(ws) {
-        const upstreamSocket = new WebSocket(`ws://127.0.0.1:${upstream.port}${ws.data.path}`); ws.data.upstream = upstreamSocket;
-        upstreamSocket.addEventListener("open", () => { for (const message of ws.data.queued) upstreamSocket.send(String(message)); ws.data.queued = []; });
-        upstreamSocket.addEventListener("message", event => ws.send(String(event.data))); upstreamSocket.addEventListener("close", event => ws.close(event.code, event.reason)); upstreamSocket.addEventListener("error", () => ws.close(1011, "upstream websocket failed"));
+  const previousWebhookUrl = Bun.env.GITHUB_WEBHOOK_URL;
+  Bun.env.GITHUB_WEBHOOK_URL = providerOrigin;
+  try {
+    const started = await startControlPlane({
+      publicOrigin: providerOrigin,
+      db: sqlDb as unknown as NonNullable<ControlPlaneStartOptions["db"]>,
+      setupOverride: {
+        masterKey: Buffer.alloc(32, 7).toString("base64"),
+        setup: { publicOrigin: () => providerOrigin, publicOriginManaged: () => true, configure: async origin => { setupCalls.push(origin); assert(origin === providerOrigin, "setup route receives provider HTTPS origin"); return origin; }, authenticate: async () => ({ userId: "admin", firstAdmin: true }) },
       },
-      message(ws, message) { if (ws.data.upstream?.readyState === WebSocket.OPEN) ws.data.upstream.send(String(message)); else ws.data.queued.push(String(message)); },
-      close(ws) { ws.data.upstream?.close(); },
-    },
-  });
+      secretBox,
+      githubApp,
+      currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+      skipBackgroundTasks: true,
+      port: 0,
+    });
+    const upstream = started.server;
+    type ProxyData = { upstream?: WebSocket; queued: Array<string | ArrayBuffer>; path: string };
+    const proxy = Bun.serve<ProxyData>({
+      port: 0,
+      async fetch(request, server) {
+        const url = new URL(request.url);
+        if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+          assert(url.pathname === "/api/browser/invalidations" || url.pathname === "/api/v1/workers/connect", "proxy only upgrades the two control-plane socket paths");
+          if (server.upgrade(request, { data: { queued: [], path: `${url.pathname}${url.search}` } })) return undefined;
+          return new Response("upgrade failed", { status: 400 });
+        }
+        const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
+        if (url.pathname === "/api/github/webhooks" && body) forwardedWebhookBody = new TextDecoder().decode(body);
+        const upstreamResponse = await fetch(`http://127.0.0.1:${upstream.port}${url.pathname}${url.search}`, { method: request.method, headers: request.headers, body });
+        return new Response(upstreamResponse.body, { status: upstreamResponse.status, headers: upstreamResponse.headers });
+      },
+      websocket: {
+        open(ws) {
+          const upstreamSocket = new WebSocket(`ws://127.0.0.1:${upstream.port}${ws.data.path}`); ws.data.upstream = upstreamSocket;
+          upstreamSocket.addEventListener("open", () => { for (const message of ws.data.queued) upstreamSocket.send(String(message)); ws.data.queued = []; });
+          upstreamSocket.addEventListener("message", event => ws.send(String(event.data))); upstreamSocket.addEventListener("close", event => ws.close(event.code, event.reason)); upstreamSocket.addEventListener("error", () => ws.close(1011, "upstream websocket failed"));
+        },
+        message(ws, message) { if (ws.data.upstream?.readyState === WebSocket.OPEN) ws.data.upstream.send(String(message)); else ws.data.queued.push(String(message)); },
+        close(ws) { ws.data.upstream?.close(); },
+      },
+    });
   const baseUrl = `http://127.0.0.1:${proxy.port}`;
   try {
     const gatewayError = await started.gateway.fetch(new Request(`${baseUrl}/api/v1/workers/connect`, { headers: { upgrade: "websocket" } }), upstream);
@@ -121,7 +144,15 @@ async function main(): Promise<void> {
     const workerSocket = new WebSocket(`${baseUrl.replace("http", "ws")}/api/v1/workers/connect?workerId=${workerId}`); const challengeMessage = await waitForSocketMessage(workerSocket, message => message.includes('"type":"challenge"'), "worker challenge"); const challenge = JSON.parse(challengeMessage) as { nonce: string }; const encryptionPublicKey = "smoke-encryption-public-key"; const canonical = Buffer.from(`${challenge.nonce}\n${workerId}\n${encryptionPublicKey}`); const signatureBytes = sign(null, canonical, workerKeys.privateKey).toString("base64url"); const authenticated = waitForSocketMessage(workerSocket, message => message.includes('"type":"authenticated"'), "worker authentication"); workerSocket.send(JSON.stringify({ version: 1, type: "authenticate", workerId, signature: signatureBytes, encryptionPublicKey })); await authenticated; assert(workerEnrollmentActivated, "worker challenge authentication atomically persisted authenticated enrollment"); workerSocket.close();
 
     console.log("PASS real manifest/setup route flow at provider HTTPS origin"); console.log("PASS invalid signature rejected without delivery"); console.log("PASS signed webhook raw-byte HMAC, headers, and completed delivery state"); console.log("PASS browser invalidations WebSocket upgrade through reverse proxy"); console.log("PASS worker challenge/signature authentication through reverse proxy");
-  } finally { proxy.stop(true); upstream.stop(true); }
+  } finally {
+    proxy.stop(true);
+    upstream.stop(true);
+  }
+  } finally {
+    if (previousWebhookUrl === undefined) delete Bun.env.GITHUB_WEBHOOK_URL;
+    else Bun.env.GITHUB_WEBHOOK_URL = previousWebhookUrl;
+  }
 }
 
-await main();
+if (Bun.env.COMPOSE_BASE_URL) await runComposeSmoke(Bun.env.COMPOSE_BASE_URL);
+else await main();

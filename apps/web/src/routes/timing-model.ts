@@ -93,7 +93,8 @@ export function formatDeltaPercent(value: number | null, digits = 1): string {
 }
 
 export function formatDate(iso: string): string {
-  return dateFormatter.format(new Date(iso));
+  const formatted = dateFormatter.format(new Date(iso));
+  return formatted.replace(" at ", ", ");
 }
 
 export function selectionAfterJobsChange(current: string | null, jobs: readonly JobResourceTrendJob[]): string | null {

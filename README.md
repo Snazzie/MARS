@@ -4,7 +4,7 @@
 
 The repository contains the control-plane API and dashboard, worker runtimes for supported host platforms, job-agent and orchestration components, deployment assets, and contract tests.
 
-> **Development status:** MARS is an active development baseline, not a production-ready platform. Worker execution, GitHub workflow dispatch, and several end-to-end runtime gates remain incomplete. See [IMPLEMENTATION-STATUS.md](IMPLEMENTATION-STATUS.md) for the current evidence and remaining work.
+> **Development status:** MARS is an active development baseline, not a production-ready platform. The supported issue #9 deployment is the Linux/amd64 control-plane hosting MVP only; job execution remains issue #6. See [IMPLEMENTATION-STATUS.md](IMPLEMENTATION-STATUS.md) for evidence and external blockers.
 
 ## Repository layout
 
@@ -22,7 +22,7 @@ The repository contains the control-plane API and dashboard, worker runtimes for
 
 ## Requirements
 
-- [Bun](https://bun.sh/) 1.2.20 or compatible
+- [Bun](https://bun.sh/) 1.4.0
 - Docker with Compose support for local PostgreSQL/control-plane runs
 - Platform-specific worker prerequisites for Windows, Linux, or macOS development
 
@@ -65,14 +65,24 @@ bun run build
 
 ## Deployment
 
-The supported control-plane deployment uses PostgreSQL plus a persistent data volume. Required configuration includes:
+Issue #9 supports Linux/amd64 control-plane hosting only. The released control-plane image requires operator-managed PostgreSQL 17, a persistent data volume, and an immutable `MARS_CONTROL_PLANE_IMAGE` tag or digest.
 
+Required configuration includes:
+
+- `MARS_CONTROL_PLANE_IMAGE` (published `v<semver>` tag or full `@sha256:` digest)
 - `DATABASE_URL`
 - `PUBLIC_BASE_URL`
 - `GITHUB_WEBHOOK_URL`
 - optional `WORKER_BASE_URL`
 
-For the complete Unraid, ingress, onboarding, backup, health-check, and release instructions, see [`deploy/control-plane/README.md`](deploy/control-plane/README.md).
+Validate and start the deployment with:
+
+```bash
+docker compose --env-file .env -f deploy/control-plane/compose.yaml config -q
+docker compose --env-file .env -f deploy/control-plane/compose.yaml up -d --wait
+```
+
+For complete Unraid, ingress, onboarding, backup, health-check, release evidence, upgrade, rollback, and restore instructions, see [`deploy/control-plane/README.md`](deploy/control-plane/README.md).
 
 ## Security and persistence
 

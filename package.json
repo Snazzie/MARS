@@ -9,6 +9,9 @@
     "test": "bun test",
     "test:live-job-pickup": "bun run tests/live-job-pickup-smoke.ts",
     "test:windows-container-image": "bun test tests/windows-container-image-contract.test.ts",
+    "test:control-plane-proxy": "bun run tests/proxied-control-plane-smoke.ts",
+    "test:control-plane-compose": "bash tests/control-plane-compose-smoke.sh",
+    "release:verify-worker": "bun run scripts/verify-worker-release.ts",
     "build": "bun run --filter '*' build && bun run build:windows-worker",
     "build:windows-worker": "bun run scripts/build-windows-worker.ts"
   },

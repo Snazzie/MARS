@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: mars
+      POSTGRES_USER: mars
+      POSTGRES_PASSWORD: ci-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mars -d mars"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - compose-smoke-postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1::5432"
+  control-plane:
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://mars:ci-only@postgres:5432/mars
+volumes:
+  compose-smoke-postgres:

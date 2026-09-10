@@ -54,6 +54,7 @@ start_control_plane() {
     -e PUBLIC_BASE_URL="http://127.0.0.1:3000" \
     -e GITHUB_WEBHOOK_URL="https://github.example.test" \
     "${runtime_args[@]}" \
+    "${manifest_args[@]}" \
     -v "$DATA_VOLUME":/var/lib/mars \
     -p 127.0.0.1:3000:3000 \
     "$IMAGE" >/dev/null
