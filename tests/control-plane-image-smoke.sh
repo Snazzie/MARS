@@ -2,8 +2,7 @@
 set -euo pipefail
 
 IMAGE=${IMAGE:?set IMAGE}
-SMOKE_MANIFEST="${GITHUB_WORKSPACE:-$PWD}/tests/fixtures/control-plane-smoke-release-manifest.json"
-SMOKE_MANIFEST_URL="${SMOKE_MANIFEST_URL-file:///tmp/worker-release-manifest.json}"
+SMOKE_MANIFEST_URL="${SMOKE_MANIFEST_URL-}"
 NETWORK="mars-smoke-${GITHUB_RUN_ID:-local}-${RANDOM}"
 POSTGRES="${NETWORK}-postgres"
 CONTROL_PLANE="${NETWORK}-control-plane"
@@ -43,11 +42,6 @@ start_control_plane() {
   fi
   if [[ -n "$SMOKE_MANIFEST_URL" ]]; then
     manifest_args+=(-e "MARS_WORKER_RELEASE_MANIFEST_URL=$SMOKE_MANIFEST_URL")
-    if [[ "$SMOKE_MANIFEST_URL" == file://* ]]; then
-      local manifest_path="${SMOKE_MANIFEST_URL#file://}"
-      [[ "$manifest_path" == /tmp/worker-release-manifest.json ]] || { echo 'local smoke manifest must use /tmp/worker-release-manifest.json' >&2; return 1; }
-      manifest_args+=(-v "$SMOKE_MANIFEST:/tmp/worker-release-manifest.json:ro")
-    fi
   fi
   docker run -d --name "$CONTROL_PLANE" --network "$NETWORK" \
     -e DATABASE_URL="postgres://mars:ci-only@${POSTGRES}:5432/$1" \
