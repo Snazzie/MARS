@@ -302,10 +302,10 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (action === "adopt") await adoptWorker(deps.db, id, c.get("user").id);
     else if (action === "reject") await deps.db`UPDATE workers SET admission_state='rejected' WHERE id=${id} AND admission_state='pending'`;
     else if (action === "drain") {
+      // Drain only removes the worker from scheduling. Existing leases must
+      // finish normally; failing them here strands otherwise healthy jobs and
+      // makes the UI contract ("active work completes") false.
       await deps.db`UPDATE workers SET draining=true WHERE id=${id}`;
-      await deps.db`UPDATE runner_leases SET state='failed',terminal_result=${jsonParameter(deps.db, { reason: "worker_drained" })}::jsonb,cleanup_state='pending',updated_at=now() WHERE worker_id=${id} AND state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')`;
-      await deps.db`UPDATE dashboard_jobs j SET status='completed',stage='completed',conclusion=COALESCE(j.conclusion,'failure'),completed_at=COALESCE(j.completed_at,now()) FROM runner_leases l WHERE l.worker_id=${id} AND l.github_job_id=j.github_job_id AND l.state='failed' AND l.terminal_result->>'reason'='worker_drained' AND j.status <> 'completed'`;
-      await deps.db`UPDATE dashboard_runs r SET status='completed',conclusion=COALESCE(r.conclusion,'failure'),completed_at=COALESCE(r.completed_at,now()) WHERE EXISTS (SELECT 1 FROM dashboard_jobs j JOIN runner_leases l ON l.organization_id=j.organization_id AND l.github_job_id=j.github_job_id WHERE l.worker_id=${id} AND l.state='failed' AND l.terminal_result->>'reason'='worker_drained' AND r.organization_id=j.organization_id AND r.id=j.run_id) AND r.status <> 'completed'`;
     } else if (action === "resume") {
       if (value.admissionState !== "adopted" || value.configurationState !== "ready") return error(c, 409, "worker_not_ready", "Worker must be adopted and configured before resume");
       await deps.db`UPDATE workers SET draining=false WHERE id=${id} AND admission_state='adopted' AND configuration_state='ready'`;
