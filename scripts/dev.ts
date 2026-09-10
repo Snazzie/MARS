@@ -11,6 +11,7 @@ const ports = devPorts(Bun.env);
 if (options.kill) {
   await killRecordedDevSupervisor();
   await killDevPortListeners(ports);
+  process.exit(0);
 }
 
 const lock = acquireDevLock();
