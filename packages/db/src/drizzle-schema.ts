@@ -822,6 +822,8 @@ export const workerCacheStatus = pgTable("worker_cache_status", {
 	cacheBaseUrl: text("cache_base_url").notNull(),
 	sizeBytes: bigint("size_bytes", { mode: "number" }).default(0).notNull(),
 	entryCount: bigint("entry_count", { mode: "number" }).default(0).notNull(),
+	hitCount: bigint("hit_count", { mode: "number" }).default(0).notNull(),
+	missCount: bigint("miss_count", { mode: "number" }).default(0).notNull(),
 	observedAt: timestamp("observed_at", { withTimezone: true, mode: 'string' }).notNull(),
 	error: text(),
 	activeSnapshotId: uuid("active_snapshot_id"),
@@ -831,6 +833,8 @@ export const workerCacheStatus = pgTable("worker_cache_status", {
 	runnerCacheMaxGiB: bigint("runner_cache_max_gib", { mode: "number" }),
 	runnerCacheSizeBytes: bigint("runner_cache_size_bytes", { mode: "number" }),
 	runnerCacheEntryCount: bigint("runner_cache_entry_count", { mode: "number" }),
+	runnerCacheHitCount: bigint("runner_cache_hit_count", { mode: "number" }).default(0).notNull(),
+	runnerCacheMissCount: bigint("runner_cache_miss_count", { mode: "number" }).default(0).notNull(),
 	runnerCacheObservedAt: timestamp("runner_cache_observed_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
 	foreignKey({ columns: [table.workerId], foreignColumns: [workers.id], name: "worker_cache_status_worker_id_fkey" }).onDelete("cascade"),

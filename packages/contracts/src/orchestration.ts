@@ -166,6 +166,8 @@ export const WorkerCacheStatus = z.object({
   cacheBaseUrl,
   sizeBytes: decimalInt64,
   entryCount: z.number().int().nonnegative().safe(),
+  hitCount: z.number().int().nonnegative().safe().optional(),
+  missCount: z.number().int().nonnegative().safe().optional(),
   observedAt: z.string().datetime({ offset: true }),
   error: z.string().max(1000).nullable(),
 }).strict();
@@ -205,6 +207,8 @@ export const WorkerRunnerCacheStatus = z.object({
   maxGiB: z.number().int().positive().safe(),
   sizeBytes: decimalInt64,
   entryCount: z.number().int().nonnegative().safe(),
+  hitCount: z.number().int().nonnegative().safe().optional(),
+  missCount: z.number().int().nonnegative().safe().optional(),
   observedAt: z.string().datetime({ offset: true }),
 }).strict();
 export type WorkerRunnerCacheStatus = z.infer<typeof WorkerRunnerCacheStatus>;

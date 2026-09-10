@@ -74,6 +74,7 @@ export type ActionCacheRouteDependencies = {
   authorize?: (request: Request) => Promise<CacheAuthorization | null>;
   signedUrl?: (entryId: string, operation: CacheGrantOperation) => string;
   verifyGrant?: (request: Request, entryId: string, operation: CacheGrantOperation) => boolean;
+  onLookup?: (hit: boolean) => void;
 };
 export type ActionCacheRoute = (request: Request) => Promise<Response>;
 export type NodeActionCacheHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
@@ -166,6 +167,7 @@ async function handleTwirp(request: Request, path: string, dependencies: ActionC
     const scopes = authorizedScopes(authorization, 1);
     if (!scopes.length) return permissionDenied();
     const entry = await dependencies.store.findReady({ githubRepositoryId: authorization.githubRepositoryId, scopes, cacheKey: input.key, restoreKeys: input.restore_keys, version: input.version });
+    dependencies.onLookup?.(entry !== null);
     if (!entry) return okJson({ ok: false });
     const touched = await dependencies.store.touchReady(entry.entryId);
     return okJson({ ok: true, signed_download_url: signedUrl(dependencies, touched.entryId, "download"), matched_key: touched.cacheKey });

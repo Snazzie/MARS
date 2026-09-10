@@ -22,6 +22,8 @@ export type WorkerRunnerCacheStatus = {
   maxGiB: number;
   sizeBytes: string;
   entryCount: number;
+  hitCount: number;
+  missCount: number;
   observedAt: string;
 };
 
@@ -58,9 +60,8 @@ export type StartActionCacheServiceOptions = {
   forwardPackageRequest?: PackageUpstreamHandler;
   scheduleSweep?: SweepScheduler;
 };
-
 export interface ActionCacheService {
-  status(): WorkerCacheStatus;
+  status(): WorkerCacheStatus & { entryCount: number; hitCount: number; missCount: number };
   runnerCacheStatus(): WorkerRunnerCacheStatus;
   applyTtl(ttlSeconds: number): Promise<void>;
   setRunnerCacheEnabled(enabled: boolean): void;
@@ -468,9 +469,10 @@ class PersistentActionCacheService implements ActionCacheService {
   #ttlSeconds: number;
   #runnerCacheEnabled: boolean;
   #runnerCacheMaxGiB: number;
+  readonly #actionCacheCounters: { hitCount: number; missCount: number };
   #ready = true;
-  #error: string | null = null;
   #closed = false;
+  #error: string | null = null;
   #renewal: CertificateRenewalHandle | null = null;
   readonly #sweepHandle: SweepHandle;
   #telemetrySink: ActionCacheTelemetrySink | null = null;
@@ -493,6 +495,7 @@ class PersistentActionCacheService implements ActionCacheService {
     createDataServer: (certificate: IssuedLeafCertificate) => HttpsServer;
     dataPort: number;
     leaseCredentials: LeaseProxyCredentials;
+    actionCacheCounters: { hitCount: number; missCount: number };
     sweepHandle: SweepHandle;
     runnerCacheEnabled: boolean;
     runnerCacheMaxGiB: number;
@@ -512,6 +515,7 @@ class PersistentActionCacheService implements ActionCacheService {
     this.#createDataServer = input.createDataServer;
     this.#dataPort = input.dataPort;
     this.#leaseCredentials = input.leaseCredentials;
+    this.#actionCacheCounters = input.actionCacheCounters;
     this.#sweepHandle = input.sweepHandle;
     this.#runnerCacheEnabled = input.runnerCacheEnabled;
     this.#runnerCacheMaxGiB = input.runnerCacheMaxGiB;
@@ -558,7 +562,7 @@ class PersistentActionCacheService implements ActionCacheService {
     }, delayMs);
   }
 
-  status(): WorkerCacheStatus {
+  status(): WorkerCacheStatus & { entryCount: number; hitCount: number; missCount: number } {
     if (!this.#closed) this.#lastStoredStatus = this.#store.status();
     const stored = this.#lastStoredStatus;
     return WorkerCacheStatusSchema.parse({
@@ -569,9 +573,11 @@ class PersistentActionCacheService implements ActionCacheService {
       cacheBaseUrl: this.#cacheBaseUrl,
       sizeBytes: stored.sizeBytes,
       entryCount: stored.entryCount,
+      hitCount: this.#actionCacheCounters.hitCount,
+      missCount: this.#actionCacheCounters.missCount,
       observedAt: this.#now().toISOString(),
       error: this.#error,
-    });
+    }) as WorkerCacheStatus & { entryCount: number; hitCount: number; missCount: number };
   }
   runnerCacheStatus(): WorkerRunnerCacheStatus {
     const stored = this.#packageDownloadCache.status();
@@ -581,6 +587,8 @@ class PersistentActionCacheService implements ActionCacheService {
       maxGiB: this.#runnerCacheMaxGiB,
       sizeBytes: stored.sizeBytes,
       entryCount: stored.entryCount,
+      hitCount: stored.hitCount ?? 0,
+      missCount: stored.missCount ?? 0,
       observedAt: this.#now().toISOString(),
     };
   }
@@ -805,10 +813,12 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
     const proxyOrigin = network.overrideOrigins?.proxyOrigin ?? originFor("http:", advertiseHost, boundProxyPort);
     cacheBaseUrl = network.overrideOrigins?.cacheBaseUrl ?? originFor("https:", advertiseHost, boundDataPort);
     const grants = new CacheGrantSigner(cacheBaseUrl, now);
+    const actionCacheCounters = { hitCount: 0, missCount: 0 };
     handleCacheRequest = createNodeActionCacheHandler(createActionCacheRoutes({
       cacheBaseUrl,
       store,
       authorize: authorizeCacheRequest,
+      onLookup: (hit) => { if (hit) actionCacheCounters.hitCount += 1; else actionCacheCounters.missCount += 1; },
       signedUrl: (entryId, operation) => grants.signedUrl(entryId, operation),
       verifyGrant: (request, entryId, operation) => principalByRequest.has(request) && grants.verify(request, entryId, operation),
     }), (incoming, request) => {
@@ -833,6 +843,7 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
       proxyOrigin,
       cacheBaseUrl,
       leaseCredentials,
+      actionCacheCounters,
       sweepHandle,
       runnerCacheEnabled: runnerCachePolicy.enabled,
       runnerCacheMaxGiB: runnerCachePolicy.maxGiB,

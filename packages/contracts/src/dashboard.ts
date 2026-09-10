@@ -152,7 +152,7 @@ export const WorkerDoctor = dto(strict({ nestedKvm: z.boolean().optional(), kvmM
 export type WorkerDoctor = z.infer<typeof WorkerDoctor>;
 export const CapacitySnapshot = dto(strict({ vcpu: strict({ actual: positiveSafe, reserved: positiveSafe.or(z.literal(0)), free: positiveSafe.or(z.literal(0)) }), memoryBytes: strict({ actual: positiveSafe, reserved: positiveSafe.or(z.literal(0)), free: positiveSafe.or(z.literal(0)) }), storageBytes: strict({ actual: positiveSafe, reserved: positiveSafe.or(z.literal(0)), free: positiveSafe.or(z.literal(0)) }), pods: strict({ actual: positiveSafe, reserved: positiveSafe.or(z.literal(0)), free: positiveSafe.or(z.literal(0)) }) }));
 export type CapacitySnapshot = z.infer<typeof CapacitySnapshot>;
-export const WorkerCacheSummary = dto(strict({ desiredTtlSeconds: positiveSafe, desiredRunnerCacheEnabled: z.boolean().default(true), desiredRunnerCacheMaxGiB: positiveSafe.default(20), effectiveTtlSeconds: positiveSafe.nullable(), effectiveRunnerCacheEnabled: z.boolean().nullable(), effectiveRunnerCacheMaxGiB: positiveSafe.nullable(), ready: z.boolean(), proxyOrigin: z.string().url().nullable(), cacheBaseUrl: z.string().url().nullable(), sizeBytes: z.string().regex(/^(?:0|[1-9]\d*)$/).nullable(), entryCount: nonnegativeSafe.nullable(), runnerCacheSizeBytes: z.string().regex(/^(?:0|[1-9]\d*)$/).nullable(), runnerCacheEntryCount: nonnegativeSafe.nullable(), observedAt: timestamp.nullable(), runnerCacheObservedAt: timestamp.nullable(), error: z.string().max(1000).nullable() }));
+export const WorkerCacheSummary = dto(strict({ desiredTtlSeconds: positiveSafe, desiredRunnerCacheEnabled: z.boolean().default(true), desiredRunnerCacheMaxGiB: positiveSafe.default(20), effectiveTtlSeconds: positiveSafe.nullable(), effectiveRunnerCacheEnabled: z.boolean().nullable(), effectiveRunnerCacheMaxGiB: positiveSafe.nullable(), ready: z.boolean(), proxyOrigin: z.string().url().nullable(), cacheBaseUrl: z.string().url().nullable(), sizeBytes: z.string().regex(/^(?:0|[1-9]\d*)$/).nullable(), entryCount: nonnegativeSafe.nullable(), hitCount: nonnegativeSafe.optional(), missCount: nonnegativeSafe.optional(), runnerCacheSizeBytes: z.string().regex(/^(?:0|[1-9]\d*)$/).nullable(), runnerCacheEntryCount: nonnegativeSafe.nullable(), runnerCacheHitCount: nonnegativeSafe.optional(), runnerCacheMissCount: nonnegativeSafe.optional(), observedAt: timestamp.nullable(), runnerCacheObservedAt: timestamp.nullable(), error: z.string().max(1000).nullable() }));
 export type WorkerCacheSummary = z.infer<typeof WorkerCacheSummary>;
 const nonnegativeSafeNumber = z.number().nonnegative().safe();
 const decimalBytes = z.string().regex(/^(?:0|[1-9]\d*)$/);
@@ -184,8 +184,12 @@ export const WorkerHealthCache = dto(strict({
   generation: z.string().uuid().nullable(),
   sizeBytes: decimalBytes.nullable(),
   entryCount: nonnegativeSafe.nullable(),
+  hitCount: nonnegativeSafe.optional(),
+  missCount: nonnegativeSafe.optional(),
   runnerCacheSizeBytes: decimalBytes.nullable(),
   runnerCacheEntryCount: nonnegativeSafe.nullable(),
+  runnerCacheHitCount: nonnegativeSafe.optional(),
+  runnerCacheMissCount: nonnegativeSafe.optional(),
   observedAt: timestamp.nullable(),
   runnerCacheObservedAt: timestamp.nullable(),
   error: z.string().max(1000).nullable(),

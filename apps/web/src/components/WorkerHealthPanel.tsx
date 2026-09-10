@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { WorkerDetail, WorkerHealth } from "@mars/contracts";
 
 const STALE_AFTER_SECONDS = 300;
@@ -10,6 +10,7 @@ type WorkerHealthPanelProps = {
   error?: unknown;
   limits?: WorkerDetail["limits"];
   showConnectionStatus?: boolean;
+  cacheMetrics?: ReactNode;
 };
 
 function errorMessage(error: unknown): string {
@@ -127,24 +128,26 @@ function UsageSection({ health, idPrefix, limits }: { health: WorkerHealth; idPr
   </section>;
 }
 
-function CacheSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: string }) {
+function CacheSection({ health, idPrefix, cacheMetrics }: { health: WorkerHealth; idPrefix: string; cacheMetrics?: ReactNode }) {
+  const [metricsOpen, setMetricsOpen] = useState(false);
   const cache = health.cache;
   return <section className="worker-health-section" aria-labelledby={`${idPrefix}-cache-heading`}>
-    <h3 id={`${idPrefix}-cache-heading`}>Cache health</h3>
+    <div className="panel-heading"><h3 id={`${idPrefix}-cache-heading`}>Cache health</h3>{cacheMetrics && <button type="button" className="control-button" onClick={() => setMetricsOpen((open) => !open)} aria-expanded={metricsOpen}>{metricsOpen ? "Hide metrics" : "Metrics"}</button>}</div>
+    {metricsOpen && cacheMetrics}
     <dl className="worker-health-details">
       <div><dt>Readiness</dt><dd>{cache.ready ? "Ready" : "Unavailable"}</dd></div>
       <div><dt>Desired TTL</dt><dd>{formatTtl(cache.desiredTtlSeconds)}</dd></div>
       <div><dt>Effective TTL</dt><dd>{formatTtl(cache.effectiveTtlSeconds)}</dd></div>
       <div><dt>Generation</dt><dd>{cache.generation ?? "No cache snapshot"}</dd></div>
-      <div><dt>Actions entries</dt><dd>{cache.entryCount ?? "Not reported"}</dd></div>
+      <div><dt>Actions entries</dt><dd><details><summary>{cache.entryCount ?? "Not reported"}</summary><p>Stored GitHub Actions artifacts. Total size: {cache.sizeBytes == null ? "Not reported" : formatBytes(cache.sizeBytes)}.</p><p>Lookup hits: {cache.runnerCacheObservedAt == null ? "Not reported" : cache.hitCount}</p><p>Lookup misses: {cache.runnerCacheObservedAt == null ? "Not reported" : cache.missCount}</p></details></dd></div>
       <div><dt>Actions size</dt><dd>{cache.sizeBytes == null ? "Not reported" : formatBytes(cache.sizeBytes)}</dd></div>
       <div><dt>Runner cache enabled</dt><dd>{cache.runnerCacheObservedAt == null ? "Not reported" : cache.effectiveRunnerCacheEnabled == null ? "Not reported" : cache.effectiveRunnerCacheEnabled ? "Enabled" : "Disabled"}</dd></div>
       <div><dt>Runner cache capacity</dt><dd>{cache.runnerCacheObservedAt == null ? "Not reported" : cache.effectiveRunnerCacheMaxGiB == null ? "Not reported" : `${cache.effectiveRunnerCacheMaxGiB} GiB`}</dd></div>
-      <div><dt>Runner cache entries</dt><dd>{cache.runnerCacheEntryCount ?? "Not reported"}</dd></div>
+      <div><dt>Runner cache entries</dt><dd><details><summary>{cache.runnerCacheEntryCount ?? "Not reported"}</summary><p>Cached public package and tool artifacts. Total size: {cache.runnerCacheSizeBytes == null ? "Not reported" : formatBytes(cache.runnerCacheSizeBytes)}.</p><p>Lookup hits: {cache.runnerCacheObservedAt == null ? "Not reported" : cache.runnerCacheHitCount}</p><p>Lookup misses: {cache.runnerCacheObservedAt == null ? "Not reported" : cache.runnerCacheMissCount}</p></details></dd></div>
       <div><dt>Runner cache size</dt><dd>{cache.runnerCacheSizeBytes == null ? "Not reported" : formatBytes(cache.runnerCacheSizeBytes)}</dd></div>
       <div><dt>Runner cache observed</dt><dd>{timestamp(cache.runnerCacheObservedAt)}</dd></div>
       <div><dt>Actions observed</dt><dd>{timestamp(cache.observedAt)}</dd></div>
-      <div><dt>Proxy status</dt><dd>{cache.ready ? "Available" : "Unavailable"}</dd></div>
+      <div><dt>Proxy status</dt><dd>{cache.ready ? "Ready" : "Unavailable"}</dd></div>
     </dl>
     <div className="worker-health-statuses" aria-label="Cache health status">
       {!cache.generation && <StatusBadge>No cache snapshot</StatusBadge>}
@@ -238,7 +241,7 @@ function ManagedContainersSection({ health, idPrefix }: { health: WorkerHealth; 
   </section>;
 }
 
-export function WorkerHealthPanel({ workerId, health, loading = false, error, limits, showConnectionStatus = true }: WorkerHealthPanelProps) {
+export function WorkerHealthPanel({ workerId, health, loading = false, error, limits, showConnectionStatus = true, cacheMetrics }: WorkerHealthPanelProps) {
   const idPrefix = workerId ? `worker-health-${workerId}` : "worker-health";
   if (loading) return <section id={`${idPrefix}-panel`} className="worker-health-panel" role="status" aria-label="Live worker health"><p>Loading live health…</p></section>;
   if (error) return <section id={`${idPrefix}-panel`} className="worker-health-panel" role="alert" aria-label="Live worker health error"><p>Live health unavailable. {errorMessage(error)}</p></section>;
@@ -252,7 +255,7 @@ export function WorkerHealthPanel({ workerId, health, loading = false, error, li
       {health.connection.doctorAgeSeconds == null && <StatusBadge>Unavailable telemetry</StatusBadge>}
     </div>}
     <UsageSection health={health} idPrefix={idPrefix} limits={limits} />
-    <CacheSection health={health} idPrefix={idPrefix} />
+    <CacheSection health={health} idPrefix={idPrefix} cacheMetrics={cacheMetrics} />
     <ManagedContainersSection health={health} idPrefix={idPrefix} />
   </section>;
 }

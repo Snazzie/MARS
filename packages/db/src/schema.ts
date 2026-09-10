@@ -206,6 +206,8 @@ CREATE TABLE IF NOT EXISTS worker_cache_status (
   cache_base_url text NOT NULL,
   size_bytes bigint NOT NULL DEFAULT 0 CHECK (size_bytes >= 0),
   entry_count bigint NOT NULL DEFAULT 0 CHECK (entry_count >= 0),
+  hit_count bigint NOT NULL DEFAULT 0 CHECK (hit_count >= 0),
+  miss_count bigint NOT NULL DEFAULT 0 CHECK (miss_count >= 0),
   observed_at timestamptz NOT NULL,
   error text,
   active_snapshot_id uuid,
@@ -215,12 +217,18 @@ CREATE TABLE IF NOT EXISTS worker_cache_status (
   runner_cache_max_gib bigint,
   runner_cache_size_bytes bigint CHECK (runner_cache_size_bytes >= 0),
   runner_cache_entry_count bigint CHECK (runner_cache_entry_count >= 0),
+  runner_cache_hit_count bigint NOT NULL DEFAULT 0 CHECK (runner_cache_hit_count >= 0),
+  runner_cache_miss_count bigint NOT NULL DEFAULT 0 CHECK (runner_cache_miss_count >= 0),
   runner_cache_observed_at timestamptz
 );
+ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS hit_count bigint NOT NULL DEFAULT 0;
+ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS miss_count bigint NOT NULL DEFAULT 0;
 ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_enabled boolean;
 ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_max_gib bigint;
 ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_size_bytes bigint;
 ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_entry_count bigint;
+ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_hit_count bigint NOT NULL DEFAULT 0;
+ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_miss_count bigint NOT NULL DEFAULT 0;
 ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_observed_at timestamptz;
 CREATE TABLE IF NOT EXISTS worker_cache_entries (
   worker_id uuid NOT NULL REFERENCES workers(id) ON DELETE CASCADE,

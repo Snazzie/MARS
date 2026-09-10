@@ -35,6 +35,36 @@ function cacheEntrySize(value: string): string { return formatBytes(value); }
 function cacheInventory(workerId: string) {
   return <WorkerCacheInventory workerId={workerId} />;
 }
+function formatMetricAge(value: string | null): string {
+  if (!value) return "Not reported";
+  const elapsedSeconds = Math.max(0, Math.round((Date.now() - Date.parse(value)) / 1000));
+  if (elapsedSeconds < 60) return `${elapsedSeconds}s ago`;
+  if (elapsedSeconds < 3600) return `${Math.round(elapsedSeconds / 60)}m ago`;
+  return `${Math.round(elapsedSeconds / 3600)}h ago`;
+}
+function WorkerCacheMetrics({ workerId, cache }: { workerId: string; cache: NonNullable<WorkerDetail["cache"]> }) {
+  const inventory = useInfiniteQuery({
+    queryKey: ["workers", workerId, "cache", "metrics"],
+    queryFn: ({ pageParam }: { pageParam: string | null }) => getWorkerCache(workerId, { cursor: pageParam, limit: 50 }),
+    initialPageParam: null,
+    getNextPageParam: (page) => page.nextCursor ?? undefined,
+  });
+  const entries = inventory.data?.pages.flatMap((page) => page.items) ?? [];
+  const lastHit = entries.reduce<string | null>((latest, entry) => !latest || Date.parse(entry.lastAccessedAt) > Date.parse(latest) ? entry.lastAccessedAt : latest, null);
+  return <div className="worker-cache-metrics" aria-label="Cache metrics">
+    <dl className="worker-health-details">
+      <div><dt>Actions cache hits</dt><dd>{cache.hitCount ?? "Not reported"}</dd></div>
+      <div><dt>Actions cached items</dt><dd>{cache.entryCount ?? "Not reported"}</dd></div>
+      <div><dt>Actions cache age</dt><dd>{formatMetricAge(cache.observedAt)}</dd></div>
+      <div><dt>Actions last hit</dt><dd>{inventory.isLoading ? "Loading…" : lastHit ? telemetryAt(lastHit) : "Not reported"}</dd></div>
+      <div><dt>Runner cache hits</dt><dd>{cache.runnerCacheHitCount ?? "Not reported"}</dd></div>
+      <div><dt>Runner cached items</dt><dd>{cache.runnerCacheEntryCount ?? "Not reported"}</dd></div>
+      <div><dt>Runner cache age</dt><dd>{formatMetricAge(cache.runnerCacheObservedAt)}</dd></div>
+      <div><dt>Runner last hit</dt><dd>Not reported</dd></div>
+    </dl>
+    {inventory.error && <p className="muted">Last-hit telemetry unavailable.</p>}
+  </div>;
+}
 function WorkerCacheInventory({ workerId }: { workerId: string }) {
   const [query, setQuery] = useState("");
   const inventory = useInfiniteQuery({
@@ -55,7 +85,7 @@ function WorkerCacheInventory({ workerId }: { workerId: string }) {
 }
 function WorkerHealthSection({ worker }: { worker: WorkerDetail }) {
   const healthQuery = useWorkerHealth(worker.id);
-  return <WorkerHealthPanel workerId={worker.id} health={healthQuery.data} loading={healthQuery.isLoading} error={healthQuery.error} limits={worker.limits} showConnectionStatus={false} />;
+  return <WorkerHealthPanel workerId={worker.id} health={healthQuery.data} loading={healthQuery.isLoading} error={healthQuery.error} limits={worker.limits} showConnectionStatus={false} cacheMetrics={worker.cache ? <WorkerCacheMetrics workerId={worker.id} cache={worker.cache} /> : undefined} />;
 }
 
 export function WorkerCard({ worker, organizationId, onChange, canManage = false }: { worker: WorkerDetail; organizationId: string; onChange: () => void; canManage?: boolean }) {
@@ -127,8 +157,7 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
     {active && effectiveConfigurationState === "ready" && !runtimeReady && worker.doctor?.runtimeBuildState !== "building" && <p className="pending-note" role="status">Runtime image is not ready. Scheduling remains paused until the worker reports a verified local runtime.</p>}
     {active && effectiveConfigurationState === "error" && <p className="pending-note" role="alert">Configuration update failed.{applied ? <> Last applied <time dateTime={worker.configurationAppliedAt!}>{applied.at}</time> · revision <code>{applied.revision}</code>.</> : " No configuration has been acknowledged."}</p>}
     <WorkerHealthSection worker={worker} />
-    {active && <section className="worker-section worker-cache-panel" aria-label="Cache inventory"><div className="panel-kicker">Cache inventory</div>{cache?.ready && cache.entryCount != null && cache.entryCount > 0 ? <details onToggle={(event) => setCacheInventoryOpen(event.currentTarget.open)}><summary>Browse cache inventory</summary>{cacheInventoryOpen && cacheInventory(worker.id)}</details> : <p className="muted">{!cache?.ready ? "Cache inventory unavailable." : cache.entryCount == null ? "Cache telemetry not reported." : "No GitHub Actions cache entries."}</p>}{canManage && <div className="worker-cache-actions"><button type="button" className="control-button" onClick={() => { void purge(); }} disabled={purgePending}>{purgePending ? "Purging runner cache…" : "Purge runner cache"}</button>{purgeSuccess && <p role="status" className="pending-note">Runner cache purge requested.</p>}{purgeError && <p role="alert" className="pending-note">{purgeError}</p>}</div>}</section>}
-    {building && <dialog open className="worker-build-dialog" aria-label="Build local runtime image"><WorkerImageBuildForm organizationId={organizationId} workerId={worker.id} runtimeBuildState={worker.doctor?.runtimeBuildState} runtimeBuildMessage={worker.doctor?.runtimeBuildMessage} onRefresh={onChange} onCancel={() => setBuilding(false)} /></dialog>}
+    {active && <section className="worker-section worker-cache-panel" aria-label="Cache inventory"><div className="panel-kicker">Cache inventory</div><div className="worker-cache-actions">{cache?.ready && cache.entryCount != null && cache.entryCount > 0 ? <details onToggle={(event) => setCacheInventoryOpen(event.currentTarget.open)}><summary>Browse cache inventory</summary>{cacheInventoryOpen && cacheInventory(worker.id)}</details> : <span className="muted">{!cache?.ready ? "Cache inventory unavailable." : cache.entryCount == null ? "Cache telemetry not reported." : "No GitHub Actions cache entries."}</span>}{canManage && <button type="button" className="control-button" onClick={() => { void purge(); }} disabled={purgePending}>{purgePending ? "Purging runner cache…" : purgeSuccess ? "Runner cache purge requested." : "Purge runner cache"}</button>}{purgeError && <span className="form-error" role="alert">{purgeError}</span>}</div></section>}
     <dialog ref={dialog} className="worker-config-dialog" onCancel={closeConfiguration} aria-label="Configure worker">{configuring && <WorkerConfigurationForm worker={{ id: worker.id, admissionState: worker.admissionState, platform: worker.platform, guestPlatforms: worker.guestPlatforms, draining: worker.draining, activeSandboxes: worker.activeSandboxes, capacity: capacityData, limits: worker.limits, desiredCacheTtlSeconds: cache?.desiredTtlSeconds, desiredRunnerCacheEnabled, desiredRunnerCacheMaxGiB }} organizationId={organizationId} onConfigured={() => { closeConfiguration(); onChange(); }} />}</dialog>
   </article>;
 }

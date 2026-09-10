@@ -213,8 +213,8 @@ test("publishes public tarballs as MISS then serves byte-identical HIT", async (
     expect(first.response.headers.get("x-mars-package-cache")).toBe("MISS");
     expect(second.response.headers.get("x-mars-package-cache")).toBe("HIT");
     expect(calls).toBe(1);
-    expect(cache.status()).toEqual({ entryCount: 1, sizeBytes: String(body.byteLength) });
-    expect(events).toEqual([{ type: "worker.runner_cache_status", payload: { entryCount: 1, sizeBytes: String(body.byteLength) } }]);
+    expect(cache.status()).toEqual({ entryCount: 1, sizeBytes: String(body.byteLength), hitCount: 1, missCount: 1 });
+    expect(events).toEqual([{ type: "worker.runner_cache_status", payload: { entryCount: 1, sizeBytes: String(body.byteLength), hitCount: 0, missCount: 1 } }]);
   } finally {
     await cache.close();
   }
@@ -240,7 +240,7 @@ test("telemetry sink failures do not discard a successfully published package", 
     expect(first.response.headers.get("x-mars-package-cache")).toBe("MISS");
     expect(second.response.headers.get("x-mars-package-cache")).toBe("HIT");
     expect(calls).toBe(1);
-    expect(cache.status()).toEqual({ entryCount: 1, sizeBytes: String(body.length) });
+    expect(cache.status()).toEqual({ entryCount: 1, sizeBytes: String(body.length), hitCount: 1, missCount: 1 });
   } finally {
     await cache.close();
   }
@@ -290,7 +290,7 @@ test("purge removes package rows and objects, is idempotent, and preserves unrel
   await Bun.write(unrelatedPath, "actions");
   try {
     await request(cache, "/pkg/-/pkg-1.0.0.tgz");
-    expect(cache.status()).toEqual({ entryCount: 1, sizeBytes: "3" });
+    expect(cache.status()).toEqual({ entryCount: 1, sizeBytes: "3", hitCount: 0, missCount: 1 });
     expect(await readdir(join(root, "packages", "objects"))).toHaveLength(1);
     await cache.purge();
     await cache.purge();
@@ -299,7 +299,7 @@ test("purge removes package rows and objects, is idempotent, and preserves unrel
     const db = new Database(join(root, "packages", "cache.sqlite"), { readonly: true });
     try {
       expect(Number(db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM package_entries").get()?.count ?? 0)).toBe(0);
-      expect(cache.status()).toEqual({ entryCount: 0, sizeBytes: "0" });
+      expect(cache.status()).toEqual({ entryCount: 0, sizeBytes: "0", hitCount: 0, missCount: 1 });
     } finally {
       db.close();
     }
@@ -379,10 +379,10 @@ test("sweep evicts expired package entries and resets the aggregate", async () =
   });
   try {
     await request(cache, "/pkg/-/pkg-1.0.0.tgz");
-    expect(cache.status()).toEqual({ entryCount: 1, sizeBytes: "3" });
+    expect(cache.status()).toEqual({ entryCount: 1, sizeBytes: "3", hitCount: 0, missCount: 1 });
     current = new Date("2025-01-01T00:01:01.000Z");
     await cache.sweep();
-    expect(cache.status()).toEqual({ entryCount: 0, sizeBytes: "0" });
+    expect(cache.status()).toEqual({ entryCount: 0, sizeBytes: "0", hitCount: 0, missCount: 1 });
   } finally {
     await cache.close();
   }

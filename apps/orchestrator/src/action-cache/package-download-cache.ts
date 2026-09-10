@@ -47,7 +47,7 @@ type CapturedResponse = {
 
 export type PackageDownloadCacheMutation = {
   type: "worker.runner_cache_status";
-  payload: { sizeBytes: string; entryCount: number };
+  payload: { sizeBytes: string; entryCount: number; hitCount?: number; missCount?: number };
 };
 export type PackageDownloadCacheTelemetrySink = (
   type: PackageDownloadCacheMutation["type"],
@@ -304,7 +304,7 @@ export interface PackageDownloadCache {
   purge(): Promise<void>;
   sweep(): Promise<void>;
   probe(): Promise<void>;
-  status(): { sizeBytes: string; entryCount: number };
+  status(): { sizeBytes: string; entryCount: number; hitCount?: number; missCount?: number };
   setTelemetrySink(sink: PackageDownloadCacheTelemetrySink | null): void;
   close(): Promise<void>;
 }
@@ -326,6 +326,8 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
   #generation = 0;
   #closed = false;
   #telemetrySink: PackageDownloadCacheTelemetrySink | null = null;
+  #hitCount = 0;
+  #missCount = 0;
 
   constructor(root: string, db: Database, ttlSeconds: number, now: Clock, upstream: PackageUpstreamHandler) {
     this.#root = root;
@@ -337,21 +339,16 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
     this.#now = now;
     this.#upstream = upstream;
   }
-
-  setTelemetrySink(sink: PackageDownloadCacheTelemetrySink | null): void { this.#telemetrySink = sink; }
-  status(): { sizeBytes: string; entryCount: number } {
+  status(): { sizeBytes: string; entryCount: number; hitCount: number; missCount: number } {
     const aggregate = this.#db.query<{ sizeBytes: string | number; entryCount: number }, []>(
       "SELECT COALESCE(SUM(CAST(size_bytes AS INTEGER)), 0) AS sizeBytes, COUNT(*) AS entryCount FROM package_entries WHERE state='ready'",
     ).get();
-    return { sizeBytes: String(aggregate?.sizeBytes ?? 0), entryCount: Number(aggregate?.entryCount ?? 0) };
+    return { sizeBytes: String(aggregate?.sizeBytes ?? 0), entryCount: Number(aggregate?.entryCount ?? 0), hitCount: this.#hitCount, missCount: this.#missCount };
   }
   #emitMutation(): void {
-    try {
-      this.#telemetrySink?.("worker.runner_cache_status", this.status());
-    } catch {
-      // Telemetry is best effort and must not affect a committed cache mutation.
-    }
+    try { this.#telemetrySink?.("worker.runner_cache_status", this.status()); } catch { /* telemetry is best effort */ }
   }
+  setTelemetrySink(sink: PackageDownloadCacheTelemetrySink | null): void { this.#telemetrySink = sink; }
   #assertOpen(): void { if (this.#closed) throw new Error("package download cache is closed"); }
   #objectPath(pathId: string): string { return join(this.#objects, `${pathId}.blob`); }
 
@@ -382,8 +379,6 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
     }).finally(() => {
       if (this.#eviction === next) this.#eviction = null;
     });
-    this.#eviction = next;
-    await next;
   }
 
   async #hit(canonicalUrl: string, response: ServerResponse): Promise<boolean> {
@@ -397,6 +392,7 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
     try {
       this.#db.query("UPDATE package_entries SET last_accessed_at=?,expires_at=? WHERE url_hash=? AND state='ready'").run(this.#now().toISOString(), isoAfter(this.#now(), this.#ttlSeconds), row.urlHash);
     } catch { return false; }
+    this.#hitCount += 1;
     let storedHeaders: HeaderMap;
     try { storedHeaders = JSON.parse(row.responseHeaders) as HeaderMap; } catch { await this.#evict(row); return false; }
     const headers: HeaderMap = { ...storedHeaders, "content-length": row.sizeBytes, "x-mars-package-cache": "HIT" };
@@ -481,6 +477,7 @@ class SqlitePackageDownloadCache implements PackageDownloadCache {
     try {
       if (await this.#hit(canonicalUrl, response)) return;
     } catch { await this.#upstream(request, response); return; }
+    this.#missCount += 1;
     const existing = this.#flights.get(canonicalUrl);
     if (existing) {
       const result = await existing;

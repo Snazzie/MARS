@@ -39,13 +39,20 @@ test("renders usage, cache health, and workload telemetry with accessible sectio
   expect(markup).toContain("acme/repo");
   expect(markup).toContain("512 MiB");
   expect(markup).toContain("Actions entries");
-  expect(markup).toContain("Actions size");
   expect(markup).toContain("Runner cache enabled");
   expect(markup).toContain("Runner cache capacity");
   expect(markup).toContain("Runner cache entries");
   expect(markup).toContain("Runner cache size");
+  expect(markup).toContain("Lookup hits");
+  expect(markup).toContain("Lookup misses");
   expect(markup).toContain("Runner cache observed");
   expect(markup).toContain("<time dateTime=\"2026-08-23T11:59:56.000Z\">");
+});
+test("places cache metrics beside the cache health heading", () => {
+  const markup = renderToStaticMarkup(<WorkerHealthPanel health={healthFixture()} cacheMetrics={<div>Actions cache hits</div>} />);
+  expect(markup).toContain('class="panel-heading"');
+  expect(markup).toContain(">Cache health</h3>");
+  expect(markup).toContain(">Metrics</button>");
 });
 
 test("splits requested job resources into separately scoped columns", () => {
