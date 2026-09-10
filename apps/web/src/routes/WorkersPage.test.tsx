@@ -36,6 +36,8 @@ test("keeps enrollment closed until explicitly opened", () => {
 });
 
 test("polls while an adopted worker is applying configuration", () => {
-  expect(workerRefetchInterval([{ admissionState: "adopted", configurationState: "applying" }])).toBe(2_000);
-  expect(workerRefetchInterval([{ admissionState: "adopted", configurationState: "ready" }])).toBe(false);
+  expect(workerRefetchInterval([{ admissionState: "adopted", configurationState: "applying", draining: false, activeSandboxes: 0 }])).toBe(2_000);
+  expect(workerRefetchInterval([{ admissionState: "adopted", configurationState: "ready", draining: true, activeSandboxes: 1 }])).toBe(2_000);
+  expect(workerRefetchInterval([{ admissionState: "adopted", configurationState: "ready", draining: true, activeSandboxes: 0 }])).toBe(false);
+  expect(workerRefetchInterval([{ admissionState: "adopted", configurationState: "ready", draining: false, activeSandboxes: 0 }])).toBe(false);
 });
