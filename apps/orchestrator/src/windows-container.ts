@@ -237,6 +237,15 @@ export class WindowsContainerDriver implements RuntimeDriver {
     }
     return rows;
   }
+  private async enumerateOwnedContainers(): Promise<DockerInspection[]> {
+    const listed = checked(await this.docker(["ps", "-a", "--filter", "label=mars.managed=true", "--filter", "label=mars.lease-id", "--format", "{{.ID}}"]), "docker ps")
+      .split(/\r?\n/).map((id) => id.trim()).filter(Boolean);
+    if (listed.length === 0) return [];
+    return (await this.inspectManagedContainers(listed)).filter((inspection) =>
+      inspection.Config?.Labels?.["mars.managed"] === "true" &&
+      WorkerContainerStatus.shape.leaseId.safeParse(inspection.Config?.Labels?.["mars.lease-id"]).success &&
+      typeof inspection.Id === "string");
+  }
   private async collectContainerStats(ids: string[]): Promise<{ rows: DockerStats[]; disappeared: Set<string> }> {
     if (ids.length === 0) return { rows: [], disappeared: new Set() };
     const batch = await this.docker(["stats", "--no-stream", "--format", "{{json .}}", ...ids]);
@@ -257,14 +266,26 @@ export class WindowsContainerDriver implements RuntimeDriver {
     }
     return { rows, disappeared };
   }
+  async reconcileOrphans(): Promise<void> {
+    const candidates = await this.enumerateOwnedContainers();
+    const errors: Error[] = [];
+    await Promise.all(candidates.map(async (inspection) => {
+      const id = inspection.Id as string;
+      const leaseId = inspection.Config!.Labels!["mars.lease-id"] as string;
+      try {
+        const result = await this.docker(["rm", "-f", id]);
+        if (result.code !== 0 && !isDockerNotFound(result)) checked(result, "docker rm");
+      } catch (error) {
+        if (!isDockerNotFound({ code: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) })) errors.push(error instanceof Error ? error : new Error(String(error)));
+      } finally {
+        await rm(this.bootstrapPath(leaseId), { recursive: true, force: true });
+      }
+    }));
+    if (errors.length > 0) throw new AggregateError(errors, "Windows container orphan reconciliation failed");
+  }
   async listContainerStatuses(): Promise<WorkerContainerStatusData[]> {
-    const listed = checked(await this.docker(["ps", "-a", "--filter", "label=mars.managed=true", "--format", "{{.ID}}"]), "docker ps")
-      .split(/\r?\n/)
-      .map((id) => id.trim())
-      .filter(Boolean);
-    if (listed.length === 0) return [];
-
-    const inspections = await this.inspectManagedContainers(listed);
+    const inspections = await this.enumerateOwnedContainers();
+    if (inspections.length === 0) return [];
     const runningIds = inspections.flatMap((inspection) => inspection.State?.Status === "running" && typeof inspection.Id === "string" ? [inspection.Id] : []);
     const stats = await this.collectContainerStats(runningIds);
     const disappeared = new Set([...stats.disappeared].map((id) => id.toLowerCase()));

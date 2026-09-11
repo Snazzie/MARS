@@ -92,12 +92,19 @@ export async function runLeaseLifecycle(
   const correlationId = crypto.randomUUID();
   const startedAt = Date.now();
   const payload = { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, correlationId };
+  const emit = (workerEvent: WorkerEvent): void => {
+    try {
+      send(workerEvent);
+    } catch (error) {
+      console.error("Worker event delivery failed", { workerId: command.workerId, leaseId: bootstrap.leaseId, type: workerEvent.type, error: error instanceof Error ? error.message : String(error) });
+    }
+  };
   let workerCache: WorkerCacheProxy | undefined;
   try {
     if (options?.cacheService) workerCache = options.cacheService.transport(bootstrap.leaseId, bootstrap.expiresAt);
   } catch (error) {
     console.error("Lease cache transport setup failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) });
-    send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "provisioning_failed" } });
+    emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "provisioning_failed" } });
     return;
   }
   try {
@@ -106,10 +113,10 @@ export async function runLeaseLifecycle(
     runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig, ...(workerCache ? { workerCache } : {}) });
   } catch (error) {
     console.error("Lease provisioning failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) });
-    send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "provisioning_failed" } });
+    emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "provisioning_failed" } });
     return;
   }
-  send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "sandbox_attested", occurredAt: new Date().toISOString(), payload: { ...payload, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed } });
+  emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "sandbox_attested", occurredAt: new Date().toISOString(), payload: { ...payload, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed } });
   const sampleRuntime = runtime.sample;
   let sampling = true;
   let pressure = initialMemoryPressureState();
@@ -132,7 +139,7 @@ export async function runLeaseLifecycle(
         lastSampleOccurredAt = occurredAt;
         samplingGapMs = Math.max(samplingGapMs ?? 0, occurredMs - previousSampleMs);
         previousSampleMs = occurredMs;
-        send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "job.resource_sample", occurredAt, payload: { jobId: bootstrap.jobId, leaseId: bootstrap.leaseId, occurredAt, ...sample } });
+        emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "job.resource_sample", occurredAt, payload: { jobId: bootstrap.jobId, leaseId: bootstrap.leaseId, occurredAt, ...sample } });
         const result = updateMemoryPressure(pressure, sample, bootstrap.resources.memoryBytes);
         pressure = result.state;
         if (result.evidence && !oomResult) {
@@ -158,13 +165,13 @@ export async function runLeaseLifecycle(
     await sampler;
     const termination = runtime.termination ?? fallbackTermination("child_exit", exitCode, Date.now() - startedAt, sampleCount, lastSampleOccurredAt, samplingGapMs);
     const reportedExitCode = oomResult && exitCode === 0 ? 137 : exitCode;
-    send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "runner.finished", occurredAt: new Date().toISOString(), payload: { ...payload, exitCode: reportedExitCode, termination, ...(oomResult ? { oom: oomResult } : {}) } });
+    emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "runner.finished", occurredAt: new Date().toISOString(), payload: { ...payload, exitCode: reportedExitCode, termination, ...(oomResult ? { oom: oomResult } : {}) } });
   } catch (error) {
     sampling = false;
     await sampler;
     const termination = runtime.termination ?? fallbackTermination("child_disappeared", null, Date.now() - startedAt, sampleCount, lastSampleOccurredAt, samplingGapMs);
     console.error("Runner failed", { leaseId: bootstrap.leaseId, correlationId, cause: termination.cause, error: error instanceof Error ? error.message : String(error) });
-    send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: oomResult ? "out_of_memory" : "runner_failed", termination, ...(oomResult ? { oom: oomResult } : {}) } });
+    emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: oomResult ? "out_of_memory" : "runner_failed", termination, ...(oomResult ? { oom: oomResult } : {}) } });
   }
   if (driver.collectRawDiagnostics) {
     try {
@@ -173,7 +180,7 @@ export async function runLeaseLifecycle(
       const chunkSize = 96 * 1024;
       const chunks = raw.length ? Math.ceil(raw.length / chunkSize) : 1;
       for (let sequence = 0; sequence < chunks; sequence += 1) {
-        send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "diagnostic.chunk", occurredAt: new Date().toISOString(), payload: { jobId: bootstrap.jobId, leaseId: bootstrap.leaseId, diagnosticId, sequence, content: raw.slice(sequence * chunkSize, (sequence + 1) * chunkSize), final: sequence === chunks - 1 } });
+        emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "diagnostic.chunk", occurredAt: new Date().toISOString(), payload: { jobId: bootstrap.jobId, leaseId: bootstrap.leaseId, diagnosticId, sequence, content: raw.slice(sequence * chunkSize, (sequence + 1) * chunkSize), final: sequence === chunks - 1 } });
       }
     } catch (error) {
       console.error("Raw container diagnostics failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) });
@@ -181,13 +188,13 @@ export async function runLeaseLifecycle(
   }
   if (preserveLeasesForDebugging(options)) {
     console.warn("Lease cleanup disabled for debugging", { leaseId: bootstrap.leaseId, correlationId });
-    send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "debug_preserve" } });
+    emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "debug_preserve" } });
     return;
   }
   let cleanupFailed = false;
   try { await driver.stopLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("Lease stop failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) }); }
   try { await driver.removeLease(bootstrap.leaseId); } catch (error) { cleanupFailed = true; console.error("Lease removal failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) }); }
-  send({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: cleanupFailed ? "lease.failed" : "lease.reaped", occurredAt: new Date().toISOString(), payload: cleanupFailed ? { ...payload, reason: "cleanup_failed" } : payload } as WorkerEvent);
+  emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: cleanupFailed ? "lease.failed" : "lease.reaped", occurredAt: new Date().toISOString(), payload: cleanupFailed ? { ...payload, reason: "cleanup_failed" } : payload } as WorkerEvent);
   } finally {
     options?.cacheService?.unregisterLease(bootstrap.leaseId);
   }

@@ -134,7 +134,17 @@ async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> {
   await save(result);
   return result;
 }
-type WindowsRuntimeDriver = Pick<RuntimeDriver, "reserveCapacity" | "createLease" | "stopLease" | "removeLease"> & { listContainerStatuses: () => Promise<WorkerContainerStatus[]>; reconcileOrphans?: () => Promise<void> };
+type WindowsRuntimeDriver = Pick<RuntimeDriver, "reserveCapacity" | "createLease" | "stopLease" | "removeLease"> & { listContainerStatuses: () => Promise<WorkerContainerStatus[]>; reconcileOrphans: () => Promise<void> };
+function emitWindowsWorkerEvent(workerId: string, leaseId: string | null, send: (workerEvent: WorkerEvent) => void, workerEvent: WorkerEvent): void {
+  try {
+    send(workerEvent);
+  } catch (error) {
+    console.error("Worker event delivery failed", { workerId, leaseId, type: workerEvent.type, error: error instanceof Error ? error.message : String(error) });
+  }
+}
+export async function reconcileWindowsRuntime(identity: Pick<Identity, "preserveLeases">, driver: Pick<WindowsRuntimeDriver, "reconcileOrphans">): Promise<void> {
+  if (identity.preserveLeases !== true) await driver.reconcileOrphans();
+}
 export function buildWindowsDoctorReport(input: { doctor: WorkerDoctorData; capacity: WorkerCapacityData; containers: WorkerContainerStatus[]; activeLeases: string[]; preserveLeases: boolean }): WorkerDoctorReport {
   return WorkerDoctorReport.parse({
     doctor: {
@@ -166,8 +176,6 @@ export async function applyWindowsRunnerCachePurge(command: WorkerCommand, cache
   await cacheService.purgeRunnerCache();
   return event(command.workerId, "command.accepted", { commandId: command.id, leaseId: null });
 }
-
-
 export async function runWindowsLeaseCleanup(
   command: WorkerCommand,
   driver: Pick<RuntimeDriver, "stopLease" | "removeLease">,
@@ -177,15 +185,16 @@ export async function runWindowsLeaseCleanup(
   if (!["tart.stop_lease", "windows-container.stop_lease", "hyperv.stop_lease"].includes(command.type) || !command.leaseId) throw new Error("Windows lease cleanup command invalid");
   const nonce = String((command.payload as Record<string, unknown>).nonce ?? "");
   const payload = { commandId: command.id, leaseId: command.leaseId, nonce };
+  const emit = (workerEvent: WorkerEvent) => emitWindowsWorkerEvent(command.workerId, command.leaseId, send, workerEvent);
   if (command.type !== "tart.stop_lease" && preserveLeases) {
-    send(event(command.workerId, "lease.failed", { ...payload, reason: "debug_preserve" }));
+    emit(event(command.workerId, "lease.failed", { ...payload, reason: "debug_preserve" }));
     return;
   }
-  send(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId }));
+  emit(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId }));
   let cleanupFailed = false;
   try { await driver.stopLease(command.leaseId); } catch { cleanupFailed = true; }
   try { await driver.removeLease(command.leaseId); } catch { cleanupFailed = true; }
-  send(event(command.workerId, cleanupFailed ? "lease.failed" : "lease.reaped", cleanupFailed
+  emit(event(command.workerId, cleanupFailed ? "lease.failed" : "lease.reaped", cleanupFailed
     ? { ...payload, reason: "cleanup_failed" }
     : payload));
 }
@@ -215,7 +224,6 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
     identity = await createIdentity();
     await save(identity);
   }
-  if (!identity.workerId) identity = await enroll(controlPlane, identity);
   const mode = Bun.env.MARS_WINDOWS_RUNTIME ?? "vm";
   let driver: WindowsRuntimeDriver;
   if (mode === "container") {
@@ -230,6 +238,8 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
   } else {
     throw new Error(`Unsupported Windows runtime: ${mode}`);
   }
+  await reconcileWindowsRuntime(identity, driver);
+  if (!identity.workerId) identity = await enroll(controlPlane, identity);
   let doctorReport = await windowsDoctor(identity.preserveLeases === true);
   const activeLeases = new Map<string, Promise<void>>();
   const sendDoctor = async (ws: WebSocket): Promise<void> => {

@@ -70,6 +70,17 @@ test("Windows installer is container-only and validates every immutable input be
   expect(windows).toContain("Register-ResumeTask");
   expect(windows).toContain("Remove-ResumeTask");
 });
+test("Windows installer configures repeated SCM recovery for fresh and upgraded workers", () => {
+  expect(windows).toContain("function Set-WorkerServiceRecovery");
+  expect(windows).toContain("sc.exe failure MarsWorker 'reset= 86400' 'actions= restart/5000/restart/30000/restart/60000'");
+  expect(windows).toContain("sc.exe failureflag MarsWorker 1");
+  const helper = windows.indexOf("function Set-WorkerServiceRecovery");
+  const upgrade = windows.indexOf("Set-WorkerServiceRecovery", windows.indexOf("function Invoke-WorkerUpgrade"));
+  const registration = windows.lastIndexOf("Set-WorkerServiceRecovery");
+  expect(upgrade).toBeGreaterThan(helper);
+  expect(registration).toBeGreaterThan(upgrade);
+  expect(windows).not.toContain("'actions= restart/5000/restart/30000/none/0'");
+});
 test("Windows upgrade path downloads only worker binaries and restarts the existing service", () => {
   expect(windows).toContain("function Invoke-WorkerUpgrade");
   const upgradeStart = windows.indexOf("function Invoke-WorkerUpgrade");

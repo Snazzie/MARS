@@ -179,6 +179,12 @@ function Verify-DownloadedFile([string]$Path, [string]$Expected, [string]$Name, 
   if ($responseHash -and $responseHash -ne $Expected) { throw "$Name response hash mismatch." }
 }
 function Download-Verified([string]$Url, [string]$Hash, [string]$Destination, [string]$Name) { $response = Download-WorkerArtifact $Url $Destination 900; Verify-DownloadedFile $Destination $Hash $Name $response }
+function Set-WorkerServiceRecovery {
+  $failure = & sc.exe failure MarsWorker 'reset= 86400' 'actions= restart/5000/restart/30000/restart/60000' 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to configure MarsWorker recovery: $($failure -join ' ')" }
+  $failureFlag = & sc.exe failureflag MarsWorker 1 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to configure MarsWorker failure flag: $($failureFlag -join ' ')" }
+}
 function Invoke-WorkerUpgrade {
   param([string]$Root, [string]$Bin)
   $identityPath = Join-Path $Root 'worker-identity.json'
@@ -200,6 +206,7 @@ function Invoke-WorkerUpgrade {
     Download-Verified $WindowsOrchestratorUrl $WindowsOrchestratorSha256 $stagedOrchestrator 'Windows orchestrator'
     Download-Verified $WindowsServiceHostUrl $WindowsServiceHostSha256 $stagedServiceHost 'Windows service host'
     if (-not (Test-Path -LiteralPath $stagedOrchestrator -PathType Leaf) -or -not (Test-Path -LiteralPath $stagedServiceHost -PathType Leaf)) { throw 'Windows worker upgrade downloads were incomplete.' }
+    Set-WorkerServiceRecovery
     Write-Host 'Stopping MarsWorker for binary replacement'
     Stop-Service MarsWorker -Force -ErrorAction Stop
     $service = Get-Service MarsWorker -ErrorAction Stop
@@ -278,7 +285,8 @@ try {
   $serviceEnvironment += "MARS_CACHE_PROXY_URL=$($cacheOrigins.Proxy)","MARS_CACHE_ADVERTISE_URL=$($cacheOrigins.Advertise)"
   if ($AllowLocalContainerImage -or $WindowsContainerImage -eq 'mars/windows-job:local') { $serviceEnvironment += 'MARS_ALLOW_LOCAL_CONTAINER_IMAGE=true' }
   foreach ($name in @('MARS_ACTION_CACHE_ROOT','MARS_CACHE_PROXY_PORT','MARS_CACHE_DATA_PORT','MARS_CACHE_TOKEN_ISSUER','MARS_CACHE_JWKS_URL','MARS_WINDOWS_CONTAINER_DNS_SERVERS')) { $value = [Environment]::GetEnvironmentVariable($name); if (-not [string]::IsNullOrWhiteSpace($value)) { $serviceEnvironment += "$name=$value" } }
-  New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\MarsWorker' -Name Environment -PropertyType MultiString -Value $serviceEnvironment -Force | Out-Null; $serviceFailure = & sc.exe failure MarsWorker 'reset= 86400' 'actions= restart/5000/restart/30000/none/0' 2>&1; if ($LASTEXITCODE -ne 0) { throw "Failed to configure MarsWorker recovery: $($serviceFailure -join ' ')" }
+  New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\MarsWorker' -Name Environment -PropertyType MultiString -Value $serviceEnvironment -Force | Out-Null
+  Set-WorkerServiceRecovery
   Write-Host '[7/7] Starting worker service and waiting for enrollment'; try { Start-Service MarsWorker -ErrorAction Stop; $service = Get-Service MarsWorker -ErrorAction Stop; $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running,[TimeSpan]::FromSeconds(30)); Start-Sleep -Seconds 2; $service.Refresh(); if ($service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running) { throw "MarsWorker stopped immediately with status $($service.Status)." } } catch { $startupError = $_.Exception.Message; $recoveryDeadline = (Get-Date).AddSeconds(15); do { Start-Sleep -Milliseconds 500; $currentService = Get-Service MarsWorker -ErrorAction SilentlyContinue } while ($currentService -and $currentService.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running -and (Get-Date) -lt $recoveryDeadline); if (-not $currentService -or $currentService.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running) { throw "MarsWorker failed to reach Running. Startup error: $startupError" }; Write-Warning "MarsWorker recovered after initial startup failure: $startupError" }
   Wait-WorkerEnrollment $identityPath; Remove-ResumeTask; Write-State 'complete' 'complete'; Write-Output 'Windows container worker setup complete; join-code remains until authenticated.'
 } finally {

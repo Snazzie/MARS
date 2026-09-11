@@ -439,8 +439,8 @@ test("enumerates managed containers and joins live stats with inspect metadata",
     if (args[0] === "inspect") return {
       code: 0,
       stdout: JSON.stringify([
-        { Id: stoppedId, Name: "/alpha", Config: { Labels: { "mars.lease-id": "22222222-2222-4222-8222-222222222222" } }, State: { Status: "exited" }, SizeRw: 4096 },
-        { Id: runningId, Name: "/zeta", Config: { Labels: { "mars.lease-id": "11111111-1111-4111-8111-111111111111" } }, State: { Status: "running" }, SizeRw: 8192 },
+        { Id: stoppedId, Name: "/alpha", Config: { Labels: { "mars.managed": "true", "mars.lease-id": "22222222-2222-4222-8222-222222222222" } }, State: { Status: "exited" }, SizeRw: 4096 },
+        { Id: runningId, Name: "/zeta", Config: { Labels: { "mars.managed": "true", "mars.lease-id": "11111111-1111-4111-8111-111111111111" } }, State: { Status: "running" }, SizeRw: 8192 },
       ]),
       stderr: "",
     };
@@ -466,7 +466,7 @@ test("retries inspect and omits only a container that disappeared", async () => 
       const id = args.at(-1)!;
       if (id === disappearedId.slice(0, 12)) return { code: 1, stdout: "", stderr: "Error: No such object" };
       const fullId = id === firstId.slice(0, 12) ? firstId : secondId;
-      return { code: 0, stdout: JSON.stringify([{ Id: fullId, Name: `/${id}`, Config: { Labels: { "mars.lease-id": id === firstId.slice(0, 12) ? "33333333-3333-4333-8333-333333333333" : "44444444-4444-4444-8444-444444444444" } }, State: { Status: "exited" }, SizeRw: 1 }]), stderr: "" };
+      return { code: 0, stdout: JSON.stringify([{ Id: fullId, Name: `/${id}`, Config: { Labels: { "mars.managed": "true", "mars.lease-id": id === firstId.slice(0, 12) ? "33333333-3333-4333-8333-333333333333" : "44444444-4444-4444-8444-444444444444" } }, State: { Status: "exited" }, SizeRw: 1 }]), stderr: "" };
     }
     return { code: 0, stdout: "", stderr: "" };
   };
@@ -498,7 +498,7 @@ test("does not inspect or sample when no managed containers exist", async () => 
     throw new Error(`unexpected docker ${args[0]}`);
   };
   expect(await new WindowsContainerDriver(collectorConfig, docker).listContainerStatuses()).toEqual([]);
-  expect(calls).toEqual([["ps", "-a", "--filter", "label=mars.managed=true", "--format", "{{.ID}}"]]);
+  expect(calls).toEqual([["ps", "-a", "--filter", "label=mars.managed=true", "--filter", "label=mars.lease-id", "--format", "{{.ID}}"]]);
 });
 
 test("retries stats and omits only a running container that disappeared", async () => {
@@ -509,8 +509,8 @@ test("retries stats and omits only a running container that disappeared", async 
     if (args[0] === "inspect") return {
       code: 0,
       stdout: JSON.stringify([
-        { Id: firstId, Name: "/first", Config: { Labels: { "mars.lease-id": "55555555-5555-4555-8555-555555555555" } }, State: { Status: "running" }, SizeRw: 10 },
-        { Id: disappearedId, Name: "/gone", Config: { Labels: { "mars.lease-id": "66666666-6666-4666-8666-666666666666" } }, State: { Status: "running" }, SizeRw: 20 },
+        { Id: firstId, Name: "/first", Config: { Labels: { "mars.managed": "true", "mars.lease-id": "55555555-5555-4555-8555-555555555555" } }, State: { Status: "running" }, SizeRw: 10 },
+        { Id: disappearedId, Name: "/gone", Config: { Labels: { "mars.managed": "true", "mars.lease-id": "66666666-6666-4666-8666-666666666666" } }, State: { Status: "running" }, SizeRw: 20 },
       ]),
       stderr: "",
     };
@@ -531,7 +531,7 @@ test("propagates non-not-found stats failures", async () => {
     if (args[0] === "ps") return { code: 0, stdout: `${id.slice(0, 12)}\n`, stderr: "" };
     if (args[0] === "inspect") return {
       code: 0,
-      stdout: JSON.stringify([{ Id: id, Name: "/running", Config: { Labels: { "mars.lease-id": "77777777-7777-4777-8777-777777777777" } }, State: { Status: "running" }, SizeRw: 1 }]),
+      stdout: JSON.stringify([{ Id: id, Name: "/running", Config: { Labels: { "mars.managed": "true", "mars.lease-id": "77777777-7777-4777-8777-777777777777" } }, State: { Status: "running" }, SizeRw: 1 }]),
       stderr: "",
     };
     if (args[0] === "stats") {
@@ -550,11 +550,45 @@ test("treats a zero Docker memory limit as unavailable", async () => {
     if (args[0] === "ps") return { code: 0, stdout: `${id.slice(0, 12)}\n`, stderr: "" };
     if (args[0] === "inspect") return {
       code: 0,
-      stdout: JSON.stringify([{ Id: id, Name: "/zero-limit", Config: { Labels: { "mars.lease-id": "88888888-8888-4888-8888-888888888888" } }, State: { Status: "running" }, SizeRw: 1 }]),
+      stdout: JSON.stringify([{ Id: id, Name: "/zero-limit", Config: { Labels: { "mars.managed": "true", "mars.lease-id": "88888888-8888-4888-8888-888888888888" } }, State: { Status: "running" }, SizeRw: 1 }]),
       stderr: "",
     };
     if (args[0] === "stats") return { code: 0, stdout: JSON.stringify({ ID: id.slice(0, 12), CPUPerc: "1%", MemUsage: "1MiB / 0B" }), stderr: "" };
     return { code: 0, stdout: "", stderr: "" };
   };
   await expect((await new WindowsContainerDriver(collectorConfig, docker).listContainerStatuses())[0]).toMatchObject({ memoryWorkingSetBytes: 1024 ** 2, memoryLimitBytes: null });
+});
+test("reconciles only fully labeled UUID-owned containers without sampling", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-reconcile-"));
+  roots.push(root);
+  const validA = "a".repeat(64);
+  const validB = "b".repeat(64);
+  const managedOnly = "c".repeat(64);
+  const leaseOnly = "d".repeat(64);
+  const malformed = "e".repeat(64);
+  const leaseA = "11111111-1111-4111-8111-111111111111";
+  const leaseB = "22222222-2222-4222-8222-222222222222";
+  await Promise.all([leaseA, leaseB, "not-owned"].map((lease) => mkdir(join(root, lease), { recursive: true })));
+  await Bun.write(join(root, "not-owned", "marker"), "keep");
+  const removed: string[] = [];
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "ps") return { code: 0, stdout: [validA, validB, managedOnly, leaseOnly, malformed].map((id) => id.slice(0, 12)).join("\n"), stderr: "" };
+    if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([
+      { Id: validA, Name: "/valid-a", Config: { Labels: { "mars.managed": "true", "mars.lease-id": leaseA } }, State: { Status: "running" } },
+      { Id: validB, Name: "/valid-b", Config: { Labels: { "mars.managed": "true", "mars.lease-id": leaseB } }, State: { Status: "exited" } },
+      { Id: managedOnly, Name: "/managed-only", Config: { Labels: { "mars.managed": "true" } }, State: { Status: "running" } },
+      { Id: leaseOnly, Name: "/lease-only", Config: { Labels: { "mars.lease-id": leaseA } }, State: { Status: "running" } },
+      { Id: malformed, Name: "/malformed", Config: { Labels: { "mars.managed": "true", "mars.lease-id": "bad" } }, State: { Status: "running" } },
+    ]), stderr: "" };
+    if (args[0] === "rm") { removed.push(args.at(-1)!); return { code: 0, stdout: "", stderr: "" }; }
+    if (args[0] === "stats") return { code: 0, stdout: JSON.stringify({ ID: validA, CPUPerc: "1%", MemUsage: "1MiB / 1GiB" }), stderr: "" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const driver = new WindowsContainerDriver({ ...collectorConfig, bootstrapRoot: root }, docker);
+  await driver.reconcileOrphans();
+  expect(removed).toEqual([validA, validB]);
+  expect(await Bun.file(join(root, "not-owned", "marker")).exists()).toBe(true);
+  expect(await Bun.file(join(root, leaseA)).exists()).toBe(false);
+  expect(await Bun.file(join(root, leaseB)).exists()).toBe(false);
+  expect((await driver.listContainerStatuses()).map((status) => status.containerId)).toEqual([validA, validB]);
 });
