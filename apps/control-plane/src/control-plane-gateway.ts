@@ -40,6 +40,7 @@ type GatewayOptions = {
   requestSource(request: Request, server: GatewayServer): string;
   dispatcher: WorkerCommandDispatcher;
   triggerReconciliation(): Promise<void>;
+  refreshDefaultPools(): Promise<void>;
   requestId(): string;
 };
 
@@ -177,6 +178,8 @@ export function createControlPlaneGateway(options: GatewayOptions) {
             const payload = frame.payload && typeof frame.payload === "object" ? frame.payload as Record<string, unknown> : {};
             const [state] = await options.db`SELECT configuration_command_id AS "commandId", configuration_revision AS revision, desired_configuration AS desired FROM workers WHERE id=${ws.data.workerId}`;
             console.error("Worker configuration acknowledgement rejected", { workerId: ws.data.workerId, commandId: payload.commandId, revision: payload.revision, expectedCommandId: state?.commandId, expectedRevision: state?.revision, observed: payload.observed, desired: state?.desired });
+          } else {
+            await options.refreshDefaultPools();
           }
           console.log(`Worker configuration acknowledgement: ${ws.data.workerId} accepted=${acknowledged}`);
           options.dispatcher.handleEvent(frame, ws);
