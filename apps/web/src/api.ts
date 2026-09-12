@@ -4,7 +4,6 @@ import {
   CursorPage,
   DashboardWorkerCachePage,
   LogChunk,
-  OrganizationSettings,
   OrganizationSummary,
   OverviewDto,
   PendingWorkerRequest,
@@ -307,20 +306,11 @@ export const mutateGlobalPool = (poolId: string, action: "enable" | "disable") =
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: "{}",
   });
-export const getSettings = (organizationId: string) =>
-  request(`/api/organizations/${organizationId}/settings`, OrganizationSettings);
 export async function mutatePool(organizationId: string, poolId: string, action: "enable" | "disable") {
   return request(`/api/organizations/${organizationId}/pools/${poolId}/${action}`, DashboardOkResponse, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify({}),
-  });
-}
-export async function updateSettings(organizationId: string, settings: Omit<z.infer<typeof OrganizationSettings>, "organizationId">) {
-  return request(`/api/organizations/${organizationId}/settings`, OrganizationSettings, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
-    body: JSON.stringify(settings),
   });
 }
 

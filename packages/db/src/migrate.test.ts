@@ -12,7 +12,7 @@ const migration = (name: string) => readFile(new URL(`./migrations/${name}`, imp
 test("Mars baseline materializes the canonical schema SQL", async () => {
   const baseline = await migration("0000_mars_baseline.sql");
 
-  expect(baseline.trim()).toBe(schemaSql.trim());
+  expect(baseline.trim().replaceAll("\r\n", "\n")).toBe(schemaSql.trim().replaceAll("\r\n", "\n"));
   expect(baseline).toContain(
     "CREATE TABLE IF NOT EXISTS webhook_deliveries (delivery_id text PRIMARY KEY, installation_id bigint NOT NULL, payload jsonb NOT NULL, received_at timestamptz NOT NULL DEFAULT now(), event_name text NOT NULL DEFAULT 'unknown', state text NOT NULL DEFAULT 'received', attempt_count integer NOT NULL DEFAULT 0, last_error text, processed_at timestamptz);",
   );
@@ -179,6 +179,22 @@ test("previous final baseline receives complete runner cache upgrade transaction
   expect(calls[0]).toContain("miss_count");
   expect(calls[0]).toContain("runner_cache_hit_count");
   expect(calls[0]).toContain("runner_cache_miss_count");
+  expect(calls).toContain("migrate");
+});
+test("latest published baseline removes organization capacity settings transactionally", async () => {
+  const calls: string[] = [];
+  let db: DatabaseClient;
+  const begin = (async (callback: (tx: TransactionSql) => Promise<unknown>): Promise<unknown> => callback(db as unknown as TransactionSql)) as DatabaseClient["begin"];
+  db = Object.assign(
+    fakeDatabase({
+      applicationSchema: true,
+      migrationTable: true,
+      journal: [{ hash: "7d93e0c39ebfb5701f5bbdf651b9cb0366ecd07c83e734d1aacf1d4544f78910", created_at: 1_700_000_000_000 }],
+    }),
+    { begin, unsafe: async (sql: string) => calls.push(sql) },
+  ) as unknown as DatabaseClient;
+  await migrateDatabase(db, { runMigrations: async () => { calls.push("migrate"); } });
+  expect(calls[0]).toContain("DROP TABLE IF EXISTS organization_settings");
   expect(calls).toContain("migrate");
 });
 test("failed published baseline upgrade never stamps the migration journal", async () => {

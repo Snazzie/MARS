@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { LogChunk, OverviewDto, RepositorySummary, RunDetail, RunSummary, WorkerDetail, WorkerHealth } from "@mars/contracts";
-import { getAllOverview, getOverview, getOrganizationSettings, getRunDetail, getWorkerHealth, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRepositories, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks, queueRepositoryDiscoveryRecheck, type DashboardDb } from "./dashboard.ts";
+import { getAllOverview, getOverview, getRunDetail, getWorkerHealth, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRepositories, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks, queueRepositoryDiscoveryRecheck, type DashboardDb } from "./dashboard.ts";
 
 test("overview uses active runner leases for the load numerator", async () => {
   const queries: string[] = [];
@@ -475,10 +475,6 @@ test("log listings normalize PostgreSQL bigint sequences and timestamps", async 
   expect(LogChunk.parse(step.items[0])).toMatchObject({ sequence: 0, occurredAt: "2026-08-13T00:00:00.000Z" });
 });
 
-test("organization settings convert PostgreSQL numeric values to numbers", async () => {
-  const db = (async () => [{ organizationId: "org-1", maxVcpuPerPod: "4", maxMemoryBytesPerPod: "8589934592", maxStorageBytesPerPod: "107374182400", maxConcurrentPods: "2" }]) as never;
-  expect(await getOrganizationSettings(db, "org-1")).toEqual({ organizationId: "org-1", maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8589934592, maxStorageBytesPerPod: 107374182400, maxConcurrentPods: 2 });
-});
 
 test("all-workspace worker listing hides rejected workers by default", async () => {
   let query = "";

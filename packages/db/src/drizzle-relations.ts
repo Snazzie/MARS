@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm/relations";
-import { users, sessions, workerBootstrapCredentials, organizations, runnerPools, workers, runnerLeases, jobClaims, commands, dashboardInstallations, dashboardRepositories, githubDiscoveryCheckpoints, dashboardRuns, dashboardJobs, dashboardOutboxInvalidations, organizationSettings, systemOnboarding, memberships, workerMutations, dashboardMutations, dashboardRunStages, dashboardLogChunks, dashboardStepLogChunks, dashboardJobSteps, dashboardJobResourceSamples, dashboardResourceObservations, dashboardJobTimingSnapshots } from "./drizzle-schema";
+import { users, sessions, workerBootstrapCredentials, organizations, runnerPools, workers, runnerLeases, jobClaims, commands, dashboardInstallations, dashboardRepositories, githubDiscoveryCheckpoints, dashboardRuns, dashboardJobs, dashboardOutboxInvalidations, systemOnboarding, memberships, workerMutations, dashboardMutations, dashboardRunStages, dashboardLogChunks, dashboardStepLogChunks, dashboardJobSteps, dashboardJobResourceSamples, dashboardResourceObservations, dashboardJobTimingSnapshots } from "./drizzle-schema";
 
 export const sessionsRelations = relations(sessions, ({one}) => ({
 	user: one(users, {
@@ -54,7 +54,6 @@ export const organizationsRelations = relations(organizations, ({many}) => ({
 	dashboardRuns: many(dashboardRuns),
 	dashboardJobs: many(dashboardJobs),
 	dashboardOutboxInvalidations: many(dashboardOutboxInvalidations),
-	organizationSettings: many(organizationSettings),
 	systemOnboardings: many(systemOnboarding),
 	memberships: many(memberships),
 	dashboardMutations: many(dashboardMutations),
@@ -171,12 +170,6 @@ export const dashboardOutboxInvalidationsRelations = relations(dashboardOutboxIn
 	}),
 }));
 
-export const organizationSettingsRelations = relations(organizationSettings, ({one}) => ({
-	organization: one(organizations, {
-		fields: [organizationSettings.organizationId],
-		references: [organizations.id]
-	}),
-}));
 
 export const systemOnboardingRelations = relations(systemOnboarding, ({one}) => ({
 	user: one(users, {

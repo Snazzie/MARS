@@ -1,6 +1,6 @@
 import type { DatabaseClient } from "./index.ts";
 import { CapacitySnapshot, ConnectionState, ConfigurationState, PoolSummary, RuntimeDriverName, RuntimePlatform, WorkerContainerStatus, WorkerDoctor, WorkerLimits, WorkerState, GuestPlatform, WorkerCacheSummary, WorkerHealth } from "@mars/contracts";
-import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, OverviewTimeseriesPoint, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail, OrganizationSettings } from "@mars/contracts";
+import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, OverviewTimeseriesPoint, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail } from "@mars/contracts";
 import { jsonParameter } from "./json.ts";
 export type DashboardDb = DatabaseClient;
 export type RunTransition = { status: RunSummary["status"]; conclusion: RunSummary["conclusion"]; startedAt?: string | null; completedAt?: string | null };
@@ -560,25 +560,6 @@ export async function listGlobalPools(db: DashboardDb, limit = 50, cursor: strin
   const rows = await db<Record<string, unknown>[]>`SELECT p.id,NULL::uuid AS "organizationId",NULL::uuid AS "workerId",'Shared fleet' AS "workerName",p.name,p.platform,p.driver,p.image_digest AS "imageDigest",p.resources,p.labels,p.trigger_label AS "triggerLabel",p.enabled,(SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS active FROM runner_pools p WHERE p.organization_id IS NULL AND (${cursor}::uuid IS NULL OR p.id < ${cursor}::uuid) ORDER BY p.id DESC LIMIT ${limit + 1}`;
   const items = rows.slice(0, limit).map(normalizePool);
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
-}
-function normalizeOrganizationSettings(row: Record<string, unknown>): OrganizationSettings {
-  return {
-    organizationId: String(row.organizationId),
-    maxVcpuPerPod: Number(row.maxVcpuPerPod),
-    maxMemoryBytesPerPod: Number(row.maxMemoryBytesPerPod),
-    maxStorageBytesPerPod: Number(row.maxStorageBytesPerPod),
-    maxConcurrentPods: Number(row.maxConcurrentPods),
-  };
-}
-export async function getOrganizationSettings(db: DashboardDb, organizationId: string): Promise<OrganizationSettings> {
-  const [row] = await db<Record<string, unknown>[]>`INSERT INTO organization_settings (organization_id) VALUES (${organizationId}) ON CONFLICT (organization_id) DO NOTHING RETURNING organization_id AS "organizationId",max_vcpu_per_pod AS "maxVcpuPerPod",max_memory_bytes_per_pod AS "maxMemoryBytesPerPod",max_storage_bytes_per_pod AS "maxStorageBytesPerPod",max_concurrent_pods AS "maxConcurrentPods"`;
-  if (row) return normalizeOrganizationSettings(row);
-  const [existing] = await db<Record<string, unknown>[]>`SELECT organization_id AS "organizationId",max_vcpu_per_pod AS "maxVcpuPerPod",max_memory_bytes_per_pod AS "maxMemoryBytesPerPod",max_storage_bytes_per_pod AS "maxStorageBytesPerPod",max_concurrent_pods AS "maxConcurrentPods" FROM organization_settings WHERE organization_id=${organizationId}`;
-  return normalizeOrganizationSettings(existing);
-}
-export async function updateOrganizationSettings(db: DashboardDb, value: OrganizationSettings): Promise<OrganizationSettings> {
-  const [row] = await db<Record<string, unknown>[]>`INSERT INTO organization_settings (organization_id,max_vcpu_per_pod,max_memory_bytes_per_pod,max_storage_bytes_per_pod,max_concurrent_pods) VALUES (${value.organizationId},${value.maxVcpuPerPod},${value.maxMemoryBytesPerPod},${value.maxStorageBytesPerPod},${value.maxConcurrentPods}) ON CONFLICT (organization_id) DO UPDATE SET max_vcpu_per_pod=excluded.max_vcpu_per_pod,max_memory_bytes_per_pod=excluded.max_memory_bytes_per_pod,max_storage_bytes_per_pod=excluded.max_storage_bytes_per_pod,max_concurrent_pods=excluded.max_concurrent_pods,updated_at=now() RETURNING organization_id AS "organizationId",max_vcpu_per_pod AS "maxVcpuPerPod",max_memory_bytes_per_pod AS "maxMemoryBytesPerPod",max_storage_bytes_per_pod AS "maxStorageBytesPerPod",max_concurrent_pods AS "maxConcurrentPods"`;
-  return normalizeOrganizationSettings(row);
 }
 export async function dashboardMutation(db: DashboardDb, organizationId: string, key: string): Promise<boolean> { const rows = await db`INSERT INTO dashboard_mutations (organization_id,idempotency_key) VALUES (${organizationId},${key}) ON CONFLICT DO NOTHING RETURNING idempotency_key`; return rows.length > 0; }
 export async function invalidateDashboard(db: DashboardDb, organizationId: string, keys: string[]): Promise<void> { await db`INSERT INTO dashboard_outbox_invalidations (organization_id,sequence,keys) SELECT ${organizationId},COALESCE(MAX(sequence),0)+1,${jsonParameter(db, keys)}::jsonb FROM dashboard_outbox_invalidations WHERE organization_id=${organizationId}`; }

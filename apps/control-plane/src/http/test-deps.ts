@@ -70,7 +70,7 @@ export function fakeHttpDeps(overrides: TestOverrides = {}): ControlPlaneHttpDep
     requestSource: () => "test",
     webRoot: new URL("file:///tmp/mars-web/"),
     workerInstallerRoot: new URL("file:///tmp/mars-installers/"),
-    onWorkerAdopted: () => undefined,
+    onWorkerChanged: () => undefined,
     health: () => ({
       buildId: "test-build",
       startedAt: "2026-08-13T00:00:00.000Z",

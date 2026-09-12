@@ -2,7 +2,6 @@ import { z } from "zod";
 import {
   ApiError,
   CursorPage,
-  OrganizationSettings,
   OrganizationSummary,
   OverviewDto,
   PoolSummary,
@@ -112,7 +111,6 @@ export {
   LogChunk,
   OnboardingDetail,
   OnboardingStatus,
-  OrganizationSettings,
   OrganizationSummary,
   OverviewDto,
   PendingWorkerRequest,

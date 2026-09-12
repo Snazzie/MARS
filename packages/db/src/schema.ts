@@ -138,7 +138,6 @@ ALTER TABLE workers DROP CONSTRAINT IF EXISTS workers_organization_id_fkey;
 ALTER TABLE workers DROP COLUMN IF EXISTS organization_id;
 CREATE TABLE IF NOT EXISTS dashboard_log_chunks (organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE, run_id uuid NOT NULL, job_id uuid NOT NULL, sequence bigint NOT NULL CHECK(sequence >= 0), content text NOT NULL, occurred_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (organization_id, run_id, job_id, sequence));
 CREATE TABLE IF NOT EXISTS dashboard_outbox_invalidations (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE, sequence bigint NOT NULL, keys jsonb NOT NULL, occurred_at timestamptz NOT NULL DEFAULT now(), UNIQUE(organization_id, sequence));
-CREATE TABLE IF NOT EXISTS organization_settings (organization_id uuid PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE, max_vcpu_per_pod bigint NOT NULL DEFAULT 1 CHECK (max_vcpu_per_pod > 0), max_memory_bytes_per_pod bigint NOT NULL DEFAULT 1 CHECK (max_memory_bytes_per_pod > 0), max_storage_bytes_per_pod bigint NOT NULL DEFAULT 1 CHECK (max_storage_bytes_per_pod > 0), max_concurrent_pods bigint NOT NULL DEFAULT 1 CHECK (max_concurrent_pods > 0), updated_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS dashboard_mutations (organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE, idempotency_key text NOT NULL, response jsonb, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (organization_id, idempotency_key));
 ALTER TABLE dashboard_mutations ADD COLUMN IF NOT EXISTS response jsonb;
 ALTER TABLE dashboard_repositories ADD COLUMN IF NOT EXISTS github_repository_id bigint;
@@ -388,7 +387,8 @@ ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_size_bytes
 ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_entry_count bigint;
 ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_hit_count bigint NOT NULL DEFAULT 0 CHECK (runner_cache_hit_count >= 0);
 ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_miss_count bigint NOT NULL DEFAULT 0 CHECK (runner_cache_miss_count >= 0);
-ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_observed_at timestamptz;`;
+ALTER TABLE worker_cache_status ADD COLUMN IF NOT EXISTS runner_cache_observed_at timestamptz;
+DROP TABLE IF EXISTS organization_settings;`;
 
 
 export const schemaSql = `${baselineSchemaSql}

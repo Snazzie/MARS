@@ -117,6 +117,6 @@ export type ControlPlaneHttpDeps = {
   workerRequestLimiter?: RequestLimiter;
   workerDispatcher?: WorkerCommandDispatcher;
   workerConnected?: (workerId: string) => boolean;
-  onWorkerAdopted(workerId: string): void;
+  onWorkerChanged(workerId: string): void | Promise<void>;
   health(): ControlPlaneHealth;
 };

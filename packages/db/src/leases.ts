@@ -24,11 +24,6 @@ export async function reserveRoutingSlot(sql: DatabaseClient, input: LeaseReserv
         AND p.enabled=true AND w.admission_state='adopted'
         AND w.configuration_state='ready' AND w.draining=false FOR UPDATE OF p, w`;
     if (!eligible[0]) throw new Error("worker_not_eligible");
-    const [organization] = await tx`SELECT max_concurrent_pods AS "maxConcurrentPods" FROM organization_settings WHERE organization_id=${input.organizationId}`;
-    if (organization) {
-      const [activeOrganization] = await tx`SELECT count(*)::int AS count FROM runner_leases WHERE organization_id=${input.organizationId} AND state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')`;
-      if (Number(activeOrganization?.count ?? 0) >= Number(organization.maxConcurrentPods)) throw new Error("organization_capacity_exhausted");
-    }
     const poolResources = typeof eligible[0].resources === "string" ? JSON.parse(eligible[0].resources) : eligible[0].resources;
     const limits = typeof eligible[0].limits === "string" ? JSON.parse(eligible[0].limits) : eligible[0].limits;
     if (!poolResources || input.requested.storageBytes > Number(poolResources.storageBytes) || input.requested.concurrency > Number(poolResources.concurrency)) throw new Error("pool_resource_ceiling_exceeded");

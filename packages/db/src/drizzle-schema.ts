@@ -412,28 +412,6 @@ export const dashboardOutboxInvalidations = pgTable("dashboard_outbox_invalidati
 	unique("dashboard_outbox_invalidations_organization_id_sequence_key").on(table.organizationId, table.sequence),
 ]);
 
-export const organizationSettings = pgTable("organization_settings", {
-	organizationId: uuid("organization_id").primaryKey().notNull(),
-	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
-	maxVcpuPerPod: bigint("max_vcpu_per_pod", { mode: "number" }).default(1).notNull(),
-	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
-	maxMemoryBytesPerPod: bigint("max_memory_bytes_per_pod", { mode: "number" }).default(1).notNull(),
-	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
-	maxStorageBytesPerPod: bigint("max_storage_bytes_per_pod", { mode: "number" }).default(1).notNull(),
-	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
-	maxConcurrentPods: bigint("max_concurrent_pods", { mode: "number" }).default(1).notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-}, (table) => [
-	foreignKey({
-			columns: [table.organizationId],
-			foreignColumns: [organizations.id],
-			name: "organization_settings_organization_id_fkey"
-		}).onDelete("cascade"),
-	check("organization_settings_max_vcpu_per_pod_check", sql`max_vcpu_per_pod > 0`),
-	check("organization_settings_max_memory_bytes_per_pod_check", sql`max_memory_bytes_per_pod > 0`),
-	check("organization_settings_max_storage_bytes_per_pod_check", sql`max_storage_bytes_per_pod > 0`),
-	check("organization_settings_max_concurrent_pods_check", sql`max_concurrent_pods > 0`),
-]);
 
 export const schemaMigrations = pgTable("schema_migrations", {
 	version: integer().primaryKey().notNull(),

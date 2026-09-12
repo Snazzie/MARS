@@ -6,7 +6,10 @@ import type { DatabaseClient, RawDatabaseClient } from "./index.ts";
 import { workerReleaseBaselineUpgradeSql } from "./schema.ts";
 const migrationsFolder = fileURLToPath(new URL("./migrations", import.meta.url));
 const baselineCreatedAt = 1_700_000_000_000;
-const previousBaselineHash = "24d85c25cfb2279005f02535ec5af93b65bc8d5ce543bd9963c4bea2e9cd1174";
+const previousBaselineHashes = new Set([
+  "24d85c25cfb2279005f02535ec5af93b65bc8d5ce543bd9963c4bea2e9cd1174",
+  "7d93e0c39ebfb5701f5bbdf651b9cb0366ecd07c83e734d1aacf1d4544f78910",
+]);
 const migrationHash = (sql: string) => createHash("sha256").update(sql).digest("hex");
 
 type MigrationJournalRow = {
@@ -49,7 +52,7 @@ function isFinalBaseline(journal: MigrationJournalRow[], baselineHash: string): 
 
 function isPublishedBaseline(journal: MigrationJournalRow[]): boolean {
   const [entry] = journal;
-  return journal.length === 1 && entry?.hash === previousBaselineHash && Number(entry.created_at) === baselineCreatedAt;
+  return journal.length === 1 && entry?.hash !== null && previousBaselineHashes.has(entry.hash) && Number(entry.created_at) === baselineCreatedAt;
 }
 function invalidMigrationStateError(): Error {
   return new Error(
@@ -76,7 +79,7 @@ export async function migrateDatabase(
     if (!raw.begin) throw new Error("published baseline upgrade requires a database transaction");
     await raw.begin(async tx => {
       await tx.unsafe(workerReleaseBaselineUpgradeSql);
-      await tx`UPDATE drizzle.__drizzle_migrations SET hash=${baselineHash} WHERE hash=${previousBaselineHash} AND created_at=${baselineCreatedAt}`;
+      await tx`UPDATE drizzle.__drizzle_migrations SET hash=${baselineHash} WHERE hash=${state.journal[0]?.hash} AND created_at=${baselineCreatedAt}`;
     });
   }
   if ((!finalBaseline && !publishedBaseline && state.applicationSchema) || (state.journal.length > 0 && !finalBaseline && !publishedBaseline)) {

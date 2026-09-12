@@ -248,8 +248,6 @@ export const WorkerDetail = dto(strict({ id, organizationId: organizationId.null
 export type WorkerDetail = z.infer<typeof WorkerDetail>;
 export const PoolSummary = dto(strict({ id, organizationId: id.nullable(), workerId: id.nullable(), workerName: z.string().min(1).nullable(), name: z.string().min(1), platform: RuntimePlatform, driver: RuntimeDriverName, imageDigest: z.string().min(1), resources, labels: z.array(z.string().min(1)), triggerLabel: RunnerTriggerLabel.nullable(), enabled: z.boolean(), active: positiveSafe.or(z.literal(0)) }));
 export type PoolSummary = z.infer<typeof PoolSummary>;
-export const OrganizationSettings = dto(strict({ organizationId, maxVcpuPerPod: positiveSafe, maxMemoryBytesPerPod: positiveSafe, maxStorageBytesPerPod: positiveSafe, maxConcurrentPods: positiveSafe }));
-export type OrganizationSettings = z.infer<typeof OrganizationSettings>;
 const githubAccountType = z.enum(["User", "Organization"]);
 export const GithubConnectionSummary = dto(z.discriminatedUnion("connected", [
   strict({ connected: z.literal(false) }),

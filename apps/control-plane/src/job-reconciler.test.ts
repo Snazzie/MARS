@@ -104,7 +104,6 @@ test("reserves, requests JIT configuration, and dispatches an eligible queued jo
       return [{ id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, jobId: 42 }];
     }
     if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 2, memoryBytes: 4, storageBytes: 8, concurrency: 1 }, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 }, doctor: { capacity: { freeVcpu: 2, freeMemoryBytes: 4, freeStorageBytes: 8 } } }];
-    if (query.includes("from organization_settings")) return [];
     if (query.includes("from runner_leases")) return [];
     if (query.includes("select id from dashboard_jobs")) return [{ id: "dashboard-job" }];
     return [];
@@ -164,7 +163,7 @@ test("does not reserve or dispatch when exact GitHub job preflight reports 404",
     }];
     }
     if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 2, memoryBytes: 4, storageBytes: 8, concurrency: 1 }, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 }, doctor: { capacity: { freeVcpu: 2, freeMemoryBytes: 4, freeStorageBytes: 8 } } }];
-    if (query.includes("from organization_settings") || query.includes("from runner_leases")) return [];
+    if (query.includes("from runner_leases")) return [];
     if (query.includes("insert into runner_leases")) {
       events.push("reserve");
       return [{ id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, jobId: 42 }];
@@ -291,61 +290,6 @@ test("stops preflighting an installation after one rate-limit response", async (
   expect(githubJobs).toEqual([42, 44]);
   expect(calls).toEqual([]);
 });
-test("defers queued jobs at organization capacity without GitHub requests", async () => {
-  const jobs = Array.from({ length: 10 }, (_, index) => ({
-    jobId: 100 + index,
-    runId: `run-${index}`,
-    githubRunId: 700 + index,
-    runAttempt: 1,
-    repositoryId: "repo",
-    organizationId: "org",
-    installationId: 7,
-    repository: "acme/project",
-    labels: ["mars-windows-x64"],
-  }));
-  const { publicKey } = generateKeyPairSync("x25519");
-  const workerEncryptionPublicKey = publicKey.export({ format: "pem", type: "spki" }).toString();
-  let tokenRequests = 0;
-  let githubRequests = 0;
-  const candidateRow = {
-    poolId: "pool",
-    workerId: "worker",
-    enabled: true,
-    platform: "windows-x64",
-    driver: "windows-hyperv-container",
-    imageDigest: "sha256:image",
-    resources: { vcpu: 2, memoryBytes: 4, storageBytes: 8, concurrency: 10 },
-    labels: ["mars-windows-x64"],
-    triggerLabel: "mars-windows-x64",
-    admissionState: "adopted",
-    connectionState: "online",
-    configurationState: "ready",
-    configurationRevision: "current",
-    appliedConfigurationRevision: "current",
-    limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 10 },
-    doctor: { runtimeReady: true },
-    encryptionPublicKey: workerEncryptionPublicKey,
-    active: 0,
-  };
-  const db = Object.assign((async (strings: TemplateStringsArray) => {
-    const query = strings.join(" ").toLowerCase();
-    if (query.includes("from dashboard_jobs j")) return jobs;
-    if (query.includes("p.id as")) return [candidateRow];
-    if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: candidateRow.resources, limits: candidateRow.limits, doctor: { capacity: { freeVcpu: 2, freeMemoryBytes: 4, freeStorageBytes: 8 } } }];
-    if (query.includes("from organization_settings")) return [{ maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 }];
-    if (query.includes("from runner_leases") && query.includes("organization_id")) return [{ count: 1 }];
-    return [];
-  }) as unknown as DatabaseClient, { begin: async (fn: (tx: DatabaseClient) => unknown) => fn(db) });
-  const result = await runQueuedJobReconciliation({
-    db,
-    installationToken: async () => { tokenRequests += 1; return "token"; },
-    githubFetchForInstallation: () => async () => { githubRequests += 1; return Response.json({}); },
-    dispatcher: { dispatch: async () => { throw new Error("must not dispatch"); } },
-  });
-  expect(result).toEqual({ reserved: 0, deferred: 10, skipped: 0, failed: 0 });
-  expect(tokenRequests).toBe(0);
-  expect(githubRequests).toBe(0);
-});
 test("persists normalized labels and releases when GitHub queued labels change", async () => {
   let updatedLabels: unknown;
   const events: string[] = [];
@@ -376,7 +320,7 @@ test("persists normalized labels and releases when GitHub queued labels change",
     if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", githubRunId: 77, runAttempt: 1, repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels: ["mars-windows-x64"] }];
     if (query.includes("p.id as")) return [candidateRow];
     if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: candidateRow.resources, limits: candidateRow.limits, doctor: { capacity: { freeVcpu: 2, freeMemoryBytes: 4, freeStorageBytes: 8 } } }];
-    if (query.includes("from organization_settings") || query.includes("from runner_leases")) return [];
+    if (query.includes("from runner_leases")) return [];
     if (query.includes("insert into runner_leases")) {
       events.push("reserve");
       return [{ id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, jobId: 42 }];
