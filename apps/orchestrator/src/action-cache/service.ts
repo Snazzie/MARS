@@ -200,6 +200,10 @@ function originFor(protocol: "http:" | "https:", hostname: string, port: number)
   return `${protocol}//${host}:${port}`;
 }
 
+function localDataProbeUrl(port: number): string {
+  return originFor("https:", "127.0.0.1", port);
+}
+
 function probeDataEndpoint(cacheBaseUrl: string, certificatePem: string): Promise<void> {
   const certificate = new X509Certificate(certificatePem);
   const currentTime = Date.now();
@@ -548,7 +552,7 @@ class PersistentActionCacheService implements ActionCacheService {
         replacement.on("error", (listenerError: Error) => this.#listenerFailed(listenerError));
         this.#dataServer = replacement;
         if (this.#closed) { await closeServer(replacement); return; }
-        await probeDataEndpoint(this.#cacheBaseUrl, certificate.certificatePem);
+        await probeDataEndpoint(localDataProbeUrl(this.#dataPort), certificate.certificatePem);
         if (this.#closed) return;
         this.#ready = true;
         this.#error = null;
@@ -825,7 +829,7 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
       const credential = incoming.socket.remotePort === undefined ? undefined : principalByTunnelPort.get(incoming.socket.remotePort);
       if (credential) principalByRequest.set(request, credential);
     });
-    await probeDataEndpoint(cacheBaseUrl, dataCertificate.certificatePem);
+    await probeDataEndpoint(localDataProbeUrl(boundDataPort), dataCertificate.certificatePem);
     return new PersistentActionCacheService({
       store,
       packageDownloadCache,

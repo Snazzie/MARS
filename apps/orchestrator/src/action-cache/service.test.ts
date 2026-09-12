@@ -203,6 +203,26 @@ test("normalizes IPv6 loopback advertise overrides for IPv4 listeners", () => {
   });
 });
 
+test("probes the local cache listener instead of an unreachable advertised gateway", async () => {
+  const service = await startActionCacheService({
+    root: await root(),
+    controlPlaneOrigin: "https://control.example.test",
+    ttlSeconds: 3600,
+    proxyPort: 0,
+    dataPort: 0,
+    env: {
+      MARS_CACHE_PROXY_URL: "http://192.0.2.1:8788",
+      MARS_CACHE_ADVERTISE_URL: "https://192.0.2.1:8789",
+    },
+  });
+  services.push(service);
+  expect(service.status()).toMatchObject({
+    ready: true,
+    proxyOrigin: "http://192.0.2.1:8788",
+    cacheBaseUrl: "https://192.0.2.1:8789",
+  });
+});
+
 test("discovers the worker advertise address from the control-plane route", async () => {
   const server = createServer();
   await new Promise<void>((resolve, reject) => {
