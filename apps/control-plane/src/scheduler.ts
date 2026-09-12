@@ -1,4 +1,4 @@
-import { PoolResources, WorkerLimits } from "@mars/contracts";
+import { ANY_RUNNER_LABEL, PoolResources, WorkerLimits } from "@mars/contracts";
 
 export interface Candidate {
   worker: { admissionState:string; connectionState:string; configurationState:string; configurationRevision:string|null; appliedConfigurationRevision:string|null; runtimeReady?: boolean; linuxEvidenceReady?: boolean; limits: unknown };
@@ -51,6 +51,7 @@ export function labelsMatch(requestedLabels: readonly string[], poolLabels: read
   if (!triggerLabel) return false;
   const requested = new Set(requestedLabels.map((label) => label.toLowerCase()));
   const labels = new Set(poolLabels.map((label) => label.toLowerCase()));
+  if (requested.size === 1 && requested.has(ANY_RUNNER_LABEL)) return true;
   const trigger = triggerLabel.toLowerCase();
   if (requested.has(trigger) && [...requested].every((label) => labels.has(label))) return true;
   return (legacyRoutingLabels[trigger] ?? []).some((legacy) => legacy.length === requested.size && legacy.every((label) => requested.has(label)));

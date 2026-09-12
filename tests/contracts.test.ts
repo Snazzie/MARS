@@ -23,7 +23,7 @@ describe("pool creation contracts", () => {
   });
 
   test("rejects reserved or malformed trigger labels", () => {
-    for (const label of ["self-hosted", "linux", "windows", "macos", "x64", "arm64", "UPPER CASE", ""]) {
+    for (const label of ["self-hosted", "linux", "windows", "macos", "x64", "arm64", "mars-any", "UPPER CASE", ""]) {
       expect(RunnerTriggerLabel.safeParse(label).success).toBe(false);
     }
   });

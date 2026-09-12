@@ -13,6 +13,14 @@ Add these labels alongside the worker pool trigger label:
 
 The suffixes are case-insensitive. Values must be positive whole numbers, so `2vcpu`, `3VCPU`, and `6G` are valid.
 
+Use `mars-any` instead of a pool trigger label when the job can run on any available runner architecture:
+
+```yaml
+runs-on: mars-any
+```
+
+The scheduler may assign that job to any enabled pool with an online worker and sufficient capacity. The job must therefore be portable across the operating systems and architectures in the fleet. `mars-any` may be combined with CPU and memory labels, but not with a platform-specific trigger label or other routing labels.
+
 Example label set:
 
 ```text
@@ -24,7 +32,7 @@ This requests a job with 3 vCPUs and 6 GiB of memory from the `mars-linux-x64` p
 ## How routing works
 
 1. The control plane removes valid CPU and memory resource labels before matching pool labels.
-2. Remaining labels, including the pool trigger label, must match the selected pool.
+2. The remaining labels must either match the selected pool or consist only of the architecture-neutral `mars-any` label.
 3. If a CPU or memory label is omitted, the pool's configured value is used.
 4. The worker's configured per-job limits are the final ceiling.
 5. The original labels are retained when the just-in-time GitHub runner is registered.

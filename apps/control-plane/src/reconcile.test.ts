@@ -16,6 +16,22 @@ test("reserves a runner slot before requesting JIT config", async () => {
   expect(routingKey).toBe("acme/project:4:arm64,macos,mars-default,self-hosted");
 });
 
+test("dispatches an architecture-neutral job through an architecture-specific pool", async () => {
+  let jitLabels: string[] = [];
+  const result = await reconcileQueuedJobs({
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["mars-any", "2VCPU"] }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
+    reserve: async (input) => ({ id: "lease", nonce: "n".repeat(32), workerId: input.workerId, poolId: input.poolId, expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested }),
+    jit: async (input) => {
+      jitLabels = input.labels;
+      return { encodedJitConfig: "config", runnerName: input.runnerName, labels: input.labels, expiresAt: new Date(Date.now() + 60_000).toISOString() };
+    },
+    dispatch: async () => {},
+  });
+  expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
+  expect(jitLabels).toEqual(["mars-any", "2VCPU"]);
+});
+
 test("does not reserve beyond active pool capacity", async () => {
   const result = await reconcileQueuedJobs({
     queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 9, labels: ["self-hosted", "macos", "arm64", "mars-default"] }],

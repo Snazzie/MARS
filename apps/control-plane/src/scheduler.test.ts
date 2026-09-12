@@ -12,6 +12,16 @@ describe("runner label routing", () => {
     expect(labelsMatch(["MARS-LINUX-X64"], ["mars-linux-x64"], "mars-linux-x64")).toBe(true);
   });
 
+  test("matches the architecture-neutral label to every runner pool", () => {
+    for (const trigger of ["mars-linux-x64", "mars-windows-x64", "mars-macos-arm64"]) {
+      expect(labelsMatch(["MARS-ANY"], [trigger], trigger)).toBe(true);
+    }
+  });
+
+  test("rejects constraints combined with the architecture-neutral label", () => {
+    expect(labelsMatch(["mars-any", "mars-windows-x64"], ["mars-windows-x64"], "mars-windows-x64")).toBe(false);
+  });
+
   test("does not claim split platform and architecture labels", () => {
     expect(labelsMatch(["self-hosted", "linux", "x64"], ["mars-linux-x64"], "mars-linux-x64")).toBe(false);
     expect(reason(candidate(["self-hosted", "linux", "x64"]))).toBe("no_matching_labels");
