@@ -210,6 +210,8 @@ export function getRepositories(organizationId: string, {
 }
 export const getWorkers = (organizationId: string, includeInactive = false) =>
   request(`/api/organizations/${organizationId}/workers?includeInactive=${includeInactive ? "true" : "false"}`, CursorPage(WorkerDetail));
+export const getWorker = (organizationId: string, workerId: string) =>
+  request(`/api/organizations/${organizationId}/workers/${workerId}`, WorkerDetail);
 export async function configureWorker(workerId: string, input: WorkerConfigurationInput) {
   return request(`/api/workers/${workerId}/configure`, DashboardWorkerMutationResponse, {
     method: "POST",

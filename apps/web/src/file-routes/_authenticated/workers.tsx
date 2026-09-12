@@ -1,4 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { WorkersPage } from "../../routes/WorkersPage.tsx";
+import { Outlet, createFileRoute } from "@tanstack/react-router";
 
-export const Route = createFileRoute("/_authenticated/workers")({ component: WorkersPage });
+function WorkersLayout() {
+  return <Outlet />;
+}
+
+export const Route = createFileRoute("/_authenticated/workers")({ component: WorkersLayout });

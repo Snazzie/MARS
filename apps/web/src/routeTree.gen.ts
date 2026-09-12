@@ -20,6 +20,8 @@ import { Route as AuthenticatedWorkersRouteImport } from './file-routes/_authent
 import { Route as AuthenticatedRunsIndexRouteImport } from './file-routes/_authenticated/runs/index'
 import { Route as AuthenticatedRunsRunIdRouteImport } from './file-routes/_authenticated/runs/$runId'
 import { Route as AuthenticatedRunsTimingRouteImport } from './file-routes/_authenticated/runs.timing'
+import { Route as AuthenticatedWorkersIndexRouteImport } from './file-routes/_authenticated/workers/index'
+import { Route as AuthenticatedWorkersWorkerIdRouteImport } from './file-routes/_authenticated/workers/$workerId'
 
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
   id: '/_authenticated',
@@ -76,6 +78,18 @@ const AuthenticatedRunsTimingRoute = AuthenticatedRunsTimingRouteImport.update({
   path: '/timing',
   getParentRoute: () => AuthenticatedRunsRoute,
 } as any)
+const AuthenticatedWorkersIndexRoute =
+  AuthenticatedWorkersIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AuthenticatedWorkersRoute,
+  } as any)
+const AuthenticatedWorkersWorkerIdRoute =
+  AuthenticatedWorkersWorkerIdRouteImport.update({
+    id: '/$workerId',
+    path: '/$workerId',
+    getParentRoute: () => AuthenticatedWorkersRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
@@ -84,21 +98,24 @@ export interface FileRoutesByFullPath {
   '/repositories': typeof AuthenticatedRepositoriesRoute
   '/runs': typeof AuthenticatedRunsRouteWithChildren
   '/settings': typeof AuthenticatedSettingsRoute
-  '/workers': typeof AuthenticatedWorkersRoute
+  '/workers': typeof AuthenticatedWorkersRouteWithChildren
   '/runs/$runId': typeof AuthenticatedRunsRunIdRoute
   '/runs/timing': typeof AuthenticatedRunsTimingRoute
+  '/workers/$workerId': typeof AuthenticatedWorkersWorkerIdRoute
   '/runs/': typeof AuthenticatedRunsIndexRoute
+  '/workers/': typeof AuthenticatedWorkersIndexRoute
 }
 export interface FileRoutesByTo {
   '/onboarding': typeof OnboardingRoute
   '/pools': typeof AuthenticatedPoolsRoute
   '/repositories': typeof AuthenticatedRepositoriesRoute
   '/settings': typeof AuthenticatedSettingsRoute
-  '/workers': typeof AuthenticatedWorkersRoute
   '/': typeof AuthenticatedIndexRoute
   '/runs/$runId': typeof AuthenticatedRunsRunIdRoute
   '/runs/timing': typeof AuthenticatedRunsTimingRoute
+  '/workers/$workerId': typeof AuthenticatedWorkersWorkerIdRoute
   '/runs': typeof AuthenticatedRunsIndexRoute
+  '/workers': typeof AuthenticatedWorkersIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -108,11 +125,13 @@ export interface FileRoutesById {
   '/_authenticated/repositories': typeof AuthenticatedRepositoriesRoute
   '/_authenticated/runs': typeof AuthenticatedRunsRouteWithChildren
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
-  '/_authenticated/workers': typeof AuthenticatedWorkersRoute
+  '/_authenticated/workers': typeof AuthenticatedWorkersRouteWithChildren
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/runs/$runId': typeof AuthenticatedRunsRunIdRoute
   '/_authenticated/runs/timing': typeof AuthenticatedRunsTimingRoute
+  '/_authenticated/workers/$workerId': typeof AuthenticatedWorkersWorkerIdRoute
   '/_authenticated/runs/': typeof AuthenticatedRunsIndexRoute
+  '/_authenticated/workers/': typeof AuthenticatedWorkersIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -126,18 +145,21 @@ export interface FileRouteTypes {
     | '/workers'
     | '/runs/$runId'
     | '/runs/timing'
+    | '/workers/$workerId'
     | '/runs/'
+    | '/workers/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/onboarding'
     | '/pools'
     | '/repositories'
     | '/settings'
-    | '/workers'
     | '/'
     | '/runs/$runId'
     | '/runs/timing'
+    | '/workers/$workerId'
     | '/runs'
+    | '/workers'
   id:
     | '__root__'
     | '/_authenticated'
@@ -150,7 +172,9 @@ export interface FileRouteTypes {
     | '/_authenticated/'
     | '/_authenticated/runs/$runId'
     | '/_authenticated/runs/timing'
+    | '/_authenticated/workers/$workerId'
     | '/_authenticated/runs/'
+    | '/_authenticated/workers/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -237,6 +261,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRunsTimingRouteImport
       parentRoute: typeof AuthenticatedRunsRoute
     }
+    '/_authenticated/workers/': {
+      id: '/_authenticated/workers/'
+      path: '/'
+      fullPath: '/workers/'
+      preLoaderRoute: typeof AuthenticatedWorkersIndexRouteImport
+      parentRoute: typeof AuthenticatedWorkersRoute
+    }
+    '/_authenticated/workers/$workerId': {
+      id: '/_authenticated/workers/$workerId'
+      path: '/$workerId'
+      fullPath: '/workers/$workerId'
+      preLoaderRoute: typeof AuthenticatedWorkersWorkerIdRouteImport
+      parentRoute: typeof AuthenticatedWorkersRoute
+    }
   }
 }
 
@@ -255,12 +293,25 @@ const AuthenticatedRunsRouteChildren: AuthenticatedRunsRouteChildren = {
 const AuthenticatedRunsRouteWithChildren =
   AuthenticatedRunsRoute._addFileChildren(AuthenticatedRunsRouteChildren)
 
+interface AuthenticatedWorkersRouteChildren {
+  AuthenticatedWorkersWorkerIdRoute: typeof AuthenticatedWorkersWorkerIdRoute
+  AuthenticatedWorkersIndexRoute: typeof AuthenticatedWorkersIndexRoute
+}
+
+const AuthenticatedWorkersRouteChildren: AuthenticatedWorkersRouteChildren = {
+  AuthenticatedWorkersWorkerIdRoute: AuthenticatedWorkersWorkerIdRoute,
+  AuthenticatedWorkersIndexRoute: AuthenticatedWorkersIndexRoute,
+}
+
+const AuthenticatedWorkersRouteWithChildren =
+  AuthenticatedWorkersRoute._addFileChildren(AuthenticatedWorkersRouteChildren)
+
 interface AuthenticatedRouteChildren {
   AuthenticatedPoolsRoute: typeof AuthenticatedPoolsRoute
   AuthenticatedRepositoriesRoute: typeof AuthenticatedRepositoriesRoute
   AuthenticatedRunsRoute: typeof AuthenticatedRunsRouteWithChildren
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
-  AuthenticatedWorkersRoute: typeof AuthenticatedWorkersRoute
+  AuthenticatedWorkersRoute: typeof AuthenticatedWorkersRouteWithChildren
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
 }
 
@@ -269,7 +320,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedRepositoriesRoute: AuthenticatedRepositoriesRoute,
   AuthenticatedRunsRoute: AuthenticatedRunsRouteWithChildren,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
-  AuthenticatedWorkersRoute: AuthenticatedWorkersRoute,
+  AuthenticatedWorkersRoute: AuthenticatedWorkersRouteWithChildren,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
 }
 

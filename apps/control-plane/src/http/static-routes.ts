@@ -19,4 +19,5 @@ export function registerStaticRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     app.get(path, async () => assetResponse(deps, "index.html", "<!doctype html><title>Mars</title>"));
   }
   app.get("/runs/:runId", async () => assetResponse(deps, "index.html", "<!doctype html><title>Mars</title>"));
+  app.get("/workers/:workerId", async () => assetResponse(deps, "index.html", "<!doctype html><title>Mars</title>"));
 }
