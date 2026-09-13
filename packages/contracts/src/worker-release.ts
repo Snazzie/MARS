@@ -7,6 +7,7 @@ const ociDigest = z.string().regex(
   "digest-pinned OCI reference required",
 );
 export const WorkerContractVersion = z.string().regex(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/, "major.minor.patch worker contract version required");
+export const CURRENT_WORKER_CONTRACT_VERSION = WorkerContractVersion.parse("0.1.0");
 
 export function parseWorkerContractVersion(value: string): { major: number; minor: number; patch: number } {
   const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(value);
