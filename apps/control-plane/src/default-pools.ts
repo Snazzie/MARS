@@ -17,10 +17,11 @@ export function poolResourcesForLimits(limits: WorkerLimits, concurrency = limit
 
 export function poolResourcesForWorkers(workers: WorkerLimits[]) {
   if (!workers.length) return null;
+  const defaults = workers.map((worker) => poolResourcesForLimits(worker));
   return {
-    vcpu: workers.reduce((sum, worker) => sum + worker.maxVcpuPerPod, 0),
-    memoryBytes: workers.reduce((sum, worker) => sum + worker.maxMemoryBytesPerPod, 0),
-    storageBytes: workers.reduce((sum, worker) => sum + worker.maxStorageBytesPerPod, 0),
+    vcpu: Math.min(...defaults.map(({ vcpu }) => vcpu)),
+    memoryBytes: Math.min(...defaults.map(({ memoryBytes }) => memoryBytes)),
+    storageBytes: Math.min(...defaults.map(({ storageBytes }) => storageBytes)),
     concurrency: workers.reduce((sum, worker) => sum + worker.maxConcurrentPods, 0),
   };
 }

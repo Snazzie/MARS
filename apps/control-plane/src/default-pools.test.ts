@@ -16,14 +16,14 @@ test("preserves worker concurrency above the old automatic cap", () => {
   expect(poolResourcesForLimits({ maxVcpuPerPod: 5, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 7 }).concurrency).toBe(7);
 });
 
-test("sums concurrency across workers sharing a default platform pool", () => {
+test("uses portable job defaults while summing shared pool concurrency", () => {
   expect(poolResourcesForWorkers([
     { maxVcpuPerPod: 5, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 },
     { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4 * GIB, maxStorageBytesPerPod: 20 * GIB, maxConcurrentPods: 5 },
   ])).toEqual({
-    vcpu: 7,
-    memoryBytes: 12 * GIB,
-    storageBytes: 60 * GIB,
+    vcpu: 2,
+    memoryBytes: 4 * GIB,
+    storageBytes: 20 * GIB,
     concurrency: 7,
   });
 });
