@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { WorkerConfigurePayload, WorkerDoctorData, WorkerDoctorReport, type LeaseBootstrapEnvelope, type WorkerCapacityData, type WorkerCommand, type WorkerContainerStatus, type WorkerEvent } from "@mars/contracts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
-import { applyWindowsRunnerCachePurge, applyWindowsWorkerConfiguration, buildWindowsDoctorReport, reconcileWindowsRuntime, runWindowsLeaseCleanup, startWindowsLeaseLifecycle } from "./windows-agent.ts";
+import { applyWindowsRunnerCachePurge, applyWindowsWorkerConfiguration, buildWindowsDoctorReport, dispatchWindowsWorkerFrame, executeWindowsWorkerCommand, reconcileWindowsRuntime, runWindowsLeaseCleanup, startWindowsLeaseLifecycle } from "./windows-agent.ts";
 const doctor = WorkerDoctorData.parse({ runtimeMode: "container", runtimeReady: true, probe: true, egress: true, imageSignatures: true });
 const capacity: WorkerCapacityData = { actualVcpu: 8, actualMemoryBytes: 16, actualStorageBytes: 32, freeVcpu: 7, freeMemoryBytes: 15, freeStorageBytes: 31 };
 const containerStatuses: WorkerContainerStatus[] = [{
@@ -81,6 +81,54 @@ const workerId = "11111111-1111-4111-8111-111111111111";
 const leaseId = "22222222-2222-4222-8222-222222222222";
 const command: WorkerCommand = { version: 1, id: "33333333-3333-4333-8333-333333333333", type: "windows-container.create_lease", workerId, leaseId, occurredAt: new Date().toISOString(), payload: {} };
 const bootstrap: LeaseBootstrapEnvelope = { leaseId, jobId: leaseId, nonce: "n".repeat(32), guestPlatform: "windows-x64", contractVersion: "0.1.0", imageDigest: `sha256:${"a".repeat(64)}`, resources: { vcpu: 1, memoryBytes: 2, storageBytes: 3, concurrency: 1 }, encodedJitConfig: "secret", expiresAt: new Date(Date.now() + 60_000).toISOString() };
+
+test("keeps the Windows health channel alive when a valid command fails", async () => {
+  const failingCreate: WorkerCommand = { ...command, payload: { bootstrapCiphertext: "invalid-bootstrap" } };
+  const sent: Record<string, unknown>[] = [];
+  let closed = 0;
+  const failureObserved = Promise.withResolvers<void>();
+  const input = {
+    workerId,
+    send: (data: string) => sent.push(JSON.parse(data)),
+    close: () => { closed += 1; },
+    sendDoctor: async () => { sent.push({ version: 1, type: "doctor", workerId, payload: {} }); },
+    execute: (next: WorkerCommand) => executeWindowsWorkerCommand(next, {
+      mode: "container",
+      limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 4, maxConcurrentPods: 1 },
+      cache: { ttlSeconds: 60, runnerCacheEnabled: true, runnerCacheMaxGiB: 1 },
+      cacheService: {} as never,
+      driver: {} as never,
+      identity: { workerId, publicKey: "", privateKey: "", encryptionPublicKey: "", encryptionPrivateKey: "" },
+      activeLeases: new Map(),
+      send: () => { throw new Error("command acknowledgement must not be sent"); },
+      refreshDoctor: async () => {},
+    }).catch(error => {
+      failureObserved.resolve();
+      throw error;
+    }),
+  };
+  dispatchWindowsWorkerFrame(failingCreate as unknown as Record<string, unknown>, input);
+  dispatchWindowsWorkerFrame({ type: "ping" }, input);
+  await failureObserved.promise;
+  expect(closed).toBe(0);
+  expect(sent).toEqual([
+    { version: 1, type: "pong", workerId },
+    { version: 1, type: "doctor", workerId, payload: {} },
+  ]);
+});
+
+test("closes the Windows socket for malformed worker frames", () => {
+  let closed = 0;
+  dispatchWindowsWorkerFrame({ type: "not-a-command" }, {
+    workerId,
+    send: () => {},
+    close: () => { closed += 1; },
+    sendDoctor: async () => {},
+    execute: async () => {},
+  });
+  expect(closed).toBe(1);
+});
+
 test("reconciles Windows runtime before startup continues", async () => {
   const calls: string[] = [];
   await reconcileWindowsRuntime({ preserveLeases: false }, { reconcileOrphans: async () => { calls.push("reconcile"); } });

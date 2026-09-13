@@ -25,3 +25,19 @@ test("reaps a terminal lease with no create command without dispatching a stop",
   expect(dispatches).toBe(0);
   expect(queries.some(query => query.includes("UPDATE runner_leases SET state='reaped'") && query.includes("cleanup_state='completed'") && query.includes("nonce="))).toBe(true);
 });
+
+test("does not dispatch another stop when a pending or sent stop already exists", async () => {
+  let dispatches = 0;
+  // The query's NOT EXISTS predicate excludes this terminal lease because
+  // its existing stop command is still pending/sent.
+  const db2 = (async () => []) as unknown as DatabaseClient;
+
+  const report = await reapPendingLeases({
+    db: db2,
+    dispatch: async () => { dispatches += 1; },
+    workerConnected: () => true,
+  });
+
+  expect(report).toEqual({ dispatched: 0, skipped: 0, failed: 0 });
+  expect(dispatches).toBe(0);
+});

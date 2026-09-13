@@ -216,6 +216,85 @@ export function startWindowsLeaseLifecycle(
   active.set(bootstrap.leaseId, lifecycle);
   return lifecycle;
 }
+type WindowsWorkerCommandContext = {
+  mode: "container" | "vm";
+  limits: Limits;
+  cache: WorkerCacheConfiguration;
+  cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled" | "setRunnerCacheMaxGiB" | "purgeRunnerCache" | "transport" | "unregisterLease">;
+  driver: WindowsRuntimeDriver;
+  identity: Identity;
+  activeLeases: Map<string, Promise<void>>;
+  send: (data: string) => void;
+  refreshDoctor: () => Promise<void>;
+};
+
+const normalizedError = (error: unknown): string => error instanceof Error ? error.message : String(error);
+
+export async function executeWindowsWorkerCommand(command: WorkerCommand, context: WindowsWorkerCommandContext): Promise<void> {
+  const { mode, limits, cache, cacheService, driver, identity, activeLeases, send, refreshDoctor } = context;
+  if (command.type === "worker.set_lease_preservation") {
+    const enabled = (command.payload as Record<string, unknown>).enabled;
+    if (typeof enabled !== "boolean") throw new Error("lease preservation command invalid");
+    identity.preserveLeases = enabled;
+    await save(identity);
+    return send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: null })));
+  }
+  if (command.type === "worker.configure") {
+    const payload = WorkerConfigurePayload.parse(command.payload);
+    const observed = await applyWindowsWorkerConfiguration(limits, cache, payload, cacheService);
+    return send(JSON.stringify(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed })));
+  }
+  if (command.type === "worker.runner_cache_purge") {
+    return send(JSON.stringify(await applyWindowsRunnerCachePurge(command, cacheService)));
+  }
+  if (command.type === "worker.build_image") {
+    await buildWindowsImage(command, workerEvent => send(JSON.stringify(workerEvent)));
+    await refreshDoctor();
+    return;
+  }
+  if (command.type === "tart.stop_lease" || command.type === "windows-container.stop_lease" || command.type === "hyperv.stop_lease") {
+    return runWindowsLeaseCleanup(command, driver, workerEvent => send(JSON.stringify(workerEvent)), identity.preserveLeases === true);
+  }
+  if (command.type === "windows-container.create_lease" || command.type === "hyperv.create_lease") {
+    const expectedType = mode === "container" ? "windows-container.create_lease" : "hyperv.create_lease";
+    if (command.type !== expectedType) throw new Error(`Windows runtime mode ${mode} rejects ${command.type}`);
+    const cipher = (command.payload as { bootstrapCiphertext?: Parameters<typeof openLeaseBootstrap>[0] }).bootstrapCiphertext;
+    if (!cipher || !command.leaseId) throw new Error("lease bootstrap payload invalid");
+    const bootstrap: LeaseBootstrapEnvelope = openLeaseBootstrap(cipher, identity.encryptionPrivateKey);
+    if (bootstrap.leaseId !== command.leaseId || (mode === "container" ? bootstrap.guestPlatform !== "windows-x64" : !["windows-x64", "linux-x64"].includes(bootstrap.guestPlatform))) throw new Error("Windows lease bootstrap mismatch");
+    send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
+    await startWindowsLeaseLifecycle(command, driver, bootstrap, workerEvent => send(JSON.stringify(workerEvent)), activeLeases, () => identity.preserveLeases === true, cacheService);
+  }
+}
+export function dispatchWindowsWorkerFrame(
+  frame: Record<string, unknown>,
+  input: { workerId: string; send: (data: string) => void; close: () => void; sendDoctor: () => Promise<void>; execute: (command: WorkerCommand) => Promise<void> },
+): void {
+  if (frame.type === "ping") {
+    input.send(JSON.stringify({ version: 1, type: "pong", workerId: input.workerId }));
+    void input.sendDoctor();
+    return;
+  }
+  if (frame.type === "doctor_ack") return;
+  let command: WorkerCommand;
+  try {
+    command = WorkerCommand.parse(frame);
+  } catch {
+    input.close();
+    return;
+  }
+  void input.execute(command).catch(error => {
+    console.error("Windows worker command failed", {
+      workerId: command.workerId,
+      commandId: command.id,
+      type: command.type,
+      leaseId: command.leaseId,
+      error: normalizedError(error),
+    });
+  });
+}
+
+
 
 async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache: WorkerCacheConfiguration, cacheService: ActionCacheService): Promise<never> {
   const controlPlane = new URL(baseUrl);
@@ -281,47 +360,24 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
             await sendDoctor(ws);
             return;
           }
-          if (frame.type === "ping") {
-            ws.send(JSON.stringify({ version: 1, type: "pong", workerId: identity.workerId }));
-            await sendDoctor(ws);
-            return;
-          }
-          if (frame.type === "doctor_ack") return;
-          const command = WorkerCommand.parse(frame);
-          if (command.type === "worker.set_lease_preservation") {
-            const enabled = (command.payload as Record<string, unknown>).enabled;
-            if (typeof enabled !== "boolean") throw new Error("lease preservation command invalid");
-            identity.preserveLeases = enabled;
-            await save(identity);
-            return ws.send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: null })));
-          }
-          if (command.type === "worker.configure") {
-            const payload = WorkerConfigurePayload.parse(command.payload);
-            const observed = await applyWindowsWorkerConfiguration(limits, cache, payload, cacheService);
-            return ws.send(JSON.stringify(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed })));
-          }
-          if (command.type === "worker.runner_cache_purge") return ws.send(JSON.stringify(await applyWindowsRunnerCachePurge(command, cacheService)));
-          if (command.type === "worker.build_image") {
-            await buildWindowsImage(command, workerEvent => ws.send(JSON.stringify(workerEvent)));
-            doctorReport = await windowsDoctor(identity.preserveLeases === true);
-            return;
-          }
-          if (command.type === "tart.stop_lease" || command.type === "windows-container.stop_lease" || command.type === "hyperv.stop_lease") {
-            await runWindowsLeaseCleanup(command, driver, workerEvent => ws.send(JSON.stringify(workerEvent)), identity.preserveLeases === true);
-            return;
-          }
-          if (command.type === "windows-container.create_lease" || command.type === "hyperv.create_lease") {
-            const expectedType = mode === "container" ? "windows-container.create_lease" : "hyperv.create_lease";
-            if (command.type !== expectedType) throw new Error(`Windows runtime mode ${mode} rejects ${command.type}`);
-            const cipher = (command.payload as { bootstrapCiphertext?: Parameters<typeof openLeaseBootstrap>[0] }).bootstrapCiphertext;
-            if (!cipher || !command.leaseId) throw new Error("lease bootstrap payload invalid");
-            const bootstrap: LeaseBootstrapEnvelope = openLeaseBootstrap(cipher, identity.encryptionPrivateKey);
-            if (bootstrap.leaseId !== command.leaseId || (mode === "container" ? bootstrap.guestPlatform !== "windows-x64" : !["windows-x64", "linux-x64"].includes(bootstrap.guestPlatform))) throw new Error("Windows lease bootstrap mismatch");
-            ws.send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
-            void startWindowsLeaseLifecycle(command, driver, bootstrap, workerEvent => ws.send(JSON.stringify(workerEvent)), activeLeases, () => identity.preserveLeases === true, cacheService);
-          }
-        } catch (error) {
-          console.error("Windows worker command failed", error);
+          dispatchWindowsWorkerFrame(frame, {
+            workerId: identity.workerId,
+            send: data => ws.send(data),
+            close: () => ws.close(1011, "worker command failed"),
+            sendDoctor: () => sendDoctor(ws),
+            execute: command => executeWindowsWorkerCommand(command, {
+              mode: mode === "container" ? "container" : "vm",
+              limits,
+              cache,
+              cacheService,
+              driver,
+              identity,
+              activeLeases,
+              send: data => ws.send(data),
+              refreshDoctor: async () => { doctorReport = await windowsDoctor(identity.preserveLeases === true); },
+            }),
+          });
+        } catch {
           ws.close(1011, "worker command failed");
         }
       };

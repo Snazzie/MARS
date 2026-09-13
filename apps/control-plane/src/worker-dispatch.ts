@@ -21,7 +21,24 @@ export async function listReplayableWorkerCommands(db: DatabaseClient, workerId:
   const rows = await db`SELECT c.id,c.version,c.type,c.worker_id AS "workerId",c.lease_id AS "leaseId",c.occurred_at AS "occurredAt",c.payload
     FROM commands c LEFT JOIN runner_leases l ON l.id=c.lease_id
     WHERE c.worker_id=${workerId} AND c.state IN ('pending','sent')
-      AND (c.lease_id IS NULL OR c.type IN ('tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease') OR (l.id IS NOT NULL AND l.state NOT IN ('failed','reaped')))
+      AND (
+        c.lease_id IS NULL
+        OR (
+          c.type IN ('linux-vm.create_lease','tart.create_lease','windows-container.create_lease','hyperv.create_lease')
+          AND l.id IS NOT NULL AND l.state NOT IN ('failed','reaped') AND l.expires_at>now()
+        )
+        OR (
+          c.type IN ('linux-vm.stop_lease','tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease')
+          AND l.id IS NOT NULL AND l.state IN ('completed','failed')
+          AND NOT EXISTS (
+            SELECT 1 FROM commands newer
+            WHERE newer.lease_id=c.lease_id
+              AND newer.type IN ('linux-vm.stop_lease','tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease')
+              AND newer.state IN ('pending','sent')
+              AND (newer.occurred_at>c.occurred_at OR (newer.occurred_at=c.occurred_at AND newer.id>c.id))
+          )
+        )
+      )
     ORDER BY c.occurred_at ASC,c.id ASC`;
   return rows.map(row => WorkerCommand.parse({
     ...row,
@@ -51,8 +68,6 @@ export class WorkerCommandDispatcher {
     this.epochs.set(workerId, (this.epochs.get(workerId) ?? 0) + 1);
     old?.close?.(4001, "superseded");
     this.sockets.set(workerId, socket);
-    const epoch = this.epochs.get(workerId)!;
-    if (this.store) void this.serialized(workerId, () => this.replay(workerId, socket, epoch));
   }
   /** Replay committed durable commands to the currently authenticated socket. */
   replayConnected(workerId: string): Promise<void> {

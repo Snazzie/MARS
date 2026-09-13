@@ -1,10 +1,10 @@
 import { completeOnboardingIfReady, createDb, ensureDatabase, migrateDatabase, jsonParameter, type DashboardDb } from "@mars/db";
-import { WorkerCommand as WorkerCommandSchema, WorkerReleaseOciDigest, type WorkerCommand, type WorkerReleaseManifest } from "@mars/contracts";
+import { WorkerReleaseOciDigest, type WorkerCommand, type WorkerReleaseManifest } from "@mars/contracts";
 import type { Server } from "bun";
 import { getSession, SecretBox, type SessionUser } from "./auth.ts";
 import { configureRunLifecycle } from "./runs.ts";
 import { discoverAvailableRepositoryJobs, discoverQueuedRepositoryJobs } from "./job-discovery.ts";
-import { WorkerCommandDispatcher, normalizeTimestamp } from "./worker-dispatch.ts";
+import { WorkerCommandDispatcher, listReplayableWorkerCommands } from "./worker-dispatch.ts";
 import { createRequestLimiter } from "./worker-requests.ts";
 import { GitHubAppService } from "./github-app.ts";
 import { runQueuedJobReconciliation } from "./job-reconciler.ts";
@@ -389,8 +389,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
       await db`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${command.id},${command.version},${command.type},${command.workerId},${command.leaseId},${command.occurredAt},${jsonParameter(db, command.payload)}) on conflict (id) do nothing`;
     },
     async listUnacknowledged(workerId: string): Promise<WorkerCommand[]> {
-      const rows = await db`select c.id,c.version,c.type,c.worker_id as "workerId",c.lease_id as "leaseId",c.occurred_at as "occurredAt",c.payload from commands c left join runner_leases l on l.id=c.lease_id where c.worker_id=${workerId} and c.state in ('pending','sent') and (c.lease_id is null or l.state not in ('failed','reaped')) order by c.occurred_at asc,c.id asc`;
-      return rows.map(row => WorkerCommandSchema.parse({ ...row, payload: typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload, occurredAt: normalizeTimestamp(row.occurredAt) }));
+      return listReplayableWorkerCommands(db, workerId);
     },
     async markSent(commandId: string): Promise<void> { await db`update commands set state='sent' where id=${commandId} and state='pending'`; },
     async acknowledge(commandId: string): Promise<void> { await db`update commands set state='acknowledged' where id=${commandId} and state in ('pending','sent')`; },

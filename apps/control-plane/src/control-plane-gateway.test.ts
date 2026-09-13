@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { enqueueWorkerMessage, scheduleWorkerPing } from "./control-plane-gateway.ts";
+import { enqueueWorkerMessage, scheduleWorkerPing, sendWorkerAuthenticationFrames } from "./control-plane-gateway.ts";
 
 test("schedules worker heartbeat pings without sending immediately", () => {
   let sendCount = 0;
@@ -21,18 +21,39 @@ test("schedules worker heartbeat pings without sending immediately", () => {
 
 const gatewaySource = await Bun.file(new URL("./control-plane-gateway.ts", import.meta.url)).text();
 
-test("starts worker heartbeat polling after authentication", () => {
-  const authenticatedBranchStart = gatewaySource.indexOf('frame.type === "authenticate"');
-  const doctorBranchStart = gatewaySource.indexOf('frame.type === "doctor"', authenticatedBranchStart);
-  const authenticatedBranch = gatewaySource.slice(authenticatedBranchStart, doctorBranchStart);
-  expect(authenticatedBranch).toContain('ws.send(JSON.stringify({ version: 1, type: "authenticated"');
-  expect(authenticatedBranch).toContain('ws.send(JSON.stringify({ version: 1, type: "ping" }));');
+test("sends authenticated and ping frames before durable replay", async () => {
+  const order: string[] = [];
+  const sent: string[] = [];
+  await sendWorkerAuthenticationFrames({
+    socket: { send(data: string) { sent.push(data); order.push(JSON.parse(data).type); } },
+    workerId: "worker",
+    admissionState: "adopted",
+    dispatcher: {
+      async replayConnected() {
+        order.push("replay");
+      },
+    },
+  });
+  expect(order).toEqual(["authenticated", "ping", "replay"]);
+  expect(JSON.parse(sent[0]!).admissionState).toBe("adopted");
+});
+
+test("logs replay rejection without closing the authenticated socket", async () => {
+  const errors: unknown[][] = [];
+  await sendWorkerAuthenticationFrames({
+    socket: { send() {} },
+    workerId: "worker",
+    admissionState: "adopted",
+    dispatcher: { async replayConnected() { throw new Error("replay unavailable"); } },
+    logError: (...args) => errors.push(args),
+  });
+  expect(errors).toEqual([["Worker command replay failed", { workerId: "worker", error: "replay unavailable" }]]);
 });
 
 test("workers answer heartbeat pings with JSON frames", async () => {
   for (const path of ["../../orchestrator/src/linux-agent.ts", "../../orchestrator/src/mac-agent.ts", "../../orchestrator/src/windows-agent.ts"]) {
     const source = await Bun.file(new URL(path, import.meta.url)).text();
-    expect(source).toContain('ws.send(JSON.stringify({ version: 1, type: "pong", workerId: identity.workerId }))');
+    expect(source).toMatch(/type: "pong", workerId:/);
   }
 });
 test("schedules the next worker ping after pong", () => {

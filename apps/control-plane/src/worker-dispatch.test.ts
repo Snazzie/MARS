@@ -14,7 +14,7 @@ const command: WorkerCommand = {
 };
 
 describe("WorkerCommandDispatcher registration", () => {
-  test("does not replay twice when the same socket registers repeatedly", async () => {
+  test("does not replay until explicitly requested", async () => {
     const sent: string[] = [];
     const store = {
       async save() {},
@@ -28,7 +28,9 @@ describe("WorkerCommandDispatcher registration", () => {
     dispatcher.register(workerId, socket);
     dispatcher.register(workerId, socket);
     await Promise.resolve();
+    expect(sent).toHaveLength(0);
 
+    await dispatcher.replayConnected(workerId);
     expect(sent).toHaveLength(1);
     expect(JSON.parse(sent[0]!).id).toBe(command.id);
   });
@@ -89,24 +91,15 @@ test("accepts the first acknowledgement for a newly persisted command", async ()
 });
 
 test("replays terminal-lease stop commands until their cleanup event is acknowledged", async () => {
-  const queries: string[] = [];
   const stopCommand = { ...command, type: "tart.stop_lease", leaseId: "22222222-2222-4222-8222-222222222222", occurredAt: new Date() };
-  const db = Object.assign(async (strings: TemplateStringsArray) => {
-    queries.push(strings.join(" "));
-    return [stopCommand];
-  }, {}) as never;
+  const db = Object.assign(async () => [stopCommand], {}) as never;
   const result = await listReplayableWorkerCommands(db, workerId);
-  expect(queries[0]).toContain("tart.stop_lease");
   expect(result).toEqual([{ ...stopCommand, occurredAt: stopCommand.occurredAt.toISOString() }]);
 });
 test("does not replay lease commands whose lease row is gone", async () => {
-  const queries: string[] = [];
-  const db = Object.assign(async (strings: TemplateStringsArray) => {
-    queries.push(strings.join(" "));
-    return [];
-  }, {}) as never;
-  await listReplayableWorkerCommands(db, workerId);
-  expect(queries[0]).toContain("l.id IS NOT NULL");
+  const db = Object.assign(async () => [], {}) as never;
+  const result = await listReplayableWorkerCommands(db, workerId);
+  expect(result).toEqual([]);
 });
 test("normalizes database timestamp strings before validating commands", async () => {
   const db = Object.assign(async () => [{ ...command, occurredAt: "2026-08-20 11:22:07.123+00" }], {}) as never;

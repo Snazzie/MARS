@@ -25,6 +25,26 @@ test("reconciles configuration before making a socket dispatchable", async () =>
   expect(order).toEqual(["reconcile", "online", "authenticated", "register"]);
   expect(workerSockets.get(workerId)).toBe(socket);
 });
+test("refreshes heartbeat for an already-enrolled worker on reconnect", async () => {
+  const queries: string[] = [];
+  let enrollmentUpdateSkipped = false;
+  await activateAuthenticatedWorkerConnection({
+    db: (async (strings: TemplateStringsArray) => {
+      const query = strings.join(" ");
+      queries.push(query);
+      if (query.includes("enrollment_authenticated_at is null")) enrollmentUpdateSkipped = true;
+      return [];
+    }) as never,
+    workerId: "worker",
+    socket: { send: () => {}, close: () => {} },
+    workerSockets: new Map(),
+    reconcile: async () => ({ state: "ready", commandId: null }),
+    markAuthenticated: () => {},
+    dispatcher: { register: () => {} },
+  });
+  expect(enrollmentUpdateSkipped).toBe(true);
+  expect(queries.some(query => query.includes("set last_heartbeat_at=now()"))).toBe(true);
+});
 
 test("marks enrollment authenticated and clears the one-use hash atomically", async () => {
   const queries: string[] = [];

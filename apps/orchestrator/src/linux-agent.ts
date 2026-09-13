@@ -86,6 +86,20 @@ export async function handleLinuxWorkerCommandWithContext(command: WorkerCommand
   active.set(bootstrap.leaseId, lifecycle);
   void lifecycle.finally(() => active.delete(bootstrap.leaseId));
 }
+export async function executeLinuxWorkerCommand(command: WorkerCommand, resources: LinuxWorkerResources, context: LinuxWorkerCommandContext): Promise<WorkerEvent | void> {
+  if (command.type === "worker.configure" || command.type === "worker.runner_cache_purge") {
+    return handleLinuxWorkerCommand(command, resources, context.cacheService);
+  }
+  if (command.type === "linux-vm.create_lease") {
+    await handleLinuxWorkerCommandWithContext(command, resources, context);
+    return workerEvent(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId });
+  }
+  if (command.type === "linux-vm.stop_lease") {
+    await handleLinuxWorkerCommandWithContext(command, resources, context);
+    return;
+  }
+  throw new Error(`unsupported Linux worker command: ${command.type}`);
+}
 export type LinuxWorkerJoinInput = {
   code: string;
   publicKey: string;
@@ -182,8 +196,9 @@ async function connectLinuxWorker(
     ws.onclose = () => closed.resolve();
     ws.onerror = () => ws.close();
     ws.onmessage = async (event) => {
+      let frame: { type?: string; nonce?: string } & Partial<WorkerCommand>;
       try {
-        const frame = JSON.parse(String(event.data)) as { type?: string; nonce?: string } & Partial<WorkerCommand>;
+        frame = JSON.parse(String(event.data)) as { type?: string; nonce?: string } & Partial<WorkerCommand>;
         if (frame.type === "challenge" && frame.nonce) return ws.send(JSON.stringify(authenticateWorker(frame.nonce, identity)));
         if (frame.type === "authenticated") {
           if (Bun.env.MARS_JOIN_CODE_FILE) await unlink(Bun.env.MARS_JOIN_CODE_FILE).catch(() => {});
@@ -200,18 +215,27 @@ async function connectLinuxWorker(
         }
         if (frame.type === "doctor_ack") return;
         const command = WorkerCommand.parse(frame);
-        if (command.type === "worker.configure" || command.type === "worker.runner_cache_purge") return ws.send(JSON.stringify(await handleLinuxWorkerCommand(command, resources, cacheService)));
-        if (command.type === "linux-vm.create_lease") {
-          ws.send(JSON.stringify(workerEvent(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
-          await handleLinuxWorkerCommandWithContext(command, resources, { driver, encryptionPrivateKey: identity.encryptionPrivateKey, runtimeReady: () => doctor.runtimeReady === true, send: (value) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); }, activeLeases, cacheService });
-          return;
-        }
-        if (command.type === "linux-vm.stop_lease") {
-          await handleLinuxWorkerCommandWithContext(command, resources, { driver, encryptionPrivateKey: identity.encryptionPrivateKey, runtimeReady: () => true, send: (value) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); }, activeLeases, cacheService });
-          return;
-        }
-        throw new Error("unsupported Linux worker command");
-      } catch { ws.close(1011, "worker command failed"); }
+        void executeLinuxWorkerCommand(command, resources, {
+          driver,
+          encryptionPrivateKey: identity.encryptionPrivateKey,
+          runtimeReady: () => doctor.runtimeReady === true,
+          send: (value) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); },
+          activeLeases,
+          cacheService,
+        }).then((response) => {
+          if (response && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(response));
+        }).catch((error: unknown) => {
+          console.error("Linux worker command failed", {
+            workerId: command.workerId,
+            commandId: command.id,
+            type: command.type,
+            leaseId: command.leaseId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      } catch {
+        ws.close(1011, "worker command failed");
+      }
     };
     await closed.promise;
     await Bun.sleep(1_000);

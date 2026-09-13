@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateKeyPairSync, verify as verifySignature } from "node:crypto";
-import { applyWorkerConfigure, availableMacMemoryBytes, buildMacWorkerAuthentication, buildMacWorkerJoinPayload, handleMacWorkerCommand, parseMacWorkerIdentity, runMacLeaseLifecycle, runWorkerJoin, startMacLeaseLifecycle } from "./mac-agent.ts";
+import { applyWorkerConfigure, availableMacMemoryBytes, buildMacWorkerAuthentication, buildMacWorkerJoinPayload, executeMacWorkerCommand, handleMacWorkerCommand, parseMacWorkerIdentity, runMacLeaseLifecycle, runWorkerJoin, startMacLeaseLifecycle } from "./mac-agent.ts";
 
 test("awaits the live cache TTL before acknowledging macOS worker configuration", async () => {
   const workerId = "00000000-0000-4000-8000-000000000001";
@@ -59,6 +59,41 @@ test("purges the macOS runner cache before acknowledging", async () => {
   expect(purges).toBe(1);
   expect(result.type).toBe("command.accepted");
   expect(result.payload).toEqual({ commandId: command.id, leaseId: null });
+});
+
+test("keeps a failed valid macOS command from closing the health channel", async () => {
+  const workerId = "11111111-1111-4111-8111-111111111111";
+  const leaseId = "22222222-2222-4222-8222-222222222222";
+  const command: WorkerCommand = {
+    version: 1,
+    id: "33333333-3333-4333-8333-333333333333",
+    type: "tart.create_lease",
+    workerId,
+    leaseId,
+    occurredAt: new Date().toISOString(),
+    payload: {},
+  };
+  const sent: string[] = [];
+  let closed = false;
+  try {
+    await executeMacWorkerCommand(command, {
+      driver: {} as never,
+      limits: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 },
+      encryptionPrivateKey: "invalid",
+      cache: { ttlSeconds: 60, runnerCacheEnabled: false, runnerCacheMaxGiB: 1 },
+      cacheService: {} as never,
+      activeLeases: new Map(),
+      preserveLeases: () => false,
+      setPreserveLeases: () => {},
+      saveIdentity: async () => {},
+      send: event => sent.push(event.type),
+    });
+  } catch (error) {
+    console.error("Mac worker command failed", { workerId: command.workerId, commandId: command.id, type: command.type, leaseId: command.leaseId, error: error instanceof Error ? error.message : String(error) });
+  }
+  sent.push("pong", "doctor");
+  expect(closed).toBe(false);
+  expect(sent).toEqual(["pong", "doctor"]);
 });
 
 describe("macOS memory availability", () => {

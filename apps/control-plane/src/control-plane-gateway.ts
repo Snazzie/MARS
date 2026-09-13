@@ -5,7 +5,7 @@ import { canSubscribeToOrganization, loadBrowserInvalidations } from "./browser-
 import { reconcileWorkerInventory } from "./lease-reconciliation.ts";
 import { verifyWorkerSignature } from "./workers.ts";
 import { createWorkerChallenge, decodeWorkerSignature } from "./worker-socket.ts";
-import { WorkerCommandDispatcher, containsSecret } from "./worker-dispatch.ts";
+import { WorkerCommandDispatcher, containsSecret, type AuthenticatedWorkerSocket } from "./worker-dispatch.ts";
 import { applyWorkerConfigurationAcknowledgement } from "./worker-requests.ts";
 import { activateAuthenticatedWorkerConnection } from "./worker-connection.ts";
 import { handleAuthenticatedWorkerEvent } from "./worker-lifecycle.ts";
@@ -19,6 +19,21 @@ export const WORKER_HEARTBEAT_INTERVAL_MS = 30_000;
 type ScheduleTimeout = (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
 export function scheduleWorkerPing(sendPing: () => void, scheduleTimeout: ScheduleTimeout = setTimeout): ReturnType<typeof setTimeout> {
   return scheduleTimeout(sendPing, WORKER_HEARTBEAT_INTERVAL_MS);
+}
+export async function sendWorkerAuthenticationFrames(input: {
+  socket: Pick<AuthenticatedWorkerSocket, "send">;
+  workerId: string;
+  admissionState: string;
+  dispatcher: Pick<WorkerCommandDispatcher, "replayConnected">;
+  logError?: (message: string, details: { workerId: string; error: string }) => void;
+}): Promise<void> {
+  input.socket.send(JSON.stringify({ version: 1, type: "authenticated", workerId: input.workerId, admissionState: input.admissionState }));
+  input.socket.send(JSON.stringify({ version: 1, type: "ping" }));
+  try {
+    await input.dispatcher.replayConnected(input.workerId);
+  } catch (error) {
+    (input.logError ?? console.error)("Worker command replay failed", { workerId: input.workerId, error: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 export function enqueueWorkerMessage(
@@ -147,8 +162,12 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           },
         });
         if (!activated) return ws.close(4001, "superseded");
-        ws.send(JSON.stringify({ version: 1, type: "authenticated", workerId: ws.data.workerId, admissionState: worker.admission_state }));
-        ws.send(JSON.stringify({ version: 1, type: "ping" }));
+        await sendWorkerAuthenticationFrames({
+          socket: ws,
+          workerId: ws.data.workerId,
+          admissionState: worker.admission_state,
+          dispatcher: options.dispatcher,
+        });
       } else if (frame.type === "doctor" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && frame.workerId === ws.data.workerId && frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload)) {
         const epoch = ws.data.connectionEpoch;
         if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;

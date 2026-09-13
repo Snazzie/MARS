@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { applyLinuxWorkerConfigure, buildLinuxWorkerJoinPayload, createLinuxIdentity, handleLinuxWorkerCommand } from "./linux-agent.ts";
-import type { WorkerCommand } from "@mars/contracts";
+import { applyLinuxWorkerConfigure, buildLinuxWorkerJoinPayload, createLinuxIdentity, executeLinuxWorkerCommand, handleLinuxWorkerCommand } from "./linux-agent.ts";
+import type { WorkerCommand, WorkerEvent } from "@mars/contracts";
+
 
 const workerId = "00000000-0000-4000-8000-000000000001";
 const command: WorkerCommand = {
@@ -57,6 +58,34 @@ test("purges only the runner cache and acknowledges after completion", async () 
   expect(result.type).toBe("command.accepted");
   expect(result.payload).toEqual({ commandId: "00000000-0000-4000-8000-000000000003", leaseId: null });
 });
+test("leaves command failures unacknowledged so health frames can continue", async () => {
+  const resources = {
+    appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 },
+    runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 },
+    cache: { ttlSeconds: 60, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 },
+  };
+  const sent: WorkerEvent[] = [];
+  const failingCommand = {
+    ...command,
+    id: "00000000-0000-4000-8000-000000000004",
+    type: "linux-vm.create_lease",
+    leaseId: "00000000-0000-4000-8000-000000000005",
+    payload: {},
+  } as WorkerCommand;
+  await expect(executeLinuxWorkerCommand(failingCommand, resources, {
+    driver: { createLease: async () => { throw new Error("not reached"); }, stopLease: async () => {}, removeLease: async () => {} },
+    encryptionPrivateKey: "unused",
+    runtimeReady: () => true,
+    send: (event) => sent.push(event),
+    activeLeases: new Map(),
+    cacheService: { applyTtl: async () => {}, setRunnerCacheEnabled: () => {}, setRunnerCacheMaxGiB: () => {} } as never,
+  })).rejects.toThrow("bootstrap_ciphertext_missing");
+  expect(sent).toEqual([]);
+  sent.push({ version: 1, id: "00000000-0000-4000-8000-000000000006", workerId, type: "pong", occurredAt: new Date().toISOString(), payload: {} });
+  sent.push({ version: 1, id: "00000000-0000-4000-8000-000000000007", workerId, type: "doctor", occurredAt: new Date().toISOString(), payload: {} });
+  expect(sent.map((event) => event.type)).toEqual(["pong", "doctor"]);
+});
+
 
 test("builds a Linux enrollment payload with digest-bound VM evidence", () => {
   const payload = buildLinuxWorkerJoinPayload({
