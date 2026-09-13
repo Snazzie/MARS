@@ -53,10 +53,11 @@ describe("Tart VM lifecycle", () => {
       stop: async (name) => { calls.push(["stop", name]); },
       remove: async (name) => { calls.push(["remove", name]); },
     };
-    const driver = new TartVmDriver(runtime, "base-image", "mars-job");
+    const driver = new TartVmDriver(runtime, "base-image", "mars-job", undefined, "0.1.0");
     const lease = await driver.createLease({
       id: "11111111-1111-4111-8111-111111111111",
       jobId: "22222222-2222-4222-8222-222222222222",
+      contractVersion: "0.1.0",
       imageDigest: "base-image",
       nonce: "nonce",
       encodedJitConfig: "jit-config",

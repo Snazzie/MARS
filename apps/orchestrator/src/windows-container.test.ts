@@ -44,7 +44,7 @@ test("includes worker cache descriptor in Windows container bootstrap", async ()
   };
   const driver = new WindowsContainerDriver({ image: "repo@sha256:" + "a".repeat(64), prefix: "mars", bootstrapRoot: root, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 }, readyTimeoutMs: 100, jobTimeoutMs: 100 }, docker);
   const leaseId = "33333333-3333-4333-8333-333333333333";
-  await driver.createLease({ id: leaseId, jobId: "job", imageDigest: "repo@sha256:" + "a".repeat(64), resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config", workerCache });
+  await driver.createLease({ id: leaseId, jobId: "job", contractVersion: "0.1.0", imageDigest: "repo@sha256:" + "a".repeat(64), resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config", workerCache });
   expect(JSON.parse(await readFile(join(root, leaseId, "bootstrap.json"), "utf8")).workerCache).toEqual(workerCache);
 });
 test("passes configured DNS servers to Docker create", async () => {
@@ -72,7 +72,7 @@ test("passes configured DNS servers to Docker create", async () => {
   await driver.createLease({
     id: "55555555-5555-4555-8555-555555555555",
     jobId: "job",
-    imageDigest: config.image,
+    contractVersion: "0.1.0", imageDigest: config.image,
     resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 },
     nonce: "n".repeat(32),
     encodedJitConfig: "config",
@@ -125,7 +125,7 @@ test("discovers host DNS immediately before Docker create when no override is co
   await driver.createLease({
     id: "66666666-6666-4666-8666-666666666666",
     jobId: "job",
-    imageDigest: config.image,
+    contractVersion: "0.1.0", imageDigest: config.image,
     resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 },
     nonce: "n".repeat(32),
     encodedJitConfig: "config",
@@ -169,7 +169,7 @@ test("does not query host DNS on non-Windows platforms", async () => {
   await driver.createLease({
     id: "77777777-7777-4777-8777-777777777777",
     jobId: "job",
-    imageDigest: config.image,
+    contractVersion: "0.1.0", imageDigest: config.image,
     resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 },
     nonce: "n".repeat(32),
     encodedJitConfig: "config",
@@ -203,7 +203,7 @@ test("rejects a container when Docker applies different CPU or memory limits", a
   await expect(driver.createLease({
     id: "44444444-4444-4444-8444-444444444444",
     jobId: "job",
-    imageDigest: "mars/windows-job:local",
+    contractVersion: "0.1.0", imageDigest: "mars/windows-job:local",
     resources: { vcpu: 2, memoryBytes: 8 * 1024 ** 3, storageBytes: 10 * 1024 ** 3, concurrency: 1 },
     nonce: "n".repeat(32),
     encodedJitConfig: "config",
@@ -234,7 +234,7 @@ test("fails completion when a containerized job stops making terminal progress",
   const lease = await driver.createLease({
     id: "11111111-1111-4111-8111-111111111111",
     jobId: "job",
-    imageDigest: "mars/windows-job:local",
+    contractVersion: "0.1.0", imageDigest: "mars/windows-job:local",
     resources: { vcpu: 2, memoryBytes: 8 * 1024 ** 3, storageBytes: 10 * 1024 ** 3, concurrency: 1 },
     nonce: "n".repeat(32),
     encodedJitConfig: "config",
@@ -278,7 +278,7 @@ test("removes a container when startup fails after creation", async () => {
   await expect(driver.createLease({
     id: "22222222-2222-4222-8222-222222222222",
     jobId: "job",
-    imageDigest: "mars/windows-job:local",
+    contractVersion: "0.1.0", imageDigest: "mars/windows-job:local",
     resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 },
     nonce: "n".repeat(32),
     encodedJitConfig: "config",
@@ -332,7 +332,7 @@ test("copies runner and worker diagnostic logs from a stopped container", async 
     jobTimeoutMs: 100,
     allowLocalImage: true,
   }, docker);
-  await driver.createLease({ id: "77777777-7777-4777-8777-777777777777", jobId: "job", imageDigest: "mars/windows-job:local", resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config" });
+  await driver.createLease({ id: "77777777-7777-4777-8777-777777777777", jobId: "job", contractVersion: "0.1.0", imageDigest: "mars/windows-job:local", resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config" });
   const diagnostics = await driver.collectRawDiagnostics("77777777-7777-4777-8777-777777777777");
   expect(diagnostics).toContain("Runner_2026.log");
   expect(diagnostics).toContain("job completed Authorization: Bearer [REDACTED]");
@@ -362,7 +362,7 @@ test("falls back to the configured memory limit when Docker stats reports an inv
   const lease = await driver.createLease({
     id: "55555555-5555-4555-8555-555555555555",
     jobId: "job",
-    imageDigest: "mars/windows-job:local",
+    contractVersion: "0.1.0", imageDigest: "mars/windows-job:local",
     resources: { vcpu: 2, memoryBytes: configuredMemory, storageBytes: 10 * 1024 ** 3, concurrency: 1 },
     nonce: "n".repeat(32),
     encodedJitConfig: "config",
@@ -390,7 +390,7 @@ test("requests an idempotent graceful runner stop before forced cleanup", async 
     jobTimeoutMs: 100,
     allowLocalImage: true,
   }, docker);
-  await driver.createLease({ id: "66666666-6666-4666-8666-666666666666", jobId: "job", imageDigest: "mars/windows-job:local", resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config" });
+  await driver.createLease({ id: "66666666-6666-4666-8666-666666666666", jobId: "job", contractVersion: "0.1.0", imageDigest: "mars/windows-job:local", resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config" });
   expect(await driver.requestGracefulStop("66666666-6666-4666-8666-666666666666", "out_of_memory", "memory limit exceeded")).toBe(true);
   expect(await driver.requestGracefulStop("66666666-6666-4666-8666-666666666666", "out_of_memory", "memory limit exceeded")).toBe(true);
   expect(calls.filter(args => args[0] === "exec")).toHaveLength(1);

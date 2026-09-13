@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PoolResources, WorkerCacheProxy } from "@mars/contracts";
+import { isWorkerContractCompatible, type PoolResources, type WorkerCacheProxy } from "@mars/contracts";
 import type { Lease, RuntimeDriver, RuntimeLease } from "./runtime.ts";
 import { validateResources } from "./runtime.ts";
 
@@ -158,14 +158,14 @@ export class TartVmDriver implements RuntimeDriver {
     private readonly baseImage: string,
     private readonly namePrefix: string,
     private readonly limits = { maxVcpuPerPod: 16, maxMemoryBytesPerPod: 64 * 1024 ** 3, maxStorageBytesPerPod: 256 * 1024 ** 3, maxConcurrentPods: 4 },
-    private readonly imageDigest = baseImage,
+    private readonly workerContractVersion = "",
   ) {}
 
   validatePool(resources: PoolResources): void { validateResources(resources, this.limits); }
   async reserveCapacity(resources: PoolResources): Promise<void> { this.validatePool(resources); }
 
   async createLease(lease: Lease): Promise<RuntimeLease> {
-    if (lease.imageDigest !== this.imageDigest) throw new Error("image digest is not allowed on this worker");
+    if (!isWorkerContractCompatible(lease.contractVersion, this.workerContractVersion)) throw new Error(`worker contract ${this.workerContractVersion || "unknown"} is not supported by control plane contract ${lease.contractVersion}`);
     this.validatePool(lease.resources);
     const vmName = `${this.namePrefix}-${lease.id.slice(0, 8)}`;
     await this.tart.clone(this.baseImage, vmName);

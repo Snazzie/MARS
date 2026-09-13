@@ -257,6 +257,7 @@ test("webhook ingestion and reconciliation authorize available repositories on a
   }) as never;
   await runQueuedJobReconciliation({
     db,
+    contractVersion: "0.1.0",
     installationToken: async () => "token",
     githubFetchForInstallation: () => fetch,
     dispatcher: { dispatch: async () => ({}) } as never,

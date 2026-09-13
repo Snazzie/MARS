@@ -1,4 +1,4 @@
-import { WorkerReleaseManifest, type WorkerReleasePlatform } from "@mars/contracts";
+import { WorkerReleaseManifest, isWorkerContractCompatible, parseWorkerContractVersion, type WorkerReleasePlatform } from "@mars/contracts";
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 
@@ -20,23 +20,8 @@ const immutableReleaseOrigin = "https://github.com";
 const configuredManifestUrl = (): string => Bun.env.MARS_WORKER_RELEASE_MANIFEST_URL?.trim() ?? "";
 const configuredContractVersion = (): string => Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "";
 
-export function parseContractVersion(value: string): { major: number; minor: number; patch: number } {
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(value);
-  if (!match) throw new Error(`invalid contract version: ${JSON.stringify(value)} (expected major.minor.patch)`);
-  const [major, minor, patch] = match.slice(1).map(Number);
-  if (![major, minor, patch].every(Number.isSafeInteger)) throw new Error(`invalid contract version: ${JSON.stringify(value)} (numeric components are too large)`);
-  return { major, minor, patch };
-}
-
-export function isWorkerContractCompatible(controlPlaneVersion: string, workerVersion: string): boolean {
-  try {
-    const controlPlane = parseContractVersion(controlPlaneVersion);
-    const worker = parseContractVersion(workerVersion);
-    return worker.major === controlPlane.major && worker.minor <= controlPlane.minor;
-  } catch {
-    return false;
-  }
-}
+export const parseContractVersion = parseWorkerContractVersion;
+export { isWorkerContractCompatible };
 
 const remoteUrl = (source: string | URL): URL | undefined => {
   let candidate: URL;

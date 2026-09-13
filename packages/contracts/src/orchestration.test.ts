@@ -16,7 +16,7 @@ test("parses a GitHub JIT config with a one-time lease binding", () => {
     guestPlatform: "macos-arm64",
     encodedJitConfig: "encoded",
     expiresAt: "2026-08-12T12:00:00.000Z",
-    imageDigest: "sha256:test",
+    contractVersion: "0.1.0", imageDigest: "sha256:test",
     resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 },
   }).success).toBe(true);
 });
@@ -257,7 +257,7 @@ test("keeps cache proxy material guest-only", () => {
     guestPlatform: "linux-x64",
     encodedJitConfig: "encoded",
     expiresAt: "2026-08-23T12:00:00.000Z",
-    imageDigest: "sha256:test",
+    contractVersion: "0.1.0", imageDigest: "sha256:test",
     resources: { vcpu: 1, memoryBytes: 2, storageBytes: 3, concurrency: 1 },
   };
   expect(LeaseBootstrapEnvelope.safeParse({ ...envelope, cache }).success).toBe(false);

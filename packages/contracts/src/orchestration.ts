@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { WorkerContractVersion } from "./worker-release.ts";
 
 export const RuntimePlatform = z.enum(["linux-x64", "windows-x64", "macos-arm64"]);
 export type RuntimePlatform = z.infer<typeof RuntimePlatform>;
@@ -91,6 +92,7 @@ export const LeaseBootstrapEnvelope = z.object({
   jobId: z.string().uuid(),
   nonce: z.string().min(32),
   guestPlatform: GuestPlatform,
+  contractVersion: WorkerContractVersion,
   encodedJitConfig: z.string().min(1),
   expiresAt: z.string().datetime(),
   imageDigest: z.string().min(1),

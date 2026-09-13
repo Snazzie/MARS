@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { PendingWorkerRequest, WorkerConfiguration, WorkerReleaseOciDigest } from "@mars/contracts";
+import { PendingWorkerRequest, WorkerConfiguration, WorkerContractVersion, WorkerReleaseOciDigest } from "@mars/contracts";
 import type { LinuxWorkerRelease, MacosWorkerRelease, WindowsWorkerRelease } from "@mars/contracts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps, DevelopmentArtifact, DevelopmentArtifactFetchOptions, DevelopmentLinuxArtifacts, DevelopmentMacosArtifacts, DevelopmentWindowsArtifacts } from "./types.ts";
 import { verifyWorkerBootstrap, initializeWorkerBootstrap, rotateWorkerBootstrap, getWorkerBootstrapStatus } from "../worker-bootstrap.ts";
@@ -531,9 +531,10 @@ export function windowsInstallerValues(platform: WindowsWorkerRelease | undefine
 
 type MacosInstallerMetadata = Pick<MacosWorkerRelease, "orchestrator" | "jobAgent" | "imagePreparationScript" | "tartSourceImage">;
 
-export function macosInstallerValues(platform: MacosInstallerMetadata, connectOrigin: string, mode: "local" | "production" = "production"): InstallerValues {
+export function macosInstallerValues(platform: MacosInstallerMetadata, connectOrigin: string, contractVersion: string, mode: "local" | "production" = "production"): InstallerValues {
   return {
     MARS_ARTIFACT_MODE: mode,
+    MARS_WORKER_CONTRACT_VERSION: WorkerContractVersion.parse(contractVersion),
     PUBLIC_BASE_URL: new URL(connectOrigin).origin,
     MARS_ORCHESTRATOR_URL: `${connectOrigin}/api/workers/orchestrator?audience=macos-arm64`,
     MARS_ORCHESTRATOR_SHA256: platform.orchestrator.sha256,
@@ -1120,8 +1121,10 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     } else if (development) {
       const macos = development as DevelopmentMacosArtifacts;
       if (!macos.orchestrator || !macos.jobAgent || !macos.imagePreparationScript || !macos.tartImage || !macos.tartImageDigest || tartDigest(macos.tartImage) !== macos.tartImageDigest.replace(/^sha256:/, "")) return unavailable(c, [`platform:${audience}`]);
-      values = macosInstallerValues({ orchestrator: { url: "", sha256: macos.orchestrator.sha256 }, jobAgent: { url: "", sha256: macos.jobAgent.sha256 }, imagePreparationScript: { url: "", sha256: macos.imagePreparationScript.sha256 }, tartSourceImage: macos.tartImage }, connectOrigin, "local");
-    } else values = macosInstallerValues(release as MacosWorkerRelease, connectOrigin, "production");
+      const contractVersion = deps.workerReleaseManifest?.contractVersion ?? Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim();
+      if (!WorkerContractVersion.safeParse(contractVersion).success) return unavailable(c, [`contract:${audience}`]);
+      values = macosInstallerValues({ orchestrator: { url: "", sha256: macos.orchestrator.sha256 }, jobAgent: { url: "", sha256: macos.jobAgent.sha256 }, imagePreparationScript: { url: "", sha256: macos.imagePreparationScript.sha256 }, tartSourceImage: macos.tartImage }, connectOrigin, contractVersion!, "local");
+    } else values = macosInstallerValues(release as MacosWorkerRelease, connectOrigin, deps.workerReleaseManifest?.contractVersion ?? "", "production");
     const generated = injectInstallerOrigin(source, connectOrigin, values, audience === "windows-x64");
     if (generated.includes("__PLACEHOLDER__") || /__[A-Za-z0-9_]+__/.test(generated)) return unavailable(c, [`installer:${file}`]);
     return new Response(generated, { headers: noStore() });

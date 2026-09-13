@@ -8,6 +8,7 @@ const envelope = {
   jobId: "22222222-2222-4222-8222-222222222222",
   nonce: "n".repeat(32),
   guestPlatform: "linux-x64" as const,
+  contractVersion: "0.1.0",
   encodedJitConfig: "encoded-jit-config",
   expiresAt: new Date(Date.now() + 60_000).toISOString(),
   imageDigest: "sha256:test",

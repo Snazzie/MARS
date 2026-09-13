@@ -22,6 +22,7 @@ ARTIFACT_BASE_URL="${MARS_ARTIFACT_BASE_URL:-}"
 require_config() {
   [[ -n "${PUBLIC_BASE_URL:-}" ]] || { echo 'PUBLIC_BASE_URL is required' >&2; exit 1; }
   [[ -n "${MARS_ARTIFACT_MODE:-}" ]] || { echo 'MARS_ARTIFACT_MODE is required' >&2; exit 1; }
+  [[ -n "${MARS_WORKER_CONTRACT_VERSION:-}" ]] || { echo 'MARS_WORKER_CONTRACT_VERSION is required' >&2; exit 1; }
   [[ -n "${MARS_ORCHESTRATOR_URL:-}" ]] || { echo 'MARS_ORCHESTRATOR_URL is required' >&2; exit 1; }
   [[ -n "${MARS_ORCHESTRATOR_SHA256:-}" ]] || { echo 'MARS_ORCHESTRATOR_SHA256 is required' >&2; exit 1; }
   [[ -n "${MARS_JOB_AGENT_URL:-}" ]] || { echo 'MARS_JOB_AGENT_URL is required' >&2; exit 1; }
@@ -43,6 +44,7 @@ validate_http_url() {
 validate_oci_digest() { [[ "$1" =~ '^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$' ]] || { echo "$2 must be a lowercase digest-pinned OCI reference" >&2; exit 1; }; }
 validate_config() {
   require_config; [[ "$MARS_ARTIFACT_MODE" == local || "$MARS_ARTIFACT_MODE" == production ]] || { echo 'MARS_ARTIFACT_MODE must be local or production' >&2; exit 1; }
+  [[ "$MARS_WORKER_CONTRACT_VERSION" =~ '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ]] || { echo 'MARS_WORKER_CONTRACT_VERSION must use major.minor.patch' >&2; exit 1; }
   PUBLIC_BASE_URL="${PUBLIC_BASE_URL%/}"; validate_http_url "$PUBLIC_BASE_URL" PUBLIC_BASE_URL origin || exit 1; local public_origin="$URL_ORIGIN" public_scheme="$URL_SCHEME"
   local artifact_origin="$public_origin"
   if [[ -n "$ARTIFACT_BASE_URL" ]]; then ARTIFACT_BASE_URL="${ARTIFACT_BASE_URL%/}"; validate_http_url "$ARTIFACT_BASE_URL" MARS_ARTIFACT_BASE_URL origin || exit 1; artifact_origin="$URL_ORIGIN"; fi
@@ -108,6 +110,7 @@ cat > "$LAUNCHER_TMP" <<EOF
 set -euo pipefail
 export PUBLIC_BASE_URL=$(printf '%q' "$PUBLIC_BASE_URL")
 export MARS_CONTROL_PLANE_URL=$(printf '%q' "$PUBLIC_BASE_URL")
+export MARS_WORKER_CONTRACT_VERSION=$(printf '%q' "$MARS_WORKER_CONTRACT_VERSION")
 export MARS_ACTION_CACHE_ROOT=$(printf '%q' "${MARS_ACTION_CACHE_ROOT:-}")
 export MARS_CACHE_PROXY_PORT=$(printf '%q' "${MARS_CACHE_PROXY_PORT:-}")
 export MARS_CACHE_DATA_PORT=$(printf '%q' "${MARS_CACHE_DATA_PORT:-}")

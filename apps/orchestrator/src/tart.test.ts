@@ -65,9 +65,21 @@ test("passes the worker cache descriptor into Tart full bootstrap", async () => 
     stop: async () => {},
     remove: async () => {},
   };
-  const driver = new TartVmDriver(tart, "base", "mars");
-  await driver.createLease({ id: "11111111-1111-4111-8111-111111111111", jobId: "22222222-2222-4222-8222-222222222222", imageDigest: "base", resources: resources(20 * 1024 ** 3), nonce: "n".repeat(32), encodedJitConfig: "jit", workerCache });
+  const driver = new TartVmDriver(tart, "base", "mars", undefined, "0.1.0");
+  await driver.createLease({ id: "11111111-1111-4111-8111-111111111111", jobId: "22222222-2222-4222-8222-222222222222", contractVersion: "0.1.0", imageDigest: "different-digest", resources: resources(20 * 1024 ** 3), nonce: "n".repeat(32), encodedJitConfig: "jit", workerCache });
   expect(received).toEqual(workerCache);
+});
+test("rejects an incompatible worker contract version", async () => {
+  const tart = {
+    clone: async () => {},
+    setResources: async () => {},
+    startWithBootstrap: async () => {},
+    startRunner: () => ({ completion: Promise.resolve(0), logs: (async function* () {})() }),
+    stop: async () => {},
+    remove: async () => {},
+  };
+  const driver = new TartVmDriver(tart, "base", "mars", undefined, "0.1.0");
+  await expect(driver.createLease({ id: "33333333-3333-4333-8333-333333333333", jobId: "44444444-4444-4444-8444-444444444444", contractVersion: "1.0.0", imageDigest: "base", resources: resources(20 * 1024 ** 3), nonce: "n".repeat(32), encodedJitConfig: "jit" })).rejects.toThrow("worker contract 0.1.0 is not supported");
 });
 
 

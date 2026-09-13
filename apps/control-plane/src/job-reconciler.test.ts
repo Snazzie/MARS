@@ -63,6 +63,7 @@ test("returns a complete report when no queued jobs are available", async () => 
   const db = (async () => []) as never;
   const result = await runQueuedJobReconciliation({
     db,
+    contractVersion: "0.1.0",
     installationToken: async () => "",
     dispatcher: { dispatch: async () => {} },
     githubFetchForInstallation: () => fetch,
@@ -122,6 +123,7 @@ test("reserves, requests JIT configuration, and dispatches an eligible queued jo
   const dispatcher = { dispatch: async () => { events.push("dispatch"); } };
   const result = await runQueuedJobReconciliation({
     db,
+    contractVersion: "0.1.0",
     installationToken: async () => "token",
     githubFetchForInstallation: () => fetcher,
     dispatcher,
@@ -176,6 +178,7 @@ test("does not reserve or dispatch when exact GitHub job preflight reports 404",
   };
   const result = await runQueuedJobReconciliation({
     db,
+    contractVersion: "0.1.0",
     installationToken: async () => "token",
     githubFetchForInstallation: () => fetcher,
     dispatcher: { dispatch: async () => { events.push("dispatch"); } },
@@ -201,6 +204,7 @@ test("fails closed when exact GitHub preflight returns an unknown status", async
 
   const result = await runQueuedJobReconciliation({
     db,
+    contractVersion: "0.1.0",
     installationToken: async () => "token",
     githubFetchForInstallation: () => fetcher,
     dispatcher: { dispatch: async () => { events.push("dispatch"); } },
@@ -224,6 +228,7 @@ test("skips all queued preflight requests while an installation is cooling down"
 
   const result = await runQueuedJobReconciliation({
     db,
+    contractVersion: "0.1.0",
     installationToken: async () => "token",
     githubFetchForInstallation: () => async () => {
       calls.push("github");
@@ -275,6 +280,7 @@ test("stops preflighting an installation after one rate-limit response", async (
 
   const result = await runQueuedJobReconciliation({
     db,
+    contractVersion: "0.1.0",
     installationToken: async () => "token",
     githubFetchForInstallation: (installationId) => async (input) => {
       const jobId = Number(String(input).match(/actions\/jobs\/(\d+)$/)?.[1]);
@@ -331,6 +337,7 @@ test("persists normalized labels and releases when GitHub queued labels change",
   }) as unknown as DatabaseClient, { begin: async (fn: (tx: DatabaseClient) => unknown) => fn(db) });
   const result = await runQueuedJobReconciliation({
     db,
+    contractVersion: "0.1.0",
     installationToken: async () => "token",
     githubFetchForInstallation: () => async (input) => {
       events.push("preflight");

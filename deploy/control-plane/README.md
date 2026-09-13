@@ -71,6 +71,10 @@ non-null Linux release, and checks contract compatibility. Every installer
 asset is fetched from the same immutable worker release and verified before it
 is served. A missing, unreachable, or mismatched asset fails closed with the
 structured artifact-unavailable response.
+For macOS Tart workers, the installer persists this contract version and every
+lease carries the control-plane contract version. The worker accepts compatible
+major/minor versions and always clones its locally prepared base image; the pool
+image digest remains provenance metadata, not a worker-side allowlist.
 
 Do not override the baked worker manifest or contract settings in Unraid or
 Compose. Publish the worker release before deploying or restarting its

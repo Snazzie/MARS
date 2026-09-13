@@ -6,6 +6,25 @@ const ociDigest = z.string().regex(
   /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?::[0-9]+)?(?:\/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)*(?::[A-Za-z0-9][A-Za-z0-9._-]*)?@sha256:[0-9a-f]{64}$/,
   "digest-pinned OCI reference required",
 );
+export const WorkerContractVersion = z.string().regex(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/, "major.minor.patch worker contract version required");
+
+export function parseWorkerContractVersion(value: string): { major: number; minor: number; patch: number } {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(value);
+  if (!match) throw new Error(`invalid contract version: ${JSON.stringify(value)} (expected major.minor.patch)`);
+  const [major, minor, patch] = match.slice(1).map(Number);
+  if (![major, minor, patch].every(Number.isSafeInteger)) throw new Error(`invalid contract version: ${JSON.stringify(value)} (numeric components are too large)`);
+  return { major: major!, minor: minor!, patch: patch! };
+}
+
+export function isWorkerContractCompatible(controlPlaneVersion: string, workerVersion: string): boolean {
+  try {
+    const controlPlane = parseWorkerContractVersion(controlPlaneVersion);
+    const worker = parseWorkerContractVersion(workerVersion);
+    return worker.major === controlPlane.major && worker.minor <= controlPlane.minor;
+  } catch {
+    return false;
+  }
+}
 
 export const hashedAsset = z.object({ url: httpsUrl, sha256 }).strict();
 export type HashedAsset = z.infer<typeof hashedAsset>;
@@ -54,7 +73,7 @@ export type MacosWorkerRelease = z.infer<typeof MacosWorkerRelease>;
 export const WorkerReleaseManifest = z.object({
   schemaVersion: z.literal(3),
   buildId: z.string().min(1),
-  contractVersion: z.string().min(1),
+  contractVersion: WorkerContractVersion,
   platforms: z.object({
     "linux-x64": LinuxWorkerRelease.nullable(),
     "windows-x64": WindowsWorkerRelease.nullable(),

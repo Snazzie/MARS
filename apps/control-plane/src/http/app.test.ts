@@ -1354,6 +1354,7 @@ test("generates complete platform installers from the immutable release manifest
     const macosInstaller = await macosResponse.text();
     expect(macosResponse.status).toBe(200);
     expect(macosInstaller).toContain("MARS_ARTIFACT_MODE='production'");
+    expect(macosInstaller).toContain("MARS_WORKER_CONTRACT_VERSION='0.1.0'");
     expect(macosInstaller).toContain("PUBLIC_BASE_URL='https://adapter.test'");
     expect(macosInstaller).toContain(`MARS_ORCHESTRATOR_SHA256='${hash}'`);
     expect(macosInstaller).toContain(`TART_IMAGE='ghcr.io/cirruslabs/macos-sonoma-base@sha256:${hash}'`);
