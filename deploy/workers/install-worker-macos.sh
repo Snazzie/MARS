@@ -18,6 +18,7 @@ parse_args() {
   PUBLIC_BASE_URL="$CONTROL_PLANE_URL"
 }
 parse_args "$@"
+ARTIFACT_BASE_URL="${MARS_ARTIFACT_BASE_URL:-}"
 require_config() {
   [[ -n "${PUBLIC_BASE_URL:-}" ]] || { echo 'PUBLIC_BASE_URL is required' >&2; exit 1; }
   [[ -n "${MARS_ARTIFACT_MODE:-}" ]] || { echo 'MARS_ARTIFACT_MODE is required' >&2; exit 1; }
@@ -43,9 +44,11 @@ validate_oci_digest() { [[ "$1" =~ '^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$
 validate_config() {
   require_config; [[ "$MARS_ARTIFACT_MODE" == local || "$MARS_ARTIFACT_MODE" == production ]] || { echo 'MARS_ARTIFACT_MODE must be local or production' >&2; exit 1; }
   PUBLIC_BASE_URL="${PUBLIC_BASE_URL%/}"; validate_http_url "$PUBLIC_BASE_URL" PUBLIC_BASE_URL origin || exit 1; local public_origin="$URL_ORIGIN" public_scheme="$URL_SCHEME"
+  local artifact_origin="$public_origin"
+  if [[ -n "$ARTIFACT_BASE_URL" ]]; then ARTIFACT_BASE_URL="${ARTIFACT_BASE_URL%/}"; validate_http_url "$ARTIFACT_BASE_URL" MARS_ARTIFACT_BASE_URL origin || exit 1; artifact_origin="$URL_ORIGIN"; fi
   if [[ "$MARS_ARTIFACT_MODE" == production && "$public_scheme" != https ]]; then echo 'PUBLIC_BASE_URL must use HTTPS in production' >&2; exit 1; fi
   if [[ "$public_scheme" == https ]]; then CURL_SECURITY=(--proto '=https' --tlsv1.2); else CURL_SECURITY=(); fi
-  for pair in "MARS_ORCHESTRATOR_URL:$MARS_ORCHESTRATOR_URL" "MARS_JOB_AGENT_URL:$MARS_JOB_AGENT_URL" "IMAGE_PREPARATION_SCRIPT_URL:$IMAGE_PREPARATION_SCRIPT_URL"; do local name="${pair%%:*}" url="${pair#*:}"; validate_http_url "$url" "$name" asset || exit 1; if [[ "$MARS_ARTIFACT_MODE" == production && "$URL_SCHEME" != https ]]; then echo "$name must use HTTPS in production" >&2; exit 1; fi; if [[ "$MARS_ARTIFACT_MODE" == local && "$URL_ORIGIN" != "$public_origin" ]]; then echo "$name must use the same origin as PUBLIC_BASE_URL in local mode" >&2; exit 1; fi; done
+  for pair in "MARS_ORCHESTRATOR_URL:$MARS_ORCHESTRATOR_URL" "MARS_JOB_AGENT_URL:$MARS_JOB_AGENT_URL" "IMAGE_PREPARATION_SCRIPT_URL:$IMAGE_PREPARATION_SCRIPT_URL"; do local name="${pair%%:*}" url="${pair#*:}"; validate_http_url "$url" "$name" asset || exit 1; if [[ "$MARS_ARTIFACT_MODE" == production && "$URL_SCHEME" != https ]]; then echo "$name must use HTTPS in production" >&2; exit 1; fi; if [[ "$MARS_ARTIFACT_MODE" == local && "$URL_ORIGIN" != "$artifact_origin" ]]; then echo "$name must use the same origin as MARS_ARTIFACT_BASE_URL or PUBLIC_BASE_URL in local mode" >&2; exit 1; fi; done
   for pair in "MARS_ORCHESTRATOR_SHA256:$MARS_ORCHESTRATOR_SHA256" "MARS_JOB_AGENT_SHA256:$MARS_JOB_AGENT_SHA256" "IMAGE_PREPARATION_SCRIPT_SHA256:$IMAGE_PREPARATION_SCRIPT_SHA256"; do local name="${pair%%:*}" hash="${pair#*:}"; [[ "$hash" =~ '^[0-9a-f]{64}$' ]] || { echo "$name must be a lowercase SHA-256 value" >&2; exit 1; }; done
   validate_oci_digest "$TART_IMAGE" TART_IMAGE; TART_IMAGE_DIGEST="${TART_IMAGE##*@}"
 }
@@ -65,8 +68,10 @@ cleanup() { local exit_code=$?; rm -rf "$DOWNLOAD_DIR"; unset JOIN_CODE; exit "$
 trap cleanup EXIT INT TERM
 
 download_verified() {
-  local url="$1" expected="$2" destination="$3" name="$4" headers="$destination.headers"
-  curl --silent --show-error --fail --location "${CURL_SECURITY[@]}" --dump-header "$headers" --output "$destination" "$url"
+  local url="$1" expected="$2" destination="$3" name="$4" security=()
+  local headers="$destination.headers"
+  [[ "$url" == https://* ]] && security=(--proto '=https' --tlsv1.2)
+  curl --silent --show-error --fail --location "${security[@]}" --dump-header "$headers" --output "$destination" "$url"
   local actual="$(shasum -a 256 "$destination" | cut -d ' ' -f 1)"; [[ "$actual" == "$expected" ]] || { echo "$name checksum mismatch: expected $expected, got $actual" >&2; return 1; }
   local response_hash="$(awk 'BEGIN{IGNORECASE=1} tolower($1)=="x-content-sha256:" {gsub("\r","",$2); print $2; exit}' "$headers")"; [[ -z "$response_hash" || "$response_hash" == "$expected" ]] || { echo "$name response hash mismatch" >&2; return 1; }; rm -f "$headers"
 }
@@ -76,6 +81,7 @@ download_verified "$IMAGE_PREPARATION_SCRIPT_URL" "$IMAGE_PREPARATION_SCRIPT_SHA
 chmod +x "$ORCHESTRATOR_STAGE" "$JOB_AGENT_STAGE" "$PREPARER_STAGE"
 mkdir -p "$APP_DIR" "$(dirname "$HOME/Library/LaunchAgents/com.mars.worker.plist")"; exec > >(tee -a "$LOG_FILE") 2>&1
 write_state() { printf '{"stage":"%s","status":"%s","updatedAt":"%s"}\n' "$1" "$2" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_FILE"; }
+CHECK=0
 check() { CHECK=$((CHECK + 1)); print "[$CHECK/8] $1"; write_state "$2" started; }
 pass() { print "  [ok] $1"; }
 TART_BIN="${TART_BIN:-$(command -v tart 2>/dev/null || true)}"
@@ -131,4 +137,4 @@ cat > "$PLIST_TMP" <<EOF
 EOF
 mv -f "$PLIST_TMP" "$PLIST"; write_state service complete
 check 'Starting the worker LaunchAgent' startup
-launchctl bootout "gui/$UID/com.mars.worker" >/dev/null 2>&1 || true; launchctl bootstrap "gui/$UID" "$PLIST"; launchctl kickstart -k "gui/$UID/com.mars.worker"; write_state complete complete; CLEANUP_DONE=1; pass 'Worker started; join-code remains until authenticated'
+launchctl bootout "gui/$UID/com.mars.worker" >/dev/null 2>&1 || true; sleep 1; launchctl bootstrap "gui/$UID" "$PLIST" || { sleep 2; launchctl bootstrap "gui/$UID" "$PLIST"; }; launchctl kickstart -k "gui/$UID/com.mars.worker"; write_state complete complete; CLEANUP_DONE=1; pass 'Worker started; join-code remains until authenticated'

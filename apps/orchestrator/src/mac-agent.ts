@@ -6,7 +6,7 @@ import { cpus, totalmem } from "node:os";
 import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, WorkerDoctorData, WorkerEvent, type LeaseBootstrapEnvelope, type WorkerCacheProxy, type WorkerCapacityData } from "@mars/contracts";
 import { z } from "zod";
 import type { Lease, RuntimeLease } from "./runtime.ts";
-import { createTartVmRuntime, TartVmDriver } from "./tart.ts";
+import { createTartVmRuntime, resolveTartExecutable, TartVmDriver } from "./tart.ts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { retryControlPlaneOperation } from "./worker-client.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
@@ -228,7 +228,7 @@ async function macMachineUuid(): Promise<string> {
   return uuid.toLowerCase();
 }
 async function currentMacDoctor(): Promise<WorkerDoctorData> {
-  const tart = Bun.spawnSync(["tart", "--version"]);
+  const tart = Bun.spawnSync([resolveTartExecutable(Bun.env.MARS_TART_EXECUTABLE), "--version"]);
   const probe = tart.exitCode === 0;
   let egress = false;
   try {
