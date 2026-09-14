@@ -1068,14 +1068,14 @@ test("rejects partial focused workflow selections before mutation idempotency", 
   const preview = await app.request("/api/organizations/org-1/repositories/repo-1/runner-workflows/preview", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ selectedPath: ".github/workflows/ci.yml", labels: ["4VCPU"] }),
+    body: JSON.stringify({ selectedPath: ".github/workflows/ci.yml", labels: ["mars-windows-x64"] }),
   });
   expect(preview.status).toBe(422);
   expect(await preview.json()).toMatchObject({ code: "workflow_invalid" });
   const pr = await app.request("/api/organizations/org-1/repositories/repo-1/runner-workflows/pr", {
     method: "POST",
     headers: { "content-type": "application/json", "idempotency-key": "partial-focused" },
-    body: JSON.stringify({ selectedPath: ".github/workflows/ci.yml", expectedHeadSha: "abcdef1", labels: ["4VCPU"] }),
+    body: JSON.stringify({ selectedPath: ".github/workflows/ci.yml", expectedHeadSha: "abcdef1", labels: ["mars-windows-x64"] }),
   });
   expect(pr.status).toBe(422);
   expect(await pr.json()).toMatchObject({ code: "workflow_invalid" });
@@ -1083,7 +1083,8 @@ test("rejects partial focused workflow selections before mutation idempotency", 
 
 const recommendationQuery = "?from=2026-08-01T00:00:00.000Z&to=2026-09-01T00:00:00.000Z&repositoryId=11111111-1111-4111-8111-111111111111&workflowName=CI&jobName=build";
 const availableRecommendationRow = {
-  currentLabels: ["stale-windows-x64", "99VCPU", "99G"],
+  currentLabels: ["mars-windows-x64-99vcpu-99g"],
+  currentPlatform: "windows-x64",
   successfulRunCount: "8",
   coveredRunCount: "8",
   p95CpuPeakPercent: "201",
@@ -1110,17 +1111,18 @@ test("uses resolved workflow labels for numeric recommendation fallback", async 
   const response = await requestRecommendation(async () => ({
     path: ".github/workflows/ci.yml",
     jobId: "build",
-    currentRunsOn: ["self-hosted", "mars-windows-x64", "4VCPU", "8G"],
+    currentRunsOn: ["mars-windows-x64-4vcpu-8g", "mars-macos-arm64-2vcpu-4g"],
   }), {
     ...availableRecommendationRow,
-    currentLabels: ["stale-windows-x64", "99VCPU", "99G"],
+    currentLabels: ["mars-windows-x64-99vcpu-99g"],
+  currentPlatform: "windows-x64",
     p95CpuPeakPercent: null,
     p95MemoryPeakBytes: null,
   });
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({
-    currentLabels: ["self-hosted", "mars-windows-x64", "4VCPU", "8G"],
-    currentWindowsLabel: "mars-windows-x64",
+    currentLabels: ["mars-windows-x64-4vcpu-8g", "mars-macos-arm64-2vcpu-4g"],
+    currentRoutingLabel: "mars-windows-x64-4vcpu-8g",
     recommendedVcpu: 4,
     recommendedMemoryGiB: 8,
   });
@@ -1136,10 +1138,10 @@ test("maps a non-Windows workflow job to unavailable", async () => {
   const response = await requestRecommendation(async () => ({
     path: ".github/workflows/ci.yml",
     jobId: "build",
-    currentRunsOn: ["ubuntu-latest", "4VCPU", "8G"],
+    currentRunsOn: ["ubuntu-latest"],
   }));
   expect(response.status).toBe(200);
-  expect(await response.json()).toMatchObject({ status: "unavailable", reason: "workflow_job_not_windows", currentWindowsLabel: null });
+  expect(await response.json()).toMatchObject({ status: "unavailable", reason: "workflow_job_no_matching_route", currentRoutingLabel: null });
 });
 
 test.each([
@@ -1156,7 +1158,8 @@ test.each([
 
 test("returns scoped timing label recommendations and unavailable history", async () => {
   const recommendation = {
-    currentLabels: ["mars-windows-x64", "4VCPU", "8G"],
+    currentLabels: ["mars-windows-x64-4vcpu-8g"],
+    currentPlatform: "windows-x64",
     successfulRunCount: "8",
     coveredRunCount: "8",
     p95CpuPeakPercent: "201",
@@ -1173,7 +1176,7 @@ test("returns scoped timing label recommendations and unavailable history", asyn
   expect(available.status).toBe(200);
   expect(await available.json()).toMatchObject({
     status: "available",
-    currentWindowsLabel: "mars-windows-x64",
+    currentRoutingLabel: "mars-windows-x64-4vcpu-8g",
     recommendedVcpu: 3,
     recommendedMemoryGiB: 7,
   });
@@ -1189,7 +1192,8 @@ test("returns scoped timing label recommendations and unavailable history", asyn
 test("resolves YAML workflow metadata for timing recommendations", async () => {
   const db = Object.assign((() => []) as unknown as (...args: never[]) => unknown, {
     unsafe: async () => [{
-      currentLabels: ["mars-windows-x64", "8VCPU", "16G"],
+      currentLabels: ["mars-windows-x64-8vcpu-16g"],
+      currentPlatform: "windows-x64",
       successfulRunCount: "8",
       coveredRunCount: "8",
       p95CpuPeakPercent: "201",
@@ -1203,7 +1207,7 @@ test("resolves YAML workflow metadata for timing recommendations", async () => {
       resolveWorkflowJob: async () => ({
         path: ".github/workflows/ci.yml",
         jobId: "build",
-        currentRunsOn: ["self-hosted", "mars-windows-x64", "custom", "8VCPU", "16G"],
+        currentRunsOn: ["mars-windows-x64-8vcpu-16g", "mars-macos-arm64-2vcpu-4g"],
       }),
     } as never,
   })).request("/api/organizations/org-1/job-timings/label-recommendation?from=2026-08-01T00:00:00.000Z&to=2026-09-01T00:00:00.000Z&repositoryId=11111111-1111-4111-8111-111111111111&workflowName=CI&jobName=build");
@@ -1211,7 +1215,7 @@ test("resolves YAML workflow metadata for timing recommendations", async () => {
   expect(await response.json()).toMatchObject({
     workflowPath: ".github/workflows/ci.yml",
     workflowJobId: "build",
-    currentLabels: ["self-hosted", "mars-windows-x64", "custom", "8VCPU", "16G"],
+    currentLabels: ["mars-windows-x64-8vcpu-16g", "mars-macos-arm64-2vcpu-4g"],
   });
 });
 
@@ -1228,7 +1232,7 @@ test("rejects focused label conflicts as workflow-invalid requests", async () =>
     body: JSON.stringify({
       selectedPath: ".github/workflows/ci.yml",
       selectedJobId: "build",
-      labels: ["mars-windows-x64", "4VCPU", "8G", "foreign"],
+      labels: ["mars-windows-x64-4vcpu-8g", "mars-linux-x64-4vcpu-8g"],
     }),
   });
   expect(response.status).toBe(422);

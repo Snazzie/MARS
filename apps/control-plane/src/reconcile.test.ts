@@ -5,22 +5,22 @@ test("reserves a runner slot before requesting JIT config", async () => {
   const order: string[] = [];
   let routingKey = "";
   const result = await reconcileQueuedJobs({
-    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "mars-default"] }],
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }],
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["mars-macos-arm64-2vcpu-4g"] }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
     reserve: async (input) => { order.push("reserve"); routingKey = input.routingKey; return { id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested }; },
-    jit: async () => { order.push("jit"); return { encodedJitConfig: "config", runnerName: "runner", labels: ["self-hosted"], expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
+    jit: async () => { order.push("jit"); return { encodedJitConfig: "config", runnerName: "runner", labels: ["mars-macos-arm64-2vcpu-4g"], expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
     dispatch: async () => { order.push("dispatch"); },
   });
   expect(result.reserved).toBe(1);
   expect(order).toEqual(["reserve", "jit", "dispatch"]);
-  expect(routingKey).toBe("acme/project:4:arm64,macos,mars-default,self-hosted");
+  expect(routingKey).toBe("acme/project:4:mars-macos-arm64-2vcpu-4g");
 });
 
 test("dispatches an architecture-neutral job through an architecture-specific pool", async () => {
   let jitLabels: string[] = [];
   const result = await reconcileQueuedJobs({
-    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["mars-any", "2VCPU"] }],
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["mars-any-2vcpu-4g"] }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
     reserve: async (input) => ({ id: "lease", nonce: "n".repeat(32), workerId: input.workerId, poolId: input.poolId, expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested }),
     jit: async (input) => {
       jitLabels = input.labels;
@@ -29,13 +29,13 @@ test("dispatches an architecture-neutral job through an architecture-specific po
     dispatch: async () => {},
   });
   expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
-  expect(jitLabels).toEqual(["mars-any", "2VCPU"]);
+  expect(jitLabels).toEqual(["mars-any-2vcpu-4g"]);
 });
 
 test("does not reserve beyond active pool capacity", async () => {
   const result = await reconcileQueuedJobs({
-    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 9, labels: ["self-hosted", "macos", "arm64", "mars-default"] }],
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 1, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }],
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 9, labels: ["mars-macos-arm64-2vcpu-4g"] }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 1, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
     reserve: async () => { throw new Error("must not reserve"); },
     jit: async () => { throw new Error("must not generate"); },
     dispatch: async () => {},
@@ -48,21 +48,21 @@ test("uses every available pool slot for one installation", async () => {
   let lease = 0;
   const result = await reconcileQueuedJobs({
     queued: [
-      { installationId: 42, repositoryId: 1, repository: "acme/one", runId: 1, jobId: 1, labels: ["mars-windows-x64"] },
-      { installationId: 42, repositoryId: 2, repository: "acme/two", runId: 2, jobId: 2, labels: ["mars-windows-x64"] },
-      { installationId: 43, repositoryId: 3, repository: "acme/three", runId: 3, jobId: 3, labels: ["mars-windows-x64"] },
+      { installationId: 42, repositoryId: 1, repository: "acme/one", runId: 1, jobId: 1, labels: ["mars-windows-x64-2vcpu-4g"] },
+      { installationId: 42, repositoryId: 2, repository: "acme/two", runId: 2, jobId: 2, labels: ["mars-windows-x64-2vcpu-4g"] },
+      { installationId: 43, repositoryId: 3, repository: "acme/three", runId: 3, jobId: 3, labels: ["mars-windows-x64-2vcpu-4g"] },
     ],
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } }],
     reserve: async (input) => ({ id: `lease-${++lease}`, nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested }),
-    jit: async ({ installationId }) => { jitInstallations.push(installationId); return { encodedJitConfig: "config", runnerName: "runner", labels: ["mars-windows-x64"], expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
+    jit: async ({ installationId }) => { jitInstallations.push(installationId); return { encodedJitConfig: "config", runnerName: "runner", labels: ["mars-windows-x64-2vcpu-4g"], expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
     dispatch: async () => {},
   });
   expect(jitInstallations).toEqual([42, 42, 43]);
   expect(result).toEqual({ reserved: 3, deferred: 0, skipped: 0, failed: 0 });
 });
 test("dispatches three jobs concurrently when bounded capacity allows it", async () => {
-  const queued = [1, 2, 3].map((jobId) => ({ installationId: 1, repositoryId: jobId, repository: `acme/project-${jobId}`, runId: jobId, jobId, labels: ["mars-windows-x64"] }));
-  const candidate = { requestedLabels: [], worker: { id: "worker", admissionState: "adopted" as const, connectionState: "online" as const, configurationState: "ready" as const, runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } };
+  const queued = [1, 2, 3].map((jobId) => ({ installationId: 1, repositoryId: jobId, repository: `acme/project-${jobId}`, runId: jobId, jobId, labels: ["mars-windows-x64-2vcpu-4g"] }));
+  const candidate = { requestedLabels: [], worker: { id: "worker", admissionState: "adopted" as const, connectionState: "online" as const, configurationState: "ready" as const, runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } };
   let activePreflights = 0;
   let maxActivePreflights = 0;
   let releasePreflight!: () => void;
@@ -81,7 +81,7 @@ test("dispatches three jobs concurrently when bounded capacity allows it", async
       activePreflights -= 1;
       return true;
     },
-    jit: async () => ({ encodedJitConfig: "config", runnerName: "runner", labels: ["mars-windows-x64"], expiresAt: new Date(Date.now() + 60_000).toISOString() }),
+    jit: async () => ({ encodedJitConfig: "config", runnerName: "runner", labels: ["mars-windows-x64-2vcpu-4g"], expiresAt: new Date(Date.now() + 60_000).toISOString() }),
     dispatch: async () => {},
   });
   const result = await resultPromise;
@@ -93,12 +93,12 @@ test("does not block a later job when an earlier job is already claimed", async 
   const reservedJobs: number[] = [];
   const result = await reconcileQueuedJobs({
     queued: [
-      { installationId: 42, repositoryId: 1, repository: "acme/one", runId: 1, jobId: 1, labels: ["mars-windows-x64"] },
-      { installationId: 42, repositoryId: 2, repository: "acme/two", runId: 2, jobId: 2, labels: ["mars-windows-x64"] },
+      { installationId: 42, repositoryId: 1, repository: "acme/one", runId: 1, jobId: 1, labels: ["mars-windows-x64-2vcpu-4g"] },
+      { installationId: 42, repositoryId: 2, repository: "acme/two", runId: 2, jobId: 2, labels: ["mars-windows-x64-2vcpu-4g"] },
     ],
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } }],
     reserve: async ({ githubJobId, requested }) => { if (githubJobId === 1) throw new Error("job_already_claimed"); reservedJobs.push(githubJobId); return { id: `lease-${githubJobId}`, nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested }; },
-    jit: async () => ({ encodedJitConfig: "config", runnerName: "runner", labels: ["mars-windows-x64"], expiresAt: new Date(Date.now() + 60_000).toISOString() }),
+    jit: async () => ({ encodedJitConfig: "config", runnerName: "runner", labels: ["mars-windows-x64-2vcpu-4g"], expiresAt: new Date(Date.now() + 60_000).toISOString() }),
     dispatch: async () => {},
   });
   expect(reservedJobs).toEqual([2]);
@@ -109,17 +109,17 @@ test("continues other installations after a rate-limited JIT attempt", async () 
   const reservedJobs: number[] = [];
   const result = await reconcileQueuedJobs({
     queued: [
-      { installationId: 42, repositoryId: 1, repository: "acme/one", runId: 1, jobId: 1, labels: ["mars-windows-x64"] },
-      { installationId: 42, repositoryId: 2, repository: "acme/two", runId: 2, jobId: 2, labels: ["mars-windows-x64"] },
-      { installationId: 43, repositoryId: 3, repository: "acme/three", runId: 3, jobId: 3, labels: ["mars-windows-x64"] },
+      { installationId: 42, repositoryId: 1, repository: "acme/one", runId: 1, jobId: 1, labels: ["mars-windows-x64-2vcpu-4g"] },
+      { installationId: 42, repositoryId: 2, repository: "acme/two", runId: 2, jobId: 2, labels: ["mars-windows-x64-2vcpu-4g"] },
+      { installationId: 43, repositoryId: 3, repository: "acme/three", runId: 3, jobId: 3, labels: ["mars-windows-x64-2vcpu-4g"] },
     ],
     maxConcurrent: 1,
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } }],
     reserve: async ({ githubJobId, requested }) => { reservedJobs.push(githubJobId); return { id: `lease-${githubJobId}`, nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested }; },
     jit: async ({ installationId }) => {
       jitInstallations.push(installationId);
       if (installationId === 42) throw Object.assign(new Error("github_rate_limited"), { code: "github_rate_limited", installationId: 42, resetAt: Date.now() + 60_000 });
-      return { encodedJitConfig: "config", runnerName: "runner", labels: ["mars-windows-x64"], expiresAt: new Date(Date.now() + 60_000).toISOString() };
+      return { encodedJitConfig: "config", runnerName: "runner", labels: ["mars-windows-x64-2vcpu-4g"], expiresAt: new Date(Date.now() + 60_000).toISOString() };
     },
     dispatch: async () => {},
     release: async () => {},
@@ -132,14 +132,14 @@ test("continues other installations after a rate-limited JIT attempt", async () 
 test("resumes routing after an installation cooldown clears", async () => {
   let blocked = true;
   const calls: string[] = [];
-  const queued = [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "mars-default"] }];
-  const candidates = [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted" as const, connectionState: "online" as const, configurationState: "ready" as const, runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }];
+  const queued = [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["mars-macos-arm64-2vcpu-4g"] }];
+  const candidates = [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted" as const, connectionState: "online" as const, configurationState: "ready" as const, runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }];
   const deps = {
     queued,
     candidates,
     installationBlocked: () => blocked,
     reserve: async (input: { requested: { vcpu: number; memoryBytes: number; storageBytes: number; concurrency: number } }) => { calls.push("reserve"); return { id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested }; },
-    jit: async () => { calls.push("jit"); return { encodedJitConfig: "config", runnerName: "runner", labels: ["self-hosted"], expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
+    jit: async () => { calls.push("jit"); return { encodedJitConfig: "config", runnerName: "runner", labels: ["mars-macos-arm64-2vcpu-4g"], expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
     dispatch: async () => { calls.push("dispatch"); },
   };
   const blockedResult = await reconcileQueuedJobs(deps);
@@ -154,8 +154,8 @@ test("resumes routing after an installation cooldown clears", async () => {
 test("defers jobs when worker capacity is exhausted", async () => {
   const calls: string[] = [];
   const result = await reconcileQueuedJobs({
-    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "mars-default"] }],
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }],
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["mars-macos-arm64-2vcpu-4g"] }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
     reserve: async () => { throw new Error("worker_capacity_exhausted"); },
     jit: async () => { calls.push("jit"); throw new Error("must not generate"); },
     dispatch: async () => { calls.push("dispatch"); },
@@ -166,8 +166,8 @@ test("defers jobs when worker capacity is exhausted", async () => {
 test("defers jobs when pool capacity is exhausted", async () => {
   const calls: string[] = [];
   const result = await reconcileQueuedJobs({
-    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "mars-default"] }],
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }],
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["mars-macos-arm64-2vcpu-4g"] }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
     reserve: async () => { throw new Error("pool_capacity_exhausted"); },
     jit: async () => { calls.push("jit"); throw new Error("must not generate"); },
     dispatch: async () => { calls.push("dispatch"); },
@@ -178,8 +178,8 @@ test("defers jobs when pool capacity is exhausted", async () => {
 test("recovers deferred work when worker capacity returns", async () => {
   let reserveAttempts = 0;
   const calls: string[] = [];
-  const queued = [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "mars-default"] }];
-  const candidates = [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted" as const, connectionState: "online" as const, configurationState: "ready" as const, runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }];
+  const queued = [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["mars-macos-arm64-2vcpu-4g"] }];
+  const candidates = [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted" as const, connectionState: "online" as const, configurationState: "ready" as const, runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }];
   const deps = {
     queued,
     candidates,
@@ -188,7 +188,7 @@ test("recovers deferred work when worker capacity returns", async () => {
       if (++reserveAttempts === 1) throw new Error("worker_capacity_exhausted");
       return { id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested };
     },
-    jit: async () => { calls.push("jit"); return { encodedJitConfig: "config", runnerName: "runner", labels: ["self-hosted"], expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
+    jit: async () => { calls.push("jit"); return { encodedJitConfig: "config", runnerName: "runner", labels: ["mars-macos-arm64-2vcpu-4g"], expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
     dispatch: async () => { calls.push("dispatch"); },
   };
   const first = await reconcileQueuedJobs(deps);
@@ -200,8 +200,8 @@ test("recovers deferred work when worker capacity returns", async () => {
 
 test("fails jobs when reservation fails unexpectedly", async () => {
   const result = await reconcileQueuedJobs({
-    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "mars-default"] }],
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }],
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["mars-macos-arm64-2vcpu-4g"] }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
     reserve: async () => { throw new Error("unexpected_reservation_error"); },
     jit: async () => { throw new Error("must not generate"); },
     dispatch: async () => {},
@@ -214,8 +214,8 @@ test("runs preflight after reserve and releases a reservation when preflight rej
   const order: string[] = [];
   const reservation = { id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 } };
   const result = await reconcileQueuedJobs({
-    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "mars-default"] }],
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }],
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["mars-macos-arm64-2vcpu-4g"] }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
     reserve: async () => { order.push("reserve"); return reservation; },
     preflight: async () => { order.push("preflight"); return false; },
     jit: async () => { order.push("jit"); throw new Error("must not generate"); },
@@ -230,8 +230,8 @@ test("releases a reservation when preflight throws", async () => {
   let released = false;
   const reservation = { id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 } };
   const result = await reconcileQueuedJobs({
-    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["self-hosted", "macos", "arm64", "mars-default"] }],
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 100, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["self-hosted", "macos", "arm64", "mars-default"], triggerLabel: "mars-default" } }],
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["mars-macos-arm64-2vcpu-4g"] }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
     reserve: async () => reservation,
     preflight: async () => { throw new Error("github_payload_invalid"); },
     jit: async () => { throw new Error("must not generate"); },

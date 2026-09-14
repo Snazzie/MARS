@@ -459,7 +459,7 @@ test("workflow dispatch returns the new GitHub workflow run identity", async () 
     if (url.endsWith("/access_tokens")) return Response.json({ token: "secret-installation-token", expires_at: futureTokenExpiry() });
     if (url.endsWith("/repos/acme/private")) return Response.json({ default_branch: "main" });
     if (url.includes("/git/trees/")) return Response.json({ tree: [{ type: "blob", path: ".github/workflows/smoke.yml", sha: "blob-sha" }] });
-    if (url.includes("/git/blobs/")) return Response.json({ content: Buffer.from("on: workflow_dispatch\njobs:\n  smoke:\n    runs-on: mars-windows-x64\n").toString("base64") });
+    if (url.includes("/git/blobs/")) return Response.json({ content: Buffer.from("on: workflow_dispatch\njobs:\n  smoke:\n    runs-on: mars-windows-x64-4vcpu-6g\n").toString("base64") });
     if (url.endsWith("/dispatches")) return new Response(null, { status: 204 });
     if (url.includes("/actions/workflows/") && url.includes("/runs?")) {
       runsRead += 1;
@@ -555,7 +555,7 @@ test("focused runner PR mutates one job and includes preserved labels in generat
   const content = `name: CI
 jobs:
   build:
-    runs-on: [mars-windows-x64, 8VCPU, 16G]
+    runs-on: [mars-windows-x64-8vcpu-16g]
     steps:
       - run: echo build
   lint:
@@ -595,7 +595,7 @@ jobs:
     repositoryId: "repo-1",
     selectedPath: ".github/workflows/ci.yml",
     selectedJobId: "build",
-    labels: ["mars-windows-x64", "4VCPU", "8G"],
+    labels: ["mars-windows-x64-4vcpu-8g"],
     p95CpuPeakPercent: 201,
     p95MemoryPeakBytes: 5368709120,
     successfulRunCount: 8,
@@ -605,13 +605,13 @@ jobs:
   const blob = requests.find((request) => request.url.endsWith("/git/blobs") && request.method === "POST");
   const blobBody = JSON.parse(await blob!.text()) as { content: string };
   expect(blobBody.content).toContain("mars-windows-x64");
-  expect(blobBody.content).toContain("4VCPU");
+  expect(blobBody.content).toContain("4vcpu");
   expect(blobBody.content).toContain("runs-on: ubuntu-latest");
   const pull = requests.find((request) => request.url.endsWith("/pulls"));
   const pullBody = JSON.parse(await pull!.text()).body as string;
   expect(pullBody).toContain("Successful sample count: 8");
   expect(pullBody).toContain("P95 memory peak: 5368709120 bytes");
-  expect(pullBody).toContain("Labels: mars-windows-x64, 4VCPU, 8G");
+  expect(pullBody).toContain("Labels: mars-windows-x64-4vcpu-8g");
 });
 
 test("focused runner PR rejects a stale workflow head", async () => {
@@ -646,7 +646,7 @@ test("focused runner PR rejects a stale workflow head", async () => {
     repositoryId: "repo-1",
     selectedPath: ".github/workflows/ci.yml",
     selectedJobId: "build",
-    labels: ["4VCPU", "8G"],
+    labels: ["mars-windows-x64-4vcpu-8g"],
     expectedHeadSha: "stale-head",
   })).rejects.toThrow("github_workflow_head_stale");
 });

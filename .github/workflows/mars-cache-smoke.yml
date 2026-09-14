@@ -10,7 +10,7 @@ concurrency:
 jobs:
   cache-smoke:
     name: Verify worker-local tool and package cache
-    runs-on: mars-windows-x64
+    runs-on: mars-windows-x64-4vcpu-6g
     timeout-minutes: 20
     steps:
       - name: Check out project

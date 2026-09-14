@@ -1,4 +1,5 @@
 export * from "./orchestration.ts";
+export * from "./runner-labels.ts";
 export * from "./dashboard.ts";
 export * from "./onboarding.ts";
 export { TemplateGuestPlatform, TemplateManifest, WorkerTemplateSet, validateTemplateSet } from "./templates.ts";

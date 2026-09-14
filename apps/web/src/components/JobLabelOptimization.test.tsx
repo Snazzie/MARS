@@ -14,8 +14,9 @@ const request: JobLabelRecommendationRequest = {
 };
 const available: JobLabelRecommendation = {
   status: "available",
-  currentLabels: ["mars-windows-x64", "8VCPU", "16G"],
-  currentWindowsLabel: "mars-windows-x64",
+  currentLabels: ["mars-windows-x64-8vcpu-16g", "mars-macos-arm64-2vcpu-4g"],
+  currentRoutingLabel: "mars-windows-x64-8vcpu-16g",
+  currentPlatform: "windows-x64",
   workflowPath: ".github/workflows/ci.yml",
   workflowJobId: "build",
   recommendedVcpu: 3,
@@ -35,7 +36,7 @@ const focusedRequest: JobLabelOptimizationRequest = {
   selectedPath: ".github/workflows/ci.yml",
   selectedJobId: "build",
   currentLabels: available.currentLabels ?? [],
-  labels: ["mars-windows-x64", "3VCPU", "5G"],
+  labels: ["mars-windows-x64-3vcpu-5g", "mars-macos-arm64-2vcpu-4g"],
   p95CpuPeakPercent: available.p95CpuPeakPercent,
   p95MemoryPeakBytes: available.p95MemoryPeakBytes,
   successfulRunCount: available.successfulRunCount,
@@ -63,18 +64,20 @@ test("renders loading and unavailable recommendation states", () => {
 test("optimization request contract carries the resolved workflow job id", () => {
   expect(focusedRequest.selectedJobId).toBe("build");
 });
-test("renders evidence, preserves the Windows label, and emits an exact editable diff", () => {
+test("renders evidence, preserves nonselected alternatives, and emits an exact editable diff", () => {
   const html = markup(available);
   expect(html).toContain("Successful runs");
   expect(html).toContain("201.0%");
   expect(html).toContain("4.0 GiB");
-  expect(html).toContain('value="mars-windows-x64"');
+  expect(html).toContain('value="mars-windows-x64-8vcpu-16g"');
+  expect(html).toContain("Routing label");
+  expect(html).toContain("Selected platform");
   expect(html).toContain('readOnly=""');
   expect(html).toContain('name="vcpu"');
   expect(html).toContain('value="3"');
   expect(html).toContain('value="5"');
-  expect(html).toContain("mars-windows-x64 8VCPU 16G");
-  expect(html).toContain("mars-windows-x64 3VCPU 5G");
+  expect(html).toContain("mars-windows-x64-8vcpu-16g mars-macos-arm64-2vcpu-4g");
+  expect(html).toContain("mars-windows-x64-3vcpu-5g mars-macos-arm64-2vcpu-4g");
   expect(html).toContain("Review pull request");
 });
 

@@ -22,20 +22,21 @@ describe("RunnerWorkflowPrModal behavior contracts", () => {
   });
   test("serializes focused preview fields without changing migration payloads", () => {
     expect(runnerWorkflowPreviewPayload([".github/workflows/ci.yml"])).toEqual({ selectedPaths: [".github/workflows/ci.yml"] });
-    expect(runnerWorkflowPreviewPayload({ selectedPath: ".github/workflows/ci.yml", selectedJobId: "build", labels: ["mars-windows-x64", "4VCPU", "8G"] })).toEqual({
+    expect(runnerWorkflowPreviewPayload({ selectedPath: ".github/workflows/ci.yml", selectedJobId: "build", labels: ["mars-windows-x64-4vcpu-8g", "mars-macos-arm64-2vcpu-4g"] })).toEqual({
       selectedPath: ".github/workflows/ci.yml",
       selectedJobId: "build",
-      labels: ["mars-windows-x64", "4VCPU", "8G"],
+      labels: ["mars-windows-x64-4vcpu-8g", "mars-macos-arm64-2vcpu-4g"],
     });
   });
 
-  test("validates focused routing, duplicate, and custom-label conflicts", () => {
-    const current = ["self-hosted", "mars-windows-x64", "custom", "8VCPU", "16G"];
-    expect(areRunnerWorkflowLabelsValid(["self-hosted", "mars-windows-x64", "custom", "4VCPU", "8G"], current)).toBe(true);
-    expect(areRunnerWorkflowLabelsValid(["self-hosted", "windows-latest", "custom", "4VCPU", "8G"], current)).toBe(false);
-    expect(areRunnerWorkflowLabelsValid(["self-hosted", "mars-windows-x64", "custom", "4VCPU", "4VCPU", "8G"], current)).toBe(false);
-    expect(areRunnerWorkflowLabelsValid(["self-hosted", "mars-windows-x64", "foreign", "4VCPU", "8G"], current)).toBe(false);
+  test("validates focused composite routes and rejects duplicates or route changes", () => {
+    const current = ["mars-windows-x64-8vcpu-16g", "mars-macos-arm64-2vcpu-4g"];
+    expect(areRunnerWorkflowLabelsValid(["mars-windows-x64-4vcpu-8g", "mars-macos-arm64-4vcpu-8g"], current)).toBe(true);
+    expect(areRunnerWorkflowLabelsValid(["mars-windows-x64-4vcpu-8g", "mars-linux-x64-4vcpu-8g"], current)).toBe(false);
+    expect(areRunnerWorkflowLabelsValid(["mars-windows-x64-4vcpu-8g", "mars-windows-x64-5vcpu-9g"], current)).toBe(false);
+    expect(areRunnerWorkflowLabelsValid(["mars-windows-x64-4vcpu-8g", "mars-windows-arm64-4vcpu-8g"], current)).toBe(false);
   });
+
 
 
   test("Escape closes an open dialog", () => {

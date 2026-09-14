@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RunnerTriggerLabel } from "./runner-labels.ts";
 import { positiveSafe, OutOfMemoryResult, PoolResources, RuntimeDriverName, RuntimePlatform, WorkerLimits, GuestPlatform, ConfigurationState } from "./orchestration.ts";
 
 const id = z.string().min(1);
@@ -37,9 +38,6 @@ export type RepositorySummary = z.infer<typeof RepositorySummary>;
 const runSummaryShape = { id, organizationId, repositoryId: id, repositoryName: z.string().min(1), runNumber: positiveSafe, workflowName: z.string().min(1), event: z.string().min(1), branch: z.string().min(1), commitSha: z.string().regex(/^[0-9a-f]{7,64}$/i), actorLogin: z.string().min(1), status: z.enum(["queued", "in_progress", "completed"]), conclusion: z.enum(["success", "failure", "cancelled", "skipped", "neutral"]).nullable(), queuedAt: timestamp, startedAt: timestamp.nullable(), completedAt: timestamp.nullable(), durationMs: positiveSafe.or(z.literal(0)), runtimeBoundary: z.enum(["Kata VM-backed container", "Hyper-V isolated container", "Tart VM"]).nullable(), allocationState: z.enum(["mars", "external"]).optional() };
 export const RunSummary = dto(strict(runSummaryShape));
 export type RunSummary = z.infer<typeof RunSummary>;
-export const ANY_RUNNER_LABEL = "mars-any";
-export const RunnerTriggerLabel = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,62}$/).refine((label) => !["self-hosted", "linux", "windows", "macos", "x64", "arm64", ANY_RUNNER_LABEL].includes(label));
-export type RunnerTriggerLabel = z.infer<typeof RunnerTriggerLabel>;
 export const CreatePoolRequest = dto(strict({ poolId: id.optional(), workerId: id, name: z.string().min(1), guestPlatform: GuestPlatform.default("macos-arm64"), resources, triggerLabel: RunnerTriggerLabel, imageDigest: z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/) }));
 export type CreatePoolRequest = z.infer<typeof CreatePoolRequest>;
 export const RunStep = dto(strict({ id, name: z.string().min(1), number: z.number().int().nonnegative(), status: z.enum(["queued", "in_progress", "completed"]), conclusion: z.string().nullable(), queuedAt: timestamp, startedAt: timestamp.nullable(), completedAt: timestamp.nullable(), durationMs: positiveSafe.or(z.literal(0)) }));
@@ -132,7 +130,8 @@ export type JobLabelRecommendationQuery = z.infer<typeof JobLabelRecommendationQ
 export const JobLabelRecommendation = dto(strict({
   status: z.enum(["available", "unavailable"]),
   currentLabels: z.array(z.string().min(1)).optional(),
-  currentWindowsLabel: z.string().min(1).nullable(),
+  currentRoutingLabel: z.string().min(1).nullable(),
+  currentPlatform: z.string().min(1).nullable(),
   workflowPath: z.string().regex(/^\.github\/workflows\/[^/]+\.(?:yml|yaml)$/).nullable().optional(),
   workflowJobId: z.string().min(1).nullable().optional(),
   recommendedVcpu: positiveSafe.nullable(),

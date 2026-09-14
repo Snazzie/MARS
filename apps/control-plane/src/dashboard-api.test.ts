@@ -325,7 +325,7 @@ test("global pool creation rejects duplicate names and labels", async () => {
 });
 test("global admins can list the control-plane pool without selecting a workspace", async () => {
   const db = Object.assign(async (strings: TemplateStringsArray) => {
-    if (strings.join(" ").includes("runner_pools")) return [{ id: "pool-1", organizationId: null, workerId: null, workerName: "Shared fleet", name: "default", platform: "macos-arm64", driver: "tart-vm", imageDigest: `macos@sha256:${"a".repeat(64)}`, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, labels: ["self-hosted", "macos", "arm64", "mars-macos"], triggerLabel: "mars-macos", enabled: true, active: 0 }];
+    if (strings.join(" ").includes("runner_pools")) return [{ id: "pool-1", organizationId: null, workerId: null, workerName: "Shared fleet", name: "default", platform: "macos-arm64", driver: "tart-vm", imageDigest: `macos@sha256:${"a".repeat(64)}`, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64", enabled: true, active: 0 }];
     return [];
   }, {}) as never;
   const response = await appFor(admin, db).request("/api/pools", { headers: sessionHeaders });

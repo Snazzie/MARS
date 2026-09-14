@@ -1,73 +1,73 @@
 import { describe, expect, test } from "bun:test";
-import { labelsMatch, parseProvisionLabels, reason, resolveProvisionResources, fits, type Candidate } from "./scheduler.ts";
+import { parseRunnerLabels } from "@mars/contracts";
+import { fits, reason, selectProvisionOption, type Candidate } from "./scheduler.ts";
 
-const candidate = (requestedLabels: string[], triggerLabel: string | null = "mars-linux-x64"): Candidate => ({
-  worker: { admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "current", appliedConfigurationRevision: "current", runtimeReady: true, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 } },
-  pool: { enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-linux-x64"], triggerLabel },
+const GiB = 1024 ** 3;
+const candidate = (requestedLabels: string[], platform = "linux-x64", triggerLabel: string | null = `mars-${platform}`): Candidate => ({
+  worker: { admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "current", appliedConfigurationRevision: "current", runtimeReady: true, limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GiB, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 } },
+  pool: { enabled: true, platform, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: [`mars-${platform}`], triggerLabel },
   requestedLabels,
 });
 
 describe("runner label routing", () => {
-  test("matches one composite label case-insensitively", () => {
-    expect(labelsMatch(["MARS-LINUX-X64"], ["mars-linux-x64"], "mars-linux-x64")).toBe(true);
+  test("selects an exact route over neutral alternatives", () => {
+    const options = parseRunnerLabels([
+      "mars-any-2vcpu-4g",
+      "mars-any-x64-3vcpu-5g",
+      "MARS-LINUX-X64-4vcpu-6g",
+    ]);
+    expect(options).not.toBeNull();
+    expect(selectProvisionOption(options!, { platform: "linux-x64", labels: ["mars-linux-x64"], triggerLabel: "mars-linux-x64" })).toMatchObject({ route: "mars-linux-x64", vcpu: 4, memoryGiB: 6 });
   });
 
-  test("matches the architecture-neutral label to every runner pool", () => {
-    for (const trigger of ["mars-linux-x64", "mars-windows-x64", "mars-macos-arm64"]) {
-      expect(labelsMatch(["MARS-ANY"], [trigger], trigger)).toBe(true);
+  test("matches x64 neutral alternatives only on x64 pools", () => {
+    const options = parseRunnerLabels(["mars-any-x64-2vcpu-4g"]);
+    expect(options).not.toBeNull();
+    expect(selectProvisionOption(options!, { platform: "linux-x64", labels: [], triggerLabel: null })).not.toBeNull();
+    expect(selectProvisionOption(options!, { platform: "macos-arm64", labels: [], triggerLabel: null })).toBeNull();
+  });
+
+  test("accepts future routes but leaves unavailable platforms unmatched", () => {
+    const options = parseRunnerLabels(["mars-windows-arm64-2vcpu-4g"]);
+    expect(options).not.toBeNull();
+    expect(selectProvisionOption(options!, { platform: "windows-x64", labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" })).toBeNull();
+  });
+
+  test("rejects split and duplicate alternatives", () => {
+    expect(parseRunnerLabels(["self-hosted", "linux", "x64"])).toBeNull();
+    expect(parseRunnerLabels(["mars-linux-x64-2vcpu-4g", "MARS-LINUX-X64-3vcpu-5g"])).toBeNull();
+    expect(parseRunnerLabels(["mars-linux-x64-2vcpu-4g", "mars-linux-x64-2vcpu-4g"])).toBeNull();
+  });
+});
+
+describe("composite resource labels", () => {
+  test("parses route and mandatory resources", () => {
+    expect(parseRunnerLabels(["MARS-LINUX-X64-2VCPU-6G"])).toMatchObject([{ original: "MARS-LINUX-X64-2VCPU-6G", route: "mars-linux-x64", vcpu: 2, memoryGiB: 6, memoryBytes: 6 * GiB }]);
+  });
+
+  test("rejects standalone, missing, zero, and overflow resources", () => {
+    for (const labels of [["2vcpu"], ["15g"], ["mars-linux-x64"], ["mars-linux-x64-0vcpu-4g"], ["mars-linux-x64-2vcpu-0g"], ["mars-linux-x64-2vcpu-9007199254740991g"]]) {
+      expect(parseRunnerLabels(labels)).toBeNull();
     }
   });
 
-  test("rejects constraints combined with the architecture-neutral label", () => {
-    expect(labelsMatch(["mars-any", "mars-windows-x64"], ["mars-windows-x64"], "mars-windows-x64")).toBe(false);
-  });
-
-  test("does not claim split platform and architecture labels", () => {
-    expect(labelsMatch(["self-hosted", "linux", "x64"], ["mars-linux-x64"], "mars-linux-x64")).toBe(false);
-    expect(reason(candidate(["self-hosted", "linux", "x64"]))).toBe("no_matching_labels");
-  });
- 
-  test("matches legacy split platform labels to a composite pool trigger", () => {
-    expect(labelsMatch(["self-hosted", "windows", "x64", "mars-default"], ["mars-windows-x64"], "mars-windows-x64")).toBe(true);
-  });
-
-  test("rejects extra requested labels", () => {
-    expect(labelsMatch(["self-hosted", "mars-linux-x64"], ["mars-linux-x64"], "mars-linux-x64")).toBe(false);
-  });
-
-  test("rejects a missing trigger label", () => {
-    expect(labelsMatch(["mars-linux-x64"], ["mars-linux-x64"], null)).toBe(false);
-  });
-});
-describe("numeric provision labels", () => {
-  test("resolves mixed-case CPU and GiB labels and strips them from routing", () => {
-    expect(parseProvisionLabels(["mars-linux-x64", "2VCPU", "6G"])).toEqual({ routingLabels: ["mars-linux-x64"], vcpu: 2, memoryBytes: 6 * 1024 ** 3 });
-  });
-  test("resolves a 3VCPU request exactly", () => {
-    expect(parseProvisionLabels(["mars-linux-x64", "3VCPU"])).toEqual({ routingLabels: ["mars-linux-x64"], vcpu: 3 });
-  });
-  test("falls back to pool dimensions when absent", () => {
-    expect(resolveProvisionResources({ vcpu: 4, memoryBytes: 8, storageBytes: 30, concurrency: 3 }, { routingLabels: [] })).toEqual({ vcpu: 4, memoryBytes: 8, storageBytes: 30, concurrency: 3 });
-  });
-  test("rejects duplicate, zero, malformed, and overflow provision labels", () => {
-    expect(parseProvisionLabels(["1vcpu", "2vcpu"])).toBeNull();
-    expect(parseProvisionLabels(["0g"])).toBeNull();
-    expect(parseProvisionLabels(["01vcpu"])).toBeNull();
-    expect(parseProvisionLabels(["9007199254740991g"])).toBeNull();
-  });
-  test("accepts CPU override above pool default within worker ceiling", () => {
-    const value = candidate(["mars-linux-x64", "2vcpu"]);
-    value.pool.resources = { vcpu: 1, memoryBytes: 4, storageBytes: 8, concurrency: 1 };
+  test("checks selected composite resources against worker ceilings", () => {
+    const value = candidate(["mars-linux-x64-2vcpu-6g"]);
     expect(fits(value)).toBe(true);
+    value.requestedLabels = ["mars-linux-x64-5vcpu-6g"];
+    expect(fits(value)).toBe(false);
+    expect(reason(value)).toBe("resource_ceiling");
+  });
+
+  test("uses pool storage and concurrency while checking selected resources", () => {
+    const value = candidate(["mars-linux-x64-2vcpu-4g"]);
+    value.pool.resources = { vcpu: 2, memoryBytes: 4, storageBytes: 8, concurrency: 1 };
+    expect(reason(value)).toBe("admissible");
   });
 });
-test("checks storage against the storage ceiling", () => {
-  const value = candidate(["mars-linux-x64", "2vcpu"]);
-  value.pool.resources = { vcpu: 2, memoryBytes: 4, storageBytes: 8, concurrency: 1 };
-  expect(reason(value)).toBe("admissible");
-});
+
 test("blocks a worker whose local runtime is not ready", () => {
-  const value = candidate(["mars-linux-x64"]);
+  const value = candidate(["mars-linux-x64-2vcpu-4g"]);
   value.worker.runtimeReady = false;
   expect(fits(value)).toBe(false);
   expect(reason(value)).toBe("worker_runtime_not_ready");

@@ -1,5 +1,5 @@
-import type { JobLabelRecommendation, JobLabelRecommendationQuery } from "@mars/contracts";
-import { JobLabelRecommendationQuery as JobLabelRecommendationQuerySchema } from "@mars/contracts";
+import type { JobLabelRecommendation, JobLabelRecommendationQuery, ParsedRunnerLabel } from "@mars/contracts";
+import { JobLabelRecommendationQuery as JobLabelRecommendationQuerySchema, formatRunnerLabel, parseRunnerLabels } from "@mars/contracts";
 import type { DatabaseClient } from "./index.ts";
 
 const MIN_SUCCESSFUL_RUNS = 5;
@@ -65,44 +65,40 @@ export function recommendResourceLabels(input: ResourceLabelRecommendationInput)
   return { status: "available", vcpu, memoryGiB, reason: null };
 }
 
-function numericLabel(label: string): boolean {
-  return /^\d+(?:VCPU|G)$/i.test(label.trim());
+function selectRank(label: ParsedRunnerLabel, platform: string | null): number {
+  const normalizedPlatform = platform?.trim().toLowerCase() ?? "";
+  if (normalizedPlatform && label.route === `mars-${normalizedPlatform}`) return 3;
+  if (label.route === "mars-any-x64" && normalizedPlatform.endsWith("-x64")) return 2;
+  if (label.route === "mars-any") return 1;
+  return 0;
 }
 
-function isWindowsRoutingLabel(label: string): boolean {
-  return /^(?:mars-)?windows(?:[-_][a-z0-9._-]+)*$/i.test(label.trim());
-}
-
-function windowsRoutingRank(label: string): number {
-  return /^mars-windows(?:[-_]|$)/i.test(label.trim()) ? 2 : 1;
-}
-
-export function parseCurrentResourceLabels(labels: readonly string[]): {
-  windowsLabel: string | null;
-  vcpu: number | null;
-  memoryGiB: number | null;
-} {
-  let windowsLabel: string | null = null;
-  let windowsRank = 0;
-  let vcpu: number | null = null;
-  let memoryGiB: number | null = null;
-  for (const label of labels) {
-    const normalized = label.trim();
-    if (isWindowsRoutingLabel(normalized) && windowsRoutingRank(normalized) > windowsRank) {
-      windowsLabel = label;
-      windowsRank = windowsRoutingRank(normalized);
+export function selectRoutingLabel(labels: readonly string[], platform: string | null): ParsedRunnerLabel | null {
+  const parsed = parseRunnerLabels(labels);
+  if (!parsed) return null;
+  let selected: ParsedRunnerLabel | null = null;
+  let rank = 0;
+  for (const option of parsed) {
+    const optionRank = selectRank(option, platform);
+    if (optionRank > rank) {
+      selected = option;
+      rank = optionRank;
     }
-    const vcpuMatch = /^(\d+)VCPU$/i.exec(normalized);
-    if (vcpuMatch && positiveSafeInteger(Number(vcpuMatch[1]))) vcpu = Number(vcpuMatch[1]);
-    const memoryMatch = /^(\d+)G$/i.exec(normalized);
-    if (memoryMatch && positiveSafeInteger(Number(memoryMatch[1]))) memoryGiB = Number(memoryMatch[1]);
   }
-  return { windowsLabel, vcpu, memoryGiB };
+  return selected;
 }
 
-export function buildOptimizedLabels(labels: readonly string[], vcpu: number, memoryGiB: number): string[] {
+export function buildOptimizedLabels(labels: readonly string[], vcpu: number, memoryGiB: number, selectedRoutingLabel?: string | null): string[] {
   if (!positiveSafeInteger(vcpu) || !positiveSafeInteger(memoryGiB)) throw new RangeError("Optimized labels require positive safe integers");
-  return [...labels.filter(label => !numericLabel(label)), `${vcpu}VCPU`, `${memoryGiB}G`];
+  const parsed = parseRunnerLabels(labels);
+  if (!parsed) throw new RangeError("Optimized labels require valid composite runner labels");
+  const selected = selectedRoutingLabel
+    ? parsed.find((option) => option.original.toLowerCase() === selectedRoutingLabel.trim().toLowerCase())
+    : parsed[0];
+  if (!selected) throw new RangeError("Optimized label is not one of the requested alternatives");
+  return labels.map((label) => label.trim().toLowerCase() === selected.original.toLowerCase()
+    ? formatRunnerLabel(selected.route, vcpu, memoryGiB)
+    : label);
 }
 
 const RECOMMENDATION_SQL = `WITH scoped AS (
@@ -120,8 +116,12 @@ const RECOMMENDATION_SQL = `WITH scoped AS (
     AND s.repository_id=$4::uuid
     AND s.workflow_name=$5::text
     AND s.job_name=$6::text
+), latest AS (
+  SELECT * FROM scoped WHERE latest_ordinal=1
 ), successful AS (
-  SELECT * FROM scoped WHERE outcome='success'
+  SELECT s.* FROM scoped s
+  JOIN latest ON latest.platform=s.platform
+  WHERE s.outcome='success'
 ), aggregate AS (
   SELECT count(*)::bigint AS "successfulRunCount",
     count(*) FILTER (WHERE cpu_peak_percent IS NOT NULL AND memory_peak_bytes IS NOT NULL)::bigint AS "coveredRunCount",
@@ -129,11 +129,11 @@ const RECOMMENDATION_SQL = `WITH scoped AS (
     round((percentile_cont(0.95) WITHIN GROUP (ORDER BY memory_peak_bytes) FILTER (WHERE memory_peak_bytes IS NOT NULL))::numeric)::bigint AS "p95MemoryPeakBytes"
   FROM successful
 )
-SELECT latest.requested_labels AS "currentLabels",
+SELECT latest.requested_labels AS "currentLabels", latest.platform AS "currentPlatform",
   aggregate."successfulRunCount", aggregate."coveredRunCount",
   aggregate."p95CpuPeakPercent", aggregate."p95MemoryPeakBytes"
 FROM aggregate
-LEFT JOIN scoped latest ON latest.latest_ordinal=1`;
+LEFT JOIN latest ON TRUE`;
 
 type RecommendationRow = Record<string, unknown>;
 
@@ -141,6 +141,10 @@ function numberValue(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   const normalized = Number(value);
   return Number.isFinite(normalized) ? normalized : null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
 }
 
 function countValue(value: unknown): number {
@@ -165,19 +169,22 @@ function normalizeRecommendation(row: RecommendationRow): JobLabelRecommendation
   const p95CpuPeakPercent = numberValue(row.p95CpuPeakPercent);
   const memoryP95 = numberValue(row.p95MemoryPeakBytes);
   const p95MemoryPeakBytes = memoryP95 === null ? null : Math.round(memoryP95);
-  const current = parseCurrentResourceLabels(labelsValue(row.currentLabels ?? row.labels));
+  const currentLabels = labelsValue(row.currentLabels ?? row.labels);
+  const currentPlatform = stringValue(row.currentPlatform);
+  const current = selectRoutingLabel(currentLabels, currentPlatform);
   const policy = recommendResourceLabels({
     cpuP95: p95CpuPeakPercent,
     memoryP95Bytes: p95MemoryPeakBytes,
     successfulRuns: successfulRunCount,
     coveredRuns: coveredRunCount,
-    currentVcpu: current.vcpu,
-    currentMemoryGiB: current.memoryGiB,
+    currentVcpu: current?.vcpu,
+    currentMemoryGiB: current?.memoryGiB,
   });
   return {
     status: policy.status,
-    currentLabels: labelsValue(row.currentLabels ?? row.labels),
-    currentWindowsLabel: current.windowsLabel,
+    currentLabels,
+    currentRoutingLabel: current?.original ?? null,
+    currentPlatform,
     workflowPath: null,
     workflowJobId: null,
     recommendedVcpu: policy.vcpu,
@@ -208,3 +215,4 @@ export async function getJobLabelRecommendation(
   ]);
   return normalizeRecommendation(rows[0] ?? {});
 }
+

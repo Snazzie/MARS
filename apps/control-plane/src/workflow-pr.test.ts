@@ -44,11 +44,11 @@ describe("workflow runner mutation", () => {
   });
 });
 
-test("focused mutation previews and rewrites only the selected job while preserving custom labels", () => {
+test("focused mutation previews composite alternatives and changes resources independently", () => {
   const input = `name: CI
 jobs:
   build:
-    runs-on: [self-hosted, mars-windows-x64, custom, 8VCPU, 16G]
+    runs-on: [mars-windows-x64-8vcpu-16g, mars-macos-arm64-2vcpu-4g, mars-linux-x64-2vcpu-4g]
     steps:
       - run: echo build
   lint:
@@ -57,65 +57,82 @@ jobs:
       - run: echo lint
 `;
   const files = discoverWorkflowFiles([{ path: ".github/workflows/ci.yml", content: input }]);
+  const labels = ["mars-linux-x64-4vcpu-12g", "MARS-WINDOWS-X64-4VCPU-20G", "mars-macos-arm64-2vcpu-4g"];
   const preview = previewWorkflowMutation({
     files,
     selectedPaths: [],
     selectedPath: ".github/workflows/ci.yml",
     selectedJobId: "build",
-    labels: ["self-hosted", "mars-windows-x64", "custom", "4VCPU", "8G"],
+    labels,
   });
   expect(preview.jobs).toEqual([{
     id: "build",
-    currentRunsOn: ["self-hosted", "mars-windows-x64", "custom", "8VCPU", "16G"],
+    currentRunsOn: ["mars-windows-x64-8vcpu-16g", "mars-macos-arm64-2vcpu-4g", "mars-linux-x64-2vcpu-4g"],
     path: ".github/workflows/ci.yml",
-    proposedRunsOn: ["self-hosted", "mars-windows-x64", "custom", "4VCPU", "8G"],
+    proposedRunsOn: ["MARS-WINDOWS-X64-4VCPU-20G", "mars-macos-arm64-2vcpu-4g", "mars-linux-x64-4vcpu-12g"],
   }]);
   expect(preview.changedFiles).toEqual([".github/workflows/ci.yml"]);
-  const output = applyWorkflowMutation(input, ["self-hosted", "mars-windows-x64", "custom", "4VCPU", "8G"], "build", true);
+  const output = applyWorkflowMutation(input, labels, "build", true);
+  expect(output).toContain("mars-macos-arm64-2vcpu-4g");
+  expect(output).toContain("MARS-WINDOWS-X64-4VCPU-20G");
+  expect(output).toContain("mars-linux-x64-4vcpu-12g");
   expect(output).toContain("echo lint");
 });
 
-test("focused mutation rejects invalid numeric labels and reports no-op", () => {
-  const focusedContent = content.replace("ubuntu-latest", "[mars-windows-x64, 8VCPU, 16G]");
+test("focused mutation rejects old syntax, malformed alternatives, duplicates, and route changes", () => {
+  const focusedContent = content.replace("ubuntu-latest", "[mars-windows-x64-4vcpu-8g, mars-macos-arm64-2vcpu-4g]");
   const files = discoverWorkflowFiles([{ path: ".github/workflows/ci.yml", content: focusedContent }]);
-  expect(() => previewWorkflowMutation({
+  const request = (labels: string[]) => previewWorkflowMutation({
     files,
     selectedPaths: [],
     selectedPath: ".github/workflows/ci.yml",
     selectedJobId: "test",
-    labels: ["mars-windows-x64", "0VCPU", "8G"],
-  })).toThrow(/invalid focused resource label/i);
-  for (const labels of [["ubuntu-latest"], ["mars-windows-x64", "-1VCPU"], ["mars-windows-x64", "4vcpu", "0G"]]) {
-    expect(() => previewWorkflowMutation({
-      files,
-      selectedPaths: [],
-      selectedPath: ".github/workflows/ci.yml",
-      selectedJobId: "test",
-      labels,
-    })).toThrow(/invalid (?:focused )?resource label|exactly one Windows routing label|foreign or conflicting labels/i);
+    labels,
+  });
+  for (const labels of [
+    ["mars-windows-x64", "4VCPU", "8G"],
+    ["mars-windows-x64-4vcpu"],
+    ["mars-windows-x64-0vcpu-8g"],
+    ["mars-windows-x64-4vcpu-8g", "mars-windows-x64-2vcpu-4g"],
+    ["mars-windows-x64-4vcpu-8g", "mars-linux-x64-2vcpu-4g"],
+  ]) {
+    expect(() => request(labels)).toThrow(/focused workflow labels/i);
   }
   expect(() => previewWorkflowMutation({
     files,
     selectedPaths: [],
     selectedPath: ".github/workflows/ci.yml",
-    labels: ["4VCPU"],
+    labels: ["mars-windows-x64-4vcpu-8g"],
   })).toThrow(/focused workflow selection/i);
   expect(() => previewWorkflowMutation({
     files,
     selectedPaths: [],
     selectedJobId: "test",
-    labels: ["4VCPU"],
+    labels: ["mars-windows-x64-4vcpu-8g"],
   })).toThrow(/focused workflow selection/i);
-  const noOp = previewWorkflowMutation({
-    files: discoverWorkflowFiles([{ path: ".github/workflows/ci.yml", content: content.replace("ubuntu-latest", "[mars-windows-x64, 4VCPU]") }]),
+  const oldFiles = discoverWorkflowFiles([{ path: ".github/workflows/ci.yml", content: content.replace("ubuntu-latest", "[mars-windows-x64, 4VCPU, 8G]") }]);
+  expect(() => previewWorkflowMutation({
+    files: oldFiles,
     selectedPaths: [],
     selectedPath: ".github/workflows/ci.yml",
     selectedJobId: "test",
-    labels: ["mars-windows-x64", "4VCPU"],
+    labels: ["mars-windows-x64-4vcpu-8g"],
+  })).toThrow(/focused workflow labels/i);
+});
+
+test("focused mutation reports no-op when composite alternatives are unchanged", () => {
+  const labels = ["mars-windows-x64-4vcpu-8g", "mars-macos-arm64-2vcpu-4g"];
+  const noOp = previewWorkflowMutation({
+    files: discoverWorkflowFiles([{ path: ".github/workflows/ci.yml", content: content.replace("ubuntu-latest", `[${labels.join(", ")}]`) }]),
+    selectedPaths: [],
+    selectedPath: ".github/workflows/ci.yml",
+    selectedJobId: "test",
+    labels,
   });
   expect(noOp.noOp).toBe(true);
   expect(noOp.changedFiles).toEqual([]);
 });
+
 
 test("resolves the YAML job key from workflow and job display names", () => {
   const files = [{
@@ -124,13 +141,13 @@ test("resolves the YAML job key from workflow and job display names", () => {
 jobs:
   build:
     name: Build Windows
-    runs-on: [mars-windows-x64, 2VCPU, 4G]
+    runs-on: mars-windows-x64-2vcpu-4g
 `,
   }];
   expect(resolveWorkflowJob(files, "CI", "Build Windows")).toEqual({
     path: ".github/workflows/ci.yml",
     jobId: "build",
-    currentRunsOn: ["mars-windows-x64", "2VCPU", "4G"],
+    currentRunsOn: "mars-windows-x64-2vcpu-4g",
   });
   expect(() => resolveWorkflowJob(files, "CI", "dashboard-uuid")).toThrow("github_workflow_job_not_found");
 });

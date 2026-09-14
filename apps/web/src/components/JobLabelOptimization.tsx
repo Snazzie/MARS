@@ -1,4 +1,5 @@
 import type { JobLabelRecommendation } from "@mars/contracts";
+import { formatRunnerLabel, parseRunnerLabels } from "@mars/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { getJobLabelRecommendation } from "../api.ts";
@@ -72,9 +73,16 @@ function currentLabelsFor(recommendation: JobLabelRecommendation, labels: readon
   return [...workflowLabels];
 }
 
-function proposedLabels(currentLabels: readonly string[], vcpu: string, memoryGiB: string): string[] {
-  const withoutNumeric = currentLabels.filter((label) => !/^\d+(?:VCPU|G)$/i.test(label));
-  return [...withoutNumeric, `${vcpu}VCPU`, `${memoryGiB}G`];
+function proposedLabels(currentLabels: readonly string[], selectedRoutingLabel: string | null, vcpu: string, memoryGiB: string): string[] {
+  const parsed = parseRunnerLabels(currentLabels);
+  if (!parsed) return [];
+  const selected = selectedRoutingLabel
+    ? parsed.find((option) => option.original.toLowerCase() === selectedRoutingLabel.trim().toLowerCase())
+    : parsed[0];
+  if (!selected) return [];
+  return currentLabels.map((label) => label.trim().toLowerCase() === selected.original.toLowerCase()
+    ? formatRunnerLabel(selected.route, Number(vcpu), Number(memoryGiB))
+    : label);
 }
 
 function sameLabels(left: readonly string[], right: readonly string[]): boolean {
@@ -119,22 +127,25 @@ export function JobLabelOptimization({
   const vcpu = vcpuValue ?? (recommendation?.recommendedVcpu === null || recommendation?.recommendedVcpu === undefined ? "" : String(recommendation.recommendedVcpu));
   const memoryGiB = memoryValue ?? (recommendation?.recommendedMemoryGiB === null || recommendation?.recommendedMemoryGiB === undefined ? "" : String(recommendation.recommendedMemoryGiB));
   const validValues = isPositiveIntegerLabel(vcpu) && isPositiveIntegerLabel(memoryGiB);
-  const proposed = recommendation && validValues ? proposedLabels(current, vcpu, memoryGiB) : [];
-  const noOp = proposed.length > 0 && sameLabels(current, proposed);
+  const proposed = recommendation && validValues
+    ? proposedLabels(current, recommendation.currentRoutingLabel, vcpu, memoryGiB)
+    : [];
+  const proposedValid = proposed.length > 0 && parseRunnerLabels(proposed) !== null;
+  const noOp = proposedValid && sameLabels(current, proposed);
   const resolvedPath = selectedPath ?? recommendation?.workflowPath ?? null;
   const resolvedJobId = selectedJobId ?? recommendation?.workflowJobId ?? null;
   const hasRecommendation = recommendation?.status === "available"
-    && recommendation.currentWindowsLabel !== null
+    && recommendation.currentRoutingLabel !== null
+    && recommendation.currentPlatform !== null
     && Boolean(recommendation.currentLabels?.length)
     && Boolean(recommendation.workflowPath)
     && Boolean(recommendation.workflowJobId)
     && recommendation.recommendedVcpu !== null
     && recommendation.recommendedMemoryGiB !== null;
   const hasRepositoryMetadata = Boolean(organizationId && repositoryId && repositoryName && workflowName && jobName && resolvedPath && resolvedJobId);
-  const canRequestPullRequest = Boolean(hasRecommendation && hasRepositoryMetadata && validValues && !noOp && (onRequestPullRequest || onCreatePullRequest));
+  const canRequestPullRequest = Boolean(hasRecommendation && hasRepositoryMetadata && validValues && proposedValid && !noOp && (onRequestPullRequest || onCreatePullRequest));
   const requestPullRequest = onRequestPullRequest ?? onCreatePullRequest;
-  const invalidMessage = !validValues ? "Enter positive whole numbers for VCPU and G labels." : noOp ? "The proposed labels are unchanged; there is no pull request to create." : null;
-
+  const invalidMessage = !validValues ? "Enter positive whole numbers for VCPU and GiB." : !proposedValid ? "The current labels are not valid composite runner alternatives." : noOp ? "The proposed labels are unchanged; there is no pull request to create." : null;
   return (
     <section className="job-label-optimization" aria-labelledby="job-label-optimization-title">
       <header className="job-label-optimization-header">
@@ -158,7 +169,8 @@ export function JobLabelOptimization({
             <div><dt>Observed p95 memory</dt><dd>{formatBytes(recommendation.p95MemoryPeakBytes)}</dd></div>
           </dl>
           <div className="job-label-optimization-fields">
-            <label>Windows routing label<input value={recommendation.currentWindowsLabel ?? "Unavailable"} readOnly aria-readonly="true" /></label>
+            <label>Routing label<input value={recommendation.currentRoutingLabel ?? "Unavailable"} readOnly aria-readonly="true" /></label>
+            <label>Selected platform<input value={recommendation.currentPlatform ?? "Unavailable"} readOnly aria-readonly="true" /></label>
             <label>VCPU label<input name="vcpu" type="number" min="1" step="1" inputMode="numeric" value={vcpu} onChange={(event) => setVcpuValue(event.target.value)} aria-invalid={vcpu.length > 0 && !isPositiveIntegerLabel(vcpu)} /></label>
             <label>Memory label (GiB)<input name="memoryGiB" type="number" min="1" step="1" inputMode="numeric" value={memoryGiB} onChange={(event) => setMemoryValue(event.target.value)} aria-invalid={memoryGiB.length > 0 && !isPositiveIntegerLabel(memoryGiB)} /></label>
           </div>

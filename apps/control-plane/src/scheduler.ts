@@ -1,85 +1,54 @@
-import { ANY_RUNNER_LABEL, PoolResources, WorkerLimits } from "@mars/contracts";
+import { ANY_RUNNER_LABEL, ANY_X64_RUNNER_LABEL, parseRunnerLabels, PoolResources, type ParsedRunnerLabel, WorkerLimits } from "@mars/contracts";
 
 export interface Candidate {
   worker: { admissionState:string; connectionState:string; configurationState:string; configurationRevision:string|null; appliedConfigurationRevision:string|null; runtimeReady?: boolean; linuxEvidenceReady?: boolean; limits: unknown };
-  pool: { enabled:boolean; resources:unknown; concurrency:number; active:number; labels:string[]; triggerLabel:string|null };
+  pool: { enabled:boolean; platform:string; resources:unknown; concurrency:number; active:number; labels:string[]; triggerLabel:string|null };
   requestedLabels:string[];
 }
 
-export type Provision = { routingLabels: string[]; vcpu?: number; memoryBytes?: number };
-
-export function parseProvisionLabels(labels: readonly string[]): Provision | null {
-  const routingLabels: string[] = [];
-  let vcpu: number | undefined;
-  let memoryBytes: number | undefined;
-  for (const original of labels) {
-    const label = original.trim();
-    const lower = label.toLowerCase();
-    const cpuCandidate = /^\d+vcpu$/.test(lower);
-    const memoryCandidate = /^\d+g$/.test(lower);
-    if (!cpuCandidate && !memoryCandidate) { routingLabels.push(original); continue; }
-    if (cpuCandidate) {
-      if (!/^[1-9]\d*vcpu$/.test(lower) || vcpu !== undefined) return null;
-      const value = Number(lower.slice(0, -4));
-      if (!Number.isSafeInteger(value) || value <= 0) return null;
-      vcpu = value;
-    } else {
-      if (!/^[1-9]\d*g$/.test(lower) || memoryBytes !== undefined) return null;
-      const value = Number(lower.slice(0, -1));
-      if (!Number.isSafeInteger(value) || value <= 0 || value > Math.floor(Number.MAX_SAFE_INTEGER / 1024 ** 3)) return null;
-      memoryBytes = value * 1024 ** 3;
-    }
+export function selectProvisionOption(
+  options: readonly ParsedRunnerLabel[],
+  pool: { platform: string; labels: string[]; triggerLabel: string | null },
+): ParsedRunnerLabel | null {
+  const trigger = pool.triggerLabel?.trim().toLowerCase();
+  if (trigger) {
+    const exact = options.find((option) => option.route.toLowerCase() === trigger);
+    if (exact) return exact;
   }
-  return { routingLabels, ...(vcpu === undefined ? {} : { vcpu }), ...(memoryBytes === undefined ? {} : { memoryBytes }) };
-}
-
-export function resolveProvisionResources(poolResources: unknown, provision: Provision): PoolResources | null {
-  const parsed = PoolResources.safeParse(poolResources);
-  if (!parsed.success) return null;
-  return PoolResources.safeParse({ ...parsed.data, ...(provision.vcpu === undefined ? {} : { vcpu: provision.vcpu }), ...(provision.memoryBytes === undefined ? {} : { memoryBytes: provision.memoryBytes }) }).success
-    ? { ...parsed.data, ...(provision.vcpu === undefined ? {} : { vcpu: provision.vcpu }), ...(provision.memoryBytes === undefined ? {} : { memoryBytes: provision.memoryBytes }) }
-    : null;
-}
-
-const legacyRoutingLabels: Record<string, readonly string[][]> = {
-  "mars-linux-x64": [["self-hosted", "linux", "x64", "mars-default"]],
-  "mars-windows-x64": [["self-hosted", "windows", "x64", "mars-default"]],
-  "mars-macos-arm64": [["self-hosted", "macos", "arm64", "mars-default"], ["self-hosted", "macos", "arm64", "mars-macos"]],
-};
-
-export function labelsMatch(requestedLabels: readonly string[], poolLabels: readonly string[], triggerLabel: string|null): boolean {
-  if (!triggerLabel) return false;
-  const requested = new Set(requestedLabels.map((label) => label.toLowerCase()));
-  const labels = new Set(poolLabels.map((label) => label.toLowerCase()));
-  if (requested.size === 1 && requested.has(ANY_RUNNER_LABEL)) return true;
-  const trigger = triggerLabel.toLowerCase();
-  if (requested.has(trigger) && [...requested].every((label) => labels.has(label))) return true;
-  return (legacyRoutingLabels[trigger] ?? []).some((legacy) => legacy.length === requested.size && legacy.every((label) => requested.has(label)));
+  const platform = pool.platform.trim().toLowerCase();
+  if (platform.endsWith("-x64")) {
+    const x64 = options.find((option) => option.route.toLowerCase() === ANY_X64_RUNNER_LABEL);
+    if (x64) return x64;
+  }
+  return options.find((option) => option.route.toLowerCase() === ANY_RUNNER_LABEL) ?? null;
 }
 
 export function fits(candidate: Candidate): boolean {
-  const provision = parseProvisionLabels(candidate.requestedLabels);
-  if (!provision || !labelsMatch(provision.routingLabels, candidate.pool.labels, candidate.pool.triggerLabel)) return false;
-  if (candidate.worker.admissionState !== "adopted" || candidate.worker.connectionState !== "online" || candidate.worker.configurationState !== "ready" || candidate.worker.configurationRevision !== candidate.worker.appliedConfigurationRevision || candidate.worker.runtimeReady !== true || candidate.worker.linuxEvidenceReady === false || !candidate.pool.enabled || candidate.pool.active >= candidate.pool.concurrency) return false;
+  const options = parseRunnerLabels(candidate.requestedLabels);
+  if (!options) return false;
+  const option = selectProvisionOption(options, candidate.pool);
+  if (!option) return false;
+  if (candidate.worker.admissionState !== "adopted" || candidate.worker.connectionState !== "online" || candidate.worker.configurationState !== "ready" || candidate.worker.configurationRevision !== candidate.worker.appliedConfigurationRevision || candidate.worker.runtimeReady !== true || candidate.worker.linuxEvidenceReady === false || !candidate.pool.enabled) return false;
   const limits = WorkerLimits.safeParse(candidate.worker.limits);
-  const resources = resolveProvisionResources(candidate.pool.resources, provision);
-  if (!limits.success || !resources) return false;
-  return resources.vcpu <= limits.data.maxVcpuPerPod && resources.memoryBytes <= limits.data.maxMemoryBytesPerPod && resources.storageBytes <= limits.data.maxStorageBytesPerPod;
+  const resources = PoolResources.safeParse(candidate.pool.resources);
+  if (!limits.success || !resources.success || candidate.pool.active >= resources.data.concurrency) return false;
+  return option.vcpu <= limits.data.maxVcpuPerPod && option.memoryBytes <= limits.data.maxMemoryBytesPerPod && resources.data.storageBytes <= limits.data.maxStorageBytesPerPod;
 }
 
 export function reason(candidate: Candidate): string {
-  const provision = parseProvisionLabels(candidate.requestedLabels);
-  if (!provision) return "invalid_provision_labels";
-  if (!labelsMatch(provision.routingLabels, candidate.pool.labels, candidate.pool.triggerLabel)) return "no_matching_labels";
+  const options = parseRunnerLabels(candidate.requestedLabels);
+  if (!options) return "invalid_provision_labels";
+  const option = selectProvisionOption(options, candidate.pool);
+  if (!option) return "no_matching_labels";
   if (candidate.worker.admissionState !== "adopted") return "worker_pending_adoption";
   if (candidate.worker.connectionState !== "online") return "worker_offline";
   if (candidate.worker.configurationState === "applying" || (candidate.worker.configurationState === "ready" && candidate.worker.configurationRevision !== candidate.worker.appliedConfigurationRevision)) return "worker_config_applying";
   if (candidate.worker.configurationState !== "ready") return "worker_not_ready";
   if (candidate.worker.runtimeReady !== true || candidate.worker.linuxEvidenceReady === false) return "worker_runtime_not_ready";
   if (!candidate.pool.enabled) return "pool_disabled";
-  if (candidate.pool.active >= candidate.pool.concurrency) return "pool_concurrency";
-  const resources = resolveProvisionResources(candidate.pool.resources, provision);
+  const resources = PoolResources.safeParse(candidate.pool.resources);
   const limits = WorkerLimits.safeParse(candidate.worker.limits);
-  return resources && limits.success && resources.vcpu <= limits.data.maxVcpuPerPod && resources.memoryBytes <= limits.data.maxMemoryBytesPerPod && resources.storageBytes <= limits.data.maxStorageBytesPerPod ? "admissible" : "resource_ceiling";
+  if (!resources.success || !limits.success) return "resource_ceiling";
+  if (candidate.pool.active >= resources.data.concurrency) return "pool_concurrency";
+  return option.vcpu <= limits.data.maxVcpuPerPod && option.memoryBytes <= limits.data.maxMemoryBytesPerPod && resources.data.storageBytes <= limits.data.maxStorageBytesPerPod ? "admissible" : "resource_ceiling";
 }
-

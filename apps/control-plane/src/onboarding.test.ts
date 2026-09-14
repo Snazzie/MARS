@@ -72,7 +72,7 @@ describe("onboarding HTTP contract", () => {
       db,
       currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
       githubApp: {
-        listRepositoryRunnerWorkflows: async () => ({ defaultBranch: "main", files: [{ path: ".github/workflows/smoke.yml", sha: "sha", content: "on: workflow_dispatch\njobs:\n  smoke:\n    runs-on: mars-windows-x64\n" }] }),
+        listRepositoryRunnerWorkflows: async () => ({ defaultBranch: "main", files: [{ path: ".github/workflows/smoke.yml", sha: "sha", content: "on: workflow_dispatch\njobs:\n  smoke:\n    runs-on: mars-windows-x64-4vcpu-6g\n" }] }),
         dispatchRepositoryWorkflow: async () => ({ githubRunId: 41 }),
       } as never,
     }));

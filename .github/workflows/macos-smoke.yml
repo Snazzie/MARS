@@ -9,7 +9,7 @@ concurrency:
 
 jobs:
   smoke:
-    runs-on: mars-macos-arm64
+    runs-on: mars-macos-arm64-2vcpu-4g
     timeout-minutes: 10
     steps:
       - name: Check out project

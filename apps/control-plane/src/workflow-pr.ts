@@ -1,4 +1,5 @@
 import YAML, { isMap, isScalar, isSeq, type Document } from "yaml";
+import { parseRunnerLabels } from "@mars/contracts";
 
 export interface WorkflowJobPreview {
   id: string;
@@ -25,8 +26,6 @@ export interface WorkflowMutation {
 }
 
 const workflowPath = /^\.github\/workflows\/[^/]+\.(?:yml|yaml)$/;
-const windowsRoutingLabel = /^(?:mars-)?windows(?:[-_][a-z0-9._-]+)*$/i;
-const numericResourceLabel = /^(\d+)(VCPU|G)$/i;
 type JobData = { id: string; runsOn: string | readonly string[]; path: [string, string, "runs-on"] };
 type ParsedWorkflow = { document: Document; jobs: JobData[]; name: string | null };
 
@@ -111,63 +110,27 @@ function selectedPaths(input: WorkflowSelection): string[] {
   return availablePaths.length ? [...availablePaths] : [];
 }
 
-function normalized(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function resourceKind(label: string): "vcpu" | "memory" | null {
-  const match = numericResourceLabel.exec(label.trim());
-  if (!match) return null;
-  const amount = Number(match[1]);
-  if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error(`Invalid focused resource label: ${label}`);
-  return match[2].toUpperCase() === "VCPU" ? "vcpu" : "memory";
-}
-
 function focusedLabels(currentRunsOn: string | readonly string[], labels: readonly string[]): string[] {
-  const current = runsOnValues(currentRunsOn).map((label) => label.trim());
-  const requested = labels.map((label) => label.trim());
-  if (!requested.length || requested.some((label) => !label)) throw new Error("Cannot replace selected workflows: labels cannot be empty");
-  const duplicate = (values: readonly string[]) => values.length !== new Set(values.map(normalized)).size;
-  if (duplicate(current)) throw new Error("Focused workflow labels contain duplicate labels");
-  if (duplicate(requested)) throw new Error("Focused workflow labels contain duplicate labels");
-  const currentRouting = current.filter((label) => windowsRoutingLabel.test(label));
-  const requestedRouting = requested.filter((label) => windowsRoutingLabel.test(label));
-  if (currentRouting.length !== 1 || requestedRouting.length !== 1) {
-    throw new Error("Focused workflow labels require exactly one Windows routing label");
+  const current = runsOnValues(currentRunsOn);
+  if (!labels.length) throw new Error("Cannot replace selected workflows: labels cannot be empty");
+
+  const currentParsed = parseRunnerLabels(current);
+  const requestedParsed = parseRunnerLabels(labels);
+  if (!currentParsed || !requestedParsed) {
+    throw new Error("Focused workflow labels must contain valid composite runner labels");
   }
-  if (normalized(currentRouting[0]) !== normalized(requestedRouting[0])) {
-    throw new Error("Focused workflow labels must preserve the selected Windows routing label");
+
+  const currentRoutes = new Set(currentParsed.map((label) => label.route));
+  const requestedRoutes = new Set(requestedParsed.map((label) => label.route));
+  if (currentRoutes.size !== requestedRoutes.size || [...currentRoutes].some((route) => !requestedRoutes.has(route))) {
+    throw new Error("Focused workflow labels must preserve the existing routing label set");
   }
-  const currentCustom = current.filter((label) => !windowsRoutingLabel.test(label) && !numericResourceLabel.test(label));
-  const requestedCustom = requested.filter((label) => !windowsRoutingLabel.test(label) && !numericResourceLabel.test(label));
-  if (currentCustom.length !== requestedCustom.length || currentCustom.some((label) => !requestedCustom.some((value) => normalized(value) === normalized(label)))) {
-    throw new Error("Focused workflow labels contain foreign or conflicting labels");
-  }
-  const requestedNumeric = new Map<"vcpu" | "memory", string>();
-  for (const label of requested) {
-    const kind = resourceKind(label);
-    if (!kind) continue;
-    if (requestedNumeric.has(kind)) throw new Error("Focused workflow labels contain duplicate resource labels");
-    const match = numericResourceLabel.exec(label)!;
-    requestedNumeric.set(kind, `${Number(match[1])}${kind === "vcpu" ? "VCPU" : "G"}`);
-  }
-  const currentNumeric = new Map<"vcpu" | "memory", string>();
-  for (const label of current) {
-    const kind = resourceKind(label);
-    if (!kind) {
-      if (/^\d+.*(?:VCPU|G)$/i.test(label)) throw new Error(`Invalid focused resource label: ${label}`);
-      continue;
-    }
-    if (currentNumeric.has(kind)) throw new Error("Focused workflow labels contain duplicate resource labels");
-    const match = numericResourceLabel.exec(label)!;
-    currentNumeric.set(kind, `${Number(match[1])}${kind === "vcpu" ? "VCPU" : "G"}`);
-  }
-  const result = current.filter((label) => !numericResourceLabel.test(label));
-  for (const kind of ["vcpu", "memory"] as const) {
-    const value = requestedNumeric.get(kind) ?? currentNumeric.get(kind);
-    if (value) result.push(value);
-  }
-  return result;
+
+  const requestedByRoute = new Map(requestedParsed.map((label) => [label.route, label]));
+  return currentParsed.map((label, index) => {
+    const requested = requestedByRoute.get(label.route)!;
+    return label.vcpu === requested.vcpu && label.memoryGiB === requested.memoryGiB ? current[index]! : requested.original;
+  });
 }
 
 function runsOnValues(value: string | readonly string[]): string[] {
@@ -206,10 +169,10 @@ export function previewWorkflowMutation(input: WorkflowSelection & { files: read
   };
 }
 
-export function applyWorkflowMutation(content: string, labels: readonly string[], selectedJobId?: string, preserveWindowsRouting = Boolean(selectedJobId)): string {
+export function applyWorkflowMutation(content: string, labels: readonly string[], selectedJobId?: string, preserveFocusedRouting = Boolean(selectedJobId)): string {
   const { document, jobs } = parseWorkflow(".github/workflows/workflow.yml", content);
   const selected = jobs.filter((job) => !selectedJobId || job.id === selectedJobId);
   if (!selected.length) throw new Error(`No selected job has runs-on; mutation would be a no-op`);
-  for (const job of selected) document.setIn(job.path, proposedLabels(job.runsOn, labels, preserveWindowsRouting));
+  for (const job of selected) document.setIn(job.path, proposedLabels(job.runsOn, labels, preserveFocusedRouting));
   return String(document);
 }

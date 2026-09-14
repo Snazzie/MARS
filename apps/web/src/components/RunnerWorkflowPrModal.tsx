@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { JobLabelRecommendation } from "@mars/contracts";
+import { formatRunnerLabel, parseRunnerLabels } from "@mars/contracts";
 import { createRunnerWorkflowPr, getRunnerWorkflowFiles, previewRunnerWorkflowPr } from "../api.ts";
 
-type FocusedRecommendation = Partial<Pick<JobLabelRecommendation, "currentWindowsLabel" | "currentLabels" | "recommendedVcpu" | "recommendedMemoryGiB" | "p95CpuPeakPercent" | "p95MemoryPeakBytes" | "successfulRunCount">> & {
+type FocusedRecommendation = Partial<Pick<JobLabelRecommendation, "currentRoutingLabel" | "currentPlatform" | "currentLabels" | "recommendedVcpu" | "recommendedMemoryGiB" | "p95CpuPeakPercent" | "p95MemoryPeakBytes" | "successfulRunCount">> & {
   labels?: readonly string[];
 };
 
@@ -49,56 +50,30 @@ export const isRunnerWorkflowPrDisabled = (input: {
 export const handleRunnerWorkflowEscape = (event: KeyboardEvent, onClose: () => void) => { if (event.key === "Escape") onClose(); };
 export const formatRunnerWorkflowRunsOn = (value: string | string[]) => Array.isArray(value) ? value.join(", ") : value;
 
-function isWindowsRoutingLabel(value: string): boolean {
-  return /^(?:mars-)?windows(?:[-_][a-z0-9._-]+)*$/i.test(value);
-}
-
 export function areRunnerWorkflowLabelsValid(labels: readonly string[], expectedCurrentLabels?: readonly string[]): boolean {
-  const values = labels.map((label) => label.trim());
-  if (!values.length || values.some((value) => !value)) return false;
-  const normalized = values.map((value) => value.toLowerCase());
-  if (new Set(normalized).size !== values.length) return false;
-  const routes = values.filter(isWindowsRoutingLabel);
-  if (routes.length !== 1) return false;
-  const counts = { VCPU: 0, G: 0 };
-  for (const value of values) {
-    if (isWindowsRoutingLabel(value)) continue;
-    const match = /^(\d+)(VCPU|G)$/i.exec(value);
-    if (!match || !Number.isSafeInteger(Number(match[1])) || Number(match[1]) <= 0) {
-      const expected = expectedCurrentLabels?.map((label) => label.trim().toLowerCase()) ?? [];
-      if (!expected.includes(value.toLowerCase())) return false;
-      continue;
-    }
-    const kind = match[2].toUpperCase() as "VCPU" | "G";
-    counts[kind] += 1;
-    if (counts[kind] > 1) return false;
-  }
-  if (expectedCurrentLabels?.length) {
-    const expected = expectedCurrentLabels.map((label) => label.trim());
-    if (expected.some((label) => !label) || new Set(expected.map((label) => label.toLowerCase())).size !== expected.length) return false;
-    const currentRoute = expected.filter(isWindowsRoutingLabel);
-    if (currentRoute.length !== 1 || currentRoute[0].toLowerCase() !== routes[0].toLowerCase()) return false;
-    for (const label of expected) {
-      if (isWindowsRoutingLabel(label)) continue;
-      const match = /^(\d+)(VCPU|G)$/i.exec(label);
-      if (match && (!Number.isSafeInteger(Number(match[1])) || Number(match[1]) <= 0)) return false;
-    }
-    const currentCustom = expected.filter((label) => !isWindowsRoutingLabel(label) && !/^(\d+)(VCPU|G)$/i.test(label)).map((label) => label.toLowerCase());
-    const requestedCustom = values.filter((label) => !isWindowsRoutingLabel(label) && !/^(\d+)(VCPU|G)$/i.test(label)).map((label) => label.toLowerCase());
-    if (currentCustom.length !== requestedCustom.length || currentCustom.some((label) => !requestedCustom.includes(label))) return false;
-  }
-  return true;
+  const parsed = parseRunnerLabels(labels);
+  if (!parsed) return false;
+  if (!expectedCurrentLabels) return true;
+  const expected = parseRunnerLabels(expectedCurrentLabels);
+  if (!expected) return false;
+  const expectedRoutes = new Set(expected.map((label) => label.route));
+  const requestedRoutes = new Set(parsed.map((label) => label.route));
+  return requestedRoutes.size === expectedRoutes.size
+    && [...expectedRoutes].every((route) => requestedRoutes.has(route));
 }
 
 function labelsFromRecommendation(recommendation: FocusedRecommendation | null | undefined): string[] {
   if (recommendation?.labels?.length) return recommendation.labels.map((label) => label.trim()).filter(Boolean);
   if (recommendation?.currentLabels?.length) return recommendation.currentLabels.map((label) => label.trim()).filter(Boolean);
-  if (!recommendation) return [];
-  const labels = recommendation.currentWindowsLabel ? [recommendation.currentWindowsLabel] : [];
-  if (recommendation.recommendedVcpu !== null && recommendation.recommendedVcpu !== undefined) labels.push(`${recommendation.recommendedVcpu}VCPU`);
-  if (recommendation.recommendedMemoryGiB !== null && recommendation.recommendedMemoryGiB !== undefined) labels.push(`${recommendation.recommendedMemoryGiB}G`);
-  return labels;
+  if (!recommendation?.currentRoutingLabel) return [];
+  const parsed = parseRunnerLabels([recommendation.currentRoutingLabel]);
+  if (!parsed) return [];
+  const selected = parsed[0];
+  const vcpu = recommendation.recommendedVcpu ?? selected.vcpu;
+  const memoryGiB = recommendation.recommendedMemoryGiB ?? selected.memoryGiB;
+  return [formatRunnerLabel(selected.route, vcpu, memoryGiB)];
 }
+
 
 export function RunnerWorkflowPrModal({
   organizationId,
@@ -237,7 +212,7 @@ export function RunnerWorkflowPrModal({
     {files.isLoading && !focused && <p role="status">Loading workflow files…</p>}
     {files.data && !focused && <fieldset className="workflow-file-selection"><legend>Workflow files</legend>{files.data.length === 0 && <p>No eligible workflow files found.</p>}{files.data.map((file) => <label key={file.path}><input type="checkbox" checked={selected.includes(file.path)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, file.path] : current.filter((path) => path !== file.path))} /> <code>{file.path}</code></label>)}</fieldset>}
     {preview.isFetching && <p role="status" aria-live="polite">Refreshing preview…</p>}{preview.data && <div className="workflow-job-list" aria-live="polite"><h3>Runner changes</h3>{jobs.length === 0 ? <p>No jobs with runs-on values are selected.</p> : jobs.map((job) => <article key={`${job.path}:${job.id}`}><strong>{job.id}</strong><small>{job.path}</small><p><code>{formatRunnerWorkflowRunsOn(job.currentRunsOn)}</code> → <code>{job.proposedRunsOn.join(", ")}</code></p></article>)}</div>}
-    {focused && <div className="workflow-focused-selection"><p>Selected job <strong>{selectedJobId}</strong></p><small>{selectedPath}</small><label>Runner labels<input name="labels" aria-label="Runner labels" value={editableLabels.join(", ")} aria-invalid={!labelsValid} onChange={(event) => setEditableLabels(event.target.value.split(",").map((label) => label.trim()).filter(Boolean))} /></label>{!labelsValid && <p role="status">Enter a Windows routing label and positive integer VCPU/G labels.</p>}</div>}
+    {focused && <div className="workflow-focused-selection"><p>Selected job <strong>{selectedJobId}</strong></p><small>{selectedPath}</small><label>Runner labels<input name="labels" aria-label="Runner labels" value={editableLabels.join(", ")} aria-invalid={!labelsValid} onChange={(event) => setEditableLabels(event.target.value.split(",").map((label) => label.trim()).filter(Boolean))} /></label>{!labelsValid && <p role="status">Enter one or more valid composite runner alternatives with unchanged routes.</p>}</div>}
     <label>PR title<input value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} /></label>
     <label>PR description<textarea value={body} maxLength={10000} onChange={(event) => setBody(event.target.value)} /></label>
     <label><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> I confirm the selected workflow replacements.</label>

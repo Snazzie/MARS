@@ -9,7 +9,7 @@ concurrency:
 
 jobs:
   smoke:
-    runs-on: mars-windows-x64
+    runs-on: mars-windows-x64-4vcpu-6g
     timeout-minutes: 15
     steps:
       - name: Check out project

@@ -1,57 +1,93 @@
 # Worker Resource Labels
 
-Use runner labels to request CPU and memory for an individual job.
-
-## Labels
-
-Add these labels alongside the worker pool trigger label:
-
-| Label | Meaning | Example |
-| --- | --- | --- |
-| `Nvcpu` | Request exactly `N` vCPUs | `3VCPU` requests 3 vCPUs |
-| `Ng` | Request exactly `N` GiB of memory | `6g` requests 6 GiB (`6442450944` bytes) |
-
-The suffixes are case-insensitive. Values must be positive whole numbers, so `2vcpu`, `3VCPU`, and `6G` are valid.
-
-Use `mars-any` instead of a pool trigger label when the job can run on any available runner architecture:
-
-```yaml
-runs-on: mars-any
-```
-
-The scheduler may assign that job to any enabled pool with an online worker and sufficient capacity. The job must therefore be portable across the operating systems and architectures in the fleet. `mars-any` may be combined with CPU and memory labels, but not with a platform-specific trigger label or other routing labels.
-
-Example label set:
+Runner labels carry both the route and the resources for one scheduling option. Every
+requested option must use the composite form:
 
 ```text
-mars-linux-x64, 3VCPU, 6G
+<route>-<vcpu>vcpu-<memoryGiB>g
 ```
 
-This requests a job with 3 vCPUs and 6 GiB of memory from the `mars-linux-x64` pool.
+The route may be `mars-any`, `mars-any-x64`, or a pool trigger route such as
+`mars-windows-x64`. CPU and memory are required positive safe integers, and the
+suffixes are case-insensitive. For example:
+
+```yaml
+runs-on: mars-any-4vcpu-10g
+```
+
+requests 4 vCPUs and 10 GiB (`10737418240` bytes). Standalone resource labels
+such as `4vcpu` or `10g` are invalid and are not combined with a route label.
+
+## Alternatives
+
+A workflow may provide several composite labels as OR alternatives. Mars chooses
+one option before creating the ephemeral runner; GitHub then schedules the job on
+that runner. Each option owns its own CPU and memory request, so alternatives can
+match different platforms with different limits:
+
+```yaml
+runs-on:
+  - mars-windows-x64-4vcpu-20g
+  - mars-windows-arm64-4vcpu-20g
+  - mars-macos-arm64-4vcpu-10g
+  - mars-linux-x64-4vcpu-10g
+```
+
+The exact pool trigger route wins when it matches a pool. Otherwise
+`mars-any-x64` matches only pools whose platform ends in `-x64`, and `mars-any`
+matches every platform. This precedence is independent of the order of labels in
+the workflow. `mars-windows-arm64` is accepted as a route and preserved by
+workflow editing, but no Windows ARM64 worker pool is currently available, so
+that alternative cannot be selected today.
 
 ## How routing works
 
-1. The control plane removes valid CPU and memory resource labels before matching pool labels.
-2. The remaining labels must either match the selected pool or consist only of the architecture-neutral `mars-any` label.
-3. If a CPU or memory label is omitted, the pool's configured value is used.
-4. The worker's configured per-job limits are the final ceiling.
-5. The original labels are retained when the just-in-time GitHub runner is registered.
+1. Mars parses the complete requested label set and rejects blank, malformed, or
+   duplicate alternatives.
+2. The scheduler selects the most specific matching alternative for each eligible
+   pool: exact trigger, then `mars-any-x64`, then `mars-any`.
+3. The selected option's vCPU and memory are checked against the worker's per-job
+   ceilings. Mars never fills in missing resource values from pool defaults.
+4. Storage and concurrency continue to come from the selected pool and existing
+   worker policies; there is no disk resource-label syntax.
+5. The original complete label array is retained when the just-in-time GitHub
+   runner is registered.
 
-A valid label may exceed the pool's default CPU or memory value when the worker's configured limit allows it. The worker appliance capacity is the aggregate maximum CPU, memory, and storage Mars may use at one time. Per-job limits are independent ceilings; the scheduler does not reserve the full per-job limit for every concurrency slot. It admits each queued job only when the resolved request fits the worker's remaining capacity. Storage and concurrency continue to use the existing pool and worker policies; there is no disk resource-label syntax.
+A valid request may exceed a pool's configured defaults when the worker's limits
+allow it. Reservations re-check resource and concurrency limits atomically before
+work is assigned. The worker appliance capacity remains the aggregate maximum
+CPU, memory, and storage Mars may use at one time.
 
 ## Invalid labels
 
-The job remains unroutable when resource labels are invalid or conflicting. Examples:
+The job remains unroutable when any requested option is invalid or conflicting.
+Examples include:
 
-- `0vcpu` or `0g`
-- `01vcpu`
-- Two CPU labels, such as `2vcpu, 3vcpu`
-- Two memory labels, such as `4g, 6g`
-- Values larger than the safe numeric range
-- Malformed resource candidates
+- standalone `4vcpu` or `10g` labels;
+- omitted CPU or memory suffixes, such as `mars-linux-x64`;
+- zero, fractional, or unsafe values;
+- malformed routes or resource suffixes;
+- duplicate full labels, even with different casing;
+- duplicate routes with different resource requests;
+- mixing composite labels with legacy split labels such as `self-hosted`,
+  `windows`, `x64`, or `mars-default`.
 
-Labels such as `6gb` are not memory resource labels. They are ordinary routing labels and must be explicitly present on the pool.
+Use one complete composite label for a single-platform job, for example:
+
+```yaml
+runs-on: mars-windows-x64-4vcpu-6g
+```
+
+For a macOS ARM64 job using the current default resources:
+
+```yaml
+runs-on: mars-macos-arm64-2vcpu-4g
+```
 
 ## Worker limits
 
-Resource labels cannot bypass worker policy. For example, a worker with a maximum of 4 vCPUs per job accepts `3VCPU` but does not accept `5vcpu`. The same per-job ceiling applies to memory and storage. `maxConcurrentPods` limits the number of active jobs; it is not multiplied by the per-job CPU, memory, or storage ceilings during configuration. Reservations re-check resource and concurrency limits atomically immediately before work is assigned.
+Composite labels cannot bypass worker policy. A worker with a maximum of 4 vCPUs
+per job accepts `mars-windows-x64-4vcpu-6g` but not an otherwise valid request for
+more than 4 vCPUs. The same per-job ceiling applies to memory and storage.
+`maxConcurrentPods` limits active jobs; it is not multiplied by per-job resource
+ceilings during configuration.

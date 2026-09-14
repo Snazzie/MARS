@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { RunnerJitConfig } from "@mars/contracts";
-import { parseProvisionLabels, resolveProvisionResources, fits, type Candidate } from "./scheduler.ts";
+import { parseRunnerLabels, PoolResources, type RunnerJitConfig } from "@mars/contracts";
+import { selectProvisionOption, fits, type Candidate } from "./scheduler.ts";
 import type { LeaseReservation } from "@mars/db";
 
 
@@ -31,7 +31,10 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
   const seen = new Set<number>();
   const reservedByPool = new Map<string, number>();
   const blockedInstallations = new Set<number>();
-  const maxConcurrent = Math.max(1, Math.floor(deps.maxConcurrent ?? Math.max(1, ...deps.candidates.map(({ pool }) => pool.concurrency))));
+  const maxConcurrent = Math.max(1, Math.floor(deps.maxConcurrent ?? Math.max(1, ...deps.candidates.map(({ pool }) => {
+    const resources = PoolResources.safeParse(pool.resources);
+    return resources.success ? resources.data.concurrency : 1;
+  }))));
   let nextJob = 0;
 
   const processJob = async (queued: QueuedRoutingJob): Promise<void> => {
@@ -39,19 +42,24 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
     seen.add(queued.jobId);
     await deps.upsert?.(queued);
     const requestedLabels = queued.labels.map((label) => label.trim()).filter(Boolean);
-    const provision = parseProvisionLabels(requestedLabels);
-    if (!provision) { report.skipped += 1; return; }
+    const options = parseRunnerLabels(requestedLabels);
+    if (!options) { report.skipped += 1; return; }
     if (deps.installationBlocked?.(queued.installationId)) { report.skipped += 1; return; }
     const candidateOrder = deps.candidates.length > 1
       ? deps.candidates.map((_, index) => deps.candidates[(queued.jobId + index) % deps.candidates.length])
       : deps.candidates;
-    const candidate = candidateOrder.find((value) => {
+    const selected = candidateOrder.map((value) => {
+      const option = selectProvisionOption(options, value.pool);
+      if (!option) return null;
       const capacityKey = `${value.pool.id}:${value.worker.id}`;
       const reserved = reservedByPool.get(capacityKey) ?? 0;
-      return reserved + value.pool.active < value.pool.concurrency && fits({ ...value, requestedLabels });
-    });
+      const candidate = { ...value, requestedLabels, pool: { ...value.pool, active: value.pool.active + reserved } };
+      return fits(candidate) ? { candidate: value, option } : null;
+    }).find((value): value is { candidate: typeof candidateOrder[number]; option: typeof options[number] } => value !== null);
     if (blockedInstallations.has(queued.installationId)) { report.skipped += 1; return; }
-    if (!candidate) { report.skipped += 1; return; }
+    if (!selected) { report.skipped += 1; return; }
+    const candidate = selected.candidate;
+    const option = selected.option;
     const [owner, repo] = queued.repository.split("/", 2);
     if (!owner || !repo) { report.failed += 1; return; }
     let reservation: LeaseReservation | undefined;
@@ -59,14 +67,15 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
     const capacityKey = `${candidate.pool.id}:${candidate.worker.id}`;
     reservedByPool.set(capacityKey, (reservedByPool.get(capacityKey) ?? 0) + 1);
     try {
-      const resources = resolveProvisionResources(candidate.pool.resources, provision);
-      if (!resources) { report.skipped += 1; return; }
+      const poolResources = PoolResources.safeParse(candidate.pool.resources);
+      if (!poolResources.success) { report.skipped += 1; return; }
+      const requested = { ...poolResources.data, vcpu: option.vcpu, memoryBytes: option.memoryBytes };
       const claimed = await deps.reserve({
         workerId: candidate.worker.id,
         poolId: candidate.pool.id,
         githubJobId: queued.jobId,
-        requested: resources,
-        routingKey: `${queued.repository}:${queued.jobId}:${requestedLabels.map((label) => label.toLowerCase()).sort().join(",")}`,
+        requested,
+        routingKey: `${queued.repository}:${queued.jobId}:${[...new Set(requestedLabels.map((label) => label.toLowerCase()))].sort().join(",")}`,
       });
       reservation = claimed;
       if (deps.preflight && !(await deps.preflight(queued))) {

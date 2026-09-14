@@ -3,8 +3,8 @@ import type { DatabaseClient } from "./index.ts";
 import {
   buildOptimizedLabels,
   getJobLabelRecommendation,
-  parseCurrentResourceLabels,
   recommendResourceLabels,
+  selectRoutingLabel,
 } from "./job-label-recommendations.ts";
 import { JobLabelRecommendation, JobLabelRecommendationQuery } from "@mars/contracts";
 
@@ -51,34 +51,41 @@ describe("resource label recommendation policy", () => {
     expect(recommendResourceLabels({ cpuP95: 10, memoryP95Bytes: null, successfulRuns: 8, coveredRuns: 8 }).status).toBe("unavailable");
   });
 
-  test("never replaces the Windows routing label", () => {
-    expect(buildOptimizedLabels(["mars-windows-x64", "8VCPU", "16G"], 4, 8)).toEqual(["mars-windows-x64", "4VCPU", "8G"]);
+  test("replaces only the selected composite alternative", () => {
+    expect(buildOptimizedLabels([
+      "mars-windows-x64-8vcpu-16g",
+      "mars-macos-arm64-2vcpu-4g",
+      "mars-linux-x64-4vcpu-8g",
+    ], 4, 8, "mars-windows-x64-8vcpu-16g")).toEqual([
+      "mars-windows-x64-4vcpu-8g",
+      "mars-macos-arm64-2vcpu-4g",
+      "mars-linux-x64-4vcpu-8g",
+    ]);
   });
-  test("selects the composite Windows routing label over generic platform labels", () => {
-    expect(parseCurrentResourceLabels(["self-hosted", "windows", "x64", "mars-windows-x64", "8VCPU", "16G"])).toEqual({
-      windowsLabel: "mars-windows-x64",
-      vcpu: 8,
-      memoryGiB: 16,
-    });
+  test("selects exact platform before neutral alternatives", () => {
+    expect(selectRoutingLabel([
+      "mars-any-4vcpu-10g",
+      "mars-any-x64-4vcpu-12g",
+      "mars-windows-x64-8vcpu-16g",
+    ], "windows-x64")?.original).toBe("mars-windows-x64-8vcpu-16g");
   });
 });
 
 describe("getJobLabelRecommendation", () => {
   test("normalizes SQL numerics and scopes successful selected snapshots", async () => {
     const db = fakeDatabase([{
-      currentLabels: '["mars-windows-x64","8VCPU","16G"]',
+      currentLabels: '["mars-windows-x64-8vcpu-16g","mars-macos-arm64-2vcpu-4g"]',
+      currentPlatform: "windows-x64",
       successfulRunCount: "8",
       coveredRunCount: "8",
-      telemetryCoveragePercent: "100.00",
       p95CpuPeakPercent: "201.00",
       p95MemoryPeakBytes: "5368709120.6",
     }]);
-
     const result = await getJobLabelRecommendation(db, "org-1", query, "user-1");
-
     expect(result).toMatchObject({
       status: "available",
-      currentWindowsLabel: "mars-windows-x64",
+      currentRoutingLabel: "mars-windows-x64-8vcpu-16g",
+      currentPlatform: "windows-x64",
       recommendedVcpu: 3,
       recommendedMemoryGiB: 7,
       p95CpuPeakPercent: 201,
@@ -89,7 +96,7 @@ describe("getJobLabelRecommendation", () => {
     });
     expect(db.calls).toHaveLength(1);
     expect(db.calls[0]?.sql).toContain("successful AS");
-    expect(db.calls[0]?.sql).toContain("LEFT JOIN scoped latest");
+    expect(db.calls[0]?.sql).toContain("LEFT JOIN latest");
     expect(db.calls[0]?.sql).toContain("round(");
     expect(db.calls[0]?.sql).toContain("FROM dashboard_job_timing_snapshots");
     expect(db.calls[0]?.sql).toContain("outcome='success'");
@@ -100,10 +107,10 @@ describe("getJobLabelRecommendation", () => {
 
   test("returns an unavailable response without treating missing telemetry as zero", async () => {
     const db = fakeDatabase([{
-      currentLabels: ["mars-windows-x64", "4VCPU", "8G"],
+      currentLabels: ["mars-windows-x64-4vcpu-8g"],
+      currentPlatform: "windows-x64",
       successfulRunCount: "8",
       coveredRunCount: "6",
-      telemetryCoveragePercent: "75",
       p95CpuPeakPercent: null,
       p95MemoryPeakBytes: null,
     }]);
@@ -116,10 +123,13 @@ describe("getJobLabelRecommendation", () => {
   });
 });
 
+
 test("recommendation contracts are strict and represent multi-core CPU percentiles", () => {
-  const value = {
+  const value: JobLabelRecommendation = {
     status: "available",
-    currentWindowsLabel: "mars-windows-x64",
+    currentLabels: ["mars-windows-x64-8vcpu-16g"],
+    currentRoutingLabel: "mars-windows-x64-8vcpu-16g",
+    currentPlatform: "windows-x64",
     recommendedVcpu: 3,
     recommendedMemoryGiB: 7,
     p95CpuPeakPercent: 201,
@@ -127,7 +137,7 @@ test("recommendation contracts are strict and represent multi-core CPU percentil
     successfulRunCount: 8,
     telemetryCoveragePercent: 100,
     reason: null,
-  } as const;
+  };
   expect(JobLabelRecommendation.parse(value)).toEqual(value);
   expect(() => JobLabelRecommendationQuery.parse({ ...query, extra: true })).toThrow();
   expect(() => JobLabelRecommendation.parse({ ...value, extra: true })).toThrow();

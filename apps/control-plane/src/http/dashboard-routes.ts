@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { listOrganizations, listAllOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates, listJobResourceTrends, JobResourceTrendInputError, listJobResourceSamples, listWorkerCacheEntries, decodeWorkerCacheCursor, getWorkerHealth, getJobLabelRecommendation, parseCurrentResourceLabels } from "@mars/db";
+import { listOrganizations, listAllOrganizations, getOverview, getAllOverview, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates, listJobResourceTrends, JobResourceTrendInputError, listJobResourceSamples, listWorkerCacheEntries, decodeWorkerCacheCursor, getWorkerHealth, getJobLabelRecommendation, selectRoutingLabel } from "@mars/db";
 import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker, purgeWorkerRunnerCache } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
@@ -155,31 +155,32 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
         jobName: parsed.data.jobName,
       });
       const currentLabels = typeof target.currentRunsOn === "string" ? [target.currentRunsOn] : [...target.currentRunsOn];
-      const currentResources = parseCurrentResourceLabels(currentLabels);
-      const currentWindowsLabel = currentResources.windowsLabel;
-      if (!currentWindowsLabel) {
+      const currentRouting = selectRoutingLabel(currentLabels, recommendation.currentPlatform);
+      if (!currentRouting) {
         return c.json(JobLabelRecommendation.parse({
           ...recommendation,
           status: "unavailable",
           currentLabels,
-          currentWindowsLabel: null,
+          currentRoutingLabel: null,
+          currentPlatform: recommendation.currentPlatform,
           workflowPath: target.path,
           workflowJobId: target.jobId,
           recommendedVcpu: null,
           recommendedMemoryGiB: null,
-          reason: "workflow_job_not_windows",
+          reason: "workflow_job_no_matching_route",
         }));
       }
       const recommendedVcpu = recommendation.p95CpuPeakPercent === null
-        ? currentResources.vcpu
+        ? currentRouting.vcpu
         : recommendation.recommendedVcpu;
       const recommendedMemoryGiB = recommendation.p95MemoryPeakBytes === null
-        ? currentResources.memoryGiB
+        ? currentRouting.memoryGiB
         : recommendation.recommendedMemoryGiB;
       return c.json(JobLabelRecommendation.parse({
         ...recommendation,
         currentLabels,
-        currentWindowsLabel,
+        currentRoutingLabel: currentRouting.original,
+        currentPlatform: recommendation.currentPlatform,
         workflowPath: target.path,
         workflowJobId: target.jobId,
         recommendedVcpu,
@@ -187,19 +188,21 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
       }));
     } catch (cause) {
       const code = cause instanceof Error ? cause.message : "";
-      if (code === "github_workflow_job_not_found" || code === "github_workflow_job_ambiguous" || code === "workflow_job_not_windows") {
+      if (code === "github_workflow_job_not_found" || code === "github_workflow_job_ambiguous" || code === "workflow_job_no_matching_route") {
         return c.json(JobLabelRecommendation.parse({
           ...recommendation,
           status: "unavailable",
           currentLabels: [],
-          currentWindowsLabel: null,
+          currentRoutingLabel: null,
+          currentPlatform: recommendation.currentPlatform,
           workflowPath: null,
           workflowJobId: null,
           recommendedVcpu: null,
           recommendedMemoryGiB: null,
-          reason: code === "workflow_job_not_windows" ? "workflow_job_not_windows" : "workflow_job_not_resolved",
+          reason: code === "workflow_job_no_matching_route" ? code : "workflow_job_not_resolved",
         }));
       }
+      if (code === "github_rate_limited") return error(c, 500, "internal_error", "Internal server error");
       if (code === "github_repository_unavailable") return error(c, 404, "repository_unavailable", "Repository is unavailable");
       if (code === "github_403") return githubWorkflowPermissionError(c);
       if (code === "github_app_unconfigured") return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
