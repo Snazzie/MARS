@@ -26,8 +26,8 @@ permissions:
   packages: read
 
 concurrency:
-  group: release-mars
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   APP_IMAGE: ghcr.io/snazzie/mars/control-plane

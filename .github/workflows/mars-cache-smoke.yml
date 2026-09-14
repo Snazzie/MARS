@@ -2,6 +2,10 @@ name: Mars worker cache smoke
 
 on:
   workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 
 jobs:
   cache-smoke:
