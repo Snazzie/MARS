@@ -152,6 +152,7 @@ export function createTartVmRuntime(tartExecutable = resolveTartExecutable(Bun.e
 export class TartVmDriver implements RuntimeDriver {
   readonly name = "tart-vm" as const;
   private readonly leases = new Map<string, { vmName: string; runtime: RuntimeLease }>();
+  private provisioning = Promise.resolve();
 
   constructor(
     private readonly tart: TartVmRuntime,
@@ -167,19 +168,27 @@ export class TartVmDriver implements RuntimeDriver {
   async createLease(lease: Lease): Promise<RuntimeLease> {
     if (!isWorkerContractCompatible(lease.contractVersion, this.workerContractVersion)) throw new Error(`worker contract ${this.workerContractVersion || "unknown"} is not supported by control plane contract ${lease.contractVersion}`);
     this.validatePool(lease.resources);
-    const vmName = `${this.namePrefix}-${lease.id.slice(0, 8)}`;
-    await this.tart.clone(this.baseImage, vmName);
+    const previousProvisioning = this.provisioning;
+    let releaseProvisioning!: () => void;
+    this.provisioning = new Promise<void>(resolve => { releaseProvisioning = resolve; });
+    await previousProvisioning;
     try {
-      await this.tart.setResources(vmName, lease.resources);
-      await this.tart.startWithBootstrap(vmName, lease.encodedJitConfig, lease.workerCache);
-      const execution = this.tart.startRunner(vmName);
-      const runtime: RuntimeLease = { runtimeInstanceId: vmName, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: execution.completion, logs: execution.logs, sample: this.tart.sample ? () => this.tart.sample!(vmName) : undefined };
-      this.leases.set(lease.id, { vmName, runtime });
-      return runtime;
-    } catch (error) {
-      await this.tart.stop(vmName).catch(() => undefined);
-      await this.tart.remove(vmName).catch(() => undefined);
-      throw error;
+      const vmName = `${this.namePrefix}-${lease.id.slice(0, 8)}`;
+      await this.tart.clone(this.baseImage, vmName);
+      try {
+        await this.tart.setResources(vmName, lease.resources);
+        await this.tart.startWithBootstrap(vmName, lease.encodedJitConfig, lease.workerCache);
+        const execution = this.tart.startRunner(vmName);
+        const runtime: RuntimeLease = { runtimeInstanceId: vmName, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: execution.completion, logs: execution.logs, sample: this.tart.sample ? () => this.tart.sample!(vmName) : undefined };
+        this.leases.set(lease.id, { vmName, runtime });
+        return runtime;
+      } catch (error) {
+        await this.tart.stop(vmName).catch(() => undefined);
+        await this.tart.remove(vmName).catch(() => undefined);
+        throw error;
+      }
+    } finally {
+      releaseProvisioning();
     }
   }
   async inspectLease(leaseId: string): Promise<RuntimeLease> { const lease = this.leases.get(leaseId); if (!lease) throw new Error("sandbox not found"); return lease.runtime; }

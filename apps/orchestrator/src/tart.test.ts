@@ -69,6 +69,40 @@ test("passes the worker cache descriptor into Tart full bootstrap", async () => 
   await driver.createLease({ id: "11111111-1111-4111-8111-111111111111", jobId: "22222222-2222-4222-8222-222222222222", contractVersion: "0.1.0", imageDigest: "different-digest", resources: resources(20 * 1024 ** 3), nonce: "n".repeat(32), encodedJitConfig: "jit", workerCache });
   expect(received).toEqual(workerCache);
 });
+
+test("serializes Tart provisioning while keeping completed VMs concurrent", async () => {
+  const calls: string[] = [];
+  const firstBootstrap = Promise.withResolvers<void>();
+  const firstBootstrapStarted = Promise.withResolvers<void>();
+  const tart = {
+    clone: async (_base: string, vm: string) => { calls.push(`clone:${vm}`); },
+    setResources: async () => {},
+    startWithBootstrap: async (vm: string) => {
+      calls.push(`bootstrap:${vm}`);
+      if (vm === "mars-job-11111111") {
+        firstBootstrapStarted.resolve();
+        await firstBootstrap.promise;
+      }
+    },
+    startRunner: () => ({ completion: new Promise<number>(() => {}), logs: (async function* () {})() }),
+    stop: async () => {},
+    remove: async () => {},
+  };
+  const driver = new TartVmDriver(tart, "base", "mars-job", undefined, "0.1.0");
+  const lease = (id: string) => ({ id, jobId: crypto.randomUUID(), contractVersion: "0.1.0", imageDigest: "base", resources: resources(20 * 1024 ** 3), nonce: "n".repeat(32), encodedJitConfig: "jit" });
+  const first = driver.createLease(lease("11111111-1111-4111-8111-111111111111"));
+  const second = driver.createLease(lease("22222222-2222-4222-8222-222222222222"));
+  await firstBootstrapStarted.promise;
+  expect(calls).toEqual(["clone:mars-job-11111111", "bootstrap:mars-job-11111111"]);
+  firstBootstrap.resolve();
+  await Promise.all([first, second]);
+  expect(calls).toEqual([
+    "clone:mars-job-11111111",
+    "bootstrap:mars-job-11111111",
+    "clone:mars-job-22222222",
+    "bootstrap:mars-job-22222222",
+  ]);
+});
 test("rejects an incompatible worker contract version", async () => {
   const tart = {
     clone: async () => {},

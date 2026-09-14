@@ -264,42 +264,6 @@ test("reports cleanup failure after runner completion without claiming reap", as
   expect(sent[2]!.payload.reason).toBe("cleanup_failed");
 });
 
-test("passes authenticated worker cache transport into macOS runtime and unregisters it", async () => {
-  const workerCache = { proxyUrl: "http://lease-user:lease-secret@127.0.0.1:3128", cacheBaseUrl: "https://127.0.0.1:8443", caCertificatePem: "worker-ca", expiresAt: new Date(Date.now() + 60_000).toISOString(), registrationUrl: "https://127.0.0.1:8443/_mars/register", registrationChallenge: "c".repeat(32) };
-  let received: unknown;
-  let unregistered: string | undefined;
-  const driver = {
-    async createLease(lease: { workerCache?: unknown }) {
-      received = lease.workerCache;
-      return { runtimeInstanceId: "vm-1", observed: { vcpu: 1, memoryBytes: 2, storageBytes: 3 }, state: "sandbox_attested" as const, completion: Promise.resolve(0) };
-    },
-    async stopLease() {},
-    async removeLease() {},
-  };
-  const bootstrap = { leaseId: "22222222-2222-4222-8222-222222222222", jobId: "44444444-4444-4444-8444-444444444444", nonce: "n".repeat(32), guestPlatform: "macos-arm64" as const, contractVersion: "0.1.0", imageDigest: "sha256:test", resources: { vcpu: 1, memoryBytes: 2, storageBytes: 3, concurrency: 1 }, encodedJitConfig: "secret", expiresAt: workerCache.expiresAt };
-  await runMacLeaseLifecycle({ version: 1, id: "33333333-3333-4333-8333-333333333333", type: "tart.create_lease", workerId: "11111111-1111-4111-8111-111111111111", leaseId: bootstrap.leaseId, occurredAt: new Date().toISOString(), payload: {} }, driver as never, bootstrap, () => {}, false, {
-    transport: () => workerCache,
-    unregisterLease: (leaseId) => { unregistered = leaseId; },
-  });
-  expect(received).toEqual(workerCache);
-  expect(new URL(workerCache.proxyUrl).username).not.toBe("");
-  expect(new URL(workerCache.proxyUrl).password).not.toBe("");
-  expect(unregistered).toBe(bootstrap.leaseId);
-});
-
-test("fails macOS lease provisioning closed when worker cache transport setup fails", async () => {
-  let created = false;
-  const sent: Array<{ type: string; payload: Record<string, unknown> }> = [];
-  const driver = {
-    async createLease() { created = true; throw new Error("must not run"); },
-    async stopLease() {},
-    async removeLease() {},
-  };
-  const bootstrap = { leaseId: "22222222-2222-4222-8222-222222222222", jobId: "44444444-4444-4444-8444-444444444444", nonce: "n".repeat(32), guestPlatform: "macos-arm64" as const, contractVersion: "0.1.0", imageDigest: "sha256:test", resources: { vcpu: 1, memoryBytes: 2, storageBytes: 3, concurrency: 1 }, encodedJitConfig: "secret", expiresAt: new Date(Date.now() + 60_000).toISOString() };
-  await runMacLeaseLifecycle({ version: 1, id: "33333333-3333-4333-8333-333333333333", type: "tart.create_lease", workerId: "11111111-1111-4111-8111-111111111111", leaseId: bootstrap.leaseId, occurredAt: new Date().toISOString(), payload: {} }, driver as never, bootstrap, event => sent.push(event as never), false, { transport: () => { throw new Error("cache unavailable"); }, unregisterLease() {} });
-  expect(created).toBe(false);
-  expect(sent).toEqual([expect.objectContaining({ type: "lease.failed", payload: expect.objectContaining({ reason: "provisioning_failed" }) })]);
-});
 
 test("deduplicates repeated delivery of an active lease", async () => {
   let creates = 0;

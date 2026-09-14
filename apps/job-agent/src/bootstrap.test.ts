@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cliArgument, consumeGuestJitConfig, consumeGuestJitConfigWithWorkerCache, mergeBunInstallCa, runGuestService, runOneTimeJitBootstrap, runnerCommandForPlatform, waitForGuestBootstrap } from "./bootstrap.ts";
@@ -14,6 +14,11 @@ const workerCache = {
   registrationChallenge: "c".repeat(32),
 };
 const writeWorkerCacheCapability = (root: string) => writeFile(join(root, ".mars-capabilities.json"), JSON.stringify({ schemaVersion: 1, capabilities: ["mars-worker-cache-registration-v1"] }));
+async function writeLinuxRunner(root: string, content: string): Promise<void> {
+  const bin = join(root, "bin");
+  await mkdir(bin, { recursive: true });
+  await writeFile(join(bin, "Runner.Listener"), content, { mode: 0o700 });
+}
 
 
 afterEach(async () => {
@@ -34,15 +39,14 @@ test("rejects an unpatched runner before installing guest trust", async () => {
 });
 
 
-test("starts run.sh from the supplied Actions Runner root", async () => {
+test("starts Runner.Listener from the supplied Actions Runner root", async () => {
   if (process.platform === "win32") return;
   const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
   roots.push(root);
   const configPath = join(root, "jit-config");
   const outputPath = join(root, "received-config");
   await writeFile(configPath, "encoded-jit-config\n", { mode: 0o600 });
-  await writeFile(join(root, "run.sh"), `#!/bin/sh\nprintf '%s' "$ACTIONS_RUNNER_INPUT_JITCONFIG" > '${outputPath}'\nprintf 'runner-output\\n'\n`, { mode: 0o700 });
-  await chmod(join(root, "run.sh"), 0o700);
+  await writeLinuxRunner(root, `#!/bin/sh\nprintf '%s' "$ACTIONS_RUNNER_INPUT_JITCONFIG" > '${outputPath}'\nprintf 'runner-output\\n'\n`);
 
   await runOneTimeJitBootstrap(configPath, root);
 
@@ -56,15 +60,14 @@ test("official runner receives worker cache proxy variables and a temporary CA",
   roots.push(root);
   await writeWorkerCacheCapability(root);
   const outputPath = join(root, "cache-env");
-  await writeFile(join(root, "run.sh"), `#!/bin/sh
+  await writeLinuxRunner(root, `#!/bin/sh
 printf '%s\n%s\n%s\n%s\n' "$HTTP_PROXY" "$http_proxy" "$HTTPS_PROXY" "$https_proxy" > '${outputPath}'
 printf '%s\n' "$NO_PROXY" "$no_proxy" >> '${outputPath}'
 printf '%s\n' "$NODE_EXTRA_CA_CERTS" "$node_extra_ca_certs" >> '${outputPath}'
 printf '%s\n' "$GIT_SSL_BACKEND" "$GIT_SSL_CAINFO" >> '${outputPath}'
 test -s "$NODE_EXTRA_CA_CERTS"
 cat "$NODE_EXTRA_CA_CERTS" >> '${outputPath}'
-`, { mode: 0o700 });
-  await chmod(join(root, "run.sh"), 0o700);
+`);
 
   await consumeGuestJitConfigWithWorkerCache("encoded-jit-config", root, "linux-x64", workerCache);
 
@@ -169,9 +172,9 @@ test("waits for the host to copy the guest bootstrap after startup", async () =>
   expect(JSON.parse(raw)).toMatchObject({ leaseId: "lease", encodedJitConfig: "jit" });
 });
 
-test("launches the runner with self-updates disabled", () => {
-  expect(runnerCommandForPlatform("windows-x64")).toEqual(["cmd.exe", "/c", "run.cmd", "--disableupdate"]);
-  expect(runnerCommandForPlatform("linux-x64")).toEqual(["./run.sh", "--disableupdate"]);
+test("launches the macOS and Linux runner listener directly", () => {
+  expect(runnerCommandForPlatform("windows-x64")).toEqual(["cmd.exe", "/c", "run.cmd"]);
+  expect(runnerCommandForPlatform("linux-x64")).toEqual(["./bin/Runner.Listener", "run"]);
 });
 test("container completion exits instead of shutting down a guest", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
@@ -183,18 +186,18 @@ test("container completion exits instead of shutting down a guest", async () => 
     await writeFile(join(root, "run.cmd"), "@echo off\r\nexit /b 0\r\n");
     await runGuestService("windows-x64", bootstrapPath, root, "exit", async () => { shutdowns++; });
   } else {
-    await writeFile(join(root, "run.sh"), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    await writeLinuxRunner(root, "#!/bin/sh\nexit 0\n");
     await runGuestService("linux-x64", bootstrapPath, root, "exit", async () => { shutdowns++; });
   }
   expect(shutdowns).toBe(0);
 });
-test("returns the runner process failure code to the container entrypoint", async () => {
+test("disables updates through runner environment and propagates failures", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
   roots.push(root);
   if (process.platform === "win32") {
-    await writeFile(join(root, "run.cmd"), "@echo off\r\nexit /b 17\r\n");
+    await writeFile(join(root, "run.cmd"), "@echo off\r\nif not \"%1\"==\"\" exit /b 21\r\nif not \"%ACTIONS_RUNNER_INPUT_DISABLEUPDATE%\"==\"1\" exit /b 22\r\nif not \"%RUNNER_MANUALLY_TRAP_SIG%\"==\"1\" exit /b 23\r\nexit /b 17\r\n");
   } else {
-    await writeFile(join(root, "run.sh"), "#!/bin/sh\nexit 17\n", { mode: 0o700 });
+    await writeLinuxRunner(root, "#!/bin/sh\n[ \"$#\" -eq 1 ] && [ \"$1\" = \"run\" ] || exit 21\n[ \"$ACTIONS_RUNNER_INPUT_DISABLEUPDATE\" = \"1\" ] || exit 22\n[ \"$RUNNER_MANUALLY_TRAP_SIG\" = \"1\" ] || exit 23\nexit 17\n");
   }
   expect(await consumeGuestJitConfig("synthetic-jit-config", root, process.platform === "win32" ? "windows-x64" : "linux-x64")).toBe(17);
 });

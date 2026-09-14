@@ -117,6 +117,18 @@ export async function runLeaseLifecycle(
     return;
   }
   emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "sandbox_attested", occurredAt: new Date().toISOString(), payload: { ...payload, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed } });
+  let logSequence = 0;
+  const logs = runtime.logs;
+  const runnerLogs = logs ? (async () => {
+    for await (const content of logs) {
+      for (let offset = 0; offset < content.length; offset += 256 * 1024) {
+        const occurredAt = new Date().toISOString();
+        emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "job.log", occurredAt, payload: { jobId: bootstrap.jobId, stepId: null, sequence: logSequence++, content: content.slice(offset, offset + 256 * 1024), occurredAt } });
+      }
+    }
+  })().catch(error => {
+    console.error("Runner log collection failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) });
+  }) : Promise.resolve();
   const sampleRuntime = runtime.sample;
   let sampling = true;
   let pressure = initialMemoryPressureState();
@@ -163,12 +175,14 @@ export async function runLeaseLifecycle(
     ]);
     sampling = false;
     await sampler;
+    await runnerLogs;
     const termination = runtime.termination ?? fallbackTermination("child_exit", exitCode, Date.now() - startedAt, sampleCount, lastSampleOccurredAt, samplingGapMs);
     const reportedExitCode = oomResult && exitCode === 0 ? 137 : exitCode;
     emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "runner.finished", occurredAt: new Date().toISOString(), payload: { ...payload, exitCode: reportedExitCode, termination, ...(oomResult ? { oom: oomResult } : {}) } });
   } catch (error) {
     sampling = false;
     await sampler;
+    await runnerLogs;
     const termination = runtime.termination ?? fallbackTermination("child_disappeared", null, Date.now() - startedAt, sampleCount, lastSampleOccurredAt, samplingGapMs);
     console.error("Runner failed", { leaseId: bootstrap.leaseId, correlationId, cause: termination.cause, error: error instanceof Error ? error.message : String(error) });
     emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: oomResult ? "out_of_memory" : "runner_failed", termination, ...(oomResult ? { oom: oomResult } : {}) } });

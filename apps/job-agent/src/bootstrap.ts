@@ -66,7 +66,12 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
   let caDirectory: string | undefined;
   let addedRootThumbprint: string | undefined;
   try {
-    const env: Record<string, string> = { ...Bun.env, ACTIONS_RUNNER_INPUT_JITCONFIG: encodedJitConfig };
+    const env: Record<string, string> = {
+      ...Bun.env,
+      ACTIONS_RUNNER_INPUT_JITCONFIG: encodedJitConfig,
+      ACTIONS_RUNNER_INPUT_DISABLEUPDATE: "1",
+      RUNNER_MANUALLY_TRAP_SIG: "1",
+    };
     if (workerCache) {
       const proxy = WorkerCacheProxy.parse(workerCache);
       await assertWorkerCacheRunnerCapability(runnerRoot);
@@ -122,8 +127,8 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
     const configuredRunnerCommand = Bun.env.MARS_RUNNER_COMMAND;
     const command = configuredRunnerCommand
       ? platform === "windows-x64" && !configuredRunnerCommand.endsWith(".sh")
-        ? ["cmd.exe", "/c", configuredRunnerCommand, "--disableupdate"]
-        : [configuredRunnerCommand, "--disableupdate"]
+        ? ["cmd.exe", "/c", configuredRunnerCommand]
+        : [configuredRunnerCommand]
       : runnerCommandForPlatform(platform);
     const runner = Bun.spawn(command, { cwd: runnerRoot, env, stdout: onOutput ? "pipe" : "ignore", stderr: onOutput ? "pipe" : "ignore" });
     if (!onOutput) return await runner.exited;
@@ -157,7 +162,7 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
 export async function consumeGuestJitConfig(encoded: string, runnerRoot: string, platform: "windows-x64" | "linux-x64" = process.platform === "win32" ? "windows-x64" : "linux-x64"): Promise<number> {
   return runRunnerWithWorkerCache(encoded, runnerRoot, platform);
 }
-async function consumeJitConfigFile(configPath: string, runnerRoot: string): Promise<number> {
+async function consumeJitConfigFile(configPath: string, runnerRoot: string, onOutput?: (stream: "stdout" | "stderr", content: string) => void): Promise<number> {
   const bytes = await readFile(configPath);
   try {
     const raw = bytes.toString("utf8").trim();
@@ -171,7 +176,7 @@ async function consumeJitConfigFile(configPath: string, runnerRoot: string): Pro
         workerCache = parsed.workerCache as WorkerCacheProxy | undefined;
       }
     } catch {}
-    return await runRunnerWithWorkerCache(encoded, runnerRoot, process.platform === "win32" ? "windows-x64" : "linux-x64", workerCache);
+    return await runRunnerWithWorkerCache(encoded, runnerRoot, process.platform === "win32" ? "windows-x64" : "linux-x64", workerCache, onOutput);
   } finally {
     bytes.fill(0);
   }
@@ -179,7 +184,17 @@ async function consumeJitConfigFile(configPath: string, runnerRoot: string): Pro
 export async function consumeGuestJitConfigWithWorkerCache(encoded: string, runnerRoot: string, platform: "windows-x64" | "linux-x64", workerCache: WorkerCacheProxy, windowsTrust: WindowsTrustAdapter = powerShellWindowsTrust): Promise<number> {
   return runRunnerWithWorkerCache(encoded, runnerRoot, platform, workerCache, undefined, windowsTrust);
 }
-export async function runOneTimeJitBootstrap(configPath: string, runnerRoot: string): Promise<void> { try { if (await consumeJitConfigFile(configPath, runnerRoot) !== 0) throw new Error("runner exited unsuccessfully"); } finally { await unlink(configPath).catch(() => undefined); } }
+export async function runOneTimeJitBootstrap(configPath: string, runnerRoot: string): Promise<void> {
+  try {
+    const exitCode = await consumeJitConfigFile(configPath, runnerRoot, (stream, content) => {
+      if (stream === "stdout") process.stdout.write(content);
+      else process.stderr.write(content);
+    });
+    if (exitCode !== 0) throw new Error(`runner exited unsuccessfully: ${exitCode}`);
+  } finally {
+    await unlink(configPath).catch(() => undefined);
+  }
+}
 export async function waitForGuestBootstrap(
   bootstrapPath: string,
   timeoutMs = 300_000,
@@ -225,5 +240,5 @@ async function defaultGuestShutdown(platform: "windows-x64" | "linux-x64"): Prom
   Bun.spawn(command, { stdout: "ignore", stderr: "ignore" });
 }
 export function runnerCommandForPlatform(platform: "windows-x64" | "linux-x64"): string[] {
-  return platform === "windows-x64" ? ["cmd.exe", "/c", "run.cmd", "--disableupdate"] : ["./run.sh", "--disableupdate"];
+  return platform === "windows-x64" ? ["cmd.exe", "/c", "run.cmd"] : ["./bin/Runner.Listener", "run"];
 }

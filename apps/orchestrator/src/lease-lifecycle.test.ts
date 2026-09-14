@@ -34,6 +34,25 @@ test("reports a nonzero runner exit before cleanup", async () => {
   ]);
 });
 
+test("forwards guest runner output before reporting completion", async () => {
+  const events: WorkerEvent[] = [];
+  const logs = (async function* () {
+    yield "runner bootstrap failed\n";
+    yield "second line\n";
+  })();
+  const driver = {
+    createLease: async () => ({ runtimeInstanceId: "runtime", observed: { vcpu: 1, memoryBytes: 2, storageBytes: 3 }, completion: Promise.resolve(1), logs, state: "sandbox_attested" as const }),
+    stopLease: async () => {},
+    removeLease: async () => {},
+  };
+  await runLeaseLifecycle(command, driver, bootstrap, event => events.push(event));
+  expect(events.map(event => event.type)).toEqual(["sandbox_attested", "job.log", "job.log", "runner.finished", "lease.reaped"]);
+  expect(events.filter(event => event.type === "job.log").map(event => event.payload)).toEqual([
+    expect.objectContaining({ jobId: bootstrap.jobId, stepId: null, sequence: 0, content: "runner bootstrap failed\n" }),
+    expect.objectContaining({ jobId: bootstrap.jobId, stepId: null, sequence: 1, content: "second line\n" }),
+  ]);
+});
+
 test("preserves a lease when worker setting is enabled", async () => {
   const stopped: string[] = [];
   const driver = {

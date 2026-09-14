@@ -3,7 +3,7 @@ import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promi
 import { dirname } from "node:path";
 import { statfsSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
-import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerContractVersion, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, WorkerDoctorData, WorkerEvent, type LeaseBootstrapEnvelope, type WorkerCacheProxy, type WorkerCapacityData } from "@mars/contracts";
+import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerContractVersion, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, WorkerDoctorData, WorkerEvent, type LeaseBootstrapEnvelope, type WorkerCapacityData } from "@mars/contracts";
 import { z } from "zod";
 import type { Lease, RuntimeLease } from "./runtime.ts";
 import { createTartVmRuntime, resolveTartExecutable, TartVmDriver } from "./tart.ts";
@@ -60,17 +60,16 @@ async function emitRuntimeLogs(workerId: string, jobId: string, logs: AsyncItera
   }
 }
 
-async function runMacLeaseLifecycleWithTransport(
+export async function runMacLeaseLifecycle(
   command: WorkerCommand,
   driver: TartVmDriver,
   bootstrap: LeaseBootstrapEnvelope,
   send: (event: WorkerEvent) => void,
   preserveLeases = false,
-  workerCache?: WorkerCacheProxy,
 ): Promise<void> {
   let runtime: RuntimeLease;
   try {
-    runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, contractVersion: bootstrap.contractVersion, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig, ...(workerCache ? { workerCache } : {}) });
+    runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, contractVersion: bootstrap.contractVersion, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
   } catch (error) {
     console.error("macOS lease provisioning failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
     send(workerEvent(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "provisioning_failed" }));
@@ -101,28 +100,6 @@ async function runMacLeaseLifecycleWithTransport(
     : { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce }));
 }
 
-export async function runMacLeaseLifecycle(
-  command: WorkerCommand,
-  driver: TartVmDriver,
-  bootstrap: LeaseBootstrapEnvelope,
-  send: (event: WorkerEvent) => void,
-  preserveLeases = false,
-  cacheService?: Pick<ActionCacheService, "transport" | "unregisterLease">,
-): Promise<void> {
-  let workerCache: WorkerCacheProxy | undefined;
-  try {
-    if (cacheService) workerCache = cacheService.transport(bootstrap.leaseId, bootstrap.expiresAt);
-  } catch (error) {
-    console.error("macOS lease cache transport setup failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
-    send(workerEvent(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "provisioning_failed" }));
-    return;
-  }
-  try {
-    await runMacLeaseLifecycleWithTransport(command, driver, bootstrap, send, preserveLeases, workerCache);
-  } finally {
-    cacheService?.unregisterLease(bootstrap.leaseId);
-  }
-}
 export function startMacLeaseLifecycle(
   command: WorkerCommand,
   driver: TartVmDriver,
@@ -130,11 +107,10 @@ export function startMacLeaseLifecycle(
   send: (event: WorkerEvent) => void,
   active: Map<string, Promise<void>>,
   preserveLeases: () => boolean = () => false,
-  cacheService?: Pick<ActionCacheService, "transport" | "unregisterLease">,
 ): Promise<void> {
   const existing = active.get(bootstrap.leaseId);
   if (existing) return existing;
-  const lifecycle = runMacLeaseLifecycle(command, driver, bootstrap, send, preserveLeases(), cacheService).finally(() => {
+  const lifecycle = runMacLeaseLifecycle(command, driver, bootstrap, send, preserveLeases()).finally(() => {
     if (active.get(bootstrap.leaseId) === lifecycle) active.delete(bootstrap.leaseId);
   });
   active.set(bootstrap.leaseId, lifecycle);
@@ -206,7 +182,7 @@ export async function executeMacWorkerCommand(command: WorkerCommand, dependenci
     const bootstrap = openLeaseBootstrap(payload.bootstrapCiphertext, encryptionPrivateKey);
     if (bootstrap.leaseId !== command.leaseId) throw new Error("lease bootstrap mismatch");
     send(workerEvent(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId }));
-    void startMacLeaseLifecycle(command, driver, bootstrap, send, activeLeases, preserveLeases, cache.runnerCacheEnabled ? cacheService : undefined);
+    void startMacLeaseLifecycle(command, driver, bootstrap, send, activeLeases, preserveLeases);
     return;
   }
   send(await handleMacWorkerCommand(command, driver, limits, encryptionPrivateKey, cache, cacheService));
