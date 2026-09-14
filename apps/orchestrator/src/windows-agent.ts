@@ -263,7 +263,7 @@ export async function executeWindowsWorkerCommand(command: WorkerCommand, contex
     const bootstrap: LeaseBootstrapEnvelope = openLeaseBootstrap(cipher, identity.encryptionPrivateKey);
     if (bootstrap.leaseId !== command.leaseId || (mode === "container" ? bootstrap.guestPlatform !== "windows-x64" : !["windows-x64", "linux-x64"].includes(bootstrap.guestPlatform))) throw new Error("Windows lease bootstrap mismatch");
     send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
-    await startWindowsLeaseLifecycle(command, driver, bootstrap, workerEvent => send(JSON.stringify(workerEvent)), activeLeases, () => identity.preserveLeases === true, cacheService);
+    await startWindowsLeaseLifecycle(command, driver, bootstrap, workerEvent => send(JSON.stringify(workerEvent)), activeLeases, () => identity.preserveLeases === true, cache.runnerCacheEnabled ? cacheService : undefined);
   }
 }
 export function dispatchWindowsWorkerFrame(

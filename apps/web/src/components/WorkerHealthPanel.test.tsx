@@ -39,8 +39,8 @@ test("renders usage, cache health, and workload telemetry with accessible sectio
   expect(markup).toContain("acme/repo");
   expect(markup).toContain("512 MiB");
   expect(markup).toContain("Actions entries");
-  expect(markup).toContain("Runner cache enabled");
-  expect(markup).toContain("Runner cache capacity");
+  expect(markup).toContain("Cache service enabled");
+  expect(markup).toContain("Cache capacity");
   expect(markup).toContain("Runner cache entries");
   expect(markup).toContain("Runner cache size");
   expect(markup).toContain("Lookup hits");

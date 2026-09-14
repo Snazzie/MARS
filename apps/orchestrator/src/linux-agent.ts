@@ -82,7 +82,7 @@ export async function handleLinuxWorkerCommandWithContext(command: WorkerCommand
   if (command.leaseId !== bootstrap.leaseId) throw new Error("lease_id_mismatch");
   const active = context.activeLeases ?? new Map<string, Promise<void>>();
   if (active.has(bootstrap.leaseId)) return;
-  const lifecycle = runLeaseLifecycle(command, context.driver, bootstrap, context.send, { cacheService: context.cacheService });
+  const lifecycle = runLeaseLifecycle(command, context.driver, bootstrap, context.send, { ...(resources.cache.runnerCacheEnabled ? { cacheService: context.cacheService } : {}) });
   active.set(bootstrap.leaseId, lifecycle);
   void lifecycle.finally(() => active.delete(bootstrap.leaseId));
 }

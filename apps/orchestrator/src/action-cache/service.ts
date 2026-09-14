@@ -573,7 +573,7 @@ class PersistentActionCacheService implements ActionCacheService {
     const stored = this.#lastStoredStatus;
     return WorkerCacheStatusSchema.parse({
       generation: this.#store.generation,
-      ready: this.#ready && !this.#closed,
+      ready: this.#ready && !this.#closed && this.#runnerCacheEnabled,
       ttlSeconds: this.#ttlSeconds,
       proxyOrigin: this.#proxyOrigin,
       cacheBaseUrl: this.#cacheBaseUrl,
@@ -613,6 +613,7 @@ class PersistentActionCacheService implements ActionCacheService {
     if (this.#closed) throw new Error("action cache service is closed");
     this.#store.saveRunnerCachePolicy({ enabled, maxGiB: this.#runnerCacheMaxGiB });
     this.#packageDownloadCache.setEnabled(enabled);
+    if (!enabled) this.#leaseCredentials.clear();
     this.#runnerCacheEnabled = enabled;
     this.#emitRunnerCacheStatus();
   }
@@ -631,6 +632,7 @@ class PersistentActionCacheService implements ActionCacheService {
     await this.#packageDownloadCache.purge();
   }
   transport(leaseId: string, expiresAt: string): WorkerCacheProxy {
+    if (!this.#runnerCacheEnabled) throw new Error("worker cache service is disabled");
     if (this.#closed || !this.#ready) throw new Error("action cache service is not ready");
     const expiry = Date.parse(expiresAt);
     if (!Number.isFinite(expiry) || new Date(expiry).toISOString() !== expiresAt || expiry <= this.#now().getTime()) throw new Error("cache transport expiry must be in the future");

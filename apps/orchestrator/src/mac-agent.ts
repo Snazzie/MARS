@@ -202,7 +202,7 @@ export async function executeMacWorkerCommand(command: WorkerCommand, dependenci
     const bootstrap = openLeaseBootstrap(payload.bootstrapCiphertext, encryptionPrivateKey);
     if (bootstrap.leaseId !== command.leaseId) throw new Error("lease bootstrap mismatch");
     send(workerEvent(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId }));
-    void startMacLeaseLifecycle(command, driver, bootstrap, send, activeLeases, preserveLeases, cacheService);
+    void startMacLeaseLifecycle(command, driver, bootstrap, send, activeLeases, preserveLeases, cache.runnerCacheEnabled ? cacheService : undefined);
     return;
   }
   send(await handleMacWorkerCommand(command, driver, limits, encryptionPrivateKey, cache, cacheService));
