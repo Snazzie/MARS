@@ -145,12 +145,7 @@ function Resolve-ContainerCacheOrigins {
     if ([string]::IsNullOrWhiteSpace($proxy) -or [string]::IsNullOrWhiteSpace($advertise)) { throw 'MARS_CACHE_PROXY_URL and MARS_CACHE_ADVERTISE_URL must be configured together.' }
     return @{ Proxy = $proxy.Trim(); Advertise = $advertise.Trim() }
   }
-  $raw = & docker.exe network inspect nat --format '{{json .IPAM.Config}}' 2>&1
-  if ($LASTEXITCODE -ne 0) { throw "Unable to inspect Docker NAT network: $($raw -join ' ')" }
-  $config = ($raw -join '') | ConvertFrom-Json
-  $gateways = @($config | ForEach-Object { $_.Gateway } | Where-Object { $_ -match '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' -and $_ -notmatch '^127\.' })
-  if ($gateways.Count -ne 1) { throw "Docker NAT must expose exactly one non-loopback IPv4 gateway; found $($gateways -join ', ')." }
-  return @{ Proxy = "http://$($gateways[0]):8788"; Advertise = "https://$($gateways[0]):8789" }
+  return @{ Proxy = 'http://host.docker.internal:8788'; Advertise = 'https://host.docker.internal:8789' }
 }
 function Ensure-ContainerFeatures {
   $restart = $false
@@ -179,6 +174,22 @@ function Verify-DownloadedFile([string]$Path, [string]$Expected, [string]$Name, 
   if ($responseHash -and $responseHash -ne $Expected) { throw "$Name response hash mismatch." }
 }
 function Download-Verified([string]$Url, [string]$Hash, [string]$Destination, [string]$Name) { $response = Download-WorkerArtifact $Url $Destination 900; Verify-DownloadedFile $Destination $Hash $Name $response }
+function Set-WorkerCacheFirewall([string]$Program) {
+  $ports = @(
+    Resolve-CachePort 'MARS_CACHE_PROXY_PORT' 8788
+    Resolve-CachePort 'MARS_CACHE_DATA_PORT' 8789
+  )
+  Get-NetFirewallRule -DisplayName 'Mars Worker Cache' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
+  New-NetFirewallRule -DisplayName 'Mars Worker Cache' -Direction Inbound -Action Allow -Protocol TCP -LocalPort $ports -Program $Program -Profile Any -RemoteAddress LocalSubnet | Out-Null
+}
+function Set-WorkerCacheServiceEnvironment {
+  $servicePath = 'HKLM:\SYSTEM\CurrentControlSet\Services\MarsWorker'
+  $values = @((Get-ItemPropertyValue -Path $servicePath -Name Environment -ErrorAction Stop))
+  $values = @($values | Where-Object { $_ -notmatch '^MARS_CACHE_(PROXY_URL|ADVERTISE_URL)=' })
+  $origins = Resolve-ContainerCacheOrigins
+  $values += "MARS_CACHE_PROXY_URL=$($origins.Proxy)","MARS_CACHE_ADVERTISE_URL=$($origins.Advertise)"
+  New-ItemProperty -Path $servicePath -Name Environment -PropertyType MultiString -Value $values -Force | Out-Null
+}
 function Set-WorkerServiceRecovery {
   $failure = & sc.exe failure MarsWorker 'reset= 86400' 'actions= restart/5000/restart/30000/restart/60000' 2>&1
   if ($LASTEXITCODE -ne 0) { throw "Failed to configure MarsWorker recovery: $($failure -join ' ')" }
@@ -207,6 +218,8 @@ function Invoke-WorkerUpgrade {
     Download-Verified $WindowsServiceHostUrl $WindowsServiceHostSha256 $stagedServiceHost 'Windows service host'
     if (-not (Test-Path -LiteralPath $stagedOrchestrator -PathType Leaf) -or -not (Test-Path -LiteralPath $stagedServiceHost -PathType Leaf)) { throw 'Windows worker upgrade downloads were incomplete.' }
     Set-WorkerServiceRecovery
+    Set-WorkerCacheFirewall $orchestratorPath
+    Set-WorkerCacheServiceEnvironment
     Write-Host 'Stopping MarsWorker for binary replacement'
     Stop-Service MarsWorker -Force -ErrorAction Stop
     $service = Get-Service MarsWorker -ErrorAction Stop
@@ -277,7 +290,7 @@ try {
   if ($existingService) { Stop-Service MarsWorker -Force -ErrorAction SilentlyContinue; $serviceDelete = & sc.exe delete MarsWorker 2>&1; if ($LASTEXITCODE -ne 0) { throw "Failed to remove existing MarsWorker service: $($serviceDelete -join ' ')" }; $deadline = (Get-Date).AddSeconds(15); while ((Get-Service MarsWorker -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }; if (Get-Service MarsWorker -ErrorAction SilentlyContinue) { throw 'Timed out removing existing MarsWorker service.' } }
   Write-Host '[6/7] Registering LocalSystem worker service'; New-Item -ItemType Directory -Force -Path $root,$bin | Out-Null
   Move-Item -LiteralPath $paths.orchestrator -Destination (Join-Path $bin 'mars-orchestrator.exe') -Force; Move-Item -LiteralPath $paths.serviceHost -Destination (Join-Path $bin 'mars-service-host.exe') -Force
-  Get-NetFirewallRule -DisplayName 'Mars Worker Cache' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop; New-NetFirewallRule -DisplayName 'Mars Worker Cache' -Direction Inbound -Action Allow -Protocol TCP -LocalPort $cacheFirewallPorts -Program $exe -Profile Domain,Private -RemoteAddress LocalSubnet | Out-Null
+  Set-WorkerCacheFirewall $exe
   $workerLogPath = Join-Path $root 'logs\worker.log'; $previousWorkerLogPath = Join-Path $root 'logs\worker.previous.log'; if (Test-Path -LiteralPath $workerLogPath) { New-Item -ItemType Directory -Force -Path (Split-Path $previousWorkerLogPath) | Out-Null; Move-Item -LiteralPath $workerLogPath -Destination $previousWorkerLogPath -Force }
   $service = New-Service -Name MarsWorker -BinaryPathName "`"$serviceHost`" `"$exe`" windows-worker" -StartupType Automatic -ErrorAction Stop; $serviceDependency = & sc.exe config MarsWorker depend= docker 2>&1; if ($LASTEXITCODE -ne 0) { throw "Failed to configure Docker dependency: $($serviceDependency -join ' ')" }
   $serviceEnvironment = @("MARS_CONTROL_PLANE_URL=$ControlPlaneUrl","MARS_JOIN_CODE_FILE=$JoinCodeFile","MARS_WINDOWS_RUNTIME=container","MARS_WINDOWS_CONTAINER_IMAGE=$WindowsContainerImage","MARS_WINDOWS_CONTAINER_PREFIX=$WindowsContainerPrefix","MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS=$WindowsContainerReadyTimeoutMs","MARS_WINDOWS_CONTAINER_JOB_TIMEOUT_MS=$WindowsContainerJobTimeoutMs","MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST=$windowsImageManifestPath")

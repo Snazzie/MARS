@@ -70,6 +70,13 @@ test("Windows installer is container-only and validates every immutable input be
   expect(windows).toContain("Register-ResumeTask");
   expect(windows).toContain("Remove-ResumeTask");
 });
+test("Windows installer allows container NAT traffic to the authenticated cache ports", () => {
+  expect(windows).toContain("New-NetFirewallRule -DisplayName 'Mars Worker Cache'");
+  expect(windows).toContain("-Profile Any -RemoteAddress LocalSubnet");
+  expect(windows).toContain("http://host.docker.internal:8788");
+  expect(windows).toContain("https://host.docker.internal:8789");
+  expect(windows).not.toContain("docker.exe network inspect nat");
+});
 test("Windows installer configures repeated SCM recovery for fresh and upgraded workers", () => {
   expect(windows).toContain("function Set-WorkerServiceRecovery");
   expect(windows).toContain("sc.exe failure MarsWorker 'reset= 86400' 'actions= restart/5000/restart/30000/restart/60000'");
@@ -96,6 +103,8 @@ test("Windows upgrade path downloads only worker binaries and restarts the exist
     "mars-orchestrator.exe",
     "mars-service-host.exe",
   ]) expect(upgrade).toContain(artifact);
+  expect(upgrade).toContain("Set-WorkerCacheFirewall $orchestratorPath");
+  expect(upgrade).toContain("Set-WorkerCacheServiceEnvironment");
   for (const forbidden of [
     "WindowsJobAgentUrl",
     "WindowsContainerRunnerUrl",
