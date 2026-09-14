@@ -98,10 +98,11 @@ TART_BIN="$TART_BIN" "$PREPARER_STAGE" --source "$TART_IMAGE" --target "$LOCAL_I
 [[ -s "$PREP_MANIFEST" ]] || { echo 'macOS image preparation did not produce provenance' >&2; exit 1; }
 PREPARED_DIGEST="$(sed -n 's/.*"preparedDigest":"\([^"]*\)".*/\1/p' "$PREP_MANIFEST")"; [[ "$PREPARED_DIGEST" == mars-macos-job@sha256:* ]] || { echo 'macOS prepared image provenance is incomplete' >&2; exit 1; }
 write_state tart-image complete; pass "Prepared local Tart image: $LOCAL_IMAGE"
+launchctl bootout "gui/$UID/com.mars.worker" >/dev/null 2>&1 || true
 check 'Installing verified worker binaries' artifacts
 ORCHESTRATOR="$APP_DIR/mars-orchestrator"; JOB_AGENT="$APP_DIR/mars-job-agent"; mv -f "$ORCHESTRATOR_STAGE" "$ORCHESTRATOR"; mv -f "$JOB_AGENT_STAGE" "$JOB_AGENT"; chmod 755 "$ORCHESTRATOR" "$JOB_AGENT"; write_state artifacts complete
 check 'Persisting the protected one-use enrollment code' enrollment
-JOIN_CODE_FILE="$APP_DIR/join-code"; IDENTITY_FILE="$APP_DIR/worker-identity.json"; [[ -f "$JOIN_CODE_FILE" ]] || { printf '%s\n' "$JOIN_CODE" > "$JOIN_CODE_FILE"; chmod 600 "$JOIN_CODE_FILE"; }; write_state enrollment complete
+JOIN_CODE_FILE="$APP_DIR/join-code"; IDENTITY_FILE="$APP_DIR/worker-identity.json"; rm -f "$IDENTITY_FILE"; JOIN_CODE_TMP="$JOIN_CODE_FILE.tmp.$$"; printf '%s\n' "$JOIN_CODE" > "$JOIN_CODE_TMP"; chmod 600 "$JOIN_CODE_TMP"; mv -f "$JOIN_CODE_TMP" "$JOIN_CODE_FILE"; write_state enrollment complete
 LAUNCHER="$APP_DIR/run-worker.sh"; PLIST="$HOME/Library/LaunchAgents/com.mars.worker.plist"; XML_LAUNCHER="${LAUNCHER//&/&amp;}"; XML_LAUNCHER="${XML_LAUNCHER//</&lt;}"; XML_LAUNCHER="${XML_LAUNCHER//>/&gt;}"; XML_LAUNCHER="${XML_LAUNCHER//\"/&quot;}"
 check 'Installing the user-scoped LaunchAgent atomically' service
 LAUNCHER_TMP="$LAUNCHER.tmp.$$"; PLIST_TMP="$PLIST.tmp.$$"
@@ -140,4 +141,4 @@ cat > "$PLIST_TMP" <<EOF
 EOF
 mv -f "$PLIST_TMP" "$PLIST"; write_state service complete
 check 'Starting the worker LaunchAgent' startup
-launchctl bootout "gui/$UID/com.mars.worker" >/dev/null 2>&1 || true; sleep 1; launchctl bootstrap "gui/$UID" "$PLIST" || { sleep 2; launchctl bootstrap "gui/$UID" "$PLIST"; }; launchctl kickstart -k "gui/$UID/com.mars.worker"; write_state complete complete; CLEANUP_DONE=1; pass 'Worker started; join-code remains until authenticated'
+sleep 1; launchctl bootstrap "gui/$UID" "$PLIST" || { sleep 2; launchctl bootstrap "gui/$UID" "$PLIST"; }; launchctl kickstart -k "gui/$UID/com.mars.worker"; write_state complete complete; CLEANUP_DONE=1; pass 'Worker started; join-code remains until authenticated'

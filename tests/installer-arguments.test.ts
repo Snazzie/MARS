@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { windowsInstallerValues } from "../apps/control-plane/src/http/worker-routes.ts";
 
 const linux = await Bun.file("deploy/workers/install-worker.sh").text();
@@ -192,6 +195,100 @@ test("macOS installer consumes verified routes and only configures LaunchAgent a
   expect(mac).not.toContain('\"$TART_BIN\" clone');
   expect(mac).toContain("MARS_TART_BASE_IMAGE");
   expect(mac).toContain("MARS_TART_IMAGE_DIGEST");
+});
+
+
+const macRuntimeTest = process.platform === "darwin" ? test : test.skip;
+macRuntimeTest("macOS fresh enrollment replaces stale state before LaunchAgent bootstrap", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-mac-installer-"));
+  const fakeBin = join(root, "bin");
+  const appDir = join(root, "Library/Application Support/Mars");
+  const launchAgents = join(root, "Library/LaunchAgents");
+  await mkdir(fakeBin, { recursive: true });
+  await mkdir(appDir, { recursive: true });
+  await writeFile(join(appDir, "join-code"), "OLD-CODE\n", { mode: 0o600 });
+  await writeFile(join(appDir, "worker-identity.json"), '{"workerId":""}\n', { mode: 0o600 });
+
+  const orchestrator = join(root, "orchestrator.payload");
+  const jobAgent = join(root, "job-agent.payload");
+  const preparer = join(root, "preparer.payload");
+  await writeFile(orchestrator, "orchestrator payload\n");
+  await writeFile(jobAgent, "job agent payload\n");
+  await writeFile(preparer, `#!/bin/zsh
+manifest=""
+while [[ $# -gt 0 ]]; do
+  [[ "$1" == --output-manifest ]] && manifest="$2"
+  shift
+done
+printf '%s\n' '{"preparedDigest":"mars-macos-job@sha256:${"b".repeat(64)}"}' > "$manifest"
+`);
+  for (const path of [orchestrator, jobAgent, preparer]) await chmod(path, 0o755);
+
+  const hashOf = async (path: string) => new Bun.CryptoHasher("sha256").update(await readFile(path)).digest("hex");
+  const hashes = await Promise.all([orchestrator, jobAgent, preparer].map(hashOf));
+  const launchctlLog = join(root, "launchctl.log");
+  const writeFake = async (name: string, body: string) => {
+    const path = join(fakeBin, name);
+    await writeFile(path, `#!/bin/zsh\n${body}\n`);
+    await chmod(path, 0o755);
+  };
+  await writeFake("uname", '[[ "$1" == "-s" ]] && print Darwin || print arm64');
+  await writeFake("sw_vers", 'print 14.0');
+  await writeFake("sudo", '[[ "$1" == "-n" ]] && shift; exec "$@"');
+  await writeFake("tart", '[[ "$1" == "--version" ]] && exit 0; exit 0');
+  await writeFake("launchctl", 'print -r -- "$*" >> "$MARS_LAUNCHCTL_LOG"; exit 0');
+  await writeFake("curl", `
+output=""
+url=""
+for ((i=1; i<=$#; i++)); do
+  [[ "\${@[$i]}" == "--output" ]] && output="\${@[$((i + 1))]}"
+  url="\${@[$i]}"
+done
+if [[ -n "$output" ]]; then
+  case "$url" in
+    */orchestrator) cp "$MARS_ORCHESTRATOR_PAYLOAD" "$output" ;;
+    */job-agent) cp "$MARS_JOB_AGENT_PAYLOAD" "$output" ;;
+    */preparer) cp "$MARS_PREPARER_PAYLOAD" "$output" ;;
+  esac
+fi
+`);
+
+  const code = "N".repeat(43);
+  const env = {
+    ...process.env,
+    HOME: root,
+    PATH: `${fakeBin}:/usr/bin:/bin:/usr/sbin:/sbin`,
+    MARS_LAUNCHCTL_LOG: launchctlLog,
+    MARS_ORCHESTRATOR_PAYLOAD: orchestrator,
+    MARS_JOB_AGENT_PAYLOAD: jobAgent,
+    MARS_PREPARER_PAYLOAD: preparer,
+    PUBLIC_BASE_URL: "http://mars.test",
+    MARS_ARTIFACT_MODE: "local",
+    MARS_WORKER_CONTRACT_VERSION: "1.0.0",
+    MARS_ORCHESTRATOR_URL: "http://mars.test/orchestrator",
+    MARS_ORCHESTRATOR_SHA256: hashes[0],
+    MARS_JOB_AGENT_URL: "http://mars.test/job-agent",
+    MARS_JOB_AGENT_SHA256: hashes[1],
+    IMAGE_PREPARATION_SCRIPT_URL: "http://mars.test/preparer",
+    IMAGE_PREPARATION_SCRIPT_SHA256: hashes[2],
+    TART_IMAGE: `ghcr.io/mars/base@sha256:${"c".repeat(64)}`,
+  };
+  try {
+    const child = Bun.spawn(["zsh", "deploy/workers/install-worker-macos.sh", "--code", code], {
+      cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+    ]);
+    expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+    expect(await readFile(join(appDir, "join-code"), "utf8")).toBe(`${code}\n`);
+    expect((await stat(join(appDir, "join-code"))).mode & 0o777).toBe(0o600);
+    expect(await Bun.file(join(appDir, "worker-identity.json")).exists()).toBe(false);
+    const events = (await readFile(launchctlLog, "utf8")).trim().split("\n");
+    expect(events.findIndex(event => event.includes("bootout"))).toBeLessThan(events.findIndex(event => event.includes("bootstrap")));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("macOS preparation is digest-pinned, content-addressed, reusable, and transactional", () => {
