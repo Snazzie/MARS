@@ -39,6 +39,12 @@ Copy the example environment file and set the required origins and database valu
 ```bash
 cp .env.example .env
 ```
+Create an untracked development override for the local super-admin credential:
+
+```bash
+printf 'MARS_DEV_TOKEN=<development secret>\n' > .env.development
+```
+
 
 Start the control-plane and web development processes:
 
@@ -54,8 +60,8 @@ docker compose up -d postgres
 
 Local development ports and service behavior are defined in `scripts/dev.ts` and `scripts/dev-ports.ts`.
 Development log APIs require a global administrator. Outside production, the
-existing `MARS_DEV_TOKEN` from the untracked `.env` may be supplied as
-`Authorization: Bearer <token>`; never commit the token.
+existing `MARS_DEV_TOKEN` from the untracked `.env.development` may be supplied
+as `Authorization: Bearer <token>`; never commit the token.
 
 - `GET /api/admin/logs?limit=200&level=error&contains=<text>` returns the
   current process's bounded, redacted control-plane log buffer. Use `after`

@@ -9,12 +9,16 @@ let envWatcher: FSWatcher | null = null;
 
 const loadDotEnv = async () => {
   const values: Record<string, string> = {};
-  const text = await Bun.file(".env").text();
-  for (const line of text.split(/\r?\n/)) {
-    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)\s*$/);
-    if (!match) continue;
-    const value = match[2].trim();
-    values[match[1]] = value.replace(/^(["'])(.*)\1$/, "$2");
+  for (const path of [".env", ".env.development"]) {
+    const file = Bun.file(path);
+    if (!await file.exists()) continue;
+    const text = await file.text();
+    for (const line of text.split(/\r?\n/)) {
+      const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)\s*$/);
+      if (!match) continue;
+      const value = match[2].trim();
+      values[match[1]] = value.replace(/^(["'])(.*)\1$/, "$2");
+    }
   }
   return values;
 };
@@ -47,7 +51,9 @@ const restart = () => {
   }, 100);
 };
 
-envWatcher = watch(".env", restart);
+envWatcher = watch(".", (_event, filename) => {
+  if (filename === ".env" || filename === ".env.development") restart();
+});
 
 envWatcher.on("error", (error) => {
   console.error(".env watcher failed", error);
