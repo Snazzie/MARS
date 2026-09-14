@@ -378,7 +378,7 @@ test("mounts the cache protocol router on the persistent HTTPS listener", async 
   expect(response.status).toBe(404);
   expect(JSON.parse(response.body)).toEqual({ code: "unimplemented", msg: "unsupported cache-service method", meta: {} });
 });
-test("forwards non-cache Results methods instead of handling them locally", async () => {
+test("forwards non-cache Results methods received at the registered cache endpoint", async () => {
   const service = await startActionCacheService({
     root: await root(),
     controlPlaneOrigin: "https://control.example.test",
@@ -386,14 +386,15 @@ test("forwards non-cache Results methods instead of handling them locally", asyn
     proxyPort: 0,
     dataPort: 0,
     discoverAdvertiseHost: async () => "127.0.0.1",
-    forwardResultsRequest: async (_request, response) => {
+    forwardResultsRequest: async (request, response) => {
+      expect(request.headers.host).toBe("results-receiver.actions.githubusercontent.com");
       response.writeHead(204);
       response.end();
     },
   });
   services.push(service);
   const transport = service.transport("11111111-1111-4111-8111-111111111111", leaseExpiry());
-  const response = await probeHttpsBody(service.status().cacheBaseUrl, "/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact", transport.caCertificatePem, { host: "results-receiver.actions.githubusercontent.com" });
+  const response = await probeHttpsBody(service.status().cacheBaseUrl, "/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact", transport.caCertificatePem);
   expect(response.status).toBe(204);
 });
 test("intercepts metadata-free cache requests through authenticated CONNECT", async () => {

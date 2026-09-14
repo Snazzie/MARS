@@ -270,10 +270,12 @@ function forwardResultsRequest(request: Parameters<NodeActionCacheHandler>[0], r
   return promise;
 }
 
+function isCachePath(path: string): boolean {
+  return CACHE_RPC_PATHS.has(path) || path.startsWith(CACHE_RPC_PREFIX) || path.startsWith(CACHE_DATA_PREFIX);
+}
 function shouldHandleCacheLocally(host: string | undefined, path: string): boolean {
   const hostname = host?.toLowerCase() ?? "";
-  if (!ACTION_CACHE_HOSTS.includes(hostname as (typeof ACTION_CACHE_HOSTS)[number])) return false;
-  return CACHE_RPC_PATHS.has(path) || path.startsWith(CACHE_RPC_PREFIX) || path.startsWith(CACHE_DATA_PREFIX);
+  return ACTION_CACHE_HOSTS.includes(hostname as (typeof ACTION_CACHE_HOSTS)[number]) && isCachePath(path);
 }
 
 type LeaseProxyCredential = {
@@ -680,6 +682,15 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
   const now = options.now ?? (() => new Date());
   const leaseCredentials = new LeaseProxyCredentials(now);
   const forwardResults = options.forwardResultsRequest ?? forwardResultsRequest;
+  const forwardRegisteredResults: NodeActionCacheHandler = async (request, response) => {
+    const originalHost = request.headers.host;
+    request.headers.host = ACTION_CACHE_HOSTS[0];
+    try {
+      await forwardResults(request, response);
+    } finally {
+      request.headers.host = originalHost;
+    }
+  };
   let store: ActionCacheStore | null = null;
   let packageDownloadCache: PackageDownloadCache | null = null;
   let proxyServer: HttpServer | null = null;
@@ -762,11 +773,13 @@ export async function startActionCacheService(options: StartActionCacheServiceOp
       const hostname = normalizedHostnameFromHeader(request.headers.host);
       const handler = PUBLIC_DOWNLOAD_HOSTS.includes(hostname as (typeof PUBLIC_DOWNLOAD_HOSTS)[number])
         ? packageDownloadCache!.handle.bind(packageDownloadCache)
-        : hostname === advertiseHost.toLowerCase() || shouldHandleCacheLocally(hostname, path)
-          ? handleCacheRequest
-          : ACTION_CACHE_HOSTS.includes(hostname as (typeof ACTION_CACHE_HOSTS)[number])
-            ? forwardResults
-            : null;
+        : hostname === advertiseHost.toLowerCase()
+          ? isCachePath(path) ? handleCacheRequest : forwardRegisteredResults
+          : shouldHandleCacheLocally(hostname, path)
+            ? handleCacheRequest
+            : ACTION_CACHE_HOSTS.includes(hostname as (typeof ACTION_CACHE_HOSTS)[number])
+              ? forwardResults
+              : null;
       if (!handler) {
         response.writeHead(421, { "content-type": "text/plain", "cache-control": "no-store" });
         response.end("Misdirected Request\n");
