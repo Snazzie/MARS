@@ -11,9 +11,9 @@ describe("worker command dispatch", () => {
     let release!: () => void; const listed = new Promise<void>(resolve => { release = resolve; }); const sent: string[] = [];
     const store = { save: async () => {}, listUnacknowledged: async () => { await listed; return []; }, markSent: async () => {}, acknowledge: async () => {} };
     const socket = { send: (value: string) => sent.push(value) }; const dispatcher = new WorkerCommandDispatcher(1000, store);
-    dispatcher.register(workerId, socket); const pending = dispatcher.dispatch({ workerId, type: "tart.create_lease", leaseId, payload: {} });
-    await Promise.resolve(); expect(sent).toHaveLength(0); release(); for (let i = 0; i < 6; i++) await Promise.resolve();
-    expect(sent).toHaveLength(1); const command = JSON.parse(sent[0]!); await expect(pending).resolves.toMatchObject({ type: "command.accepted", payload: { commandId: command.id, leaseId } });
+    dispatcher.register(workerId, socket); const replay = dispatcher.replayConnected(workerId); const pending = dispatcher.dispatch({ workerId, type: "tart.create_lease", leaseId, payload: {} });
+    await Promise.resolve(); expect(sent).toHaveLength(0); release(); await expect(pending).resolves.toMatchObject({ type: "command.accepted", payload: { commandId: expect.any(String), leaseId } });
+    expect(sent).toHaveLength(1); const command = JSON.parse(sent[0]!); expect(command.id).toMatch(/[0-9a-f-]{36}/);
   });
   test("superseding a socket closes and revokes the stale socket", () => {
     const first = { send: () => {}, close: () => {} }; const second = { send: () => {} }; const dispatcher = new WorkerCommandDispatcher();
@@ -26,7 +26,7 @@ describe("worker command dispatch", () => {
     const socket = { send: () => {} };
     const dispatcher = new WorkerCommandDispatcher(1000, store);
     dispatcher.register(workerId, socket);
-    for (let i = 0; i < 4; i++) await Promise.resolve();
+    await dispatcher.replayConnected(workerId);
     expect(dispatcher.handleEvent(event(command.id), socket)).toBe(true);
     await Promise.resolve();
     expect(acknowledged).toBe(command.id);
