@@ -26,7 +26,7 @@ export async function reapPendingLeases(input: {
       AND NOT EXISTS (
         SELECT 1 FROM commands c
         WHERE c.lease_id=l.id AND c.type IN ('linux-vm.stop_lease','tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease')
-          AND c.state IN ('pending','sent')
+          AND c.state IN ('pending','sent','acknowledged')
       )
     LIMIT 100`;
   const report: LeaseCleanupReport = { dispatched: 0, skipped: 0, failed: 0 };

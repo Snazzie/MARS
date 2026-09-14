@@ -16,7 +16,7 @@ function acceptingDb() {
   const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
     calls.push({ query: strings.join(" "), values });
     return [{ id: leaseId }];
-  }, {}) as never;
+  }, { begin: async (callback: (tx: unknown) => unknown) => callback(db) }) as never;
   return { db, calls };
 }
 
@@ -62,12 +62,15 @@ test("maps a nonzero runner exit to a failed terminal lease", async () => {
 });
 
 
-test("marks cleanup failure without erasing the terminal runner result", async () => {
+test("marks cleanup failure and releases its acknowledged stop for retry", async () => {
   const { db, calls } = acceptingDb();
-  expect(await applyWorkerLeaseEvent(db, event("lease.failed", { leaseId, nonce, reason: "cleanup_failed" }))).toBe(true);
+  const commandId = crypto.randomUUID();
+  expect(await applyWorkerLeaseEvent(db, event("lease.failed", { commandId, leaseId, nonce, reason: "cleanup_failed" }))).toBe(true);
   expect(calls[0]!.query).toContain("cleanup_state='failed'");
   expect(calls[0]!.query).not.toContain("terminal_result=");
   expect(calls[0]!.query).toContain("'completed','failed'");
+  expect(calls[1]!.query).toContain("UPDATE commands SET state='failed'");
+  expect(calls[1]!.values).toEqual([commandId, workerId, leaseId]);
 });
 
 test("marks debug-preserved leases without scheduling cleanup", async () => {

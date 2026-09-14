@@ -165,8 +165,12 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
   if (parsedPayload.data.type === "lease.failed") {
     const payload = parsedPayload.data.payload;
     if (payload.reason === "cleanup_failed") {
-      const rows = await db`UPDATE runner_leases SET cleanup_state='failed',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed') RETURNING id`;
-      return Boolean(rows[0]);
+      return db.begin(async tx => {
+        const rows = await tx`UPDATE runner_leases SET cleanup_state='failed',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed') RETURNING id`;
+        if (!rows[0]) return false;
+        if (typeof payload.commandId === "string") await tx`UPDATE commands SET state='failed' WHERE id=${payload.commandId} AND worker_id=${event.workerId} AND lease_id=${payload.leaseId} AND state='acknowledged'`;
+        return true;
+      });
     }
     if (payload.reason === "debug_preserve") {
       const rows = await db`UPDATE runner_leases SET state='failed',terminal_result=${jsonParameter(db, { reason: payload.reason })},cleanup_state='debug_preserved',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed','sandbox_ready','online','busy') RETURNING id`;

@@ -43,7 +43,7 @@ test("dispatches durable cleanup for terminal leases without an outstanding stop
   });
   expect(report).toEqual({ dispatched: 1, skipped: 0, failed: 0 });
   expect(queries[0]).toContain("NOT EXISTS");
-  expect(queries[0]).toContain("c.state IN ('pending','sent')");
+  expect(queries[0]).toContain("c.state IN ('pending','sent','acknowledged')");
   expect(queries[0]).not.toContain("interval '1 minute'");
   expect(commands).toEqual([{
     type: "tart.stop_lease",
