@@ -233,14 +233,16 @@ test("renders managed containers with their matching jobs and explicit unmatched
   expect(markup).toContain(`<time dateTime="${sampledRecently}">`);
   expect(markup).toContain(`<time dateTime="${sampledEarlier}">`);
 });
-test("renders VM leases as managed workloads instead of unassigned jobs", () => {
-  const markup = renderToStaticMarkup(<WorkerHealthPanel workerId="worker-vm" health={healthFixture({
-    runtimeMode: "vm",
-    containers: [],
-  })} />);
-  expect(markup).toContain("Managed workloads");
-  expect(markup).toContain("acme/repo");
-  expect(markup).not.toContain("Unassigned jobs");
+test("renders VM and Tart leases as managed workloads instead of unassigned jobs", () => {
+  for (const runtimeMode of ["vm", "tart"] as const) {
+    const markup = renderToStaticMarkup(<WorkerHealthPanel workerId={`worker-${runtimeMode}`} health={healthFixture({
+      runtimeMode,
+      containers: [],
+    })} />);
+    expect(markup).toContain("Managed VM workloads");
+    expect(markup).toContain("acme/repo");
+    expect(markup).not.toContain("Unassigned jobs");
+  }
 });
 
 test("renders an explicit empty managed-container inventory", () => {

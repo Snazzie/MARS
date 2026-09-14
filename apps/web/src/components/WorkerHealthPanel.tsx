@@ -215,7 +215,7 @@ function VmWorkloadsSection({ jobs }: { jobs: WorkerHealth["jobs"] }) {
 function ManagedContainersSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: string }) {
   const jobsByLeaseId = new Map(health.jobs.map((job) => [job.leaseId, job]));
   const unassignedJobs = health.jobs.filter((job) => !health.containers.some((container) => container.leaseId === job.leaseId));
-  const vmMode = health.runtimeMode === "vm";
+  const vmMode = health.runtimeMode === "vm" || health.runtimeMode === "tart";
   return <section className="worker-health-section" aria-labelledby={`${idPrefix}-containers-heading`}>
     <h3 id={`${idPrefix}-containers-heading`}>{vmMode ? "Managed workloads" : "Managed containers"}</h3>
     {vmMode ? health.jobs.length > 0 ? <VmWorkloadsSection jobs={health.jobs} /> : <p className="worker-health-empty">No active workloads</p> : health.containers.length === 0 ? <p className="worker-health-empty">No managed containers reported.</p> : <div className="worker-health-table-wrap">
