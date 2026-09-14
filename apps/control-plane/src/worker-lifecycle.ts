@@ -65,6 +65,7 @@ export async function handleAuthenticatedWorkerEvent(
       return false;
     }
   }
+  if (payload.data.type === "worker.logs") return dispatcher.handleEvent(event.data, socket);
   if (payload.data.type === "worker.build_completed" || payload.data.type === "worker.build_failed") {
     const ready = payload.data.payload.runtimeReady;
     await db`UPDATE workers SET doctor=COALESCE(doctor,'{}'::jsonb) || ${JSON.stringify({ runtimeReady: ready, runtimeBuildState: ready ? "ready" : "failed", runtimeBuildMessage: ready ? null : payload.data.payload.message, artifactSource: "worker_local", artifactIdentity: payload.data.payload.image, ...(payload.data.payload.imageId ? { artifactDigest: payload.data.payload.imageId } : {}), remediation: ready ? null : payload.data.payload.message })}::jsonb, doctor_observed_at=now(), last_heartbeat_at=now(), connection_state='online' WHERE id=${event.data.workerId}`;
@@ -143,7 +144,7 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
   if (!parsedEvent.success) return false;
   const event = parsedEvent.data;
   const parsedPayload = WorkerEventPayload.safeParse({ type: event.type, payload: event.payload });
-  if (!parsedPayload.success || parsedPayload.data.type === "command.accepted" || parsedPayload.data.type === "worker.build_completed" || parsedPayload.data.type === "worker.build_failed" || parsedPayload.data.type === "worker.cache_entry_upsert" || parsedPayload.data.type === "worker.cache_entry_deleted" || parsedPayload.data.type === "worker.cache_snapshot_begin" || parsedPayload.data.type === "worker.cache_snapshot_page" || parsedPayload.data.type === "worker.cache_snapshot_end" || parsedPayload.data.type === "worker.runner_cache_status" || parsedPayload.data.type === "diagnostic.chunk" || parsedPayload.data.type === "job.log" || parsedPayload.data.type === "job.resource_sample") return false;
+  if (!parsedPayload.success || parsedPayload.data.type === "command.accepted" || parsedPayload.data.type === "worker.build_completed" || parsedPayload.data.type === "worker.build_failed" || parsedPayload.data.type === "worker.cache_entry_upsert" || parsedPayload.data.type === "worker.cache_entry_deleted" || parsedPayload.data.type === "worker.cache_snapshot_begin" || parsedPayload.data.type === "worker.cache_snapshot_page" || parsedPayload.data.type === "worker.cache_snapshot_end" || parsedPayload.data.type === "worker.runner_cache_status" || parsedPayload.data.type === "diagnostic.chunk" || parsedPayload.data.type === "worker.logs" || parsedPayload.data.type === "job.log" || parsedPayload.data.type === "job.resource_sample") return false;
 
   if (parsedPayload.data.type === "sandbox_attested") {
     const payload = parsedPayload.data.payload;

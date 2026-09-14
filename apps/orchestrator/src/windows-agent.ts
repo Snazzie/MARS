@@ -2,6 +2,7 @@ import { generateKeyPairSync, sign as signMessage, randomUUID } from "node:crypt
 import { dirname, join } from "node:path";
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, WorkerDoctorData, WorkerDoctorReport, WorkerEvent, type WorkerCapacityData, type WorkerContainerStatus, type LeaseBootstrapEnvelope } from "@mars/contracts";
+import { collectWorkerServiceLogs } from "./worker-service-logs.ts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { createHyperVRuntime, HyperVDriver } from "./hyperv.ts";
 import { WindowsContainerDriver, isExpectedWindowsEntrypoint, parseWindowsContainerDnsServers } from "./windows-container.ts";
@@ -232,6 +233,9 @@ const normalizedError = (error: unknown): string => error instanceof Error ? err
 
 export async function executeWindowsWorkerCommand(command: WorkerCommand, context: WindowsWorkerCommandContext): Promise<void> {
   const { mode, limits, cache, cacheService, driver, identity, activeLeases, send, refreshDoctor } = context;
+  if (command.type === "worker.collect_logs") {
+    return send(JSON.stringify(await collectWorkerServiceLogs(command)));
+  }
   if (command.type === "worker.set_lease_preservation") {
     const enabled = (command.payload as Record<string, unknown>).enabled;
     if (typeof enabled !== "boolean") throw new Error("lease preservation command invalid");

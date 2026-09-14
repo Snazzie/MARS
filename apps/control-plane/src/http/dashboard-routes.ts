@@ -7,7 +7,8 @@ import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker, purgeWorkerRunnerCache } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 import { createWorkerImageBuildPayload } from "../windows-image-build.ts";
-import { ApiError, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth, JobLabelRecommendation, JobLabelRecommendationQuery, GithubConnectionSummary, GithubRateLimitStats } from "@mars/contracts";
+import { ApiError, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth, JobLabelRecommendation, JobLabelRecommendationQuery, GithubConnectionSummary, GithubRateLimitStats, WorkerEventPayload } from "@mars/contracts";
+import { WorkerDispatchError } from "../worker-dispatch.ts";
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
@@ -43,6 +44,15 @@ const jobResourceTrendQuerySchema = z.object({
   if (to - from > 90 * 24 * 60 * 60 * 1000) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["from"], message: "range must not exceed 90 days" });
 });
 const logSchema = z.object({ after: z.coerce.number().int().min(-1).default(-1), limit: z.coerce.number().int().min(1).max(100).default(100) }).strict();
+const controlPlaneLogQuerySchema = z.object({
+  after: z.coerce.number().int().nonnegative().optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(200),
+  level: z.enum(["log", "warn", "error"]).optional(),
+  contains: z.string().max(200).optional(),
+}).strict();
+const workerLogQuerySchema = z.object({
+  maxBytes: z.coerce.number().int().min(1).max(128 * 1024).default(64 * 1024),
+}).strict();
 const mutationSchema = z.object({}).strict();
 
 function error(c: any, status: number, code: string, message: string, details?: Record<string, unknown>) {
@@ -63,6 +73,34 @@ function githubInstallationLocation(row: { login?: unknown; githubInstallationId
 
 export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
   const safe = (fn: (c: any) => Promise<Response> | Response) => async (c: any) => { try { return await fn(c); } catch (cause) { if (cause instanceof z.ZodError) return error(c, 400, "invalid_request", "Invalid request", { issues: cause.issues }); console.error(cause); return error(c, 500, "internal_error", "Internal server error"); } };
+  app.get("/api/admin/logs", safe(async (c) => {
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    if (!deps.controlPlaneLogs) return error(c, 503, "logs_unavailable", "Control-plane logs are unavailable");
+    const query = controlPlaneLogQuerySchema.safeParse(c.req.query());
+    if (!query.success) return error(c, 400, "invalid_log_query", "Invalid log query", { issues: query.error.issues });
+    return c.json(deps.controlPlaneLogs.list(query.data), 200, { "cache-control": "no-store" });
+  }));
+  app.get("/api/workers/:workerId/logs", safe(async (c) => {
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    if (!deps.workerDispatcher) return error(c, 503, "worker_dispatch_unavailable", "Worker command dispatch is unavailable");
+    const query = workerLogQuerySchema.safeParse(c.req.query());
+    if (!query.success) return error(c, 400, "invalid_log_query", "Invalid log query", { issues: query.error.issues });
+    const workerId = c.req.param("workerId");
+    const [worker] = await deps.db`SELECT id FROM workers WHERE id=${workerId}`;
+    if (!worker) return error(c, 404, "not_found", "Resource not found");
+    const requestId = randomUUID();
+    try {
+      const event = await deps.workerDispatcher.request({ workerId, type: "worker.collect_logs", leaseId: null, payload: { requestId, maxBytes: query.data.maxBytes } });
+      const payload = WorkerEventPayload.safeParse({ type: event.type, payload: event.payload });
+      if (!payload.success || payload.data.type !== "worker.logs" || payload.data.payload.requestId !== requestId) throw new WorkerDispatchError("worker returned an invalid log response");
+      return c.json({ workerId, ...payload.data.payload }, 200, { "cache-control": "no-store" });
+    } catch (cause) {
+      if (!(cause instanceof WorkerDispatchError)) throw cause;
+      if (cause.message === "worker is not authenticated") return error(c, 409, "worker_offline", "Worker is not connected");
+      if (cause.message === "worker request timed out") return error(c, 504, "worker_log_timeout", "Worker log request timed out");
+      return error(c, 502, "worker_log_failed", "Worker log request failed");
+    }
+  }));
   app.get("/api/me", (c) => c.json(c.get("user")));
   app.get("/api/organizations", safe(async (c) => {
     const user = c.get("user");

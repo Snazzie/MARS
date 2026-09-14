@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { initializeDatabase, configureErrorFileLogging, configureTimestampedConsoleLogging, formatJobReconciliationReport, resolveWebhookOrigin, createDevelopmentWindowsContainerBuild, resolveDevelopmentWindowsArtifacts, resolveDevelopmentLinuxArtifacts, resolveDevelopmentMacosArtifacts, controlPlaneBuildId } from "./index.ts";
+import { initializeDatabase, configureControlPlaneLogBuffer, configureErrorFileLogging, configureTimestampedConsoleLogging, formatJobReconciliationReport, resolveWebhookOrigin, createDevelopmentWindowsContainerBuild, resolveDevelopmentWindowsArtifacts, resolveDevelopmentLinuxArtifacts, resolveDevelopmentMacosArtifacts, controlPlaneBuildId } from "./index.ts";
 
 test("requires an explicit webhook origin at startup", () => {
   const previous = Bun.env.GITHUB_WEBHOOK_URL;
@@ -60,6 +60,24 @@ test("writes console errors to the configured control-plane log", async () => {
   } finally {
     console.error = originalError;
     await rm(directory, { recursive: true, force: true });
+  }
+});
+test("keeps a bounded redacted control-plane log buffer", () => {
+  const originalLog = console.log;
+  console.log = () => {};
+  const configured = configureControlPlaneLogBuffer(2);
+  try {
+    console.log("first");
+    console.warn("token=secret-value");
+    console.error("third", { workerId: "worker-1" });
+    expect(configured.source.list({ limit: 10 }).items).toEqual([
+      expect.objectContaining({ sequence: 2, level: "warn", message: "token=[REDACTED]" }),
+      expect.objectContaining({ sequence: 3, level: "error", message: expect.stringContaining("worker-1") }),
+    ]);
+    expect(configured.source.list({ after: 2, limit: 10, level: "error", contains: "WORKER-1" }).items).toHaveLength(1);
+  } finally {
+    configured.restore();
+    console.log = originalLog;
   }
 });
 

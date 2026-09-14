@@ -53,6 +53,19 @@ docker compose up -d postgres
 ```
 
 Local development ports and service behavior are defined in `scripts/dev.ts` and `scripts/dev-ports.ts`.
+Development log APIs require a global administrator. Outside production, the
+existing `MARS_DEV_TOKEN` from the untracked `.env` may be supplied as
+`Authorization: Bearer <token>`; never commit the token.
+
+- `GET /api/admin/logs?limit=200&level=error&contains=<text>` returns the
+  current process's bounded, redacted control-plane log buffer. Use `after`
+  with the returned `nextCursor` for incremental reads.
+- `GET /api/workers/:workerId/logs?maxBytes=65536` requests a bounded,
+  redacted service-log tail from a connected worker. The worker must run an
+  artifact that supports `worker.collect_logs`.
+
+Both responses use `Cache-Control: no-store`.
+
 
 Useful commands:
 

@@ -229,6 +229,11 @@ export const WorkerCacheTelemetry = z.discriminatedUnion("type", [
 export type WorkerCacheTelemetry = z.infer<typeof WorkerCacheTelemetry>;
 export const WorkerRunnerCachePurgePayload = z.object({ workerId: z.string().uuid() }).strict();
 export type WorkerRunnerCachePurgePayload = z.infer<typeof WorkerRunnerCachePurgePayload>;
+export const WorkerLogRequestPayload = z.object({
+  requestId: z.string().uuid(),
+  maxBytes: z.number().int().min(1).max(128 * 1024),
+}).strict();
+export type WorkerLogRequestPayload = z.infer<typeof WorkerLogRequestPayload>;
 export const WorkerCommand = z.object({ version: z.literal(1), id: z.string().uuid(), type: z.string().min(1), workerId: z.string().uuid(), leaseId: z.string().uuid().nullable(), occurredAt: z.string().datetime(), payload: z.record(z.unknown()) });
 export const WorkerEvent = z.object({ version: z.literal(1), id: z.string().uuid(), workerId: z.string().uuid(), type: z.string().min(1), occurredAt: z.string().datetime(), payload: z.record(z.unknown()) });
 export const WorkerEventPayload = z.discriminatedUnion("type", [
@@ -240,6 +245,7 @@ export const WorkerEventPayload = z.discriminatedUnion("type", [
   z.object({ type: z.literal("lease.reaped"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32), correlationId: z.string().uuid().optional() }).strict() }),
   z.object({ type: z.literal("lease.failed"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32), reason: z.enum(["provisioning_failed","runner_failed","cleanup_failed","debug_preserve","out_of_memory"]), oom: OutOfMemoryResult.optional(), termination: RuntimeTerminationEvidence.optional(), correlationId: z.string().uuid().optional() }).strict() }),
   z.object({ type: z.literal("diagnostic.chunk"), payload: z.object({ jobId: z.string().uuid(), leaseId: z.string().uuid(), diagnosticId: z.string().uuid(), sequence: z.number().int().nonnegative(), content: z.string().max(128 * 1024), final: z.boolean() }).strict() }),
+  z.object({ type: z.literal("worker.logs"), payload: z.object({ commandId: z.string().uuid(), requestId: z.string().uuid(), observedAt: z.string().datetime({ offset: true }), content: z.string().max(128 * 1024) }).strict() }),
   z.object({ type: z.literal("job.log"), payload: z.object({ jobId: z.string().uuid(), stepId: z.string().uuid().nullable(), sequence: z.number().int().nonnegative(), content: z.string().max(256 * 1024), occurredAt: z.string().datetime() }).strict() }),
   z.object({ type: z.literal("job.resource_sample"), payload: z.object({ jobId: z.string().uuid(), leaseId: z.string().uuid(), occurredAt: z.string().datetime(), cpuUsagePercent: z.number().min(0).max(100), cpuTimeMs: z.number().int().nonnegative(), memoryWorkingSetBytes: z.number().int().nonnegative(), memoryLimitBytes: z.number().int().positive() }).strict() }),
   WorkerCacheEntryUpsertTelemetry,

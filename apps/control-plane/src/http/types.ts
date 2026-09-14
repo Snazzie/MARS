@@ -70,6 +70,19 @@ export type ControlPlaneHealth = {
   startedAt: string;
   discovery: DiscoveryHealthSnapshot;
 };
+export type ControlPlaneLogLevel = "log" | "warn" | "error";
+export type ControlPlaneLogEntry = {
+  sequence: number;
+  occurredAt: string;
+  level: ControlPlaneLogLevel;
+  message: string;
+};
+export type ControlPlaneLogSource = {
+  list(input: { after?: number; limit: number; level?: ControlPlaneLogLevel; contains?: string }): {
+    items: ControlPlaneLogEntry[];
+    nextCursor: number | null;
+  };
+};
 
 export type ControlPlaneHttpDeps = {
   db: DashboardDb;
@@ -119,4 +132,5 @@ export type ControlPlaneHttpDeps = {
   workerConnected?: (workerId: string) => boolean;
   onWorkerChanged(workerId: string): void | Promise<void>;
   health(): ControlPlaneHealth;
+  controlPlaneLogs?: ControlPlaneLogSource;
 };

@@ -1,5 +1,5 @@
 import { completeOnboardingIfReady, createDb, ensureDatabase, migrateDatabase, jsonParameter, type DashboardDb } from "@mars/db";
-import { CURRENT_WORKER_CONTRACT_VERSION, WorkerReleaseOciDigest, type WorkerCommand, type WorkerReleaseManifest } from "@mars/contracts";
+import { CURRENT_WORKER_CONTRACT_VERSION, WorkerReleaseOciDigest, sanitizeDiagnosticText, type WorkerCommand, type WorkerReleaseManifest } from "@mars/contracts";
 import type { Server } from "bun";
 import { getSession, SecretBox, type SessionUser } from "./auth.ts";
 import { configureRunLifecycle } from "./runs.ts";
@@ -15,7 +15,7 @@ import { startReconciliationScheduler } from "./reconcile-loop.ts";
 import { pruneExpiredData } from "./retention.ts";
 import { DiscoveryHealthMonitor, isDiscoveryCycleSuccessful } from "./discovery-health.ts";
 import { createControlPlaneApp } from "./http/app.ts";
-import type { ControlPlaneHttpDeps, DevelopmentArtifact, DevelopmentLinuxArtifacts, DevelopmentMacosArtifacts, DevelopmentWindowsArtifacts } from "./http/types.ts";
+import type { ControlPlaneHttpDeps, ControlPlaneLogLevel, ControlPlaneLogSource, DevelopmentArtifact, DevelopmentLinuxArtifacts, DevelopmentMacosArtifacts, DevelopmentWindowsArtifacts } from "./http/types.ts";
 import type { ControlPlaneSetup } from "./control-plane-setup.ts";
 import { ensureDefaultPools } from "./default-pools.ts";
 import { GithubRateLimitGate } from "./github-rate-limit.ts";
@@ -74,6 +74,47 @@ export function configureErrorFileLogging(dataRoot: string): string {
     }
   };
   return logPath;
+}
+export function configureControlPlaneLogBuffer(capacity = 2_000): { source: ControlPlaneLogSource; restore(): void } {
+  const entries: Array<{ sequence: number; occurredAt: string; level: ControlPlaneLogLevel; message: string }> = [];
+  let sequence = 0;
+  const originals = { log: console.log, warn: console.warn, error: console.error };
+  const serialize = (value: unknown): string => {
+    if (value instanceof Error) return value.stack ?? value.message;
+    if (typeof value === "string") return value;
+    try { return JSON.stringify(value); } catch { return String(value); }
+  };
+  for (const level of ["log", "warn", "error"] as const) {
+    console[level] = (...args: unknown[]) => {
+      originals[level](...args);
+      entries.push({
+        sequence: sequence += 1,
+        occurredAt: new Date().toISOString(),
+        level,
+        message: sanitizeDiagnosticText(args.map(serialize).join(" "), 128 * 1024),
+      });
+      if (entries.length > capacity) entries.splice(0, entries.length - capacity);
+    };
+  }
+  return {
+    source: {
+      list(input) {
+        const contains = input.contains?.toLocaleLowerCase();
+        const matching = entries.filter(entry =>
+          (input.after === undefined || entry.sequence > input.after)
+          && (input.level === undefined || entry.level === input.level)
+          && (contains === undefined || entry.message.toLocaleLowerCase().includes(contains))
+        );
+        const items = input.after === undefined ? matching.slice(-input.limit) : matching.slice(0, input.limit);
+        return { items, nextCursor: items.at(-1)?.sequence ?? null };
+      },
+    },
+    restore() {
+      console.log = originals.log;
+      console.warn = originals.warn;
+      console.error = originals.error;
+    },
+  };
 }
 type DevelopmentEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -277,6 +318,7 @@ export type ControlPlaneStartOptions = {
   workerReleaseManifest?: WorkerReleaseManifest;
   currentUser?: (request: Request) => Promise<SessionUser | null>;
   dispatcher?: WorkerCommandDispatcher;
+  controlPlaneLogs?: ControlPlaneLogSource;
   webRoot?: URL;
   workerInstallerRoot?: URL;
 };
@@ -402,7 +444,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const discoveryHealth = new DiscoveryHealthMonitor(discoveryIntervalMs, Date.parse(startedAt));
   const githubApp = options.githubApp ?? new GitHubAppService({ db, secretBox, publicOrigin: initialized.setup.publicOrigin, webhookOrigin: () => configuredWebhookOrigin });
   const githubRateLimits = new GithubRateLimitGate();
-  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, developmentWindowsArtifacts, developmentLinuxArtifacts, developmentMacosArtifacts, windowsContainerBuild, windowsContainerArtifacts, workerInstallerRoot, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerChanged: () => ensureDefaultPools(db, env.DEFAULT_IMAGES), health: () => ({ buildId: controlPlaneBuildId(), startedAt, discovery: discoveryHealth.snapshot(), database: "ready" }) });
+  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, developmentWindowsArtifacts, developmentLinuxArtifacts, developmentMacosArtifacts, windowsContainerBuild, windowsContainerArtifacts, workerInstallerRoot, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerChanged: () => ensureDefaultPools(db, env.DEFAULT_IMAGES), health: () => ({ buildId: controlPlaneBuildId(), startedAt, discovery: discoveryHealth.snapshot() }), controlPlaneLogs: options.controlPlaneLogs });
   let triggerReconciliation = () => Promise.resolve();
   const gateway = createControlPlaneGateway({ db, httpFetch: async request => await httpApp.fetch(request), current, requestSource: (request, activeServer) => { requestSources.set(request, activeServer.requestIP(request)?.address ?? "unknown"); return requestSources.get(request) ?? "unknown"; }, dispatcher, refreshDefaultPools: () => ensureDefaultPools(db, env.DEFAULT_IMAGES), triggerReconciliation: () => triggerReconciliation(), requestId: () => crypto.randomUUID() });
   let server!: Server<ControlPlaneSocketData>;
@@ -443,8 +485,9 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
 if (import.meta.main) {
   configureTimestampedConsoleLogging();
   configureErrorFileLogging(Bun.env.DATA_ROOT?.trim() || "/var/lib/mars");
+  const controlPlaneLogs = configureControlPlaneLogBuffer();
   try {
-    await startControlPlane();
+    await startControlPlane({ controlPlaneLogs: controlPlaneLogs.source });
   } catch (error) {
     console.error("Control plane startup failed", error);
     process.exitCode = 1;

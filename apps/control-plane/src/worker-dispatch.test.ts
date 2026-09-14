@@ -89,6 +89,24 @@ test("accepts the first acknowledgement for a newly persisted command", async ()
   await Promise.resolve();
   expect(acknowledged).toEqual([dispatched.id]);
 });
+test("resolves a non-durable worker request from its correlated response", async () => {
+  const sent: string[] = [];
+  const socket = { send(data: string) { sent.push(data); } };
+  const dispatcher = new WorkerCommandDispatcher(100);
+  dispatcher.register(workerId, socket);
+  const response = dispatcher.request({ type: "worker.collect_logs", workerId, leaseId: null, payload: { requestId: "11111111-1111-4111-8111-111111111111", maxBytes: 1024 } });
+  const requested = JSON.parse(sent[0]!);
+  const event = {
+    version: 1 as const,
+    id: crypto.randomUUID(),
+    workerId,
+    type: "worker.logs",
+    occurredAt: new Date().toISOString(),
+    payload: { commandId: requested.id, requestId: requested.payload.requestId, observedAt: new Date().toISOString(), content: "worker output" },
+  };
+  expect(dispatcher.handleEvent(event, socket)).toBe(true);
+  await expect(response).resolves.toMatchObject({ type: "worker.logs", payload: { content: "worker output" } });
+});
 
 test("replays terminal-lease stop commands until their cleanup event is acknowledged", async () => {
   const stopCommand = { ...command, type: "tart.stop_lease", leaseId: "22222222-2222-4222-8222-222222222222", occurredAt: new Date() };

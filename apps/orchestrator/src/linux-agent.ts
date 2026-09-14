@@ -11,6 +11,7 @@ import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 import type { LibvirtVmDriver } from "./libvirt-vm.ts";
 import type { WorkerLimits } from "@mars/contracts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
+import { collectWorkerServiceLogs } from "./worker-service-logs.ts";
 export type LinuxWorkerResources = {
   appliance: { vcpu: number; memoryBytes: number; storageBytes: number };
   runtime: { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
@@ -87,6 +88,9 @@ export async function handleLinuxWorkerCommandWithContext(command: WorkerCommand
   void lifecycle.finally(() => active.delete(bootstrap.leaseId));
 }
 export async function executeLinuxWorkerCommand(command: WorkerCommand, resources: LinuxWorkerResources, context: LinuxWorkerCommandContext): Promise<WorkerEvent | void> {
+  if (command.type === "worker.collect_logs") {
+    return collectWorkerServiceLogs(command);
+  }
   if (command.type === "worker.configure" || command.type === "worker.runner_cache_purge") {
     return handleLinuxWorkerCommand(command, resources, context.cacheService);
   }

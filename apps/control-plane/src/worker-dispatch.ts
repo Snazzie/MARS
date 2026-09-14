@@ -62,9 +62,18 @@ export class WorkerCommandDispatcher {
     return result;
   }
   isConnected(workerId: string): boolean { return this.sockets.has(workerId); }
+  private rejectPendingWorker(workerId: string, message: string): void {
+    for (const [id, pending] of this.pending) {
+      if (pending.command.workerId !== workerId) continue;
+      clearTimeout(pending.timer);
+      this.pending.delete(id);
+      pending.reject(new WorkerDispatchError(message));
+    }
+  }
   register(workerId: string, socket: AuthenticatedWorkerSocket): void {
     const old = this.sockets.get(workerId);
     if (old === socket) return;
+    if (old) this.rejectPendingWorker(workerId, "worker connection superseded");
     this.epochs.set(workerId, (this.epochs.get(workerId) ?? 0) + 1);
     old?.close?.(4001, "superseded");
     this.sockets.set(workerId, socket);
@@ -92,9 +101,7 @@ export class WorkerCommandDispatcher {
   unregister(workerId: string, socket?: AuthenticatedWorkerSocket): void {
     if (socket && this.sockets.get(workerId) !== socket) return;
     this.sockets.delete(workerId); this.epochs.set(workerId, (this.epochs.get(workerId) ?? 0) + 1);
-    if (!this.store) for (const [id, pending] of this.pending) if (pending.command.workerId === workerId) {
-      clearTimeout(pending.timer); this.pending.delete(id); pending.reject(new WorkerDispatchError("worker disconnected"));
-    }
+    this.rejectPendingWorker(workerId, "worker disconnected");
   }
   handleEvent(input: unknown, socket?: AuthenticatedWorkerSocket): boolean {
     const parsed = WorkerEvent.safeParse(input); if (!parsed.success) return false;
@@ -109,6 +116,27 @@ export class WorkerCommandDispatcher {
     }
     if (this.durableWorkers.get(commandId) !== event.workerId) return false;
     this.durableWorkers.delete(commandId); void this.store?.acknowledge(commandId); return true;
+  }
+  request(input: Omit<WorkerCommand, "version" | "id" | "occurredAt"> & Partial<Pick<WorkerCommand, "leaseId">>): Promise<WorkerEvent> {
+    const socket = this.sockets.get(input.workerId);
+    if (!socket) return Promise.reject(new WorkerDispatchError("worker is not authenticated"));
+    const command = WorkerCommand.parse({ ...input, version: 1, id: randomUUID(), occurredAt: new Date().toISOString(), leaseId: input.leaseId ?? null });
+    if (containsSecret(command.payload)) return Promise.reject(new WorkerDispatchError("worker command payload contains secret material"));
+    return new Promise<WorkerEvent>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(command.id);
+        reject(new WorkerDispatchError("worker request timed out"));
+      }, this.timeoutMs);
+      this.pending.set(command.id, { command, resolve, reject, timer });
+      try {
+        if (this.sockets.get(input.workerId) !== socket) throw new WorkerDispatchError("worker socket changed before send");
+        socket.send(JSON.stringify(command));
+      } catch {
+        clearTimeout(timer);
+        this.pending.delete(command.id);
+        reject(new WorkerDispatchError("worker socket send failed"));
+      }
+    });
   }
   async dispatch(input: Omit<WorkerCommand, "version" | "id" | "occurredAt"> & Partial<Pick<WorkerCommand, "leaseId">>): Promise<WorkerEvent> {
     return this.serialized(input.workerId, async () => {

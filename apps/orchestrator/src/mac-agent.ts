@@ -10,7 +10,7 @@ import { createTartVmRuntime, resolveTartExecutable, TartVmDriver } from "./tart
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { retryControlPlaneOperation } from "./worker-client.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
-
+import { collectWorkerServiceLogs } from "./worker-service-logs.ts";
 export interface MacWorkerLimits { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number }
 export interface MacWorkerJoinInput {
   code: string;
@@ -183,6 +183,10 @@ export interface MacWorkerCommandDependencies {
 }
 export async function executeMacWorkerCommand(command: WorkerCommand, dependencies: MacWorkerCommandDependencies): Promise<void> {
   const { driver, limits, encryptionPrivateKey, cache, cacheService, activeLeases, preserveLeases, saveIdentity, setPreserveLeases, send } = dependencies;
+  if (command.type === "worker.collect_logs") {
+    send(await collectWorkerServiceLogs(command));
+    return;
+  }
   if (command.type === "worker.set_lease_preservation") {
     const enabled = (command.payload as Record<string, unknown>).enabled;
     setPreserveLeases(enabled === true);

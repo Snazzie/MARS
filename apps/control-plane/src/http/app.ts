@@ -54,6 +54,8 @@ export function createControlPlaneApp(deps: ControlPlaneHttpDeps) {
   protectedApi.use("/api/pools", requireSession(deps));
   protectedApi.use("/api/pools/*", requireSession(deps));
   protectedApi.use("/api/workers/*", requireSession(deps));
+  protectedApi.use("/api/admin", requireSession(deps));
+  protectedApi.use("/api/admin/*", requireSession(deps));
   registerDashboardRoutes(protectedApi, deps);
   registerWorkerRoutes(app, deps);
   app.route("/", protectedApi);
