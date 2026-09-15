@@ -145,6 +145,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       labels: stringArray(row.labels),
     })),
     candidates,
+    workerConnected: deps.workerConnected,
     installationBlocked: (installationId) => blockedInstallations.has(installationId) || Boolean(deps.installationBlocked?.(installationId)),
     preflight: async (job) => {
       const row = queuedByJob.get(job.jobId);

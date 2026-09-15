@@ -183,13 +183,20 @@ export async function runWindowsLeaseCleanup(
   driver: Pick<RuntimeDriver, "stopLease" | "removeLease">,
   send: (workerEvent: WorkerEvent) => void,
   preserveLeases = false,
+  inventoryChanged?: () => void,
 ): Promise<void> {
   if (!["tart.stop_lease", "windows-container.stop_lease", "hyperv.stop_lease"].includes(command.type) || !command.leaseId) throw new Error("Windows lease cleanup command invalid");
   const nonce = String((command.payload as Record<string, unknown>).nonce ?? "");
   const payload = { commandId: command.id, leaseId: command.leaseId, nonce };
   const emit = (workerEvent: WorkerEvent) => emitWindowsWorkerEvent(command.workerId, command.leaseId, send, workerEvent);
+  const notifyInventory = () => {
+    try { inventoryChanged?.(); } catch (error) {
+      console.error("Windows worker inventory notification failed", { workerId: command.workerId, leaseId: command.leaseId, error: error instanceof Error ? error.message : String(error) });
+    }
+  };
   if (command.type !== "tart.stop_lease" && preserveLeases) {
     emit(event(command.workerId, "lease.failed", { ...payload, reason: "debug_preserve" }));
+    notifyInventory();
     return;
   }
   emit(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId }));
@@ -199,6 +206,7 @@ export async function runWindowsLeaseCleanup(
   emit(event(command.workerId, cleanupFailed ? "lease.failed" : "lease.reaped", cleanupFailed
     ? { ...payload, reason: "cleanup_failed" }
     : payload));
+  notifyInventory();
 }
 
 export function startWindowsLeaseLifecycle(
@@ -209,15 +217,40 @@ export function startWindowsLeaseLifecycle(
   active: Map<string, Promise<void>>,
   preserveLeases: () => boolean = () => false,
   cacheService?: Pick<ActionCacheService, "transport" | "unregisterLease">,
+  inventoryChanged?: () => void,
 ): Promise<void> {
   const existing = active.get(bootstrap.leaseId);
   if (existing) return existing;
-  const lifecycle = runLeaseLifecycle(command, driver, bootstrap, send, { preserveLeases, cacheService }).finally(() => {
+  let terminal = false;
+  const notifyInventory = (type: string) => {
+    if (type !== "sandbox_attested" && type !== "lease.reaped" && type !== "lease.failed") return;
+    if (type !== "sandbox_attested") {
+      terminal = true;
+      return;
+    }
+    try { inventoryChanged?.(); } catch (error) {
+      console.error("Windows worker inventory notification failed", { workerId: command.workerId, leaseId: bootstrap.leaseId, type, error: error instanceof Error ? error.message : String(error) });
+    }
+  };
+  const emit = (workerEvent: WorkerEvent) => {
+    try {
+      send(workerEvent);
+    } finally {
+      notifyInventory(workerEvent.type);
+    }
+  };
+  const lifecycle = runLeaseLifecycle(command, driver, bootstrap, emit, { preserveLeases, cacheService }).finally(() => {
     if (active.get(bootstrap.leaseId) === lifecycle) active.delete(bootstrap.leaseId);
+    if (terminal) {
+      try { inventoryChanged?.(); } catch (error) {
+        console.error("Windows worker inventory notification failed", { workerId: command.workerId, leaseId: bootstrap.leaseId, type: "terminal", error: error instanceof Error ? error.message : String(error) });
+      }
+    }
   });
   active.set(bootstrap.leaseId, lifecycle);
   return lifecycle;
 }
+
 type WindowsWorkerCommandContext = {
   mode: "container" | "vm";
   limits: Limits;
@@ -229,11 +262,13 @@ type WindowsWorkerCommandContext = {
   acceptingLeases?: () => boolean;
   send: (data: string) => void;
   refreshDoctor: () => Promise<void>;
+  sendDoctor: () => void;
 };
+
 
 const normalizedError = (error: unknown): string => error instanceof Error ? error.message : String(error);
 export async function executeWindowsWorkerCommand(command: WorkerCommand, context: WindowsWorkerCommandContext): Promise<void> {
-  const { mode, limits, cache, cacheService, driver, identity, activeLeases, acceptingLeases, send, refreshDoctor } = context;
+  const { mode, limits, cache, cacheService, driver, identity, activeLeases, acceptingLeases, send, refreshDoctor, sendDoctor } = context;
   if (command.type === "worker.collect_logs") {
     return send(JSON.stringify(await collectWorkerServiceLogs(command)));
   }
@@ -258,7 +293,7 @@ export async function executeWindowsWorkerCommand(command: WorkerCommand, contex
     return;
   }
   if (command.type === "tart.stop_lease" || command.type === "windows-container.stop_lease" || command.type === "hyperv.stop_lease") {
-    return runWindowsLeaseCleanup(command, driver, workerEvent => send(JSON.stringify(workerEvent)), identity.preserveLeases === true);
+    return runWindowsLeaseCleanup(command, driver, workerEvent => send(JSON.stringify(workerEvent)), identity.preserveLeases === true, sendDoctor);
   }
   if (command.type === "windows-container.create_lease" || command.type === "hyperv.create_lease") {
     const expectedType = mode === "container" ? "windows-container.create_lease" : "hyperv.create_lease";
@@ -270,7 +305,7 @@ export async function executeWindowsWorkerCommand(command: WorkerCommand, contex
       return send(JSON.stringify(event(command.workerId, "lease.declined", { commandId: command.id, leaseId: command.leaseId, nonce: bootstrap.nonce, reason: "pickup_paused" })));
     }
     send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
-    await startWindowsLeaseLifecycle(command, driver, bootstrap, workerEvent => send(JSON.stringify(workerEvent)), activeLeases, () => identity.preserveLeases === true, cache.runnerCacheEnabled ? cacheService : undefined);
+    await startWindowsLeaseLifecycle(command, driver, bootstrap, workerEvent => send(JSON.stringify(workerEvent)), activeLeases, () => identity.preserveLeases === true, cache.runnerCacheEnabled ? cacheService : undefined, sendDoctor);
   }
 }
 export function dispatchWindowsWorkerFrame(
@@ -384,6 +419,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
               activeLeases,
               send: data => ws.send(data),
               refreshDoctor: async () => { doctorReport = await windowsDoctor(identity.preserveLeases === true); },
+              sendDoctor: () => { void sendDoctor(ws); },
             }),
           });
         } catch {

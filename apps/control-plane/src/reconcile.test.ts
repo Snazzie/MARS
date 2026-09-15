@@ -31,6 +31,27 @@ test("dispatches an architecture-neutral job through an architecture-specific po
   expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
   expect(jitLabels).toEqual(["mars-any-2vcpu-4g"]);
 });
+test("routes multi-platform alternatives to an online worker", async () => {
+  let selectedWorker = "";
+  const worker = (id: string, platform: string, connectionState: "online" | "offline") => ({
+    requestedLabels: [],
+    worker: { id, admissionState: "adopted" as const, connectionState, configurationState: "ready" as const, runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } },
+    pool: { id: `pool-${id}`, platform, enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: [`mars-${platform}`], triggerLabel: `mars-${platform}` },
+  });
+  const result = await reconcileQueuedJobs({
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 5, labels: ["mars-windows-x64-2vcpu-4g", "mars-any-2vcpu-4g"] }],
+    candidates: [worker("offline", "windows-x64", "offline"), worker("online", "macos-arm64", "online")],
+    workerConnected: (workerId) => workerId === "online",
+    reserve: async (input) => {
+      selectedWorker = input.workerId;
+      return { id: "lease", nonce: "n".repeat(32), workerId: input.workerId, poolId: input.poolId, expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested };
+    },
+    jit: async (input) => ({ encodedJitConfig: "config", runnerName: input.runnerName, labels: input.labels, expiresAt: new Date(Date.now() + 60_000).toISOString() }),
+    dispatch: async () => {},
+  });
+  expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
+  expect(selectedWorker).toBe("online");
+});
 
 test("does not reserve beyond active pool capacity", async () => {
   const result = await reconcileQueuedJobs({

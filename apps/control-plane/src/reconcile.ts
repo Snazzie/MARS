@@ -17,6 +17,7 @@ export type ReconcileDeps = {
   candidates: Array<Candidate & { worker: Candidate["worker"] & { id: string }; pool: Candidate["pool"] & { id: string } }>;
   upsert?: (job: QueuedRoutingJob) => Promise<void>;
   installationBlocked?: (installationId: number) => boolean;
+  workerConnected?: (workerId: string) => boolean;
   preflight?: (job: QueuedRoutingJob) => Promise<boolean>;
   reserve: (input: { workerId: string; poolId: string; githubJobId: number; routingKey: string; requested: { vcpu: number; memoryBytes: number; storageBytes: number; concurrency: number } }) => Promise<LeaseReservation>;
   jit: (input: { installationId: number; owner: string; repo: string; runnerName: string; labels: string[]; githubJobId: number }) => Promise<RunnerJitConfig>;
@@ -49,6 +50,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
       ? deps.candidates.map((_, index) => deps.candidates[(queued.jobId + index) % deps.candidates.length])
       : deps.candidates;
     const selected = candidateOrder.map((value) => {
+      if (deps.workerConnected && !deps.workerConnected(value.worker.id)) return null;
       const option = selectProvisionOption(options, value.pool);
       if (!option) return null;
       const capacityKey = `${value.pool.id}:${value.worker.id}`;

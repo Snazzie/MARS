@@ -102,6 +102,7 @@ test("keeps the Windows health channel alive when a valid command fails", async 
       activeLeases: new Map(),
       send: () => { throw new Error("command acknowledgement must not be sent"); },
       refreshDoctor: async () => {},
+      sendDoctor: () => {},
     }).catch(error => {
       failureObserved.resolve();
       throw error;
@@ -171,10 +172,30 @@ test("coalesces duplicate Windows lease commands while provisioning", async () =
   expect(creates).toBe(1);
   expect(events.filter(event => event.type === "sandbox_attested")).toHaveLength(1);
 });
+test("publishes inventory while a Windows lease is running and after cleanup", async () => {
+  let resolveCompletion!: (exitCode: number) => void;
+  const completion = new Promise<number>(resolve => { resolveCompletion = resolve; });
+  const events: WorkerEvent[] = [];
+  const inventoryStates: boolean[] = [];
+  const active = new Map<string, Promise<void>>();
+  const lifecycle = startWindowsLeaseLifecycle(command, {
+    createLease: async () => ({ runtimeInstanceId: "container", observed: { vcpu: 1, memoryBytes: 2, storageBytes: 3 }, state: "sandbox_attested" as const, completion }),
+    stopLease: async () => {},
+    removeLease: async () => {},
+  }, bootstrap, event => events.push(event), active, undefined, undefined, () => { inventoryStates.push(active.has(leaseId)); });
+  await Promise.resolve();
+  expect(events.some(event => event.type === "sandbox_attested")).toBe(true);
+  expect(inventoryStates).toEqual([true]);
+  resolveCompletion(0);
+  await lifecycle;
+  expect(inventoryStates).toEqual([true, false]);
+  expect(events.at(-1)?.type).toBe("lease.reaped");
+});
 
 test("handles durable stop commands and removes the lease", async () => {
   const events: WorkerEvent[] = [];
   const calls: string[] = [];
+  const inventoryStates: string[][] = [];
   const stopCommand: WorkerCommand = {
     ...command,
     type: "tart.stop_lease",
@@ -183,9 +204,10 @@ test("handles durable stop commands and removes the lease", async () => {
   await runWindowsLeaseCleanup(stopCommand, {
     stopLease: async (id) => { calls.push(`stop:${id}`); },
     removeLease: async (id) => { calls.push(`remove:${id}`); },
-  }, (workerEvent) => events.push(workerEvent));
+  }, (workerEvent) => events.push(workerEvent), false, () => { inventoryStates.push([...calls]); });
 
   expect(calls).toEqual([`stop:${leaseId}`, `remove:${leaseId}`]);
+  expect(inventoryStates).toEqual([[`stop:${leaseId}`, `remove:${leaseId}`]]);
   expect(events).toEqual([
     expect.objectContaining({ type: "command.accepted", payload: expect.objectContaining({ commandId: command.id, leaseId }) }),
     expect.objectContaining({ type: "lease.reaped", payload: expect.objectContaining({ commandId: command.id, leaseId, nonce: bootstrap.nonce }) }),
