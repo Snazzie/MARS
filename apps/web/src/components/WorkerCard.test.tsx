@@ -4,7 +4,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { WorkerDetail } from "@mars/contracts";
+import type { WorkerDetail, WorkerHealth } from "@mars/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WorkerCard, workerOperationalLabel, workerReadinessLabel } from "./WorkerCard.tsx";
 
@@ -73,7 +73,19 @@ const cacheFixture = (overrides: Partial<WorkerCacheSummary> = {}): WorkerCacheS
 });
 
 const cacheWorkerFixture = (overrides: Partial<WorkerDetail> = {}, cache = cacheFixture()) => ({ ...workerFixture(overrides), cache });
-const renderCard = (worker: WorkerDetail) => renderToStaticMarkup(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><WorkerCard worker={worker} organizationId="all" onChange={() => {}} /></QueryClientProvider>);
+const liveHealthFixture = (connection: Partial<WorkerHealth["connection"]> = {}): WorkerHealth => ({
+  observedAt: new Date().toISOString(),
+  connection: { state: "online", lastHeartbeatAt: new Date().toISOString(), lastDoctorAt: new Date().toISOString(), heartbeatAgeSeconds: 1, doctorAgeSeconds: 2, ...connection },
+  usage: { cpu: { actual: 1, reserved: 0, free: 1 }, memoryBytes: { actual: "1", reserved: "0", free: "1" }, storageBytes: { actual: "1", reserved: "0", free: "1" }, pods: { actual: 1, reserved: 0, free: 1 } },
+  cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: null, effectiveRunnerCacheEnabled: null, effectiveRunnerCacheMaxGiB: null, ready: false, generation: null, sizeBytes: "0", entryCount: 0, runnerCacheSizeBytes: "0", runnerCacheEntryCount: 0, observedAt: null, runnerCacheObservedAt: null, error: null },
+  containers: [],
+  jobs: [],
+});
+const renderCard = (worker: WorkerDetail, health?: WorkerHealth) => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  if (health) client.setQueryData(["worker-health", worker.id], health);
+  return renderToStaticMarkup(<QueryClientProvider client={client}><WorkerCard worker={worker} organizationId="all" onChange={() => {}} /></QueryClientProvider>);
+};
 
 test("keeps worker health authoritative and cache inventory compact", () => {
   const markup = renderCard(cacheWorkerFixture());
@@ -265,6 +277,24 @@ test("shows the exact applied revision and acknowledgement time", () => {
   expect(markup).toContain("Aug");
 });
 
+test("uses live health connection telemetry over stale worker snapshot data", () => {
+  const liveHeartbeatAt = new Date(Date.now() - 1_000).toISOString();
+  const liveDoctorAt = new Date(Date.now() - 2_000).toISOString();
+  const markup = renderCard(workerFixture({
+    connectionState: "offline",
+    lastHeartbeatAt: "2020-01-01T00:00:00.000Z",
+    lastDoctorAt: "2020-01-01T00:00:00.000Z",
+  }), liveHealthFixture({ lastHeartbeatAt: liveHeartbeatAt, lastDoctorAt: liveDoctorAt }));
+  expect(markup).toContain(`dateTime="${liveHeartbeatAt}"`);
+  expect(markup).toContain(`dateTime="${liveDoctorAt}"`);
+  expect(markup).not.toContain("stale heartbeat");
+  expect(markup).not.toContain("stale doctor");
+});
+
+test("shows a stale doctor badge from live health age", () => {
+  const markup = renderCard(workerFixture({ lastDoctorAt: new Date().toISOString() }), liveHealthFixture({ doctorAgeSeconds: 301 }));
+  expect(markup).toContain("stale doctor");
+});
 test("retains the last successful acknowledgement when an update fails", () => {
   const worker = workerFixture({ configurationState: "error", configurationRevision: "b".repeat(64) });
   const markup = renderCard(worker);

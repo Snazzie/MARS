@@ -6,9 +6,9 @@ import { Button } from "@astryxdesign/core/Button";
 import { WorkerActions } from "./WorkerActions.tsx";
 import { WorkerConfigurationForm } from "./WorkerConfigurationForm.tsx";
 import { WorkerDoctor } from "./WorkerDoctor.tsx";
-import { WorkerHealthPanel } from "./WorkerHealthPanel.tsx";
-import { useWorkerHealth } from "./useWorkerHealth.ts";
+import { WorkerHealthPanel, workerTelemetryIsStale } from "./WorkerHealthPanel.tsx";
 import { WorkerImageBuildForm } from "./WorkerImageBuildForm.tsx";
+import { useWorkerHealth } from "./useWorkerHealth.ts";
 function formatScaledBytes(bytes: bigint, unit: bigint, label: string): string {
   const tenths = (bytes * 10n + unit / 2n) / unit;
   return `${tenths / 10n}.${tenths % 10n} ${label}`;
@@ -83,12 +83,17 @@ function WorkerCacheInventory({ workerId }: { workerId: string }) {
     {inventory.hasNextPage && <button type="button" className="control-button" onClick={() => void inventory.fetchNextPage()} disabled={inventory.isFetchingNextPage}>{inventory.isFetchingNextPage ? "Loading…" : "Load more"}</button>}
   </div>;
 }
-function WorkerHealthSection({ worker }: { worker: WorkerDetail }) {
-  const healthQuery = useWorkerHealth(worker.id);
-  return <WorkerHealthPanel workerId={worker.id} health={healthQuery.data} loading={healthQuery.isLoading} error={healthQuery.error} limits={worker.limits} showConnectionStatus={false} cacheMetrics={worker.cache ? <WorkerCacheMetrics workerId={worker.id} cache={worker.cache} /> : undefined} />;
-}
+ 
 
 export function WorkerCard({ worker, organizationId, onChange, canManage = false }: { worker: WorkerDetail; organizationId: string; onChange: () => void; canManage?: boolean }) {
+  const healthQuery = useWorkerHealth(worker.id);
+  const liveConnection = healthQuery.data?.connection;
+  const connectionState = liveConnection?.state ?? worker.connectionState;
+  const lastHeartbeatAt = liveConnection?.lastHeartbeatAt ?? worker.lastHeartbeatAt;
+  const lastDoctorAt = liveConnection?.lastDoctorAt ?? worker.lastDoctorAt;
+  const staleBefore = Date.now() - 300_000;
+  const heartbeatStale = liveConnection ? workerTelemetryIsStale(liveConnection.heartbeatAgeSeconds) : Boolean(lastHeartbeatAt && Date.parse(lastHeartbeatAt) < staleBefore);
+  const doctorStale = liveConnection ? workerTelemetryIsStale(liveConnection.doctorAgeSeconds) : Boolean(lastDoctorAt && Date.parse(lastDoctorAt) < staleBefore);
   const active = worker.admissionState === "adopted";
   const [preservationPending, setPreservationPending] = useState(false);
   const [preservationError, setPreservationError] = useState<string | null>(null);
@@ -123,7 +128,6 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
     : null;
   const [configuring, setConfiguring] = useState(false);
   const [building, setBuilding] = useState(false);
-  const staleBefore = Date.now() - 300_000;
   const dialog = useRef<HTMLDialogElement>(null);
   const openConfiguration = () => { setConfiguring(true); dialog.current?.showModal(); };
   const closeConfiguration = () => { dialog.current?.close(); setConfiguring(false); };
@@ -134,20 +138,20 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
   return <article className={`worker-card ${worker.admissionState !== "adopted" ? "worker-card-pending" : ""}`} aria-labelledby={`worker-${worker.id}`}>
     <header className="worker-card-header">
       <div className="worker-card-identity">
-        <div className="worker-name-row"><span className={`status-dot status-${worker.connectionState}`} aria-label={worker.connectionState} /><h2 id={`worker-${worker.id}`}>{worker.name}</h2></div>
-        <div className="worker-statuses" aria-label="Worker status"><span className={`status-pill status-${worker.connectionState}`}>{worker.connectionState}</span>{worker.lastHeartbeatAt && Date.parse(worker.lastHeartbeatAt) < staleBefore && <span className="status-pill status-stale">stale heartbeat</span>}{worker.lastDoctorAt && Date.parse(worker.lastDoctorAt) < staleBefore && <span className="status-pill status-stale">stale doctor</span>}{worker.draining && <span className="status-pill status-draining">new leases paused</span>}<span className={`status-pill status-${effectiveConfigurationState}`}>{readinessLabel}</span><span className={`status-pill status-${worker.admissionState}`}>{worker.admissionState}</span></div>
+        <div className="worker-name-row"><span className={`status-dot status-${connectionState}`} aria-label={connectionState} /><h2 id={`worker-${worker.id}`}>{worker.name}</h2></div>
+        <div className="worker-statuses" aria-label="Worker status"><span className={`status-pill status-${connectionState}`}>{connectionState}</span>{heartbeatStale && <span className="status-pill status-stale">stale heartbeat</span>}{doctorStale && <span className="status-pill status-stale">stale doctor</span>}{worker.draining && <span className="status-pill status-draining">new leases paused</span>}<span className={`status-pill status-${effectiveConfigurationState}`}>{readinessLabel}</span><span className={`status-pill status-${worker.admissionState}`}>{worker.admissionState}</span></div>
         <p className="worker-meta">{worker.platform} · guests: {worker.guestPlatforms.join(", ")} · {worker.driver} · <span className="worker-fingerprint">key <code tabIndex={0} title={worker.fingerprint}>{worker.fingerprint}</code></span></p>
       </div>
       <div className="worker-card-controls">
-        {active && worker.platform === "windows-x64" && <button type="button" className="control-button" onClick={() => setBuilding(true)} disabled={worker.connectionState !== "online" || worker.doctor?.runtimeBuildState === "building"} title={worker.connectionState === "online" ? "Send the declarative image build to the worker" : "Worker must be online before it can build an image"}>{worker.connectionState !== "online" ? "Worker offline" : worker.doctor?.runtimeBuildState === "building" ? "Building…" : "Build local image"}</button>}
+        {active && worker.platform === "windows-x64" && <button type="button" className="control-button" onClick={() => setBuilding(true)} disabled={connectionState !== "online" || worker.doctor?.runtimeBuildState === "building"} title={connectionState === "online" ? "Send the declarative image build to the worker" : "Worker must be online before it can build an image"}>{connectionState !== "online" ? "Worker offline" : worker.doctor?.runtimeBuildState === "building" ? "Building…" : "Build local image"}</button>}
         <WorkerActions organizationId={organizationId} workerId={worker.id} admissionState={worker.admissionState} draining={worker.draining} activeSandboxes={worker.activeSandboxes} platform={worker.platform} runtimeMode={worker.platform === "windows-x64" ? "container" : worker.runtimeMode === "container" || worker.runtimeMode === "vm" ? worker.runtimeMode : null} onComplete={onChange} />
         {active && <Button label="Configure" variant="secondary" clickAction={openConfiguration} />}
       </div>
     </header>
     {active && canManage && <div className="worker-policy-control"><label title="Keeps failed runtimes for inspection and consumes worker capacity until disabled."><input type="checkbox" checked={worker.preserveLeases === true} disabled={preservationPending} onChange={(event) => { void togglePreservation(event.currentTarget.checked); }} /> Preserve failed containers</label>{preservationError && <p className="form-error" role="alert">{preservationError}</p>}</div>}
     <dl className="limits-list worker-telemetry worker-operational-strip">
-      <div><dt>Last heartbeat</dt><dd>{telemetryAt(worker.lastHeartbeatAt)}</dd></div>
-      <div><dt>Last successful doctor</dt><dd>{telemetryAt(worker.lastDoctorAt)}</dd></div>
+      <div><dt>Last heartbeat</dt><dd>{telemetryAt(lastHeartbeatAt)}</dd></div>
+      <div><dt>Last successful doctor</dt><dd>{telemetryAt(lastDoctorAt)}</dd></div>
       <div><dt>Runtime mode</dt><dd>{worker.runtimeMode ?? "Not reported"}</dd></div>
       <div><dt>Active leases</dt><dd>{worker.activeSandboxes}</dd></div>
     </dl>
@@ -156,8 +160,8 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
     {active && effectiveConfigurationState === "ready" && worker.doctor?.runtimeBuildState === "building" && <p className="pending-note" role="status">Building local runtime image. Scheduling remains paused until the worker reports completion.</p>}
     {active && effectiveConfigurationState === "ready" && !runtimeReady && worker.doctor?.runtimeBuildState !== "building" && <p className="pending-note" role="status">Runtime image is not ready. Scheduling remains paused until the worker reports a verified local runtime.</p>}
     {active && effectiveConfigurationState === "error" && <p className="pending-note" role="alert">Configuration update failed.{applied ? <> Last applied <time dateTime={worker.configurationAppliedAt!}>{applied.at}</time> · revision <code>{applied.revision}</code>.</> : " No configuration has been acknowledged."}</p>}
-    <WorkerHealthSection worker={worker} />
-    {active && <section className="worker-section worker-cache-panel" aria-label="Cache inventory"><div className="panel-kicker">Cache inventory</div><div className="worker-cache-actions">{cache?.ready && cache.entryCount != null && cache.entryCount > 0 ? <details onToggle={(event) => setCacheInventoryOpen(event.currentTarget.open)}><summary>Browse cache inventory</summary>{cacheInventoryOpen && cacheInventory(worker.id)}</details> : <span className="muted">{!cache?.ready ? "Cache inventory unavailable." : cache.entryCount == null ? "Cache telemetry not reported." : "No GitHub Actions cache entries."}</span>}{canManage && <button type="button" className="control-button" onClick={() => { void purge(); }} disabled={purgePending}>{purgePending ? "Purging runner cache…" : purgeSuccess ? "Runner cache purge requested." : "Purge runner cache"}</button>}{purgeError && <span className="form-error" role="alert">{purgeError}</span>}</div></section>}
+    <WorkerHealthPanel workerId={worker.id} health={healthQuery.data} loading={healthQuery.isLoading} error={healthQuery.error} limits={worker.limits} showConnectionStatus={false} cacheMetrics={cache ? <WorkerCacheMetrics workerId={worker.id} cache={cache} /> : undefined} />
+    {active && <section className="worker-section worker-cache-panel" aria-label="Cache inventory"><div className="panel-kicker">Cache inventory</div><div className="worker-cache-actions">{cache?.ready && cache.entryCount != null && cache.entryCount > 0 ? <details onToggle={(event) => setCacheInventoryOpen(event.currentTarget.open)}><summary>Browse cache inventory</summary>{cacheInventoryOpen && cacheInventory(worker.id)}</details> : <span className="muted">{!cache?.ready ? "Cache inventory unavailable." : cache.entryCount == null ? "Cache telemetry not reported." : "No GitHub Actions cache entries."}</span>}{canManage && <button type="button" className="control-button" onClick={() => { void purge(); }} disabled={purgePending}>{purgePending ? "Purging…" : "Purge runner cache"}</button>}</div>{purgeError && <p className="form-error" role="alert">{purgeError}</p>}{purgeSuccess && <p className="pending-note" role="status">Runner cache purge requested.</p>}</section>}
     <dialog ref={dialog} className="worker-config-dialog" onCancel={closeConfiguration} aria-label="Configure worker">{configuring && <WorkerConfigurationForm worker={{ id: worker.id, admissionState: worker.admissionState, platform: worker.platform, guestPlatforms: worker.guestPlatforms, draining: worker.draining, activeSandboxes: worker.activeSandboxes, capacity: capacityData, limits: worker.limits, desiredCacheTtlSeconds: cache?.desiredTtlSeconds, desiredRunnerCacheEnabled, desiredRunnerCacheMaxGiB }} organizationId={organizationId} onConfigured={() => { closeConfiguration(); onChange(); }} />}</dialog>
   </article>;
 }

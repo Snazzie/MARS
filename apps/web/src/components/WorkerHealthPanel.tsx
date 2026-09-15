@@ -76,8 +76,8 @@ function ageDisplay(value: number | null, startedAt: string | null): ReactNode {
   const label = age(value);
   return startedAt ? <time dateTime={startedAt}>{label}</time> : label;
 }
-function stale(value: number | null): boolean {
-  return value != null && value > STALE_AFTER_SECONDS;
+export function workerTelemetryIsStale(ageSeconds: number | null): boolean {
+  return ageSeconds != null && ageSeconds > STALE_AFTER_SECONDS;
 }
 
 function StatusBadge({ children }: { children: ReactNode }) {
@@ -181,7 +181,7 @@ function JobCells({ job }: { job: WorkerHealth["jobs"][number] }) {
     <td>{job.jobId ?? "Unavailable telemetry"}</td>
     <td>{job.repositoryFullName ?? job.repositoryName ?? "Unavailable telemetry"}</td>
     <td>{job.state}</td>
-    <td>{ageDisplay(job.ageSeconds, job.startedAt)}{stale(job.ageSeconds) && <StatusBadge>Stale job telemetry</StatusBadge>}</td>
+    <td>{ageDisplay(job.ageSeconds, job.startedAt)}{workerTelemetryIsStale(job.ageSeconds) && <StatusBadge>Stale job telemetry</StatusBadge>}</td>
     <td>- / {job.requested.vcpu}</td>
     <td>- / {formatBytes(job.requested.memoryBytes)}</td>
     <td>- / {formatBytes(job.requested.storageBytes)}</td>
@@ -249,8 +249,8 @@ export function WorkerHealthPanel({ workerId, health, loading = false, error, li
   return <section id={`${idPrefix}-panel`} className="worker-health-panel" aria-label="Live worker health">
     {showConnectionStatus && <div className="worker-health-statuses" aria-label="Worker telemetry status">
       <StatusBadge>{health.connection.state === "offline" ? "Offline" : "Online"}</StatusBadge>
-      {stale(health.connection.heartbeatAgeSeconds) && <StatusBadge>Stale heartbeat</StatusBadge>}
-      {stale(health.connection.doctorAgeSeconds) && <StatusBadge>Stale doctor</StatusBadge>}
+      {workerTelemetryIsStale(health.connection.heartbeatAgeSeconds) && <StatusBadge>Stale heartbeat</StatusBadge>}
+      {workerTelemetryIsStale(health.connection.doctorAgeSeconds) && <StatusBadge>Stale doctor</StatusBadge>}
       {health.connection.heartbeatAgeSeconds == null && <StatusBadge>Unavailable telemetry</StatusBadge>}
       {health.connection.doctorAgeSeconds == null && <StatusBadge>Unavailable telemetry</StatusBadge>}
     </div>}
