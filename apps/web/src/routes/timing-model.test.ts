@@ -37,6 +37,7 @@ test("provides the seven-day default filter set", () => {
   expect(defaultTimingFilters).toEqual({
     range: "7d",
     platform: "",
+    workerId: "",
     vcpu: "",
     concurrency: "",
     search: "",
@@ -106,6 +107,7 @@ test("builds a complete trends URL while omitting empty filters", () => {
     from: "2026-08-27T12:00:00.000Z",
     to: "2026-09-03T12:00:00.000Z",
     platform: "windows-x64",
+    workerId: "00000000-0000-4000-8000-000000000001",
     vcpu: 4,
     concurrency: 2,
     search: "build & test",
@@ -114,7 +116,7 @@ test("builds a complete trends URL while omitting empty filters", () => {
     limit: 25,
     jobKey: "selected_job",
     pointLimit: 75,
-  })).toBe("/api/organizations/org-1/job-resource-trends?from=2026-08-27T12%3A00%3A00.000Z&to=2026-09-03T12%3A00%3A00.000Z&platform=windows-x64&vcpu=4&concurrency=2&search=build+%26+test&sort=memory&cursor=next_page&limit=25&jobKey=selected_job&pointLimit=75");
+  })).toBe("/api/organizations/org-1/job-resource-trends?from=2026-08-27T12%3A00%3A00.000Z&to=2026-09-03T12%3A00%3A00.000Z&platform=windows-x64&workerId=00000000-0000-4000-8000-000000000001&vcpu=4&concurrency=2&search=build+%26+test&sort=memory&cursor=next_page&limit=25&jobKey=selected_job&pointLimit=75");
 
   expect(buildJobResourceTrendsUrl("org-1", {
     from: "2026-08-27T12:00:00.000Z",

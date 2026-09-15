@@ -22,6 +22,7 @@ const sorts: readonly { value: JobResourceTrendSort; label: string }[] = [
 export function TimingToolbar({ filters, facets, generatedAt, refreshing, onChange, onRefresh }: TimingToolbarProps) {
   const isDefault = filters.range === defaultTimingFilters.range
     && filters.platform === defaultTimingFilters.platform
+    && filters.workerId === defaultTimingFilters.workerId
     && filters.vcpu === defaultTimingFilters.vcpu
     && filters.concurrency === defaultTimingFilters.concurrency
     && filters.search === defaultTimingFilters.search
@@ -50,6 +51,20 @@ export function TimingToolbar({ filters, facets, generatedAt, refreshing, onChan
         <select value={filters.platform} onChange={(event) => onChange({ ...filters, platform: event.target.value })}>
           <option value="">All platforms</option>
           {facets.platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}
+        </select>
+      </label>
+
+      <label>
+        Worker
+        <select value={filters.workerId} onChange={(event) => onChange({ ...filters, workerId: event.target.value })}>
+          <option value="">All workers</option>
+          {facets.workers.map((worker) => (
+            <option key={worker.id} value={worker.id}>
+              {facets.workers.filter((candidate) => candidate.name === worker.name).length > 1
+                ? `${worker.name} · ${worker.id.slice(0, 8)}`
+                : worker.name}
+            </option>
+          ))}
         </select>
       </label>
 

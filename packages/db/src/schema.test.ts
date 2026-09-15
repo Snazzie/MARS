@@ -63,6 +63,13 @@ test("timing snapshots preserve dimensions and non-negative durations", () => {
   expect(schemaSql).toContain("effective_concurrency bigint NOT NULL CHECK(effective_concurrency > 0)");
 });
 
+test("canonical timing schema requires worker attribution and its access index", () => {
+  expect(schemaSql).toContain("ALTER TABLE dashboard_job_timing_snapshots ADD COLUMN IF NOT EXISTS worker_id uuid;");
+  expect(schemaSql).toContain("ALTER TABLE dashboard_job_timing_snapshots ALTER COLUMN worker_id SET NOT NULL;");
+  expect(schemaSql).toContain("CREATE INDEX IF NOT EXISTS dashboard_job_timing_worker_idx ON dashboard_job_timing_snapshots(organization_id, worker_id, completed_at DESC);");
+  expect(workers.id).toBeDefined();
+});
+
 test("creates the dashboard job composite key before dependent foreign keys", () => {
   const key = schemaSql.indexOf("CREATE UNIQUE INDEX IF NOT EXISTS dashboard_jobs_org_run_id_idx");
   const timingForeignKey = schemaSql.indexOf("FOREIGN KEY (organization_id, run_id, job_id) REFERENCES dashboard_jobs");

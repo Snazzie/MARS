@@ -5,6 +5,7 @@ import { listJobTimingHistory, recordJobTimingSnapshot, type JobTimingDb, type J
 const input: JobTimingSnapshotInput = {
   organizationId: "org-1", jobId: "job-1", runId: "run-1", repositoryId: "repo-1", githubJobId: 42,
   repositoryName: "acme/project", workflowName: "CI", jobName: "build", platform: "windows-x64",
+  workerId: "worker-1",
   driver: "windows-hyperv-container", runtimeBoundary: "Hyper-V isolated container", poolId: "pool-1",
   artifactDigest: "sha256:test", outcome: "success", completedAt: "2026-08-16T00:00:10.000Z",
   queuedAt: "2026-08-16T00:00:00.000Z", startedAt: "2026-08-16T00:00:03.000Z",

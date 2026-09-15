@@ -3,7 +3,7 @@ import type { DatabaseClient } from "./index.ts";
 
 export type JobResourceTrendQuery = {
   from: string; to: string; platform?: string; vcpu?: number; concurrency?: number;
-  search?: string; sort?: JobResourceTrendSort; cursor?: string | null;
+  workerId?: string; search?: string; sort?: JobResourceTrendSort; cursor?: string | null;
   limit?: number; jobKey?: string; pointLimit?: number;
 };
 export type JobResourceIdentity = { repositoryId: string; workflowName: string; jobName: string };
@@ -65,7 +65,9 @@ const FILTER_PREDICATES = `
   AND ($4::text IS NULL OR platform=$4)
   AND ($5::bigint IS NULL OR requested_vcpu=$5)
   AND ($6::bigint IS NULL OR effective_concurrency=$6)
-  AND ($7::text = '' OR repository_name ILIKE $7 ESCAPE '\\' OR workflow_name ILIKE $7 ESCAPE '\\' OR job_name ILIKE $7 ESCAPE '\\')`;
+  AND ($7::text = '' OR repository_name ILIKE $7 ESCAPE '\\' OR workflow_name ILIKE $7 ESCAPE '\\' OR job_name ILIKE $7 ESCAPE '\\')
+  AND ($9::uuid IS NULL OR worker_id=$9)`;
+const FILTER_PREDICATES_WITHOUT_WORKER = FILTER_PREDICATES.replace("\n  AND ($9::uuid IS NULL OR worker_id=$9)", "");
 const FILTERED_CTE = `WITH filtered AS (
   SELECT * FROM dashboard_job_timing_snapshots
   WHERE ${FILTER_PREDICATES}
@@ -76,10 +78,15 @@ SELECT count(DISTINCT (repository_id, workflow_name, job_name))::bigint AS "jobC
   coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY execution_duration_ms), 0)::bigint AS "medianExecutionDurationMs",
   count(*) FILTER (WHERE telemetry_sample_count > 0)::bigint AS "telemetryCoveredRunCount"
 FROM filtered`;
-const FACETS_SQL = `${FILTERED_CTE}
-SELECT coalesce(array_agg(DISTINCT platform ORDER BY platform), ARRAY[]::text[]) AS platforms,
-  coalesce(array_agg(DISTINCT requested_vcpu ORDER BY requested_vcpu), ARRAY[]::bigint[]) AS vcpus,
-  coalesce(array_agg(DISTINCT effective_concurrency ORDER BY effective_concurrency), ARRAY[]::bigint[]) AS concurrencies
+const FACETS_SQL = `WITH filtered AS (
+  SELECT * FROM dashboard_job_timing_snapshots
+  WHERE ${FILTER_PREDICATES_WITHOUT_WORKER}
+)
+SELECT coalesce(array_agg(DISTINCT filtered.platform ORDER BY filtered.platform), ARRAY[]::text[]) AS platforms,
+  coalesce(array_agg(DISTINCT filtered.requested_vcpu ORDER BY filtered.requested_vcpu), ARRAY[]::bigint[]) AS vcpus,
+  coalesce(array_agg(DISTINCT filtered.effective_concurrency ORDER BY filtered.effective_concurrency), ARRAY[]::bigint[]) AS concurrencies,
+  coalesce((SELECT jsonb_agg(jsonb_build_object('id', w.id, 'name', w.name) ORDER BY w.name, w.id)
+    FROM workers w JOIN (SELECT DISTINCT worker_id FROM filtered) eligible ON eligible.worker_id=w.id), '[]'::jsonb) AS workers
 FROM filtered`;
 const GROUPED_CTES = `${FILTERED_CTE}, ranked AS (
   SELECT filtered.*, row_number() OVER (
@@ -115,17 +122,17 @@ const SUMMARY_COLUMNS = `SELECT "repositoryId", "repositoryName", "workflowName"
   "runCount", "latestCompletedAt", "latestRequestedVcpu", "latestRequestedMemoryBytes", "latestEffectiveConcurrency",
   "medianExecutionDurationMs", "cpuPeakPercent", "memoryPeakBytes", "telemetryCoveredRunCount",
   "durationChangePercent", "cpuChangePercent", "memoryChangePercent" FROM summaries`;
-const identityAfterCursor = `("repositoryId", "workflowName", "jobName") > ($11::uuid, $12::text, $13::text)`;
+const identityAfterCursor = `("repositoryId", "workflowName", "jobName") > ($12::uuid, $13::text, $14::text)`;
 const SUMMARY_SQL: Record<JobResourceTrendSort, string> = {
-  latest: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $9::boolean OR "latestCompletedAt" < $10::timestamptz OR ("latestCompletedAt" = $10::timestamptz AND ${identityAfterCursor})\nORDER BY "latestCompletedAt" DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $14`,
-  duration: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $9::boolean OR "medianExecutionDurationMs" < $10::numeric OR ("medianExecutionDurationMs" = $10::numeric AND ${identityAfterCursor})\nORDER BY "medianExecutionDurationMs" DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $14`,
-  cpu: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $9::boolean OR coalesce("cpuPeakPercent", -1) < $10::numeric OR (coalesce("cpuPeakPercent", -1) = $10::numeric AND ${identityAfterCursor})\nORDER BY coalesce("cpuPeakPercent", -1) DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $14`,
-  memory: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $9::boolean OR coalesce("memoryPeakBytes", -1) < $10::numeric OR (coalesce("memoryPeakBytes", -1) = $10::numeric AND ${identityAfterCursor})\nORDER BY coalesce("memoryPeakBytes", -1) DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $14`,
-  runs: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $9::boolean OR "runCount" < $10::numeric OR ("runCount" = $10::numeric AND ${identityAfterCursor})\nORDER BY "runCount" DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $14`,
+  latest: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $10::boolean OR "latestCompletedAt" < $11::timestamptz OR ("latestCompletedAt" = $11::timestamptz AND ${identityAfterCursor})\nORDER BY "latestCompletedAt" DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $15`,
+  duration: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $10::boolean OR "medianExecutionDurationMs" < $11::numeric OR ("medianExecutionDurationMs" = $11::numeric AND ${identityAfterCursor})\nORDER BY "medianExecutionDurationMs" DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $15`,
+  cpu: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $10::boolean OR coalesce("cpuPeakPercent", -1) < $11::numeric OR (coalesce("cpuPeakPercent", -1) = $11::numeric AND ${identityAfterCursor})\nORDER BY coalesce("cpuPeakPercent", -1) DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $15`,
+  memory: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $10::boolean OR coalesce("memoryPeakBytes", -1) < $11::numeric OR (coalesce("memoryPeakBytes", -1) = $11::numeric AND ${identityAfterCursor})\nORDER BY coalesce("memoryPeakBytes", -1) DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $15`,
+  runs: `${GROUPED_CTES}\n${SUMMARY_COLUMNS}\nWHERE NOT $10::boolean OR "runCount" < $11::numeric OR ("runCount" = $11::numeric AND ${identityAfterCursor})\nORDER BY "runCount" DESC, "repositoryId", "workflowName", "jobName"\nLIMIT $15`,
 };
 const SELECTED_SUMMARY_SQL = `${GROUPED_CTES}
 ${SUMMARY_COLUMNS}
-WHERE "repositoryId"=$9::uuid AND "workflowName"=$10 AND "jobName"=$11
+WHERE "repositoryId"=$10::uuid AND "workflowName"=$11 AND "jobName"=$12
 LIMIT 1`;
 const POINTS_SQL = `${FILTERED_CTE}, ordered AS (
   SELECT organization_id AS "organizationId", run_id AS "runId", job_id AS "jobId", completed_at AS "completedAt", outcome,
@@ -133,21 +140,21 @@ const POINTS_SQL = `${FILTERED_CTE}, ordered AS (
     memory_peak_bytes AS "memoryPeakBytes", requested_vcpu AS "requestedVcpu", requested_memory_bytes AS "requestedMemoryBytes",
     effective_concurrency AS "effectiveConcurrency", telemetry_state AS "telemetryState", telemetry_sample_count AS "telemetrySampleCount",
     row_number() OVER (ORDER BY completed_at, job_id) AS ordinal, count(*) OVER () AS total
-  FROM filtered WHERE repository_id=$9 AND workflow_name=$10 AND job_name=$11
+  FROM filtered WHERE repository_id=$10 AND workflow_name=$11 AND job_name=$12
 ), targets AS (
-  SELECT DISTINCT CASE WHEN total <= $12 THEN target_index
-    ELSE round(1 + (target_index - 1) * (total - 1)::numeric / ($12 - 1))::bigint END AS ordinal
+  SELECT DISTINCT CASE WHEN total <= $13 THEN target_index
+    ELSE round(1 + (target_index - 1) * (total - 1)::numeric / ($13 - 1))::bigint END AS ordinal
   FROM (SELECT max(total)::bigint AS total FROM ordered) counts
-  CROSS JOIN LATERAL generate_series(1::bigint, least(total, $12::bigint)) AS generated(target_index)
+  CROSS JOIN LATERAL generate_series(1::bigint, least(total, $13::bigint)) AS generated(target_index)
   WHERE total > 0
 )
 SELECT "organizationId", "runId", "jobId", "completedAt", outcome, "executionDurationMs", "cpuAveragePercent", "cpuPeakPercent",
   "memoryPeakBytes", "requestedVcpu", "requestedMemoryBytes", "effectiveConcurrency", "telemetryState", "telemetrySampleCount"
 FROM ordered JOIN targets USING (ordinal)
 ORDER BY ordered."completedAt", ordered."jobId"
-LIMIT $12`;
+LIMIT $13`;
 type ValidatedQuery = {
-  from: string; to: string; platform: string | null; vcpu: number | null; concurrency: number | null;
+  from: string; to: string; platform: string | null; vcpu: number | null; concurrency: number | null; workerId: string | null;
   searchPattern: string; sort: JobResourceTrendSort;
   cursor: (JobResourceCursor & { identity: JobResourceIdentity }) | null;
   limit: number; requestedIdentity: JobResourceIdentity | null; pointLimit: number;
@@ -166,6 +173,7 @@ function validateQuery(query: JobResourceTrendQuery): ValidatedQuery {
   if (query.vcpu !== undefined && !positiveInteger(query.vcpu)) throw new JobResourceTrendInputError();
   if (query.concurrency !== undefined && !positiveInteger(query.concurrency)) throw new JobResourceTrendInputError();
   if (query.platform !== undefined && typeof query.platform !== "string") throw new JobResourceTrendInputError();
+  if (query.workerId !== undefined && (typeof query.workerId !== "string" || !uuid(query.workerId))) throw new JobResourceTrendInputError();
   if (query.search !== undefined && typeof query.search !== "string") throw new JobResourceTrendInputError();
   const sort = query.sort ?? "latest";
   if (!sorts.has(sort)) throw new JobResourceTrendInputError();
@@ -185,13 +193,14 @@ function validateQuery(query: JobResourceTrendQuery): ValidatedQuery {
   }
   return {
     from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString(), platform: query.platform ?? null,
-    vcpu: query.vcpu ?? null, concurrency: query.concurrency ?? null, searchPattern: searchPattern(query.search ?? ""), sort, cursor,
+    vcpu: query.vcpu ?? null, concurrency: query.concurrency ?? null, workerId: query.workerId ?? null,
+    searchPattern: searchPattern(query.search ?? ""), sort, cursor,
     limit: normalizeLimit(query.limit, 50, 1, 100), requestedIdentity, pointLimit: normalizeLimit(query.pointLimit, 100, 2, 200),
   };
 }
 type SqlParameter = string | number | boolean | null;
 function filterParameters(organizationId: string, query: ValidatedQuery, userId?: string): SqlParameter[] {
-  return [organizationId, query.from, query.to, query.platform, query.vcpu, query.concurrency, query.searchPattern, userId ?? null];
+  return [organizationId, query.from, query.to, query.platform, query.vcpu, query.concurrency, query.searchPattern, userId ?? null, query.workerId];
 }
 const asNumber = (value: unknown): number => Number(value ?? 0);
 const asNullableNumber = (value: unknown): number | null => value == null ? null : Number(value);
@@ -269,7 +278,7 @@ export async function listJobResourceTrends(db: DatabaseClient, organizationId: 
     cursor?.identity.repositoryId ?? "00000000-0000-0000-0000-000000000000", cursor?.identity.workflowName ?? "", cursor?.identity.jobName ?? "", validated.limit + 1];
   const [totalRows, facetRows, summaryRows] = await Promise.all([
     db.unsafe<Record<string, unknown>[]>(TOTALS_SQL, filters),
-    db.unsafe<Record<string, unknown>[]>(FACETS_SQL, filters),
+    db.unsafe<Record<string, unknown>[]>(FACETS_SQL, filters.slice(0, 8)),
     db.unsafe<Record<string, unknown>[]>(SUMMARY_SQL[validated.sort], summaryParams),
   ]);
   const total = totalRows[0] ?? {}, completedRunCount = asNumber(total.completedRunCount), telemetryCoveredRunCount = asNumber(total.telemetryCoveredRunCount);
@@ -295,11 +304,13 @@ export async function listJobResourceTrends(db: DatabaseClient, organizationId: 
   const facets = facetRows[0] ?? {};
   const uniqueStrings = (values: unknown): string[] => [...new Set(Array.isArray(values) ? values.map(String) : [])].sort();
   const uniqueNumbers = (values: unknown): number[] => [...new Set(Array.isArray(values) ? values.map(asNumber) : [])].sort((left, right) => left - right);
+  const workers = Array.isArray(facets.workers)
+    ? facets.workers.map((worker) => worker && typeof worker === "object" ? { id: String((worker as Record<string, unknown>).id), name: String((worker as Record<string, unknown>).name) } : null).filter((worker): worker is { id: string; name: string } => Boolean(worker?.id && worker?.name)).sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
+    : [];
   return {
     summary: { jobCount: asNumber(total.jobCount), completedRunCount, medianExecutionDurationMs: asNumber(total.medianExecutionDurationMs), telemetryCoveredRunCount,
       telemetryCoveragePercent: completedRunCount === 0 ? 0 : telemetryCoveredRunCount / completedRunCount * 100 },
-    jobs, nextCursor, selectedJob,
-    filters: { platforms: uniqueStrings(facets.platforms), vcpus: uniqueNumbers(facets.vcpus), concurrencies: uniqueNumbers(facets.concurrencies) },
+    jobs, nextCursor, selectedJob, filters: { platforms: uniqueStrings(facets.platforms), vcpus: uniqueNumbers(facets.vcpus), concurrencies: uniqueNumbers(facets.concurrencies), workers },
     generatedAt: new Date().toISOString(),
   };
 }

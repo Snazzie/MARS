@@ -92,7 +92,7 @@ const trendResponse = {
       effectiveConcurrency: 1, telemetryState: "available", telemetrySampleCount: 12,
     }],
   },
-  filters: { platforms: ["windows-x64"], vcpus: [2], concurrencies: [1] },
+  filters: { platforms: ["windows-x64"], vcpus: [2], concurrencies: [1], workers: [] },
   generatedAt: "2026-09-03T12:01:00.000Z",
 };
 

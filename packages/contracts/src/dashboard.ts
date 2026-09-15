@@ -55,7 +55,7 @@ const timingOutcome = z.enum(["success", "failure", "cancelled", "skipped", "neu
 export const JobTimingSnapshot = dto(strict({
   organizationId: id, jobId: id, runId: id, repositoryId: id, githubJobId: positiveSafe,
   repositoryName: z.string().min(1), workflowName: z.string().min(1), jobName: z.string().min(1),
-  platform: z.string().min(1), driver: z.string().min(1), runtimeBoundary: z.string().nullable(),
+  workerId: id, platform: z.string().min(1), driver: z.string().min(1), runtimeBoundary: z.string().nullable(),
   poolId: id.nullable(), artifactDigest: z.string().nullable(), outcome: timingOutcome,
   completedAt: timestamp, queuedAt: timestamp, startedAt: timestamp.nullable(),
   queueDurationMs: timingDuration, startupDurationMs: timingDuration, executionDurationMs: timingDuration,
@@ -114,7 +114,7 @@ export const JobResourceTrendResponse = dto(strict({
   }),
   jobs: z.array(JobResourceTrendJob), nextCursor: cursor.nullable(),
   selectedJob: strict({ summary: JobResourceTrendJob, points: z.array(JobResourceTrendPoint) }).nullable(),
-  filters: strict({ platforms: z.array(z.string().min(1)), vcpus: z.array(positiveSafe), concurrencies: z.array(positiveSafe) }),
+  filters: strict({ platforms: z.array(z.string().min(1)), vcpus: z.array(positiveSafe), concurrencies: z.array(positiveSafe), workers: z.array(strict({ id, name: z.string().min(1) })) }),
   generatedAt: timestamp,
 }));
 export type JobResourceTrendResponse = z.infer<typeof JobResourceTrendResponse>;

@@ -9,6 +9,7 @@ const baselineCreatedAt = 1_700_000_000_000;
 const previousBaselineHashes = new Set([
   "24d85c25cfb2279005f02535ec5af93b65bc8d5ce543bd9963c4bea2e9cd1174",
   "7d93e0c39ebfb5701f5bbdf651b9cb0366ecd07c83e734d1aacf1d4544f78910",
+  "68370a64cd9067be7c5c1a963ea471c64a9a7bbe6feab00b491f27d62431bb93",
 ]);
 const migrationHash = (sql: string) => createHash("sha256").update(sql).digest("hex");
 

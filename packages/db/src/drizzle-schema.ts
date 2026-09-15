@@ -712,6 +712,7 @@ export const dashboardJobTimingSnapshots = pgTable("dashboard_job_timing_snapsho
 	repositoryName: text("repository_name").notNull(),
 	workflowName: text("workflow_name").notNull(),
 	jobName: text("job_name").notNull(),
+	workerId: uuid("worker_id").notNull(),
 	platform: text().notNull(),
 	driver: text().notNull(),
 	runtimeBoundary: text("runtime_boundary"),
@@ -762,6 +763,7 @@ export const dashboardJobTimingSnapshots = pgTable("dashboard_job_timing_snapsho
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	memoryPeakBytes: bigint("memory_peak_bytes", { mode: "number" }),
 }, (table) => [
+	index("dashboard_job_timing_worker_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.workerId.asc().nullsLast().op("uuid_ops"), table.completedAt.desc().nullsFirst().op("timestamptz_ops")),
 	index("dashboard_job_timing_completed_idx").using("btree", table.organizationId.asc().nullsLast().op("timestamptz_ops"), table.completedAt.desc().nullsFirst().op("timestamptz_ops"), table.jobId.desc().nullsFirst().op("timestamptz_ops")),
 	index("dashboard_job_timing_dimensions_idx").using("btree", table.organizationId.asc().nullsLast().op("text_ops"), table.platform.asc().nullsLast().op("text_ops"), table.driver.asc().nullsLast().op("text_ops"), table.requestedVcpu.asc().nullsLast().op("text_ops"), table.effectiveConcurrency.asc().nullsLast().op("text_ops"), table.completedAt.desc().nullsFirst().op("uuid_ops")),
 	foreignKey({

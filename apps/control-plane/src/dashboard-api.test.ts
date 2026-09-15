@@ -72,7 +72,7 @@ function trendDb() {
     if (query.includes('count(DISTINCT (repository_id, workflow_name, job_name))')) return [{
       jobCount: 1, completedRunCount: 1, medianExecutionDurationMs: 60_000, telemetryCoveredRunCount: 1,
     }];
-    if (query.includes("array_agg(DISTINCT platform")) return [{ platforms: ["windows-x64"], vcpus: [2], concurrencies: [1] }];
+    if (query.includes("array_agg(DISTINCT platform")) return [{ platforms: ["windows-x64"], vcpus: [2], concurrencies: [1], workers: [] }];
     if (query.includes('FROM summaries')) return [{
       repositoryId: trendRepositoryId, repositoryName: "acme/app", workflowName: "CI", jobName: "build",
       platform: "windows-x64", runCount: 1, latestCompletedAt: new Date("2026-09-02T12:00:00.000Z"),

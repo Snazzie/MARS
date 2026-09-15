@@ -86,7 +86,7 @@ async function recordReapedJobTiming(db: DatabaseClient, leaseId: string, reaped
       j.github_job_id AS "githubJobId", j.name AS "jobName", j.queued_at AS "queuedAt",
       j.started_at AS "startedAt", j.completed_at AS "completedAt", j.conclusion,
       r.repository_id AS "repositoryId", p.name AS "repositoryName", r.workflow_name AS "workflowName",
-      r.runtime_boundary AS "runtimeBoundary", l.pool_id AS "poolId", l.requested,
+      l.worker_id AS "workerId", r.runtime_boundary AS "runtimeBoundary", l.pool_id AS "poolId", l.requested,
       l.terminal_result AS "terminalResult", p.platform, p.driver, p.image_digest AS "artifactDigest",
       s.started_at AS "allocationStartedAt",
       (SELECT started_at FROM dashboard_run_stages WHERE organization_id=j.organization_id AND run_id=j.run_id AND stage='sandbox_ready') AS "sandboxReadyAt",
@@ -111,7 +111,7 @@ async function recordReapedJobTiming(db: DatabaseClient, leaseId: string, reaped
   const snapshot: JobTimingSnapshotInput = {
     organizationId: String(row.organizationId), jobId: String(row.jobId), runId: String(row.runId),
     repositoryId: String(row.repositoryId), githubJobId: Number(row.githubJobId), repositoryName: String(row.repositoryName),
-    workflowName: String(row.workflowName), jobName: String(row.jobName), platform: String(row.platform),
+    workflowName: String(row.workflowName), jobName: String(row.jobName), workerId: String(row.workerId), platform: String(row.platform),
     driver: String(row.driver), runtimeBoundary: row.runtimeBoundary ? String(row.runtimeBoundary) : null,
     poolId: row.poolId ? String(row.poolId) : null, artifactDigest: row.artifactDigest ? String(row.artifactDigest) : null,
     outcome: String(row.conclusion ?? (Number(terminalResult?.exitCode) === 0 ? "success" : "failure")) as JobTimingSnapshotInput["outcome"],

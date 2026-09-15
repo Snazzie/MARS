@@ -153,6 +153,7 @@ export type JobResourceTrendRequest = {
   from: JobResourceTrendTimestamp;
   to: JobResourceTrendTimestamp;
   platform?: string;
+  workerId?: string;
   vcpu?: number;
   concurrency?: number;
   search?: string;

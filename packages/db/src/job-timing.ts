@@ -8,7 +8,7 @@ export async function recordJobTimingSnapshot(db: JobTimingDb, input: JobTimingS
   const [row] = await db<{ jobId: string }[]>`
     INSERT INTO dashboard_job_timing_snapshots (
       organization_id, job_id, run_id, repository_id, github_job_id,
-      repository_name, workflow_name, job_name, platform, driver, runtime_boundary,
+      repository_name, workflow_name, job_name, worker_id, platform, driver, runtime_boundary,
       pool_id, artifact_digest, outcome, completed_at, queued_at, started_at,
       queue_duration_ms, startup_duration_ms, execution_duration_ms, cleanup_duration_ms, total_duration_ms,
       requested_vcpu, requested_memory_bytes, requested_storage_bytes, requested_concurrency,
@@ -16,7 +16,7 @@ export async function recordJobTimingSnapshot(db: JobTimingDb, input: JobTimingS
       telemetry_state, telemetry_sample_count, cpu_average_percent, cpu_p50_percent, cpu_p95_percent, cpu_peak_percent, cpu_time_ms, memory_average_bytes, memory_peak_bytes, created_at
     ) VALUES (
       ${input.organizationId}, ${input.jobId}, ${input.runId}, ${input.repositoryId}, ${input.githubJobId},
-      ${input.repositoryName}, ${input.workflowName}, ${input.jobName}, ${input.platform}, ${input.driver}, ${input.runtimeBoundary},
+      ${input.repositoryName}, ${input.workflowName}, ${input.jobName}, ${input.workerId}, ${input.platform}, ${input.driver}, ${input.runtimeBoundary},
       ${input.poolId}, ${input.artifactDigest}, ${input.outcome}, ${input.completedAt}, ${input.queuedAt}, ${input.startedAt},
       ${input.queueDurationMs}, ${input.startupDurationMs}, ${input.executionDurationMs}, ${input.cleanupDurationMs}, ${input.totalDurationMs},
       ${input.requestedVcpu}, ${input.requestedMemoryBytes}, ${input.requestedStorageBytes}, ${input.requestedConcurrency},
@@ -87,7 +87,7 @@ export async function listJobTimingHistory(db: JobTimingDb, organizationId: stri
   const rows = await db<Record<string, unknown>[]>`
     SELECT organization_id AS "organizationId", job_id AS "jobId", run_id AS "runId", repository_id AS "repositoryId",
       github_job_id AS "githubJobId", repository_name AS "repositoryName", workflow_name AS "workflowName", job_name AS "jobName",
-      platform, driver, runtime_boundary AS "runtimeBoundary", pool_id AS "poolId", artifact_digest AS "artifactDigest",
+      worker_id AS "workerId", platform, driver, runtime_boundary AS "runtimeBoundary", pool_id AS "poolId", artifact_digest AS "artifactDigest",
       outcome, completed_at AS "completedAt", queued_at AS "queuedAt", started_at AS "startedAt",
       queue_duration_ms AS "queueDurationMs", startup_duration_ms AS "startupDurationMs",
       execution_duration_ms AS "executionDurationMs", cleanup_duration_ms AS "cleanupDurationMs", total_duration_ms AS "totalDurationMs",
@@ -95,7 +95,6 @@ export async function listJobTimingHistory(db: JobTimingDb, organizationId: stri
       requested_concurrency AS "requestedConcurrency", observed_vcpu AS "observedVcpu", observed_memory_bytes AS "observedMemoryBytes",
       observed_storage_bytes AS "observedStorageBytes", effective_concurrency AS "effectiveConcurrency",
       telemetry_state AS "telemetryState", telemetry_sample_count AS "telemetrySampleCount", cpu_average_percent AS "cpuAveragePercent", cpu_p50_percent AS "cpuP50Percent", cpu_p95_percent AS "cpuP95Percent", cpu_peak_percent AS "cpuPeakPercent", cpu_time_ms AS "cpuTimeMs", memory_average_bytes AS "memoryAverageBytes", memory_peak_bytes AS "memoryPeakBytes", created_at AS "createdAt"
-    FROM dashboard_job_timing_snapshots
     WHERE (
       (${organizationId === "all"} AND organization_id IN (SELECT organization_id FROM memberships WHERE user_id=${userId ?? null}))
       OR (${organizationId !== "all"} AND organization_id=${organizationId === "all" ? null : organizationId}::uuid)

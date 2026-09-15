@@ -68,7 +68,7 @@ function trendPage(job: JobResourceTrendJob): JobResourceTrendResponse {
     jobs: [job],
     nextCursor: null,
     selectedJob: { summary: job, points: [] },
-    filters: { platforms: [job.platform], vcpus: [job.latestRequestedVcpu], concurrencies: [job.latestEffectiveConcurrency] },
+    filters: { platforms: [job.platform], vcpus: [job.latestRequestedVcpu], concurrencies: [job.latestEffectiveConcurrency], workers: [] },
     generatedAt: now.toISOString(),
   };
 }
@@ -85,6 +85,7 @@ test("resource history defaults to a seven-day bounded request", () => {
       from: "2026-08-27T12:00:00.000Z",
       to: "2026-09-03T12:00:00.000Z",
       platform: undefined,
+      workerId: undefined,
       vcpu: undefined,
       concurrency: undefined,
       search: undefined,
@@ -99,6 +100,7 @@ test("resource history defaults to a seven-day bounded request", () => {
 test("resource history query includes every active filter", () => {
   const options = jobResourceTrendQueryOptions("org-1", {
     range: "30d",
+    workerId: "",
     platform: "windows-x64",
     vcpu: "4",
     concurrency: "3",
@@ -110,6 +112,7 @@ test("resource history query includes every active filter", () => {
     from: "2026-08-04T12:00:00.000Z",
     to: "2026-09-03T12:00:00.000Z",
     platform: "windows-x64",
+    workerId: undefined,
     vcpu: 4,
     concurrency: 3,
     search: "nightly build",
@@ -240,13 +243,14 @@ test("commits summary and selected detail only from one request generation", () 
 });
 
 test("no-match facets retain active controlled filter options", () => {
-  const empty: JobResourceTrendResponse["filters"] = { platforms: [], vcpus: [], concurrencies: [] };
+  const empty: JobResourceTrendResponse["filters"] = { platforms: [], vcpus: [], concurrencies: [], workers: [] };
   const filters = { ...defaultTimingFilters, platform: "windows-x64", vcpu: "4", concurrency: "3" };
 
   expect(resourceHistoryToolbarFacets(empty, filters)).toEqual({
     platforms: ["windows-x64"],
     vcpus: [4],
     concurrencies: [3],
+    workers: [],
   });
 });
 

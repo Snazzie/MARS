@@ -4,15 +4,19 @@ import { readdir, readFile } from "node:fs/promises";
 import { migrateDatabase } from "./migrate.ts";
 import type { DatabaseClient } from "./index.ts";
 import type { TransactionSql } from "postgres";
-import { schemaSql } from "./schema.ts";
+import { schemaSql, workerAnalyticsMigrationSql } from "./schema.ts";
 
 const migrationsUrl = new URL("./migrations/", import.meta.url);
 const migration = (name: string) => readFile(new URL(`./migrations/${name}`, import.meta.url), "utf8");
 
-test("Mars baseline materializes the canonical schema SQL", async () => {
+test("journaled migrations materialize the canonical schema SQL", async () => {
   const baseline = await migration("0000_mars_baseline.sql");
+  const workerAnalytics = await migration("0001_worker_analytics.sql");
 
-  expect(baseline.trim().replaceAll("\r\n", "\n")).toBe(schemaSql.trim().replaceAll("\r\n", "\n"));
+  expect(`${baseline}\n${workerAnalytics}`.trim().replaceAll("\r\n", "\n")).toBe(schemaSql.trim().replaceAll("\r\n", "\n"));
+  expect(workerAnalytics.trim().replaceAll("\r\n", "\n")).toBe(workerAnalyticsMigrationSql.trim().replaceAll("\r\n", "\n"));
+  expect(baseline).not.toContain("ALTER TABLE dashboard_job_timing_snapshots ADD COLUMN IF NOT EXISTS worker_id uuid;");
+  expect(workerAnalytics).toContain("ALTER TABLE dashboard_job_timing_snapshots ADD COLUMN IF NOT EXISTS worker_id uuid;");
   expect(baseline).toContain(
     "CREATE TABLE IF NOT EXISTS webhook_deliveries (delivery_id text PRIMARY KEY, installation_id bigint NOT NULL, payload jsonb NOT NULL, received_at timestamptz NOT NULL DEFAULT now(), event_name text NOT NULL DEFAULT 'unknown', state text NOT NULL DEFAULT 'received', attempt_count integer NOT NULL DEFAULT 0, last_error text, processed_at timestamptz);",
   );
@@ -27,13 +31,13 @@ test("Mars baseline materializes the canonical schema SQL", async () => {
   ]) expect(baseline).toContain(column);
 });
 
-test("migration directory contains exactly one journaled baseline", async () => {
+test("migration directory contains journaled baseline and worker analytics migration", async () => {
   const journal = JSON.parse(await readFile(new URL("./migrations/meta/_journal.json", import.meta.url), "utf8")) as {
     entries: Array<{ idx: number; version: string; tag: string; when: number; breakpoints: boolean }>;
   };
   const files = (await readdir(migrationsUrl)).filter(file => file.endsWith(".sql"));
 
-  expect(files).toEqual(["0000_mars_baseline.sql"]);
+  expect(files).toEqual(["0000_mars_baseline.sql", "0001_worker_analytics.sql"]);
   expect(journal.entries).toEqual([
     {
       idx: 0,
@@ -42,8 +46,16 @@ test("migration directory contains exactly one journaled baseline", async () => 
       tag: "0000_mars_baseline",
       breakpoints: true,
     },
+    {
+      idx: 1,
+      version: "7",
+      when: 1789469267000,
+      tag: "0001_worker_analytics",
+      breakpoints: true,
+    },
   ]);
 });
+
 type JournalRow = { hash: string; created_at: number };
 
 function fakeDatabase(input: {

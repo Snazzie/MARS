@@ -5,6 +5,7 @@ export type TimingRange = "24h" | "7d" | "30d" | "90d";
 export type TimingFilters = {
   range: TimingRange;
   platform: string;
+  workerId: string;
   vcpu: string;
   concurrency: string;
   search: string;
@@ -12,12 +13,7 @@ export type TimingFilters = {
 };
 
 export const defaultTimingFilters: TimingFilters = {
-  range: "7d",
-  platform: "",
-  vcpu: "",
-  concurrency: "",
-  search: "",
-  sort: "latest",
+  range: "7d", platform: "", workerId: "", vcpu: "", concurrency: "", search: "", sort: "latest",
 };
 
 const rangeDurationMs: Record<TimingRange, number> = {

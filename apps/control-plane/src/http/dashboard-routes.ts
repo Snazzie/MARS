@@ -30,6 +30,7 @@ const jobResourceTrendQuerySchema = z.object({
   from: unixOrDateTimeSchema,
   to: unixOrDateTimeSchema,
   platform: z.string().max(100).optional(),
+  workerId: z.string().uuid().optional(),
   vcpu: z.coerce.number().int().positive().optional(),
   concurrency: z.coerce.number().int().positive().optional(),
   search: z.string().max(200).default(""),

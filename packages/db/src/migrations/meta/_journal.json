@@ -8,6 +8,13 @@
       "when": 1700000000000,
       "tag": "0000_mars_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789469267000,
+      "tag": "0001_worker_analytics",
+      "breakpoints": true
     }
   ]
 }

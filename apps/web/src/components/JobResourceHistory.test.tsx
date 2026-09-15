@@ -17,6 +17,7 @@ const facets: JobResourceTrendResponse["filters"] = {
   platforms: ["linux-x64", "windows-x64"],
   vcpus: [2, 4],
   concurrencies: [1, 3],
+  workers: [],
 };
 
 const summary: JobResourceTrendResponse["summary"] = {

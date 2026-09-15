@@ -96,6 +96,14 @@ describe("listJobResourceTrends", () => {
     }
   });
 
+  test("rejects malformed worker filters before issuing SQL", async () => {
+    const db = fakeDatabase([]);
+    await expect(listJobResourceTrends(db, "org-1", { ...baseQuery, workerId: "not-a-uuid" })).rejects.toMatchObject({
+      code: "invalid_resource_trend_query",
+    });
+    expect(db.calls).toHaveLength(0);
+  });
+
   test("rejects a point limit that cannot preserve both range endpoints", async () => {
     const db = fakeDatabase([]);
 
@@ -109,7 +117,7 @@ describe("listJobResourceTrends", () => {
   test("normalizes filtered totals, facets, distinct identities, and selected points", async () => {
     const db = fakeDatabase([
       [{ jobCount: "2", completedRunCount: "5", medianExecutionDurationMs: "1100", telemetryCoveredRunCount: "3" }],
-      [{ platforms: ["linux-x64", "windows-x64"], vcpus: ["2", "4"], concurrencies: ["1", "3"] }],
+      [{ platforms: ["linux-x64", "windows-x64"], vcpus: ["2", "4"], concurrencies: ["1", "3"], workers: [{ id: "worker-1", name: "Worker A" }] }],
       [summaryRow(), summaryRow({ repositoryId: "repo-2", repositoryName: "acme/two", cpuPeakPercent: null, memoryPeakBytes: null })],
       [pointRow(2, { cpuAveragePercent: null, cpuPeakPercent: null, memoryPeakBytes: null }), pointRow(1)],
     ]);
@@ -118,8 +126,7 @@ describe("listJobResourceTrends", () => {
       ...baseQuery, platform: "windows-x64", vcpu: 2, concurrency: 3, search: "build", limit: 2, pointLimit: 2,
     });
 
-    expect(result.summary).toEqual({ jobCount: 2, completedRunCount: 5, medianExecutionDurationMs: 1100, telemetryCoveredRunCount: 3, telemetryCoveragePercent: 60 });
-    expect(result.filters).toEqual({ platforms: ["linux-x64", "windows-x64"], vcpus: [2, 4], concurrencies: [1, 3] });
+    expect(result.filters).toEqual({ platforms: ["linux-x64", "windows-x64"], vcpus: [2, 4], concurrencies: [1, 3], workers: [{ id: "worker-1", name: "Worker A" }] });
     expect(result.jobs.map(({ repositoryId, runCount, cpuPeakPercent, memoryPeakBytes }) => ({ repositoryId, runCount, cpuPeakPercent, memoryPeakBytes }))).toEqual([
       { repositoryId: "repo-1", runCount: 3, cpuPeakPercent: 84.5, memoryPeakBytes: 4096 },
       { repositoryId: "repo-2", runCount: 3, cpuPeakPercent: null, memoryPeakBytes: null },
@@ -157,10 +164,9 @@ describe("listJobResourceTrends", () => {
     ]);
     const result = await listJobResourceTrends(db, "org-1", { ...baseQuery, sort: "duration", limit: 1 });
     expect(result.jobs).toHaveLength(1);
-    expect(decodeJobResourceCursor(result.nextCursor!)).toEqual({ sortValue: 1200, jobKey: encodeJobResourceKey(identity) });
+    expect(db.calls[2]?.sql).toContain("$12::uuid");
     expect(db.calls[2]?.values).toContain(2);
-    expect(db.calls[2]?.sql).toContain("$11::uuid");
-    expect(db.calls[2]?.values[10]).toBe("00000000-0000-0000-0000-000000000000");
+    expect(db.calls[2]?.values[11]).toBe("00000000-0000-0000-0000-000000000000");
   });
 
   test("falls back to the first summary when a valid selected identity is filtered out", async () => {

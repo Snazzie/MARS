@@ -58,12 +58,14 @@ const emptyFacets: ResourceTrendPage["filters"] = {
   platforms: [],
   vcpus: [],
   concurrencies: [],
+  workers: [],
 };
 
 function resourceTrendRequest(filters: TimingFilters, now: Date) {
   return {
     ...timingRangeBounds(filters.range, now),
     platform: filters.platform || undefined,
+    workerId: filters.workerId || undefined,
     vcpu: filters.vcpu ? Number(filters.vcpu) : undefined,
     concurrency: filters.concurrency ? Number(filters.concurrency) : undefined,
     search: filters.search.trim() || undefined,
@@ -121,6 +123,7 @@ export function resourceHistoryPageState(jobCount: number, filters: TimingFilter
   if (jobCount > 0) return "ready";
   const hasActiveFilters = filters.range !== defaultTimingFilters.range
     || filters.platform !== defaultTimingFilters.platform
+    || filters.workerId !== defaultTimingFilters.workerId
     || filters.vcpu !== defaultTimingFilters.vcpu
     || filters.concurrency !== defaultTimingFilters.concurrency
     || filters.search.trim() !== defaultTimingFilters.search
@@ -192,15 +195,18 @@ export function resourceHistoryDisplayedDetail(
 ): SelectedResourceTrend | null {
   const candidate = requestedJobKey === null ? firstPageDetail : requestedDetail ?? firstPageDetail;
   if (!candidate) return null;
-  return jobs.some((job) => job.jobKey === candidate.summary.jobKey) ? candidate : null;
+  if (!jobs.some((job) => job.jobKey === candidate.summary.jobKey)) return null;
+  return candidate;
 }
-
 export function resourceHistoryToolbarFacets(
   facets: ResourceTrendPage["filters"],
   filters: TimingFilters,
 ): ResourceTrendPage["filters"] {
   const vcpu = filters.vcpu ? Number(filters.vcpu) : null;
   const concurrency = filters.concurrency ? Number(filters.concurrency) : null;
+  const workers = filters.workerId && !facets.workers.some((worker) => worker.id === filters.workerId)
+    ? [...facets.workers, { id: filters.workerId, name: `Unknown worker (${filters.workerId.slice(0, 8)})` }]
+    : facets.workers;
   return {
     platforms: filters.platform && !facets.platforms.includes(filters.platform)
       ? [...facets.platforms, filters.platform]
@@ -209,6 +215,7 @@ export function resourceHistoryToolbarFacets(
     concurrencies: concurrency !== null && !facets.concurrencies.includes(concurrency)
       ? [...facets.concurrencies, concurrency]
       : facets.concurrencies,
+    workers,
   };
 }
 
