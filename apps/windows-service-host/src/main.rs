@@ -6,7 +6,7 @@ use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use windows_service::define_windows_service;
 use windows_service::service::{
     ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType,
@@ -28,8 +28,6 @@ const SERVICE_NAME: &str = "MarsWorker";
 enum TerminationCause {
     ChildExit,
     ServiceStop,
-    ForcedJobTermination,
-    ChildDisappeared,
     ServiceHostError,
 }
 
@@ -38,8 +36,6 @@ impl TerminationCause {
         match self {
             Self::ChildExit => "child_exit",
             Self::ServiceStop => "service_stop",
-            Self::ForcedJobTermination => "forced_job_termination",
-            Self::ChildDisappeared => "child_disappeared",
             Self::ServiceHostError => "service_host_error",
         }
     }
@@ -60,8 +56,6 @@ struct JobAccounting {
 struct SupervisionOutcome {
     exit_code: u32,
     cause: TerminationCause,
-    exit_observed: bool,
-    elapsed_ms: u64,
     accounting: Option<JobAccounting>,
 }
 
@@ -243,7 +237,6 @@ fn supervise_child(
     stop: mpsc::Receiver<()>,
     on_stop: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<SupervisionOutcome> {
-    let started = Instant::now();
     let child_pid = child.id();
     let mut on_stop = Some(on_stop);
     loop {
@@ -254,12 +247,10 @@ fn supervise_child(
             }
             let accounting = job.accounting().ok();
             job.terminate();
-            let status = child.wait().ok();
+            let _ = child.wait();
             let outcome = SupervisionOutcome {
                 exit_code: 0,
                 cause: TerminationCause::ServiceStop,
-                exit_observed: status.is_some(),
-                elapsed_ms: started.elapsed().as_millis() as u64,
                 accounting,
             };
             append_record("job_terminated", Some(child_pid), Some(outcome.cause), None, outcome.accounting);
@@ -269,8 +260,6 @@ fn supervise_child(
             let outcome = SupervisionOutcome {
                 exit_code: if status.success() { 1 } else { child_exit_code(status) },
                 cause: TerminationCause::ChildExit,
-                exit_observed: true,
-                elapsed_ms: started.elapsed().as_millis() as u64,
                 accounting: job.accounting().ok(),
             };
             append_record("child_exited", Some(child_pid), Some(outcome.cause), None, outcome.accounting);
@@ -404,19 +393,6 @@ mod tests {
             },
             1
         );
-    }
-
-    #[test]
-    fn forced_termination_is_not_oom() {
-        let outcome = SupervisionOutcome {
-            exit_code: 1,
-            cause: TerminationCause::ForcedJobTermination,
-            exit_observed: false,
-            elapsed_ms: 1_000,
-            accounting: None,
-        };
-        assert_eq!(outcome.cause, TerminationCause::ForcedJobTermination);
-        assert!(!outcome.exit_observed);
     }
 
     #[test]
