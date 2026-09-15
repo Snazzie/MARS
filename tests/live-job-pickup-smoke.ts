@@ -78,7 +78,7 @@ type DatabaseRunState = {
 };
 
 export function isMarsRunnerName(value: string | null): boolean {
-  return typeof value === "string" && /^mars-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+  return typeof value === "string" && /^mars-[a-z0-9][a-z0-9._-]*-[1-9][0-9]*vcpu-[1-9][0-9]*g-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 }
 export function assertExpectedControlPlaneBuild(value: unknown, expectedBuildId: string): asserts value is ControlPlaneHealthResponse {
   if (!value || typeof value !== "object") throw new Error("control_plane_health_invalid");

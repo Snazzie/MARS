@@ -10,9 +10,9 @@ import {
 
 describe("live job pickup smoke helpers", () => {
   test("accepts only lease-correlated Mars runner names", () => {
-    expect(isMarsRunnerName("mars-123e4567-e89b-12d3-a456-426614174000")).toBe(true);
-    expect(isMarsRunnerName("mars-debug-123e4567-e89b-12d3-a456-426614174000")).toBe(false);
-    expect(isMarsRunnerName("mars-123e4567-e89b-12d3-a456-42661417400z")).toBe(false);
+    expect(isMarsRunnerName("mars-windows-x64-4vcpu-6g-123e4567-e89b-12d3-a456-426614174000")).toBe(true);
+    expect(isMarsRunnerName("mars-123e4567-e89b-12d3-a456-426614174000")).toBe(false);
+    expect(isMarsRunnerName("mars-windows-x64-4vcpu-6g-123e4567-e89b-12d3-a456-42661417400z")).toBe(false);
     expect(isMarsRunnerName(null)).toBe(false);
   });
 
@@ -62,14 +62,14 @@ describe("live job pickup smoke helpers", () => {
     const lease = advanceFreshRunMilestones(queued, { ...base, leaseId: "123e4567-e89b-12d3-a456-426614174000", leaseState: "dispatched" });
     expect(lease.lease).toBe(true);
 
-    const inProgress = advanceFreshRunMilestones(lease, { ...base, githubStatus: "in_progress", databaseRunStatus: "in_progress", databaseJobStatus: "in_progress", runnerName: "mars-123e4567-e89b-12d3-a456-426614174000", leaseId: "123e4567-e89b-12d3-a456-426614174000", leaseState: "busy", pending: 0 });
+    const inProgress = advanceFreshRunMilestones(lease, { ...base, githubStatus: "in_progress", databaseRunStatus: "in_progress", databaseJobStatus: "in_progress", runnerName: "mars-windows-x64-4vcpu-6g-123e4567-e89b-12d3-a456-426614174000", leaseId: "123e4567-e89b-12d3-a456-426614174000", leaseState: "busy", pending: 0 });
     expect(inProgress.inProgress).toBe(true);
 
-    const terminal = advanceFreshRunMilestones(inProgress, { ...base, githubStatus: "completed", githubConclusion: "success", databaseRunStatus: "completed", databaseJobStatus: "completed", runnerName: "mars-123e4567-e89b-12d3-a456-426614174000", leaseId: "123e4567-e89b-12d3-a456-426614174000", leaseState: "completed", pending: 0 });
+    const terminal = advanceFreshRunMilestones(inProgress, { ...base, githubStatus: "completed", githubConclusion: "success", databaseRunStatus: "completed", databaseJobStatus: "completed", runnerName: "mars-windows-x64-4vcpu-6g-123e4567-e89b-12d3-a456-426614174000", leaseId: "123e4567-e89b-12d3-a456-426614174000", leaseState: "completed", pending: 0 });
     expect(terminal.terminal).toBe(true);
     expect(terminal.reaped).toBe(false);
 
-    const completed = advanceFreshRunMilestones(terminal, { ...base, githubStatus: "completed", githubConclusion: "success", databaseRunStatus: "completed", databaseJobStatus: "completed", runnerName: "mars-123e4567-e89b-12d3-a456-426614174000", leaseId: "123e4567-e89b-12d3-a456-426614174000", leaseState: "reaped", pending: 0 });
+    const completed = advanceFreshRunMilestones(terminal, { ...base, githubStatus: "completed", githubConclusion: "success", databaseRunStatus: "completed", databaseJobStatus: "completed", runnerName: "mars-windows-x64-4vcpu-6g-123e4567-e89b-12d3-a456-426614174000", leaseId: "123e4567-e89b-12d3-a456-426614174000", leaseState: "reaped", pending: 0 });
     expect(completed).toEqual({ queued: true, lease: true, inProgress: true, terminal: true, reaped: true, pendingZero: true });
   });
 
@@ -79,7 +79,7 @@ describe("live job pickup smoke helpers", () => {
       githubConclusion: "success",
       databaseRunStatus: "completed",
       databaseJobStatus: "completed",
-      runnerName: "mars-123e4567-e89b-12d3-a456-426614174000",
+      runnerName: "mars-windows-x64-4vcpu-6g-123e4567-e89b-12d3-a456-426614174000",
       leaseId: "123e4567-e89b-12d3-a456-426614174000",
       leaseState: "reaped",
       pending: 0,

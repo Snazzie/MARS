@@ -86,7 +86,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
         reservation = undefined;
         return;
       }
-      const jit = await deps.jit({ installationId: queued.installationId, owner, repo, runnerName: `mars-${randomUUID()}`, labels: requestedLabels, githubJobId: queued.jobId }).catch((error) => {
+      const jit = await deps.jit({ installationId: queued.installationId, owner, repo, runnerName: `${option.route}-${option.vcpu}vcpu-${option.memoryGiB}g-${randomUUID()}`, labels: requestedLabels, githubJobId: queued.jobId }).catch((error) => {
         jitFailed = true;
         throw error;
       });
