@@ -11,6 +11,8 @@ import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { retryControlPlaneOperation } from "./worker-client.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 import { collectWorkerServiceLogs } from "./worker-service-logs.ts";
+import { openLeasePickupState, leasePickupStateFile, type LeasePickupStateController } from "./lease-pickup-state.ts";
+import { MacStatusItemSupervisor, statusItemExecutable } from "./mac-status-item.ts";
 export interface MacWorkerLimits { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number }
 export interface MacWorkerJoinInput {
   code: string;
@@ -153,12 +155,13 @@ export interface MacWorkerCommandDependencies {
   cacheService: ActionCacheService;
   activeLeases: Map<string, Promise<void>>;
   preserveLeases: () => boolean;
+  acceptingLeases?: () => boolean;
   saveIdentity: () => Promise<void>;
   setPreserveLeases: (enabled: boolean) => void;
   send: (event: WorkerEvent) => void;
 }
 export async function executeMacWorkerCommand(command: WorkerCommand, dependencies: MacWorkerCommandDependencies): Promise<void> {
-  const { driver, limits, encryptionPrivateKey, cache, cacheService, activeLeases, preserveLeases, saveIdentity, setPreserveLeases, send } = dependencies;
+  const { driver, limits, encryptionPrivateKey, cache, cacheService, activeLeases, preserveLeases, acceptingLeases = () => true, saveIdentity, setPreserveLeases, send } = dependencies;
   if (command.type === "worker.collect_logs") {
     send(await collectWorkerServiceLogs(command));
     return;
@@ -180,7 +183,10 @@ export async function executeMacWorkerCommand(command: WorkerCommand, dependenci
     const payload = command.payload as { bootstrapCiphertext?: Parameters<typeof openLeaseBootstrap>[0] };
     if (!payload.bootstrapCiphertext) throw new Error("lease bootstrap payload invalid");
     const bootstrap = openLeaseBootstrap(payload.bootstrapCiphertext, encryptionPrivateKey);
-    if (bootstrap.leaseId !== command.leaseId) throw new Error("lease bootstrap mismatch");
+    if (!acceptingLeases()) {
+      send(workerEvent(command.workerId, "lease.declined", { commandId: command.id, leaseId: command.leaseId, nonce: bootstrap.nonce, reason: "pickup_paused" }));
+      return;
+    }
     send(workerEvent(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId }));
     void startMacLeaseLifecycle(command, driver, bootstrap, send, activeLeases, preserveLeases);
     return;
@@ -342,7 +348,7 @@ async function enrollMacWorker(controlPlane: URL, identity: MacWorkerIdentity): 
   } finally { codeBytes.fill(0); }
 }
 
-async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, driver: TartVmDriver, limits: MacWorkerLimits, cache: WorkerCacheConfiguration, cacheService: ActionCacheService): Promise<never> {
+async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, driver: TartVmDriver, limits: MacWorkerLimits, cache: WorkerCacheConfiguration, cacheService: ActionCacheService, pickupState: LeasePickupStateController): Promise<never> {
   const doctorReport = await currentMacDoctor();
   const activeLeases = new Map<string, Promise<void>>();
   for (;;) {
@@ -368,12 +374,12 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           await emitActionCacheSnapshot(cacheService, (type, payload) => {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(workerEvent(identity.workerId, type, payload)));
           });
-          ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
+          ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, acceptingLeases: pickupState.acceptingLeases, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
           return;
         }
         if (frame.type === "ping") {
           ws.send(JSON.stringify({ version: 1, type: "pong", workerId: identity.workerId }));
-          ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
+          ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, acceptingLeases: pickupState.acceptingLeases, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
           return;
         }
         if (frame.type === "doctor_ack") return;
@@ -398,6 +404,7 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           activeLeases,
           preserveLeases: () => identity.preserveLeases === true,
           setPreserveLeases: enabled => { identity.preserveLeases = enabled; },
+          acceptingLeases: () => pickupState.acceptingLeases,
           saveIdentity: () => saveMacWorkerIdentity(identity),
           send: eventToSend => {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(eventToSend));
@@ -431,6 +438,9 @@ export async function runWorkerJoin(platform: "macos-arm64" | "windows-x64", bas
 export async function runMacWorker(baseUrl: string, limits: MacWorkerLimits, cache = WorkerCacheConfiguration.parse({})): Promise<never> {
   const controlPlane = validateControlPlaneUrl(baseUrl);
   const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: cache.ttlSeconds, runnerCacheEnabled: cache.runnerCacheEnabled, runnerCacheMaxGiB: cache.runnerCacheMaxGiB });
+  const pickupState = await openLeasePickupState(leasePickupStateFile());
+  const statusItem = new MacStatusItemSupervisor(statusItemExecutable(), leasePickupStateFile());
+  void statusItem.run();
   try {
     const driver = new TartVmDriver(createTartVmRuntime(), Bun.env.MARS_TART_BASE_IMAGE ?? "mars-macos-worker", "mars-job", limits, Bun.env.MARS_WORKER_CONTRACT_VERSION ?? "");
     let identity = await loadMacWorkerIdentity();
@@ -439,9 +449,10 @@ export async function runMacWorker(baseUrl: string, limits: MacWorkerLimits, cac
       identity = { workerId: "", ...createKeyPair(), machineUuid, vmUuid: (Bun.env.MARS_VM_UUID ?? machineUuid).toLowerCase() };
       await saveMacWorkerIdentity(identity);
     }
-    if (!identity.workerId) identity = await enrollMacWorker(controlPlane, identity);
-    return await connectMacWorker(controlPlane, identity, driver, limits, cache, cacheService);
+    return await connectMacWorker(controlPlane, identity, driver, limits, cache, cacheService, pickupState);
   } finally {
+    await statusItem.close();
+    await pickupState.close();
     await cacheService.close();
   }
 }

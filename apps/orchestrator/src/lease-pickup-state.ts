@@ -1,0 +1,89 @@
+import { mkdir, readFile, rename, writeFile, chmod } from "node:fs/promises";
+import { watch, type FSWatcher } from "node:fs";
+import { dirname, basename } from "node:path";
+
+export type LeasePickupState = { paused: boolean };
+export type LeasePickupStateController = {
+  readonly acceptingLeases: boolean;
+  subscribe(listener: (acceptingLeases: boolean) => void): () => void;
+  close(): Promise<void>;
+};
+
+const parseState = (value: unknown): LeasePickupState => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("lease pickup state must be an object");
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length !== 1 || entries[0]?.[0] !== "paused" || typeof entries[0][1] !== "boolean") throw new Error("lease pickup state must be exactly { paused: boolean }");
+  return { paused: entries[0][1] as boolean };
+};
+
+export async function readLeasePickupState(path: string): Promise<boolean> {
+  try {
+    return !parseState(JSON.parse(await readFile(path, "utf8"))).paused;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    console.error("Lease pickup state unreadable; failing closed", { path, error: error instanceof Error ? error.message : String(error) });
+    return false;
+  }
+}
+
+export async function writeLeasePickupState(path: string, acceptingLeases: boolean): Promise<void> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify({ paused: !acceptingLeases }), { flag: "wx", mode: 0o600 });
+    await chmod(temporary, 0o600);
+    await rename(temporary, path);
+  } catch (error) {
+    await Bun.file(temporary).delete().catch(() => {});
+    throw error;
+  }
+}
+
+export async function openLeasePickupState(path: string): Promise<LeasePickupStateController> {
+  if (!path.startsWith("/")) throw new Error("lease pickup state path must be absolute");
+  try {
+    await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") await writeLeasePickupState(path, true);
+  }
+  let acceptingLeases = await readLeasePickupState(path);
+  const listeners = new Set<(acceptingLeases: boolean) => void>();
+  let closed = false;
+  let loading: Promise<void> | undefined;
+  const reload = async () => {
+    if (closed) return;
+    if (loading) return loading;
+    loading = (async () => {
+      const next = await readLeasePickupState(path);
+      if (next !== acceptingLeases) {
+        acceptingLeases = next;
+        for (const listener of listeners) listener(next);
+      }
+    })().finally(() => { loading = undefined; });
+    return loading;
+  };
+  let watcher: FSWatcher | undefined;
+  try {
+    watcher = watch(dirname(path), () => {
+      void reload();
+    });
+  } catch (error) {
+    console.error("Lease pickup state watcher unavailable", { path, error: error instanceof Error ? error.message : String(error) });
+  }
+  const timer = setInterval(() => { void reload(); }, 5_000);
+  return {
+    get acceptingLeases() { return acceptingLeases; },
+    subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+    async close() {
+      if (closed) return;
+      closed = true;
+      clearInterval(timer);
+      watcher?.close();
+      listeners.clear();
+      await loading;
+    },
+  };
+}
+
+export const leasePickupStateFile = () => Bun.env.MARS_LEASE_PICKUP_STATE_FILE ?? `${Bun.env.HOME ?? "."}/Library/Application Support/Mars/lease-pickup.json`;
+export const leasePickupStateFilename = (path: string) => basename(path);

@@ -49,6 +49,7 @@ export const WindowsWorkerRelease = z.object({
   orchestrator: hashedAsset,
   serviceHost: hashedAsset,
   jobAgent: hashedAsset,
+  trayScript: hashedAsset.optional(),
   container: z.object({
     baseImage: ociDigest,
     runner: hashedAsset,
@@ -61,11 +62,11 @@ export const WindowsWorkerRelease = z.object({
   }).strict(),
 }).strict();
 export type WindowsWorkerRelease = z.infer<typeof WindowsWorkerRelease>;
-
 export const MacosWorkerRelease = z.object({
   installer: hashedAsset,
   orchestrator: hashedAsset,
   jobAgent: hashedAsset,
+  statusItem: hashedAsset.optional(),
   imagePreparationScript: hashedAsset,
   tartSourceImage: ociDigest,
 }).strict();

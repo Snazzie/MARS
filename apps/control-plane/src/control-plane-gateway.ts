@@ -176,6 +176,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         if (!parsed.success) return;
         const doctorPayload = parsed.data;
         await options.db`update workers set doctor=${jsonParameter(options.db, doctorPayload)}, doctor_observed_at=now(), last_heartbeat_at=now() where id=${ws.data.workerId}`;
+        void options.triggerReconciliation();
         if (doctorPayload.doctor.activeLeases) {
           await reconcileWorkerInventory(options.db, ws.data.workerId, doctorPayload.doctor.activeLeases);
         }
@@ -205,6 +206,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           void options.triggerReconciliation();
         } else {
           const accepted = await handleAuthenticatedWorkerEvent(options.db, options.dispatcher, frame, ws);
+          if (frame.type === "lease.declined" && accepted) void options.triggerReconciliation();
           if (!accepted) throw new Error("invalid worker event");
           console.log(`Worker event: ${ws.data.workerId} type=${frame.type}`);
         }

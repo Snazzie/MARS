@@ -142,7 +142,7 @@ jobs:
           New-Item -ItemType Directory -Force dist/windows | Out-Null
           bun build apps/orchestrator/src/index.ts --compile --target=bun-windows-x64 --outfile=dist/windows/mars-orchestrator.exe
           bun build apps/job-agent/src/index.ts --compile --target=bun-windows-x64 --outfile=dist/windows/mars-job-agent.exe
-          Copy-Item deploy/workers/install-worker.ps1,deploy/workers/build-windows-container-image-local.ps1,images/jobs/windows/verify-runtime.ps1,images/jobs/windows/Containerfile,images/jobs/windows/entrypoint.ps1 dist/windows
+          Copy-Item deploy/workers/install-worker.ps1,deploy/workers/mars-worker-tray.ps1,deploy/workers/build-windows-container-image-local.ps1,images/jobs/windows/verify-runtime.ps1,images/jobs/windows/Containerfile,images/jobs/windows/entrypoint.ps1 dist/windows
           rustup target add x86_64-pc-windows-gnu
           cargo build --manifest-path apps/windows-service-host/Cargo.toml --release --target x86_64-pc-windows-gnu
           Copy-Item apps/windows-service-host/target/x86_64-pc-windows-gnu/release/mars-service-host.exe dist/windows/mars-service-host.exe
@@ -161,21 +161,38 @@ jobs:
           function Asset($file,$name) { [ordered]@{url="$base/$name";sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath "dist/windows/$file").Hash.ToLowerInvariant()} }
           $d=Get-Content dist/windows/dependencies.json -Raw|ConvertFrom-Json
           $c=[ordered]@{baseImage=$d.baseImage;runner=Asset 'mars-windows-runner.zip' 'mars-windows-runner.zip';git=Asset 'mars-windows-git.zip' 'mars-windows-git.zip';vcRuntime=Asset 'mars-windows-vc-runtime.exe' 'mars-windows-vc-runtime.exe';buildScript=Asset 'build-windows-container-image-local.ps1' 'build-windows-container-image-local.ps1';verifyScript=Asset 'verify-runtime.ps1' 'verify-runtime.ps1';containerfile=Asset 'Containerfile' 'Containerfile';entrypoint=Asset 'entrypoint.ps1' 'entrypoint.ps1'}
-          $m=[ordered]@{installer=Asset 'install-worker.ps1' 'install-worker-windows-x64.ps1';orchestrator=Asset 'mars-orchestrator.exe' 'mars-orchestrator-windows-x64.exe';serviceHost=Asset 'mars-service-host.exe' 'mars-service-host.exe';jobAgent=Asset 'mars-job-agent.exe' 'mars-job-agent-windows-x64.exe';container=$c}; $m|ConvertTo-Json -Depth 8 -Compress|Set-Content dist/windows/metadata.json; "json=$(Get-Content dist/windows/metadata.json -Raw)"|Out-File $env:GITHUB_OUTPUT -Append
+          $m=[ordered]@{installer=Asset 'install-worker.ps1' 'install-worker-windows-x64.ps1';orchestrator=Asset 'mars-orchestrator.exe' 'mars-orchestrator-windows-x64.exe';serviceHost=Asset 'mars-service-host.exe' 'mars-service-host.exe';jobAgent=Asset 'mars-job-agent.exe' 'mars-job-agent-windows-x64.exe';trayScript=Asset 'mars-worker-tray.ps1' 'mars-worker-tray.ps1';container=$c}; $m|ConvertTo-Json -Depth 8 -Compress|Set-Content dist/windows/metadata.json; "json=$(Get-Content dist/windows/metadata.json -Raw)"|Out-File $env:GITHUB_OUTPUT -Append
       - uses: actions/upload-artifact@v4
         with: { name: "worker-windows-${{ github.sha }}", path: dist/windows }
+
+  macos-status-item:
+    name: Build macOS status item
+    if: inputs.worker_release_mode == 'build'
+    needs: validate-inputs
+    runs-on: macos-14
+    permissions: { contents: read }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build status item
+        run: |
+          set -euo pipefail
+          mkdir -p dist/macos
+          swiftc -parse-as-library -framework AppKit apps/macos-status-item/main.swift -o dist/macos/mars-status-item
+      - uses: actions/upload-artifact@v4
+        with: { name: "worker-macos-status-item-${{ github.sha }}", path: dist/macos/mars-status-item }
 
   macos:
     name: Build macOS arm64 worker assets
     if: inputs.worker_release_mode == 'build'
-    needs: validate-inputs
+    needs: [validate-inputs, macos-status-item]
     runs-on: ubuntu-24.04
     permissions: { contents: read }
-    outputs: { metadata: "${{ steps.metadata.outputs.json }}" }
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.4.0 }
+      - uses: actions/download-artifact@v4
+        with: { name: "worker-macos-status-item-${{ github.sha }}", path: dist/macos }
       - name: Build macOS worker assets
         run: |
           set -euo pipefail; bun install --frozen-lockfile; mkdir -p dist/macos
@@ -183,8 +200,8 @@ jobs:
           bun build apps/job-agent/src/index.ts --compile --target=bun-darwin-arm64 --outfile=dist/macos/mars-job-agent
           cp deploy/workers/install-worker-macos.sh deploy/workers/prepare-macos-job-image.sh dist/macos/
           digest=$(docker buildx imagetools inspect ghcr.io/cirruslabs/macos-sonoma-base:latest --format '{{.Manifest.Digest}}'); [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          base="https://github.com/Snazzie/MARS/releases/download/worker-v$WORKER_VERSION"; asset(){ printf '{"url":"%s/%s","sha256":"%s"}' "$base" "$2" "$(sha256sum "$1"|cut -d' ' -f1)"; }
-          jq -cn --arg tartSourceImage "ghcr.io/cirruslabs/macos-sonoma-base@$digest" --argjson installer "$(asset dist/macos/install-worker-macos.sh install-worker-macos-arm64.sh)" --argjson orchestrator "$(asset dist/macos/mars-orchestrator mars-orchestrator-macos-arm64)" --argjson jobAgent "$(asset dist/macos/mars-job-agent mars-job-agent-macos-arm64)" --argjson imagePreparationScript "$(asset dist/macos/prepare-macos-job-image.sh prepare-macos-job-image.sh)" '{installer:$installer,orchestrator:$orchestrator,jobAgent:$jobAgent,imagePreparationScript:$imagePreparationScript,tartSourceImage:$tartSourceImage}' > dist/macos/metadata.json
+          chmod +x dist/macos/mars-status-item
+          jq -cn --arg tartSourceImage "ghcr.io/cirruslabs/macos-sonoma-base@$digest" --argjson installer "$(asset dist/macos/install-worker-macos.sh install-worker-macos-arm64.sh)" --argjson orchestrator "$(asset dist/macos/mars-orchestrator mars-orchestrator-macos-arm64)" --argjson jobAgent "$(asset dist/macos/mars-job-agent mars-job-agent-macos-arm64)" --argjson statusItem "$(asset dist/macos/mars-status-item mars-status-item-macos-arm64)" --argjson imagePreparationScript "$(asset dist/macos/prepare-macos-job-image.sh prepare-macos-job-image.sh)" '{installer:$installer,orchestrator:$orchestrator,jobAgent:$jobAgent,statusItem:$statusItem,imagePreparationScript:$imagePreparationScript,tartSourceImage:$tartSourceImage}' > dist/macos/metadata.json
       - id: metadata
         run: echo "json=$(cat dist/macos/metadata.json)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
@@ -198,9 +215,6 @@ jobs:
     permissions: { contents: write, packages: write }
     outputs: { manifest_url: "${{ needs.validate-inputs.outputs.manifest_url }}" }
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with: { bun-version: 1.4.0 }
       - uses: actions/download-artifact@v4
         with: { pattern: worker-*, path: dist, merge-multiple: false }
       - name: Install and validate schema-3 contract
@@ -215,9 +229,9 @@ jobs:
           cp dist/worker-linux-$GITHUB_SHA/mars-job-agent dist/release/mars-job-agent-linux-x64
           cp dist/worker-linux-$GITHUB_SHA/mars-worker-golden.qcow2 dist/release/mars-worker-golden.qcow2
           cp dist/worker-linux-$GITHUB_SHA/linux-broker-compose.yaml dist/release/linux-broker-compose.yaml; cp dist/worker-linux-$GITHUB_SHA/worker-domain.xml dist/release/worker-domain.xml
-          cp dist/worker-windows-$GITHUB_SHA/install-worker.ps1 dist/release/install-worker-windows-x64.ps1; cp dist/worker-windows-$GITHUB_SHA/mars-orchestrator.exe dist/release/mars-orchestrator-windows-x64.exe; cp dist/worker-windows-$GITHUB_SHA/mars-job-agent.exe dist/release/mars-job-agent-windows-x64.exe; cp dist/worker-windows-$GITHUB_SHA/mars-service-host.exe dist/release/mars-service-host.exe
+          cp dist/worker-windows-$GITHUB_SHA/install-worker.ps1 dist/release/install-worker-windows-x64.ps1; cp dist/worker-windows-$GITHUB_SHA/mars-worker-tray.ps1 dist/release/mars-worker-tray.ps1; cp dist/worker-windows-$GITHUB_SHA/mars-orchestrator.exe dist/release/mars-orchestrator-windows-x64.exe; cp dist/worker-windows-$GITHUB_SHA/mars-job-agent.exe dist/release/mars-job-agent-windows-x64.exe; cp dist/worker-windows-$GITHUB_SHA/mars-service-host.exe dist/release/mars-service-host.exe
           cp dist/worker-windows-$GITHUB_SHA/build-windows-container-image-local.ps1 dist/release/build-windows-container-image-local.ps1; cp dist/worker-windows-$GITHUB_SHA/verify-runtime.ps1 dist/release/verify-runtime.ps1; cp dist/worker-windows-$GITHUB_SHA/Containerfile dist/release/Containerfile; cp dist/worker-windows-$GITHUB_SHA/entrypoint.ps1 dist/release/entrypoint.ps1; cp dist/worker-windows-$GITHUB_SHA/mars-windows-runner.zip dist/release/mars-windows-runner.zip; cp dist/worker-windows-$GITHUB_SHA/mars-windows-git.zip dist/release/mars-windows-git.zip; cp dist/worker-windows-$GITHUB_SHA/mars-windows-vc-runtime.exe dist/release/mars-windows-vc-runtime.exe
-          cp dist/worker-macos-$GITHUB_SHA/install-worker-macos.sh dist/release/install-worker-macos-arm64.sh; cp dist/worker-macos-$GITHUB_SHA/mars-orchestrator dist/release/mars-orchestrator-macos-arm64; cp dist/worker-macos-$GITHUB_SHA/mars-job-agent dist/release/mars-job-agent-macos-arm64; cp dist/worker-macos-$GITHUB_SHA/prepare-macos-job-image.sh dist/release/prepare-macos-job-image.sh
+          cp dist/worker-macos-$GITHUB_SHA/install-worker-macos.sh dist/release/install-worker-macos-arm64.sh; cp dist/worker-macos-$GITHUB_SHA/mars-orchestrator dist/release/mars-orchestrator-macos-arm64; cp dist/worker-macos-$GITHUB_SHA/mars-job-agent dist/release/mars-job-agent-macos-arm64; cp dist/worker-macos-$GITHUB_SHA/mars-status-item dist/release/mars-status-item-macos-arm64; cp dist/worker-macos-$GITHUB_SHA/prepare-macos-job-image.sh dist/release/prepare-macos-job-image.sh
       - uses: actions/upload-artifact@v4
         with: { name: "worker-release-assets-${{ github.sha }}", path: dist/release }
       - name: Create worker prerelease candidate

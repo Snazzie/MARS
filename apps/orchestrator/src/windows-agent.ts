@@ -11,6 +11,7 @@ import type { RuntimeDriver } from "./runtime.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 import { retryControlPlaneOperation } from "./worker-client.ts";
+import { openLeasePickupState, leasePickupStateFile, type LeasePickupStateController } from "./lease-pickup-state.ts";
 
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
 type Identity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string; vmUuid?: string; machineUuid?: string; preserveLeases?: boolean };
@@ -225,14 +226,14 @@ type WindowsWorkerCommandContext = {
   driver: WindowsRuntimeDriver;
   identity: Identity;
   activeLeases: Map<string, Promise<void>>;
+  acceptingLeases?: () => boolean;
   send: (data: string) => void;
   refreshDoctor: () => Promise<void>;
 };
 
 const normalizedError = (error: unknown): string => error instanceof Error ? error.message : String(error);
-
 export async function executeWindowsWorkerCommand(command: WorkerCommand, context: WindowsWorkerCommandContext): Promise<void> {
-  const { mode, limits, cache, cacheService, driver, identity, activeLeases, send, refreshDoctor } = context;
+  const { mode, limits, cache, cacheService, driver, identity, activeLeases, acceptingLeases, send, refreshDoctor } = context;
   if (command.type === "worker.collect_logs") {
     return send(JSON.stringify(await collectWorkerServiceLogs(command)));
   }
@@ -263,9 +264,11 @@ export async function executeWindowsWorkerCommand(command: WorkerCommand, contex
     const expectedType = mode === "container" ? "windows-container.create_lease" : "hyperv.create_lease";
     if (command.type !== expectedType) throw new Error(`Windows runtime mode ${mode} rejects ${command.type}`);
     const cipher = (command.payload as { bootstrapCiphertext?: Parameters<typeof openLeaseBootstrap>[0] }).bootstrapCiphertext;
-    if (!cipher || !command.leaseId) throw new Error("lease bootstrap payload invalid");
+    if (!cipher) throw new Error("lease bootstrap payload invalid");
     const bootstrap: LeaseBootstrapEnvelope = openLeaseBootstrap(cipher, identity.encryptionPrivateKey);
-    if (bootstrap.leaseId !== command.leaseId || (mode === "container" ? bootstrap.guestPlatform !== "windows-x64" : !["windows-x64", "linux-x64"].includes(bootstrap.guestPlatform))) throw new Error("Windows lease bootstrap mismatch");
+    if (acceptingLeases && !acceptingLeases()) {
+      return send(JSON.stringify(event(command.workerId, "lease.declined", { commandId: command.id, leaseId: command.leaseId, nonce: bootstrap.nonce, reason: "pickup_paused" })));
+    }
     send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
     await startWindowsLeaseLifecycle(command, driver, bootstrap, workerEvent => send(JSON.stringify(workerEvent)), activeLeases, () => identity.preserveLeases === true, cache.runnerCacheEnabled ? cacheService : undefined);
   }
@@ -323,13 +326,14 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
   }
   await reconcileWindowsRuntime(identity, driver);
   if (!identity.workerId) identity = await enroll(controlPlane, identity);
+  const pickupState = await openLeasePickupState(leasePickupStateFile());
   let doctorReport = await windowsDoctor(identity.preserveLeases === true);
   const activeLeases = new Map<string, Promise<void>>();
   const sendDoctor = async (ws: WebSocket): Promise<void> => {
     try {
       const [currentCapacity, containers] = await Promise.all([capacity(), driver.listContainerStatuses()]);
       const report = buildWindowsDoctorReport({
-        doctor: doctorReport,
+        doctor: { ...doctorReport, acceptingLeases: pickupState.acceptingLeases },
         capacity: currentCapacity,
         containers,
         activeLeases: [...activeLeases.keys()],
@@ -375,6 +379,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
               cache,
               cacheService,
               driver,
+              acceptingLeases: () => pickupState.acceptingLeases,
               identity,
               activeLeases,
               send: data => ws.send(data),

@@ -22,7 +22,8 @@ export async function reserveRoutingSlot(sql: DatabaseClient, input: LeaseReserv
       FROM runner_pools p JOIN workers w ON w.id=${input.workerId}
       WHERE p.id=${input.poolId}
         AND p.enabled=true AND w.admission_state='adopted'
-        AND w.configuration_state='ready' AND w.draining=false FOR UPDATE OF p, w`;
+        AND w.configuration_state='ready' AND w.draining=false
+        AND COALESCE(w.doctor->'doctor'->>'acceptingLeases','true') <> 'false' FOR UPDATE OF p, w`;
     if (!eligible[0]) throw new Error("worker_not_eligible");
     const poolResources = typeof eligible[0].resources === "string" ? JSON.parse(eligible[0].resources) : eligible[0].resources;
     const limits = typeof eligible[0].limits === "string" ? JSON.parse(eligible[0].limits) : eligible[0].limits;
@@ -67,7 +68,6 @@ export async function bindLeaseToJob(sql: DatabaseClient, leaseId: string, githu
     throw new Error("lease_job_conflict");
   }
 }
-
 export async function completeLease(sql: DatabaseClient, leaseId: string, result: { state: "completed" | "failed"; conclusion?: string | null }): Promise<void> {
   await sql`UPDATE runner_leases SET state=${result.state}, terminal_result=${jsonParameter(sql, result)}, updated_at=now() WHERE id=${leaseId} AND state NOT IN ('completed','failed','reaped')`;
 }

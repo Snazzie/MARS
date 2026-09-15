@@ -5,8 +5,8 @@ import { ApiRequestError, getWorkerControlPlaneUrls, mutateWorker } from "../api
 type Action = "reject" | "drain" | "resume" | "remove";
 const copy: Record<Action, { label: string; confirm: string; variant: "primary" | "secondary" | "destructive" }> = {
  reject: { label: "Reject", confirm: "Reject this worker? Its enrollment will be revoked and it will not receive work.", variant: "destructive" },
- drain: { label: "Drain", confirm: "Drain this worker? New leases will stop while active work completes.", variant: "secondary" },
- resume: { label: "Resume", confirm: "Resume this worker? It will become eligible for new leases after its configuration and runtime checks are ready.", variant: "primary" },
+ drain: { label: "Pause new leases", confirm: "Pause new lease assignment for this worker? Existing leases will finish normally.", variant: "secondary" },
+ resume: { label: "Resume new leases", confirm: "Resume new lease assignment for this worker? It will become eligible after configuration and runtime checks are ready.", variant: "primary" },
  remove: { label: "Remove", confirm: "Remove this worker? Pools will be disabled and the worker will be revoked after active leases finish.", variant: "destructive" },
 };
 function quotePowerShell(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
@@ -50,7 +50,7 @@ export function WorkerActions({ organizationId, workerId, admissionState, draini
  }
  return <>
   <div className="worker-actions" aria-label="Worker actions">
-   {admissionState === "adopted" && <><Button label={draining ? "Resume" : "Drain"} variant="secondary" clickAction={() => open(draining ? "resume" : "drain")} />{platform === "windows-x64" && runtimeMode === "container" && <Button label="Upgrade" variant="secondary" clickAction={() => void openUpgrade()} />}{<Button label="Remove" variant="destructive" clickAction={() => open("remove")} />}</>}
+   {admissionState === "adopted" && <><Button label={draining ? "Resume new leases" : "Pause new leases"} variant="secondary" clickAction={() => open(draining ? "resume" : "drain")} />{platform === "windows-x64" && runtimeMode === "container" && <Button label="Upgrade" variant="secondary" clickAction={() => void openUpgrade()} />}{<Button label="Remove" variant="destructive" clickAction={() => open("remove")} />}</>}
   </div>
   {upgradeError && <p className="inline-error" role="alert">{upgradeError}</p>}
   {upgradeCommand && <dialog open className="confirm-dialog" aria-labelledby="worker-upgrade-title"><form method="dialog"><p className="panel-kicker">Manual upgrade</p><h2 id="worker-upgrade-title">Copy upgrade command</h2><p>Drain this worker and wait for zero active jobs before running this command in an Administrator PowerShell.</p><textarea aria-label="Windows worker upgrade command" readOnly value={upgradeCommand} /><div className="dialog-actions"><Button label="Close" variant="secondary" onClick={() => { setUpgradeCommand(null); setUpgradeError(null); }} /><Button label="Copy command" variant="primary" clickAction={() => void navigator.clipboard?.writeText(upgradeCommand)} /></div></form></dialog>}

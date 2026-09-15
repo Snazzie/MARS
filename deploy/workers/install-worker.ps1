@@ -7,6 +7,8 @@ param(
   [ValidateSet('production','local')][string]$WindowsArtifactMode = 'production',
   [string]$WindowsOrchestratorUrl = '',
   [string]$WindowsOrchestratorSha256 = '',
+  [string]$WindowsTrayScriptUrl = '',
+  [string]$WindowsTrayScriptSha256 = '',
   [string]$WindowsServiceHostUrl = '',
   [string]$WindowsServiceHostSha256 = '',
   [string]$WindowsJobAgentUrl = '',
@@ -57,16 +59,18 @@ function Assert-ArtifactConfiguration {
   if ($Upgrade) {
     $required = @(
       @('WindowsOrchestratorUrl', $WindowsOrchestratorUrl, $WindowsOrchestratorSha256),
-      @('WindowsServiceHostUrl', $WindowsServiceHostUrl, $WindowsServiceHostSha256)
+      @('WindowsServiceHostUrl', $WindowsServiceHostUrl, $WindowsServiceHostSha256),
+      @('WindowsTrayScriptUrl', $WindowsTrayScriptUrl, $WindowsTrayScriptSha256)
     )
     $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace($_[1]) -or [string]::IsNullOrWhiteSpace($_[2]) } | ForEach-Object { $_[0] })
-    if ($missing.Count -gt 0) { throw "Windows worker upgrade artifacts are not configured: $($missing -join ', ')."}
+    if ($missing.Count -gt 0) { throw "Windows worker upgrade artifacts are not configured: $($missing -join ', ')." }
     foreach ($item in $required) { Assert-HttpsUrl $item[1] $item[0]; Assert-Sha256 $item[2] "$($item[0]) SHA-256" }
     return
   }
   $required = @(
     @('WindowsOrchestratorUrl', $WindowsOrchestratorUrl, $WindowsOrchestratorSha256),
     @('WindowsServiceHostUrl', $WindowsServiceHostUrl, $WindowsServiceHostSha256),
+    @('WindowsTrayScriptUrl', $WindowsTrayScriptUrl, $WindowsTrayScriptSha256),
     @('WindowsJobAgentUrl', $WindowsJobAgentUrl, $WindowsJobAgentSha256),
     @('WindowsContainerRunnerUrl', $WindowsContainerRunnerUrl, $WindowsContainerRunnerSha256),
     @('WindowsContainerGitUrl', $WindowsContainerGitUrl, $WindowsContainerGitSha256),
@@ -78,7 +82,7 @@ function Assert-ArtifactConfiguration {
   )
   $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace($_[1]) -or [string]::IsNullOrWhiteSpace($_[2]) } | ForEach-Object { $_[0] })
   if ([string]::IsNullOrWhiteSpace($WindowsContainerBaseImage)) { $missing += 'WindowsContainerBaseImage' }
-  if ($missing.Count -gt 0) { throw "Windows worker artifacts are not configured: $($missing -join ', ')."}
+  if ($missing.Count -gt 0) { throw "Windows worker artifacts are not configured: $($missing -join ', ')." }
   if ($WindowsContainerBaseImage -notmatch '^mcr\.microsoft\.com/windows/server:ltsc2025@sha256:[0-9a-f]{64}$') { throw 'WindowsContainerBaseImage must be a digest-pinned Windows Server LTSC 2025 reference.' }
   foreach ($item in $required) { Assert-HttpsUrl $item[1] $item[0]; Assert-Sha256 $item[2] "$($item[0]) SHA-256" }
 }
@@ -270,8 +274,8 @@ try {
   if (($Resume -and [string]::IsNullOrWhiteSpace($JoinCode)) -and (Test-Path -LiteralPath $JoinCodeFile)) { $JoinCode = (Get-Content -LiteralPath $JoinCodeFile -Raw).Trim() }
   if ([string]::IsNullOrWhiteSpace($JoinCode) -or $JoinCode -notmatch '^[A-Za-z0-9_-]{43}$') { throw 'Join code is not configured.' }
   New-Item -ItemType Directory -Force -Path $staging | Out-Null
-  $paths = [ordered]@{ orchestrator = Join-Path $staging 'mars-orchestrator.exe'; serviceHost = Join-Path $staging 'mars-service-host.exe'; jobAgent = Join-Path $staging 'mars-job-agent.exe'; runner = Join-Path $staging 'runner.zip'; git = Join-Path $staging 'git.zip'; vc = Join-Path $staging 'vc_redist.x64.exe'; builder = Join-Path $staging 'build-image.ps1'; verifier = Join-Path $staging 'verify-runtime.ps1'; containerfile = Join-Path $staging 'Containerfile'; entrypoint = Join-Path $staging 'entrypoint.ps1'; manifest = Join-Path $staging 'windows-job-image.json' }
-  Download-Verified $WindowsOrchestratorUrl $WindowsOrchestratorSha256 $paths.orchestrator 'Windows orchestrator'; Download-Verified $WindowsServiceHostUrl $WindowsServiceHostSha256 $paths.serviceHost 'Windows service host'; Download-Verified $WindowsJobAgentUrl $WindowsJobAgentSha256 $paths.jobAgent 'Windows job agent'; Download-Verified $WindowsContainerRunnerUrl $WindowsContainerRunnerSha256 $paths.runner 'Actions Runner'; Download-Verified $WindowsContainerGitUrl $WindowsContainerGitSha256 $paths.git 'Git'; Download-Verified $WindowsContainerVcRuntimeUrl $WindowsContainerVcRuntimeSha256 $paths.vc 'VC runtime'; Download-Verified $WindowsContainerBuilderUrl $WindowsContainerBuilderSha256 $paths.builder 'Windows image builder'; Download-Verified $WindowsContainerVerifierUrl $WindowsContainerVerifierSha256 $paths.verifier 'Windows runtime verifier'; Download-Verified $WindowsContainerfileUrl $WindowsContainerfileSha256 $paths.containerfile 'Windows Containerfile'; Download-Verified $WindowsContainerEntrypointUrl $WindowsContainerEntrypointSha256 $paths.entrypoint 'Windows image entrypoint'
+  $paths = [ordered]@{ orchestrator = Join-Path $staging 'mars-orchestrator.exe'; serviceHost = Join-Path $staging 'mars-service-host.exe'; tray = Join-Path $staging 'mars-worker-tray.ps1'; jobAgent = Join-Path $staging 'mars-job-agent.exe'; runner = Join-Path $staging 'runner.zip'; git = Join-Path $staging 'git.zip'; vc = Join-Path $staging 'vc_redist.x64.exe'; builder = Join-Path $staging 'build-image.ps1'; verifier = Join-Path $staging 'verify-runtime.ps1'; containerfile = Join-Path $staging 'Containerfile'; entrypoint = Join-Path $staging 'entrypoint.ps1'; manifest = Join-Path $staging 'windows-job-image.json' }
+  Download-Verified $WindowsOrchestratorUrl $WindowsOrchestratorSha256 $paths.orchestrator 'Windows orchestrator'; Download-Verified $WindowsServiceHostUrl $WindowsServiceHostSha256 $paths.serviceHost 'Windows service host'; Download-Verified $WindowsTrayScriptUrl $WindowsTrayScriptSha256 $paths.tray 'Windows tray script'; Download-Verified $WindowsJobAgentUrl $WindowsJobAgentSha256 $paths.jobAgent 'Windows job agent'; Download-Verified $WindowsContainerRunnerUrl $WindowsContainerRunnerSha256 $paths.runner 'Actions Runner'; Download-Verified $WindowsContainerGitUrl $WindowsContainerGitSha256 $paths.git 'Git'; Download-Verified $WindowsContainerVcRuntimeUrl $WindowsContainerVcRuntimeSha256 $paths.vc 'VC runtime'; Download-Verified $WindowsContainerBuilderUrl $WindowsContainerBuilderSha256 $paths.builder 'Windows image builder'; Download-Verified $WindowsContainerVerifierUrl $WindowsContainerVerifierSha256 $paths.verifier 'Windows image verifier'; Download-Verified $WindowsContainerfileUrl $WindowsContainerfileSha256 $paths.containerfile 'Windows Containerfile'; Download-Verified $WindowsContainerEntrypointUrl $WindowsContainerEntrypointSha256 $paths.entrypoint 'Windows entrypoint'
   Write-State 'artifact-download' 'complete'
   Write-Host '[4/7] Checking container runtime and installing prerequisites'
   if (-not $Upgrade -and -not (Test-Path -LiteralPath $JoinCodeFile)) { Set-WorkerJoinCredential $JoinCodeFile $JoinCode }
@@ -289,11 +293,12 @@ try {
   if (-not $Upgrade) { Reset-WorkerIdentity $identityPath $false; Set-WorkerJoinCredential $JoinCodeFile $JoinCode }
   if ($existingService) { Stop-Service MarsWorker -Force -ErrorAction SilentlyContinue; $serviceDelete = & sc.exe delete MarsWorker 2>&1; if ($LASTEXITCODE -ne 0) { throw "Failed to remove existing MarsWorker service: $($serviceDelete -join ' ')" }; $deadline = (Get-Date).AddSeconds(15); while ((Get-Service MarsWorker -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }; if (Get-Service MarsWorker -ErrorAction SilentlyContinue) { throw 'Timed out removing existing MarsWorker service.' } }
   Write-Host '[6/7] Registering LocalSystem worker service'; New-Item -ItemType Directory -Force -Path $root,$bin | Out-Null
-  Move-Item -LiteralPath $paths.orchestrator -Destination (Join-Path $bin 'mars-orchestrator.exe') -Force; Move-Item -LiteralPath $paths.serviceHost -Destination (Join-Path $bin 'mars-service-host.exe') -Force
+  $userState = Join-Path $root 'UserState'; New-Item -ItemType Directory -Force -Path $userState | Out-Null; & icacls.exe $userState /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-4:M' | Out-Null
+  Move-Item -LiteralPath $paths.orchestrator -Destination (Join-Path $bin 'mars-orchestrator.exe') -Force; Move-Item -LiteralPath $paths.serviceHost -Destination (Join-Path $bin 'mars-service-host.exe') -Force; Move-Item -LiteralPath $paths.tray -Destination (Join-Path $bin 'mars-worker-tray.ps1') -Force
   Set-WorkerCacheFirewall $exe
   $workerLogPath = Join-Path $root 'logs\worker.log'; $previousWorkerLogPath = Join-Path $root 'logs\worker.previous.log'; if (Test-Path -LiteralPath $workerLogPath) { New-Item -ItemType Directory -Force -Path (Split-Path $previousWorkerLogPath) | Out-Null; Move-Item -LiteralPath $workerLogPath -Destination $previousWorkerLogPath -Force }
   $service = New-Service -Name MarsWorker -BinaryPathName "`"$serviceHost`" `"$exe`" windows-worker" -StartupType Automatic -ErrorAction Stop; $serviceDependency = & sc.exe config MarsWorker depend= docker 2>&1; if ($LASTEXITCODE -ne 0) { throw "Failed to configure Docker dependency: $($serviceDependency -join ' ')" }
-  $serviceEnvironment = @("MARS_CONTROL_PLANE_URL=$ControlPlaneUrl","MARS_JOIN_CODE_FILE=$JoinCodeFile","MARS_WINDOWS_RUNTIME=container","MARS_WINDOWS_CONTAINER_IMAGE=$WindowsContainerImage","MARS_WINDOWS_CONTAINER_PREFIX=$WindowsContainerPrefix","MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS=$WindowsContainerReadyTimeoutMs","MARS_WINDOWS_CONTAINER_JOB_TIMEOUT_MS=$WindowsContainerJobTimeoutMs","MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST=$windowsImageManifestPath")
+  $serviceEnvironment = @("MARS_CONTROL_PLANE_URL=$ControlPlaneUrl","MARS_JOIN_CODE_FILE=$JoinCodeFile","MARS_LEASE_PICKUP_STATE_FILE=C:\ProgramData\Mars\UserState\lease-pickup.json","MARS_WINDOWS_RUNTIME=container","MARS_WINDOWS_CONTAINER_IMAGE=$WindowsContainerImage","MARS_WINDOWS_CONTAINER_PREFIX=$WindowsContainerPrefix","MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS=$WindowsContainerReadyTimeoutMs","MARS_WINDOWS_CONTAINER_JOB_TIMEOUT_MS=$WindowsContainerJobTimeoutMs","MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST=$windowsImageManifestPath")
   $cacheOrigins = Resolve-ContainerCacheOrigins
   $serviceEnvironment += "MARS_CACHE_PROXY_URL=$($cacheOrigins.Proxy)","MARS_CACHE_ADVERTISE_URL=$($cacheOrigins.Advertise)"
   if ($AllowLocalContainerImage -or $WindowsContainerImage -eq 'mars/windows-job:local') { $serviceEnvironment += 'MARS_ALLOW_LOCAL_CONTAINER_IMAGE=true' }

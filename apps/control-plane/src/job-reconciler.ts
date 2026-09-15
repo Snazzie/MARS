@@ -65,6 +65,7 @@ export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate[
     appliedConfigurationRevision: nullableString(row.appliedConfigurationRevision ?? row.worker_applied_configuration_revision),
     runtimeReady: doctorRecord.runtimeReady === true,
     linuxEvidenceReady,
+    acceptingLeases: doctorRecord.acceptingLeases !== false,
     limits: jsonValue(row.limits ?? row.worker_limits),
   };
 }

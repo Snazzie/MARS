@@ -1,7 +1,7 @@
 import { ANY_RUNNER_LABEL, ANY_X64_RUNNER_LABEL, parseRunnerLabels, PoolResources, type ParsedRunnerLabel, WorkerLimits } from "@mars/contracts";
 
 export interface Candidate {
-  worker: { admissionState:string; connectionState:string; configurationState:string; configurationRevision:string|null; appliedConfigurationRevision:string|null; runtimeReady?: boolean; linuxEvidenceReady?: boolean; limits: unknown };
+  worker: { admissionState:string; connectionState:string; configurationState:string; configurationRevision:string|null; appliedConfigurationRevision:string|null; runtimeReady?: boolean; linuxEvidenceReady?: boolean; acceptingLeases?: boolean; limits: unknown };
   pool: { enabled:boolean; platform:string; resources:unknown; concurrency:number; active:number; labels:string[]; triggerLabel:string|null };
   requestedLabels:string[];
 }
@@ -28,7 +28,7 @@ export function fits(candidate: Candidate): boolean {
   if (!options) return false;
   const option = selectProvisionOption(options, candidate.pool);
   if (!option) return false;
-  if (candidate.worker.admissionState !== "adopted" || candidate.worker.connectionState !== "online" || candidate.worker.configurationState !== "ready" || candidate.worker.configurationRevision !== candidate.worker.appliedConfigurationRevision || candidate.worker.runtimeReady !== true || candidate.worker.linuxEvidenceReady === false || !candidate.pool.enabled) return false;
+  if (candidate.worker.admissionState !== "adopted" || candidate.worker.connectionState !== "online" || candidate.worker.configurationState !== "ready" || candidate.worker.configurationRevision !== candidate.worker.appliedConfigurationRevision || candidate.worker.runtimeReady !== true || candidate.worker.linuxEvidenceReady === false || candidate.worker.acceptingLeases === false || !candidate.pool.enabled) return false;
   const limits = WorkerLimits.safeParse(candidate.worker.limits);
   const resources = PoolResources.safeParse(candidate.pool.resources);
   if (!limits.success || !resources.success || candidate.pool.active >= resources.data.concurrency) return false;
@@ -40,11 +40,11 @@ export function reason(candidate: Candidate): string {
   if (!options) return "invalid_provision_labels";
   const option = selectProvisionOption(options, candidate.pool);
   if (!option) return "no_matching_labels";
-  if (candidate.worker.admissionState !== "adopted") return "worker_pending_adoption";
   if (candidate.worker.connectionState !== "online") return "worker_offline";
   if (candidate.worker.configurationState === "applying" || (candidate.worker.configurationState === "ready" && candidate.worker.configurationRevision !== candidate.worker.appliedConfigurationRevision)) return "worker_config_applying";
   if (candidate.worker.configurationState !== "ready") return "worker_not_ready";
   if (candidate.worker.runtimeReady !== true || candidate.worker.linuxEvidenceReady === false) return "worker_runtime_not_ready";
+  if (candidate.worker.acceptingLeases === false) return "worker_pickup_paused";
   if (!candidate.pool.enabled) return "pool_disabled";
   const resources = PoolResources.safeParse(candidate.pool.resources);
   const limits = WorkerLimits.safeParse(candidate.worker.limits);
