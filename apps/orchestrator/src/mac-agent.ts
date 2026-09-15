@@ -68,7 +68,13 @@ export async function runMacLeaseLifecycle(
   bootstrap: LeaseBootstrapEnvelope,
   send: (event: WorkerEvent) => void,
   preserveLeases = false,
+  inventoryChanged?: () => void,
 ): Promise<void> {
+  const notifyInventory = () => {
+    try { inventoryChanged?.(); } catch (error) {
+      console.error("macOS worker inventory notification failed", { workerId: command.workerId, leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
+    }
+  };
   let runtime: RuntimeLease;
   try {
     runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, contractVersion: bootstrap.contractVersion, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
@@ -78,6 +84,7 @@ export async function runMacLeaseLifecycle(
     return;
   }
   send(workerEvent(command.workerId, "sandbox_attested", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed }));
+  notifyInventory();
   const logPump = emitRuntimeLogs(command.workerId, bootstrap.jobId, runtime.logs, send).catch(error => {
     console.error("macOS runner log streaming failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
   });
@@ -109,16 +116,21 @@ export function startMacLeaseLifecycle(
   send: (event: WorkerEvent) => void,
   active: Map<string, Promise<void>>,
   preserveLeases: () => boolean = () => false,
+  inventoryChanged?: () => void,
 ): Promise<void> {
   const existing = active.get(bootstrap.leaseId);
   if (existing) return existing;
-  const lifecycle = runMacLeaseLifecycle(command, driver, bootstrap, send, preserveLeases()).finally(() => {
+  const lifecycle = runMacLeaseLifecycle(command, driver, bootstrap, send, preserveLeases(), inventoryChanged).finally(() => {
     if (active.get(bootstrap.leaseId) === lifecycle) active.delete(bootstrap.leaseId);
+    try { inventoryChanged?.(); } catch (error) {
+      console.error("macOS worker inventory notification failed", { workerId: command.workerId, leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
+    }
   });
   active.set(bootstrap.leaseId, lifecycle);
   return lifecycle;
 }
-export async function handleMacWorkerCommand(command: WorkerCommand, driver: TartVmDriver, limits?: MacWorkerLimits, encryptionPrivateKey?: string, cache?: WorkerCacheConfiguration, cacheService?: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled" | "setRunnerCacheMaxGiB"> & Partial<Pick<ActionCacheService, "purgeRunnerCache">>): Promise<WorkerEvent> {
+
+export async function handleMacWorkerCommand(command: WorkerCommand, driver: TartVmDriver, limits?: MacWorkerLimits, encryptionPrivateKey?: string, cache?: WorkerCacheConfiguration, cacheService?: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled" | "setRunnerCacheMaxGiB"> & Partial<Pick<ActionCacheService, "purgeRunnerCache">>, inventoryChanged?: () => void): Promise<WorkerEvent> {
   if (command.type === "worker.runner_cache_purge") {
     const payload = WorkerRunnerCachePurgePayload.parse(command.payload);
     if (payload.workerId !== command.workerId || command.leaseId !== null || !cacheService?.purgeRunnerCache) throw new Error("runner cache purge command invalid");
@@ -143,6 +155,9 @@ export async function handleMacWorkerCommand(command: WorkerCommand, driver: Tar
   if (command.type === "tart.stop_lease" && command.leaseId) {
     await driver.stopLease(command.leaseId).catch(() => undefined);
     await driver.removeLease(command.leaseId);
+    try { inventoryChanged?.(); } catch (error) {
+      console.error("macOS worker inventory notification failed", { workerId: command.workerId, leaseId: command.leaseId, error: error instanceof Error ? error.message : String(error) });
+    }
     return workerEvent(command.workerId, "lease.reaped", { commandId: command.id, leaseId: command.leaseId, nonce: String((command.payload as Record<string, unknown>).nonce ?? "") });
   }
   throw new Error("unsupported worker command");
@@ -159,9 +174,10 @@ export interface MacWorkerCommandDependencies {
   saveIdentity: () => Promise<void>;
   setPreserveLeases: (enabled: boolean) => void;
   send: (event: WorkerEvent) => void;
+  sendDoctor: () => void;
 }
 export async function executeMacWorkerCommand(command: WorkerCommand, dependencies: MacWorkerCommandDependencies): Promise<void> {
-  const { driver, limits, encryptionPrivateKey, cache, cacheService, activeLeases, preserveLeases, acceptingLeases = () => true, saveIdentity, setPreserveLeases, send } = dependencies;
+  const { driver, limits, encryptionPrivateKey, cache, cacheService, activeLeases, preserveLeases, acceptingLeases = () => true, sendDoctor, saveIdentity, setPreserveLeases, send } = dependencies;
   if (command.type === "worker.collect_logs") {
     send(await collectWorkerServiceLogs(command));
     return;
@@ -176,6 +192,7 @@ export async function executeMacWorkerCommand(command: WorkerCommand, dependenci
   if (command.type === "tart.stop_lease" && preserveLeases() && command.leaseId) {
     const nonce = String((command.payload as Record<string, unknown>).nonce ?? "");
     send(workerEvent(command.workerId, "lease.failed", { commandId: command.id, leaseId: command.leaseId, nonce, reason: "debug_preserve" }));
+    sendDoctor();
     return;
   }
   if (command.type === "tart.create_lease") {
@@ -188,10 +205,12 @@ export async function executeMacWorkerCommand(command: WorkerCommand, dependenci
       return;
     }
     send(workerEvent(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId }));
-    void startMacLeaseLifecycle(command, driver, bootstrap, send, activeLeases, preserveLeases);
+    void startMacLeaseLifecycle(command, driver, bootstrap, send, activeLeases, preserveLeases, sendDoctor);
     return;
   }
-  send(await handleMacWorkerCommand(command, driver, limits, encryptionPrivateKey, cache, cacheService));
+  const result = await handleMacWorkerCommand(command, driver, limits, encryptionPrivateKey, cache, cacheService);
+  send(result);
+  if (command.type === "tart.stop_lease") sendDoctor();
 }
 function createKeyPair(): { privateKey: string; publicKey: string; encryptionPrivateKey: string; encryptionPublicKey: string } {
  const signing = generateKeyPairSync("ed25519");
@@ -368,6 +387,10 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
       console.error("Mac worker connection closed; reconnecting", { workerId: identity.workerId, code: event.code, reason: event.reason });
       closed.resolve();
     };
+    const sendDoctor = () => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, acceptingLeases: pickupState.acceptingLeases, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
+    };
     ws.onerror = () => ws.close();
     ws.onmessage = async event => {
       let frame: { type?: string; nonce?: string } & Partial<WorkerCommand>;
@@ -387,12 +410,12 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           await emitActionCacheSnapshot(cacheService, (type, payload) => {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(workerEvent(identity.workerId, type, payload)));
           });
-          ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, acceptingLeases: pickupState.acceptingLeases, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
+          sendDoctor();
           return;
         }
         if (frame.type === "ping") {
           ws.send(JSON.stringify({ version: 1, type: "pong", workerId: identity.workerId }));
-          ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, acceptingLeases: pickupState.acceptingLeases, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
+          sendDoctor();
           return;
         }
         if (frame.type === "doctor_ack") return;
@@ -422,6 +445,7 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           send: eventToSend => {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(eventToSend));
           },
+          sendDoctor,
         });
       } catch (error) {
         console.error("Mac worker command failed", {

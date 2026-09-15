@@ -87,6 +87,7 @@ test("keeps a failed valid macOS command from closing the health channel", async
       setPreserveLeases: () => {},
       saveIdentity: async () => {},
       send: event => sent.push(event.type),
+      sendDoctor: () => {},
     });
   } catch (error) {
     console.error("Mac worker command failed", { workerId: command.workerId, commandId: command.id, type: command.type, leaseId: command.leaseId, error: error instanceof Error ? error.message : String(error) });
@@ -284,4 +285,23 @@ test("deduplicates repeated delivery of an active lease", async () => {
   finishRunner(0);
   await first;
   expect(active.size).toBe(0);
+});
+test("publishes doctor inventory when a macOS lease starts and is removed", async () => {
+  let release!: (exitCode: number) => void;
+  const completion = new Promise<number>(resolve => { release = resolve; });
+  const active = new Map<string, Promise<void>>();
+  const notifications: string[] = [];
+  const driver = {
+    async createLease() { return { runtimeInstanceId: "vm-1", observed: { vcpu: 1, memoryBytes: 2, storageBytes: 3 }, state: "sandbox_attested" as const, completion }; },
+    async stopLease() {},
+    async removeLease() {},
+  };
+  const bootstrap = { leaseId: "22222222-2222-4222-8222-222222222222", jobId: "44444444-4444-4444-8444-444444444444", nonce: "n".repeat(32), guestPlatform: "macos-arm64" as const, contractVersion: "0.1.0", imageDigest: "sha256:test", resources: { vcpu: 1, memoryBytes: 2, storageBytes: 3, concurrency: 1 }, encodedJitConfig: "secret", expiresAt: new Date(Date.now() + 60_000).toISOString() };
+  const lifecycle = startMacLeaseLifecycle({ version: 1, id: "33333333-3333-4333-8333-333333333333", type: "tart.create_lease", workerId: "11111111-1111-4111-8111-111111111111", leaseId: bootstrap.leaseId, occurredAt: new Date().toISOString(), payload: {} }, driver as never, bootstrap, () => {}, active, () => false, () => notifications.push(`doctor:${active.size}`));
+  await Bun.sleep(0);
+  expect(notifications).toEqual(["doctor:1"]);
+  expect(active.has(bootstrap.leaseId)).toBe(true);
+  release(0);
+  await lifecycle;
+  expect(notifications).toEqual(["doctor:1", "doctor:0"]);
 });
