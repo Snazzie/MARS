@@ -51,7 +51,7 @@ export const workerBootstrapCredentials = pgTable("worker_bootstrap_credentials"
 			foreignColumns: [users.id],
 			name: "worker_bootstrap_credentials_rotated_by_fkey"
 		}),
-	check("worker_bootstrap_credentials_singleton_check", sql`CHECK (singleton)`),
+	check("worker_bootstrap_credentials_singleton_check", sql`singleton`),
 	check("worker_bootstrap_credentials_generation_check", sql`generation > 0`),
 ]);
 
@@ -63,7 +63,7 @@ export const organizations = pgTable("organizations", {
 	githubAccountType: text("github_account_type").default('Organization').notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
-	uniqueIndex("organizations_github_account_idx").using("btree", table.githubAccountType.asc().nullsLast().op("int8_ops"), table.githubOrgId.asc().nullsLast().op("int8_ops")),
+	uniqueIndex("organizations_github_account_idx").using("btree", table.githubAccountType.asc().nullsLast(), table.githubOrgId.asc().nullsLast()),
 	unique("organizations_github_org_id_key").on(table.githubOrgId),
 	check("organizations_github_account_type_check", sql`github_account_type = ANY (ARRAY['User'::text, 'Organization'::text])`),
 ]);
@@ -81,8 +81,8 @@ export const runnerPools = pgTable("runner_pools", {
 	triggerLabel: text("trigger_label"),
 	enabled: boolean().default(false).notNull(),
 }, (table) => [
-	uniqueIndex("runner_pools_global_name_idx").using("btree", table.name.asc().nullsLast().op("text_ops")).where(sql`(organization_id IS NULL)`),
-	uniqueIndex("runner_pools_global_trigger_idx").using("btree", table.triggerLabel.asc().nullsLast().op("text_ops")).where(sql`((organization_id IS NULL) AND (trigger_label IS NOT NULL))`),
+	uniqueIndex("runner_pools_global_name_idx").using("btree", table.name.asc().nullsLast()).where(sql`(organization_id IS NULL)`),
+	uniqueIndex("runner_pools_global_trigger_idx").using("btree", table.triggerLabel.asc().nullsLast()).where(sql`((organization_id IS NULL) AND (trigger_label IS NOT NULL))`),
 	foreignKey({
 			columns: [table.organizationId],
 			foreignColumns: [organizations.id],
@@ -124,9 +124,9 @@ export const workers = pgTable("workers", {
 	lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true, mode: 'string' }),
 	doctorObservedAt: timestamp("doctor_observed_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
-	uniqueIndex("workers_active_fingerprint_idx").using("btree", table.fingerprint.asc().nullsLast().op("text_ops")).where(sql`((fingerprint IS NOT NULL) AND (admission_state = ANY (ARRAY['pending'::text, 'adopted'::text])))`),
-	uniqueIndex("workers_active_machine_uuid_idx").using("btree", table.machineUuid.asc().nullsLast().op("text_ops")).where(sql`((machine_uuid IS NOT NULL) AND (admission_state = ANY (ARRAY['pending'::text, 'adopted'::text])))`),
-	uniqueIndex("workers_active_vm_uuid_idx").using("btree", table.vmUuid.asc().nullsLast().op("text_ops")).where(sql`((vm_uuid IS NOT NULL) AND (admission_state = ANY (ARRAY['pending'::text, 'adopted'::text])))`),
+	uniqueIndex("workers_active_fingerprint_idx").using("btree", table.fingerprint.asc().nullsLast()).where(sql`((fingerprint IS NOT NULL) AND (admission_state = ANY (ARRAY['pending'::text, 'adopted'::text])))`),
+	uniqueIndex("workers_active_machine_uuid_idx").using("btree", table.machineUuid.asc().nullsLast()).where(sql`((machine_uuid IS NOT NULL) AND (admission_state = ANY (ARRAY['pending'::text, 'adopted'::text])))`),
+	uniqueIndex("workers_active_vm_uuid_idx").using("btree", table.vmUuid.asc().nullsLast()).where(sql`((vm_uuid IS NOT NULL) AND (admission_state = ANY (ARRAY['pending'::text, 'adopted'::text])))`),
 ]);
 
 export const runnerLeases = pgTable("runner_leases", {
@@ -221,7 +221,7 @@ export const webhookDeliveries = pgTable("webhook_deliveries", {
 	lastError: text("last_error"),
 	processedAt: timestamp("processed_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
-	index("webhook_deliveries_state_idx").using("btree", table.state.asc().nullsLast().op("text_ops"), table.receivedAt.asc().nullsLast().op("text_ops")),
+	index("webhook_deliveries_state_idx").using("btree", table.state.asc().nullsLast(), table.receivedAt.asc().nullsLast()),
 ]);
 
 export const dashboardInstallations = pgTable("dashboard_installations", {
@@ -240,7 +240,7 @@ export const dashboardInstallations = pgTable("dashboard_installations", {
 			foreignColumns: [organizations.id],
 			name: "dashboard_installations_organization_id_fkey"
 		}).onDelete("cascade"),
-	unique("dashboard_installations_organization_id_id_key").on(table.id, table.organizationId),
+	unique("dashboard_installations_organization_id_id_key").on(table.organizationId, table.id),
 	unique("dashboard_installations_organization_id_github_installation_key").on(table.organizationId, table.githubInstallationId),
 	check("dashboard_installations_state_check", sql`state = ANY (ARRAY['pending'::text, 'approved'::text, 'suspended'::text])`),
 	check("dashboard_installations_repository_selection_check", sql`repository_selection = ANY (ARRAY['all'::text, 'selected'::text])`),
@@ -253,7 +253,7 @@ export const controlPlaneConfig = pgTable("control_plane_config", {
 	setupCompletedAt: timestamp("setup_completed_at", { withTimezone: true, mode: 'string' }),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
-	check("control_plane_config_singleton_check", sql`CHECK (singleton)`),
+	check("control_plane_config_singleton_check", sql`singleton`),
 ]);
 
 export const githubAppConfig = pgTable("github_app_config", {
@@ -267,7 +267,7 @@ export const githubAppConfig = pgTable("github_app_config", {
 	encryptedWebhookSecret: text("encrypted_webhook_secret").notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
-	check("github_app_config_singleton_check", sql`CHECK (singleton)`),
+	check("github_app_config_singleton_check", sql`singleton`),
 ]);
 
 export const dashboardRepositories = pgTable("dashboard_repositories", {
@@ -284,7 +284,7 @@ export const dashboardRepositories = pgTable("dashboard_repositories", {
 	discoveryError: text("discovery_error"),
 	discoveryRetryAt: timestamp("discovery_retry_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
-	uniqueIndex("dashboard_repositories_github_id_idx").using("btree", table.organizationId.asc().nullsLast().op("int8_ops"), table.githubRepositoryId.asc().nullsLast().op("uuid_ops")).where(sql`(github_repository_id IS NOT NULL)`),
+	uniqueIndex("dashboard_repositories_github_id_idx").using("btree", table.organizationId.asc().nullsLast(), table.githubRepositoryId.asc().nullsLast()).where(sql`(github_repository_id IS NOT NULL)`),
 	foreignKey({
 			columns: [table.organizationId],
 			foreignColumns: [organizations.id],
@@ -292,10 +292,10 @@ export const dashboardRepositories = pgTable("dashboard_repositories", {
 		}).onDelete("cascade"),
 	foreignKey({
 			columns: [table.organizationId, table.installationId],
-			foreignColumns: [dashboardInstallations.id, dashboardInstallations.organizationId],
+			foreignColumns: [dashboardInstallations.organizationId, dashboardInstallations.id],
 			name: "dashboard_repositories_organization_id_installation_id_fkey"
 		}).onDelete("cascade"),
-	unique("dashboard_repositories_organization_id_id_key").on(table.id, table.organizationId),
+	unique("dashboard_repositories_organization_id_id_key").on(table.organizationId, table.id),
 	unique("dashboard_repositories_organization_id_github_repository_id_key").on(table.organizationId, table.githubRepositoryId),
 	check("dashboard_repositories_visibility_check", sql`visibility = ANY (ARRAY['private'::text, 'internal'::text, 'public'::text])`),
 ]);
@@ -336,8 +336,8 @@ export const dashboardRuns = pgTable("dashboard_runs", {
 	runtimeBoundary: text("runtime_boundary"),
 	runAttempt: integer("run_attempt").default(1).notNull(),
 }, (table) => [
-	uniqueIndex("dashboard_runs_github_id_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.githubRunId.asc().nullsLast().op("uuid_ops")).where(sql`(github_run_id IS NOT NULL)`),
-	index("dashboard_runs_org_queued_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.queuedAt.desc().nullsFirst().op("timestamptz_ops"), table.id.desc().nullsFirst().op("uuid_ops")),
+	uniqueIndex("dashboard_runs_github_id_idx").using("btree", table.organizationId.asc().nullsLast(), table.githubRunId.asc().nullsLast()).where(sql`(github_run_id IS NOT NULL)`),
+	index("dashboard_runs_org_queued_idx").using("btree", table.organizationId.asc().nullsLast(), table.queuedAt.desc().nullsFirst(), table.id.desc().nullsFirst()),
 	foreignKey({
 			columns: [table.organizationId],
 			foreignColumns: [organizations.id],
@@ -345,10 +345,10 @@ export const dashboardRuns = pgTable("dashboard_runs", {
 		}).onDelete("cascade"),
 	foreignKey({
 			columns: [table.organizationId, table.repositoryId],
-			foreignColumns: [dashboardRepositories.id, dashboardRepositories.organizationId],
+			foreignColumns: [dashboardRepositories.organizationId, dashboardRepositories.id],
 			name: "dashboard_runs_organization_id_repository_id_fkey"
 		}).onDelete("cascade"),
-	unique("dashboard_runs_organization_id_id_key").on(table.id, table.organizationId),
+	unique("dashboard_runs_organization_id_id_key").on(table.organizationId, table.id),
 	unique("dashboard_runs_organization_id_github_run_id_key").on(table.organizationId, table.githubRunId),
 	check("dashboard_runs_run_attempt_check", sql`run_attempt > 0`),
 ]);
@@ -376,9 +376,9 @@ export const dashboardJobs = pgTable("dashboard_jobs", {
 	logsVersion: integer("logs_version").default(0).notNull(),
 	runAttempt: integer("run_attempt").default(1).notNull(),
 }, (table) => [
-	uniqueIndex("dashboard_jobs_github_id_idx").using("btree", table.organizationId.asc().nullsLast().op("int8_ops"), table.githubJobId.asc().nullsLast().op("int8_ops")).where(sql`(github_job_id IS NOT NULL)`),
-	index("dashboard_jobs_org_run_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.runId.asc().nullsLast().op("uuid_ops")),
-	index("dashboard_jobs_reconcile_idx").using("btree", table.organizationId.asc().nullsLast().op("timestamptz_ops"), table.status.asc().nullsLast().op("timestamptz_ops"), table.queuedAt.asc().nullsLast().op("uuid_ops"), table.githubJobId.asc().nullsLast().op("text_ops")),
+	uniqueIndex("dashboard_jobs_github_id_idx").using("btree", table.organizationId.asc().nullsLast(), table.githubJobId.asc().nullsLast()).where(sql`(github_job_id IS NOT NULL)`),
+	unique("dashboard_jobs_org_run_id_key").on(table.organizationId, table.runId, table.id),
+	index("dashboard_jobs_reconcile_idx").using("btree", table.organizationId.asc().nullsLast(), table.status.asc().nullsLast(), table.queuedAt.asc().nullsLast(), table.githubJobId.asc().nullsLast()),
 	foreignKey({
 			columns: [table.organizationId],
 			foreignColumns: [organizations.id],
@@ -386,10 +386,10 @@ export const dashboardJobs = pgTable("dashboard_jobs", {
 		}).onDelete("cascade"),
 	foreignKey({
 			columns: [table.organizationId, table.runId],
-			foreignColumns: [dashboardRuns.id, dashboardRuns.organizationId],
+			foreignColumns: [dashboardRuns.organizationId, dashboardRuns.id],
 			name: "dashboard_jobs_organization_id_run_id_fkey"
 		}).onDelete("cascade"),
-	unique("dashboard_jobs_organization_id_id_key").on(table.id, table.organizationId),
+	unique("dashboard_jobs_organization_id_id_key").on(table.organizationId, table.id),
 	unique("dashboard_jobs_organization_id_github_job_id_key").on(table.organizationId, table.githubJobId),
 	check("dashboard_jobs_run_attempt_check", sql`run_attempt > 0`),
 ]);
@@ -403,7 +403,7 @@ export const dashboardOutboxInvalidations = pgTable("dashboard_outbox_invalidati
 	keys: jsonb().notNull(),
 	occurredAt: timestamp("occurred_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
-	index("dashboard_outbox_org_sequence_idx").using("btree", table.organizationId.asc().nullsLast().op("int8_ops"), table.sequence.asc().nullsLast().op("int8_ops")),
+	index("dashboard_outbox_org_sequence_idx").using("btree", table.organizationId.asc().nullsLast(), table.sequence.asc().nullsLast()),
 	foreignKey({
 			columns: [table.organizationId],
 			foreignColumns: [organizations.id],
@@ -412,13 +412,6 @@ export const dashboardOutboxInvalidations = pgTable("dashboard_outbox_invalidati
 	unique("dashboard_outbox_invalidations_organization_id_sequence_key").on(table.organizationId, table.sequence),
 ]);
 
-
-export const schemaMigrations = pgTable("schema_migrations", {
-	version: integer().primaryKey().notNull(),
-	name: text().notNull(),
-	checksum: text().notNull(),
-	appliedAt: timestamp("applied_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-});
 
 export const githubSetupStates = pgTable("github_setup_states", {
 	stateHash: bytea("state_hash").primaryKey().notNull(),
@@ -473,7 +466,7 @@ export const systemOnboarding = pgTable("system_onboarding", {
 			foreignColumns: [runnerPools.id],
 			name: "system_onboarding_verification_pool_id_fkey"
 		}).onDelete("set null"),
-	check("system_onboarding_singleton_check", sql`CHECK (singleton)`),
+	check("system_onboarding_singleton_check", sql`singleton`),
 ]);
 
 export const memberships = pgTable("memberships", {
@@ -538,7 +531,7 @@ export const dashboardRunStages = pgTable("dashboard_run_stages", {
 		}).onDelete("cascade"),
 	foreignKey({
 			columns: [table.organizationId, table.runId],
-			foreignColumns: [dashboardRuns.id, dashboardRuns.organizationId],
+			foreignColumns: [dashboardRuns.organizationId, dashboardRuns.id],
 			name: "dashboard_run_stages_organization_id_run_id_fkey"
 		}).onDelete("cascade"),
 	primaryKey({ columns: [table.organizationId, table.runId, table.stage], name: "dashboard_run_stages_pkey"}),
@@ -553,7 +546,7 @@ export const dashboardLogChunks = pgTable("dashboard_log_chunks", {
 	content: text().notNull(),
 	occurredAt: timestamp("occurred_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
-	index("dashboard_logs_org_run_job_idx").using("btree", table.organizationId.asc().nullsLast().op("int8_ops"), table.runId.asc().nullsLast().op("int8_ops"), table.jobId.asc().nullsLast().op("int8_ops"), table.sequence.asc().nullsLast().op("int8_ops")),
+	index("dashboard_logs_org_run_job_idx").using("btree", table.organizationId.asc().nullsLast(), table.runId.asc().nullsLast(), table.jobId.asc().nullsLast(), table.sequence.asc().nullsLast()),
 	foreignKey({
 			columns: [table.organizationId],
 			foreignColumns: [organizations.id],
@@ -573,7 +566,7 @@ export const dashboardStepLogChunks = pgTable("dashboard_step_log_chunks", {
 	content: text().notNull(),
 	occurredAt: timestamp("occurred_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
-	index("dashboard_step_logs_order_idx").using("btree", table.organizationId.asc().nullsLast().op("int8_ops"), table.runId.asc().nullsLast().op("int8_ops"), table.jobId.asc().nullsLast().op("int8_ops"), table.stepId.asc().nullsLast().op("int8_ops"), table.sequence.asc().nullsLast().op("int8_ops")),
+	index("dashboard_step_logs_order_idx").using("btree", table.organizationId.asc().nullsLast(), table.runId.asc().nullsLast(), table.jobId.asc().nullsLast(), table.stepId.asc().nullsLast(), table.sequence.asc().nullsLast()),
 	foreignKey({
 			columns: [table.organizationId],
 			foreignColumns: [organizations.id],
@@ -603,8 +596,8 @@ export const dashboardJobResourceSamples = pgTable("dashboard_job_resource_sampl
 	memoryLimitBytes: bigint("memory_limit_bytes", { mode: "number" }).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
-	index("dashboard_job_resource_samples_job_time_idx").using("btree", table.organizationId.asc().nullsLast().op("timestamptz_ops"), table.jobId.asc().nullsLast().op("uuid_ops"), table.occurredAt.asc().nullsLast().op("uuid_ops")),
-	index("dashboard_job_resource_samples_retention_idx").using("btree", table.createdAt.asc().nullsLast().op("timestamptz_ops")),
+	index("dashboard_job_resource_samples_job_time_idx").using("btree", table.organizationId.asc().nullsLast(), table.jobId.asc().nullsLast(), table.occurredAt.asc().nullsLast()),
+	index("dashboard_job_resource_samples_retention_idx").using("btree", table.createdAt.asc().nullsLast()),
 	foreignKey({
 			columns: [table.organizationId],
 			foreignColumns: [organizations.id],
@@ -617,7 +610,7 @@ export const dashboardJobResourceSamples = pgTable("dashboard_job_resource_sampl
 		}).onDelete("cascade"),
 	foreignKey({
 			columns: [table.organizationId, table.runId, table.jobId],
-			foreignColumns: [dashboardJobs.id, dashboardJobs.organizationId, dashboardJobs.runId],
+			foreignColumns: [dashboardJobs.organizationId, dashboardJobs.runId, dashboardJobs.id],
 			name: "dashboard_job_resource_sample_organization_id_run_id_job_i_fkey"
 		}).onDelete("cascade"),
 	primaryKey({ columns: [table.organizationId, table.jobId, table.occurredAt], name: "dashboard_job_resource_samples_pkey"}),
@@ -642,8 +635,8 @@ export const dashboardJobSteps = pgTable("dashboard_job_steps", {
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	durationMs: bigint("duration_ms", { mode: "number" }).default(0).notNull(),
 }, (table) => [
-	uniqueIndex("dashboard_job_steps_number_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.runId.asc().nullsLast().op("int4_ops"), table.jobId.asc().nullsLast().op("uuid_ops"), table.number.asc().nullsLast().op("uuid_ops")),
-	index("dashboard_job_steps_order_idx").using("btree", table.organizationId.asc().nullsLast().op("int4_ops"), table.runId.asc().nullsLast().op("int4_ops"), table.jobId.asc().nullsLast().op("text_ops"), table.number.asc().nullsLast().op("text_ops"), table.id.asc().nullsLast().op("int4_ops")),
+	uniqueIndex("dashboard_job_steps_number_idx").using("btree", table.organizationId.asc().nullsLast(), table.runId.asc().nullsLast(), table.jobId.asc().nullsLast(), table.number.asc().nullsLast()),
+	index("dashboard_job_steps_order_idx").using("btree", table.organizationId.asc().nullsLast(), table.runId.asc().nullsLast(), table.jobId.asc().nullsLast(), table.number.asc().nullsLast(), table.id.asc().nullsLast()),
 	foreignKey({
 			columns: [table.organizationId],
 			foreignColumns: [organizations.id],
@@ -651,7 +644,7 @@ export const dashboardJobSteps = pgTable("dashboard_job_steps", {
 		}).onDelete("cascade"),
 	foreignKey({
 			columns: [table.organizationId, table.runId, table.jobId],
-			foreignColumns: [dashboardJobs.id, dashboardJobs.organizationId, dashboardJobs.runId],
+			foreignColumns: [dashboardJobs.organizationId, dashboardJobs.runId, dashboardJobs.id],
 			name: "dashboard_job_steps_organization_id_run_id_job_id_fkey"
 		}).onDelete("cascade"),
 	primaryKey({ columns: [table.organizationId, table.runId, table.jobId, table.id], name: "dashboard_job_steps_pkey"}),
@@ -688,7 +681,7 @@ export const dashboardResourceObservations = pgTable("dashboard_resource_observa
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	podsFree: bigint("pods_free", { mode: "number" }).notNull(),
 }, (table) => [
-	index("dashboard_resources_org_worker_idx").using("btree", table.organizationId.asc().nullsLast().op("timestamptz_ops"), table.workerId.asc().nullsLast().op("timestamptz_ops"), table.observedAt.desc().nullsFirst().op("timestamptz_ops")),
+	index("dashboard_resources_org_worker_idx").using("btree", table.organizationId.asc().nullsLast(), table.workerId.asc().nullsLast(), table.observedAt.desc().nullsFirst()),
 	foreignKey({
 			columns: [table.organizationId],
 			foreignColumns: [organizations.id],
@@ -763,22 +756,22 @@ export const dashboardJobTimingSnapshots = pgTable("dashboard_job_timing_snapsho
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	memoryPeakBytes: bigint("memory_peak_bytes", { mode: "number" }),
 }, (table) => [
-	index("dashboard_job_timing_worker_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.workerId.asc().nullsLast().op("uuid_ops"), table.completedAt.desc().nullsFirst().op("timestamptz_ops")),
-	index("dashboard_job_timing_completed_idx").using("btree", table.organizationId.asc().nullsLast().op("timestamptz_ops"), table.completedAt.desc().nullsFirst().op("timestamptz_ops"), table.jobId.desc().nullsFirst().op("timestamptz_ops")),
-	index("dashboard_job_timing_dimensions_idx").using("btree", table.organizationId.asc().nullsLast().op("text_ops"), table.platform.asc().nullsLast().op("text_ops"), table.driver.asc().nullsLast().op("text_ops"), table.requestedVcpu.asc().nullsLast().op("text_ops"), table.effectiveConcurrency.asc().nullsLast().op("text_ops"), table.completedAt.desc().nullsFirst().op("uuid_ops")),
+	index("dashboard_job_timing_worker_idx").using("btree", table.organizationId.asc().nullsLast(), table.workerId.asc().nullsLast(), table.completedAt.desc().nullsFirst()),
+	index("dashboard_job_timing_completed_idx").using("btree", table.organizationId.asc().nullsLast(), table.completedAt.desc().nullsFirst(), table.jobId.desc().nullsFirst()),
+	index("dashboard_job_timing_dimensions_idx").using("btree", table.organizationId.asc().nullsLast(), table.platform.asc().nullsLast(), table.driver.asc().nullsLast(), table.requestedVcpu.asc().nullsLast(), table.effectiveConcurrency.asc().nullsLast(), table.completedAt.desc().nullsFirst()),
 	foreignKey({
 			columns: [table.organizationId],
 			foreignColumns: [organizations.id],
 			name: "dashboard_job_timing_snapshots_organization_id_fkey"
 		}).onDelete("cascade"),
 	foreignKey({
-			columns: [table.organizationId, table.jobId, table.runId],
-			foreignColumns: [dashboardJobs.id, dashboardJobs.organizationId, dashboardJobs.runId],
+			columns: [table.organizationId, table.runId, table.jobId],
+			foreignColumns: [dashboardJobs.organizationId, dashboardJobs.runId, dashboardJobs.id],
 			name: "dashboard_job_timing_snapshot_organization_id_run_id_job_i_fkey"
 		}).onDelete("cascade"),
 	foreignKey({
 			columns: [table.organizationId, table.runId],
-			foreignColumns: [dashboardRuns.id, dashboardRuns.organizationId],
+			foreignColumns: [dashboardRuns.organizationId, dashboardRuns.id],
 			name: "dashboard_job_timing_snapshots_organization_id_run_id_fkey"
 		}).onDelete("cascade"),
 	primaryKey({ columns: [table.organizationId, table.jobId], name: "dashboard_job_timing_snapshots_pkey"}),
