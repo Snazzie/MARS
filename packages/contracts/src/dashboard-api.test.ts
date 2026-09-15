@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import { DashboardHealthResponse, DashboardWorkerMutationResponse, DashboardEndpoint, WorkerConfiguration } from "./dashboard-api.ts";
-import { JobResourceTrendResponse, WorkerHealth } from "./dashboard.ts";
+import { JobResourceTrendResponse, WorkerHealth, WorkerDoctor } from "./dashboard.ts";
+
+test("worker doctor accepts lease pickup state", () => {
+  expect(WorkerDoctor.parse({ acceptingLeases: true })).toEqual({ acceptingLeases: true });
+});
 
 const workerHealthFixture = {
   observedAt: "2026-08-23T12:00:00.000Z",
