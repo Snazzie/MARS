@@ -352,9 +352,22 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
   const doctorReport = await currentMacDoctor();
   const activeLeases = new Map<string, Promise<void>>();
   for (;;) {
-    const ws = new WebSocket(buildMacWorkerSocketUrl(controlPlane.toString(), identity.workerId));
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(buildMacWorkerSocketUrl(controlPlane.toString(), identity.workerId));
+    } catch (error) {
+      console.error("Mac worker connection attempt failed", { workerId: identity.workerId, error: error instanceof Error ? error.message : String(error) });
+      await Bun.sleep(1_000);
+      continue;
+    }
     const closed = Promise.withResolvers<void>();
-    ws.onclose = () => closed.resolve();
+    const connectionTimeout = setTimeout(() => ws.close(1000, "worker connection timeout"), 30_000);
+    ws.onopen = () => clearTimeout(connectionTimeout);
+    ws.onclose = event => {
+      clearTimeout(connectionTimeout);
+      console.error("Mac worker connection closed; reconnecting", { workerId: identity.workerId, code: event.code, reason: event.reason });
+      closed.resolve();
+    };
     ws.onerror = () => ws.close();
     ws.onmessage = async event => {
       let frame: { type?: string; nonce?: string } & Partial<WorkerCommand>;
@@ -449,6 +462,7 @@ export async function runMacWorker(baseUrl: string, limits: MacWorkerLimits, cac
       identity = { workerId: "", ...createKeyPair(), machineUuid, vmUuid: (Bun.env.MARS_VM_UUID ?? machineUuid).toLowerCase() };
       await saveMacWorkerIdentity(identity);
     }
+    if (!identity.workerId) identity = await enrollMacWorker(controlPlane, identity);
     return await connectMacWorker(controlPlane, identity, driver, limits, cache, cacheService, pickupState);
   } finally {
     await statusItem.close();
