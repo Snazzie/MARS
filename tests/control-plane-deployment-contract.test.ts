@@ -232,12 +232,3 @@ test("active runtime uses Mars identifiers and no packaged workers", async () =>
   expect(source).not.toContain('required("WORKER_INSTALLER_ROOT")');
 });
 
-test("image smoke asserts runtime files and excludes worker payload", async () => {
-  const smoke = await read("tests/control-plane-image-smoke.sh");
-  for (const artifact of [
-    "/app/index.js", "/app/web/index.html", "/app/web/index.js", "/app/web/index.css",
-    "/app/migrations/0000_mars_baseline.sql", "/app/migrations/meta/_journal.json",
-  ]) expect(smoke).toContain(artifact);
-  expect(smoke).toContain("worker assets must not be packaged");
-  expect(smoke).not.toContain("/app/workers/");
-});

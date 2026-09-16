@@ -3,17 +3,18 @@ import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 
 const clientRoutes: Record<string, true> = { "/": true, "/onboarding": true, "/settings": true, "/runs": true, "/repositories": true, "/workers": true, "/pools": true };
 
-async function assetResponse(deps: ControlPlaneHttpDeps, name: string, fallback = ""): Promise<Response> {
+async function assetResponse(deps: ControlPlaneHttpDeps, name: string, fallback = "", contentType = "text/html; charset=utf-8"): Promise<Response> {
   const file = Bun.file(new URL(name, deps.webRoot));
   if (await file.exists()) {
-    return new Response(file, { headers: { "Cache-Control": "no-cache" } });
+    return new Response(file, { headers: { "Cache-Control": "no-cache", "Content-Type": contentType } });
   }
-  return new Response(fallback, { headers: { "Cache-Control": "no-cache", "Content-Type": "text/html; charset=utf-8" } });
+  return new Response(fallback, { headers: { "Cache-Control": "no-cache", "Content-Type": contentType } });
 }
 
 export function registerStaticRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps): void {
   app.get("/index.html", async () => assetResponse(deps, "index.html", "<!doctype html><title>Mars</title>"));
   app.get("/index.js", async () => assetResponse(deps, "index.js"));
+  app.get("/index.css", async () => assetResponse(deps, "index.css", "", "text/css; charset=utf-8"));
   app.get("/mars-icon.svg", async () => assetResponse(deps, "mars-icon.svg", ""));
   app.get("/mars-icon.ico", async () => assetResponse(deps, "MARS.ico", ""));
   for (const path of Object.keys(clientRoutes)) {
@@ -22,3 +23,4 @@ export function registerStaticRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   app.get("/runs/:runId", async () => assetResponse(deps, "index.html", "<!doctype html><title>Mars</title>"));
   app.get("/workers/:workerId", async () => assetResponse(deps, "index.html", "<!doctype html><title>Mars</title>"));
 }
+
