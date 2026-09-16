@@ -32,6 +32,8 @@ const nonnegativeSafe = z.number().int().nonnegative().safe();
 export const OverviewRunningContainer = dto(strict({ id, organizationId, jobId: id, runId: id, jobName: z.string().min(1), repositoryName: z.string().min(1), workflowName: z.string().min(1), workerName: z.string().min(1), runtime: z.string().min(1), startedAt: timestamp, cpuUsagePercent: z.number().min(0).max(100).nullable(), memoryWorkingSetBytes: nonnegativeSafe.nullable(), memoryLimitBytes: positiveSafe.nullable(), diskUsageBytes: nonnegativeSafe.nullable(), allocatedStorageBytes: nonnegativeSafe, sampledAt: timestamp.nullable() }));
 export type OverviewRunningContainer = z.output<typeof OverviewRunningContainer>;
 const overviewRateDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+export const DashboardPeriod = z.enum(["24h", "7d", "30d"]);
+export type DashboardPeriod = z.infer<typeof DashboardPeriod>;
 export const OverviewCostSavings = dto(strict({
   selfHostedMinutes: nonnegativeSafe,
   pricedMinutes: nonnegativeSafe,
@@ -45,8 +47,51 @@ export const OverviewCostSavings = dto(strict({
   }
 });
 export type OverviewCostSavings = z.output<typeof OverviewCostSavings>;
-export const OverviewDto = dto(strict({ organizationId, period: z.enum(["24h", "7d", "30d"]), queued: positiveSafe.or(z.literal(0)), running: positiveSafe.or(z.literal(0)), completed: positiveSafe.or(z.literal(0)), failed: positiveSafe.or(z.literal(0)), queueP50Ms: positiveSafe.or(z.literal(0)), queueP95Ms: positiveSafe.or(z.literal(0)), durationP50Ms: positiveSafe.or(z.literal(0)), durationP95Ms: positiveSafe.or(z.literal(0)), concurrency: positiveSafe.or(z.literal(0)), utilization: strict({ vcpu: z.number().min(0).max(1), memory: z.number().min(0).max(1), storage: z.number().min(0).max(1), pods: z.number().min(0).max(1) }), costSavings: OverviewCostSavings, timeseries: z.array(OverviewTimeseriesPoint).default([]), jobOutcomes: z.array(strict({ outcome: OverviewJobOutcome, platforms: OverviewJobOutcomePlatforms })).default([]), runningContainers: z.array(OverviewRunningContainer).default([]) }));
+export const OverviewDto = dto(strict({ organizationId, period: DashboardPeriod, queued: positiveSafe.or(z.literal(0)), running: positiveSafe.or(z.literal(0)), completed: positiveSafe.or(z.literal(0)), failed: positiveSafe.or(z.literal(0)), queueP50Ms: positiveSafe.or(z.literal(0)), queueP95Ms: positiveSafe.or(z.literal(0)), durationP50Ms: positiveSafe.or(z.literal(0)), durationP95Ms: positiveSafe.or(z.literal(0)), concurrency: positiveSafe.or(z.literal(0)), utilization: strict({ vcpu: z.number().min(0).max(1), memory: z.number().min(0).max(1), storage: z.number().min(0).max(1), pods: z.number().min(0).max(1) }), costSavings: OverviewCostSavings, timeseries: z.array(OverviewTimeseriesPoint).default([]), jobOutcomes: z.array(strict({ outcome: OverviewJobOutcome, platforms: OverviewJobOutcomePlatforms })).default([]), runningContainers: z.array(OverviewRunningContainer).default([]) }));
 export type OverviewDto = z.output<typeof OverviewDto>;
+const CostCenterBreakdownBase = strict({
+  organizationId,
+  repositoryId: id,
+  repositoryName: z.string().min(1),
+  platform: z.string().min(1),
+  requestedVcpu: positiveSafe,
+  githubRunnerSku: z.string().min(1).nullable(),
+  githubRunnerVcpu: positiveSafe.nullable(),
+  jobCount: positiveSafe.or(z.literal(0)),
+  selfHostedMinutes: nonnegativeSafe,
+  pricedMinutes: nonnegativeSafe,
+  unpricedMinutes: nonnegativeSafe,
+  estimatedSavingsMicros: nonnegativeSafe,
+});
+export const CostCenterBreakdown = dto(CostCenterBreakdownBase).superRefine((value, ctx) => {
+  if (value.selfHostedMinutes !== value.pricedMinutes + value.unpricedMinutes) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["selfHostedMinutes"], message: "Self-hosted minutes must equal priced plus unpriced minutes" });
+  }
+  if ((value.githubRunnerSku === null) !== (value.githubRunnerVcpu === null)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["githubRunnerSku"], message: "GitHub runner identity must be paired" });
+  }
+  if (value.githubRunnerSku === null && (value.pricedMinutes !== 0 || value.estimatedSavingsMicros !== 0)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["githubRunnerSku"], message: "Unmatched usage cannot have priced minutes or savings" });
+  }
+});
+export type CostCenterBreakdown = z.output<typeof CostCenterBreakdown>;
+export const CostCenterDto = dto(strict({
+  organizationId,
+  period: DashboardPeriod,
+  costSavings: OverviewCostSavings,
+  breakdown: z.array(CostCenterBreakdown),
+})).superRefine((value, ctx) => {
+  const totals = value.breakdown.reduce((sum, row) => ({
+    selfHostedMinutes: sum.selfHostedMinutes + row.selfHostedMinutes,
+    pricedMinutes: sum.pricedMinutes + row.pricedMinutes,
+    unpricedMinutes: sum.unpricedMinutes + row.unpricedMinutes,
+    estimatedSavingsMicros: sum.estimatedSavingsMicros + row.estimatedSavingsMicros,
+  }), { selfHostedMinutes: 0, pricedMinutes: 0, unpricedMinutes: 0, estimatedSavingsMicros: 0 });
+  for (const key of Object.keys(totals) as (keyof typeof totals)[]) {
+    if (value.costSavings[key] !== totals[key]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["costSavings", key], message: `Cost savings ${key} must equal breakdown totals` });
+  }
+});
+export type CostCenterDto = z.output<typeof CostCenterDto>;
 export const RepositorySummary = dto(strict({ id, organizationId, name: z.string().min(1), fullName: z.string().min(1), visibility: z.enum(["private", "internal", "public"]), available: z.boolean(), installationId: id, discoveryState: z.enum(["active", "paused", "rate_limited", "queued"]), discoveryRetryAt: timestamp.nullable() }));
 export type RepositorySummary = z.infer<typeof RepositorySummary>;
 const runSummaryShape = { id, organizationId, repositoryId: id, repositoryName: z.string().min(1), runNumber: positiveSafe, workflowName: z.string().min(1), event: z.string().min(1), branch: z.string().min(1), commitSha: z.string().regex(/^[0-9a-f]{7,64}$/i), actorLogin: z.string().min(1), status: z.enum(["queued", "in_progress", "completed"]), conclusion: z.enum(["success", "failure", "cancelled", "skipped", "neutral"]).nullable(), queuedAt: timestamp, startedAt: timestamp.nullable(), completedAt: timestamp.nullable(), durationMs: positiveSafe.or(z.literal(0)), runtimeBoundary: z.enum(["Kata VM-backed container", "Hyper-V isolated container", "Tart VM"]).nullable(), allocationState: z.enum(["mars", "external"]).optional() };

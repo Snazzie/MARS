@@ -5,6 +5,7 @@ import {
   DashboardWorkerCachePage,
   LogChunk,
   OrganizationSummary,
+  CostCenterDto,
   OverviewDto,
   PendingWorkerRequest,
   PoolSummary,
@@ -117,6 +118,8 @@ export const getWorkerHealth = (workerId: string) =>
   request(`/api/workers/${workerId}/health`, WorkerHealth, { cache: "no-store" });
 export const logout = () => request("/api/auth/logout", DashboardOkResponse, { method: "POST" });
 export const getOrganizations = () => request("/api/organizations", z.array(OrganizationSummary));
+export const getCostCenter = (organizationId: string, period: OverviewDto["period"] = "24h") =>
+  request(`/api/organizations/${organizationId}/cost-center?period=${period}`, CostCenterDto);
 export const getOverview = (organizationId: string, period: OverviewDto["period"] = "24h") =>
   request(`/api/organizations/${organizationId}/overview?period=${period}`, OverviewDto);
 export function getRuns(organizationId: string, { cursor, search = "", limit = 50 }: { cursor?: string | null; search?: string; limit?: number } = {}) {

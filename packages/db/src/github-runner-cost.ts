@@ -1,10 +1,20 @@
-import type { OverviewCostSavings, OverviewDto } from "@mars/contracts";
+import type { CostCenterBreakdown, OverviewCostSavings, OverviewDto } from "@mars/contracts";
 import type { DatabaseClient } from "./index.ts";
 
 export type GithubRunnerPlatform = "linux-x64" | "windows-x64" | "macos-arm64";
 export type GithubRunnerRate = Readonly<{ platform: GithubRunnerPlatform; vcpu: number; sku: string; rateMicros: number }>;
 export type GithubRunnerRateSchedule = Readonly<{ effectiveFrom: string; sourceUrl: string; rates: readonly GithubRunnerRate[] }>;
 export type GithubRunnerUsageGroup = Readonly<{ usageDate: string; platform: string; requestedVcpu: number; billableMinutes: number }>;
+export type GithubRunnerCostCenterUsageGroup = Readonly<{
+  organizationId: string;
+  repositoryId: string;
+  repositoryName: string;
+  usageDate: string;
+  platform: string;
+  requestedVcpu: number;
+  jobCount: number;
+  billableMinutes: number;
+}>;
 
 const githubPricingUrl = "https://docs.github.com/en/billing/reference/actions-runner-pricing";
 
@@ -34,6 +44,12 @@ export const GITHUB_HOSTED_RATE_SCHEDULES: readonly GithubRunnerRateSchedule[] =
 }]);
 
 const emptySavings = (): OverviewCostSavings => ({ selfHostedMinutes: 0, pricedMinutes: 0, unpricedMinutes: 0, estimatedSavingsMicros: 0, currency: "USD", latestRateEffectiveFrom: null });
+type ResolvedGithubRate = { schedule: GithubRunnerRateSchedule; rate: GithubRunnerRate } | null;
+function resolveGithubRate(usageDate: string, platform: string, requestedVcpu: number, schedules: readonly GithubRunnerRateSchedule[]): ResolvedGithubRate {
+  const schedule = schedules.filter((candidate) => candidate.effectiveFrom <= usageDate).sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom))[0];
+  const rate = schedule?.rates.filter((candidate) => candidate.platform === platform && candidate.vcpu >= requestedVcpu).sort((a, b) => a.vcpu - b.vcpu)[0];
+  return schedule && rate ? { schedule, rate } : null;
+}
 
 export function calculateGithubRunnerCostSavings(usage: readonly GithubRunnerUsageGroup[], schedules: readonly GithubRunnerRateSchedule[] = GITHUB_HOSTED_RATE_SCHEDULES): OverviewCostSavings {
   let selfHostedMinutes = 0;
@@ -43,17 +59,58 @@ export function calculateGithubRunnerCostSavings(usage: readonly GithubRunnerUsa
   for (const group of usage) {
     const minutes = Math.max(0, Math.floor(group.billableMinutes));
     selfHostedMinutes += minutes;
-    const schedule = schedules.filter((candidate) => candidate.effectiveFrom <= group.usageDate).sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom))[0];
-    const rate = schedule?.rates.filter((candidate) => candidate.platform === group.platform && candidate.vcpu >= group.requestedVcpu).sort((a, b) => a.vcpu - b.vcpu)[0];
-    if (!rate) continue;
+    const resolved = resolveGithubRate(group.usageDate, group.platform, group.requestedVcpu, schedules);
+    if (!resolved) continue;
     pricedMinutes += minutes;
-    estimatedSavingsMicros += minutes * rate.rateMicros;
-    if (!latestRateEffectiveFrom || schedule.effectiveFrom > latestRateEffectiveFrom) latestRateEffectiveFrom = schedule.effectiveFrom;
+    estimatedSavingsMicros += minutes * resolved.rate.rateMicros;
+    if (!latestRateEffectiveFrom || resolved.schedule.effectiveFrom > latestRateEffectiveFrom) latestRateEffectiveFrom = resolved.schedule.effectiveFrom;
   }
   return { ...emptySavings(), selfHostedMinutes, pricedMinutes, unpricedMinutes: selfHostedMinutes - pricedMinutes, estimatedSavingsMicros, latestRateEffectiveFrom };
 }
 
+export function calculateGithubRunnerCostCenter(usage: readonly GithubRunnerCostCenterUsageGroup[], schedules: readonly GithubRunnerRateSchedule[] = GITHUB_HOSTED_RATE_SCHEDULES): { costSavings: OverviewCostSavings; breakdown: CostCenterBreakdown[] } {
+  const merged = new Map<string, CostCenterBreakdown>();
+  for (const group of usage) {
+    const minutes = Math.max(0, Math.floor(group.billableMinutes));
+    const resolved = resolveGithubRate(group.usageDate, group.platform, group.requestedVcpu, schedules);
+    const githubRunnerSku = resolved?.rate.sku ?? null;
+    const githubRunnerVcpu = resolved?.rate.vcpu ?? null;
+    const key = [group.organizationId, group.repositoryId, group.platform, group.requestedVcpu, githubRunnerSku, githubRunnerVcpu].join("|");
+    const previous = merged.get(key);
+    const pricedMinutes = resolved ? minutes : 0;
+    const row: CostCenterBreakdown = previous ? {
+      ...previous,
+      jobCount: previous.jobCount + group.jobCount,
+      selfHostedMinutes: previous.selfHostedMinutes + minutes,
+      pricedMinutes: previous.pricedMinutes + pricedMinutes,
+      unpricedMinutes: previous.unpricedMinutes + (minutes - pricedMinutes),
+      estimatedSavingsMicros: previous.estimatedSavingsMicros + (resolved ? minutes * resolved.rate.rateMicros : 0),
+    } : {
+      organizationId: group.organizationId, repositoryId: group.repositoryId, repositoryName: group.repositoryName, platform: group.platform,
+      requestedVcpu: group.requestedVcpu, githubRunnerSku, githubRunnerVcpu, jobCount: group.jobCount,
+      selfHostedMinutes: minutes, pricedMinutes, unpricedMinutes: minutes - pricedMinutes,
+      estimatedSavingsMicros: resolved ? minutes * resolved.rate.rateMicros : 0,
+    };
+    merged.set(key, row);
+  }
+  const breakdown = [...merged.values()].sort((a, b) => b.estimatedSavingsMicros - a.estimatedSavingsMicros || a.repositoryName.localeCompare(b.repositoryName) || a.platform.localeCompare(b.platform) || a.requestedVcpu - b.requestedVcpu || (a.githubRunnerSku ?? "").localeCompare(b.githubRunnerSku ?? ""));
+  const costSavings = breakdown.reduce((sum, row) => ({
+    ...sum,
+    selfHostedMinutes: sum.selfHostedMinutes + row.selfHostedMinutes,
+    pricedMinutes: sum.pricedMinutes + row.pricedMinutes,
+    unpricedMinutes: sum.unpricedMinutes + row.unpricedMinutes,
+    estimatedSavingsMicros: sum.estimatedSavingsMicros + row.estimatedSavingsMicros,
+    latestRateEffectiveFrom: sum.latestRateEffectiveFrom,
+  }), emptySavings());
+  for (const group of usage) {
+    const resolved = resolveGithubRate(group.usageDate, group.platform, group.requestedVcpu, schedules);
+    if (resolved && (!costSavings.latestRateEffectiveFrom || resolved.schedule.effectiveFrom > costSavings.latestRateEffectiveFrom)) costSavings.latestRateEffectiveFrom = resolved.schedule.effectiveFrom;
+  }
+  return { costSavings, breakdown };
+}
+
 const periodInterval = (period: OverviewDto["period"]) => period === "24h" ? "24 hours" : period === "7d" ? "7 days" : "30 days";
+
 
 export async function getGithubRunnerCostSavings(db: DatabaseClient, organizationId: string, period: OverviewDto["period"], userId?: string): Promise<OverviewCostSavings> {
   const rows = await db<Record<string, unknown>[]>`
@@ -66,4 +123,18 @@ export async function getGithubRunnerCostSavings(db: DatabaseClient, organizatio
     GROUP BY (completed_at AT TIME ZONE 'UTC')::date, platform, requested_vcpu
   `;
   return calculateGithubRunnerCostSavings(rows.map((row) => ({ usageDate: String(row.usageDate), platform: String(row.platform), requestedVcpu: Number(row.requestedVcpu), billableMinutes: Number(row.billableMinutes) })));
+}
+
+export async function getGithubRunnerCostCenter(db: DatabaseClient, organizationId: string, period: OverviewDto["period"], userId?: string): Promise<{ costSavings: OverviewCostSavings; breakdown: CostCenterBreakdown[] }> {
+  const rows = await db<Record<string, unknown>[]>`
+    SELECT organization_id AS "organizationId", repository_id AS "repositoryId", repository_name AS "repositoryName",
+      (completed_at AT TIME ZONE 'UTC')::date::text AS "usageDate", platform, requested_vcpu AS "requestedVcpu",
+      COUNT(*)::bigint AS "jobCount", SUM(GREATEST(1, CEIL(execution_duration_ms / 60000.0)))::bigint AS "billableMinutes"
+    FROM dashboard_job_timing_snapshots
+    WHERE completed_at >= now() - (${periodInterval(period)})::interval
+      AND ((${organizationId === "all"} AND organization_id IN (SELECT organization_id FROM memberships WHERE user_id=${userId ?? null}))
+        OR (${organizationId !== "all"} AND organization_id=${organizationId === "all" ? null : organizationId}::uuid))
+    GROUP BY organization_id, repository_id, repository_name, (completed_at AT TIME ZONE 'UTC')::date, platform, requested_vcpu
+  `;
+  return calculateGithubRunnerCostCenter(rows.map((row) => ({ organizationId: String(row.organizationId), repositoryId: String(row.repositoryId), repositoryName: String(row.repositoryName), usageDate: String(row.usageDate), platform: String(row.platform), requestedVcpu: Number(row.requestedVcpu), jobCount: Number(row.jobCount), billableMinutes: Number(row.billableMinutes) })));
 }

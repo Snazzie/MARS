@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './file-routes/__root'
 import { Route as AuthenticatedRouteImport } from './file-routes/_authenticated'
 import { Route as OnboardingRouteImport } from './file-routes/onboarding'
 import { Route as AuthenticatedIndexRouteImport } from './file-routes/_authenticated/index'
+import { Route as AuthenticatedCostCenterRouteImport } from './file-routes/_authenticated/cost-center'
 import { Route as AuthenticatedPoolsRouteImport } from './file-routes/_authenticated/pools'
 import { Route as AuthenticatedRepositoriesRouteImport } from './file-routes/_authenticated/repositories'
 import { Route as AuthenticatedRunsRouteImport } from './file-routes/_authenticated/runs'
@@ -35,6 +36,11 @@ const OnboardingRoute = OnboardingRouteImport.update({
 const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedCostCenterRoute = AuthenticatedCostCenterRouteImport.update({
+  id: '/cost-center',
+  path: '/cost-center',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
 const AuthenticatedPoolsRoute = AuthenticatedPoolsRouteImport.update({
@@ -94,6 +100,7 @@ const AuthenticatedWorkersWorkerIdRoute =
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
   '/onboarding': typeof OnboardingRoute
+  '/cost-center': typeof AuthenticatedCostCenterRoute
   '/pools': typeof AuthenticatedPoolsRoute
   '/repositories': typeof AuthenticatedRepositoriesRoute
   '/runs': typeof AuthenticatedRunsRouteWithChildren
@@ -107,6 +114,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/onboarding': typeof OnboardingRoute
+  '/cost-center': typeof AuthenticatedCostCenterRoute
   '/pools': typeof AuthenticatedPoolsRoute
   '/repositories': typeof AuthenticatedRepositoriesRoute
   '/settings': typeof AuthenticatedSettingsRoute
@@ -121,6 +129,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/onboarding': typeof OnboardingRoute
+  '/_authenticated/cost-center': typeof AuthenticatedCostCenterRoute
   '/_authenticated/pools': typeof AuthenticatedPoolsRoute
   '/_authenticated/repositories': typeof AuthenticatedRepositoriesRoute
   '/_authenticated/runs': typeof AuthenticatedRunsRouteWithChildren
@@ -138,6 +147,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/onboarding'
+    | '/cost-center'
     | '/pools'
     | '/repositories'
     | '/runs'
@@ -151,6 +161,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/onboarding'
+    | '/cost-center'
     | '/pools'
     | '/repositories'
     | '/settings'
@@ -164,6 +175,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_authenticated'
     | '/onboarding'
+    | '/_authenticated/cost-center'
     | '/_authenticated/pools'
     | '/_authenticated/repositories'
     | '/_authenticated/runs'
@@ -203,6 +215,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof AuthenticatedIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/cost-center': {
+      id: '/_authenticated/cost-center'
+      path: '/cost-center'
+      fullPath: '/cost-center'
+      preLoaderRoute: typeof AuthenticatedCostCenterRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/pools': {
@@ -307,6 +326,7 @@ const AuthenticatedWorkersRouteWithChildren =
   AuthenticatedWorkersRoute._addFileChildren(AuthenticatedWorkersRouteChildren)
 
 interface AuthenticatedRouteChildren {
+  AuthenticatedCostCenterRoute: typeof AuthenticatedCostCenterRoute
   AuthenticatedPoolsRoute: typeof AuthenticatedPoolsRoute
   AuthenticatedRepositoriesRoute: typeof AuthenticatedRepositoriesRoute
   AuthenticatedRunsRoute: typeof AuthenticatedRunsRouteWithChildren
@@ -316,6 +336,7 @@ interface AuthenticatedRouteChildren {
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
+  AuthenticatedCostCenterRoute: AuthenticatedCostCenterRoute,
   AuthenticatedPoolsRoute: AuthenticatedPoolsRoute,
   AuthenticatedRepositoriesRoute: AuthenticatedRepositoriesRoute,
   AuthenticatedRunsRoute: AuthenticatedRunsRouteWithChildren,

@@ -101,6 +101,7 @@ export function createDb(url: string): DatabaseClient {
 export { migrateDatabase } from "./migrate.ts";
 export * from "./json.ts";
 export * from "./dashboard.ts";
+export * from "./github-runner-cost.ts";
 export * from "./worker-cache.ts";
 export * from "./job-timing.ts";
 export * from "./job-resource-telemetry.ts";

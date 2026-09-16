@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { ApiRequestError, configureWorker, getGithubConnection, getGithubRateLimit, getJobResourceSamples, getWorkerCache, getWorkerHealth, getWorkers, purgeWorkerCache } from "./api.ts";
-import type { WorkerHealth } from "@mars/contracts";
+import { ApiRequestError, configureWorker, getCostCenter, getGithubConnection, getGithubRateLimit, getJobResourceSamples, getWorkerCache, getWorkerHealth, getWorkers, purgeWorkerCache } from "./api.ts";
+import type { CostCenterDto, WorkerHealth } from "@mars/contracts";
 const workerHealth: WorkerHealth = {
   observedAt: "2026-08-23T12:00:00.000Z",
   connection: { state: "online", lastHeartbeatAt: "2026-08-23T11:59:59.000Z", lastDoctorAt: "2026-08-23T11:59:58.000Z", heartbeatAgeSeconds: 1, doctorAgeSeconds: 2 },
@@ -211,4 +211,16 @@ test("loads GitHub rate-limit stats with the organization URL", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+const costCenter: CostCenterDto = { organizationId: "org-1", period: "7d", costSavings: { selfHostedMinutes: 1, pricedMinutes: 1, unpricedMinutes: 0, estimatedSavingsMicros: 10_000, currency: "USD", latestRateEffectiveFrom: "2026-01-01" }, breakdown: [{ organizationId: "org-1", repositoryId: "repo-1", repositoryName: "app", platform: "linux-x64", requestedVcpu: 2, githubRunnerSku: "actions_linux", githubRunnerVcpu: 2, jobCount: 1, selfHostedMinutes: 1, pricedMinutes: 1, unpricedMinutes: 0, estimatedSavingsMicros: 10_000 }] };
+test("loads Cost Center with exact period URL and strict response parsing", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = (async (input: RequestInfo | URL) => { requested = String(input); return new Response(JSON.stringify(costCenter), { status: 200 }); }) as unknown as typeof fetch;
+  try {
+    await expect(getCostCenter("org-1", "7d")).resolves.toEqual(costCenter);
+    expect(requested).toBe("/api/organizations/org-1/cost-center?period=7d");
+    globalThis.fetch = (async () => new Response(JSON.stringify({ ...costCenter, breakdown: [{ ...costCenter.breakdown[0], unexpected: true }] }), { status: 200 })) as unknown as typeof fetch;
+    await expect(getCostCenter("org-1", "7d")).rejects.toThrow("Invalid API response");
+  } finally { globalThis.fetch = originalFetch; }
 });

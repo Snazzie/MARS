@@ -1,1 +1,10 @@
-export function displayCell(value: unknown): string { if (value === undefined || value === null || value === "") return "—"; if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value); return JSON.stringify(value); }
+export function formatMinutes(minutes: number): string {
+  return `${minutes.toLocaleString("en-US")} min`;
+}
+
+export function formatUsdMicros(micros: number): string {
+  if (micros === 0) return "$0.00";
+  const dollars = micros / 1_000_000;
+  if (dollars < 0.01) return "<$0.01";
+  return dollars.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
