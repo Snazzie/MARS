@@ -19,6 +19,7 @@ COPY --from=build /app/apps/control-plane/dist/index.js ./index.js
 COPY --from=build /app/packages/db/src/migrations ./migrations
 COPY --from=build /app/apps/web/dist/index.html /app/web/index.html
 COPY --from=build /app/apps/web/dist/index.js /app/web/index.js
+COPY --from=build /app/apps/web/dist/index.css /app/web/index.css
 COPY --from=build /app/apps/web/dist/mars-icon.svg /app/web/mars-icon.svg
 COPY --from=build /app/apps/web/dist/MARS.ico /app/web/MARS.ico
 RUN apt-get update \

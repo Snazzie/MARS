@@ -13,10 +13,10 @@ async function assetResponse(deps: ControlPlaneHttpDeps, name: string, fallback 
 
 export function registerStaticRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps): void {
   app.get("/index.html", async () => assetResponse(deps, "index.html", "<!doctype html><title>Mars</title>"));
-  app.get("/index.js", async () => assetResponse(deps, "index.js"));
+  app.get("/index.js", async () => assetResponse(deps, "index.js", "", "text/javascript; charset=utf-8"));
   app.get("/index.css", async () => assetResponse(deps, "index.css", "", "text/css; charset=utf-8"));
-  app.get("/mars-icon.svg", async () => assetResponse(deps, "mars-icon.svg", ""));
-  app.get("/mars-icon.ico", async () => assetResponse(deps, "MARS.ico", ""));
+  app.get("/mars-icon.svg", async () => assetResponse(deps, "mars-icon.svg", "", "image/svg+xml"));
+  app.get("/mars-icon.ico", async () => assetResponse(deps, "MARS.ico", "", "image/x-icon"));
   for (const path of Object.keys(clientRoutes)) {
     app.get(path, async () => assetResponse(deps, "index.html", "<!doctype html><title>Mars</title>"));
   }

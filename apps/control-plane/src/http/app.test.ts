@@ -91,15 +91,21 @@ describe("control-plane HTTP boundary", () => {
     });
     expect((await app.request("/healthz")).status).toBe(404);
   });
-  test("serves the dashboard stylesheet with a CSS content type", async () => {
+  test("serves dashboard assets with executable content types", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-web-"));
     try {
       await Bun.write(join(root, "index.css"), ".console-frame { display: grid; }");
-      const response = await createControlPlaneApp(fakeHttpDeps({ webRoot: pathToFileURL(`${root}/`) })).request("/index.css");
+      await Bun.write(join(root, "index.js"), "console.log('loaded');");
+      const assetApp = createControlPlaneApp(fakeHttpDeps({ webRoot: pathToFileURL(`${root}/`) }));
+      const stylesheet = await assetApp.request("/index.css");
+      const script = await assetApp.request("/index.js");
 
-      expect(response.status).toBe(200);
-      expect(response.headers.get("content-type")).toContain("text/css");
-      expect(await response.text()).toContain(".console-frame");
+      expect(stylesheet.status).toBe(200);
+      expect(stylesheet.headers.get("content-type")).toContain("text/css");
+      expect(await stylesheet.text()).toContain(".console-frame");
+      expect(script.status).toBe(200);
+      expect(script.headers.get("content-type")).toContain("text/javascript");
+      expect(await script.text()).toContain("loaded");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
