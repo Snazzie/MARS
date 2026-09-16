@@ -572,6 +572,11 @@ describe("control-plane HTTP boundary", () => {
     expect((await app.request("/runs")).status).toBe(200);
     expect((await app.request("/runs/123")).status).toBe(200);
   });
+  test("redirects the file-route identifier to the canonical cost center URL", async () => {
+    const response = await app.request("/_authenticated/cost-center?period=7d");
+    expect(response.status).toBe(308);
+    expect(response.headers.get("location")).toBe("/cost-center?period=7d");
+  });
 
   test("serves all dashboard and onboarding client routes", async () => {
     for (const path of ["/settings", "/workers", "/pools", "/repositories", "/runs", "/onboarding", "/cost-center"]) {
