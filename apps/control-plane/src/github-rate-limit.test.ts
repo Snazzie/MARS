@@ -136,36 +136,70 @@ test("reserves the final 100 primary requests for dispatch", async () => {
   expect(calls).toBe(3);
 });
 
-test("preserves the last valid budget when rate-limit headers are malformed", async () => {
+test("preserves the last valid budget when later headers are missing or malformed", async () => {
   const gate = new GithubRateLimitGate({ now: () => RESET_MS - 60_000, log: () => {} });
   let calls = 0;
-  const fetcher = gate.scopedFetch(42, "background", async () => {
+  const network = async () => {
     calls += 1;
-    return calls === 1
-      ? new Response(null, { headers: { "x-ratelimit-remaining": "150", "x-ratelimit-reset": String(RESET_SECONDS) } })
-      : new Response(null, { headers: { "x-ratelimit-remaining": "invalid", "x-ratelimit-reset": "invalid" } });
-  });
-  await fetcher("https://api.github.test");
-  await fetcher("https://api.github.test");
-  expect(calls).toBe(2);
+    if (calls === 1) return new Response(null, { headers: { "x-ratelimit-remaining": "100", "x-ratelimit-reset": String(RESET_SECONDS) } });
+    if (calls === 2) return new Response(null);
+    return new Response(null, { headers: { "x-ratelimit-remaining": "invalid", "x-ratelimit-reset": "invalid" } });
+  };
+  const background = gate.scopedFetch(42, "background", network);
+  const dispatch = gate.scopedFetch(42, "dispatch", network);
+
+  await background("https://api.github.test");
+  await dispatch("https://api.github.test");
+  await dispatch("https://api.github.test");
+  await expect(background("https://api.github.test")).rejects.toMatchObject({ kind: "reserved", resetAt: RESET_MS });
+  expect(calls).toBe(3);
 });
 
-test("counts in-flight background requests against the reserve", async () => {
+test("counts requests that started before the installation budget was learned", async () => {
   let release!: () => void;
   const pending = new Promise<void>(resolve => { release = resolve; });
   const gate = new GithubRateLimitGate({ now: () => RESET_MS - 60_000, log: () => {} });
   let calls = 0;
-  const fetcher = gate.scopedFetch(42, "background", async () => {
+  const slow = gate.scopedFetch(42, "background", async () => {
     calls += 1;
-    if (calls === 1) return new Response(null, { headers: { "x-ratelimit-remaining": "101", "x-ratelimit-reset": String(RESET_SECONDS) } });
     await pending;
+    return new Response(null, { headers: { "x-ratelimit-remaining": "100", "x-ratelimit-reset": String(RESET_SECONDS) } });
+  });
+  const learning = gate.scopedFetch(42, "background", async () => {
+    calls += 1;
     return new Response(null, { headers: { "x-ratelimit-remaining": "101", "x-ratelimit-reset": String(RESET_SECONDS) } });
   });
-  await fetcher("https://api.github.test");
-  const first = fetcher("https://api.github.test");
+  const pendingRequest = slow("https://api.github.test");
   await Promise.resolve();
-  await expect(fetcher("https://api.github.test")).rejects.toMatchObject({ kind: "reserved" });
+  await learning("https://api.github.test");
+  await expect(learning("https://api.github.test")).rejects.toMatchObject({ kind: "reserved" });
   release();
-  await first;
+  await pendingRequest;
   expect(calls).toBe(2);
+});
+
+test("logs reserve entry once per installation reset window", async () => {
+  const logs: string[] = [];
+  const gate = new GithubRateLimitGate({ now: () => RESET_MS - 60_000, log: message => logs.push(message) });
+  const background = gate.scopedFetch(42, "background", async () => new Response(null, {
+    headers: { "x-ratelimit-remaining": "100", "x-ratelimit-reset": String(RESET_SECONDS) },
+  }));
+
+  await background("https://api.github.test");
+  expect(gate.isBackgroundBlocked(42)).toBe(true);
+  expect(gate.isBackgroundBlocked(42)).toBe(true);
+  await expect(background("https://api.github.test")).rejects.toMatchObject({ kind: "reserved" });
+  expect(logs.filter(message => message.includes("rate limit reserve"))).toHaveLength(1);
+});
+
+test("zero remaining hard-blocks background and dispatch requests", async () => {
+  const gate = new GithubRateLimitGate({ now: () => RESET_MS - 60_000, log: () => {} });
+  const exhaust = gate.scopedFetch(42, "dispatch", async () => new Response(null, {
+    headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(RESET_SECONDS) },
+  }));
+  await exhaust("https://api.github.test");
+
+  const unexpectedNetwork = async () => { throw new Error("unexpected_network_call"); };
+  await expect(gate.scopedFetch(42, "background", unexpectedNetwork)("https://api.github.test")).rejects.toMatchObject({ kind: "primary" });
+  await expect(gate.scopedFetch(42, "dispatch", unexpectedNetwork)("https://api.github.test")).rejects.toMatchObject({ kind: "primary" });
 });

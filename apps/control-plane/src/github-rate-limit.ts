@@ -17,11 +17,13 @@ export function isGithubRateLimitError(value: unknown): value is GithubRateLimit
 }
 
 type Cooldown = { resetAt: number; kind: RateLimitKind };
-type Budget = { remaining: number; resetAt: number; inFlight: number };
+type Budget = { remaining: number; resetAt: number };
 
 export class GithubRateLimitGate {
   private readonly cooldowns = new Map<number, Cooldown>();
   private readonly budgets = new Map<number, Budget>();
+  private readonly inFlight = new Map<number, number>();
+  private readonly reserveLogs = new Map<number, number>();
   private readonly now: () => number;
   private readonly log: (message: string) => void;
 
@@ -39,23 +41,21 @@ export class GithubRateLimitGate {
         this.cooldowns.delete(installationId);
         this.log(`GitHub rate limit recovered: installation=${installationId}`);
       }
-      const budget = this.budgets.get(installationId);
-      if (budget !== undefined && current >= budget.resetAt) this.budgets.delete(installationId);
-      const currentBudget = this.budgets.get(installationId);
-      if (requestClass === "background" && currentBudget !== undefined && currentBudget.remaining - currentBudget.inFlight <= 100) {
-        throw new GithubRateLimitError(installationId, currentBudget.resetAt, "reserved");
+      const budget = this.activeBudget(installationId, current);
+      if (requestClass === "background" && budget !== undefined && this.reserveBlocks(installationId, budget)) {
+        throw new GithubRateLimitError(installationId, budget.resetAt, "reserved");
       }
-      if (currentBudget !== undefined) currentBudget.inFlight += 1;
+      this.inFlight.set(installationId, (this.inFlight.get(installationId) ?? 0) + 1);
       try {
         const response = await fetcher(input, init);
         const responseNow = this.now();
         const remaining = finiteHeader(response.headers.get("x-ratelimit-remaining"));
         const resetSeconds = finiteHeader(response.headers.get("x-ratelimit-reset"));
-        const existing = this.budgets.get(installationId);
+        const existing = this.activeBudget(installationId, responseNow);
         const headerResetAt = resetSeconds === null ? null : resetSeconds * 1_000;
         const resetAt = headerResetAt !== null && validTimestamp(headerResetAt) && headerResetAt > responseNow ? headerResetAt : existing?.resetAt;
         if (remaining !== null && resetAt !== undefined && resetAt > responseNow) {
-          this.budgets.set(installationId, { remaining, resetAt, inFlight: existing?.inFlight ?? 0 });
+          this.budgets.set(installationId, { remaining, resetAt });
         } else if (existing !== undefined && remaining !== null) {
           existing.remaining = remaining;
         } else if (existing !== undefined && resetAt !== undefined) {
@@ -71,8 +71,9 @@ export class GithubRateLimitGate {
         if (rateLimited) throw new GithubRateLimitError(installationId, limitResetAt, kind);
         return response;
       } finally {
-        const finalBudget = this.budgets.get(installationId);
-        if (finalBudget !== undefined) finalBudget.inFlight = Math.max(0, finalBudget.inFlight - 1);
+        const remainingInFlight = (this.inFlight.get(installationId) ?? 1) - 1;
+        if (remainingInFlight === 0) this.inFlight.delete(installationId);
+        else this.inFlight.set(installationId, remainingInFlight);
       }
     };
   }
@@ -87,9 +88,24 @@ export class GithubRateLimitGate {
   }
   isBackgroundBlocked(installationId: number): boolean {
     if (this.isCoolingDown(installationId)) return true;
+    const budget = this.activeBudget(installationId, this.now());
+    return budget !== undefined && this.reserveBlocks(installationId, budget);
+  }
+  private activeBudget(installationId: number, current: number): Budget | undefined {
     const budget = this.budgets.get(installationId);
-    if (budget === undefined || this.now() >= budget.resetAt) return false;
-    return budget.remaining - budget.inFlight <= 100;
+    if (budget === undefined || current < budget.resetAt) return budget;
+    this.budgets.delete(installationId);
+    if (this.reserveLogs.get(installationId) === budget.resetAt) this.reserveLogs.delete(installationId);
+    return undefined;
+  }
+  private reserveBlocks(installationId: number, budget: Budget): boolean {
+    const inFlight = this.inFlight.get(installationId) ?? 0;
+    if (budget.remaining - inFlight > 100) return false;
+    if (this.reserveLogs.get(installationId) !== budget.resetAt) {
+      this.reserveLogs.set(installationId, budget.resetAt);
+      this.log(`GitHub rate limit reserve: installation=${installationId} remaining=${budget.remaining} inFlight=${inFlight} reset=${new Date(budget.resetAt).toISOString()}`);
+    }
+    return true;
   }
   private enterCooldown(installationId: number, resetAt: number, kind: RateLimitKind): void {
     const existing = this.cooldowns.get(installationId);
