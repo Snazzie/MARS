@@ -37,14 +37,17 @@ test("worker inventory reclaims runtime leases it does not report", async () => 
   expect(query).not.toContain("ANY((");
   expect(query).toContain("jsonb_array_elements_text");
 });
-test("worker inventory empty list reclaims all runtime leases", async () => {
+test("worker inventory empty list reclaims runtime leases and completed cleanup", async () => {
   let query = "";
   const db = (async (strings: TemplateStringsArray) => {
     query = strings.join(" ");
-    return [{ id: "lease-1" }];
+    return [{ id: "runtime-lease" }, { id: "terminal-lease" }];
   }) as never;
-  expect(await reconcileWorkerInventory(db, "worker-1", [])).toBe(1);
+  expect(await reconcileWorkerInventory(db, "worker-1", [])).toBe(2);
   expect(query).toContain("state IN ('dispatched','sandbox_ready','online','busy')");
+  expect(query).toContain("state IN ('completed','failed') AND cleanup_state IN ('pending','failed')");
+  expect(query).toContain("THEN 'reaped'");
+  expect(query).toContain("THEN 'completed'");
   expect(query).not.toContain("expires_at < now()");
   expect(query).not.toContain("ANY");
 });

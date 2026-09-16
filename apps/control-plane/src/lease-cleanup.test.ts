@@ -43,4 +43,5 @@ test("does not dispatch another stop after a stop was queued or accepted", async
   expect(report).toEqual({ dispatched: 0, skipped: 0, failed: 0 });
   expect(dispatches).toBe(0);
   expect(queries[0]).toContain("c.state IN ('pending','sent','acknowledged')");
+  expect(queries[0]).toContain("c.payload->>'nonce'=l.nonce");
 });

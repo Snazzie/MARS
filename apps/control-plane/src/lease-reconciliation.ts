@@ -51,19 +51,32 @@ async function markTerminalLease(deps: StaleLeaseReconciliationDeps, row: StaleL
 }
 export async function reconcileWorkerInventory(db: DatabaseClient, workerId: string, activeLeaseIds: readonly string[]): Promise<number> {
   const ids = [...new Set(activeLeaseIds)];
+  const terminalResult = jsonParameter(db, { reason: "worker_inventory_missing" });
   const rows = ids.length === 0
     ? await db<Array<{ id: string }>>`
         UPDATE runner_leases
-        SET state='failed', terminal_result=${jsonParameter(db, { reason: "worker_inventory_missing" })}::jsonb, cleanup_state='pending', updated_at=now()
+        SET state=CASE WHEN state IN ('completed','failed') THEN 'reaped' ELSE 'failed' END,
+          terminal_result=CASE WHEN state IN ('completed','failed') THEN terminal_result ELSE ${terminalResult}::jsonb END,
+          cleanup_state=CASE WHEN state IN ('completed','failed') THEN 'completed' ELSE 'pending' END,
+          updated_at=now()
         WHERE worker_id=${workerId}
-          AND state IN ('dispatched','sandbox_ready','online','busy')
+          AND (
+            state IN ('dispatched','sandbox_ready','online','busy')
+            OR (state IN ('completed','failed') AND cleanup_state IN ('pending','failed'))
+          )
         RETURNING id
       `
     : await db<Array<{ id: string }>>`
         UPDATE runner_leases
-        SET state='failed', terminal_result=${jsonParameter(db, { reason: "worker_inventory_missing" })}::jsonb, cleanup_state='pending', updated_at=now()
+        SET state=CASE WHEN state IN ('completed','failed') THEN 'reaped' ELSE 'failed' END,
+          terminal_result=CASE WHEN state IN ('completed','failed') THEN terminal_result ELSE ${terminalResult}::jsonb END,
+          cleanup_state=CASE WHEN state IN ('completed','failed') THEN 'completed' ELSE 'pending' END,
+          updated_at=now()
         WHERE worker_id=${workerId}
-          AND state IN ('dispatched','sandbox_ready','online','busy')
+          AND (
+            state IN ('dispatched','sandbox_ready','online','busy')
+            OR (state IN ('completed','failed') AND cleanup_state IN ('pending','failed'))
+          )
           AND NOT EXISTS (
             SELECT 1
             FROM jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb) AS active(id)
