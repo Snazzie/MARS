@@ -42,6 +42,12 @@ final class Delegate: NSObject, NSApplicationDelegate {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     item.button?.setAccessibilityLabel("Mars Worker")
+    if let path = ProcessInfo.processInfo.environment["MARS_MACOS_STATUS_ITEM_ICON"],
+       path.hasPrefix("/"), let image = NSImage(contentsOfFile: path) {
+      image.size = NSSize(width: 18, height: 18)
+      item.button?.image = image
+      item.button?.imageScaling = .scaleProportionallyDown
+    }
     let menu = NSMenu()
     status.isEnabled = false
     menu.addItem(status); menu.addItem(.separator()); action.target = self; menu.addItem(action)

@@ -64,7 +64,7 @@ curl --silent --show-error --fail --max-time 20 --location "${CURL_SECURITY[@]}"
 
 DOWNLOAD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mars-worker.XXXXXX")"
 APP_DIR="$HOME/Library/Application Support/Mars"; STATE_FILE="$APP_DIR/install-state.json"; LOG_FILE="$APP_DIR/install.log"
-ORCHESTRATOR_STAGE="$DOWNLOAD_DIR/mars-orchestrator"; JOB_AGENT_STAGE="$DOWNLOAD_DIR/mars-job-agent"; PREPARER_STAGE="$DOWNLOAD_DIR/prepare-macos-job-image.sh"; STATUS_ITEM_STAGE="$DOWNLOAD_DIR/mars-status-item"
+ORCHESTRATOR_STAGE="$DOWNLOAD_DIR/mars-orchestrator"; JOB_AGENT_STAGE="$DOWNLOAD_DIR/mars-job-agent"; PREPARER_STAGE="$DOWNLOAD_DIR/prepare-macos-job-image.sh"; STATUS_ITEM_STAGE="$DOWNLOAD_DIR/mars-status-item"; ICON_STAGE="$DOWNLOAD_DIR/mars-icon.png"
 CLEANUP_DONE=0
 cleanup() { local exit_code=$?; rm -rf "$DOWNLOAD_DIR"; unset JOIN_CODE; exit "$exit_code"; }
 trap cleanup EXIT INT TERM
@@ -81,6 +81,8 @@ download_verified "$MARS_ORCHESTRATOR_URL" "$MARS_ORCHESTRATOR_SHA256" "$ORCHEST
 download_verified "$MARS_JOB_AGENT_URL" "$MARS_JOB_AGENT_SHA256" "$JOB_AGENT_STAGE" 'job agent'
 download_verified "$IMAGE_PREPARATION_SCRIPT_URL" "$IMAGE_PREPARATION_SCRIPT_SHA256" "$PREPARER_STAGE" 'image preparation script'
 download_verified "$MARS_MACOS_STATUS_ITEM_URL" "$MARS_MACOS_STATUS_ITEM_SHA256" "$STATUS_ITEM_STAGE" 'macOS status item'
+curl --silent --show-error --fail --location "${PUBLIC_BASE_URL%/}/mars-icon.svg" -o "$DOWNLOAD_DIR/mars-icon.svg"
+sips -s format png "$DOWNLOAD_DIR/mars-icon.svg" --out "$ICON_STAGE" >/dev/null
 chmod +x "$ORCHESTRATOR_STAGE" "$JOB_AGENT_STAGE" "$PREPARER_STAGE" "$STATUS_ITEM_STAGE"
 mkdir -p "$APP_DIR" "$(dirname "$HOME/Library/LaunchAgents/com.mars.worker.plist")"; exec > >(tee -a "$LOG_FILE") 2>&1
 write_state() { printf '{"stage":"%s","status":"%s","updatedAt":"%s"}\n' "$1" "$2" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_FILE"; }
@@ -100,7 +102,7 @@ TART_BIN="$TART_BIN" "$PREPARER_STAGE" --source "$TART_IMAGE" --target "$LOCAL_I
 PREPARED_DIGEST="$(sed -n 's/.*"preparedDigest":"\([^"]*\)".*/\1/p' "$PREP_MANIFEST")"; [[ "$PREPARED_DIGEST" == mars-macos-job@sha256:* ]] || { echo 'macOS prepared image provenance is incomplete' >&2; exit 1; }
 write_state tart-image complete; pass "Prepared local Tart image: $LOCAL_IMAGE"
 launchctl bootout "gui/$UID/com.mars.worker" >/dev/null 2>&1 || true
-ORCHESTRATOR="$APP_DIR/mars-orchestrator"; JOB_AGENT="$APP_DIR/mars-job-agent"; STATUS_ITEM="$APP_DIR/mars-status-item"; mv -f "$ORCHESTRATOR_STAGE" "$ORCHESTRATOR"; mv -f "$JOB_AGENT_STAGE" "$JOB_AGENT"; mv -f "$STATUS_ITEM_STAGE" "$STATUS_ITEM"; chmod 755 "$ORCHESTRATOR" "$JOB_AGENT" "$STATUS_ITEM"; write_state artifacts complete
+ORCHESTRATOR="$APP_DIR/mars-orchestrator"; JOB_AGENT="$APP_DIR/mars-job-agent"; STATUS_ITEM="$APP_DIR/mars-status-item"; ICON="$APP_DIR/mars-icon.png"; mv -f "$ORCHESTRATOR_STAGE" "$ORCHESTRATOR"; mv -f "$JOB_AGENT_STAGE" "$JOB_AGENT"; mv -f "$STATUS_ITEM_STAGE" "$STATUS_ITEM"; mv -f "$ICON_STAGE" "$ICON"; chmod 755 "$ORCHESTRATOR" "$JOB_AGENT" "$STATUS_ITEM"; write_state artifacts complete
 check 'Persisting the protected one-use enrollment code' enrollment
 JOIN_CODE_FILE="$APP_DIR/join-code"; IDENTITY_FILE="$APP_DIR/worker-identity.json"; rm -f "$IDENTITY_FILE"; JOIN_CODE_TMP="$JOIN_CODE_FILE.tmp.$$"; printf '%s\n' "$JOIN_CODE" > "$JOIN_CODE_TMP"; chmod 600 "$JOIN_CODE_TMP"; mv -f "$JOIN_CODE_TMP" "$JOIN_CODE_FILE"; write_state enrollment complete
 LAUNCHER="$APP_DIR/run-worker.sh"; PLIST="$HOME/Library/LaunchAgents/com.mars.worker.plist"; XML_LAUNCHER="${LAUNCHER//&/&amp;}"; XML_LAUNCHER="${XML_LAUNCHER//</&lt;}"; XML_LAUNCHER="${XML_LAUNCHER//>/&gt;}"; XML_LAUNCHER="${XML_LAUNCHER//\"/&quot;}"
@@ -124,6 +126,7 @@ export MARS_JOIN_CODE_FILE=$(printf '%q' "$JOIN_CODE_FILE")
 export MARS_TART_BASE_IMAGE=$(printf '%q' "$LOCAL_IMAGE")
 export MARS_TART_IMAGE_DIGEST=$(printf '%q' "$PREPARED_DIGEST")
 export MARS_MACOS_STATUS_ITEM_EXECUTABLE=$(printf '%q' "$STATUS_ITEM")
+export MARS_MACOS_STATUS_ITEM_ICON=$(printf '%q' "$ICON")
 export MARS_LEASE_PICKUP_STATE_FILE=$(printf '%q' "$APP_DIR/lease-pickup.json")
 export MARS_TART_EXECUTABLE=$(printf '%q' "$TART_BIN")
 if [[ -f "\$MARS_JOIN_CODE_FILE" ]]; then exec "$ORCHESTRATOR" mac-worker < "\$MARS_JOIN_CODE_FILE"; fi

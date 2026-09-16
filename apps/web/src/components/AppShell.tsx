@@ -56,7 +56,7 @@ export function AppShell() {
     <div className="console-frame">
       <ContextHelp label={currentHelp.label}>{currentHelp.text}</ContextHelp>
       <aside className="rail">
-        <div className="brand-lockup"><span className="brand-pip" aria-hidden="true" /><span>MARS</span></div>
+        <div className="brand-lockup"><img className="brand-mark" src="/mars-icon.svg" alt="" /><span>MARS</span></div>
         <p className="rail-caption">Runner operations / 01</p>
         {!settingsRoute && <label className="rail-org-picker">Workspace
           <select aria-label="Select workspace" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
@@ -78,7 +78,7 @@ export function AppShell() {
       <div className="console-body">
         <header className="mobile-header">
           <div className="mobile-header-top">
-            <div className="brand-lockup"><span className="brand-pip" aria-hidden="true" /><span>MARS</span></div>
+            <div className="brand-lockup"><img className="brand-mark" src="/mars-icon.svg" alt="" /><span>MARS</span></div>
             <button ref={menuButtonRef} type="button" className="mobile-menu-button" aria-expanded={mobileMenuOpen} aria-controls="mobile-navigation" onClick={() => setMobileMenuOpen((open) => !open)}>
               {mobileMenuOpen ? "Close" : "Menu"}
             </button>

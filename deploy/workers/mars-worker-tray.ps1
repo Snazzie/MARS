@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$StateFile)
+param([Parameter(Mandatory=$true)][string]$StateFile,[string]$IconPath='')
 $ErrorActionPreference='Stop'
 if (-not [IO.Path]::IsPathFullyQualified($StateFile)) { exit 2 }
 Add-Type -AssemblyName System.Windows.Forms
@@ -8,7 +8,7 @@ if (-not $created) { exit 0 }
 function Read-State { try { if (-not (Test-Path -LiteralPath $StateFile)) { return $true }; $v=Get-Content -LiteralPath $StateFile -Raw|ConvertFrom-Json; if ($null -eq $v.paused -or @($v.PSObject.Properties).Count -ne 1) { throw 'invalid state' }; return (-not [bool]$v.paused) } catch { return $false } }
 function Write-State([bool]$accepting) { $dir=Split-Path $StateFile; New-Item -ItemType Directory -Force -Path $dir|Out-Null; $tmp="$StateFile.$([guid]::NewGuid().ToString('N')).tmp"; @{paused=(-not $accepting)}|ConvertTo-Json -Compress|Set-Content -LiteralPath $tmp -Encoding utf8; Move-Item -LiteralPath $tmp -Destination $StateFile -Force }
 $accepting=Read-State
-$notify=New-Object Windows.Forms.NotifyIcon; $notify.Icon=[Drawing.SystemIcons]::Application; $notify.Visible=$true
+$notify=New-Object Windows.Forms.NotifyIcon; $iconCandidate=if($IconPath){$IconPath}else{Join-Path $PSScriptRoot 'MARS.ico'}; if(Test-Path -LiteralPath $iconCandidate){$notify.Icon=New-Object Drawing.Icon($iconCandidate)}else{$notify.Icon=[Drawing.SystemIcons]::Application}; $notify.Visible=$true
 $menu=New-Object Windows.Forms.ContextMenuStrip; $status=$menu.Items.Add(''); $status.Enabled=$false; [void]$menu.Items.Add('-'); $action=$menu.Items.Add('')
 $refresh={ $status.Text=if($accepting){'Accepting new leases'}else{'New leases paused'}; $action.Text=if($accepting){'Pause New Leases'}else{'Resume New Leases'}; $notify.Text=if($accepting){'Mars Worker — accepting new leases'}else{'Mars Worker — new leases paused'} }
 $toggle={ try { Write-State (-not $accepting); $accepting=-not $accepting; & $refresh } catch {} }

@@ -142,7 +142,7 @@ jobs:
           New-Item -ItemType Directory -Force dist/windows | Out-Null
           bun build apps/orchestrator/src/index.ts --compile --target=bun-windows-x64 --outfile=dist/windows/mars-orchestrator.exe
           bun build apps/job-agent/src/index.ts --compile --target=bun-windows-x64 --outfile=dist/windows/mars-job-agent.exe
-          Copy-Item deploy/workers/install-worker.ps1,deploy/workers/mars-worker-tray.ps1,deploy/workers/build-windows-container-image-local.ps1,images/jobs/windows/verify-runtime.ps1,images/jobs/windows/Containerfile,images/jobs/windows/entrypoint.ps1 dist/windows
+          Copy-Item deploy/workers/install-worker.ps1,deploy/workers/mars-worker-tray.ps1,assets/MARS.ico,deploy/workers/build-windows-container-image-local.ps1,images/jobs/windows/verify-runtime.ps1,images/jobs/windows/Containerfile,images/jobs/windows/entrypoint.ps1 dist/windows
           rustup target add x86_64-pc-windows-gnu
           cargo build --manifest-path apps/windows-service-host/Cargo.toml --release --target x86_64-pc-windows-gnu
           Copy-Item apps/windows-service-host/target/x86_64-pc-windows-gnu/release/mars-service-host.exe dist/windows/mars-service-host.exe
@@ -178,8 +178,9 @@ jobs:
           set -euo pipefail
           mkdir -p dist/macos
           swiftc -parse-as-library -framework AppKit apps/macos-status-item/main.swift -o dist/macos/mars-status-item
+          cp assets/MARS.icns dist/macos/MARS.icns
       - uses: actions/upload-artifact@v4
-        with: { name: "worker-macos-status-item-${{ github.sha }}", path: dist/macos/mars-status-item }
+        with: { name: "worker-macos-status-item-${{ github.sha }}", path: dist/macos }
 
   macos:
     name: Build macOS arm64 worker assets
@@ -229,9 +230,9 @@ jobs:
           cp dist/worker-linux-$GITHUB_SHA/mars-job-agent dist/release/mars-job-agent-linux-x64
           cp dist/worker-linux-$GITHUB_SHA/mars-worker-golden.qcow2 dist/release/mars-worker-golden.qcow2
           cp dist/worker-linux-$GITHUB_SHA/linux-broker-compose.yaml dist/release/linux-broker-compose.yaml; cp dist/worker-linux-$GITHUB_SHA/worker-domain.xml dist/release/worker-domain.xml
-          cp dist/worker-windows-$GITHUB_SHA/install-worker.ps1 dist/release/install-worker-windows-x64.ps1; cp dist/worker-windows-$GITHUB_SHA/mars-worker-tray.ps1 dist/release/mars-worker-tray.ps1; cp dist/worker-windows-$GITHUB_SHA/mars-orchestrator.exe dist/release/mars-orchestrator-windows-x64.exe; cp dist/worker-windows-$GITHUB_SHA/mars-job-agent.exe dist/release/mars-job-agent-windows-x64.exe; cp dist/worker-windows-$GITHUB_SHA/mars-service-host.exe dist/release/mars-service-host.exe
+          cp dist/worker-windows-$GITHUB_SHA/install-worker.ps1 dist/release/install-worker-windows-x64.ps1; cp dist/worker-windows-$GITHUB_SHA/mars-worker-tray.ps1 dist/release/mars-worker-tray.ps1; cp dist/worker-windows-$GITHUB_SHA/MARS.ico dist/release/MARS.ico; cp dist/worker-windows-$GITHUB_SHA/mars-orchestrator.exe dist/release/mars-orchestrator-windows-x64.exe; cp dist/worker-windows-$GITHUB_SHA/mars-job-agent.exe dist/release/mars-job-agent-windows-x64.exe; cp dist/worker-windows-$GITHUB_SHA/mars-service-host.exe dist/release/mars-service-host.exe
           cp dist/worker-windows-$GITHUB_SHA/build-windows-container-image-local.ps1 dist/release/build-windows-container-image-local.ps1; cp dist/worker-windows-$GITHUB_SHA/verify-runtime.ps1 dist/release/verify-runtime.ps1; cp dist/worker-windows-$GITHUB_SHA/Containerfile dist/release/Containerfile; cp dist/worker-windows-$GITHUB_SHA/entrypoint.ps1 dist/release/entrypoint.ps1; cp dist/worker-windows-$GITHUB_SHA/mars-windows-runner.zip dist/release/mars-windows-runner.zip; cp dist/worker-windows-$GITHUB_SHA/mars-windows-git.zip dist/release/mars-windows-git.zip; cp dist/worker-windows-$GITHUB_SHA/mars-windows-vc-runtime.exe dist/release/mars-windows-vc-runtime.exe
-          cp dist/worker-macos-$GITHUB_SHA/install-worker-macos.sh dist/release/install-worker-macos-arm64.sh; cp dist/worker-macos-$GITHUB_SHA/mars-orchestrator dist/release/mars-orchestrator-macos-arm64; cp dist/worker-macos-$GITHUB_SHA/mars-job-agent dist/release/mars-job-agent-macos-arm64; cp dist/worker-macos-$GITHUB_SHA/mars-status-item dist/release/mars-status-item-macos-arm64; cp dist/worker-macos-$GITHUB_SHA/prepare-macos-job-image.sh dist/release/prepare-macos-job-image.sh
+          cp dist/worker-macos-$GITHUB_SHA/install-worker-macos.sh dist/release/install-worker-macos-arm64.sh; cp dist/worker-macos-$GITHUB_SHA/mars-orchestrator dist/release/mars-orchestrator-macos-arm64; cp dist/worker-macos-$GITHUB_SHA/mars-job-agent dist/release/mars-job-agent-macos-arm64; cp dist/worker-macos-$GITHUB_SHA/mars-status-item dist/release/mars-status-item-macos-arm64; cp dist/worker-macos-$GITHUB_SHA/MARS.icns dist/release/MARS.icns; cp dist/worker-macos-$GITHUB_SHA/prepare-macos-job-image.sh dist/release/prepare-macos-job-image.sh
       - uses: actions/upload-artifact@v4
         with: { name: "worker-release-assets-${{ github.sha }}", path: dist/release }
       - name: Create worker prerelease candidate
