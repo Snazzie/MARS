@@ -18,6 +18,28 @@ export function OverviewPeriodControl({ value, onChange }: { value: OverviewPeri
 }
 
 function PageHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) { return <header className="page-header"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p className="page-description">{description}</p></div>{action}</header>; }
+export function formatOverviewMinutes(minutes: number): string {
+  return `${minutes.toLocaleString("en-US")} min`;
+}
+export function formatOverviewMicros(micros: number): string {
+  if (micros === 0) return "$0.00";
+  const dollars = micros / 1_000_000;
+  if (dollars < 0.01) return "<$0.01";
+  return dollars.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+export function OverviewCostMetrics({ costSavings }: { costSavings: OverviewDto["costSavings"] }) {
+  const latestRate = costSavings.latestRateEffectiveFrom
+    ? ` Latest applied rate: ${new Date(`${costSavings.latestRateEffectiveFrom}T00:00:00Z`).toLocaleDateString("en-US", { dateStyle: "medium", timeZone: "UTC" })}.`
+    : "";
+  const partial = costSavings.unpricedMinutes > 0
+    ? ` ${formatOverviewMinutes(costSavings.unpricedMinutes)} could not be matched to a comparable GitHub-hosted runner, so the estimate is partial.`
+    : "";
+  return <><Metric label="Self-hosted minutes" value={formatOverviewMinutes(costSavings.selfHostedMinutes)} detail="GitHub-equivalent billable minutes" /><Metric label="Estimated savings" value={formatOverviewMicros(costSavings.estimatedSavingsMicros)} detail="retail GitHub-hosted compute estimate" /><p className="overview-cost-note">Dated GitHub-hosted rates are applied by job completion date. Retail estimate excludes included plan minutes, public-repository free usage, and self-hosted infrastructure costs. Each completed Mars job is rounded independently.{partial}{latestRate}</p></>;
+}
+
+function OverviewContent({ data }: { data: OverviewDto }) {
+  return <div className="overview-grid"><section className="signal-panel"><div className="panel-kicker">Current load</div><div className="signal-value">{data.running}<span>/ {data.concurrency || "—"}</span></div><p>active runs / concurrency ceiling</p><div className="load-track"><span style={{ width: `${Math.round(data.utilization.pods * 100)}%` }} /></div><div className="load-meta"><span>Queue <b>{data.queued}</b></span><span>Completed <b>{data.completed}</b></span><span>Failed <b>{data.failed}</b></span></div></section><section className="metric-panel"><Metric label="Queue p50" value={`${Math.round(data.queueP50Ms / 1000)}s`} detail="median wait" /><Metric label="Queue p95" value={`${Math.round(data.queueP95Ms / 1000)}s`} detail="slowest cohort" /><Metric label="Duration p50" value={`${Math.round(data.durationP50Ms / 60000)}m`} detail="median runtime" /><Metric label="Duration p95" value={`${Math.round(data.durationP95Ms / 60000)}m`} detail="slowest cohort" /><OverviewCostMetrics costSavings={data.costSavings} /></section><section className="chart-panel"><div className="panel-kicker">Pending vs running</div><JobActivityChart points={data.timeseries ?? []} /></section><section className="chart-panel"><div className="panel-kicker">Job outcomes</div><OutcomeBars outcomes={data.jobOutcomes ?? []} /></section><RunningContainers containers={data.runningContainers ?? []} /></div>;
+}
 function Metric({ label, value, detail }: { label: string; value: string | number; detail: string }) { return <div className="metric"><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>; }
 
 export function OverviewPage() {
@@ -25,8 +47,4 @@ export function OverviewPage() {
   const [period, setPeriod] = useState<OverviewPeriod>("24h");
   const query = useQuery(overviewQueryOptions(organizationId, period));
   return <><PageHeader eyebrow={`Signal / ${overviewPeriodLabels[period]}`} title="The fleet, at a glance." description="A quiet read on demand, capacity, and the jobs that matter now." action={<div className="overview-actions"><OverviewPeriodControl value={period} onChange={setPeriod} /><Link className="button" to="/runs">Open run ledger <span>↗</span></Link></div>} /><QueryState error={query.error} isLoading={query.isLoading} retry={() => void query.refetch()} operationLabel="overview telemetry" />{query.data && <OverviewContent data={query.data} />}</>;
-}
-
-function OverviewContent({ data }: { data: OverviewDto }) {
-  return <div className="overview-grid"><section className="signal-panel"><div className="panel-kicker">Current load</div><div className="signal-value">{data.running}<span>/ {data.concurrency || "—"}</span></div><p>active runs / concurrency ceiling</p><div className="load-track"><span style={{ width: `${Math.round(data.utilization.pods * 100)}%` }} /></div><div className="load-meta"><span>Queue <b>{data.queued}</b></span><span>Completed <b>{data.completed}</b></span><span>Failed <b>{data.failed}</b></span></div></section><section className="metric-panel"><Metric label="Queue p50" value={`${Math.round(data.queueP50Ms / 1000)}s`} detail="median wait" /><Metric label="Queue p95" value={`${Math.round(data.queueP95Ms / 1000)}s`} detail="slowest cohort" /><Metric label="Duration p50" value={`${Math.round(data.durationP50Ms / 60000)}m`} detail="median runtime" /><Metric label="Duration p95" value={`${Math.round(data.durationP95Ms / 60000)}m`} detail="slowest cohort" /></section><section className="chart-panel"><div className="panel-kicker">Pending vs running</div><JobActivityChart points={data.timeseries ?? []} /></section><section className="chart-panel"><div className="panel-kicker">Job outcomes</div><OutcomeBars outcomes={data.jobOutcomes ?? []} /></section><RunningContainers containers={data.runningContainers ?? []} /></div>;
 }

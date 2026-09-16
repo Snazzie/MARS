@@ -181,7 +181,6 @@ test("pairs rerun attempts during repository discovery", async () => {
   const runRequests = requests.filter((url) => url.includes("/actions/runs?"));
   expect(runRequests).toEqual([
     "https://api.github.com/repos/acme/repo/actions/runs?per_page=100&page=1",
-    "https://api.github.com/repos/acme/repo/actions/runs?per_page=100&page=1",
   ]);
   expect(runRequests.every((url) => !url.includes("status=completed"))).toBe(true);
   expect(requests.some((url) => url.includes("/actions/runs/32564909816/jobs?filter=latest"))).toBe(false);

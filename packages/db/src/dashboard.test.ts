@@ -7,10 +7,12 @@ test("overview uses active runner leases for the load numerator", async () => {
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
     queries.push(query);
+    if (query.includes("FROM dashboard_job_timing_snapshots")) return [];
     if (query.includes("SELECT l.id")) return [{ id: "lease-1", organizationId: "org-1", jobId: "job-1", runId: "run-1", jobName: "build", repositoryName: "acme/project", workflowName: "CI", workerName: "worker-1", runtime: "windows-hyperv-container", startedAt: new Date("2026-08-17T20:00:00.000Z"), cpuUsagePercent: 42.5, memoryWorkingSetBytes: 2_147_483_648, memoryLimitBytes: 4_294_967_296, diskUsageBytes: null, allocatedStorageBytes: 10_737_418_240, sampledAt: new Date("2026-08-17T20:05:00.000Z") }];
     if (query.includes("generate_series")) return [{ bucket: new Date("2026-08-12T10:00:00.000Z"), pending: 2, running: 1 }];
     return [{
       organizationId: "org-1",
+      costSavings: undefined,
       period: "24h",
       queued: 1,
       running: 2,
@@ -34,6 +36,7 @@ test("aggregate overview preserves each running container organization", async (
   const queries: string[] = [];
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
+    if (query.includes("FROM dashboard_job_timing_snapshots")) return [];
     queries.push(query);
     if (query.includes("SELECT l.id")) return [{ id: "lease-1", organizationId: "org-2", jobId: "job-1", runId: "run-1", jobName: "build", repositoryName: "acme/project", workflowName: "CI", workerName: "worker-1", runtime: "windows-hyperv-container", startedAt: new Date("2026-08-17T20:00:00.000Z"), cpuUsagePercent: 42.5, memoryWorkingSetBytes: 2_147_483_648, memoryLimitBytes: 4_294_967_296, diskUsageBytes: null, allocatedStorageBytes: 10_737_418_240, sampledAt: new Date("2026-08-17T20:05:00.000Z") }];
     if (query.includes("generate_series")) return [];
@@ -47,6 +50,7 @@ test("overview outcome aggregation guards malformed scalar runner labels", async
   const queries: string[] = [];
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
+    if (query.includes("FROM dashboard_job_timing_snapshots")) return [];
     if (query.includes("SELECT l.id")) return [];
     queries.push(query);
     if (query.includes("generate_series")) return [];

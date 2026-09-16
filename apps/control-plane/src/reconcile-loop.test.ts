@@ -52,3 +52,11 @@ test("dispatches durable cleanup for terminal leases without an outstanding stop
     payload: { nonce: "n".repeat(32) },
   }]);
 });
+test("can delay the initial reconciliation while trigger remains immediate", async () => {
+  let calls = 0;
+  const scheduler = startReconciliationScheduler(async () => { calls += 1; }, 10, false);
+  expect(calls).toBe(0);
+  await scheduler.trigger();
+  expect(calls).toBe(1);
+  scheduler.stop();
+});

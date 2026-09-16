@@ -1,11 +1,12 @@
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+export type GithubRateLimitRequestClass = "background" | "dispatch";
 type RateLimitKind = "primary" | "secondary";
 type GateOptions = { now?: () => number; log?: (message: string) => void };
 
 export class GithubRateLimitError extends Error {
   readonly code = "github_rate_limited";
 
-  constructor(readonly installationId: number, readonly resetAt: number, readonly kind: RateLimitKind = "primary") {
+  constructor(readonly installationId: number, readonly resetAt: number, readonly kind: RateLimitKind | "reserved" = "primary") {
     super("github_rate_limited");
     this.name = "GithubRateLimitError";
   }
@@ -16,9 +17,11 @@ export function isGithubRateLimitError(value: unknown): value is GithubRateLimit
 }
 
 type Cooldown = { resetAt: number; kind: RateLimitKind };
+type Budget = { remaining: number; resetAt: number; inFlight: number };
 
 export class GithubRateLimitGate {
   private readonly cooldowns = new Map<number, Cooldown>();
+  private readonly budgets = new Map<number, Budget>();
   private readonly now: () => number;
   private readonly log: (message: string) => void;
 
@@ -27,7 +30,7 @@ export class GithubRateLimitGate {
     this.log = options.log ?? console.warn;
   }
 
-  scopedFetch(installationId: number, fetcher: Fetcher = fetch): Fetcher {
+  scopedFetch(installationId: number, requestClass: GithubRateLimitRequestClass, fetcher: Fetcher = fetch): Fetcher {
     return async (input, init) => {
       const current = this.now();
       const cooldown = this.cooldowns.get(installationId);
@@ -36,20 +39,41 @@ export class GithubRateLimitGate {
         this.cooldowns.delete(installationId);
         this.log(`GitHub rate limit recovered: installation=${installationId}`);
       }
-
-      const response = await fetcher(input, init);
-      const responseNow = this.now();
-      const remaining = finiteHeader(response.headers.get("x-ratelimit-remaining"));
-      const rateLimited = response.status === 429
-        || (response.status === 403 && (remaining === 0 || await hasRateLimitMessage(response)));
-      const kind: RateLimitKind = remaining === 0 ? "primary" : "secondary";
-      const resetAt = kind === "primary"
-        ? primaryResetAt(responseNow, finiteHeader(response.headers.get("x-ratelimit-reset")))
-        : secondaryResetAt(responseNow, response.headers.get("retry-after"));
-
-      if (remaining === 0 || rateLimited) this.enterCooldown(installationId, resetAt, kind);
-      if (rateLimited) throw new GithubRateLimitError(installationId, resetAt, kind);
-      return response;
+      const budget = this.budgets.get(installationId);
+      if (budget !== undefined && current >= budget.resetAt) this.budgets.delete(installationId);
+      const currentBudget = this.budgets.get(installationId);
+      if (requestClass === "background" && currentBudget !== undefined && currentBudget.remaining - currentBudget.inFlight <= 100) {
+        throw new GithubRateLimitError(installationId, currentBudget.resetAt, "reserved");
+      }
+      if (currentBudget !== undefined) currentBudget.inFlight += 1;
+      try {
+        const response = await fetcher(input, init);
+        const responseNow = this.now();
+        const remaining = finiteHeader(response.headers.get("x-ratelimit-remaining"));
+        const resetSeconds = finiteHeader(response.headers.get("x-ratelimit-reset"));
+        const existing = this.budgets.get(installationId);
+        const headerResetAt = resetSeconds === null ? null : resetSeconds * 1_000;
+        const resetAt = headerResetAt !== null && validTimestamp(headerResetAt) && headerResetAt > responseNow ? headerResetAt : existing?.resetAt;
+        if (remaining !== null && resetAt !== undefined && resetAt > responseNow) {
+          this.budgets.set(installationId, { remaining, resetAt, inFlight: existing?.inFlight ?? 0 });
+        } else if (existing !== undefined && remaining !== null) {
+          existing.remaining = remaining;
+        } else if (existing !== undefined && resetAt !== undefined) {
+          existing.resetAt = resetAt;
+        }
+        const rateLimited = response.status === 429
+          || (response.status === 403 && (remaining === 0 || await hasRateLimitMessage(response)));
+        const kind: RateLimitKind = remaining === 0 ? "primary" : "secondary";
+        const limitResetAt = kind === "primary"
+          ? primaryResetAt(responseNow, resetSeconds)
+          : secondaryResetAt(responseNow, response.headers.get("retry-after"));
+        if (remaining === 0 || rateLimited) this.enterCooldown(installationId, limitResetAt, kind);
+        if (rateLimited) throw new GithubRateLimitError(installationId, limitResetAt, kind);
+        return response;
+      } finally {
+        const finalBudget = this.budgets.get(installationId);
+        if (finalBudget !== undefined) finalBudget.inFlight = Math.max(0, finalBudget.inFlight - 1);
+      }
     };
   }
   isCoolingDown(installationId: number): boolean {
@@ -61,7 +85,12 @@ export class GithubRateLimitGate {
     }
     return true;
   }
-
+  isBackgroundBlocked(installationId: number): boolean {
+    if (this.isCoolingDown(installationId)) return true;
+    const budget = this.budgets.get(installationId);
+    if (budget === undefined || this.now() >= budget.resetAt) return false;
+    return budget.remaining - budget.inFlight <= 100;
+  }
   private enterCooldown(installationId: number, resetAt: number, kind: RateLimitKind): void {
     const existing = this.cooldowns.get(installationId);
     if (existing?.resetAt === resetAt && existing.kind === kind) return;

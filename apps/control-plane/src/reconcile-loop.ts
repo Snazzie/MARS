@@ -3,7 +3,7 @@ export interface ReconciliationScheduler {
   trigger(): Promise<void>;
 }
 
-export function startReconciliationScheduler(run: () => Promise<void>, intervalMs = 5_000): ReconciliationScheduler {
+export function startReconciliationScheduler(run: () => Promise<void>, intervalMs = 5_000, runImmediately = true): ReconciliationScheduler {
   let stopped = false;
   let running = false;
   let rerun = false;
@@ -27,6 +27,6 @@ export function startReconciliationScheduler(run: () => Promise<void>, intervalM
     }
   };
   const timer = setInterval(() => { void tick(); }, intervalMs);
-  void tick();
+  if (runImmediately) void tick();
   return { stop() { stopped = true; clearInterval(timer); }, trigger: tick };
 }

@@ -144,10 +144,6 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
   const installationId = Number(row.installationId);
   const client = new GithubJobsClient({ token: () => deps.installationToken(installationId), fetch: deps.githubFetchForInstallation(installationId) });
   const runs = new Map<string, GithubRunSnapshot>();
-  const active = await client.listRuns(owner, repo, undefined, 1);
-  for (const run of active.runs) {
-    if (run.status === "queued" || run.status === "in_progress") runs.set(`${run.id}:${run.runAttempt}`, run);
-  }
   const [checkpoint] = await deps.db`SELECT completed_run_id AS "completedRunId",completed_run_attempt AS "completedRunAttempt" FROM github_discovery_checkpoints WHERE repository_id=${String(row.repositoryId)}`;
   const completed = await listRunsSinceCompletedCheckpoint(
     page => client.listRuns(owner, repo, undefined, page),

@@ -31,7 +31,21 @@ const OverviewJobOutcomePlatforms = strict({ macos: positiveSafe.or(z.literal(0)
 const nonnegativeSafe = z.number().int().nonnegative().safe();
 export const OverviewRunningContainer = dto(strict({ id, organizationId, jobId: id, runId: id, jobName: z.string().min(1), repositoryName: z.string().min(1), workflowName: z.string().min(1), workerName: z.string().min(1), runtime: z.string().min(1), startedAt: timestamp, cpuUsagePercent: z.number().min(0).max(100).nullable(), memoryWorkingSetBytes: nonnegativeSafe.nullable(), memoryLimitBytes: positiveSafe.nullable(), diskUsageBytes: nonnegativeSafe.nullable(), allocatedStorageBytes: nonnegativeSafe, sampledAt: timestamp.nullable() }));
 export type OverviewRunningContainer = z.output<typeof OverviewRunningContainer>;
-export const OverviewDto = dto(strict({ organizationId, period: z.enum(["24h", "7d", "30d"]), queued: positiveSafe.or(z.literal(0)), running: positiveSafe.or(z.literal(0)), completed: positiveSafe.or(z.literal(0)), failed: positiveSafe.or(z.literal(0)), queueP50Ms: positiveSafe.or(z.literal(0)), queueP95Ms: positiveSafe.or(z.literal(0)), durationP50Ms: positiveSafe.or(z.literal(0)), durationP95Ms: positiveSafe.or(z.literal(0)), concurrency: positiveSafe.or(z.literal(0)), utilization: strict({ vcpu: z.number().min(0).max(1), memory: z.number().min(0).max(1), storage: z.number().min(0).max(1), pods: z.number().min(0).max(1) }), timeseries: z.array(OverviewTimeseriesPoint).default([]), jobOutcomes: z.array(strict({ outcome: OverviewJobOutcome, platforms: OverviewJobOutcomePlatforms })).default([]), runningContainers: z.array(OverviewRunningContainer).default([]) }));
+const overviewRateDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+export const OverviewCostSavings = dto(strict({
+  selfHostedMinutes: nonnegativeSafe,
+  pricedMinutes: nonnegativeSafe,
+  unpricedMinutes: nonnegativeSafe,
+  estimatedSavingsMicros: nonnegativeSafe,
+  currency: z.literal("USD"),
+  latestRateEffectiveFrom: overviewRateDate.nullable(),
+})).superRefine((value, ctx) => {
+  if (value.selfHostedMinutes !== value.pricedMinutes + value.unpricedMinutes) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["selfHostedMinutes"], message: "Self-hosted minutes must equal priced plus unpriced minutes" });
+  }
+});
+export type OverviewCostSavings = z.output<typeof OverviewCostSavings>;
+export const OverviewDto = dto(strict({ organizationId, period: z.enum(["24h", "7d", "30d"]), queued: positiveSafe.or(z.literal(0)), running: positiveSafe.or(z.literal(0)), completed: positiveSafe.or(z.literal(0)), failed: positiveSafe.or(z.literal(0)), queueP50Ms: positiveSafe.or(z.literal(0)), queueP95Ms: positiveSafe.or(z.literal(0)), durationP50Ms: positiveSafe.or(z.literal(0)), durationP95Ms: positiveSafe.or(z.literal(0)), concurrency: positiveSafe.or(z.literal(0)), utilization: strict({ vcpu: z.number().min(0).max(1), memory: z.number().min(0).max(1), storage: z.number().min(0).max(1), pods: z.number().min(0).max(1) }), costSavings: OverviewCostSavings, timeseries: z.array(OverviewTimeseriesPoint).default([]), jobOutcomes: z.array(strict({ outcome: OverviewJobOutcome, platforms: OverviewJobOutcomePlatforms })).default([]), runningContainers: z.array(OverviewRunningContainer).default([]) }));
 export type OverviewDto = z.output<typeof OverviewDto>;
 export const RepositorySummary = dto(strict({ id, organizationId, name: z.string().min(1), fullName: z.string().min(1), visibility: z.enum(["private", "internal", "public"]), available: z.boolean(), installationId: id, discoveryState: z.enum(["active", "paused", "rate_limited", "queued"]), discoveryRetryAt: timestamp.nullable() }));
 export type RepositorySummary = z.infer<typeof RepositorySummary>;
