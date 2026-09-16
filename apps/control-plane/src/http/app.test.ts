@@ -574,7 +574,7 @@ describe("control-plane HTTP boundary", () => {
   });
 
   test("serves all dashboard and onboarding client routes", async () => {
-    for (const path of ["/settings", "/workers", "/pools", "/repositories", "/runs", "/onboarding"]) {
+    for (const path of ["/settings", "/workers", "/pools", "/repositories", "/runs", "/onboarding", "/cost-center"]) {
       expect((await app.request(path)).status).toBe(200);
     }
   });
