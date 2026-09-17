@@ -27,7 +27,7 @@ function displayStatus(value: string): string {
 
 function ActionNode({ data }: NodeProps<ActionFlowNode>) {
   return <div className={`action-node action-node-${data.outcome}`}>
-    <Handle className="action-node-handle" type="target" position={Position.Top} />
+    <Handle className="action-node-handle" type="target" position={Position.Left} />
     <div className="action-node-heading">
       <strong title={data.name}>{data.name}</strong>
       <span className={`action-node-outcome action-node-outcome-${data.outcome}`}>
@@ -39,7 +39,7 @@ function ActionNode({ data }: NodeProps<ActionFlowNode>) {
       <div><dt>Runtime</dt><dd>{formatDuration(data.durationMs)}</dd></div>
       <div><dt>Stage</dt><dd>{displayStatus(data.status)}</dd></div>
     </dl>
-    <Handle className="action-node-handle" type="source" position={Position.Bottom} />
+    <Handle className="action-node-handle" type="source" position={Position.Right} />
   </div>;
 }
 
@@ -82,14 +82,14 @@ export function layoutActionGraph(graph: ActionGraphDto): { nodes: ActionFlowNod
     const layer = depth.get(node.id) ?? 0;
     const layerNodes = layers.get(layer) ?? [];
     const index = layerNodes.findIndex((candidate) => candidate.id === node.id);
-    const layerOffset = (widestLayer - layerNodes.length) * (NODE_WIDTH + COLUMN_GAP) / 2;
+    const layerOffset = (widestLayer - layerNodes.length) * (NODE_HEIGHT + ROW_GAP) / 2;
     const outcome = node.conclusion ?? node.status;
     return {
       id: node.id,
       type: "action",
       position: {
-        x: layerOffset + index * (NODE_WIDTH + COLUMN_GAP),
-        y: layer * (NODE_HEIGHT + ROW_GAP),
+        x: layer * (NODE_WIDTH + COLUMN_GAP),
+        y: layerOffset + index * (NODE_HEIGHT + ROW_GAP),
       },
       width: NODE_WIDTH,
       height: NODE_HEIGHT,

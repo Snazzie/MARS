@@ -131,7 +131,8 @@ test("lays dependency edges out after their prerequisites", () => {
     edges: [{ from: "build", to: "test" }],
   });
   expect(flow.edges).toMatchObject([{ source: "build", target: "test" }]);
-  expect(flow.nodes.find((node) => node.id === "test")!.position.y).toBeGreaterThan(flow.nodes.find((node) => node.id === "build")!.position.y);
+  expect(flow.nodes.find((node) => node.id === "test")!.position.x).toBeGreaterThan(flow.nodes.find((node) => node.id === "build")!.position.x);
+  expect(flow.nodes.find((node) => node.id === "test")!.position.y).toBe(flow.nodes.find((node) => node.id === "build")!.position.y);
 });
 test("connects jobs in display order when dependency metadata is absent", () => {
   const flow = layoutActionGraph({
