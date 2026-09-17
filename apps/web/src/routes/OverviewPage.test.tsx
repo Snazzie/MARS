@@ -15,8 +15,8 @@ test("period control exposes all supported reporting windows", () => {
   expect(reportingPeriodLabels["30d"]).toBe("30 days");
 });
 
-test("overview query polls only for all-workspace aggregate", () => {
-  expect(overviewQueryOptions("org-1", "24h")).not.toHaveProperty("refetchInterval");
+test("overview queries poll every five seconds for organization and aggregate views", () => {
+  expect(overviewQueryOptions("org-1", "24h")).toMatchObject({ refetchInterval: 5_000 });
   expect(overviewQueryOptions("all", "24h")).toMatchObject({ refetchInterval: 5_000 });
 });
 

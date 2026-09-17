@@ -80,8 +80,10 @@ export function workerTelemetryIsStale(ageSeconds: number | null): boolean {
   return ageSeconds != null && ageSeconds > STALE_AFTER_SECONDS;
 }
 
-function StatusBadge({ children }: { children: ReactNode }) {
-  return <span className="worker-health-status">{children}</span>;
+type StatusBadgeTone = "success" | "warning" | "danger" | "info";
+
+function StatusBadge({ children, tone = "info" }: { children: ReactNode; tone?: StatusBadgeTone }) {
+  return <span className={`worker-health-status worker-health-status-${tone}`}>{children}</span>;
 }
 
 function UsageSection({ health, idPrefix, limits }: { health: WorkerHealth; idPrefix: string; limits?: WorkerDetail["limits"] }) {
@@ -150,9 +152,9 @@ function CacheSection({ health, idPrefix, cacheMetrics }: { health: WorkerHealth
       <div><dt>Proxy status</dt><dd>{cache.ready ? "Ready" : "Unavailable"}</dd></div>
     </dl>
     <div className="worker-health-statuses" aria-label="Cache health status">
-      {!cache.generation && <StatusBadge>No cache snapshot</StatusBadge>}
-      {cacheStale(cache.observedAt) && <StatusBadge>Stale cache</StatusBadge>}
-      {!cache.observedAt && <StatusBadge>Unavailable telemetry</StatusBadge>}
+      {!cache.generation && <StatusBadge tone="warning">No cache snapshot</StatusBadge>}
+      {cacheStale(cache.observedAt) && <StatusBadge tone="warning">Stale cache</StatusBadge>}
+      {!cache.observedAt && <StatusBadge tone="info">Unavailable telemetry</StatusBadge>}
     </div>
     {cache.error && <div className="worker-health-error" role="alert"><strong>Cache error</strong><span>{cache.error}</span><small>Remediation: verify the worker cache service and retry the health check.</small></div>}
   </section>;
@@ -248,11 +250,11 @@ export function WorkerHealthPanel({ workerId, health, loading = false, error, li
   if (!health) return <section id={`${idPrefix}-panel`} className="worker-health-panel" role="alert" aria-label="Live worker health error"><p>Live health unavailable. No telemetry was reported.</p></section>;
   return <section id={`${idPrefix}-panel`} className="worker-health-panel" aria-label="Live worker health">
     {showConnectionStatus && <div className="worker-health-statuses" aria-label="Worker telemetry status">
-      <StatusBadge>{health.connection.state === "offline" ? "Offline" : "Online"}</StatusBadge>
-      {workerTelemetryIsStale(health.connection.heartbeatAgeSeconds) && <StatusBadge>Stale heartbeat</StatusBadge>}
-      {workerTelemetryIsStale(health.connection.doctorAgeSeconds) && <StatusBadge>Stale doctor</StatusBadge>}
-      {health.connection.heartbeatAgeSeconds == null && <StatusBadge>Unavailable telemetry</StatusBadge>}
-      {health.connection.doctorAgeSeconds == null && <StatusBadge>Unavailable telemetry</StatusBadge>}
+      <StatusBadge tone={health.connection.state === "offline" ? "danger" : "success"}>{health.connection.state === "offline" ? "Offline" : "Online"}</StatusBadge>
+      {workerTelemetryIsStale(health.connection.heartbeatAgeSeconds) && <StatusBadge tone="warning">Stale heartbeat</StatusBadge>}
+      {workerTelemetryIsStale(health.connection.doctorAgeSeconds) && <StatusBadge tone="warning">Stale doctor</StatusBadge>}
+      {health.connection.heartbeatAgeSeconds == null && <StatusBadge tone="info">Unavailable telemetry</StatusBadge>}
+      {health.connection.doctorAgeSeconds == null && <StatusBadge tone="info">Unavailable telemetry</StatusBadge>}
     </div>}
     <UsageSection health={health} idPrefix={idPrefix} limits={limits} />
     <CacheSection health={health} idPrefix={idPrefix} cacheMetrics={cacheMetrics} />

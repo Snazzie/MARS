@@ -49,65 +49,74 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
     const candidateOrder = deps.candidates.length > 1
       ? deps.candidates.map((_, index) => deps.candidates[(queued.jobId + index) % deps.candidates.length])
       : deps.candidates;
-    const selected = candidateOrder.map((value) => {
-      if (deps.workerConnected && !deps.workerConnected(value.worker.id)) return null;
+    const compatible = candidateOrder.flatMap((value) => {
+      if (deps.workerConnected && !deps.workerConnected(value.worker.id)) return [];
       const option = selectProvisionOption(options, value.pool);
-      if (!option) return null;
+      if (!option) return [];
       const capacityKey = `${value.pool.id}:${value.worker.id}`;
       const reserved = reservedByPool.get(capacityKey) ?? 0;
       const candidate = { ...value, requestedLabels, pool: { ...value.pool, active: value.pool.active + reserved } };
-      return fits(candidate) ? { candidate: value, option } : null;
-    }).find((value): value is { candidate: typeof candidateOrder[number]; option: typeof options[number] } => value !== null);
+      return fits(candidate) ? [{ candidate: value, option }] : [];
+    });
     if (blockedInstallations.has(queued.installationId)) { report.skipped += 1; return; }
-    if (!selected) { report.skipped += 1; return; }
-    const candidate = selected.candidate;
-    const option = selected.option;
+    if (compatible.length === 0) { report.skipped += 1; return; }
     const [owner, repo] = queued.repository.split("/", 2);
     if (!owner || !repo) { report.failed += 1; return; }
-    let reservation: LeaseReservation | undefined;
-    let jitFailed = false;
-    const capacityKey = `${candidate.pool.id}:${candidate.worker.id}`;
-    reservedByPool.set(capacityKey, (reservedByPool.get(capacityKey) ?? 0) + 1);
-    try {
-      const poolResources = PoolResources.safeParse(candidate.pool.resources);
-      if (!poolResources.success) { report.skipped += 1; return; }
-      const requested = { ...poolResources.data, vcpu: option.vcpu, memoryBytes: option.memoryBytes };
-      const claimed = await deps.reserve({
-        workerId: candidate.worker.id,
-        poolId: candidate.pool.id,
-        githubJobId: queued.jobId,
-        requested,
-        routingKey: `${queued.repository}:${queued.jobId}:${[...new Set(requestedLabels.map((label) => label.toLowerCase()))].sort().join(",")}`,
-      });
-      reservation = claimed;
-      if (deps.preflight && !(await deps.preflight(queued))) {
-        report.skipped += 1;
-        await deps.release?.(claimed);
-        reservation = undefined;
+    let capacityRejected = false;
+    for (const selected of compatible) {
+      const candidate = selected.candidate;
+      const option = selected.option;
+      const capacityKey = `${candidate.pool.id}:${candidate.worker.id}`;
+      reservedByPool.set(capacityKey, (reservedByPool.get(capacityKey) ?? 0) + 1);
+      let reservation: LeaseReservation | undefined;
+      let jitFailed = false;
+      try {
+        const poolResources = PoolResources.safeParse(candidate.pool.resources);
+        if (!poolResources.success) { report.skipped += 1; return; }
+        const requested = { ...poolResources.data, vcpu: option.vcpu, memoryBytes: option.memoryBytes };
+        const claimed = await deps.reserve({
+          workerId: candidate.worker.id,
+          poolId: candidate.pool.id,
+          githubJobId: queued.jobId,
+          requested,
+          routingKey: `${queued.repository}:${queued.jobId}:${[...new Set(requestedLabels.map((label) => label.toLowerCase()))].sort().join(",")}`,
+        });
+        reservation = claimed;
+        if (deps.preflight && !(await deps.preflight(queued))) {
+          report.skipped += 1;
+          await deps.release?.(claimed);
+          return;
+        }
+        const jit = await deps.jit({ installationId: queued.installationId, owner, repo, runnerName: `${option.route}-${option.vcpu}vcpu-${option.memoryGiB}g-${randomUUID()}`, labels: requestedLabels, githubJobId: queued.jobId }).catch((error) => {
+          jitFailed = true;
+          throw error;
+        });
+        await deps.dispatch(claimed, jit);
+        report.reserved += 1;
         return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "unknown";
+        if (message === "worker_capacity_exhausted" || message === "pool_capacity_exhausted") {
+          capacityRejected = true;
+        } else {
+          console.error(`Reconcile job ${queued.jobId} failed: ${message}`);
+          report.failed += 1;
+          if (reservation) {
+            if (jitFailed) blockedInstallations.add(queued.installationId);
+            await deps.release?.(reservation);
+          }
+          if (message === "github_rate_limited") blockedInstallations.add(queued.installationId);
+          return;
+        }
+        if (reservation) {
+          await deps.release?.(reservation);
+          return;
+        }
+      } finally {
+        reservedByPool.set(capacityKey, Math.max(0, (reservedByPool.get(capacityKey) ?? 1) - 1));
       }
-      const jit = await deps.jit({ installationId: queued.installationId, owner, repo, runnerName: `${option.route}-${option.vcpu}vcpu-${option.memoryGiB}g-${randomUUID()}`, labels: requestedLabels, githubJobId: queued.jobId }).catch((error) => {
-        jitFailed = true;
-        throw error;
-      });
-      await deps.dispatch(claimed, jit);
-      report.reserved += 1;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "unknown";
-      if (message === "worker_capacity_exhausted" || message === "pool_capacity_exhausted") {
-        report.deferred += 1;
-      } else {
-        console.error(`Reconcile job ${queued.jobId} failed: ${message}`);
-        report.failed += 1;
-      }
-      if (reservation) {
-        if (jitFailed) blockedInstallations.add(queued.installationId);
-        await deps.release?.(reservation);
-      }
-      if (message === "github_rate_limited") blockedInstallations.add(queued.installationId);
-    } finally {
-      reservedByPool.set(capacityKey, Math.max(0, (reservedByPool.get(capacityKey) ?? 1) - 1));
     }
+    if (capacityRejected) report.deferred += 1;
   };
 
   const worker = async (): Promise<void> => {

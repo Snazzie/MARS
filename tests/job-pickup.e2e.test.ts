@@ -2,6 +2,8 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { createDb, migrateDatabase, type DatabaseClient } from "../packages/db/src/index.ts";
 import { applyWorkflowJobWebhook, configureRunLifecycle } from "../apps/control-plane/src/runs.ts";
+import { reconcileExpiredLeasesWithGithub } from "../apps/control-plane/src/lease-reconciliation.ts";
+import { getOverview } from "../packages/db/src/dashboard.ts";
 import { listReplayableWorkerCommands } from "../apps/control-plane/src/worker-dispatch.ts";
 
 const databaseUrl = Bun.env.MARS_E2E_DATABASE_URL;
@@ -96,6 +98,64 @@ test.skipIf(!databaseUrl)("replay filters expired creates and deduplicates termi
     await db`delete from runner_leases where worker_id=${workerId}`;
     await db`delete from runner_pools where id=${poolId}`;
     await db`delete from workers where id=${workerId}`;
+    await db`delete from organizations where id=${organizationId}`;
+  }
+});
+test.skipIf(!databaseUrl)("reclaims stale provisioning capacity before picking up queued work", async () => {
+  if (!sql) return;
+  const db = sql;
+  const organizationId = crypto.randomUUID();
+  const installationId = crypto.randomUUID();
+  const repositoryId = crypto.randomUUID();
+  const workerId = crypto.randomUUID();
+  const poolId = crypto.randomUUID();
+  const staleJobId = 987654322;
+  const queuedJobId = 987654323;
+  const [encryption] = [generateKeyPairSync("x25519")];
+  const workerPublicKey = encryption.publicKey.export({ format: "pem", type: "spki" }).toString();
+  await db`insert into organizations (id, github_org_id, login) values (${organizationId}, ${Math.floor(Math.random() * 1_000_000_000)}, 'stale-capacity-e2e')`;
+  await db`insert into dashboard_installations (id, organization_id, github_installation_id, state, repository_selection) values (${installationId}, ${organizationId}, ${Math.floor(Math.random() * 1_000_000_000)}, 'approved', 'selected')`;
+  await db`insert into dashboard_repositories (id, organization_id, installation_id, github_repository_id, name, full_name, visibility, available) values (${repositoryId}, ${organizationId}, ${installationId}, ${Math.floor(Math.random() * 1_000_000_000)}, 'repo', 'stale-capacity-e2e/repo', 'private', true)`;
+  await db`insert into workers (id, name, platform, admission_state, connection_state, configuration_state, encryption_public_key, limits, vm_uuid, machine_uuid) values (${workerId}, 'stale-capacity-worker', 'linux-x64', 'adopted', 'online', 'ready', ${workerPublicKey}, ${JSON.stringify({ maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 8192, maxConcurrentPods: 2 })}, ${crypto.randomUUID()}, ${crypto.randomUUID()})`;
+  await db`insert into runner_pools (id, organization_id, worker_id, name, platform, driver, image_digest, resources, labels, trigger_label, enabled) values (${poolId}, ${organizationId}, ${workerId}, 'stale-capacity-e2e', 'linux-x64', 'linux-libvirt-vm', 'ubuntu@sha256:' || repeat('c', 64), ${JSON.stringify({ vcpu: 1, memoryBytes: 4 * 1024 ** 3, storageBytes: 2048, concurrency: 2 })}, ${JSON.stringify(['mars-linux-x64'])}, 'mars-linux-x64', true)`;
+  const installationGithubId = Number((await db`select github_installation_id from dashboard_installations where id=${installationId}`)[0].github_installation_id);
+  const repositoryGithubId = Number((await db`select github_repository_id from dashboard_repositories where id=${repositoryId}`)[0].github_repository_id);
+  const createJob = async (jobId: number, status: "queued" | "in_progress") => {
+    await applyWorkflowJobWebhook({ action: "queued", installation: { id: installationGithubId }, repository: { id: repositoryGithubId, name: "repo", full_name: "stale-capacity-e2e/repo" }, workflow_job: { id: jobId, run_id: jobId + 1000, run_number: 1, name: "build", status, labels: ["mars-linux-x64-1vcpu-1g"] } });
+    if (status === "in_progress") await db`update dashboard_jobs set status='in_progress', started_at=now() where organization_id=${organizationId} and github_job_id=${jobId}`;
+  };
+  try {
+    await createJob(987654321, "in_progress");
+    await createJob(staleJobId, "in_progress");
+    await createJob(queuedJobId, "queued");
+    const createLease = (jobId: number, state: string, expiresAt: Date) => db`insert into runner_leases (id, organization_id, pool_id, worker_id, github_job_id, routing_key, state, requested, nonce, expires_at) values (${crypto.randomUUID()}, ${organizationId}, ${poolId}, ${workerId}, ${jobId}, 'stale-capacity', ${state}, ${JSON.stringify({ vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 })}, ${crypto.randomUUID()}, ${expiresAt})`;
+    await createLease(987654321, "busy", new Date(Date.now() + 60_000));
+    await createLease(staleJobId, "provisioning", new Date(Date.now() - 60_000));
+    const before = await getOverview(db, organizationId, "24h");
+    expect(before.running).toBe(2);
+    expect(before.queued).toBe(1);
+    const stale = await reconcileExpiredLeasesWithGithub({ db, installationToken: async () => "token", githubFetchForInstallation: () => async (input) => {
+      if (String(input).endsWith(`/actions/jobs/${staleJobId}`)) return Response.json({ id: staleJobId, run_id: staleJobId + 1000, run_attempt: 1, status: "in_progress", name: "build", created_at: new Date().toISOString() });
+      throw new Error(`unexpected GitHub request: ${String(input)}`);
+    } });
+    expect(stale.released).toBe(1);
+    const dispatched: unknown[] = [];
+    const result = await runQueuedJobReconciliation({ db, installationToken: async () => "token", githubFetchForInstallation: () => async (_input, init) => init?.method === "POST" ? Response.json({ encoded_jit_config: "encoded-jit-config" }) : Response.json({ id: queuedJobId, run_id: queuedJobId + 1000, run_attempt: 1, status: "queued", name: "build", labels: ["mars-linux-x64-1vcpu-1g"], created_at: new Date().toISOString() }), dispatcher: { dispatch: async (command) => { dispatched.push(command); return {} as never; } } });
+    expect(result.reserved).toBe(1);
+    expect(dispatched).toHaveLength(1);
+    const staleLease = (await db`select state, terminal_result from runner_leases where github_job_id=${staleJobId}`)[0];
+    const queuedLease = (await db`select state from runner_leases where github_job_id=${queuedJobId}`)[0];
+    expect(staleLease.state).toBe("failed");
+    expect(staleLease.terminal_result).toMatchObject({ reason: "startup_timeout" });
+    expect(queuedLease.state).toBe("dispatched");
+  } finally {
+    await db`delete from runner_leases where organization_id=${organizationId}`;
+    await db`delete from dashboard_jobs where organization_id=${organizationId}`;
+    await db`delete from dashboard_runs where organization_id=${organizationId}`;
+    await db`delete from runner_pools where id=${poolId}`;
+    await db`delete from workers where id=${workerId}`;
+    await db`delete from dashboard_repositories where id=${repositoryId}`;
+    await db`delete from dashboard_installations where id=${installationId}`;
     await db`delete from organizations where id=${organizationId}`;
   }
 });

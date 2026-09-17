@@ -28,9 +28,9 @@ test("overview uses active runner leases for the load numerator", async () => {
   }) as never;
   const result = await getOverview(db, "org-1", "24h");
   expect(OverviewDto.parse(result)).toMatchObject({ running: 2, concurrency: 10, utilization: { pods: 0.2 }, timeseries: [{ bucket: "2026-08-12T10:00:00.000Z", pending: 2, running: 1 }], runningContainers: [{ organizationId: "org-1", jobName: "build", cpuUsagePercent: 42.5 }] });
-  expect(queries.some((query) => query.includes("l.state IN ('sandbox_ready','online','busy')") && query.includes("j.status='in_progress'"))).toBe(true);
-  expect(queries.some((query) => query.includes("count(*) FILTER (WHERE j.status='queued')") && query.includes("FROM dashboard_jobs j"))).toBe(true);
-  expect(queries.some((query) => query.includes("SELECT count(*)::int FROM runner_leases") && query.includes("l.state IN ('sandbox_ready','online','busy')"))).toBe(true);
+  expect(queries.some((query) => query.includes("l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')") && query.includes("FROM runner_leases"))).toBe(true);
+  expect(queries.some((query) => query.includes("j.status='queued'") && query.includes("NOT EXISTS") && query.includes("ql.cleanup_state IN ('pending','failed')"))).toBe(true);
+  expect(queries.some((query) => query.includes("SELECT count(*)::int FROM runner_leases") && query.includes("l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')"))).toBe(true);
 });
 test("aggregate overview preserves each running container organization", async () => {
   const queries: string[] = [];

@@ -73,7 +73,7 @@ export function AppShell() {
           ))}
         </nav>
         <div className="rail-settings"><p className="nav-label">Settings</p><Link to="/settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>General</span></Link></div>
-        <div className="rail-footer" role="status" aria-live="polite"><span className={`online-dot ${health.data?.ok ? "" : "is-offline"}`} />Control plane <strong>{health.isLoading ? "checking" : health.data?.ok ? "connected" : health.error ? "unreachable" : "degraded"}</strong>{health.data?.discovery.stale && <small> Discovery stale</small>}</div>
+        <div className="rail-footer" role="status" aria-live="polite"><span className={`online-dot ${health.data ? "" : "is-offline"}`} />Control plane <strong>{health.isLoading ? "checking" : health.data ? "connected" : "unreachable"}</strong>{health.data?.discovery.stale && <small> Discovery stale</small>}</div>
       </aside>
       <div className="console-body">
         <header className="mobile-header">

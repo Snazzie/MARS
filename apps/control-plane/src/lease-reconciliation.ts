@@ -61,7 +61,7 @@ export async function reconcileWorkerInventory(db: DatabaseClient, workerId: str
           updated_at=now()
         WHERE worker_id=${workerId}
           AND (
-            state IN ('dispatched','sandbox_ready','online','busy')
+            state IN ('dispatched','provisioning','sandbox_ready','online','busy')
             OR (state IN ('completed','failed') AND cleanup_state IN ('pending','failed'))
           )
         RETURNING id
@@ -74,7 +74,7 @@ export async function reconcileWorkerInventory(db: DatabaseClient, workerId: str
           updated_at=now()
         WHERE worker_id=${workerId}
           AND (
-            state IN ('dispatched','sandbox_ready','online','busy')
+            state IN ('dispatched','provisioning','sandbox_ready','online','busy')
             OR (state IN ('completed','failed') AND cleanup_state IN ('pending','failed'))
           )
           AND NOT EXISTS (
@@ -114,7 +114,7 @@ async function failStartupLease(deps: StaleLeaseReconciliationDeps, row: StaleLe
         terminal_result=${jsonParameter(deps.db, { reason: "startup_timeout" })}::jsonb,
         updated_at=now()
     WHERE id=${row.leaseId} AND nonce=${row.nonce}
-      AND state IN ('reserved','requested','dispatched','sandbox_ready')
+      AND state IN ('reserved','requested','dispatched','provisioning','sandbox_ready')
     RETURNING id`;
   return Boolean(updated[0]);
 }
@@ -173,7 +173,7 @@ export async function reconcileExpiredLeasesWithGithub(deps: StaleLeaseReconcili
       }
       if (job.id !== githubJobId || job.runId !== githubRunId || job.runAttempt !== githubRunAttempt) throw new Error("github_payload_invalid");
       if (job.status !== "completed") {
-        if (row.leaseExpired && (row.leaseState === "dispatched" || row.leaseState === "sandbox_ready")) {
+        if (row.leaseExpired && (row.leaseState === "dispatched" || row.leaseState === "provisioning" || row.leaseState === "sandbox_ready")) {
           if (await failStartupLease(deps, row)) report.released += 1;
           else report.skipped += 1;
         } else {

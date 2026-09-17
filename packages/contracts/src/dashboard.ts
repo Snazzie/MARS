@@ -49,6 +49,8 @@ export const OverviewCostSavings = dto(strict({
 export type OverviewCostSavings = z.output<typeof OverviewCostSavings>;
 export const OverviewDto = dto(strict({ organizationId, period: DashboardPeriod, queued: positiveSafe.or(z.literal(0)), running: positiveSafe.or(z.literal(0)), completed: positiveSafe.or(z.literal(0)), failed: positiveSafe.or(z.literal(0)), queueP50Ms: positiveSafe.or(z.literal(0)), queueP95Ms: positiveSafe.or(z.literal(0)), durationP50Ms: positiveSafe.or(z.literal(0)), durationP95Ms: positiveSafe.or(z.literal(0)), concurrency: positiveSafe.or(z.literal(0)), utilization: strict({ vcpu: z.number().min(0).max(1), memory: z.number().min(0).max(1), storage: z.number().min(0).max(1), pods: z.number().min(0).max(1) }), costSavings: OverviewCostSavings, timeseries: z.array(OverviewTimeseriesPoint).default([]), jobOutcomes: z.array(strict({ outcome: OverviewJobOutcome, platforms: OverviewJobOutcomePlatforms })).default([]), runningContainers: z.array(OverviewRunningContainer).default([]) }));
 export type OverviewDto = z.output<typeof OverviewDto>;
+export const CostCenterPricingProvider = z.enum(["github", "blacksmith"]);
+export type CostCenterPricingProvider = z.infer<typeof CostCenterPricingProvider>;
 const CostCenterBreakdownBase = strict({
   organizationId,
   repositoryId: id,
@@ -83,6 +85,7 @@ export type CostCenterPricePoint = z.output<typeof CostCenterPricePoint>;
 export const CostCenterDto = dto(strict({
   organizationId,
   period: DashboardPeriod,
+  pricingProvider: CostCenterPricingProvider.optional(),
   costSavings: OverviewCostSavings,
   priceOverTime: z.array(CostCenterPricePoint),
   breakdown: z.array(CostCenterBreakdown),

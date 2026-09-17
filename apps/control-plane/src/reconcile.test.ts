@@ -264,3 +264,23 @@ test("releases a reservation when preflight throws", async () => {
   expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 1 });
   expect(released).toBe(true);
 });
+test("reroutes after the rotated-first compatible worker rejects capacity", async () => {
+  const calls: string[] = [];
+  const reservation = (workerId: string) => ({ id: `lease-${workerId}`, nonce: "n".repeat(32), workerId, poolId: `pool-${workerId}`, expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 } });
+  const worker = (id: string) => ({ id, admissionState: "adopted" as const, connectionState: "online" as const, configurationState: "ready" as const, runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } });
+  const pool = (id: string, workerId: string) => ({ id, platform: "macos-arm64" as const, enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64", workerId });
+  const result = await reconcileQueuedJobs({
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 5, labels: ["mars-macos-arm64-2vcpu-4g"] }],
+    candidates: [{ requestedLabels: [], worker: worker("worker-1"), pool: pool("pool-1", "worker-1") }, { requestedLabels: [], worker: worker("worker-2"), pool: pool("pool-2", "worker-2") }],
+    reserve: async ({ workerId }) => {
+      calls.push(`reserve-${workerId}`);
+      if (workerId === "worker-2") throw new Error("worker_capacity_exhausted");
+      return reservation(workerId);
+    },
+    jit: async ({ runnerName }) => { calls.push(`jit-${runnerName}`); return { encodedJitConfig: "config", runnerName, labels: ["mars-macos-arm64-2vcpu-4g"], expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
+    dispatch: async (claimed) => { calls.push(`dispatch-${claimed.workerId}`); },
+  });
+  expect(result).toMatchObject({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
+  expect(calls.filter((call) => call.startsWith("reserve-"))).toEqual(["reserve-worker-2", "reserve-worker-1"]);
+  expect(calls.filter((call) => call.startsWith("dispatch-"))).toEqual(["dispatch-worker-1"]);
+});

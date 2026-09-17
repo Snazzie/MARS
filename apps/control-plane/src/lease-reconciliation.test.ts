@@ -33,7 +33,7 @@ test("worker inventory reclaims runtime leases it does not report", async () => 
   }) as never;
   expect(await reconcileWorkerInventory(db, "worker-1", ["11111111-1111-4111-8111-111111111111"])).toBe(1);
   expect(query).not.toContain("expires_at < now()");
-  expect(query).toContain("state IN ('dispatched','sandbox_ready','online','busy')");
+  expect(query).toContain("state IN ('dispatched','provisioning','sandbox_ready','online','busy')");
   expect(query).not.toContain("ANY((");
   expect(query).toContain("jsonb_array_elements_text");
 });
@@ -44,7 +44,7 @@ test("worker inventory empty list reclaims runtime leases and completed cleanup"
     return [{ id: "runtime-lease" }, { id: "terminal-lease" }];
   }) as never;
   expect(await reconcileWorkerInventory(db, "worker-1", [])).toBe(2);
-  expect(query).toContain("state IN ('dispatched','sandbox_ready','online','busy')");
+  expect(query).toContain("state IN ('dispatched','provisioning','sandbox_ready','online','busy')");
   expect(query).toContain("state IN ('completed','failed') AND cleanup_state IN ('pending','failed')");
   expect(query).toContain("THEN 'reaped'");
   expect(query).toContain("THEN 'completed'");
@@ -98,6 +98,30 @@ test("fails an expired sandbox-ready lease with startup timeout while the job re
     const path = String(input);
     if (path.endsWith("/actions/jobs/42")) return Response.json({ id: 42, run_id: 7, run_attempt: 2, status: "in_progress", name: "build", created_at: "2026-08-20T00:00:00Z" });
     if (path.endsWith("/actions/runs/7/attempts/2")) return Response.json({ id: 7, run_attempt: 2, status: "in_progress", name: "ci", run_number: 7, created_at: "2026-08-20T00:00:00Z" });
+    throw new Error(`unexpected GitHub request: ${path}`);
+  };
+
+  const report = await reconcileExpiredLeasesWithGithub({ db, installationToken: async () => "token", githubFetchForInstallation: () => fetcher });
+
+  expect(report).toEqual({ inspected: 1, completed: 0, released: 1, stillActive: 0, skipped: 0 });
+  expect(calls.some(({ query, values }) => query.includes("UPDATE runner_leases") && values.some(value => value && typeof value === "object" && JSON.stringify(value).includes("startup_timeout")))).toBe(true);
+});
+test("fails an expired provisioning lease with startup timeout while the job remains nonterminal", async () => {
+  const calls: Array<{ query: string; values: unknown[] }> = [];
+  const db = Object.assign((async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const query = strings.join(" ");
+    calls.push({ query, values });
+    if (query.includes("FROM runner_leases l")) return [{
+      leaseId: "lease-provisioning-timeout", organizationId: "org-1", workerId: "worker-1", nonce: "nonce-provisioning-timeout", expiresAt: "2020-01-01T00:00:00.000Z",
+      githubJobId: 43, githubRunId: 8, githubRunAttempt: 1, leaseExpired: true, leaseState: "provisioning", githubRepositoryId: 99, repositoryName: "repo",
+      repositoryFullName: "acme/repo", installationId: 123, jobStatus: "queued", jobConclusion: null,
+    }];
+    if (query.includes("UPDATE runner_leases")) return [{ id: "lease-provisioning-timeout" }];
+    return [];
+  }) as never, { begin: async (fn: (tx: typeof db) => unknown) => fn(db) }) as never;
+  const fetcher = async (input: RequestInfo | URL): Promise<Response> => {
+    const path = String(input);
+    if (path.endsWith("/actions/jobs/43")) return Response.json({ id: 43, run_id: 8, run_attempt: 1, status: "queued", name: "build", created_at: "2026-08-20T00:00:00Z" });
     throw new Error(`unexpected GitHub request: ${path}`);
   };
 
