@@ -133,6 +133,21 @@ test("lays dependency edges out after their prerequisites", () => {
   expect(flow.edges).toMatchObject([{ source: "build", target: "test" }]);
   expect(flow.nodes.find((node) => node.id === "test")!.position.y).toBeGreaterThan(flow.nodes.find((node) => node.id === "build")!.position.y);
 });
+test("connects jobs in display order when dependency metadata is absent", () => {
+  const flow = layoutActionGraph({
+    nodes: [
+      { id: "build", name: "Build", status: "completed", conclusion: "success", durationMs: 12_000 },
+      { id: "test", name: "Test", status: "completed", conclusion: "success", durationMs: 8_000 },
+      { id: "deploy", name: "Deploy", status: "queued", conclusion: null, durationMs: 0 },
+    ],
+    edges: [],
+  });
+  expect(flow.edges).toMatchObject([
+    { source: "build", target: "test" },
+    { source: "test", target: "deploy" },
+  ]);
+});
+
 
 
 test("selecting a graph node shows only that job's logs", async () => {
@@ -183,6 +198,7 @@ test("selecting a graph node shows only that job's logs", async () => {
   });
   expect(jobNode?.classList.contains("selected")).toBe(true);
   expect(container.querySelector("#job-job-2 .log-panel")).not.toBeNull();
+  expect(container.querySelector(".graph-panel")?.nextElementSibling).toBe(container.querySelector("#job-job-2"));
   expect(container.querySelector("#job-job-1")).toBeNull();
   expect(container.querySelector("#job-job-2")?.textContent).toContain("Unit tests");
   expect(container.querySelector("#job-job-2")?.textContent).toContain("Test");

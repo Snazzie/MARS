@@ -47,11 +47,14 @@ const nodeTypes = { action: ActionNode };
 
 export function layoutActionGraph(graph: ActionGraphDto): { nodes: ActionFlowNode[]; edges: Edge[] } {
   const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  const graphEdges = graph.edges.length > 0
+    ? graph.edges
+    : graph.nodes.slice(1).map((node, index) => ({ from: graph.nodes[index]!.id, to: node.id }));
   const outgoing = new Map<string, string[]>();
   const indegree = new Map(graph.nodes.map((node) => [node.id, 0]));
   const depth = new Map(graph.nodes.map((node) => [node.id, 0]));
 
-  for (const edge of graph.edges) {
+  for (const edge of graphEdges) {
     if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) continue;
     outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge.to]);
     indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1);
@@ -97,14 +100,17 @@ export function layoutActionGraph(graph: ActionGraphDto): { nodes: ActionFlowNod
     };
   });
 
-  const edges = graph.edges
+  const edges = graphEdges
     .filter((edge) => nodeIds.has(edge.from) && nodeIds.has(edge.to))
     .map((edge): Edge => ({
       id: `${edge.from}-${edge.to}`,
       source: edge.from,
       target: edge.to,
+      type: "smoothstep",
       className: "action-flow-edge",
-      markerEnd: { type: MarkerType.ArrowClosed },
+      style: { stroke: "var(--mars)", strokeWidth: 2.25 },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "var(--mars)", width: 18, height: 18 },
+      zIndex: 1,
     }));
   return { nodes, edges };
 }
