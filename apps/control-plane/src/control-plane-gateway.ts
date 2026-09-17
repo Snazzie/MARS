@@ -15,7 +15,7 @@ type WorkerSocketData = { actor: "worker"; workerId: string; challenge?: Buffer;
 type BrowserSocketData = { actor: "browser"; organizationId: string; cursor: number };
 export type ControlPlaneSocketData = WorkerSocketData | BrowserSocketData;
 type GatewayServer = Server<ControlPlaneSocketData>;
-export const WORKER_HEARTBEAT_INTERVAL_MS = 30_000;
+export const WORKER_HEARTBEAT_INTERVAL_MS = 10_000;
 type ScheduleTimeout = (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
 export function scheduleWorkerPing(sendPing: () => void, scheduleTimeout: ScheduleTimeout = setTimeout): ReturnType<typeof setTimeout> {
   return scheduleTimeout(sendPing, WORKER_HEARTBEAT_INTERVAL_MS);

@@ -14,7 +14,7 @@ test("schedules worker heartbeat pings without sending immediately", () => {
     },
   );
   expect(sendCount).toBe(0);
-  expect(capturedDelay).toBe(30_000);
+  expect(capturedDelay).toBe(10_000);
   capturedCallback();
   expect(sendCount).toBe(1);
 });
