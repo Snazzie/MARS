@@ -11,7 +11,7 @@ import type { RuntimeDriver } from "./runtime.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 import { retryControlPlaneOperation } from "./worker-client.ts";
-import { openLeasePickupState, leasePickupStateFile, type LeasePickupStateController } from "./lease-pickup-state.ts";
+import { openLeasePickupState, leasePickupStateFile, writeLeasePickupState, type LeasePickupStateController } from "./lease-pickup-state.ts";
 
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
 type Identity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string; vmUuid?: string; machineUuid?: string; preserveLeases?: boolean };
@@ -364,7 +364,9 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
   const pickupState = await openLeasePickupState(leasePickupStateFile());
   let doctorReport = await windowsDoctor(identity.preserveLeases === true);
   const activeLeases = new Map<string, Promise<void>>();
+  const publishInventory = () => { void writeLeasePickupState(leasePickupStateFile(), pickupState.acceptingLeases, activeLeases.size); };
   const sendDoctor = async (ws: WebSocket): Promise<void> => {
+    publishInventory();
     try {
       const [currentCapacity, containers] = await Promise.all([capacity(), driver.listContainerStatuses()]);
       const report = buildWindowsDoctorReport({

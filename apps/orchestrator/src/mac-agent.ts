@@ -11,7 +11,7 @@ import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { retryControlPlaneOperation } from "./worker-client.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 import { collectWorkerServiceLogs } from "./worker-service-logs.ts";
-import { openLeasePickupState, leasePickupStateFile, type LeasePickupStateController } from "./lease-pickup-state.ts";
+import { openLeasePickupState, leasePickupStateFile, writeLeasePickupState, type LeasePickupStateController } from "./lease-pickup-state.ts";
 import { MacStatusItemSupervisor, statusItemExecutable } from "./mac-status-item.ts";
 export interface MacWorkerLimits { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number }
 export interface MacWorkerJoinInput {
@@ -387,7 +387,9 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
       console.error("Mac worker connection closed; reconnecting", { workerId: identity.workerId, code: event.code, reason: event.reason });
       closed.resolve();
     };
+    const publishInventory = () => { void writeLeasePickupState(leasePickupStateFile(), pickupState.acceptingLeases, activeLeases.size); };
     const sendDoctor = () => {
+      publishInventory();
       if (ws.readyState !== WebSocket.OPEN) return;
       ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, acceptingLeases: pickupState.acceptingLeases, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
     };

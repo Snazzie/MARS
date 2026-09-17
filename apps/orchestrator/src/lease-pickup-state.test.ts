@@ -14,7 +14,7 @@ describe("lease pickup state", () => {
     await changed;
     expect(controller.acceptingLeases).toBe(false);
     await controller.close();
-    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ paused: true });
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ paused: true, activeCount: 0 });
     await rm(directory, { recursive: true });
   });
   test("malformed state fails closed", async () => {

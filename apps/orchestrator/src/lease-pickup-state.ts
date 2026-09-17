@@ -1,8 +1,8 @@
 import { mkdir, readFile, rename, writeFile, chmod } from "node:fs/promises";
 import { watch, type FSWatcher } from "node:fs";
-import { dirname, basename } from "node:path";
+import { dirname, basename, isAbsolute } from "node:path";
 
-export type LeasePickupState = { paused: boolean };
+export type LeasePickupState = { paused: boolean; activeCount: number };
 export type LeasePickupStateController = {
   readonly acceptingLeases: boolean;
   subscribe(listener: (acceptingLeases: boolean) => void): () => void;
@@ -11,26 +11,32 @@ export type LeasePickupStateController = {
 
 const parseState = (value: unknown): LeasePickupState => {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("lease pickup state must be an object");
-  const entries = Object.entries(value as Record<string, unknown>);
-  if (entries.length !== 1 || entries[0]?.[0] !== "paused" || typeof entries[0][1] !== "boolean") throw new Error("lease pickup state must be exactly { paused: boolean }");
-  return { paused: entries[0][1] as boolean };
+  const object = value as Record<string, unknown>;
+  if ((object.paused !== true && object.paused !== false) || Object.keys(object).some(key => key !== "paused" && key !== "activeCount")) throw new Error("lease pickup state has invalid fields");
+  const activeCount = typeof object.activeCount === "undefined" ? 0 : object.activeCount;
+  if (typeof activeCount !== "number" || !Number.isInteger(activeCount) || activeCount < 0) throw new Error("lease pickup state activeCount must be a non-negative integer");
+  return { paused: object.paused, activeCount };
+};
+
+const readState = async (path: string): Promise<LeasePickupState> => {
+  try {
+    return parseState(JSON.parse(await readFile(path, "utf8")));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { paused: false, activeCount: 0 };
+    console.error("Lease pickup state unreadable; failing closed", { path, error: error instanceof Error ? error.message : String(error) });
+    return { paused: true, activeCount: 0 };
+  }
 };
 
 export async function readLeasePickupState(path: string): Promise<boolean> {
-  try {
-    return !parseState(JSON.parse(await readFile(path, "utf8"))).paused;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
-    console.error("Lease pickup state unreadable; failing closed", { path, error: error instanceof Error ? error.message : String(error) });
-    return false;
-  }
+  return !(await readState(path)).paused;
 }
 
-export async function writeLeasePickupState(path: string, acceptingLeases: boolean): Promise<void> {
+export async function writeLeasePickupState(path: string, acceptingLeases: boolean, activeCount = 0): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
   try {
-    await writeFile(temporary, JSON.stringify({ paused: !acceptingLeases }), { flag: "wx", mode: 0o600 });
+    await writeFile(temporary, JSON.stringify({ paused: !acceptingLeases, activeCount }), { flag: "wx", mode: 0o600 });
     await chmod(temporary, 0o600);
     await rename(temporary, path);
   } catch (error) {
@@ -40,13 +46,13 @@ export async function writeLeasePickupState(path: string, acceptingLeases: boole
 }
 
 export async function openLeasePickupState(path: string): Promise<LeasePickupStateController> {
-  if (!path.startsWith("/")) throw new Error("lease pickup state path must be absolute");
+  if (!isAbsolute(path)) throw new Error("lease pickup state path must be absolute");
   try {
     await readFile(path, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") await writeLeasePickupState(path, true);
   }
-  let acceptingLeases = await readLeasePickupState(path);
+  let acceptingLeases = !(await readState(path)).paused;
   const listeners = new Set<(acceptingLeases: boolean) => void>();
   let closed = false;
   let loading: Promise<void> | undefined;
@@ -54,7 +60,7 @@ export async function openLeasePickupState(path: string): Promise<LeasePickupSta
     if (closed) return;
     if (loading) return loading;
     loading = (async () => {
-      const next = await readLeasePickupState(path);
+      const next = !(await readState(path)).paused;
       if (next !== acceptingLeases) {
         acceptingLeases = next;
         for (const listener of listeners) listener(next);
@@ -64,9 +70,7 @@ export async function openLeasePickupState(path: string): Promise<LeasePickupSta
   };
   let watcher: FSWatcher | undefined;
   try {
-    watcher = watch(dirname(path), () => {
-      void reload();
-    });
+    watcher = watch(dirname(path), () => { void reload(); });
   } catch (error) {
     console.error("Lease pickup state watcher unavailable", { path, error: error instanceof Error ? error.message : String(error) });
   }
