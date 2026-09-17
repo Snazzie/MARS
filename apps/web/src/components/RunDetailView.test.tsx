@@ -148,6 +148,31 @@ test("connects jobs in display order when dependency metadata is absent", () => 
     { source: "test", target: "deploy" },
   ]);
 });
+test("groups matrix variants with matching dependencies", () => {
+  const flow = layoutActionGraph({
+    nodes: [
+      { id: "build", name: "Build", status: "completed", conclusion: "success", durationMs: 12_000 },
+      { id: "linux", name: "Test linux", status: "completed", conclusion: "success", durationMs: 8_000 },
+      { id: "windows", name: "Test windows", status: "completed", conclusion: "failure", durationMs: 9_000 },
+      { id: "publish", name: "Publish", status: "queued", conclusion: null, durationMs: 0 },
+    ],
+    edges: [
+      { from: "build", to: "linux" },
+      { from: "build", to: "windows" },
+      { from: "linux", to: "publish" },
+      { from: "windows", to: "publish" },
+    ],
+  });
+  const matrix = flow.nodes.find((node) => node.type === "matrix");
+  expect(flow.nodes).toHaveLength(3);
+  expect(matrix?.type).toBe("matrix");
+  if (!matrix || matrix.type !== "matrix") throw new Error("Expected matrix node");
+  expect(matrix.data).toMatchObject({ label: "Test", members: [{ id: "linux" }, { id: "windows" }] });
+  expect(flow.edges).toHaveLength(2);
+  expect(flow.nodes.find((node) => node.id === "build")!.position.x).toBeLessThan(matrix.position.x);
+  expect(matrix.position.x).toBeLessThan(flow.nodes.find((node) => node.id === "publish")!.position.x);
+});
+
 
 
 
