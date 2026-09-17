@@ -83,41 +83,38 @@ function commonMatrixLabel(nodes: readonly ActionGraphNode[]): string | null {
   return words[0]!.slice(0, shared).join(" ").replace(/[\s([{/,:-]+$/, "") || null;
 }
 
-function matrixGroups(graph: ActionGraphDto): Map<string, { id: string; label: string; members: ActionGraphNode[] }> {
+function matrixGroups(nodes: readonly ActionGraphNode[]): Map<string, { id: string; label: string; members: ActionGraphNode[] }> {
   const groups = new Map<string, { id: string; label: string; members: ActionGraphNode[] }>();
-  if (graph.edges.length === 0) return groups;
-  const incoming = new Map(graph.nodes.map((node) => [node.id, [] as string[]]));
-  const outgoing = new Map(graph.nodes.map((node) => [node.id, [] as string[]]));
-  for (const edge of graph.edges) {
-    incoming.get(edge.to)?.push(edge.from);
-    outgoing.get(edge.from)?.push(edge.to);
-  }
   const candidates = new Map<string, ActionGraphNode[]>();
-  for (const node of graph.nodes) {
+  for (const node of nodes) {
     const family = node.name.trim().split(/\s+/, 1)[0]?.toLowerCase();
     if (!family) continue;
-    const key = `${family}|${(incoming.get(node.id) ?? []).sort().join(",")}|${(outgoing.get(node.id) ?? []).sort().join(",")}`;
-    candidates.set(key, [...(candidates.get(key) ?? []), node]);
+    candidates.set(family, [...(candidates.get(family) ?? []), node]);
   }
-  for (const nodes of candidates.values()) {
-    if (nodes.length < 2) continue;
-    const label = commonMatrixLabel(nodes);
+  for (const members of candidates.values()) {
+    if (members.length < 2) continue;
+    const label = commonMatrixLabel(members);
     if (!label) continue;
-    const group = { id: `matrix:${nodes.map((node) => node.id).join("|")}`, label, members: nodes };
-    for (const node of nodes) groups.set(node.id, group);
+    const group = { id: `matrix:${members.map((node) => node.id).join("|")}`, label, members };
+    for (const node of members) groups.set(node.id, group);
   }
   return groups;
 }
 
+function deduplicateJobNodes(nodes: readonly ActionGraphNode[]): ActionGraphNode[] {
+  return [...new Map(nodes.map((node) => [node.id, node])).values()];
+}
+
 export function layoutActionGraph(graph: ActionGraphDto): { nodes: ActionFlowNode[]; edges: Edge[] } {
-  const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  const jobNodes = deduplicateJobNodes(graph.nodes);
+  const nodeIds = new Set(jobNodes.map((node) => node.id));
   const graphEdges = graph.edges.length > 0
     ? graph.edges
-    : graph.nodes.slice(1).map((node, index) => ({ from: graph.nodes[index]!.id, to: node.id }));
-  const groups = matrixGroups(graph);
-  const memberToUnit = new Map(graph.nodes.map((node) => [node.id, groups.get(node.id)?.id ?? node.id]));
+    : jobNodes.slice(1).map((node, index) => ({ from: jobNodes[index]!.id, to: node.id }));
+  const groups = matrixGroups(jobNodes);
+  const memberToUnit = new Map(jobNodes.map((node) => [node.id, groups.get(node.id)?.id ?? node.id]));
   const unitMembers = new Map<string, ActionGraphNode[]>();
-  for (const node of graph.nodes) {
+  for (const node of jobNodes) {
     const unitId = memberToUnit.get(node.id)!;
     unitMembers.set(unitId, [...(unitMembers.get(unitId) ?? []), node]);
   }

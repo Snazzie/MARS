@@ -148,19 +148,19 @@ test("connects jobs in display order when dependency metadata is absent", () => 
     { source: "test", target: "deploy" },
   ]);
 });
-test("groups matrix variants with matching dependencies", () => {
+test("deduplicates matrix jobs before mapping dependency edges", () => {
   const flow = layoutActionGraph({
     nodes: [
       { id: "build", name: "Build", status: "completed", conclusion: "success", durationMs: 12_000 },
       { id: "linux", name: "Test linux", status: "completed", conclusion: "success", durationMs: 8_000 },
       { id: "windows", name: "Test windows", status: "completed", conclusion: "failure", durationMs: 9_000 },
       { id: "publish", name: "Publish", status: "queued", conclusion: null, durationMs: 0 },
+      { id: "linux", name: "Test linux", status: "completed", conclusion: "success", durationMs: 8_000 },
     ],
     edges: [
       { from: "build", to: "linux" },
       { from: "build", to: "windows" },
       { from: "linux", to: "publish" },
-      { from: "windows", to: "publish" },
     ],
   });
   const matrix = flow.nodes.find((node) => node.type === "matrix");
