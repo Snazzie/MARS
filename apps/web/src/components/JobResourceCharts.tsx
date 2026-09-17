@@ -30,13 +30,13 @@ type MemoryRow = SharedRow & { series: "Peak" | "Requested"; segment: string; va
 type DurationRow = SharedRow & { value: number };
 type MetricRow = SharedRow & { value: number };
 
-const CPU_AVERAGE = "#4f83ff";
-const CPU_PEAK = "#8bc9dc";
-const MEMORY_PEAK = "#e56b3f";
-const REQUESTED_MEMORY = "#d6a15f";
-const DURATION = "#d6a15f";
-const DEGRADED = "#e76f9b";
-const PANEL = "#211917";
+const CPU_AVERAGE = "var(--ui-chart-blue)";
+const CPU_PEAK = "var(--ui-info)";
+const MEMORY_PEAK = "var(--ui-chart-orange)";
+const REQUESTED_MEMORY = "var(--ui-chart-purple)";
+const DURATION = "var(--ui-chart-purple)";
+const DEGRADED = "var(--ui-chart-partial)";
+const PANEL = "var(--ui-surface)";
 const tooltipPlacement = ["top", "right", "left", "bottom"] as const;
 
 function outcomeLabel(outcome: JobResourceTrendPoint["outcome"]): string {

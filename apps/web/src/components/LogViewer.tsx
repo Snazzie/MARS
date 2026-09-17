@@ -98,7 +98,7 @@ function StepLogRow({ organizationId, runId, jobId, logsState, step, open, maxDu
       <div className="step-log-body">
         <QueryState error={query.error} isLoading={query.isLoading} isEmpty={false} retry={() => void query.refetch()} operationLabel="step logs" />
         {!query.isLoading && !query.error && items.length === 0 && <p className="log-meta">{stepLogEmptyMessage(logsState)}</p>}
-        {items.length > 0 && <><pre className="log-viewer" tabIndex={0} aria-label={`${step.name} log output`}>{text}</pre>{query.hasNextPage && <button type="button" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage}>Load older output</button>}<p className="log-meta">Showing {items.length} ordered chunks.</p></>}
+        {items.length > 0 && <><pre className="log-viewer" tabIndex={0} aria-label={`${step.name} log output`}>{text}</pre>{query.hasNextPage && <button className="button secondary" type="button" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage}>Load older output</button>}<p className="log-meta">Showing {items.length} ordered chunks.</p></>}
       </div>
     </details>
   );
@@ -128,11 +128,11 @@ export function LogViewer({ organizationId, runId, jobId, logsState, steps = [] 
     <div className="panel-kicker" id={`logs-title-${jobId}`}>Job logs</div>
     <div className="step-log-toolbar">
       <label className="step-log-search"><span>Search job steps and loaded logs</span><input aria-label="Search job steps and loaded logs" value={search} onInput={(event) => setSearch(event.currentTarget.value)} /></label>
-      <div className="step-log-actions" aria-label="Step log actions"><button type="button" onClick={() => expandVisible(true)}>Expand all</button><button type="button" onClick={() => expandVisible(false)}>Collapse all</button></div>
+      <div className="step-log-actions" aria-label="Step log actions"><button className="button secondary" type="button" onClick={() => expandVisible(true)}>Expand all</button><button className="button secondary" type="button" onClick={() => expandVisible(false)}>Collapse all</button></div>
     </div>
     <section className="step-log-list" aria-label="Job steps">
       {steps.length === 0 ? <p className="log-meta">No attributed steps recorded.</p> : visibleSteps.length === 0 ? <p className="log-meta">No steps match this search.</p> : visibleSteps.map((step) => <StepLogRow key={step.id} organizationId={organizationId} runId={runId} jobId={jobId} logsState={logsState} step={step} open={expandedStepIds.has(step.id)} maxDurationMs={maxStepDurationMs} onOpenChange={(open) => setStepExpanded(step.id, open)} onLoadedTextChange={(text) => setLoadedText(step.id, text)} />)}
     </section>
-    <section className="unattributed-log-panel" aria-labelledby={`unattributed-logs-title-${jobId}`}><div className="panel-kicker" id={`unattributed-logs-title-${jobId}`}>Unattributed job logs</div><QueryState error={query.error} isLoading={query.isLoading} isEmpty={false} retry={() => void query.refetch()} operationLabel="logs" />{!query.isLoading && !query.error && visibleItems.length === 0 && <p className="log-meta">{search.trim() ? noMatchingJobMessage : items.length === 0 ? emptyJobMessage : noMatchingJobMessage}</p>}{visibleItems.length > 0 && <><pre className="log-viewer" tabIndex={0}>{orderedLogText(visibleItems)}</pre>{query.hasNextPage && <button type="button" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage}>Load older output</button>}<p className="log-meta">Showing {items.length} loaded chunks.</p></>}</section>
+    <section className="unattributed-log-panel" aria-labelledby={`unattributed-logs-title-${jobId}`}><div className="panel-kicker" id={`unattributed-logs-title-${jobId}`}>Unattributed job logs</div><QueryState error={query.error} isLoading={query.isLoading} isEmpty={false} retry={() => void query.refetch()} operationLabel="logs" />{!query.isLoading && !query.error && visibleItems.length === 0 && <p className="log-meta">{search.trim() ? noMatchingJobMessage : items.length === 0 ? emptyJobMessage : noMatchingJobMessage}</p>}{visibleItems.length > 0 && <><pre className="log-viewer" tabIndex={0}>{orderedLogText(visibleItems)}</pre>{query.hasNextPage && <button className="button secondary" type="button" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage}>Load older output</button>}<p className="log-meta">Showing {items.length} loaded chunks.</p></>}</section>
   </section>;
 }

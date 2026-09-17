@@ -60,7 +60,7 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
     void (organizationId ? configureWorker(worker.id, input) : configurePendingWorker(worker.id, input)).then(onConfigured).catch((reason) => setError(reason instanceof Error ? reason.message : "Worker configuration failed.")).finally(() => setPending(false));
   };
   return <>
-    {!adopted && <div className="worker-configuration-actions"><button type="button" className="control-button" onClick={() => { if (window.confirm("Discard this pending worker and generate a new installation?")) discard.mutate(worker.id); }} disabled={discard.isPending}>Discard and reinstall</button></div>}
+    {!adopted && <div className="worker-configuration-actions"><button type="button" className="control-button destructive" onClick={() => { if (window.confirm("Discard this pending worker and generate a new installation?")) discard.mutate(worker.id); }} disabled={discard.isPending}>Discard and reinstall</button></div>}
     <form className="worker-configuration-form" onSubmit={submit}>
       <header className="worker-configuration-header"><div><p className="eyebrow">{adopted ? "Worker configuration" : "Approval and capacity"}</p><h3>{adopted ? "Configure worker" : "Approve and configure worker"}</h3><p>Review the worker's reported capacity, then apply the limits it may use.</p></div><span className="worker-status-badge">{adopted ? "Configured worker" : "Pending approval"}</span></header>
       {error && <p role="alert" className="form-error">{error}</p>}

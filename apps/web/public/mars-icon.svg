@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1536 700" role="img" aria-labelledby="title desc">
 <title id="title">MARS</title><desc id="desc">MARS ribbon emblem</desc>
-<rect x="-1000" y="-1000" width="4000" height="3000" rx="180" fill="#151110"/>
+<rect x="-1000" y="-1000" width="4000" height="3000" rx="180" fill="none"/>
 <defs>
     <linearGradient id="front-gradient" gradientUnits="userSpaceOnUse" x1="430.732" y1="136.744" x2="807.352" y2="602.188">
       <stop offset="0" stop-color="#fe8a0b"/>

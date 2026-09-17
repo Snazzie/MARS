@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { routeTree } from "./routeTree.gen.ts";
 import { ApiRequestError } from "./api.ts";
 import { redirectOnUnauthorized } from "./auth.ts";
+import "./theme.ts";
 
 export const router = createRouter({ routeTree });
 const queryClient = new QueryClient({

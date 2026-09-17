@@ -102,7 +102,7 @@ export function RepositoriesPage() {
               <button type="button" className="button secondary" onClick={() => refreshConnection.mutate()} disabled={allWorkspaces || !organizationId || refreshConnection.isPending}>
                 {refreshConnection.isPending ? "Syncing…" : "Sync installed repositories"}
               </button>
-              <button type="button" className="button secondary" onClick={() => { if (window.confirm("Uninstall Mars from this GitHub organization?")) manageOrganization.mutate(); }} disabled={allWorkspaces || !organizationId || manageOrganization.isPending}>
+              <button type="button" className="button destructive" onClick={() => { if (window.confirm("Uninstall Mars from this GitHub organization?")) manageOrganization.mutate(); }} disabled={allWorkspaces || !organizationId || manageOrganization.isPending}>
                 Uninstall
               </button>
             </div>

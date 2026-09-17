@@ -30,7 +30,7 @@ export function OnboardingPage() {
   const skipLabels = useMutation({ mutationFn: skipOnboardingLabels, onSuccess: refresh, onError: (e) => setError(e instanceof Error ? e.message : "Could not continue to the dashboard") });
   const select = useMutation({ mutationFn: selectOnboardingWorker, onSuccess: refresh, onError: (e) => setError(e instanceof Error ? e.message : "Could not select worker") });
   if (status.isLoading) return <main className="onboarding"><p>Loading onboarding…</p></main>;
-  if (status.error || !s) return <main className="onboarding"><h1>Onboarding unavailable</h1><p role="alert">{status.error instanceof Error ? status.error.message : "Could not load onboarding."}</p><button onClick={() => void status.refetch()}>Retry</button></main>;
+  if (status.error || !s) return <main className="onboarding"><h1>Onboarding unavailable</h1><p role="alert">{status.error instanceof Error ? status.error.message : "Could not load onboarding."}</p><button className="button secondary" onClick={() => void status.refetch()}>Retry</button></main>;
   if (s.step === "setup") return <SetupCard status={s} />;
   if (!s.authenticated) return <SignIn firstAdmin={!s.adminCreated} />;
   if (!s.canManage) return <main className="onboarding"><section className="onboarding-card"><h1>Administrator access required</h1><p>Your GitHub account is signed in, but it cannot configure this control plane.</p></section></main>;
@@ -40,7 +40,7 @@ export function OnboardingPage() {
   const currentIndex = steps.findIndex(([id]) => id === d.step);
   const activeStep = viewStep ?? currentIndex;
   const viewingPastStep = activeStep < currentIndex;
-  return <main className="onboarding"><header><p className="eyebrow">FIRST-RUN SETUP</p><h1>Get Mars ready</h1><p>Complete each verified step. Progress is saved on the control plane.</p></header>{error && <p role="alert" className="form-error">{error} <button onClick={() => setError(null)}>Dismiss</button></p>}<div className="onboarding-layout"><nav aria-label="Onboarding steps"><ol className="onboarding-steps">{steps.map(([id, label], index) => <li key={id} className={index === activeStep ? "is-current" : index < currentIndex ? "is-complete" : "is-locked"}><span>{index + 1}</span><strong>{label}</strong></li>)}</ol></nav><section className="onboarding-task" aria-live="polite"><h2>{steps[activeStep]?.[1]}</h2>{activeStep === 0 ? <p>Administrator account is configured.</p> : <EditableStep detail={d} index={activeStep} onDone={() => { refresh(); setViewStep(null); }} onDiscard={() => { refresh(); setViewStep(null); }} onSelect={(id) => select.mutate({ workerId: id })} onSkip={() => skipLabels.mutate()} />}{activeStep > 0 && <div className="onboarding-navigation"><button type="button" onClick={() => setViewStep(Math.max(0, activeStep - 1))} disabled={activeStep === 0}>Back</button><button type="button" onClick={() => setViewStep(Math.min(currentIndex, activeStep + 1))} disabled={!viewingPastStep}>Next</button></div>}</section></div></main>;
+  return <main className="onboarding"><header><p className="eyebrow">FIRST-RUN SETUP</p><h1>Get Mars ready</h1><p>Complete each verified step. Progress is saved on the control plane.</p></header>{error && <p role="alert" className="form-error">{error} <button className="button secondary" onClick={() => setError(null)}>Dismiss</button></p>}<div className="onboarding-layout"><nav aria-label="Onboarding steps"><ol className="onboarding-steps">{steps.map(([id, label], index) => <li key={id} className={index === activeStep ? "is-current" : index < currentIndex ? "is-complete" : "is-locked"}><span>{index + 1}</span><strong>{label}</strong></li>)}</ol></nav><section className="onboarding-task" aria-live="polite"><h2>{steps[activeStep]?.[1]}</h2>{activeStep === 0 ? <p>Administrator account is configured.</p> : <EditableStep detail={d} index={activeStep} onDone={() => { refresh(); setViewStep(null); }} onDiscard={() => { refresh(); setViewStep(null); }} onSelect={(id) => select.mutate({ workerId: id })} onSkip={() => skipLabels.mutate()} />}{activeStep > 0 && <div className="onboarding-navigation"><button type="button" onClick={() => setViewStep(Math.max(0, activeStep - 1))} disabled={activeStep === 0}>Back</button><button type="button" onClick={() => setViewStep(Math.min(currentIndex, activeStep + 1))} disabled={!viewingPastStep}>Next</button></div>}</section></div></main>;
 }
 function EditableStep({ detail, index, onDone, onDiscard, onSelect, onSkip }: { detail: OnboardingDetail; index: number; onDone: () => void; onDiscard: () => void; onSelect: (id: string) => void; onSkip: () => void }) {
   if (index === 1) return <GithubStep detail={detail} />;
@@ -64,7 +64,7 @@ function SetupCard({ status }: { status: OnboardingStatus }) {
     <form onSubmit={(event) => { event.preventDefault(); setError(null); setup.mutate({ publicBaseUrl: managedOrigin }); }}>
       {status.publicBaseUrlManaged ? <p>GitHub App setup will use the configured origin above.</p> : <label>Public URL<input aria-label="Public URL" type="url" value={managedOrigin} onChange={(event) => setPublicBaseUrl(event.target.value)} required /></label>}
       {error && <p role="alert" className="form-error">{error}</p>}
-      <button type="submit" disabled={setup.isPending}>{setup.isPending ? "Creating GitHub App…" : "Create GitHub App"}</button>
+      <button className="button" type="submit" disabled={setup.isPending}>{setup.isPending ? "Creating GitHub App…" : "Create GitHub App"}</button>
     </form>
   </section></main>;
 }
@@ -73,7 +73,7 @@ function SignIn({ firstAdmin }: { firstAdmin: boolean }) { return <main classNam
 function ReviewSummary({ detail, through, onClose }: { detail: OnboardingDetail; through: number; onClose?: () => void }) {
   const org = detail.organizations.find((item) => item.id === detail.github.organizationId);
   return <aside className="onboarding-review">
-    {onClose && <button type="button" onClick={onClose}>Back to current step</button>}
+    {onClose && <button className="button secondary" type="button" onClick={onClose}>Back to current step</button>}
     <h3>Completed setup</h3>
     {through >= 2 && detail.worker && <p>Worker enrollment<br />Worker: {detail.worker.name ?? detail.worker.vmUuid}</p>}
     {through >= 3 && detail.github.organizationId && <p>GitHub account: {org?.name ?? detail.github.organizationId}<br />Available repositories: {detail.github.repositories.filter((repository) => repository.available).length}</p>}
@@ -82,7 +82,7 @@ function ReviewSummary({ detail, through, onClose }: { detail: OnboardingDetail;
 function WorkerStep({ onSelect }: { onSelect: (id: string) => void }) {
   const q = useQuery(pendingWorkerQueryOptions());
   const discard = useMutation({ mutationFn: rejectPendingWorker, onSuccess: () => void q.refetch() });
-  return <div><EnrollmentPanel workers={q.data ?? []} onConnected={() => void q.refetch()} showRotation={false} /><p>Choose the worker you verified. It remains unschedulable until resources are configured.</p>{q.error && <p role="alert">{q.error instanceof Error ? q.error.message : "Could not load workers."} <button type="button" onClick={() => void q.refetch()}>Retry</button></p>}{discard.error && <p role="alert">{discard.error instanceof Error ? discard.error.message : "Could not discard the pending worker."}</p>}{(q.data ?? []).map((w) => <article className="worker-choice" key={w.id}><h3>{w.vmUuid}</h3><p>{w.platform} · {w.connectionState}</p><p>Fingerprint: <code>{w.fingerprint}</code></p><button type="button" onClick={() => onSelect(w.id)}>Use this worker</button><button type="button" onClick={() => { if (window.confirm("Discard this pending worker and generate a new installation?")) discard.mutate(w.id); }} disabled={discard.isPending}>Discard and reinstall</button></article>)}</div>;
+  return <div><EnrollmentPanel workers={q.data ?? []} onConnected={() => void q.refetch()} showRotation={false} /><p>Choose the worker you verified. It remains unschedulable until resources are configured.</p>{q.error && <p role="alert">{q.error instanceof Error ? q.error.message : "Could not load workers."} <button className="button secondary" type="button" onClick={() => void q.refetch()}>Retry</button></p>}{discard.error && <p role="alert">{discard.error instanceof Error ? discard.error.message : "Could not discard the pending worker."}</p>}{(q.data ?? []).map((w) => <article className="worker-choice" key={w.id}><h3>{w.vmUuid}</h3><p>{w.platform} · {w.connectionState}</p><p>Fingerprint: <code>{w.fingerprint}</code></p><button type="button" onClick={() => onSelect(w.id)}>Use this worker</button><button className="button destructive" type="button" onClick={() => { if (window.confirm("Discard this pending worker and generate a new installation?")) discard.mutate(w.id); }} disabled={discard.isPending}>Discard and reinstall</button></article>)}</div>;
 }
 function submitGithubManifest(launch: { action: string; manifest: string }): void {
   const form = document.createElement("form");
@@ -147,20 +147,20 @@ function GithubStep({ detail }: { detail: OnboardingDetail }) {
           {detail.organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
         </select>
       </label>
-      <button type="button" disabled={!organizationId} onClick={() => void connect()}>Create Mars GitHub App</button>
+      <button className="button" type="button" disabled={!organizationId} onClick={() => void connect()}>Create Mars GitHub App</button>
       {connectError && <p role="alert" className="form-error">{connectError}</p>}
     </>}
     {!hasInstallation && detail.github.appConfigured && <>
       <p>GitHub will ask which account or organization should receive the Mars App.</p>
-      <button type="button" onClick={() => void installUnbound()}>Install Mars GitHub App</button>
+      <button className="button" type="button" onClick={() => void installUnbound()}>Install Mars GitHub App</button>
       {connectError && <p role="alert" className="form-error">{connectError}</p>}
     </>}
     {hasInstallation && !hasUsableInstallation && <>
       <p role="status">GitHub App installed. Repository access is not verified.</p>
       <p>Select at least one repository in the GitHub App installation, then verify access here.</p>
       {selectionRemediation && <p role="alert">GitHub returned no available repositories. Update the installation repository access before verifying again.</p>}
-      <button type="button" onClick={() => verify.mutate()} disabled={verify.isPending}>{verify.isPending ? "Verifying repository access…" : "Verify repository access"}</button>
-      <button type="button" onClick={() => void connect()} disabled={!organizationId}>Manage installation access</button>
+      <button className="button" type="button" onClick={() => verify.mutate()} disabled={verify.isPending}>{verify.isPending ? "Verifying repository access…" : "Verify repository access"}</button>
+      <button className="button secondary" type="button" onClick={() => void connect()} disabled={!organizationId}>Manage installation access</button>
       {verify.error && <p role="alert" className="form-error">{verify.error instanceof Error ? verify.error.message : "Repository verification failed"}</p>}
       {connectError && <p role="alert" className="form-error">{connectError}</p>}
     </>}
@@ -170,11 +170,11 @@ function GithubStep({ detail }: { detail: OnboardingDetail }) {
 function WorkerSetupStep({ detail, onSelect, onDone, onDiscard, edit = false }: { detail: OnboardingDetail; onSelect: (id: string) => void; onDone: () => void; onDiscard?: () => void; edit?: boolean }) {
   const discard = useMutation({ mutationFn: rejectPendingWorker, onSuccess: () => onDiscard?.() });
   if (!detail.worker) return <WorkerStep onSelect={onSelect} />;
-  return <div><h3>Worker enrollment</h3><p>Selected worker: {detail.worker.name ?? detail.worker.vmUuid}</p>{detail.worker.admissionState === "pending" && onDiscard && <button type="button" onClick={() => { if (window.confirm("Discard this pending worker and generate a new installation?")) discard.mutate(detail.worker!.id); }} disabled={discard.isPending}>Discard and reinstall</button>}{discard.error && <p role="alert">{discard.error instanceof Error ? discard.error.message : "Could not discard the pending worker."}</p>}<ResourceStep detail={detail} onDone={onDone} onDiscard={onDiscard} edit={edit} /></div>;
+  return <div><h3>Worker enrollment</h3><p>Selected worker: {detail.worker.name ?? detail.worker.vmUuid}</p>{detail.worker.admissionState === "pending" && onDiscard && <button className="button destructive" type="button" onClick={() => { if (window.confirm("Discard this pending worker and generate a new installation?")) discard.mutate(detail.worker!.id); }} disabled={discard.isPending}>Discard and reinstall</button>}{discard.error && <p role="alert">{discard.error instanceof Error ? discard.error.message : "Could not discard the pending worker."}</p>}<ResourceStep detail={detail} onDone={onDone} onDiscard={onDiscard} edit={edit} /></div>;
 }
 const canonicalRunnerLabel = (platform: "linux-x64" | "windows-x64" | "macos-arm64") => `mars-${platform}`;
 function LabelsStep({ detail, onSkip }: { detail: OnboardingDetail; onSkip: () => void }) {
-  if (detail.pool) return <div><OnboardingVerificationStep detail={detail} /><button type="button" onClick={onSkip}>Continue to dashboard</button></div>;
+  if (detail.pool) return <div><OnboardingVerificationStep detail={detail} /><button className="button" type="button" onClick={onSkip}>Continue to dashboard</button></div>;
   const platforms = detail.worker?.guestPlatforms ?? (detail.worker ? [detail.worker.platform] : []);
   const labels = platforms.map((platform) => canonicalRunnerLabel(platform));
   return <div><h3>Trigger labels</h3><p role="status">Preparing the default runner pool for all configured workers…</p><p>Generated runner labels: <code>{labels.join(", ")}</code></p><pre>runs-on: {labels.join(", ")}</pre></div>;
@@ -218,7 +218,7 @@ function OnboardingVerificationStep({ detail }: { detail: OnboardingDetail }) {
     </select></label>
     <QueryState error={workflows.error} isLoading={workflows.isLoading} isEmpty={!workflows.isLoading && !workflows.error && compatible.length === 0} retry={() => void workflows.refetch()} operationLabel="compatible workflows" />
     {!workflows.isLoading && workflows.data && compatible.length === 0 && <p>No workflow currently requests <code>{triggerLabel}</code>. Configure a repository workflow before verification.</p>}
-    <button type="button" disabled={!repositoryId || !workflowPath || verification.isPending} onClick={() => verification.mutate({ repositoryId, workflowPath })}>{verification.isPending ? "Dispatching smoke workflow…" : state === "failed" ? "Retry smoke workflow" : "Run smoke workflow"}</button>
+    <button className="button" type="button" disabled={!repositoryId || !workflowPath || verification.isPending} onClick={() => verification.mutate({ repositoryId, workflowPath })}>{verification.isPending ? "Dispatching smoke workflow…" : state === "failed" ? "Retry smoke workflow" : "Run smoke workflow"}</button>
     {verification.error && <p role="alert" className="form-error">{verification.error instanceof Error ? verification.error.message : "Smoke workflow dispatch failed"}</p>}
   </div>;
 }

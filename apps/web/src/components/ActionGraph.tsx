@@ -225,8 +225,8 @@ export function layoutActionGraph(graph: ActionGraphDto, expandedGroupIds?: Read
     target: edge.to,
     type: "smoothstep",
     className: "action-flow-edge",
-    style: { stroke: "var(--mars)", strokeWidth: 2.25 },
-    markerEnd: { type: MarkerType.ArrowClosed, color: "var(--mars)", width: 18, height: 18 },
+    style: { stroke: "var(--ui-primary)", strokeWidth: 2.25 },
+    markerEnd: { type: MarkerType.ArrowClosed, color: "var(--ui-primary)", width: 18, height: 18 },
     zIndex: 1,
   }));
   return { nodes, edges };
@@ -289,6 +289,6 @@ export function ActionGraph({ graph, selectedNodeId, onNodeSelect }: { graph: Ac
           </ReactFlow>
         </div>
       : <p className="graph-empty">No jobs have been discovered for this run.</p>}
-    <details className="graph-fallback"><summary>View dependency table</summary><table><caption className="sr-only">Action dependencies</caption><thead><tr><th>Action</th><th>Outcome</th><th>Runtime</th><th>Depends on</th></tr></thead><tbody>{graph.nodes.map((node) => <tr key={node.id}><th><button type="button" onClick={() => onNodeSelect(node.id)}>{node.name}</button></th><td>{displayStatus(node.conclusion ?? node.status)}</td><td>{formatDuration(node.durationMs)}</td><td>{graph.edges.filter((edge) => edge.to === node.id).map((edge) => graph.nodes.find((candidate) => candidate.id === edge.from)?.name ?? edge.from).join(", ") || "—"}</td></tr>)}</tbody></table></details>
+    <details className="graph-fallback"><summary>View dependency table</summary><table><caption className="sr-only">Action dependencies</caption><thead><tr><th>Action</th><th>Outcome</th><th>Runtime</th><th>Depends on</th></tr></thead><tbody>{graph.nodes.map((node) => <tr key={node.id}><th><button className="graph-fallback-action" type="button" onClick={() => onNodeSelect(node.id)}>{node.name}</button></th><td>{displayStatus(node.conclusion ?? node.status)}</td><td>{formatDuration(node.durationMs)}</td><td>{graph.edges.filter((edge) => edge.to === node.id).map((edge) => graph.nodes.find((candidate) => candidate.id === edge.from)?.name ?? edge.from).join(", ") || "—"}</td></tr>)}</tbody></table></details>
   </section>;
 }

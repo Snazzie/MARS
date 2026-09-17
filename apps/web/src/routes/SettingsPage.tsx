@@ -11,6 +11,7 @@ import {
   refreshGithubConnection,
   uninstallOrganizationGithub,
 } from "../api.ts";
+import { useTheme, themeOptions } from "../theme.ts";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
 
 
@@ -23,6 +24,7 @@ function githubError(error: unknown, fallback: string) {
 }
 
 export function SettingsPage() {
+  const { theme, setTheme } = useTheme();
   const { organizationId } = useOrganizationFromRoute();
   const client = useQueryClient();
   const me = useQuery({ queryKey: ["me"], queryFn: getMe });
@@ -83,6 +85,15 @@ export function SettingsPage() {
   return (
     <>
       <header className="page-header"><div><p className="eyebrow">Deployment settings</p><h1>Manage the deployment.</h1><p className="page-description">Review signed-in access, GitHub connections, and live API quota from one deployment-wide view.</p></div></header>
+      <section className="settings-theme" aria-labelledby="theme-title">
+        <div className="panel-heading"><div><p className="eyebrow">Interface appearance</p><h2 id="theme-title">Colour palette</h2></div></div>
+        <p className="form-help">Choose the accessible MARS palette used across the console. Default is the neutral accessible palette; Martian restores the warm orange-and-purple MARS treatment. Your choice is saved on this device.</p>
+        <label className="settings-theme-select">Theme
+          <select value={theme} onChange={(event) => setTheme(event.target.value as typeof theme)}>
+            {themeOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+          </select>
+        </label>
+      </section>
       <section className="settings-account" aria-labelledby="account-title"><h2 id="account-title">Signed-in identity</h2><p>{me.data ? `GitHub account: ${me.data.login}` : "Loading GitHub identity…"}</p><button className="button secondary" type="button" onClick={() => signOut.mutate()} disabled={signOut.isPending}>{signOut.isPending ? "Signing out…" : "Sign out"}</button>{signOut.error && <p className="form-error" role="alert">{signOut.error instanceof Error ? signOut.error.message : "Sign out failed."}</p>}</section>
       <section className="settings-deployment" aria-labelledby="deployment-integrations-title">
         <div className="panel-heading"><div><p className="eyebrow">Deployment integrations</p><h2 id="deployment-integrations-title">GitHub connections</h2></div></div>
