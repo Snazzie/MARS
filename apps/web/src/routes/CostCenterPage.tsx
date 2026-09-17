@@ -7,6 +7,7 @@ import { ReportingPeriodControl, reportingPeriodLabels } from "../components/Rep
 import { GithubRunnerCostDisclosure } from "../components/GithubRunnerCostDisclosure.tsx";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
 import { formatMinutes, formatUsdMicros } from "../format.ts";
+import { CostCenterPriceChart } from "../components/CostCenterPriceChart.tsx";
 
 export const costCenterQueryOptions = (organizationId: string, period: DashboardPeriod) => ({ queryKey: ["org", organizationId, "cost-center", period], queryFn: () => getCostCenter(organizationId, period), enabled: Boolean(organizationId), ...(organizationId === "all" ? { refetchInterval: 5_000 } : {}) });
 export const formatPlatform = (platform: string) => ({ "linux-x64": "Linux x64", "windows-x64": "Windows x64", "macos-arm64": "macOS arm64" } as Record<string, string>)[platform] ?? platform;
@@ -28,6 +29,6 @@ export function CostCenterPage() {
   const navigate = useNavigate({ from: "/_authenticated/cost-center" });
   const period = search.period as DashboardPeriod;
   const query = useQuery(costCenterQueryOptions(organizationId, period));
-  const setPeriod = (next: DashboardPeriod) => void navigate({ search: { period: next }, replace: true });
-  return <><PageHeader period={period} onPeriodChange={setPeriod} /><QueryState error={query.error} isLoading={query.isLoading} retry={() => void query.refetch()} operationLabel="Cost Center" />{query.data && <><Summary costSavings={query.data.costSavings} /><GithubRunnerCostDisclosure costSavings={query.data.costSavings} />{query.data.breakdown.length > 0 ? <BreakdownTable rows={query.data.breakdown} /> : <p className="cost-center-empty">No completed Mars jobs were recorded in this period.</p>}</>}</>;
+  const setPeriod = (next: DashboardPeriod) => void navigate({ to: "/cost-center", search: { period: next }, replace: true });
+  return <><PageHeader period={period} onPeriodChange={setPeriod} /><QueryState error={query.error} isLoading={query.isLoading} retry={() => void query.refetch()} operationLabel="Cost Center" />{query.data && <><Summary costSavings={query.data.costSavings} /><GithubRunnerCostDisclosure costSavings={query.data.costSavings} /><section className="cost-center-price-panel" aria-labelledby="cost-center-price-title"><div className="panel-kicker">Price over time</div><h2 id="cost-center-price-title">Estimated retail cost avoided by completion date</h2><CostCenterPriceChart points={query.data.priceOverTime} /></section>{query.data.breakdown.length > 0 ? <BreakdownTable rows={query.data.breakdown} /> : <p className="cost-center-empty">No completed Mars jobs were recorded in this period.</p>}</>}</>;
 }

@@ -1,4 +1,4 @@
-import type { CostCenterBreakdown, OverviewCostSavings, OverviewDto } from "@mars/contracts";
+import type { CostCenterBreakdown, CostCenterPricePoint, OverviewCostSavings, OverviewDto } from "@mars/contracts";
 import type { DatabaseClient } from "./index.ts";
 
 export type GithubRunnerPlatform = "linux-x64" | "windows-x64" | "macos-arm64";
@@ -68,8 +68,9 @@ export function calculateGithubRunnerCostSavings(usage: readonly GithubRunnerUsa
   return { ...emptySavings(), selfHostedMinutes, pricedMinutes, unpricedMinutes: selfHostedMinutes - pricedMinutes, estimatedSavingsMicros, latestRateEffectiveFrom };
 }
 
-export function calculateGithubRunnerCostCenter(usage: readonly GithubRunnerCostCenterUsageGroup[], schedules: readonly GithubRunnerRateSchedule[] = GITHUB_HOSTED_RATE_SCHEDULES): { costSavings: OverviewCostSavings; breakdown: CostCenterBreakdown[] } {
+export function calculateGithubRunnerCostCenter(usage: readonly GithubRunnerCostCenterUsageGroup[], schedules: readonly GithubRunnerRateSchedule[] = GITHUB_HOSTED_RATE_SCHEDULES): { costSavings: OverviewCostSavings; priceOverTime: CostCenterPricePoint[]; breakdown: CostCenterBreakdown[] } {
   const merged = new Map<string, CostCenterBreakdown>();
+  const daily = new Map<string, number>();
   for (const group of usage) {
     const minutes = Math.max(0, Math.floor(group.billableMinutes));
     const resolved = resolveGithubRate(group.usageDate, group.platform, group.requestedVcpu, schedules);
@@ -78,22 +79,24 @@ export function calculateGithubRunnerCostCenter(usage: readonly GithubRunnerCost
     const key = [group.organizationId, group.repositoryId, group.platform, group.requestedVcpu, githubRunnerSku, githubRunnerVcpu].join("|");
     const previous = merged.get(key);
     const pricedMinutes = resolved ? minutes : 0;
+    const estimatedSavingsMicros = resolved ? minutes * resolved.rate.rateMicros : 0;
     const row: CostCenterBreakdown = previous ? {
       ...previous,
       jobCount: previous.jobCount + group.jobCount,
       selfHostedMinutes: previous.selfHostedMinutes + minutes,
       pricedMinutes: previous.pricedMinutes + pricedMinutes,
       unpricedMinutes: previous.unpricedMinutes + (minutes - pricedMinutes),
-      estimatedSavingsMicros: previous.estimatedSavingsMicros + (resolved ? minutes * resolved.rate.rateMicros : 0),
+      estimatedSavingsMicros: previous.estimatedSavingsMicros + estimatedSavingsMicros,
     } : {
       organizationId: group.organizationId, repositoryId: group.repositoryId, repositoryName: group.repositoryName, platform: group.platform,
       requestedVcpu: group.requestedVcpu, githubRunnerSku, githubRunnerVcpu, jobCount: group.jobCount,
-      selfHostedMinutes: minutes, pricedMinutes, unpricedMinutes: minutes - pricedMinutes,
-      estimatedSavingsMicros: resolved ? minutes * resolved.rate.rateMicros : 0,
+      selfHostedMinutes: minutes, pricedMinutes, unpricedMinutes: minutes - pricedMinutes, estimatedSavingsMicros,
     };
     merged.set(key, row);
+    daily.set(group.usageDate, (daily.get(group.usageDate) ?? 0) + estimatedSavingsMicros);
   }
   const breakdown = [...merged.values()].sort((a, b) => b.estimatedSavingsMicros - a.estimatedSavingsMicros || a.repositoryName.localeCompare(b.repositoryName) || a.platform.localeCompare(b.platform) || a.requestedVcpu - b.requestedVcpu || (a.githubRunnerSku ?? "").localeCompare(b.githubRunnerSku ?? ""));
+  const priceOverTime = [...daily.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, estimatedSavingsMicros]) => ({ date, estimatedSavingsMicros }));
   const costSavings = breakdown.reduce((sum, row) => ({
     ...sum,
     selfHostedMinutes: sum.selfHostedMinutes + row.selfHostedMinutes,
@@ -106,7 +109,7 @@ export function calculateGithubRunnerCostCenter(usage: readonly GithubRunnerCost
     const resolved = resolveGithubRate(group.usageDate, group.platform, group.requestedVcpu, schedules);
     if (resolved && (!costSavings.latestRateEffectiveFrom || resolved.schedule.effectiveFrom > costSavings.latestRateEffectiveFrom)) costSavings.latestRateEffectiveFrom = resolved.schedule.effectiveFrom;
   }
-  return { costSavings, breakdown };
+  return { costSavings, priceOverTime, breakdown };
 }
 
 const periodInterval = (period: OverviewDto["period"]) => period === "24h" ? "24 hours" : period === "7d" ? "7 days" : "30 days";

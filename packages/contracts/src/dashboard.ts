@@ -75,10 +75,16 @@ export const CostCenterBreakdown = dto(CostCenterBreakdownBase).superRefine((val
   }
 });
 export type CostCenterBreakdown = z.output<typeof CostCenterBreakdown>;
+export const CostCenterPricePoint = dto(strict({
+  date: overviewRateDate,
+  estimatedSavingsMicros: nonnegativeSafe,
+}));
+export type CostCenterPricePoint = z.output<typeof CostCenterPricePoint>;
 export const CostCenterDto = dto(strict({
   organizationId,
   period: DashboardPeriod,
   costSavings: OverviewCostSavings,
+  priceOverTime: z.array(CostCenterPricePoint),
   breakdown: z.array(CostCenterBreakdown),
 })).superRefine((value, ctx) => {
   const totals = value.breakdown.reduce((sum, row) => ({
@@ -90,6 +96,8 @@ export const CostCenterDto = dto(strict({
   for (const key of Object.keys(totals) as (keyof typeof totals)[]) {
     if (value.costSavings[key] !== totals[key]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["costSavings", key], message: `Cost savings ${key} must equal breakdown totals` });
   }
+  const pointTotal = value.priceOverTime.reduce((sum, point) => sum + point.estimatedSavingsMicros, 0);
+  if (pointTotal !== value.costSavings.estimatedSavingsMicros) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["priceOverTime"], message: "Price-over-time savings must equal cost savings total" });
 });
 export type CostCenterDto = z.output<typeof CostCenterDto>;
 export const RepositorySummary = dto(strict({ id, organizationId, name: z.string().min(1), fullName: z.string().min(1), visibility: z.enum(["private", "internal", "public"]), available: z.boolean(), installationId: id, discoveryState: z.enum(["active", "paused", "rate_limited", "queued"]), discoveryRetryAt: timestamp.nullable() }));

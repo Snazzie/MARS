@@ -24,7 +24,7 @@ describe("dashboard contracts", () => {
   test("enforces Cost Center row and headline invariants", () => {
     const priced = { organizationId: "org-1", repositoryId: "repo-1", repositoryName: "acme/app", platform: "windows-x64", requestedVcpu: 3, githubRunnerSku: "windows_4_core", githubRunnerVcpu: 4, jobCount: 2, selfHostedMinutes: 5, pricedMinutes: 5, unpricedMinutes: 0, estimatedSavingsMicros: 110_000 };
     const unmatched = { organizationId: "org-1", repositoryId: "repo-2", repositoryName: "acme/tools", platform: "linux-x64", requestedVcpu: 128, githubRunnerSku: null, githubRunnerVcpu: null, jobCount: 1, selfHostedMinutes: 2, pricedMinutes: 0, unpricedMinutes: 2, estimatedSavingsMicros: 0 };
-    const payload = { organizationId: "org-1", period: "7d" as const, costSavings: { selfHostedMinutes: 7, pricedMinutes: 5, unpricedMinutes: 2, estimatedSavingsMicros: 110_000, currency: "USD" as const, latestRateEffectiveFrom: "2026-01-01" }, breakdown: [priced, unmatched] };
+    const payload = { organizationId: "org-1", period: "7d" as const, costSavings: { selfHostedMinutes: 7, pricedMinutes: 5, unpricedMinutes: 2, estimatedSavingsMicros: 110_000, currency: "USD" as const, latestRateEffectiveFrom: "2026-01-01" }, priceOverTime: [{ date: "2026-01-01", estimatedSavingsMicros: 110_000 }], breakdown: [priced, unmatched] };
     expect(CostCenterDto.safeParse(payload).success).toBe(true);
     expect(CostCenterDto.safeParse({ ...payload, costSavings: { ...payload.costSavings, pricedMinutes: 4 } }).success).toBe(false);
     expect(CostCenterDto.safeParse({ ...payload, breakdown: [{ ...priced, githubRunnerSku: null }] }).success).toBe(false);

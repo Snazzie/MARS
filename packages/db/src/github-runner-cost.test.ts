@@ -50,6 +50,8 @@ test("cost center query preserves repository/date/platform/vcpu grouping and mem
   expect(queries[0]).toContain("GREATEST(1, CEIL(execution_duration_ms / 60000.0))");
   expect(queries[0]).toContain("repository_id, repository_name");
   expect(queries[0]).toContain("memberships WHERE user_id");
+  expect(queries[0]).not.toContain("queue_duration_ms");
+  expect(queries[0]).not.toContain("total_duration_ms");
 });
 
 test("query groups rounded completed Mars snapshots and constrains aggregate membership", async () => {

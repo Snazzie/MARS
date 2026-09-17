@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { BreakdownTable, Summary, formatMinutesBreakdown, formatPlatform, formatRunner } from "./CostCenterPage.tsx";
+import { CostCenterPriceChart } from "../components/CostCenterPriceChart.tsx";
 import { GithubRunnerCostDisclosure } from "../components/GithubRunnerCostDisclosure.tsx";
 
 const savings = { selfHostedMinutes: 7, pricedMinutes: 5, unpricedMinutes: 2, estimatedSavingsMicros: 110_000, currency: "USD" as const, latestRateEffectiveFrom: "2026-01-01" };
+const points = [{ date: "2026-01-01", estimatedSavingsMicros: 50_000 }, { date: "2026-01-02", estimatedSavingsMicros: 60_000 }];
 const rows = [{ organizationId: "org-1", repositoryId: "repo-1", repositoryName: "acme/app", platform: "windows-x64", requestedVcpu: 3, githubRunnerSku: "windows_4_core", githubRunnerVcpu: 4, jobCount: 2, selfHostedMinutes: 5, pricedMinutes: 5, unpricedMinutes: 0, estimatedSavingsMicros: 110_000 }, { organizationId: "org-1", repositoryId: "repo-2", repositoryName: "acme/tools", platform: "linux-x64", requestedVcpu: 128, githubRunnerSku: null, githubRunnerVcpu: null, jobCount: 1, selfHostedMinutes: 2, pricedMinutes: 0, unpricedMinutes: 2, estimatedSavingsMicros: 0 }];
 
 test("renders Cost Center populated rows and disclosure", () => {
@@ -15,6 +17,13 @@ test("renders Cost Center populated rows and disclosure", () => {
   expect(markup).toContain("No comparable GitHub-hosted runner");
   expect(markup).toContain("2 min unmatched");
   expect(markup).toContain("Dated GitHub-hosted rates are applied by job completion date.");
+});
+
+test("renders the price-over-time chart above the breakdown", () => {
+  const markup = renderToStaticMarkup(<CostCenterPriceChart points={points} />);
+  expect(markup).toContain("Estimated GitHub-hosted retail cost avoided by completion date");
+  expect(markup).toContain("<svg");
+  expect(markup).toContain("2026-01-01");
 });
 
 test("formats platform, runner, and partial minute values", () => {
