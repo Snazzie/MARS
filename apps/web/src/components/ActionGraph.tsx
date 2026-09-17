@@ -11,13 +11,14 @@ import {
   type NodeProps,
   type NodeTypes,
 } from "@xyflow/react";
+import { useState } from "react";
 import type { ActionGraph as ActionGraphDto } from "@mars/contracts";
 import { formatDuration } from "./RunTelemetry.tsx";
 
 type ActionGraphNode = ActionGraphDto["nodes"][number];
 type ActionMember = ActionGraphNode & { outcome: string };
-type ActionNodeData = ActionMember & { onSelect?: (nodeId: string) => void };
-type MatrixNodeData = { label: string; members: ActionMember[]; onSelect?: (nodeId: string) => void; selectedNodeId?: string | null };
+type ActionNodeData = ActionMember & { onSelect?: (nodeId: string) => void; onHover?: (nodeId: string | null) => void };
+type MatrixNodeData = { label: string; members: ActionMember[]; onSelect?: (nodeId: string) => void; onHover?: (nodeId: string | null) => void; selectedNodeId?: string | null };
 type ActionFlowNode = Node<ActionNodeData, "action"> | Node<MatrixNodeData, "matrix">;
 
 const NODE_WIDTH = 224;
@@ -32,8 +33,8 @@ function displayStatus(value: string): string {
   return value.replaceAll("_", " ");
 }
 
-function ActionNode({ data }: NodeProps<Node<ActionNodeData, "action">>) {
-  return <div className={`action-node action-node-${data.outcome}`}>
+function ActionNode({ id, data }: NodeProps<Node<ActionNodeData, "action">>) {
+  return <div className={`action-node action-node-${data.outcome}`} onMouseOver={() => data.onHover?.(id)} onMouseOut={(event) => { if (!(event.relatedTarget instanceof globalThis.Node) || !event.currentTarget.contains(event.relatedTarget)) data.onHover?.(null); }}>
     <Handle className="action-node-handle" type="target" position={Position.Left} />
     <div className="action-node-heading">
       <strong title={data.name}>{data.name}</strong>
@@ -50,8 +51,8 @@ function ActionNode({ data }: NodeProps<Node<ActionNodeData, "action">>) {
   </div>;
 }
 
-function MatrixNode({ data }: NodeProps<Node<MatrixNodeData, "matrix">>) {
-  return <div className="matrix-node">
+function MatrixNode({ id, data }: NodeProps<Node<MatrixNodeData, "matrix">>) {
+  return <div className="matrix-node" onMouseOver={() => data.onHover?.(id)} onMouseOut={(event) => { if (!(event.relatedTarget instanceof globalThis.Node) || !event.currentTarget.contains(event.relatedTarget)) data.onHover?.(null); }}>
     <Handle className="action-node-handle" type="target" position={Position.Left} />
     <div className="matrix-node-heading"><strong>{data.label}</strong><span>Matrix · {data.members.length}</span></div>
     <div className="matrix-node-members">
@@ -84,20 +85,45 @@ function commonMatrixLabel(nodes: readonly ActionGraphNode[]): string | null {
   return words[0]!.slice(0, shared).join(" ").replace(/[\s([{/,:-]+$/, "") || null;
 }
 
-function matrixGroups(nodes: readonly ActionGraphNode[]): Map<string, { id: string; label: string; members: ActionGraphNode[] }> {
+function matrixGroups(nodes: readonly ActionGraphNode[], edges: ActionGraphDto["edges"]): Map<string, { id: string; label: string; members: ActionGraphNode[] }> {
   const groups = new Map<string, { id: string; label: string; members: ActionGraphNode[] }>();
   const candidates = new Map<string, ActionGraphNode[]>();
+  const outgoing = new Map<string, string[]>();
+  for (const edge of edges) outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge.to]);
+  const reachableByNode = new Map<string, Set<string>>();
+  const reachableFrom = (from: string): Set<string> => {
+    const cached = reachableByNode.get(from);
+    if (cached) return cached;
+    const reachable = new Set<string>();
+    const pending = [...(outgoing.get(from) ?? [])];
+    while (pending.length > 0) {
+      const current = pending.pop()!;
+      if (reachable.has(current)) continue;
+      reachable.add(current);
+      pending.push(...(outgoing.get(current) ?? []));
+    }
+    reachableByNode.set(from, reachable);
+    return reachable;
+  };
   for (const node of nodes) {
     const family = node.name.trim().split(/\s+/, 1)[0]?.toLowerCase();
     if (!family) continue;
     candidates.set(family, [...(candidates.get(family) ?? []), node]);
   }
   for (const members of candidates.values()) {
-    if (members.length < 2) continue;
-    const label = commonMatrixLabel(members);
-    if (!label) continue;
-    const group = { id: `matrix:${members.map((node) => node.id).join("|")}`, label, members };
-    for (const node of members) groups.set(node.id, group);
+    const independentGroups: ActionGraphNode[][] = [];
+    for (const member of members) {
+      const group = independentGroups.find((items) => items.every((item) => !reachableFrom(item.id).has(member.id) && !reachableFrom(member.id).has(item.id)));
+      if (group) group.push(member);
+      else independentGroups.push([member]);
+    }
+    for (const independentMembers of independentGroups) {
+      if (independentMembers.length < 2) continue;
+      const label = commonMatrixLabel(independentMembers);
+      if (!label) continue;
+      const group = { id: `matrix:${independentMembers.map((node) => node.id).join("|")}`, label, members: independentMembers };
+      for (const node of independentMembers) groups.set(node.id, group);
+    }
   }
   return groups;
 }
@@ -112,7 +138,7 @@ export function layoutActionGraph(graph: ActionGraphDto): { nodes: ActionFlowNod
   const graphEdges = graph.edges.length > 0
     ? graph.edges
     : jobNodes.slice(1).map((node, index) => ({ from: jobNodes[index]!.id, to: node.id }));
-  const groups = matrixGroups(jobNodes);
+  const groups = matrixGroups(jobNodes, graph.edges);
   const memberToUnit = new Map(jobNodes.map((node) => [node.id, groups.get(node.id)?.id ?? node.id]));
   const unitMembers = new Map<string, ActionGraphNode[]>();
   for (const node of jobNodes) {
@@ -200,17 +226,18 @@ export function layoutActionGraph(graph: ActionGraphDto): { nodes: ActionFlowNod
 }
 
 export function ActionGraph({ graph, selectedNodeId, onNodeSelect }: { graph: ActionGraphDto; selectedNodeId: string | null; onNodeSelect: (nodeId: string) => void }) {
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const flow = layoutActionGraph(graph);
   const nodes = flow.nodes.map((node): ActionFlowNode => node.type === "matrix"
     ? {
         ...node,
         selected: node.data.members.some((member) => member.id === selectedNodeId),
-        data: { ...node.data, onSelect: onNodeSelect, selectedNodeId },
+        data: { ...node.data, onSelect: onNodeSelect, onHover: setHoveredNodeId, selectedNodeId },
       }
     : {
         ...node,
         selected: node.id === selectedNodeId,
-        data: { ...node.data, onSelect: onNodeSelect },
+        data: { ...node.data, onSelect: onNodeSelect, onHover: setHoveredNodeId },
       });
   return <section className="graph-panel" aria-labelledby="graph-title">
     <div className="panel-kicker" id="graph-title">Action dependency graph</div>
@@ -218,7 +245,14 @@ export function ActionGraph({ graph, selectedNodeId, onNodeSelect }: { graph: Ac
       ? <div className="action-graph-wrap" role="img" aria-label="Action dependency relationships">
           <ReactFlow
             nodes={nodes}
-            edges={flow.edges}
+            edges={flow.edges.map((edge) => ({
+              ...edge,
+              className: `action-flow-edge${hoveredNodeId === null
+                ? ""
+                : edge.source === hoveredNodeId || edge.target === hoveredNodeId
+                  ? " is-highlighted"
+                  : " is-dimmed"}`,
+            }))}
             nodeTypes={nodeTypes}
             onNodeClick={(_, node) => {
               if (node.type === "action") onNodeSelect(node.id);

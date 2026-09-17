@@ -188,6 +188,32 @@ test("deduplicates matrix jobs before mapping dependency edges", () => {
   expect(flow.nodes.find((node) => node.id === "build")!.position.x).toBeLessThan(matrix.position.x);
   expect(matrix.position.x).toBeLessThan(flow.nodes.find((node) => node.id === "publish")!.position.x);
 });
+test("keeps a dependent job separate from its matrix siblings", () => {
+  const flow = layoutActionGraph({
+    nodes: [
+      { id: "collect", name: "Screenshots / collect", status: "completed", conclusion: "success", durationMs: 4_000 },
+      { id: "chromium", name: "Screenshots / build test (chromium)", status: "completed", conclusion: "success", durationMs: 12_000 },
+      { id: "firefox", name: "Screenshots / build test (firefox)", status: "completed", conclusion: "success", durationMs: 13_000 },
+    ],
+    edges: [
+      { from: "collect", to: "chromium" },
+      { from: "collect", to: "firefox" },
+    ],
+  });
+
+  const matrix = flow.nodes.find((node) => node.type === "matrix");
+  expect(flow.nodes).toHaveLength(2);
+  expect(flow.nodes.find((node) => node.id === "collect")?.type).toBe("action");
+  expect(matrix?.type).toBe("matrix");
+  if (!matrix || matrix.type !== "matrix") throw new Error("Expected matrix node");
+  expect(matrix.data).toMatchObject({
+    label: "Screenshots / build test",
+    members: [{ id: "chromium" }, { id: "firefox" }],
+  });
+  expect(flow.edges).toMatchObject([{ source: "collect", target: matrix.id }]);
+});
+
+
 
 
 
