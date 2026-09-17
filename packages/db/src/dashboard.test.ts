@@ -448,6 +448,9 @@ test("run detail returns complete jobs and ordered steps", async () => {
         conclusion: "success",
         stage: "completed",
         runnerName: "runner",
+        queuedAt: new Date("2026-08-13T10:00:00.000Z"),
+        startedAt: new Date("2026-08-13T10:00:01.000Z"),
+        completedAt: new Date("2026-08-13T10:00:02.000Z"),
         requested: { vcpu: 2, memoryBytes: 4_294_967_296, storageBytes: 10_737_418_240, concurrency: 1 },
         observed: null,
         ...(query.includes('logs_state AS "logsState"') ? { logsState: "pending", requestedLabels: ["self-hosted", "windows", "x64"] } : {}),
@@ -458,6 +461,9 @@ test("run detail returns complete jobs and ordered steps", async () => {
         conclusion: "success",
         stage: "completed",
         runnerName: "runner",
+        queuedAt: new Date("2026-08-13T10:00:00.000Z"),
+        startedAt: new Date("2026-08-13T10:00:02.000Z"),
+        completedAt: new Date("2026-08-13T10:00:04.000Z"),
         requested: { vcpu: 2, memoryBytes: 4_294_967_296, storageBytes: 10_737_418_240, concurrency: 1 },
         observed: null,
         ...(query.includes('logs_state AS "logsState"') ? { logsState: "ingested", requestedLabels: ["self-hosted", "windows", "x64"] } : {}),
@@ -479,6 +485,7 @@ test("run detail returns complete jobs and ordered steps", async () => {
     steps: [{ id: stepId, number: 1, durationMs: 1000, startedAt: "2026-08-13T10:00:01.000Z" }],
   });
   expect(detail?.actionGraph.edges).toEqual([{ from: jobId, to: dependentJobId }]);
+  expect(detail?.actionGraph.nodes[0]).toMatchObject({ conclusion: "success", durationMs: 1000 });
   expect(queries.some((query) => query.includes("dashboard_action_edges"))).toBe(true);
 });
 

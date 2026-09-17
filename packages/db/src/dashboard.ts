@@ -191,7 +191,8 @@ export async function getRunDetail(db: DashboardDb, organizationId: string, runI
   if (!run) return null;
   const jobRows = await db<Record<string, unknown>[]>`
     SELECT id,name,status,conclusion,stage,runner_name AS "runnerName",logs_state AS "logsState",
-      requested,requested_labels AS "requestedLabels",observed,
+      requested,requested_labels AS "requestedLabels",observed,queued_at AS "queuedAt",
+      started_at AS "startedAt",completed_at AS "completedAt",
       (SELECT terminal_result FROM runner_leases WHERE github_job_id=dashboard_jobs.github_job_id ORDER BY updated_at DESC LIMIT 1) AS "terminalResult"
     FROM dashboard_jobs WHERE organization_id=${organizationId} AND run_id=${runId} ORDER BY id
   `;
@@ -255,7 +256,26 @@ export async function getRunDetail(db: DashboardDb, organizationId: string, runI
     completedAt: normalizeTimestamp(row.completedAt),
     durationMs: Math.max(0, Number(row.durationMs) || 0),
   }));
-  return { ...run, jobs, stages, actionGraph: { nodes: jobs.map((job) => ({ id: job.id, name: job.name, status: job.stage })), edges } as ActionGraph };
+  return {
+    ...run,
+    jobs,
+    stages,
+    actionGraph: {
+      nodes: jobs.map((job, index) => {
+        const row = jobRows[index]!;
+        const startedAt = normalizeTimestamp(row.startedAt);
+        const completedAt = normalizeTimestamp(row.completedAt);
+        return {
+          id: job.id,
+          name: job.name,
+          status: job.stage,
+          conclusion: job.conclusion,
+          durationMs: derivedDurationMs(startedAt, completedAt, job.status),
+        };
+      }),
+      edges,
+    },
+  };
 }
 export async function listStepLogChunks(db: DashboardDb, organizationId: string, runId: string, jobId: string, stepId: string, after = -1, limit = 100): Promise<CursorPage<LogChunk>> {
   const safeLimit = Math.max(0, Math.min(1000, Math.floor(limit)));

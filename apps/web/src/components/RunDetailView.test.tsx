@@ -7,8 +7,25 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { RunDetail } from "@mars/contracts";
 
 import { RunDetailView, formatResourceValue, jobDetailHref, runDetailFacts } from "./RunDetailView.tsx";
+import { layoutActionGraph } from "./ActionGraph.tsx";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+globalThis.requestAnimationFrame = (callback: FrameRequestCallback) => setTimeout(callback, 0) as unknown as number;
+globalThis.cancelAnimationFrame = (handle: number) => clearTimeout(handle);
+globalThis.ResizeObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as typeof ResizeObserver;
+
+function setFlowContainerSize(window: Window) {
+  for (const property of ["clientWidth", "offsetWidth"]) {
+    Object.defineProperty(window.HTMLElement.prototype, property, { configurable: true, get: () => 800 });
+  }
+  for (const property of ["clientHeight", "offsetHeight"]) {
+    Object.defineProperty(window.HTMLElement.prototype, property, { configurable: true, get: () => 430 });
+  }
+}
 
 const detail: RunDetail = {
   id: "run-1",
@@ -45,7 +62,7 @@ const detail: RunDetail = {
     }],
   }],
   stages: [{ stage: "completed", startedAt: "2026-08-13T14:00:05.000Z", completedAt: "2026-08-13T14:01:35.000Z", durationMs: 90000 }],
-  actionGraph: { nodes: [{ id: "job-1", name: "macOS smoke", status: "completed" }], edges: [] },
+  actionGraph: { nodes: [{ id: "job-1", name: "macOS smoke", status: "completed", conclusion: "success", durationMs: 80_000 }], edges: [] },
 };
 
 const renderView = (data = detail) => renderToStaticMarkup(
@@ -91,6 +108,8 @@ test("defaults to the dependency graph with complete run context", () => {
   expect(markup).toContain("commit abcdef012345");
   expect(markup).toContain("mars-lease-1");
   expect(markup).toContain("macOS smoke");
+  expect(markup).toContain("1m 20s");
+  expect(markup).toContain("success");
   expect(markup).toContain("abcdef012345");
   expect(markup).toContain("status-success");
 });
@@ -100,12 +119,25 @@ test("labels concurrency as scheduler slots rather than vCPU", () => {
 });
 test("renders an awaiting-runner badge when no runner is assigned", () => {
   const markup = renderView({ ...detail, jobs: [{ ...detail.jobs[0], runnerName: null }] });
+
   expect(markup).toContain("Awaiting runner");
+});
+test("lays dependency edges out after their prerequisites", () => {
+  const flow = layoutActionGraph({
+    nodes: [
+      { id: "build", name: "Build", status: "completed", conclusion: "success", durationMs: 12_000 },
+      { id: "test", name: "Test", status: "completed", conclusion: "failure", durationMs: 8_000 },
+    ],
+    edges: [{ from: "build", to: "test" }],
+  });
+  expect(flow.edges).toMatchObject([{ source: "build", target: "test" }]);
+  expect(flow.nodes.find((node) => node.id === "test")!.position.y).toBeGreaterThan(flow.nodes.find((node) => node.id === "build")!.position.y);
 });
 
 
 test("selecting a graph node shows only that job's logs", async () => {
   const window = new Window();
+  setFlowContainerSize(window);
   // @ts-expect-error test DOM globals
   globalThis.document = window.document;
   // @ts-expect-error test DOM globals
@@ -133,7 +165,7 @@ test("selecting a graph node shows only that job's logs", async () => {
     ...detail,
     jobs: [detail.jobs[0]!, secondJob],
     actionGraph: {
-      nodes: [...detail.actionGraph.nodes, { id: "job-2", name: "Unit tests", status: "completed" as const }],
+      nodes: [...detail.actionGraph.nodes, { id: "job-2", name: "Unit tests", status: "completed" as const, conclusion: "failure", durationMs: 42_000 }],
       edges: [{ from: "job-1", to: "job-2" }],
     },
   };
@@ -143,14 +175,13 @@ test("selecting a graph node shows only that job's logs", async () => {
     await waitForRender();
   });
   expect(container.querySelector(".log-panel")).toBeNull();
-  expect(container.querySelector(".graph-edge")).not.toBeNull();
-  const jobNode = container.querySelector<SVGGElement>('[role="button"][aria-label^="Unit tests,"]');
+  const jobNode = container.querySelector<HTMLElement>('[data-id="job-2"]');
   expect(jobNode).not.toBeNull();
   await act(async () => {
     jobNode?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }) as unknown as Event);
     await waitForRender();
   });
-  expect(jobNode?.getAttribute("aria-pressed")).toBe("true");
+  expect(jobNode?.classList.contains("selected")).toBe(true);
   expect(container.querySelector("#job-job-2 .log-panel")).not.toBeNull();
   expect(container.querySelector("#job-job-1")).toBeNull();
   expect(container.querySelector("#job-job-2")?.textContent).toContain("Unit tests");
@@ -165,6 +196,7 @@ test("selecting a graph node shows only that job's logs", async () => {
 
 test("switches to Metrics without rendering log viewers", async () => {
   const window = new Window();
+  setFlowContainerSize(window);
   // @ts-expect-error test DOM globals
   globalThis.document = window.document;
   // @ts-expect-error test DOM globals
