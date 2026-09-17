@@ -1,4 +1,5 @@
 import type { DatabaseClient } from "@mars/db";
+import YAML from "yaml";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { GithubRateLimitError, isGithubRateLimitError } from "./github-rate-limit.ts";
 import { applyGithubJobSnapshot, markGithubJobMissing, type GithubJobSnapshot, type GithubRunSnapshot } from "./runs.ts";
@@ -58,6 +59,98 @@ export async function listRunsSinceCompletedCheckpoint(
     if (checkpoint === null || response.runs.length === 0 || consumed >= response.totalCount) break;
   }
   return { runs, newestCheckpoint };
+}
+
+type WorkflowDependencyEdge = { from: number; to: number };
+
+function jobNameAliases(jobId: string, value: Record<string, unknown>): string[] {
+  const aliases = [jobId];
+  if (typeof value.name === "string") {
+    const staticPrefix = value.name.split("${{", 1)[0]?.trim();
+    if (staticPrefix) aliases.push(staticPrefix);
+  }
+  return aliases;
+}
+
+function matchesWorkflowJob(name: string, aliases: readonly string[]): boolean {
+  return aliases.some((alias) => name === alias || name.startsWith(`${alias} `));
+}
+
+export function workflowDependencyEdges(content: string, jobs: readonly Pick<GithubJobSnapshot, "id" | "name">[]): WorkflowDependencyEdge[] {
+  const parsed: unknown = YAML.parse(content);
+  if (!parsed || typeof parsed !== "object") return [];
+  const definitions = (parsed as Record<string, unknown>).jobs;
+  if (!definitions || typeof definitions !== "object" || Array.isArray(definitions)) return [];
+  const workflowJobs = definitions as Record<string, unknown>;
+  const actualByWorkflowJob = new Map<string, number[]>();
+  for (const [jobId, raw] of Object.entries(workflowJobs)) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const aliases = jobNameAliases(jobId, raw as Record<string, unknown>);
+    actualByWorkflowJob.set(jobId, jobs.filter((job) => matchesWorkflowJob(job.name, aliases)).map((job) => job.id));
+  }
+  const edges = new Map<string, WorkflowDependencyEdge>();
+  for (const [jobId, raw] of Object.entries(workflowJobs)) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const needsValue = (raw as Record<string, unknown>).needs;
+    const needs = typeof needsValue === "string" ? [needsValue] : Array.isArray(needsValue) ? needsValue.filter((value): value is string => typeof value === "string") : [];
+    for (const dependency of needs) {
+      for (const from of actualByWorkflowJob.get(dependency) ?? []) {
+        for (const to of actualByWorkflowJob.get(jobId) ?? []) {
+          if (from !== to) edges.set(`${from}:${to}`, { from, to });
+        }
+      }
+    }
+  }
+  return [...edges.values()];
+}
+
+async function syncRunActionGraph(
+  deps: DiscoveryDeps,
+  client: GithubJobsClient,
+  owner: string,
+  repo: string,
+  row: Record<string, unknown>,
+  run: GithubRunSnapshot,
+  jobs: readonly GithubJobSnapshot[],
+): Promise<void> {
+  const organizationId = String(row.organizationId ?? "");
+  const [storedRun] = await deps.db`
+    SELECT id,action_graph_resolved_at AS "actionGraphResolvedAt"
+    FROM dashboard_runs
+    WHERE organization_id=${organizationId} AND repository_id=${String(row.repositoryId)}
+      AND github_run_id=${run.id} AND run_attempt=${run.runAttempt}
+  `;
+  if (!storedRun || storedRun.actionGraphResolvedAt) return;
+  let edges: WorkflowDependencyEdge[] = [];
+  if (jobs.length > 1) {
+    const workflowPath = run.workflowPath?.split("@", 1)[0] ?? "";
+    if (!/^\.github\/workflows\/[^/]+\.(?:yml|yaml)$/.test(workflowPath) || !run.commitSha) return;
+    const content = await client.getWorkflowFile(owner, repo, workflowPath, run.commitSha);
+    edges = workflowDependencyEdges(content, jobs);
+  }
+  await deps.db.begin(async tx => {
+    const [lockedRun] = await tx`
+      SELECT id FROM dashboard_runs
+      WHERE organization_id=${organizationId} AND id=${String(storedRun.id)}
+        AND run_attempt=${run.runAttempt} AND action_graph_resolved_at IS NULL
+      FOR UPDATE
+    `;
+    if (!lockedRun) return;
+    await tx`DELETE FROM dashboard_action_edges WHERE organization_id=${organizationId} AND run_id=${String(storedRun.id)}`;
+    for (const edge of edges) {
+      await tx`
+        INSERT INTO dashboard_action_edges (organization_id,run_id,from_job_id,to_job_id)
+        SELECT ${organizationId},${String(storedRun.id)},source.id,target.id
+        FROM dashboard_jobs source CROSS JOIN dashboard_jobs target
+        WHERE source.organization_id=${organizationId} AND source.run_id=${String(storedRun.id)}
+          AND source.run_attempt=${run.runAttempt} AND source.github_job_id=${edge.from}
+          AND target.organization_id=${organizationId} AND target.run_id=${String(storedRun.id)}
+          AND target.run_attempt=${run.runAttempt} AND target.github_job_id=${edge.to}
+        ON CONFLICT DO NOTHING
+      `;
+    }
+    await tx`UPDATE dashboard_runs SET action_graph_resolved_at=now() WHERE organization_id=${organizationId} AND id=${String(storedRun.id)} AND run_attempt=${run.runAttempt}`;
+  });
 }
 
 type LocalNonterminalJob = { jobId: number; organizationId?: string; githubRunId: number; runAttempt: number };
@@ -192,6 +285,7 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
       const reconciled = await reconcileAbsentJobs(deps, client, owner, repo, row, run, run.id, run.runAttempt, new Set(listing.items.map(job => job.id)));
       discovered += reconciled.discovered;
       updated += reconciled.updated;
+      await syncRunActionGraph(deps, client, owner, repo, row, run, listing.items);
     }
   }
   if (completed.newestCheckpoint !== null) {

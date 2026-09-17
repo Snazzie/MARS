@@ -27,11 +27,12 @@ test("normalizes attempt-qualified REST run and job snapshots", async () => {
     if (url.endsWith("/actions/runs/1/attempts/2/jobs?per_page=100&page=1")) {
       return Response.json({ total_count: 1, jobs: [{ id: 2, run_id: 1, run_attempt: 2, status: "in_progress", name: "build", created_at: "2026-08-13T00:00:00Z", steps: [{ id: 9, number: 1, name: "Run", status: "queued", started_at: "2026-08-13T00:01:00Z" }] }] });
     }
-    return Response.json({ id: 1, run_number: 1, run_attempt: 2, status: "in_progress", name: "CI", created_at: "2026-08-13T00:00:00Z" });
+    return Response.json({ id: 1, run_number: 1, run_attempt: 2, status: "in_progress", name: "CI", path: ".github/workflows/ci.yml", created_at: "2026-08-13T00:00:00Z" });
   } });
   const run = await client.getRun("acme", "project", 1);
   const result = await client.listJobs("acme", "project", 1, 2, 1);
   expect(run.runAttempt).toBe(2);
+  expect(run.workflowPath).toBe(".github/workflows/ci.yml");
   expect(result.jobs[0]?.runAttempt).toBe(2);
   expect(requests[1]?.url).toBe("https://api.github.com/repos/acme/project/actions/runs/1/attempts/2/jobs?per_page=100&page=1");
   expect(result.jobs[0]?.steps[0]).toEqual({ id: "9", number: 1, name: "Run", status: "queued", conclusion: null, queuedAt: "2026-08-13T00:00:00Z", startedAt: null, completedAt: null, durationMs: 0 });
@@ -73,6 +74,18 @@ test("normalizes REST job steps and rejects malformed step payloads", async () =
   expect(result.jobs[0]?.steps[0]).toEqual({ id: "9", number: 1, name: "Run", status: "queued", conclusion: null, queuedAt: "2026-08-13T00:00:00Z", startedAt: null, completedAt: null, durationMs: 0 });
   const malformed = new GithubJobsClient({ token: async () => "token", fetch: async () => Response.json({ jobs: [{ id: 2, run_id: 1, run_attempt: 2, status: "queued", steps: [{ number: "nope", status: "queued" }] }] }) });
   await expect(malformed.listJobs("acme", "project", 1, 2, 1)).rejects.toThrow("github_payload_invalid");
+});
+
+test("loads workflow YAML at the run commit", async () => {
+  const requests: Request[] = [];
+  const content = "jobs:\n  build:\n    runs-on: ubuntu-latest\n";
+  const client = new GithubJobsClient({ token: async () => "token", fetch: async (input, init) => {
+    requests.push(new Request(input, init));
+    return Response.json({ encoding: "base64", content: Buffer.from(content).toString("base64") });
+  } });
+
+  expect(await client.getWorkflowFile("acme", "project", ".github/workflows/ci.yml", "abc123")).toBe(content);
+  expect(requests[0]?.url).toBe("https://api.github.com/repos/acme/project/contents/.github/workflows/ci.yml?ref=abc123");
 });
 
 test("downloads bounded GitHub-masked job logs as text", async () => {

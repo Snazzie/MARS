@@ -8,6 +8,13 @@
       "when": 1789492017398,
       "tag": "0000_colossal_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789659067808,
+      "tag": "0001_green_skullbuster",
+      "breakpoints": true
     }
   ]
 }

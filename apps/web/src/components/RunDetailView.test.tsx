@@ -5,7 +5,10 @@ import { Window } from "happy-dom";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { RunDetail } from "@mars/contracts";
+
 import { RunDetailView, formatResourceValue, jobDetailHref, runDetailFacts } from "./RunDetailView.tsx";
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const detail: RunDetail = {
   id: "run-1",
@@ -140,6 +143,7 @@ test("selecting a graph node shows only that job's logs", async () => {
     await waitForRender();
   });
   expect(container.querySelector(".log-panel")).toBeNull();
+  expect(container.querySelector(".graph-edge")).not.toBeNull();
   const jobNode = container.querySelector<SVGGElement>('[role="button"][aria-label^="Unit tests,"]');
   expect(jobNode).not.toBeNull();
   await act(async () => {

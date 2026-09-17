@@ -243,7 +243,7 @@ export async function getRunDetail(db: DashboardDb, organizationId: string, runI
       steps: stepsByJob.get(String(row.id)) ?? [],
     };
   });
-  const edges: ActionGraph["edges"] = [];
+  const edges = await db<ActionGraph["edges"]>`SELECT from_job_id AS "from",to_job_id AS "to" FROM dashboard_action_edges WHERE organization_id=${organizationId} AND run_id=${runId} ORDER BY from_job_id,to_job_id`;
   const stageRows = await db<Record<string, unknown>[]>`
     SELECT stage,started_at AS "startedAt",completed_at AS "completedAt",
       COALESCE(EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000,0)::bigint AS "durationMs"

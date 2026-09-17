@@ -79,7 +79,7 @@ export class GithubJobsClient {
   private parseRun(value: Record<string, unknown>): GithubRunSnapshot {
     const id = positiveSafeInteger(value.id);
     const runAttempt = positiveSafeInteger(value.run_attempt);
-    return { id, runAttempt, runNumber: Number(value.run_number) || id, workflowName: stringValue(value.name, stringValue(value.display_title, "workflow")), event: stringValue(value.event), branch: stringValue(value.head_branch), commitSha: stringValue(value.head_sha), actorLogin: stringValue((value.actor as Record<string, unknown> | undefined)?.login, "github"), status: runStatus(value.status), conclusion: nullableString(value.conclusion), queuedAt: stringValue(value.created_at, new Date().toISOString()), startedAt: nullableString(value.run_started_at), completedAt: nullableString(value.status === "completed" ? value.updated_at : null) };
+    return { id, runAttempt, runNumber: Number(value.run_number) || id, workflowName: stringValue(value.name, stringValue(value.display_title, "workflow")), workflowPath: nullableString(value.path), event: stringValue(value.event), branch: stringValue(value.head_branch), commitSha: stringValue(value.head_sha), actorLogin: stringValue((value.actor as Record<string, unknown> | undefined)?.login, "github"), status: runStatus(value.status), conclusion: nullableString(value.conclusion), queuedAt: stringValue(value.created_at, new Date().toISOString()), startedAt: nullableString(value.run_started_at), completedAt: nullableString(value.status === "completed" ? value.updated_at : null) };
   }
   private parseJob(value: Record<string, unknown>): GithubJobSnapshot {
     const id = positiveSafeInteger(value.id);
@@ -106,6 +106,12 @@ export class GithubJobsClient {
     const jobs = Array.isArray(value.jobs) ? value.jobs.filter((x): x is Record<string, unknown> => Boolean(x && typeof x === "object")).map(x => this.parseJob(x)) : [];
     if (jobs.some(job => job.runId !== runId || job.runAttempt !== runAttempt)) throw new Error("github_payload_invalid");
     return { totalCount: Number(value.total_count) || jobs.length, jobs };
+  }
+  async getWorkflowFile(owner: string, repo: string, path: string, ref: string): Promise<string> {
+    const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+    const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`);
+    if (value.encoding !== "base64" || typeof value.content !== "string") throw new Error("github_workflow_content_invalid");
+    return Buffer.from(value.content.replaceAll(/\s/g, ""), "base64").toString("utf8");
   }
   async getJobLogs(owner: string, repo: string, jobId: number, maxBytes = 10 * 1024 * 1024): Promise<string> {
     return this.requestText(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/jobs/${jobId}/logs`, maxBytes);

@@ -4,7 +4,7 @@ import { jsonParameter } from "@mars/db";
 
 export type StageTimestamps = { startedAt: string; completedAt?: string | null };
 export type GithubStepSnapshot = { id: string | null; number: number; name: string; status: "queued"|"in_progress"|"completed"; conclusion: string|null; queuedAt: string; startedAt: string|null; completedAt: string|null; durationMs: number };
-export type GithubRunSnapshot = { id:number; runAttempt:number; runNumber:number; workflowName:string; event:string; branch:string; commitSha:string; actorLogin:string; status:"queued"|"in_progress"|"completed"; conclusion:string|null; queuedAt:string; startedAt:string|null; completedAt:string|null };
+export type GithubRunSnapshot = { id:number; runAttempt:number; runNumber:number; workflowName:string; workflowPath?:string|null; event:string; branch:string; commitSha:string; actorLogin:string; status:"queued"|"in_progress"|"completed"; conclusion:string|null; queuedAt:string; startedAt:string|null; completedAt:string|null };
 export type GithubJobSnapshot = { id:number; runId:number; runAttempt:number; name:string; status:"queued"|"in_progress"|"completed"; conclusion:string|null; labels:string[]; runnerName:string|null; queuedAt:string; startedAt:string|null; completedAt:string|null; steps: GithubStepSnapshot[] };
 export type WorkflowJobPayload = { action?: string; installation?: { id?: number }; repository?: { id?: number; name?: string; full_name?: string; private?: boolean }; organization?: { id?: number; login?: string }; sender?: { login?: string }; workflow_job?: { id?: number; run_id?: number; run_attempt?: number; run_number?: number; name?: string; status?: string; conclusion?: string | null; started_at?: string | null; completed_at?: string | null; created_at?: string; runner_name?: string | null; workflow_name?: string; head_branch?: string; head_sha?: string; labels?: string[]; event?: string; steps?: Array<Record<string, unknown>> } };
 let database: Sql<{}> | undefined;
@@ -59,6 +59,7 @@ export async function applyGithubJobSnapshot(input: { installationId:number; rep
     if (!installation) return [];
     const [repository] = await tx`SELECT id FROM dashboard_repositories WHERE organization_id=${installation.organization_id} AND installation_id=${installation.id} AND github_repository_id=${input.repository.id} AND available=true`;
     if (!repository) return [];
+    await tx`UPDATE dashboard_runs SET action_graph_resolved_at=NULL WHERE organization_id=${installation.organization_id} AND github_run_id=${input.run.id} AND run_attempt<${input.run.runAttempt}`;
     if (authoritative && runStatus !== "completed") {
       if (runStatus === "queued") {
         await tx`UPDATE dashboard_runs SET status='queued',conclusion=NULL,queued_at=${input.run.queuedAt},started_at=NULL,completed_at=NULL WHERE organization_id=${installation.organization_id} AND github_run_id=${input.run.id} AND run_attempt=${input.run.runAttempt} AND status='completed' AND ${runStatus}='queued'`;

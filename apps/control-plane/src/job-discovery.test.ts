@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { discoverAvailableRepositoryJobs, discoverQueuedRepositoryJobs, listRunsSinceCompletedCheckpoint, syncCompletedJobLogsBestEffort } from "./job-discovery.ts";
+import { discoverAvailableRepositoryJobs, discoverQueuedRepositoryJobs, listRunsSinceCompletedCheckpoint, syncCompletedJobLogsBestEffort, workflowDependencyEdges } from "./job-discovery.ts";
 import { configureRunLifecycle } from "./runs.ts";
 import { GithubRateLimitError } from "./github-rate-limit.ts";
 import type { GithubRunSnapshot } from "./runs.ts";
@@ -21,6 +21,36 @@ function run(id: number, runAttempt: number): GithubRunSnapshot {
     completedAt: "2026-08-13T00:00:02Z",
   };
 }
+
+test("maps workflow needs to concrete GitHub jobs including matrix jobs", () => {
+  const content = `jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+  test:
+    name: Test \${{ matrix.os }}
+    needs: build
+    strategy:
+      matrix:
+        os: [linux, windows]
+    runs-on: \${{ matrix.os }}
+  publish:
+    needs: [build, test]
+    runs-on: ubuntu-latest
+`;
+  expect(workflowDependencyEdges(content, [
+    { id: 1, name: "Build" },
+    { id: 2, name: "Test linux" },
+    { id: 3, name: "Test windows" },
+    { id: 4, name: "publish" },
+  ])).toEqual([
+    { from: 1, to: 2 },
+    { from: 1, to: 3 },
+    { from: 1, to: 4 },
+    { from: 2, to: 4 },
+    { from: 3, to: 4 },
+  ]);
+});
 
 describe("completed run recovery", () => {
   test("paginates until the persisted completed-run checkpoint pair", async () => {
@@ -124,14 +154,21 @@ test("does not log expected GitHub log preparation delays", async () => {
   expect(errors).toEqual([]);
 });
 test("pairs rerun attempts during repository discovery", async () => {
-  const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
+  const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", organizationId: "org", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
   const requests: string[] = [];
   const persistedRuns: Array<{ runId: number; runAttempt: number; status: string }> = [];
   const persistedJobs: Array<{ runId: number; runAttempt: number; status: string; githubJobId: number }> = [];
+  const persistedEdges: Array<{ from: number; to: number }> = [];
   const execute = async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join(" ");
     if (query.includes("FROM dashboard_installations")) return [{ id: "installation", organization_id: "org" }];
     if (query.includes("SELECT id FROM dashboard_repositories")) return [{ id: "repository" }];
+    if (query.includes('action_graph_resolved_at AS "actionGraphResolvedAt"')) return [{ id: "run-32564909816", actionGraphResolvedAt: null }];
+    if (query.includes("action_graph_resolved_at IS NULL") && query.includes("FOR UPDATE")) return [{ id: "run-32564909816" }];
+    if (query.includes("INSERT INTO dashboard_action_edges")) {
+      persistedEdges.push({ from: Number(values[5]), to: Number(values[9]) });
+      return [];
+    }
     if (query.startsWith("INSERT INTO dashboard_runs")) {
       const attemptQualified = query.includes("run_attempt");
       const githubRunId = Number(values[2]);
@@ -160,23 +197,31 @@ test("pairs rerun attempts during repository discovery", async () => {
     if (url.includes("status=completed")) {
       return Response.json({
         total_count: 1,
-        workflow_runs: [{ id: 32564909816, run_number: 42, run_attempt: 1, name: "CI", event: "push", head_branch: "main", head_sha: "a".repeat(40), actor: { login: "octocat" }, status: "completed", conclusion: "failure", created_at: "2026-08-22T10:30:00Z", run_started_at: "2026-08-22T10:30:01Z", updated_at: "2026-08-22T10:31:17Z" }],
+        workflow_runs: [{ id: 32564909816, run_number: 42, run_attempt: 1, name: "CI", path: ".github/workflows/ci.yml", event: "push", head_branch: "main", head_sha: "a".repeat(40), actor: { login: "octocat" }, status: "completed", conclusion: "failure", created_at: "2026-08-22T10:30:00Z", run_started_at: "2026-08-22T10:30:01Z", updated_at: "2026-08-22T10:31:17Z" }],
       });
     }
     if (url.includes("/attempts/2/jobs")) {
-      return Response.json({ total_count: 1, jobs: [{ id: 97018978327, run_id: 32564909816, run_attempt: 2, name: "windows", status: "queued", conclusion: null, labels: ["self-hosted", "windows"], created_at: "2026-08-22T10:31:46Z", started_at: null, completed_at: null, steps: [] }] });
+      return Response.json({ total_count: 2, jobs: [
+        { id: 97018978327, run_id: 32564909816, run_attempt: 2, name: "build", status: "completed", conclusion: "success", labels: ["self-hosted", "windows"], created_at: "2026-08-22T10:31:46Z", started_at: "2026-08-22T10:31:47Z", completed_at: "2026-08-22T10:31:48Z", steps: [] },
+        { id: 97018978328, run_id: 32564909816, run_attempt: 2, name: "test", status: "queued", conclusion: null, labels: ["self-hosted", "windows"], created_at: "2026-08-22T10:31:46Z", started_at: null, completed_at: null, steps: [] },
+      ] });
+    }
+    if (url.includes("/contents/.github/workflows/ci.yml")) {
+      return Response.json({ encoding: "base64", content: Buffer.from("jobs:\n  build:\n    runs-on: ubuntu-latest\n  test:\n    needs: build\n    runs-on: ubuntu-latest\n").toString("base64") });
     }
     return Response.json({
       total_count: 1,
-      workflow_runs: [{ id: 32564909816, run_number: 42, run_attempt: 2, name: "CI", event: "push", head_branch: "main", head_sha: "a".repeat(40), actor: { login: "octocat" }, status: "queued", conclusion: null, created_at: "2026-08-22T10:31:46Z", run_started_at: null, updated_at: "2026-08-22T10:31:46Z" }],
+      workflow_runs: [{ id: 32564909816, run_number: 42, run_attempt: 2, name: "CI", path: ".github/workflows/ci.yml", event: "push", head_branch: "main", head_sha: "a".repeat(40), actor: { login: "octocat" }, status: "queued", conclusion: null, created_at: "2026-08-22T10:31:46Z", run_started_at: null, updated_at: "2026-08-22T10:31:46Z" }],
     });
   };
 
   const report = await discoverAvailableRepositoryJobs({ db, installationToken: async () => "token", githubFetchForInstallation: () => githubFetch });
 
-  expect(report).toMatchObject({ repositories: 1, discovered: 1, updated: 1, failed: 0 });
+  expect(report).toMatchObject({ repositories: 1, discovered: 2, updated: 2, failed: 0 });
   expect(persistedRuns).toContainEqual({ runId: 32564909816, runAttempt: 2, status: "queued" });
-  expect(persistedJobs).toContainEqual({ runId: 32564909816, githubJobId: 97018978327, runAttempt: 2, status: "queued" });
+  expect(persistedJobs).toContainEqual({ runId: 32564909816, githubJobId: 97018978327, runAttempt: 2, status: "completed" });
+  expect(persistedJobs).toContainEqual({ runId: 32564909816, githubJobId: 97018978328, runAttempt: 2, status: "queued" });
+  expect(persistedEdges).toEqual([{ from: 97018978327, to: 97018978328 }]);
   expect(requests.some((url) => url === "https://api.github.com/repos/acme/repo/actions/runs/32564909816/attempts/2/jobs?per_page=100&page=1")).toBe(true);
   const runRequests = requests.filter((url) => url.includes("/actions/runs?"));
   expect(runRequests).toEqual([

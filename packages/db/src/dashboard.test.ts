@@ -434,6 +434,7 @@ test("run detail returns complete jobs and ordered steps", async () => {
   const repositoryId = "22222222-2222-4222-8222-222222222222";
   const runId = "33333333-3333-4333-8333-333333333333";
   const jobId = "44444444-4444-4444-8444-444444444444";
+  const dependentJobId = "66666666-6666-4666-8666-666666666666";
   const stepId = "55555555-5555-4555-8555-555555555555";
   const queries: string[] = [];
   const db = (async (strings: TemplateStringsArray) => {
@@ -450,12 +451,22 @@ test("run detail returns complete jobs and ordered steps", async () => {
         requested: { vcpu: 2, memoryBytes: 4_294_967_296, storageBytes: 10_737_418_240, concurrency: 1 },
         observed: null,
         ...(query.includes('logs_state AS "logsState"') ? { logsState: "pending", requestedLabels: ["self-hosted", "windows", "x64"] } : {}),
+      }, {
+        id: dependentJobId,
+        name: "test",
+        status: "completed",
+        conclusion: "success",
+        stage: "completed",
+        runnerName: "runner",
+        requested: { vcpu: 2, memoryBytes: 4_294_967_296, storageBytes: 10_737_418_240, concurrency: 1 },
+        observed: null,
+        ...(query.includes('logs_state AS "logsState"') ? { logsState: "ingested", requestedLabels: ["self-hosted", "windows", "x64"] } : {}),
       }];
     }
     if (query.includes("FROM dashboard_job_steps")) {
       return [{ id: stepId, jobId, name: "test", number: 1, status: "completed", conclusion: "success", queuedAt: new Date("2026-08-13T10:00:00.000Z"), startedAt: new Date("2026-08-13T10:00:01.000Z"), completedAt: new Date("2026-08-13T10:00:02.000Z"), durationMs: "1000" }];
     }
-    if (query.includes("dashboard_action_edges")) return [];
+    if (query.includes("dashboard_action_edges")) return [{ from: jobId, to: dependentJobId }];
     if (query.includes("dashboard_run_stages")) return [];
     return [{ id: runId, organizationId, repositoryId, repositoryName: "repo", runNumber: "42", workflowName: "ci", event: "push", branch: "main", commitSha: "abcdef1", actorLogin: "acme", status: "completed", conclusion: "success", queuedAt: new Date("2026-08-13T10:00:00.000Z"), startedAt: new Date("2026-08-13T10:00:01.000Z"), completedAt: new Date("2026-08-13T10:00:02.000Z"), durationMs: "1000", runtimeBoundary: null }];
   }) as never;
@@ -467,7 +478,8 @@ test("run detail returns complete jobs and ordered steps", async () => {
     requestedLabels: ["self-hosted", "windows", "x64"],
     steps: [{ id: stepId, number: 1, durationMs: 1000, startedAt: "2026-08-13T10:00:01.000Z" }],
   });
-  expect(queries.some((query) => query.includes("dashboard_action_edges"))).toBe(false);
+  expect(detail?.actionGraph.edges).toEqual([{ from: jobId, to: dependentJobId }]);
+  expect(queries.some((query) => query.includes("dashboard_action_edges"))).toBe(true);
 });
 
 

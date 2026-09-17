@@ -335,6 +335,7 @@ export const dashboardRuns = pgTable("dashboard_runs", {
 	completedAt: timestamp("completed_at", { withTimezone: true, mode: 'string' }),
 	runtimeBoundary: text("runtime_boundary"),
 	runAttempt: integer("run_attempt").default(1).notNull(),
+	actionGraphResolvedAt: timestamp("action_graph_resolved_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
 	uniqueIndex("dashboard_runs_github_id_idx").using("btree", table.organizationId.asc().nullsLast(), table.githubRunId.asc().nullsLast()).where(sql`(github_run_id IS NOT NULL)`),
 	index("dashboard_runs_org_queued_idx").using("btree", table.organizationId.asc().nullsLast(), table.queuedAt.desc().nullsFirst(), table.id.desc().nullsFirst()),
@@ -392,6 +393,36 @@ export const dashboardJobs = pgTable("dashboard_jobs", {
 	unique("dashboard_jobs_organization_id_id_key").on(table.organizationId, table.id),
 	unique("dashboard_jobs_organization_id_github_job_id_key").on(table.organizationId, table.githubJobId),
 	check("dashboard_jobs_run_attempt_check", sql`run_attempt > 0`),
+]);
+
+export const dashboardActionEdges = pgTable("dashboard_action_edges", {
+	organizationId: uuid("organization_id").notNull(),
+	runId: uuid("run_id").notNull(),
+	fromJobId: uuid("from_job_id").notNull(),
+	toJobId: uuid("to_job_id").notNull(),
+}, (table) => [
+	primaryKey({ columns: [table.organizationId, table.runId, table.fromJobId, table.toJobId], name: "dashboard_action_edges_pkey" }),
+	foreignKey({
+			columns: [table.organizationId],
+			foreignColumns: [organizations.id],
+			name: "dashboard_action_edges_organization_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.organizationId, table.runId],
+			foreignColumns: [dashboardRuns.organizationId, dashboardRuns.id],
+			name: "dashboard_action_edges_organization_id_run_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.organizationId, table.fromJobId],
+			foreignColumns: [dashboardJobs.organizationId, dashboardJobs.id],
+			name: "dashboard_action_edges_organization_id_from_job_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.organizationId, table.toJobId],
+			foreignColumns: [dashboardJobs.organizationId, dashboardJobs.id],
+			name: "dashboard_action_edges_organization_id_to_job_id_fkey"
+		}).onDelete("cascade"),
+	check("dashboard_action_edges_distinct_jobs_check", sql`from_job_id <> to_job_id`),
 ]);
 
 
