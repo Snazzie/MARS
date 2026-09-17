@@ -1,5 +1,17 @@
 import { expect, test } from "bun:test";
-import { retryControlPlaneOperation } from "./worker-client.ts";
+import { retryControlPlaneOperation, waitForWorkerSocketClose } from "./worker-client.ts";
+
+test("reconnects when a worker websocket errors without closing", async () => {
+  class FaultingSocket extends EventTarget {
+    closeCalls = 0;
+    close(): void { this.closeCalls += 1; }
+  }
+  const socket = new FaultingSocket();
+  const closed = waitForWorkerSocketClose(socket as unknown as WebSocket);
+  socket.dispatchEvent(new Event("error"));
+  await closed;
+  expect(socket.closeCalls).toBe(1);
+});
 
 test("retries transient control-plane failures until the operation succeeds", async () => {
   let attempts = 0;

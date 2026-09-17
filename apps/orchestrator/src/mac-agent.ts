@@ -8,7 +8,7 @@ import { z } from "zod";
 import type { Lease, RuntimeLease } from "./runtime.ts";
 import { createTartVmRuntime, resolveTartExecutable, TartVmDriver } from "./tart.ts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
-import { retryControlPlaneOperation } from "./worker-client.ts";
+import { retryControlPlaneOperation, waitForWorkerSocketClose } from "./worker-client.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 import { collectWorkerServiceLogs } from "./worker-service-logs.ts";
 import { openLeasePickupState, leasePickupStateFile, writeLeasePickupState, type LeasePickupStateController } from "./lease-pickup-state.ts";
@@ -379,13 +379,9 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
       await Bun.sleep(1_000);
       continue;
     }
-    const closed = Promise.withResolvers<void>();
-    const connectionTimeout = setTimeout(() => ws.close(1000, "worker connection timeout"), 30_000);
-    ws.onopen = () => clearTimeout(connectionTimeout);
+    const closed = waitForWorkerSocketClose(ws);
     ws.onclose = event => {
-      clearTimeout(connectionTimeout);
       console.error("Mac worker connection closed; reconnecting", { workerId: identity.workerId, code: event.code, reason: event.reason });
-      closed.resolve();
     };
     const publishInventory = () => { void writeLeasePickupState(leasePickupStateFile(), pickupState.acceptingLeases, activeLeases.size); };
     const sendDoctor = () => {
@@ -393,7 +389,6 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
       if (ws.readyState !== WebSocket.OPEN) return;
       ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, acceptingLeases: pickupState.acceptingLeases, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
     };
-    ws.onerror = () => ws.close();
     ws.onmessage = async event => {
       let frame: { type?: string; nonce?: string } & Partial<WorkerCommand>;
       try {
@@ -459,7 +454,7 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
         });
       }
     };
-    await closed.promise;
+    await closed;
     await Bun.sleep(1_000);
   }
 }

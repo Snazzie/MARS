@@ -6,7 +6,7 @@ import { statfsSync } from "node:fs";
 import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerObservedConfiguration, WorkerConfigurePayload, WorkerRunnerCachePurgePayload, WorkerCommand, WorkerDoctorData, WorkerEvent, type WorkerCapacityData } from "@mars/contracts";
 import { z } from "zod";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
-import { authenticateWorker, retryControlPlaneOperation, workerSocketUrl, type WorkerIdentity } from "./worker-client.ts";
+import { authenticateWorker, retryControlPlaneOperation, waitForWorkerSocketClose, workerSocketUrl, type WorkerIdentity } from "./worker-client.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 import type { LibvirtVmDriver } from "./libvirt-vm.ts";
 import type { WorkerLimits } from "@mars/contracts";
@@ -196,9 +196,7 @@ async function connectLinuxWorker(
   let doctor = await linuxDoctor(driver, digest, channelRoot);
   for (;;) {
     const ws = new WebSocket(workerSocketUrl(baseUrl.toString(), identity.workerId));
-    const closed = Promise.withResolvers<void>();
-    ws.onclose = () => closed.resolve();
-    ws.onerror = () => ws.close();
+    const closed = waitForWorkerSocketClose(ws);
     ws.onmessage = async (event) => {
       let frame: { type?: string; nonce?: string } & Partial<WorkerCommand>;
       try {
@@ -241,7 +239,7 @@ async function connectLinuxWorker(
         ws.close(1011, "worker command failed");
       }
     };
-    await closed.promise;
+    await closed;
     await Bun.sleep(1_000);
   }
 }
