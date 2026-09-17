@@ -273,7 +273,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
       const id = inspection.Id as string;
       const leaseId = inspection.Config!.Labels!["mars.lease-id"] as string;
       try {
-        const result = await this.docker(["rm", "-f", id]);
+        const result = await this.docker(["rm", "-f", "-v", id]);
         if (result.code !== 0 && !isDockerNotFound(result)) checked(result, "docker rm");
       } catch (error) {
         if (!isDockerNotFound({ code: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) })) errors.push(error instanceof Error ? error : new Error(String(error)));
@@ -343,7 +343,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
     const name = lease?.name ?? this.containerName(leaseId);
     const root = lease?.root ?? this.bootstrapPath(leaseId);
     try {
-      const result = await this.docker(["rm", "-f", name]);
+      const result = await this.docker(["rm", "-f", "-v", name]);
       if (result.code !== 0 && !/no such container/i.test(result.stderr)) checked(result, "docker rm");
     } finally {
       this.gracefulStops.delete(leaseId);

@@ -208,7 +208,7 @@ test("rejects a container when Docker applies different CPU or memory limits", a
     nonce: "n".repeat(32),
     encodedJitConfig: "config",
   })).rejects.toThrow("resource limits");
-  expect(calls).toContainEqual(["rm", "-f", "mars-44444444-4444-4444-8444-444444444444"]);
+  expect(calls).toContainEqual(["rm", "-f", "-v", "mars-44444444-4444-4444-8444-444444444444"]);
 });
 
 test("fails completion when a containerized job stops making terminal progress", async () => {
@@ -283,10 +283,10 @@ test("removes a container when startup fails after creation", async () => {
     nonce: "n".repeat(32),
     encodedJitConfig: "config",
   })).rejects.toThrow("docker start failed");
-  expect(calls).toContainEqual(["rm", "-f", "mars-22222222-2222-4222-8222-222222222222"]);
+  expect(calls).toContainEqual(["rm", "-f", "-v", "mars-22222222-2222-4222-8222-222222222222"]);
 });
 
-test("removes a known lease container after a worker restart", async () => {
+test("removes a known lease container and its anonymous volumes after a worker restart", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-windows-container-"));
   roots.push(root);
   const calls: string[][] = [];
@@ -306,7 +306,7 @@ test("removes a known lease container after a worker restart", async () => {
   }, docker);
 
   await driver.removeLease("33333333-3333-4333-8333-333333333333");
-  expect(calls).toContainEqual(["rm", "-f", "mars-33333333-3333-4333-8333-333333333333"]);
+  expect(calls).toContainEqual(["rm", "-f", "-v", "mars-33333333-3333-4333-8333-333333333333"]);
 });
 
 test("copies runner and worker diagnostic logs from a stopped container", async () => {
