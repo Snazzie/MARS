@@ -246,8 +246,21 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
   await deps.db`UPDATE dashboard_jobs j SET logs_state='unavailable',logs_synced_at=now(),logs_error='github_logs_expired',logs_version=${GITHUB_LOG_FORMAT_VERSION} FROM dashboard_runs r WHERE j.run_id=r.id AND r.repository_id=${String(row.repositoryId)} AND j.status='completed' AND j.completed_at<now()-interval '90 days' AND j.logs_version<${GITHUB_LOG_FORMAT_VERSION}`;
   const activeLocal = await deps.db`SELECT DISTINCT r.github_run_id AS "runId",r.run_attempt AS "runAttempt" FROM dashboard_runs r WHERE r.repository_id=${String(row.repositoryId)} AND r.status<>'completed'`;
   const logBackfill = await deps.db`SELECT DISTINCT r.github_run_id AS "runId",j.run_attempt AS "runAttempt" FROM dashboard_runs r JOIN dashboard_jobs j ON j.run_id=r.id WHERE r.repository_id=${String(row.repositoryId)} AND j.status='completed' AND j.completed_at>=now()-interval '90 days' AND (j.logs_state='pending' OR j.logs_version<${GITHUB_LOG_FORMAT_VERSION}) ORDER BY r.github_run_id DESC LIMIT 2`;
+  await deps.db`
+    UPDATE dashboard_runs r SET action_graph_resolved_at=now()
+    WHERE r.repository_id=${String(row.repositoryId)} AND r.action_graph_resolved_at IS NULL
+      AND (SELECT count(*) FROM dashboard_jobs j
+        WHERE j.organization_id=r.organization_id AND j.run_id=r.id AND j.run_attempt=r.run_attempt) <= 1
+  `;
+  const graphBackfill = await deps.db`
+    SELECT r.github_run_id AS "runId",r.run_attempt AS "runAttempt"
+    FROM dashboard_runs r
+    WHERE r.repository_id=${String(row.repositoryId)} AND r.action_graph_resolved_at IS NULL
+    ORDER BY r.queued_at DESC
+    LIMIT 2
+  `;
   let discovered = 0, updated = 0;
-  for (const item of [...activeLocal, ...logBackfill]) {
+  for (const item of [...activeLocal, ...logBackfill, ...graphBackfill]) {
     const runId = Number(item.runId), runAttempt = Number(item.runAttempt);
     if (runId > 0 && runAttempt > 0 && !runs.has(`${runId}:${runAttempt}`)) {
       try {
