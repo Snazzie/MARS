@@ -403,6 +403,7 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           return;
         }
         if (frame.type === "authenticated") {
+          console.log("Mac worker authenticated", { workerId: identity.workerId });
           if (Bun.env.MARS_JOIN_CODE_FILE) await unlink(Bun.env.MARS_JOIN_CODE_FILE).catch(() => {});
           await emitActionCacheSnapshot(cacheService, (type, payload) => {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(workerEvent(identity.workerId, type, payload)));
