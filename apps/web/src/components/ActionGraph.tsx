@@ -1,3 +1,4 @@
+import dagre from "@dagrejs/dagre";
 import {
   Background,
   Controls,
@@ -24,8 +25,8 @@ const NODE_HEIGHT = 92;
 const MATRIX_WIDTH = 252;
 const MATRIX_HEADER_HEIGHT = 34;
 const MATRIX_MEMBER_HEIGHT = 58;
-const COLUMN_GAP = 48;
-const ROW_GAP = 58;
+const COLUMN_GAP = 64;
+const ROW_GAP = 44;
 
 function displayStatus(value: string): string {
   return value.replaceAll("_", " ");
@@ -126,67 +127,63 @@ export function layoutActionGraph(graph: ActionGraphDto): { nodes: ActionFlowNod
     const to = memberToUnit.get(edge.to)!;
     if (from !== to) unitEdges.set(`${from}:${to}`, { from, to });
   }
-  const outgoing = new Map<string, string[]>();
-  const indegree = new Map(unitIds.map((id) => [id, 0]));
-  const depth = new Map(unitIds.map((id) => [id, 0]));
-  for (const edge of unitEdges.values()) {
-    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge.to]);
-    indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1);
-  }
-  const queue = unitIds.filter((id) => indegree.get(id) === 0);
-  for (let cursor = 0; cursor < queue.length; cursor += 1) {
-    const source = queue[cursor]!;
-    for (const target of outgoing.get(source) ?? []) {
-      depth.set(target, Math.max(depth.get(target) ?? 0, (depth.get(source) ?? 0) + 1));
-      const nextIndegree = (indegree.get(target) ?? 1) - 1;
-      indegree.set(target, nextIndegree);
-      if (nextIndegree === 0) queue.push(target);
-    }
-  }
   const unitHeight = (id: string) => {
     const members = unitMembers.get(id) ?? [];
     return members.length > 1 ? MATRIX_HEADER_HEIGHT + members.length * MATRIX_MEMBER_HEIGHT : NODE_HEIGHT;
   };
-  const layers = new Map<number, string[]>();
+  const unitWidth = (id: string) => (unitMembers.get(id)?.length ?? 0) > 1 ? MATRIX_WIDTH : NODE_WIDTH;
+  const layoutGraph = new dagre.graphlib.Graph();
+  layoutGraph.setGraph({
+    rankdir: "LR",
+    ranker: "network-simplex",
+    acyclicer: "greedy",
+    ranksep: COLUMN_GAP,
+    nodesep: ROW_GAP,
+    edgesep: 18,
+    marginx: 0,
+    marginy: 0,
+  });
+  layoutGraph.setDefaultEdgeLabel(() => ({}));
   for (const id of unitIds) {
-    const layer = depth.get(id) ?? 0;
-    layers.set(layer, [...(layers.get(layer) ?? []), id]);
+    layoutGraph.setNode(id, { width: unitWidth(id), height: unitHeight(id) });
   }
-  const layerHeight = (ids: string[]) => ids.reduce((sum, id) => sum + unitHeight(id), 0) + Math.max(0, ids.length - 1) * ROW_GAP;
-  const tallestLayer = Math.max(NODE_HEIGHT, ...[...layers.values()].map(layerHeight));
+  for (const edge of unitEdges.values()) {
+    layoutGraph.setEdge(edge.from, edge.to);
+  }
+  dagre.layout(layoutGraph);
+
   const nodes: ActionFlowNode[] = [];
-  for (const [layer, ids] of layers) {
-    let y = (tallestLayer - layerHeight(ids)) / 2;
-    for (const id of ids) {
-      const members = unitMembers.get(id)!;
-      const height = unitHeight(id);
-      if (members.length > 1) {
-        const group = groups.get(members[0]!.id)!;
-        nodes.push({
-          id,
-          type: "matrix",
-          position: { x: layer * (MATRIX_WIDTH + COLUMN_GAP), y },
-          width: MATRIX_WIDTH,
-          height,
-          data: { label: group.label, members: members.map((member) => ({ ...member, outcome: member.conclusion ?? member.status })) },
-          focusable: false,
-          ariaLabel: `${group.label} matrix, ${members.length} jobs`,
-        });
-      } else {
-        const member = members[0]!;
-        const outcome = member.conclusion ?? member.status;
-        nodes.push({
-          id,
-          type: "action",
-          position: { x: layer * (MATRIX_WIDTH + COLUMN_GAP), y },
-          width: NODE_WIDTH,
-          height,
-          data: { ...member, outcome },
-          focusable: true,
-          ariaLabel: `${member.name}, ${displayStatus(outcome)}, runtime ${formatDuration(member.durationMs)}`,
-        });
-      }
-      y += height + ROW_GAP;
+  for (const id of unitIds) {
+    const members = unitMembers.get(id)!;
+    const width = unitWidth(id);
+    const height = unitHeight(id);
+    const center = layoutGraph.node(id);
+    const position = { x: center.x - width / 2, y: center.y - height / 2 };
+    if (members.length > 1) {
+      const group = groups.get(members[0]!.id)!;
+      nodes.push({
+        id,
+        type: "matrix",
+        position,
+        width,
+        height,
+        data: { label: group.label, members: members.map((member) => ({ ...member, outcome: member.conclusion ?? member.status })) },
+        focusable: false,
+        ariaLabel: `${group.label} matrix, ${members.length} jobs`,
+      });
+    } else {
+      const member = members[0]!;
+      const outcome = member.conclusion ?? member.status;
+      nodes.push({
+        id,
+        type: "action",
+        position,
+        width,
+        height,
+        data: { ...member, outcome },
+        focusable: true,
+        ariaLabel: `${member.name}, ${displayStatus(outcome)}, runtime ${formatDuration(member.durationMs)}`,
+      });
     }
   }
   const edges = [...unitEdges.values()].map((edge): Edge => ({

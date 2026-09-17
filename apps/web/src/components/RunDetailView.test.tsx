@@ -134,6 +134,22 @@ test("lays dependency edges out after their prerequisites", () => {
   expect(flow.nodes.find((node) => node.id === "test")!.position.x).toBeGreaterThan(flow.nodes.find((node) => node.id === "build")!.position.x);
   expect(flow.nodes.find((node) => node.id === "test")!.position.y).toBe(flow.nodes.find((node) => node.id === "build")!.position.y);
 });
+test("orders parallel branches to avoid crossing dependency edges", () => {
+  const flow = layoutActionGraph({
+    nodes: [
+      { id: "build-a", name: "Compile", status: "completed", conclusion: "success", durationMs: 12_000 },
+      { id: "build-b", name: "Package", status: "completed", conclusion: "success", durationMs: 11_000 },
+      { id: "test-b", name: "Lint", status: "completed", conclusion: "success", durationMs: 8_000 },
+      { id: "test-a", name: "Verify", status: "completed", conclusion: "success", durationMs: 9_000 },
+    ],
+    edges: [
+      { from: "build-a", to: "test-a" },
+      { from: "build-b", to: "test-b" },
+    ],
+  });
+  const y = (id: string) => flow.nodes.find((node) => node.id === id)!.position.y;
+  expect((y("build-a") - y("build-b")) * (y("test-a") - y("test-b"))).toBeGreaterThan(0);
+});
 test("connects jobs in display order when dependency metadata is absent", () => {
   const flow = layoutActionGraph({
     nodes: [
