@@ -194,13 +194,21 @@ export async function getRunDetail(db: DashboardDb, organizationId: string, runI
       requested,requested_labels AS "requestedLabels",observed,queued_at AS "queuedAt",
       started_at AS "startedAt",completed_at AS "completedAt",
       (SELECT terminal_result FROM runner_leases WHERE github_job_id=dashboard_jobs.github_job_id ORDER BY updated_at DESC LIMIT 1) AS "terminalResult"
-    FROM dashboard_jobs WHERE organization_id=${organizationId} AND run_id=${runId} ORDER BY id
+    FROM dashboard_jobs
+    WHERE organization_id=${organizationId} AND run_id=${runId}
+      AND run_attempt=(SELECT run_attempt FROM dashboard_runs WHERE organization_id=${organizationId} AND id=${runId})
+    ORDER BY id
   `;
   const stepRows = await db<Record<string, unknown>[]>`
     SELECT id,job_id AS "jobId",name,number,status,conclusion,queued_at AS "queuedAt",
       started_at AS "startedAt",completed_at AS "completedAt",duration_ms AS "durationMs"
     FROM dashboard_job_steps
     WHERE organization_id=${organizationId} AND run_id=${runId}
+      AND job_id IN (
+        SELECT j.id FROM dashboard_jobs j
+        JOIN dashboard_runs r ON r.organization_id=j.organization_id AND r.id=j.run_id
+        WHERE j.organization_id=${organizationId} AND j.run_id=${runId} AND j.run_attempt=r.run_attempt
+      )
     ORDER BY job_id,number,id
   `;
   const stepsByJob = new Map<string, RunJob["steps"]>();
@@ -244,7 +252,16 @@ export async function getRunDetail(db: DashboardDb, organizationId: string, runI
       steps: stepsByJob.get(String(row.id)) ?? [],
     };
   });
-  const edges = await db<ActionGraph["edges"]>`SELECT from_job_id AS "from",to_job_id AS "to" FROM dashboard_action_edges WHERE organization_id=${organizationId} AND run_id=${runId} ORDER BY from_job_id,to_job_id`;
+  const edges = await db<ActionGraph["edges"]>`
+    SELECT e.from_job_id AS "from",e.to_job_id AS "to"
+    FROM dashboard_action_edges e
+    JOIN dashboard_jobs source ON source.organization_id=e.organization_id AND source.id=e.from_job_id
+    JOIN dashboard_jobs target ON target.organization_id=e.organization_id AND target.id=e.to_job_id
+    JOIN dashboard_runs r ON r.organization_id=e.organization_id AND r.id=e.run_id
+    WHERE e.organization_id=${organizationId} AND e.run_id=${runId}
+      AND source.run_attempt=r.run_attempt AND target.run_attempt=r.run_attempt
+    ORDER BY e.from_job_id,e.to_job_id
+  `;
   const stageRows = await db<Record<string, unknown>[]>`
     SELECT stage,started_at AS "startedAt",completed_at AS "completedAt",
       COALESCE(EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000,0)::bigint AS "durationMs"

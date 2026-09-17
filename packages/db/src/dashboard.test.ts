@@ -440,7 +440,7 @@ test("run detail returns complete jobs and ordered steps", async () => {
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
     queries.push(query);
-    if (query.includes("FROM dashboard_jobs WHERE")) {
+    if (query.includes("SELECT id,name,status")) {
       return [{
         id: jobId,
         name: "build",
@@ -488,6 +488,73 @@ test("run detail returns complete jobs and ordered steps", async () => {
   expect(detail?.actionGraph.nodes[0]).toMatchObject({ conclusion: "success", durationMs: 1000 });
   expect(queries.some((query) => query.includes("dashboard_action_edges"))).toBe(true);
 });
+test("run detail excludes jobs and graph data from prior attempts", async () => {
+  const organizationId = "11111111-1111-4111-8111-111111111111";
+  const runId = "33333333-3333-4333-8333-333333333333";
+  const oldJobId = "44444444-4444-4444-8444-444444444444";
+  const currentJobId = "55555555-5555-4555-8555-555555555555";
+  const currentStepId = "66666666-6666-4666-8666-666666666666";
+  const job = (id: string) => ({
+    id,
+    name: "Build",
+    status: "completed",
+    conclusion: "success",
+    stage: "completed",
+    runnerName: "runner",
+    logsState: "pending",
+    requested: { vcpu: 2, memoryBytes: 4_294_967_296, storageBytes: 10_737_418_240, concurrency: 1 },
+    requestedLabels: ["self-hosted"],
+    observed: null,
+    queuedAt: new Date("2026-08-13T10:00:00.000Z"),
+    startedAt: new Date("2026-08-13T10:00:01.000Z"),
+    completedAt: new Date("2026-08-13T10:00:02.000Z"),
+  });
+  const db = (async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ");
+    if (query.includes("SELECT id,name,status")) {
+      return query.includes("run_attempt=(SELECT run_attempt")
+        ? [job(currentJobId)]
+        : [job(oldJobId), job(currentJobId)];
+    }
+    if (query.includes("FROM dashboard_job_steps")) {
+      const current = { id: currentStepId, jobId: currentJobId, name: "run", number: 1, status: "completed", conclusion: "success", queuedAt: new Date("2026-08-13T10:00:00.000Z"), startedAt: new Date("2026-08-13T10:00:01.000Z"), completedAt: new Date("2026-08-13T10:00:02.000Z"), durationMs: "1000" };
+      const old = { ...current, id: oldJobId, jobId: oldJobId };
+      return query.includes("j.run_attempt=r.run_attempt") ? [current] : [old, current];
+    }
+    if (query.includes("FROM dashboard_action_edges")) {
+      return query.includes("source.run_attempt=r.run_attempt") && query.includes("target.run_attempt=r.run_attempt")
+        ? []
+        : [{ from: oldJobId, to: currentJobId }];
+    }
+    if (query.includes("dashboard_run_stages")) return [];
+    return [{
+      id: runId,
+      organizationId,
+      repositoryId: "22222222-2222-4222-8222-222222222222",
+      repositoryName: "repo",
+      runNumber: "42",
+      workflowName: "ci",
+      event: "push",
+      branch: "main",
+      commitSha: "abcdef1",
+      actorLogin: "acme",
+      status: "completed",
+      conclusion: "success",
+      queuedAt: new Date("2026-08-13T10:00:00.000Z"),
+      startedAt: new Date("2026-08-13T10:00:01.000Z"),
+      completedAt: new Date("2026-08-13T10:00:02.000Z"),
+      durationMs: "1000",
+      runtimeBoundary: null,
+    }];
+  }) as never;
+
+  const detail = await getRunDetail(db, organizationId, runId);
+  expect(detail?.jobs.map(({ id }) => id)).toEqual([currentJobId]);
+  expect(detail?.jobs[0]?.steps.map(({ id }) => id)).toEqual([currentStepId]);
+  expect(detail?.actionGraph.nodes.map(({ id }) => id)).toEqual([currentJobId]);
+  expect(detail?.actionGraph.edges).toEqual([]);
+});
+
 
 
 test("log listings normalize PostgreSQL bigint sequences and timestamps", async () => {
