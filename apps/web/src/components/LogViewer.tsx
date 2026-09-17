@@ -108,6 +108,7 @@ export function LogViewer({ organizationId, runId, jobId, logsState, steps = [] 
   const query = useInfiniteQuery({
     queryKey: ["org", organizationId, "run", runId, "job", jobId, "logs"],
     initialPageParam: "-1",
+    queryFn: ({ pageParam }) => getLogs(organizationId, runId, jobId, pageParam, STEP_LOG_LIMIT),
     getNextPageParam: (page: JobLogPage) => page.nextCursor ?? undefined,
     staleTime: 15_000,
   });

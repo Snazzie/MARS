@@ -42,6 +42,6 @@ export function RunDetailPage() {
     <Link className="back-link" to="/runs">← Back to runs</Link>
     {!query.data && <h1 className="sr-only">Loading run detail</h1>}
     <QueryState error={query.error} isLoading={query.isLoading} retry={() => void query.refetch()} operationLabel="run detail" />
-    {query.data && <RunDetailView data={query.data} organizationId={detailOrganizationId} />}
+    {query.data && <RunDetailView key={query.data.id} data={query.data} organizationId={detailOrganizationId} />}
   </>;
 }

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
+import { act } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Window } from "happy-dom";
-import React from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { RunDetail } from "@mars/contracts";
@@ -51,6 +51,12 @@ const renderView = (data = detail) => renderToStaticMarkup(
   </QueryClientProvider>,
 );
 
+const waitForRender = async () => {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, 20);
+  await promise;
+};
+
 test("constructs organization-aware encoded job detail links", () => {
   expect(jobDetailHref("run-1", "org-1", "job-1")).toBe("/runs/run-1?organizationId=org-1#job-job-1");
   expect(jobDetailHref("run/1", "org&1", "job#1")).toBe("/runs/run%2F1?organizationId=org%261#job-job%231");
@@ -64,13 +70,16 @@ test("maps real run facts and names missing values explicitly", () => {
   });
 });
 
-test("renders only semantic Logs and Metrics tabs with complete run context", () => {
+test("defaults to the dependency graph with complete run context", () => {
   const markup = renderView();
   expect(markup).toContain('role="tablist"');
-  expect(markup).toContain("Logs");
-  expect(markup).toContain("Metrics");
-  expect(markup).not.toContain("Network");
-  expect(markup).not.toContain("Tests");
+  expect(markup).toContain(">Graph<");
+  expect(markup).toContain(">Metrics<");
+  expect(markup).not.toContain(">Logs<");
+  expect(markup).toContain('id="run-graph-panel"');
+  expect(markup).toContain("Action dependency graph");
+  expect(markup).toContain("Select a job in the dependency graph to inspect its logs.");
+  expect(markup).not.toContain('class="log-panel"');
   expect(markup).toContain('aria-selected="true"');
   expect(markup).toContain("acme/mars");
   expect(markup).toContain("Tart VM");
@@ -78,16 +87,9 @@ test("renders only semantic Logs and Metrics tabs with complete run context", ()
   expect(markup).toContain("acoop");
   expect(markup).toContain("commit abcdef012345");
   expect(markup).toContain("mars-lease-1");
-  expect(markup).toContain("self-hosted");
-  expect(markup).toContain("macos");
-  expect(markup).toContain("arm64");
+  expect(markup).toContain("macOS smoke");
   expect(markup).toContain("abcdef012345");
   expect(markup).toContain("status-success");
-  expect(markup).toContain('id="job-job-1"');
-  expect(markup).toContain('/runs/run-1?organizationId=org-1#job-job-1');
-  expect(markup).toContain('target="_blank"');
-  expect(markup).toContain('rel="noreferrer"');
-  expect(markup).toContain('aria-label="Open job macOS smoke in a new tab"');
 });
 test("labels concurrency as scheduler slots rather than vCPU", () => {
   expect(formatResourceValue(3, "slots")).toBe("3 slots");
@@ -98,26 +100,63 @@ test("renders an awaiting-runner badge when no runner is assigned", () => {
   expect(markup).toContain("Awaiting runner");
 });
 
-test("renders an actionable OOM diagnosis", () => {
-  const markup = renderView({
+
+test("selecting a graph node shows only that job's logs", async () => {
+  const window = new Window();
+  // @ts-expect-error test DOM globals
+  globalThis.document = window.document;
+  // @ts-expect-error test DOM globals
+  globalThis.window = window;
+  globalThis.requestAnimationFrame = (callback: FrameRequestCallback) => setTimeout(callback, 0) as unknown as number;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const secondJob = {
+    ...detail.jobs[0]!,
+    id: "job-2",
+    name: "Unit tests",
+    runnerName: "mars-lease-2",
+    conclusion: "failure" as const,
+    failureReason: "out_of_memory" as const,
+    oom: {
+      reason: "out_of_memory" as const,
+      memoryWorkingSetBytes: 11_295_763_988,
+      memoryLimitBytes: 10_737_418_240,
+      detectedAt: "2026-08-17T20:59:24.015Z",
+      gracefulStopAcknowledged: false,
+    },
+    steps: [{ ...detail.jobs[0]!.steps[0]!, id: "step-2", name: "Test" }],
+  };
+  const graphDetail = {
     ...detail,
-    jobs: [{
-      ...detail.jobs[0]!,
-      conclusion: "failure",
-      failureReason: "out_of_memory",
-      oom: {
-        reason: "out_of_memory",
-        memoryWorkingSetBytes: 11_295_763_988,
-        memoryLimitBytes: 10_737_418_240,
-        detectedAt: "2026-08-17T20:59:24.015Z",
-        gracefulStopAcknowledged: false,
-      },
-    }],
+    jobs: [detail.jobs[0]!, secondJob],
+    actionGraph: {
+      nodes: [...detail.actionGraph.nodes, { id: "job-2", name: "Unit tests", status: "completed" as const }],
+      edges: [{ from: "job-1", to: "job-2" }],
+    },
+  };
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><RunDetailView data={graphDetail} organizationId="org-1" /></QueryClientProvider>);
+    await waitForRender();
   });
-  expect(markup).toContain("out of memory");
-  expect(markup).toContain("Memory limit exceeded");
-  expect(markup).toContain("10.5 GiB");
-  expect(markup).toContain("10.0 GiB");
+  expect(container.querySelector(".log-panel")).toBeNull();
+  const jobNode = container.querySelector<SVGGElement>('[role="button"][aria-label^="Unit tests,"]');
+  expect(jobNode).not.toBeNull();
+  await act(async () => {
+    jobNode?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }) as unknown as Event);
+    await waitForRender();
+  });
+  expect(jobNode?.getAttribute("aria-pressed")).toBe("true");
+  expect(container.querySelector("#job-job-2 .log-panel")).not.toBeNull();
+  expect(container.querySelector("#job-job-1")).toBeNull();
+  expect(container.querySelector("#job-job-2")?.textContent).toContain("Unit tests");
+  expect(container.querySelector("#job-job-2")?.textContent).toContain("Test");
+  expect(container.querySelector("#job-job-2")?.textContent).toContain("out of memory");
+  expect(container.querySelector("#job-job-2")?.textContent).toContain("Memory limit exceeded");
+  expect(container.querySelector("#job-job-2")?.textContent).toContain("10.5 GiB");
+  expect(container.querySelector("#job-job-2")?.textContent).toContain("10.0 GiB");
+  act(() => root.unmount());
+  container.remove();
 });
 
 test("switches to Metrics without rendering log viewers", async () => {
@@ -130,15 +169,20 @@ test("switches to Metrics without rendering log viewers", async () => {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  root.render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><RunDetailView data={detail} organizationId="org-1" /></QueryClientProvider>);
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await act(async () => {
+    root.render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><RunDetailView data={detail} organizationId="org-1" /></QueryClientProvider>);
+    await waitForRender();
+  });
   const metricsTab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-controls="run-metrics-panel"]');
   expect(metricsTab).not.toBeNull();
-  metricsTab?.click();
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await act(async () => {
+    metricsTab?.click();
+    await waitForRender();
+  });
   expect(metricsTab?.getAttribute("aria-selected")).toBe("true");
   expect(container.querySelector('[role="tabpanel"]#run-metrics-panel')).not.toBeNull();
   expect(container.querySelector('a[href="/runs/run-1?organizationId=org-1#job-job-1"]')).not.toBeNull();
   expect(container.querySelector(".log-panel")).toBeNull();
-  root.unmount();
+  act(() => root.unmount());
+  container.remove();
 });

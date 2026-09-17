@@ -62,13 +62,23 @@ function OomNotice({ job }: { job: RunJob }) {
 }
 
 
- export function RunDetailView({ data, organizationId }: { data: RunDetail; organizationId: string }) {
-   const [selectedTab, setSelectedTab] = useState<"logs" | "metrics">("logs");
-   const facts = runDetailFacts(data);
-   const detail = data as RunDetail & { currentStage?: string; schedulerReason?: string; retryCount?: number; leaseCleanupState?: string; htmlUrl?: string; stageDurations?: Partial<Record<RunStage, number>> };
-   const stageDurations = detail.stageDurations;
-   const status = statusLabel(data);
-   return <div className="run-detail-grid">
+export function RunDetailView({ data, organizationId }: { data: RunDetail; organizationId: string }) {
+  const [selectedTab, setSelectedTab] = useState<"graph" | "metrics">("graph");
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(() => {
+    if (typeof window === "undefined" || !window.location.hash.startsWith("#job-")) return null;
+    try {
+      const jobId = decodeURIComponent(window.location.hash.slice("#job-".length));
+      return data.jobs.some((job) => job.id === jobId) ? jobId : null;
+    } catch {
+      return null;
+    }
+  });
+  const facts = runDetailFacts(data);
+  const detail = data as RunDetail & { currentStage?: string; schedulerReason?: string; retryCount?: number; leaseCleanupState?: string; htmlUrl?: string; stageDurations?: Partial<Record<RunStage, number>> };
+  const stageDurations = detail.stageDurations;
+  const status = statusLabel(data);
+  const selectedJob = data.jobs.find((job) => job.id === selectedJobId) ?? null;
+  return <div className="run-detail-grid">
     <section className="detail-panel" aria-labelledby="run-detail-title">
       <nav className="detail-breadcrumb" aria-label="Workflow breadcrumb"><a href="/runs">Runs</a><span aria-hidden="true">/</span><span>{data.workflowName}</span></nav>
       <div className="detail-heading"><span className={`status status-${data.conclusion ?? data.status}`}><span className="status-icon" aria-hidden="true">●</span><span>{status}</span></span><span className="detail-run-number">Run #{data.runNumber}</span><h1 id="run-detail-title">{data.workflowName}</h1></div>
@@ -78,15 +88,17 @@ function OomNotice({ job }: { job: RunJob }) {
     </section>
     <div className="detail-tabs">
       <div className="detail-tab-list" role="tablist" aria-label="Run detail views">
-        <button type="button" role="tab" id="run-logs-tab" aria-selected={selectedTab === "logs"} aria-controls="run-logs-panel" tabIndex={selectedTab === "logs" ? 0 : -1} onClick={() => setSelectedTab("logs")}>Logs</button>
+        <button type="button" role="tab" id="run-graph-tab" aria-selected={selectedTab === "graph"} aria-controls="run-graph-panel" tabIndex={selectedTab === "graph" ? 0 : -1} onClick={() => setSelectedTab("graph")}>Graph</button>
         <button type="button" role="tab" id="run-metrics-tab" aria-selected={selectedTab === "metrics"} aria-controls="run-metrics-panel" tabIndex={selectedTab === "metrics" ? 0 : -1} onClick={() => setSelectedTab("metrics")}>Metrics</button>
       </div>
-      {selectedTab === "logs" ? <section id="run-logs-panel" role="tabpanel" aria-labelledby="run-logs-tab" className="run-tab-panel">
-        {data.jobs.map((job) => <section className="run-job-logs" id={`job-${job.id}`} key={job.id}><header className="job-heading"><div><h2><a href={jobDetailHref(data.id, organizationId, job.id)} target="_blank" rel="noreferrer" aria-label={`Open job ${job.name} in a new tab`}>{job.name}</a></h2><JobBadges job={job} /></div><span className={`status ${job.failureReason === "out_of_memory" ? "status-failure" : `status-${job.conclusion ?? job.status}`}`}>{jobStatusLabel(job)}</span></header><OomNotice job={job} /><LogViewer organizationId={organizationId} runId={data.id} jobId={job.id} logsState={job.logsState} steps={job.steps} /></section>)}
+      {selectedTab === "graph" ? <section id="run-graph-panel" role="tabpanel" aria-labelledby="run-graph-tab" className="run-tab-panel">
+        <div className={`run-graph-layout${selectedJob ? " has-selection" : ""}`}>
+          <ActionGraph graph={data.actionGraph} selectedNodeId={selectedJobId} onNodeSelect={setSelectedJobId} />
+          {selectedJob ? <section className="run-job-logs" id={`job-${selectedJob.id}`}><header className="job-heading"><div><h2>{selectedJob.name}</h2><JobBadges job={selectedJob} /></div><span className={`status ${selectedJob.failureReason === "out_of_memory" ? "status-failure" : `status-${selectedJob.conclusion ?? selectedJob.status}`}`}>{jobStatusLabel(selectedJob)}</span></header><OomNotice job={selectedJob} /><LogViewer organizationId={organizationId} runId={data.id} jobId={selectedJob.id} logsState={selectedJob.logsState} steps={selectedJob.steps} /></section> : <p className="graph-selection-hint">Select a job in the dependency graph to inspect its logs.</p>}
+        </div>
       </section> : <section id="run-metrics-panel" role="tabpanel" aria-labelledby="run-metrics-tab" className="run-tab-panel">
         <RunTelemetry queuedAt={data.queuedAt} startedAt={data.startedAt} completedAt={data.completedAt} />
         <RunTimeline jobs={data.jobs} durations={stageDurations} />
-        <ActionGraph graph={data.actionGraph} />
         {data.jobs.map((job) => <section className="job-panel" id={`job-${job.id}`} key={job.id}><header className="job-heading"><div><h2><a href={jobDetailHref(data.id, organizationId, job.id)} target="_blank" rel="noreferrer" aria-label={`Open job ${job.name} in a new tab`}>{job.name}</a></h2><JobBadges job={job} /></div><DetailBadges values={job.requestedLabels} /></header><ResourceTable job={job} /></section>)}
       </section>}
     </div>
