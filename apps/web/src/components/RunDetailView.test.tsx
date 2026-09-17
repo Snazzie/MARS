@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { RunDetail } from "@mars/contracts";
 
 import { RunDetailView, formatResourceValue, jobDetailHref, runDetailFacts } from "./RunDetailView.tsx";
-import { layoutActionGraph } from "./ActionGraph.tsx";
+import { ActionGraph, layoutActionGraph } from "./ActionGraph.tsx";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.requestAnimationFrame = (callback: FrameRequestCallback) => setTimeout(callback, 0) as unknown as number;
@@ -187,6 +187,43 @@ test("deduplicates matrix jobs before mapping dependency edges", () => {
   expect(flow.edges).toHaveLength(2);
   expect(flow.nodes.find((node) => node.id === "build")!.position.x).toBeLessThan(matrix.position.x);
   expect(matrix.position.x).toBeLessThan(flow.nodes.find((node) => node.id === "publish")!.position.x);
+});
+test("renders matrix groups collapsed until their heading is expanded", async () => {
+  const window = new Window();
+  setFlowContainerSize(window);
+  // @ts-expect-error test DOM globals
+  globalThis.document = window.document;
+  // @ts-expect-error test DOM globals
+  globalThis.window = window;
+  globalThis.requestAnimationFrame = (callback: FrameRequestCallback) => setTimeout(callback, 0) as unknown as number;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(<ActionGraph
+      graph={{
+        nodes: [
+          { id: "linux", name: "Test linux", status: "completed", conclusion: "success", durationMs: 8_000 },
+          { id: "windows", name: "Test windows", status: "completed", conclusion: "failure", durationMs: 9_000 },
+        ],
+        edges: [],
+      }}
+      selectedNodeId={null}
+      onNodeSelect={() => {}}
+    />);
+    await waitForRender();
+  });
+  const heading = container.querySelector<HTMLButtonElement>(".matrix-node-heading");
+  expect(heading?.getAttribute("aria-expanded")).toBe("false");
+  expect(container.querySelector(".matrix-member")).toBeNull();
+  await act(async () => {
+    heading?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }) as unknown as Event);
+    await waitForRender();
+  });
+  expect(heading?.getAttribute("aria-expanded")).toBe("true");
+  expect(container.querySelectorAll(".matrix-member")).toHaveLength(2);
+  act(() => root.unmount());
+  container.remove();
 });
 test("keeps a dependent job separate from its matrix siblings", () => {
   const flow = layoutActionGraph({

@@ -18,7 +18,7 @@ import { formatDuration } from "./RunTelemetry.tsx";
 type ActionGraphNode = ActionGraphDto["nodes"][number];
 type ActionMember = ActionGraphNode & { outcome: string };
 type ActionNodeData = ActionMember & { onSelect?: (nodeId: string) => void; onHover?: (nodeId: string | null) => void };
-type MatrixNodeData = { label: string; members: ActionMember[]; onSelect?: (nodeId: string) => void; onHover?: (nodeId: string | null) => void; selectedNodeId?: string | null };
+type MatrixNodeData = { label: string; members: ActionMember[]; expanded: boolean; onSelect?: (nodeId: string) => void; onHover?: (nodeId: string | null) => void; onToggle?: () => void; selectedNodeId?: string | null };
 type ActionFlowNode = Node<ActionNodeData, "action"> | Node<MatrixNodeData, "matrix">;
 
 const NODE_WIDTH = 224;
@@ -54,8 +54,13 @@ function ActionNode({ id, data }: NodeProps<Node<ActionNodeData, "action">>) {
 function MatrixNode({ id, data }: NodeProps<Node<MatrixNodeData, "matrix">>) {
   return <div className="matrix-node" onMouseOver={() => data.onHover?.(id)} onMouseOut={(event) => { if (!(event.relatedTarget instanceof globalThis.Node) || !event.currentTarget.contains(event.relatedTarget)) data.onHover?.(null); }}>
     <Handle className="action-node-handle" type="target" position={Position.Left} />
-    <div className="matrix-node-heading"><strong>{data.label}</strong><span>Matrix · {data.members.length}</span></div>
-    <div className="matrix-node-members">
+    <button className="matrix-node-heading" type="button" aria-expanded={data.expanded} onClick={(event) => {
+      event.stopPropagation();
+      data.onToggle?.();
+    }}>
+      <strong>{data.label}</strong><span>{data.expanded ? "▾" : "▸"} Matrix · {data.members.length}</span>
+    </button>
+    {data.expanded ? <div className="matrix-node-members">
       {data.members.map((member) => <button
         aria-pressed={data.selectedNodeId === member.id}
         className={`matrix-member${data.selectedNodeId === member.id ? " is-selected" : ""}`}
@@ -69,7 +74,7 @@ function MatrixNode({ id, data }: NodeProps<Node<MatrixNodeData, "matrix">>) {
         <span><strong>{member.name}</strong><small>{formatDuration(member.durationMs)}</small></span>
         <span className={`action-node-outcome action-node-outcome-${member.outcome}`}><span aria-hidden="true">●</span>{displayStatus(member.outcome)}</span>
       </button>)}
-    </div>
+    </div> : null}
     <Handle className="action-node-handle" type="source" position={Position.Right} />
   </div>;
 }
@@ -132,7 +137,7 @@ function deduplicateJobNodes(nodes: readonly ActionGraphNode[]): ActionGraphNode
   return [...new Map(nodes.map((node) => [node.id, node])).values()];
 }
 
-export function layoutActionGraph(graph: ActionGraphDto): { nodes: ActionFlowNode[]; edges: Edge[] } {
+export function layoutActionGraph(graph: ActionGraphDto, expandedGroupIds?: ReadonlySet<string>): { nodes: ActionFlowNode[]; edges: Edge[] } {
   const jobNodes = deduplicateJobNodes(graph.nodes);
   const nodeIds = new Set(jobNodes.map((node) => node.id));
   const graphEdges = graph.edges.length > 0
@@ -155,7 +160,8 @@ export function layoutActionGraph(graph: ActionGraphDto): { nodes: ActionFlowNod
   }
   const unitHeight = (id: string) => {
     const members = unitMembers.get(id) ?? [];
-    return members.length > 1 ? MATRIX_HEADER_HEIGHT + members.length * MATRIX_MEMBER_HEIGHT : NODE_HEIGHT;
+    if (members.length <= 1) return NODE_HEIGHT;
+    return expandedGroupIds?.has(id) ? MATRIX_HEADER_HEIGHT + members.length * MATRIX_MEMBER_HEIGHT : MATRIX_HEADER_HEIGHT;
   };
   const unitWidth = (id: string) => (unitMembers.get(id)?.length ?? 0) > 1 ? MATRIX_WIDTH : NODE_WIDTH;
   const layoutGraph = new dagre.graphlib.Graph();
@@ -187,15 +193,16 @@ export function layoutActionGraph(graph: ActionGraphDto): { nodes: ActionFlowNod
     const position = { x: center.x - width / 2, y: center.y - height / 2 };
     if (members.length > 1) {
       const group = groups.get(members[0]!.id)!;
+      const expanded = expandedGroupIds?.has(id) ?? false;
       nodes.push({
         id,
         type: "matrix",
         position,
         width,
         height,
-        data: { label: group.label, members: members.map((member) => ({ ...member, outcome: member.conclusion ?? member.status })) },
+        data: { label: group.label, members: members.map((member) => ({ ...member, outcome: member.conclusion ?? member.status })), expanded },
         focusable: false,
-        ariaLabel: `${group.label} matrix, ${members.length} jobs`,
+        ariaLabel: `${group.label} matrix, ${members.length} jobs, ${expanded ? "expanded" : "collapsed"}`,
       });
     } else {
       const member = members[0]!;
@@ -227,12 +234,24 @@ export function layoutActionGraph(graph: ActionGraphDto): { nodes: ActionFlowNod
 
 export function ActionGraph({ graph, selectedNodeId, onNodeSelect }: { graph: ActionGraphDto; selectedNodeId: string | null; onNodeSelect: (nodeId: string) => void }) {
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
-  const flow = layoutActionGraph(graph);
+  const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(() => new Set());
+  const flow = layoutActionGraph(graph, expandedGroupIds);
   const nodes = flow.nodes.map((node): ActionFlowNode => node.type === "matrix"
     ? {
         ...node,
         selected: node.data.members.some((member) => member.id === selectedNodeId),
-        data: { ...node.data, onSelect: onNodeSelect, onHover: setHoveredNodeId, selectedNodeId },
+        data: {
+          ...node.data,
+          onSelect: onNodeSelect,
+          onHover: setHoveredNodeId,
+          onToggle: () => setExpandedGroupIds((current) => {
+            const next = new Set(current);
+            if (next.has(node.id)) next.delete(node.id);
+            else next.add(node.id);
+            return next;
+          }),
+          selectedNodeId,
+        },
       }
     : {
         ...node,
