@@ -1236,3 +1236,4 @@ a:active {
   background: var(--ui-log-surface);
   color: var(--ui-log-text);
 }
+.load-meta .load-awaiting{font-size:15px}
