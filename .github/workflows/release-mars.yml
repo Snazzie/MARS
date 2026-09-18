@@ -203,6 +203,8 @@ jobs:
           set -euo pipefail
           mkdir -p dist/macos
           swiftc -parse-as-library -framework AppKit apps/macos-status-item/main.swift -o dist/macos/mars-status-item
+      - uses: actions/upload-artifact@v4
+        with: { name: "worker-macos-status-item-${{ github.sha }}", path: dist/macos }
   macos:
     name: Build macOS arm64 worker assets
     if: inputs.worker_release_mode == 'build'
