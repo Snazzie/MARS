@@ -1,21 +1,22 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isWorkerContractCompatible, type PoolResources, type WorkerCacheProxy } from "@mars/contracts";
+import { isWorkerContractCompatible, type GuestPlatform, type PoolResources, type WorkerCacheProxy } from "@mars/contracts";
 import type { Lease, RuntimeDriver, RuntimeLease } from "./runtime.ts";
 import { validateResources } from "./runtime.ts";
 
+type TartImage = { baseImage: string; imageDigest: string };
+type TartImages = Record<"macos-arm64" | "linux-arm64", TartImage>;
 export function resolveTartExecutable(configured: string | undefined): string {
   return configured?.trim() || "tart";
 }
 
 export const TART_JIT_CONFIG_PATH = "/tmp/mars/jit-config";
-const TART_BOOTSTRAP_SHARE_PATH = "/Volumes/My Shared Files/jit-config";
 export function buildTartRunArguments(vmName: string, bootstrapDirectory: string): string[] {
-  return ["run", "--no-graphics", "--no-audio", "--dir", `${bootstrapDirectory}:ro`, vmName];
+  return ["run", "--no-graphics", "--no-audio", vmName];
 }
 export function buildTartBootstrapArguments(vmName: string): string[] {
-  return ["exec", vmName, "sh", "-c", `set -eu; umask 077; install -d -m 700 /tmp/mars; rm -f ${TART_JIT_CONFIG_PATH}; cat "${TART_BOOTSTRAP_SHARE_PATH}" > ${TART_JIT_CONFIG_PATH}`];
+  return ["exec", "-i", vmName, "sh", "-c", `set -eu; umask 077; install -d -m 700 /tmp/mars; rm -f ${TART_JIT_CONFIG_PATH}; cat > ${TART_JIT_CONFIG_PATH}; chmod 600 ${TART_JIT_CONFIG_PATH}`];
 }
 export function buildTartRunnerArguments(vmName: string): string[] {
   return [
@@ -82,7 +83,7 @@ export interface TartVmRuntime {
   startRunner(vmName: string): TartRunnerExecution;
   stop(vmName: string): Promise<void>;
   remove(vmName: string): Promise<void>;
-  sample?(vmName: string): Promise<{ cpuUsagePercent: number; cpuTimeMs: number; memoryWorkingSetBytes: number; memoryLimitBytes: number; diskUsageBytes: number }>;
+  sample?(vmName: string, guestPlatform?: GuestPlatform): Promise<{ cpuUsagePercent: number; cpuTimeMs: number; memoryWorkingSetBytes: number; memoryLimitBytes: number; diskUsageBytes: number }>;
 }
 
 export function createTartVmRuntime(tartExecutable = resolveTartExecutable(Bun.env.MARS_TART_EXECUTABLE)): TartVmRuntime {
@@ -122,30 +123,39 @@ export function createTartVmRuntime(tartExecutable = resolveTartExecutable(Bun.e
     },
     async startWithBootstrap(vmName, encodedJitConfig, workerCache) {
       if (processes.has(vmName)) throw new Error(`Tart VM already running: ${vmName}`);
-      const bootstrapDirectory = await mkdtemp(join(tmpdir(), "mars-bootstrap-"));
-      const configPath = join(bootstrapDirectory, "jit-config");
       const config = workerCache ? JSON.stringify({ encodedJitConfig, workerCache }) : encodedJitConfig;
       const configBytes = Buffer.from(config, "utf8");
       try {
-        await writeFile(configPath, configBytes, { flag: "wx", mode: 0o600 });
-        const process = Bun.spawn([tartExecutable, ...buildTartRunArguments(vmName, bootstrapDirectory)], { stdout: "ignore", stderr: "ignore" });
+        const process = Bun.spawn([tartExecutable, ...buildTartRunArguments(vmName, "")], { stdout: "ignore", stderr: "ignore" });
         processes.set(vmName, process);
         void process.exited.then(() => processes.delete(vmName));
-        await run(buildTartBootstrapArguments(vmName));
+        let lastError = "";
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+          const bootstrap = Bun.spawn([tartExecutable, ...buildTartBootstrapArguments(vmName)], { stdin: "pipe", stdout: "ignore", stderr: "pipe" });
+          bootstrap.stdin.write(configBytes);
+          bootstrap.stdin.end();
+          const [exitCode, stderr] = await Promise.all([bootstrap.exited, new Response(bootstrap.stderr).text()]);
+          if (exitCode === 0) return;
+          lastError = stderr.trim();
+          await Bun.sleep(1_000);
+        }
+        throw new Error(`tart bootstrap failed${lastError ? `: ${lastError}` : ""}`);
       } finally {
         configBytes.fill(0);
-        await rm(bootstrapDirectory, { recursive: true, force: true });
       }
     },
-    stop: async vmName => { await run(["stop", vmName]); processes.delete(vmName); },
-    remove: async vmName => { await run(["delete", vmName]); processes.delete(vmName); },
-    sample: async vmName => {
-      const process = Bun.spawn([tartExecutable, "exec", vmName, "sh", "-c", "set -eu; cpu=$(ps -eo pcpu= | awk '{s+=$1} END {print s+0}'); rss=$(ps -eo rss= | awk '{s+=$1} END {print s+0}'); mem=$(awk '/MemTotal/{print $2}' /proc/meminfo); disk=$(df -kP / | awk 'NR==2 {print $3+0}'); printf '%s %s %s %s' \"$cpu\" \"$rss\" \"$mem\" \"$disk\""], { stdout: "pipe", stderr: "pipe" });
+    sample: async (vmName, guestPlatform = "linux-arm64") => {
+      const command = guestPlatform === "macos-arm64"
+        ? "set -eu; cpu=$(ps -Ao %cpu= | awk '{s+=$1} END {print s+0}'); rss=$(ps -Ao rss= | awk '{s+=$1} END {print s+0}'); mem=$(sysctl -n hw.memsize); disk=$(df -kP / | awk 'NR==2 {print $3+0}'); printf '%s %s %s %s' \"$cpu\" \"$rss\" \"$mem\" \"$disk\""
+        : "set -eu; cpu=$(ps -eo pcpu= | awk '{s+=$1} END {print s+0}'); rss=$(ps -eo rss= | awk '{s+=$1} END {print s+0}'); mem=$(awk '/MemTotal/{print $2}' /proc/meminfo); disk=$(df -kP / | awk 'NR==2 {print $3+0}'); printf '%s %s %s %s' \"$cpu\" \"$rss\" \"$mem\" \"$disk\"";
+      const process = Bun.spawn([tartExecutable, "exec", vmName, "sh", "-c", command], { stdout: "pipe", stderr: "pipe" });
       const [stdout, stderr, code] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
       if (code !== 0) throw new Error(`tart resource sample failed: ${stderr.trim()}`);
       const [cpu, rss, mem, disk] = stdout.trim().split(/\s+/).map(Number);
-      return { cpuUsagePercent: Math.max(0, Math.min(100, cpu || 0)), cpuTimeMs: 0, memoryWorkingSetBytes: Math.max(0, (rss || 0) * 1024), memoryLimitBytes: Math.max(1, (mem || 1) * 1024), diskUsageBytes: Math.max(0, (disk || 0) * 1024) };
+      return { cpuUsagePercent: Math.max(0, Math.min(100, cpu || 0)), cpuTimeMs: 0, memoryWorkingSetBytes: Math.max(0, (rss || 0) * 1024), memoryLimitBytes: Math.max(1, mem || 1), diskUsageBytes: Math.max(0, (disk || 0) * 1024) };
     },
+    stop: async vmName => { await run(["stop", vmName]); processes.delete(vmName); },
+    remove: async vmName => { await run(["delete", vmName]); processes.delete(vmName); },
   };
 }
 
@@ -154,19 +164,30 @@ export class TartVmDriver implements RuntimeDriver {
   private readonly leases = new Map<string, { vmName: string; runtime: RuntimeLease }>();
   private provisioning = Promise.resolve();
 
+  private readonly images: TartImages;
+  private readonly legacyImages: boolean;
   constructor(
     private readonly tart: TartVmRuntime,
-    private readonly baseImage: string,
+    images: TartImages | string,
     private readonly namePrefix: string,
     private readonly limits = { maxVcpuPerPod: 16, maxMemoryBytesPerPod: 64 * 1024 ** 3, maxStorageBytesPerPod: 256 * 1024 ** 3, maxConcurrentPods: 4 },
     private readonly workerContractVersion = "",
-  ) {}
+  ) {
+    this.legacyImages = typeof images === "string";
+    this.images = typeof images === "string"
+      ? { "macos-arm64": { baseImage: images, imageDigest: images }, "linux-arm64": { baseImage: images, imageDigest: images } }
+      : images;
+  }
 
   validatePool(resources: PoolResources): void { validateResources(resources, this.limits); }
   async reserveCapacity(resources: PoolResources): Promise<void> { this.validatePool(resources); }
 
   async createLease(lease: Lease): Promise<RuntimeLease> {
     if (!isWorkerContractCompatible(lease.contractVersion, this.workerContractVersion)) throw new Error(`worker contract ${this.workerContractVersion || "unknown"} is not supported by control plane contract ${lease.contractVersion}`);
+    const guestPlatform = lease.guestPlatform ?? "macos-arm64";
+    const image = guestPlatform === "macos-arm64" || guestPlatform === "linux-arm64" ? this.images[guestPlatform] : undefined;
+    if (!image) throw new Error(`unsupported Tart guest platform: ${lease.guestPlatform}`);
+    if (!this.legacyImages && lease.imageDigest !== image.imageDigest) throw new Error(`lease image digest does not match prepared ${guestPlatform} Tart image`);
     this.validatePool(lease.resources);
     const previousProvisioning = this.provisioning;
     let releaseProvisioning!: () => void;
@@ -174,12 +195,12 @@ export class TartVmDriver implements RuntimeDriver {
     await previousProvisioning;
     try {
       const vmName = `${this.namePrefix}-${lease.id.slice(0, 8)}`;
-      await this.tart.clone(this.baseImage, vmName);
+      await this.tart.clone(image.baseImage, vmName);
       try {
         await this.tart.setResources(vmName, lease.resources);
         await this.tart.startWithBootstrap(vmName, lease.encodedJitConfig, lease.workerCache);
         const execution = this.tart.startRunner(vmName);
-        const runtime: RuntimeLease = { runtimeInstanceId: vmName, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: execution.completion, logs: execution.logs, sample: this.tart.sample ? () => this.tart.sample!(vmName) : undefined };
+        const runtime: RuntimeLease = { runtimeInstanceId: vmName, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: execution.completion, logs: execution.logs, sample: this.tart.sample ? () => this.tart.sample!(vmName, guestPlatform) : undefined };
         this.leases.set(lease.id, { vmName, runtime });
         return runtime;
       } catch (error) {

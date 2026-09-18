@@ -7,7 +7,7 @@ import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker, purgeWorkerRunnerCache } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 import { createWorkerImageBuildPayload } from "../windows-image-build.ts";
-import { ApiError, CostCenterDto, CostCenterPricingProvider, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth, JobLabelRecommendation, JobLabelRecommendationQuery, GithubConnectionSummary, GithubRateLimitStats, WorkerEventPayload, WorkerUpgradeStatus, runtimeDriverForPlatform } from "@mars/contracts";
+import { ApiError, CostCenterDto, CostCenterPricingProvider, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth, JobLabelRecommendation, JobLabelRecommendationQuery, GithubConnectionSummary, GithubRateLimitStats, WorkerEventPayload, WorkerUpgradeStatus, runtimeDriverForWorker } from "@mars/contracts";
 import { WorkerDispatchError } from "../worker-dispatch.ts";
 import { WorkerReleaseCatalogUnavailable } from "../worker-release.ts";
 const querySchema = z.object({
@@ -387,13 +387,16 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!worker) return { error: "not_found" as const };
     if (worker.admissionState !== "adopted" || worker.configurationState !== "ready" || worker.configurationRevision !== worker.appliedConfigurationRevision) return { error: "worker_not_ready" as const };
     if (!(Array.isArray(worker.guestPlatforms) ? worker.guestPlatforms : [worker.platform]).includes(body.guestPlatform)) return { error: "worker_guest_platform_unsupported" as const };
-    const driver = runtimeDriverForPlatform(worker.platform);
-    if (driver === "linux-libvirt-vm") {
-      const doctor = worker.doctor && typeof worker.doctor === "object" ? worker.doctor as Record<string, unknown> : {};
+    const driver = runtimeDriverForWorker(worker.platform, body.guestPlatform);
+    if (!driver) return { error: "runtime_unsupported" as const };
+    const doctor = worker.doctor && typeof worker.doctor === "object" ? worker.doctor as Record<string, unknown> : {};
+    if (driver === "tart-vm") {
+      const digests = doctor.artifactDigests && typeof doctor.artifactDigests === "object" ? doctor.artifactDigests as Record<string, unknown> : {};
+      if (digests[body.guestPlatform] !== body.imageDigest) return { error: "worker_image_mismatch" };
+    } else if (driver === "linux-libvirt-vm") {
       if (![doctor.runtimeReady, doctor.libvirtReady, doctor.networkReady, doctor.cloneStorageReady, doctor.imageSignatures, doctor.realVmSmoke].every((value) => value === true)) return { error: "worker_runtime_not_ready" };
       if (doctor.artifactDigest !== body.imageDigest || doctor.smokeArtifactDigest !== body.imageDigest) return { error: "worker_image_mismatch" };
     } else if (driver === "linux-docker-container") {
-      const doctor = worker.doctor && typeof worker.doctor === "object" ? worker.doctor as Record<string, unknown> : {};
       if (![doctor.runtimeReady, doctor.networkReady, doctor.imageSignatures].every((value) => value === true)) return { error: "worker_runtime_not_ready" };
       if (doctor.artifactDigest !== body.imageDigest) return { error: "worker_image_mismatch" };
     }
@@ -446,7 +449,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const [pool] = await deps.db`SELECT id,platform,driver,image_digest AS "imageDigest" FROM runner_pools WHERE id=${poolId} AND organization_id IS NULL`;
     if (!pool) return error(c, 404, "not_found", "Pool not found");
     if (action === "enable") {
-      const [ready] = await deps.db`SELECT w.id FROM workers w WHERE w.admission_state='adopted' AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false AND w.last_heartbeat_at>now()-interval '90 seconds' AND w.doctor_observed_at IS NOT NULL AND ${pool.platform}=ANY(SELECT jsonb_array_elements_text(w.guest_platforms)) AND ${pool.driver}=CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN 'windows-hyperv-container' WHEN 'macos-arm64' THEN 'tart-vm' ELSE NULL END AND (${pool.driver} NOT IN ('linux-libvirt-vm','linux-docker-container') OR (${pool.driver}='linux-libvirt-vm' AND (w.doctor->>'runtimeReady')::boolean IS TRUE AND (w.doctor->>'libvirtReady')::boolean IS TRUE AND (w.doctor->>'networkReady')::boolean IS TRUE AND (w.doctor->>'cloneStorageReady')::boolean IS TRUE AND (w.doctor->>'imageSignatures')::boolean IS TRUE AND (w.doctor->>'realVmSmoke')::boolean IS TRUE AND w.doctor->>'artifactDigest'=${pool.imageDigest} AND w.doctor->>'smokeArtifactDigest'=${pool.imageDigest}) OR (${pool.driver}='linux-docker-container' AND (w.doctor->>'runtimeReady')::boolean IS TRUE AND (w.doctor->>'networkReady')::boolean IS TRUE AND (w.doctor->>'imageSignatures')::boolean IS TRUE AND w.doctor->>'artifactDigest'=${pool.imageDigest}))) LIMIT 1`;
+      const [ready] = await deps.db`SELECT w.id FROM workers w WHERE w.admission_state='adopted' AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false AND w.last_heartbeat_at>now()-interval '90 seconds' AND w.doctor_observed_at IS NOT NULL AND ${pool.platform}=ANY(SELECT jsonb_array_elements_text(w.guest_platforms)) AND ${pool.driver}=CASE WHEN w.platform='macos-arm64' AND ${pool.platform} IN ('macos-arm64','linux-arm64') THEN 'tart-vm' WHEN ${pool.platform}=w.platform THEN CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN 'windows-hyperv-container' WHEN 'macos-arm64' THEN 'tart-vm' END ELSE NULL END AND (${pool.driver}<>'tart-vm' OR w.doctor->'artifactDigests'->>${pool.platform}=${pool.imageDigest}) LIMIT 1`;
       if (!ready || (deps.workerConnected ? !deps.workerConnected(String(ready.id)) : false)) return error(c, 409, "no_compatible_ready_worker", "No compatible ready worker is connected for this pool");
     }
     await deps.db`UPDATE runner_pools SET enabled=${action === "enable"} WHERE id=${poolId} AND organization_id IS NULL`;
@@ -458,13 +461,17 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const idem = requireMutation(c); if (idem) return idem;
     const body = CreatePoolRequest.parse(await c.req.json());
-    if (body.guestPlatform === "linux-x64") return error(c, 422, "runtime_unsupported", "Linux runners are not available in this release");
-    if (body.triggerLabel === "self-hosted" || ["linux", "windows", "macos", "x64", "arm64"].includes(body.triggerLabel)) return error(c, 400, "reserved_trigger_label", "Trigger label is reserved");
-    const [w] = await deps.db`SELECT platform,guest_platforms AS "guestPlatforms",admission_state AS "admissionState",configuration_state AS "configurationState",draining,limits FROM workers WHERE id=${body.workerId}`;
+    const [w] = await deps.db`SELECT platform,guest_platforms AS "guestPlatforms",admission_state AS "admissionState",configuration_state AS "configurationState",draining,limits,doctor FROM workers WHERE id=${body.workerId}`;
     if (w.platform === "linux-x64") return error(c, 422, "runtime_unsupported", "Linux runners are not available in this release");
     if (w.admissionState !== "adopted" || (deps.workerConnected ? !deps.workerConnected(body.workerId) : false) || w.configurationState !== "ready" || w.draining) return error(c, 422, "worker_not_ready", "Worker is not ready");
     if (!(Array.isArray(w.guestPlatforms) ? w.guestPlatforms : [w.platform]).includes(body.guestPlatform)) return error(c, 422, "worker_guest_platform_unsupported", "Worker does not support the requested guest platform");
-    const driver = runtimeDriverForPlatform(w.platform);
+    const driver = runtimeDriverForWorker(w.platform, body.guestPlatform);
+    if (!driver) return error(c, 422, "runtime_unsupported", "Worker cannot provide the requested runtime");
+    if (driver === "tart-vm") {
+      const doctor = w.doctor && typeof w.doctor === "object" ? w.doctor as Record<string, unknown> : {};
+      const digests = doctor.artifactDigests && typeof doctor.artifactDigests === "object" ? doctor.artifactDigests as Record<string, unknown> : {};
+      if (digests[body.guestPlatform] !== body.imageDigest) return error(c, 422, "worker_image_mismatch", "Worker image evidence does not match the requested digest");
+    }
     const labels = [body.triggerLabel];
     const [duplicate] = await deps.db`SELECT id,name,trigger_label AS "triggerLabel" FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel})`;
     if (body.poolId) {

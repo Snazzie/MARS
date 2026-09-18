@@ -4,9 +4,9 @@ import { WorkerReleaseManifest } from "./worker-release.ts";
 const hash = "a".repeat(64);
 const asset = (name: string) => ({ url: `https://downloads.example.test/${name}`, sha256: hash });
 const valid = {
-  schemaVersion: 4 as const,
+  schemaVersion: 5 as const,
   buildId: "build-1",
-  contractVersion: "0.2.0",
+  contractVersion: "0.3.0",
   platforms: {
     "linux-x64": {
       installer: asset("linux-installer.sh"),
@@ -42,9 +42,12 @@ const valid = {
     "macos-arm64": {
       installer: asset("macos-installer.sh"),
       orchestrator: asset("macos-orchestrator"),
-      jobAgent: asset("macos-job-agent"),
-      imagePreparationScript: asset("prepare-macos-job-image.sh"),
-      tartSourceImage: `ghcr.io/cirruslabs/macos-sonoma-base@sha256:${hash}`,
+      macosJobAgent: asset("macos-job-agent"),
+      linuxArm64JobAgent: asset("linux-arm64-job-agent"),
+      linuxArm64Runner: asset("linux-arm64-runner.tar.gz"),
+      imagePreparationScript: asset("prepare-tart-job-image.sh"),
+      tartMacosSourceImage: `ghcr.io/cirruslabs/macos-sonoma-base@sha256:${hash}`,
+      tartLinuxArm64SourceImage: `ghcr.io/cirruslabs/ubuntu@sha256:${hash}`,
     },
   },
 };
@@ -91,11 +94,11 @@ test("rejects HTTP asset URLs", () => {
 
 test("rejects malformed and uppercase hashes", () => {
   const malformed = structuredClone(valid);
-  malformed.platforms["macos-arm64"].jobAgent.sha256 = "not-a-sha256";
+  malformed.platforms["macos-arm64"].macosJobAgent.sha256 = "not-a-sha256";
   expect(() => WorkerReleaseManifest.parse(malformed)).toThrow();
 
   const uppercase = structuredClone(valid);
-  uppercase.platforms["macos-arm64"].jobAgent.sha256 = "A".repeat(64);
+  uppercase.platforms["macos-arm64"].macosJobAgent.sha256 = "A".repeat(64);
   expect(() => WorkerReleaseManifest.parse(uppercase)).toThrow();
 });
 

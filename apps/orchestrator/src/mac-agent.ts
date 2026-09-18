@@ -79,7 +79,7 @@ export async function runMacLeaseLifecycle(
   };
   let runtime: RuntimeLease;
   try {
-    runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, contractVersion: bootstrap.contractVersion, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
+    runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, contractVersion: bootstrap.contractVersion, guestPlatform: bootstrap.guestPlatform, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
   } catch (error) {
     console.error("macOS lease provisioning failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
     send(workerEvent(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "provisioning_failed" }));
@@ -169,7 +169,7 @@ export async function handleMacWorkerCommand(command: WorkerCommand, driver: Tar
     if (!payload.bootstrapCiphertext) throw new Error("lease bootstrap payload invalid");
     const bootstrap = openLeaseBootstrap(payload.bootstrapCiphertext, encryptionPrivateKey);
     if (bootstrap.leaseId !== command.leaseId) throw new Error("lease bootstrap mismatch");
-    const runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, contractVersion: bootstrap.contractVersion, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
+    const runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, contractVersion: bootstrap.contractVersion, guestPlatform: bootstrap.guestPlatform, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
     return workerEvent(command.workerId, "sandbox_attested", { commandId: command.id, leaseId: command.leaseId, nonce: bootstrap.nonce, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed });
   }
   if (command.type === "tart.stop_lease" && command.leaseId) {
@@ -290,21 +290,22 @@ async function macMachineUuid(): Promise<string> {
   if (!uuid) throw new Error("macOS machine UUID is unavailable");
   return uuid.toLowerCase();
 }
-async function currentMacDoctor(): Promise<WorkerDoctorData> {
+export async function currentMacDoctor(): Promise<WorkerDoctorData> {
   const tart = Bun.spawnSync([resolveTartExecutable(Bun.env.MARS_TART_EXECUTABLE), "--version"]);
   const probe = tart.exitCode === 0;
   let egress = false;
   try {
-    const response = await fetch("https://api.github.com/meta", { signal: AbortSignal.timeout(5_000), headers: { "user-agent": "mars-worker-doctor" } });
-    egress = response.ok;
-  } catch {
-    egress = false;
-  }
-  const artifactDigest = Bun.env.MARS_TART_IMAGE_DIGEST ?? Bun.env.MARS_TART_BASE_IMAGE;
-  const immutableArtifact = typeof artifactDigest === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactDigest);
+    const response = await fetch("https://api.github.com", { method: "HEAD" });
+    egress = response.ok || response.status < 500;
+  } catch {}
+  const macosDigest = Bun.env.MARS_TART_MACOS_IMAGE_DIGEST?.trim();
+  const linuxDigest = Bun.env.MARS_TART_LINUX_ARM64_IMAGE_DIGEST?.trim();
+  const digestPattern = /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i;
+  const artifactDigests = { "macos-arm64": macosDigest ?? "", "linux-arm64": linuxDigest ?? "" };
+  const immutableImages = digestPattern.test(artifactDigests["macos-arm64"]) && digestPattern.test(artifactDigests["linux-arm64"]);
   const contractVersion = Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim();
-  const failures = [!probe && "Tart runtime probe failed", !egress && "GitHub egress probe failed", !immutableArtifact && "Immutable Tart image digest is missing", !WorkerContractVersion.safeParse(contractVersion).success && "Worker contract version is missing or invalid"].filter(Boolean);
-  return WorkerDoctorData.parse({ runtimeMode: "tart", artifactSource: "registry", ...(immutableArtifact ? { artifactDigest, artifactIdentity: artifactDigest } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
+  const failures = [!probe && "Tart runtime probe failed", !egress && "GitHub egress probe failed", !immutableImages && "Both immutable Tart image digests are required", !WorkerContractVersion.safeParse(contractVersion).success && "Worker contract version is missing or invalid"].filter(Boolean);
+  return WorkerDoctorData.parse({ runtimeMode: "tart", artifactSource: "registry", ...(immutableImages ? { artifactDigests, artifactDigest: artifactDigests["macos-arm64"], artifactIdentity: artifactDigests["macos-arm64"] } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableImages, remediation: failures.length ? failures.join("; ") : null });
 }
 async function currentMacWorkerJoinPayload(code: string, publicKey: string, encryptionPublicKey: string, vmUuid?: string, machineUuid?: string): Promise<MacWorkerJoinPayload> {
   const stableMachineUuid = machineUuid ?? await macMachineUuid();
@@ -498,7 +499,11 @@ export async function runMacWorker(baseUrl: string, limits: MacWorkerLimits, cac
   const statusItem = new MacStatusItemSupervisor(statusItemExecutable(), leasePickupStateFile());
   void statusItem.run();
   try {
-    const driver = new TartVmDriver(createTartVmRuntime(), Bun.env.MARS_TART_BASE_IMAGE ?? "mars-macos-worker", "mars-job", limits, Bun.env.MARS_WORKER_CONTRACT_VERSION ?? "");
+    const macosBaseImage = Bun.env.MARS_TART_MACOS_BASE_IMAGE ?? Bun.env.MARS_TART_BASE_IMAGE ?? "mars-macos-worker";
+    const linuxBaseImage = Bun.env.MARS_TART_LINUX_ARM64_BASE_IMAGE ?? "ghcr.io/cirruslabs/ubuntu:latest";
+    const macosImageDigest = Bun.env.MARS_TART_MACOS_IMAGE_DIGEST ?? Bun.env.MARS_TART_IMAGE_DIGEST ?? "";
+    const linuxImageDigest = Bun.env.MARS_TART_LINUX_ARM64_IMAGE_DIGEST ?? "";
+    const driver = new TartVmDriver(createTartVmRuntime(), { "macos-arm64": { baseImage: macosBaseImage, imageDigest: macosImageDigest }, "linux-arm64": { baseImage: linuxBaseImage, imageDigest: linuxImageDigest } }, "mars-job", limits, Bun.env.MARS_WORKER_CONTRACT_VERSION ?? "");
     let identity = await loadMacWorkerIdentity();
     if (!identity) {
       const machineUuid = (Bun.env.MARS_MACHINE_UUID ?? await macMachineUuid()).toLowerCase();

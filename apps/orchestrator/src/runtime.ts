@@ -1,5 +1,5 @@
-import { PoolResources, type RuntimeTerminationEvidence, type WorkerCacheProxy } from "@mars/contracts";
-export interface Lease { id:string; jobId:string; contractVersion:string; imageDigest:string; resources:PoolResources; nonce:string; encodedJitConfig:string; workerCache?: WorkerCacheProxy; }
+import { PoolResources, type GuestPlatform, type RuntimeTerminationEvidence, type WorkerCacheProxy } from "@mars/contracts";
+export interface Lease { id:string; jobId:string; contractVersion:string; guestPlatform?: GuestPlatform; imageDigest:string; resources:PoolResources; nonce:string; encodedJitConfig:string; workerCache?: WorkerCacheProxy; }
 export interface RuntimeLease {
   runtimeInstanceId:string;
   observed:{vcpu:number;memoryBytes:number;storageBytes:number};

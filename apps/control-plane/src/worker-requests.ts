@@ -1,6 +1,6 @@
 import type { Sql } from "@mars/db";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, validateWorkerGuestPlatforms, type GuestPlatform } from "@mars/contracts";
+import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, validateWorkerGuestPlatforms, CURRENT_WORKER_CONTRACT_VERSION, parseWorkerContractVersion, type GuestPlatform } from "@mars/contracts";
 import { z } from "zod";
 import { jsonParameter } from "@mars/db";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
@@ -95,6 +95,15 @@ export type WorkerConfigurationInput = {
   cache?: { ttlSeconds?: number; runnerCacheEnabled?: boolean; runnerCacheMaxGiB?: number };
 };
 function canonical(value: unknown): string { if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`; if (value && typeof value === "object") return `{${Object.entries(value).sort(([a],[b]) => a.localeCompare(b)).map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`).join(",")}}`; return JSON.stringify(value); }
+function compareContractVersions(left: string, right: string): number {
+  try {
+    const a = parseWorkerContractVersion(left);
+    const b = parseWorkerContractVersion(right);
+    return a.major - b.major || a.minor - b.minor || a.patch - b.patch;
+  } catch {
+    return -1;
+  }
+}
 export async function configurePendingWorker(db: Sql<{}>, workerId: string, configuration: WorkerConfigurationInput, adminId: string, dispatcher?: WorkerCommandDispatcher, idempotencyKey?: string): Promise<{ revision: string; fingerprint: string; commandId?: string }> {
   const parsed = WorkerConfiguration.parse({ ...configuration, guestPlatforms: configuration.guestPlatforms ?? ["macos-arm64"] });
   const revision = createHash("sha256").update(canonical(parsed)).digest("hex");
@@ -107,9 +116,9 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, conf
       const prior = await tx<{ response: { revision: string; fingerprint: string; commandId?: string } | null }[]>`select response from worker_mutations where worker_id=${workerId} and idempotency_key=${idempotencyKey}`;
       if (prior[0]?.response) return prior[0].response;
     }
-    const rows = await tx<{ id: string; doctor: unknown; admissionState: string; platform: GuestPlatform; guestPlatforms: GuestPlatform[]; draining: boolean }[]>`select id, doctor, admission_state as "admissionState", platform, guest_platforms as "guestPlatforms", draining from workers where id=${workerId} for update`;
+    const rows = await tx<{ id: string; doctor: unknown; admissionState: string; platform: GuestPlatform; guestPlatforms: GuestPlatform[]; draining: boolean; contractVersion: string | null }[]>`select id, doctor, admission_state as "admissionState", platform, guest_platforms as "guestPlatforms", draining, contract_version as "contractVersion" from workers where id=${workerId} for update`;
     const row = rows[0]; if (!row || !["pending", "adopted"].includes(row.admissionState)) throw new Error("worker configuration conflict");
-    if (!validateWorkerGuestPlatforms(row.platform, parsed.guestPlatforms)) throw new Error("worker guest platform configuration conflict");
+    if (parsed.guestPlatforms.length > 1 && (!row.contractVersion || compareContractVersions(row.contractVersion, CURRENT_WORKER_CONTRACT_VERSION) < 0)) throw new Error("worker contract does not support dual-platform configuration");
     const priorPlatforms = Array.isArray(row.guestPlatforms) ? row.guestPlatforms : [row.platform];
     if (row.admissionState === "adopted" && canonical(priorPlatforms) !== canonical(parsed.guestPlatforms)) {
       const [{ count }] = await tx<{ count: number }[]>`select count(*)::int as count from runner_leases where worker_id=${workerId} and state not in ('completed','reaped','failed')`;

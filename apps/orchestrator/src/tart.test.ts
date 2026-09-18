@@ -27,22 +27,20 @@ test("starts the VM with only a read-only bootstrap directory path", () => {
     "run",
     "--no-graphics",
     "--no-audio",
-    "--dir",
-    "/private/tmp/mars-bootstrap:ro",
     "lease-vm",
   ]);
 });
-
-test("copies bootstrap configuration from the read-only VM share without stdin attachment", () => {
+test("streams bootstrap configuration through Tart stdin", () => {
   expect(buildTartBootstrapArguments("lease-vm")).toEqual([
     "exec",
+    "-i",
     "lease-vm",
     "sh",
     "-c",
-    `set -eu; umask 077; install -d -m 700 /tmp/mars; rm -f ${TART_JIT_CONFIG_PATH}; cat "/Volumes/My Shared Files/jit-config" > ${TART_JIT_CONFIG_PATH}`,
+    `set -eu; umask 077; install -d -m 700 /tmp/mars; rm -f ${TART_JIT_CONFIG_PATH}; cat > ${TART_JIT_CONFIG_PATH}; chmod 600 ${TART_JIT_CONFIG_PATH}`,
   ]);
-  expect(TART_JIT_CONFIG_PATH).toBe("/tmp/mars/jit-config");
 });
+
 
 test("passes the Actions Runner root explicitly to the guest job agent", () => {
   expect(buildTartRunnerArguments("lease-vm")).toEqual([

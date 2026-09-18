@@ -47,9 +47,16 @@ export type DevelopmentLinuxArm64Artifacts = {
 export type DevelopmentMacosArtifacts = {
   orchestrator?: DevelopmentArtifact;
   jobAgent?: DevelopmentArtifact;
+  macosJobAgent?: DevelopmentArtifact;
+  linuxArm64JobAgent?: DevelopmentArtifact;
+  linuxArm64Runner?: DevelopmentArtifact;
   imagePreparationScript?: DevelopmentArtifact;
   tartImage?: string;
+  tartMacosImage?: string;
+  tartLinuxArm64Image?: string;
   tartImageDigest?: string;
+  tartMacosImageDigest?: string;
+  tartLinuxArm64ImageDigest?: string;
 };
 
 export type DevelopmentArtifactFetchOptions = RequestInit & {

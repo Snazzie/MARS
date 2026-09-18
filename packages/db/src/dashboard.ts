@@ -342,6 +342,7 @@ function workerDoctor(value: unknown): WorkerDetail["doctor"] {
   if (["worker_local", "registry", "template"].includes(String(source.artifactSource))) candidate.artifactSource = source.artifactSource;
   if (typeof source.artifactIdentity === "string") candidate.artifactIdentity = source.artifactIdentity;
   if (typeof source.artifactDigest === "string") candidate.artifactDigest = source.artifactDigest;
+  if (source.artifactDigests && typeof source.artifactDigests === "object") candidate.artifactDigests = source.artifactDigests;
   if (typeof source.runtimeHandler === "string") candidate.runtimeHandler = source.runtimeHandler;
   if (typeof source.remediation === "string" || source.remediation === null) candidate.remediation = source.remediation;
   if (source.versions && typeof source.versions === "object") candidate.versions = source.versions;
@@ -567,6 +568,7 @@ function normalizeWorker(row: Record<string, unknown>, workerConnected?: (worker
     lastDoctorAt: timestamp(row.lastDoctorAt),
     runtimeMode: doctor?.runtimeMode ?? (platform === "macos-arm64" ? "tart" : null),
     artifactDigest: doctor?.artifactDigest ?? null,
+    artifactDigests: doctor?.artifactDigests ?? null,
     fingerprint: String(row.fingerprint),
     limits: limitsValue.success ? limitsValue.data : null,
     doctor,

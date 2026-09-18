@@ -291,7 +291,7 @@ test("global admins can create the control-plane default pool without an organiz
   const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join(" ");
     queries.push(query);
-    if (query.includes("FROM workers")) return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64"], admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "a", appliedConfigurationRevision: "a", draining: false, limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8, maxStorageBytesPerPod: 20, maxConcurrentPods: 2 } }];
+    if (query.includes("FROM workers")) return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64"], doctor: { artifactDigests: { "macos-arm64": `macos-arm64@sha256:${"a".repeat(64)}` } }, admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "a", appliedConfigurationRevision: "a", draining: false, limits: { maxVcpuPerPod: 4, maxMemoryBytes: 8, maxStorageBytes: 20, maxConcurrentPods: 2 } }];
     if (query.includes("runner_pools") && query.includes("RETURNING id")) return [{ id: "00000000-0000-4000-8000-000000000003" }];
     if (query.includes("dashboard_mutations")) return [{ idempotency_key: "global-pool" }];
     return [];
@@ -299,7 +299,7 @@ test("global admins can create the control-plane default pool without an organiz
   const response = await appFor(admin, db).request("/api/pools", {
     method: "POST",
     headers: { ...sessionHeaders, "Content-Type": "application/json", "Idempotency-Key": "global-pool" },
-    body: JSON.stringify({ workerId: "00000000-0000-4000-8000-000000000004", name: "default", resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, triggerLabel: "mars-macos-arm64", imageDigest: `macos@sha256:${"a".repeat(64)}` }),
+    body: JSON.stringify({ workerId: "00000000-0000-4000-8000-000000000004", name: "default", resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, triggerLabel: "mars-macos-arm64", imageDigest: `macos-arm64@sha256:${"a".repeat(64)}` }),
   });
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({ labels: ["mars-macos-arm64"] });
@@ -310,14 +310,14 @@ test("global pool creation rejects duplicate names and labels", async () => {
   const db = Object.assign(async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
     queries.push(query);
-    if (query.includes("FROM workers")) return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64"], admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "a", appliedConfigurationRevision: "a", draining: false }];
+    if (query.includes("FROM workers")) return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64"], doctor: { artifactDigests: { "macos-arm64": `macos-arm64@sha256:${"a".repeat(64)}` } }, admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "a", appliedConfigurationRevision: "a", draining: false }];
     if (query.includes("FROM runner_pools")) return [{ id: "00000000-0000-4000-8000-000000000003", name: "macos-smoke", triggerLabel: "mars-macos" }];
     return [];
   }, {}) as never;
   const response = await appFor(admin, db).request("/api/pools", {
     method: "POST",
     headers: { ...sessionHeaders, "Content-Type": "application/json", "Idempotency-Key": "repair-global-pool" },
-    body: JSON.stringify({ workerId: "00000000-0000-4000-8000-000000000004", name: "macos-smoke", resources: { vcpu: 4, memoryBytes: 8_589_934_592, storageBytes: 85_899_345_920, concurrency: 1 }, triggerLabel: "mars-macos", imageDigest: `mars-macos-job@sha256:${"a".repeat(64)}` }),
+    body: JSON.stringify({ workerId: "00000000-0000-4000-8000-000000000004", name: "macos-smoke", resources: { vcpu: 4, memoryBytes: 8_589_934_592, storageBytes: 85_899_345_920, concurrency: 1 }, triggerLabel: "mars-macos", imageDigest: `macos-arm64@sha256:${"a".repeat(64)}` }),
   });
   expect(response.status).toBe(409);
   expect(await response.json()).toMatchObject({ code: "pool_conflict" });

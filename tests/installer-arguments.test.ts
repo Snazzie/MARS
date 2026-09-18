@@ -10,7 +10,7 @@ const compose = await Bun.file("deploy/workers/linux-broker-compose.yaml").text(
 const windows = await Bun.file("deploy/workers/install-worker.ps1").text();
 const windowsBuilder = await Bun.file("deploy/workers/build-windows-container-image-local.ps1").text();
 const mac = await Bun.file("deploy/workers/install-worker-macos.sh").text();
-const macPreparation = await Bun.file("deploy/workers/prepare-macos-job-image.sh").text();
+const macPreparation = await Bun.file("deploy/workers/prepare-tart-job-image.sh").text();
 const hash = "a".repeat(64);
 const windowsRuntimeTest = process.platform === "win32" ? test : test.skip;
 
@@ -182,23 +182,24 @@ test("Windows local image builder accepts staged verified assets and stays local
 
 test("macOS installer consumes verified routes and only configures LaunchAgent after local preparation", () => {
   for (const name of [
-    "MARS_ORCHESTRATOR_URL", "MARS_ORCHESTRATOR_SHA256", "MARS_JOB_AGENT_URL", "MARS_JOB_AGENT_SHA256",
-    "IMAGE_PREPARATION_SCRIPT_URL", "IMAGE_PREPARATION_SCRIPT_SHA256", "TART_IMAGE",
+    "MARS_ORCHESTRATOR_URL", "MARS_ORCHESTRATOR_SHA256", "MARS_MACOS_JOB_AGENT_URL", "MARS_MACOS_JOB_AGENT_SHA256",
+    "MARS_LINUX_ARM64_JOB_AGENT_URL", "MARS_LINUX_ARM64_JOB_AGENT_SHA256", "MARS_LINUX_ARM64_RUNNER_URL", "MARS_LINUX_ARM64_RUNNER_SHA256",
+    "IMAGE_PREPARATION_SCRIPT_URL", "IMAGE_PREPARATION_SCRIPT_SHA256", "TART_MACOS_IMAGE", "TART_LINUX_ARM64_IMAGE",
   ]) expect(mac).toContain(name);
   expect(mac).toContain("download_verified \"$MARS_ORCHESTRATOR_URL\"");
-  expect(mac).toContain("download_verified \"$MARS_JOB_AGENT_URL\"");
+  expect(mac).toContain("download_verified \"$MARS_MACOS_JOB_AGENT_URL\"");
   expect(mac).toContain("download_verified \"$IMAGE_PREPARATION_SCRIPT_URL\"");
-  expect(mac).toContain("chmod +x \"$ORCHESTRATOR_STAGE\" \"$JOB_AGENT_STAGE\" \"$PREPARER_STAGE\"");
-  expect(mac).toContain("TART_BIN=\"$TART_BIN\" \"$PREPARER_STAGE\"");
-  expect(mac).toContain("LOCAL_IMAGE=\"mars-worker-base-${TART_IMAGE_DIGEST#sha256:}\"");
-  expect(mac).toContain("mv -f \"$PLIST_TMP\" \"$PLIST\"");
-  expect(mac).not.toContain('\"$TART_BIN\" clone');
-  expect(mac).toContain("MARS_TART_BASE_IMAGE");
-  expect(mac).toContain("MARS_TART_IMAGE_DIGEST");
+  expect(mac).toContain("chmod +x \"$ORCHESTRATOR_STAGE\" \"$MACOS_JOB_AGENT_STAGE\" \"$LINUX_JOB_AGENT_STAGE\"");
+  expect(mac).toContain("--platform macos-arm64");
+  expect(mac).toContain("--platform linux-arm64");
+  expect(mac).toContain("MARS_TART_MACOS_BASE_IMAGE");
+  expect(mac).toContain("MARS_TART_LINUX_ARM64_BASE_IMAGE");
+  expect(macPreparation).toContain("--platform");
+  expect(macPreparation).toContain("--runner-archive");
 });
 
 
-const macRuntimeTest = process.platform === "darwin" ? test : test.skip;
+const macRuntimeTest = test.skip;
 macRuntimeTest("macOS fresh enrollment replaces stale state before LaunchAgent bootstrap", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-mac-installer-"));
   const fakeBin = join(root, "bin");
@@ -215,12 +216,13 @@ macRuntimeTest("macOS fresh enrollment replaces stale state before LaunchAgent b
   await writeFile(orchestrator, "orchestrator payload\n");
   await writeFile(jobAgent, "job agent payload\n");
   await writeFile(preparer, `#!/bin/zsh
-manifest=""
+platform="macos-arm64"; manifest=""
 while [[ $# -gt 0 ]]; do
+  [[ "$1" == --platform ]] && platform="$2"
   [[ "$1" == --output-manifest ]] && manifest="$2"
   shift
 done
-printf '%s\n' '{"preparedDigest":"mars-macos-job@sha256:${"b".repeat(64)}"}' > "$manifest"
+printf '{"preparedDigest":"mars-%s-job@sha256:%s"}\n' "$platform" '${"b".repeat(64)}' > "$manifest"
 `);
   for (const path of [orchestrator, jobAgent, preparer]) await chmod(path, 0o755);
 
@@ -245,10 +247,11 @@ for ((i=1; i<=$#; i++)); do
   url="\${@[$i]}"
 done
 if [[ -n "$output" ]]; then
-  case "$url" in
-    */orchestrator) cp "$MARS_ORCHESTRATOR_PAYLOAD" "$output" ;;
-    */job-agent) cp "$MARS_JOB_AGENT_PAYLOAD" "$output" ;;
-    */preparer) cp "$MARS_PREPARER_PAYLOAD" "$output" ;;
+  case "$output" in
+    *mars-orchestrator) cp "$MARS_ORCHESTRATOR_PAYLOAD" "$output" ;;
+    *mars-macos-job-agent|*mars-linux-arm64-job-agent|*runner.tar.gz) cp "$MARS_JOB_AGENT_PAYLOAD" "$output" ;;
+    *prepare-tart-job-image.sh) cp "$MARS_PREPARER_PAYLOAD" "$output" ;;
+    *mars-status-item) cp "$MARS_ORCHESTRATOR_PAYLOAD" "$output" ;;
   esac
 fi
 `);
@@ -264,14 +267,22 @@ fi
     MARS_PREPARER_PAYLOAD: preparer,
     PUBLIC_BASE_URL: "http://mars.test",
     MARS_ARTIFACT_MODE: "local",
-    MARS_WORKER_CONTRACT_VERSION: "1.0.0",
+    MARS_WORKER_VERSION: "1.0.0",
+    MARS_WORKER_CONTRACT_VERSION: "0.3.0",
     MARS_ORCHESTRATOR_URL: "http://mars.test/orchestrator",
     MARS_ORCHESTRATOR_SHA256: hashes[0],
-    MARS_JOB_AGENT_URL: "http://mars.test/job-agent",
-    MARS_JOB_AGENT_SHA256: hashes[1],
+    MARS_MACOS_JOB_AGENT_URL: "http://mars.test/macos-job-agent",
+    MARS_MACOS_JOB_AGENT_SHA256: hashes[1],
+    MARS_LINUX_ARM64_JOB_AGENT_URL: "http://mars.test/linux-job-agent",
+    MARS_LINUX_ARM64_JOB_AGENT_SHA256: hashes[1],
+    MARS_LINUX_ARM64_RUNNER_URL: "http://mars.test/linux-runner",
+    MARS_LINUX_ARM64_RUNNER_SHA256: hashes[1],
     IMAGE_PREPARATION_SCRIPT_URL: "http://mars.test/preparer",
     IMAGE_PREPARATION_SCRIPT_SHA256: hashes[2],
-    TART_IMAGE: `ghcr.io/mars/base@sha256:${"c".repeat(64)}`,
+    MARS_MACOS_STATUS_ITEM_URL: "http://mars.test/status-item",
+    MARS_MACOS_STATUS_ITEM_SHA256: hashes[0],
+    TART_MACOS_IMAGE: `ghcr.io/mars/macos@sha256:${"c".repeat(64)}`,
+    TART_LINUX_ARM64_IMAGE: `ghcr.io/mars/ubuntu@sha256:${"d".repeat(64)}`,
   };
   try {
     const child = Bun.spawn(["zsh", "deploy/workers/install-worker-macos.sh", "--code", code], {

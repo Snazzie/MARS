@@ -13,7 +13,7 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
   const discard = useMutation({ mutationFn: rejectPendingWorker, onSuccess: () => onDiscard?.(), onError: (reason) => setError(reason instanceof Error ? reason.message : "Could not discard the pending worker.") });
   const platform = worker.platform ?? "linux-x64";
   const canEditGuests = !organizationId || (worker.draining === true && worker.activeSandboxes === 0);
-  const [allowLinux, setAllowLinux] = useState(() => worker.guestPlatforms?.includes("linux-x64") ?? false);
+  const [allowLinux, setAllowLinux] = useState(() => worker.guestPlatforms?.includes(platform === "macos-arm64" ? "linux-arm64" : "linux-x64") ?? false);
   const [vcpu, setVcpu] = useState(String(c.actualVcpu));
   const [ram, setRam] = useState(initialGiB(c.actualMemoryBytes));
   const [disk, setDisk] = useState(initialGiB(c.actualStorageBytes));
@@ -29,7 +29,7 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
   const [runnerCacheMaxGiB, setRunnerCacheMaxGiB] = useState(() => String(worker.desiredRunnerCacheMaxGiB ?? 20));
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const capabilityHelp = platform === "windows-x64" ? <div><label className="checkbox-field"><input type="checkbox" name="allowLinux" checked={allowLinux} disabled={!canEditGuests || pending} onChange={(event) => setAllowLinux(event.target.checked)} /> Allow Linux VMs</label>{organizationId && !canEditGuests && <p className="field-help">Drain this worker and wait for active jobs to finish before changing guest operating systems.</p>}</div> : null;
+  const capabilityHelp = platform === "windows-x64" ? <div><label className="checkbox-field"><input type="checkbox" name="allowLinux" checked={allowLinux} disabled={!canEditGuests || pending} onChange={(event) => setAllowLinux(event.target.checked)} /> Allow Linux VMs</label>{organizationId && !canEditGuests && <p className="field-help">Drain this worker and wait for active jobs to finish before changing guest operating systems.</p>}</div> : platform === "macos-arm64" ? <div><label className="checkbox-field"><input type="checkbox" name="allowUbuntuArm64" checked={allowLinux} disabled={!canEditGuests || pending} onChange={(event) => setAllowLinux(event.target.checked)} /> Allow Ubuntu ARM64 VMs</label>{organizationId && !canEditGuests && <p className="field-help">Drain this worker and wait for active jobs to finish before changing guest operating systems.</p>}</div> : null;
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const applianceVcpu = parsePositiveInteger(vcpu);
@@ -48,7 +48,7 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
     if (!Number.isSafeInteger(ttlSeconds)) return setError("Cache TTL is too large.");
     if (applianceVcpu > c.actualVcpu || applianceMemory > c.actualMemoryBytes || applianceStorage > c.actualStorageBytes) return setError("Appliance resources cannot exceed the worker's total capacity.");
     if (podVcpu > applianceVcpu || podMemory > applianceMemory || podStorage > applianceStorage) return setError("Per-job ceilings cannot exceed appliance resources.");
-    const guestPlatforms: WorkerConfigurationInput["guestPlatforms"] = platform === "windows-x64" ? (allowLinux ? ["windows-x64", "linux-x64"] : ["windows-x64"]) : [platform];
+    const guestPlatforms: WorkerConfigurationInput["guestPlatforms"] = platform === "windows-x64" ? (allowLinux ? ["windows-x64", "linux-x64"] : ["windows-x64"]) : platform === "macos-arm64" ? (allowLinux ? ["macos-arm64", "linux-arm64"] : ["macos-arm64"]) : [platform];
     const input: WorkerConfigurationInput = {
       appliance: { vcpu: applianceVcpu, memoryBytes: applianceMemory, storageBytes: applianceStorage },
       runtime: { maxVcpuPerPod: podVcpu, maxMemoryBytesPerPod: podMemory, maxStorageBytesPerPod: podStorage, maxConcurrentPods },

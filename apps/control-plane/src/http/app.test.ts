@@ -421,9 +421,8 @@ describe("control-plane HTTP boundary", () => {
       })).request("/api/workers/installer?audience=macos-arm64&connectOrigin=http%3A%2F%2Flocalhost%3A3000");
       const installer = await response.text();
       expect(response.status).toBe(200);
-      expect(installer).toContain(`TART_IMAGE='ghcr.io/cirruslabs/macos-sonoma-base@sha256:${"a".repeat(64)}'`);
-      expect(installer).toContain(`MARS_ORCHESTRATOR_SHA256='${"a".repeat(64)}'`);
-      expect(installer).toContain(`TART_IMAGE_DIGEST='${"a".repeat(64)}'`);
+      expect(installer).toContain(`TART_MACOS_IMAGE='ghcr.io/cirruslabs/macos-sonoma-base@sha256:${"a".repeat(64)}'`);
+      expect(installer).toContain(`TART_MACOS_IMAGE_DIGEST='${"a".repeat(64)}'`);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -1318,9 +1317,9 @@ test("generates complete platform installers from the immutable release manifest
     }
     await Bun.write(join(root, "macos-orchestrator"), "packaged-macos-orchestrator");
     const manifest = {
-      schemaVersion: 4 as const,
+      schemaVersion: 5 as const,
       buildId: "build-1",
-      contractVersion: "0.2.0",
+      contractVersion: "0.3.0",
       platforms: {
         "linux-x64": {
           installer: { url: "https://release.test/linux-installer.sh", sha256: hash },
@@ -1356,9 +1355,12 @@ test("generates complete platform installers from the immutable release manifest
         "macos-arm64": {
           installer: { url: "https://release.test/macos-installer.sh", sha256: hash },
           orchestrator: { url: "https://release.test/macos-orchestrator", sha256: hash },
-          jobAgent: { url: "https://release.test/macos-job-agent", sha256: hash },
-          imagePreparationScript: { url: "https://release.test/prepare-macos-job-image.sh", sha256: hash },
-          tartSourceImage: `ghcr.io/cirruslabs/macos-sonoma-base@sha256:${hash}`,
+          macosJobAgent: { url: "https://release.test/macos-job-agent", sha256: hash },
+          linuxArm64JobAgent: { url: "https://release.test/linux-arm64-job-agent", sha256: hash },
+          linuxArm64Runner: { url: "https://release.test/linux-arm64-runner.tar.gz", sha256: hash },
+          imagePreparationScript: { url: "https://release.test/prepare-tart-job-image.sh", sha256: hash },
+          tartMacosSourceImage: `ghcr.io/cirruslabs/macos-sonoma-base@sha256:${hash}`,
+          tartLinuxArm64SourceImage: `ghcr.io/cirruslabs/ubuntu@sha256:${hash}`,
         },
       },
     };
@@ -1382,11 +1384,11 @@ test("generates complete platform installers from the immutable release manifest
     const macosInstaller = await macosResponse.text();
     expect(macosResponse.status).toBe(200);
     expect(macosInstaller).toContain("MARS_ARTIFACT_MODE='production'");
-    expect(macosInstaller).toContain("MARS_WORKER_CONTRACT_VERSION='0.2.0'");
+    expect(macosInstaller).toContain("MARS_WORKER_CONTRACT_VERSION='0.3.0'");
     expect(macosInstaller).toContain("PUBLIC_BASE_URL='https://adapter.test'");
     expect(macosInstaller).toContain(`MARS_ORCHESTRATOR_SHA256='${hash}'`);
-    expect(macosInstaller).toContain(`TART_IMAGE='ghcr.io/cirruslabs/macos-sonoma-base@sha256:${hash}'`);
-    expect(macosInstaller).toContain(`TART_IMAGE_DIGEST='${hash}'`);
+    expect(macosInstaller).toContain(`TART_MACOS_IMAGE='ghcr.io/cirruslabs/macos-sonoma-base@sha256:${hash}'`);
+    expect(macosInstaller).toContain(`TART_MACOS_IMAGE_DIGEST='${hash}'`);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -2193,9 +2195,9 @@ describe("Linux and macOS platform artifact sources", () => {
     const requested: string[] = [];
     const fetcher = Object.assign(async (input: string | URL | Request) => { requested.push(String(input)); return new Response(body, { headers: { "content-type": "application/octet-stream" } }); }, { preconnect: globalThis.fetch.preconnect });
     const manifest = {
-      schemaVersion: 4 as const,
-      buildId: "production-build",
-      contractVersion: "0.2.0",
+    schemaVersion: 5 as const,
+    buildId: "production-build",
+    contractVersion: "0.3.0",
       platforms: {
         "linux-x64": {
           installer: { url: "https://release.test/linux-installer.sh", sha256: "a".repeat(64) },

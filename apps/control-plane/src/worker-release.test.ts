@@ -33,8 +33,8 @@ const linuxArm64Release = {
   brokerImage: `ghcr.io/snazzie/mars/linux-arm64-broker@sha256:${hash}`,
   jobImage: `ghcr.io/snazzie/mars/linux-arm64-job@sha256:${hash}`,
 };
-const remoteManifest = (contractVersion = "0.2.0") => ({
-  schemaVersion: 4 as const,
+const remoteManifest = (contractVersion = "0.3.0") => ({
+  schemaVersion: 5 as const,
   buildId: "release-build",
   contractVersion,
   platforms: { "linux-x64": linuxRelease, "linux-arm64": linuxArm64Release, "windows-x64": null, "macos-arm64": null },

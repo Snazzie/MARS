@@ -1,17 +1,23 @@
 import { useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CreatePoolRequest, type PoolSummary, type WorkerDetail } from "@mars/contracts";
+import { CreatePoolRequest, runtimeDriverForWorker, type PoolSummary, type WorkerDetail } from "@mars/contracts";
 import { ApiRequestError, deleteGlobalPool, getGlobalPools, getWorkers, mutateGlobalPool, saveGlobalPool } from "../api.ts";
 import { Disclosure } from "../components/Disclosure.tsx";
 import { QueryState } from "../components/StateView.tsx";
 import { workerOperationalLabel, workerReadinessLabel } from "../components/WorkerCard.tsx";
 
-type PoolWorker = Pick<WorkerDetail, "id" | "platform" | "driver" | "connectionState" | "configurationState" | "configurationRevision" | "appliedConfigurationRevision" | "draining"> & { guestPlatforms?: WorkerDetail["guestPlatforms"] };
-type PoolIdentity = Pick<PoolSummary, "platform" | "driver" | "workerId">;
+type PoolWorker = Pick<WorkerDetail, "id" | "name" | "platform" | "driver" | "connectionState" | "configurationState" | "configurationRevision" | "appliedConfigurationRevision" | "draining" | "artifactDigest" | "artifactDigests"> & { guestPlatforms?: WorkerDetail["guestPlatforms"] };
+type PoolIdentity = Pick<PoolSummary, "platform" | "driver" | "workerId" | "imageDigest">;
+const preparedDigest = (worker: PoolWorker, platform: PoolWorker["platform"]): string | null => platform === "macos-arm64" || platform === "linux-arm64" ? worker.artifactDigests?.[platform] ?? null : worker.artifactDigest ?? null;
 export type PoolWorkerCoverage = { online: number; ready: number; warning: string | null; operational: string | null; readiness: string | null };
 export function poolWorkerCoverage(pool: PoolIdentity, workers: PoolWorker[] | undefined): PoolWorkerCoverage {
   if (!workers) return { online: 0, ready: 0, warning: "Worker status unavailable", operational: null, readiness: null };
-  const matching = pool.workerId ? workers.filter((worker) => worker.id === pool.workerId) : workers.filter((worker) => (worker.guestPlatforms?.includes(pool.platform) ?? worker.platform === pool.platform) && worker.driver === pool.driver);
+  const matching = pool.workerId ? workers.filter((worker) => worker.id === pool.workerId) : workers.filter((worker) => {
+    const guest = worker.guestPlatforms?.includes(pool.platform) ?? worker.platform === pool.platform;
+    const driver = runtimeDriverForWorker(worker.platform, pool.platform) === pool.driver;
+    const digest = preparedDigest(worker, pool.platform);
+    return guest && driver && digest === pool.imageDigest;
+  });
   const isReady = (worker: PoolWorker) => worker.connectionState === "online" && worker.configurationState === "ready" && worker.configurationRevision === worker.appliedConfigurationRevision && !worker.draining;
   if (pool.workerId) {
     const worker = matching[0];
@@ -36,7 +42,7 @@ function PoolEditor({ pool, workers, onCancel, onSave, pending, error }: { pool:
   const [platform, setPlatform] = useState(pool?.platform ?? initialWorker?.guestPlatforms[0] ?? "windows-x64");
   const [name, setName] = useState(pool?.name ?? "");
   const [label, setLabel] = useState(pool?.triggerLabel ?? "");
-  const [digest, setDigest] = useState(pool?.imageDigest ?? initialWorker?.artifactDigest ?? "");
+  const [digest, setDigest] = useState(pool?.imageDigest ?? (initialWorker ? preparedDigest(initialWorker, pool?.platform ?? "windows-x64") ?? "" : ""));
   const [vcpu, setVcpu] = useState(pool?.resources.vcpu ?? 1);
   const [memoryGiB, setMemoryGiB] = useState(gib(pool?.resources.memoryBytes ?? 4 * 1024 ** 3));
   const [storageGiB, setStorageGiB] = useState(gib(pool?.resources.storageBytes ?? 20 * 1024 ** 3));
@@ -48,9 +54,9 @@ function PoolEditor({ pool, workers, onCancel, onSave, pending, error }: { pool:
   }}>
     <h2>{pool ? `Edit ${pool.name}` : "Create runner pool"}</h2>
     <p>New and edited pools remain disabled until a compatible worker is online and recently healthy.</p>
-    <label>Reference worker<select value={workerId} required onChange={(event) => { const id = event.target.value; const selected = compatible.find((candidate) => candidate.id === id); setWorkerId(id); if (selected) { setPlatform(selected.guestPlatforms[0]); setDigest(selected.artifactDigest ?? ""); } }}>{compatible.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label>
-    <label>Guest platform<select value={platform} onChange={(event) => setPlatform(event.target.value as typeof platform)}>{worker?.guestPlatforms.map((guest) => <option key={guest} value={guest}>{guest}</option>)}</select></label>
-    <p>Runtime driver: <code>{worker?.driver ?? "Select a worker"}</code></p>
+    <label>Reference worker<select value={workerId} required onChange={(event) => { const id = event.target.value; const selected = compatible.find((candidate) => candidate.id === id); setWorkerId(id); if (selected) { const nextPlatform = selected.guestPlatforms[0]; setPlatform(nextPlatform); setDigest(preparedDigest(selected, nextPlatform) ?? ""); } }}>{compatible.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label>
+    <label>Guest platform<select value={platform} onChange={(event) => { const nextPlatform = event.target.value as typeof platform; setPlatform(nextPlatform); setDigest(worker ? preparedDigest(worker, nextPlatform) ?? "" : ""); }}>{worker?.guestPlatforms.map((guest) => <option key={guest} value={guest}>{guest}</option>)}</select></label>
+    <p>Runtime driver: <code>{worker ? runtimeDriverForWorker(worker.platform, platform) ?? "Unsupported" : "Select a worker"}</code></p>
     <label>Pool name<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
     <label>Canonical trigger label<input required pattern="[a-z0-9][a-z0-9._-]{0,62}" value={label} onChange={(event) => setLabel(event.target.value)} /></label>
     <label>Immutable image or checkpoint digest<input required value={digest} pattern="(?:[^@\s]+@)?sha256:[0-9a-fA-F]{64}" onChange={(event) => setDigest(event.target.value)} /></label>

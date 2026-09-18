@@ -30,7 +30,7 @@ export function compareWorkerReleaseVersions(left: string, right: string): -1 | 
 }
 export const WorkerContractVersion = z.string().regex(semverPattern, "major.minor.patch worker contract version required");
 export type WorkerContractVersion = z.infer<typeof WorkerContractVersion>;
-export const CURRENT_WORKER_CONTRACT_VERSION = WorkerContractVersion.parse("0.2.0");
+export const CURRENT_WORKER_CONTRACT_VERSION = WorkerContractVersion.parse("0.3.0");
 
 export function parseWorkerContractVersion(value: string): { major: number; minor: number; patch: number } {
   return parseSemVer(value, "contract version");
@@ -92,15 +92,18 @@ export type WindowsWorkerRelease = z.infer<typeof WindowsWorkerRelease>;
 export const MacosWorkerRelease = z.object({
   installer: hashedAsset,
   orchestrator: hashedAsset,
-  jobAgent: hashedAsset,
+  macosJobAgent: hashedAsset,
+  linuxArm64JobAgent: hashedAsset,
+  linuxArm64Runner: hashedAsset,
   statusItem: hashedAsset.optional(),
   imagePreparationScript: hashedAsset,
-  tartSourceImage: ociDigest,
+  tartMacosSourceImage: ociDigest,
+  tartLinuxArm64SourceImage: ociDigest,
 }).strict();
 export type MacosWorkerRelease = z.infer<typeof MacosWorkerRelease>;
 
 export const WorkerReleaseManifest = z.object({
-  schemaVersion: z.literal(4),
+  schemaVersion: z.literal(5),
   buildId: z.string().min(1),
   contractVersion: WorkerContractVersion,
   platforms: z.object({

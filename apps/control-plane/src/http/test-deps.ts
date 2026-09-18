@@ -6,9 +6,9 @@ const fakeDb = (() => []) as unknown as ControlPlaneHttpDeps["db"];
 const testHash = "a".repeat(64);
 const testAsset = (name: string) => ({ url: `https://release.test/${name}`, sha256: testHash });
 const testReleaseManifest: WorkerReleaseManifest = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   buildId: "test-build",
-  contractVersion: "0.2.0",
+  contractVersion: "0.3.0",
   platforms: {
     "linux-x64": {
       installer: testAsset("linux-installer.sh"),
@@ -44,9 +44,12 @@ const testReleaseManifest: WorkerReleaseManifest = {
     "macos-arm64": {
       installer: testAsset("macos-installer.sh"),
       orchestrator: testAsset("macos-orchestrator"),
-      jobAgent: testAsset("macos-job-agent"),
-      imagePreparationScript: testAsset("prepare-macos-job-image.sh"),
-      tartSourceImage: `ghcr.io/cirruslabs/macos-sonoma-base@sha256:${testHash}`,
+      macosJobAgent: testAsset("macos-job-agent"),
+      linuxArm64JobAgent: testAsset("linux-arm64-job-agent"),
+      linuxArm64Runner: testAsset("linux-arm64-runner.tar.gz"),
+      imagePreparationScript: testAsset("prepare-tart-job-image.sh"),
+      tartMacosSourceImage: `ghcr.io/cirruslabs/macos-sonoma-base@sha256:${testHash}`,
+      tartLinuxArm64SourceImage: `ghcr.io/cirruslabs/ubuntu@sha256:${testHash}`,
     },
   },
 };

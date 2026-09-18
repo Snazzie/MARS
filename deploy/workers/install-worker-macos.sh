@@ -26,13 +26,12 @@ require_config() {
   [[ -n "${MARS_WORKER_CONTRACT_VERSION:-}" ]] || { echo 'MARS_WORKER_CONTRACT_VERSION is required' >&2; exit 1; }
   [[ -n "${MARS_ORCHESTRATOR_URL:-}" ]] || { echo 'MARS_ORCHESTRATOR_URL is required' >&2; exit 1; }
   [[ -n "${MARS_ORCHESTRATOR_SHA256:-}" ]] || { echo 'MARS_ORCHESTRATOR_SHA256 is required' >&2; exit 1; }
-  [[ -n "${MARS_JOB_AGENT_URL:-}" ]] || { echo 'MARS_JOB_AGENT_URL is required' >&2; exit 1; }
-  [[ -n "${MARS_JOB_AGENT_SHA256:-}" ]] || { echo 'MARS_JOB_AGENT_SHA256 is required' >&2; exit 1; }
-  [[ -n "${IMAGE_PREPARATION_SCRIPT_URL:-}" ]] || { echo 'IMAGE_PREPARATION_SCRIPT_URL is required' >&2; exit 1; }
-  [[ -n "${MARS_MACOS_STATUS_ITEM_URL:-}" ]] || { echo 'MARS_MACOS_STATUS_ITEM_URL is required' >&2; exit 1; }
-  [[ -n "${MARS_MACOS_STATUS_ITEM_SHA256:-}" ]] || { echo 'MARS_MACOS_STATUS_ITEM_SHA256 is required' >&2; exit 1; }
-  [[ -n "${IMAGE_PREPARATION_SCRIPT_SHA256:-}" ]] || { echo 'IMAGE_PREPARATION_SCRIPT_SHA256 is required' >&2; exit 1; }
-  [[ -n "${TART_IMAGE:-}" ]] || { echo 'TART_IMAGE is required' >&2; exit 1; }
+  [[ -n "${MARS_MACOS_JOB_AGENT_URL:-}" && -n "${MARS_MACOS_JOB_AGENT_SHA256:-}" ]] || { echo 'macOS job agent is required' >&2; exit 1; }
+  [[ -n "${MARS_LINUX_ARM64_JOB_AGENT_URL:-}" && -n "${MARS_LINUX_ARM64_JOB_AGENT_SHA256:-}" ]] || { echo 'Linux ARM64 job agent is required' >&2; exit 1; }
+  [[ -n "${MARS_LINUX_ARM64_RUNNER_URL:-}" && -n "${MARS_LINUX_ARM64_RUNNER_SHA256:-}" ]] || { echo 'Linux ARM64 runner is required' >&2; exit 1; }
+  [[ -n "${IMAGE_PREPARATION_SCRIPT_URL:-}" && -n "${IMAGE_PREPARATION_SCRIPT_SHA256:-}" ]] || { echo 'Tart image preparation script is required' >&2; exit 1; }
+  [[ -n "${MARS_MACOS_STATUS_ITEM_URL:-}" && -n "${MARS_MACOS_STATUS_ITEM_SHA256:-}" ]] || { echo 'macOS status item is required' >&2; exit 1; }
+  [[ -n "${TART_MACOS_IMAGE:-}" && -n "${TART_LINUX_ARM64_IMAGE:-}" ]] || { echo 'both Tart source images are required' >&2; exit 1; }
 }
 validate_http_url() {
   local raw="$1" name="$2" kind="$3" scheme rest authority suffix host port
@@ -49,13 +48,15 @@ validate_config() {
   require_config; [[ "$MARS_ARTIFACT_MODE" == local || "$MARS_ARTIFACT_MODE" == production ]] || { echo 'MARS_ARTIFACT_MODE must be local or production' >&2; exit 1; }
   [[ "$MARS_WORKER_VERSION" =~ '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ]] || { echo 'MARS_WORKER_VERSION must use major.minor.patch' >&2; exit 1; }
   [[ "$MARS_WORKER_CONTRACT_VERSION" =~ '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ]] || { echo 'MARS_WORKER_CONTRACT_VERSION must use major.minor.patch' >&2; exit 1; }
-  local artifact_origin="$public_origin"
+  validate_http_url "$PUBLIC_BASE_URL" PUBLIC_BASE_URL origin || exit 1
+  local artifact_origin="$URL_ORIGIN"
   if [[ -n "$ARTIFACT_BASE_URL" ]]; then ARTIFACT_BASE_URL="${ARTIFACT_BASE_URL%/}"; validate_http_url "$ARTIFACT_BASE_URL" MARS_ARTIFACT_BASE_URL origin || exit 1; artifact_origin="$URL_ORIGIN"; fi
-  for pair in "MARS_ORCHESTRATOR_URL:$MARS_ORCHESTRATOR_URL" "MARS_JOB_AGENT_URL:$MARS_JOB_AGENT_URL" "IMAGE_PREPARATION_SCRIPT_URL:$IMAGE_PREPARATION_SCRIPT_URL" "MARS_MACOS_STATUS_ITEM_URL:$MARS_MACOS_STATUS_ITEM_URL"; do local name="${pair%%:*}" url="${pair#*:}"; validate_http_url "$url" "$name" asset || exit 1; if [[ "$MARS_ARTIFACT_MODE" == production && "$URL_SCHEME" != https ]]; then echo "$name must use HTTPS in production" >&2; exit 1; fi; if [[ "$MARS_ARTIFACT_MODE" == local && "$URL_ORIGIN" != "$artifact_origin" ]]; then echo "$name must use the same origin as MARS_ARTIFACT_BASE_URL or PUBLIC_BASE_URL in local mode" >&2; exit 1; fi; done
-  for pair in "MARS_ORCHESTRATOR_SHA256:$MARS_ORCHESTRATOR_SHA256" "MARS_JOB_AGENT_SHA256:$MARS_JOB_AGENT_SHA256" "IMAGE_PREPARATION_SCRIPT_SHA256:$IMAGE_PREPARATION_SCRIPT_SHA256" "MARS_MACOS_STATUS_ITEM_SHA256:$MARS_MACOS_STATUS_ITEM_SHA256"; do local name="${pair%%:*}" hash="${pair#*:}"; [[ "$hash" =~ '^[0-9a-f]{64}$' ]] || { echo "$name must be a lowercase SHA-256 value" >&2; exit 1; }; done
-  validate_oci_digest "$TART_IMAGE" TART_IMAGE; TART_IMAGE_DIGEST="${TART_IMAGE##*@}"
+  for pair in "MARS_ORCHESTRATOR_URL:$MARS_ORCHESTRATOR_URL" "MARS_MACOS_JOB_AGENT_URL:$MARS_MACOS_JOB_AGENT_URL" "MARS_LINUX_ARM64_JOB_AGENT_URL:$MARS_LINUX_ARM64_JOB_AGENT_URL" "MARS_LINUX_ARM64_RUNNER_URL:$MARS_LINUX_ARM64_RUNNER_URL" "IMAGE_PREPARATION_SCRIPT_URL:$IMAGE_PREPARATION_SCRIPT_URL" "MARS_MACOS_STATUS_ITEM_URL:$MARS_MACOS_STATUS_ITEM_URL"; do local name="${pair%%:*}" url="${pair#*:}"; validate_http_url "$url" "$name" asset || exit 1; done
+  for pair in "MARS_ORCHESTRATOR_SHA256:$MARS_ORCHESTRATOR_SHA256" "MARS_MACOS_JOB_AGENT_SHA256:$MARS_MACOS_JOB_AGENT_SHA256" "MARS_LINUX_ARM64_JOB_AGENT_SHA256:$MARS_LINUX_ARM64_JOB_AGENT_SHA256" "MARS_LINUX_ARM64_RUNNER_SHA256:$MARS_LINUX_ARM64_RUNNER_SHA256" "IMAGE_PREPARATION_SCRIPT_SHA256:$IMAGE_PREPARATION_SCRIPT_SHA256" "MARS_MACOS_STATUS_ITEM_SHA256:$MARS_MACOS_STATUS_ITEM_SHA256"; do local name="${pair%%:*}" hash="${pair#*:}"; [[ "$hash" =~ '^[0-9a-f]{64}$' ]] || { echo "$name must be a lowercase SHA-256 value" >&2; exit 1; }; done
+  validate_oci_digest "$TART_MACOS_IMAGE" TART_MACOS_IMAGE; validate_oci_digest "$TART_LINUX_ARM64_IMAGE" TART_LINUX_ARM64_IMAGE
 }
 validate_config
+CURL_SECURITY=()
 trap 'unset JOIN_CODE CONTROL_PLANE_URL_ARG' EXIT
 [[ "$EUID" -ne 0 ]] || { echo 'Run this installer as the logged-in user, not with sudo.' >&2; exit 1; }
 [[ "$(uname -s)" == Darwin ]] || { echo 'macOS is required' >&2; exit 1; }
@@ -65,42 +66,41 @@ curl --silent --show-error --fail --max-time 20 --location "${CURL_SECURITY[@]}"
 
 DOWNLOAD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mars-worker.XXXXXX")"
 APP_DIR="$HOME/Library/Application Support/Mars"; STATE_FILE="$APP_DIR/install-state.json"; LOG_FILE="$APP_DIR/install.log"
-ORCHESTRATOR_STAGE="$DOWNLOAD_DIR/mars-orchestrator"; JOB_AGENT_STAGE="$DOWNLOAD_DIR/mars-job-agent"; PREPARER_STAGE="$DOWNLOAD_DIR/prepare-macos-job-image.sh"; STATUS_ITEM_STAGE="$DOWNLOAD_DIR/mars-status-item"; ICON_STAGE="$DOWNLOAD_DIR/mars-icon.png"
-CLEANUP_DONE=0
+ORCHESTRATOR_STAGE="$DOWNLOAD_DIR/mars-orchestrator"; MACOS_JOB_AGENT_STAGE="$DOWNLOAD_DIR/mars-macos-job-agent"; LINUX_JOB_AGENT_STAGE="$DOWNLOAD_DIR/mars-linux-arm64-job-agent"; LINUX_RUNNER_STAGE="$DOWNLOAD_DIR/runner.tar.gz"; PREPARER_STAGE="$DOWNLOAD_DIR/prepare-tart-job-image.sh"; STATUS_ITEM_STAGE="$DOWNLOAD_DIR/mars-status-item"; ICON_STAGE="$DOWNLOAD_DIR/mars-icon.png"
 cleanup() { local exit_code=$?; rm -rf "$DOWNLOAD_DIR"; unset JOIN_CODE; exit "$exit_code"; }
 trap cleanup EXIT INT TERM
 
 download_verified() {
   local url="$1" expected="$2" destination="$3" name="$4" security=()
   local headers="$destination.headers"
-  [[ "$url" == https://* ]] && security=(--proto '=https' --tlsv1.2)
-  curl --silent --show-error --fail --location "${security[@]}" --dump-header "$headers" --output "$destination" "$url"
   local actual="$(shasum -a 256 "$destination" | cut -d ' ' -f 1)"; [[ "$actual" == "$expected" ]] || { echo "$name checksum mismatch: expected $expected, got $actual" >&2; return 1; }
-  local response_hash="$(awk 'BEGIN{IGNORECASE=1} tolower($1)=="x-content-sha256:" {gsub("\r","",$2); print $2; exit}' "$headers")"; [[ -z "$response_hash" || "$response_hash" == "$expected" ]] || { echo "$name response hash mismatch" >&2; return 1; }; rm -f "$headers"
+  local response_hash=""; [[ -f "$headers" ]] && response_hash="$(awk 'BEGIN{IGNORECASE=1} tolower($1)=="x-content-sha256:" {gsub("\r","",$2); print $2; exit}' "$headers")"; [[ -z "$response_hash" || "$response_hash" == "$expected" ]] || { echo "$name response hash mismatch" >&2; return 1; }; rm -f "$headers"
 }
 if [[ "$UPGRADE" -eq 1 ]]; then
   [[ -x "$HOME/Library/Application Support/Mars/mars-orchestrator" ]] || { echo 'Upgrade requires an existing macOS worker.' >&2; exit 1; }
   UPGRADE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mars-worker-upgrade.XXXXXX")"
   trap 'rm -rf "$UPGRADE_DIR"; exit $?' EXIT INT TERM
   download_verified "$MARS_ORCHESTRATOR_URL" "$MARS_ORCHESTRATOR_SHA256" "$UPGRADE_DIR/mars-orchestrator" orchestrator
-  download_verified "$MARS_JOB_AGENT_URL" "$MARS_JOB_AGENT_SHA256" "$UPGRADE_DIR/mars-job-agent" 'job agent'
-  chmod 755 "$UPGRADE_DIR/mars-orchestrator" "$UPGRADE_DIR/mars-job-agent"
+  download_verified "$MARS_MACOS_JOB_AGENT_URL" "$MARS_MACOS_JOB_AGENT_SHA256" "$UPGRADE_DIR/mars-macos-job-agent" 'macOS job agent'
+  download_verified "$MARS_LINUX_ARM64_JOB_AGENT_URL" "$MARS_LINUX_ARM64_JOB_AGENT_SHA256" "$UPGRADE_DIR/mars-linux-arm64-job-agent" 'Linux ARM64 job agent'
+  chmod 755 "$UPGRADE_DIR/mars-orchestrator" "$UPGRADE_DIR/mars-macos-job-agent" "$UPGRADE_DIR/mars-linux-arm64-job-agent"
   launchctl bootout "gui/$UID/com.mars.worker" >/dev/null 2>&1 || true
   mv -f "$UPGRADE_DIR/mars-orchestrator" "$HOME/Library/Application Support/Mars/mars-orchestrator"
-  mv -f "$UPGRADE_DIR/mars-job-agent" "$HOME/Library/Application Support/Mars/mars-job-agent"
+  mv -f "$UPGRADE_DIR/mars-macos-job-agent" "$HOME/Library/Application Support/Mars/mars-macos-job-agent"
+  mv -f "$UPGRADE_DIR/mars-linux-arm64-job-agent" "$HOME/Library/Application Support/Mars/mars-linux-arm64-job-agent"
   launchctl bootstrap "gui/$UID" "$HOME/Library/LaunchAgents/com.mars.worker.plist"
   launchctl kickstart -k "gui/$UID/com.mars.worker"
   exit 0
 fi
 download_verified "$MARS_ORCHESTRATOR_URL" "$MARS_ORCHESTRATOR_SHA256" "$ORCHESTRATOR_STAGE" orchestrator
-download_verified "$MARS_JOB_AGENT_URL" "$MARS_JOB_AGENT_SHA256" "$JOB_AGENT_STAGE" 'job agent'
+download_verified "$MARS_MACOS_JOB_AGENT_URL" "$MARS_MACOS_JOB_AGENT_SHA256" "$MACOS_JOB_AGENT_STAGE" 'macOS job agent'
+download_verified "$MARS_LINUX_ARM64_JOB_AGENT_URL" "$MARS_LINUX_ARM64_JOB_AGENT_SHA256" "$LINUX_JOB_AGENT_STAGE" 'Linux ARM64 job agent'
+download_verified "$MARS_LINUX_ARM64_RUNNER_URL" "$MARS_LINUX_ARM64_RUNNER_SHA256" "$LINUX_RUNNER_STAGE" 'Linux ARM64 runner'
 download_verified "$IMAGE_PREPARATION_SCRIPT_URL" "$IMAGE_PREPARATION_SCRIPT_SHA256" "$PREPARER_STAGE" 'image preparation script'
 download_verified "$MARS_MACOS_STATUS_ITEM_URL" "$MARS_MACOS_STATUS_ITEM_SHA256" "$STATUS_ITEM_STAGE" 'macOS status item'
 curl --silent --show-error --fail --location "${PUBLIC_BASE_URL%/}/mars-icon.svg" -o "$DOWNLOAD_DIR/mars-icon.svg"
 sips -s format png "$DOWNLOAD_DIR/mars-icon.svg" --out "$ICON_STAGE" >/dev/null
-chmod +x "$ORCHESTRATOR_STAGE" "$JOB_AGENT_STAGE" "$PREPARER_STAGE" "$STATUS_ITEM_STAGE"
-mkdir -p "$APP_DIR" "$(dirname "$HOME/Library/LaunchAgents/com.mars.worker.plist")"; exec > >(tee -a "$LOG_FILE") 2>&1
-write_state() { printf '{"stage":"%s","status":"%s","updatedAt":"%s"}\n' "$1" "$2" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_FILE"; }
+chmod +x "$ORCHESTRATOR_STAGE" "$MACOS_JOB_AGENT_STAGE" "$LINUX_JOB_AGENT_STAGE" "$PREPARER_STAGE" "$STATUS_ITEM_STAGE"
 CHECK=0
 check() { CHECK=$((CHECK + 1)); print "[$CHECK/8] $1"; write_state "$2" started; }
 pass() { print "  [ok] $1"; }
@@ -110,14 +110,17 @@ if [[ -z "$TART_BIN" ]]; then BREW_BIN="$(command -v brew 2>/dev/null || true)";
 [[ -x "$TART_BIN" ]] || { echo 'Tart is required' >&2; exit 1; }; write_state prerequisites complete; pass 'Homebrew and Tart are installed'
 if ! sudo -n "$TART_BIN" --version >/dev/null 2>&1; then sudo -v || { echo 'Administrator authorization was cancelled.' >&2; exit 1; }; SUDOERS_FILE="/etc/sudoers.d/mars-tart-${USER}"; printf '%s ALL=(root) NOPASSWD: %s\n' "$USER" "$TART_BIN" | sudo tee "$SUDOERS_FILE" >/dev/null; sudo chmod 440 "$SUDOERS_FILE"; sudo visudo -cf "$SUDOERS_FILE" >/dev/null 2>&1 || { sudo rm -f "$SUDOERS_FILE"; echo 'Tart sudoers validation failed' >&2; exit 1; }; sudo -n "$TART_BIN" --version >/dev/null 2>&1 || { echo 'Tart is not usable with sudoers rule' >&2; exit 1; }; fi
 write_state sudoers complete; pass 'Tart sudo capability configured'
-check 'Preparing and verifying the local Tart job image' tart-image
-LOCAL_IMAGE="mars-worker-base-${TART_IMAGE_DIGEST#sha256:}"; PREP_MANIFEST="$APP_DIR/macos-job-image-manifest.json"
-TART_BIN="$TART_BIN" "$PREPARER_STAGE" --source "$TART_IMAGE" --target "$LOCAL_IMAGE" --job-agent "$JOB_AGENT_STAGE" --output-manifest "$PREP_MANIFEST"
-[[ -s "$PREP_MANIFEST" ]] || { echo 'macOS image preparation did not produce provenance' >&2; exit 1; }
-PREPARED_DIGEST="$(sed -n 's/.*"preparedDigest":"\([^"]*\)".*/\1/p' "$PREP_MANIFEST")"; [[ "$PREPARED_DIGEST" == mars-macos-job@sha256:* ]] || { echo 'macOS prepared image provenance is incomplete' >&2; exit 1; }
-write_state tart-image complete; pass "Prepared local Tart image: $LOCAL_IMAGE"
+check 'Preparing and verifying both local Tart job images' tart-image
+MACOS_IMAGE="mars-worker-macos-arm64-base-${TART_MACOS_IMAGE##*@sha256:}"; LINUX_IMAGE="mars-worker-linux-arm64-base-${TART_LINUX_ARM64_IMAGE##*@sha256:}"
+MACOS_MANIFEST="$APP_DIR/macos-tart-image-manifest.json"; LINUX_MANIFEST="$APP_DIR/linux-arm64-tart-image-manifest.json"
+TART_BIN="$TART_BIN" "$PREPARER_STAGE" --platform macos-arm64 --source "$TART_MACOS_IMAGE" --target "$MACOS_IMAGE" --job-agent "$MACOS_JOB_AGENT_STAGE" --output-manifest "$MACOS_MANIFEST"
+TART_BIN="$TART_BIN" "$PREPARER_STAGE" --platform linux-arm64 --source "$TART_LINUX_ARM64_IMAGE" --target "$LINUX_IMAGE" --job-agent "$LINUX_JOB_AGENT_STAGE" --runner-archive "$LINUX_RUNNER_STAGE" --output-manifest "$LINUX_MANIFEST"
+[[ -s "$MACOS_MANIFEST" && -s "$LINUX_MANIFEST" ]] || { echo 'Tart image preparation did not produce provenance' >&2; exit 1; }
+MACOS_PREPARED_DIGEST="$(sed -n 's/.*"preparedDigest":"\([^"]*\)".*/\1/p' "$MACOS_MANIFEST")"; LINUX_PREPARED_DIGEST="$(sed -n 's/.*"preparedDigest":"\([^"]*\)".*/\1/p' "$LINUX_MANIFEST")"
+[[ "$MACOS_PREPARED_DIGEST" == mars-macos-arm64-job@sha256:* && "$LINUX_PREPARED_DIGEST" == mars-linux-arm64-job@sha256:* ]] || { echo 'Tart prepared image provenance is incomplete' >&2; exit 1; }
+write_state tart-image complete; pass "Prepared local Tart images: $MACOS_IMAGE and $LINUX_IMAGE"
 launchctl bootout "gui/$UID/com.mars.worker" >/dev/null 2>&1 || true
-ORCHESTRATOR="$APP_DIR/mars-orchestrator"; JOB_AGENT="$APP_DIR/mars-job-agent"; STATUS_ITEM="$APP_DIR/mars-status-item"; ICON="$APP_DIR/mars-icon.png"; mv -f "$ORCHESTRATOR_STAGE" "$ORCHESTRATOR"; mv -f "$JOB_AGENT_STAGE" "$JOB_AGENT"; mv -f "$STATUS_ITEM_STAGE" "$STATUS_ITEM"; mv -f "$ICON_STAGE" "$ICON"; chmod 755 "$ORCHESTRATOR" "$JOB_AGENT" "$STATUS_ITEM"; write_state artifacts complete
+ORCHESTRATOR="$APP_DIR/mars-orchestrator"; MACOS_JOB_AGENT="$APP_DIR/mars-macos-job-agent"; LINUX_JOB_AGENT="$APP_DIR/mars-linux-arm64-job-agent"; STATUS_ITEM="$APP_DIR/mars-status-item"; ICON="$APP_DIR/mars-icon.png"; mv -f "$ORCHESTRATOR_STAGE" "$ORCHESTRATOR"; mv -f "$MACOS_JOB_AGENT_STAGE" "$MACOS_JOB_AGENT"; mv -f "$LINUX_JOB_AGENT_STAGE" "$LINUX_JOB_AGENT"; mv -f "$STATUS_ITEM_STAGE" "$STATUS_ITEM"; mv -f "$ICON_STAGE" "$ICON"; chmod 755 "$ORCHESTRATOR" "$MACOS_JOB_AGENT" "$LINUX_JOB_AGENT" "$STATUS_ITEM"; write_state artifacts complete
 check 'Persisting the protected one-use enrollment code' enrollment
 JOIN_CODE_FILE="$APP_DIR/join-code"; IDENTITY_FILE="$APP_DIR/worker-identity.json"; rm -f "$IDENTITY_FILE"; JOIN_CODE_TMP="$JOIN_CODE_FILE.tmp.$$"; printf '%s\n' "$JOIN_CODE" > "$JOIN_CODE_TMP"; chmod 600 "$JOIN_CODE_TMP"; mv -f "$JOIN_CODE_TMP" "$JOIN_CODE_FILE"; write_state enrollment complete
 LAUNCHER="$APP_DIR/run-worker.sh"; PLIST="$HOME/Library/LaunchAgents/com.mars.worker.plist"; XML_LAUNCHER="${LAUNCHER//&/&amp;}"; XML_LAUNCHER="${XML_LAUNCHER//</&lt;}"; XML_LAUNCHER="${XML_LAUNCHER//>/&gt;}"; XML_LAUNCHER="${XML_LAUNCHER//\"/&quot;}"
@@ -139,8 +142,10 @@ export MARS_CACHE_TOKEN_ISSUER=$(printf '%q' "${MARS_CACHE_TOKEN_ISSUER:-}")
 export MARS_CACHE_JWKS_URL=$(printf '%q' "${MARS_CACHE_JWKS_URL:-}")
 export MARS_WORKER_IDENTITY_FILE=$(printf '%q' "$IDENTITY_FILE")
 export MARS_JOIN_CODE_FILE=$(printf '%q' "$JOIN_CODE_FILE")
-export MARS_TART_BASE_IMAGE=$(printf '%q' "$LOCAL_IMAGE")
-export MARS_TART_IMAGE_DIGEST=$(printf '%q' "$PREPARED_DIGEST")
+export MARS_TART_MACOS_BASE_IMAGE=$(printf '%q' "$MACOS_IMAGE")
+export MARS_TART_MACOS_IMAGE_DIGEST=$(printf '%q' "$MACOS_PREPARED_DIGEST")
+export MARS_TART_LINUX_ARM64_BASE_IMAGE=$(printf '%q' "$LINUX_IMAGE")
+export MARS_TART_LINUX_ARM64_IMAGE_DIGEST=$(printf '%q' "$LINUX_PREPARED_DIGEST")
 export MARS_MACOS_STATUS_ITEM_EXECUTABLE=$(printf '%q' "$STATUS_ITEM")
 export MARS_MACOS_STATUS_ITEM_ICON=$(printf '%q' "$ICON")
 export MARS_LEASE_PICKUP_STATE_FILE=$(printf '%q' "$APP_DIR/lease-pickup.json")
