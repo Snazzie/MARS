@@ -248,7 +248,7 @@ export const WorkerEventPayload = z.discriminatedUnion("type", [
   z.object({ type: z.literal("diagnostic.chunk"), payload: z.object({ jobId: z.string().uuid(), leaseId: z.string().uuid(), diagnosticId: z.string().uuid(), sequence: z.number().int().nonnegative(), content: z.string().max(128 * 1024), final: z.boolean() }).strict() }),
   z.object({ type: z.literal("worker.logs"), payload: z.object({ commandId: z.string().uuid(), requestId: z.string().uuid(), observedAt: z.string().datetime({ offset: true }), content: z.string().max(128 * 1024) }).strict() }),
   z.object({ type: z.literal("job.log"), payload: z.object({ jobId: z.string().uuid(), stepId: z.string().uuid().nullable(), sequence: z.number().int().nonnegative(), content: z.string().max(256 * 1024), occurredAt: z.string().datetime() }).strict() }),
-  z.object({ type: z.literal("job.resource_sample"), payload: z.object({ jobId: z.string().uuid(), leaseId: z.string().uuid(), occurredAt: z.string().datetime(), cpuUsagePercent: z.number().min(0).max(100), cpuTimeMs: z.number().int().nonnegative(), memoryWorkingSetBytes: z.number().int().nonnegative(), memoryLimitBytes: z.number().int().positive() }).strict() }),
+  z.object({ type: z.literal("job.resource_sample"), payload: z.object({ jobId: z.string().uuid(), leaseId: z.string().uuid(), occurredAt: z.string().datetime(), cpuUsagePercent: z.number().min(0).max(100), cpuTimeMs: z.number().int().nonnegative(), memoryWorkingSetBytes: z.number().int().nonnegative(), memoryLimitBytes: z.number().int().positive(), diskUsageBytes: z.number().int().nonnegative().nullable().optional() }).strict() }),
   WorkerCacheEntryUpsertTelemetry,
   WorkerCacheEntryDeletedTelemetry,
   WorkerCacheSnapshotBeginTelemetry,

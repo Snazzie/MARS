@@ -623,8 +623,8 @@ export const dashboardJobResourceSamples = pgTable("dashboard_job_resource_sampl
 	cpuTimeMs: bigint("cpu_time_ms", { mode: "number" }).notNull(),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	memoryWorkingSetBytes: bigint("memory_working_set_bytes", { mode: "number" }).notNull(),
-	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	memoryLimitBytes: bigint("memory_limit_bytes", { mode: "number" }).notNull(),
+	diskUsageBytes: bigint("disk_usage_bytes", { mode: "number" }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	index("dashboard_job_resource_samples_job_time_idx").using("btree", table.organizationId.asc().nullsLast(), table.jobId.asc().nullsLast(), table.occurredAt.asc().nullsLast()),

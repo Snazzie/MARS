@@ -12,7 +12,7 @@ export function resolveTartExecutable(configured: string | undefined): string {
 export const TART_JIT_CONFIG_PATH = "/tmp/mars/jit-config";
 const TART_BOOTSTRAP_SHARE_PATH = "/Volumes/My Shared Files/jit-config";
 export function buildTartRunArguments(vmName: string, bootstrapDirectory: string): string[] {
-  return ["run", "--no-graphics", "--dir", `${bootstrapDirectory}:ro`, vmName];
+  return ["run", "--no-graphics", "--no-audio", "--dir", `${bootstrapDirectory}:ro`, vmName];
 }
 export function buildTartBootstrapArguments(vmName: string): string[] {
   return ["exec", vmName, "sh", "-c", `set -eu; umask 077; install -d -m 700 /tmp/mars; rm -f ${TART_JIT_CONFIG_PATH}; cat "${TART_BOOTSTRAP_SHARE_PATH}" > ${TART_JIT_CONFIG_PATH}`];
@@ -82,7 +82,7 @@ export interface TartVmRuntime {
   startRunner(vmName: string): TartRunnerExecution;
   stop(vmName: string): Promise<void>;
   remove(vmName: string): Promise<void>;
-  sample?(vmName: string): Promise<{ cpuUsagePercent: number; cpuTimeMs: number; memoryWorkingSetBytes: number; memoryLimitBytes: number }>;
+  sample?(vmName: string): Promise<{ cpuUsagePercent: number; cpuTimeMs: number; memoryWorkingSetBytes: number; memoryLimitBytes: number; diskUsageBytes: number }>;
 }
 
 export function createTartVmRuntime(tartExecutable = resolveTartExecutable(Bun.env.MARS_TART_EXECUTABLE)): TartVmRuntime {
@@ -140,11 +140,11 @@ export function createTartVmRuntime(tartExecutable = resolveTartExecutable(Bun.e
     stop: async vmName => { await run(["stop", vmName]); processes.delete(vmName); },
     remove: async vmName => { await run(["delete", vmName]); processes.delete(vmName); },
     sample: async vmName => {
-      const process = Bun.spawn([tartExecutable, "exec", vmName, "sh", "-c", "set -eu; cpu=$(ps -eo pcpu= | awk '{s+=$1} END {print s+0}'); rss=$(ps -eo rss= | awk '{s+=$1} END {print s+0}'); mem=$(awk '/MemTotal/{print $2}' /proc/meminfo); printf '%s %s %s' \"$cpu\" \"$rss\" \"$mem\""], { stdout: "pipe", stderr: "pipe" });
+      const process = Bun.spawn([tartExecutable, "exec", vmName, "sh", "-c", "set -eu; cpu=$(ps -eo pcpu= | awk '{s+=$1} END {print s+0}'); rss=$(ps -eo rss= | awk '{s+=$1} END {print s+0}'); mem=$(awk '/MemTotal/{print $2}' /proc/meminfo); disk=$(df -kP / | awk 'NR==2 {print $3+0}'); printf '%s %s %s %s' \"$cpu\" \"$rss\" \"$mem\" \"$disk\""], { stdout: "pipe", stderr: "pipe" });
       const [stdout, stderr, code] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
       if (code !== 0) throw new Error(`tart resource sample failed: ${stderr.trim()}`);
-      const [cpu, rss, mem] = stdout.trim().split(/\s+/).map(Number);
-      return { cpuUsagePercent: Math.max(0, Math.min(100, cpu || 0)), cpuTimeMs: 0, memoryWorkingSetBytes: Math.max(0, (rss || 0) * 1024), memoryLimitBytes: Math.max(1, (mem || 1) * 1024) };
+      const [cpu, rss, mem, disk] = stdout.trim().split(/\s+/).map(Number);
+      return { cpuUsagePercent: Math.max(0, Math.min(100, cpu || 0)), cpuTimeMs: 0, memoryWorkingSetBytes: Math.max(0, (rss || 0) * 1024), memoryLimitBytes: Math.max(1, (mem || 1) * 1024), diskUsageBytes: Math.max(0, (disk || 0) * 1024) };
     },
   };
 }

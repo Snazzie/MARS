@@ -1,0 +1,1 @@
+ALTER TABLE "dashboard_job_resource_samples" ADD COLUMN "disk_usage_bytes" bigint;

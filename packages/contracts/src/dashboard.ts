@@ -223,7 +223,7 @@ export const JobLabelRecommendation = dto(strict({
 }));
 export type JobLabelRecommendation = z.infer<typeof JobLabelRecommendation>;
 
-export const JobResourceSample = dto(strict({ organizationId: id, runId: id, jobId: id, leaseId: id, occurredAt: timestamp, cpuUsagePercent: z.number().min(0).max(100), cpuTimeMs: positiveSafe.or(z.literal(0)), memoryWorkingSetBytes: positiveSafe.or(z.literal(0)), memoryLimitBytes: positiveSafe }));
+export const JobResourceSample = dto(strict({ organizationId: id, runId: id, jobId: id, leaseId: id, occurredAt: timestamp, cpuUsagePercent: z.number().min(0).max(100), cpuTimeMs: positiveSafe.or(z.literal(0)), memoryWorkingSetBytes: positiveSafe.or(z.literal(0)), memoryLimitBytes: positiveSafe, diskUsageBytes: nonnegativeSafe.nullable().optional() }));
 export type JobResourceSample = z.infer<typeof JobResourceSample>;
 export const LogChunk = dto(strict({ organizationId, runId: id, jobId: id, sequence: positiveSafe.or(z.literal(0)), content: z.string(), hasMore: z.boolean(), occurredAt: timestamp }));
 export type LogChunk = z.infer<typeof LogChunk>;

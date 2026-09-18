@@ -85,15 +85,33 @@ export async function runMacLeaseLifecycle(
   }
   send(workerEvent(command.workerId, "sandbox_attested", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed }));
   notifyInventory();
+  let sampling = true;
+  const sampleRuntime = runtime.sample;
+  const sampler = sampleRuntime ? (async () => {
+    while (sampling) {
+      await Promise.race([Bun.sleep(5_000), runtime.completion?.then(() => undefined, () => undefined)]);
+      if (!sampling || !runtime.completion) break;
+      try {
+        const occurredAt = new Date().toISOString();
+        send(workerEvent(command.workerId, "job.resource_sample", { jobId: bootstrap.jobId, leaseId: bootstrap.leaseId, occurredAt, ...await sampleRuntime() }));
+      } catch (error) {
+        console.error("macOS VM resource sample failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  })() : Promise.resolve();
   const logPump = emitRuntimeLogs(command.workerId, bootstrap.jobId, runtime.logs, send).catch(error => {
     console.error("macOS runner log streaming failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
   });
   try {
     if (!runtime.completion) throw new Error("runner completion unavailable");
     const exitCode = await runtime.completion;
+    sampling = false;
+    await sampler;
     await logPump;
     send(workerEvent(command.workerId, "runner.finished", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, exitCode }));
   } catch (error) {
+    sampling = false;
+    await sampler.catch(() => undefined);
     console.error("macOS runner failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
     send(workerEvent(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "runner_failed" }));
   }

@@ -6,7 +6,7 @@ export interface RuntimeLease {
   state:"sandbox_attested"|"failed";
   completion?: Promise<number>;
   logs?: AsyncIterable<string>;
-  sample?: () => Promise<{ cpuUsagePercent:number; cpuTimeMs:number; memoryWorkingSetBytes:number; memoryLimitBytes:number }>;
+  sample?: () => Promise<{ cpuUsagePercent:number; cpuTimeMs:number; memoryWorkingSetBytes:number; memoryLimitBytes:number; diskUsageBytes?:number }>;
   termination?: RuntimeTerminationEvidence;
   correlationId?: string;
 }

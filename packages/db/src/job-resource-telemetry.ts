@@ -23,8 +23,8 @@ export async function persistJobResourceSample(db: JobResourceTelemetryDb, worke
   if (!lease) return "rejected";
   const inserted = await db<{ occurredAt: string }[]>`
     INSERT INTO dashboard_job_resource_samples
-      (organization_id,run_id,job_id,lease_id,occurred_at,cpu_usage_percent,cpu_time_ms,memory_working_set_bytes,memory_limit_bytes)
-    VALUES (${lease.organizationId},${lease.runId},${sample.jobId},${sample.leaseId},${sample.occurredAt},${sample.cpuUsagePercent},${sample.cpuTimeMs},${sample.memoryWorkingSetBytes},${sample.memoryLimitBytes})
+      (organization_id,run_id,job_id,lease_id,occurred_at,cpu_usage_percent,cpu_time_ms,memory_working_set_bytes,memory_limit_bytes,disk_usage_bytes)
+    VALUES (${lease.organizationId},${lease.runId},${sample.jobId},${sample.leaseId},${sample.occurredAt},${sample.cpuUsagePercent},${sample.cpuTimeMs},${sample.memoryWorkingSetBytes},${sample.memoryLimitBytes},${sample.diskUsageBytes ?? null})
     ON CONFLICT (organization_id,job_id,occurred_at) DO NOTHING
     RETURNING occurred_at AS "occurredAt"
   `;
@@ -39,12 +39,12 @@ export async function persistJobResourceSample(db: JobResourceTelemetryDb, worke
 export async function listJobResourceSamples(db: JobResourceTelemetryDb, organizationId: string, runId: string, jobId: string, after: string | null = null, limit = 100): Promise<{ items: JobResourceSample[]; nextCursor: string | null }> {
   const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
   const rows = await db<Record<string, unknown>[]>`
-    SELECT organization_id AS "organizationId",run_id AS "runId",job_id AS "jobId",lease_id AS "leaseId",occurred_at AS "occurredAt",cpu_usage_percent AS "cpuUsagePercent",cpu_time_ms AS "cpuTimeMs",memory_working_set_bytes AS "memoryWorkingSetBytes",memory_limit_bytes AS "memoryLimitBytes"
+    SELECT organization_id AS "organizationId",run_id AS "runId",job_id AS "jobId",lease_id AS "leaseId",occurred_at AS "occurredAt",cpu_usage_percent AS "cpuUsagePercent",cpu_time_ms AS "cpuTimeMs",memory_working_set_bytes AS "memoryWorkingSetBytes",memory_limit_bytes AS "memoryLimitBytes",disk_usage_bytes AS "diskUsageBytes"
     FROM dashboard_job_resource_samples
     WHERE organization_id=${organizationId} AND run_id=${runId} AND job_id=${jobId} AND (${after}::timestamptz IS NULL OR occurred_at > ${after}::timestamptz)
       AND occurred_at >= now() - interval '7 days'
     ORDER BY occurred_at ASC LIMIT ${safeLimit + 1}
   `;
-  const items = rows.slice(0, safeLimit).map(row => ({ ...row, cpuUsagePercent: Number(row.cpuUsagePercent), cpuTimeMs: Number(row.cpuTimeMs), memoryWorkingSetBytes: Number(row.memoryWorkingSetBytes), memoryLimitBytes: Number(row.memoryLimitBytes), occurredAt: row.occurredAt instanceof Date ? row.occurredAt.toISOString() : String(row.occurredAt) })) as JobResourceSample[];
+  const items = rows.slice(0, safeLimit).map(row => ({ ...row, cpuUsagePercent: Number(row.cpuUsagePercent), cpuTimeMs: Number(row.cpuTimeMs), memoryWorkingSetBytes: Number(row.memoryWorkingSetBytes), memoryLimitBytes: Number(row.memoryLimitBytes), diskUsageBytes: row.diskUsageBytes == null ? null : Number(row.diskUsageBytes), occurredAt: row.occurredAt instanceof Date ? row.occurredAt.toISOString() : String(row.occurredAt) })) as JobResourceSample[];
   return { items, nextCursor: rows.length > safeLimit ? items.at(-1)?.occurredAt ?? null : null };
 }

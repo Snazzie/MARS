@@ -26,6 +26,7 @@ test("starts the VM with only a read-only bootstrap directory path", () => {
   expect(buildTartRunArguments!("lease-vm", "/private/tmp/mars-bootstrap")).toEqual([
     "run",
     "--no-graphics",
+    "--no-audio",
     "--dir",
     "/private/tmp/mars-bootstrap:ro",
     "lease-vm",
@@ -68,6 +69,20 @@ test("passes the worker cache descriptor into Tart full bootstrap", async () => 
   const driver = new TartVmDriver(tart, "base", "mars", undefined, "0.1.0");
   await driver.createLease({ id: "11111111-1111-4111-8111-111111111111", jobId: "22222222-2222-4222-8222-222222222222", contractVersion: "0.1.0", imageDigest: "different-digest", resources: resources(20 * 1024 ** 3), nonce: "n".repeat(32), encodedJitConfig: "jit", workerCache });
   expect(received).toEqual(workerCache);
+});
+test("forwards Tart VM resource samples including guest disk usage", async () => {
+  const tart = {
+    clone: async () => {},
+    setResources: async () => {},
+    startWithBootstrap: async () => {},
+    startRunner: () => ({ completion: Promise.resolve(0), logs: (async function* () {})() }),
+    sample: async () => ({ cpuUsagePercent: 12.5, cpuTimeMs: 0, memoryWorkingSetBytes: 1024, memoryLimitBytes: 2048, diskUsageBytes: 4096 }),
+    stop: async () => {},
+    remove: async () => {},
+  };
+  const driver = new TartVmDriver(tart, "base", "mars", undefined, "0.1.0");
+  const runtime = await driver.createLease({ id: "11111111-1111-4111-8111-111111111111", jobId: "22222222-2222-4222-8222-222222222222", contractVersion: "0.1.0", imageDigest: "base", resources: resources(20 * 1024 ** 3), nonce: "n".repeat(32), encodedJitConfig: "jit" });
+  expect(await runtime.sample?.()).toEqual({ cpuUsagePercent: 12.5, cpuTimeMs: 0, memoryWorkingSetBytes: 1024, memoryLimitBytes: 2048, diskUsageBytes: 4096 });
 });
 
 test("serializes Tart provisioning while keeping completed VMs concurrent", async () => {
