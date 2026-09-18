@@ -35,6 +35,7 @@ env:
   APP_VERSION: "${{ inputs.app_version }}"
   WORKER_MODE: "${{ inputs.worker_release_mode }}"
   WORKER_VERSION: "${{ inputs.worker_version }}"
+  WORKER_MANIFEST_URL: "${{ inputs.worker_manifest_url }}"
   BUILD_ID: "${{ github.sha }}"
   CONTRACT_VERSION_FILE: deploy/workers/contract-version.txt
   APP_CANDIDATE_TAG: "cp-${{ github.run_id }}-${{ github.run_attempt }}"
