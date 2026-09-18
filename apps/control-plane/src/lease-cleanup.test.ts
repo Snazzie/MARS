@@ -26,6 +26,21 @@ test("reaps a terminal lease with no create command without dispatching a stop",
   expect(queries.some(query => query.includes("UPDATE runner_leases SET state='reaped'") && query.includes("cleanup_state='completed'") && query.includes("nonce="))).toBe(true);
 });
 
+test("skips cleanup dispatch while the worker is disconnected", async () => {
+  let dispatches = 0;
+  const db = (async (strings: TemplateStringsArray) => {
+    if (strings.join(" ").startsWith("SELECT l.id")) return [{ leaseId: "lease-2", workerId: "worker-2", nonce: "m".repeat(32), cleanupType: "windows-container.stop_lease" }];
+    return [];
+  }) as unknown as DatabaseClient;
+  const report = await reapPendingLeases({
+    db,
+    dispatch: async () => { dispatches += 1; },
+    workerConnected: () => false,
+  });
+  expect(report).toEqual({ dispatched: 0, skipped: 1, failed: 0 });
+  expect(dispatches).toBe(0);
+});
+
 test("does not dispatch another stop after a stop was queued or accepted", async () => {
   let dispatches = 0;
   const queries: string[] = [];

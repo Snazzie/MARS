@@ -41,6 +41,10 @@ export async function reapPendingLeases(input: {
       if (!reaped[0]) report.skipped += 1;
       continue;
     }
+    if (!input.workerConnected(lease.workerId)) {
+      report.skipped += 1;
+      continue;
+    }
     try {
       await input.dispatch({ type: lease.cleanupType, workerId: lease.workerId, leaseId: lease.leaseId, payload: { nonce: lease.nonce } });
       report.dispatched += 1;
