@@ -33,34 +33,43 @@ try {
   const buildExit = await build.exited;
   if (buildExit !== 0) process.exitCode = buildExit;
   else {
-    const migration = Bun.spawn(["bun", "run", "db:migrate"], {
-      cwd: "packages/db",
+    const webBuild = Bun.spawn(["bun", "run", "--filter", "@mars/web", "build"], {
       stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",
     });
-    const migrationExit = await migration.exited;
-    if (migrationExit !== 0) process.exitCode = migrationExit;
+    const webBuildExit = await webBuild.exited;
+    if (webBuildExit !== 0) process.exitCode = webBuildExit;
     else {
-      const commands = [
-        "bun run scripts/control-plane-dev.ts",
-        "bun run --filter @mars/web dev",
-      ];
-      const names = ["control-plane", "web"];
-      if (Bun.env.MARS_DEV_TUNNEL === "1" || Bun.env.CLOUDFLARE_TUNNEL_TOKEN?.trim()) {
-        names.push("tunnel");
-        commands.push("bun x wrangler tunnel run mars");
+      const migration = Bun.spawn(["bun", "run", "db:migrate"], {
+        cwd: "packages/db",
+        stdin: "inherit",
+        stdout: "inherit",
+        stderr: "inherit",
+      });
+      const migrationExit = await migration.exited;
+      if (migrationExit !== 0) process.exitCode = migrationExit;
+      else {
+        const commands = [
+          "bun run scripts/control-plane-dev.ts",
+          "bun run --filter @mars/web dev",
+        ];
+        const names = ["control-plane", "web"];
+        if (Bun.env.MARS_DEV_TUNNEL === "1" || Bun.env.CLOUDFLARE_TUNNEL_TOKEN?.trim()) {
+          names.push("tunnel");
+          commands.push("bun x wrangler tunnel run mars");
+        }
+        const dev = Bun.spawn([
+          "bun",
+          "x",
+          "concurrently",
+          "--kill-others-on-fail",
+          "--names",
+          names.join(","),
+          ...commands,
+        ], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+        process.exitCode = await dev.exited;
       }
-      const dev = Bun.spawn([
-        "bun",
-        "x",
-        "concurrently",
-        "--kill-others-on-fail",
-        "--names",
-        names.join(","),
-        ...commands,
-      ], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
-      process.exitCode = await dev.exited;
     }
   }
 } finally {
