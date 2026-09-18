@@ -3,13 +3,13 @@ import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { cpus, totalmem } from "node:os";
 import { statfsSync } from "node:fs";
-import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerObservedConfiguration, WorkerConfigurePayload, WorkerRunnerCachePurgePayload, WorkerCommand, WorkerDoctorData, WorkerEvent, type WorkerCapacityData } from "@mars/contracts";
+import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerObservedConfiguration, WorkerConfigurePayload, WorkerRunnerCachePurgePayload, WorkerCommand, WorkerDoctorData, WorkerEvent, type WorkerCapacityData, type WorkerLimits } from "@mars/contracts";
 import { z } from "zod";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { authenticateWorker, retryControlPlaneOperation, waitForWorkerSocketClose, workerSocketUrl, type WorkerIdentity } from "./worker-client.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 import type { LibvirtVmDriver } from "./libvirt-vm.ts";
-import type { WorkerLimits } from "@mars/contracts";
+import type { RuntimeDriver } from "./runtime.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 import { collectWorkerServiceLogs } from "./worker-service-logs.ts";
 export type LinuxWorkerResources = {
@@ -58,7 +58,7 @@ export async function handleLinuxWorkerCommand(
 }
 
 export type LinuxWorkerCommandContext = {
-  driver: Pick<LibvirtVmDriver, "createLease" | "stopLease" | "removeLease">;
+  driver: Pick<RuntimeDriver, "createLease" | "stopLease" | "removeLease">;
   encryptionPrivateKey: string;
   runtimeReady: () => boolean;
   send: (event: WorkerEvent) => void;
@@ -66,16 +66,16 @@ export type LinuxWorkerCommandContext = {
   cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled" | "setRunnerCacheMaxGiB" | "transport" | "unregisterLease"> & Partial<Pick<ActionCacheService, "purgeRunnerCache">>;
 };
 
-export async function handleLinuxWorkerCommandWithContext(command: WorkerCommand, resources: LinuxWorkerResources, context: LinuxWorkerCommandContext): Promise<WorkerEvent | void> {
+export async function handleLinuxWorkerCommandWithContext(command: WorkerCommand, resources: LinuxWorkerResources, context: LinuxWorkerCommandContext, commandPrefix = "linux-vm"): Promise<WorkerEvent | void> {
   if (command.type === "worker.configure" || command.type === "worker.runner_cache_purge") return handleLinuxWorkerCommand(command, resources, context.cacheService);
-  if (command.type === "linux-vm.stop_lease") {
+  if (command.type === `${commandPrefix}.stop_lease`) {
     if (!command.leaseId) throw new Error("lease_id_required");
     await context.driver.stopLease(command.leaseId);
     const event = { version: 1 as const, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.reaped", occurredAt: new Date().toISOString(), payload: { leaseId: command.leaseId } };
     context.send(event);
     return event;
   }
-  if (command.type !== "linux-vm.create_lease") throw new Error(`unsupported worker command: ${command.type}`);
+  if (command.type !== `${commandPrefix}.create_lease`) throw new Error(`unsupported worker command: ${command.type}`);
   if (!context.runtimeReady()) throw new Error("worker_runtime_not_ready");
   const payload = command.payload as { bootstrapCiphertext?: Parameters<typeof openLeaseBootstrap>[0] };
   if (!payload.bootstrapCiphertext) throw new Error("bootstrap_ciphertext_missing");
@@ -87,19 +87,15 @@ export async function handleLinuxWorkerCommandWithContext(command: WorkerCommand
   active.set(bootstrap.leaseId, lifecycle);
   void lifecycle.finally(() => active.delete(bootstrap.leaseId));
 }
-export async function executeLinuxWorkerCommand(command: WorkerCommand, resources: LinuxWorkerResources, context: LinuxWorkerCommandContext): Promise<WorkerEvent | void> {
-  if (command.type === "worker.collect_logs") {
-    return collectWorkerServiceLogs(command);
-  }
-  if (command.type === "worker.configure" || command.type === "worker.runner_cache_purge") {
-    return handleLinuxWorkerCommand(command, resources, context.cacheService);
-  }
-  if (command.type === "linux-vm.create_lease") {
-    await handleLinuxWorkerCommandWithContext(command, resources, context);
+export async function executeLinuxWorkerCommand(command: WorkerCommand, resources: LinuxWorkerResources, context: LinuxWorkerCommandContext, commandPrefix = "linux-vm"): Promise<WorkerEvent | void> {
+  if (command.type === "worker.collect_logs") return collectWorkerServiceLogs(command);
+  if (command.type === "worker.configure" || command.type === "worker.runner_cache_purge") return handleLinuxWorkerCommand(command, resources, context.cacheService);
+  if (command.type === `${commandPrefix}.create_lease`) {
+    await handleLinuxWorkerCommandWithContext(command, resources, context, commandPrefix);
     return workerEvent(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId });
   }
-  if (command.type === "linux-vm.stop_lease") {
-    await handleLinuxWorkerCommandWithContext(command, resources, context);
+  if (command.type === `${commandPrefix}.stop_lease`) {
+    await handleLinuxWorkerCommandWithContext(command, resources, context, commandPrefix);
     return;
   }
   throw new Error(`unsupported Linux worker command: ${command.type}`);
@@ -266,3 +262,56 @@ export async function runLinuxWorker(baseUrl: string, driver: LibvirtVmDriver, l
     await cacheService.close();
   }
 }
+export async function runDockerLinuxWorker(baseUrl: string, driver: RuntimeDriver & { validateHost(): Promise<{ runtimeReady: boolean; networkReady: boolean; imageReady: boolean; architecture: string; engineOs: string; entrypointReady: boolean; artifactDigest: string }>; listContainerStatuses(): Promise<unknown[]>; reconcileOrphans(): Promise<void> }, limits: WorkerLimits): Promise<void> {
+  if (!baseUrl) throw new Error("MARS_CONTROL_PLANE_URL is required");
+  const host = await driver.validateHost();
+  if (!host.runtimeReady) throw new Error("Linux ARM Docker runtime is not ready");
+  await driver.reconcileOrphans();
+  const resources: LinuxWorkerResources = { appliance: { vcpu: cpus().length, memoryBytes: totalmem(), storageBytes: linuxCapacity().actualStorageBytes }, runtime: limits, cache: WorkerCacheConfiguration.parse({}) };
+  const controlPlane = new URL(baseUrl);
+  const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: resources.cache.ttlSeconds, runnerCacheEnabled: resources.cache.runnerCacheEnabled, runnerCacheMaxGiB: resources.cache.runnerCacheMaxGiB });
+  const identity = await loadIdentity() ?? createLinuxIdentity();
+  await saveIdentity(identity);
+  try {
+    let enrolled = identity;
+    if (!enrolled.workerId) {
+      const code = await readEnrollmentCode();
+      const payload = WorkerBootstrapRequest.parse({ code, platform: "linux-arm64", publicKey: enrolled.publicKey, encryptionPublicKey: enrolled.encryptionPublicKey, vmUuid: enrolled.vmUuid, machineUuid: enrolled.machineUuid, doctor: WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: host.runtimeReady, probe: true, egress: true, imageSignatures: host.imageReady, networkReady: host.networkReady, acceptingLeases: true }), capacity: linuxCapacity() });
+      const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", controlPlane), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) }));
+      if (!response.ok) throw new Error(`worker join failed: ${response.status}`);
+      const joined = await response.json() as { workerId?: string };
+      if (!joined.workerId) throw new Error("worker join response missing workerId");
+      enrolled = { ...enrolled, workerId: joined.workerId };
+      await saveIdentity(enrolled);
+    }
+    const activeLeases = new Map<string, Promise<void>>();
+    for (;;) {
+      const ws = new WebSocket(workerSocketUrl(controlPlane.toString(), enrolled.workerId));
+      const closed = waitForWorkerSocketClose(ws);
+      ws.onmessage = async (event) => {
+        try {
+          const frame = JSON.parse(String(event.data)) as { type?: string; nonce?: string } & Partial<WorkerCommand>;
+          if (frame.type === "challenge" && frame.nonce) return ws.send(JSON.stringify(authenticateWorker(frame.nonce, enrolled)));
+          if (frame.type === "authenticated") {
+            if (Bun.env.MARS_JOIN_CODE_FILE) await unlink(Bun.env.MARS_JOIN_CODE_FILE).catch(() => {});
+            await emitActionCacheSnapshot(cacheService, (type, payload) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(workerEvent(enrolled.workerId, type, payload))); });
+            const containers = await driver.listContainerStatuses().catch(() => []);
+            const doctor = WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: host.runtimeReady, probe: true, egress: true, imageSignatures: host.imageReady, networkReady: host.networkReady, acceptingLeases: true, activeLeases: [...activeLeases.keys()], containers });
+            return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: enrolled.workerId, payload: { doctor, capacity: linuxCapacity() } }));
+          }
+          if (frame.type === "ping") { ws.send(JSON.stringify({ version: 1, type: "pong", workerId: enrolled.workerId })); return; }
+          if (frame.type === "doctor_ack") return;
+          const command = WorkerCommand.parse(frame);
+          void executeLinuxWorkerCommand(command, resources, { driver, encryptionPrivateKey: enrolled.encryptionPrivateKey, runtimeReady: () => host.runtimeReady, send: (value) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); }, activeLeases, cacheService }, "linux-container").then((response) => { if (response && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(response)); }).catch((error: unknown) => { console.error("Linux ARM worker command failed", { commandId: command.id, type: command.type, error: error instanceof Error ? error.message : String(error) }); });
+        } catch {
+          ws.close(1011, "worker command failed");
+        }
+      };
+      await closed;
+      await Bun.sleep(1_000);
+    }
+  } finally {
+    await cacheService.close();
+  }
+}
+export { runDockerLinuxWorker as runLinuxContainerWorker };

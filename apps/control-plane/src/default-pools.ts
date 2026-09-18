@@ -1,5 +1,5 @@
 import type { Sql } from "@mars/db";
-import type { GuestPlatform } from "@mars/contracts";
+import { runtimeDriverForPlatform, type GuestPlatform } from "@mars/contracts";
 import { jsonParameter } from "@mars/db";
 
 type PoolDefaults = Partial<Record<GuestPlatform, string | undefined>>;
@@ -28,7 +28,7 @@ export function poolResourcesForWorkers(workers: WorkerLimits[]) {
 
 function guestPlatformsForWorker(worker: Record<string, unknown>): GuestPlatform[] {
   const value = worker.guestPlatforms;
-  return (Array.isArray(value) ? value : [worker.platform]).filter((platform): platform is GuestPlatform => platform === "linux-x64" || platform === "windows-x64" || platform === "macos-arm64");
+  return (Array.isArray(value) ? value : [worker.platform]).filter((platform): platform is GuestPlatform => platform === "linux-x64" || platform === "linux-arm64" || platform === "windows-x64" || platform === "macos-arm64");
 }
 
 export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Promise<void> {
@@ -45,7 +45,7 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
     const imageDigest = images[platform];
     if (!imageDigest) continue;
     const label = `mars-${platform}`;
-    const driver = platform === "linux-x64" ? "linux-libvirt-vm" : platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm";
+    const driver = runtimeDriverForPlatform(platform);
     const name = `default-${platform}`;
     const [existing] = await db`select id from runner_pools where organization_id is null and (name=${name} or trigger_label=${label}) limit 1`;
     if (existing) {

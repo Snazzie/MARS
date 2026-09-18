@@ -24,16 +24,16 @@ export async function listReplayableWorkerCommands(db: DatabaseClient, workerId:
       AND (
         c.lease_id IS NULL
         OR (
-          c.type IN ('linux-vm.create_lease','tart.create_lease','windows-container.create_lease','hyperv.create_lease')
+          c.type IN ('linux-vm.create_lease','linux-container.create_lease','tart.create_lease','windows-container.create_lease','hyperv.create_lease')
           AND l.id IS NOT NULL AND l.state NOT IN ('failed','reaped') AND l.expires_at>now()
         )
         OR (
-          c.type IN ('linux-vm.stop_lease','tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease')
+          c.type IN ('linux-vm.stop_lease','linux-container.stop_lease','tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease')
           AND l.id IS NOT NULL AND l.state IN ('completed','failed')
           AND NOT EXISTS (
             SELECT 1 FROM commands newer
             WHERE newer.lease_id=c.lease_id
-              AND newer.type IN ('linux-vm.stop_lease','tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease')
+              AND newer.type IN ('linux-vm.stop_lease','linux-container.stop_lease','tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease')
               AND newer.state IN ('pending','sent')
               AND (newer.occurred_at>c.occurred_at OR (newer.occurred_at=c.occurred_at AND newer.id>c.id))
           )

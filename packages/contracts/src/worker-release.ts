@@ -7,7 +7,7 @@ const ociDigest = z.string().regex(
   "digest-pinned OCI reference required",
 );
 export const WorkerContractVersion = z.string().regex(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/, "major.minor.patch worker contract version required");
-export const CURRENT_WORKER_CONTRACT_VERSION = WorkerContractVersion.parse("0.1.0");
+export const CURRENT_WORKER_CONTRACT_VERSION = WorkerContractVersion.parse("0.2.0");
 
 export function parseWorkerContractVersion(value: string): { major: number; minor: number; patch: number } {
   const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(value);
@@ -30,7 +30,7 @@ export function isWorkerContractCompatible(controlPlaneVersion: string, workerVe
 export const hashedAsset = z.object({ url: httpsUrl, sha256 }).strict();
 export type HashedAsset = z.infer<typeof hashedAsset>;
 
-export const WorkerReleasePlatform = z.enum(["linux-x64", "windows-x64", "macos-arm64"]);
+export const WorkerReleasePlatform = z.enum(["linux-x64", "linux-arm64", "windows-x64", "macos-arm64"]);
 export type WorkerReleasePlatform = z.infer<typeof WorkerReleasePlatform>;
 
 export const LinuxWorkerRelease = z.object({
@@ -43,6 +43,14 @@ export const LinuxWorkerRelease = z.object({
   domainTemplate: hashedAsset,
 }).strict();
 export type LinuxWorkerRelease = z.infer<typeof LinuxWorkerRelease>;
+
+export const LinuxArm64WorkerRelease = z.object({
+  installer: hashedAsset,
+  compose: hashedAsset,
+  brokerImage: ociDigest,
+  jobImage: ociDigest,
+}).strict();
+export type LinuxArm64WorkerRelease = z.infer<typeof LinuxArm64WorkerRelease>;
 
 export const WindowsWorkerRelease = z.object({
   installer: hashedAsset,
@@ -73,11 +81,12 @@ export const MacosWorkerRelease = z.object({
 export type MacosWorkerRelease = z.infer<typeof MacosWorkerRelease>;
 
 export const WorkerReleaseManifest = z.object({
-  schemaVersion: z.literal(3),
+  schemaVersion: z.literal(4),
   buildId: z.string().min(1),
   contractVersion: WorkerContractVersion,
   platforms: z.object({
     "linux-x64": LinuxWorkerRelease.nullable(),
+    "linux-arm64": LinuxArm64WorkerRelease.nullable(),
     "windows-x64": WindowsWorkerRelease.nullable(),
     "macos-arm64": MacosWorkerRelease.nullable(),
   }).strict(),

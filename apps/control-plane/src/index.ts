@@ -15,7 +15,7 @@ import { startReconciliationScheduler } from "./reconcile-loop.ts";
 import { pruneExpiredData } from "./retention.ts";
 import { DiscoveryHealthMonitor, isDiscoveryCycleSuccessful } from "./discovery-health.ts";
 import { createControlPlaneApp } from "./http/app.ts";
-import type { ControlPlaneHttpDeps, ControlPlaneLogLevel, ControlPlaneLogSource, DevelopmentArtifact, DevelopmentLinuxArtifacts, DevelopmentMacosArtifacts, DevelopmentWindowsArtifacts } from "./http/types.ts";
+import type { ControlPlaneHttpDeps, ControlPlaneLogLevel, ControlPlaneLogSource, DevelopmentArtifact, DevelopmentLinuxArtifacts, DevelopmentLinuxArm64Artifacts, DevelopmentMacosArtifacts, DevelopmentWindowsArtifacts } from "./http/types.ts";
 import type { ControlPlaneSetup } from "./control-plane-setup.ts";
 import { ensureDefaultPools } from "./default-pools.ts";
 import { GithubRateLimitGate } from "./github-rate-limit.ts";
@@ -183,6 +183,7 @@ const developmentDefaultArtifactPaths = {
   windowsContainerfile: "../../../images/jobs/windows/Containerfile",
   windowsContainerEntrypoint: "../../../images/jobs/windows/entrypoint.ps1",
   linuxCompose: "../../../deploy/workers/linux-broker-compose.yaml",
+  linuxArm64Compose: "../../../deploy/workers/linux-arm64-broker-compose.yaml",
   linuxDomainTemplate: "../../../deploy/workers/worker-domain.xml",
   macosOrchestrator: "../../../apps/orchestrator/dist/mars-orchestrator-macos-arm64",
 } as const;
@@ -232,23 +233,30 @@ export async function resolveDevelopmentWindowsArtifacts(environment: Developmen
   return { orchestrator, serviceHost, ...(jobAgent ? { jobAgent } : {}), ...(container ? { container } : {}) };
 }
 
+export async function resolveDevelopmentLinuxArtifacts(environment: DevelopmentEnvironment = Bun.env): Promise<DevelopmentLinuxArtifacts | undefined> {
+  if (environment.NODE_ENV === "production") return undefined;
+  const [goldenImage, compose, domainTemplate] = await Promise.all([
+    resolveDevelopmentArtifact(environment, ["MARS_LINUX_GOLDEN_IMAGE_PATH", "MARS_LINUX_GOLDEN_PATH"], ["MARS_LINUX_GOLDEN_IMAGE_URL"], ["MARS_LINUX_GOLDEN_IMAGE_SHA256"]),
+    resolveDevelopmentArtifact(environment, ["MARS_LINUX_COMPOSE_PATH"], ["MARS_LINUX_COMPOSE_URL"], ["MARS_LINUX_COMPOSE_SHA256"], developmentDefaultArtifactPaths.linuxCompose),
+    resolveDevelopmentArtifact(environment, ["MARS_LINUX_DOMAIN_TEMPLATE_PATH"], ["MARS_LINUX_DOMAIN_TEMPLATE_URL"], ["MARS_LINUX_DOMAIN_TEMPLATE_SHA256"], developmentDefaultArtifactPaths.linuxDomainTemplate),
+  ]);
+  const brokerImage = trimmedEnvironmentValue(environment, ["MARS_LINUX_BROKER_IMAGE", "MARS_BROKER_IMAGE"]);
+  if (!brokerImage && !goldenImage && !compose && !domainTemplate) return undefined;
+  return { ...(brokerImage ? { brokerImage } : {}), ...(goldenImage ? { goldenImage } : {}), ...(compose ? { compose } : {}), ...(domainTemplate ? { domainTemplate } : {}) };
+}
+export async function resolveDevelopmentLinuxArm64Artifacts(environment: DevelopmentEnvironment = Bun.env): Promise<DevelopmentLinuxArm64Artifacts | undefined> {
+  if (environment.NODE_ENV === "production") return undefined;
+  const compose = await resolveDevelopmentArtifact(environment, ["MARS_LINUX_ARM64_COMPOSE_PATH"], ["MARS_LINUX_ARM64_COMPOSE_URL"], ["MARS_LINUX_ARM64_COMPOSE_SHA256"], developmentDefaultArtifactPaths.linuxArm64Compose);
+  const brokerImage = trimmedEnvironmentValue(environment, ["MARS_LINUX_ARM64_BROKER_IMAGE"]);
+  const jobImage = trimmedEnvironmentValue(environment, ["MARS_LINUX_ARM64_JOB_IMAGE"]);
+  if (!brokerImage && !jobImage && !compose) return undefined;
+  return { ...(brokerImage ? { brokerImage } : {}), ...(jobImage ? { jobImage } : {}), ...(compose ? { compose } : {}) };
+}
+
 const developmentDigest = (environment: DevelopmentEnvironment, names: string[]): string | undefined => {
   const match = trimmedEnvironmentValue(environment, names)?.match(/^(?:[^@\s]+@sha256:|sha256:)?([0-9a-f]{64})$/);
   return match?.[1];
 };
-
-export async function resolveDevelopmentLinuxArtifacts(environment: DevelopmentEnvironment = Bun.env): Promise<DevelopmentLinuxArtifacts | undefined> {
-  if (environment.NODE_ENV === "production") return undefined;
-  const [goldenImage, compose, domainTemplate] = await Promise.all([
-    resolveDevelopmentArtifact(environment, ["MARS_LINUX_GOLDEN_PATH"], ["MARS_LINUX_GOLDEN_URL"], ["MARS_LINUX_GOLDEN_SHA256", "MARS_LINUX_GOLDEN_DIGEST"]),
-    resolveDevelopmentArtifact(environment, ["MARS_LINUX_COMPOSE_PATH", "MARS_LINUX_BROKER_COMPOSE_PATH"], ["MARS_LINUX_COMPOSE_URL", "MARS_LINUX_BROKER_COMPOSE_URL"], ["MARS_LINUX_COMPOSE_SHA256", "MARS_LINUX_BROKER_COMPOSE_SHA256"], developmentDefaultArtifactPaths.linuxCompose),
-    resolveDevelopmentArtifact(environment, ["MARS_LINUX_DOMAIN_TEMPLATE_PATH", "MARS_LINUX_DOMAIN_PATH"], ["MARS_LINUX_DOMAIN_TEMPLATE_URL", "MARS_LINUX_DOMAIN_URL"], ["MARS_LINUX_DOMAIN_TEMPLATE_SHA256", "MARS_LINUX_DOMAIN_SHA256"], developmentDefaultArtifactPaths.linuxDomainTemplate),
-  ]);
-  const brokerImage = trimmedEnvironmentValue(environment, ["MARS_LINUX_BROKER_IMAGE"]);
-  if (!brokerImage && !goldenImage && !compose && !domainTemplate) return undefined;
-  return { ...(brokerImage ? { brokerImage } : {}), ...(goldenImage ? { goldenImage } : {}), ...(compose ? { compose } : {}), ...(domainTemplate ? { domainTemplate } : {}) };
-}
-
 export async function resolveDevelopmentMacosArtifacts(environment: DevelopmentEnvironment = Bun.env): Promise<DevelopmentMacosArtifacts | undefined> {
   if (environment.NODE_ENV === "production") return undefined;
   const [orchestrator, jobAgent, imagePreparationScript] = await Promise.all([
@@ -353,15 +361,13 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const configuredWorkerOrigins = configuredWorkerOriginRaw
     ? [httpOrigin("WORKER_BASE_URL", configuredWorkerOriginRaw)]
     : options.adapterUrls?.map(value => httpOrigin("CONTROL_PLANE_ADAPTER_URLS", value)) ?? [];
-  const env = {
-    DEFAULT_IMAGES: { "linux-x64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_X64, "windows-x64": Bun.env.DEFAULT_JOB_IMAGE_WINDOWS_X64, "macos-arm64": Bun.env.DEFAULT_JOB_IMAGE_MACOS_ARM64 },
-  };
   const webRoot = options.webRoot ?? new URL(Bun.env.WEB_ROOT ?? "../../web/dist/", import.meta.url);
   // Production never resolves worker binaries from the application image.
   const workerInstallerRoot = options.workerInstallerRoot ?? new URL(production ? "file:///var/empty/" : Bun.env.WORKER_INSTALLER_ROOT ?? "../../../deploy/workers/", import.meta.url);
-  const [developmentWindowsArtifacts, developmentLinuxArtifacts, developmentMacosArtifacts] = await Promise.all([
+  const [developmentWindowsArtifacts, developmentLinuxArtifacts, developmentLinuxArm64Artifacts, developmentMacosArtifacts] = await Promise.all([
     resolveDevelopmentWindowsArtifacts(Bun.env),
     resolveDevelopmentLinuxArtifacts(Bun.env),
+    resolveDevelopmentLinuxArm64Artifacts(Bun.env),
     resolveDevelopmentMacosArtifacts(Bun.env),
   ]);
   const developmentContainer = developmentWindowsArtifacts?.container;
@@ -384,6 +390,14 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const workerReleaseManifest = production
     ? options.workerReleaseManifest ?? await loadWorkerReleaseManifest(workerReleaseManifestSource, undefined, { controlPlaneVersion: workerReleaseContractVersion })
     : undefined;
+  const env = {
+    DEFAULT_IMAGES: {
+      "linux-x64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_X64,
+      "linux-arm64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_ARM64 ?? workerReleaseManifest?.platforms["linux-arm64"]?.jobImage,
+      "windows-x64": Bun.env.DEFAULT_JOB_IMAGE_WINDOWS_X64,
+      "macos-arm64": Bun.env.DEFAULT_JOB_IMAGE_MACOS_ARM64,
+    },
+  };
   if (production && !options.skipArtifactChecks) {
     const requiredReleaseArtifacts = {
       webIndex: new URL("index.html", webRoot),
@@ -444,7 +458,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const discoveryHealth = new DiscoveryHealthMonitor(discoveryIntervalMs, Date.parse(startedAt));
   const githubApp = options.githubApp ?? new GitHubAppService({ db, secretBox, publicOrigin: initialized.setup.publicOrigin, webhookOrigin: () => configuredWebhookOrigin });
   const githubRateLimits = new GithubRateLimitGate();
-  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, developmentWindowsArtifacts, developmentLinuxArtifacts, developmentMacosArtifacts, windowsContainerBuild, windowsContainerArtifacts, workerInstallerRoot, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerChanged: () => ensureDefaultPools(db, env.DEFAULT_IMAGES), health: () => ({ buildId: controlPlaneBuildId(), startedAt, discovery: discoveryHealth.snapshot() }), controlPlaneLogs: options.controlPlaneLogs });
+  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, developmentWindowsArtifacts, developmentLinuxArtifacts, developmentLinuxArm64Artifacts, developmentMacosArtifacts, windowsContainerBuild, windowsContainerArtifacts, workerInstallerRoot, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerChanged: () => ensureDefaultPools(db, env.DEFAULT_IMAGES), health: () => ({ buildId: controlPlaneBuildId(), startedAt, discovery: discoveryHealth.snapshot() }), controlPlaneLogs: options.controlPlaneLogs });
   let triggerReconciliation = () => Promise.resolve();
   const gateway = createControlPlaneGateway({ db, httpFetch: async request => await httpApp.fetch(request), current, requestSource: (request, activeServer) => { requestSources.set(request, activeServer.requestIP(request)?.address ?? "unknown"); return requestSources.get(request) ?? "unknown"; }, dispatcher, refreshDefaultPools: () => ensureDefaultPools(db, env.DEFAULT_IMAGES), triggerReconciliation: () => triggerReconciliation(), requestId: () => crypto.randomUUID() });
   let server!: Server<ControlPlaneSocketData>;

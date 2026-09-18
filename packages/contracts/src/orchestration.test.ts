@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig, RuntimeTerminationEvidence, WorkerBuildImagePayload, WorkerContainerStatus, WorkerDoctorData, WorkerDoctorReport, WorkerImageBuildSpec, sanitizeDiagnosticText } from "./orchestration.ts";
+import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig, RuntimeTerminationEvidence, WorkerBuildImagePayload, WorkerContainerStatus, WorkerDoctorData, WorkerDoctorReport, WorkerImageBuildSpec, sanitizeDiagnosticText, runtimeDriverForPlatform } from "./orchestration.ts";
 import * as orchestration from "./orchestration.ts";
 
 test("parses a GitHub JIT config with a one-time lease binding", () => {
@@ -19,6 +19,9 @@ test("parses a GitHub JIT config with a one-time lease binding", () => {
     contractVersion: "0.1.0", imageDigest: "sha256:test",
     resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 },
   }).success).toBe(true);
+});
+test("maps Linux ARM64 to the Docker runtime driver", () => {
+  expect(runtimeDriverForPlatform("linux-arm64")).toBe("linux-docker-container");
 });
 
 test("rejects JIT config without runner labels", () => {

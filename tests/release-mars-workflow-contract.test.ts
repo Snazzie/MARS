@@ -24,8 +24,8 @@ test("Release Mars is the sole manually dispatched publisher", async () => {
 test("build mode retains all worker platforms while reuse skips them", async () => {
   const source = await read(".github/workflows/release-mars.yml");
   const workflow = parseWorkflow(source);
-  for (const name of ["linux", "windows", "macos", "worker-release"]) expect(workflow.jobs[name].if).toContain("worker_release_mode == 'build'");
-  expect(workflow.jobs["worker-release"].needs).toEqual(["validate-inputs", "linux", "windows", "macos"]);
+  for (const name of ["linux", "linux-arm64", "windows", "macos", "worker-release"]) expect(workflow.jobs[name].if).toContain("worker_release_mode == 'build'");
+  expect(workflow.jobs["worker-release"].needs).toEqual(["validate-inputs", "linux", "linux-arm64", "windows", "macos"]);
   expect(workflow.jobs["worker-binding"].needs).toEqual(["validate-inputs", "worker-release"]);
   expect(workflow.jobs["control-plane"].needs).toEqual(["validate-inputs", "worker-binding"]);
   expect(source).toContain("if: always() && needs.validate-inputs.result == 'success' && (inputs.worker_release_mode == 'reuse' || needs.worker-release.result == 'success')");
@@ -41,7 +41,7 @@ test("exact SHA CI and immutable worker assets are required", async () => {
   expect(source).toContain("worker-v<semver>");
   expect(source).toContain("docker manifest inspect");
   expect(source).toContain("DOCKER_CONFIG");
-  expect(source).toContain("schemaVersion:3");
+  expect(source).toContain("schemaVersion:4");
   expect(source).toContain("--platform linux/amd64");
 });
 

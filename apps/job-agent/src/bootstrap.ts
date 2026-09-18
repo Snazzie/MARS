@@ -61,7 +61,7 @@ export function mergeBunInstallCa(source: string, caPath: string): string {
 }
 
 
-export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerRoot: string, platform: "windows-x64" | "linux-x64", workerCache?: WorkerCacheProxy, onOutput?: (stream: "stdout" | "stderr", content: string) => void, windowsTrust: WindowsTrustAdapter = powerShellWindowsTrust): Promise<number> {
+export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerRoot: string, platform: "windows-x64" | "linux-x64" | "linux-arm64", workerCache?: WorkerCacheProxy, onOutput?: (stream: "stdout" | "stderr", content: string) => void, windowsTrust: WindowsTrustAdapter = powerShellWindowsTrust): Promise<number> {
   RunnerJitConfig.shape.encodedJitConfig.parse(encodedJitConfig);
   let caDirectory: string | undefined;
   let addedRootThumbprint: string | undefined;
@@ -159,7 +159,7 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
     if (caCleanupError) throw caCleanupError;
   }
 }
-export async function consumeGuestJitConfig(encoded: string, runnerRoot: string, platform: "windows-x64" | "linux-x64" = process.platform === "win32" ? "windows-x64" : "linux-x64"): Promise<number> {
+export async function consumeGuestJitConfig(encoded: string, runnerRoot: string, platform: "windows-x64" | "linux-x64" | "linux-arm64" = process.platform === "win32" ? "windows-x64" : "linux-x64"): Promise<number> {
   return runRunnerWithWorkerCache(encoded, runnerRoot, platform);
 }
 async function consumeJitConfigFile(configPath: string, runnerRoot: string, onOutput?: (stream: "stdout" | "stderr", content: string) => void): Promise<number> {
@@ -181,7 +181,7 @@ async function consumeJitConfigFile(configPath: string, runnerRoot: string, onOu
     bytes.fill(0);
   }
 }
-export async function consumeGuestJitConfigWithWorkerCache(encoded: string, runnerRoot: string, platform: "windows-x64" | "linux-x64", workerCache: WorkerCacheProxy, windowsTrust: WindowsTrustAdapter = powerShellWindowsTrust): Promise<number> {
+export async function consumeGuestJitConfigWithWorkerCache(encoded: string, runnerRoot: string, platform: "windows-x64" | "linux-x64" | "linux-arm64", workerCache: WorkerCacheProxy, windowsTrust: WindowsTrustAdapter = powerShellWindowsTrust): Promise<number> {
   return runRunnerWithWorkerCache(encoded, runnerRoot, platform, workerCache, undefined, windowsTrust);
 }
 export async function runOneTimeJitBootstrap(configPath: string, runnerRoot: string): Promise<void> {
@@ -214,11 +214,11 @@ export async function waitForGuestBootstrap(
 }
 
 export async function runGuestService(
-  platform: "windows-x64" | "linux-x64",
+  platform: "windows-x64" | "linux-x64" | "linux-arm64",
   bootstrapPath: string,
   runnerRoot: string,
   completionMode: "shutdown" | "exit" = "shutdown",
-  shutdown: (platform: "windows-x64" | "linux-x64") => Promise<void> | void = defaultGuestShutdown,
+  shutdown: (platform: "windows-x64" | "linux-x64" | "linux-arm64") => Promise<void> | void = defaultGuestShutdown,
 ): Promise<void> {
   const raw = await waitForGuestBootstrap(bootstrapPath, Number.POSITIVE_INFINITY);
   await unlink(bootstrapPath).catch((error: NodeJS.ErrnoException) => {
@@ -235,10 +235,11 @@ export async function runGuestService(
   await shutdown(platform);
 }
 
-async function defaultGuestShutdown(platform: "windows-x64" | "linux-x64"): Promise<void> {
+async function defaultGuestShutdown(platform: "windows-x64" | "linux-x64" | "linux-arm64"): Promise<void> {
+  if (platform === "linux-arm64") return;
   const command = platform === "windows-x64" ? ["shutdown.exe", "/s", "/t", "0"] : ["systemctl", "poweroff"];
   Bun.spawn(command, { stdout: "ignore", stderr: "ignore" });
 }
-export function runnerCommandForPlatform(platform: "windows-x64" | "linux-x64"): string[] {
+export function runnerCommandForPlatform(platform: "windows-x64" | "linux-x64" | "linux-arm64"): string[] {
   return platform === "windows-x64" ? ["cmd.exe", "/c", "run.cmd"] : ["./bin/Runner.Listener", "run"];
 }

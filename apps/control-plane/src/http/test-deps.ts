@@ -6,9 +6,9 @@ const fakeDb = (() => []) as unknown as ControlPlaneHttpDeps["db"];
 const testHash = "a".repeat(64);
 const testAsset = (name: string) => ({ url: `https://release.test/${name}`, sha256: testHash });
 const testReleaseManifest: WorkerReleaseManifest = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   buildId: "test-build",
-  contractVersion: "0.1.0",
+  contractVersion: "0.2.0",
   platforms: {
     "linux-x64": {
       installer: testAsset("linux-installer.sh"),
@@ -18,6 +18,12 @@ const testReleaseManifest: WorkerReleaseManifest = {
       goldenImage: testAsset("worker.qcow2"),
       compose: testAsset("compose.yaml"),
       domainTemplate: testAsset("domain.xml"),
+    },
+    "linux-arm64": {
+      installer: testAsset("linux-arm64-installer.ps1"),
+      compose: testAsset("linux-arm64-compose.yaml"),
+      brokerImage: `ghcr.io/snazzie/mars/linux-arm64-broker@sha256:${testHash}`,
+      jobImage: `ghcr.io/snazzie/mars/linux-arm64-job@sha256:${testHash}`,
     },
     "windows-x64": {
       installer: testAsset("windows-installer.ps1"),

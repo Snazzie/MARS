@@ -11,7 +11,7 @@ import { CostCenterPriceChart } from "../components/CostCenterPriceChart.tsx";
 
 const providerLabels: Record<CostCenterPricingProvider, string> = { github: "GitHub-hosted", blacksmith: "Blacksmith", "azure-vm": "Azure VM" };
 export const costCenterQueryOptions = (organizationId: string, period: DashboardPeriod, provider: CostCenterPricingProvider = "github") => ({ queryKey: ["org", organizationId, "cost-center", period, provider], queryFn: () => getCostCenter(organizationId, period, provider), enabled: Boolean(organizationId), ...(organizationId === "all" ? { refetchInterval: 5_000 } : {}) });
-export const formatPlatform = (platform: string) => ({ "linux-x64": "Linux x64", "windows-x64": "Windows x64", "macos-arm64": "macOS arm64" } as Record<string, string>)[platform] ?? platform;
+export const formatPlatform = (platform: string) => ({ "linux-x64": "Linux x64", "linux-arm64": "Linux ARM64 (Docker Desktop)", "windows-x64": "Windows x64", "macos-arm64": "macOS arm64" } as Record<string, string>)[platform] ?? platform;
 export const formatRunner = (row: Pick<CostCenterBreakdown, "githubRunnerSku" | "githubRunnerVcpu">, provider: CostCenterPricingProvider = "github") => row.githubRunnerSku && row.githubRunnerVcpu ? `${row.githubRunnerSku} · ${row.githubRunnerVcpu} vCPU` : `No comparable ${providerLabels[provider]} runner`;
 export const formatMinutesBreakdown = (row: CostCenterBreakdown) => row.unpricedMinutes > 0 ? `${formatMinutes(row.pricedMinutes)} priced · ${formatMinutes(row.unpricedMinutes)} unmatched` : formatMinutes(row.selfHostedMinutes);
 

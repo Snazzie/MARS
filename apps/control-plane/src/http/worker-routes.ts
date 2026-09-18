@@ -7,8 +7,8 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { PendingWorkerRequest, WorkerConfiguration, WorkerContractVersion, WorkerReleaseOciDigest } from "@mars/contracts";
-import type { LinuxWorkerRelease, MacosWorkerRelease, WindowsWorkerRelease } from "@mars/contracts";
-import type { ControlPlaneEnv, ControlPlaneHttpDeps, DevelopmentArtifact, DevelopmentArtifactFetchOptions, DevelopmentLinuxArtifacts, DevelopmentMacosArtifacts, DevelopmentWindowsArtifacts } from "./types.ts";
+import type { LinuxArm64WorkerRelease, LinuxWorkerRelease, MacosWorkerRelease, WindowsWorkerRelease } from "@mars/contracts";
+import type { ControlPlaneEnv, ControlPlaneHttpDeps, DevelopmentArtifact, DevelopmentArtifactFetchOptions, DevelopmentLinuxArm64Artifacts, DevelopmentLinuxArtifacts, DevelopmentMacosArtifacts, DevelopmentWindowsArtifacts } from "./types.ts";
 import { verifyWorkerBootstrap, initializeWorkerBootstrap, rotateWorkerBootstrap, getWorkerBootstrapStatus } from "../worker-bootstrap.ts";
 import { approvePendingWorker, configurePendingWorker, createRequestLimiter, hasMachineIdentity, parseApproveWorkerRequest, requestPendingWorker, rejectPendingWorker } from "../worker-requests.ts";
 import { httpOrigin } from "../http-origin.ts";
@@ -477,6 +477,17 @@ export function linuxInstallerValues(platform: LinuxInstallerMetadata, connectOr
     MARS_LIBVIRT_NETWORK: "default",
   };
 }
+type LinuxArm64InstallerMetadata = Pick<LinuxArm64WorkerRelease, "brokerImage" | "jobImage" | "compose">;
+export function linuxArm64InstallerValues(platform: LinuxArm64InstallerMetadata, connectOrigin: string, mode: "local" | "production" = "production"): InstallerValues {
+  return {
+    ControlPlaneUrl: new URL(connectOrigin).origin,
+    ArtifactMode: mode,
+    BrokerImage: platform.brokerImage,
+    JobImage: platform.jobImage,
+    ComposeUrl: `${connectOrigin}/api/workers/linux-arm64-broker-compose`,
+    ComposeSha256: platform.compose.sha256,
+  };
+}
 
 export function windowsInstallerValues(platform: WindowsWorkerRelease | undefined, connectOrigin: string, development?: NonNullable<ControlPlaneHttpDeps["developmentWindowsArtifacts"]>, upgrade = false): InstallerValues {
   const source = platform ?? (development ? ({
@@ -536,28 +547,23 @@ export function macosInstallerValues(platform: MacosInstallerMetadata, connectOr
     MARS_ARTIFACT_MODE: mode,
     MARS_WORKER_CONTRACT_VERSION: WorkerContractVersion.parse(contractVersion),
     PUBLIC_BASE_URL: new URL(connectOrigin).origin,
-    MARS_ORCHESTRATOR_URL: `${connectOrigin}/api/workers/orchestrator?audience=macos-arm64`,
-    MARS_ORCHESTRATOR_SHA256: platform.orchestrator.sha256,
-    MARS_JOB_AGENT_URL: `${connectOrigin}/api/workers/macos-job-agent`,
-    MARS_JOB_AGENT_SHA256: platform.jobAgent.sha256,
-    IMAGE_PREPARATION_SCRIPT_URL: `${connectOrigin}/api/workers/macos-image-preparation`,
-    IMAGE_PREPARATION_SCRIPT_SHA256: platform.imagePreparationScript.sha256,
     TART_IMAGE: platform.tartSourceImage,
     TART_IMAGE_DIGEST: platform.tartSourceImage.split("@sha256:")[1]!,
   };
 }
 
-type DevelopmentPlatformArtifacts = DevelopmentLinuxArtifacts | DevelopmentWindowsArtifacts | DevelopmentMacosArtifacts;
+type DevelopmentPlatformArtifacts = DevelopmentLinuxArtifacts | DevelopmentLinuxArm64Artifacts | DevelopmentWindowsArtifacts | DevelopmentMacosArtifacts;
+
 
 async function installerArtifacts(
   deps: ControlPlaneHttpDeps,
-  audience: "linux-x64" | "windows-x64" | "macos-arm64",
-  platform: LinuxWorkerRelease | WindowsWorkerRelease | MacosWorkerRelease | null | undefined,
+  audience: "linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64",
+  platform: LinuxWorkerRelease | LinuxArm64WorkerRelease | WindowsWorkerRelease | MacosWorkerRelease | null | undefined,
   development?: DevelopmentPlatformArtifacts,
   upgrade = false,
 ): Promise<string[]> {
   const missing: string[] = [];
-  const installerName = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : "install-worker-macos.sh";
+  const installerName = audience === "linux-x64" ? "install-worker.sh" : audience === "linux-arm64" ? "install-worker-linux-arm64.ps1" : audience === "windows-x64" ? "install-worker.ps1" : "install-worker-macos.sh";
   if (development) {
     if (!deps.workerInstallerRoot || !await artifactExists(pathFor(deps.workerInstallerRoot, installerName))) missing.push(`installer:${installerName}`);
     if (audience === "linux-x64") {
@@ -566,6 +572,11 @@ async function installerArtifacts(
       if (!linux.goldenImage) missing.push("development:golden-image");
       if (!linux.compose) missing.push("development:linux-broker-compose");
       if (!linux.domainTemplate) missing.push("development:linux-domain-template");
+    } else if (audience === "linux-arm64") {
+      const arm = development as DevelopmentLinuxArm64Artifacts;
+      if (!hasValue(arm.brokerImage)) missing.push("development:linux-arm64-broker-image");
+      if (!hasValue(arm.jobImage)) missing.push("development:linux-arm64-job-image");
+      if (!arm.compose) missing.push("development:linux-arm64-broker-compose");
     } else if (audience === "windows-x64") {
       const windows = development as DevelopmentWindowsArtifacts;
       if (!windows.orchestrator) missing.push("development:orchestrator");
@@ -586,9 +597,11 @@ async function installerArtifacts(
   if (!platform) return [`platform:${audience}`];
   const fields = audience === "linux-x64"
     ? ["installer", "orchestrator", "jobAgent", "brokerImage", "goldenImage", "compose", "domainTemplate"]
-    : audience === "windows-x64"
-      ? (upgrade ? ["installer", "orchestrator", "serviceHost"] : ["installer", "orchestrator", "serviceHost", "jobAgent", "container"])
-      : ["installer", "orchestrator", "jobAgent", "imagePreparationScript", "tartSourceImage"];
+    : audience === "linux-arm64"
+      ? ["installer", "compose", "brokerImage", "jobImage"]
+      : audience === "windows-x64"
+        ? (upgrade ? ["installer", "orchestrator", "serviceHost"] : ["installer", "orchestrator", "serviceHost", "jobAgent", "container"])
+        : ["installer", "orchestrator", "jobAgent", "imagePreparationScript", "tartSourceImage"];
   for (const field of fields) if (!(platform as unknown as Record<string, unknown>)[field]) missing.push(releaseField(audience, field));
   return missing;
 }
@@ -1052,6 +1065,11 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const asset = deps.workerReleaseManifest?.platforms["linux-x64"]?.compose;
     return asset ? await proxyPackagedResponse(asset.url, "linux-broker-compose.yaml", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, ["linux-broker-compose"]) : unavailable(c, ["manifest:linux-x64.compose"]);
   };
+  const linuxArm64Compose = async (c: Context<ControlPlaneEnv>) => {
+    if (deps.developmentLinuxArm64Artifacts) return developmentPackaged(c, deps.developmentLinuxArm64Artifacts.compose, "linux-arm64-broker-compose", "linux-arm64-broker-compose.yaml", "binary");
+    const asset = deps.workerReleaseManifest?.platforms["linux-arm64"]?.compose;
+    return asset ? await proxyPackagedResponse(asset.url, "linux-arm64-broker-compose.yaml", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, ["linux-arm64-broker-compose"]) : unavailable(c, ["manifest:linux-arm64.compose"]);
+  };
   const linuxDomain = async (c: Context<ControlPlaneEnv>) => {
     if (deps.developmentLinuxArtifacts) return developmentPackaged(c, deps.developmentLinuxArtifacts.domainTemplate, "linux-domain-template", "worker-domain.xml", "binary");
     const asset = deps.workerReleaseManifest?.platforms["linux-x64"]?.domainTemplate;
@@ -1062,15 +1080,14 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const asset = deps.workerReleaseManifest?.platforms["linux-x64"]?.goldenImage;
     return asset ? await immutablePackaged(c, asset, "linux-golden-image", "worker.qcow2", "template") : unavailable(c, ["manifest:linux-x64.goldenImage"]);
   });
+  app.get("/api/workers/linux-arm64-broker-compose", linuxArm64Compose);
   app.get("/api/workers/linux-broker-compose", linuxCompose);
   app.get("/api/workers/linux-compose", linuxCompose);
-  app.get("/api/workers/linux-domain-template", linuxDomain);
-  app.get("/api/workers/worker-domain", linuxDomain);
   app.get("/api/workers/installer", async (c) => {
-    const audience = c.req.query("audience") as "linux-x64" | "windows-x64" | "macos-arm64" | undefined;
+    const audience = c.req.query("audience") as "linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64" | undefined;
     const runtime = c.req.query("runtime") ?? "container";
     const upgrade = c.req.query("upgrade") === "true";
-    const file = audience === "linux-x64" ? "install-worker.sh" : audience === "windows-x64" ? "install-worker.ps1" : audience === "macos-arm64" ? "install-worker-macos.sh" : null;
+    const file = audience === "linux-x64" ? "install-worker.sh" : audience === "linux-arm64" ? "install-worker-linux-arm64.ps1" : audience === "windows-x64" ? "install-worker.ps1" : audience === "macos-arm64" ? "install-worker-macos.sh" : null;
     if (!audience || !file) return c.json({ error: "unsupported installer audience" }, 400);
     if (audience === "windows-x64" && runtime !== "container") {
       return c.json({ code: "unsupported_runtime", message: "Only the container runtime is supported in worker v1" }, 400);
@@ -1087,8 +1104,12 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       const configured = deps.developmentLinuxArtifacts;
       const [goldenImage, compose, domainTemplate] = await Promise.all([currentDevelopmentArtifact(configured.goldenImage), currentDevelopmentArtifact(configured.compose), currentDevelopmentArtifact(configured.domainTemplate)]);
       development = { ...configured, goldenImage, compose, domainTemplate };
+    } else if (audience === "linux-arm64" && deps.developmentLinuxArm64Artifacts) {
+      const configured = deps.developmentLinuxArm64Artifacts;
+      development = { ...configured, compose: await currentDevelopmentArtifact(configured.compose) };
     } else if (audience === "windows-x64" && deps.developmentWindowsArtifacts) {
-      development = { ...deps.developmentWindowsArtifacts, orchestrator: await currentDevelopmentArtifact(deps.developmentWindowsArtifacts.orchestrator), serviceHost: await currentDevelopmentArtifact(deps.developmentWindowsArtifacts.serviceHost) } as DevelopmentWindowsArtifacts;
+      const configured = deps.developmentWindowsArtifacts;
+      development = { ...configured, orchestrator: await currentDevelopmentArtifact(configured.orchestrator), serviceHost: await currentDevelopmentArtifact(configured.serviceHost) } as DevelopmentWindowsArtifacts;
     } else if (audience === "macos-arm64" && deps.developmentMacosArtifacts) {
       const configured = deps.developmentMacosArtifacts;
       development = { ...configured, orchestrator: await currentDevelopmentArtifact(configured.orchestrator), jobAgent: await currentDevelopmentArtifact(configured.jobAgent), imagePreparationScript: await currentDevelopmentArtifact(configured.imagePreparationScript) };
@@ -1116,6 +1137,12 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
         if (!linux.brokerImage || !linux.goldenImage || !linux.compose || !linux.domainTemplate) return unavailable(c, [`platform:${audience}`]);
         values = linuxInstallerValues({ brokerImage: linux.brokerImage, goldenImage: { url: "", sha256: linux.goldenImage.sha256 }, compose: { url: "", sha256: linux.compose.sha256 }, domainTemplate: { url: "", sha256: linux.domainTemplate.sha256 } }, connectOrigin, "local");
       } else values = linuxInstallerValues(release as LinuxWorkerRelease, connectOrigin, "production");
+    } else if (audience === "linux-arm64") {
+      const arm = development as DevelopmentLinuxArm64Artifacts | undefined;
+      if (arm) {
+        if (!arm.brokerImage || !arm.jobImage || !WorkerReleaseOciDigest.safeParse(arm.brokerImage).success || !WorkerReleaseOciDigest.safeParse(arm.jobImage).success || !arm.compose) return unavailable(c, [`platform:${audience}`]);
+        values = linuxArm64InstallerValues({ brokerImage: arm.brokerImage, jobImage: arm.jobImage, compose: { url: "", sha256: arm.compose.sha256 } }, connectOrigin, "local");
+      } else values = linuxArm64InstallerValues(release as LinuxArm64WorkerRelease, connectOrigin, "production");
     } else if (audience === "windows-x64") {
       values = windowsInstallerValues(release as WindowsWorkerRelease | undefined, connectOrigin, development as DevelopmentWindowsArtifacts | undefined, upgrade);
     } else if (development) {
@@ -1125,7 +1152,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       if (!WorkerContractVersion.safeParse(contractVersion).success) return unavailable(c, [`contract:${audience}`]);
       values = macosInstallerValues({ orchestrator: { url: "", sha256: macos.orchestrator.sha256 }, jobAgent: { url: "", sha256: macos.jobAgent.sha256 }, imagePreparationScript: { url: "", sha256: macos.imagePreparationScript.sha256 }, tartSourceImage: macos.tartImage }, connectOrigin, contractVersion!, "local");
     } else values = macosInstallerValues(release as MacosWorkerRelease, connectOrigin, deps.workerReleaseManifest?.contractVersion ?? "", "production");
-    const generated = injectInstallerOrigin(source, connectOrigin, values, audience === "windows-x64");
+    const generated = injectInstallerOrigin(source, connectOrigin, values, audience === "windows-x64" || audience === "linux-arm64");
     if (generated.includes("__PLACEHOLDER__") || /__[A-Za-z0-9_]+__/.test(generated)) return unavailable(c, [`installer:${file}`]);
     return new Response(generated, { headers: noStore() });
   });

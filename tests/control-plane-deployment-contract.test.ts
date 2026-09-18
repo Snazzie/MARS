@@ -146,12 +146,12 @@ test("deployment guide documents image-owned worker contract and operations", as
   expect(readme).not.toContain("MARS_WORKER_CONTRACT_VERSION=");
 });
 
-test("schema-3 release fixture keeps unavailable platforms explicit", async () => {
+test("schema-4 release fixture keeps unavailable platforms explicit", async () => {
   const manifest = JSON.parse(await read("deploy/control-plane/release-manifest.json"));
   expect(manifest).toMatchObject({
-    schemaVersion: 3,
-    contractVersion: "0.1.0",
-    platforms: { "linux-x64": null, "windows-x64": null, "macos-arm64": null },
+    schemaVersion: 4,
+    contractVersion: "0.2.0",
+    platforms: { "linux-x64": null, "linux-arm64": null, "windows-x64": null, "macos-arm64": null },
   });
   expect(manifest).not.toHaveProperty("windowsContainerBuild");
 });
@@ -163,8 +163,8 @@ test("release workflow encodes build/reuse DAG and evidence gates", async () => 
   expect(inputs.worker_release_mode).toMatchObject({ required: true, type: "choice", options: ["build", "reuse"] });
   expect(inputs.worker_version).toMatchObject({ required: false, type: "string" });
   expect(inputs.worker_manifest_url).toMatchObject({ required: false, type: "string" });
-  for (const job of ["linux", "windows", "macos", "worker-release"]) expect(workflow.jobs[job].if).toContain("worker_release_mode == 'build'");
-  expect(workflow.jobs["worker-release"].needs).toEqual(["validate-inputs", "linux", "windows", "macos"]);
+  for (const job of ["linux", "linux-arm64", "windows", "macos", "worker-release"]) expect(workflow.jobs[job].if).toContain("worker_release_mode == 'build'");
+  expect(workflow.jobs["worker-release"].needs).toEqual(["validate-inputs", "linux", "linux-arm64", "windows", "macos"]);
   expect(workflow.jobs["worker-binding"].needs).toEqual(["validate-inputs", "worker-release"]);
   expect(workflow.jobs["control-plane"].needs).toEqual(["validate-inputs", "worker-binding"]);
   expect(workflow.jobs["candidate-compose-smoke"].needs).toContain("control-plane");

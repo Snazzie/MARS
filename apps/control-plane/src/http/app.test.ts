@@ -1324,9 +1324,9 @@ test("generates complete platform installers from the immutable release manifest
     }
     await Bun.write(join(root, "macos-orchestrator"), "packaged-macos-orchestrator");
     const manifest = {
-      schemaVersion: 3 as const,
+      schemaVersion: 4 as const,
       buildId: "build-1",
-      contractVersion: "0.1.0",
+      contractVersion: "0.2.0",
       platforms: {
         "linux-x64": {
           installer: { url: "https://release.test/linux-installer.sh", sha256: hash },
@@ -1336,6 +1336,12 @@ test("generates complete platform installers from the immutable release manifest
           goldenImage: { url: "https://release.test/worker.qcow2", sha256: hash },
           compose: { url: "https://release.test/compose.yaml", sha256: hash },
           domainTemplate: { url: "https://release.test/domain.xml", sha256: hash },
+        },
+        "linux-arm64": {
+          installer: { url: "https://release.test/linux-arm64-installer.ps1", sha256: hash },
+          compose: { url: "https://release.test/linux-arm64-compose.yaml", sha256: hash },
+          brokerImage: `ghcr.io/snazzie/mars/linux-arm64-broker@sha256:${hash}`,
+          jobImage: `ghcr.io/snazzie/mars/linux-arm64-job@sha256:${hash}`,
         },
         "windows-x64": {
           installer: { url: "https://release.test/windows-installer.ps1", sha256: hash },
@@ -1382,7 +1388,7 @@ test("generates complete platform installers from the immutable release manifest
     const macosInstaller = await macosResponse.text();
     expect(macosResponse.status).toBe(200);
     expect(macosInstaller).toContain("MARS_ARTIFACT_MODE='production'");
-    expect(macosInstaller).toContain("MARS_WORKER_CONTRACT_VERSION='0.1.0'");
+    expect(macosInstaller).toContain("MARS_WORKER_CONTRACT_VERSION='0.2.0'");
     expect(macosInstaller).toContain("PUBLIC_BASE_URL='https://adapter.test'");
     expect(macosInstaller).toContain(`MARS_ORCHESTRATOR_SHA256='${hash}'`);
     expect(macosInstaller).toContain(`TART_IMAGE='ghcr.io/cirruslabs/macos-sonoma-base@sha256:${hash}'`);
@@ -2191,14 +2197,11 @@ describe("Linux and macOS platform artifact sources", () => {
     const body = "production-golden-image";
     const hash = createHash("sha256").update(body).digest("hex");
     const requested: string[] = [];
-    const fetcher = Object.assign(async (input: string | URL | Request) => {
-      requested.push(String(input));
-      return new Response(body, { headers: { "content-type": "application/octet-stream" } });
-    }, { preconnect: globalThis.fetch.preconnect });
+    const fetcher = Object.assign(async (input: string | URL | Request) => { requested.push(String(input)); return new Response(body, { headers: { "content-type": "application/octet-stream" } }); }, { preconnect: globalThis.fetch.preconnect });
     const manifest = {
-      schemaVersion: 3 as const,
+      schemaVersion: 4 as const,
       buildId: "production-build",
-      contractVersion: "0.1.0",
+      contractVersion: "0.2.0",
       platforms: {
         "linux-x64": {
           installer: { url: "https://release.test/linux-installer.sh", sha256: "a".repeat(64) },
@@ -2208,6 +2211,12 @@ describe("Linux and macOS platform artifact sources", () => {
           goldenImage: { url: "https://release.test/linux-golden.qcow2", sha256: hash },
           compose: { url: "https://release.test/compose.yaml", sha256: "c".repeat(64) },
           domainTemplate: { url: "https://release.test/domain.xml", sha256: "d".repeat(64) },
+        },
+        "linux-arm64": {
+          installer: { url: "https://release.test/linux-arm64-installer.ps1", sha256: "e".repeat(64) },
+          compose: { url: "https://release.test/linux-arm64-compose.yaml", sha256: "f".repeat(64) },
+          brokerImage: `ghcr.io/snazzie/mars/linux-arm64-broker@sha256:${"a".repeat(64)}`,
+          jobImage: `ghcr.io/snazzie/mars/linux-arm64-job@sha256:${"b".repeat(64)}`,
         },
         "windows-x64": null,
         "macos-arm64": null,

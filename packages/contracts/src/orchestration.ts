@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { WorkerContractVersion } from "./worker-release.ts";
 
-export const RuntimePlatform = z.enum(["linux-x64", "windows-x64", "macos-arm64"]);
+export const RuntimePlatform = z.enum(["linux-x64", "linux-arm64", "windows-x64", "macos-arm64"]);
 export type RuntimePlatform = z.infer<typeof RuntimePlatform>;
 export const GuestPlatform = RuntimePlatform;
 export type GuestPlatform = RuntimePlatform;
@@ -10,7 +10,16 @@ export type WorkerGuestPlatforms = z.infer<typeof WorkerGuestPlatforms>;
 export function validateWorkerGuestPlatforms(hostPlatform: RuntimePlatform, guestPlatforms: WorkerGuestPlatforms): boolean {
   return guestPlatforms.length === 1 && guestPlatforms[0] === hostPlatform;
 }
-export const RuntimeDriverName = z.enum(["linux-libvirt-vm", "windows-hyperv", "windows-hyperv-container", "tart-vm"]);
+export const RuntimeDriverName = z.enum(["linux-libvirt-vm", "linux-docker-container", "windows-hyperv", "windows-hyperv-container", "tart-vm"]);
+export type RuntimeDriverName = z.infer<typeof RuntimeDriverName>;
+export function runtimeDriverForPlatform(platform: RuntimePlatform): RuntimeDriverName {
+  switch (platform) {
+    case "linux-x64": return "linux-libvirt-vm";
+    case "linux-arm64": return "linux-docker-container";
+    case "windows-x64": return "windows-hyperv-container";
+    case "macos-arm64": return "tart-vm";
+  }
+}
 const diagnosticSecretAssignment = /((?:^|[\s"'`([{;,&])(?:--)?[A-Za-z_$][A-Za-z0-9_$.-]*)(\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s"'`,;)\]}]+)/g;
 const diagnosticSecretKey = /(?:^|[._:-])(?:password|passwd|passphrase|secret|token|credential|credentials|private[-_.]?key|access[-_.]?key|auth[-_.]?token|refresh[-_.]?token|client[-_.]?secret|api[-_.]?key)(?:$|[._:-])/i;
 export function sanitizeDiagnosticText(input: string, maxLength = 128 * 1024): string {
@@ -22,7 +31,6 @@ export function sanitizeDiagnosticText(input: string, maxLength = 128 * 1024): s
   if (!Number.isSafeInteger(maxLength) || maxLength < 1) return "";
   return redacted.length > maxLength ? `${redacted.slice(0, maxLength)}\n=== diagnostic output truncated ===\n` : redacted;
 }
-export type RuntimeDriverName = z.infer<typeof RuntimeDriverName>;
 const positiveSafe = z.number().int().positive().safe();
 export const OutOfMemoryResult = z.object({
   reason: z.literal("out_of_memory"),
@@ -308,6 +316,7 @@ export const WorkerContainerStatus = z.object({
   diskUsageBytes: z.number().int().nonnegative().safe().nullable(),
   sampledAt: z.string().datetime({ offset: true }),
 }).strict();
+export type WorkerContainerStatus = z.infer<typeof WorkerContainerStatus>;
 export const WorkerDoctorData = z.object({ nestedKvm: z.boolean().optional(), kvmModules: z.boolean().optional(), probe: z.boolean().optional(), egress: z.boolean().optional(), imageSignatures: z.boolean().optional(), blockVolume: z.boolean().optional(), libvirtReady: z.boolean().optional(), networkReady: z.boolean().optional(), cloneStorageReady: z.boolean().optional(), realVmSmoke: z.boolean().optional(), smokeArtifactDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/).optional(), smokeObservedAt: z.string().datetime({ offset: true }).optional(), runtimeMode: z.enum(["container", "vm", "tart"]).optional(), artifactSource: z.enum(["worker_local", "registry", "template"]).optional(), artifactIdentity: z.string().min(1).optional(), artifactDigest: z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/).optional(), runtimeReady: z.boolean().optional(), runtimeBuildState: z.enum(["idle", "building", "ready", "failed"]).optional(), runtimeBuildMessage: z.string().max(1000).nullable().optional(), remediation: z.string().nullable().optional(), actualVcpu: boundedResource.optional(), actualMemoryBytes: boundedResource.optional(), actualStorageBytes: boundedResource.optional(), freeVcpu: boundedResource.optional(), freeMemoryBytes: boundedResource.optional(), freeStorageBytes: boundedResource.optional(), activeLeases: z.array(z.string().uuid()).optional(), preserveLeases: z.boolean().optional(), acceptingLeases: z.boolean().optional(), containers: z.array(WorkerContainerStatus).default([]) }).strict();
 export const WorkerCapacityData = z.object({ actualVcpu: boundedResource, actualMemoryBytes: boundedResource, actualStorageBytes: boundedResource, freeVcpu: boundedResource, freeMemoryBytes: boundedResource, freeStorageBytes: boundedResource }).strict();
 export const WorkerDoctorReport = z.object({ doctor: WorkerDoctorData, capacity: WorkerCapacityData }).strict();

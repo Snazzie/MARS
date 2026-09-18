@@ -1,0 +1,9 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+WORKDIR /opt/actions-runner
+COPY runner.tar.gz /tmp/runner.tar.gz
+RUN apt-get update && apt-get install --no-install-recommends -y ca-certificates bash git curl && rm -rf /var/lib/apt/lists/* && tar -xzf /tmp/runner.tar.gz -C /opt/actions-runner && rm /tmp/runner.tar.gz && mkdir -p /var/lib/mars/bootstrap
+COPY mars-job-agent /usr/local/bin/mars-job-agent
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 0755 /usr/local/bin/mars-job-agent /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

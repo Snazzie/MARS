@@ -1,0 +1,49 @@
+name: mars-linux-arm64
+
+services:
+  broker:
+    image: ${MARS_BROKER_IMAGE:?digest-pinned broker image required}
+    restart: unless-stopped
+    environment:
+      MARS_CONTROL_PLANE_URL: ${MARS_CONTROL_PLANE_URL:?control-plane URL required}
+      MARS_LINUX_CONTAINER_IMAGE: ${MARS_JOB_IMAGE:?digest-pinned ARM job image required}
+      MARS_LINUX_CONTAINER_NETWORK: mars-linux-arm64
+      MARS_JOIN_CODE_FILE: /var/lib/mars/config/join-code
+      MARS_WORKER_IDENTITY_FILE: /var/lib/mars/config/worker-identity.json
+      MARS_ACTION_CACHE_ROOT: /var/lib/mars/action-cache
+      MARS_CACHE_PROXY_PORT: "8788"
+      MARS_CACHE_DATA_PORT: "8789"
+      MARS_CACHE_PROXY_URL: http://mars-cache:8788
+      MARS_CACHE_ADVERTISE_URL: https://mars-cache:8789
+      MAX_VCPU_PER_POD: ${MAX_VCPU_PER_POD:-4}
+      MAX_MEMORY_BYTES_PER_POD: ${MAX_MEMORY_BYTES_PER_POD:-6442450944}
+      MAX_STORAGE_BYTES_PER_POD: ${MAX_STORAGE_BYTES_PER_POD:-32212254720}
+      MAX_CONCURRENT_PODS: ${MAX_CONCURRENT_PODS:-3}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - mars-linux-arm64-state:/var/lib/mars
+    networks:
+      mars-linux-arm64:
+        aliases: [mars-broker]
+    healthcheck:
+      test: ["CMD-SHELL", "docker info --format '{{.OSType}}/{{.Architecture}}' | grep -Eq '^linux/(arm64|aarch64)$'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    depends_on:
+      cache:
+        condition: service_started
+  cache:
+    image: ${MARS_CACHE_IMAGE:-ghcr.io/snazzie/mars/worker-cache:latest}
+    restart: unless-stopped
+    networks:
+      mars-linux-arm64:
+        aliases: [mars-cache]
+    expose: ["8788", "8789"]
+
+volumes:
+  mars-linux-arm64-state:
+
+networks:
+  mars-linux-arm64:
+    name: mars-linux-arm64

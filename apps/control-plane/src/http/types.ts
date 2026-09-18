@@ -36,6 +36,11 @@ export type DevelopmentLinuxArtifacts = {
   compose?: DevelopmentArtifact;
   domainTemplate?: DevelopmentArtifact;
 };
+export type DevelopmentLinuxArm64Artifacts = {
+  brokerImage?: string;
+  jobImage?: string;
+  compose?: DevelopmentArtifact;
+};
 
 export type DevelopmentMacosArtifacts = {
   orchestrator?: DevelopmentArtifact;
@@ -90,10 +95,11 @@ export type ControlPlaneHttpDeps = {
   browserOrigin(): string | null;
   secretBox: SecretBox;
   githubApp?: GitHubAppService;
-  defaultJobImages: Partial<Record<"linux-x64" | "windows-x64" | "macos-arm64", string>>;
+  defaultJobImages: Partial<Record<"linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64", string>>;
   workerReleaseManifest?: WorkerReleaseManifest;
   developmentWindowsArtifacts?: DevelopmentWindowsArtifacts;
   developmentLinuxArtifacts?: DevelopmentLinuxArtifacts;
+  developmentLinuxArm64Artifacts?: DevelopmentLinuxArm64Artifacts;
   developmentMacosArtifacts?: DevelopmentMacosArtifacts;
   developmentArtifactProxy?: DevelopmentArtifactProxyOptions;
   /** Development-only local source for installer scripts. */

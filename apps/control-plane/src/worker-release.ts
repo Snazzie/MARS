@@ -153,6 +153,7 @@ export function loadWorkerReleaseManifest(
       catch (error) { throw new Error(`worker release manifest has an invalid contract version: ${error instanceof Error ? error.message : String(error)}`); }
       if (!isWorkerContractCompatible(compatibilityVersion, manifest.contractVersion)) throw new Error(`worker release contract ${manifest.contractVersion} is incompatible with control-plane contract ${compatibilityVersion}`);
       if (manifest.platforms["linux-x64"] === null) throw new Error("worker release manifest does not provide a linux-x64 release");
+      if (manifest.platforms["linux-arm64"] === null) throw new Error("worker release manifest does not provide a linux-arm64 release");
     }
     return _development ? await withDevelopmentWindowsRelease(manifest, _development) : manifest;
   };

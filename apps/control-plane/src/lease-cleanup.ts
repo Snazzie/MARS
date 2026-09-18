@@ -1,6 +1,6 @@
 import type { DatabaseClient } from "@mars/db";
 
-type CleanupLease = { leaseId: string; workerId: string; nonce: string; cleanupType?: "linux-vm.stop_lease" | "tart.stop_lease" | "windows-container.stop_lease" | "hyperv.stop_lease" };
+type CleanupLease = { leaseId: string; workerId: string; nonce: string; cleanupType?: "linux-vm.stop_lease" | "linux-container.stop_lease" | "tart.stop_lease" | "windows-container.stop_lease" | "hyperv.stop_lease" };
 export type LeaseCleanupReport = { dispatched: number; skipped: number; failed: number };
 
 export async function reapPendingLeases(input: {
@@ -12,12 +12,13 @@ export async function reapPendingLeases(input: {
       COALESCE((
         SELECT CASE
           WHEN c.type='linux-vm.create_lease' THEN 'linux-vm.stop_lease'
+          WHEN c.type='linux-container.create_lease' THEN 'linux-container.stop_lease'
           WHEN c.type='windows-container.create_lease' THEN 'windows-container.stop_lease'
           WHEN c.type='hyperv.create_lease' THEN 'hyperv.stop_lease'
           WHEN c.type='tart.create_lease' THEN 'tart.stop_lease'
         END
         FROM commands c
-        WHERE c.lease_id=l.id AND c.type IN ('linux-vm.create_lease','windows-container.create_lease','hyperv.create_lease','tart.create_lease')
+        WHERE c.lease_id=l.id AND c.type IN ('linux-vm.create_lease','linux-container.create_lease','windows-container.create_lease','hyperv.create_lease','tart.create_lease')
         ORDER BY c.occurred_at ASC LIMIT 1
       )) AS "cleanupType"
     FROM runner_leases l
@@ -25,7 +26,7 @@ export async function reapPendingLeases(input: {
       AND l.cleanup_state IN ('pending','failed')
       AND NOT EXISTS (
         SELECT 1 FROM commands c
-        WHERE c.lease_id=l.id AND c.type IN ('linux-vm.stop_lease','tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease')
+        WHERE c.lease_id=l.id AND c.type IN ('linux-vm.stop_lease','linux-container.stop_lease','tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease')
           AND c.payload->>'nonce'=l.nonce
           AND c.state IN ('pending','sent','acknowledged')
       )

@@ -14,6 +14,10 @@ export type VerifiedWorkerRelease = {
   workerBuildId: string;
   brokerImage: string;
   brokerDigest: string;
+  armBrokerImage: string;
+  armBrokerDigest: string;
+  armJobImage: string;
+  armJobDigest: string;
 };
 
 type VerifyOptions = {
@@ -70,6 +74,11 @@ export async function verifyPublishedWorkerRelease(
   if (!linux) throw new Error("worker release manifest does not provide a linux-x64 release");
   const digest = digestPattern.exec(linux.brokerImage)?.groups?.digest;
   if (!digest) throw new Error("linux broker image is not digest pinned");
+  const arm = manifest.platforms["linux-arm64"];
+  if (!arm) throw new Error("worker release manifest does not provide a linux-arm64 release");
+  const armBrokerDigest = digestPattern.exec(arm.brokerImage)?.groups?.digest;
+  const armJobDigest = digestPattern.exec(arm.jobImage)?.groups?.digest;
+  if (!armBrokerDigest || !armJobDigest) throw new Error("linux ARM broker and job images must be digest pinned");
   return {
     workerTag,
     workerVersion,
@@ -78,6 +87,10 @@ export async function verifyPublishedWorkerRelease(
     workerBuildId: manifest.buildId,
     brokerImage: linux.brokerImage,
     brokerDigest: digest,
+    armBrokerImage: arm.brokerImage,
+    armBrokerDigest,
+    armJobImage: arm.jobImage,
+    armJobDigest,
   };
 }
 

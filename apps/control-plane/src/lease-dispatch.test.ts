@@ -29,6 +29,13 @@ test("dispatches Windows leases to the Hyper-V container command", async () => {
   await dispatchLeaseBootstrap({ dispatch: async (input: unknown) => { calls.push(input); } }, { driver: "windows-hyperv-container", leaseId: "11111111-1111-4111-8111-111111111111", jobId: "22222222-2222-4222-8222-222222222222", workerId: "33333333-3333-4333-8333-333333333333", workerEncryptionPublicKey: publicKey, guestPlatform: "windows-x64", contractVersion: "0.1.0", imageDigest: "sha256:" + "a".repeat(64), resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "secret", expiresAt: new Date(Date.now() + 60_000).toISOString() });
   expect((calls[0] as { type: string }).type).toBe("windows-container.create_lease");
 });
+test("dispatches Linux ARM leases to the Docker container command", async () => {
+  const calls: { type: string }[] = [];
+  const keys = generateKeyPairSync("x25519");
+  const publicKey = keys.publicKey.export({ format: "pem", type: "spki" }).toString();
+  await dispatchLeaseBootstrap({ dispatch: async (input: unknown) => { if (input && typeof input === "object" && "type" in input && typeof input.type === "string") calls.push({ type: input.type }); } }, { driver: "linux-docker-container", leaseId: "11111111-1111-4111-8111-111111111111", jobId: "22222222-2222-4222-8222-222222222222", workerId: "33333333-3333-4333-8333-333333333333", workerEncryptionPublicKey: publicKey, guestPlatform: "linux-arm64", contractVersion: "0.2.0", imageDigest: "ghcr.io/snazzie/mars/linux-arm64-job@sha256:" + "a".repeat(64), resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "secret", expiresAt: new Date(Date.now() + 60_000).toISOString() });
+  expect(calls[0]?.type).toBe("linux-container.create_lease");
+});
 test("waits for command delivery failures", async () => {
   const keys = generateKeyPairSync("x25519");
   const publicKey = keys.publicKey.export({ format: "pem", type: "spki" }).toString();

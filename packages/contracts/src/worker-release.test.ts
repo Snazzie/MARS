@@ -4,9 +4,9 @@ import { WorkerReleaseManifest } from "./worker-release.ts";
 const hash = "a".repeat(64);
 const asset = (name: string) => ({ url: `https://downloads.example.test/${name}`, sha256: hash });
 const valid = {
-  schemaVersion: 3 as const,
+  schemaVersion: 4 as const,
   buildId: "build-1",
-  contractVersion: "0.1.0",
+  contractVersion: "0.2.0",
   platforms: {
     "linux-x64": {
       installer: asset("linux-installer.sh"),
@@ -16,6 +16,12 @@ const valid = {
       goldenImage: asset("linux-golden.qcow2"),
       compose: asset("linux-compose.yaml"),
       domainTemplate: asset("linux-domain.xml"),
+    },
+    "linux-arm64": {
+      installer: asset("linux-arm64-installer.ps1"),
+      compose: asset("linux-arm64-compose.yaml"),
+      brokerImage: `ghcr.io/snazzie/mars/linux-arm64-broker@sha256:${hash}`,
+      jobImage: `ghcr.io/snazzie/mars/linux-arm64-job@sha256:${hash}`,
     },
     "windows-x64": {
       installer: asset("windows-installer.ps1"),
@@ -43,7 +49,7 @@ const valid = {
   },
 };
 
-test("accepts a complete schema-3 release manifest", () => {
+test("accepts a complete schema-4 release manifest", () => {
   expect(WorkerReleaseManifest.parse(valid)).toEqual(valid);
 });
 
@@ -52,6 +58,7 @@ test("accepts explicit nulls for unavailable platforms", () => {
     ...valid,
     platforms: {
       "linux-x64": null,
+      "linux-arm64": null,
       "windows-x64": null,
       "macos-arm64": null,
     },

@@ -26,11 +26,17 @@ const linuxRelease = {
   domainTemplate: asset("domain.xml"),
 };
 
-const remoteManifest = (contractVersion = "0.1.0") => ({
-  schemaVersion: 3 as const,
+const linuxArm64Release = {
+  installer: asset("linux-arm64-installer.ps1"),
+  compose: asset("linux-arm64-compose.yaml"),
+  brokerImage: `ghcr.io/snazzie/mars/linux-arm64-broker@sha256:${hash}`,
+  jobImage: `ghcr.io/snazzie/mars/linux-arm64-job@sha256:${hash}`,
+};
+const remoteManifest = (contractVersion = "0.2.0") => ({
+  schemaVersion: 4 as const,
   buildId: "release-build",
   contractVersion,
-  platforms: { "linux-x64": linuxRelease, "windows-x64": null, "macos-arm64": null },
+  platforms: { "linux-x64": linuxRelease, "linux-arm64": linuxArm64Release, "windows-x64": null, "macos-arm64": null },
 });
 
 test("parses strict major.minor.patch versions", () => {
@@ -51,17 +57,17 @@ test("accepts compatible worker contract boundaries", () => {
 });
 
 test("loads a valid HTTPS remote manifest", async () => {
-  const fetcher = async () => new Response(JSON.stringify(remoteManifest()), { status: 200 })
+  const fetcher = async () => new Response(JSON.stringify(remoteManifest()), { status: 200 });
   const manifest = await loadWorkerReleaseManifest(releaseManifestUrl, undefined, {
     fetch: fetcher,
-    controlPlaneVersion: "0.1.0",
+    controlPlaneVersion: "0.2.0",
   });
   expect(manifest.buildId).toBe("release-build");
   expect(manifest.platforms["linux-x64"]).toEqual(linuxRelease);
 });
 test("enumerates every hashed asset with stable field paths", () => {
-  const assets = enumerateWorkerReleaseAssets({ ...remoteManifest(), platforms: { ...remoteManifest().platforms, "linux-x64": linuxRelease } });
-  expect(assets).toHaveLength(6);
+  const assets = enumerateWorkerReleaseAssets(remoteManifest());
+  expect(assets).toHaveLength(8);
   expect(assets.map(asset => asset.field)).toEqual([
     "linux-x64.installer",
     "linux-x64.orchestrator",
@@ -69,12 +75,14 @@ test("enumerates every hashed asset with stable field paths", () => {
     "linux-x64.goldenImage",
     "linux-x64.compose",
     "linux-x64.domainTemplate",
+    "linux-arm64.installer",
+    "linux-arm64.compose",
   ]);
   expect(assets.every(asset => asset.sha256 === hash)).toBe(true);
 });
 test("rejects malformed hashed asset metadata", async () => {
   const malformed = { ...remoteManifest(), platforms: { ...remoteManifest().platforms, "linux-x64": { ...linuxRelease, installer: { ...linuxRelease.installer, sha256: "not-a-hash" } } } };
-  await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, { fetch: async () => new Response(JSON.stringify(malformed)), controlPlaneVersion: "0.1.0" })).rejects.toThrow("schema");
+  await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, { fetch: async () => new Response(JSON.stringify(malformed)), controlPlaneVersion: "0.2.0" })).rejects.toThrow("schema");
 });
 
 test("rejects remote HTTP failures", async () => {
@@ -135,7 +143,7 @@ test("accepts the immutable worker release URL emitted by GitHub", async () => {
     const manifest = await loadWorkerReleaseManifest(
       "https://github.com/Snazzie/MARS/releases/download/worker-v0.1.1/worker-release-manifest.json",
       undefined,
-      { fetch: fetcher, controlPlaneVersion: "0.1.0" },
+      { fetch: fetcher, controlPlaneVersion: "0.2.0" },
     );
     expect(manifest.buildId).toBe("release-build");
   } finally {
@@ -146,7 +154,7 @@ test("accepts the immutable worker release URL emitted by GitHub", async () => {
 test("accepts GitHub repository casing variations", async () => {
   const source = releaseManifestUrl.replace("/Snazzie/MARS/", "/snazzie/Mars/");
   const fetcher = async () => new Response(JSON.stringify(remoteManifest()), { status: 200 })
-  await expect(loadWorkerReleaseManifest(source, undefined, { fetch: fetcher, controlPlaneVersion: "0.1.0" })).resolves.toMatchObject({ buildId: "release-build" });
+  await expect(loadWorkerReleaseManifest(source, undefined, { fetch: fetcher, controlPlaneVersion: "0.2.0" })).resolves.toMatchObject({ buildId: "release-build" });
 });
 test("rejects payload URLs outside the exact immutable worker release", async () => {
   for (const url of [
@@ -156,7 +164,7 @@ test("rejects payload URLs outside the exact immutable worker release", async ()
   ]) {
     const manifest = { ...remoteManifest(), platforms: { ...remoteManifest().platforms, "linux-x64": { ...linuxRelease, installer: { url, sha256: hash } } } };
     const fetcher = async () => new Response(JSON.stringify(manifest), { status: 200 })
-    await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, { fetch: fetcher, controlPlaneVersion: "0.1.0" })).rejects.toThrow("outside immutable");
+    await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, { fetch: fetcher, controlPlaneVersion: "0.2.0" })).rejects.toThrow("outside immutable");
   }
 });
 
@@ -171,10 +179,10 @@ test("loads a usable Windows release from local development artifacts", async ()
 
     const manifestPath = join(root, "release-manifest.json");
     await Bun.write(manifestPath, JSON.stringify({
-      schemaVersion: 3 as const,
+      schemaVersion: 4 as const,
       buildId: "development",
-      contractVersion: "0.1.0",
-      platforms: { "linux-x64": null, "windows-x64": null, "macos-arm64": null },
+      contractVersion: "0.2.0",
+      platforms: { "linux-x64": null, "linux-arm64": null, "windows-x64": null, "macos-arm64": null },
     }));
 
     const manifest = await loadWorkerReleaseManifest(pathToFileURL(manifestPath), {

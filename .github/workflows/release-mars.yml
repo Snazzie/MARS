@@ -122,6 +122,29 @@ jobs:
         run: echo "json=$(cat dist/linux/metadata.json)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with: { name: "worker-linux-${{ github.sha }}", path: dist/linux }
+  linux-arm64:
+    name: Build Linux ARM64 Docker worker assets
+    if: inputs.worker_release_mode == 'build'
+    needs: validate-inputs
+    runs-on: ubuntu-24.04-arm
+    permissions: { contents: read, packages: write }
+    outputs: { metadata: "${{ steps.metadata.outputs.json }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.4.0 }
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ github.token }}" }
+      - name: Build ARM64 Docker worker and artifacts
+        id: metadata
+        env:
+          GH_TOKEN: "${{ github.token }}"
+        run: |
+          bun install --frozen-lockfile
+          bun run scripts/build-linux-arm64-release.ts
+      - uses: actions/upload-artifact@v4
+        with: { name: "worker-linux-arm64-${{ github.sha }}", path: dist/linux-arm64 }
 
   windows:
     name: Build Windows x64 worker assets
@@ -178,10 +201,6 @@ jobs:
           set -euo pipefail
           mkdir -p dist/macos
           swiftc -parse-as-library -framework AppKit apps/macos-status-item/main.swift -o dist/macos/mars-status-item
-          cp assets/MARS.icns dist/macos/MARS.icns
-      - uses: actions/upload-artifact@v4
-        with: { name: "worker-macos-status-item-${{ github.sha }}", path: dist/macos }
-
   macos:
     name: Build macOS arm64 worker assets
     if: inputs.worker_release_mode == 'build'
@@ -211,20 +230,21 @@ jobs:
   worker-release:
     name: Validate and publish worker prerelease
     if: inputs.worker_release_mode == 'build'
-    needs: [validate-inputs, linux, windows, macos]
+    needs: [validate-inputs, linux, linux-arm64, windows, macos]
     runs-on: ubuntu-24.04
     permissions: { contents: write, packages: write }
     outputs: { manifest_url: "${{ needs.validate-inputs.outputs.manifest_url }}" }
     steps:
       - uses: actions/download-artifact@v4
         with: { pattern: worker-*, path: dist, merge-multiple: false }
-      - name: Install and validate schema-3 contract
+      - name: Install and validate schema-4 contract
         run: |
           set -euo pipefail; bun install --frozen-lockfile
-          linux=$(cat "dist/worker-linux-$GITHUB_SHA/metadata.json"); windows=$(cat "dist/worker-windows-$GITHUB_SHA/metadata.json"); macos=$(cat "dist/worker-macos-$GITHUB_SHA/metadata.json")
-          jq -n --arg buildId "$BUILD_ID" --arg contractVersion "$(cat "$CONTRACT_VERSION_FILE")" --argjson linux "$linux" --argjson windows "$windows" --argjson macos "$macos" '{schemaVersion:3,buildId:$buildId,contractVersion:$contractVersion,platforms:{"linux-x64":$linux,"windows-x64":$windows,"macos-arm64":$macos}}' > dist/worker-release-manifest.json
+          linux=$(cat "dist/worker-linux-$GITHUB_SHA/metadata.json"); linux_arm64=$(cat "dist/worker-linux-arm64-$GITHUB_SHA/metadata.json"); windows=$(cat "dist/worker-windows-$GITHUB_SHA/metadata.json"); macos=$(cat "dist/worker-macos-$GITHUB_SHA/metadata.json")
+          jq -n --arg buildId "$BUILD_ID" --arg contractVersion "$(cat "$CONTRACT_VERSION_FILE")" --argjson linux "$linux" --argjson linux_arm64 "$linux_arm64" --argjson windows "$windows" --argjson macos "$macos" '{schemaVersion:4,buildId:$buildId,contractVersion:$contractVersion,platforms:{"linux-x64":$linux,"linux-arm64":$linux_arm64,"windows-x64":$windows,"macos-arm64":$macos}}' > dist/worker-release-manifest.json
           bun -e 'import { WorkerReleaseManifest } from "./packages/contracts/src/worker-release.ts"; WorkerReleaseManifest.parse(JSON.parse(await Bun.file("dist/worker-release-manifest.json").text()))'
           mkdir -p dist/release; cp dist/worker-release-manifest.json dist/release/worker-release-manifest.json
+          cp dist/worker-linux-arm64-$GITHUB_SHA/install-worker-linux-arm64.ps1 dist/release/install-worker-linux-arm64.ps1; cp dist/worker-linux-arm64-$GITHUB_SHA/linux-arm64-broker-compose.yaml dist/release/linux-arm64-broker-compose.yaml
           cp dist/worker-linux-$GITHUB_SHA/install-worker.sh dist/release/install-worker-linux-x64.sh
           cp dist/worker-linux-$GITHUB_SHA/mars-orchestrator dist/release/mars-orchestrator-linux-x64
           cp dist/worker-linux-$GITHUB_SHA/mars-job-agent dist/release/mars-job-agent-linux-x64
@@ -257,6 +277,10 @@ jobs:
       worker_build_id: "${{ steps.binding.outputs.worker_build_id }}"
       broker_image: "${{ steps.binding.outputs.broker_image }}"
       broker_digest: "${{ steps.binding.outputs.broker_digest }}"
+      arm_broker_image: "${{ steps.binding.outputs.arm_broker_image }}"
+      arm_broker_digest: "${{ steps.binding.outputs.arm_broker_digest }}"
+      arm_job_image: "${{ steps.binding.outputs.arm_job_image }}"
+      arm_job_digest: "${{ steps.binding.outputs.arm_job_digest }}"
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -267,10 +291,12 @@ jobs:
         run: |
           set -euo pipefail; bun install --frozen-lockfile
           result=$(bun run scripts/verify-worker-release.ts --manifest-url "$BINDING_URL" --contract-version "$BINDING_CONTRACT"); echo "$result"
-          worker_version=$(jq -r .workerVersion <<<"$result"); build_id=$(jq -r .workerBuildId <<<"$result"); broker=$(jq -r .brokerImage <<<"$result"); digest=$(jq -r .brokerDigest <<<"$result")
+          worker_version=$(jq -r .workerVersion <<<"$result"); build_id=$(jq -r .workerBuildId <<<"$result"); broker=$(jq -r .brokerImage <<<"$result"); digest=$(jq -r .brokerDigest <<<"$result"); arm_broker=$(jq -r .armBrokerImage <<<"$result"); arm_broker_digest=$(jq -r .armBrokerDigest <<<"$result"); arm_job=$(jq -r .armJobImage <<<"$result"); arm_job_digest=$(jq -r .armJobDigest <<<"$result")
           docker_config=$(mktemp -d); trap 'rm -rf "$docker_config"' EXIT; export DOCKER_CONFIG="$docker_config"
           docker buildx imagetools inspect "$broker" --format '{{.Manifest.Digest}}' >/dev/null; docker manifest inspect "$broker" >/dev/null
-          printf 'manifest_url=%s\nworker_version=%s\ncontract_version=%s\nworker_build_id=%s\nbroker_image=%s\nbroker_digest=%s\n' "$BINDING_URL" "$worker_version" "$BINDING_CONTRACT" "$build_id" "$broker" "$digest" >> "$GITHUB_OUTPUT"
+          docker buildx imagetools inspect "$arm_broker" --format '{{.Manifest.Digest}}' >/dev/null; docker manifest inspect "$arm_broker" >/dev/null
+          docker buildx imagetools inspect "$arm_job" --format '{{.Manifest.Digest}}' >/dev/null; docker manifest inspect "$arm_job" >/dev/null
+          printf 'manifest_url=%s\nworker_version=%s\ncontract_version=%s\nworker_build_id=%s\nbroker_image=%s\nbroker_digest=%s\narm_broker_image=%s\narm_broker_digest=%s\narm_job_image=%s\narm_job_digest=%s\n' "$BINDING_URL" "$worker_version" "$BINDING_CONTRACT" "$build_id" "$broker" "$digest" "$arm_broker" "$arm_broker_digest" "$arm_job" "$arm_job_digest" >> "$GITHUB_OUTPUT"
 
   control-plane:
     name: Build control-plane candidate

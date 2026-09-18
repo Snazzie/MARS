@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
 import type { WorkerCapacityData, WorkerLimits } from "@mars/contracts";
 import { configurePendingWorker, configureWorker, rejectPendingWorker, type WorkerConfigurationInput } from "../api.ts";
-type Props = { worker: { id: string; admissionState: "pending" | "adopted" | "rejected" | "revoked"; platform?: "linux-x64" | "windows-x64" | "macos-arm64"; guestPlatforms?: ("linux-x64" | "windows-x64" | "macos-arm64")[]; draining?: boolean; activeSandboxes?: number; capacity: WorkerCapacityData; limits: WorkerLimits | null; desiredCacheTtlSeconds?: number; desiredRunnerCacheEnabled?: boolean; desiredRunnerCacheMaxGiB?: number }; organizationId?: string; onConfigured(): void; onDiscard?(): void };
+type Props = { worker: { id: string; admissionState: "pending" | "adopted" | "rejected" | "revoked"; platform?: "linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64"; guestPlatforms?: ("linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64")[]; draining?: boolean; activeSandboxes?: number; capacity: WorkerCapacityData; limits: WorkerLimits | null; desiredCacheTtlSeconds?: number; desiredRunnerCacheEnabled?: boolean; desiredRunnerCacheMaxGiB?: number }; organizationId?: string; onConfigured(): void; onDiscard?(): void };
 const GIB = 1024 ** 3;
 const initialGiB = (bytes: number) => { const value = Math.floor(bytes / GIB); return value > 0 ? String(value) : ""; };
 const parsePositiveInteger = (value: string) => { if (!/^\d+$/.test(value)) return null; const parsed = Number(value); return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null; };
