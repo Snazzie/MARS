@@ -115,8 +115,10 @@ test("migration directory contains only Drizzle-generated SQL and metadata", asy
 });
 
 test("generated baseline has a stable hash and required schema objects", async () => {
-  const [file] = (await readdir(migrationsUrl)).filter(name => name.endsWith(".sql"));
-  const sql = await migration(file!);
+  const journal = JSON.parse(await readFile(new URL("./migrations/meta/_journal.json", import.meta.url), "utf8")) as {
+    entries: Array<{ tag: string }>;
+  };
+  const sql = await migration(`${journal.entries[0]!.tag}.sql`);
   expect(createHash("sha256").update(sql).digest("hex")).toMatch(/^[a-f0-9]{64}$/);
   expect(sql).toContain('CREATE TABLE "users"');
   expect(sql).toContain('CREATE TABLE "webhook_deliveries"');
