@@ -1,4 +1,4 @@
-import type { CostCenterBreakdown, CostCenterPricePoint, CostCenterPricingProvider, OverviewCostSavings, OverviewDto } from "@mars/contracts";
+import type { CostCenterBreakdown, CostCenterExternalBreakdown, CostCenterPricePoint, CostCenterPricingProvider, OverviewCostSavings, OverviewDto } from "@mars/contracts";
 import type { DatabaseClient } from "./index.ts";
 
 export type GithubRunnerPlatform = "linux-x64" | "windows-x64" | "macos-arm64";
@@ -6,7 +6,7 @@ export type GithubRunnerRate = Readonly<{ platform: GithubRunnerPlatform; vcpu: 
 export type GithubRunnerRateSchedule = Readonly<{ effectiveFrom: string; sourceUrl: string; rates: readonly GithubRunnerRate[] }>;
 export type GithubRunnerUsageGroup = Readonly<{ usageDate: string; platform: string; requestedVcpu: number; billableMinutes: number }>;
 export type GithubRunnerCostCenterUsageGroup = Readonly<{ organizationId: string; repositoryId: string; repositoryName: string; usageDate: string; platform: string; requestedVcpu: number; jobCount: number; billableMinutes: number }>;
-
+export type GithubExternalUsageGroup = Readonly<{ organizationId: string; repositoryId: string; repositoryName: string; usageDate: string; platform: string; requestedVcpu: number; jobCount: number; billableMinutes: number }>;
 const githubPricingUrl = "https://docs.github.com/en/billing/reference/actions-runner-pricing";
 export const GITHUB_HOSTED_RATE_SCHEDULES: readonly GithubRunnerRateSchedule[] = Object.freeze([{
   effectiveFrom: "2026-01-01", sourceUrl: githubPricingUrl,
@@ -26,7 +26,16 @@ export const BLACKSMITH_HOSTED_RATE_SCHEDULES: readonly GithubRunnerRateSchedule
     ...[2, 4, 8, 16, 32].map((vcpu) => ({ platform: "macos-arm64" as const, vcpu, sku: `blacksmith_macos_m4_${vcpu}`, rateMicros: 80_000 })),
   ]),
 }]);
-const schedulesForProvider = (provider: CostCenterPricingProvider) => provider === "blacksmith" ? BLACKSMITH_HOSTED_RATE_SCHEDULES : GITHUB_HOSTED_RATE_SCHEDULES;
+
+const azureVmPricingUrl = "https://azure.microsoft.com/en-us/pricing/details/virtual-machines/";
+export const AZURE_VM_RATE_SCHEDULES: readonly GithubRunnerRateSchedule[] = Object.freeze([{
+  effectiveFrom: "2026-01-01", sourceUrl: azureVmPricingUrl,
+  rates: Object.freeze<GithubRunnerRate[]>([
+    ...[2, 4, 8, 16, 32, 64].map((vcpu) => ({ platform: "linux-x64" as const, vcpu, sku: `Standard_D${vcpu}s_v5`, rateMicros: vcpu * 800 })),
+    ...[2, 4, 8, 16, 32, 64].map((vcpu) => ({ platform: "windows-x64" as const, vcpu, sku: `Standard_D${vcpu}s_v5_windows`, rateMicros: vcpu * 1_600 })),
+  ]),
+}]);
+const schedulesForProvider = (provider: CostCenterPricingProvider) => provider === "blacksmith" ? BLACKSMITH_HOSTED_RATE_SCHEDULES : provider === "azure-vm" ? AZURE_VM_RATE_SCHEDULES : GITHUB_HOSTED_RATE_SCHEDULES;
 const emptySavings = (): OverviewCostSavings => ({ selfHostedMinutes: 0, pricedMinutes: 0, unpricedMinutes: 0, estimatedSavingsMicros: 0, currency: "USD", latestRateEffectiveFrom: null });
 type ResolvedRate = { schedule: GithubRunnerRateSchedule; rate: GithubRunnerRate } | null;
 function resolveRate(usageDate: string, platform: string, requestedVcpu: number, schedules: readonly GithubRunnerRateSchedule[]): ResolvedRate {
@@ -61,6 +70,30 @@ export function calculateGithubRunnerCostCenter(usage: readonly GithubRunnerCost
   for (const group of usage) { const resolved = resolveRate(group.usageDate, group.platform, group.requestedVcpu, schedules); if (resolved && (!costSavings.latestRateEffectiveFrom || resolved.schedule.effectiveFrom > costSavings.latestRateEffectiveFrom)) costSavings.latestRateEffectiveFrom = resolved.schedule.effectiveFrom; }
   return { costSavings, priceOverTime, breakdown };
 }
+export function calculateGithubExternalCostCenter(usage: readonly GithubExternalUsageGroup[], schedules: readonly GithubRunnerRateSchedule[] = GITHUB_HOSTED_RATE_SCHEDULES): { externalMinutes: number; externalPricedMinutes: number; externalUnpricedMinutes: number; estimatedExternalCostMicros: number; externalBreakdown: CostCenterExternalBreakdown[] } {
+  const merged = new Map<string, CostCenterExternalBreakdown>();
+  for (const group of usage) {
+    const minutes = Math.max(0, Math.floor(group.billableMinutes));
+    const resolved = resolveRate(group.usageDate, group.platform, group.requestedVcpu, schedules);
+    const githubRunnerSku = resolved?.rate.sku ?? null;
+    const githubRunnerVcpu = resolved?.rate.vcpu ?? null;
+    const key = [group.organizationId, group.repositoryId, group.platform, group.requestedVcpu, githubRunnerSku, githubRunnerVcpu].join("|");
+    const pricedMinutes = resolved ? minutes : 0;
+    const estimatedCostMicros = resolved ? minutes * resolved.rate.rateMicros : 0;
+    const previous = merged.get(key);
+    merged.set(key, previous
+      ? { ...previous, jobCount: previous.jobCount + group.jobCount, billableMinutes: previous.billableMinutes + minutes, pricedMinutes: previous.pricedMinutes + pricedMinutes, unpricedMinutes: previous.unpricedMinutes + minutes - pricedMinutes, estimatedCostMicros: previous.estimatedCostMicros + estimatedCostMicros }
+      : { organizationId: group.organizationId, repositoryId: group.repositoryId, repositoryName: group.repositoryName, platform: group.platform, requestedVcpu: group.requestedVcpu, githubRunnerSku, githubRunnerVcpu, jobCount: group.jobCount, billableMinutes: minutes, pricedMinutes, unpricedMinutes: minutes - pricedMinutes, estimatedCostMicros });
+  }
+  const externalBreakdown = [...merged.values()].sort((a, b) => b.estimatedCostMicros - a.estimatedCostMicros || a.repositoryName.localeCompare(b.repositoryName));
+  return externalBreakdown.reduce((totals, row) => ({
+    externalMinutes: totals.externalMinutes + row.billableMinutes,
+    externalPricedMinutes: totals.externalPricedMinutes + row.pricedMinutes,
+    externalUnpricedMinutes: totals.externalUnpricedMinutes + row.unpricedMinutes,
+    estimatedExternalCostMicros: totals.estimatedExternalCostMicros + row.estimatedCostMicros,
+    externalBreakdown,
+  }), { externalMinutes: 0, externalPricedMinutes: 0, externalUnpricedMinutes: 0, estimatedExternalCostMicros: 0, externalBreakdown });
+}
 
 const periodInterval = (period: OverviewDto["period"]) => period === "24h" ? "24 hours" : period === "7d" ? "7 days" : "30 days";
 
@@ -77,7 +110,7 @@ export async function getGithubRunnerCostSavings(db: DatabaseClient, organizatio
   return calculateGithubRunnerCostSavings(rows.map((row) => ({ usageDate: String(row.usageDate), platform: String(row.platform), requestedVcpu: Number(row.requestedVcpu), billableMinutes: Number(row.billableMinutes) })), schedulesForProvider(provider));
 }
 
-export async function getGithubRunnerCostCenter(db: DatabaseClient, organizationId: string, period: OverviewDto["period"], userId?: string, provider: CostCenterPricingProvider = "github"): Promise<{ pricingProvider: CostCenterPricingProvider; costSavings: OverviewCostSavings; breakdown: CostCenterBreakdown[]; priceOverTime: CostCenterPricePoint[] }> {
+export async function getGithubRunnerCostCenter(db: DatabaseClient, organizationId: string, period: OverviewDto["period"], userId?: string, provider: CostCenterPricingProvider = "github"): Promise<{ costSavings: OverviewCostSavings; externalMinutes: number; externalPricedMinutes: number; externalUnpricedMinutes: number; estimatedExternalCostMicros: number; breakdown: CostCenterBreakdown[]; externalBreakdown: CostCenterExternalBreakdown[]; priceOverTime: CostCenterPricePoint[] }> {
   const rows = await db<Record<string, unknown>[]>`
     SELECT organization_id AS "organizationId", repository_id AS "repositoryId", repository_name AS "repositoryName",
       (completed_at AT TIME ZONE 'UTC')::date::text AS "usageDate", platform, requested_vcpu AS "requestedVcpu",
@@ -88,6 +121,31 @@ export async function getGithubRunnerCostCenter(db: DatabaseClient, organization
         OR (${organizationId !== "all"} AND organization_id=${organizationId === "all" ? null : organizationId}::uuid))
     GROUP BY organization_id, repository_id, repository_name, (completed_at AT TIME ZONE 'UTC')::date, platform, requested_vcpu
   `;
+  const externalRows = await db<Record<string, unknown>[]>`
+    SELECT j.organization_id AS "organizationId", dr.repository_id AS "repositoryId", r.full_name AS "repositoryName",
+      (j.completed_at AT TIME ZONE 'UTC')::date::text AS "usageDate",
+      CASE
+        WHEN labels.text LIKE '%macos%' THEN 'macos-arm64'
+        WHEN labels.text LIKE '%windows%' THEN 'windows-x64'
+        WHEN labels.text LIKE '%ubuntu%' OR labels.text LIKE '%linux%' THEN 'linux-x64'
+        ELSE NULL
+      END AS platform,
+      4 AS "requestedVcpu",
+      COUNT(*)::bigint AS "jobCount",
+      SUM(GREATEST(1, CEIL(EXTRACT(EPOCH FROM (j.completed_at - j.started_at)) / 60.0)))::bigint AS "billableMinutes"
+    FROM dashboard_jobs j
+    JOIN dashboard_runs dr ON dr.organization_id=j.organization_id AND dr.id=j.run_id
+    JOIN dashboard_repositories r ON r.organization_id=dr.organization_id AND r.id=dr.repository_id
+    LEFT JOIN LATERAL (SELECT lower(string_agg(value, ' ')) AS text FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(j.requested_labels)='array' THEN j.requested_labels ELSE '[]'::jsonb END)) labels ON true
+    WHERE j.status='completed' AND j.completed_at IS NOT NULL AND j.started_at IS NOT NULL
+      AND j.completed_at >= now() - (${periodInterval(period)})::interval
+      AND NOT EXISTS (SELECT 1 FROM dashboard_job_timing_snapshots s WHERE s.organization_id=j.organization_id AND s.job_id=j.id)
+      AND (labels.text LIKE '%macos%' OR labels.text LIKE '%windows%' OR labels.text LIKE '%ubuntu%' OR labels.text LIKE '%linux%')
+      AND ((${organizationId === "all"} AND j.organization_id IN (SELECT organization_id FROM memberships WHERE user_id=${userId ?? null}))
+        OR (${organizationId !== "all"} AND j.organization_id=${organizationId === "all" ? null : organizationId}::uuid))
+    GROUP BY j.organization_id, dr.repository_id, r.full_name, (j.completed_at AT TIME ZONE 'UTC')::date, platform
+  `;
   const result = calculateGithubRunnerCostCenter(rows.map((row) => ({ organizationId: String(row.organizationId), repositoryId: String(row.repositoryId), repositoryName: String(row.repositoryName), usageDate: String(row.usageDate), platform: String(row.platform), requestedVcpu: Number(row.requestedVcpu), jobCount: Number(row.jobCount), billableMinutes: Number(row.billableMinutes) })), schedulesForProvider(provider));
-  return { pricingProvider: provider, ...result };
+  const external = calculateGithubExternalCostCenter(externalRows.filter((row) => row.platform).map((row) => ({ organizationId: String(row.organizationId), repositoryId: String(row.repositoryId), repositoryName: String(row.repositoryName), usageDate: String(row.usageDate), platform: String(row.platform), requestedVcpu: Number(row.requestedVcpu), jobCount: Number(row.jobCount), billableMinutes: Number(row.billableMinutes) })), schedulesForProvider(provider));
+  return { ...result, ...external };
 }

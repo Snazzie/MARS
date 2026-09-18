@@ -9,7 +9,7 @@ import { formatUsdMicros } from "../format.ts";
 
 type PriceRow = { date: string; value: number };
 export function CostCenterPriceChart({ points, provider = "github" }: { points: readonly CostCenterPricePoint[]; provider?: CostCenterPricingProvider }) {
-  const providerName = provider === "blacksmith" ? "Blacksmith" : "GitHub-hosted";
+  const providerName = provider === "blacksmith" ? "Blacksmith" : provider === "azure-vm" ? "Azure VM" : "GitHub-hosted";
   const rows = useMemo<PriceRow[]>(() => points.map((point) => ({ date: point.date, value: point.estimatedSavingsMicros / 1_000_000 })), [points]);
   const definition = useMemo(() => defineChart({ marks: [lineY(rows, { x: "date", y: "value", points: true })], x: { scale: () => scalePoint<string>().padding(0.4) }, y: { scale: scaleLinear, nice: true, grid: true, axis: { label: "USD avoided" } }, tooltip: { use: tooltip, anchor: "point", placement: ["top", "right", "left", "bottom"] }, svgAnimation: true }), [rows]);
   if (!points.length) return <p className="chart-empty">No priced usage in this window.</p>;

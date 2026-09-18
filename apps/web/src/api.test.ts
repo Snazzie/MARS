@@ -212,7 +212,7 @@ test("loads GitHub rate-limit stats with the organization URL", async () => {
     globalThis.fetch = originalFetch;
   }
 });
-const costCenter: CostCenterDto = { organizationId: "org-1", period: "7d", costSavings: { selfHostedMinutes: 1, pricedMinutes: 1, unpricedMinutes: 0, estimatedSavingsMicros: 10_000, currency: "USD", latestRateEffectiveFrom: "2026-01-01" }, priceOverTime: [{ date: "2026-01-01", estimatedSavingsMicros: 10_000 }], breakdown: [{ organizationId: "org-1", repositoryId: "repo-1", repositoryName: "app", platform: "linux-x64", requestedVcpu: 2, githubRunnerSku: "actions_linux", githubRunnerVcpu: 2, jobCount: 1, selfHostedMinutes: 1, pricedMinutes: 1, unpricedMinutes: 0, estimatedSavingsMicros: 10_000 }] };
+const costCenter: CostCenterDto = { organizationId: "org-1", period: "7d", costSavings: { selfHostedMinutes: 1, pricedMinutes: 1, unpricedMinutes: 0, estimatedSavingsMicros: 10_000, currency: "USD", latestRateEffectiveFrom: "2026-01-01" }, externalMinutes: 0, externalPricedMinutes: 0, externalUnpricedMinutes: 0, estimatedExternalCostMicros: 0, priceOverTime: [{ date: "2026-01-01", estimatedSavingsMicros: 10_000 }], breakdown: [{ organizationId: "org-1", repositoryId: "repo-1", repositoryName: "app", platform: "linux-x64", requestedVcpu: 2, githubRunnerSku: "actions_linux", githubRunnerVcpu: 2, jobCount: 1, selfHostedMinutes: 1, pricedMinutes: 1, unpricedMinutes: 0, estimatedSavingsMicros: 10_000 }], externalBreakdown: [] };
 test("loads Cost Center with exact period URL and strict response parsing", async () => {
   const originalFetch = globalThis.fetch;
   let requested = "";

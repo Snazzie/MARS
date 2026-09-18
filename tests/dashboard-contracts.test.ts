@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ApiError, CostCenterDto, CreatePoolRequest, CursorPage, OnboardingStep, OverviewDto, RepositorySummary, RunDetail, WorkerDetail } from "../packages/contracts/src/index.ts";
+import { ApiError, CostCenterDto, CostCenterPricingProvider, CreatePoolRequest, CursorPage, OnboardingStep, OverviewDto, RepositorySummary, RunDetail, WorkerDetail } from "../packages/contracts/src/index.ts";
 
 const run = { id: "run-1", organizationId: "org-1", repositoryId: "repo-1", repositoryName: "acme/app", runNumber: 4, workflowName: "CI", event: "workflow_dispatch", branch: "main", commitSha: "0123456789abcdef", actorLogin: "octocat", status: "completed" as const, conclusion: "success" as const, queuedAt: "2026-08-11T10:00:00Z", startedAt: "2026-08-11T10:01:00Z", completedAt: "2026-08-11T10:02:00Z", durationMs: 60_000, runtimeBoundary: "Kata VM-backed container" as const };
 
@@ -29,6 +29,7 @@ describe("dashboard contracts", () => {
     expect(CostCenterDto.safeParse({ ...payload, costSavings: { ...payload.costSavings, pricedMinutes: 4 } }).success).toBe(false);
     expect(CostCenterDto.safeParse({ ...payload, breakdown: [{ ...priced, githubRunnerSku: null }] }).success).toBe(false);
     expect(CostCenterDto.safeParse({ ...payload, breakdown: [{ ...unmatched, estimatedSavingsMicros: 1 }, priced] }).success).toBe(false);
+    expect(CostCenterPricingProvider.safeParse("azure-vm").success).toBe(true);
   });
   test("accepts applying worker configuration metadata", () => {
     expect(WorkerDetail.safeParse({

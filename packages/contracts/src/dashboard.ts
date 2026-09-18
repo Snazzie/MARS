@@ -49,7 +49,7 @@ export const OverviewCostSavings = dto(strict({
 export type OverviewCostSavings = z.output<typeof OverviewCostSavings>;
 export const OverviewDto = dto(strict({ organizationId, period: DashboardPeriod, queued: positiveSafe.or(z.literal(0)), running: positiveSafe.or(z.literal(0)), completed: positiveSafe.or(z.literal(0)), failed: positiveSafe.or(z.literal(0)), queueP50Ms: positiveSafe.or(z.literal(0)), queueP95Ms: positiveSafe.or(z.literal(0)), durationP50Ms: positiveSafe.or(z.literal(0)), durationP95Ms: positiveSafe.or(z.literal(0)), concurrency: positiveSafe.or(z.literal(0)), utilization: strict({ vcpu: z.number().min(0).max(1), memory: z.number().min(0).max(1), storage: z.number().min(0).max(1), pods: z.number().min(0).max(1) }), costSavings: OverviewCostSavings, timeseries: z.array(OverviewTimeseriesPoint).default([]), jobOutcomes: z.array(strict({ outcome: OverviewJobOutcome, platforms: OverviewJobOutcomePlatforms })).default([]), runningContainers: z.array(OverviewRunningContainer).default([]) }));
 export type OverviewDto = z.output<typeof OverviewDto>;
-export const CostCenterPricingProvider = z.enum(["github", "blacksmith"]);
+export const CostCenterPricingProvider = z.enum(["github", "blacksmith", "azure-vm"]);
 export type CostCenterPricingProvider = z.infer<typeof CostCenterPricingProvider>;
 const CostCenterBreakdownBase = strict({
   organizationId,
@@ -82,13 +82,37 @@ export const CostCenterPricePoint = dto(strict({
   estimatedSavingsMicros: nonnegativeSafe,
 }));
 export type CostCenterPricePoint = z.output<typeof CostCenterPricePoint>;
+export const CostCenterExternalBreakdown = dto(strict({
+  organizationId,
+  repositoryId: id,
+  repositoryName: z.string().min(1),
+  platform: z.string().min(1),
+  requestedVcpu: positiveSafe,
+  githubRunnerSku: z.string().min(1).nullable(),
+  githubRunnerVcpu: positiveSafe.nullable(),
+  jobCount: positiveSafe.or(z.literal(0)),
+  billableMinutes: nonnegativeSafe,
+  pricedMinutes: nonnegativeSafe,
+  unpricedMinutes: nonnegativeSafe,
+  estimatedCostMicros: nonnegativeSafe,
+})).superRefine((value, ctx) => {
+  if (value.billableMinutes !== value.pricedMinutes + value.unpricedMinutes) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["billableMinutes"], message: "External billable minutes must equal priced plus unpriced minutes" });
+  if ((value.githubRunnerSku === null) !== (value.githubRunnerVcpu === null)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["githubRunnerSku"], message: "GitHub runner identity must be paired" });
+  if (value.githubRunnerSku === null && (value.pricedMinutes !== 0 || value.estimatedCostMicros !== 0)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["githubRunnerSku"], message: "Unmatched external usage cannot have priced minutes or cost" });
+});
+export type CostCenterExternalBreakdown = z.output<typeof CostCenterExternalBreakdown>;
 export const CostCenterDto = dto(strict({
   organizationId,
   period: DashboardPeriod,
   pricingProvider: CostCenterPricingProvider.optional(),
   costSavings: OverviewCostSavings,
+  externalMinutes: nonnegativeSafe.default(0),
+  externalPricedMinutes: nonnegativeSafe.default(0),
+  externalUnpricedMinutes: nonnegativeSafe.default(0),
+  estimatedExternalCostMicros: nonnegativeSafe.default(0),
   priceOverTime: z.array(CostCenterPricePoint),
   breakdown: z.array(CostCenterBreakdown),
+  externalBreakdown: z.array(CostCenterExternalBreakdown).default([]),
 })).superRefine((value, ctx) => {
   const totals = value.breakdown.reduce((sum, row) => ({
     selfHostedMinutes: sum.selfHostedMinutes + row.selfHostedMinutes,
@@ -99,6 +123,16 @@ export const CostCenterDto = dto(strict({
   for (const key of Object.keys(totals) as (keyof typeof totals)[]) {
     if (value.costSavings[key] !== totals[key]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["costSavings", key], message: `Cost savings ${key} must equal breakdown totals` });
   }
+  const externalTotals = value.externalBreakdown.reduce((sum, row) => ({
+    billableMinutes: sum.billableMinutes + row.billableMinutes,
+    pricedMinutes: sum.pricedMinutes + row.pricedMinutes,
+    unpricedMinutes: sum.unpricedMinutes + row.unpricedMinutes,
+    estimatedCostMicros: sum.estimatedCostMicros + row.estimatedCostMicros,
+  }), { billableMinutes: 0, pricedMinutes: 0, unpricedMinutes: 0, estimatedCostMicros: 0 });
+  if (value.externalMinutes !== externalTotals.billableMinutes) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["externalMinutes"], message: "External minutes must equal breakdown totals" });
+  if (value.externalPricedMinutes !== externalTotals.pricedMinutes) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["externalPricedMinutes"], message: "External priced minutes must equal breakdown totals" });
+  if (value.externalUnpricedMinutes !== externalTotals.unpricedMinutes) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["externalUnpricedMinutes"], message: "External unpriced minutes must equal breakdown totals" });
+  if (value.estimatedExternalCostMicros !== externalTotals.estimatedCostMicros) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["estimatedExternalCostMicros"], message: "External cost must equal breakdown totals" });
   const pointTotal = value.priceOverTime.reduce((sum, point) => sum + point.estimatedSavingsMicros, 0);
   if (pointTotal !== value.costSavings.estimatedSavingsMicros) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["priceOverTime"], message: "Price-over-time savings must equal cost savings total" });
 });

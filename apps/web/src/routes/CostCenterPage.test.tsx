@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { BreakdownTable, Summary, formatMinutesBreakdown, formatPlatform, formatRunner } from "./CostCenterPage.tsx";
+import { BreakdownTable, ExternalBreakdownTable, Summary, formatMinutesBreakdown, formatPlatform, formatRunner } from "./CostCenterPage.tsx";
 import { CostCenterPriceChart } from "../components/CostCenterPriceChart.tsx";
 import { GithubRunnerCostDisclosure } from "../components/GithubRunnerCostDisclosure.tsx";
 
@@ -17,6 +17,13 @@ test("renders Cost Center populated rows and disclosure", () => {
   expect(markup).toContain("No comparable GitHub-hosted runner");
   expect(markup).toContain("2 min unmatched");
   expect(markup).toContain("Dated GitHub-hosted rates are applied by job completion date.");
+});
+test("renders detected external action cost rows", () => {
+  const externalRows = [{ organizationId: "org-1", repositoryId: "repo-1", repositoryName: "acme/app", platform: "linux-x64", requestedVcpu: 4, githubRunnerSku: "linux_4_core", githubRunnerVcpu: 4, jobCount: 1, billableMinutes: 3, pricedMinutes: 3, unpricedMinutes: 0, estimatedCostMicros: 36_000 }];
+  const markup = renderToStaticMarkup(<><Summary costSavings={savings} externalCostMicros={36_000} externalMinutes={3} /><ExternalBreakdownTable rows={externalRows} /></>);
+  expect(markup).toContain("Estimated external GitHub-hosted cost");
+  expect(markup).toContain("$0.04");
+  expect(markup).toContain("linux_4_core · 4 vCPU");
 });
 
 test("renders the price-over-time chart above the breakdown", () => {
