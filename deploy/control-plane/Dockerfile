@@ -3,6 +3,7 @@ WORKDIR /app
 COPY package.json bun.lock ./
 COPY apps ./apps
 COPY packages ./packages
+COPY assets ./assets
 RUN rm -rf apps/*/node_modules packages/*/node_modules \
   && bun install --frozen-lockfile --linker hoisted \
   && bun install --cwd apps/web --frozen-lockfile --linker hoisted \
