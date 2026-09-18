@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Mars Cloudflared</Name>
+  <Repository>__CLOUDFLARED_IMAGE__</Repository>
+  <Registry>https://hub.docker.com/r/cloudflare/cloudflared</Registry>
+  <Network>bridge</Network>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/Snazzie/Mars</Support>
+  <Project>https://github.com/Snazzie/Mars</Project>
+  <Overview>Unprivileged Cloudflare Tunnel connector for the Mars control plane. Configure the remotely managed published route separately in Cloudflare.</Overview>
+  <PostArgs>tunnel --no-autoupdate run</PostArgs>
+  <Config Name="Tunnel token" Target="TUNNEL_TOKEN" Default="" Description="Required masked token for the remotely managed Cloudflare Tunnel." Type="Variable" Display="always" Required="true" Mask="true"></Config>
+</Container>

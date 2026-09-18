@@ -109,16 +109,17 @@ docker compose --env-file .env -f deploy/control-plane/compose.yaml logs control
 ```
 
 An optional Cloudflare named tunnel can expose the stable hostname without an
-inbound Unraid port. Put its token in an untracked `.env` and start the tunnel
-profile. Route every path to `http://control-plane:3000`, permit WebSocket
-upgrades for `/api/browser/invalidations` and `/api/v1/workers/connect`,
-preserve webhook headers/body (including `X-Hub-Signature-256`), and bypass
-Cloudflare Access/identity challenges for webhook, GitHub callback, and
-worker bootstrap/WebSocket requests. Keep TLS termination at Cloudflare and
-the internal Compose hop on HTTP.
+inbound Unraid port. Create a remotely managed named tunnel, publish one
+application route for the Mars HTTPS hostname, and set its service URL to
+`http://<unraid-lan-ip>:<control-plane-host-port>`. Put the connector token in
+the sidecar's masked `TUNNEL_TOKEN` field. Route every path unchanged, permit
+WebSocket upgrades for `/api/browser/invalidations` and
+`/api/v1/workers/connect`, preserve exact webhook headers/body including
+`X-Hub-Signature-256`, and bypass Cloudflare Access/identity challenges for
+webhook, GitHub callback, setup, browser, and worker requests.
 
 ```bash
-CLOUDFLARE_TUNNEL_TOKEN=eyJ...
+TUNNEL_TOKEN=eyJ...
 docker compose --env-file .env -f deploy/control-plane/compose.yaml --profile tunnel up -d
 docker compose --env-file .env -f deploy/control-plane/compose.yaml logs -f cloudflared
 ```
@@ -206,7 +207,7 @@ mkdir -p backups/$(date -u +%Y%m%dT%H%M%SZ)
 backup_dir="$(pwd)/backups/$(date -u +%Y%m%dT%H%M%SZ)"
 docker compose --env-file .env -f deploy/control-plane/compose.yaml stop control-plane
 pg_dump --format=custom --no-owner --no-acl "$DATABASE_URL" > "$backup_dir/mars.pre-upgrade.dump"
-tar --xattrs --acls -czf "$backup_dir/mars-data.pre-upgrade.tar.gz" -C /var/lib/mars .
+docker run --rm -v "${COMPOSE_PROJECT_NAME:-project}_mars-data:/data:ro" -v "$backup_dir:/backup" alpine:3.20 tar -C /data -czf /backup/mars-data.pre-upgrade.tar.gz .
 (cd "$backup_dir" && sha256sum mars.pre-upgrade.dump mars-data.pre-upgrade.tar.gz > checksums.txt)
 docker compose --env-file .env -f deploy/control-plane/compose.yaml up -d --wait control-plane
 curl --fail https://control.example.com/api/readyz
@@ -221,7 +222,7 @@ rollback: stop it, restore the coordinated PostgreSQL dump and complete
 ```bash
 set -euo pipefail
 pg_restore --clean --if-exists --no-owner --dbname "$DATABASE_URL" "$backup_dir/mars.pre-upgrade.dump"
-tar --xattrs --acls -xzf "$backup_dir/mars-data.pre-upgrade.tar.gz" -C /var/lib/mars
+docker run --rm -v "${COMPOSE_PROJECT_NAME:-project}_mars-data:/data" -v "$backup_dir:/backup:ro" alpine:3.20 tar -C /data -xzf /backup/mars-data.pre-upgrade.tar.gz
 docker compose --env-file .env -f deploy/control-plane/compose.yaml up -d --wait control-plane
 curl --fail https://control.example.com/api/livez
 curl --fail https://control.example.com/api/readyz
@@ -271,44 +272,94 @@ sign-in, App installation, or webhook delivery can fail.
 
 ## Unraid
 
+The supported host is an x86-64 Unraid server. Import the three versioned XML
+assets attached to a release:
+`mars-postgres-v<app-version>.xml`, `mars-control-plane-v<app-version>.xml`,
+and, when using Cloudflare, `mars-cloudflared-v<app-version>.xml`. The source
+templates are not operator artifacts; the release renderer replaces every
+repository with an immutable digest.
 
-Import the versioned `mars-control-plane-v<app-version>.xml` asset attached to
-the GitHub release. The repository template
-`deploy/unraid/mars-control-plane.template.xml` is not an operator artifact;
-the release workflow renders its immutable image reference. Supply external
-PostgreSQL 17, persistent appdata, canonical `PUBLIC_BASE_URL`, required
-public HTTPS `GITHUB_WEBHOOK_URL`, and optional `WORKER_BASE_URL`.
-The template is unprivileged, targets Linux/amd64, keeps PostgreSQL external,
-and publishes host port 3000 in bridge mode. It has no worker-manifest or
-worker-contract inputs because those values belong to the released image.
-For external PostgreSQL, import `deploy/unraid/mars-postgres.xml` as a separate
-container. Start it before Mars with the default `postgres:postgres` credentials
-and `mars` database, then set the control-plane `DATABASE_URL` to the Unraid host
-address:
+### Preflight
 
-```text
-postgres://postgres:postgres@<unraid-host-ip>:5432/mars
-```
+Before installing, verify:
 
-The PostgreSQL template uses a new persistent data directory by default,
-avoiding inherited collation-version mismatches from an older PostgreSQL
-installation. Do not reuse an existing PostgreSQL data directory without
-performing its required collation maintenance.
+- free host ports for PostgreSQL and MARS, two appdata directories, and a
+  generated non-default database password;
+- anonymous Linux/amd64 pulls for the PostgreSQL, control-plane, and optional
+  cloudflared digest-pinned images;
+- a Cloudflare-managed domain and remotely managed named tunnel, plus outbound
+  connectivity to Cloudflare on port `7844` when tunneling;
+- the public hostname is chosen before GitHub App onboarding.
 
-For a private Windows worker on the same tailnet, install Tailscale on
-Unraid and expose the local control plane without publishing another port:
+### Install order
+
+1. Import `mars-postgres-v<version>.xml`, enter the password, start it, and
+   require `pg_isready -U mars -d mars` to succeed. The matching URL is
+   `postgres://mars:<password>@<unraid-lan-ip>:5432/mars`.
+2. Import `mars-control-plane-v<version>.xml`. Enter the matching
+   `DATABASE_URL`, the same public HTTPS origin in `PUBLIC_BASE_URL` and
+   `GITHUB_WEBHOOK_URL`, a free host port, and
+   `/mnt/user/appdata/mars-control-plane/data`. Require Docker health plus
+   `/api/livez`, `/api/readyz`, and `/api/healthz` to succeed. Startup runs
+   `ensureDatabase` and generated Drizzle migrations before `Bun.serve`; no
+   migration container or manual SQL is required.
+3. In Cloudflare, add one published-application route for
+   `https://<mars-hostname>` with service
+   `http://<unraid-lan-ip>:<control-plane-host-port>`. Import
+   `mars-cloudflared-v<version>.xml`, enter only the masked `TUNNEL_TOKEN`,
+   start it, require the tunnel to report Healthy, and load all three health
+   endpoints through the public hostname. Route every path unchanged, preserve
+   exact webhook bodies and `X-Hub-Signature-256`, `X-GitHub-Delivery`, and
+   `X-GitHub-Event`, and permit WebSockets for
+   `/api/browser/invalidations` and `/api/v1/workers/connect`. Do not attach
+   Cloudflare Access to this hostname.
+4. Complete `/onboarding`, create/install the GitHub App, sign in the first
+   administrator, then confirm one signed webhook delivery and both WebSocket
+   paths through the tunnel. The image-owned worker manifest URL and contract
+   version are never operator inputs.
+
+Set both public variables to `https://<mars-hostname>` and leave
+`WORKER_BASE_URL` empty unless a deliberately separate worker ingress exists.
+Rotate a connector token by replacing only `TUNNEL_TOKEN` and restarting only
+cloudflared. A blank or revoked token must stop that sidecar without stopping
+PostgreSQL or the directly reachable control-plane container. If bridge mode
+cannot reach the Unraid host, switch only cloudflared to host networking and
+use `http://127.0.0.1:<control-plane-host-port>` as the route service.
+
+### Failure diagnostics
+
+For image pull failures verify anonymous registry access, Linux/amd64 support,
+and the exact digest. For PostgreSQL failures check `pg_isready`, reachability,
+the `mars` role/database, privileges, and the URL. For startup failures inspect
+bind-mount ownership, migration errors, Docker health output, and control-plane
+logs. For ingress failures inspect cloudflared logs, DNS/TLS, tunnel Healthy
+status, route service URL, and token validity. Do not hide readiness failures
+by repeatedly restarting.
+
+### Backup, rollback, and restore
+
+For Unraid, stop the control plane, create a PostgreSQL custom-format dump,
+archive `/mnt/user/appdata/mars-control-plane/data` including `app_master_key`,
+and write SHA-256 checksums before restarting:
 
 ```bash
-tailscale serve --bg 3000
-tailscale serve status
+set -euo pipefail
+backup_dir="$PWD/backups/$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$backup_dir"
+docker stop <mars-control-plane>
+docker exec <mars-postgres> pg_dump --format=custom --no-owner --no-acl -U mars mars > "$backup_dir/mars.dump"
+tar --xattrs --acls -czf "$backup_dir/mars-data.tar.gz" -C /mnt/user/appdata/mars-control-plane/data .
+(cd "$backup_dir" && sha256sum mars.dump mars-data.tar.gz > checksums.txt)
+docker start <mars-control-plane>
 ```
 
-Use the resulting HTTPS node URL as `WORKER_BASE_URL`, for example
-`https://megavault.koi-pleco.ts.net`. Keep `PUBLIC_BASE_URL` set to the
-browser-facing URL and `GITHUB_WEBHOOK_URL` set to a separate public HTTPS
-origin; neither should be replaced with the private Tailscale URL.
+Before rollback or restore, run `sha256sum -c checksums.txt`; restore the
+database dump and data archive as one pair. The entrypoint may repair only the
+data-root owner/mode. Prove that the prior encrypted GitHub configuration still
+decrypts; never regenerate `app_master_key`.
 
-After the container is healthy, open `PUBLIC_BASE_URL`, create/install the
-GitHub App, generate a worker bootstrap code, select the Windows container
-runtime, and run the generated PowerShell command on the Windows host. The
-command is single-use and must not be edited.
+For Compose, use Docker named-volume commands rather than the Unraid bind path:
+`docker run --rm -v <project>_mars-data:/data:ro ...` to archive and
+`docker run --rm -v <project>_mars-data:/data ...` to restore. Keep Compose
+archives inside the named volume; do not use a host-side data-root archive.
+control-plane digest and the coordinated PostgreSQL/data pair.

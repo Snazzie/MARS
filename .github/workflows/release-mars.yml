@@ -298,6 +298,30 @@ jobs:
           docker buildx imagetools inspect "$arm_job" --format '{{.Manifest.Digest}}' >/dev/null; docker manifest inspect "$arm_job" >/dev/null
           printf 'manifest_url=%s\nworker_version=%s\ncontract_version=%s\nworker_build_id=%s\nbroker_image=%s\nbroker_digest=%s\narm_broker_image=%s\narm_broker_digest=%s\narm_job_image=%s\narm_job_digest=%s\n' "$BINDING_URL" "$worker_version" "$BINDING_CONTRACT" "$build_id" "$broker" "$digest" "$arm_broker" "$arm_broker_digest" "$arm_job" "$arm_job_digest" >> "$GITHUB_OUTPUT"
 
+  unraid-images:
+    name: Resolve immutable Unraid base images
+    needs: validate-inputs
+    runs-on: ubuntu-24.04
+    permissions: { contents: read }
+    outputs:
+      postgres_image: "${{ steps.images.outputs.postgres_image }}"
+      postgres_digest: "${{ steps.images.outputs.postgres_digest }}"
+      cloudflared_image: "${{ steps.images.outputs.cloudflared_image }}"
+      cloudflared_digest: "${{ steps.images.outputs.cloudflared_digest }}"
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - id: images
+        run: |
+          set -euo pipefail
+          docker_config=$(mktemp -d); trap 'rm -rf "$docker_config"' EXIT; export DOCKER_CONFIG="$docker_config"
+          postgres_image=postgres:17
+          cloudflared_image=cloudflare/cloudflared:2026.9.1
+          docker pull --platform linux/amd64 "$postgres_image" >/dev/null
+          docker pull --platform linux/amd64 "$cloudflared_image" >/dev/null
+          postgres_digest=$(docker buildx imagetools inspect "$postgres_image" --format '{{.Manifest.Digest}}')
+          cloudflared_digest=$(docker buildx imagetools inspect "$cloudflared_image" --format '{{.Manifest.Digest}}')
+          [[ "$postgres_digest" =~ ^sha256:[0-9a-f]{64}$ && "$cloudflared_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'postgres_image=%s\npostgres_digest=%s\ncloudflared_image=%s\ncloudflared_digest=%s\n' "$postgres_image" "$postgres_digest" "$cloudflared_image" "$cloudflared_digest" >> "$GITHUB_OUTPUT"
   control-plane:
     name: Build control-plane candidate
     needs: [validate-inputs, worker-binding]
@@ -347,13 +371,19 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.4.0 }
       - uses: docker/setup-buildx-action@v3
-      - name: Resolve exact previous published digest
+      - name: Resolve previous immutable release digest
         id: previous
+        env: { GH_TOKEN: "${{ github.token }}" }
         run: |
-          previous=$(docker buildx imagetools inspect "$APP_IMAGE:latest" --format '{{.Manifest.Digest}}' 2>&1) || { echo 'unable to determine existing control-plane latest digest (MANIFEST_UNKNOWN); tag does not exist; aborting before recovery proof' >&2; exit 1; }
-          [[ "$previous" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'previous latest digest is not immutable' >&2; exit 1; }
-          echo "image=$APP_IMAGE@$previous" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          previous_tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,isDraft --jq '[.[] | select(.isDraft == false and (.tagName | startswith("v")))][0].tagName // empty')
+          if [[ -z "$previous_tag" ]]; then echo 'No previous published app release; upgrade/rollback proof is not applicable.'; exit 0; fi
+          mkdir -p previous; gh release download "$previous_tag" --repo "$GITHUB_REPOSITORY" --pattern mars-release-metadata.txt --dir previous
+          previous_digest=$(awk -F= '$1 == "app_digest" { print $2 }' previous/mars-release-metadata.txt)
+          [[ "$previous_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'previous release metadata has no immutable app digest' >&2; exit 1; }
+          echo "image=$APP_IMAGE@$previous_digest" >> "$GITHUB_OUTPUT"
       - name: Run coordinated upgrade and recovery proof
+        if: steps.previous.outputs.image != ''
         env:
           PREVIOUS_IMAGE: "${{ steps.previous.outputs.image }}"
           CANDIDATE_IMAGE: "${{ env.APP_IMAGE }}@${{ needs.control-plane.outputs.digest }}"
@@ -375,7 +405,7 @@ jobs:
 
   release-evidence:
     name: Create draft release and publish evidence
-    needs: [validate-inputs, worker-binding, control-plane, candidate-compose-smoke, upgrade-recovery, candidate-observability]
+    needs: [validate-inputs, worker-binding, unraid-images, control-plane, candidate-compose-smoke, upgrade-recovery, candidate-observability]
     runs-on: ubuntu-24.04
     permissions: { contents: write, packages: read, id-token: write, attestations: write }
     outputs: { metadata: "${{ steps.metadata.outputs.path }}" }
@@ -390,18 +420,38 @@ jobs:
       - uses: actions/attest@v4
         id: sbom-attestation
         with: { subject-name: ghcr.io/snazzie/mars/control-plane, subject-digest: "${{ needs.control-plane.outputs.digest }}", sbom-path: control-plane-sbom.spdx.json, push-to-registry: true, create-storage-record: false }
-      - name: Render immutable Unraid release asset
-        env: { APP_DIGEST: "${{ needs.control-plane.outputs.digest }}" }
+      - name: Render immutable Unraid release assets
+        env:
+          APP_DIGEST: "${{ needs.control-plane.outputs.digest }}"
+          POSTGRES_IMAGE: "${{ needs.unraid-images.outputs.postgres_image }}"
+          POSTGRES_DIGEST: "${{ needs.unraid-images.outputs.postgres_digest }}"
+          CLOUDFLARED_IMAGE: "${{ needs.unraid-images.outputs.cloudflared_image }}"
+          CLOUDFLARED_DIGEST: "${{ needs.unraid-images.outputs.cloudflared_digest }}"
         run: |
-          set -euo pipefail; sed "s#__MARS_CONTROL_PLANE_IMAGE__#${APP_IMAGE}@${APP_DIGEST}#g" deploy/unraid/mars-control-plane.template.xml > "mars-control-plane-v${APP_VERSION}.xml"; test -s "mars-control-plane-v${APP_VERSION}.xml"; ! grep -F '__MARS_CONTROL_PLANE_IMAGE__' "mars-control-plane-v${APP_VERSION}.xml"
+          set -euo pipefail
+          bun install --frozen-lockfile
+          bun run scripts/render-unraid-release.ts \
+            --app-version "$APP_VERSION" \
+            --app-image "$APP_IMAGE@$APP_DIGEST" \
+            --postgres-image "${POSTGRES_IMAGE%@*}@$POSTGRES_DIGEST" \
+            --cloudflared-image "${CLOUDFLARED_IMAGE%@*}@$CLOUDFLARED_DIGEST" \
+            --out-dir dist/unraid
+          for asset in dist/unraid/*.xml; do xmllint --noout "$asset"; done
+          test "$(grep -c "<Repository>$APP_IMAGE@$APP_DIGEST</Repository>" dist/unraid/mars-control-plane-v"$APP_VERSION".xml)" = 1
+          test "$(grep -c "<Repository>${POSTGRES_IMAGE%@*}@$POSTGRES_DIGEST</Repository>" dist/unraid/mars-postgres-v"$APP_VERSION".xml)" = 1
+          test "$(grep -c "<Repository>${CLOUDFLARED_IMAGE%@*}@$CLOUDFLARED_DIGEST</Repository>" dist/unraid/mars-cloudflared-v"$APP_VERSION".xml)" = 1
       - name: Create draft app release and upload evidence
         id: metadata
         env: { GH_TOKEN: "${{ github.token }}", APP_DIGEST: "${{ needs.control-plane.outputs.digest }}", SBOM_ATTESTATION_URL: "${{ steps.sbom-attestation.outputs.attestation-url }}", PROVENANCE_ATTESTATION_URL: "${{ steps.provenance.outputs.attestation-url }}" }
         run: |
           set -euo pipefail; sbom_sha256=$(sha256sum control-plane-sbom.spdx.json | cut -d' ' -f1); sbom_url="https://github.com/$GITHUB_REPOSITORY/releases/download/v$APP_VERSION/control-plane-sbom.spdx.json"
-          printf 'app_version=%s\nbuild_sha=%s\napp_image=%s\napp_digest=%s\nworker_version=%s\nworker_manifest_url=%s\nworker_build_id=%s\ncontract_version=%s\nbroker_image=%s\nbroker_digest=%s\nsbom_url=%s\nsbom_sha256=%s\nprovenance_attestation_url=%s\nsbom_attestation_url=%s\n' "$APP_VERSION" "$GITHUB_SHA" "$APP_IMAGE" "$APP_DIGEST" "${{ needs.worker-binding.outputs.worker_version }}" "${{ needs.worker-binding.outputs.manifest_url }}" "${{ needs.worker-binding.outputs.worker_build_id }}" "${{ needs.worker-binding.outputs.contract_version }}" "${{ needs.worker-binding.outputs.broker_image }}" "${{ needs.worker-binding.outputs.broker_digest }}" "$sbom_url" "$sbom_sha256" "$PROVENANCE_ATTESTATION_URL" "$SBOM_ATTESTATION_URL" > mars-release-metadata.txt
+          printf 'app_version=%s\nbuild_sha=%s\napp_image=%s\napp_digest=%s\npostgres_image=%s\npostgres_digest=%s\ncloudflared_image=%s\ncloudflared_digest=%s\nunraid_control_plane_asset=mars-control-plane-v%s.xml\nunraid_postgres_asset=mars-postgres-v%s.xml\nunraid_cloudflared_asset=mars-cloudflared-v%s.xml\nworker_version=%s\nworker_manifest_url=%s\nworker_build_id=%s\ncontract_version=%s\nbroker_image=%s\nbroker_digest=%s\nsbom_url=%s\nsbom_sha256=%s\nprovenance_attestation_url=%s\nsbom_attestation_url=%s\n' "$APP_VERSION" "$GITHUB_SHA" "$APP_IMAGE" "$APP_DIGEST" "${{ needs.unraid-images.outputs.postgres_image }}" "${{ needs.unraid-images.outputs.postgres_digest }}" "${{ needs.unraid-images.outputs.cloudflared_image }}" "${{ needs.unraid-images.outputs.cloudflared_digest }}" "$APP_VERSION" "$APP_VERSION" "$APP_VERSION" "${{ needs.worker-binding.outputs.worker_version }}" "${{ needs.worker-binding.outputs.manifest_url }}" "${{ needs.worker-binding.outputs.worker_build_id }}" "${{ needs.worker-binding.outputs.contract_version }}" "${{ needs.worker-binding.outputs.broker_image }}" "${{ needs.worker-binding.outputs.broker_digest }}" "$sbom_url" "$sbom_sha256" "$PROVENANCE_ATTESTATION_URL" "$SBOM_ATTESTATION_URL" > mars-release-metadata.txt
+          for field in app_digest postgres_digest cloudflared_digest; do grep -Eq "^${field}=.+$" mars-release-metadata.txt; done
+          grep -F "<Repository>${APP_IMAGE}@${APP_DIGEST}</Repository>" "dist/unraid/mars-control-plane-v${APP_VERSION}.xml"
+          grep -F "<Repository>${{ needs.unraid-images.outputs.postgres_image }}@${{ needs.unraid-images.outputs.postgres_digest }}</Repository>" "dist/unraid/mars-postgres-v${APP_VERSION}.xml"
+          grep -F "<Repository>${{ needs.unraid-images.outputs.cloudflared_image }}@${{ needs.unraid-images.outputs.cloudflared_digest }}</Repository>" "dist/unraid/mars-cloudflared-v${APP_VERSION}.xml"
           gh release create "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --latest=false --title "Mars v$APP_VERSION" --generate-notes
-          gh release upload "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" mars-release-metadata.txt control-plane-sbom.spdx.json "mars-control-plane-v${APP_VERSION}.xml"
+          gh release upload "v$APP_VERSION" --repo "$GITHUB_REPOSITORY" mars-release-metadata.txt control-plane-sbom.spdx.json dist/unraid/*.xml
           echo 'path=mars-release-metadata.txt' >> "$GITHUB_OUTPUT"
       - name: Verify published digest and attestations before staging
         env:

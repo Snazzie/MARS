@@ -23,13 +23,12 @@ services:
     ports: ["127.0.0.1:3000:3000"]
 
   cloudflared:
-    image: cloudflare/cloudflared:2025.7.0
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.9.1}
     profiles: [tunnel]
     restart: unless-stopped
-    entrypoint: ["/bin/sh", "-c"]
-    command: ["test -n \"$$TUNNEL_TOKEN\" || { echo 'CLOUDFLARE_TUNNEL_TOKEN is required' >&2; exit 1; }; exec cloudflared tunnel --no-autoupdate run --token \"$$TUNNEL_TOKEN\""]
+    command: ["tunnel", "--no-autoupdate", "run"]
     environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN}
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN}
     depends_on:
       control-plane:
         condition: service_healthy

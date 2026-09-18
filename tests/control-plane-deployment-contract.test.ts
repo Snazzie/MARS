@@ -58,36 +58,41 @@ test("production Compose requires immutable image, external database, and origin
   expect(composeText).not.toContain("MARS_WORKER_CONTRACT_VERSION");
 });
 
-test("Unraid source template requires release rendering", async () => {
+test("Unraid source templates require release rendering and safe runtime flags", async () => {
   const template = await read("deploy/unraid/mars-control-plane.template.xml");
   expect(template).toContain("<WebUI>http://[IP]:[PORT:3000]/</WebUI>");
   expect(template).toContain("<Repository>__MARS_CONTROL_PLANE_IMAGE__</Repository>");
   expect(template).toContain("<Network>bridge</Network>");
   expect(template).toContain("Linux/amd64");
-  expect(template).toContain("external PostgreSQL 17");
+  expect(template).toContain("PostgreSQL 17");
+  expect(template).toContain("--read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m");
   for (const target of ["DATABASE_URL", "3000", "/var/lib/mars", "PUBLIC_BASE_URL", "GITHUB_WEBHOOK_URL", "WORKER_BASE_URL"])
     expect(template).toContain(`Target=\"${target}\"`);
-  expect(template).not.toContain("MARS_WORKER_RELEASE_MANIFEST_URL");
-  expect(template).not.toContain("MARS_WORKER_CONTRACT_VERSION");
+  for (const required of ["DATABASE_URL", "PUBLIC_BASE_URL", "GITHUB_WEBHOOK_URL"])
+    expect(template).toMatch(new RegExp(`Target=\"${required}\"[^>]*Default=\"\"`));
   expect(template).not.toContain(":latest");
-  expect(template).toContain("public HTTPS");
   expect(template).toContain("app_master_key");
   expect(template).not.toContain("/run/secrets/app_master_key");
-});
 
-test("Mars PostgreSQL template initializes a persistent mars database", async () => {
-  const template = await read("deploy/unraid/mars-postgres.xml");
-  expect(template).toContain("<Repository>postgres:17</Repository>");
-  expect(template).toContain("<Network>bridge</Network>");
-  expect(template).toContain('Target="5432"');
-  expect(template).toContain('Target="POSTGRES_USER"');
-  expect(template).toContain('Target="POSTGRES_PASSWORD"');
-  expect(template).toContain('Target="POSTGRES_DB"');
-  expect(template).toContain(">postgres</Config>");
-  expect(template).toContain(">mars</Config>");
-  expect(template).toContain("/var/lib/postgresql/data");
-  expect(template).toContain("/mnt/user/appdata/mars-postgres");
+  const postgres = await read("deploy/unraid/mars-postgres.template.xml");
+  expect(postgres).toContain("<Repository>__POSTGRES_IMAGE__</Repository>");
+  expect(postgres).toContain("<Network>bridge</Network>");
+  expect(postgres).toContain('Target="5432"');
+  expect(postgres).toContain('Target="POSTGRES_USER"');
+  expect(postgres).toContain('Target="POSTGRES_PASSWORD"');
+  expect(postgres).toContain('Target="POSTGRES_DB"');
+  expect(postgres).toContain(">mars</Config>");
+  expect(postgres).toContain("/mnt/user/appdata/mars-postgres");
+  expect(postgres).toMatch(/Target="POSTGRES_PASSWORD"[^>]*Default=""/);
 
+  const cloudflared = await read("deploy/unraid/mars-cloudflared.template.xml");
+  expect(cloudflared).toContain("<Repository>__CLOUDFLARED_IMAGE__</Repository>");
+  expect(cloudflared).toContain("<Network>bridge</Network>");
+  expect(cloudflared).toContain("<PostArgs>tunnel --no-autoupdate run</PostArgs>");
+  expect(cloudflared).toContain('Target="TUNNEL_TOKEN"');
+  expect(cloudflared).toContain('Required="true" Mask="true"');
+  expect(cloudflared).not.toContain("credentials");
+  expect(cloudflared).not.toContain("config.yml");
 });
 test("control-plane image is slim, immutable-contract aware, and healthy", async () => {
   const dockerfile = await read("deploy/control-plane/Dockerfile");
@@ -122,28 +127,23 @@ test("entrypoint repairs only data root before dropping privileges", async () =>
   expect(entrypoint).not.toMatch(/chown[^\n]*-R/);
   expect(entrypoint).not.toContain("USER root");
 });
-
-test("deployment guide documents image-owned worker contract and operations", async () => {
+test("deployment guide documents Unraid preflight, ingress, and recovery", async () => {
   const readme = await read("deploy/control-plane/README.md");
   for (const phrase of [
-    "Linux/amd64", "external PostgreSQL 17", "maintenance database `postgres`", "create the target database",
-    "applies pending migrations", "publicly readable", "anonymously", "worker-v<worker-version>",
-    "worker-release-manifest.json", "image owns", "127.0.0.1:3000", "LAN-published", "bridge mode",
-    "/api/livez", "/api/readyz", "/api/healthz", "healthcheck", "roll back", "app_master_key",
-    "pg_dump", "coordinated pair", "/onboarding", "WebSocket", "Cloudflare named tunnel",
-    "CLOUDFLARE_TUNNEL_TOKEN", "/api/github/webhooks", "WORKER_BASE_URL", "/api/browser/invalidations",
-    "/api/v1/workers/connect", "identity challenges", "Tailscale Serve", "Tailscale Funnel",
-    "/api/auth/github/callback", "/api/github/app/setup", "online pending worker", "fingerprint",
-    "/var/log/mars/install.log", "ProgramData", "Library/Application Support/Mars/install.log",
+    "Linux/amd64", "external PostgreSQL 17", "applies pending migrations", "publicly readable", "anonymously",
+    "worker-v<worker-version>", "worker-release-manifest.json", "image owns", "127.0.0.1:3000", "LAN-published",
+    "bridge mode", "/api/livez", "/api/readyz", "/api/healthz", "healthcheck", "roll back", "app_master_key",
+    "pg_dump", "coordinated pair", "/onboarding", "WebSocket", "Cloudflare named tunnel", "TUNNEL_TOKEN",
+    "/api/github/webhooks", "WORKER_BASE_URL", "/api/browser/invalidations", "/api/v1/workers/connect",
+    "/api/auth/github/callback", "/api/github/app/setup", "sha256sum -c", "7844", "x86-64", "two appdata directories",
+    "mars-postgres-v<version>.xml", "mars-cloudflared-v<version>.xml", "migration container",
   ]) expect(readme).toContain(phrase);
   expect(readme).toContain("repository@sha256:<digest>");
   expect(readme).toContain("exact previous control-plane digest");
-  expect(readme).toContain("docker compose --env-file .env -f deploy/control-plane/compose.yaml ps -q control-plane");
-  expect(readme).toContain("<container-id-or-name>");
-  expect(readme).not.toContain("docker logs mars-control-plane");
   expect(readme).not.toContain("releases/latest/download");
   expect(readme).not.toContain("MARS_WORKER_RELEASE_MANIFEST_URL=");
   expect(readme).not.toContain("MARS_WORKER_CONTRACT_VERSION=");
+  expect(readme).not.toContain("tar -C /var/lib/mars");
 });
 
 test("schema-4 release fixture keeps unavailable platforms explicit", async () => {

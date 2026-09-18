@@ -35,25 +35,27 @@ health=$(curl --fail --silent --show-error http://127.0.0.1:3000/api/healthz); p
 DATA_ROOT=$(docker volume inspect "${PROJECT}_mars-data" --format '{{.Mountpoint}}') DATABASE_URL="$HOST_DATABASE_URL" bun run tests/control-plane-recovery-fixture.ts --read
 "${compose[@]}" restart control-plane >/dev/null
 "${compose[@]}" up -d --wait control-plane >/dev/null
-# Rollback is supported only with the coordinated pre-upgrade database and DATA_ROOT pair.
-"${compose[@]}" stop control-plane
-docker cp "$BACKUP_DIR/pre-upgrade.dump" "$postgres:/tmp/pre-upgrade.dump"
-docker exec "$postgres" psql -U mars -d postgres -c 'DROP DATABASE IF EXISTS mars'
-docker exec "$postgres" psql -U mars -d postgres -c 'CREATE DATABASE mars OWNER mars'
-docker exec "$postgres" pg_restore --clean --if-exists --no-owner --no-acl -U mars -d mars /tmp/pre-upgrade.dump
-docker run --rm -v "${PROJECT}_mars-data:/data" alpine:3.20 sh -c 'rm -rf /data/* /data/.[!.]* /data/..?*'
-docker run --rm -v "${PROJECT}_mars-data:/data" -v "$BACKUP_DIR:/backup:ro" alpine:3.20 tar -C /data -xzf /backup/pre-upgrade-data.tar.gz
-export MARS_CONTROL_PLANE_IMAGE="$PREVIOUS_IMAGE"
-"${compose[@]}" up -d --wait control-plane
-DATA_ROOT=$(docker volume inspect "${PROJECT}_mars-data" --format '{{.Mountpoint}}') DATABASE_URL="$HOST_DATABASE_URL" bun run tests/control-plane-recovery-fixture.ts --read
-# Restore into fresh PostgreSQL and DATA_ROOT volumes with the candidate digest.
-"${restore_compose[@]}" up -d --wait postgres
-restore_postgres=$("${restore_compose[@]}" ps -q postgres)
-restore_port=$("${restore_compose[@]}" port postgres 5432 | cut -d: -f2)
-RESTORE_DATABASE_URL="postgres://mars:ci-only@127.0.0.1:${restore_port}/mars"
-docker cp "$BACKUP_DIR/pre-upgrade.dump" "$restore_postgres:/tmp/pre-upgrade.dump"
-docker exec "$restore_postgres" pg_restore --clean --if-exists --no-owner --no-acl -U mars -d mars /tmp/pre-upgrade.dump
-docker run --rm -v "${RESTORE_PROJECT}_mars-data:/data" -v "$BACKUP_DIR:/backup:ro" alpine:3.20 tar -C /data -xzf /backup/pre-upgrade-data.tar.gz
+ # Rollback is supported only with the coordinated pre-upgrade database and DATA_ROOT pair.
+ "${compose[@]}" stop control-plane
+ (cd "$BACKUP_DIR" && sha256sum -c checksums.txt)
+ docker cp "$BACKUP_DIR/pre-upgrade.dump" "$postgres:/tmp/pre-upgrade.dump"
+ docker exec "$postgres" psql -U mars -d postgres -c 'DROP DATABASE IF EXISTS mars'
+ docker exec "$postgres" psql -U mars -d postgres -c 'CREATE DATABASE mars OWNER mars'
+ docker exec "$postgres" pg_restore --clean --if-exists --no-owner --no-acl -U mars -d mars /tmp/pre-upgrade.dump
+ docker run --rm -v "${PROJECT}_mars-data:/data" alpine:3.20 sh -c 'rm -rf /data/* /data/.[!.]* /data/..?*'
+ docker run --rm -v "${PROJECT}_mars-data:/data" -v "$BACKUP_DIR:/backup:ro" alpine:3.20 tar -C /data -xzf /backup/pre-upgrade-data.tar.gz
+ export MARS_CONTROL_PLANE_IMAGE="$PREVIOUS_IMAGE"
+ "${compose[@]}" up -d --wait control-plane
+ DATA_ROOT=$(docker volume inspect "${PROJECT}_mars-data" --format '{{.Mountpoint}}') DATABASE_URL="$HOST_DATABASE_URL" bun run tests/control-plane-recovery-fixture.ts --read
+ # Restore into fresh PostgreSQL and DATA_ROOT volumes with the candidate digest.
+ (cd "$BACKUP_DIR" && sha256sum -c checksums.txt)
+ "${restore_compose[@]}" up -d --wait postgres
+ restore_postgres=$("${restore_compose[@]}" ps -q postgres)
+ restore_port=$("${restore_compose[@]}" port postgres 5432 | cut -d: -f2)
+ RESTORE_DATABASE_URL="postgres://mars:ci-only@127.0.0.1:${restore_port}/mars"
+ docker cp "$BACKUP_DIR/pre-upgrade.dump" "$restore_postgres:/tmp/pre-upgrade.dump"
+ docker exec "$restore_postgres" pg_restore --clean --if-exists --no-owner --no-acl -U mars -d mars /tmp/pre-upgrade.dump
+ docker run --rm -v "${RESTORE_PROJECT}_mars-data:/data" -v "$BACKUP_DIR:/backup:ro" alpine:3.20 tar -C /data -xzf /backup/pre-upgrade-data.tar.gz
 export MARS_CONTROL_PLANE_IMAGE="$CANDIDATE_IMAGE"
 "${restore_compose[@]}" up -d --wait control-plane
 restore_health=$(curl --fail --silent --show-error http://127.0.0.1:3000/api/healthz); printf '%s' "$restore_health" | EXPECTED_BUILD_SHA="$EXPECTED_BUILD_SHA" bun -e 'const v=JSON.parse(await new Response(Bun.stdin).text()); if(v.buildId!==Bun.env.EXPECTED_BUILD_SHA) throw new Error("clean restore build identity mismatch")'
