@@ -111,7 +111,7 @@ jobs:
           export LIBGUESTFS_BACKEND=direct LIBGUESTFS_BACKEND_SETTINGS=force_tcg
           sudo chmod a+rx /boot; sudo chmod a+r /boot/vmlinuz-*
           sudo apt-get update; sudo apt-get install --no-install-recommends -y libguestfs-tools qemu-utils
-          sudo -E env LIBGUESTFS_BACKEND=direct LIBGUESTFS_BACKEND_SETTINGS=force_tcg UBUNTU_QCOW2_URL=https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img images/worker-appliance/build.sh mars-worker-golden
+          sudo -E env LIBGUESTFS_BACKEND=direct LIBGUESTFS_BACKEND_SETTINGS=force_tcg RUNNER_ARCHIVE_URL="$runner_url" RUNNER_ARCHIVE_SHA256="$runner_sha256" JOB_AGENT_BINARY=dist/linux/mars-job-agent UBUNTU_QCOW2_URL=https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img images/worker-appliance/build.sh mars-worker-golden
           mv dist/mars-worker-golden.qcow2 dist/linux/mars-worker-golden.qcow2
           mv dist/mars-worker-golden.qcow2.sha256 dist/linux/mars-worker-golden.qcow2.sha256
           docker buildx build --platform linux/amd64 --push -f deploy/workers/linux-broker.Dockerfile -t "$BROKER_IMAGE:worker-v$WORKER_VERSION" -t "$BROKER_IMAGE:$BROKER_CANDIDATE_TAG" .
