@@ -70,6 +70,7 @@ jobs:
             [[ "$WORKER_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo 'worker_version is required and must be SemVer in build mode' >&2; exit 1; }
             if gh release view "worker-v$WORKER_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then echo "worker release already exists: worker-v$WORKER_VERSION" >&2; exit 1; fi
             worker_url="https://github.com/Snazzie/MARS/releases/download/worker-v$WORKER_VERSION/worker-release-manifest.json"
+            worker_version="$WORKER_VERSION"
           elif [[ "$WORKER_MODE" == reuse ]]; then
             [[ "$WORKER_VERSION" == '' ]] || { echo 'worker_version must be omitted in reuse mode' >&2; exit 1; }
             [[ "$WORKER_MANIFEST_URL" =~ ^https://github\.com/Snazzie/MARS/releases/download/worker-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)/worker-release-manifest\.json$ ]] || { echo 'worker_manifest_url must be an immutable worker-v<semver> URL' >&2; exit 1; }
