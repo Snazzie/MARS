@@ -8,6 +8,12 @@ test("Linux broker is non-root and has only libvirt/qemu runtime dependencies", 
   expect(dockerfile).toContain("USER mars");
   expect(dockerfile).not.toContain("docker.sock");
 });
+test("ARM64 broker installs Docker Compose v2 from the Docker repository", async () => {
+  const dockerfile = await readFile("deploy/workers/linux-arm64-broker.Dockerfile", "utf8");
+  expect(dockerfile).toContain("download.docker.com/linux/debian/gpg");
+  expect(dockerfile).toContain("docker-ce-cli docker-compose-plugin");
+  expect(dockerfile).toContain("linux-container-worker");
+});
 
 test("golden appliance contract is immutable and secret-free", async () => {
   const readme = await readFile("images/worker-appliance/README.txt", "utf8");
