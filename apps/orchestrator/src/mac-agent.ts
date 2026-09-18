@@ -8,7 +8,7 @@ import { z } from "zod";
 import type { Lease, RuntimeLease } from "./runtime.ts";
 import { createTartVmRuntime, resolveTartExecutable, TartVmDriver } from "./tart.ts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
-import { retryControlPlaneOperation, waitForWorkerSocketClose } from "./worker-client.ts";
+import { retryControlPlaneOperation, waitForWorkerSocketClose, workerRuntimeVersions } from "./worker-client.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 import { collectWorkerServiceLogs } from "./worker-service-logs.ts";
 import { openLeasePickupState, leasePickupStateFile, writeLeasePickupState, type LeasePickupStateController } from "./lease-pickup-state.ts";
@@ -16,6 +16,8 @@ import { MacStatusItemSupervisor, statusItemExecutable } from "./mac-status-item
 export interface MacWorkerLimits { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number }
 export interface MacWorkerJoinInput {
   code: string;
+  releaseVersion: string;
+  contractVersion: string;
   publicKey: string;
   encryptionPublicKey: string;
   vmUuid: string;
@@ -42,7 +44,7 @@ export async function applyWorkerConfigure(
   Object.assign(cache, observed.cache);
   return workerEvent(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed });
 }
-export function buildMacWorkerJoinPayload(input: MacWorkerJoinInput): MacWorkerJoinPayload { return { code: input.code, publicKey: input.publicKey, encryptionPublicKey: input.encryptionPublicKey, vmUuid: input.vmUuid, machineUuid: input.machineUuid, doctor: input.doctor, capacity: input.capacity, platform: "macos-arm64" }; }
+export function buildMacWorkerJoinPayload(input: MacWorkerJoinInput): MacWorkerJoinPayload { return { code: input.code, releaseVersion: input.releaseVersion, contractVersion: input.contractVersion, publicKey: input.publicKey, encryptionPublicKey: input.encryptionPublicKey, vmUuid: input.vmUuid, machineUuid: input.machineUuid, doctor: input.doctor, capacity: input.capacity, platform: "macos-arm64" }; }
 export function buildMacWorkerAuthentication(challenge: string, workerId: string, privateKey: string, encryptionPublicKey?: string): { type: "authenticate"; workerId: string; encryptionPublicKey?: string; signature: string } {
   const canonical = encryptionPublicKey ? `${challenge}\n${workerId}\n${encryptionPublicKey}` : challenge;
   const signature = signMessage(null, encryptionPublicKey ? Buffer.from(canonical) : Buffer.from(challenge, "base64url"), privateKey).toString("base64url");
@@ -309,6 +311,7 @@ async function currentMacWorkerJoinPayload(code: string, publicKey: string, encr
   const resources = capacity();
   return WorkerBootstrapRequest.parse(buildMacWorkerJoinPayload({
     code,
+    ...workerRuntimeVersions(),
     publicKey,
     encryptionPublicKey,
     machineUuid: stableMachineUuid,
@@ -405,7 +408,7 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
     const sendDoctor = () => {
       publishInventory();
       if (ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctorReport, acceptingLeases: pickupState.acceptingLeases, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
+      ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { ...workerRuntimeVersions(), doctor: { ...doctorReport, acceptingLeases: pickupState.acceptingLeases, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
     };
     ws.onmessage = async event => {
       let frame: { type?: string; nonce?: string } & Partial<WorkerCommand>;

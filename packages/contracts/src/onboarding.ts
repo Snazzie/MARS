@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { RuntimePlatform, GuestPlatform, WorkerState, ConnectionState, ConfigurationState, WorkerDoctorData, WorkerCapacityData, WorkerLimits } from "./orchestration.ts";
+import { WorkerContractVersion, WorkerReleaseVersion } from "./worker-release.ts";
 import { OrganizationSummary, RepositorySummary, PoolSummary } from "./dashboard.ts";
 
 export const OnboardingStep = z.enum(["setup", "admin", "worker", "github", "labels", "complete"]);
@@ -8,7 +9,7 @@ export const OnboardingStatus = z.object({ version:z.literal(1), onboardingRequi
 export type OnboardingStatus = z.infer<typeof OnboardingStatus>;
 export const ControlPlaneSetupRequest = z.object({ publicBaseUrl: z.string().min(1).max(2048) }).strict();
 export type ControlPlaneSetupRequest = z.infer<typeof ControlPlaneSetupRequest>;
-export const OnboardingWorker = z.object({ id:z.string().uuid(), name:z.string().min(1), platform:RuntimePlatform, guestPlatforms:z.array(GuestPlatform).min(1).optional(), admissionState:WorkerState, connectionState:ConnectionState, configurationState:ConfigurationState, publicKey:z.string(), fingerprint:z.string(), vmUuid:z.string(), machineUuid:z.string(), doctor:WorkerDoctorData, capacity:WorkerCapacityData, limits:WorkerLimits.nullable(), configurationRevision:z.string().nullable() }).strict();
+export const OnboardingWorker = z.object({ id:z.string().uuid(), name:z.string().min(1), platform:RuntimePlatform, guestPlatforms:z.array(GuestPlatform).min(1).optional(), releaseVersion:WorkerReleaseVersion.nullable().optional(), contractVersion:WorkerContractVersion.nullable().optional(), admissionState:WorkerState, connectionState:ConnectionState, configurationState:ConfigurationState, publicKey:z.string(), fingerprint:z.string(), vmUuid:z.string(), machineUuid:z.string(), doctor:WorkerDoctorData, capacity:WorkerCapacityData, limits:WorkerLimits.nullable(), configurationRevision:z.string().nullable() }).strict();
 export type OnboardingWorker = z.infer<typeof OnboardingWorker>;
 export const OnboardingInstallation = z.object({ id:z.string().uuid(), githubInstallationId:z.number().int(), state:z.enum(["pending","approved","suspended"]), repositorySelection:z.enum(["all","selected"]).nullable() }).strict();
 export type OnboardingInstallation = z.infer<typeof OnboardingInstallation>;

@@ -66,7 +66,7 @@ test("package dev command delegates argument handling to the Bun entrypoint", as
   expect(pkg.scripts.dev).toBe("bun run scripts/dev.ts");
   const launcher = await Bun.file("scripts/dev.ts").text();
   const ports = await Bun.file("scripts/dev-ports.ts").text();
-  expect(launcher).toContain("await killRecordedDevSupervisor();\n  await killDevPortListeners");
+  expect(launcher.replaceAll("\r\n", "\n")).toContain("await killRecordedDevSupervisor();\n  await killDevPortListeners(ports);");
   expect(ports).toContain("taskkill.exe");
   expect(ports).toContain("windowsPortCleanupScript(ports, process.pid)");
 });

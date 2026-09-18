@@ -1,8 +1,9 @@
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory=$true)][string]$Code,
+  [string]$Code = '',
   [string]$ControlPlaneUrl,
-  [string]$InstallRoot = 'C:\ProgramData\Mars\linux-arm64'
+  [string]$InstallRoot = 'C:\ProgramData\Mars\linux-arm64',
+  [switch]$Upgrade
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -53,7 +54,9 @@ function SwitchDockerLinuxEngine {
 Require ([Environment]::OSVersion.Version.Build -ge 22631) 'Windows ARM64 build 22631 or newer is required'
 Require ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [System.Runtime.InteropServices.Architecture]::Arm64) 'Windows ARM64 is required'
 Require (Get-Command winget -ErrorAction SilentlyContinue -or (Get-Command docker -ErrorAction SilentlyContinue)) 'winget or Docker CLI is required'
-Require ($Code -match '^[A-Za-z0-9_-]{43}$') 'A valid one-use enrollment code is required'
+if (-not $Upgrade) { Require ($Code -match '^[A-Za-z0-9_-]{43}$') 'A valid one-use enrollment code is required' }
+Require ($WorkerVersion -match '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') 'WorkerVersion must use major.minor.patch'
+Require ($WorkerContractVersion -match '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') 'WorkerContractVersion must use major.minor.patch'
 Require ($ControlPlaneUrl -match '^(https://|http://(localhost|127\.0\.0\.1)(:\d+)?/?$)') 'ControlPlaneUrl must be HTTPS or loopback HTTP'
 Require ($ArtifactMode -in @('local','production')) 'ArtifactMode must be local or production'
 Digest $BrokerImage 'BrokerImage'
@@ -80,6 +83,8 @@ try {
   $compose = Get-Content -Raw -LiteralPath $tmpCompose
   $env = @(
     "MARS_CONTROL_PLANE_URL=$ControlPlaneUrl"
+    "MARS_WORKER_VERSION=$WorkerVersion"
+    "MARS_WORKER_CONTRACT_VERSION=$WorkerContractVersion"
     "MARS_BROKER_IMAGE=$BrokerImage"
     "MARS_JOB_IMAGE=$JobImage"
   ) -join "`n"
@@ -97,8 +102,10 @@ try {
   Require ($job.Os -eq 'linux' -and $job.Architecture -in @('arm64','aarch64')) 'Job image is not Linux ARM64'
   $stateVolume = 'mars-linux-arm64-state'
   InvokeDocker @('volume','create',$stateVolume)
-  $Code | & docker run --rm -i --entrypoint /bin/sh -v "$stateVolume`:/var/lib/mars" $BrokerImage -c 'umask 077; mkdir -p /var/lib/mars/config; cat > /var/lib/mars/config/join-code; chmod 0600 /var/lib/mars/config/join-code'
-  Require ($LASTEXITCODE -eq 0) 'Could not persist enrollment code in the broker state volume'
+  if (-not $Upgrade) {
+    $Code | & docker run --rm -i --entrypoint /bin/sh -v "$stateVolume`:/var/lib/mars" $BrokerImage -c 'umask 077; mkdir -p /var/lib/mars/config; cat > /var/lib/mars/config/join-code; chmod 0600 /var/lib/mars/config/join-code'
+    Require ($LASTEXITCODE -eq 0) 'Could not persist enrollment code in the broker state volume'
+  }
   Move-Item -Force -LiteralPath $candidateCompose -Destination $composePath
   Move-Item -Force -LiteralPath $candidateEnv -Destination $envPath
   InvokeDocker @('compose','--project-name','mars-linux-arm64','--env-file',$envPath,'-f',$composePath,'up','-d')

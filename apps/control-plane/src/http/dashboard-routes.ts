@@ -7,8 +7,9 @@ import { adoptWorker } from "../workers.ts";
 import { configurePendingWorker, purgeWorkerRunnerCache } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 import { createWorkerImageBuildPayload } from "../windows-image-build.ts";
-import { ApiError, CostCenterDto, CostCenterPricingProvider, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth, JobLabelRecommendation, JobLabelRecommendationQuery, GithubConnectionSummary, GithubRateLimitStats, WorkerEventPayload, runtimeDriverForPlatform } from "@mars/contracts";
+import { ApiError, CostCenterDto, CostCenterPricingProvider, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth, JobLabelRecommendation, JobLabelRecommendationQuery, GithubConnectionSummary, GithubRateLimitStats, WorkerEventPayload, WorkerUpgradeStatus, runtimeDriverForPlatform } from "@mars/contracts";
 import { WorkerDispatchError } from "../worker-dispatch.ts";
+import { WorkerReleaseCatalogUnavailable } from "../worker-release.ts";
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
@@ -258,6 +259,18 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     return c.json({ queued: true }, 202);
   }));
   app.get("/api/organizations/:organizationId/workers", safe(async (c) => { if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required"); const q = parseQuery(c); if (q instanceof Response) return q; return c.json(CursorPage(WorkerDetail).parse(await listAllWorkers(deps.db, c.get("user").id, q.limit, q.includeInactive, deps.workerConnected))); }));
+  app.get("/api/workers/:workerId/upgrade", safe(async (c) => {
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    const worker = await getWorkerDetail(deps.db, "all", c.req.param("workerId"), deps.workerConnected);
+    if (!worker) return error(c, 404, "not_found", "Resource not found");
+    if (!deps.workerUpgradeService) return error(c, 503, "worker_release_catalog_unavailable", "Worker release catalog is unavailable");
+    try {
+      return c.json(WorkerUpgradeStatus.parse(await deps.workerUpgradeService.suggest(worker)), { headers: { "Cache-Control": "no-store" } });
+    } catch (cause) {
+      if (cause instanceof WorkerReleaseCatalogUnavailable) return error(c, 503, "worker_release_catalog_unavailable", "Worker release catalog is unavailable");
+      throw cause;
+    }
+  }));
   app.post("/api/workers/:workerId/configure", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const idem = requireMutation(c); if (idem) return idem;

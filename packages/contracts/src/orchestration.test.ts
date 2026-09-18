@@ -123,6 +123,8 @@ test("defaults worker doctor container inventory to an empty array", () => {
 
 test("parses a strict worker doctor report with container inventory", () => {
   const parsed = WorkerDoctorReport.parse({
+    releaseVersion: "0.1.0",
+    contractVersion: "0.1.0",
     doctor: { containers: [workerContainerStatusFixture] },
     capacity: workerCapacityFixture,
   });

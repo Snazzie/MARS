@@ -99,6 +99,8 @@ export const workers = pgTable("workers", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
 	name: text().notNull(),
 	platform: text().notNull(),
+	releaseVersion: text("release_version"),
+	contractVersion: text("contract_version"),
 	guestPlatforms: jsonb("guest_platforms").default([]).notNull(),
 	admissionState: text("admission_state").notNull(),
 	connectionState: text("connection_state").default('offline').notNull(),

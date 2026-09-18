@@ -14,7 +14,7 @@ test("post-enrollment configuration is strict and excludes organization binding"
 });
 
 describe("pending worker request contracts", () => {
-  const valid = { code: "A".repeat(43), platform: "linux-x64", publicKey: "ed25519-public", encryptionPublicKey: "x25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
+  const valid = { code: "A".repeat(43), platform: "linux-x64", releaseVersion: "0.1.0", contractVersion: "0.1.0", publicKey: "ed25519-public", encryptionPublicKey: "x25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 4096 } };
   test("requires stable identity and excludes code from pending DTO", () => {
     expect(WorkerBootstrapRequest.parse(valid).machineUuid).toBe(valid.machineUuid);
     const { code: _code, encryptionPublicKey: _encryptionPublicKey, ...pending } = { ...valid, limits: null };
@@ -37,7 +37,8 @@ test("pending worker DTO ignores database-only columns", () => {
     id: "00000000-0000-4000-8000-000000000003",
     name: "worker",
     platform: "macos-arm64" as const,
-    admissionState: "pending",
+    releaseVersion: "0.1.0",
+    contractVersion: "0.1.0",
     connectionState: "offline",
     configurationState: "unconfigured",
     publicKey: "ed25519-public",
@@ -55,9 +56,11 @@ test("pending worker DTO ignores database-only columns", () => {
   expect(pendingWorkerDto(row)).toEqual({
     id: row.id,
     fingerprint: row.fingerprint,
-    platform: row.platform,
     guestPlatforms: ["macos-arm64"],
+    platform: row.platform,
     publicKey: row.publicKey,
+    releaseVersion: row.releaseVersion,
+    contractVersion: row.contractVersion,
     vmUuid: row.vmUuid,
     machineUuid: row.machineUuid,
     limits: null,
@@ -83,10 +86,7 @@ test("pending worker DTO fails closed when legacy telemetry lacks capacity", () 
     limits: null,
     doctor: { probe: true },
   };
-  expect(pendingWorkerDto(row)).toMatchObject({
-    capacity: { actualVcpu: 0, actualMemoryBytes: 0, actualStorageBytes: 0, freeVcpu: 0, freeMemoryBytes: 0, freeStorageBytes: 0 },
-    doctor: { probe: true },
-  });
+  expect(pendingWorkerDto(row)).toBeNull();
 });
 
 test("reused machine identity is not an exact reconnect", () => {

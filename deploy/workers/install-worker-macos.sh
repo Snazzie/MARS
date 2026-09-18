@@ -2,18 +2,19 @@
 set -euo pipefail
 umask 077
 
-usage() { echo "usage: $0 --code ENROLLMENT_CODE [--control-plane-url URL]" >&2; exit 2; }
+usage() { echo "usage: $0 [--code ENROLLMENT_CODE] [--upgrade] [--control-plane-url URL]" >&2; exit 2; }
 parse_args() {
-  JOIN_CODE=""; CONTROL_PLANE_URL="${PUBLIC_BASE_URL:-}"; CONTROL_PLANE_URL_ARG=""; local had_args=$#
+  JOIN_CODE=""; CONTROL_PLANE_URL="${PUBLIC_BASE_URL:-}"; CONTROL_PLANE_URL_ARG=""; UPGRADE=0; local had_args=$#
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --code) [[ $# -ge 2 && -z "$JOIN_CODE" && -n "$2" ]] || usage; JOIN_CODE="$2"; shift 2 ;;
+      --code) [[ $# -ge 2 && -z "$JOIN_CODE" && -n "$2" && "$UPGRADE" -eq 0 ]] || usage; JOIN_CODE="$2"; shift 2 ;;
+      --upgrade) [[ "$UPGRADE" -eq 0 ]] || usage; UPGRADE=1; shift ;;
       --control-plane-url) [[ $# -ge 2 && -z "$CONTROL_PLANE_URL_ARG" && -n "$2" ]] || usage; CONTROL_PLANE_URL_ARG="$2"; shift 2 ;;
       *) usage ;;
     esac
   done
-  if [[ -z "$JOIN_CODE" && "$had_args" -eq 0 && -t 0 ]]; then read -r -s 'JOIN_CODE?Mars enrollment code: '; print >&2; fi
-  [[ -n "$JOIN_CODE" && "$JOIN_CODE" =~ ^[A-Za-z0-9_-]{43}$ ]] || usage
+  if [[ "$UPGRADE" -eq 0 && -z "$JOIN_CODE" && "$had_args" -eq 0 && -t 0 ]]; then read -r -s 'JOIN_CODE?Mars enrollment code: '; print >&2; fi
+  if [[ "$UPGRADE" -eq 0 ]]; then [[ "$JOIN_CODE" =~ ^[A-Za-z0-9_-]{43}$ ]] || usage; else [[ -z "$JOIN_CODE" ]] || usage; fi
   [[ -z "$CONTROL_PLANE_URL_ARG" ]] || CONTROL_PLANE_URL="$CONTROL_PLANE_URL_ARG"
   PUBLIC_BASE_URL="$CONTROL_PLANE_URL"
 }
@@ -21,7 +22,7 @@ parse_args "$@"
 ARTIFACT_BASE_URL="${MARS_ARTIFACT_BASE_URL:-}"
 require_config() {
   [[ -n "${PUBLIC_BASE_URL:-}" ]] || { echo 'PUBLIC_BASE_URL is required' >&2; exit 1; }
-  [[ -n "${MARS_ARTIFACT_MODE:-}" ]] || { echo 'MARS_ARTIFACT_MODE is required' >&2; exit 1; }
+  [[ -n "${MARS_WORKER_VERSION:-}" ]] || { echo 'MARS_WORKER_VERSION is required' >&2; exit 1; }
   [[ -n "${MARS_WORKER_CONTRACT_VERSION:-}" ]] || { echo 'MARS_WORKER_CONTRACT_VERSION is required' >&2; exit 1; }
   [[ -n "${MARS_ORCHESTRATOR_URL:-}" ]] || { echo 'MARS_ORCHESTRATOR_URL is required' >&2; exit 1; }
   [[ -n "${MARS_ORCHESTRATOR_SHA256:-}" ]] || { echo 'MARS_ORCHESTRATOR_SHA256 is required' >&2; exit 1; }
@@ -46,8 +47,8 @@ validate_http_url() {
 validate_oci_digest() { [[ "$1" =~ '^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$' ]] || { echo "$2 must be a lowercase digest-pinned OCI reference" >&2; exit 1; }; }
 validate_config() {
   require_config; [[ "$MARS_ARTIFACT_MODE" == local || "$MARS_ARTIFACT_MODE" == production ]] || { echo 'MARS_ARTIFACT_MODE must be local or production' >&2; exit 1; }
+  [[ "$MARS_WORKER_VERSION" =~ '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ]] || { echo 'MARS_WORKER_VERSION must use major.minor.patch' >&2; exit 1; }
   [[ "$MARS_WORKER_CONTRACT_VERSION" =~ '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ]] || { echo 'MARS_WORKER_CONTRACT_VERSION must use major.minor.patch' >&2; exit 1; }
-  PUBLIC_BASE_URL="${PUBLIC_BASE_URL%/}"; validate_http_url "$PUBLIC_BASE_URL" PUBLIC_BASE_URL origin || exit 1; local public_origin="$URL_ORIGIN" public_scheme="$URL_SCHEME"
   local artifact_origin="$public_origin"
   if [[ -n "$ARTIFACT_BASE_URL" ]]; then ARTIFACT_BASE_URL="${ARTIFACT_BASE_URL%/}"; validate_http_url "$ARTIFACT_BASE_URL" MARS_ARTIFACT_BASE_URL origin || exit 1; artifact_origin="$URL_ORIGIN"; fi
   for pair in "MARS_ORCHESTRATOR_URL:$MARS_ORCHESTRATOR_URL" "MARS_JOB_AGENT_URL:$MARS_JOB_AGENT_URL" "IMAGE_PREPARATION_SCRIPT_URL:$IMAGE_PREPARATION_SCRIPT_URL" "MARS_MACOS_STATUS_ITEM_URL:$MARS_MACOS_STATUS_ITEM_URL"; do local name="${pair%%:*}" url="${pair#*:}"; validate_http_url "$url" "$name" asset || exit 1; if [[ "$MARS_ARTIFACT_MODE" == production && "$URL_SCHEME" != https ]]; then echo "$name must use HTTPS in production" >&2; exit 1; fi; if [[ "$MARS_ARTIFACT_MODE" == local && "$URL_ORIGIN" != "$artifact_origin" ]]; then echo "$name must use the same origin as MARS_ARTIFACT_BASE_URL or PUBLIC_BASE_URL in local mode" >&2; exit 1; fi; done
@@ -77,6 +78,20 @@ download_verified() {
   local actual="$(shasum -a 256 "$destination" | cut -d ' ' -f 1)"; [[ "$actual" == "$expected" ]] || { echo "$name checksum mismatch: expected $expected, got $actual" >&2; return 1; }
   local response_hash="$(awk 'BEGIN{IGNORECASE=1} tolower($1)=="x-content-sha256:" {gsub("\r","",$2); print $2; exit}' "$headers")"; [[ -z "$response_hash" || "$response_hash" == "$expected" ]] || { echo "$name response hash mismatch" >&2; return 1; }; rm -f "$headers"
 }
+if [[ "$UPGRADE" -eq 1 ]]; then
+  [[ -x "$HOME/Library/Application Support/Mars/mars-orchestrator" ]] || { echo 'Upgrade requires an existing macOS worker.' >&2; exit 1; }
+  UPGRADE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mars-worker-upgrade.XXXXXX")"
+  trap 'rm -rf "$UPGRADE_DIR"; exit $?' EXIT INT TERM
+  download_verified "$MARS_ORCHESTRATOR_URL" "$MARS_ORCHESTRATOR_SHA256" "$UPGRADE_DIR/mars-orchestrator" orchestrator
+  download_verified "$MARS_JOB_AGENT_URL" "$MARS_JOB_AGENT_SHA256" "$UPGRADE_DIR/mars-job-agent" 'job agent'
+  chmod 755 "$UPGRADE_DIR/mars-orchestrator" "$UPGRADE_DIR/mars-job-agent"
+  launchctl bootout "gui/$UID/com.mars.worker" >/dev/null 2>&1 || true
+  mv -f "$UPGRADE_DIR/mars-orchestrator" "$HOME/Library/Application Support/Mars/mars-orchestrator"
+  mv -f "$UPGRADE_DIR/mars-job-agent" "$HOME/Library/Application Support/Mars/mars-job-agent"
+  launchctl bootstrap "gui/$UID" "$HOME/Library/LaunchAgents/com.mars.worker.plist"
+  launchctl kickstart -k "gui/$UID/com.mars.worker"
+  exit 0
+fi
 download_verified "$MARS_ORCHESTRATOR_URL" "$MARS_ORCHESTRATOR_SHA256" "$ORCHESTRATOR_STAGE" orchestrator
 download_verified "$MARS_JOB_AGENT_URL" "$MARS_JOB_AGENT_SHA256" "$JOB_AGENT_STAGE" 'job agent'
 download_verified "$IMAGE_PREPARATION_SCRIPT_URL" "$IMAGE_PREPARATION_SCRIPT_SHA256" "$PREPARER_STAGE" 'image preparation script'
@@ -113,6 +128,7 @@ cat > "$LAUNCHER_TMP" <<EOF
 set -euo pipefail
 export PUBLIC_BASE_URL=$(printf '%q' "$PUBLIC_BASE_URL")
 export MARS_CONTROL_PLANE_URL=$(printf '%q' "$PUBLIC_BASE_URL")
+export MARS_WORKER_VERSION=$(printf '%q' "$MARS_WORKER_VERSION")
 export MARS_WORKER_CONTRACT_VERSION=$(printf '%q' "$MARS_WORKER_CONTRACT_VERSION")
 export MARS_ACTION_CACHE_ROOT=$(printf '%q' "${MARS_ACTION_CACHE_ROOT:-}")
 export MARS_CACHE_PROXY_PORT=$(printf '%q' "${MARS_CACHE_PROXY_PORT:-}")

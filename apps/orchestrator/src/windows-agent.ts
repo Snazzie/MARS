@@ -10,7 +10,7 @@ import { downloadWindowsImageBuildArtifacts } from "./windows-image-build.ts";
 import type { RuntimeDriver } from "./runtime.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
-import { retryControlPlaneOperation, waitForWorkerSocketClose } from "./worker-client.ts";
+import { retryControlPlaneOperation, waitForWorkerSocketClose, workerRuntimeVersions } from "./worker-client.ts";
 import { openLeasePickupState, leasePickupStateFile, writeLeasePickupState, type LeasePickupStateController } from "./lease-pickup-state.ts";
 
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
@@ -128,7 +128,7 @@ async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> {
   const machine = identity.machineUuid ?? await machineUuid();
   const persisted = { ...identity, vmUuid, machineUuid: machine };
   await save(persisted);
-  const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), platform: "windows-x64", publicKey: persisted.publicKey, encryptionPublicKey: persisted.encryptionPublicKey, vmUuid, machineUuid: machine, doctor: await windowsDoctor(), capacity: await capacity() });
+  const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), platform: "windows-x64", ...workerRuntimeVersions(), publicKey: persisted.publicKey, encryptionPublicKey: persisted.encryptionPublicKey, vmUuid, machineUuid: machine, doctor: await windowsDoctor(), capacity: await capacity() });
   const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }));
   if (!response.ok) throw new Error(`worker join failed: ${response.status}`);
   const joined = await response.json() as { workerId: string };
@@ -147,8 +147,9 @@ function emitWindowsWorkerEvent(workerId: string, leaseId: string | null, send: 
 export async function reconcileWindowsRuntime(identity: Pick<Identity, "preserveLeases">, driver: Pick<WindowsRuntimeDriver, "reconcileOrphans">): Promise<void> {
   if (identity.preserveLeases !== true) await driver.reconcileOrphans();
 }
-export function buildWindowsDoctorReport(input: { doctor: WorkerDoctorData; capacity: WorkerCapacityData; containers: WorkerContainerStatus[]; activeLeases: string[]; preserveLeases: boolean }): WorkerDoctorReport {
+export function buildWindowsDoctorReport(input: { doctor: WorkerDoctorData; capacity: WorkerCapacityData; containers: WorkerContainerStatus[]; activeLeases: string[]; preserveLeases: boolean; versions?: { releaseVersion: string; contractVersion: string } }): WorkerDoctorReport {
   return WorkerDoctorReport.parse({
+    ...(input.versions ?? workerRuntimeVersions()),
     doctor: {
       ...input.doctor,
       containers: input.containers,

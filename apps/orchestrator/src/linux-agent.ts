@@ -6,7 +6,7 @@ import { statfsSync } from "node:fs";
 import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerObservedConfiguration, WorkerConfigurePayload, WorkerRunnerCachePurgePayload, WorkerCommand, WorkerDoctorData, WorkerEvent, type WorkerCapacityData, type WorkerLimits } from "@mars/contracts";
 import { z } from "zod";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
-import { authenticateWorker, retryControlPlaneOperation, waitForWorkerSocketClose, workerSocketUrl, type WorkerIdentity } from "./worker-client.ts";
+import { authenticateWorker, retryControlPlaneOperation, waitForWorkerSocketClose, workerRuntimeVersions, workerSocketUrl, type WorkerIdentity } from "./worker-client.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 import type { LibvirtVmDriver } from "./libvirt-vm.ts";
 import type { RuntimeDriver } from "./runtime.ts";
@@ -102,6 +102,8 @@ export async function executeLinuxWorkerCommand(command: WorkerCommand, resource
 }
 export type LinuxWorkerJoinInput = {
   code: string;
+  releaseVersion: string;
+  contractVersion: string;
   publicKey: string;
   encryptionPublicKey: string;
   vmUuid: string;
@@ -169,7 +171,7 @@ async function enrollLinuxWorker(baseUrl: URL, identity: WorkerIdentity, driver:
   const code = await readEnrollmentCode();
   const capacity = linuxCapacity();
   const doctor = await linuxDoctor(driver, digest, channelRoot);
-  const payload = buildLinuxWorkerJoinPayload({ code, publicKey: persisted.publicKey, encryptionPublicKey: persisted.encryptionPublicKey, vmUuid, machineUuid, doctor, capacity });
+  const payload = buildLinuxWorkerJoinPayload({ code, ...workerRuntimeVersions(), publicKey: persisted.publicKey, encryptionPublicKey: persisted.encryptionPublicKey, vmUuid, machineUuid, doctor, capacity });
   const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) }));
   if (!response.ok) throw new Error(`worker join failed: ${response.status}`);
   const joined = await response.json() as { workerId?: string };
@@ -204,12 +206,12 @@ async function connectLinuxWorker(
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(workerEvent(identity.workerId, type, payload)));
           });
           doctor = await linuxDoctor(driver, digest, channelRoot);
-          return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctor, activeLeases: [...activeLeases.keys()] }, capacity: linuxCapacity() } }));
+          return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { ...workerRuntimeVersions(), doctor: { ...doctor, activeLeases: [...activeLeases.keys()] }, capacity: linuxCapacity() } }));
         }
         if (frame.type === "ping") {
           ws.send(JSON.stringify({ version: 1, type: "pong", workerId: identity.workerId }));
           doctor = await linuxDoctor(driver, digest, channelRoot);
-          return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { doctor: { ...doctor, activeLeases: [...activeLeases.keys()] }, capacity: linuxCapacity() } }));
+          return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { ...workerRuntimeVersions(), doctor: { ...doctor, activeLeases: [...activeLeases.keys()] }, capacity: linuxCapacity() } }));
         }
         if (frame.type === "doctor_ack") return;
         const command = WorkerCommand.parse(frame);
@@ -276,7 +278,7 @@ export async function runDockerLinuxWorker(baseUrl: string, driver: RuntimeDrive
     let enrolled = identity;
     if (!enrolled.workerId) {
       const code = await readEnrollmentCode();
-      const payload = WorkerBootstrapRequest.parse({ code, platform: "linux-arm64", publicKey: enrolled.publicKey, encryptionPublicKey: enrolled.encryptionPublicKey, vmUuid: enrolled.vmUuid, machineUuid: enrolled.machineUuid, doctor: WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: host.runtimeReady, probe: true, egress: true, imageSignatures: host.imageReady, networkReady: host.networkReady, acceptingLeases: true }), capacity: linuxCapacity() });
+      const payload = WorkerBootstrapRequest.parse({ code, platform: "linux-arm64", ...workerRuntimeVersions(), publicKey: enrolled.publicKey, encryptionPublicKey: enrolled.encryptionPublicKey, vmUuid: enrolled.vmUuid, machineUuid: enrolled.machineUuid, doctor: WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: host.runtimeReady, probe: true, egress: true, imageSignatures: host.imageReady, networkReady: host.networkReady, acceptingLeases: true }), capacity: linuxCapacity() });
       const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", controlPlane), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) }));
       if (!response.ok) throw new Error(`worker join failed: ${response.status}`);
       const joined = await response.json() as { workerId?: string };
@@ -297,7 +299,7 @@ export async function runDockerLinuxWorker(baseUrl: string, driver: RuntimeDrive
             await emitActionCacheSnapshot(cacheService, (type, payload) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(workerEvent(enrolled.workerId, type, payload))); });
             const containers = await driver.listContainerStatuses().catch(() => []);
             const doctor = WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: host.runtimeReady, probe: true, egress: true, imageSignatures: host.imageReady, networkReady: host.networkReady, acceptingLeases: true, activeLeases: [...activeLeases.keys()], containers });
-            return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: enrolled.workerId, payload: { doctor, capacity: linuxCapacity() } }));
+            return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: enrolled.workerId, payload: { ...workerRuntimeVersions(), doctor, capacity: linuxCapacity() } }));
           }
           if (frame.type === "ping") { ws.send(JSON.stringify({ version: 1, type: "pong", workerId: enrolled.workerId })); return; }
           if (frame.type === "doctor_ack") return;

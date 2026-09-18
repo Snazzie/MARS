@@ -8,6 +8,7 @@ import {
   isWorkerContractCompatible,
   loadWorkerReleaseManifest,
   parseContractVersion,
+  WorkerReleaseCatalog,
 } from "./worker-release.ts";
 
 const hash = "a".repeat(64);
@@ -65,6 +66,30 @@ test("loads a valid HTTPS remote manifest", async () => {
   expect(manifest.buildId).toBe("release-build");
   expect(manifest.platforms["linux-x64"]).toEqual(linuxRelease);
 });
+test("catalog lists releases lazily, skips incompatible targets, and caches manifest loads", async () => {
+  let apiCalls = 0;
+  let manifestCalls = 0;
+  const fetcher = async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("api.github.com")) {
+      apiCalls += 1;
+      return new Response(JSON.stringify([
+        { tag_name: "worker-v0.2.0", draft: false, prerelease: false },
+        { tag_name: "worker-v0.3.0", draft: false, prerelease: false },
+      ]), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    manifestCalls += 1;
+    const version = url.includes("worker-v0.2.0") ? "0.2.0" : "0.3.0";
+    return new Response(JSON.stringify(remoteManifest(version === "0.2.0" ? "0.2.0" : "0.1.1")).replaceAll("worker-v0.1.1", `worker-v${version}`), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const catalog = new WorkerReleaseCatalog({ fetch: fetcher, controlPlaneContractVersion: "0.1.0" });
+  const first = await catalog.findNextCompatible("0.1.0", "linux-x64");
+  expect(first?.releaseVersion).toBe("0.3.0");
+  const second = await catalog.findNextCompatible("0.1.0", "linux-x64");
+  expect(second?.releaseVersion).toBe("0.3.0");
+  expect(apiCalls).toBe(1);
+  expect(manifestCalls).toBe(2);
+});
 test("enumerates every hashed asset with stable field paths", () => {
   const assets = enumerateWorkerReleaseAssets(remoteManifest());
   expect(assets).toHaveLength(8);
@@ -100,20 +125,20 @@ test("rejects invalid remote JSON", async () => {
   await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, { fetch: fetcher })).rejects.toThrow("invalid JSON");
 });
 
-test("rejects remote schema and compatibility failures", async () => {
-  const schemaFailure = async () => new Response(JSON.stringify({ ...remoteManifest(), platforms: {} }), { status: 200 })
+test("accepts schema-valid manifests before catalog compatibility filtering", async () => {
+  const schemaFailure = async () => new Response(JSON.stringify({ ...remoteManifest(), platforms: {} }), { status: 200 });
   await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, { fetch: schemaFailure })).rejects.toThrow("schema");
 
-  const incompatible = async () => new Response(JSON.stringify(remoteManifest("0.2.0")), { status: 200 })
+  const incompatible = async () => new Response(JSON.stringify(remoteManifest("0.2.0")), { status: 200 });
   await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, {
     fetch: incompatible,
     controlPlaneVersion: "0.1.0",
-  })).rejects.toThrow("incompatible");
+  })).resolves.toMatchObject({ contractVersion: "0.2.0" });
 });
 
-test("rejects remote manifests without linux-x64", async () => {
-  const fetcher = async () => new Response(JSON.stringify({ ...remoteManifest(), platforms: { ...remoteManifest().platforms, "linux-x64": null } }), { status: 200 })
-  await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, { fetch: fetcher })).rejects.toThrow("linux-x64");
+test("rejects manifests missing a platform before catalog filtering", async () => {
+  const fetcher = async () => new Response(JSON.stringify({ ...remoteManifest(), platforms: { ...remoteManifest().platforms, "linux-x64": undefined } }), { status: 200 });
+  await expect(loadWorkerReleaseManifest(releaseManifestUrl, undefined, { fetch: fetcher })).rejects.toThrow("schema");
 });
 
 test("requires an immutable baked worker release URL in production", async () => {

@@ -33,8 +33,11 @@ test("builds a parsed Windows doctor report with the complete container inventor
     containers: containerStatuses,
     activeLeases: ["44444444-4444-4444-8444-444444444444"],
     preserveLeases: true,
+    versions: { releaseVersion: "0.1.0", contractVersion: "0.1.0" },
   });
   expect(WorkerDoctorReport.parse(report)).toEqual({
+    releaseVersion: "0.1.0",
+    contractVersion: "0.1.0",
     doctor: { ...doctor, containers: containerStatuses, activeLeases: ["44444444-4444-4444-8444-444444444444"], preserveLeases: true },
     capacity,
   });

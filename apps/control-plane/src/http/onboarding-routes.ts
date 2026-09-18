@@ -101,7 +101,7 @@ export function registerOnboardingRoutes(app: Hono<ControlPlaneEnv>, deps: Contr
       const workflow = discoverWorkflowFiles(listing.files).find((candidate) => candidate.path === parsed.data.workflowPath);
       const targetsPool = workflow?.jobs.some((job) => {
         const labels = typeof job.currentRunsOn === "string" ? [job.currentRunsOn] : job.currentRunsOn;
-        return pool.triggerLabel != null && labels.includes(pool.triggerLabel);
+        return pool.triggerLabel != null && labels.some(label => label === pool.triggerLabel || label.startsWith(`${pool.triggerLabel}-`));
       });
       if (!targetsPool) return c.json({ code: "workflow_not_targeting_pool", message: `The workflow must request ${pool.triggerLabel ?? "the selected runner pool"}` }, 422);
       if (!(await dashboardMutation(deps.db, organizationId, c.req.header("Idempotency-Key")!.trim()))) return c.json({ code: "mutation_in_progress", message: "This verification request is already in progress" }, 409);

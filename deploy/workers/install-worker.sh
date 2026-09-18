@@ -3,30 +3,22 @@
 set -euo pipefail
 umask 077
 
-usage() { echo "usage: $0 --code ENROLLMENT_CODE [--control-plane-url URL]" >&2; exit 2; }
+usage() { echo "usage: $0 [--code ENROLLMENT_CODE] [--upgrade] [--control-plane-url URL]" >&2; exit 2; }
 parse_args() {
   JOIN_CODE=""
   CONTROL_PLANE_URL="${PUBLIC_BASE_URL:-}"
   CONTROL_PLANE_URL_ARG=""
+  UPGRADE=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --code)
-        [[ $# -ge 2 && -z "$JOIN_CODE" && -n "$2" ]] || usage
-        JOIN_CODE="$2"
-        shift 2
-        ;;
-      --control-plane-url)
-        [[ $# -ge 2 && -z "$CONTROL_PLANE_URL_ARG" && -n "$2" ]] || usage
-        CONTROL_PLANE_URL_ARG="$2"
-        shift 2
-        ;;
+      --code) [[ $# -ge 2 && -z "$JOIN_CODE" && -n "$2" && "$UPGRADE" -eq 0 ]] || usage; JOIN_CODE="$2"; shift 2 ;;
+      --upgrade) [[ "$UPGRADE" -eq 0 ]] || usage; UPGRADE=1; shift ;;
+      --control-plane-url) [[ $# -ge 2 && -z "$CONTROL_PLANE_URL_ARG" && -n "$2" ]] || usage; CONTROL_PLANE_URL_ARG="$2"; shift 2 ;;
       *) usage ;;
     esac
   done
-  [[ -n "$JOIN_CODE" && "$JOIN_CODE" =~ ^[A-Za-z0-9_-]{43}$ ]] || usage
-  if [[ -n "$CONTROL_PLANE_URL_ARG" ]]; then
-    CONTROL_PLANE_URL="$CONTROL_PLANE_URL_ARG"
-  fi
+  if [[ "$UPGRADE" -eq 0 ]]; then [[ "$JOIN_CODE" =~ ^[A-Za-z0-9_-]{43}$ ]] || usage; else [[ -z "$JOIN_CODE" ]] || usage; fi
+  if [[ -n "$CONTROL_PLANE_URL_ARG" ]]; then CONTROL_PLANE_URL="$CONTROL_PLANE_URL_ARG"; fi
   PUBLIC_BASE_URL="$CONTROL_PLANE_URL"
 }
 parse_args "$@"
@@ -41,6 +33,8 @@ require_config() {
   [[ -n "${MARS_COMPOSE_FILE:-}" ]] || { echo 'MARS_COMPOSE_FILE is required' >&2; exit 1; }
   [[ -n "${MARS_COMPOSE_SHA256:-}" ]] || { echo 'MARS_COMPOSE_SHA256 is required' >&2; exit 1; }
   [[ -n "${MARS_DOMAIN_TEMPLATE:-}" ]] || { echo 'MARS_DOMAIN_TEMPLATE is required' >&2; exit 1; }
+  [[ -n "${MARS_WORKER_VERSION:-}" ]] || { echo 'MARS_WORKER_VERSION is required' >&2; exit 1; }
+  [[ -n "${MARS_WORKER_CONTRACT_VERSION:-}" ]] || { echo 'MARS_WORKER_CONTRACT_VERSION is required' >&2; exit 1; }
   [[ -n "${MARS_DOMAIN_TEMPLATE_SHA256:-}" ]] || { echo 'MARS_DOMAIN_TEMPLATE_SHA256 is required' >&2; exit 1; }
 }
 validate_url() {
@@ -132,9 +126,8 @@ preflight() {
 }
 validate_config
 
-if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   command -v sudo >/dev/null || { echo 'Root or sudo is required.' >&2; exit 1; }
-  exec sudo --preserve-env=PUBLIC_BASE_URL,MARS_ARTIFACT_MODE,MARS_BROKER_IMAGE,MARS_GOLDEN_IMAGE,MARS_GOLDEN_DIGEST,MARS_COMPOSE_FILE,MARS_COMPOSE_SHA256,MARS_DOMAIN_TEMPLATE,MARS_DOMAIN_TEMPLATE_SHA256,MARS_BROKER_CONFIG,MARS_GOLDEN_ROOT,MARS_CLONE_ROOT,MARS_CHANNEL_ROOT,MARS_ACTION_CACHE_ROOT,MARS_LIBVIRT_NETWORK,MARS_CACHE_PROXY_PORT,MARS_CACHE_DATA_PORT,MARS_CACHE_PROXY_URL,MARS_CACHE_ADVERTISE_URL,MARS_CACHE_TOKEN_ISSUER,MARS_CACHE_JWKS_URL "$0" "$@"
+  exec sudo --preserve-env=PUBLIC_BASE_URL,MARS_ARTIFACT_MODE,MARS_WORKER_VERSION,MARS_WORKER_CONTRACT_VERSION,MARS_BROKER_IMAGE,MARS_GOLDEN_IMAGE,MARS_GOLDEN_DIGEST,MARS_COMPOSE_FILE,MARS_COMPOSE_SHA256,MARS_DOMAIN_TEMPLATE,MARS_DOMAIN_TEMPLATE_SHA256,MARS_BROKER_CONFIG,MARS_GOLDEN_ROOT,MARS_CLONE_ROOT,MARS_CHANNEL_ROOT,MARS_ACTION_CACHE_ROOT,MARS_LIBVIRT_NETWORK,MARS_CACHE_PROXY_PORT,MARS_CACHE_DATA_PORT,MARS_CACHE_PROXY_URL,MARS_CACHE_ADVERTISE_URL,MARS_CACHE_TOKEN_ISSUER,MARS_CACHE_JWKS_URL "$0" "$@"
 fi
 
 check_kvm_access() {
@@ -153,6 +146,7 @@ STATE_FILE=/var/lib/mars/install-state.json
 LOG_FILE=/var/log/mars/install.log
 JOIN_CODE_FILE="$CONFIG_DIR/join-code"
 mkdir -p "$CONFIG_DIR" "$GOLDEN_ROOT" "$CLONE_ROOT" "$CHANNEL_ROOT" "$ACTION_CACHE_ROOT" /var/lib/mars /var/log/mars
+if [[ "$UPGRADE" -eq 1 && ! -s "$JOIN_CODE_FILE" ]]; then echo 'Upgrade requires an existing worker enrollment state.' >&2; exit 1; fi
 exec > >(tee -a "$LOG_FILE") 2>&1
 write_state() {
   local stage="$1" status="$2"
@@ -235,6 +229,8 @@ stage 'Writing broker configuration' configuration
 mkdir -p "$GOLDEN_ROOT" "$CLONE_ROOT" "$CHANNEL_ROOT" "$ACTION_CACHE_ROOT"
 cat > "$CONFIG_DIR/.env" <<EOF
 MARS_CONTROL_PLANE_URL=$PUBLIC_BASE_URL
+MARS_WORKER_VERSION=$MARS_WORKER_VERSION
+MARS_WORKER_CONTRACT_VERSION=$MARS_WORKER_CONTRACT_VERSION
 MARS_BROKER_IMAGE=$MARS_BROKER_IMAGE
 MARS_GOLDEN_DIGEST=$MARS_GOLDEN_DIGEST
 MARS_BROKER_CONFIG=$CONFIG_DIR

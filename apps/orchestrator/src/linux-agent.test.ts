@@ -90,6 +90,8 @@ test("leaves command failures unacknowledged so health frames can continue", asy
 test("builds a Linux enrollment payload with digest-bound VM evidence", () => {
   const payload = buildLinuxWorkerJoinPayload({
     code: "A".repeat(43),
+    releaseVersion: "0.1.0",
+    contractVersion: "0.1.0",
     publicKey: "public",
     encryptionPublicKey: "encryption",
     vmUuid: workerId,

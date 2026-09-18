@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { WorkerContractVersion } from "./worker-release.ts";
+import { WorkerContractVersion, WorkerReleaseVersion } from "./worker-release.ts";
 
 export const RuntimePlatform = z.enum(["linux-x64", "linux-arm64", "windows-x64", "macos-arm64"]);
 export type RuntimePlatform = z.infer<typeof RuntimePlatform>;
@@ -319,11 +319,13 @@ export const WorkerContainerStatus = z.object({
 export type WorkerContainerStatus = z.infer<typeof WorkerContainerStatus>;
 export const WorkerDoctorData = z.object({ nestedKvm: z.boolean().optional(), kvmModules: z.boolean().optional(), probe: z.boolean().optional(), egress: z.boolean().optional(), imageSignatures: z.boolean().optional(), blockVolume: z.boolean().optional(), libvirtReady: z.boolean().optional(), networkReady: z.boolean().optional(), cloneStorageReady: z.boolean().optional(), realVmSmoke: z.boolean().optional(), smokeArtifactDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/).optional(), smokeObservedAt: z.string().datetime({ offset: true }).optional(), runtimeMode: z.enum(["container", "vm", "tart"]).optional(), artifactSource: z.enum(["worker_local", "registry", "template"]).optional(), artifactIdentity: z.string().min(1).optional(), artifactDigest: z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/).optional(), runtimeReady: z.boolean().optional(), runtimeBuildState: z.enum(["idle", "building", "ready", "failed"]).optional(), runtimeBuildMessage: z.string().max(1000).nullable().optional(), remediation: z.string().nullable().optional(), actualVcpu: boundedResource.optional(), actualMemoryBytes: boundedResource.optional(), actualStorageBytes: boundedResource.optional(), freeVcpu: boundedResource.optional(), freeMemoryBytes: boundedResource.optional(), freeStorageBytes: boundedResource.optional(), activeLeases: z.array(z.string().uuid()).optional(), preserveLeases: z.boolean().optional(), acceptingLeases: z.boolean().optional(), containers: z.array(WorkerContainerStatus).default([]) }).strict();
 export const WorkerCapacityData = z.object({ actualVcpu: boundedResource, actualMemoryBytes: boundedResource, actualStorageBytes: boundedResource, freeVcpu: boundedResource, freeMemoryBytes: boundedResource, freeStorageBytes: boundedResource }).strict();
-export const WorkerDoctorReport = z.object({ doctor: WorkerDoctorData, capacity: WorkerCapacityData }).strict();
+export const WorkerDoctorReport = z.object({ releaseVersion: WorkerReleaseVersion, contractVersion: WorkerContractVersion, doctor: WorkerDoctorData, capacity: WorkerCapacityData }).strict();
 export type WorkerDoctorReport = z.infer<typeof WorkerDoctorReport>;
 export const WorkerBootstrapRequest = z.object({
   code: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   platform: RuntimePlatform,
+  releaseVersion: WorkerReleaseVersion,
+  contractVersion: WorkerContractVersion,
   publicKey: z.string().min(1),
   encryptionPublicKey: z.string().min(1),
   vmUuid: z.string().uuid(),

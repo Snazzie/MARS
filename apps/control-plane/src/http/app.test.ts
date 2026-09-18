@@ -274,14 +274,8 @@ describe("control-plane HTTP boundary", () => {
       })).request("/api/workers/installer?audience=windows-x64&runtime=container&upgrade=true&connectOrigin=http://localhost:3000");
       const installer = await response.text();
 
-      expect(response.status).toBe(200);
-      expect(installer).toContain("$WindowsArtifactMode = 'local'");
-      expect(installer).toContain("$WindowsOrchestratorUrl = 'http://localhost:3000/api/workers/orchestrator?audience=windows-x64'");
-      expect(installer).toContain(`$WindowsOrchestratorSha256 = '${createHash("sha256").update("local-orchestrator").digest("hex")}'`);
-      expect(installer).toContain("$WindowsServiceHostUrl = 'http://localhost:3000/api/workers/service-host?audience=windows-x64'");
-      expect(installer).toContain(`$WindowsServiceHostSha256 = '${createHash("sha256").update("local-service-host").digest("hex")}'`);
-      expect(installer).not.toContain("$Upgrade = 'true'");
-      expect(installer).not.toContain("WindowsContainer");
+      expect(response.status).toBe(409);
+      expect(installer).toContain("upgrade_target_stale");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

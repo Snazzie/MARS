@@ -80,7 +80,7 @@ export async function getOnboardingDetail(
 ): Promise<OnboardingDetail> {
   const status = await getOnboardingStatus(db, auth, setup);
   const selectedRow = first(await db`
-    SELECT w.id,w.name,w.platform,w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",
+    SELECT w.id,w.name,w.platform,w.release_version AS "releaseVersion",w.contract_version AS "contractVersion",w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",
       w.connection_state AS "connectionState",w.configuration_state AS "configurationState",
       w.public_key AS "publicKey",w.fingerprint,w.vm_uuid AS "vmUuid",
       w.machine_uuid AS "machineUuid",w.doctor,w.limits,
@@ -105,6 +105,8 @@ export async function getOnboardingDetail(
     worker = {
       id: String(selectedRow.id), name: String(selectedRow.name), platform: selectedRow.platform as OnboardingWorker["platform"],
       guestPlatforms: Array.isArray(selectedRow.guestPlatforms) ? selectedRow.guestPlatforms as OnboardingWorker["guestPlatforms"] : [selectedRow.platform as OnboardingWorker["platform"]],
+      releaseVersion: typeof selectedRow.releaseVersion === "string" ? selectedRow.releaseVersion : null,
+      contractVersion: typeof selectedRow.contractVersion === "string" ? selectedRow.contractVersion : null,
       admissionState: selectedRow.admissionState as OnboardingWorker["admissionState"],
       connectionState: selectedRow.connectionState as OnboardingWorker["connectionState"],
       configurationState: selectedRow.configurationState as OnboardingWorker["configurationState"],

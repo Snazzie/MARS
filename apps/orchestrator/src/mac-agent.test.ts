@@ -112,6 +112,8 @@ describe("worker join payload", () => {
     const vmUuid = "00000000-0000-4000-8000-000000000001";
     const payload = buildMacWorkerJoinPayload({
       code: "A".repeat(43),
+      releaseVersion: "0.1.0",
+      contractVersion: "0.1.0",
       publicKey: "ed25519",
       encryptionPublicKey: "x25519",
       vmUuid,
@@ -135,6 +137,8 @@ describe("worker join payload", () => {
     };
     const payload = buildMacWorkerJoinPayload({
       code: "A".repeat(43),
+      releaseVersion: "0.1.0",
+      contractVersion: "0.1.0",
       publicKey: "ed25519",
       encryptionPublicKey: "x25519",
       vmUuid,
@@ -146,6 +150,8 @@ describe("worker join payload", () => {
     expect(WorkerBootstrapRequest.parse(payload)).toEqual({
       code: "A".repeat(43),
       platform: "macos-arm64",
+      releaseVersion: "0.1.0",
+      contractVersion: "0.1.0",
       publicKey: "ed25519",
       encryptionPublicKey: "x25519",
       vmUuid,
@@ -188,6 +194,8 @@ describe("worker identity persistence", () => {
     await writeFile(codePath, `${"A".repeat(43)}\n`);
     const previousIdentityPath = Bun.env.MARS_WORKER_IDENTITY_FILE;
     const previousJoinCodePath = Bun.env.MARS_JOIN_CODE_FILE;
+    const previousWorkerVersion = Bun.env.MARS_WORKER_VERSION;
+    const previousContractVersion = Bun.env.MARS_WORKER_CONTRACT_VERSION;
     const previousTartDigest = Bun.env.MARS_TART_IMAGE_DIGEST;
     const previousSpawnSync = Bun.spawnSync;
     const previousSleep = Bun.sleep;
@@ -197,6 +205,8 @@ describe("worker identity persistence", () => {
     try {
       Bun.env.MARS_WORKER_IDENTITY_FILE = identityPath;
       Bun.env.MARS_JOIN_CODE_FILE = codePath;
+      Bun.env.MARS_WORKER_VERSION = "0.1.0";
+      Bun.env.MARS_WORKER_CONTRACT_VERSION = "0.1.0";
       Bun.env.MARS_TART_IMAGE_DIGEST = `sha256:${"c".repeat(64)}`;
       Object.defineProperty(Bun, "spawnSync", { value: () => ({ exitCode: 0, stdout: Buffer.from("System-wide memory free percentage: 50%"), stderr: Buffer.from("") }) });
       Object.defineProperty(Bun, "sleep", { value: async () => {} });
@@ -221,6 +231,10 @@ describe("worker identity persistence", () => {
     } finally {
       if (previousIdentityPath === undefined) delete Bun.env.MARS_WORKER_IDENTITY_FILE;
       else Bun.env.MARS_WORKER_IDENTITY_FILE = previousIdentityPath;
+      if (previousWorkerVersion === undefined) delete Bun.env.MARS_WORKER_VERSION;
+      else Bun.env.MARS_WORKER_VERSION = previousWorkerVersion;
+      if (previousContractVersion === undefined) delete Bun.env.MARS_WORKER_CONTRACT_VERSION;
+      else Bun.env.MARS_WORKER_CONTRACT_VERSION = previousContractVersion;
       if (previousJoinCodePath === undefined) delete Bun.env.MARS_JOIN_CODE_FILE;
       else Bun.env.MARS_JOIN_CODE_FILE = previousJoinCodePath;
       if (previousTartDigest === undefined) delete Bun.env.MARS_TART_IMAGE_DIGEST;

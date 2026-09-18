@@ -5,6 +5,8 @@ import type { RequestLimiter } from "../worker-requests.ts";
 import type { WorkerCommandDispatcher } from "../worker-dispatch.ts";
 import type { GitHubAppService } from "../github-app.ts";
 import type { DiscoveryHealthSnapshot } from "../discovery-health.ts";
+import type { WorkerReleaseCatalog } from "../worker-release.ts";
+import type { WorkerUpgradeService } from "../worker-upgrade.ts";
 import type { WorkerReleaseManifest } from "@mars/contracts";
 export type ControlPlaneEnv = { Variables: { user: SessionUser } };
 
@@ -97,6 +99,8 @@ export type ControlPlaneHttpDeps = {
   githubApp?: GitHubAppService;
   defaultJobImages: Partial<Record<"linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64", string>>;
   workerReleaseManifest?: WorkerReleaseManifest;
+  workerReleaseCatalog?: WorkerReleaseCatalog;
+  workerUpgradeService?: WorkerUpgradeService;
   developmentWindowsArtifacts?: DevelopmentWindowsArtifacts;
   developmentLinuxArtifacts?: DevelopmentLinuxArtifacts;
   developmentLinuxArm64Artifacts?: DevelopmentLinuxArm64Artifacts;

@@ -1,4 +1,4 @@
-import { WorkerReleaseManifest, isWorkerContractCompatible, parseWorkerContractVersion, type WorkerReleasePlatform } from "@mars/contracts";
+import { CURRENT_WORKER_CONTRACT_VERSION, WorkerReleaseManifest, WorkerReleaseVersion, compareWorkerReleaseVersions, isWorkerContractCompatible, parseWorkerContractVersion, type WorkerReleasePlatform } from "@mars/contracts";
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 
@@ -119,8 +119,6 @@ export function loadWorkerReleaseManifest(
   const resolvedSource = configured ?? new URL("../../../deploy/control-plane/release-manifest.json", import.meta.url);
   const url = remoteUrl(resolvedSource);
   const fetcher = options.fetch ?? fetch;
-  const controlPlaneVersion = options.controlPlaneVersion ?? configuredContractVersion();
-  const enforceCompatibility = production || options.controlPlaneVersion !== undefined || url !== undefined;
   const load = async (): Promise<WorkerReleaseManifest> => {
     const workerTag = url ? immutableWorkerTag(url) : undefined;
     if (production) {
@@ -147,18 +145,118 @@ export function loadWorkerReleaseManifest(
     let manifest: WorkerReleaseManifest;
     try { manifest = WorkerReleaseManifest.parse(raw); } catch (error) { throw new Error(`worker release manifest schema validation failed: ${error instanceof Error ? error.message : String(error)}`); }
     if (workerTag) validateImmutableAssetUrls(manifest, workerTag);
-    if (enforceCompatibility) {
-      const compatibilityVersion = controlPlaneVersion || manifest.contractVersion;
-      try { parseContractVersion(compatibilityVersion); parseContractVersion(manifest.contractVersion); }
-      catch (error) { throw new Error(`worker release manifest has an invalid contract version: ${error instanceof Error ? error.message : String(error)}`); }
-      if (!isWorkerContractCompatible(compatibilityVersion, manifest.contractVersion)) throw new Error(`worker release contract ${manifest.contractVersion} is incompatible with control-plane contract ${compatibilityVersion}`);
-      if (manifest.platforms["linux-x64"] === null) throw new Error("worker release manifest does not provide a linux-x64 release");
-      if (manifest.platforms["linux-arm64"] === null) throw new Error("worker release manifest does not provide a linux-arm64 release");
-    }
     return _development ? await withDevelopmentWindowsRelease(manifest, _development) : manifest;
   };
   if (production && source === undefined && _development === undefined) { loaded ??= load(); return loaded; }
   return load();
+}
+
+export type WorkerReleaseTarget = { releaseVersion: WorkerReleaseVersion; manifestUrl: string; manifest: WorkerReleaseManifest };
+export class WorkerReleaseCatalogUnavailable extends Error {
+  constructor(message: string, options?: { cause?: unknown }) { super(message, options); this.name = "WorkerReleaseCatalogUnavailable"; }
+}
+type ReleaseCatalogOptions = {
+  fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  now?: () => number;
+  cacheTtlMs?: number;
+  manifestLoader?: typeof loadWorkerReleaseManifest;
+  controlPlaneContractVersion?: string;
+};
+type GithubRelease = { draft?: boolean; prerelease?: boolean; tag_name?: string; assets?: Array<{ name?: string; browser_download_url?: string }> };
+const releaseTag = /^worker-(\d+\.\d+\.\d+)$/;
+const releaseManifestUrl = (version: string): string => `https://github.com/Snazzie/MARS/releases/download/worker-v${version}/worker-release-manifest.json`;
+const releaseVersionFromTag = (tag: string): WorkerReleaseVersion | undefined => {
+  const value = tag.match(/^worker-v(.+)$/)?.[1];
+  return value && WorkerReleaseVersion.safeParse(value).success ? value : undefined;
+};
+
+export class WorkerReleaseCatalog {
+  private readonly fetcher: NonNullable<ReleaseCatalogOptions["fetch"]>;
+  private readonly now: () => number;
+  private readonly ttlMs: number;
+  private readonly loader: typeof loadWorkerReleaseManifest;
+  private readonly controlPlaneContractVersion: string;
+  private releasesCache?: { expiresAt: number; releases: GithubRelease[] };
+  private releasesFlight?: Promise<GithubRelease[]>;
+  private readonly targetCache = new Map<string, { expiresAt: number; target: WorkerReleaseTarget }>();
+  private readonly targetFlights = new Map<string, Promise<WorkerReleaseTarget>>();
+  constructor(options: ReleaseCatalogOptions = {}) {
+    this.fetcher = options.fetch ?? fetch;
+    this.now = options.now ?? Date.now;
+    this.ttlMs = options.cacheTtlMs ?? 5 * 60_000;
+    this.controlPlaneContractVersion = options.controlPlaneContractVersion ?? (configuredContractVersion() || (Bun.env.NODE_ENV === "production" ? "" : CURRENT_WORKER_CONTRACT_VERSION));
+    this.loader = options.manifestLoader ?? loadWorkerReleaseManifest;
+    parseWorkerContractVersion(this.controlPlaneContractVersion);
+  }
+  private async releases(): Promise<GithubRelease[]> {
+    const cached = this.releasesCache;
+    if (cached && cached.expiresAt > this.now()) return cached.releases;
+    if (this.releasesFlight) return this.releasesFlight;
+    this.releasesFlight = this.fetchReleasePages().then(releases => {
+      this.releasesCache = { releases, expiresAt: this.now() + this.ttlMs };
+      return releases;
+    }).finally(() => { this.releasesFlight = undefined; });
+    return this.releasesFlight;
+  }
+  private async fetchReleasePages(): Promise<GithubRelease[]> {
+    const releases: GithubRelease[] = [];
+    let url = new URL("https://api.github.com/repos/Snazzie/MARS/releases?per_page=100");
+    try {
+      for (;;) {
+        const response = await this.fetcher(url, { headers: { Accept: "application/vnd.github+json", "User-Agent": "mars-control-plane" } });
+        if (!response.ok) throw new Error(`GitHub releases request failed with HTTP ${response.status}`);
+        const page = await response.json() as unknown;
+        if (!Array.isArray(page)) throw new Error("GitHub releases response is invalid");
+        releases.push(...page as GithubRelease[]);
+        const next = response.headers.get("link")?.match(/<([^>]+)>;\s*rel="next"/i)?.[1];
+        if (!next) return releases;
+        url = new URL(next);
+      }
+    } catch (error) {
+      throw new WorkerReleaseCatalogUnavailable(`worker release catalog unavailable: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
+  }
+  private async target(version: WorkerReleaseVersion, manifestUrl = releaseManifestUrl(version)): Promise<WorkerReleaseTarget> {
+    const cached = this.targetCache.get(version);
+    if (cached && cached.expiresAt > this.now()) return cached.target;
+    const flight = this.targetFlights.get(version);
+    if (flight) return flight;
+    const pending = this.loader(manifestUrl, undefined, { fetch: this.fetcher }).then(manifest => {
+      const target = { releaseVersion: version, manifestUrl, manifest };
+      this.targetCache.set(version, { target, expiresAt: this.now() + this.ttlMs });
+      return target;
+    }).finally(() => this.targetFlights.delete(version));
+    this.targetFlights.set(version, pending);
+    return pending;
+  }
+  async defaultRelease(): Promise<WorkerReleaseTarget> {
+    const url = configuredManifestUrl() || DEFAULT_WORKER_RELEASE_MANIFEST_URL;
+    if (!url) throw new WorkerReleaseCatalogUnavailable("default worker release manifest is not configured");
+    const version = immutableWorkerTag(new URL(url))?.replace(/^worker-v/, "");
+    if (!version || !WorkerReleaseVersion.safeParse(version).success) throw new WorkerReleaseCatalogUnavailable("default worker release manifest URL has no valid release tag");
+    return this.target(version, url);
+  }
+  async release(version: string): Promise<WorkerReleaseTarget> {
+    const parsed = WorkerReleaseVersion.parse(version);
+    return this.target(parsed);
+  }
+  async findNextCompatible(currentReleaseVersion: string, platform: WorkerReleasePlatform): Promise<WorkerReleaseTarget | null> {
+    const current = WorkerReleaseVersion.parse(currentReleaseVersion);
+    const candidates = (await this.releases())
+      .map(release => ({ release, version: release.tag_name ? releaseVersionFromTag(release.tag_name) : undefined }))
+      .filter((entry): entry is { release: GithubRelease; version: WorkerReleaseVersion } => Boolean(entry.version) && entry.release.draft === false && entry.release.prerelease === false)
+      .filter(entry => compareWorkerReleaseVersions(entry.version, current) > 0)
+      .sort((left, right) => compareWorkerReleaseVersions(left.version, right.version));
+    for (const candidate of candidates) {
+      try {
+        const target = await this.target(candidate.version);
+        if (target.manifest.platforms[platform] && isWorkerContractCompatible(this.controlPlaneContractVersion, target.manifest.contractVersion)) return target;
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
 }
 
 export function workerReleasePlatform<T extends WorkerReleasePlatform>(manifest: WorkerReleaseManifest, platform: T): WorkerReleaseManifest["platforms"][T] {

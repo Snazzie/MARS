@@ -144,7 +144,7 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
       </div>
       <div className="worker-card-controls">
         {active && worker.platform === "windows-x64" && <button type="button" className="control-button" onClick={() => setBuilding(true)} disabled={connectionState !== "online" || worker.doctor?.runtimeBuildState === "building"} title={connectionState === "online" ? "Send the declarative image build to the worker" : "Worker must be online before it can build an image"}>{connectionState !== "online" ? "Worker offline" : worker.doctor?.runtimeBuildState === "building" ? "Building…" : "Build local image"}</button>}
-        <WorkerActions organizationId={organizationId} workerId={worker.id} admissionState={worker.admissionState} draining={worker.draining} activeSandboxes={worker.activeSandboxes} platform={worker.platform} runtimeMode={worker.platform === "windows-x64" ? "container" : worker.runtimeMode === "container" || worker.runtimeMode === "vm" ? worker.runtimeMode : null} onComplete={onChange} />
+        <WorkerActions organizationId={organizationId} workerId={worker.id} admissionState={worker.admissionState} draining={worker.draining} activeSandboxes={worker.activeSandboxes} platform={worker.platform} runtimeMode={worker.platform === "windows-x64" ? "container" : worker.runtimeMode === "container" || worker.runtimeMode === "vm" ? worker.runtimeMode : null} currentReleaseVersion={worker.releaseVersion} currentContractVersion={worker.contractVersion} onComplete={onChange} />
         {active && <Button label="Configure" variant="secondary" clickAction={openConfiguration} />}
       </div>
     </header>
@@ -153,6 +153,8 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
       <div><dt>Last heartbeat</dt><dd>{telemetryAt(lastHeartbeatAt)}</dd></div>
       <div><dt>Last successful doctor</dt><dd>{telemetryAt(lastDoctorAt)}</dd></div>
       <div><dt>Runtime mode</dt><dd>{worker.runtimeMode ?? "Not reported"}</dd></div>
+      <div><dt>Worker release</dt><dd>{worker.releaseVersion ? `v${worker.releaseVersion}` : "Unknown"}</dd></div>
+      <div><dt>Worker contract</dt><dd>{worker.contractVersion ?? "Unknown"}</dd></div>
       <div><dt>Active leases</dt><dd>{worker.activeSandboxes}</dd></div>
     </dl>
     {active && effectiveConfigurationState === "ready" && applied && <p className="pending-note">Configuration updated <time dateTime={worker.configurationAppliedAt!}>{applied.at}</time> · revision <code>{applied.revision}</code></p>}

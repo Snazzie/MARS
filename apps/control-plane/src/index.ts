@@ -24,7 +24,8 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { initializeControlPlaneSetup } from "./control-plane-setup.ts";
 import { httpOrigin, publicHttpOrigin } from "./http-origin.ts";
-import { loadWorkerReleaseManifest } from "./worker-release.ts";
+import { WorkerReleaseCatalog } from "./worker-release.ts";
+import { WorkerUpgradeService } from "./worker-upgrade.ts";
 import { createControlPlaneGateway, type ControlPlaneSocketData } from "./control-plane-gateway.ts";
 
 export function formatJobReconciliationReport(report: ReconcileReport): string | undefined {
@@ -385,11 +386,11 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
       jobAgentPath: developmentJobAgentPath,
     }
     : undefined;
-  const workerReleaseManifestSource = production ? Bun.env.MARS_WORKER_RELEASE_MANIFEST_URL?.trim() || undefined : undefined;
-  const workerReleaseContractVersion = production ? Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() || undefined : undefined;
-  const workerReleaseManifest = production
-    ? options.workerReleaseManifest ?? await loadWorkerReleaseManifest(workerReleaseManifestSource, undefined, { controlPlaneVersion: workerReleaseContractVersion })
-    : undefined;
+  const workerReleaseContractVersion = Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() || (!production ? CURRENT_WORKER_CONTRACT_VERSION : undefined);
+  const workerReleaseManifestUrl = Bun.env.MARS_WORKER_RELEASE_MANIFEST_URL?.trim();
+  if (production && !workerReleaseContractVersion) throw new Error("MARS_WORKER_CONTRACT_VERSION is required");
+  const workerReleaseCatalog = new WorkerReleaseCatalog({ controlPlaneContractVersion: workerReleaseContractVersion });
+  const workerReleaseManifest = options.workerReleaseManifest;
   const env = {
     DEFAULT_IMAGES: {
       "linux-x64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_X64,
@@ -430,6 +431,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   };
   const secretBox = options.secretBox ?? new SecretBox(initialized.masterKey);
   const devToken = !production ? Bun.env.MARS_DEV_TOKEN?.trim() : undefined;
+  const workerUpgradeService = new WorkerUpgradeService(workerReleaseCatalog, secretBox);
   const current = options.currentUser ?? (async (request: Request) => {
     const authorization = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
     const supplied = authorization || request.headers.get("x-mars-dev-token")?.trim();
@@ -480,7 +482,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
           installationToken: installationId => githubApp.getInstallationToken(installationId),
           githubFetchForInstallation: installationId => githubRateLimits.scopedFetch(installationId, "dispatch"),
           dispatcher,
-          contractVersion: workerReleaseManifest?.contractVersion ?? workerReleaseContractVersion ?? CURRENT_WORKER_CONTRACT_VERSION,
+          contractVersion: workerReleaseContractVersion ?? CURRENT_WORKER_CONTRACT_VERSION,
           installationBlocked: installationId => githubRateLimits.isCoolingDown(installationId),
           workerConnected: workerId => dispatcher.isConnected(workerId),
         });

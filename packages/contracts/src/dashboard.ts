@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { RunnerTriggerLabel } from "./runner-labels.ts";
 import { positiveSafe, OutOfMemoryResult, PoolResources, RuntimeDriverName, RuntimePlatform, WorkerLimits, GuestPlatform, ConfigurationState } from "./orchestration.ts";
+import { WorkerContractVersion, WorkerReleaseVersion } from "./worker-release.ts";
 
 const id = z.string().min(1);
 const timestamp = z.string().datetime({ offset: true });
@@ -357,8 +358,13 @@ export const DashboardWorkerCacheEntry = dto(strict({ entryId: id, githubReposit
 export type DashboardWorkerCacheEntry = z.infer<typeof DashboardWorkerCacheEntry>;
 export const DashboardWorkerCachePage = dto(strict({ items: z.array(DashboardWorkerCacheEntry), nextCursor: cursor.nullable() }));
 export type DashboardWorkerCachePage = z.infer<typeof DashboardWorkerCachePage>;
-export const WorkerDetail = dto(strict({ id, organizationId: organizationId.nullable(), name: z.string().min(1), platform: RuntimePlatform, guestPlatforms: z.array(GuestPlatform).min(1), driver: RuntimeDriverName, admissionState: z.enum(["pending", "adopted", "rejected", "revoked"]), connectionState: z.enum(["offline", "online"]), configurationState: ConfigurationState, configurationRevision: z.string().nullable(), appliedConfigurationRevision: z.string().nullable(), configurationAppliedAt: timestamp.nullable(), lastHeartbeatAt: timestamp.nullable(), lastDoctorAt: timestamp.nullable(), runtimeMode: z.enum(["container", "vm", "tart"]).nullable(), artifactDigest: z.string().nullable(), fingerprint: z.string().min(1), limits: WorkerLimits.nullable(), doctor: WorkerDoctor.nullable(), capacity: CapacitySnapshot, activeSandboxes: positiveSafe.or(z.literal(0)), draining: z.boolean(), preserveLeases: z.boolean().optional(), cache: WorkerCacheSummary.optional() }));
+export const WorkerDetail = dto(strict({ id, organizationId: organizationId.nullable(), name: z.string().min(1), platform: RuntimePlatform, guestPlatforms: z.array(GuestPlatform).min(1), releaseVersion: WorkerReleaseVersion.nullable().optional(), contractVersion: WorkerContractVersion.nullable().optional(), driver: RuntimeDriverName, admissionState: z.enum(["pending", "adopted", "rejected", "revoked"]), connectionState: z.enum(["offline", "online"]), configurationState: ConfigurationState, configurationRevision: z.string().nullable(), appliedConfigurationRevision: z.string().nullable(), configurationAppliedAt: timestamp.nullable(), lastHeartbeatAt: timestamp.nullable(), lastDoctorAt: timestamp.nullable(), runtimeMode: z.enum(["container", "vm", "tart"]).nullable(), artifactDigest: z.string().nullable(), fingerprint: z.string().min(1), limits: WorkerLimits.nullable(), doctor: WorkerDoctor.nullable(), capacity: CapacitySnapshot, activeSandboxes: positiveSafe.or(z.literal(0)), draining: z.boolean(), preserveLeases: z.boolean().optional(), cache: WorkerCacheSummary.optional() }));
 export type WorkerDetail = z.infer<typeof WorkerDetail>;
+export const WorkerUpgradeStatus = z.discriminatedUnion("available", [
+  z.object({ available: z.literal(false), currentReleaseVersion: WorkerReleaseVersion.nullable(), currentContractVersion: WorkerContractVersion.nullable() }).strict(),
+  z.object({ available: z.literal(true), currentReleaseVersion: WorkerReleaseVersion, currentContractVersion: WorkerContractVersion, target: z.object({ releaseVersion: WorkerReleaseVersion, contractVersion: WorkerContractVersion, token: z.string().min(1) }).strict() }).strict(),
+]);
+export type WorkerUpgradeStatus = z.infer<typeof WorkerUpgradeStatus>;
 export const PoolSummary = dto(strict({ id, organizationId: id.nullable(), workerId: id.nullable(), workerName: z.string().min(1).nullable(), name: z.string().min(1), platform: RuntimePlatform, driver: RuntimeDriverName, imageDigest: z.string().min(1), resources, labels: z.array(z.string().min(1)), triggerLabel: RunnerTriggerLabel.nullable(), enabled: z.boolean(), active: positiveSafe.or(z.literal(0)) }));
 export type PoolSummary = z.infer<typeof PoolSummary>;
 const githubAccountType = z.enum(["User", "Organization"]);

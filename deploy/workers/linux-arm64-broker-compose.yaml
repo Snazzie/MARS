@@ -6,7 +6,8 @@ services:
     restart: unless-stopped
     environment:
       MARS_CONTROL_PLANE_URL: ${MARS_CONTROL_PLANE_URL:?control-plane URL required}
-      MARS_LINUX_CONTAINER_IMAGE: ${MARS_JOB_IMAGE:?digest-pinned ARM job image required}
+      MARS_WORKER_VERSION: ${MARS_WORKER_VERSION:?worker release version required}
+      MARS_WORKER_CONTRACT_VERSION: ${MARS_WORKER_CONTRACT_VERSION:?worker contract version required}
       MARS_LINUX_CONTAINER_NETWORK: mars-linux-arm64
       MARS_JOIN_CODE_FILE: /var/lib/mars/config/join-code
       MARS_WORKER_IDENTITY_FILE: /var/lib/mars/config/worker-identity.json

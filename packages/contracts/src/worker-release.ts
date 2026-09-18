@@ -6,15 +6,34 @@ const ociDigest = z.string().regex(
   /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?::[0-9]+)?(?:\/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)*(?::[A-Za-z0-9][A-Za-z0-9._-]*)?@sha256:[0-9a-f]{64}$/,
   "digest-pinned OCI reference required",
 );
-export const WorkerContractVersion = z.string().regex(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/, "major.minor.patch worker contract version required");
+const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const parseSemVer = (value: string, label: string): { major: number; minor: number; patch: number } => {
+  const match = semverPattern.exec(value);
+  if (!match) throw new Error(`invalid ${label}: ${JSON.stringify(value)} (expected major.minor.patch)`);
+  const [major, minor, patch] = match.slice(1).map(Number);
+  if (![major, minor, patch].every(Number.isSafeInteger)) throw new Error(`invalid ${label}: ${JSON.stringify(value)} (numeric components are too large)`);
+  return { major: major!, minor: minor!, patch: patch! };
+};
+export const WorkerReleaseVersion = z.string().regex(semverPattern, "major.minor.patch worker release version required");
+export type WorkerReleaseVersion = z.infer<typeof WorkerReleaseVersion>;
+export function parseWorkerReleaseVersion(value: string): { major: number; minor: number; patch: number } {
+  return parseSemVer(value, "release version");
+}
+export function compareWorkerReleaseVersions(left: string, right: string): -1 | 0 | 1 {
+  const a = parseWorkerReleaseVersion(left);
+  const b = parseWorkerReleaseVersion(right);
+  for (const key of ["major", "minor", "patch"] as const) {
+    if (a[key] < b[key]) return -1;
+    if (a[key] > b[key]) return 1;
+  }
+  return 0;
+}
+export const WorkerContractVersion = z.string().regex(semverPattern, "major.minor.patch worker contract version required");
+export type WorkerContractVersion = z.infer<typeof WorkerContractVersion>;
 export const CURRENT_WORKER_CONTRACT_VERSION = WorkerContractVersion.parse("0.2.0");
 
 export function parseWorkerContractVersion(value: string): { major: number; minor: number; patch: number } {
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(value);
-  if (!match) throw new Error(`invalid contract version: ${JSON.stringify(value)} (expected major.minor.patch)`);
-  const [major, minor, patch] = match.slice(1).map(Number);
-  if (![major, minor, patch].every(Number.isSafeInteger)) throw new Error(`invalid contract version: ${JSON.stringify(value)} (numeric components are too large)`);
-  return { major: major!, minor: minor!, patch: patch! };
+  return parseSemVer(value, "contract version");
 }
 
 export function isWorkerContractCompatible(controlPlaneVersion: string, workerVersion: string): boolean {

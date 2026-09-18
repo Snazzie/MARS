@@ -175,7 +175,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         const parsed = WorkerDoctorReport.safeParse(frame.payload);
         if (!parsed.success) return;
         const doctorPayload = parsed.data;
-        await options.db`update workers set doctor=${jsonParameter(options.db, doctorPayload)}, doctor_observed_at=now(), last_heartbeat_at=now() where id=${ws.data.workerId}`;
+        await options.db`update workers set doctor=${jsonParameter(options.db, doctorPayload)}, release_version=${doctorPayload.releaseVersion}, contract_version=${doctorPayload.contractVersion}, doctor_observed_at=now(), last_heartbeat_at=now() where id=${ws.data.workerId}`;
         void options.triggerReconciliation();
         if (doctorPayload.doctor.activeLeases) {
           await reconcileWorkerInventory(options.db, ws.data.workerId, doctorPayload.doctor.activeLeases);

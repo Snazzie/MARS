@@ -22,6 +22,13 @@
       "when": 1789731235020,
       "tag": "0002_hot_tomorrow_man",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789763363097,
+      "tag": "0003_premium_black_widow",
+      "breakpoints": true
     }
   ]
 }

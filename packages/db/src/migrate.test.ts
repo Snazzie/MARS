@@ -109,18 +109,9 @@ test("migration directory contains only Drizzle-generated SQL and metadata", asy
     dialect: string;
     entries: Array<{ idx: number; version: string; when: number; tag: string; breakpoints: boolean }>;
   };
-  expect(sqlFiles).toHaveLength(1);
-  expect(sqlFiles[0]).toMatch(/^0000_.+\.sql$/);
+  expect(sqlFiles).toHaveLength(journal.entries.length);
+  expect(sqlFiles).toEqual(journal.entries.map(entry => `${entry.tag}.sql`));
   expect(journal.dialect).toBe("postgresql");
-  expect(journal.entries).toEqual([
-    {
-      idx: 0,
-      version: "7",
-      when: expect.any(Number),
-      tag: sqlFiles[0]!.replace(/\.sql$/, ""),
-      breakpoints: true,
-    },
-  ]);
 });
 
 test("generated baseline has a stable hash and required schema objects", async () => {
