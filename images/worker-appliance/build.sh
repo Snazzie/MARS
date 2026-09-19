@@ -40,8 +40,7 @@ qemu-img create -f qcow2 "$work/expanded.qcow2" "$expanded_size"
 virt-resize --expand /dev/sda1 "$work/base.qcow2" "$work/expanded.qcow2"
 mv "$work/expanded.qcow2" "$work/base.qcow2"
 
-virt-customize -a "$work/base.qcow2" \
-  --install ca-certificates,curl,tar \
+virt-customize --no-network -a "$work/base.qcow2" \
   --mkdir /opt/actions-runner \
   --copy-in "$work/runner.tar.gz:/opt/actions-runner" \
   --copy-in "$work/mars-job-agent:/usr/local/bin" \
