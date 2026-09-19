@@ -204,7 +204,7 @@ test("loads a usable Windows release from local development artifacts", async ()
 
     const manifestPath = join(root, "release-manifest.json");
     await Bun.write(manifestPath, JSON.stringify({
-      schemaVersion: 4 as const,
+      schemaVersion: 5 as const,
       buildId: "development",
       contractVersion: "0.2.0",
       platforms: { "linux-x64": null, "linux-arm64": null, "windows-x64": null, "macos-arm64": null },
