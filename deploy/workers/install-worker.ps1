@@ -15,8 +15,8 @@ param(
   [string]$WindowsServiceHostSha256 = '',
   [string]$WindowsJobAgentUrl = '',
   [string]$WindowsJobAgentSha256 = '',
-  [string]$WindowsTemplateUrl = '',
-  [string]$WindowsTemplateSha256 = '',
+  [string]$WindowsCheckpointUrl = '',
+  [string]$WindowsCheckpointSha256 = '',
   [string]$WindowsContainerBaseImage = '',
   [string]$WindowsContainerRunnerUrl = '',
   [string]$WindowsContainerRunnerSha256 = '',
@@ -66,6 +66,7 @@ function Assert-ArtifactConfiguration {
       @('WindowsServiceHostUrl', $WindowsServiceHostUrl, $WindowsServiceHostSha256),
       @('WindowsTrayScriptUrl', $WindowsTrayScriptUrl, $WindowsTrayScriptSha256)
     )
+    if ($WindowsRuntime -eq 'vm') { $required += ,@('WindowsCheckpointUrl', $WindowsCheckpointUrl, $WindowsCheckpointSha256) }
     $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace($_[1]) -or [string]::IsNullOrWhiteSpace($_[2]) } | ForEach-Object { $_[0] })
     if ($missing.Count -gt 0) { throw "Windows worker upgrade artifacts are not configured: $($missing -join ', ')." }
     foreach ($item in $required) { Assert-HttpsUrl $item[1] $item[0]; Assert-Sha256 $item[2] "$($item[0]) SHA-256" }
@@ -77,7 +78,7 @@ function Assert-ArtifactConfiguration {
     @('WindowsTrayScriptUrl', $WindowsTrayScriptUrl, $WindowsTrayScriptSha256)
   )
   if ($WindowsRuntime -eq 'vm') {
-    $required += ,@('WindowsTemplateUrl', $WindowsTemplateUrl, $WindowsTemplateSha256)
+    $required += ,@('WindowsCheckpointUrl', $WindowsCheckpointUrl, $WindowsCheckpointSha256)
   } else {
     $required += @(
       @('WindowsJobAgentUrl', $WindowsJobAgentUrl, $WindowsJobAgentSha256),
@@ -141,7 +142,7 @@ function Assert-HostPreflight {
 function Quote-TaskArgument([string]$Value) { return "'" + $Value.Replace("'", "''") + "'" }
 function Register-ResumeTask {
   param([string]$ScriptPath)
-  $resumeParameters = @('-ControlPlaneUrl',$ControlPlaneUrl,'-JoinCodeFile',$JoinCodeFile,'-WindowsArtifactMode',$WindowsArtifactMode,'-WorkerVersion',$WorkerVersion,'-WorkerContractVersion',$WorkerContractVersion,'-WindowsOrchestratorUrl',$WindowsOrchestratorUrl,'-WindowsOrchestratorSha256',$WindowsOrchestratorSha256,'-WindowsServiceHostUrl',$WindowsServiceHostUrl,'-WindowsServiceHostSha256',$WindowsServiceHostSha256,'-WindowsTrayScriptUrl',$WindowsTrayScriptUrl,'-WindowsTrayScriptSha256',$WindowsTrayScriptSha256,'-WindowsTemplateUrl',$WindowsTemplateUrl,'-WindowsTemplateSha256',$WindowsTemplateSha256,'-WindowsJobAgentUrl',$WindowsJobAgentUrl,'-WindowsJobAgentSha256',$WindowsJobAgentSha256,'-WindowsContainerBaseImage',$WindowsContainerBaseImage,'-WindowsContainerRunnerUrl',$WindowsContainerRunnerUrl,'-WindowsContainerRunnerSha256',$WindowsContainerRunnerSha256,'-WindowsContainerGitUrl',$WindowsContainerGitUrl,'-WindowsContainerGitSha256',$WindowsContainerGitSha256,'-WindowsContainerVcRuntimeUrl',$WindowsContainerVcRuntimeUrl,'-WindowsContainerVcRuntimeSha256',$WindowsContainerVcRuntimeSha256,'-WindowsContainerBuilderUrl',$WindowsContainerBuilderUrl,'-WindowsContainerBuilderSha256',$WindowsContainerBuilderSha256,'-WindowsContainerVerifierUrl',$WindowsContainerVerifierUrl,'-WindowsContainerVerifierSha256',$WindowsContainerVerifierSha256,'-WindowsContainerfileUrl',$WindowsContainerfileUrl,'-WindowsContainerfileSha256',$WindowsContainerfileSha256,'-WindowsContainerEntrypointUrl',$WindowsContainerEntrypointUrl,'-WindowsContainerEntrypointSha256',$WindowsContainerEntrypointSha256,'-WindowsContainerImage',$WindowsContainerImage,'-WindowsContainerPrefix',$WindowsContainerPrefix,'-WindowsContainerReadyTimeoutMs',$WindowsContainerReadyTimeoutMs,'-WindowsContainerJobTimeoutMs',$WindowsContainerJobTimeoutMs,'-WindowsRuntime',$WindowsRuntime,'-Resume')
+  $resumeParameters = @('-ControlPlaneUrl',$ControlPlaneUrl,'-JoinCodeFile',$JoinCodeFile,'-WindowsArtifactMode',$WindowsArtifactMode,'-WorkerVersion',$WorkerVersion,'-WorkerContractVersion',$WorkerContractVersion,'-WindowsOrchestratorUrl',$WindowsOrchestratorUrl,'-WindowsOrchestratorSha256',$WindowsOrchestratorSha256,'-WindowsServiceHostUrl',$WindowsServiceHostUrl,'-WindowsServiceHostSha256',$WindowsServiceHostSha256,'-WindowsTrayScriptUrl',$WindowsTrayScriptUrl,'-WindowsTrayScriptSha256',$WindowsTrayScriptSha256,'-WindowsCheckpointUrl',$WindowsCheckpointUrl,'-WindowsCheckpointSha256',$WindowsCheckpointSha256,'-WindowsJobAgentUrl',$WindowsJobAgentUrl,'-WindowsJobAgentSha256',$WindowsJobAgentSha256,'-WindowsContainerBaseImage',$WindowsContainerBaseImage,'-WindowsContainerRunnerUrl',$WindowsContainerRunnerUrl,'-WindowsContainerRunnerSha256',$WindowsContainerRunnerSha256,'-WindowsContainerGitUrl',$WindowsContainerGitUrl,'-WindowsContainerGitSha256',$WindowsContainerGitSha256,'-WindowsContainerVcRuntimeUrl',$WindowsContainerVcRuntimeUrl,'-WindowsContainerVcRuntimeSha256',$WindowsContainerVcRuntimeSha256,'-WindowsContainerBuilderUrl',$WindowsContainerBuilderUrl,'-WindowsContainerBuilderSha256',$WindowsContainerBuilderSha256,'-WindowsContainerVerifierUrl',$WindowsContainerVerifierUrl,'-WindowsContainerVerifierSha256',$WindowsContainerVerifierSha256,'-WindowsContainerfileUrl',$WindowsContainerfileUrl,'-WindowsContainerfileSha256',$WindowsContainerfileSha256,'-WindowsContainerEntrypointUrl',$WindowsContainerEntrypointUrl,'-WindowsContainerEntrypointSha256',$WindowsContainerEntrypointSha256,'-WindowsContainerImage',$WindowsContainerImage,'-WindowsContainerPrefix',$WindowsContainerPrefix,'-WindowsContainerReadyTimeoutMs',$WindowsContainerReadyTimeoutMs,'-WindowsContainerJobTimeoutMs',$WindowsContainerJobTimeoutMs,'-WindowsRuntime',$WindowsRuntime,'-Resume')
   if ($AllowInsecureHttp) { $resumeParameters += '-AllowInsecureHttp' }; if ($AllowLocalContainerImage) { $resumeParameters += '-AllowLocalContainerImage' }; if ($Upgrade) { $resumeParameters += '-Upgrade' }
   $argumentText = ($resumeParameters | ForEach-Object { Quote-TaskArgument ([string]$_) }) -join ' '
   $action = New-ScheduledTaskAction -Execute 'PowerShell.exe' -Argument "-NoLogo -NoProfile -ExecutionPolicy Bypass -File $(Quote-TaskArgument $ScriptPath) $argumentText"
@@ -196,6 +197,27 @@ function Verify-DownloadedFile([string]$Path, [string]$Expected, [string]$Name, 
   if ($responseHash -and $responseHash -ne $Expected) { throw "$Name response hash mismatch." }
 }
 function Download-Verified([string]$Url, [string]$Hash, [string]$Destination, [string]$Name) { $response = Download-WorkerArtifact $Url $Destination 900; Verify-DownloadedFile $Destination $Hash $Name $response }
+function Install-WindowsCheckpoint([string]$ArchivePath, [string]$Root, [string]$Sha256) {
+  $checkpointPath = Join-Path $Root "checkpoints\$Sha256"
+  if (-not (Test-Path -LiteralPath $checkpointPath -PathType Container)) {
+    $checkpointStaging = "$checkpointPath.partial.$([guid]::NewGuid().ToString('N'))"
+    try {
+      Expand-Archive -LiteralPath $ArchivePath -DestinationPath $checkpointStaging
+      $checkpointConfigs = @(Get-ChildItem -LiteralPath $checkpointStaging -Recurse -Filter '*.vmcx')
+      if ($checkpointConfigs.Count -ne 1 -or -not (Test-Path -LiteralPath (Join-Path $checkpointStaging 'manifest.json') -PathType Leaf)) { throw 'Windows VM checkpoint archive must contain one .vmcx configuration and manifest.json.' }
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $checkpointPath) | Out-Null
+      Move-Item -LiteralPath $checkpointStaging -Destination $checkpointPath
+    } finally {
+      Remove-Item -LiteralPath $checkpointStaging -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
+  $checkpointConfigs = @(Get-ChildItem -LiteralPath $checkpointPath -Recurse -Filter '*.vmcx')
+  if ($checkpointConfigs.Count -ne 1 -or -not (Test-Path -LiteralPath (Join-Path $checkpointPath 'manifest.json') -PathType Leaf)) { throw 'Installed Windows VM checkpoint is invalid.' }
+  Get-ChildItem -LiteralPath $checkpointPath -Recurse -File | ForEach-Object { $_.IsReadOnly = $true }
+  $checkpointAcl = & icacls.exe $checkpointPath /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)R' '*S-1-5-32-544:(OI)(CI)R' /t 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to secure Windows VM checkpoint: $($checkpointAcl -join ' ')" }
+  return $checkpointPath
+}
 function Set-WorkerCacheFirewall([string]$Program) {
   $ports = @(
     Resolve-CachePort 'MARS_CACHE_PROXY_PORT' 8788
@@ -230,6 +252,7 @@ function Invoke-WorkerUpgrade {
   $upgradeStaging = Join-Path ([IO.Path]::GetTempPath()) ('mars-worker-upgrade-' + [guid]::NewGuid().ToString('N'))
   $stagedOrchestrator = Join-Path $upgradeStaging 'mars-orchestrator.exe'
   $stagedServiceHost = Join-Path $upgradeStaging 'mars-service-host.exe'
+  $stagedCheckpoint = Join-Path $upgradeStaging 'windows-worker-checkpoint.zip'
   $backupOrchestrator = Join-Path $upgradeStaging 'mars-orchestrator.exe.previous'
   $backupServiceHost = Join-Path $upgradeStaging 'mars-service-host.exe.previous'
   $orchestratorReplaced = $false
@@ -238,9 +261,18 @@ function Invoke-WorkerUpgrade {
     New-Item -ItemType Directory -Force -Path $upgradeStaging | Out-Null
     Download-Verified $WindowsOrchestratorUrl $WindowsOrchestratorSha256 $stagedOrchestrator 'Windows orchestrator'
     Download-Verified $WindowsServiceHostUrl $WindowsServiceHostSha256 $stagedServiceHost 'Windows service host'
+    if ($WindowsRuntime -eq 'vm') {
+      Assert-HyperVHost
+      Download-Verified $WindowsCheckpointUrl $WindowsCheckpointSha256 $stagedCheckpoint 'Windows VM checkpoint'
+      $checkpointPath = Install-WindowsCheckpoint $stagedCheckpoint $Root $WindowsCheckpointSha256
+    }
     if (-not (Test-Path -LiteralPath $stagedOrchestrator -PathType Leaf) -or -not (Test-Path -LiteralPath $stagedServiceHost -PathType Leaf)) { throw 'Windows worker upgrade downloads were incomplete.' }
     $servicePath = 'HKLM:\SYSTEM\CurrentControlSet\Services\MarsWorker'
     $values = @((Get-ItemPropertyValue -Path $servicePath -Name Environment -ErrorAction Stop) | Where-Object { $_ -notmatch '^MARS_WORKER_(VERSION|CONTRACT_VERSION)=' })
+    if ($WindowsRuntime -eq 'vm') {
+      $values = @($values | Where-Object { $_ -notmatch '^MARS_WINDOWS_(TEMPLATE|CHECKPOINT)_(PATH|DIGEST)=' })
+      $values += "MARS_WINDOWS_CHECKPOINT_PATH=$checkpointPath","MARS_WINDOWS_CHECKPOINT_DIGEST=sha256:$WindowsCheckpointSha256"
+    }
     $values += "MARS_WORKER_VERSION=$WorkerVersion","MARS_WORKER_CONTRACT_VERSION=$WorkerContractVersion"
     New-ItemProperty -Path $servicePath -Name Environment -PropertyType MultiString -Value $values -Force | Out-Null
     Set-WorkerServiceRecovery
@@ -296,10 +328,10 @@ try {
   if (($Resume -and [string]::IsNullOrWhiteSpace($JoinCode)) -and (Test-Path -LiteralPath $JoinCodeFile)) { $JoinCode = (Get-Content -LiteralPath $JoinCodeFile -Raw).Trim() }
   if ([string]::IsNullOrWhiteSpace($JoinCode) -or $JoinCode -notmatch '^[A-Za-z0-9_-]{43}$') { throw 'Join code is not configured.' }
   New-Item -ItemType Directory -Force -Path $staging | Out-Null
-  $paths = [ordered]@{ orchestrator = Join-Path $staging 'mars-orchestrator.exe'; serviceHost = Join-Path $staging 'mars-service-host.exe'; tray = Join-Path $staging 'mars-worker-tray.ps1'; icon = Join-Path $staging 'MARS.ico'; template = Join-Path $staging 'windows-worker.vhdx'; jobAgent = Join-Path $staging 'mars-job-agent.exe'; runner = Join-Path $staging 'runner.zip'; git = Join-Path $staging 'git.zip'; vc = Join-Path $staging 'vc_redist.x64.exe'; builder = Join-Path $staging 'build-image.ps1'; verifier = Join-Path $staging 'verify-runtime.ps1'; containerfile = Join-Path $staging 'Containerfile'; entrypoint = Join-Path $staging 'entrypoint.ps1'; manifest = Join-Path $staging 'windows-job-image.json' }
+  $paths = [ordered]@{ orchestrator = Join-Path $staging 'mars-orchestrator.exe'; serviceHost = Join-Path $staging 'mars-service-host.exe'; tray = Join-Path $staging 'mars-worker-tray.ps1'; icon = Join-Path $staging 'MARS.ico'; checkpoint = Join-Path $staging 'windows-worker-checkpoint.zip'; jobAgent = Join-Path $staging 'mars-job-agent.exe'; runner = Join-Path $staging 'runner.zip'; git = Join-Path $staging 'git.zip'; vc = Join-Path $staging 'vc_redist.x64.exe'; builder = Join-Path $staging 'build-image.ps1'; verifier = Join-Path $staging 'verify-runtime.ps1'; containerfile = Join-Path $staging 'Containerfile'; entrypoint = Join-Path $staging 'entrypoint.ps1'; manifest = Join-Path $staging 'windows-job-image.json' }
   Download-Verified $WindowsOrchestratorUrl $WindowsOrchestratorSha256 $paths.orchestrator 'Windows orchestrator'; Download-Verified $WindowsServiceHostUrl $WindowsServiceHostSha256 $paths.serviceHost 'Windows service host'; Download-Verified $WindowsTrayScriptUrl $WindowsTrayScriptSha256 $paths.tray 'Windows tray script'
   if ($WindowsRuntime -eq 'vm') {
-    Download-Verified $WindowsTemplateUrl $WindowsTemplateSha256 $paths.template 'Windows VM template'
+    Download-Verified $WindowsCheckpointUrl $WindowsCheckpointSha256 $paths.checkpoint 'Windows VM checkpoint'
   } else {
     Download-Verified $WindowsJobAgentUrl $WindowsJobAgentSha256 $paths.jobAgent 'Windows job agent'; Download-Verified $WindowsContainerRunnerUrl $WindowsContainerRunnerSha256 $paths.runner 'Actions Runner'; Download-Verified $WindowsContainerGitUrl $WindowsContainerGitSha256 $paths.git 'Git'; Download-Verified $WindowsContainerVcRuntimeUrl $WindowsContainerVcRuntimeSha256 $paths.vc 'VC runtime'; Download-Verified $WindowsContainerBuilderUrl $WindowsContainerBuilderSha256 $paths.builder 'Windows image builder'; Download-Verified $WindowsContainerVerifierUrl $WindowsContainerVerifierSha256 $paths.verifier 'Windows image verifier'; Download-Verified $WindowsContainerfileUrl $WindowsContainerfileSha256 $paths.containerfile 'Windows Containerfile'; Download-Verified $WindowsContainerEntrypointUrl $WindowsContainerEntrypointSha256 $paths.entrypoint 'Windows entrypoint'
   }
@@ -310,12 +342,7 @@ try {
   if (Ensure-WindowsFeatures) { New-Item -ItemType Directory -Force -Path $root | Out-Null; if ([IO.Path]::GetFullPath($PSCommandPath) -ne [IO.Path]::GetFullPath($persistentInstallerPath)) { Copy-Item -LiteralPath $PSCommandPath -Destination $persistentInstallerPath -Force }; Register-ResumeTask $persistentInstallerPath; Write-State 'reboot-required' 'pending'; Write-Host 'Windows features require a reboot; MarsWorkerInstallResume will continue automatically.'; Restart-Computer -Force; exit 0 }
   if ($WindowsRuntime -eq 'vm') {
     Assert-HyperVHost
-    $templatePath = Join-Path $root 'templates\windows-worker.vhdx'
-    New-Item -ItemType Directory -Force -Path (Split-Path $templatePath) | Out-Null
-    Move-Item -LiteralPath $paths.template -Destination $templatePath -Force
-    Set-ItemProperty -LiteralPath $templatePath -Name IsReadOnly -Value $true
-    $templateAcl = & icacls.exe $templatePath /inheritance:r /grant:r '*S-1-5-18:R' '*S-1-5-32-544:R' 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "Failed to secure Windows VM template: $($templateAcl -join ' ')" }
+    $checkpointPath = Install-WindowsCheckpoint $paths.checkpoint $root $WindowsCheckpointSha256
   } else {
     Install-DockerDesktop; Switch-DockerWindowsEngine; Assert-WindowsContainerHost
     & $paths.builder -BaseImage $WindowsContainerBaseImage -RunnerArchivePath $paths.runner -RunnerSha256 $WindowsContainerRunnerSha256 -GitArchivePath $paths.git -GitSha256 $WindowsContainerGitSha256 -VcRuntimePath $paths.vc -VcRuntimeSha256 $WindowsContainerVcRuntimeSha256 -JobAgent $paths.jobAgent -Image $WindowsContainerImage -ManifestPath $paths.manifest -VerifierPath $paths.verifier -ContainerfilePath $paths.containerfile -EntrypointPath $paths.entrypoint
@@ -341,7 +368,7 @@ try {
 $trayPath = Join-Path $bin 'mars-worker-tray.ps1'; $trayAction = New-ScheduledTaskAction -Execute 'PowerShell.exe' -Argument "-NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$trayPath`" -StateFile `"$userState\lease-pickup.json`" -IconPath `"$bin\MARS.ico`""; $trayTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME; $trayPrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited; Register-ScheduledTask -TaskName 'MarsWorkerTray' -Action $trayAction -Trigger $trayTrigger -Principal $trayPrincipal -Force | Out-Null
   $serviceEnvironment = @("MARS_WORKER_VERSION=$WorkerVersion","MARS_WORKER_CONTRACT_VERSION=$WorkerContractVersion","MARS_WINDOWS_RUNTIME=$WindowsRuntime")
   if ($WindowsRuntime -eq 'vm') {
-    $serviceEnvironment += "MARS_WINDOWS_TEMPLATE_PATH=$templatePath","MARS_WINDOWS_TEMPLATE_DIGEST=sha256:$WindowsTemplateSha256"
+    $serviceEnvironment += "MARS_WINDOWS_CHECKPOINT_PATH=$checkpointPath","MARS_WINDOWS_CHECKPOINT_DIGEST=sha256:$WindowsCheckpointSha256"
     $switchName = [Environment]::GetEnvironmentVariable('MARS_HYPERV_SWITCH_NAME'); if (-not [string]::IsNullOrWhiteSpace($switchName)) { $serviceEnvironment += "MARS_HYPERV_SWITCH_NAME=$($switchName.Trim())" }
   } else {
     $serviceEnvironment += "MARS_WINDOWS_CONTAINER_IMAGE=$WindowsContainerImage","MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST=$windowsImageManifestPath","MARS_WINDOWS_CONTAINER_PREFIX=$WindowsContainerPrefix","MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS=$WindowsContainerReadyTimeoutMs","MARS_WINDOWS_CONTAINER_JOB_TIMEOUT_MS=$WindowsContainerJobTimeoutMs"

@@ -28,7 +28,7 @@ const valid = {
       orchestrator: asset("windows-orchestrator.exe"),
       serviceHost: asset("windows-service-host.exe"),
       jobAgent: asset("windows-job-agent.exe"),
-      vm: { template: asset("windows-worker.vhdx") },
+      vm: { checkpoint: asset("windows-worker-checkpoint.zip") },
       container: {
         baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}`,
         runner: asset("windows-runner.zip"),

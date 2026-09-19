@@ -51,12 +51,12 @@ const localImageVerification = async (image: string): Promise<{ manifest: boolea
 };
 export const windowsDoctor = async (preserveLeases = false): Promise<WorkerDoctorData> => {
   const runtimeMode = Bun.env.MARS_WINDOWS_RUNTIME === "container" ? "container" : "vm";
-  const artifactValue = runtimeMode === "container" ? Bun.env.MARS_WINDOWS_CONTAINER_IMAGE : Bun.env.MARS_WINDOWS_TEMPLATE_DIGEST;
+  const artifactValue = runtimeMode === "container" ? Bun.env.MARS_WINDOWS_CONTAINER_IMAGE : Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST;
   const localVerification = runtimeMode === "container" ? await localImageVerification(artifactValue ?? "") : { manifest: false, entrypoint: true };
   const localManifest = localVerification.manifest;
-  const templatePresent = runtimeMode === "vm" && Boolean(Bun.env.MARS_WINDOWS_TEMPLATE_PATH) && await stat(Bun.env.MARS_WINDOWS_TEMPLATE_PATH!).then(value => value.isFile()).catch(() => false);
+  const checkpointPresent = runtimeMode === "vm" && Boolean(Bun.env.MARS_WINDOWS_CHECKPOINT_PATH) && await stat(Bun.env.MARS_WINDOWS_CHECKPOINT_PATH!).then(value => value.isDirectory()).catch(() => false);
   const digestPinned = typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactValue);
-  const immutableArtifact = runtimeMode === "container" ? localManifest || digestPinned : templatePresent && digestPinned;
+  const immutableArtifact = runtimeMode === "container" ? localManifest || digestPinned : checkpointPresent && digestPinned;
   const probe = runtimeMode === "container"
     ? await commandSucceeds(["docker.exe", "info", "--format", "{{.OSType}}"])
     : await commandSucceeds(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-VMHost -ErrorAction Stop | Out-Null"]);
@@ -355,10 +355,10 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
     if (!image) throw new Error("MARS_WINDOWS_CONTAINER_IMAGE is required in container mode");
     driver = new WindowsContainerDriver({ image, prefix: Bun.env.MARS_WINDOWS_CONTAINER_PREFIX ?? "mars", bootstrapRoot: Bun.env.ProgramData ? `${Bun.env.ProgramData}\\Mars\\leases` : "C:\\ProgramData\\Mars\\leases", limits, readyTimeoutMs: Number(Bun.env.MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS ?? 15_000), jobTimeoutMs: Number(Bun.env.MARS_WINDOWS_CONTAINER_JOB_TIMEOUT_MS ?? 900_000), allowLocalImage: Bun.env.MARS_ALLOW_LOCAL_CONTAINER_IMAGE === "true", imageManifestPath: Bun.env.MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST, requireLocalImageManifest: image === "mars/windows-job:local", dnsServers: parseWindowsContainerDnsServers(Bun.env.MARS_WINDOWS_CONTAINER_DNS_SERVERS) });
   } else if (mode === "vm") {
-    const templatePath = Bun.env.MARS_WINDOWS_TEMPLATE_PATH;
-    const templateDigest = Bun.env.MARS_WINDOWS_TEMPLATE_DIGEST;
-    if (!templatePath || !templateDigest) throw new Error("Windows Hyper-V template path and digest are required in VM mode");
-    driver = new HyperVDriver(createHyperVRuntime(), templatePath, templateDigest, Bun.env.MARS_HYPERV_VM_PREFIX ?? "mars", limits);
+    const checkpointPath = Bun.env.MARS_WINDOWS_CHECKPOINT_PATH;
+    const checkpointDigest = Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST;
+    if (!checkpointPath || !checkpointDigest) throw new Error("Windows Hyper-V checkpoint path and digest are required in VM mode");
+    driver = new HyperVDriver(createHyperVRuntime(), checkpointPath, checkpointDigest, Bun.env.MARS_HYPERV_VM_PREFIX ?? "mars", limits);
   } else {
     throw new Error(`Unsupported Windows runtime: ${mode}`);
   }

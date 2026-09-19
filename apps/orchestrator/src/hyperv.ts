@@ -17,16 +17,15 @@ function bytesToMegabytes(value: number): number { return Math.max(1, Math.floor
 function bytesToGigabytes(value: number): number { return Math.max(1, Math.ceil(value / 1024 ** 3)); }
 export interface HyperVRuntime {
   verifyHost(): Promise<void>;
-  createDifferencingDisk(parent: string, child: string): Promise<void>;
-  createVm(input: { name: string; diskPath: string; resources: PoolResources; switchName: string }): Promise<void>;
+  importCheckpoint(input: { checkpointPath: string; destinationPath: string; name: string; resources: PoolResources; switchName: string }): Promise<void>;
   copyBootstrap(vmName: string, sourcePath: string, guestPath: string): Promise<void>;
   start(vmName: string): Promise<void>;
   waitForGuestReady(vmName: string, timeoutMs: number): Promise<void>;
   waitForStop(vmName: string, timeoutMs: number): Promise<void>;
   stop(vmName: string): Promise<void>;
   remove(vmName: string): Promise<void>;
-  removeDisk(path: string): Promise<void>;
-  reconcileOrphans(prefix: string): Promise<void>;
+  removeFiles(path: string): Promise<void>;
+  reconcileOrphans(prefix: string, filesRoot: string): Promise<void>;
   sample?(vmName: string): Promise<{ cpuUsagePercent: number; cpuTimeMs: number; memoryWorkingSetBytes: number; memoryLimitBytes: number }>;
 }
 export function createHyperVRuntime(run: HyperVRunner = defaultRunner): HyperVRuntime {
@@ -37,53 +36,51 @@ export function createHyperVRuntime(run: HyperVRunner = defaultRunner): HyperVRu
   }
   return {
     verifyHost: async () => { await invoke("if ((Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All).State -ne 'Enabled') { exit 1 }; if (-not (Get-VMHost)) { exit 1 }"); },
-    createDifferencingDisk: async (parent, child) => { await invoke("New-VHD -Path $args[1] -ParentPath $args[0] -Differencing | Out-Null", [parent, child]); },
-    createVm: async ({ name, diskPath, resources, switchName }) => { await invoke("$vm=New-VM -Name $args[0] -Generation 2 -MemoryStartupBytes ($args[2]*1MB) -VHDPath $args[1] -SwitchName $args[4]; Set-VMProcessor -VM $vm -Count $args[3]; Set-VMMemory -VM $vm -DynamicMemoryEnabled $false -StartupBytes ($args[2]*1MB); Set-VMFirmware -VM $vm -EnableSecureBoot On -SecureBootTemplate MicrosoftWindows; Set-VM -VM $vm -AutomaticStopAction ShutDown | Out-Null; Set-VM -VM $vm -AutomaticCheckpointsEnabled $false | Out-Null; Enable-VMIntegrationService -VM $vm -Name 'Guest Service Interface' | Out-Null", [name, diskPath, String(bytesToMegabytes(resources.memoryBytes)), String(resources.vcpu), switchName]); },
+    importCheckpoint: async ({ checkpointPath, destinationPath, name, resources, switchName }) => { await invoke("$config=Get-ChildItem -LiteralPath $args[0] -Recurse -Filter '*.vmcx' | Select-Object -First 1; if (-not $config) { throw 'Checkpoint export does not contain a .vmcx configuration' }; New-Item -ItemType Directory -Force -Path $args[1] | Out-Null; $vm=Import-VM -Path $config.FullName -Copy -GenerateNewId -VirtualMachinePath $args[1] -VhdDestinationPath $args[1]; Rename-VM -VM $vm -NewName $args[2]; Set-VMProcessor -VM $vm -Count $args[4]; Set-VMMemory -VM $vm -DynamicMemoryEnabled $false -StartupBytes ($args[3]*1MB); Set-VM -VM $vm -AutomaticStopAction ShutDown -AutomaticCheckpointsEnabled $false | Out-Null; Get-VMNetworkAdapter -VM $vm | Connect-VMNetworkAdapter -SwitchName $args[5]; Enable-VMIntegrationService -VM $vm -Name 'Guest Service Interface' | Out-Null", [checkpointPath, destinationPath, name, String(bytesToMegabytes(resources.memoryBytes)), String(resources.vcpu), switchName]); },
     copyBootstrap: async (vmName, sourcePath, guestPath) => { await invoke("Copy-VMFile -Name $args[0] -SourcePath $args[1] -DestinationPath $args[2] -FileSource Host -CreateFullPath", [vmName, sourcePath, guestPath]); },
     start: async vmName => { await invoke("Start-VM -Name $args[0] | Out-Null", [vmName]); },
     waitForGuestReady: async (vmName, timeoutMs) => { await invoke("$deadline=(Get-Date).AddMilliseconds($args[1]); do { $heartbeat=Get-VMIntegrationService -VMName $args[0] -Name 'Heartbeat' -ErrorAction SilentlyContinue; if ($heartbeat -and $heartbeat.PrimaryStatusDescription -eq 'OK') { exit 0 }; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $deadline); exit 1", [vmName, String(timeoutMs)]); },
     waitForStop: async (vmName, timeoutMs) => { await invoke("$deadline=(Get-Date).AddMilliseconds($args[1]); do { $state=(Get-VM -Name $args[0] -ErrorAction SilentlyContinue).State; if ($state -eq 'Off') { exit 0 }; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $deadline); exit 1", [vmName, String(timeoutMs)]); },
     stop: async vmName => { await invoke("Stop-VM -Name $args[0] -TurnOff -Force -ErrorAction SilentlyContinue", [vmName]); },
     remove: async vmName => { await invoke("Remove-VM -Name $args[0] -Force -ErrorAction SilentlyContinue", [vmName]); },
-    removeDisk: async path => { await rm(path, { force: true }); },
-    reconcileOrphans: async prefix => { await invoke("Get-VM -Name ($args[0]+'-*') -ErrorAction SilentlyContinue | ForEach-Object { Stop-VM -VM $_ -TurnOff -Force -ErrorAction SilentlyContinue; Remove-VM -VM $_ -Force -ErrorAction SilentlyContinue }", [prefix]); },
+    removeFiles: async path => { await rm(path, { recursive: true, force: true }); },
+    reconcileOrphans: async (prefix, filesRoot) => { await invoke("Get-VM -Name ($args[0]+'-*') -ErrorAction SilentlyContinue | ForEach-Object { Stop-VM -VM $_ -TurnOff -Force -ErrorAction SilentlyContinue; Remove-VM -VM $_ -Force -ErrorAction SilentlyContinue }; Get-ChildItem -LiteralPath $args[1] -Filter ($args[0]+'-*') -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue", [prefix, filesRoot]); },
     sample: async vmName => { const value = JSON.parse(await invoke("Get-VM -Name $args[0] | Select-Object CPUUsage,MemoryAssigned | ConvertTo-Json -Compress", [vmName])) as { CPUUsage?: number; MemoryAssigned?: number }; return { cpuUsagePercent: Math.max(0, Math.min(100, Number(value.CPUUsage ?? 0))), cpuTimeMs: 0, memoryWorkingSetBytes: Number(value.MemoryAssigned ?? 0), memoryLimitBytes: Math.max(1, Number(value.MemoryAssigned ?? 0)) }; },
   };
 }
 export class HyperVDriver implements RuntimeDriver {
   readonly name = "windows-hyperv" as const;
-  private readonly leases = new Map<string, { vmName: string; diskPath: string; runtime: RuntimeLease }>();
-  constructor(private readonly hyperv: HyperVRuntime, private readonly templatePath: string, private readonly templateDigest: string, private readonly prefix: string, private readonly limits: Limits, private readonly bootstrapRoot = join(Bun.env.ProgramData ?? "C:\\ProgramData", "Mars", "leases")) {}
+  private readonly leases = new Map<string, { vmName: string; filesPath: string; runtime: RuntimeLease }>();
+  constructor(private readonly hyperv: HyperVRuntime, private readonly checkpointPath: string, private readonly checkpointDigest: string, private readonly prefix: string, private readonly limits: Limits, private readonly bootstrapRoot = join(Bun.env.ProgramData ?? "C:\\ProgramData", "Mars", "leases")) {}
   validatePool(resources: PoolResources): void { validateResources(resources, this.limits); }
   async reserveCapacity(resources: PoolResources): Promise<void> { this.validatePool(resources); await this.hyperv.verifyHost(); }
-  async reconcileOrphans(): Promise<void> { await this.hyperv.reconcileOrphans(this.prefix); }
+  async reconcileOrphans(): Promise<void> { await this.hyperv.reconcileOrphans(this.prefix, this.bootstrapRoot); }
   async listContainerStatuses(): Promise<WorkerContainerStatus[]> {
     return [];
   }
   async createLease(lease: Lease): Promise<RuntimeLease> {
-    if (lease.imageDigest !== this.templateDigest) throw new Error("lease image digest does not match Hyper-V template");
+    if (lease.imageDigest !== this.checkpointDigest) throw new Error("lease image digest does not match Hyper-V checkpoint");
     this.validatePool(lease.resources);
     await mkdir(this.bootstrapRoot, { recursive: true });
     const vmName = `${this.prefix}-${lease.id.slice(0, 8)}`;
-    const diskPath = join(this.bootstrapRoot, `${vmName}.vhdx`);
+    const filesPath = join(this.bootstrapRoot, vmName);
     const bootstrapPath = join(this.bootstrapRoot, `${vmName}.json`);
     await writeFile(bootstrapPath, JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig, ...(lease.workerCache ? { workerCache: lease.workerCache } : {}) }), { flag: "wx", mode: 0o600 });
     try {
-      await this.hyperv.createDifferencingDisk(this.templatePath, diskPath);
-      await this.hyperv.createVm({ name: vmName, diskPath, resources: lease.resources, switchName: Bun.env.MARS_HYPERV_SWITCH_NAME?.trim() || "Default Switch" });
+      await this.hyperv.importCheckpoint({ checkpointPath: this.checkpointPath, destinationPath: filesPath, name: vmName, resources: lease.resources, switchName: Bun.env.MARS_HYPERV_SWITCH_NAME?.trim() || "Default Switch" });
       await this.hyperv.start(vmName);
       await this.hyperv.waitForGuestReady(vmName, Number(Bun.env.MARS_HYPERV_READY_TIMEOUT_MS ?? 120_000));
       await this.hyperv.copyBootstrap(vmName, bootstrapPath, "C:\\ProgramData\\Mars\\bootstrap.json");
       const completion = this.hyperv.waitForStop(vmName, Number(Bun.env.MARS_HYPERV_JOB_TIMEOUT_MS ?? 3_600_000)).then(() => 0);
       const runtime: RuntimeLease = { runtimeInstanceId: vmName, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: bytesToGigabytes(lease.resources.storageBytes) * 1024 ** 3 }, state: "sandbox_attested", completion, sample: this.hyperv.sample ? () => this.hyperv.sample!(vmName) : undefined };
-      this.leases.set(lease.id, { vmName, diskPath, runtime });
+      this.leases.set(lease.id, { vmName, filesPath, runtime });
       return runtime;
     } catch (error) {
-      await this.hyperv.stop(vmName).catch(() => undefined); await this.hyperv.remove(vmName).catch(() => undefined); await this.hyperv.removeDisk(diskPath).catch(() => undefined); throw error;
+      await this.hyperv.stop(vmName).catch(() => undefined); await this.hyperv.remove(vmName).catch(() => undefined); await this.hyperv.removeFiles(filesPath).catch(() => undefined); throw error;
     } finally { await rm(bootstrapPath, { force: true }); }
   }
   async inspectLease(leaseId: string): Promise<RuntimeLease> { const lease = this.leases.get(leaseId); if (!lease) throw new Error("sandbox not found"); return lease.runtime; }
   async stopLease(leaseId: string): Promise<void> { const lease = this.leases.get(leaseId); if (lease) await this.hyperv.stop(lease.vmName); }
-  async removeLease(leaseId: string): Promise<void> { const lease = this.leases.get(leaseId); if (!lease) return; await this.hyperv.remove(lease.vmName).catch(() => undefined); await this.hyperv.removeDisk(lease.diskPath).catch(() => undefined); this.leases.delete(leaseId); }
+  async removeLease(leaseId: string): Promise<void> { const lease = this.leases.get(leaseId); if (!lease) return; await this.hyperv.remove(lease.vmName).catch(() => undefined); await this.hyperv.removeFiles(lease.filesPath).catch(() => undefined); this.leases.delete(leaseId); }
   async collectDiagnostics(leaseId: string): Promise<Record<string, unknown>> { const runtime = await this.inspectLease(leaseId); return { driver: this.name, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed }; }
 }

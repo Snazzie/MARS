@@ -245,11 +245,11 @@ test("retains a configured artifact URL when its preferred local path is missing
 test("does not resolve a missing local worker artifact", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-development-artifacts-"));
   const hash = "a".repeat(64);
-  const template = join(root, "template.vhdx");
+  const checkpoint = join(root, "windows-worker-checkpoint.zip");
   const runner = join(root, "runner.zip");
   const git = join(root, "git.zip");
   const vcRuntime = join(root, "vc-runtime.exe");
-  await Promise.all([template, runner, git, vcRuntime].map((path, index) => Bun.write(path, `artifact-${index}`)));
+  await Promise.all([checkpoint, runner, git, vcRuntime].map((path, index) => Bun.write(path, `artifact-${index}`)));
   try {
     const artifacts = await resolveDevelopmentWindowsArtifacts({
       NODE_ENV: "development",
@@ -257,8 +257,8 @@ test("does not resolve a missing local worker artifact", async () => {
       MARS_WINDOWS_ORCHESTRATOR_SHA256: hash,
       MARS_WINDOWS_SERVICE_HOST_PATH: join(root, "missing-service-host.exe"),
       MARS_WINDOWS_SERVICE_HOST_SHA256: hash,
-      MARS_WINDOWS_TEMPLATE_PATH: template,
-      MARS_WINDOWS_TEMPLATE_SHA256: hash,
+      MARS_WINDOWS_CHECKPOINT_PATH: checkpoint,
+      MARS_WINDOWS_CHECKPOINT_SHA256: hash,
       MARS_WINDOWS_CONTAINER_BASE_IMAGE: "mcr.microsoft.com/windows/server:ltsc2025",
       MARS_WINDOWS_CONTAINER_RUNNER_PATH: runner,
       MARS_WINDOWS_CONTAINER_RUNNER_SHA256: hash,

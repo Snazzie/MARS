@@ -22,7 +22,7 @@ export type DevelopmentWindowsArtifacts = {
   jobAgent?: DevelopmentArtifact;
   trayScript?: DevelopmentArtifact;
   vm?: {
-    template: DevelopmentArtifact;
+    checkpoint: DevelopmentArtifact;
   };
   container?: {
     baseImage: string;

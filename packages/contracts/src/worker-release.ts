@@ -78,7 +78,7 @@ export const WindowsWorkerRelease = z.object({
   jobAgent: hashedAsset,
   trayScript: hashedAsset.optional(),
   vm: z.object({
-    template: hashedAsset,
+    checkpoint: hashedAsset,
   }).strict().optional(),
   container: z.object({
     baseImage: ociDigest,

@@ -18,8 +18,8 @@ const app = createControlPlaneApp(fakeHttpDeps());
       MARS_WINDOWS_ORCHESTRATOR_SHA256: hash,
       WORKER_SERVICE_HOST_EXECUTABLE: "C:\\mars\\mars-service-host.exe",
       MARS_WINDOWS_SERVICE_HOST_SHA256: hash,
-      MARS_WINDOWS_TEMPLATE_PATH: "C:\\mars\\worker-template.vhdx",
-      MARS_WINDOWS_TEMPLATE_DIGEST: `sha256:${hash}`,
+      MARS_WINDOWS_CHECKPOINT_PATH: "C:\\mars\\windows-worker-checkpoint.zip",
+      MARS_WINDOWS_CHECKPOINT_DIGEST: `sha256:${hash}`,
       MARS_WINDOWS_CONTAINER_BASE_IMAGE: `mcr.microsoft.com/windows@sha256:${hash}`,
       MARS_WINDOWS_CONTAINER_RUNNER_PATH: "C:\\mars\\runner.zip",
       MARS_WINDOWS_CONTAINER_RUNNER_URL: "http://localhost:3000/runner.zip",
@@ -33,7 +33,7 @@ const app = createControlPlaneApp(fakeHttpDeps());
     })).toEqual({
       orchestrator: { path: "C:\\mars\\mars-orchestrator.exe", sha256: hash },
       serviceHost: { path: "C:\\mars\\mars-service-host.exe", sha256: hash },
-      vm: { template: { path: "C:\\mars\\worker-template.vhdx", sha256: hash } },
+      vm: { checkpoint: { path: "C:\\mars\\windows-worker-checkpoint.zip", sha256: hash } },
       container: {
         baseImage: `mcr.microsoft.com/windows@sha256:${hash}`,
         runner: { path: "C:\\mars\\runner.zip", url: "http://localhost:3000/runner.zip", sha256: hash },
@@ -43,8 +43,8 @@ const app = createControlPlaneApp(fakeHttpDeps());
     });
   });
   test.each([
-    "https://github.com/Snazzie/Mars/releases/latest/download/windows-worker.vhdx",
-    "https://github.com/Snazzie/Mars/releases/download/v1/windows-worker.vhdx",
+    "https://github.com/Snazzie/Mars/releases/latest/download/windows-worker-checkpoint.zip",
+    "https://github.com/Snazzie/Mars/releases/download/v1/windows-worker-checkpoint.zip",
   ])("omits a development artifact configured with GitHub release URL %s", (url) => {
     const hash = "a".repeat(64);
     const artifacts = createDevelopmentWindowsArtifacts({
@@ -53,8 +53,8 @@ const app = createControlPlaneApp(fakeHttpDeps());
       MARS_WINDOWS_ORCHESTRATOR_SHA256: hash,
       WORKER_SERVICE_HOST_EXECUTABLE: "C:\\mars\\mars-service-host.exe",
       MARS_WINDOWS_SERVICE_HOST_SHA256: hash,
-      MARS_WINDOWS_TEMPLATE_URL: url,
-      MARS_WINDOWS_TEMPLATE_SHA256: hash,
+      MARS_WINDOWS_CHECKPOINT_URL: url,
+      MARS_WINDOWS_CHECKPOINT_SHA256: hash,
       MARS_WINDOWS_CONTAINER_BASE_IMAGE: `mcr.microsoft.com/windows@sha256:${hash}`,
       MARS_WINDOWS_CONTAINER_RUNNER_URL: "http://localhost:3000/runner.zip",
       MARS_WINDOWS_CONTAINER_RUNNER_SHA256: hash,
@@ -313,17 +313,17 @@ describe("control-plane HTTP boundary", () => {
       const serviceHost = await artifact("service-host.exe", "vm-service-host");
       const jobAgent = await artifact("job-agent.exe", "vm-job-agent");
       const trayScript = await artifact("tray.ps1", "vm-tray");
-      const template = await artifact("worker-template.vhdx", "vm-template");
+      const checkpoint = await artifact("windows-worker-checkpoint.zip", "vm-checkpoint");
       const response = await createControlPlaneApp(fakeHttpDeps({
         workerReleaseManifest: undefined,
         workerInstallerRoot: pathToFileURL(`${root}/`),
-        developmentWindowsArtifacts: { orchestrator, serviceHost, jobAgent, trayScript, vm: { template } },
+        developmentWindowsArtifacts: { orchestrator, serviceHost, jobAgent, trayScript, vm: { checkpoint } },
       })).request("/api/workers/installer?audience=windows-x64&runtime=vm&connectOrigin=https://control-plane.test");
       const installer = await response.text();
 
       expect(response.status).toBe(200);
       expect(installer).toContain("$WindowsRuntime = 'vm'");
-      expect(installer).toContain("/api/workers/windows-vm-template");
+      expect(installer).toContain("/api/workers/windows-vm-checkpoint");
       expect(installer).not.toContain("MARS_WINDOWS_CONTAINER_BASE_IMAGE=mcr.");
     } finally {
       await rm(root, { recursive: true, force: true });

@@ -54,11 +54,11 @@ test("Linux broker image and Compose preserve non-root writable paths and cache 
 
 test("Windows installer supports container and VM runtimes with isolated prerequisites", () => {
   expect(windows).toContain("[ValidateSet('container','vm')]");
-  expect(windows).toContain("WindowsTemplateUrl");
+  expect(windows).toContain("WindowsCheckpointUrl");
   expect(windows).toContain("MARS_WINDOWS_RUNTIME=$WindowsRuntime");
   expect(windows).toContain("if ($WindowsRuntime -eq 'vm')");
   expect(windows).toContain("Assert-HyperVHost");
-  expect(windows).toContain("MARS_WINDOWS_TEMPLATE_PATH=$templatePath");
+  expect(windows).toContain("MARS_WINDOWS_CHECKPOINT_PATH=$checkpointPath");
   expect(windows).toContain("if ($WindowsRuntime -eq 'container')");
   for (const name of [
     "WindowsOrchestratorUrl", "WindowsServiceHostUrl", "WindowsJobAgentUrl", "WindowsContainerBaseImage",
@@ -67,7 +67,7 @@ test("Windows installer supports container and VM runtimes with isolated prerequ
   ]) expect(windows).toContain(`$${name}`);
   expect(windows).toContain("Assert-ArtifactConfiguration");
   expect(windows).toContain("Download-Verified $WindowsContainerBuilderUrl");
-  expect(windows).toContain("Download-Verified $WindowsTemplateUrl");
+  expect(windows).toContain("Download-Verified $WindowsCheckpointUrl");
   expect(windows).toContain("Verify-DownloadedFile");
   expect(windows).toContain("-ManifestPath $paths.manifest");
   expect(windows).toContain("Move-Item -LiteralPath $paths.manifest -Destination $windowsImageManifestPath -Force");
@@ -338,7 +338,7 @@ test("Windows route values expose every schema-3 container asset through control
   });
   for (const endpoint of ["orchestrator", "service-host", "windows-tray-script", "windows-container-job-agent", "windows-container-runner", "windows-container-git", "windows-container-vc-runtime", "windows-container-builder", "windows-container-verifier", "windows-containerfile", "windows-container-entrypoint"]) expect(JSON.stringify(values)).toContain(`https://control.example/api/workers/${endpoint}`);
 });
-test("Windows route values select the Hyper-V template without container artifacts", () => {
+test("Windows route values keep the Hyper-V checkpoint on upgrades", () => {
   const asset = (suffix: string) => ({ url: `https://release.example/${suffix}`, sha256: hash });
   const values = windowsInstallerValues({
     installer: asset("install-worker.ps1"),
@@ -346,12 +346,12 @@ test("Windows route values select the Hyper-V template without container artifac
     serviceHost: asset("service-host.exe"),
     jobAgent: asset("job-agent.exe"),
     trayScript: asset("tray.ps1"),
-    vm: { template: asset("windows-worker.vhdx") },
-  }, "https://control.example", undefined, false, { releaseVersion: "1.0.0", contractVersion: "0.3.0" }, "vm");
+    vm: { checkpoint: asset("windows-worker-checkpoint.zip") },
+  }, "https://control.example", undefined, true, { releaseVersion: "1.0.0", contractVersion: "0.3.0" }, "vm");
   expect(values).toMatchObject({
     WindowsRuntime: "vm",
-    WindowsTemplateUrl: "https://control.example/api/workers/windows-vm-template",
-    WindowsTemplateSha256: hash,
+    WindowsCheckpointUrl: "https://control.example/api/workers/windows-vm-checkpoint",
+    WindowsCheckpointSha256: hash,
   });
   expect(values).not.toHaveProperty("WindowsContainerBaseImage");
 });

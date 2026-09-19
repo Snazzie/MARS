@@ -5,23 +5,36 @@ import type { WorkerCacheProxy } from "@mars/contracts";
 const limits = { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 20 * 1024 ** 3, maxConcurrentPods: 2 };
 const lease = { id: "11111111-1111-4111-8111-111111111111", jobId: "22222222-2222-4222-8222-222222222222", contractVersion: "0.1.0", imageDigest: "sha256:" + "a".repeat(64), resources: { vcpu: 1, memoryBytes: 1024 ** 3, storageBytes: 4 * 1024 ** 3, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "encrypted-bootstrap" };
 const workerCache: WorkerCacheProxy = { proxyUrl: "http://127.0.0.1:39123", cacheBaseUrl: "https://127.0.0.1:39443", caCertificatePem: "worker-ca", expiresAt: new Date(Date.now() + 60_000).toISOString(), registrationUrl: "https://127.0.0.1:39443/_mars/register", registrationChallenge: "c".repeat(32) };
-function fake(calls: string[]): HyperVRuntime { const record = (value: string): (() => Promise<void>) => async () => { calls.push(value); }; return { verifyHost: record("verify"), createDifferencingDisk: async (p, c) => { calls.push(`diff:${p}:${c}`); }, createVm: async ({ name }) => { calls.push(`vm:${name}`); }, copyBootstrap: async (name, source, target) => { calls.push(`copy:${name}:${source}:${target}`); }, start: async name => { calls.push(`start:${name}`); }, waitForGuestReady: async name => { calls.push(`ready:${name}`); }, waitForStop: async name => { calls.push(`stopwait:${name}`); }, stop: async name => { calls.push(`stop:${name}`); }, remove: async name => { calls.push(`remove:${name}`); }, removeDisk: async path => { calls.push(`disk-remove:${path}`); }, reconcileOrphans: async prefix => { calls.push(`orphans:${prefix}`); } }; }
+function fake(calls: string[]): HyperVRuntime {
+  const record = (value: string): (() => Promise<void>) => async () => { calls.push(value); };
+  return {
+    verifyHost: record("verify"),
+    importCheckpoint: async ({ checkpointPath, destinationPath, name }) => { calls.push(`import:${checkpointPath}:${destinationPath}:${name}`); },
+    copyBootstrap: async (name, source, target) => { calls.push(`copy:${name}:${source}:${target}`); },
+    start: async name => { calls.push(`start:${name}`); },
+    waitForGuestReady: async name => { calls.push(`ready:${name}`); },
+    waitForStop: async name => { calls.push(`stopwait:${name}`); },
+    stop: async name => { calls.push(`stop:${name}`); },
+    remove: async name => { calls.push(`remove:${name}`); },
+    removeFiles: async path => { calls.push(`files-remove:${path}`); },
+    reconcileOrphans: async prefix => { calls.push(`orphans:${prefix}`); },
+  };
+}
 describe("HyperVDriver", () => {
-  test("creates a differencing Gen 2 lease and waits for guest completion", async () => { const calls: string[] = []; const driver = new HyperVDriver(fake(calls), "C:\\templates\\windows.vhdx", lease.imageDigest, "mars", limits, "C:\\temp"); await driver.reserveCapacity(lease.resources); const runtime = await driver.createLease(lease); expect(runtime.runtimeInstanceId).toContain("mars-"); expect(calls[0]).toBe("verify"); expect(calls.some(call => call.startsWith("diff:"))).toBe(true); expect(calls.some(call => call.startsWith("ready:"))).toBe(true); await runtime.completion; expect(calls.some(call => call.startsWith("stopwait:"))).toBe(true); await driver.removeLease(lease.id); });
-  test("rejects a lease whose image digest is not the sealed template", async () => { const driver = new HyperVDriver(fake([]), "template.vhdx", lease.imageDigest, "mars", limits); await expect(driver.createLease({ ...lease, contractVersion: "0.1.0", imageDigest: "sha256:" + "b".repeat(64) })).rejects.toThrow("does not match"); });
+  test("imports a checkpoint clone and waits for guest completion", async () => { const calls: string[] = []; const driver = new HyperVDriver(fake(calls), "C:\\templates\\checkpoint", lease.imageDigest, "mars", limits, "C:\\temp"); await driver.reserveCapacity(lease.resources); const runtime = await driver.createLease(lease); expect(runtime.runtimeInstanceId).toContain("mars-"); expect(calls[0]).toBe("verify"); expect(calls.some(call => call.startsWith("import:C:\\templates\\checkpoint:"))).toBe(true); expect(calls.some(call => call.startsWith("ready:"))).toBe(true); await runtime.completion; expect(calls.some(call => call.startsWith("stopwait:"))).toBe(true); await driver.removeLease(lease.id); expect(calls.some(call => call.startsWith("files-remove:"))).toBe(true); });
+  test("rejects a lease whose image digest is not the sealed checkpoint", async () => { const driver = new HyperVDriver(fake([]), "checkpoint", lease.imageDigest, "mars", limits); await expect(driver.createLease({ ...lease, contractVersion: "0.1.0", imageDigest: "sha256:" + "b".repeat(64) })).rejects.toThrow("does not match"); });
 });
-test("uses the VHDX extension required for a differencing disk", async () => {
+test("uses a lease-specific directory for each checkpoint import", async () => {
   const calls: string[] = [];
-  const driver = new HyperVDriver(fake(calls), "C:\\templates\\windows.vhdx", lease.imageDigest, "mars", limits, "C:\\temp");
+  const driver = new HyperVDriver(fake(calls), "C:\\templates\\checkpoint", lease.imageDigest, "mars", limits, "C:\\temp");
   await driver.createLease(lease);
-  const child = calls.find(call => call.startsWith("diff:"));
-  expect(child).toEndWith(".vhdx");
-  expect(child).not.toEndWith(".avhdx");
+  const imported = calls.find(call => call.startsWith("import:"));
+  expect(imported).toContain("C:\\temp\\mars-11111111");
 });
-test("copies bootstrap to the guest service path", async () => { const calls: string[] = []; const driver = new HyperVDriver(fake(calls), "C:\\templates\\windows.vhdx", lease.imageDigest, "mars", limits, "C:\\temp"); await driver.createLease(lease); expect(calls.some(call => call.endsWith(":C:\\ProgramData\\Mars\\bootstrap.json"))).toBe(true); });
+test("copies bootstrap to the guest service path", async () => { const calls: string[] = []; const driver = new HyperVDriver(fake(calls), "C:\\templates\\checkpoint", lease.imageDigest, "mars", limits, "C:\\temp"); await driver.createLease(lease); expect(calls.some(call => call.endsWith(":C:\\ProgramData\\Mars\\bootstrap.json"))).toBe(true); });
 test("waits for the guest before copying bootstrap", async () => {
   const calls: string[] = [];
-  const driver = new HyperVDriver(fake(calls), "C:\\templates\\windows.vhdx", lease.imageDigest, "mars", limits, "C:\\temp");
+  const driver = new HyperVDriver(fake(calls), "C:\\templates\\checkpoint", lease.imageDigest, "mars", limits, "C:\\temp");
   await driver.createLease(lease);
   const start = calls.findIndex(call => call.startsWith("start:"));
   const ready = calls.findIndex(call => call.startsWith("ready:"));
@@ -33,7 +46,7 @@ test("writes the guest service bootstrap envelope", async () => {
   const copied: string[] = [];
   const runtime = fake([]);
   runtime.copyBootstrap = async (_name, source) => { copied.push(await readFile(source, "utf8")); };
-  const driver = new HyperVDriver(runtime, "C:\\templates\\windows.vhdx", lease.imageDigest, "mars", limits, "C:\\temp");
+  const driver = new HyperVDriver(runtime, "C:\\templates\\checkpoint", lease.imageDigest, "mars", limits, "C:\\temp");
   await driver.createLease(lease);
   expect(JSON.parse(copied[0])).toEqual({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig });
 });
@@ -41,7 +54,7 @@ test("includes worker cache descriptor in Hyper-V guest bootstrap", async () => 
   const copied: string[] = [];
   const runtime = fake([]);
   runtime.copyBootstrap = async (_name, source) => { copied.push(await readFile(source, "utf8")); };
-  const driver = new HyperVDriver(runtime, "C:\\templates\\windows.vhdx", lease.imageDigest, "mars", limits, "C:\\temp");
+  const driver = new HyperVDriver(runtime, "C:\\templates\\checkpoint", lease.imageDigest, "mars", limits, "C:\\temp");
   await driver.createLease({ ...lease, workerCache });
   expect(JSON.parse(copied[0]).workerCache).toEqual(workerCache);
 });
@@ -51,13 +64,15 @@ test("wraps Hyper-V scripts so native command arguments populate PowerShell args
 test("makes native PowerShell cmdlet errors terminating", () => {
   expect(powerShellCommand("New-VHD")).toContain("$ErrorActionPreference = 'Stop'");
 });
-test("configures disposable runner VM host settings", async () => {
+test("imports a generated-ID checkpoint clone with isolated files and host settings", async () => {
   const scripts: string[] = [];
   const commandArgs: string[][] = [];
   const runtime = createHyperVRuntime(async (script, args) => { scripts.push(script); commandArgs.push(args); return { code: 0, stdout: "", stderr: "" }; });
-  await runtime.createVm({ name: "runner", diskPath: "runner.vhdx", resources: lease.resources, switchName: "Mars Switch" });
-  expect(scripts[0]).toContain("Set-VM -VM $vm -AutomaticCheckpointsEnabled $false");
-  expect(scripts[0]).toContain("-SwitchName $args[4]");
-  expect(commandArgs[0]?.[4]).toBe("Mars Switch");
+  await runtime.importCheckpoint({ checkpointPath: "checkpoint", destinationPath: "lease", name: "runner", resources: lease.resources, switchName: "Mars Switch" });
+  expect(scripts[0]).toContain("Import-VM");
+  expect(scripts[0]).toContain("-Copy -GenerateNewId");
+  expect(scripts[0]).toContain("-AutomaticCheckpointsEnabled $false");
+  expect(scripts[0]).toContain("Connect-VMNetworkAdapter -SwitchName $args[5]");
+  expect(commandArgs[0]?.[5]).toBe("Mars Switch");
   expect(scripts[0]).toContain("Enable-VMIntegrationService -VM $vm -Name 'Guest Service Interface'");
 });

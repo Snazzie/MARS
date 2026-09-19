@@ -530,10 +530,10 @@ export function windowsInstallerValues(platform: WindowsWorkerRelease | undefine
     WindowsServiceHostUrl: artifact("/api/workers/service-host?audience=windows-x64"),
     WindowsServiceHostSha256: source.serviceHost.sha256,
     ...(source.trayScript ? { WindowsTrayScriptUrl: artifact("/api/workers/windows-tray-script"), WindowsTrayScriptSha256: source.trayScript.sha256 } : {}),
-    ...(upgrade ? {} : runtime === "vm" ? {
-      WindowsTemplateUrl: artifact("/api/workers/windows-vm-template"),
-      WindowsTemplateSha256: vm!.template.sha256,
-    } : {
+    ...(runtime === "vm" ? {
+      WindowsCheckpointUrl: artifact("/api/workers/windows-vm-checkpoint"),
+      WindowsCheckpointSha256: vm!.checkpoint.sha256,
+    } : upgrade ? {} : {
       WindowsJobAgentUrl: artifact("/api/workers/windows-container-job-agent"),
       WindowsJobAgentSha256: source.jobAgent.sha256,
       WindowsContainerBaseImage: container!.baseImage,
@@ -613,8 +613,8 @@ async function installerArtifacts(
       if (!windows.orchestrator) missing.push("development:orchestrator");
       if (!windows.serviceHost) missing.push("development:service-host");
       if (!windows.trayScript) missing.push("development:tray-script");
-      if (!upgrade && runtime === "vm") {
-        if (!windows.vm?.template) missing.push("development:vm.template");
+      if (runtime === "vm") {
+        if (!windows.vm?.checkpoint) missing.push("development:vm.checkpoint");
       } else if (!upgrade) {
         if (!windows.jobAgent) missing.push("development:job-agent");
         const container = windows.container;
@@ -633,7 +633,7 @@ async function installerArtifacts(
     : audience === "linux-arm64"
       ? ["installer", "compose", "brokerImage", "jobImage"]
       : audience === "windows-x64"
-        ? (upgrade ? ["installer", "orchestrator", "serviceHost", "trayScript"] : runtime === "vm" ? ["installer", "orchestrator", "serviceHost", "trayScript", "vm"] : ["installer", "orchestrator", "serviceHost", "trayScript", "jobAgent", "container"])
+        ? (runtime === "vm" ? ["installer", "orchestrator", "serviceHost", "trayScript", "vm"] : upgrade ? ["installer", "orchestrator", "serviceHost", "trayScript"] : ["installer", "orchestrator", "serviceHost", "trayScript", "jobAgent", "container"])
         : ["installer", "orchestrator", "macosJobAgent", "linuxArm64JobAgent", "linuxArm64Runner", "imagePreparationScript", "tartMacosSourceImage", "tartLinuxArm64SourceImage"];
   for (const field of fields) if (!(platform as unknown as Record<string, unknown>)[field]) missing.push(releaseField(audience, field));
   return missing;
@@ -1091,11 +1091,11 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   });
   app.get("/api/workers/templates/:platform/manifest", (c) => unavailable(c, [`template-manifest:${c.req.param("platform")}`]));
   app.get("/api/workers/templates/:platform/artifact", (c) => unavailable(c, [`template:${c.req.param("platform")}`]));
-  app.get("/api/workers/windows-vm-template", async c => {
-    const development = deps.developmentWindowsArtifacts?.vm?.template;
-    if (development) return developmentPackaged(c, development, "windows-vm-template", "windows-worker.vhdx", "template");
-    const asset = (await releaseManifestFor(c, "windows-x64"))?.platforms["windows-x64"]?.vm?.template;
-    return asset ? await immutablePackaged(c, asset, "windows-vm-template", "windows-worker.vhdx", "template") : unavailable(c, ["manifest:windows-x64.vm.template"]);
+  app.get("/api/workers/windows-vm-checkpoint", async c => {
+    const development = deps.developmentWindowsArtifacts?.vm?.checkpoint;
+    if (development) return developmentPackaged(c, development, "windows-vm-checkpoint", "windows-worker-checkpoint.zip", "template");
+    const asset = (await releaseManifestFor(c, "windows-x64"))?.platforms["windows-x64"]?.vm?.checkpoint;
+    return asset ? await immutablePackaged(c, asset, "windows-vm-checkpoint", "windows-worker-checkpoint.zip", "template") : unavailable(c, ["manifest:windows-x64.vm.checkpoint"]);
   });
   app.get("/api/workers/windows-tray-script", async c => {
     const development = deps.developmentWindowsArtifacts?.trayScript;
@@ -1189,7 +1189,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       development = { ...configured, compose: await currentDevelopmentArtifact(configured.compose) };
     } else if (audience === "windows-x64" && deps.developmentWindowsArtifacts) {
       const configured = deps.developmentWindowsArtifacts;
-      development = { ...configured, orchestrator: await currentDevelopmentArtifact(configured.orchestrator), serviceHost: await currentDevelopmentArtifact(configured.serviceHost), trayScript: await currentDevelopmentArtifact(configured.trayScript), ...(configured.vm?.template ? { vm: { template: await currentDevelopmentArtifact(configured.vm.template) } } : {}) } as DevelopmentWindowsArtifacts;
+      development = { ...configured, orchestrator: await currentDevelopmentArtifact(configured.orchestrator), serviceHost: await currentDevelopmentArtifact(configured.serviceHost), trayScript: await currentDevelopmentArtifact(configured.trayScript), ...(configured.vm?.checkpoint ? { vm: { checkpoint: await currentDevelopmentArtifact(configured.vm.checkpoint) } } : {}) } as DevelopmentWindowsArtifacts;
     } else if (audience === "macos-arm64" && deps.developmentMacosArtifacts) {
       const configured = deps.developmentMacosArtifacts;
       development = { ...configured, orchestrator: await currentDevelopmentArtifact(configured.orchestrator), jobAgent: await currentDevelopmentArtifact(configured.jobAgent), imagePreparationScript: await currentDevelopmentArtifact(configured.imagePreparationScript) };

@@ -1,21 +1,27 @@
 # Windows Worker Development Progress
 
-Last updated: 2026-08-20
+Last updated: 2026-09-19
 
 ## Current decision
 
-The Windows runtime must use a **warm Hyper-V checkpoint pool**.
+The first production Windows runtime uses a **downloaded Hyper-V checkpoint
+archive with on-demand generated-ID clones**.
 
-The golden source is the existing `Windows 11 dev environment` VM in its signed-in desktop state. The worker must not create a new VM from the generalized `windows.vhdx` and cold-boot through OOBE for every lease.
+The golden source is the existing `Windows 11 dev environment` VM in its
+signed-in desktop state. Worker setup downloads and verifies
+`windows-worker-checkpoint.zip` once, extracts it into a digest-addressed,
+read-only directory, and uses `Import-VM -Copy -GenerateNewId` for each lease.
 
 Target lifecycle:
 
 1. Prepare the guest agent and startup task inside `Windows 11 dev environment`.
 2. Take a running-state Standard checkpoint while the desktop is ready and the guest agent is waiting for bootstrap.
-3. Export that checkpoint once as the golden checkpoint.
-4. Import one generated-ID clone per worker concurrency slot.
-5. Keep each clone as a stopped/saved warm slot.
-6. On lease dispatch, resume a slot, copy bootstrap, execute the job, destroy the consumed slot, and replenish it asynchronously.
+3. Package and publish that checkpoint once as the immutable release artifact.
+4. Download and verify the archive during worker setup.
+5. Import one isolated clone per lease, resume it, copy bootstrap, execute the job, and remove the clone and copied files.
+
+A persistent warm-slot pool is deferred until measured import latency justifies
+the extra reconciliation and state-management complexity.
 
 The Windows worker is deliberately **drained** while this is unfinished. Verified database state at handoff: `online | ready | draining=true`.
 
@@ -150,7 +156,7 @@ Current modified files:
 apps/job-agent/src/bootstrap.test.ts
 apps/job-agent/src/bootstrap.ts
 apps/job-agent/src/index.ts
-deploy/workers/prepare-windows-hyperv-template.ps1
+deploy/workers/prepare-windows-hyperv-checkpoint.ps1
 tests/installer-arguments.test.ts
 ```
 
@@ -214,50 +220,43 @@ Export the new Mars checkpoint, then:
 
 No GitHub runner is involved in this proof.
 
-### 3. Implement the persistent warm-slot runtime
+### 3. On-demand checkpoint runtime implemented
 
-Replace the VHDX-per-lease path in `apps/orchestrator/src/hyperv.ts` with checkpoint slots:
+The VHDX-per-lease path in `apps/orchestrator/src/hyperv.ts` now:
 
-- Golden exported checkpoint path/digest configuration.
-- Import generated-ID clones until warm slot count equals `maxConcurrentPods`.
-- Persist slot metadata so service restart can reconcile slots safely.
-- Resume one saved slot per lease.
-- Never share one saved VM state concurrently.
-- Destroy consumed slot after completion/failure.
-- Replenish the slot asynchronously.
-- Keep source golden checkpoint immutable.
+- uses the installed checkpoint export path and archive digest;
+- imports one generated-ID clone into a lease-specific directory;
+- applies lease CPU, memory, and switch settings before resume;
+- destroys the imported VM and all copied files after completion/failure; and
+- removes orphan Mars VMs and lease directories after service restart.
 
-### 4. Update installation and configuration
+### 4. Download and installation implemented
 
-The Windows installer/runtime configuration currently points at:
+The artifact contract is now:
 
 ```text
-MARS_WINDOWS_TEMPLATE_PATH=C:\ProgramData\Mars\templates\windows.vhdx
+MARS_WINDOWS_CHECKPOINT_PATH=C:\ProgramData\Mars\checkpoints\<sha256>
+MARS_WINDOWS_CHECKPOINT_DIGEST=sha256:<archive-digest>
 ```
 
-Replace this contract with the exported golden-checkpoint location and immutable manifest/digest. Update:
+`deploy/workers/prepare-windows-hyperv-checkpoint.ps1` exports the newest
+Standard checkpoint by default, creates a ZIP and digest-identical backup, and
+prints the control-plane configuration values. Worker setup downloads and
+verifies the ZIP, extracts it to a digest-addressed path, validates one `.vmcx`
+plus `manifest.json`, and makes the export read-only. The obsolete generalized
+VHDX preparation scripts were removed.
 
-- installer
-- service environment
-- worker configuration preflight
-- dashboard configuration copy if exposed
-- tests
-
-The existing `prepare-windows-hyperv-template.ps1` VHDX/OOBE flow is obsolete for job startup after the checkpoint model is complete. Remove it or narrow it to preparation of the golden source; do not retain two runtime paths.
-
-### 5. Verify local warm-pool behavior
+### 5. Verify local clone behavior
 
 Before enabling the worker:
 
-- Prepare at least two checkpoint slots.
-- Resume both independently.
-- Give each a distinct synthetic command/bootstrap.
-- Verify both outputs and isolation.
-- Verify bootstrap consumption.
-- Verify guest shutdown.
-- Verify slot destruction.
-- Verify asynchronous replenishment returns pool to target size.
-- Restart the worker service and verify reconciliation does not delete or duplicate valid warm slots.
+- install the exact published checkpoint archive;
+- import at least two clones independently;
+- give each a distinct synthetic command/bootstrap;
+- verify bootstrap consumption and output isolation;
+- verify guest shutdown;
+- verify VM and copied-file destruction; and
+- restart the worker service and verify orphan cleanup.
 
 ### 6. Publish and deploy verified source
 
