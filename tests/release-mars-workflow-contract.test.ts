@@ -41,8 +41,24 @@ test("exact SHA CI and immutable worker assets are required", async () => {
   expect(source).toContain("worker-v<semver>");
   expect(source).toContain("docker manifest inspect");
   expect(source).toContain("DOCKER_CONFIG");
-  expect(source).toContain("schemaVersion:5");
+  expect(source).toContain("schemaVersion:6");
   expect(source).toContain("--platform linux/amd64");
+});
+
+test("Windows release packages and verifies the exact VM provisioner allowlist", async () => {
+  const source = await read(".github/workflows/release-mars.yml");
+  for (const member of [
+    "provision-windows-hyperv-image.ps1",
+    "provision-windows-hyperv-guest.ps1",
+    "prepare-windows-job-image.ps1",
+    "windows-hyperv-checkpoint.psm1",
+  ]) {
+    expect(source).toContain(`'deploy/workers/${member}'`);
+    expect(source).toContain(`'${member}'`);
+  }
+  expect(source).toContain("[System.IO.Compression.ZipFile]::OpenRead");
+  expect(source).toContain("Compare-Object $expectedMembers $actualMembers");
+  expect(source).toContain("mars-windows-vm-provisioner.zip");
 });
 
 test("candidate, recovery, evidence, and staging gates precede promotion", async () => {

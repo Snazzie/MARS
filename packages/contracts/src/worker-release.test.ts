@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { WorkerReleaseManifest } from "./worker-release.ts";
+import { normalizeWindowsWorkerRelease, WorkerReleaseManifest } from "./worker-release.ts";
 
 const hash = "a".repeat(64);
 const asset = (name: string) => ({ url: `https://downloads.example.test/${name}`, sha256: hash });
@@ -53,8 +53,65 @@ const valid = {
   },
 };
 
+const validV6 = {
+  ...valid,
+  schemaVersion: 6 as const,
+  platforms: {
+    ...valid.platforms,
+    "windows-x64": {
+      installer: asset("windows-installer.ps1"),
+      orchestrator: asset("windows-orchestrator.exe"),
+      serviceHost: asset("windows-service-host.exe"),
+      jobAgent: asset("windows-job-agent.exe"),
+      runner: asset("windows-runner.zip"),
+      git: asset("windows-git.zip"),
+      vcRuntime: asset("windows-vc-runtime.exe"),
+      vm: {
+        checkpoint: asset("windows-worker-checkpoint.zip"),
+        provisioner: asset("mars-windows-vm-provisioner.zip"),
+      },
+      container: {
+        baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}`,
+        buildScript: asset("windows-build.ps1"),
+        verifyScript: asset("windows-verify.ps1"),
+        containerfile: asset("windows-Containerfile"),
+        entrypoint: asset("windows-entrypoint.ps1"),
+      },
+    },
+  },
+};
+
 test("accepts a complete schema-5 release manifest with both Windows runtimes", () => {
   expect(WorkerReleaseManifest.parse(valid)).toEqual(valid);
+});
+
+test("accepts schema 6 and normalizes shared Windows assets", () => {
+  const manifest = WorkerReleaseManifest.parse(validV6);
+  expect(normalizeWindowsWorkerRelease(manifest)).toMatchObject({
+    installerContract: 6,
+    runner: asset("windows-runner.zip"),
+    git: asset("windows-git.zip"),
+    vcRuntime: asset("windows-vc-runtime.exe"),
+    checkpoint: asset("windows-worker-checkpoint.zip"),
+    provisioner: asset("mars-windows-vm-provisioner.zip"),
+  });
+});
+
+test("normalizes schema 5 assets from its container contract", () => {
+  const manifest = WorkerReleaseManifest.parse(valid);
+  expect(normalizeWindowsWorkerRelease(manifest)).toMatchObject({
+    installerContract: 5,
+    runner: asset("windows-runner.zip"),
+    git: asset("windows-git.zip"),
+    vcRuntime: asset("windows-vc-runtime.exe"),
+    checkpoint: asset("windows-worker-checkpoint.zip"),
+  });
+});
+
+test("rejects schema 6 Windows container aliases", () => {
+  const value = structuredClone(validV6);
+  (value.platforms["windows-x64"].container as Record<string, unknown>).runner = asset("alias.zip");
+  expect(() => WorkerReleaseManifest.parse(value)).toThrow();
 });
 
 test("accepts explicit nulls for unavailable platforms", () => {

@@ -9,6 +9,7 @@
     "test": "bun test",
     "setup:windows-hyperv-checkpoint": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy/workers/prepare-windows-hyperv-checkpoint.ps1",
     "test:windows-hyperv-vm": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/prove-windows-hyperv-vm.ps1",
+    "test:windows-hyperv-provisioning": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows-hyperv-provisioning.test.ps1",
     "test:control-plane-tunnel": "bash tests/control-plane-tunnel-smoke.sh",
     "test:windows-container-image": "bun test tests/windows-container-image-contract.test.ts",
     "test:control-plane-proxy": "bun run tests/proxied-control-plane-smoke.ts",

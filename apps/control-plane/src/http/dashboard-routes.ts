@@ -10,6 +10,7 @@ import { createWorkerImageBuildPayload } from "../windows-image-build.ts";
 import { ApiError, CostCenterDto, CostCenterPricingProvider, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth, JobLabelRecommendation, JobLabelRecommendationQuery, GithubConnectionSummary, GithubRateLimitStats, WorkerEventPayload, WorkerUpgradeStatus, runtimeDriverForWorker } from "@mars/contracts";
 import { WorkerDispatchError } from "../worker-dispatch.ts";
 import { WorkerReleaseCatalogUnavailable } from "../worker-release.ts";
+import { storedWorkerRuntimeMode, workerPoolEvidence } from "../worker-evidence.ts";
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
@@ -56,14 +57,6 @@ const workerLogQuerySchema = z.object({
   maxBytes: z.coerce.number().int().min(1).max(128 * 1024).default(64 * 1024),
 }).strict();
 const mutationSchema = z.object({}).strict();
-const storedWorkerRuntimeMode = (value: unknown): "container" | "vm" | "tart" | undefined => {
-  if (!value || typeof value !== "object") return undefined;
-  const direct = "runtimeMode" in value ? value.runtimeMode : undefined;
-  if (direct === "container" || direct === "vm" || direct === "tart") return direct;
-  const nested = "doctor" in value ? value.doctor : undefined;
-  if (!nested || typeof nested !== "object" || !("runtimeMode" in nested)) return undefined;
-  return nested.runtimeMode === "container" || nested.runtimeMode === "vm" || nested.runtimeMode === "tart" ? nested.runtimeMode : undefined;
-};
 
 function error(c: any, status: number, code: string, message: string, details?: Record<string, unknown>) {
   return c.json(ApiError.parse({ code, message, requestId: c.req.header("x-request-id") || crypto.randomUUID(), ...(details ? { details } : {}) }), status, { "cache-control": "no-store" });
@@ -397,17 +390,9 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!(Array.isArray(worker.guestPlatforms) ? worker.guestPlatforms : [worker.platform]).includes(body.guestPlatform)) return { error: "worker_guest_platform_unsupported" as const };
     const driver = runtimeDriverForWorker(worker.platform, body.guestPlatform, storedWorkerRuntimeMode(worker.doctor));
     if (!driver) return { error: "runtime_unsupported" as const };
-    const doctor = worker.doctor && typeof worker.doctor === "object" ? worker.doctor as Record<string, unknown> : {};
-    if (driver === "tart-vm") {
-      const digests = doctor.artifactDigests && typeof doctor.artifactDigests === "object" ? doctor.artifactDigests as Record<string, unknown> : {};
-      if (digests[body.guestPlatform] !== body.imageDigest) return { error: "worker_image_mismatch" };
-    } else if (driver === "linux-libvirt-vm") {
-      if (![doctor.runtimeReady, doctor.libvirtReady, doctor.networkReady, doctor.cloneStorageReady, doctor.imageSignatures, doctor.realVmSmoke].every((value) => value === true)) return { error: "worker_runtime_not_ready" };
-      if (doctor.artifactDigest !== body.imageDigest || doctor.smokeArtifactDigest !== body.imageDigest) return { error: "worker_image_mismatch" };
-    } else if (driver === "linux-docker-container") {
-      if (![doctor.runtimeReady, doctor.networkReady, doctor.imageSignatures].every((value) => value === true)) return { error: "worker_runtime_not_ready" };
-      if (doctor.artifactDigest !== body.imageDigest) return { error: "worker_image_mismatch" };
-    }
+    const evidence = workerPoolEvidence(worker.doctor, driver, body.imageDigest, body.guestPlatform);
+    if (!evidence.ready) return { error: "worker_runtime_not_ready" };
+    if (!evidence.imageMatches) return { error: "worker_image_mismatch" };
     return { driver };
   };
   app.post("/api/pools", safe(async (c) => {
@@ -457,7 +442,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const [pool] = await deps.db`SELECT id,platform,driver,image_digest AS "imageDigest" FROM runner_pools WHERE id=${poolId} AND organization_id IS NULL`;
     if (!pool) return error(c, 404, "not_found", "Pool not found");
     if (action === "enable") {
-      const [ready] = await deps.db`SELECT w.id FROM workers w WHERE w.admission_state='adopted' AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false AND w.last_heartbeat_at>now()-interval '90 seconds' AND w.doctor_observed_at IS NOT NULL AND ${pool.platform}=ANY(SELECT jsonb_array_elements_text(w.guest_platforms)) AND ${pool.driver}=CASE WHEN w.platform='macos-arm64' AND ${pool.platform} IN ('macos-arm64','linux-arm64') THEN 'tart-vm' WHEN ${pool.platform}=w.platform THEN CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN CASE WHEN w.doctor->'doctor'->>'runtimeMode'='vm' THEN 'windows-hyperv' ELSE 'windows-hyperv-container' END WHEN 'macos-arm64' THEN 'tart-vm' END ELSE NULL END AND (${pool.driver}<>'tart-vm' OR w.doctor->'artifactDigests'->>${pool.platform}=${pool.imageDigest}) LIMIT 1`;
+      const [ready] = await deps.db`SELECT w.id FROM workers w CROSS JOIN LATERAL (SELECT CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END AS evidence) e WHERE w.admission_state='adopted' AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false AND w.last_heartbeat_at>now()-interval '90 seconds' AND w.doctor_observed_at IS NOT NULL AND ${pool.platform}=ANY(SELECT jsonb_array_elements_text(w.guest_platforms)) AND ${pool.driver}=CASE WHEN w.platform='macos-arm64' AND ${pool.platform} IN ('macos-arm64','linux-arm64') THEN 'tart-vm' WHEN ${pool.platform}=w.platform THEN CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN CASE WHEN e.evidence->>'runtimeMode'='vm' THEN 'windows-hyperv' ELSE 'windows-hyperv-container' END WHEN 'macos-arm64' THEN 'tart-vm' END ELSE NULL END AND e.evidence->>'runtimeReady'='true' AND CASE WHEN ${pool.driver}='tart-vm' THEN e.evidence->'artifactDigests'->>${pool.platform}=${pool.imageDigest} WHEN ${pool.driver}='linux-libvirt-vm' THEN e.evidence->>'artifactDigest'=${pool.imageDigest} AND e.evidence->>'smokeArtifactDigest'=${pool.imageDigest} AND e.evidence->>'libvirtReady'='true' AND e.evidence->>'networkReady'='true' AND e.evidence->>'cloneStorageReady'='true' AND e.evidence->>'imageSignatures'='true' AND e.evidence->>'realVmSmoke'='true' WHEN ${pool.driver}='linux-docker-container' THEN e.evidence->>'artifactDigest'=${pool.imageDigest} AND e.evidence->>'networkReady'='true' AND e.evidence->>'imageSignatures'='true' WHEN ${pool.driver} IN ('windows-hyperv','windows-hyperv-container') THEN e.evidence->>'artifactDigest'=${pool.imageDigest} AND e.evidence->>'probe'='true' AND e.evidence->>'imageSignatures'='true' ELSE false END LIMIT 1`;
       if (!ready || (deps.workerConnected ? !deps.workerConnected(String(ready.id)) : false)) return error(c, 409, "no_compatible_ready_worker", "No compatible ready worker is connected for this pool");
     }
     await deps.db`UPDATE runner_pools SET enabled=${action === "enable"} WHERE id=${poolId} AND organization_id IS NULL`;
@@ -475,11 +460,9 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!(Array.isArray(w.guestPlatforms) ? w.guestPlatforms : [w.platform]).includes(body.guestPlatform)) return error(c, 422, "worker_guest_platform_unsupported", "Worker does not support the requested guest platform");
     const driver = runtimeDriverForWorker(w.platform, body.guestPlatform, storedWorkerRuntimeMode(w.doctor));
     if (!driver) return error(c, 422, "runtime_unsupported", "Worker cannot provide the requested runtime");
-    if (driver === "tart-vm") {
-      const doctor = w.doctor && typeof w.doctor === "object" ? w.doctor as Record<string, unknown> : {};
-      const digests = doctor.artifactDigests && typeof doctor.artifactDigests === "object" ? doctor.artifactDigests as Record<string, unknown> : {};
-      if (digests[body.guestPlatform] !== body.imageDigest) return error(c, 422, "worker_image_mismatch", "Worker image evidence does not match the requested digest");
-    }
+    const evidence = workerPoolEvidence(w.doctor, driver, body.imageDigest, body.guestPlatform);
+    if (!evidence.ready) return error(c, 422, "worker_runtime_not_ready", "Worker runtime host evidence is not ready");
+    if (!evidence.imageMatches) return error(c, 422, "worker_image_mismatch", "Worker image evidence does not match the requested digest");
     const labels = [body.triggerLabel];
     const [duplicate] = await deps.db`SELECT id,name,trigger_label AS "triggerLabel" FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel})`;
     if (body.poolId) {

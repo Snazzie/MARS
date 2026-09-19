@@ -21,24 +21,24 @@ const app = createControlPlaneApp(fakeHttpDeps());
       MARS_WINDOWS_CHECKPOINT_PATH: "C:\\mars\\windows-worker-checkpoint.zip",
       MARS_WINDOWS_CHECKPOINT_DIGEST: `sha256:${hash}`,
       MARS_WINDOWS_CONTAINER_BASE_IMAGE: `mcr.microsoft.com/windows@sha256:${hash}`,
-      MARS_WINDOWS_CONTAINER_RUNNER_PATH: "C:\\mars\\runner.zip",
-      MARS_WINDOWS_CONTAINER_RUNNER_URL: "http://localhost:3000/runner.zip",
-      MARS_WINDOWS_CONTAINER_RUNNER_SHA256: hash,
-      MARS_WINDOWS_CONTAINER_GIT_PATH: "C:\\mars\\git.zip",
-      MARS_WINDOWS_CONTAINER_GIT_URL: "http://localhost:3000/git.zip",
-      MARS_WINDOWS_CONTAINER_GIT_SHA256: hash,
-      MARS_WINDOWS_CONTAINER_VC_PATH: "C:\\mars\\vc.exe",
-      MARS_WINDOWS_CONTAINER_VC_URL: "http://localhost:3000/vc.exe",
-      MARS_WINDOWS_CONTAINER_VC_SHA256: hash,
+      MARS_WINDOWS_RUNNER_PATH: "C:\\mars\\runner.zip",
+      MARS_WINDOWS_RUNNER_URL: "http://localhost:3000/runner.zip",
+      MARS_WINDOWS_RUNNER_SHA256: hash,
+      MARS_WINDOWS_GIT_PATH: "C:\\mars\\git.zip",
+      MARS_WINDOWS_GIT_URL: "http://localhost:3000/git.zip",
+      MARS_WINDOWS_GIT_SHA256: hash,
+      MARS_WINDOWS_VC_RUNTIME_PATH: "C:\\mars\\vc.exe",
+      MARS_WINDOWS_VC_RUNTIME_URL: "http://localhost:3000/vc.exe",
+      MARS_WINDOWS_VC_RUNTIME_SHA256: hash,
     })).toEqual({
       orchestrator: { path: "C:\\mars\\mars-orchestrator.exe", sha256: hash },
       serviceHost: { path: "C:\\mars\\mars-service-host.exe", sha256: hash },
+      runner: { path: "C:\\mars\\runner.zip", url: "http://localhost:3000/runner.zip", sha256: hash },
+      git: { path: "C:\\mars\\git.zip", url: "http://localhost:3000/git.zip", sha256: hash },
+      vcRuntime: { path: "C:\\mars\\vc.exe", url: "http://localhost:3000/vc.exe", sha256: hash },
       vm: { checkpoint: { path: "C:\\mars\\windows-worker-checkpoint.zip", sha256: hash } },
       container: {
         baseImage: `mcr.microsoft.com/windows@sha256:${hash}`,
-        runner: { path: "C:\\mars\\runner.zip", url: "http://localhost:3000/runner.zip", sha256: hash },
-        git: { path: "C:\\mars\\git.zip", url: "http://localhost:3000/git.zip", sha256: hash },
-        vcRuntime: { path: "C:\\mars\\vc.exe", url: "http://localhost:3000/vc.exe", sha256: hash },
       },
     });
   });
@@ -56,12 +56,12 @@ const app = createControlPlaneApp(fakeHttpDeps());
       MARS_WINDOWS_CHECKPOINT_URL: url,
       MARS_WINDOWS_CHECKPOINT_SHA256: hash,
       MARS_WINDOWS_CONTAINER_BASE_IMAGE: `mcr.microsoft.com/windows@sha256:${hash}`,
-      MARS_WINDOWS_CONTAINER_RUNNER_URL: "http://localhost:3000/runner.zip",
-      MARS_WINDOWS_CONTAINER_RUNNER_SHA256: hash,
-      MARS_WINDOWS_CONTAINER_GIT_URL: "http://localhost:3000/git.zip",
-      MARS_WINDOWS_CONTAINER_GIT_SHA256: hash,
-      MARS_WINDOWS_CONTAINER_VC_URL: "http://localhost:3000/vc.exe",
-      MARS_WINDOWS_CONTAINER_VC_SHA256: hash,
+      MARS_WINDOWS_RUNNER_URL: "http://localhost:3000/runner.zip",
+      MARS_WINDOWS_RUNNER_SHA256: hash,
+      MARS_WINDOWS_GIT_URL: "http://localhost:3000/git.zip",
+      MARS_WINDOWS_GIT_SHA256: hash,
+      MARS_WINDOWS_VC_RUNTIME_URL: "http://localhost:3000/vc.exe",
+      MARS_WINDOWS_VC_RUNTIME_SHA256: hash,
     });
     expect(artifacts?.orchestrator.sha256).toBe(hash);
     expect(artifacts?.serviceHost.sha256).toBe(hash);
@@ -300,7 +300,7 @@ describe("control-plane HTTP boundary", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
-  test("serves a fresh local Hyper-V VM installer with no container artifacts", async () => {
+  test("serves a fresh local checkpoint VM installer with provisioner validation tools", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-local-windows-vm-"));
     try {
       const artifact = async (name: string, content: string) => {
@@ -314,16 +314,18 @@ describe("control-plane HTTP boundary", () => {
       const jobAgent = await artifact("job-agent.exe", "vm-job-agent");
       const trayScript = await artifact("tray.ps1", "vm-tray");
       const checkpoint = await artifact("windows-worker-checkpoint.zip", "vm-checkpoint");
+      const provisioner = await artifact("mars-windows-vm-provisioner.zip", "vm-provisioner");
       const response = await createControlPlaneApp(fakeHttpDeps({
         workerReleaseManifest: undefined,
         workerInstallerRoot: pathToFileURL(`${root}/`),
-        developmentWindowsArtifacts: { orchestrator, serviceHost, jobAgent, trayScript, vm: { checkpoint } },
-      })).request("/api/workers/installer?audience=windows-x64&runtime=vm&connectOrigin=https://control-plane.test");
+        developmentWindowsArtifacts: { orchestrator, serviceHost, jobAgent, trayScript, vm: { checkpoint, provisioner } },
+      })).request("/api/workers/installer?audience=windows-x64&runtime=vm&vmSource=checkpoint&connectOrigin=https://control-plane.test");
       const installer = await response.text();
 
       expect(response.status).toBe(200);
       expect(installer).toContain("$WindowsRuntime = 'vm'");
       expect(installer).toContain("/api/workers/windows-vm-checkpoint");
+      expect(installer).toContain("/api/workers/windows-vm-provisioner");
       expect(installer).not.toContain("MARS_WINDOWS_CONTAINER_BASE_IMAGE=mcr.");
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -344,20 +346,20 @@ describe("control-plane HTTP boundary", () => {
       const responseCases = [
         ["/api/workers/orchestrator?audience=windows-x64", contents.orchestrator, "mars-orchestrator.exe"],
         ["/api/workers/service-host?audience=windows-x64", contents.serviceHost, "mars-service-host.exe"],
-        ["/api/workers/windows-container-runner", contents.runner, "runner.zip"],
-        ["/api/workers/windows-container-git", contents.git, "git.zip"],
-        ["/api/workers/windows-container-vc-runtime", contents.vcRuntime, "vc-runtime.exe"],
+        ["/api/workers/windows-runner", contents.runner, "runner.zip"],
+        ["/api/workers/windows-git", contents.git, "git.zip"],
+        ["/api/workers/windows-vc-runtime", contents.vcRuntime, "vc-runtime.exe"],
       ] as const;
       const response = await createControlPlaneApp(fakeHttpDeps({
         workerReleaseManifest: undefined,
         developmentWindowsArtifacts: {
           orchestrator: { path: paths.orchestrator, sha256: createHash("sha256").update(contents.orchestrator).digest("hex") },
           serviceHost: { path: paths.serviceHost, sha256: createHash("sha256").update(contents.serviceHost).digest("hex") },
+          runner: { path: paths.runner, sha256: createHash("sha256").update(contents.runner).digest("hex") },
+          git: { path: paths.git, sha256: createHash("sha256").update(contents.git).digest("hex") },
+          vcRuntime: { path: paths.vcRuntime, sha256: createHash("sha256").update(contents.vcRuntime).digest("hex") },
           container: {
             baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${"c".repeat(64)}`,
-            runner: { path: paths.runner, sha256: createHash("sha256").update(contents.runner).digest("hex") },
-            git: { path: paths.git, sha256: createHash("sha256").update(contents.git).digest("hex") },
-            vcRuntime: { path: paths.vcRuntime, sha256: createHash("sha256").update(contents.vcRuntime).digest("hex") },
           },
         },
       }));
@@ -382,14 +384,14 @@ describe("control-plane HTTP boundary", () => {
         developmentWindowsArtifacts: {
           orchestrator: { url: `http://127.0.0.1:${upstream.port}/orchestrator.exe`, sha256: hash },
           serviceHost: { url: `http://127.0.0.1:${upstream.port}/service-host.exe`, sha256: hash },
+          runner: { url: `http://127.0.0.1:${upstream.port}/runner.zip`, sha256: hash },
+          git: { url: `http://127.0.0.1:${upstream.port}/git.zip`, sha256: hash },
+          vcRuntime: { url: `http://127.0.0.1:${upstream.port}/vc-runtime.exe`, sha256: hash },
           container: {
             baseImage: `mcr.microsoft.com/windows@sha256:${hash}`,
-            runner: { url: `http://127.0.0.1:${upstream.port}/runner.zip`, sha256: hash },
-            git: { url: `http://127.0.0.1:${upstream.port}/git.zip`, sha256: hash },
-            vcRuntime: { url: `http://127.0.0.1:${upstream.port}/vc-runtime.exe`, sha256: hash },
           },
         },
-      })).request("/api/workers/windows-container-runner");
+      })).request("/api/workers/windows-runner");
 
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("proxied-runner");
@@ -413,11 +415,11 @@ describe("control-plane HTTP boundary", () => {
         developmentWindowsArtifacts: {
           orchestrator: { path: join(root, "missing-orchestrator.exe"), sha256: hash },
           serviceHost: { path: join(root, "missing-service-host.exe"), sha256: hash },
+          runner: { path: join(root, "missing-runner.zip"), sha256: hash },
+          git: { path: join(root, "missing-git.zip"), sha256: hash },
+          vcRuntime: { path: join(root, "missing-vc-runtime.exe"), sha256: hash },
           container: {
             baseImage: `mcr.microsoft.com/windows@sha256:${hash}`,
-            runner: { path: join(root, "missing-runner.zip"), sha256: hash },
-            git: { path: join(root, "missing-git.zip"), sha256: hash },
-            vcRuntime: { path: join(root, "missing-vc-runtime.exe"), sha256: hash },
           },
         },
       })).request("/api/workers/orchestrator?audience=windows-x64");
@@ -438,6 +440,16 @@ describe("control-plane HTTP boundary", () => {
     const response = await createControlPlaneApp(fakeHttpDeps()).request("/api/workers/installer?audience=windows-x64&runtime=wsl&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ code: "unsupported_runtime", message: "Windows runtime must be container or vm" });
+  });
+  test("rejects invalid Windows VM source combinations", async () => {
+    const application = createControlPlaneApp(fakeHttpDeps());
+    const invalid = await application.request("/api/workers/installer?audience=windows-x64&runtime=vm&vmSource=network&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
+    expect(invalid.status).toBe(400);
+    expect((await invalid.json()).code).toBe("invalid_vm_source");
+    const container = await application.request("/api/workers/installer?audience=windows-x64&runtime=container&vmSource=iso&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
+    expect(container.status).toBe(400);
+    const upgrade = await application.request("/api/workers/installer?audience=windows-x64&runtime=vm&upgrade=true&vmSource=iso&connectOrigin=https%3A%2F%2Fcontrol-plane.test");
+    expect(upgrade.status).toBe(400);
   });
   test("injects split Tart runtime identity into the macOS installer", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-macos-installers-"));

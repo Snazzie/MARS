@@ -15,9 +15,31 @@ export function connectedEnrollmentWorker(snapshot: WorkerConnectionSnapshot, wo
 
 function quoteShell(value: string): string { return `'${value.replaceAll("'", "'\"'\"'")}'`; }
 function quotePowerShell(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
+export type WindowsVmImageSource = "checkpoint" | "iso" | "vhdx";
+export type WindowsVmImageOptions = {
+  source: WindowsVmImageSource;
+  sourcePath?: string;
+  sourceSha256?: string;
+  imageName?: string;
+  acceptWindowsLicenseTerms?: boolean;
+  customScriptPath?: string;
+  customScriptSha256?: string;
+};
+
+const sha256Pattern = /^[0-9a-f]{64}$/;
+export function validWindowsVmImageOptions(options: WindowsVmImageOptions): boolean {
+  const customPair = Boolean(options.customScriptPath?.trim()) === Boolean(options.customScriptSha256?.trim());
+  if (!customPair || (options.customScriptSha256 && !sha256Pattern.test(options.customScriptSha256))) return false;
+  if (options.source === "checkpoint") {
+    return !options.sourcePath && !options.sourceSha256 && !options.imageName && !options.acceptWindowsLicenseTerms;
+  }
+  if (!options.sourcePath?.trim() || !options.sourceSha256 || !sha256Pattern.test(options.sourceSha256)) return false;
+  if (options.source === "iso") return Boolean(options.imageName?.trim() && options.acceptWindowsLicenseTerms);
+  return !options.imageName && !options.acceptWindowsLicenseTerms;
+}
 
 
-export function buildInstallerCommand(installer: string, audience: RuntimePlatform, code?: string, connectOrigin?: string): string {
+export function buildInstallerCommand(installer: string, audience: RuntimePlatform, code?: string, connectOrigin?: string, vmOptions?: WindowsVmImageOptions): string {
   if (!["linux-x64", "linux-arm64", "windows-x64", "macos-arm64"].includes(audience)) throw new Error("Unsupported installer audience");
   const url = new URL(installer);
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("Installer URL must use HTTP or HTTPS");
@@ -28,7 +50,22 @@ export function buildInstallerCommand(installer: string, audience: RuntimePlatfo
     const codeArg = code ? ` -Code ${quotePowerShell(code)}` : "";
     const insecureArg = selectedOrigin.startsWith("http:") && audience === "windows-x64" ? " -AllowInsecureHttp" : "";
     const windowsRuntime = url.searchParams.get("runtime") === "vm" ? "vm" : "container";
-    const args = audience === "windows-x64" ? ` -ControlPlaneUrl ${quotePowerShell(selectedOrigin)} -WindowsRuntime '${windowsRuntime}'${codeArg}${insecureArg}` : ` -ControlPlaneUrl ${quotePowerShell(selectedOrigin)}${codeArg}`;
+    let vmArgs = "";
+    if (audience === "windows-x64" && windowsRuntime === "vm") {
+      if (!vmOptions || !validWindowsVmImageOptions(vmOptions)) throw new Error("Windows VM image source fields are invalid");
+      vmArgs += ` -WindowsVmImageSource ${quotePowerShell(vmOptions.source)}`;
+      if (vmOptions.source !== "checkpoint") {
+        vmArgs += ` -WindowsSourcePath ${quotePowerShell(vmOptions.sourcePath!)} -WindowsSourceSha256 ${quotePowerShell(vmOptions.sourceSha256!)}`;
+      }
+      if (vmOptions.source === "iso") {
+        vmArgs += ` -WindowsImageName ${quotePowerShell(vmOptions.imageName!)}`;
+        if (vmOptions.acceptWindowsLicenseTerms) vmArgs += " -AcceptWindowsLicenseTerms";
+      }
+      if (vmOptions.customScriptPath) {
+        vmArgs += ` -WindowsCustomProvisioningScriptPath ${quotePowerShell(vmOptions.customScriptPath)} -WindowsCustomProvisioningScriptSha256 ${quotePowerShell(vmOptions.customScriptSha256!)}`;
+      }
+    }
+    const args = audience === "windows-x64" ? ` -ControlPlaneUrl ${quotePowerShell(selectedOrigin)} -WindowsRuntime '${windowsRuntime}'${vmArgs}${codeArg}${insecureArg}` : ` -ControlPlaneUrl ${quotePowerShell(selectedOrigin)}${codeArg}`;
     return `$marsInstaller = Join-Path $env:TEMP ("mars-installer-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${protocol}'${tls} --output $marsInstaller '${url}'\n  if ($LASTEXITCODE -ne 0) { throw "Installer download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $marsInstaller${args}\n} finally {\n  Remove-Item -LiteralPath $marsInstaller -Force -ErrorAction SilentlyContinue\n}`;
   }
   const shell = audience === "macos-arm64" ? "zsh" : "bash";
@@ -37,12 +74,13 @@ export function buildInstallerCommand(installer: string, audience: RuntimePlatfo
   const controlPlaneEnv = `PUBLIC_BASE_URL=${quoteShell(selectedOrigin)} `;
   return `set -e\nmarsInstaller="$(mktemp "\${TMPDIR:-/tmp}/mars-installer.XXXXXX")"\ntrap 'rm -f "$marsInstaller"' EXIT\ncurl --fail --proto '=${protocol}'${tls} --output "$marsInstaller" ${quoteShell(url.toString())}\n${controlPlaneEnv}${shell} "$marsInstaller"${controlPlaneArg}${codeArg}`;
 }
-export function buildInstallerCommands(origin: string, audience: RuntimePlatform, code?: string, windowsRuntime: "container" | "vm" = "container"): { label: string; command: string }[] {
+export function buildInstallerCommands(origin: string, audience: RuntimePlatform, code?: string, windowsRuntime: "container" | "vm" = "container", vmOptions?: WindowsVmImageOptions): { label: string; command: string }[] {
   const labels: Record<RuntimePlatform, string> = { "linux-x64": "Linux x64", "linux-arm64": "Linux ARM64 (Docker Desktop)", "windows-x64": windowsRuntime === "vm" ? "Windows x64 (Hyper-V VM)" : "Windows x64 (container)", "macos-arm64": "macOS arm64" };
   const selectedOrigin = new URL(origin).origin;
   const runtime = audience === "windows-x64" ? windowsRuntime : "container";
-  const installer = `${selectedOrigin}/api/workers/installer?audience=${audience}&runtime=${runtime}&connectOrigin=${encodeURIComponent(selectedOrigin)}`;
-  return [{ label: labels[audience], command: buildInstallerCommand(installer, audience, code, selectedOrigin) }];
+  const vmSource = audience === "windows-x64" && runtime === "vm" ? `&vmSource=${vmOptions?.source ?? ""}` : "";
+  const installer = `${selectedOrigin}/api/workers/installer?audience=${audience}&runtime=${runtime}${vmSource}&connectOrigin=${encodeURIComponent(selectedOrigin)}`;
+  return [{ label: labels[audience], command: buildInstallerCommand(installer, audience, code, selectedOrigin, vmOptions) }];
 }
 export function normalizeControlPlaneUrls(values: readonly string[]): string[] {
   const valid = values.flatMap((value) => {
@@ -65,6 +103,13 @@ type EnrollmentPanelProps = {
 export function EnrollmentPanel({ workers, onConnected, showRotation = true }: EnrollmentPanelProps) {
   const [audience, setAudience] = useState<RuntimePlatform>("linux-x64");
   const [windowsRuntime, setWindowsRuntime] = useState<"container" | "vm">("container");
+  const [windowsVmSource, setWindowsVmSource] = useState<WindowsVmImageSource>("iso");
+  const [windowsSourcePath, setWindowsSourcePath] = useState("");
+  const [windowsSourceSha256, setWindowsSourceSha256] = useState("");
+  const [windowsImageName, setWindowsImageName] = useState("Windows 11 Pro");
+  const [acceptWindowsLicenseTerms, setAcceptWindowsLicenseTerms] = useState(false);
+  const [customScriptPath, setCustomScriptPath] = useState("");
+  const [customScriptSha256, setCustomScriptSha256] = useState("");
   const [reveal, setReveal] = useState<Reveal | null>(null);
   const [status, setStatus] = useState<{ initialized: boolean } | null>(null);
   const [controlPlaneUrls, setControlPlaneUrls] = useState<string[]>([]);
@@ -98,7 +143,14 @@ export function EnrollmentPanel({ workers, onConnected, showRotation = true }: E
   }, [connectedWorkerId, onConnected, reveal, snapshot, workers]);
   const selectedUrl = controlPlaneUrl;
   const validSelectedUrl = controlPlaneUrls.includes(selectedUrl);
-  const commandBlocks = reveal && validSelectedUrl ? buildInstallerCommands(selectedUrl, audience, reveal.code, windowsRuntime) : [];
+  const vmOptions: WindowsVmImageOptions = {
+    source: windowsVmSource,
+    ...(windowsVmSource !== "checkpoint" ? { sourcePath: windowsSourcePath, sourceSha256: windowsSourceSha256 } : {}),
+    ...(windowsVmSource === "iso" ? { imageName: windowsImageName, acceptWindowsLicenseTerms } : {}),
+    ...(customScriptPath || customScriptSha256 ? { customScriptPath, customScriptSha256 } : {}),
+  };
+  const validSource = audience !== "windows-x64" || windowsRuntime !== "vm" || validWindowsVmImageOptions(vmOptions);
+  const commandBlocks = reveal && validSelectedUrl && validSource ? buildInstallerCommands(selectedUrl, audience, reveal.code, windowsRuntime, vmOptions) : [];
   async function create() {
     if (showRotation && status?.initialized && !window.confirm("Rotate the bootstrap code? The previous code will stop working immediately.")) return;
     setPending(true);
@@ -124,9 +176,9 @@ export function EnrollmentPanel({ workers, onConnected, showRotation = true }: E
     <h2 id="enrollment-title">Bring an appliance online</h2>
     {connectedWorkerId ? <div role="status"><h3>Worker connected</h3><p>The worker is ready for identity verification and selection.</p><Button label="Enroll another worker" variant="secondary" clickAction={reset} /></div> : <>
       <label>Target platform<select value={audience} onChange={(event) => setAudience(event.target.value as RuntimePlatform)}><option value="linux-x64">Linux x64</option><option value="linux-arm64">Linux ARM64 (Docker Desktop)</option><option value="windows-x64">Windows x64</option><option value="macos-arm64">macOS arm64</option></select></label>
-      {audience === "windows-x64" && <label>Windows runtime<select value={windowsRuntime} onChange={(event) => setWindowsRuntime(event.target.value as "container" | "vm")}><option value="container">Docker Windows container</option><option value="vm">Hyper-V virtual machine</option></select></label>}
+      {audience === "windows-x64" && <><label>Windows runtime<select value={windowsRuntime} onChange={(event) => setWindowsRuntime(event.target.value as "container" | "vm")}><option value="container">Docker Windows container</option><option value="vm">Hyper-V virtual machine</option></select></label>{windowsRuntime === "vm" && <><label>VM image source<select value={windowsVmSource} onChange={(event) => setWindowsVmSource(event.target.value as WindowsVmImageSource)}><option value="iso">Build from Windows ISO</option><option value="vhdx">Build from generalized VHDX</option><option value="checkpoint">Download prepared checkpoint</option></select></label>{windowsVmSource !== "checkpoint" && <><label>Local {windowsVmSource.toUpperCase()} path<input value={windowsSourcePath} onChange={(event) => setWindowsSourcePath(event.target.value)} /></label><label>Local {windowsVmSource.toUpperCase()} SHA-256<input value={windowsSourceSha256} onChange={(event) => setWindowsSourceSha256(event.target.value)} /></label>{windowsVmSource === "iso" && <><label>Windows image name<input value={windowsImageName} onChange={(event) => setWindowsImageName(event.target.value)} /></label><label><input type="checkbox" checked={acceptWindowsLicenseTerms} onChange={(event) => setAcceptWindowsLicenseTerms(event.target.checked)} />I confirm I am licensed to use this Windows media and accept its license terms</label></>}</>}<label>Custom provisioning script path (optional)<input value={customScriptPath} onChange={(event) => setCustomScriptPath(event.target.value)} /></label><label>Custom provisioning script SHA-256 (optional)<input value={customScriptSha256} onChange={(event) => setCustomScriptSha256(event.target.value)} /></label>{!validSource && <p className="form-error" role="alert">Complete the selected VM source fields using lowercase SHA-256 values.</p>}</>}</>}
       <label>Control-plane URL<select value={controlPlaneUrl} onChange={(event) => setControlPlaneUrl(event.target.value)}>{controlPlaneUrls.map((url) => <option key={url} value={url}>{url}</option>)}</select></label>
-      {reveal ? <div><p><strong>Bootstrap code (showing once)</strong></p><code>{reveal.code}</code><p>Copy the command below and run it on the target machine.</p>{commandBlocks.map(({ label, command: block }) => <div key={label}><h3>{label}</h3><pre>{block}</pre><Button label="Copy install command" variant="secondary" clickAction={() => void navigator.clipboard.writeText(block)} /></div>)}</div> : <div><p>Choose a target platform and approved control-plane URL, then generate a one-use bootstrap code.</p><Button label="Generate bootstrap code" variant="primary" clickAction={() => void create()} isDisabled={pending || !status || !validSelectedUrl} /></div>}
+      {reveal ? <div><p><strong>Bootstrap code (showing once)</strong></p><code>{reveal.code}</code><p>Copy the command below and run it on the target machine.</p>{commandBlocks.map(({ label, command: block }) => <div key={label}><h3>{label}</h3><pre>{block}</pre><Button label="Copy install command" variant="secondary" clickAction={() => void navigator.clipboard.writeText(block)} /></div>)}</div> : <div><p>Choose a target platform and approved control-plane URL, then generate a one-use bootstrap code.</p><Button label="Generate bootstrap code" variant="primary" clickAction={() => void create()} isDisabled={pending || !status || !validSelectedUrl || !validSource} /></div>}
     </>}
     {error && <div role="alert" className="form-error"><p>{error}</p>{!status && <Button label="Retry" variant="secondary" clickAction={() => void load()} isDisabled={pending} />}</div>}
   </section>;

@@ -8,6 +8,7 @@ import { isGithubRateLimitError } from "./github-rate-limit.ts";
 import { reconcileQueuedJobs, type ReconcileReport } from "./reconcile.ts";
 import { reason, type Candidate } from "./scheduler.ts";
 import { applyGithubJobSnapshot, markGithubJobMissing, type GithubJobSnapshot } from "./runs.ts";
+import { storedWorkerDoctor, workerPoolEvidence } from "./worker-evidence.ts";
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 const LEASE_STARTUP_TTL_MS = 10 * 60_000;
 type Dispatch = { dispatch(input: { workerId: string; leaseId: string; type: string; payload: Record<string, unknown> }): Promise<unknown> };
@@ -39,28 +40,10 @@ export function isDispatchableRunStatus(status: string): boolean {
 
 
 export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate["worker"] & { id: string } {
-  const rawDoctor = jsonValue(row.doctor ?? row.worker_doctor);
-  const doctor = rawDoctor && typeof rawDoctor === "object" && "doctor" in rawDoctor
-    ? (rawDoctor as { doctor?: unknown }).doctor
-    : rawDoctor;
-  const doctorRecord = doctor && typeof doctor === "object" ? doctor as Record<string, unknown> : {};
+  const doctorRecord = storedWorkerDoctor(jsonValue(row.doctor ?? row.worker_doctor));
   const driver = String(row.driver ?? "");
   const poolDigest = String(row.imageDigest ?? row.image_digest ?? "");
-  const linuxEvidenceReady = driver === "linux-libvirt-vm"
-    ? doctorRecord.runtimeReady === true &&
-      doctorRecord.libvirtReady === true &&
-      doctorRecord.networkReady === true &&
-      doctorRecord.cloneStorageReady === true &&
-      doctorRecord.imageSignatures === true &&
-      doctorRecord.realVmSmoke === true &&
-      doctorRecord.artifactDigest === poolDigest &&
-      doctorRecord.smokeArtifactDigest === poolDigest
-    : driver === "linux-docker-container"
-      ? doctorRecord.runtimeReady === true &&
-        doctorRecord.networkReady === true &&
-        doctorRecord.imageSignatures === true &&
-        doctorRecord.artifactDigest === poolDigest
-      : true;
+  const evidence = workerPoolEvidence(doctorRecord, driver, poolDigest, String(row.platform ?? ""));
   return {
     id: String(row.workerId ?? row.worker_id ?? ""),
     admissionState: String(row.admissionState ?? row.worker_admission_state),
@@ -69,7 +52,7 @@ export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate[
     configurationRevision: nullableString(row.configurationRevision ?? row.worker_configuration_revision),
     appliedConfigurationRevision: nullableString(row.appliedConfigurationRevision ?? row.worker_applied_configuration_revision),
     runtimeReady: doctorRecord.runtimeReady === true,
-    linuxEvidenceReady,
+    imageEvidenceReady: evidence.ready && evidence.imageMatches,
     acceptingLeases: doctorRecord.acceptingLeases !== false,
     limits: jsonValue(row.limits ?? row.worker_limits),
   };

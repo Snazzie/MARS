@@ -1,5 +1,5 @@
 import { generateKeyPairSync, sign as signMessage, randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { mkdir, mkdtemp, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, WorkerDoctorData, WorkerDoctorReport, WorkerEvent, type WorkerCapacityData, type WorkerContainerStatus, type LeaseBootstrapEnvelope } from "@mars/contracts";
 import { collectWorkerServiceLogs } from "./worker-service-logs.ts";
@@ -49,14 +49,55 @@ const localImageVerification = async (image: string): Promise<{ manifest: boolea
     return { manifest: false, entrypoint: false };
   }
 };
+type WindowsVmImageState = {
+  version: number;
+  imageDigest: string;
+  contentDigest: string;
+  installedPath: string;
+  ready: boolean;
+  remediation?: string | null;
+  probe?: { passed?: boolean };
+};
+export const verifiedWindowsVmImage = async (
+  programData = Bun.env.ProgramData ?? "C:\\ProgramData",
+  configuredPath = Bun.env.MARS_WINDOWS_CHECKPOINT_PATH,
+  configuredDigest = Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST,
+): Promise<{ ready: boolean; digest?: string; remediation?: string }> => {
+  const statePath = join(programData, "Mars", "vm-provisioning", "image-state.json");
+  try {
+    const state = JSON.parse((await readFile(statePath, "utf8")).replace(/^\uFEFF/, "")) as WindowsVmImageState;
+    if (!configuredPath || resolve(configuredPath).toLowerCase() !== resolve(state.installedPath).toLowerCase()) throw new Error("VM image state path does not match the service checkpoint path");
+    if (state.version !== 1 || state.ready !== true || state.probe?.passed !== true) throw new Error("VM image state is not ready or lacks passing probe evidence");
+    if (!configuredDigest || configuredDigest !== state.imageDigest) throw new Error("VM image state digest does not match the service checkpoint digest");
+    if (!/^sha256:[0-9a-f]{64}$/.test(state.imageDigest) || !/^sha256:[0-9a-f]{64}$/.test(state.contentDigest)) throw new Error("VM image state digests are invalid");
+    const manifest = JSON.parse((await readFile(join(state.installedPath, "manifest.json"), "utf8")).replace(/^\uFEFF/, "")) as Record<string, unknown>;
+    const probeEvidence = manifest.probe as Record<string, unknown> | undefined;
+    if (manifest.format === 2) {
+      if (manifest.kind !== "hyperv-checkpoint-export" || manifest.imageDigest !== state.imageDigest || manifest.contentDigest !== state.contentDigest) throw new Error("VM checkpoint manifest identity does not match image state");
+      if (probeEvidence?.passed !== true || probeEvidence.imageDigest !== state.imageDigest || probeEvidence.contentDigest !== state.contentDigest) throw new Error("VM checkpoint probe evidence is not bound to the installed image");
+    } else if (manifest.format !== 1) {
+      throw new Error("VM checkpoint manifest format is unsupported");
+    }
+    const files = Array.isArray(manifest.files) ? manifest.files as Array<Record<string, unknown>> : [];
+    if (files.length === 0 || files.filter(file => typeof file.path === "string" && file.path.toLowerCase().endsWith(".vmcx")).length !== 1) throw new Error("VM checkpoint manifest file inventory is invalid");
+    for (const file of files) {
+      if (typeof file.path !== "string" || file.path.includes("..") || typeof file.length !== "number" || !/^(?:sha256:)?[0-9a-f]{64}$/.test(String(file.sha256))) throw new Error("VM checkpoint manifest contains an invalid file record");
+      const value = await stat(join(state.installedPath, file.path)).catch(() => null);
+      if (!value?.isFile() || value.size !== file.length) throw new Error(`VM checkpoint file is missing or changed: ${file.path}`);
+    }
+    return { ready: true, digest: state.imageDigest };
+  } catch (error) {
+    return { ready: false, remediation: error instanceof Error ? error.message : String(error) };
+  }
+};
 export const windowsDoctor = async (preserveLeases = false): Promise<WorkerDoctorData> => {
   const runtimeMode = Bun.env.MARS_WINDOWS_RUNTIME === "container" ? "container" : "vm";
   const artifactValue = runtimeMode === "container" ? Bun.env.MARS_WINDOWS_CONTAINER_IMAGE : Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST;
   const localVerification = runtimeMode === "container" ? await localImageVerification(artifactValue ?? "") : { manifest: false, entrypoint: true };
+  const vmImage = runtimeMode === "vm" ? await verifiedWindowsVmImage() : undefined;
   const localManifest = localVerification.manifest;
-  const checkpointPresent = runtimeMode === "vm" && Boolean(Bun.env.MARS_WINDOWS_CHECKPOINT_PATH) && await stat(Bun.env.MARS_WINDOWS_CHECKPOINT_PATH!).then(value => value.isDirectory()).catch(() => false);
-  const digestPinned = typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactValue);
-  const immutableArtifact = runtimeMode === "container" ? localManifest || digestPinned : checkpointPresent && digestPinned;
+  const digestPinned = typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/.test(artifactValue);
+  const immutableArtifact = runtimeMode === "container" ? localManifest || digestPinned : vmImage?.ready === true && vmImage.digest === artifactValue;
   const probe = runtimeMode === "container"
     ? await commandSucceeds(["docker.exe", "info", "--format", "{{.OSType}}"])
     : await commandSucceeds(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-VMHost -ErrorAction Stop | Out-Null"]);
@@ -70,11 +111,11 @@ export const windowsDoctor = async (preserveLeases = false): Promise<WorkerDocto
   const failures = [
     !probe && `${runtimeMode === "container" ? "Windows container host" : "Hyper-V host"} probe failed`,
     !egress && "GitHub egress probe failed",
-    !immutableArtifact && (runtimeMode === "container" ? "Verified Windows container image manifest is missing or stale" : "Verified Windows VM template is missing or invalid"),
+    !immutableArtifact && (runtimeMode === "container" ? "Verified Windows container image manifest is missing or stale" : vmImage?.remediation ?? "Verified Windows VM image state is missing or invalid"),
     runtimeMode === "container" && localManifest && !localVerification.entrypoint && "Windows container image entrypoint is invalid",
   ].filter((failure): failure is string => Boolean(failure));
-  const artifactDigest = localVerification.imageId ?? (digestPinned ? artifactValue : undefined);
-  return WorkerDoctorData.parse({ runtimeMode, preserveLeases, ...(runtimeMode === "container" ? { artifactSource: "worker_local", ...(artifactValue ? { artifactIdentity: artifactValue } : {}) } : { artifactSource: "template", ...(artifactDigest ? { artifactDigest } : {}) }), ...(artifactDigest ? { artifactDigest } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
+  const artifactDigest = runtimeMode === "vm" ? vmImage?.digest : localVerification.imageId ?? (digestPinned ? artifactValue : undefined);
+  return WorkerDoctorData.parse({ runtimeMode, preserveLeases, ...(runtimeMode === "container" ? { artifactSource: "worker_local", ...(artifactValue ? { artifactIdentity: artifactValue } : {}) } : { artifactSource: "template" }), ...(artifactDigest ? { artifactDigest } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
 };
 const joinCode = async () => { const path = Bun.env.MARS_JOIN_CODE_FILE; if (path) return (await readFile(path, "utf8")).trim(); const reader = Bun.stdin.stream().getReader(); const { value } = await reader.read(); reader.releaseLock(); return Buffer.from(value ?? []).toString("utf8").trim(); };
 const save = async (identity: Identity) => { const path = identityPath(); await mkdir(dirname(path), { recursive: true }); await writeFile(path, JSON.stringify(identity) + "\n", { mode: 0o600 }); };

@@ -36,7 +36,7 @@ test("recalculates shared pool concurrency after worker limits change", async ()
   const concurrency: number[] = [];
   const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join(" ").toLowerCase();
-    if (query.includes("from workers")) return limits.map((workerLimits) => ({ platform: "windows-x64", guestPlatforms: ["windows-x64"], limits: workerLimits }));
+    if (query.includes("from workers")) return limits.map((workerLimits) => ({ platform: "windows-x64", guestPlatforms: ["windows-x64"], limits: workerLimits, doctor: { doctor: { runtimeMode: "vm", runtimeReady: true, probe: true, imageSignatures: true, artifactDigest: "sha256:image" } } }));
     if (query.includes("select id from runner_pools")) return [{ id: "pool" }];
     if (query.includes("update runner_pools")) concurrency.push((values[3] as { concurrency: number }).concurrency);
     return [];

@@ -53,11 +53,11 @@ test("parses a local development image build with proxied dependencies and prese
     const build = createDevelopmentWindowsContainerBuild({
       publicOrigin: "https://control.test",
       artifacts: {
+        runner: { path: join(root, "runner.zip"), sha256: hash },
+        git: { path: join(root, "git.zip"), sha256: hash },
+        vcRuntime: { path: join(root, "vc-runtime.exe"), sha256: hash },
         container: {
           baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${"b".repeat(64)}`,
-          runner: { path: join(root, "runner.zip"), sha256: hash },
-          git: { path: join(root, "git.zip"), sha256: hash },
-          vcRuntime: { path: join(root, "vc-runtime.exe"), sha256: hash },
         },
       },
       buildArtifacts: {
@@ -82,9 +82,9 @@ test("parses a local development image build with proxied dependencies and prese
       image: "mars/windows-job:local",
       build: build!,
     });
-    expect(payload.runner).toEqual({ url: "https://control.test/api/workers/windows-container-runner", sha256: hash });
-    expect(payload.git).toEqual({ url: "https://control.test/api/workers/windows-container-git", sha256: hash });
-    expect(payload.vcRuntime).toEqual({ url: "https://control.test/api/workers/windows-container-vc-runtime", sha256: hash });
+    expect(payload.runner).toEqual({ url: "https://control.test/api/workers/windows-runner", sha256: hash });
+    expect(payload.git).toEqual({ url: "https://control.test/api/workers/windows-git", sha256: hash });
+    expect(payload.vcRuntime).toEqual({ url: "https://control.test/api/workers/windows-vc-runtime", sha256: hash });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

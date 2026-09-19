@@ -139,11 +139,11 @@ test("builds development Windows image inputs from local artifacts behind contro
   const build = createDevelopmentWindowsContainerBuild({
     publicOrigin: "https://control.example/path",
     artifacts: {
+      runner: { path: "C:\\mars\\runner.zip", sha256: hash },
+      git: { path: "C:\\mars\\git.zip", sha256: hash },
+      vcRuntime: { path: "C:\\mars\\vc-runtime.exe", sha256: hash },
       container: {
         baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${"b".repeat(64)}`,
-        runner: { path: "C:\\mars\\runner.zip", sha256: hash },
-        git: { path: "C:\\mars\\git.zip", sha256: hash },
-        vcRuntime: { path: "C:\\mars\\vc-runtime.exe", sha256: hash },
       },
     },
     buildArtifacts: {
@@ -157,11 +157,11 @@ test("builds development Windows image inputs from local artifacts behind contro
 
   expect(build).toMatchObject({
     baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${"b".repeat(64)}`,
-    runnerUrl: "https://control.example/api/workers/windows-container-runner",
+    runnerUrl: "https://control.example/api/workers/windows-runner",
     runnerSha256: hash,
-    gitUrl: "https://control.example/api/workers/windows-container-git",
+    gitUrl: "https://control.example/api/workers/windows-git",
     gitSha256: hash,
-    vcUrl: "https://control.example/api/workers/windows-container-vc-runtime",
+    vcUrl: "https://control.example/api/workers/windows-vc-runtime",
     vcSha256: hash,
   });
 });
@@ -260,12 +260,12 @@ test("does not resolve a missing local worker artifact", async () => {
       MARS_WINDOWS_CHECKPOINT_PATH: checkpoint,
       MARS_WINDOWS_CHECKPOINT_SHA256: hash,
       MARS_WINDOWS_CONTAINER_BASE_IMAGE: "mcr.microsoft.com/windows/server:ltsc2025",
-      MARS_WINDOWS_CONTAINER_RUNNER_PATH: runner,
-      MARS_WINDOWS_CONTAINER_RUNNER_SHA256: hash,
-      MARS_WINDOWS_CONTAINER_GIT_PATH: git,
-      MARS_WINDOWS_CONTAINER_GIT_SHA256: hash,
-      MARS_WINDOWS_CONTAINER_VC_PATH: vcRuntime,
-      MARS_WINDOWS_CONTAINER_VC_SHA256: hash,
+      MARS_WINDOWS_RUNNER_PATH: runner,
+      MARS_WINDOWS_RUNNER_SHA256: hash,
+      MARS_WINDOWS_GIT_PATH: git,
+      MARS_WINDOWS_GIT_SHA256: hash,
+      MARS_WINDOWS_VC_RUNTIME_PATH: vcRuntime,
+      MARS_WINDOWS_VC_RUNTIME_SHA256: hash,
     });
     expect(artifacts).toBeUndefined();
   } finally {

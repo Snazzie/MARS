@@ -1,87 +1,56 @@
 [CmdletBinding()]
-param(
-  [string]$CheckpointExportPath = 'C:\ProgramData\Mars\golden-checkpoint',
-  [string]$CredentialUser = 'MarsAdmin',
-  [string]$CredentialPassword = $env:MARS_HYPERV_GUEST_PASSWORD
-)
-
+param([string]$CheckpointExportPath = 'C:\ProgramData\Mars\golden-checkpoint')
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot '..\deploy\workers\windows-hyperv-checkpoint.psm1') -Force
 
-function Is-Administrator {
+function Test-MarsAdministrator {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-  ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  return ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-if (-not (Is-Administrator)) {
-  $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath)
-  if ($CheckpointExportPath) { $arguments += @('-CheckpointExportPath', $CheckpointExportPath) }
-  if ($CredentialUser) { $arguments += @('-CredentialUser', $CredentialUser) }
-  $process = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -Wait -PassThru
+if (-not (Test-MarsAdministrator)) {
+  $process = Start-Process powershell.exe -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$PSCommandPath,'-CheckpointExportPath',$CheckpointExportPath) -Wait -PassThru
   exit $process.ExitCode
 }
 
-$vmcx = Get-ChildItem -LiteralPath $CheckpointExportPath -Recurse -Filter '*.vmcx' -ErrorAction Stop | Select-Object -First 1
-if (-not $vmcx) {
-  throw "No exported VM configuration found under $CheckpointExportPath. Run setup:windows-hyperv-checkpoint once."
-}
-
-$cloneName = "mars-local-smoke-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+$manifest = Test-MarsCheckpointManifest -Root $CheckpointExportPath -PassThru
+$vmcx = @(Get-ChildItem -LiteralPath $CheckpointExportPath -Recurse -File -Filter '*.vmcx')
+if ($vmcx.Count -ne 1) { throw "Expected exactly one exported VM configuration under $CheckpointExportPath." }
+$cloneName = "mars-local-smoke-$([guid]::NewGuid().ToString('N').Substring(0,8))"
 $root = Join-Path ([IO.Path]::GetTempPath()) $cloneName
-$vmFiles = Join-Path $root 'vm'
-$importedName = $null
-$imported = $false
-
-New-Item -ItemType Directory -Force -Path $vmFiles | Out-Null
-
+$created = $false
 try {
-  Write-Host "Importing disposable VM from $CheckpointExportPath..."
-  $importedVm = Import-VM -Path $vmcx.FullName -Copy -GenerateNewId -VirtualMachinePath $vmFiles -VhdDestinationPath $vmFiles
-  $importedName = $importedVm.Name
-  Rename-VM -VM $importedVm -NewName $cloneName
-  $imported = $true
-
+  New-Item -ItemType Directory -Force -Path $root | Out-Null
+  $vm = Import-VM -Path $vmcx[0].FullName -Copy -GenerateNewId -VirtualMachinePath $root -VhdDestinationPath $root
+  Rename-VM -VM $vm -NewName $cloneName; $created = $true
   Set-VM -Name $cloneName -AutomaticCheckpointsEnabled $false
   Enable-VMIntegrationService -VMName $cloneName -Name 'Guest Service Interface'
   Start-VM -Name $cloneName | Out-Null
-
-  $deadline = (Get-Date).AddMinutes(5)
-  do {
-    Start-Sleep -Seconds 2
-    $heartbeat = (Get-VMIntegrationService -VMName $cloneName -Name 'Heartbeat').PrimaryStatusDescription
-  } while ($heartbeat -ne 'OK' -and (Get-Date) -lt $deadline)
+  $deadline = [DateTime]::UtcNow.AddMinutes(5)
+  do { $heartbeat = (Get-VMIntegrationService -VMName $cloneName -Name 'Heartbeat').PrimaryStatusDescription; if ($heartbeat -eq 'OK') { break }; Start-Sleep -Seconds 2 } while ([DateTime]::UtcNow -lt $deadline)
   if ($heartbeat -ne 'OK') { throw "Guest heartbeat did not become ready: $heartbeat" }
-
-  if ([string]::IsNullOrWhiteSpace($CredentialPassword)) {
-    throw 'Set MARS_HYPERV_GUEST_PASSWORD once; the smoke test is non-interactive.'
+  $nonce = ([BitConverter]::ToString((New-MarsRandomBytes 32))).Replace('-','').ToLowerInvariant()
+  $bootstrap = Join-Path $root 'probe.json'
+  [ordered]@{ version=1;mode='probe';nonce=$nonce } | ConvertTo-Json -Compress | Set-Content -LiteralPath $bootstrap -Encoding utf8
+  Copy-VMFile -Name $cloneName -SourcePath $bootstrap -DestinationPath 'C:\ProgramData\Mars\bootstrap.json' -FileSource Host -CreateFullPath -Force
+  $deadline = [DateTime]::UtcNow.AddMinutes(10)
+  do { $state = (Get-VM -Name $cloneName).State.ToString(); if ($state -eq 'Off') { break }; Start-Sleep -Seconds 2 } while ([DateTime]::UtcNow -lt $deadline)
+  if ($state -ne 'Off') { throw "Probe guest did not shut down: $state" }
+  $diskPath = (Get-VMHardDiskDrive -VMName $cloneName | Select-Object -First 1).Path
+  $disk = Mount-VHD -Path $diskPath -ReadOnly -Passthru | Get-Disk
+  $partition = Get-Partition -DiskNumber $disk.Number | Where-Object Type -eq 'Basic' | Sort-Object Size -Descending | Select-Object -First 1
+  $letter = (68..90 | ForEach-Object { [char]$_ } | Where-Object { -not (Test-Path "$($_):\") } | Select-Object -First 1); $access = "$letter`:\"
+  Add-PartitionAccessPath -DiskNumber $partition.DiskNumber -PartitionNumber $partition.PartitionNumber -AccessPath $access
+  try {
+    $result = Get-Content -LiteralPath (Join-Path $access 'ProgramData\Mars\provisioning-probe.json') -Raw | ConvertFrom-Json
+    if ([int]$result.version -ne 1 -or $result.success -ne $true -or $result.nonce -cne $nonce) { throw 'Credential-free guest probe returned invalid evidence.' }
+  } finally {
+    Remove-PartitionAccessPath -DiskNumber $partition.DiskNumber -PartitionNumber $partition.PartitionNumber -AccessPath $access -ErrorAction SilentlyContinue
+    Dismount-VHD -Path $diskPath -ErrorAction SilentlyContinue
   }
-  $securePassword = ConvertTo-SecureString $CredentialPassword -AsPlainText -Force
-  $credential = [PSCredential]::new($CredentialUser, $securePassword)
-  $result = Invoke-Command -VMName $cloneName -Credential $credential -ScriptBlock {
-    $resultPath = 'C:\ProgramData\Mars\local-hyperv-smoke-result.json'
-    New-Item -ItemType Directory -Force -Path 'C:\ProgramData\Mars' | Out-Null
-    $payload = [ordered]@{ success = $true; computer = $env:COMPUTERNAME; executedAt = (Get-Date).ToUniversalTime().ToString('o'); work = 'synthetic-local-hyperv-work' }
-    $payload | ConvertTo-Json | Set-Content -LiteralPath $resultPath -Encoding utf8
-    [pscustomobject]$payload
-  }
-  if (-not $result.success) { throw 'Synthetic guest work failed.' }
-  $result | Format-List
-
-  Stop-VM -Name $cloneName -Force
-  $deadline = (Get-Date).AddMinutes(2)
-  do { Start-Sleep -Seconds 2; $state = (Get-VM -Name $cloneName).State } while ($state -ne 'Off' -and (Get-Date) -lt $deadline)
-  if ($state -ne 'Off') { throw "VM did not stop: $state" }
-
-  Remove-VM -Name $cloneName -Force
-  $imported = $false
-  if (Get-VM -Name $cloneName -ErrorAction SilentlyContinue) { throw 'VM still exists after removal.' }
-  Write-Host 'LOCAL HYPER-V VM SMOKE PASSED' -ForegroundColor Green
-}
-finally {
-  foreach ($name in @($cloneName, $importedName) | Where-Object { $_ }) {
-    if (Get-VM -Name $name -ErrorAction SilentlyContinue) {
-      Stop-VM -Name $name -Force -ErrorAction SilentlyContinue
-      Remove-VM -Name $name -Force -ErrorAction SilentlyContinue
-    }
-  }
+  Write-Host "LOCAL HYPER-V VM PROOF PASSED ($($manifest.imageDigest))" -ForegroundColor Green
+} finally {
+  if ($created -and (Get-VM -Name $cloneName -ErrorAction SilentlyContinue)) { Stop-VM -Name $cloneName -TurnOff -Force -ErrorAction SilentlyContinue; Remove-VM -Name $cloneName -Force -ErrorAction SilentlyContinue }
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 }

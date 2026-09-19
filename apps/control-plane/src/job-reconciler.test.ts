@@ -11,6 +11,7 @@ test("keeps queued jobs eligible while their workflow run is in progress", () =>
   expect(isDispatchableRunStatus("completed")).toBe(false);
 });
 
+const windowsEvidence = { runtimeMode: "container", runtimeReady: true, probe: true, imageSignatures: true, artifactDigest: "sha256:image" };
 const row = {
   worker_admission_state: "adopted",
   worker_connection_state: "online",
@@ -18,6 +19,10 @@ const row = {
   worker_configuration_revision: "current",
   worker_applied_configuration_revision: "current",
   worker_limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 },
+  platform: "windows-x64",
+  driver: "windows-hyperv-container",
+  imageDigest: "sha256:image",
+  worker_doctor: { doctor: windowsEvidence },
 };
 
 function candidate(worker: Candidate["worker"]): Candidate {
@@ -54,7 +59,7 @@ test("parses composite CPU and memory routing labels", () => {
 });
 
 test("reports resource ceiling for a connected worker below the requested limits", () => {
-  const worker = candidateWorkerFromRow({ ...row, worker_doctor: { runtimeReady: true }, worker_limits: { maxVcpuPerPod: 8, maxMemoryBytesPerPod: 15 * 1024 ** 3, maxStorageBytesPerPod: 50 * 1024 ** 3, maxConcurrentPods: 1 } });
+  const worker = candidateWorkerFromRow({ ...row, worker_doctor: windowsEvidence, worker_limits: { maxVcpuPerPod: 8, maxMemoryBytesPerPod: 15 * 1024 ** 3, maxStorageBytesPerPod: 50 * 1024 ** 3, maxConcurrentPods: 1 } });
   const value = candidate(worker);
   value.pool.resources = { vcpu: 16, memoryBytes: 20 * 1024 ** 3, storageBytes: 50 * 1024 ** 3, concurrency: 1 };
   value.requestedLabels = ["mars-windows-x64-10vcpu-15g"];
@@ -99,7 +104,7 @@ test("reserves, requests JIT configuration, and dispatches an eligible queued jo
       configurationRevision: "current",
       appliedConfigurationRevision: "current",
       limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 },
-      doctor: { runtimeReady: true },
+      doctor: { doctor: windowsEvidence },
       encryptionPublicKey: workerEncryptionPublicKey,
       active: 0,
     }];
@@ -162,7 +167,7 @@ test("does not reserve or dispatch when exact GitHub job preflight reports 404",
       configurationRevision: "current",
       appliedConfigurationRevision: "current",
       limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 },
-      doctor: { runtimeReady: true },
+      doctor: windowsEvidence,
       encryptionPublicKey: workerEncryptionPublicKey,
       active: 0,
     }];
@@ -272,7 +277,7 @@ test("stops preflighting an installation after one rate-limit response", async (
       configurationRevision: "current",
       appliedConfigurationRevision: "current",
       limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 },
-      doctor: { runtimeReady: true },
+      doctor: windowsEvidence,
       encryptionPublicKey: "",
       active: 0,
     }];
@@ -320,7 +325,7 @@ test("persists normalized labels and releases when GitHub queued labels change",
     configurationRevision: "current",
     appliedConfigurationRevision: "current",
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 },
-    doctor: { runtimeReady: true },
+    doctor: windowsEvidence,
     encryptionPublicKey: workerEncryptionPublicKey,
     active: 0,
   };

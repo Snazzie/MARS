@@ -1,9 +1,25 @@
-import { mkdtemp, unlink, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, unlink, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import { RunnerJitConfig, WorkerCacheProxy } from "@mars/contracts";
 
-type GuestBootstrap = { version: 1; leaseId: string; nonce: string; encodedJitConfig: string; callbackUrl?: string; callbackToken?: string; workerCache?: WorkerCacheProxy };
+const guestJobBootstrap = z.object({
+  version: z.literal(1),
+  leaseId: z.string().min(1),
+  nonce: z.string().min(1),
+  encodedJitConfig: z.string().min(1),
+  callbackUrl: z.string().url().optional(),
+  callbackToken: z.string().min(1).optional(),
+  workerCache: WorkerCacheProxy.optional(),
+}).strict().refine(value => Boolean(value.callbackUrl) === Boolean(value.callbackToken), "guest bootstrap callback invalid");
+const guestProbeBootstrap = z.object({ version: z.literal(1), mode: z.literal("probe"), nonce: z.string().min(32) }).strict();
+export const GuestBootstrap = z.union([guestProbeBootstrap, guestJobBootstrap]);
+export type GuestBootstrap = z.infer<typeof GuestBootstrap>;
+
+export function parseGuestBootstrap(raw: string): GuestBootstrap {
+  return GuestBootstrap.parse(JSON.parse(raw));
+}
 export function cliArgument(argv: readonly string[], flag: string): string | undefined {
   const index = argv.indexOf(flag);
   return index >= 0 ? argv[index + 1] : undefined;
@@ -213,22 +229,71 @@ export async function waitForGuestBootstrap(
   throw new Error(`guest bootstrap was not copied within ${timeoutMs}ms`);
 }
 
+export interface WindowsProbeAdapter {
+  isSystem(): Promise<boolean>;
+  serviceTaskExecutable(): Promise<string>;
+  exists(path: string): Promise<boolean>;
+  writeResult(result: { version: 1; success: true; nonce: string } | { version: 1; success: false; nonce: string; error: string }): Promise<void>;
+}
+
+const windowsProbeAdapter: WindowsProbeAdapter = {
+  async isSystem() {
+    return (await runPowerShell("[Security.Principal.WindowsIdentity]::GetCurrent().IsSystem")).toLowerCase() === "true";
+  },
+  async serviceTaskExecutable() {
+    return runPowerShell("(Get-ScheduledTask -TaskName 'MarsGuestService' -ErrorAction Stop).Actions.Execute");
+  },
+  async exists(path) {
+    try { await access(path); return true; } catch { return false; }
+  },
+  async writeResult(result) {
+    await writeFile("C:\\ProgramData\\Mars\\provisioning-probe.json", JSON.stringify(result), { encoding: "utf8", mode: 0o600 });
+  },
+};
+
+const probeError = (error: unknown): string => (error instanceof Error ? error.message : String(error)).replace(/[\r\n\t]+/g, " ").slice(0, 512);
+export async function runWindowsProvisioningProbe(nonce: string, runnerRoot: string, adapter: WindowsProbeAdapter = windowsProbeAdapter): Promise<void> {
+  try {
+    if (!await adapter.isSystem()) throw new Error("probe must run as SYSTEM");
+    const executable = await adapter.serviceTaskExecutable();
+    if (executable.toLowerCase() !== "c:\\program files\\mars\\mars-job-agent.exe") throw new Error("MarsGuestService executable is invalid");
+    const required = [
+      join(runnerRoot, "run.cmd"),
+      join(runnerRoot, ".mars-capabilities.json"),
+      "C:\\Git\\cmd\\git.exe",
+      "C:\\Program Files\\Mars\\mars-job-agent.exe",
+    ];
+    for (const path of required) if (!await adapter.exists(path)) throw new Error(`required probe path is missing: ${path}`);
+    const capability = JSON.parse(await readFile(join(runnerRoot, ".mars-capabilities.json"), "utf8")) as { schemaVersion?: unknown; capabilities?: unknown };
+    if (capability.schemaVersion !== 1 || !Array.isArray(capability.capabilities) || !capability.capabilities.includes(WORKER_CACHE_CAPABILITY)) throw new Error("runner capability manifest is invalid");
+    await adapter.writeResult({ version: 1, success: true, nonce });
+  } catch (error) {
+    await adapter.writeResult({ version: 1, success: false, nonce, error: probeError(error) });
+  }
+}
+
 export async function runGuestService(
   platform: "windows-x64" | "linux-x64" | "linux-arm64",
   bootstrapPath: string,
   runnerRoot: string,
   completionMode: "shutdown" | "exit" = "shutdown",
   shutdown: (platform: "windows-x64" | "linux-x64" | "linux-arm64") => Promise<void> | void = defaultGuestShutdown,
+  probeAdapter: WindowsProbeAdapter = windowsProbeAdapter,
 ): Promise<void> {
   const raw = await waitForGuestBootstrap(bootstrapPath, Number.POSITIVE_INFINITY);
   await unlink(bootstrapPath).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== "EPERM" && error.code !== "EROFS" && error.code !== "EACCES") throw error;
   });
-  const bootstrap = JSON.parse(raw) as GuestBootstrap;
+  const bootstrap = parseGuestBootstrap(raw);
+  if ("mode" in bootstrap) {
+    if (platform !== "windows-x64") throw new Error("provisioning probes require windows-x64");
+    await runWindowsProvisioningProbe(bootstrap.nonce, runnerRoot, probeAdapter);
+    await shutdown(platform);
+    return;
+  }
   const exitCode = await runRunnerWithWorkerCache(bootstrap.encodedJitConfig, runnerRoot, platform, bootstrap.workerCache);
-  if (bootstrap.callbackUrl || bootstrap.callbackToken) {
-    if (!bootstrap.callbackUrl || !bootstrap.callbackToken) throw new Error("guest bootstrap callback invalid");
-    const response = await fetch(bootstrap.callbackUrl, { method: "POST", headers: { authorization: `Bearer ${bootstrap.callbackToken}`, "content-type": "application/json" }, body: JSON.stringify({ leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, exitCode }) });
+  if (bootstrap.callbackUrl) {
+    const response = await fetch(bootstrap.callbackUrl, { method: "POST", headers: { authorization: `Bearer ${bootstrap.callbackToken!}`, "content-type": "application/json" }, body: JSON.stringify({ leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, exitCode }) });
     if (!response.ok) throw new Error(`lease callback failed: ${response.status}`);
   }
   if (completionMode === "exit") return;

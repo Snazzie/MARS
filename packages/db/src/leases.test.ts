@@ -16,7 +16,9 @@ test("reserves a routing slot before any JIT request", async () => {
   expect(result.id).toBe("00000000-0000-4000-8000-000000000001");
   const poolQuery = queries.find((query) => query.toLowerCase().includes("from runner_pools"));
   expect(poolQuery).toBeDefined();
-  expect(poolQuery?.toLowerCase()).not.toContain("w.connection_state='online'");
+  expect(poolQuery?.toLowerCase()).toContain("w.connection_state='online'");
+  expect(poolQuery?.toLowerCase()).toContain("e.evidence->>'artifactdigest'=p.image_digest");
+  expect(poolQuery?.toLowerCase()).toContain("e.evidence->>'runtimeready'='true'");
   const insertQuery = queries.find((query) => query.toLowerCase().includes("insert into runner_leases"));
   expect(insertQuery).toBeDefined();
   expect(insertQuery).not.toContain("id=EXCLUDED.id");

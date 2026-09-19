@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { WorkerConfigurePayload, WorkerDoctorData, WorkerDoctorReport, type LeaseBootstrapEnvelope, type WorkerCapacityData, type WorkerCommand, type WorkerContainerStatus, type WorkerEvent } from "@mars/contracts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
-import { applyWindowsRunnerCachePurge, applyWindowsWorkerConfiguration, buildWindowsDoctorReport, dispatchWindowsWorkerFrame, executeWindowsWorkerCommand, reconcileWindowsRuntime, runWindowsLeaseCleanup, startWindowsLeaseLifecycle } from "./windows-agent.ts";
+import { applyWindowsRunnerCachePurge, applyWindowsWorkerConfiguration, buildWindowsDoctorReport, dispatchWindowsWorkerFrame, executeWindowsWorkerCommand, reconcileWindowsRuntime, runWindowsLeaseCleanup, startWindowsLeaseLifecycle, verifiedWindowsVmImage } from "./windows-agent.ts";
 const doctor = WorkerDoctorData.parse({ runtimeMode: "container", runtimeReady: true, probe: true, egress: true, imageSignatures: true });
 const capacity: WorkerCapacityData = { actualVcpu: 8, actualMemoryBytes: 16, actualStorageBytes: 32, freeVcpu: 7, freeMemoryBytes: 15, freeStorageBytes: 31 };
 const containerStatuses: WorkerContainerStatus[] = [{
@@ -25,6 +28,25 @@ const containerStatuses: WorkerContainerStatus[] = [{
   diskUsageBytes: 8192,
   sampledAt: "2026-08-31T12:00:00.000Z",
 }];
+test("validates installed Windows VM identity and rejects stale service digests", async () => {
+  const programData = await mkdtemp(join(tmpdir(), "mars-windows-image-state-"));
+  const checkpoint = join(programData, "checkpoint");
+  const stateRoot = join(programData, "Mars", "vm-provisioning");
+  const digest = `sha256:${"a".repeat(64)}`;
+  const contentDigest = `sha256:${"b".repeat(64)}`;
+  try {
+    await mkdir(checkpoint, { recursive: true });
+    await mkdir(stateRoot, { recursive: true });
+    await writeFile(join(checkpoint, "image.vmcx"), "vm");
+    const probe = { passed: true, imageDigest: digest, contentDigest };
+    await writeFile(join(checkpoint, "manifest.json"), JSON.stringify({ format: 2, kind: "hyperv-checkpoint-export", imageDigest: digest, contentDigest, probe, files: [{ path: "image.vmcx", length: 2, sha256: `sha256:${"c".repeat(64)}` }] }));
+    await writeFile(join(stateRoot, "image-state.json"), JSON.stringify({ version: 1, imageDigest: digest, contentDigest, installedPath: checkpoint, ready: true, probe: { passed: true } }));
+    expect(await verifiedWindowsVmImage(programData, checkpoint, digest)).toEqual({ ready: true, digest });
+    expect((await verifiedWindowsVmImage(programData, checkpoint, `sha256:${"d".repeat(64)}`)).ready).toBe(false);
+  } finally {
+    await rm(programData, { recursive: true, force: true });
+  }
+});
 
 test("builds a parsed Windows doctor report with the complete container inventory", () => {
   const report = buildWindowsDoctorReport({

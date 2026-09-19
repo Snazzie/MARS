@@ -166,16 +166,18 @@ export function createDevelopmentWindowsArtifacts(environment: DevelopmentEnviro
   if (environment.NODE_ENV === "production") return undefined;
   const orchestrator = developmentArtifact(environment, ["MARS_WINDOWS_ORCHESTRATOR_PATH", "WORKER_ORCHESTRATOR_WINDOWS_X64"], ["MARS_WINDOWS_ORCHESTRATOR_URL"], ["MARS_WINDOWS_ORCHESTRATOR_SHA256", "WORKER_ORCHESTRATOR_WINDOWS_X64_SHA256"]);
   const serviceHost = developmentArtifact(environment, ["MARS_WINDOWS_SERVICE_HOST_PATH", "WORKER_SERVICE_HOST_EXECUTABLE"], ["MARS_WINDOWS_SERVICE_HOST_URL"], ["MARS_WINDOWS_SERVICE_HOST_SHA256", "WORKER_SERVICE_HOST_SHA256"]);
-  const jobAgent = developmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_JOB_AGENT_PATH", "MARS_WINDOWS_JOB_AGENT_PATH"], ["MARS_WINDOWS_CONTAINER_JOB_AGENT_URL", "MARS_WINDOWS_JOB_AGENT_URL"], ["MARS_WINDOWS_CONTAINER_JOB_AGENT_SHA256", "MARS_WINDOWS_JOB_AGENT_SHA256"]);
+  const jobAgent = developmentArtifact(environment, ["MARS_WINDOWS_JOB_AGENT_PATH"], ["MARS_WINDOWS_JOB_AGENT_URL"], ["MARS_WINDOWS_JOB_AGENT_SHA256"]);
   const checkpoint = developmentArtifact(environment, ["MARS_WINDOWS_CHECKPOINT_PATH"], ["MARS_WINDOWS_CHECKPOINT_URL"], ["MARS_WINDOWS_CHECKPOINT_SHA256", "MARS_WINDOWS_CHECKPOINT_DIGEST"]);
+  const provisioner = developmentArtifact(environment, ["MARS_WINDOWS_VM_PROVISIONER_PATH"], ["MARS_WINDOWS_VM_PROVISIONER_URL"], ["MARS_WINDOWS_VM_PROVISIONER_SHA256"]);
   const trayScript = developmentArtifact(environment, ["MARS_WINDOWS_TRAY_SCRIPT_PATH"], ["MARS_WINDOWS_TRAY_SCRIPT_URL"], ["MARS_WINDOWS_TRAY_SCRIPT_SHA256"]);
-  const runner = developmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_RUNNER_PATH"], ["MARS_WINDOWS_CONTAINER_RUNNER_URL"], ["MARS_WINDOWS_CONTAINER_RUNNER_SHA256"]);
-  const git = developmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_GIT_PATH"], ["MARS_WINDOWS_CONTAINER_GIT_URL"], ["MARS_WINDOWS_CONTAINER_GIT_SHA256"]);
-  const vcRuntime = developmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_VC_PATH"], ["MARS_WINDOWS_CONTAINER_VC_URL"], ["MARS_WINDOWS_CONTAINER_VC_SHA256"]);
+  const runner = developmentArtifact(environment, ["MARS_WINDOWS_RUNNER_PATH"], ["MARS_WINDOWS_RUNNER_URL"], ["MARS_WINDOWS_RUNNER_SHA256"]);
+  const git = developmentArtifact(environment, ["MARS_WINDOWS_GIT_PATH"], ["MARS_WINDOWS_GIT_URL"], ["MARS_WINDOWS_GIT_SHA256"]);
+  const vcRuntime = developmentArtifact(environment, ["MARS_WINDOWS_VC_RUNTIME_PATH"], ["MARS_WINDOWS_VC_RUNTIME_URL"], ["MARS_WINDOWS_VC_RUNTIME_SHA256"]);
   const baseImage = trimmedEnvironmentValue(environment, ["MARS_WINDOWS_CONTAINER_BASE_IMAGE"]);
   if (!orchestrator || !serviceHost) return undefined;
-  const container = runner && git && vcRuntime && baseImage ? { baseImage, runner, git, vcRuntime } : undefined;
-  return { orchestrator, serviceHost, ...(jobAgent ? { jobAgent } : {}), ...(trayScript ? { trayScript } : {}), ...(checkpoint ? { vm: { checkpoint } } : {}), ...(container ? { container } : {}) };
+  const container = baseImage ? { baseImage } : undefined;
+  const vm = checkpoint || provisioner ? { ...(checkpoint ? { checkpoint } : {}), ...(provisioner ? { provisioner } : {}) } : undefined;
+  return { orchestrator, serviceHost, ...(jobAgent ? { jobAgent } : {}), ...(runner ? { runner } : {}), ...(git ? { git } : {}), ...(vcRuntime ? { vcRuntime } : {}), ...(trayScript ? { trayScript } : {}), ...(vm ? { vm } : {}), ...(container ? { container } : {}) };
 }
 const developmentDefaultArtifactPaths = {
   windowsOrchestrator: "../../../apps/orchestrator/dist/mars-orchestrator.exe",
@@ -219,15 +221,16 @@ const resolveDevelopmentArtifact = async (
  
 export async function resolveDevelopmentWindowsArtifacts(environment: DevelopmentEnvironment = Bun.env): Promise<DevelopmentWindowsArtifacts | undefined> {
   if (environment.NODE_ENV === "production") return undefined;
-  const [orchestrator, serviceHost, jobAgent, trayScript, checkpoint, runner, git, vcRuntime, buildScript, verifyScript, containerfile, entrypoint] = await Promise.all([
+  const [orchestrator, serviceHost, jobAgent, trayScript, checkpoint, provisioner, runner, git, vcRuntime, buildScript, verifyScript, containerfile, entrypoint] = await Promise.all([
     resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_ORCHESTRATOR_PATH", "WORKER_ORCHESTRATOR_WINDOWS_X64"], ["MARS_WINDOWS_ORCHESTRATOR_URL"], ["MARS_WINDOWS_ORCHESTRATOR_SHA256", "WORKER_ORCHESTRATOR_WINDOWS_X64_SHA256"], developmentDefaultArtifactPaths.windowsOrchestrator),
     resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_SERVICE_HOST_PATH", "WORKER_SERVICE_HOST_EXECUTABLE"], ["MARS_WINDOWS_SERVICE_HOST_URL"], ["MARS_WINDOWS_SERVICE_HOST_SHA256", "WORKER_SERVICE_HOST_SHA256"], developmentDefaultArtifactPaths.windowsServiceHost),
-    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_JOB_AGENT_PATH", "MARS_WINDOWS_JOB_AGENT_PATH"], ["MARS_WINDOWS_CONTAINER_JOB_AGENT_URL", "MARS_WINDOWS_JOB_AGENT_URL"], ["MARS_WINDOWS_CONTAINER_JOB_AGENT_SHA256", "MARS_WINDOWS_JOB_AGENT_SHA256"], developmentDefaultArtifactPaths.windowsJobAgent),
+    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_JOB_AGENT_PATH"], ["MARS_WINDOWS_JOB_AGENT_URL"], ["MARS_WINDOWS_JOB_AGENT_SHA256"], developmentDefaultArtifactPaths.windowsJobAgent),
     resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_TRAY_SCRIPT_PATH"], ["MARS_WINDOWS_TRAY_SCRIPT_URL"], ["MARS_WINDOWS_TRAY_SCRIPT_SHA256"], developmentDefaultArtifactPaths.windowsTrayScript),
     resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CHECKPOINT_PATH"], ["MARS_WINDOWS_CHECKPOINT_URL"], ["MARS_WINDOWS_CHECKPOINT_SHA256", "MARS_WINDOWS_CHECKPOINT_DIGEST"]),
-    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_RUNNER_PATH"], ["MARS_WINDOWS_CONTAINER_RUNNER_URL"], ["MARS_WINDOWS_CONTAINER_RUNNER_SHA256"]),
-    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_GIT_PATH"], ["MARS_WINDOWS_CONTAINER_GIT_URL"], ["MARS_WINDOWS_CONTAINER_GIT_SHA256"]),
-    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_VC_PATH"], ["MARS_WINDOWS_CONTAINER_VC_URL"], ["MARS_WINDOWS_CONTAINER_VC_SHA256"]),
+    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_VM_PROVISIONER_PATH"], ["MARS_WINDOWS_VM_PROVISIONER_URL"], ["MARS_WINDOWS_VM_PROVISIONER_SHA256"]),
+    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_RUNNER_PATH"], ["MARS_WINDOWS_RUNNER_URL"], ["MARS_WINDOWS_RUNNER_SHA256"]),
+    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_GIT_PATH"], ["MARS_WINDOWS_GIT_URL"], ["MARS_WINDOWS_GIT_SHA256"]),
+    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_VC_RUNTIME_PATH"], ["MARS_WINDOWS_VC_RUNTIME_URL"], ["MARS_WINDOWS_VC_RUNTIME_SHA256"]),
     resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_BUILDER_PATH"], ["MARS_WINDOWS_CONTAINER_BUILDER_URL"], ["MARS_WINDOWS_CONTAINER_BUILDER_SHA256"], developmentDefaultArtifactPaths.windowsContainerBuilder),
     resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_VERIFIER_PATH"], ["MARS_WINDOWS_CONTAINER_VERIFIER_URL"], ["MARS_WINDOWS_CONTAINER_VERIFIER_SHA256"], developmentDefaultArtifactPaths.windowsContainerVerifier),
     resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINERFILE_PATH"], ["MARS_WINDOWS_CONTAINERFILE_URL"], ["MARS_WINDOWS_CONTAINERFILE_SHA256"], developmentDefaultArtifactPaths.windowsContainerfile),
@@ -235,8 +238,9 @@ export async function resolveDevelopmentWindowsArtifacts(environment: Developmen
   ]);
   const baseImage = trimmedEnvironmentValue(environment, ["MARS_WINDOWS_CONTAINER_BASE_IMAGE"]);
   if (!orchestrator || !serviceHost) return undefined;
-  const container = runner && git && vcRuntime && baseImage ? { baseImage, runner, git, vcRuntime, ...(buildScript ? { buildScript } : {}), ...(verifyScript ? { verifyScript } : {}), ...(containerfile ? { containerfile } : {}), ...(entrypoint ? { entrypoint } : {}) } : undefined;
-  return { orchestrator, serviceHost, ...(jobAgent ? { jobAgent } : {}), ...(trayScript ? { trayScript } : {}), ...(checkpoint ? { vm: { checkpoint } } : {}), ...(container ? { container } : {}) };
+  const container = baseImage ? { baseImage, ...(buildScript ? { buildScript } : {}), ...(verifyScript ? { verifyScript } : {}), ...(containerfile ? { containerfile } : {}), ...(entrypoint ? { entrypoint } : {}) } : undefined;
+  const vm = checkpoint || provisioner ? { ...(checkpoint ? { checkpoint } : {}), ...(provisioner ? { provisioner } : {}) } : undefined;
+  return { orchestrator, serviceHost, ...(jobAgent ? { jobAgent } : {}), ...(runner ? { runner } : {}), ...(git ? { git } : {}), ...(vcRuntime ? { vcRuntime } : {}), ...(trayScript ? { trayScript } : {}), ...(vm ? { vm } : {}), ...(container ? { container } : {}) };
 }
 
 export async function resolveDevelopmentLinuxArtifacts(environment: DevelopmentEnvironment = Bun.env): Promise<DevelopmentLinuxArtifacts | undefined> {
@@ -286,20 +290,23 @@ const windowsContainerBaseImagePattern = /^mcr\.microsoft\.com\/windows\/server:
 
 export function createDevelopmentWindowsContainerBuild(input: {
   publicOrigin: string | null;
-  artifacts?: Pick<DevelopmentWindowsArtifacts, "container">;
+  artifacts?: Pick<DevelopmentWindowsArtifacts, "container" | "runner" | "git" | "vcRuntime">;
   buildArtifacts?: NonNullable<ControlPlaneHttpDeps["windowsContainerArtifacts"]>;
 }): NonNullable<ControlPlaneHttpDeps["windowsContainerBuild"]> | undefined {
   const container = input.artifacts?.container;
+  const runner = input.artifacts?.runner;
+  const git = input.artifacts?.git;
+  const vcRuntime = input.artifacts?.vcRuntime;
   const buildArtifacts = input.buildArtifacts;
-  if (!input.publicOrigin || !container || !buildArtifacts || !windowsContainerBaseImagePattern.test(container.baseImage)) return undefined;
+  if (!input.publicOrigin || !container || !runner || !git || !vcRuntime || !buildArtifacts || !windowsContainerBaseImagePattern.test(container.baseImage)) return undefined;
   return {
     baseImage: container.baseImage,
-    runnerUrl: new URL("/api/workers/windows-container-runner", input.publicOrigin).toString(),
-    runnerSha256: container.runner.sha256,
-    gitUrl: new URL("/api/workers/windows-container-git", input.publicOrigin).toString(),
-    gitSha256: container.git.sha256,
-    vcUrl: new URL("/api/workers/windows-container-vc-runtime", input.publicOrigin).toString(),
-    vcSha256: container.vcRuntime.sha256,
+    runnerUrl: new URL("/api/workers/windows-runner", input.publicOrigin).toString(),
+    runnerSha256: runner.sha256,
+    gitUrl: new URL("/api/workers/windows-git", input.publicOrigin).toString(),
+    gitSha256: git.sha256,
+    vcUrl: new URL("/api/workers/windows-vc-runtime", input.publicOrigin).toString(),
+    vcSha256: vcRuntime.sha256,
     builderPath: normalizeDevelopmentFilesystemPath(buildArtifacts.builderPath),
     verifierPath: normalizeDevelopmentFilesystemPath(buildArtifacts.verifierPath),
     containerfilePath: normalizeDevelopmentFilesystemPath(buildArtifacts.containerfilePath),

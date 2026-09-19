@@ -20,13 +20,15 @@ export async function reserveRoutingSlot(sql: DatabaseClient, input: LeaseReserv
   const rows = await sql.begin(async (tx) => {
     const eligible = await tx`SELECT p.id, p.resources, p.platform, p.driver, p.image_digest AS "imageDigest", w.id AS "workerId", w.limits, w.doctor
       FROM runner_pools p JOIN workers w ON w.id=${input.workerId}
+      CROSS JOIN LATERAL (SELECT CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END AS evidence) e
       WHERE p.id=${input.poolId}
-        AND p.enabled=true AND w.admission_state='adopted'
-        AND w.configuration_state='ready' AND w.draining=false
+        AND p.enabled=true AND w.admission_state='adopted' AND w.connection_state='online'
+        AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false
+        AND w.doctor_observed_at IS NOT NULL AND e.evidence->>'runtimeReady'='true'
         AND p.platform=ANY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(w.guest_platforms)='array' THEN w.guest_platforms ELSE (w.guest_platforms #>> '{}')::jsonb END))
-        AND p.driver=CASE WHEN w.platform='macos-arm64' AND p.platform IN ('macos-arm64','linux-arm64') THEN 'tart-vm' WHEN p.platform=w.platform THEN CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN CASE WHEN w.doctor->'doctor'->>'runtimeMode'='vm' THEN 'windows-hyperv' ELSE 'windows-hyperv-container' END WHEN 'macos-arm64' THEN 'tart-vm' END ELSE NULL END
-        AND (p.driver <> 'tart-vm' OR w.doctor->'artifactDigests'->>p.platform = p.image_digest)
-        AND COALESCE(w.doctor->'doctor'->>'acceptingLeases','true') <> 'false' FOR UPDATE OF p, w`;
+        AND p.driver=CASE WHEN w.platform='macos-arm64' AND p.platform IN ('macos-arm64','linux-arm64') THEN 'tart-vm' WHEN p.platform=w.platform THEN CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN CASE WHEN e.evidence->>'runtimeMode'='vm' THEN 'windows-hyperv' ELSE 'windows-hyperv-container' END WHEN 'macos-arm64' THEN 'tart-vm' END ELSE NULL END
+        AND CASE WHEN p.driver='tart-vm' THEN e.evidence->'artifactDigests'->>p.platform=p.image_digest WHEN p.driver='linux-libvirt-vm' THEN e.evidence->>'artifactDigest'=p.image_digest AND e.evidence->>'smokeArtifactDigest'=p.image_digest AND e.evidence->>'libvirtReady'='true' AND e.evidence->>'networkReady'='true' AND e.evidence->>'cloneStorageReady'='true' AND e.evidence->>'imageSignatures'='true' AND e.evidence->>'realVmSmoke'='true' WHEN p.driver='linux-docker-container' THEN e.evidence->>'artifactDigest'=p.image_digest AND e.evidence->>'networkReady'='true' AND e.evidence->>'imageSignatures'='true' WHEN p.driver IN ('windows-hyperv','windows-hyperv-container') THEN e.evidence->>'artifactDigest'=p.image_digest AND e.evidence->>'probe'='true' AND e.evidence->>'imageSignatures'='true' ELSE false END
+        AND COALESCE(e.evidence->>'acceptingLeases','true') <> 'false' FOR UPDATE OF p, w`;
     if (!eligible[0]) throw new Error("worker_not_eligible");
     const poolResources = typeof eligible[0].resources === "string" ? JSON.parse(eligible[0].resources) : eligible[0].resources;
     const limits = typeof eligible[0].limits === "string" ? JSON.parse(eligible[0].limits) : eligible[0].limits;

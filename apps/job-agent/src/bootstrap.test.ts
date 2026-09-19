@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cliArgument, consumeGuestJitConfig, consumeGuestJitConfigWithWorkerCache, mergeBunInstallCa, runGuestService, runOneTimeJitBootstrap, runnerCommandForPlatform, waitForGuestBootstrap } from "./bootstrap.ts";
+import { cliArgument, consumeGuestJitConfig, consumeGuestJitConfigWithWorkerCache, mergeBunInstallCa, parseGuestBootstrap, runGuestService, runOneTimeJitBootstrap, runWindowsProvisioningProbe, runnerCommandForPlatform, waitForGuestBootstrap, type WindowsProbeAdapter } from "./bootstrap.ts";
 
 const roots: string[] = [];
 const workerCache = {
@@ -217,4 +217,45 @@ test("does not treat the executable path as a missing optional argument", () => 
   const argv = ["C:\\ProgramData\\Mars\\mars-job-agent.exe", "guest-service", "--platform", "windows-x64"];
   expect(cliArgument(argv, "--runner-root")).toBeUndefined();
   expect(cliArgument(argv, "--platform")).toBe("windows-x64");
+});
+
+test("strictly parses job and probe bootstrap envelopes", () => {
+  expect(parseGuestBootstrap(JSON.stringify({ version: 1, leaseId: "lease", nonce: "nonce", encodedJitConfig: "jit" }))).toMatchObject({ leaseId: "lease" });
+  expect(parseGuestBootstrap(JSON.stringify({ version: 1, mode: "probe", nonce: "n".repeat(32) }))).toMatchObject({ mode: "probe" });
+  expect(() => parseGuestBootstrap(JSON.stringify({ version: 1, mode: "probe", nonce: "short" }))).toThrow();
+  expect(() => parseGuestBootstrap(JSON.stringify({ version: 1, leaseId: "lease", nonce: "nonce", encodedJitConfig: "jit", unknown: true }))).toThrow();
+});
+
+test("probe verifies SYSTEM service assets and writes a strict result without launching a runner", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-probe-"));
+  roots.push(root);
+  await writeFile(join(root, "run.cmd"), "must-not-run");
+  await writeWorkerCacheCapability(root);
+  const results: unknown[] = [];
+  const adapter: WindowsProbeAdapter = {
+    isSystem: async () => true,
+    serviceTaskExecutable: async () => "C:\\Program Files\\Mars\\mars-job-agent.exe",
+    exists: async path => path === join(root, "run.cmd") || path === join(root, ".mars-capabilities.json") || path === "C:\\Git\\cmd\\git.exe" || path === "C:\\Program Files\\Mars\\mars-job-agent.exe",
+    writeResult: async result => { results.push(result); },
+  };
+  await runWindowsProvisioningProbe("n".repeat(32), root, adapter);
+  expect(results).toEqual([{ version: 1, success: true, nonce: "n".repeat(32) }]);
+});
+
+test("probe mode consumes bootstrap and shuts down on validation failure", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-probe-service-"));
+  roots.push(root);
+  const bootstrap = join(root, "bootstrap.json");
+  await writeFile(bootstrap, JSON.stringify({ version: 1, mode: "probe", nonce: "n".repeat(32) }));
+  const results: unknown[] = [];
+  let shutdowns = 0;
+  await runGuestService("windows-x64", bootstrap, root, "shutdown", async () => { shutdowns += 1; }, {
+    isSystem: async () => false,
+    serviceTaskExecutable: async () => "",
+    exists: async () => false,
+    writeResult: async result => { results.push(result); },
+  });
+  expect(await Bun.file(bootstrap).exists()).toBe(false);
+  expect(shutdowns).toBe(1);
+  expect(results).toEqual([{ version: 1, success: false, nonce: "n".repeat(32), error: "probe must run as SYSTEM" }]);
 });

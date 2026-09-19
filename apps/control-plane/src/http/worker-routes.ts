@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { PendingWorkerRequest, WorkerConfiguration, WorkerContractVersion, WorkerReleaseOciDigest, WorkerReleaseVersion } from "@mars/contracts";
+import { PendingWorkerRequest, WorkerConfiguration, WorkerContractVersion, WorkerReleaseOciDigest, WorkerReleaseVersion, normalizeWindowsWorkerRelease } from "@mars/contracts";
 import type { LinuxArm64WorkerRelease, LinuxWorkerRelease, MacosWorkerRelease, WindowsWorkerRelease } from "@mars/contracts";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps, DevelopmentArtifact, DevelopmentArtifactFetchOptions, DevelopmentLinuxArm64Artifacts, DevelopmentLinuxArtifacts, DevelopmentMacosArtifacts, DevelopmentWindowsArtifacts } from "./types.ts";
 import { verifyWorkerBootstrap, initializeWorkerBootstrap, rotateWorkerBootstrap, getWorkerBootstrapStatus } from "../worker-bootstrap.ts";
@@ -497,19 +497,21 @@ export function linuxArm64InstallerValues(platform: LinuxArm64InstallerMetadata,
   };
 }
 
-export function windowsInstallerValues(platform: WindowsWorkerRelease | undefined, connectOrigin: string, development?: NonNullable<ControlPlaneHttpDeps["developmentWindowsArtifacts"]>, upgrade = false, versions: { releaseVersion: string; contractVersion: string; targetToken?: string } = { releaseVersion: "0.0.0", contractVersion: Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.2.0" }, runtime: "container" | "vm" = "container"): InstallerValues {
+export type WindowsVmImageSource = "checkpoint" | "iso" | "vhdx";
+
+export function windowsInstallerValues(platform: WindowsWorkerRelease | undefined, connectOrigin: string, development?: NonNullable<ControlPlaneHttpDeps["developmentWindowsArtifacts"]>, upgrade = false, versions: { releaseVersion: string; contractVersion: string; targetToken?: string } = { releaseVersion: "0.0.0", contractVersion: Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.2.0" }, runtime: "container" | "vm" = "container", vmSource: WindowsVmImageSource = "checkpoint", installerContract: 5 | 6 = 6): InstallerValues {
   const source = platform ?? (development ? ({
     installer: development.orchestrator,
     orchestrator: development.orchestrator,
     serviceHost: development.serviceHost,
     jobAgent: development.jobAgent ?? development.orchestrator,
+    runner: development.runner ?? development.orchestrator,
+    git: development.git ?? development.orchestrator,
+    vcRuntime: development.vcRuntime ?? development.orchestrator,
     trayScript: development.trayScript,
     vm: development.vm,
     container: development.container ? {
       baseImage: development.container.baseImage,
-      runner: development.container.runner,
-      git: development.container.git,
-      vcRuntime: development.container.vcRuntime,
       buildScript: development.container.buildScript ?? development.orchestrator,
       verifyScript: development.container.verifyScript ?? development.orchestrator,
       containerfile: development.container.containerfile ?? development.orchestrator,
@@ -517,9 +519,34 @@ export function windowsInstallerValues(platform: WindowsWorkerRelease | undefine
     } : undefined,
   } as unknown as WindowsWorkerRelease) : undefined);
   if (!source) throw new Error("Windows release metadata is unavailable.");
+  const legacyContainer = installerContract === 5 ? source.container as Extract<WindowsWorkerRelease, { container?: { runner: unknown } }>["container"] : undefined;
+  const runner = installerContract === 5 ? legacyContainer?.runner : "runner" in source ? source.runner : undefined;
+  const git = installerContract === 5 ? legacyContainer?.git : "git" in source ? source.git : undefined;
+  const vcRuntime = installerContract === 5 ? legacyContainer?.vcRuntime : "vcRuntime" in source ? source.vcRuntime : undefined;
   const container = source.container;
   const vm = source.vm;
+  const checkpoint = vm?.checkpoint;
+  const provisioner = vm && "provisioner" in vm ? vm.provisioner : undefined;
   const artifact = (path: string) => `${connectOrigin}${path}${versions.targetToken ? `${path.includes("?") ? "&" : "?"}target=${encodeURIComponent(versions.targetToken)}` : ""}`;
+  const sharedValues = {
+    WindowsJobAgentUrl: artifact("/api/workers/windows-job-agent"),
+    WindowsJobAgentSha256: source.jobAgent.sha256,
+    ...(installerContract === 5 ? {
+      WindowsContainerRunnerUrl: artifact("/api/workers/windows-runner"),
+      WindowsContainerRunnerSha256: runner!.sha256,
+      WindowsContainerGitUrl: artifact("/api/workers/windows-git"),
+      WindowsContainerGitSha256: git!.sha256,
+      WindowsContainerVcRuntimeUrl: artifact("/api/workers/windows-vc-runtime"),
+      WindowsContainerVcRuntimeSha256: vcRuntime!.sha256,
+    } : {
+      WindowsRunnerUrl: artifact("/api/workers/windows-runner"),
+      WindowsRunnerSha256: runner!.sha256,
+      WindowsGitUrl: artifact("/api/workers/windows-git"),
+      WindowsGitSha256: git!.sha256,
+      WindowsVcRuntimeUrl: artifact("/api/workers/windows-vc-runtime"),
+      WindowsVcRuntimeSha256: vcRuntime!.sha256,
+    }),
+  };
   return {
     WindowsArtifactMode: platform ? "production" : "local",
     WindowsRuntime: runtime,
@@ -530,20 +557,13 @@ export function windowsInstallerValues(platform: WindowsWorkerRelease | undefine
     WindowsServiceHostUrl: artifact("/api/workers/service-host?audience=windows-x64"),
     WindowsServiceHostSha256: source.serviceHost.sha256,
     ...(source.trayScript ? { WindowsTrayScriptUrl: artifact("/api/workers/windows-tray-script"), WindowsTrayScriptSha256: source.trayScript.sha256 } : {}),
-    ...(runtime === "vm" ? {
-      WindowsCheckpointUrl: artifact("/api/workers/windows-vm-checkpoint"),
-      WindowsCheckpointSha256: vm!.checkpoint.sha256,
-    } : upgrade ? {} : {
-      WindowsJobAgentUrl: artifact("/api/workers/windows-container-job-agent"),
-      WindowsJobAgentSha256: source.jobAgent.sha256,
+    ...(runtime === "vm" && !upgrade ? { WindowsVmImageSource: vmSource } : {}),
+    ...((upgrade || runtime === "vm") && checkpoint ? { WindowsCheckpointUrl: artifact("/api/workers/windows-vm-checkpoint"), WindowsCheckpointSha256: checkpoint.sha256 } : {}),
+    ...((upgrade || runtime === "vm") && provisioner ? { WindowsVmProvisionerUrl: artifact("/api/workers/windows-vm-provisioner"), WindowsVmProvisionerSha256: provisioner.sha256 } : {}),
+    ...((upgrade || runtime === "container" || vmSource !== "checkpoint") ? sharedValues : {}),
+    ...(runtime === "container" && !upgrade ? {
       WindowsContainerBaseImage: container!.baseImage,
       WindowsContainerImage: "mars/windows-job:local",
-      WindowsContainerRunnerUrl: artifact("/api/workers/windows-container-runner"),
-      WindowsContainerRunnerSha256: container!.runner.sha256,
-      WindowsContainerGitUrl: artifact("/api/workers/windows-container-git"),
-      WindowsContainerGitSha256: container!.git.sha256,
-      WindowsContainerVcRuntimeUrl: artifact("/api/workers/windows-container-vc-runtime"),
-      WindowsContainerVcRuntimeSha256: container!.vcRuntime.sha256,
       WindowsContainerBuilderUrl: artifact("/api/workers/windows-container-builder"),
       WindowsContainerBuilderSha256: container!.buildScript.sha256,
       WindowsContainerVerifierUrl: artifact("/api/workers/windows-container-verifier"),
@@ -552,7 +572,7 @@ export function windowsInstallerValues(platform: WindowsWorkerRelease | undefine
       WindowsContainerfileSha256: container!.containerfile.sha256,
       WindowsContainerEntrypointUrl: artifact("/api/workers/windows-container-entrypoint"),
       WindowsContainerEntrypointSha256: container!.entrypoint.sha256,
-    }),
+    } : {}),
   };
 }
 
@@ -592,6 +612,7 @@ async function installerArtifacts(
   development?: DevelopmentPlatformArtifacts,
   upgrade = false,
   runtime: "container" | "vm" = "container",
+  vmSource: WindowsVmImageSource = "checkpoint",
 ): Promise<string[]> {
   const missing: string[] = [];
   const installerName = audience === "linux-x64" ? "install-worker.sh" : audience === "linux-arm64" ? "install-worker-linux-arm64.ps1" : audience === "windows-x64" ? "install-worker.ps1" : "install-worker-macos.sh";
@@ -613,13 +634,17 @@ async function installerArtifacts(
       if (!windows.orchestrator) missing.push("development:orchestrator");
       if (!windows.serviceHost) missing.push("development:service-host");
       if (!windows.trayScript) missing.push("development:tray-script");
-      if (runtime === "vm") {
-        if (!windows.vm?.checkpoint) missing.push("development:vm.checkpoint");
+      if (!upgrade && runtime === "vm") {
+        if (!windows.vm?.provisioner) missing.push("development:vm.provisioner");
+        if (vmSource === "checkpoint" && !windows.vm?.checkpoint) missing.push("development:vm.checkpoint");
+        if (vmSource !== "checkpoint") {
+          for (const field of ["jobAgent", "runner", "git", "vcRuntime"] as const) if (!windows[field]) missing.push(`development:${field}`);
+        }
       } else if (!upgrade) {
-        if (!windows.jobAgent) missing.push("development:job-agent");
+        for (const field of ["jobAgent", "runner", "git", "vcRuntime"] as const) if (!windows[field]) missing.push(`development:${field}`);
         const container = windows.container;
         if (!container || !WorkerReleaseOciDigest.safeParse(container.baseImage).success) missing.push("development:container");
-        else for (const field of ["runner", "git", "vcRuntime", "buildScript", "verifyScript", "containerfile", "entrypoint"] as const) if (!container[field]) missing.push(`development:container.${field}`);
+        else for (const field of ["buildScript", "verifyScript", "containerfile", "entrypoint"] as const) if (!container[field]) missing.push(`development:container.${field}`);
       }
     } else if (audience === "macos-arm64") {
       const macos = development as DevelopmentMacosArtifacts;
@@ -628,14 +653,32 @@ async function installerArtifacts(
     return missing;
   }
   if (!platform) return [`platform:${audience}`];
-  const fields = audience === "linux-x64"
-    ? ["installer", "orchestrator", "jobAgent", "brokerImage", "goldenImage", "compose", "domainTemplate"]
-    : audience === "linux-arm64"
-      ? ["installer", "compose", "brokerImage", "jobImage"]
-      : audience === "windows-x64"
-        ? (runtime === "vm" ? ["installer", "orchestrator", "serviceHost", "trayScript", "vm"] : upgrade ? ["installer", "orchestrator", "serviceHost", "trayScript"] : ["installer", "orchestrator", "serviceHost", "trayScript", "jobAgent", "container"])
+  if (audience !== "windows-x64") {
+    const fields = audience === "linux-x64"
+      ? ["installer", "orchestrator", "jobAgent", "brokerImage", "goldenImage", "compose", "domainTemplate"]
+      : audience === "linux-arm64"
+        ? ["installer", "compose", "brokerImage", "jobImage"]
         : ["installer", "orchestrator", "macosJobAgent", "linuxArm64JobAgent", "linuxArm64Runner", "imagePreparationScript", "tartMacosSourceImage", "tartLinuxArm64SourceImage"];
-  for (const field of fields) if (!(platform as unknown as Record<string, unknown>)[field]) missing.push(releaseField(audience, field));
+    for (const field of fields) if (!(platform as unknown as Record<string, unknown>)[field]) missing.push(releaseField(audience, field));
+    return missing;
+  }
+  const windows = platform as WindowsWorkerRelease;
+  for (const field of ["installer", "orchestrator", "serviceHost", "trayScript"] as const) if (!windows[field]) missing.push(releaseField(audience, field));
+  if (upgrade) return missing;
+  const schema6 = "runner" in windows;
+  if (runtime === "vm") {
+    if (!schema6) {
+      if (vmSource !== "checkpoint") missing.push("manifest:windows-x64.schema5-local-source-unsupported");
+      if (!windows.vm?.checkpoint) missing.push("manifest:windows-x64.vm.checkpoint");
+      if (!windows.container) missing.push("manifest:windows-x64.container");
+    } else {
+      if (!windows.vm?.provisioner) missing.push("manifest:windows-x64.vm.provisioner");
+      if (vmSource === "checkpoint" && !windows.vm?.checkpoint) missing.push("manifest:windows-x64.vm.checkpoint");
+      if (vmSource !== "checkpoint" && (!windows.jobAgent || !windows.runner || !windows.git || !windows.vcRuntime)) missing.push("manifest:windows-x64.shared-assets");
+    }
+  } else if (!windows.jobAgent || !windows.container || (schema6 && (!windows.runner || !windows.git || !windows.vcRuntime))) {
+    missing.push("manifest:windows-x64.container");
+  }
   return missing;
 }
 
@@ -1103,25 +1146,45 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const asset = (await releaseManifestFor(c, "windows-x64"))?.platforms["windows-x64"]?.trayScript;
     return asset ? await proxyPackagedResponse(asset.url, "mars-worker-tray.ps1", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, ["windows-tray-script"]) : unavailable(c, ["manifest:windows-x64.trayScript"]);
   });
-  const releaseContainerAsset = (key: "buildScript" | "verifyScript" | "containerfile" | "entrypoint" | "jobAgent" | "runner" | "git" | "vcRuntime", name: string, filename: string, sizeClass: ArtifactSizeClass) => async (c: Context<ControlPlaneEnv>) => {
-    const development = key === "jobAgent"
-      ? deps.developmentWindowsArtifacts?.jobAgent
-      : deps.developmentWindowsArtifacts?.container?.[key];
+  const releaseWindowsAsset = (
+    key: "buildScript" | "verifyScript" | "containerfile" | "entrypoint" | "jobAgent" | "runner" | "git" | "vcRuntime" | "provisioner",
+    name: string,
+    filename: string,
+    sizeClass: ArtifactSizeClass,
+  ) => async (c: Context<ControlPlaneEnv>) => {
+    const configured = deps.developmentWindowsArtifacts;
+    const development = !configured ? undefined
+      : key === "jobAgent" || key === "runner" || key === "git" || key === "vcRuntime"
+        ? configured[key]
+        : key === "provisioner" ? configured.vm?.provisioner : configured.container?.[key];
     if (development) return developmentPackaged(c, development, name, filename, sizeClass);
-    const release = (await releaseManifestFor(c, "windows-x64"))?.platforms["windows-x64"];
-    const asset = release && key === "jobAgent" ? release.jobAgent : release?.container?.[key as keyof typeof release.container];
+    const manifest = await releaseManifestFor(c, "windows-x64");
+    const normalized = manifest ? normalizeWindowsWorkerRelease(manifest) : undefined;
+    const asset = !normalized ? undefined
+      : key === "jobAgent" ? normalized.release.jobAgent
+      : key === "runner" || key === "git" || key === "vcRuntime" ? normalized[key]
+      : key === "provisioner" ? normalized.provisioner
+      : normalized.release.container?.[key];
     if (!asset || typeof asset === "string") return unavailable(c, [name]);
     return await proxyPackagedResponse(asset.url, filename, asset.sha256, sizeClass, c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, [name]);
   };
-  const developmentContainerArtifact = (key: "runner" | "git" | "vcRuntime", name: string, filename: string) => (c: Context<ControlPlaneEnv>) => developmentPackaged(c, deps.developmentWindowsArtifacts?.container?.[key], name, filename, key === "vcRuntime" ? "binary" : "archive");
-  app.get("/api/workers/windows-container-builder", releaseContainerAsset("buildScript", "windows-container-builder", "build-windows-container-image-local.ps1", "binary"));
-  app.get("/api/workers/windows-container-verifier", releaseContainerAsset("verifyScript", "windows-container-verifier", "verify-runtime.ps1", "binary"));
-  app.get("/api/workers/windows-containerfile", releaseContainerAsset("containerfile", "windows-containerfile", "Containerfile", "binary"));
-  app.get("/api/workers/windows-container-entrypoint", releaseContainerAsset("entrypoint", "windows-container-entrypoint", "entrypoint.ps1", "binary"));
-  app.get("/api/workers/windows-container-job-agent", releaseContainerAsset("jobAgent", "windows-container-job-agent", "mars-job-agent.exe", "binary"));
-  app.get("/api/workers/windows-container-runner", async c => deps.developmentWindowsArtifacts ? developmentContainerArtifact("runner", "container-runner", "runner.zip")(c) : releaseContainerAsset("runner", "windows-container-runner", "runner.zip", "archive")(c));
-  app.get("/api/workers/windows-container-git", async c => deps.developmentWindowsArtifacts ? developmentContainerArtifact("git", "container-git", "git.zip")(c) : releaseContainerAsset("git", "windows-container-git", "git.zip", "archive")(c));
-  app.get("/api/workers/windows-container-vc-runtime", async c => deps.developmentWindowsArtifacts ? developmentContainerArtifact("vcRuntime", "container-vc-runtime", "vc-runtime.exe")(c) : releaseContainerAsset("vcRuntime", "windows-container-vc-runtime", "vc-runtime.exe", "binary")(c));
+  app.get("/api/workers/windows-container-builder", releaseWindowsAsset("buildScript", "windows-container-builder", "build-windows-container-image-local.ps1", "binary"));
+  app.get("/api/workers/windows-container-verifier", releaseWindowsAsset("verifyScript", "windows-container-verifier", "verify-runtime.ps1", "binary"));
+  app.get("/api/workers/windows-containerfile", releaseWindowsAsset("containerfile", "windows-containerfile", "Containerfile", "binary"));
+  app.get("/api/workers/windows-container-entrypoint", releaseWindowsAsset("entrypoint", "windows-container-entrypoint", "entrypoint.ps1", "binary"));
+  const windowsJobAgent = releaseWindowsAsset("jobAgent", "windows-job-agent", "mars-job-agent.exe", "binary");
+  const windowsRunner = releaseWindowsAsset("runner", "windows-runner", "runner.zip", "archive");
+  const windowsGit = releaseWindowsAsset("git", "windows-git", "git.zip", "archive");
+  const windowsVcRuntime = releaseWindowsAsset("vcRuntime", "windows-vc-runtime", "vc-runtime.exe", "binary");
+  app.get("/api/workers/windows-job-agent", windowsJobAgent);
+  app.get("/api/workers/windows-runner", windowsRunner);
+  app.get("/api/workers/windows-git", windowsGit);
+  app.get("/api/workers/windows-vc-runtime", windowsVcRuntime);
+  app.get("/api/workers/windows-vm-provisioner", releaseWindowsAsset("provisioner", "windows-vm-provisioner", "mars-windows-vm-provisioner.zip", "archive"));
+  app.get("/api/workers/windows-container-job-agent", windowsJobAgent);
+  app.get("/api/workers/windows-container-runner", windowsRunner);
+  app.get("/api/workers/windows-container-git", windowsGit);
+  app.get("/api/workers/windows-container-vc-runtime", windowsVcRuntime);
   const linuxCompose = async (c: Context<ControlPlaneEnv>) => {
     if (deps.developmentLinuxArtifacts) return developmentPackaged(c, deps.developmentLinuxArtifacts.compose, "linux-broker-compose", "linux-broker-compose.yaml", "binary");
     const asset = (await releaseManifestFor(c, "linux-x64"))?.platforms["linux-x64"]?.compose;
@@ -1150,6 +1213,14 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const runtime = c.req.query("runtime") ?? "container";
     const upgrade = c.req.query("upgrade") === "true";
     const targetToken = c.req.query("target");
+    const requestedVmSource = c.req.query("vmSource");
+    if (requestedVmSource && (audience !== "windows-x64" || runtime !== "vm" || upgrade)) {
+      return c.json({ code: "invalid_vm_source", message: "vmSource is valid only for a fresh Windows VM enrollment" }, 400);
+    }
+    if (requestedVmSource && !["checkpoint", "iso", "vhdx"].includes(requestedVmSource)) {
+      return c.json({ code: "invalid_vm_source", message: "Windows VM source must be checkpoint, iso, or vhdx" }, 400);
+    }
+    const vmSource = (requestedVmSource ?? "checkpoint") as WindowsVmImageSource;
     let targetRelease: WorkerReleaseTarget | undefined;
     if (upgrade) {
       if (!targetToken || !deps.workerUpgradeService || !deps.workerReleaseCatalog) return c.json({ code: "upgrade_target_stale", message: "A valid upgrade target is required" }, 409);
@@ -1189,7 +1260,19 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       development = { ...configured, compose: await currentDevelopmentArtifact(configured.compose) };
     } else if (audience === "windows-x64" && deps.developmentWindowsArtifacts) {
       const configured = deps.developmentWindowsArtifacts;
-      development = { ...configured, orchestrator: await currentDevelopmentArtifact(configured.orchestrator), serviceHost: await currentDevelopmentArtifact(configured.serviceHost), trayScript: await currentDevelopmentArtifact(configured.trayScript), ...(configured.vm?.checkpoint ? { vm: { checkpoint: await currentDevelopmentArtifact(configured.vm.checkpoint) } } : {}) } as DevelopmentWindowsArtifacts;
+      const [orchestrator, serviceHost, jobAgent, runner, git, vcRuntime, trayScript, checkpoint, provisioner] = await Promise.all([
+        currentDevelopmentArtifact(configured.orchestrator),
+        currentDevelopmentArtifact(configured.serviceHost),
+        currentDevelopmentArtifact(configured.jobAgent),
+        currentDevelopmentArtifact(configured.runner),
+        currentDevelopmentArtifact(configured.git),
+        currentDevelopmentArtifact(configured.vcRuntime),
+        currentDevelopmentArtifact(configured.trayScript),
+        currentDevelopmentArtifact(configured.vm?.checkpoint),
+        currentDevelopmentArtifact(configured.vm?.provisioner),
+      ]);
+      const vm = checkpoint || provisioner ? { ...(checkpoint ? { checkpoint } : {}), ...(provisioner ? { provisioner } : {}) } : undefined;
+      development = { ...configured, orchestrator: orchestrator!, serviceHost: serviceHost!, jobAgent, runner, git, vcRuntime, trayScript, ...(vm ? { vm } : {}) } as DevelopmentWindowsArtifacts;
     } else if (audience === "macos-arm64" && deps.developmentMacosArtifacts) {
       const configured = deps.developmentMacosArtifacts;
       development = { ...configured, orchestrator: await currentDevelopmentArtifact(configured.orchestrator), jobAgent: await currentDevelopmentArtifact(configured.jobAgent), imagePreparationScript: await currentDevelopmentArtifact(configured.imagePreparationScript) };
@@ -1200,9 +1283,12 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     }
     if (targetRelease) selectedManifest = targetRelease.manifest;
     const release = selectedManifest?.platforms[audience];
+    if (audience === "windows-x64" && runtime === "vm" && vmSource !== "checkpoint" && selectedManifest?.schemaVersion === 5) {
+      return c.json({ code: "unsupported_vm_source", message: "Schema-5 Windows releases support prepared checkpoints only" }, 400);
+    }
     const configuredReleaseVersion = Bun.env.MARS_WORKER_VERSION?.trim() ?? "0.0.0";
     const releaseVersion = targetRelease?.releaseVersion ?? (WorkerReleaseVersion.safeParse(configuredReleaseVersion).success ? configuredReleaseVersion : "0.0.0");
-    const missing = await installerArtifacts(deps, audience, release, development, upgrade, runtime as "container" | "vm");
+    const missing = await installerArtifacts(deps, audience, release, development, upgrade, runtime as "container" | "vm", vmSource);
     if (missing.length) return unavailable(c, missing);
     let source: string;
     const localInstallerPath = deps.workerInstallerRoot ? pathFor(deps.workerInstallerRoot, file) : undefined;
@@ -1231,7 +1317,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
         values = linuxArm64InstallerValues({ brokerImage: arm.brokerImage, jobImage: arm.jobImage, compose: { url: "", sha256: arm.compose.sha256 } }, connectOrigin, "local", { releaseVersion: "0.0.0", contractVersion: Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.2.0", targetToken });
       } else values = linuxArm64InstallerValues(release as LinuxArm64WorkerRelease, connectOrigin, "production", { releaseVersion, contractVersion: selectedManifest!.contractVersion, targetToken });
     } else if (audience === "windows-x64") {
-      values = windowsInstallerValues(release as WindowsWorkerRelease | undefined, connectOrigin, development as DevelopmentWindowsArtifacts | undefined, upgrade, { releaseVersion, contractVersion: selectedManifest?.contractVersion ?? "0.2.0", targetToken }, runtime as "container" | "vm");
+      values = windowsInstallerValues(release as WindowsWorkerRelease | undefined, connectOrigin, development as DevelopmentWindowsArtifacts | undefined, upgrade, { releaseVersion, contractVersion: selectedManifest?.contractVersion ?? "0.2.0", targetToken }, runtime as "container" | "vm", vmSource, selectedManifest?.schemaVersion ?? 6);
     } else if (development) {
       const macos = development as DevelopmentMacosArtifacts;
       const contractVersion = selectedManifest?.contractVersion ?? Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.3.0";

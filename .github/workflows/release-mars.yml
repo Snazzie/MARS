@@ -168,6 +168,17 @@ jobs:
           bun build apps/orchestrator/src/index.ts --compile --target=bun-windows-x64 --outfile=dist/windows/mars-orchestrator.exe
           bun build apps/job-agent/src/index.ts --compile --target=bun-windows-x64 --outfile=dist/windows/mars-job-agent.exe
           Copy-Item deploy/workers/install-worker.ps1,deploy/workers/mars-worker-tray.ps1,assets/MARS.ico,deploy/workers/build-windows-container-image-local.ps1,images/jobs/windows/verify-runtime.ps1,images/jobs/windows/Containerfile,images/jobs/windows/entrypoint.ps1 dist/windows
+          Compress-Archive -LiteralPath @(
+            'deploy/workers/provision-windows-hyperv-image.ps1',
+            'deploy/workers/provision-windows-hyperv-guest.ps1',
+            'deploy/workers/prepare-windows-job-image.ps1',
+            'deploy/workers/windows-hyperv-checkpoint.psm1'
+          ) -DestinationPath dist/windows/mars-windows-vm-provisioner.zip
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $expectedMembers = @('prepare-windows-job-image.ps1','provision-windows-hyperv-guest.ps1','provision-windows-hyperv-image.ps1','windows-hyperv-checkpoint.psm1')
+          $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path 'dist/windows/mars-windows-vm-provisioner.zip'))
+          try { $actualMembers = @($archive.Entries.FullName | Sort-Object) } finally { $archive.Dispose() }
+          if ((Compare-Object $expectedMembers $actualMembers).Count -ne 0) { throw "Unexpected Windows VM provisioner ZIP members: $($actualMembers -join ', ')" }
           rustup target add x86_64-pc-windows-gnu
           cargo build --manifest-path apps/windows-service-host/Cargo.toml --release --target x86_64-pc-windows-gnu
           Copy-Item apps/windows-service-host/target/x86_64-pc-windows-gnu/release/mars-service-host.exe dist/windows/mars-service-host.exe
@@ -185,8 +196,9 @@ jobs:
           $ErrorActionPreference = 'Stop'; $base="https://github.com/Snazzie/MARS/releases/download/worker-v$env:WORKER_VERSION"
           function Asset($file,$name) { [ordered]@{url="$base/$name";sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath "dist/windows/$file").Hash.ToLowerInvariant()} }
           $d=Get-Content dist/windows/dependencies.json -Raw|ConvertFrom-Json
-          $c=[ordered]@{baseImage=$d.baseImage;runner=Asset 'mars-windows-runner.zip' 'mars-windows-runner.zip';git=Asset 'mars-windows-git.zip' 'mars-windows-git.zip';vcRuntime=Asset 'mars-windows-vc-runtime.exe' 'mars-windows-vc-runtime.exe';buildScript=Asset 'build-windows-container-image-local.ps1' 'build-windows-container-image-local.ps1';verifyScript=Asset 'verify-runtime.ps1' 'verify-runtime.ps1';containerfile=Asset 'Containerfile' 'Containerfile';entrypoint=Asset 'entrypoint.ps1' 'entrypoint.ps1'}
-          $m=[ordered]@{installer=Asset 'install-worker.ps1' 'install-worker-windows-x64.ps1';orchestrator=Asset 'mars-orchestrator.exe' 'mars-orchestrator-windows-x64.exe';serviceHost=Asset 'mars-service-host.exe' 'mars-service-host.exe';jobAgent=Asset 'mars-job-agent.exe' 'mars-job-agent-windows-x64.exe';trayScript=Asset 'mars-worker-tray.ps1' 'mars-worker-tray.ps1';container=$c}; $m|ConvertTo-Json -Depth 8 -Compress|Set-Content dist/windows/metadata.json; "json=$(Get-Content dist/windows/metadata.json -Raw)"|Out-File $env:GITHUB_OUTPUT -Append
+          $c=[ordered]@{baseImage=$d.baseImage;buildScript=Asset 'build-windows-container-image-local.ps1' 'build-windows-container-image-local.ps1';verifyScript=Asset 'verify-runtime.ps1' 'verify-runtime.ps1';containerfile=Asset 'Containerfile' 'Containerfile';entrypoint=Asset 'entrypoint.ps1' 'entrypoint.ps1'}
+          $vm=[ordered]@{provisioner=Asset 'mars-windows-vm-provisioner.zip' 'mars-windows-vm-provisioner.zip'}
+          $m=[ordered]@{installer=Asset 'install-worker.ps1' 'install-worker-windows-x64.ps1';orchestrator=Asset 'mars-orchestrator.exe' 'mars-orchestrator-windows-x64.exe';serviceHost=Asset 'mars-service-host.exe' 'mars-service-host.exe';jobAgent=Asset 'mars-job-agent.exe' 'mars-job-agent-windows-x64.exe';runner=Asset 'mars-windows-runner.zip' 'mars-windows-runner.zip';git=Asset 'mars-windows-git.zip' 'mars-windows-git.zip';vcRuntime=Asset 'mars-windows-vc-runtime.exe' 'mars-windows-vc-runtime.exe';trayScript=Asset 'mars-worker-tray.ps1' 'mars-worker-tray.ps1';vm=$vm;container=$c}; $m|ConvertTo-Json -Depth 8 -Compress|Set-Content dist/windows/metadata.json; "json=$(Get-Content dist/windows/metadata.json -Raw)"|Out-File $env:GITHUB_OUTPUT -Append
       - uses: actions/upload-artifact@v4
         with: { name: "worker-windows-${{ github.sha }}", path: dist/windows }
 
@@ -254,11 +266,11 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { pattern: worker-*, path: dist, merge-multiple: false }
-      - name: Install and validate schema-5 contract
+      - name: Install and validate schema-6 contract
         run: |
           set -euo pipefail; bun install --frozen-lockfile
           linux=$(cat "dist/worker-linux-$GITHUB_SHA/metadata.json"); linux_arm64=$(cat "dist/worker-linux-arm64-$GITHUB_SHA/metadata.json"); windows=$(cat "dist/worker-windows-$GITHUB_SHA/metadata.json"); macos=$(cat "dist/worker-macos-$GITHUB_SHA/metadata.json")
-          jq -n --arg buildId "$BUILD_ID" --arg contractVersion "$(cat "$CONTRACT_VERSION_FILE")" --argjson linux "$linux" --argjson linux_arm64 "$linux_arm64" --argjson windows "$windows" --argjson macos "$macos" '{schemaVersion:5,buildId:$buildId,contractVersion:$contractVersion,platforms:{"linux-x64":$linux,"linux-arm64":$linux_arm64,"windows-x64":$windows,"macos-arm64":$macos}}' > dist/worker-release-manifest.json
+          jq -n --arg buildId "$BUILD_ID" --arg contractVersion "$(cat "$CONTRACT_VERSION_FILE")" --argjson linux "$linux" --argjson linux_arm64 "$linux_arm64" --argjson windows "$windows" --argjson macos "$macos" '{schemaVersion:6,buildId:$buildId,contractVersion:$contractVersion,platforms:{"linux-x64":$linux,"linux-arm64":$linux_arm64,"windows-x64":$windows,"macos-arm64":$macos}}' > dist/worker-release-manifest.json
           bun -e 'import { WorkerReleaseManifest } from "./packages/contracts/src/worker-release.ts"; WorkerReleaseManifest.parse(JSON.parse(await Bun.file("dist/worker-release-manifest.json").text()))'
           mkdir -p dist/release; cp dist/worker-release-manifest.json dist/release/worker-release-manifest.json
           cp dist/worker-linux-arm64-$GITHUB_SHA/install-worker-linux-arm64.ps1 dist/release/install-worker-linux-arm64.ps1; cp dist/worker-linux-arm64-$GITHUB_SHA/linux-arm64-broker-compose.yaml dist/release/linux-arm64-broker-compose.yaml
@@ -268,7 +280,7 @@ jobs:
           cp dist/worker-linux-$GITHUB_SHA/mars-worker-golden.qcow2 dist/release/mars-worker-golden.qcow2
           cp dist/worker-linux-$GITHUB_SHA/linux-broker-compose.yaml dist/release/linux-broker-compose.yaml; cp dist/worker-linux-$GITHUB_SHA/worker-domain.xml dist/release/worker-domain.xml
           cp dist/worker-windows-$GITHUB_SHA/install-worker.ps1 dist/release/install-worker-windows-x64.ps1; cp dist/worker-windows-$GITHUB_SHA/mars-worker-tray.ps1 dist/release/mars-worker-tray.ps1; cp dist/worker-windows-$GITHUB_SHA/MARS.ico dist/release/MARS.ico; cp dist/worker-windows-$GITHUB_SHA/mars-orchestrator.exe dist/release/mars-orchestrator-windows-x64.exe; cp dist/worker-windows-$GITHUB_SHA/mars-job-agent.exe dist/release/mars-job-agent-windows-x64.exe; cp dist/worker-windows-$GITHUB_SHA/mars-service-host.exe dist/release/mars-service-host.exe
-          cp dist/worker-windows-$GITHUB_SHA/build-windows-container-image-local.ps1 dist/release/build-windows-container-image-local.ps1; cp dist/worker-windows-$GITHUB_SHA/verify-runtime.ps1 dist/release/verify-runtime.ps1; cp dist/worker-windows-$GITHUB_SHA/Containerfile dist/release/Containerfile; cp dist/worker-windows-$GITHUB_SHA/entrypoint.ps1 dist/release/entrypoint.ps1; cp dist/worker-windows-$GITHUB_SHA/mars-windows-runner.zip dist/release/mars-windows-runner.zip; cp dist/worker-windows-$GITHUB_SHA/mars-windows-git.zip dist/release/mars-windows-git.zip; cp dist/worker-windows-$GITHUB_SHA/mars-windows-vc-runtime.exe dist/release/mars-windows-vc-runtime.exe
+          cp dist/worker-windows-$GITHUB_SHA/build-windows-container-image-local.ps1 dist/release/build-windows-container-image-local.ps1; cp dist/worker-windows-$GITHUB_SHA/verify-runtime.ps1 dist/release/verify-runtime.ps1; cp dist/worker-windows-$GITHUB_SHA/Containerfile dist/release/Containerfile; cp dist/worker-windows-$GITHUB_SHA/entrypoint.ps1 dist/release/entrypoint.ps1; cp dist/worker-windows-$GITHUB_SHA/mars-windows-runner.zip dist/release/mars-windows-runner.zip; cp dist/worker-windows-$GITHUB_SHA/mars-windows-git.zip dist/release/mars-windows-git.zip; cp dist/worker-windows-$GITHUB_SHA/mars-windows-vc-runtime.exe dist/release/mars-windows-vc-runtime.exe; cp dist/worker-windows-$GITHUB_SHA/mars-windows-vm-provisioner.zip dist/release/mars-windows-vm-provisioner.zip
           cp dist/worker-macos-$GITHUB_SHA/install-worker-macos.sh dist/release/install-worker-macos-arm64.sh; cp dist/worker-macos-$GITHUB_SHA/mars-orchestrator dist/release/mars-orchestrator-macos-arm64; cp dist/worker-macos-$GITHUB_SHA/mars-job-agent dist/release/mars-job-agent-macos-arm64; cp dist/worker-macos-$GITHUB_SHA/mars-status-item dist/release/mars-status-item-macos-arm64; cp dist/worker-macos-$GITHUB_SHA/MARS.icns dist/release/MARS.icns; cp dist/worker-macos-$GITHUB_SHA/prepare-macos-job-image.sh dist/release/prepare-macos-job-image.sh
       - uses: actions/upload-artifact@v4
         with: { name: "worker-release-assets-${{ github.sha }}", path: dist/release }

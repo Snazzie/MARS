@@ -1,6 +1,7 @@
 import type { Sql } from "@mars/db";
 import { runtimeDriverForPlatform, runtimeDriverForWorker, type GuestPlatform } from "@mars/contracts";
 import { jsonParameter } from "@mars/db";
+import { storedWorkerDoctor, storedWorkerRuntimeMode, workerPoolEvidence } from "./worker-evidence.ts";
 
 type PoolDefaults = Partial<Record<GuestPlatform, string | undefined>>;
 type WorkerLimits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
@@ -34,7 +35,7 @@ function guestPlatformsForWorker(worker: Record<string, unknown>): GuestPlatform
 export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Promise<void> {
   const workers = await db`select platform, guest_platforms as "guestPlatforms", limits, doctor from workers where admission_state='adopted' and configuration_state='ready' order by created_at asc`;
   const configuredWorkers = workers
-    .map((worker) => ({ worker, limits: (typeof worker.limits === "string" ? JSON.parse(worker.limits) : worker.limits) as WorkerLimits, doctor: typeof worker.doctor === "string" ? JSON.parse(worker.doctor) : worker.doctor }))
+    .map((worker) => ({ worker, limits: (typeof worker.limits === "string" ? JSON.parse(worker.limits) : worker.limits) as WorkerLimits, doctor: storedWorkerDoctor(worker.doctor) }))
     .filter(({ worker }) => worker.limits);
   if (!configuredWorkers.length) return;
   const guestPlatforms = [...new Set(configuredWorkers.flatMap(({ worker }) => guestPlatformsForWorker(worker)))];
@@ -45,12 +46,15 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
     if (platform === "linux-arm64") {
       compatibleWorkers = compatibleWorkers.filter(({ worker }) => worker.platform === "macos-arm64");
       driver = "tart-vm";
-      imageDigest = compatibleWorkers.map(({ doctor }) => doctor?.artifactDigests?.["linux-arm64"]).find((digest): digest is string => typeof digest === "string");
-      if (imageDigest) compatibleWorkers = compatibleWorkers.filter(({ doctor }) => doctor?.artifactDigests?.["linux-arm64"] === imageDigest);
+      imageDigest = compatibleWorkers.map(({ doctor }) => (doctor.artifactDigests && typeof doctor.artifactDigests === "object" ? (doctor.artifactDigests as Record<string, unknown>)["linux-arm64"] : undefined)).find((digest): digest is string => typeof digest === "string");
+      if (imageDigest) compatibleWorkers = compatibleWorkers.filter(({ doctor }) => doctor.artifactDigests && typeof doctor.artifactDigests === "object" && (doctor.artifactDigests as Record<string, unknown>)["linux-arm64"] === imageDigest);
     } else {
-      if (platform === "windows-x64") driver = compatibleWorkers.some(({ doctor }) => doctor?.runtimeMode !== "vm") ? "windows-hyperv-container" : "windows-hyperv";
-      compatibleWorkers = compatibleWorkers.filter(({ worker, doctor }) => runtimeDriverForWorker(worker.platform, platform, doctor?.runtimeMode) === driver);
-      if (platform === "windows-x64") imageDigest = compatibleWorkers.map(({ doctor }) => doctor?.artifactDigest).find((digest): digest is string => typeof digest === "string") ?? imageDigest;
+      if (platform === "windows-x64") driver = compatibleWorkers.some(({ doctor }) => doctor.runtimeMode !== "vm") ? "windows-hyperv-container" : "windows-hyperv";
+      compatibleWorkers = compatibleWorkers.filter(({ worker, doctor }) => runtimeDriverForWorker(worker.platform, platform, storedWorkerRuntimeMode(doctor)) === driver);
+      if (platform === "windows-x64") {
+        imageDigest = compatibleWorkers.map(({ doctor }) => doctor.artifactDigest).find((digest): digest is string => typeof digest === "string");
+        if (imageDigest) compatibleWorkers = compatibleWorkers.filter(({ doctor }) => { const evidence = workerPoolEvidence(doctor, driver, imageDigest!, platform); return evidence.ready && evidence.imageMatches; });
+      }
     }
     const resources = poolResourcesForWorkers(compatibleWorkers.map(({ limits }) => limits));
     if (!resources || !imageDigest) continue;

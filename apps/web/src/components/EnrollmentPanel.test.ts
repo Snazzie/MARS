@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { buildInstallerCommand, buildInstallerCommands, connectedEnrollmentWorker, connectionSnapshot, normalizeControlPlaneUrls } from "./EnrollmentPanel.tsx";
+import { buildInstallerCommand, buildInstallerCommands, connectedEnrollmentWorker, connectionSnapshot, normalizeControlPlaneUrls, validWindowsVmImageOptions } from "./EnrollmentPanel.tsx";
 const url = "https://control.example/api/workers/installer?audience=linux-x64&runtime=container&connectOrigin=https%3A%2F%2Fcontrol.example";
 test("bootstrap status contract includes initialization generation and timestamps", () => {
   const status = {
@@ -60,11 +60,24 @@ test("uses the control-plane installer endpoint in production", () => {
   expect(command).toContain("connectOrigin=https%3A%2F%2Fcontrol.example");
   expect(command).not.toContain("releases/latest/download");
 });
-test("builds a Docker-free Hyper-V VM enrollment command", () => {
-  const command = buildInstallerCommands("https://control.example", "windows-x64", "code", "vm")[0]?.command ?? "";
-  expect(command).toContain("runtime=vm");
+test("builds a licensed ISO Hyper-V VM enrollment command", () => {
+  const command = buildInstallerCommands("https://control.example", "windows-x64", "code", "vm", {
+    source: "iso",
+    sourcePath: "D:\\Windows '11'.iso",
+    sourceSha256: "a".repeat(64),
+    imageName: "Windows 11 Pro",
+    acceptWindowsLicenseTerms: true,
+  })[0]?.command ?? "";
+  expect(command).toContain("runtime=vm&vmSource=iso");
   expect(command).toContain("-WindowsRuntime 'vm'");
-  expect(command).not.toContain("-WindowsRuntime 'container'");
+  expect(command).toContain("-WindowsSourcePath 'D:\\Windows ''11''.iso'");
+  expect(command).toContain("-WindowsImageName 'Windows 11 Pro' -AcceptWindowsLicenseTerms");
+});
+
+test("refuses incomplete local VM source fields and accepts prepared checkpoints", () => {
+  expect(validWindowsVmImageOptions({ source: "iso", sourcePath: "D:\\Windows.iso", sourceSha256: "A".repeat(64), imageName: "Windows 11 Pro", acceptWindowsLicenseTerms: true })).toBe(false);
+  expect(validWindowsVmImageOptions({ source: "checkpoint" })).toBe(true);
+  expect(() => buildInstallerCommands("https://control.example", "windows-x64", "code", "vm", { source: "vhdx" })).toThrow("source fields are invalid");
 });
 test("builds only the selected platform installer command", () => {
   const commands = buildInstallerCommands("https://control.example", "windows-x64", "one-use-code");

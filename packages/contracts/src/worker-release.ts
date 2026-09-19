@@ -71,7 +71,7 @@ export const LinuxArm64WorkerRelease = z.object({
 }).strict();
 export type LinuxArm64WorkerRelease = z.infer<typeof LinuxArm64WorkerRelease>;
 
-export const WindowsWorkerRelease = z.object({
+export const WindowsWorkerReleaseV5 = z.object({
   installer: hashedAsset,
   orchestrator: hashedAsset,
   serviceHost: hashedAsset,
@@ -91,6 +91,31 @@ export const WindowsWorkerRelease = z.object({
     entrypoint: hashedAsset,
   }).strict().optional(),
 }).strict();
+export type WindowsWorkerReleaseV5 = z.infer<typeof WindowsWorkerReleaseV5>;
+
+export const WindowsWorkerReleaseV6 = z.object({
+  installer: hashedAsset,
+  orchestrator: hashedAsset,
+  serviceHost: hashedAsset,
+  jobAgent: hashedAsset,
+  runner: hashedAsset,
+  git: hashedAsset,
+  vcRuntime: hashedAsset,
+  trayScript: hashedAsset.optional(),
+  vm: z.object({
+    checkpoint: hashedAsset.optional(),
+    provisioner: hashedAsset,
+  }).strict().optional(),
+  container: z.object({
+    baseImage: ociDigest,
+    buildScript: hashedAsset,
+    verifyScript: hashedAsset,
+    containerfile: hashedAsset,
+    entrypoint: hashedAsset,
+  }).strict().optional(),
+}).strict();
+export type WindowsWorkerReleaseV6 = z.infer<typeof WindowsWorkerReleaseV6>;
+export const WindowsWorkerRelease = z.union([WindowsWorkerReleaseV5, WindowsWorkerReleaseV6]);
 export type WindowsWorkerRelease = z.infer<typeof WindowsWorkerRelease>;
 export const MacosWorkerRelease = z.object({
   installer: hashedAsset,
@@ -105,18 +130,77 @@ export const MacosWorkerRelease = z.object({
 }).strict();
 export type MacosWorkerRelease = z.infer<typeof MacosWorkerRelease>;
 
-export const WorkerReleaseManifest = z.object({
+const workerReleasePlatformsV5 = z.object({
+  "linux-x64": LinuxWorkerRelease.nullable(),
+  "linux-arm64": LinuxArm64WorkerRelease.nullable(),
+  "windows-x64": WindowsWorkerReleaseV5.nullable(),
+  "macos-arm64": MacosWorkerRelease.nullable(),
+}).strict();
+
+const workerReleasePlatformsV6 = z.object({
+  "linux-x64": LinuxWorkerRelease.nullable(),
+  "linux-arm64": LinuxArm64WorkerRelease.nullable(),
+  "windows-x64": WindowsWorkerReleaseV6.nullable(),
+  "macos-arm64": MacosWorkerRelease.nullable(),
+}).strict();
+
+export const WorkerReleaseManifestV5 = z.object({
   schemaVersion: z.literal(5),
   buildId: z.string().min(1),
   contractVersion: WorkerContractVersion,
-  platforms: z.object({
-    "linux-x64": LinuxWorkerRelease.nullable(),
-    "linux-arm64": LinuxArm64WorkerRelease.nullable(),
-    "windows-x64": WindowsWorkerRelease.nullable(),
-    "macos-arm64": MacosWorkerRelease.nullable(),
-  }).strict(),
+  platforms: workerReleasePlatformsV5,
 }).strict();
+export type WorkerReleaseManifestV5 = z.infer<typeof WorkerReleaseManifestV5>;
+
+export const WorkerReleaseManifestV6 = z.object({
+  schemaVersion: z.literal(6),
+  buildId: z.string().min(1),
+  contractVersion: WorkerContractVersion,
+  platforms: workerReleasePlatformsV6,
+}).strict();
+export type WorkerReleaseManifestV6 = z.infer<typeof WorkerReleaseManifestV6>;
+
+export const WorkerReleaseManifest = z.discriminatedUnion("schemaVersion", [
+  WorkerReleaseManifestV5,
+  WorkerReleaseManifestV6,
+]);
 export type WorkerReleaseManifest = z.infer<typeof WorkerReleaseManifest>;
+
+export type NormalizedWindowsWorkerRelease = {
+  release: WindowsWorkerRelease;
+  installerContract: 5 | 6;
+  runner: HashedAsset;
+  git: HashedAsset;
+  vcRuntime: HashedAsset;
+  checkpoint?: HashedAsset;
+  provisioner?: HashedAsset;
+};
+
+export function normalizeWindowsWorkerRelease(manifest: WorkerReleaseManifest): NormalizedWindowsWorkerRelease | undefined {
+  if (manifest.schemaVersion === 5) {
+    const release: WindowsWorkerReleaseV5 | null = manifest.platforms["windows-x64"];
+    if (!release?.container) return undefined;
+    return {
+      release,
+      installerContract: 5,
+      runner: release.container.runner,
+      git: release.container.git,
+      vcRuntime: release.container.vcRuntime,
+      checkpoint: release.vm?.checkpoint,
+    };
+  }
+  const release: WindowsWorkerReleaseV6 | null = manifest.platforms["windows-x64"];
+  if (!release) return undefined;
+  return {
+    release,
+    installerContract: 6,
+    runner: release.runner,
+    git: release.git,
+    vcRuntime: release.vcRuntime,
+    checkpoint: release.vm?.checkpoint,
+    provisioner: release.vm?.provisioner,
+  };
+}
 
 export { sha256 as WorkerReleaseSha256, httpsUrl as WorkerReleaseHttpsUrl, ociDigest as WorkerReleaseOciDigest };
 export { hashedAsset as WorkerReleaseHashedAsset };
