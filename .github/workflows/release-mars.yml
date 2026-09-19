@@ -218,14 +218,27 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: "worker-macos-status-item-${{ github.sha }}", path: dist/macos }
       - name: Build macOS worker assets
+        env:
+          GH_TOKEN: "${{ github.token }}"
         run: |
-          set -euo pipefail; bun install --frozen-lockfile; mkdir -p dist/macos
+          set -euo pipefail
+          bun install --frozen-lockfile
+          mkdir -p dist/macos
           bun build apps/orchestrator/src/index.ts --compile --target=bun-darwin-arm64 --outfile=dist/macos/mars-orchestrator
           bun build apps/job-agent/src/index.ts --compile --target=bun-darwin-arm64 --outfile=dist/macos/mars-job-agent
+          cp assets/MARS.icns dist/macos/
+          bun build apps/job-agent/src/index.ts --compile --target=bun-linux-arm64 --outfile=dist/macos/mars-linux-arm64-job-agent
           cp deploy/workers/install-worker-macos.sh deploy/workers/prepare-macos-job-image.sh dist/macos/
-          digest=$(docker buildx imagetools inspect ghcr.io/cirruslabs/macos-sonoma-base:latest --format '{{.Manifest.Digest}}'); [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          runner_url=$(curl --fail --location --proto '=https' --tlsv1.2 -H "Authorization: Bearer $GH_TOKEN" 'https://api.github.com/repos/actions/runner/releases?per_page=30' | jq -r '[.[] | select(.draft == false and .prerelease == false)][0].assets[] | select(.name | test("^actions-runner-linux-arm64-[0-9.]+\\.tar\\.gz$")) | .browser_download_url')
+          [[ "$runner_url" == https://* ]] || { echo 'Actions Runner Linux ARM64 asset was not found' >&2; exit 1; }
+          curl --fail --location --proto '=https' --tlsv1.2 "$runner_url" --output dist/macos/mars-linux-arm64-runner.tar.gz
+          digest=$(docker buildx imagetools inspect ghcr.io/cirruslabs/macos-sonoma-base:latest --format '{{.Manifest.Digest}}')
+          linux_digest=$(docker buildx imagetools inspect ghcr.io/cirruslabs/ubuntu:latest --format '{{.Manifest.Digest}}')
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ && "$linux_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           chmod +x dist/macos/mars-status-item
-          jq -cn --arg tartSourceImage "ghcr.io/cirruslabs/macos-sonoma-base@$digest" --argjson installer "$(asset dist/macos/install-worker-macos.sh install-worker-macos-arm64.sh)" --argjson orchestrator "$(asset dist/macos/mars-orchestrator mars-orchestrator-macos-arm64)" --argjson jobAgent "$(asset dist/macos/mars-job-agent mars-job-agent-macos-arm64)" --argjson statusItem "$(asset dist/macos/mars-status-item mars-status-item-macos-arm64)" --argjson imagePreparationScript "$(asset dist/macos/prepare-macos-job-image.sh prepare-macos-job-image.sh)" '{installer:$installer,orchestrator:$orchestrator,jobAgent:$jobAgent,statusItem:$statusItem,imagePreparationScript:$imagePreparationScript,tartSourceImage:$tartSourceImage}' > dist/macos/metadata.json
+          base="https://github.com/Snazzie/MARS/releases/download/worker-v$WORKER_VERSION"
+          asset() { printf '{"url":"%s/%s","sha256":"%s"}' "$base" "$2" "$(sha256sum "$1" | cut -d' ' -f1)"; }
+          jq -cn --arg tartMacosSourceImage "ghcr.io/cirruslabs/macos-sonoma-base@$digest" --arg tartLinuxArm64SourceImage "ghcr.io/cirruslabs/ubuntu@$linux_digest" --argjson installer "$(asset dist/macos/install-worker-macos.sh install-worker-macos-arm64.sh)" --argjson orchestrator "$(asset dist/macos/mars-orchestrator mars-orchestrator-macos-arm64)" --argjson macosJobAgent "$(asset dist/macos/mars-job-agent mars-job-agent-macos-arm64)" --argjson linuxArm64JobAgent "$(asset dist/macos/mars-linux-arm64-job-agent mars-linux-arm64-job-agent)" --argjson linuxArm64Runner "$(asset dist/macos/mars-linux-arm64-runner.tar.gz mars-linux-arm64-runner.tar.gz)" --argjson imagePreparationScript "$(asset dist/macos/prepare-macos-job-image.sh prepare-macos-job-image.sh)" '{installer:$installer,orchestrator:$orchestrator,macosJobAgent:$macosJobAgent,linuxArm64JobAgent:$linuxArm64JobAgent,linuxArm64Runner:$linuxArm64Runner,imagePreparationScript:$imagePreparationScript,tartMacosSourceImage:$tartMacosSourceImage,tartLinuxArm64SourceImage:$tartLinuxArm64SourceImage}' > dist/macos/metadata.json
       - id: metadata
         run: echo "json=$(cat dist/macos/metadata.json)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
@@ -241,11 +254,11 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { pattern: worker-*, path: dist, merge-multiple: false }
-      - name: Install and validate schema-4 contract
+      - name: Install and validate schema-5 contract
         run: |
           set -euo pipefail; bun install --frozen-lockfile
           linux=$(cat "dist/worker-linux-$GITHUB_SHA/metadata.json"); linux_arm64=$(cat "dist/worker-linux-arm64-$GITHUB_SHA/metadata.json"); windows=$(cat "dist/worker-windows-$GITHUB_SHA/metadata.json"); macos=$(cat "dist/worker-macos-$GITHUB_SHA/metadata.json")
-          jq -n --arg buildId "$BUILD_ID" --arg contractVersion "$(cat "$CONTRACT_VERSION_FILE")" --argjson linux "$linux" --argjson linux_arm64 "$linux_arm64" --argjson windows "$windows" --argjson macos "$macos" '{schemaVersion:4,buildId:$buildId,contractVersion:$contractVersion,platforms:{"linux-x64":$linux,"linux-arm64":$linux_arm64,"windows-x64":$windows,"macos-arm64":$macos}}' > dist/worker-release-manifest.json
+          jq -n --arg buildId "$BUILD_ID" --arg contractVersion "$(cat "$CONTRACT_VERSION_FILE")" --argjson linux "$linux" --argjson linux_arm64 "$linux_arm64" --argjson windows "$windows" --argjson macos "$macos" '{schemaVersion:5,buildId:$buildId,contractVersion:$contractVersion,platforms:{"linux-x64":$linux,"linux-arm64":$linux_arm64,"windows-x64":$windows,"macos-arm64":$macos}}' > dist/worker-release-manifest.json
           bun -e 'import { WorkerReleaseManifest } from "./packages/contracts/src/worker-release.ts"; WorkerReleaseManifest.parse(JSON.parse(await Bun.file("dist/worker-release-manifest.json").text()))'
           mkdir -p dist/release; cp dist/worker-release-manifest.json dist/release/worker-release-manifest.json
           cp dist/worker-linux-arm64-$GITHUB_SHA/install-worker-linux-arm64.ps1 dist/release/install-worker-linux-arm64.ps1; cp dist/worker-linux-arm64-$GITHUB_SHA/linux-arm64-broker-compose.yaml dist/release/linux-arm64-broker-compose.yaml

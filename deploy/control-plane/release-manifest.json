@@ -1,7 +1,7 @@
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "buildId": "development",
-  "contractVersion": "0.2.0",
+  "contractVersion": "0.3.0",
   "platforms": {
     "linux-x64": null,
     "linux-arm64": null,

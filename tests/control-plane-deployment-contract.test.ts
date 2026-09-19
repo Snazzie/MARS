@@ -146,11 +146,11 @@ test("deployment guide documents Unraid preflight, ingress, and recovery", async
   expect(readme).not.toContain("tar -C /var/lib/mars");
 });
 
-test("schema-4 release fixture keeps unavailable platforms explicit", async () => {
+test("schema-5 release fixture keeps unavailable platforms explicit", async () => {
   const manifest = JSON.parse(await read("deploy/control-plane/release-manifest.json"));
   expect(manifest).toMatchObject({
-    schemaVersion: 4,
-    contractVersion: "0.2.0",
+    schemaVersion: 5,
+    contractVersion: "0.3.0",
     platforms: { "linux-x64": null, "linux-arm64": null, "windows-x64": null, "macos-arm64": null },
   });
   expect(manifest).not.toHaveProperty("windowsContainerBuild");

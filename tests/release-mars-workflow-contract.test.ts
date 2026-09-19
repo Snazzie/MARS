@@ -41,7 +41,7 @@ test("exact SHA CI and immutable worker assets are required", async () => {
   expect(source).toContain("worker-v<semver>");
   expect(source).toContain("docker manifest inspect");
   expect(source).toContain("DOCKER_CONFIG");
-  expect(source).toContain("schemaVersion:4");
+  expect(source).toContain("schemaVersion:5");
   expect(source).toContain("--platform linux/amd64");
 });
 
