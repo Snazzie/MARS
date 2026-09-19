@@ -32,6 +32,31 @@ Install dependencies:
 bun install
 ```
 
+## Windows worker runtimes
+
+Windows x64 workers support two explicit, non-fallback runtime modes:
+
+- **Docker / Windows containers** uses the existing digest-pinned local image and
+  mandatory Hyper-V container isolation.
+- **Hyper-V VM** creates a disposable Generation 2 VM and differencing VHDX for
+  each lease from a verified, read-only parent template. Docker is not installed
+  or used by this mode.
+
+Choose the runtime in the dashboard's Windows enrollment panel. The generated
+PowerShell command passes `-WindowsRuntime 'container'` or `-WindowsRuntime 'vm'`;
+upgrades preserve that selection.
+
+The VM mode requires Windows 11 Pro or Enterprise, Hyper-V, Administrator access,
+and a usable virtual switch. It uses `Default Switch` unless
+`MARS_HYPERV_SWITCH_NAME` is set on the worker host before installation. Prepare
+the parent VHDX with `deploy/workers/prepare-windows-hyperv-template.ps1`; the
+script verifies the source image and Actions Runner archive, installs the Mars job
+agent and runner, generalizes the guest, and emits the sealed VHDX plus manifest.
+Configure the control plane with `MARS_WINDOWS_TEMPLATE_PATH` or
+`MARS_WINDOWS_TEMPLATE_URL` and its SHA-256 value. Production release manifests
+may provide the same artifact as `windows.vm.template`; Docker-only releases
+remain valid.
+
 ## Local development
 
 Copy the example environment file and set the required origins and database values:

@@ -18,7 +18,7 @@ function bytesToGigabytes(value: number): number { return Math.max(1, Math.ceil(
 export interface HyperVRuntime {
   verifyHost(): Promise<void>;
   createDifferencingDisk(parent: string, child: string): Promise<void>;
-  createVm(input: { name: string; diskPath: string; resources: PoolResources }): Promise<void>;
+  createVm(input: { name: string; diskPath: string; resources: PoolResources; switchName: string }): Promise<void>;
   copyBootstrap(vmName: string, sourcePath: string, guestPath: string): Promise<void>;
   start(vmName: string): Promise<void>;
   waitForGuestReady(vmName: string, timeoutMs: number): Promise<void>;
@@ -38,7 +38,7 @@ export function createHyperVRuntime(run: HyperVRunner = defaultRunner): HyperVRu
   return {
     verifyHost: async () => { await invoke("if ((Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All).State -ne 'Enabled') { exit 1 }; if (-not (Get-VMHost)) { exit 1 }"); },
     createDifferencingDisk: async (parent, child) => { await invoke("New-VHD -Path $args[1] -ParentPath $args[0] -Differencing | Out-Null", [parent, child]); },
-    createVm: async ({ name, diskPath, resources }) => { await invoke("$vm=New-VM -Name $args[0] -Generation 2 -MemoryStartupBytes ($args[2]*1MB) -VHDPath $args[1]; Set-VMProcessor -VM $vm -Count $args[3]; Set-VMMemory -VM $vm -DynamicMemoryEnabled $false -StartupBytes ($args[2]*1MB); Set-VM -VM $vm -AutomaticStopAction ShutDown | Out-Null; Set-VM -VM $vm -AutomaticCheckpointsEnabled $false | Out-Null; Enable-VMIntegrationService -VM $vm -Name 'Guest Service Interface' | Out-Null", [name, diskPath, String(bytesToMegabytes(resources.memoryBytes)), String(resources.vcpu)]); },
+    createVm: async ({ name, diskPath, resources, switchName }) => { await invoke("$vm=New-VM -Name $args[0] -Generation 2 -MemoryStartupBytes ($args[2]*1MB) -VHDPath $args[1] -SwitchName $args[4]; Set-VMProcessor -VM $vm -Count $args[3]; Set-VMMemory -VM $vm -DynamicMemoryEnabled $false -StartupBytes ($args[2]*1MB); Set-VMFirmware -VM $vm -EnableSecureBoot On -SecureBootTemplate MicrosoftWindows; Set-VM -VM $vm -AutomaticStopAction ShutDown | Out-Null; Set-VM -VM $vm -AutomaticCheckpointsEnabled $false | Out-Null; Enable-VMIntegrationService -VM $vm -Name 'Guest Service Interface' | Out-Null", [name, diskPath, String(bytesToMegabytes(resources.memoryBytes)), String(resources.vcpu), switchName]); },
     copyBootstrap: async (vmName, sourcePath, guestPath) => { await invoke("Copy-VMFile -Name $args[0] -SourcePath $args[1] -DestinationPath $args[2] -FileSource Host -CreateFullPath", [vmName, sourcePath, guestPath]); },
     start: async vmName => { await invoke("Start-VM -Name $args[0] | Out-Null", [vmName]); },
     waitForGuestReady: async (vmName, timeoutMs) => { await invoke("$deadline=(Get-Date).AddMilliseconds($args[1]); do { $heartbeat=Get-VMIntegrationService -VMName $args[0] -Name 'Heartbeat' -ErrorAction SilentlyContinue; if ($heartbeat -and $heartbeat.PrimaryStatusDescription -eq 'OK') { exit 0 }; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $deadline); exit 1", [vmName, String(timeoutMs)]); },
@@ -70,7 +70,7 @@ export class HyperVDriver implements RuntimeDriver {
     await writeFile(bootstrapPath, JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig, ...(lease.workerCache ? { workerCache: lease.workerCache } : {}) }), { flag: "wx", mode: 0o600 });
     try {
       await this.hyperv.createDifferencingDisk(this.templatePath, diskPath);
-      await this.hyperv.createVm({ name: vmName, diskPath, resources: lease.resources });
+      await this.hyperv.createVm({ name: vmName, diskPath, resources: lease.resources, switchName: Bun.env.MARS_HYPERV_SWITCH_NAME?.trim() || "Default Switch" });
       await this.hyperv.start(vmName);
       await this.hyperv.waitForGuestReady(vmName, Number(Bun.env.MARS_HYPERV_READY_TIMEOUT_MS ?? 120_000));
       await this.hyperv.copyBootstrap(vmName, bootstrapPath, "C:\\ProgramData\\Mars\\bootstrap.json");

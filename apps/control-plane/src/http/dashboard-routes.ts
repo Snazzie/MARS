@@ -56,6 +56,14 @@ const workerLogQuerySchema = z.object({
   maxBytes: z.coerce.number().int().min(1).max(128 * 1024).default(64 * 1024),
 }).strict();
 const mutationSchema = z.object({}).strict();
+const storedWorkerRuntimeMode = (value: unknown): "container" | "vm" | "tart" | undefined => {
+  if (!value || typeof value !== "object") return undefined;
+  const direct = "runtimeMode" in value ? value.runtimeMode : undefined;
+  if (direct === "container" || direct === "vm" || direct === "tart") return direct;
+  const nested = "doctor" in value ? value.doctor : undefined;
+  if (!nested || typeof nested !== "object" || !("runtimeMode" in nested)) return undefined;
+  return nested.runtimeMode === "container" || nested.runtimeMode === "vm" || nested.runtimeMode === "tart" ? nested.runtimeMode : undefined;
+};
 
 function error(c: any, status: number, code: string, message: string, details?: Record<string, unknown>) {
   return c.json(ApiError.parse({ code, message, requestId: c.req.header("x-request-id") || crypto.randomUUID(), ...(details ? { details } : {}) }), status, { "cache-control": "no-store" });
@@ -387,7 +395,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!worker) return { error: "not_found" as const };
     if (worker.admissionState !== "adopted" || worker.configurationState !== "ready" || worker.configurationRevision !== worker.appliedConfigurationRevision) return { error: "worker_not_ready" as const };
     if (!(Array.isArray(worker.guestPlatforms) ? worker.guestPlatforms : [worker.platform]).includes(body.guestPlatform)) return { error: "worker_guest_platform_unsupported" as const };
-    const driver = runtimeDriverForWorker(worker.platform, body.guestPlatform);
+    const driver = runtimeDriverForWorker(worker.platform, body.guestPlatform, storedWorkerRuntimeMode(worker.doctor));
     if (!driver) return { error: "runtime_unsupported" as const };
     const doctor = worker.doctor && typeof worker.doctor === "object" ? worker.doctor as Record<string, unknown> : {};
     if (driver === "tart-vm") {
@@ -449,7 +457,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const [pool] = await deps.db`SELECT id,platform,driver,image_digest AS "imageDigest" FROM runner_pools WHERE id=${poolId} AND organization_id IS NULL`;
     if (!pool) return error(c, 404, "not_found", "Pool not found");
     if (action === "enable") {
-      const [ready] = await deps.db`SELECT w.id FROM workers w WHERE w.admission_state='adopted' AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false AND w.last_heartbeat_at>now()-interval '90 seconds' AND w.doctor_observed_at IS NOT NULL AND ${pool.platform}=ANY(SELECT jsonb_array_elements_text(w.guest_platforms)) AND ${pool.driver}=CASE WHEN w.platform='macos-arm64' AND ${pool.platform} IN ('macos-arm64','linux-arm64') THEN 'tart-vm' WHEN ${pool.platform}=w.platform THEN CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN 'windows-hyperv-container' WHEN 'macos-arm64' THEN 'tart-vm' END ELSE NULL END AND (${pool.driver}<>'tart-vm' OR w.doctor->'artifactDigests'->>${pool.platform}=${pool.imageDigest}) LIMIT 1`;
+      const [ready] = await deps.db`SELECT w.id FROM workers w WHERE w.admission_state='adopted' AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false AND w.last_heartbeat_at>now()-interval '90 seconds' AND w.doctor_observed_at IS NOT NULL AND ${pool.platform}=ANY(SELECT jsonb_array_elements_text(w.guest_platforms)) AND ${pool.driver}=CASE WHEN w.platform='macos-arm64' AND ${pool.platform} IN ('macos-arm64','linux-arm64') THEN 'tart-vm' WHEN ${pool.platform}=w.platform THEN CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN CASE WHEN w.doctor->'doctor'->>'runtimeMode'='vm' THEN 'windows-hyperv' ELSE 'windows-hyperv-container' END WHEN 'macos-arm64' THEN 'tart-vm' END ELSE NULL END AND (${pool.driver}<>'tart-vm' OR w.doctor->'artifactDigests'->>${pool.platform}=${pool.imageDigest}) LIMIT 1`;
       if (!ready || (deps.workerConnected ? !deps.workerConnected(String(ready.id)) : false)) return error(c, 409, "no_compatible_ready_worker", "No compatible ready worker is connected for this pool");
     }
     await deps.db`UPDATE runner_pools SET enabled=${action === "enable"} WHERE id=${poolId} AND organization_id IS NULL`;
@@ -465,7 +473,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (w.platform === "linux-x64") return error(c, 422, "runtime_unsupported", "Linux runners are not available in this release");
     if (w.admissionState !== "adopted" || (deps.workerConnected ? !deps.workerConnected(body.workerId) : false) || w.configurationState !== "ready" || w.draining) return error(c, 422, "worker_not_ready", "Worker is not ready");
     if (!(Array.isArray(w.guestPlatforms) ? w.guestPlatforms : [w.platform]).includes(body.guestPlatform)) return error(c, 422, "worker_guest_platform_unsupported", "Worker does not support the requested guest platform");
-    const driver = runtimeDriverForWorker(w.platform, body.guestPlatform);
+    const driver = runtimeDriverForWorker(w.platform, body.guestPlatform, storedWorkerRuntimeMode(w.doctor));
     if (!driver) return error(c, 422, "runtime_unsupported", "Worker cannot provide the requested runtime");
     if (driver === "tart-vm") {
       const doctor = w.doctor && typeof w.doctor === "object" ? w.doctor as Record<string, unknown> : {};

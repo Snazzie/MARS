@@ -53,8 +53,11 @@ test("makes native PowerShell cmdlet errors terminating", () => {
 });
 test("configures disposable runner VM host settings", async () => {
   const scripts: string[] = [];
-  const runtime = createHyperVRuntime(async script => { scripts.push(script); return { code: 0, stdout: "", stderr: "" }; });
-  await runtime.createVm({ name: "runner", diskPath: "runner.vhdx", resources: lease.resources });
+  const commandArgs: string[][] = [];
+  const runtime = createHyperVRuntime(async (script, args) => { scripts.push(script); commandArgs.push(args); return { code: 0, stdout: "", stderr: "" }; });
+  await runtime.createVm({ name: "runner", diskPath: "runner.vhdx", resources: lease.resources, switchName: "Mars Switch" });
   expect(scripts[0]).toContain("Set-VM -VM $vm -AutomaticCheckpointsEnabled $false");
+  expect(scripts[0]).toContain("-SwitchName $args[4]");
+  expect(commandArgs[0]?.[4]).toBe("Mars Switch");
   expect(scripts[0]).toContain("Enable-VMIntegrationService -VM $vm -Name 'Guest Service Interface'");
 });

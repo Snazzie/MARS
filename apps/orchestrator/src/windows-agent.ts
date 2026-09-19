@@ -1,6 +1,6 @@
 import { generateKeyPairSync, sign as signMessage, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
-import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, WorkerDoctorData, WorkerDoctorReport, WorkerEvent, type WorkerCapacityData, type WorkerContainerStatus, type LeaseBootstrapEnvelope } from "@mars/contracts";
 import { collectWorkerServiceLogs } from "./worker-service-logs.ts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
@@ -54,7 +54,9 @@ export const windowsDoctor = async (preserveLeases = false): Promise<WorkerDocto
   const artifactValue = runtimeMode === "container" ? Bun.env.MARS_WINDOWS_CONTAINER_IMAGE : Bun.env.MARS_WINDOWS_TEMPLATE_DIGEST;
   const localVerification = runtimeMode === "container" ? await localImageVerification(artifactValue ?? "") : { manifest: false, entrypoint: true };
   const localManifest = localVerification.manifest;
-  const immutableArtifact = localManifest || (typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactValue));
+  const templatePresent = runtimeMode === "vm" && Boolean(Bun.env.MARS_WINDOWS_TEMPLATE_PATH) && await stat(Bun.env.MARS_WINDOWS_TEMPLATE_PATH!).then(value => value.isFile()).catch(() => false);
+  const digestPinned = typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactValue);
+  const immutableArtifact = runtimeMode === "container" ? localManifest || digestPinned : templatePresent && digestPinned;
   const probe = runtimeMode === "container"
     ? await commandSucceeds(["docker.exe", "info", "--format", "{{.OSType}}"])
     : await commandSucceeds(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-VMHost -ErrorAction Stop | Out-Null"]);
@@ -68,10 +70,10 @@ export const windowsDoctor = async (preserveLeases = false): Promise<WorkerDocto
   const failures = [
     !probe && `${runtimeMode === "container" ? "Windows container host" : "Hyper-V host"} probe failed`,
     !egress && "GitHub egress probe failed",
-    !immutableArtifact && "Verified Windows container image manifest is missing or stale",
+    !immutableArtifact && (runtimeMode === "container" ? "Verified Windows container image manifest is missing or stale" : "Verified Windows VM template is missing or invalid"),
     runtimeMode === "container" && localManifest && !localVerification.entrypoint && "Windows container image entrypoint is invalid",
   ].filter((failure): failure is string => Boolean(failure));
-  const artifactDigest = localVerification.imageId ?? (typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i.test(artifactValue) ? artifactValue : undefined);
+  const artifactDigest = localVerification.imageId ?? (digestPinned ? artifactValue : undefined);
   return WorkerDoctorData.parse({ runtimeMode, preserveLeases, ...(runtimeMode === "container" ? { artifactSource: "worker_local", ...(artifactValue ? { artifactIdentity: artifactValue } : {}) } : { artifactSource: "template", ...(artifactDigest ? { artifactDigest } : {}) }), ...(artifactDigest ? { artifactDigest } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
 };
 const joinCode = async () => { const path = Bun.env.MARS_JOIN_CODE_FILE; if (path) return (await readFile(path, "utf8")).trim(); const reader = Bun.stdin.stream().getReader(); const { value } = await reader.read(); reader.releaseLock(); return Buffer.from(value ?? []).toString("utf8").trim(); };

@@ -28,6 +28,7 @@ const valid = {
       orchestrator: asset("windows-orchestrator.exe"),
       serviceHost: asset("windows-service-host.exe"),
       jobAgent: asset("windows-job-agent.exe"),
+      vm: { template: asset("windows-worker.vhdx") },
       container: {
         baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}`,
         runner: asset("windows-runner.zip"),
@@ -52,7 +53,7 @@ const valid = {
   },
 };
 
-test("accepts a complete schema-4 release manifest", () => {
+test("accepts a complete schema-5 release manifest with both Windows runtimes", () => {
   expect(WorkerReleaseManifest.parse(valid)).toEqual(valid);
 });
 

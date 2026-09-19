@@ -77,6 +77,9 @@ export const WindowsWorkerRelease = z.object({
   serviceHost: hashedAsset,
   jobAgent: hashedAsset,
   trayScript: hashedAsset.optional(),
+  vm: z.object({
+    template: hashedAsset,
+  }).strict().optional(),
   container: z.object({
     baseImage: ociDigest,
     runner: hashedAsset,
@@ -86,7 +89,7 @@ export const WindowsWorkerRelease = z.object({
     verifyScript: hashedAsset,
     containerfile: hashedAsset,
     entrypoint: hashedAsset,
-  }).strict(),
+  }).strict().optional(),
 }).strict();
 export type WindowsWorkerRelease = z.infer<typeof WindowsWorkerRelease>;
 export const MacosWorkerRelease = z.object({

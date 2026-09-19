@@ -60,6 +60,12 @@ test("uses the control-plane installer endpoint in production", () => {
   expect(command).toContain("connectOrigin=https%3A%2F%2Fcontrol.example");
   expect(command).not.toContain("releases/latest/download");
 });
+test("builds a Docker-free Hyper-V VM enrollment command", () => {
+  const command = buildInstallerCommands("https://control.example", "windows-x64", "code", "vm")[0]?.command ?? "";
+  expect(command).toContain("runtime=vm");
+  expect(command).toContain("-WindowsRuntime 'vm'");
+  expect(command).not.toContain("-WindowsRuntime 'container'");
+});
 test("builds only the selected platform installer command", () => {
   const commands = buildInstallerCommands("https://control.example", "windows-x64", "one-use-code");
   expect(commands).toHaveLength(1);

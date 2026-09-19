@@ -2,6 +2,7 @@
 param(
   [string]$VmName = 'Windows 11 dev environment',
   [string]$AgentPath = '',
+  [string]$RunnerArchivePath = '',
   [string]$TemplateDirectory = 'C:\ProgramData\Mars\templates'
 )
 $ErrorActionPreference = 'Stop'
@@ -18,6 +19,8 @@ Require-Administrator
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $AgentPath = if ($AgentPath) { $AgentPath } else { Join-Path $repoRoot 'apps\job-agent\dist\mars-job-agent.exe' }
 if (-not (Test-Path -LiteralPath $AgentPath -PathType Leaf)) { throw "Job agent not found: $AgentPath" }
+$RunnerArchivePath = if ($RunnerArchivePath) { $RunnerArchivePath } else { Join-Path $repoRoot 'dist\windows\mars-windows-runner.zip' }
+if (-not (Test-Path -LiteralPath $RunnerArchivePath -PathType Leaf)) { throw "Actions Runner archive not found: $RunnerArchivePath" }
 $prepare = Join-Path $PSScriptRoot 'prepare-windows-hyperv-template.ps1'
 if (-not (Test-Path -LiteralPath $prepare -PathType Leaf)) { throw "Template preparation script not found: $prepare" }
 
@@ -42,7 +45,7 @@ $sourceDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath $source).Hash
 $outputVhdx = Join-Path $TemplateDirectory 'windows.vhdx'
 $outputManifest = Join-Path $TemplateDirectory 'windows-manifest.json'
 $credential = Get-Credential -UserName 'MarsAdmin' -Message 'Enter the local administrator credentials for the developer VM'
-& $prepare -SourceVhdx $source -SourceSha256 $sourceDigest -JobAgentPath $AgentPath -OutputVhdx $outputVhdx -OutputManifest $outputManifest -GuestCredential $credential -SourceUrl 'https://developer.microsoft.com/en-us/windows/downloads/virtual-machines/'
+& $prepare -SourceVhdx $source -SourceSha256 $sourceDigest -JobAgentPath $AgentPath -RunnerArchivePath $RunnerArchivePath -RunnerArchiveSha256 (Get-FileHash -Algorithm SHA256 -LiteralPath $RunnerArchivePath).Hash -OutputVhdx $outputVhdx -OutputManifest $outputManifest -GuestCredential $credential -SourceUrl 'https://developer.microsoft.com/en-us/windows/downloads/virtual-machines/'
 if (-not $? -or -not (Test-Path -LiteralPath $outputVhdx -PathType Leaf) -or -not (Test-Path -LiteralPath $outputManifest -PathType Leaf)) { throw 'Template preparation did not produce the sealed VHDX and manifest.' }
 $sealedDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath $outputVhdx).Hash.ToLowerInvariant()
 Write-Output "Template: $outputVhdx"

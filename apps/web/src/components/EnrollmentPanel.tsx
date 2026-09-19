@@ -25,9 +25,10 @@ export function buildInstallerCommand(installer: string, audience: RuntimePlatfo
   const protocol = url.protocol.slice(0, -1);
   const tls = protocol === "https" ? " --tlsv1.3" : "";
   if (audience === "windows-x64" || audience === "linux-arm64") {
-    const codeArg = code ? (audience === "windows-x64" ? ` -Code ${quotePowerShell(code)}` : ` -Code ${quotePowerShell(code)}`) : "";
-    const insecureArg = selectedOrigin.startsWith("http:") ? (audience === "windows-x64" ? " -AllowInsecureHttp" : "") : "";
-    const args = audience === "windows-x64" ? ` -ControlPlaneUrl ${quotePowerShell(selectedOrigin)} -WindowsRuntime 'container'${codeArg}${insecureArg}` : ` -ControlPlaneUrl ${quotePowerShell(selectedOrigin)}${codeArg}`;
+    const codeArg = code ? ` -Code ${quotePowerShell(code)}` : "";
+    const insecureArg = selectedOrigin.startsWith("http:") && audience === "windows-x64" ? " -AllowInsecureHttp" : "";
+    const windowsRuntime = url.searchParams.get("runtime") === "vm" ? "vm" : "container";
+    const args = audience === "windows-x64" ? ` -ControlPlaneUrl ${quotePowerShell(selectedOrigin)} -WindowsRuntime '${windowsRuntime}'${codeArg}${insecureArg}` : ` -ControlPlaneUrl ${quotePowerShell(selectedOrigin)}${codeArg}`;
     return `$marsInstaller = Join-Path $env:TEMP ("mars-installer-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${protocol}'${tls} --output $marsInstaller '${url}'\n  if ($LASTEXITCODE -ne 0) { throw "Installer download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $marsInstaller${args}\n} finally {\n  Remove-Item -LiteralPath $marsInstaller -Force -ErrorAction SilentlyContinue\n}`;
   }
   const shell = audience === "macos-arm64" ? "zsh" : "bash";
@@ -36,10 +37,11 @@ export function buildInstallerCommand(installer: string, audience: RuntimePlatfo
   const controlPlaneEnv = `PUBLIC_BASE_URL=${quoteShell(selectedOrigin)} `;
   return `set -e\nmarsInstaller="$(mktemp "\${TMPDIR:-/tmp}/mars-installer.XXXXXX")"\ntrap 'rm -f "$marsInstaller"' EXIT\ncurl --fail --proto '=${protocol}'${tls} --output "$marsInstaller" ${quoteShell(url.toString())}\n${controlPlaneEnv}${shell} "$marsInstaller"${controlPlaneArg}${codeArg}`;
 }
-export function buildInstallerCommands(origin: string, audience: RuntimePlatform, code?: string): { label: string; command: string }[] {
-  const labels: Record<RuntimePlatform, string> = { "linux-x64": "Linux x64", "linux-arm64": "Linux ARM64 (Docker Desktop)", "windows-x64": "Windows x64 (container)", "macos-arm64": "macOS arm64" };
+export function buildInstallerCommands(origin: string, audience: RuntimePlatform, code?: string, windowsRuntime: "container" | "vm" = "container"): { label: string; command: string }[] {
+  const labels: Record<RuntimePlatform, string> = { "linux-x64": "Linux x64", "linux-arm64": "Linux ARM64 (Docker Desktop)", "windows-x64": windowsRuntime === "vm" ? "Windows x64 (Hyper-V VM)" : "Windows x64 (container)", "macos-arm64": "macOS arm64" };
   const selectedOrigin = new URL(origin).origin;
-  const installer = `${selectedOrigin}/api/workers/installer?audience=${audience}&runtime=container&connectOrigin=${encodeURIComponent(selectedOrigin)}`;
+  const runtime = audience === "windows-x64" ? windowsRuntime : "container";
+  const installer = `${selectedOrigin}/api/workers/installer?audience=${audience}&runtime=${runtime}&connectOrigin=${encodeURIComponent(selectedOrigin)}`;
   return [{ label: labels[audience], command: buildInstallerCommand(installer, audience, code, selectedOrigin) }];
 }
 export function normalizeControlPlaneUrls(values: readonly string[]): string[] {
@@ -62,6 +64,7 @@ type EnrollmentPanelProps = {
 
 export function EnrollmentPanel({ workers, onConnected, showRotation = true }: EnrollmentPanelProps) {
   const [audience, setAudience] = useState<RuntimePlatform>("linux-x64");
+  const [windowsRuntime, setWindowsRuntime] = useState<"container" | "vm">("container");
   const [reveal, setReveal] = useState<Reveal | null>(null);
   const [status, setStatus] = useState<{ initialized: boolean } | null>(null);
   const [controlPlaneUrls, setControlPlaneUrls] = useState<string[]>([]);
@@ -95,7 +98,7 @@ export function EnrollmentPanel({ workers, onConnected, showRotation = true }: E
   }, [connectedWorkerId, onConnected, reveal, snapshot, workers]);
   const selectedUrl = controlPlaneUrl;
   const validSelectedUrl = controlPlaneUrls.includes(selectedUrl);
-  const commandBlocks = reveal && validSelectedUrl ? buildInstallerCommands(selectedUrl, audience, reveal.code) : [];
+  const commandBlocks = reveal && validSelectedUrl ? buildInstallerCommands(selectedUrl, audience, reveal.code, windowsRuntime) : [];
   async function create() {
     if (showRotation && status?.initialized && !window.confirm("Rotate the bootstrap code? The previous code will stop working immediately.")) return;
     setPending(true);
@@ -121,6 +124,7 @@ export function EnrollmentPanel({ workers, onConnected, showRotation = true }: E
     <h2 id="enrollment-title">Bring an appliance online</h2>
     {connectedWorkerId ? <div role="status"><h3>Worker connected</h3><p>The worker is ready for identity verification and selection.</p><Button label="Enroll another worker" variant="secondary" clickAction={reset} /></div> : <>
       <label>Target platform<select value={audience} onChange={(event) => setAudience(event.target.value as RuntimePlatform)}><option value="linux-x64">Linux x64</option><option value="linux-arm64">Linux ARM64 (Docker Desktop)</option><option value="windows-x64">Windows x64</option><option value="macos-arm64">macOS arm64</option></select></label>
+      {audience === "windows-x64" && <label>Windows runtime<select value={windowsRuntime} onChange={(event) => setWindowsRuntime(event.target.value as "container" | "vm")}><option value="container">Docker Windows container</option><option value="vm">Hyper-V virtual machine</option></select></label>}
       <label>Control-plane URL<select value={controlPlaneUrl} onChange={(event) => setControlPlaneUrl(event.target.value)}>{controlPlaneUrls.map((url) => <option key={url} value={url}>{url}</option>)}</select></label>
       {reveal ? <div><p><strong>Bootstrap code (showing once)</strong></p><code>{reveal.code}</code><p>Copy the command below and run it on the target machine.</p>{commandBlocks.map(({ label, command: block }) => <div key={label}><h3>{label}</h3><pre>{block}</pre><Button label="Copy install command" variant="secondary" clickAction={() => void navigator.clipboard.writeText(block)} /></div>)}</div> : <div><p>Choose a target platform and approved control-plane URL, then generate a one-use bootstrap code.</p><Button label="Generate bootstrap code" variant="primary" clickAction={() => void create()} isDisabled={pending || !status || !validSelectedUrl} /></div>}
     </>}

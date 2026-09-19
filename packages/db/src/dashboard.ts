@@ -540,11 +540,11 @@ export async function getWorkerHealth(db: DashboardDb, workerId: string, workerC
 }
 function normalizeWorker(row: Record<string, unknown>, workerConnected?: (workerId: string) => boolean): WorkerDetail {
   const platform = RuntimePlatform.parse(row.platform);
-  const driver = RuntimeDriverName.parse(platform === "linux-x64" ? "linux-libvirt-vm" : platform === "windows-x64" ? "windows-hyperv-container" : "tart-vm");
   const rawGuestPlatforms = jsonValue(row.guestPlatforms);
   const guestPlatforms = Array.isArray(rawGuestPlatforms) && rawGuestPlatforms.length > 0 ? rawGuestPlatforms.map((value) => GuestPlatform.parse(value)) : [platform];
   const limitsValue = WorkerLimits.safeParse(jsonValue(row.limits));
   const doctor = workerDoctor(row.doctor);
+  const driver = RuntimeDriverName.parse(platform === "windows-x64" && doctor?.runtimeMode === "vm" ? "windows-hyperv" : platform === "linux-x64" ? "linux-libvirt-vm" : platform === "windows-x64" ? "windows-hyperv-container" : platform === "linux-arm64" ? "linux-docker-container" : "tart-vm");
   const timestamp = (value: unknown) => {
     const date = value instanceof Date ? value : typeof value === "string" ? new Date(value) : null;
     return date && Number.isFinite(date.getTime()) ? date.toISOString() : null;

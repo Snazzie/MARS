@@ -20,6 +20,10 @@ export type DevelopmentWindowsArtifacts = {
   orchestrator: DevelopmentArtifact;
   serviceHost: DevelopmentArtifact;
   jobAgent?: DevelopmentArtifact;
+  trayScript?: DevelopmentArtifact;
+  vm?: {
+    template: DevelopmentArtifact;
+  };
   container?: {
     baseImage: string;
     runner: DevelopmentArtifact;

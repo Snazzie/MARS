@@ -81,11 +81,23 @@ const liveHealthFixture = (connection: Partial<WorkerHealth["connection"]> = {})
   containers: [],
   jobs: [],
 });
-const renderCard = (worker: WorkerDetail, health?: WorkerHealth) => {
+const renderCard = (worker: WorkerDetail, health?: WorkerHealth, canManage = false) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (health) client.setQueryData(["worker-health", worker.id], health);
-  return renderToStaticMarkup(<QueryClientProvider client={client}><WorkerCard worker={worker} organizationId="all" onChange={() => {}} /></QueryClientProvider>);
+  return renderToStaticMarkup(<QueryClientProvider client={client}><WorkerCard worker={worker} organizationId="all" onChange={() => {}} canManage={canManage} /></QueryClientProvider>);
 };
+
+test("renders VM-specific Windows controls without container image actions", () => {
+  const markup = renderCard(workerFixture({
+    name: "vm-worker",
+    platform: "windows-x64",
+    driver: "windows-hyperv",
+    guestPlatforms: ["windows-x64"],
+    runtimeMode: "vm",
+  }), undefined, true);
+  expect(markup).toContain("Preserve failed VMs");
+  expect(markup).not.toContain("Build local image");
+});
 
 test("keeps worker health authoritative and cache inventory compact", () => {
   const markup = renderCard(cacheWorkerFixture());

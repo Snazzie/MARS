@@ -3,6 +3,8 @@ param(
   [Parameter(Mandatory)][string]$SourceVhdx,
   [Parameter(Mandatory)][string]$SourceSha256,
   [Parameter(Mandatory)][string]$JobAgentPath,
+  [Parameter(Mandatory)][string]$RunnerArchivePath,
+  [Parameter(Mandatory)][string]$RunnerArchiveSha256,
   [Parameter(Mandatory)][string]$OutputVhdx,
   [Parameter(Mandatory)][string]$OutputManifest,
   [Parameter(Mandatory)][System.Management.Automation.PSCredential]$GuestCredential,
@@ -13,6 +15,8 @@ function Digest([string]$path) { 'sha256:' + (Get-FileHash -Algorithm SHA256 -Li
 function AssertDigest([string]$actual, [string]$expected, [string]$label) { $normalized = $expected.ToLowerInvariant(); if ($normalized -notmatch '^sha256:[0-9a-f]{64}$' -or $actual -ne $normalized) { throw "$label checksum mismatch: expected $expected, got $actual" } }
 if (-not (Test-Path -LiteralPath $SourceVhdx -PathType Leaf)) { throw "Source VHDX not found: $SourceVhdx" }
 if (-not (Test-Path -LiteralPath $JobAgentPath -PathType Leaf)) { throw "Job agent not found: $JobAgentPath" }
+if (-not (Test-Path -LiteralPath $RunnerArchivePath -PathType Leaf)) { throw "Actions Runner archive not found: $RunnerArchivePath" }
+AssertDigest (Digest $RunnerArchivePath) ("sha256:" + $RunnerArchiveSha256.Trim().ToLowerInvariant().Replace('sha256:','')) 'Actions Runner archive'
 AssertDigest (Digest $SourceVhdx) ("sha256:" + $SourceSha256.Trim().ToLowerInvariant().Replace('sha256:','')) 'source VHDX'
 if ((Get-VHD -Path $SourceVhdx).VhdType -eq 'Differencing') { throw 'Source VHDX must be a sealed non-differencing parent.' }
 $name = "mars-template-$([guid]::NewGuid().ToString('N'))"
@@ -31,16 +35,20 @@ try {
   do { Start-Sleep -Seconds 2; $heartbeat = (Get-VMIntegrationService -VMName $name -Name 'Heartbeat').PrimaryStatusDescription } while ($heartbeat -ne 'OK' -and (Get-Date) -lt $deadline)
   if ($heartbeat -ne 'OK') { throw 'Windows template guest heartbeat did not become ready.' }
   Copy-VMFile -VMName $name -SourcePath $JobAgentPath -DestinationPath 'C:\Windows\Temp\mars-job-agent.exe' -FileSource Host -CreateFullPath
+  Copy-VMFile -VMName $name -SourcePath $RunnerArchivePath -DestinationPath 'C:\Windows\Temp\mars-runner.zip' -FileSource Host -CreateFullPath
   Invoke-Command -VMName $name -Credential $GuestCredential -ScriptBlock {
     New-Item -ItemType Directory -Force -Path 'C:\ProgramData\Mars' | Out-Null
     Copy-Item 'C:\Windows\Temp\mars-job-agent.exe' 'C:\ProgramData\Mars\mars-job-agent.exe' -Force
+    New-Item -ItemType Directory -Force -Path 'C:\actions-runner' | Out-Null
+    Expand-Archive -LiteralPath 'C:\Windows\Temp\mars-runner.zip' -DestinationPath 'C:\actions-runner' -Force
+    if (-not (Test-Path -LiteralPath 'C:\actions-runner\run.cmd' -PathType Leaf)) { throw 'Actions Runner archive does not contain run.cmd.' }
     New-Item -ItemType File -Force -Path 'C:\ProgramData\Mars\guest-service.ready' | Out-Null
     $action = New-ScheduledTaskAction -Execute 'C:\ProgramData\Mars\mars-job-agent.exe' -Argument 'guest-service --platform windows-x64 --bootstrap-file C:\ProgramData\Mars\bootstrap.json'
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
     Register-ScheduledTask -TaskName 'MarsGuestService' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-    Remove-Item 'C:\Windows\Temp\mars-job-agent.exe' -Force
+    Remove-Item 'C:\Windows\Temp\mars-job-agent.exe','C:\Windows\Temp\mars-runner.zip' -Force
     Remove-Item 'C:\Users\*\AppData\Local\Temp\*' -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item 'C:\ProgramData\Mars\worker-identity.json' -Force -ErrorAction SilentlyContinue
   }

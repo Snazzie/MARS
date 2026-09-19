@@ -11,18 +11,18 @@ const copy: Record<Action, { label: string; confirm: string; variant: "primary" 
  remove: { label: "Remove", confirm: "Remove this worker? Pools will be disabled and the worker will be revoked after active leases finish.", variant: "destructive" },
 };
 function quotePowerShell(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
-function installerUrl(origin: string, platform: string, token: string): string {
- return `${origin}/api/workers/installer?audience=${platform}&runtime=${platform === "windows-x64" ? "container" : "container"}&upgrade=true&connectOrigin=${encodeURIComponent(origin)}&target=${encodeURIComponent(token)}`;
+function installerUrl(origin: string, platform: string, token: string, runtimeMode: "container" | "vm" = "container"): string {
+ return `${origin}/api/workers/installer?audience=${platform}&runtime=${platform === "windows-x64" ? runtimeMode : "container"}&upgrade=true&connectOrigin=${encodeURIComponent(origin)}&target=${encodeURIComponent(token)}`;
 }
 export function buildWindowsUpgradeCommand(workerId: string, origin: string, connectOrigin: string = origin, runtimeMode: "container" | "vm" | null = "container", token = ""): string {
  const selectedOrigin = new URL(connectOrigin || origin).origin;
- if (runtimeMode !== "container") throw new Error("Windows worker upgrades require the container runtime");
+ if (runtimeMode !== "container" && runtimeMode !== "vm") throw new Error("Windows worker runtime is unknown");
  if (!/^https?:$/.test(new URL(selectedOrigin).protocol)) throw new Error("Upgrade origin must use HTTP or HTTPS");
  const controlPlane = quotePowerShell(selectedOrigin);
- const installer = installerUrl(selectedOrigin, "windows-x64", token);
+ const installer = installerUrl(selectedOrigin, "windows-x64", token, runtimeMode);
  const installerProtocol = installer.startsWith("http:") ? "http" : "https";
  const tls = installerProtocol === "https" ? " --tlsv1.3" : "";
- return `# Mars worker ${workerId}\n$script = Join-Path $env:TEMP ("mars-upgrade-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${installerProtocol}'${tls} --output $script '${installer}'\n  if ($LASTEXITCODE -ne 0) { throw "Upgrade command download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -ControlPlaneUrl ${controlPlane} -Upgrade -WindowsRuntime 'container'${selectedOrigin.startsWith("http:") ? " -AllowInsecureHttp" : ""}\n} finally {\n  Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n}`;
+ return `# Mars worker ${workerId}\n$script = Join-Path $env:TEMP ("mars-upgrade-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${installerProtocol}'${tls} --output $script '${installer}'\n  if ($LASTEXITCODE -ne 0) { throw "Upgrade command download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -ControlPlaneUrl ${controlPlane} -Upgrade -WindowsRuntime '${runtimeMode}'${selectedOrigin.startsWith("http:") ? " -AllowInsecureHttp" : ""}\n} finally {\n  Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n}`;
 }
 export function buildUpgradeCommand(workerId: string, origin: string, connectOrigin: string, platform: string, token: string): string {
  const selectedOrigin = new URL(connectOrigin || origin).origin;

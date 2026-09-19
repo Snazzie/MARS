@@ -164,7 +164,7 @@ export async function getOnboardingDetail(
       visibility: row.visibility, available: row.available, installationId: String(row.installationId), discoveryState, discoveryRetryAt,
     } as RepositorySummary;
   });
-  const workerDriver = worker?.platform === "linux-x64" ? "linux-libvirt-vm" : worker?.platform === "windows-x64" ? "windows-hyperv-container" : worker?.platform === "macos-arm64" ? "tart-vm" : null;
+  const workerDriver = worker?.platform === "linux-x64" ? "linux-libvirt-vm" : worker?.platform === "windows-x64" ? worker.doctor?.runtimeMode === "vm" ? "windows-hyperv" : "windows-hyperv-container" : worker?.platform === "macos-arm64" ? "tart-vm" : null;
   const workerGuestPlatforms = worker?.guestPlatforms ?? (worker ? [worker.platform] : []);
   const poolRows = worker ? await db`
     SELECT p.id,p.organization_id AS "organizationId",p.worker_id AS "workerId",'Shared fleet' AS "workerName",
@@ -285,7 +285,7 @@ export async function completeOnboardingIfReady(db: OnboardingDb, options: { ski
         AND EXISTS (
           SELECT 1 FROM runner_pools p
           WHERE p.organization_id IS NULL AND p.enabled=true AND p.platform=ANY(SELECT jsonb_array_elements_text(w.guest_platforms))
-            AND p.driver=CASE WHEN w.platform='macos-arm64' AND p.platform IN ('macos-arm64','linux-arm64') THEN 'tart-vm' WHEN p.platform=w.platform THEN CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN 'windows-hyperv-container' WHEN 'macos-arm64' THEN 'tart-vm' END ELSE NULL END
+            AND p.driver=CASE WHEN w.platform='macos-arm64' AND p.platform IN ('macos-arm64','linux-arm64') THEN 'tart-vm' WHEN p.platform=w.platform THEN CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN CASE WHEN w.doctor->'doctor'->>'runtimeMode'='vm' THEN 'windows-hyperv' ELSE 'windows-hyperv-container' END WHEN 'macos-arm64' THEN 'tart-vm' END ELSE NULL END
             AND (p.driver <> 'tart-vm' OR w.doctor->'artifactDigests'->>p.platform=p.image_digest)
       LIMIT 1
     `

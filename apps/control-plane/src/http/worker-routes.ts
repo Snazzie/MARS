@@ -497,12 +497,14 @@ export function linuxArm64InstallerValues(platform: LinuxArm64InstallerMetadata,
   };
 }
 
-export function windowsInstallerValues(platform: WindowsWorkerRelease | undefined, connectOrigin: string, development?: NonNullable<ControlPlaneHttpDeps["developmentWindowsArtifacts"]>, upgrade = false, versions: { releaseVersion: string; contractVersion: string; targetToken?: string } = { releaseVersion: "0.0.0", contractVersion: Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.2.0" }): InstallerValues {
+export function windowsInstallerValues(platform: WindowsWorkerRelease | undefined, connectOrigin: string, development?: NonNullable<ControlPlaneHttpDeps["developmentWindowsArtifacts"]>, upgrade = false, versions: { releaseVersion: string; contractVersion: string; targetToken?: string } = { releaseVersion: "0.0.0", contractVersion: Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.2.0" }, runtime: "container" | "vm" = "container"): InstallerValues {
   const source = platform ?? (development ? ({
     installer: development.orchestrator,
     orchestrator: development.orchestrator,
     serviceHost: development.serviceHost,
-    jobAgent: development.orchestrator,
+    jobAgent: development.jobAgent ?? development.orchestrator,
+    trayScript: development.trayScript,
+    vm: development.vm,
     container: development.container ? {
       baseImage: development.container.baseImage,
       runner: development.container.runner,
@@ -516,37 +518,40 @@ export function windowsInstallerValues(platform: WindowsWorkerRelease | undefine
   } as unknown as WindowsWorkerRelease) : undefined);
   if (!source) throw new Error("Windows release metadata is unavailable.");
   const container = source.container;
+  const vm = source.vm;
   const artifact = (path: string) => `${connectOrigin}${path}${versions.targetToken ? `${path.includes("?") ? "&" : "?"}target=${encodeURIComponent(versions.targetToken)}` : ""}`;
   return {
     WindowsArtifactMode: platform ? "production" : "local",
-    WindowsRuntime: "container",
+    WindowsRuntime: runtime,
     WorkerVersion: versions.releaseVersion,
     WorkerContractVersion: versions.contractVersion,
     WindowsOrchestratorUrl: artifact("/api/workers/orchestrator?audience=windows-x64"),
     WindowsOrchestratorSha256: source.orchestrator.sha256,
     WindowsServiceHostUrl: artifact("/api/workers/service-host?audience=windows-x64"),
     WindowsServiceHostSha256: source.serviceHost.sha256,
-    ...(upgrade ? {} : {
+    ...(source.trayScript ? { WindowsTrayScriptUrl: artifact("/api/workers/windows-tray-script"), WindowsTrayScriptSha256: source.trayScript.sha256 } : {}),
+    ...(upgrade ? {} : runtime === "vm" ? {
+      WindowsTemplateUrl: artifact("/api/workers/windows-vm-template"),
+      WindowsTemplateSha256: vm!.template.sha256,
+    } : {
       WindowsJobAgentUrl: artifact("/api/workers/windows-container-job-agent"),
       WindowsJobAgentSha256: source.jobAgent.sha256,
-      ...(container ? {
-        WindowsContainerBaseImage: container.baseImage,
-        WindowsContainerImage: "mars/windows-job:local",
-        WindowsContainerRunnerUrl: artifact("/api/workers/windows-container-runner"),
-        WindowsContainerRunnerSha256: container.runner.sha256,
-        WindowsContainerGitUrl: artifact("/api/workers/windows-container-git"),
-        WindowsContainerGitSha256: container.git.sha256,
-        WindowsContainerVcRuntimeUrl: artifact("/api/workers/windows-container-vc-runtime"),
-        WindowsContainerVcRuntimeSha256: container.vcRuntime.sha256,
-        WindowsContainerBuilderUrl: artifact("/api/workers/windows-container-builder"),
-        WindowsContainerBuilderSha256: container.buildScript.sha256,
-        WindowsContainerVerifierUrl: artifact("/api/workers/windows-container-verifier"),
-        WindowsContainerVerifierSha256: container.verifyScript.sha256,
-        WindowsContainerfileUrl: artifact("/api/workers/windows-containerfile"),
-        WindowsContainerfileSha256: container.containerfile.sha256,
-        WindowsContainerEntrypointUrl: artifact("/api/workers/windows-container-entrypoint"),
-        WindowsContainerEntrypointSha256: container.entrypoint.sha256,
-      } : {}),
+      WindowsContainerBaseImage: container!.baseImage,
+      WindowsContainerImage: "mars/windows-job:local",
+      WindowsContainerRunnerUrl: artifact("/api/workers/windows-container-runner"),
+      WindowsContainerRunnerSha256: container!.runner.sha256,
+      WindowsContainerGitUrl: artifact("/api/workers/windows-container-git"),
+      WindowsContainerGitSha256: container!.git.sha256,
+      WindowsContainerVcRuntimeUrl: artifact("/api/workers/windows-container-vc-runtime"),
+      WindowsContainerVcRuntimeSha256: container!.vcRuntime.sha256,
+      WindowsContainerBuilderUrl: artifact("/api/workers/windows-container-builder"),
+      WindowsContainerBuilderSha256: container!.buildScript.sha256,
+      WindowsContainerVerifierUrl: artifact("/api/workers/windows-container-verifier"),
+      WindowsContainerVerifierSha256: container!.verifyScript.sha256,
+      WindowsContainerfileUrl: artifact("/api/workers/windows-containerfile"),
+      WindowsContainerfileSha256: container!.containerfile.sha256,
+      WindowsContainerEntrypointUrl: artifact("/api/workers/windows-container-entrypoint"),
+      WindowsContainerEntrypointSha256: container!.entrypoint.sha256,
     }),
   };
 }
@@ -586,6 +591,7 @@ async function installerArtifacts(
   platform: LinuxWorkerRelease | LinuxArm64WorkerRelease | WindowsWorkerRelease | MacosWorkerRelease | null | undefined,
   development?: DevelopmentPlatformArtifacts,
   upgrade = false,
+  runtime: "container" | "vm" = "container",
 ): Promise<string[]> {
   const missing: string[] = [];
   const installerName = audience === "linux-x64" ? "install-worker.sh" : audience === "linux-arm64" ? "install-worker-linux-arm64.ps1" : audience === "windows-x64" ? "install-worker.ps1" : "install-worker-macos.sh";
@@ -606,8 +612,11 @@ async function installerArtifacts(
       const windows = development as DevelopmentWindowsArtifacts;
       if (!windows.orchestrator) missing.push("development:orchestrator");
       if (!windows.serviceHost) missing.push("development:service-host");
-      if (!upgrade && !windows.jobAgent) missing.push("development:job-agent");
-      if (!upgrade) {
+      if (!windows.trayScript) missing.push("development:tray-script");
+      if (!upgrade && runtime === "vm") {
+        if (!windows.vm?.template) missing.push("development:vm.template");
+      } else if (!upgrade) {
+        if (!windows.jobAgent) missing.push("development:job-agent");
         const container = windows.container;
         if (!container || !WorkerReleaseOciDigest.safeParse(container.baseImage).success) missing.push("development:container");
         else for (const field of ["runner", "git", "vcRuntime", "buildScript", "verifyScript", "containerfile", "entrypoint"] as const) if (!container[field]) missing.push(`development:container.${field}`);
@@ -624,7 +633,7 @@ async function installerArtifacts(
     : audience === "linux-arm64"
       ? ["installer", "compose", "brokerImage", "jobImage"]
       : audience === "windows-x64"
-        ? (upgrade ? ["installer", "orchestrator", "serviceHost"] : ["installer", "orchestrator", "serviceHost", "jobAgent", "container"])
+        ? (upgrade ? ["installer", "orchestrator", "serviceHost", "trayScript"] : runtime === "vm" ? ["installer", "orchestrator", "serviceHost", "trayScript", "vm"] : ["installer", "orchestrator", "serviceHost", "trayScript", "jobAgent", "container"])
         : ["installer", "orchestrator", "macosJobAgent", "linuxArm64JobAgent", "linuxArm64Runner", "imagePreparationScript", "tartMacosSourceImage", "tartLinuxArm64SourceImage"];
   for (const field of fields) if (!(platform as unknown as Record<string, unknown>)[field]) missing.push(releaseField(audience, field));
   return missing;
@@ -1082,6 +1091,18 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   });
   app.get("/api/workers/templates/:platform/manifest", (c) => unavailable(c, [`template-manifest:${c.req.param("platform")}`]));
   app.get("/api/workers/templates/:platform/artifact", (c) => unavailable(c, [`template:${c.req.param("platform")}`]));
+  app.get("/api/workers/windows-vm-template", async c => {
+    const development = deps.developmentWindowsArtifacts?.vm?.template;
+    if (development) return developmentPackaged(c, development, "windows-vm-template", "windows-worker.vhdx", "template");
+    const asset = (await releaseManifestFor(c, "windows-x64"))?.platforms["windows-x64"]?.vm?.template;
+    return asset ? await immutablePackaged(c, asset, "windows-vm-template", "windows-worker.vhdx", "template") : unavailable(c, ["manifest:windows-x64.vm.template"]);
+  });
+  app.get("/api/workers/windows-tray-script", async c => {
+    const development = deps.developmentWindowsArtifacts?.trayScript;
+    if (development) return developmentPackaged(c, development, "windows-tray-script", "mars-worker-tray.ps1", "binary");
+    const asset = (await releaseManifestFor(c, "windows-x64"))?.platforms["windows-x64"]?.trayScript;
+    return asset ? await proxyPackagedResponse(asset.url, "mars-worker-tray.ps1", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, ["windows-tray-script"]) : unavailable(c, ["manifest:windows-x64.trayScript"]);
+  });
   const releaseContainerAsset = (key: "buildScript" | "verifyScript" | "containerfile" | "entrypoint" | "jobAgent" | "runner" | "git" | "vcRuntime", name: string, filename: string, sizeClass: ArtifactSizeClass) => async (c: Context<ControlPlaneEnv>) => {
     const development = key === "jobAgent"
       ? deps.developmentWindowsArtifacts?.jobAgent
@@ -1148,8 +1169,8 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     }
     const file = audience === "linux-x64" ? "install-worker.sh" : audience === "linux-arm64" ? "install-worker-linux-arm64.ps1" : audience === "windows-x64" ? "install-worker.ps1" : audience === "macos-arm64" ? "install-worker-macos.sh" : null;
     if (!audience || !file) return c.json({ error: "unsupported installer audience" }, 400);
-    if (audience === "windows-x64" && runtime !== "container") {
-      return c.json({ code: "unsupported_runtime", message: "Only the container runtime is supported in worker v1" }, 400);
+    if (audience === "windows-x64" && runtime !== "container" && runtime !== "vm") {
+      return c.json({ code: "unsupported_runtime", message: "Windows runtime must be container or vm" }, 400);
     }
     let connectOrigin: string;
     try {
@@ -1168,7 +1189,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       development = { ...configured, compose: await currentDevelopmentArtifact(configured.compose) };
     } else if (audience === "windows-x64" && deps.developmentWindowsArtifacts) {
       const configured = deps.developmentWindowsArtifacts;
-      development = { ...configured, orchestrator: await currentDevelopmentArtifact(configured.orchestrator), serviceHost: await currentDevelopmentArtifact(configured.serviceHost) } as DevelopmentWindowsArtifacts;
+      development = { ...configured, orchestrator: await currentDevelopmentArtifact(configured.orchestrator), serviceHost: await currentDevelopmentArtifact(configured.serviceHost), trayScript: await currentDevelopmentArtifact(configured.trayScript), ...(configured.vm?.template ? { vm: { template: await currentDevelopmentArtifact(configured.vm.template) } } : {}) } as DevelopmentWindowsArtifacts;
     } else if (audience === "macos-arm64" && deps.developmentMacosArtifacts) {
       const configured = deps.developmentMacosArtifacts;
       development = { ...configured, orchestrator: await currentDevelopmentArtifact(configured.orchestrator), jobAgent: await currentDevelopmentArtifact(configured.jobAgent), imagePreparationScript: await currentDevelopmentArtifact(configured.imagePreparationScript) };
@@ -1181,7 +1202,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const release = selectedManifest?.platforms[audience];
     const configuredReleaseVersion = Bun.env.MARS_WORKER_VERSION?.trim() ?? "0.0.0";
     const releaseVersion = targetRelease?.releaseVersion ?? (WorkerReleaseVersion.safeParse(configuredReleaseVersion).success ? configuredReleaseVersion : "0.0.0");
-    const missing = await installerArtifacts(deps, audience, release, development, upgrade);
+    const missing = await installerArtifacts(deps, audience, release, development, upgrade, runtime as "container" | "vm");
     if (missing.length) return unavailable(c, missing);
     let source: string;
     const localInstallerPath = deps.workerInstallerRoot ? pathFor(deps.workerInstallerRoot, file) : undefined;
@@ -1210,7 +1231,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
         values = linuxArm64InstallerValues({ brokerImage: arm.brokerImage, jobImage: arm.jobImage, compose: { url: "", sha256: arm.compose.sha256 } }, connectOrigin, "local", { releaseVersion: "0.0.0", contractVersion: Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.2.0", targetToken });
       } else values = linuxArm64InstallerValues(release as LinuxArm64WorkerRelease, connectOrigin, "production", { releaseVersion, contractVersion: selectedManifest!.contractVersion, targetToken });
     } else if (audience === "windows-x64") {
-      values = windowsInstallerValues(release as WindowsWorkerRelease | undefined, connectOrigin, development as DevelopmentWindowsArtifacts | undefined, upgrade, { releaseVersion, contractVersion: selectedManifest?.contractVersion ?? "0.2.0", targetToken });
+      values = windowsInstallerValues(release as WindowsWorkerRelease | undefined, connectOrigin, development as DevelopmentWindowsArtifacts | undefined, upgrade, { releaseVersion, contractVersion: selectedManifest?.contractVersion ?? "0.2.0", targetToken }, runtime as "container" | "vm");
     } else if (development) {
       const macos = development as DevelopmentMacosArtifacts;
       const contractVersion = selectedManifest?.contractVersion ?? Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.3.0";

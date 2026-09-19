@@ -48,7 +48,9 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
       imageDigest = compatibleWorkers.map(({ doctor }) => doctor?.artifactDigests?.["linux-arm64"]).find((digest): digest is string => typeof digest === "string");
       if (imageDigest) compatibleWorkers = compatibleWorkers.filter(({ doctor }) => doctor?.artifactDigests?.["linux-arm64"] === imageDigest);
     } else {
-      compatibleWorkers = compatibleWorkers.filter(({ worker }) => runtimeDriverForWorker(worker.platform, platform) === driver);
+      if (platform === "windows-x64") driver = compatibleWorkers.some(({ doctor }) => doctor?.runtimeMode !== "vm") ? "windows-hyperv-container" : "windows-hyperv";
+      compatibleWorkers = compatibleWorkers.filter(({ worker, doctor }) => runtimeDriverForWorker(worker.platform, platform, doctor?.runtimeMode) === driver);
+      if (platform === "windows-x64") imageDigest = compatibleWorkers.map(({ doctor }) => doctor?.artifactDigest).find((digest): digest is string => typeof digest === "string") ?? imageDigest;
     }
     const resources = poolResourcesForWorkers(compatibleWorkers.map(({ limits }) => limits));
     if (!resources || !imageDigest) continue;

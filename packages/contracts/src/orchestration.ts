@@ -14,8 +14,9 @@ export function validateWorkerGuestPlatforms(hostPlatform: RuntimePlatform, gues
 }
 export const RuntimeDriverName = z.enum(["linux-libvirt-vm", "linux-docker-container", "windows-hyperv", "windows-hyperv-container", "tart-vm"]);
 export type RuntimeDriverName = z.infer<typeof RuntimeDriverName>;
-export function runtimeDriverForWorker(hostPlatform: RuntimePlatform, guestPlatform: GuestPlatform): RuntimeDriverName | null {
+export function runtimeDriverForWorker(hostPlatform: RuntimePlatform, guestPlatform: GuestPlatform, runtimeMode?: "container" | "vm" | "tart" | null): RuntimeDriverName | null {
   if (hostPlatform === "macos-arm64" && (guestPlatform === "macos-arm64" || guestPlatform === "linux-arm64")) return "tart-vm";
+  if (hostPlatform === "windows-x64" && guestPlatform === "windows-x64") return runtimeMode === "vm" ? "windows-hyperv" : "windows-hyperv-container";
   return hostPlatform === guestPlatform ? runtimeDriverForPlatform(hostPlatform) : null;
 }
 export function runtimeDriverForPlatform(platform: RuntimePlatform): RuntimeDriverName {

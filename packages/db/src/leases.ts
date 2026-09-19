@@ -24,7 +24,7 @@ export async function reserveRoutingSlot(sql: DatabaseClient, input: LeaseReserv
         AND p.enabled=true AND w.admission_state='adopted'
         AND w.configuration_state='ready' AND w.draining=false
         AND p.platform=ANY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(w.guest_platforms)='array' THEN w.guest_platforms ELSE (w.guest_platforms #>> '{}')::jsonb END))
-        AND p.driver=CASE WHEN w.platform='macos-arm64' AND p.platform IN ('macos-arm64','linux-arm64') THEN 'tart-vm' WHEN p.platform=w.platform THEN CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN 'windows-hyperv-container' WHEN 'macos-arm64' THEN 'tart-vm' END ELSE NULL END
+        AND p.driver=CASE WHEN w.platform='macos-arm64' AND p.platform IN ('macos-arm64','linux-arm64') THEN 'tart-vm' WHEN p.platform=w.platform THEN CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN CASE WHEN w.doctor->'doctor'->>'runtimeMode'='vm' THEN 'windows-hyperv' ELSE 'windows-hyperv-container' END WHEN 'macos-arm64' THEN 'tart-vm' END ELSE NULL END
         AND (p.driver <> 'tart-vm' OR w.doctor->'artifactDigests'->>p.platform = p.image_digest)
         AND COALESCE(w.doctor->'doctor'->>'acceptingLeases','true') <> 'false' FOR UPDATE OF p, w`;
     if (!eligible[0]) throw new Error("worker_not_eligible");

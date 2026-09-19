@@ -166,14 +166,16 @@ export function createDevelopmentWindowsArtifacts(environment: DevelopmentEnviro
   if (environment.NODE_ENV === "production") return undefined;
   const orchestrator = developmentArtifact(environment, ["MARS_WINDOWS_ORCHESTRATOR_PATH", "WORKER_ORCHESTRATOR_WINDOWS_X64"], ["MARS_WINDOWS_ORCHESTRATOR_URL"], ["MARS_WINDOWS_ORCHESTRATOR_SHA256", "WORKER_ORCHESTRATOR_WINDOWS_X64_SHA256"]);
   const serviceHost = developmentArtifact(environment, ["MARS_WINDOWS_SERVICE_HOST_PATH", "WORKER_SERVICE_HOST_EXECUTABLE"], ["MARS_WINDOWS_SERVICE_HOST_URL"], ["MARS_WINDOWS_SERVICE_HOST_SHA256", "WORKER_SERVICE_HOST_SHA256"]);
-  const jobAgent = developmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_JOB_AGENT_PATH"], ["MARS_WINDOWS_CONTAINER_JOB_AGENT_URL"], ["MARS_WINDOWS_CONTAINER_JOB_AGENT_SHA256"]);
+  const jobAgent = developmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_JOB_AGENT_PATH", "MARS_WINDOWS_JOB_AGENT_PATH"], ["MARS_WINDOWS_CONTAINER_JOB_AGENT_URL", "MARS_WINDOWS_JOB_AGENT_URL"], ["MARS_WINDOWS_CONTAINER_JOB_AGENT_SHA256", "MARS_WINDOWS_JOB_AGENT_SHA256"]);
+  const template = developmentArtifact(environment, ["MARS_WINDOWS_TEMPLATE_PATH"], ["MARS_WINDOWS_TEMPLATE_URL"], ["MARS_WINDOWS_TEMPLATE_SHA256", "MARS_WINDOWS_TEMPLATE_DIGEST"]);
+  const trayScript = developmentArtifact(environment, ["MARS_WINDOWS_TRAY_SCRIPT_PATH"], ["MARS_WINDOWS_TRAY_SCRIPT_URL"], ["MARS_WINDOWS_TRAY_SCRIPT_SHA256"]);
   const runner = developmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_RUNNER_PATH"], ["MARS_WINDOWS_CONTAINER_RUNNER_URL"], ["MARS_WINDOWS_CONTAINER_RUNNER_SHA256"]);
   const git = developmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_GIT_PATH"], ["MARS_WINDOWS_CONTAINER_GIT_URL"], ["MARS_WINDOWS_CONTAINER_GIT_SHA256"]);
   const vcRuntime = developmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_VC_PATH"], ["MARS_WINDOWS_CONTAINER_VC_URL"], ["MARS_WINDOWS_CONTAINER_VC_SHA256"]);
   const baseImage = trimmedEnvironmentValue(environment, ["MARS_WINDOWS_CONTAINER_BASE_IMAGE"]);
   if (!orchestrator || !serviceHost) return undefined;
   const container = runner && git && vcRuntime && baseImage ? { baseImage, runner, git, vcRuntime } : undefined;
-  return { orchestrator, serviceHost, ...(jobAgent ? { jobAgent } : {}), ...(container ? { container } : {}) };
+  return { orchestrator, serviceHost, ...(jobAgent ? { jobAgent } : {}), ...(trayScript ? { trayScript } : {}), ...(template ? { vm: { template } } : {}), ...(container ? { container } : {}) };
 }
 const developmentDefaultArtifactPaths = {
   windowsOrchestrator: "../../../apps/orchestrator/dist/mars-orchestrator.exe",
@@ -182,6 +184,7 @@ const developmentDefaultArtifactPaths = {
   windowsContainerBuilder: "../../../deploy/workers/build-windows-container-image-local.ps1",
   windowsContainerVerifier: "../../../images/jobs/windows/verify-runtime.ps1",
   windowsContainerfile: "../../../images/jobs/windows/Containerfile",
+  windowsTrayScript: "../../../deploy/workers/mars-worker-tray.ps1",
   windowsContainerEntrypoint: "../../../images/jobs/windows/entrypoint.ps1",
   linuxCompose: "../../../deploy/workers/linux-broker-compose.yaml",
   linuxArm64Compose: "../../../deploy/workers/linux-arm64-broker-compose.yaml",
@@ -216,10 +219,12 @@ const resolveDevelopmentArtifact = async (
  
 export async function resolveDevelopmentWindowsArtifacts(environment: DevelopmentEnvironment = Bun.env): Promise<DevelopmentWindowsArtifacts | undefined> {
   if (environment.NODE_ENV === "production") return undefined;
-  const [orchestrator, serviceHost, jobAgent, runner, git, vcRuntime, buildScript, verifyScript, containerfile, entrypoint] = await Promise.all([
+  const [orchestrator, serviceHost, jobAgent, trayScript, template, runner, git, vcRuntime, buildScript, verifyScript, containerfile, entrypoint] = await Promise.all([
     resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_ORCHESTRATOR_PATH", "WORKER_ORCHESTRATOR_WINDOWS_X64"], ["MARS_WINDOWS_ORCHESTRATOR_URL"], ["MARS_WINDOWS_ORCHESTRATOR_SHA256", "WORKER_ORCHESTRATOR_WINDOWS_X64_SHA256"], developmentDefaultArtifactPaths.windowsOrchestrator),
     resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_SERVICE_HOST_PATH", "WORKER_SERVICE_HOST_EXECUTABLE"], ["MARS_WINDOWS_SERVICE_HOST_URL"], ["MARS_WINDOWS_SERVICE_HOST_SHA256", "WORKER_SERVICE_HOST_SHA256"], developmentDefaultArtifactPaths.windowsServiceHost),
-    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_JOB_AGENT_PATH"], ["MARS_WINDOWS_CONTAINER_JOB_AGENT_URL"], ["MARS_WINDOWS_CONTAINER_JOB_AGENT_SHA256"], developmentDefaultArtifactPaths.windowsJobAgent),
+    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_JOB_AGENT_PATH", "MARS_WINDOWS_JOB_AGENT_PATH"], ["MARS_WINDOWS_CONTAINER_JOB_AGENT_URL", "MARS_WINDOWS_JOB_AGENT_URL"], ["MARS_WINDOWS_CONTAINER_JOB_AGENT_SHA256", "MARS_WINDOWS_JOB_AGENT_SHA256"], developmentDefaultArtifactPaths.windowsJobAgent),
+    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_TRAY_SCRIPT_PATH"], ["MARS_WINDOWS_TRAY_SCRIPT_URL"], ["MARS_WINDOWS_TRAY_SCRIPT_SHA256"], developmentDefaultArtifactPaths.windowsTrayScript),
+    resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_TEMPLATE_PATH"], ["MARS_WINDOWS_TEMPLATE_URL"], ["MARS_WINDOWS_TEMPLATE_SHA256", "MARS_WINDOWS_TEMPLATE_DIGEST"]),
     resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_RUNNER_PATH"], ["MARS_WINDOWS_CONTAINER_RUNNER_URL"], ["MARS_WINDOWS_CONTAINER_RUNNER_SHA256"]),
     resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_GIT_PATH"], ["MARS_WINDOWS_CONTAINER_GIT_URL"], ["MARS_WINDOWS_CONTAINER_GIT_SHA256"]),
     resolveDevelopmentArtifact(environment, ["MARS_WINDOWS_CONTAINER_VC_PATH"], ["MARS_WINDOWS_CONTAINER_VC_URL"], ["MARS_WINDOWS_CONTAINER_VC_SHA256"]),
@@ -231,7 +236,7 @@ export async function resolveDevelopmentWindowsArtifacts(environment: Developmen
   const baseImage = trimmedEnvironmentValue(environment, ["MARS_WINDOWS_CONTAINER_BASE_IMAGE"]);
   if (!orchestrator || !serviceHost) return undefined;
   const container = runner && git && vcRuntime && baseImage ? { baseImage, runner, git, vcRuntime, ...(buildScript ? { buildScript } : {}), ...(verifyScript ? { verifyScript } : {}), ...(containerfile ? { containerfile } : {}), ...(entrypoint ? { entrypoint } : {}) } : undefined;
-  return { orchestrator, serviceHost, ...(jobAgent ? { jobAgent } : {}), ...(container ? { container } : {}) };
+  return { orchestrator, serviceHost, ...(jobAgent ? { jobAgent } : {}), ...(trayScript ? { trayScript } : {}), ...(template ? { vm: { template } } : {}), ...(container ? { container } : {}) };
 }
 
 export async function resolveDevelopmentLinuxArtifacts(environment: DevelopmentEnvironment = Bun.env): Promise<DevelopmentLinuxArtifacts | undefined> {
