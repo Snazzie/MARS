@@ -8,6 +8,7 @@
     "lint": "bun run --filter '*' lint",
     "test": "bun test",
     "test:live-job-pickup": "bun run tests/live-job-pickup-smoke.ts",
+    "test:control-plane-tunnel": "bash tests/control-plane-tunnel-smoke.sh",
     "test:windows-container-image": "bun test tests/windows-container-image-contract.test.ts",
     "test:control-plane-proxy": "bun run tests/proxied-control-plane-smoke.ts",
     "test:control-plane-compose": "bash tests/control-plane-compose-smoke.sh",
