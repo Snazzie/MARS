@@ -112,6 +112,7 @@ describe("worker join payload", () => {
     const vmUuid = "00000000-0000-4000-8000-000000000001";
     const payload = buildMacWorkerJoinPayload({
       code: "A".repeat(43),
+      computerName: "mac-builder",
       releaseVersion: "0.1.0",
       contractVersion: "0.1.0",
       publicKey: "ed25519",
@@ -137,6 +138,7 @@ describe("worker join payload", () => {
     };
     const payload = buildMacWorkerJoinPayload({
       code: "A".repeat(43),
+      computerName: "mac-builder",
       releaseVersion: "0.1.0",
       contractVersion: "0.1.0",
       publicKey: "ed25519",
@@ -149,6 +151,7 @@ describe("worker join payload", () => {
 
     expect(WorkerBootstrapRequest.parse(payload)).toEqual({
       code: "A".repeat(43),
+      computerName: "mac-builder",
       platform: "macos-arm64",
       releaseVersion: "0.1.0",
       contractVersion: "0.1.0",

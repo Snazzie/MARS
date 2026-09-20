@@ -7,3 +7,10 @@ export function fingerprint(publicKey: string): string { return createHash("sha2
 export function createWorkerKey(): { privateKey: string; publicKey: string } { const pair = generateKeyPairSync("ed25519"); return { privateKey: pair.privateKey.export({ format: "pem", type: "pkcs8" }).toString(), publicKey: pair.publicKey.export({ format: "pem", type: "spki" }).toString() }; }
 export function verifyWorkerSignature(publicKey: string, nonce: Buffer, signature: Buffer): boolean { return verify(null, nonce, publicKey, signature); }
 export async function adoptWorker(sql: Sql<{}>, workerId: string, adminId: string): Promise<void> { await sql.begin(async tx => { const rows = await tx`update workers set admission_state='adopted', configuration_state=case when doctor is not null then 'ready' else 'unconfigured' end where id=${workerId} and admission_state='pending' returning id`; if (rows.length !== 1) throw new Error("worker adoption conflict"); await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.adopted',${jsonParameter(tx, { workerId })})`; }); }
+export async function renameWorker(sql: Sql<{}>, workerId: string, name: string, adminId: string): Promise<void> {
+  await sql.begin(async tx => {
+    const rows = await tx`update workers set name=${name} where id=${workerId} and admission_state in ('pending','adopted') returning id`;
+    if (rows.length !== 1) throw new Error("worker rename conflict");
+    await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.renamed',${jsonParameter(tx, { workerId, name })})`;
+  });
+}

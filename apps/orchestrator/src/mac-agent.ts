@@ -2,7 +2,7 @@ import { generateKeyPairSync, randomUUID, sign as signMessage } from "node:crypt
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { statfsSync } from "node:fs";
-import { cpus, totalmem } from "node:os";
+import { cpus, hostname, totalmem } from "node:os";
 import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerContractVersion, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, WorkerDoctorData, WorkerEvent, type LeaseBootstrapEnvelope, type WorkerCapacityData } from "@mars/contracts";
 import { z } from "zod";
 import type { Lease, RuntimeLease } from "./runtime.ts";
@@ -16,6 +16,7 @@ import { MacStatusItemSupervisor, statusItemExecutable } from "./mac-status-item
 export interface MacWorkerLimits { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number }
 export interface MacWorkerJoinInput {
   code: string;
+  computerName: string;
   releaseVersion: string;
   contractVersion: string;
   publicKey: string;
@@ -44,7 +45,7 @@ export async function applyWorkerConfigure(
   Object.assign(cache, observed.cache);
   return workerEvent(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed });
 }
-export function buildMacWorkerJoinPayload(input: MacWorkerJoinInput): MacWorkerJoinPayload { return { code: input.code, releaseVersion: input.releaseVersion, contractVersion: input.contractVersion, publicKey: input.publicKey, encryptionPublicKey: input.encryptionPublicKey, vmUuid: input.vmUuid, machineUuid: input.machineUuid, doctor: input.doctor, capacity: input.capacity, platform: "macos-arm64" }; }
+export function buildMacWorkerJoinPayload(input: MacWorkerJoinInput): MacWorkerJoinPayload { return { code: input.code, computerName: input.computerName, releaseVersion: input.releaseVersion, contractVersion: input.contractVersion, publicKey: input.publicKey, encryptionPublicKey: input.encryptionPublicKey, vmUuid: input.vmUuid, machineUuid: input.machineUuid, doctor: input.doctor, capacity: input.capacity, platform: "macos-arm64" }; }
 export function buildMacWorkerAuthentication(challenge: string, workerId: string, privateKey: string, encryptionPublicKey?: string): { type: "authenticate"; workerId: string; encryptionPublicKey?: string; signature: string } {
   const canonical = encryptionPublicKey ? `${challenge}\n${workerId}\n${encryptionPublicKey}` : challenge;
   const signature = signMessage(null, encryptionPublicKey ? Buffer.from(canonical) : Buffer.from(challenge, "base64url"), privateKey).toString("base64url");
@@ -312,6 +313,7 @@ async function currentMacWorkerJoinPayload(code: string, publicKey: string, encr
   const resources = capacity();
   return WorkerBootstrapRequest.parse(buildMacWorkerJoinPayload({
     code,
+    computerName: hostname(),
     ...workerRuntimeVersions(),
     publicKey,
     encryptionPublicKey,

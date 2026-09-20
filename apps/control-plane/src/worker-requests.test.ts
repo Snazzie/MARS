@@ -14,7 +14,7 @@ test("post-enrollment configuration is strict and excludes organization binding"
 });
 
 describe("pending worker request contracts", () => {
-  const valid = { code: "A".repeat(43), platform: "linux-x64", releaseVersion: "0.1.0", contractVersion: "0.1.0", publicKey: "ed25519-public", encryptionPublicKey: "x25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 4096 } };
+  const valid = { code: "A".repeat(43), computerName: "build-host", platform: "linux-x64", releaseVersion: "0.1.0", contractVersion: "0.1.0", publicKey: "ed25519-public", encryptionPublicKey: "x25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 4096 } };
   test("requires stable identity and excludes code from pending DTO", () => {
     expect(WorkerBootstrapRequest.parse(valid).machineUuid).toBe(valid.machineUuid);
     const { code: _code, encryptionPublicKey: _encryptionPublicKey, ...pending } = { ...valid, limits: null };
@@ -57,6 +57,7 @@ test("pending worker DTO ignores database-only columns", () => {
     id: row.id,
     fingerprint: row.fingerprint,
     guestPlatforms: ["macos-arm64"],
+    computerName: row.name,
     platform: row.platform,
     publicKey: row.publicKey,
     releaseVersion: row.releaseVersion,

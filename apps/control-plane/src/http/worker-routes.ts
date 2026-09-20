@@ -997,6 +997,7 @@ export function pendingWorkerDto(row: Record<string, unknown>, workerConnected?:
   };
   const pending = PendingWorkerRequest.parse({
     platform: row.platform,
+    computerName: row.name,
     releaseVersion: row.releaseVersion,
     contractVersion: row.contractVersion,
     guestPlatforms,

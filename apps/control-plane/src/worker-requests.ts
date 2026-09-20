@@ -57,17 +57,17 @@ export async function requestPendingWorker(db: Sql<{}>, input: z.input<typeof Wo
         && exactIdentity.enrollmentCodeHash.length === candidate.length
         && timingSafeEqual(exactIdentity.enrollmentCodeHash, candidate);
       if (!exactIdentity || !replay) return { conflict: true as const, invalid: false as const };
-      await tx`update workers set last_requested_at=now(), release_version=${parsed.releaseVersion}, contract_version=${parsed.contractVersion}, doctor=${jsonParameter(tx, telemetry)}::jsonb, doctor_observed_at=now() where id=${exactIdentity.id} and admission_state='pending' and enrollment_authenticated_at is null`;
+      await tx`update workers set name=${parsed.computerName}, last_requested_at=now(), release_version=${parsed.releaseVersion}, contract_version=${parsed.contractVersion}, doctor=${jsonParameter(tx, telemetry)}::jsonb, doctor_observed_at=now() where id=${exactIdentity.id} and admission_state='pending' and enrollment_authenticated_at is null`;
       return { status: "existing" as const, workerId: exactIdentity.id };
     }
     if (exactIdentity && exactIdentity.admissionState === "pending" && !exactIdentity.enrollmentAuthenticatedAt) {
       await tx`update worker_bootstrap_credentials set consumed_at=now() where singleton=true and consumed_at is null`;
-      await tx`update workers set last_requested_at=now(), machine_uuid=${parsed.machineUuid}, encryption_public_key=${parsed.encryptionPublicKey}, enrollment_code_hash=${candidate}, release_version=${parsed.releaseVersion}, contract_version=${parsed.contractVersion}, doctor=${jsonParameter(tx, telemetry)}::jsonb, doctor_observed_at=now() where id=${exactIdentity.id} and admission_state='pending' and enrollment_authenticated_at is null`;
+      await tx`update workers set name=${parsed.computerName}, last_requested_at=now(), machine_uuid=${parsed.machineUuid}, encryption_public_key=${parsed.encryptionPublicKey}, enrollment_code_hash=${candidate}, release_version=${parsed.releaseVersion}, contract_version=${parsed.contractVersion}, doctor=${jsonParameter(tx, telemetry)}::jsonb, doctor_observed_at=now() where id=${exactIdentity.id} and admission_state='pending' and enrollment_authenticated_at is null`;
       return { status: "existing" as const, workerId: exactIdentity.id };
     }
     if (rows.length) return { conflict: true as const, invalid: false as const };
     await tx`update worker_bootstrap_credentials set consumed_at=now() where singleton=true and consumed_at is null`;
-    const [created] = await tx<{ id: string }[]>`insert into workers (name,platform,release_version,contract_version,guest_platforms,admission_state,public_key,encryption_public_key,fingerprint,vm_uuid,machine_uuid,enrollment_code_hash,limits,doctor,last_requested_at,doctor_observed_at) values (${parsed.vmUuid},${parsed.platform},${parsed.releaseVersion},${parsed.contractVersion},${jsonParameter(tx, guestPlatforms)}::jsonb,'pending',${parsed.publicKey},${parsed.encryptionPublicKey},${fp},${parsed.vmUuid},${parsed.machineUuid},${candidate},null,${jsonParameter(tx, telemetry)}::jsonb,now(),now()) returning id`;
+    const [created] = await tx<{ id: string }[]>`insert into workers (name,platform,release_version,contract_version,guest_platforms,admission_state,public_key,encryption_public_key,fingerprint,vm_uuid,machine_uuid,enrollment_code_hash,limits,doctor,last_requested_at,doctor_observed_at) values (${parsed.computerName},${parsed.platform},${parsed.releaseVersion},${parsed.contractVersion},${jsonParameter(tx, guestPlatforms)}::jsonb,'pending',${parsed.publicKey},${parsed.encryptionPublicKey},${fp},${parsed.vmUuid},${parsed.machineUuid},${candidate},null,${jsonParameter(tx, telemetry)}::jsonb,now(),now()) returning id`;
     await tx`insert into audit_events (actor,type,payload) values ('worker','worker.requested',${jsonParameter(tx, { workerId: created.id, vmUuid: parsed.vmUuid, fingerprint: fp, guestPlatforms })}::jsonb)`;
     return { status: "created" as const, workerId: created.id };
   });

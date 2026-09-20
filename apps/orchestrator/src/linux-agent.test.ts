@@ -90,6 +90,7 @@ test("leaves command failures unacknowledged so health frames can continue", asy
 test("builds a Linux enrollment payload with digest-bound VM evidence", () => {
   const payload = buildLinuxWorkerJoinPayload({
     code: "A".repeat(43),
+    computerName: "linux-builder",
     releaseVersion: "0.1.0",
     contractVersion: "0.1.0",
     publicKey: "public",
@@ -100,6 +101,7 @@ test("builds a Linux enrollment payload with digest-bound VM evidence", () => {
     capacity: { actualVcpu: 8, actualMemoryBytes: 16_000, actualStorageBytes: 64_000, freeVcpu: 8, freeMemoryBytes: 16_000, freeStorageBytes: 64_000 },
   });
   expect(payload.platform).toBe("linux-x64");
+  expect(payload.computerName).toBe("linux-builder");
   expect(payload.doctor.smokeArtifactDigest).toBe(payload.doctor.artifactDigest);
 });
 test("creates persisted identity with stable UUIDs before enrollment", () => {

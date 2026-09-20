@@ -3,7 +3,7 @@ import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { listOrganizations, listAllOrganizations, getOverview, getAllOverview, getGithubRunnerCostCenter, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates, listJobResourceTrends, JobResourceTrendInputError, listJobResourceSamples, listWorkerCacheEntries, decodeWorkerCacheCursor, getWorkerHealth, getJobLabelRecommendation, selectRoutingLabel } from "@mars/db";
-import { adoptWorker } from "../workers.ts";
+import { adoptWorker, renameWorker } from "../workers.ts";
 import { configurePendingWorker, purgeWorkerRunnerCache } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 import { createWorkerImageBuildPayload } from "../windows-image-build.ts";
@@ -57,6 +57,7 @@ const workerLogQuerySchema = z.object({
   maxBytes: z.coerce.number().int().min(1).max(128 * 1024).default(64 * 1024),
 }).strict();
 const mutationSchema = z.object({}).strict();
+const workerNameSchema = z.object({ name: z.string().trim().min(1).max(100) }).strict();
 
 function error(c: any, status: number, code: string, message: string, details?: Record<string, unknown>) {
   return c.json(ApiError.parse({ code, message, requestId: c.req.header("x-request-id") || crypto.randomUUID(), ...(details ? { details } : {}) }), status, { "cache-control": "no-store" });
@@ -346,6 +347,18 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     await deps.workerDispatcher.dispatch({ type: "worker.set_lease_preservation", workerId, leaseId: null, payload: { enabled: body.enabled } });
     if (organizationId !== "all") await invalidateDashboard(deps.db, organizationId, ["workers", workerId]);
     return c.json(WorkerDetail.parse(await getWorkerDetail(deps.db, organizationId, workerId)));
+  }));
+  app.post("/api/organizations/:organizationId/workers/:workerId/name", safe(async (c) => {
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    const idem = requireMutation(c); if (idem) return idem;
+    const organizationId = c.req.param("organizationId");
+    const workerId = c.req.param("workerId");
+    const worker = await getWorkerDetail(deps.db, organizationId, workerId);
+    if (!worker) return error(c, 404, "not_found", "Resource not found");
+    const body = workerNameSchema.parse(await c.req.json());
+    await renameWorker(deps.db, workerId, body.name, c.get("user").id);
+    await deps.onWorkerChanged(workerId);
+    return c.json(WorkerDetail.parse({ ...worker, name: body.name }));
   }));
   app.post("/api/organizations/:organizationId/workers/:workerId/:action", safe(async (c) => {
     const action = c.req.param("action"), id = c.req.param("workerId");

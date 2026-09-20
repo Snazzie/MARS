@@ -98,6 +98,11 @@ test("renders VM-specific Windows controls without container image actions", () 
   expect(markup).toContain("Preserve failed VMs");
   expect(markup).not.toContain("Build local image");
 });
+test("offers friendly renaming only to worker administrators", () => {
+  expect(renderCard(workerFixture(), undefined, true)).toContain(">Rename</button>");
+  expect(renderCard(workerFixture(), undefined, false)).not.toContain(">Rename</button>");
+});
+
 
 test("keeps worker health authoritative and cache inventory compact", () => {
   const markup = renderCard(cacheWorkerFixture());

@@ -9,7 +9,7 @@ describe("pending worker persistence", () => {
     const queries: string[] = [];
     const queryValues: unknown[][] = [];
     const tx = Object.assign((strings: TemplateStringsArray, ...values: unknown[]) => { const sql = strings.join(" "); queries.push(sql); queryValues.push(values); if (sql.includes("select code_hash")) return [{ codeHash: createHash("sha256").update(Buffer.from("A".repeat(43), "base64url")).digest() }]; if (sql.includes("select id,")) return []; if (sql.includes("returning id")) return [{ id: "00000000-0000-4000-8000-000000000003" }]; return []; }, { json: (value: unknown) => value });
-    const input = { code: "A".repeat(43), platform: "linux-x64" as const, releaseVersion: "0.1.0", contractVersion: "0.1.0", publicKey: "ed25519-public", encryptionPublicKey: "x25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
+    const input = { code: "A".repeat(43), computerName: "build-host", platform: "linux-x64" as const, releaseVersion: "0.1.0", contractVersion: "0.1.0", publicKey: "ed25519-public", encryptionPublicKey: "x25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
     const telemetry = { doctor: { ...input.doctor, containers: [] }, capacity: input.capacity };
     const db = Object.assign(((strings: TemplateStringsArray, ...values: unknown[]) => { queries.push(strings.join(" ")); queryValues.push(values); return []; }) as unknown as Sql<{}>, { begin: async (fn: (tx: unknown) => unknown) => fn(tx) });
     const result = await requestPendingWorker(db, input);
@@ -19,13 +19,14 @@ describe("pending worker persistence", () => {
     expect(queries.some(query => query.includes("consumed_at is null for update"))).toBe(true);
     expect(queries.some(query => query.includes("set consumed_at=now()"))).toBe(true);
     expect(queries[insertIndex]).toContain(",null,");
+    expect(insertValues).toContain(input.computerName);
     expect(insertValues).toEqual(expect.arrayContaining([telemetry]));
   });
 });
 test("replays a response-lost enrollment only for the exact pending identity", async () => {
   const code = "A".repeat(43);
   const candidate = createHash("sha256").update(Buffer.from(code, "base64url")).digest();
-  const input = { code, platform: "linux-x64" as const, releaseVersion: "0.1.0", contractVersion: "0.1.0", publicKey: "ed25519-public", encryptionPublicKey: "x25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
+  const input = { code, computerName: "build-host", platform: "linux-x64" as const, releaseVersion: "0.1.0", contractVersion: "0.1.0", publicKey: "ed25519-public", encryptionPublicKey: "x25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
   const queries: string[] = [];
   const tx = (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
@@ -54,7 +55,7 @@ test("replays a response-lost enrollment only for the exact pending identity", a
 test("rejects consumed-code replay with a different key or machine identity", async () => {
   const code = "A".repeat(43);
   const candidate = createHash("sha256").update(Buffer.from(code, "base64url")).digest();
-  const input = { code, platform: "linux-x64" as const, releaseVersion: "0.1.0", contractVersion: "0.1.0", publicKey: "ed25519-public", encryptionPublicKey: "x25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
+  const input = { code, computerName: "build-host", platform: "linux-x64" as const, releaseVersion: "0.1.0", contractVersion: "0.1.0", publicKey: "ed25519-public", encryptionPublicKey: "x25519-public", vmUuid: "00000000-0000-4000-8000-000000000001", machineUuid: "00000000-0000-4000-8000-000000000002", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
   const tx = (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
     if (query.includes("consumed_at is not null")) return [{ codeHash: candidate, consumedAt: "2026-08-28T00:00:00.000Z" }];

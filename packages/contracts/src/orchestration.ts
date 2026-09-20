@@ -331,6 +331,7 @@ export type WorkerDoctorReport = z.infer<typeof WorkerDoctorReport>;
 export const WorkerBootstrapRequest = z.object({
   code: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   platform: RuntimePlatform,
+  computerName: z.string().trim().min(1).max(100),
   releaseVersion: WorkerReleaseVersion,
   contractVersion: WorkerContractVersion,
   publicKey: z.string().min(1),

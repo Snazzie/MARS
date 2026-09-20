@@ -1,7 +1,7 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import type { DashboardWorkerCacheEntry, WorkerDetail } from "@mars/contracts";
-import { getWorkerCache, purgeWorkerCache, setWorkerLeasePreservation } from "../api.ts";
+import { getWorkerCache, purgeWorkerCache, renameWorker as renameWorkerRequest, setWorkerLeasePreservation } from "../api.ts";
 import { Button } from "@astryxdesign/core/Button";
 import { WorkerActions } from "./WorkerActions.tsx";
 import { WorkerConfigurationForm } from "./WorkerConfigurationForm.tsx";
@@ -83,6 +83,33 @@ function WorkerCacheInventory({ workerId }: { workerId: string }) {
     {inventory.hasNextPage && <button type="button" className="control-button" onClick={() => void inventory.fetchNextPage()} disabled={inventory.isFetchingNextPage}>{inventory.isFetchingNextPage ? "Loading…" : "Load more"}</button>}
   </div>;
 }
+function WorkerNameEditor({ worker, organizationId, canManage, onChange }: { worker: Pick<WorkerDetail, "id" | "name">; organizationId: string; canManage: boolean; onChange: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(worker.name);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const headingId = `worker-${worker.id}`;
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const nextName = name.trim();
+    if (!nextName) return setError("Worker name is required.");
+    if (nextName === worker.name) { setEditing(false); return; }
+    setPending(true);
+    setError(null);
+    try {
+      await renameWorkerRequest(organizationId, worker.id, nextName);
+      setEditing(false);
+      onChange();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not rename worker.");
+    } finally {
+      setPending(false);
+    }
+  };
+  if (!editing) return <div className="worker-name-row"><h2 id={headingId}>{worker.name}</h2>{canManage && <button type="button" className="control-button" onClick={() => { setName(worker.name); setError(null); setEditing(true); }}>Rename</button>}</div>;
+  return <div><h2 id={headingId} className="sr-only">{worker.name}</h2><form className="worker-name-row" onSubmit={(event) => { void submit(event); }}><label className="sr-only" htmlFor={`${headingId}-name`}>Worker name</label><input id={`${headingId}-name`} value={name} maxLength={100} autoFocus onChange={(event) => setName(event.target.value)} disabled={pending} required /><button type="submit" className="control-button" disabled={pending}>{pending ? "Saving…" : "Save name"}</button><button type="button" className="control-button" onClick={() => setEditing(false)} disabled={pending}>Cancel</button></form>{error && <p className="form-error" role="alert">{error}</p>}</div>;
+}
+
  
 
 export function WorkerCard({ worker, organizationId, onChange, canManage = false }: { worker: WorkerDetail; organizationId: string; onChange: () => void; canManage?: boolean }) {
@@ -138,7 +165,7 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
   return <article className={`worker-card ${worker.admissionState !== "adopted" ? "worker-card-pending" : ""}`} aria-labelledby={`worker-${worker.id}`}>
     <header className="worker-card-header">
       <div className="worker-card-identity">
-        <div className="worker-name-row"><span className={`status-dot status-${connectionState}`} aria-label={connectionState} /><h2 id={`worker-${worker.id}`}>{worker.name}</h2></div>
+        <WorkerNameEditor worker={worker} organizationId={organizationId} canManage={canManage} onChange={onChange} />
         <div className="worker-statuses" aria-label="Worker status"><span className={`status-pill status-${connectionState}`}>{connectionState}</span>{heartbeatStale && <span className="status-pill status-stale">stale heartbeat</span>}{doctorStale && <span className="status-pill status-stale">stale doctor</span>}{worker.draining && <span className="status-pill status-draining">new leases paused</span>}<span className={`status-pill status-${effectiveConfigurationState}`}>{readinessLabel}</span><span className={`status-pill status-${worker.admissionState}`}>{worker.admissionState}</span></div>
         <p className="worker-meta">{worker.platform} · guests: {worker.guestPlatforms.join(", ")} · {worker.driver} · <span className="worker-fingerprint">key <code tabIndex={0} title={worker.fingerprint}>{worker.fingerprint}</code></span></p>
       </div>

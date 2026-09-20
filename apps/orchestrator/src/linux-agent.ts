@@ -1,7 +1,7 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { cpus, totalmem } from "node:os";
+import { cpus, hostname, totalmem } from "node:os";
 import { statfsSync } from "node:fs";
 import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerObservedConfiguration, WorkerConfigurePayload, WorkerRunnerCachePurgePayload, WorkerCommand, WorkerDoctorData, WorkerEvent, type WorkerCapacityData, type WorkerLimits } from "@mars/contracts";
 import { z } from "zod";
@@ -102,6 +102,7 @@ export async function executeLinuxWorkerCommand(command: WorkerCommand, resource
 }
 export type LinuxWorkerJoinInput = {
   code: string;
+  computerName: string;
   releaseVersion: string;
   contractVersion: string;
   publicKey: string;
@@ -171,7 +172,7 @@ async function enrollLinuxWorker(baseUrl: URL, identity: WorkerIdentity, driver:
   const code = await readEnrollmentCode();
   const capacity = linuxCapacity();
   const doctor = await linuxDoctor(driver, digest, channelRoot);
-  const payload = buildLinuxWorkerJoinPayload({ code, ...workerRuntimeVersions(), publicKey: persisted.publicKey, encryptionPublicKey: persisted.encryptionPublicKey, vmUuid, machineUuid, doctor, capacity });
+  const payload = buildLinuxWorkerJoinPayload({ code, computerName: hostname(), ...workerRuntimeVersions(), publicKey: persisted.publicKey, encryptionPublicKey: persisted.encryptionPublicKey, vmUuid, machineUuid, doctor, capacity });
   const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) }));
   if (!response.ok) throw new Error(`worker join failed: ${response.status}`);
   const joined = await response.json() as { workerId?: string };
@@ -278,7 +279,7 @@ export async function runDockerLinuxWorker(baseUrl: string, driver: RuntimeDrive
     let enrolled = identity;
     if (!enrolled.workerId) {
       const code = await readEnrollmentCode();
-      const payload = WorkerBootstrapRequest.parse({ code, platform: "linux-arm64", ...workerRuntimeVersions(), publicKey: enrolled.publicKey, encryptionPublicKey: enrolled.encryptionPublicKey, vmUuid: enrolled.vmUuid, machineUuid: enrolled.machineUuid, doctor: WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: host.runtimeReady, probe: true, egress: true, imageSignatures: host.imageReady, networkReady: host.networkReady, acceptingLeases: true }), capacity: linuxCapacity() });
+      const payload = WorkerBootstrapRequest.parse({ code, computerName: hostname(), platform: "linux-arm64", ...workerRuntimeVersions(), publicKey: enrolled.publicKey, encryptionPublicKey: enrolled.encryptionPublicKey, vmUuid: enrolled.vmUuid, machineUuid: enrolled.machineUuid, doctor: WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: host.runtimeReady, probe: true, egress: true, imageSignatures: host.imageReady, networkReady: host.networkReady, acceptingLeases: true }), capacity: linuxCapacity() });
       const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", controlPlane), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) }));
       if (!response.ok) throw new Error(`worker join failed: ${response.status}`);
       const joined = await response.json() as { workerId?: string };

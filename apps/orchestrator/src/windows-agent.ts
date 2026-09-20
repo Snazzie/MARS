@@ -1,6 +1,7 @@
 import { generateKeyPairSync, sign as signMessage, randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { mkdir, mkdtemp, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { hostname } from "node:os";
 import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, WorkerDoctorData, WorkerDoctorReport, WorkerEvent, type WorkerCapacityData, type WorkerContainerStatus, type LeaseBootstrapEnvelope } from "@mars/contracts";
 import { collectWorkerServiceLogs } from "./worker-service-logs.ts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
@@ -171,7 +172,7 @@ async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> {
   const machine = identity.machineUuid ?? await machineUuid();
   const persisted = { ...identity, vmUuid, machineUuid: machine };
   await save(persisted);
-  const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), platform: "windows-x64", ...workerRuntimeVersions(), publicKey: persisted.publicKey, encryptionPublicKey: persisted.encryptionPublicKey, vmUuid, machineUuid: machine, doctor: await windowsDoctor(), capacity: await capacity() });
+  const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), computerName: hostname(), platform: "windows-x64", ...workerRuntimeVersions(), publicKey: persisted.publicKey, encryptionPublicKey: persisted.encryptionPublicKey, vmUuid, machineUuid: machine, doctor: await windowsDoctor(), capacity: await capacity() });
   const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }));
   if (!response.ok) throw new Error(`worker join failed: ${response.status}`);
   const joined = await response.json() as { workerId: string };

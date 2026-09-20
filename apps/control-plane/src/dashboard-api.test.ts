@@ -239,6 +239,45 @@ describe("dashboard API", () => {
     const adminResponse = await appFor(admin).request("/api/organizations/org/workers/w1/adopt", { method: "POST", headers: { ...sessionHeaders, "Idempotency-Key": "two" } });
     expect(adminResponse.status).toBe(404);
   });
+  test("renames an adopted worker to a trimmed friendly name", async () => {
+    const values: unknown[] = [];
+    const workerId = "86afd915-add3-407c-a6c1-1b46803ef713";
+    const row = {
+      id: workerId,
+      name: "BUILD-HOST",
+      platform: "macos-arm64",
+      releaseVersion: "0.1.0",
+      contractVersion: "0.1.0",
+      guestPlatforms: ["macos-arm64"],
+      admissionState: "adopted",
+      connectionState: "online",
+      configurationState: "ready",
+      fingerprint: "sha256:worker",
+      limits: null,
+      doctor: { doctor: { runtimeMode: "tart" }, capacity: { actualVcpu: 4, actualMemoryBytes: 8, actualStorageBytes: 10, freeVcpu: 4, freeMemoryBytes: 8, freeStorageBytes: 10 } },
+      draining: false,
+      preserveLeases: false,
+      activeSandboxes: 0,
+    };
+    const db = Object.assign(async (strings: TemplateStringsArray, ...parameters: unknown[]) => {
+      const query = strings.join(" ");
+      values.push(...parameters);
+      if (query.includes("SELECT w.id")) return [row];
+      if (query.includes("update workers set name=")) return [{ id: workerId }];
+      return [];
+    }, {
+      begin: async (transaction: (tx: unknown) => Promise<unknown>) => transaction(db),
+      json: (value: unknown) => value,
+    }) as never;
+    const response = await appFor(admin, db).request(`/api/organizations/all/workers/${workerId}/name`, {
+      method: "POST",
+      headers: { ...sessionHeaders, "Content-Type": "application/json", "Idempotency-Key": "rename-1" },
+      body: JSON.stringify({ name: "  Friendly Builder  " }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id: workerId, name: "Friendly Builder" });
+    expect(values).toContain("Friendly Builder");
+  });
 });
 
 describe("repository discovery recheck", () => {
