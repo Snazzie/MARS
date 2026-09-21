@@ -39,13 +39,14 @@ export function isDispatchableRunStatus(status: string): boolean {
 }
 
 
-export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate["worker"] & { id: string } {
+export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate["worker"] & { id: string; name?: string } {
   const doctorRecord = storedWorkerDoctor(jsonValue(row.doctor ?? row.worker_doctor));
   const driver = String(row.driver ?? "");
   const poolDigest = String(row.imageDigest ?? row.image_digest ?? "");
   const evidence = workerPoolEvidence(doctorRecord, driver, poolDigest, String(row.platform ?? ""));
   return {
     id: String(row.workerId ?? row.worker_id ?? ""),
+    name: String(row.workerName ?? row.worker_name ?? ""),
     admissionState: String(row.admissionState ?? row.worker_admission_state),
     connectionState: String(row.connectionState ?? row.worker_connection_state),
     configurationState: String(row.configurationState ?? row.worker_configuration_state),
@@ -95,7 +96,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
   const blockedInstallations = new Set<number>();
   const candidateRows = await deps.db`
     SELECT p.id AS "poolId", p.organization_id AS "organizationId", p.worker_id AS "poolWorkerId",
-      w.id AS "workerId", p.enabled, p.platform, p.driver, p.image_digest AS "imageDigest", p.resources, p.labels, p.trigger_label AS "triggerLabel",
+      w.id AS "workerId", w.name AS "workerName", p.enabled, p.platform, p.driver, p.image_digest AS "imageDigest", p.resources, p.labels, p.trigger_label AS "triggerLabel",
       w.admission_state AS "admissionState", w.connection_state AS "connectionState", w.configuration_state AS "configurationState",
       w.configuration_revision AS "configurationRevision", w.applied_configuration_revision AS "appliedConfigurationRevision",
       w.limits, w.doctor, w.encryption_public_key AS "encryptionPublicKey",

@@ -12,9 +12,17 @@ export type QueuedRoutingJob = {
   jobId: number;
   labels: string[];
 };
+
+const MAX_RUNNER_NAME_LENGTH = 128;
+function resolvedRunnerName(workerName: string, workerId: string, platform: string, uniqueId = randomUUID()): string {
+  const resolvedPlatform = platform.trim().toLowerCase();
+  const suffix = `-${resolvedPlatform}-${uniqueId}`;
+  const base = workerName.trim() || workerId;
+  return `${base.slice(0, Math.max(1, MAX_RUNNER_NAME_LENGTH - suffix.length))}${suffix}`;
+}
 export type ReconcileDeps = {
   queued: QueuedRoutingJob[];
-  candidates: Array<Candidate & { worker: Candidate["worker"] & { id: string }; pool: Candidate["pool"] & { id: string } }>;
+  candidates: Array<Candidate & { worker: Candidate["worker"] & { id: string; name?: string }; pool: Candidate["pool"] & { id: string } }>;
   upsert?: (job: QueuedRoutingJob) => Promise<void>;
   installationBlocked?: (installationId: number) => boolean;
   workerConnected?: (workerId: string) => boolean;
@@ -87,7 +95,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
           await deps.release?.(claimed);
           return;
         }
-        const jit = await deps.jit({ installationId: queued.installationId, owner, repo, runnerName: `${option.route}-${option.vcpu}vcpu-${option.memoryGiB}g-${randomUUID()}`, labels: requestedLabels, githubJobId: queued.jobId }).catch((error) => {
+        const jit = await deps.jit({ installationId: queued.installationId, owner, repo, runnerName: resolvedRunnerName(candidate.worker.name ?? "", candidate.worker.id, candidate.pool.platform), labels: requestedLabels, githubJobId: queued.jobId }).catch((error) => {
           jitFailed = true;
           throw error;
         });

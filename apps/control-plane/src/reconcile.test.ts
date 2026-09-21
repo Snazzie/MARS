@@ -7,7 +7,7 @@ test("reserves a runner slot before requesting JIT config", async () => {
   let runnerName = "";
   const result = await reconcileQueuedJobs({
     queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["mars-macos-arm64-2vcpu-4g"] }],
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", name: "mars-mac-studio", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
     reserve: async (input) => { order.push("reserve"); routingKey = input.routingKey; return { id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested }; },
     jit: async (input) => { order.push("jit"); runnerName = input.runnerName; return { encodedJitConfig: "config", runnerName: input.runnerName, labels: ["mars-macos-arm64-2vcpu-4g"], expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
     dispatch: async () => { order.push("dispatch"); },
@@ -15,23 +15,26 @@ test("reserves a runner slot before requesting JIT config", async () => {
   expect(result.reserved).toBe(1);
   expect(order).toEqual(["reserve", "jit", "dispatch"]);
   expect(routingKey).toBe("acme/project:4:mars-macos-arm64-2vcpu-4g");
-  expect(runnerName).toMatch(/^mars-macos-arm64-2vcpu-4g-[0-9a-f-]{36}$/);
+  expect(runnerName).toMatch(/^mars-mac-studio-macos-arm64-[0-9a-f-]{36}$/);
 });
 
 test("dispatches an architecture-neutral job through an architecture-specific pool", async () => {
   let jitLabels: string[] = [];
+  let runnerName = "";
   const result = await reconcileQueuedJobs({
     queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["mars-any-2vcpu-4g"] }],
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", name: "mars-mac-studio", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
     reserve: async (input) => ({ id: "lease", nonce: "n".repeat(32), workerId: input.workerId, poolId: input.poolId, expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested }),
     jit: async (input) => {
       jitLabels = input.labels;
+      runnerName = input.runnerName;
       return { encodedJitConfig: "config", runnerName: input.runnerName, labels: input.labels, expiresAt: new Date(Date.now() + 60_000).toISOString() };
     },
     dispatch: async () => {},
   });
   expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
   expect(jitLabels).toEqual(["mars-any-2vcpu-4g"]);
+  expect(runnerName).toMatch(/^mars-mac-studio-macos-arm64-[0-9a-f-]{36}$/);
 });
 test("routes multi-platform alternatives to an online worker", async () => {
   let selectedWorker = "";

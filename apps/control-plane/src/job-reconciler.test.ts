@@ -79,18 +79,19 @@ test("returns a complete report when no queued jobs are available", async () => 
   expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 0 });
 });
 
-test("reserves, requests JIT configuration, and dispatches an eligible queued job", async () => {
+test("registers an any-label job with its resolved worker and platform", async () => {
   const events: string[] = [];
   const { publicKey } = generateKeyPairSync("x25519");
   const workerEncryptionPublicKey = publicKey.export({ format: "pem", type: "spki" }).toString();
   let db: DatabaseClient;
   db = Object.assign((async (strings: TemplateStringsArray) => {
     const query = strings.join(" ").toLowerCase();
-    if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", githubRunId: 77, runAttempt: 1, repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels: ["mars-windows-x64-2vcpu-4g"] }];
+    if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", githubRunId: 77, runAttempt: 1, repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels: ["mars-any-2vcpu-4g"] }];
     if (query.includes('p.id as "poolid"')) return [{
       poolId: "pool",
       organizationId: "org",
       workerId: "worker",
+      workerName: "D2E0B2D7893B",
       enabled: true,
       platform: "windows-x64",
       driver: "windows-hyperv-container",
@@ -122,10 +123,11 @@ test("reserves, requests JIT configuration, and dispatches an eligible queued jo
     if (url.endsWith("/actions/jobs/42")) {
       events.push("preflight");
       expect(init?.method).toBeUndefined();
-      return Response.json({ id: 42, run_id: 77, run_attempt: 1, status: "queued", name: "build", labels: ["mars-windows-x64-2vcpu-4g"], created_at: "2026-08-22T10:31:46Z" });
+      return Response.json({ id: 42, run_id: 77, run_attempt: 1, status: "queued", name: "build", labels: ["mars-any-2vcpu-4g"], created_at: "2026-08-22T10:31:46Z" });
     }
     events.push("jit");
     expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body)).name).toMatch(/^D2E0B2D7893B-windows-x64-[0-9a-f-]{36}$/);
     return new Response(JSON.stringify({ encoded_jit_config: "encoded-config" }), { status: 200, headers: { "content-type": "application/json" } });
   };
   const dispatcher = { dispatch: async () => { events.push("dispatch"); } };
