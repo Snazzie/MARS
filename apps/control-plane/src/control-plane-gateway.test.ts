@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { enqueueWorkerMessage, scheduleWorkerPing, sendWorkerAuthenticationFrames } from "./control-plane-gateway.ts";
+import { enqueueWorkerMessage, scheduleWorkerPing, sendWorkerAuthenticationFrames, sendWorkerStatus } from "./control-plane-gateway.ts";
 
 test("schedules worker heartbeat pings without sending immediately", () => {
   let sendCount = 0;
@@ -36,6 +36,15 @@ test("sends authenticated and ping frames before durable replay", async () => {
   });
   expect(order).toEqual(["authenticated", "ping", "replay"]);
   expect(JSON.parse(sent[0]!).admissionState).toBe("adopted");
+});
+test("broadcasts worker status frames only to browser sockets", () => {
+  const sent: string[] = [];
+  sendWorkerStatus([
+    { data: { actor: "browser", organizationId: "all", cursor: 0 }, send: data => sent.push(String(data)) },
+    { data: { actor: "worker", workerId: "worker", authenticated: true }, send: data => sent.push(String(data)) },
+  ], "worker", "online");
+  expect(sent).toHaveLength(1);
+  expect(JSON.parse(sent[0]!)).toMatchObject({ version: 1, type: "worker_status", state: "online" });
 });
 
 test("logs replay rejection without closing the authenticated socket", async () => {

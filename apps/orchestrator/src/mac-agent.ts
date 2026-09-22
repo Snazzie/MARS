@@ -282,6 +282,15 @@ function capacity(): WorkerCapacityData {
     freeStorageBytes: Number(disk.bavail * disk.bsize),
   };
 }
+export function capacityForMacDoctor(readCapacity: () => WorkerCapacityData = capacity): WorkerCapacityData {
+  try {
+    return readCapacity();
+  } catch (error) {
+    console.error("macOS capacity metrics unavailable; publishing doctor with zero available capacity", { error: error instanceof Error ? error.message : String(error) });
+    return { actualVcpu: 0, actualMemoryBytes: 0, actualStorageBytes: 0, freeVcpu: 0, freeMemoryBytes: 0, freeStorageBytes: 0 };
+  }
+}
+
 async function macMachineUuid(): Promise<string> {
   if (Bun.env.MARS_MACHINE_UUID) return Bun.env.MARS_MACHINE_UUID.toLowerCase();
   const process = Bun.spawn(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"], { stdout: "pipe", stderr: "pipe" });
@@ -411,7 +420,7 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
     const sendDoctor = () => {
       publishInventory();
       if (ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { ...workerRuntimeVersions(), doctor: { ...doctorReport, acceptingLeases: pickupState.acceptingLeases, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacity() } }));
+      ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { ...workerRuntimeVersions(), doctor: { ...doctorReport, acceptingLeases: pickupState.acceptingLeases, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacityForMacDoctor() } }));
     };
     ws.onmessage = async event => {
       let frame: { type?: string; nonce?: string } & Partial<WorkerCommand>;

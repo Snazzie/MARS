@@ -524,7 +524,7 @@ test("retries stats and omits only a running container that disappeared", async 
   expect(statuses[0]).toMatchObject({ containerId: firstId, name: "first", cpuUsagePercent: 1 });
 });
 
-test("propagates non-not-found stats failures", async () => {
+test("publishes container inventory when Docker stats fail", async () => {
   const id = "3".repeat(64);
   let statsCalls = 0;
   const docker: DockerRunner = async (args) => {
@@ -540,7 +540,8 @@ test("propagates non-not-found stats failures", async () => {
     }
     return { code: 0, stdout: "", stderr: "" };
   };
-  await expect(new WindowsContainerDriver(collectorConfig, docker).listContainerStatuses()).rejects.toThrow("docker stats failed");
+  const statuses = await new WindowsContainerDriver(collectorConfig, docker).listContainerStatuses();
+  expect(statuses).toMatchObject([{ containerId: id, name: "running", state: "running", cpuUsagePercent: null, memoryWorkingSetBytes: null, memoryLimitBytes: null, diskUsageBytes: 1 }]);
   expect(statsCalls).toBe(1);
 });
 

@@ -7,14 +7,17 @@ import { QueryState } from "./StateView.tsx";
 import { ContextHelp } from "./ContextHelp.tsx";
 import { useDashboardInvalidations } from "../useDashboardInvalidations.ts";
 
-const links = [
+const navigationLinks = [
   ["/", "Overview", "01"],
   ["/runs", "Runs", "02"],
   ["/repositories", "Repositories", "03"],
   ["/workers", "Workers", "04"],
   ["/pools", "Pools", "05"],
-  ["/settings", "Settings", "06"],
 ] as const;
+const settingsLinks = [
+  ["/settings", "Settings"],
+] as const;
+const links = [...navigationLinks, ["/settings", "Settings", "06"]] as const;
 const helpByRoute: Record<(typeof links)[number][0], { label: string; text: string }> = {
   "/": { label: "About overview health", text: "What: workload outcomes and control-plane freshness for the selected workspace. How: change the time window to inspect trends. Fix: open Workers when capacity or runtime health is degraded, then Runs for individual failures." },
   "/runs": { label: "About run history", text: "What: GitHub workflow jobs observed by Mars. How: filter by repository, branch, actor, status, or conclusion and open a run for jobs, stages, and logs. Fix: use the linked GitHub run when cancellation or rerun is required." },
@@ -64,15 +67,21 @@ export function AppShell() {
             {organizations.data?.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
           </select>
         </label>}
-        <nav aria-label="Primary navigation">
-          <p className="nav-label">Navigate</p>
-          {links.filter(([to]) => to !== "/settings").map(([to, label, number]) => (
-            <Link key={to} to={to} className="nav-link" activeProps={{ className: "nav-link is-active" }}>
-              <span className="nav-number">{number}</span><span>{label}</span>
-            </Link>
-          ))}
-        </nav>
-        <div className="rail-settings"><p className="nav-label">Settings</p><Link to="/settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>General</span></Link></div>
+        {settingsRoute ? <nav aria-label="Settings navigation">
+          <p className="nav-label">Settings</p>
+          {settingsLinks.map(([to, label]) => <Link key={to} to={to} className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>{label}</span></Link>)}
+          <Link to="/" className="nav-link"><span>Overview</span></Link>
+        </nav> : <>
+          <nav aria-label="Primary navigation">
+            <p className="nav-label">Navigate</p>
+            {navigationLinks.map(([to, label, number]) => (
+              <Link key={to} to={to} className="nav-link" activeProps={{ className: "nav-link is-active" }}>
+                <span className="nav-number">{number}</span><span>{label}</span>
+              </Link>
+            ))}
+          </nav>
+          <div className="rail-settings"><Link to="/settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>Settings</span></Link></div>
+        </>}
         <div className="rail-footer" role="status" aria-live="polite"><span className={`online-dot ${health.data ? "" : "is-offline"}`} />Control plane <strong>{health.isLoading ? "checking" : health.data ? "connected" : "unreachable"}</strong>{health.data?.discovery.stale && <small> Discovery stale</small>}</div>
       </aside>
       <div className="console-body">
@@ -92,9 +101,14 @@ export function AppShell() {
               </select>
             </label>}
           </div>
-          {mobileMenuOpen && <nav ref={mobileNavigationRef} id="mobile-navigation" className="mobile-navigation" aria-label="Mobile navigation">
-            {links.filter(([to]) => to !== "/settings").map(([to, label, navNumber]) => <Link key={to} to={to} className="nav-link" activeProps={{ className: "nav-link is-active" }}><span className="nav-number">{navNumber}</span><span>{label}</span></Link>)}
-            <div className="mobile-settings-nav"><p className="nav-label">Settings</p><Link to="/settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>General</span></Link></div>
+          {mobileMenuOpen && <nav ref={mobileNavigationRef} id="mobile-navigation" className="mobile-navigation" aria-label={settingsRoute ? "Settings navigation" : "Mobile navigation"}>
+            {settingsRoute ? <>
+              {settingsLinks.map(([to, label]) => <Link key={to} to={to} className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>{label}</span></Link>)}
+              <Link to="/" className="nav-link"><span>Overview</span></Link>
+            </> : <>
+              {navigationLinks.map(([to, label, navNumber]) => <Link key={to} to={to} className="nav-link" activeProps={{ className: "nav-link is-active" }}><span className="nav-number">{navNumber}</span><span>{label}</span></Link>)}
+              <div className="mobile-settings-nav"><Link to="/settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>Settings</span></Link></div>
+            </>}
           </nav>}
         </header>
         <main id="main-content" className="workspace" data-path={location}>

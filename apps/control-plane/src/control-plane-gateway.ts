@@ -35,6 +35,20 @@ export async function sendWorkerAuthenticationFrames(input: {
     (input.logError ?? console.error)("Worker command replay failed", { workerId: input.workerId, error: error instanceof Error ? error.message : String(error) });
   }
 }
+export type WorkerStatusFrame = { version: 1; type: "worker_status"; workerId: string; state: "online" | "offline"; occurredAt: string };
+
+export function sendWorkerStatus(
+  sockets: Iterable<Pick<ServerWebSocket<ControlPlaneSocketData>, "data" | "send">>,
+  workerId: string,
+  state: WorkerStatusFrame["state"],
+  occurredAt = new Date().toISOString(),
+): void {
+  const frame = JSON.stringify({ version: 1, type: "worker_status", workerId, state, occurredAt });
+  for (const socket of sockets) {
+    if (socket.data.actor === "browser") socket.send(frame);
+  }
+}
+
 
 export function enqueueWorkerMessage(
   tails: WeakMap<object, Promise<void>>,
@@ -71,7 +85,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
   const json = (data: unknown, status = 200) => Response.json(data, { status, headers: { "cache-control": "no-store" } });
 
   async function replayBrowserInvalidations(ws: ServerWebSocket<ControlPlaneSocketData>): Promise<void> {
-    if (ws.data.actor !== "browser" || replayingBrowserSockets.has(ws)) return;
+    if (ws.data.actor !== "browser" || ws.data.organizationId === "all" || replayingBrowserSockets.has(ws)) return;
     replayingBrowserSockets.add(ws);
     try {
       for (let page = 0; page < 10; page += 1) {
@@ -86,6 +100,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
       replayingBrowserSockets.delete(ws);
     }
   }
+
 
   const websocket: NonNullable<Parameters<typeof Bun.serve<ControlPlaneSocketData>>[0]["websocket"]> = {
     open(ws) {
@@ -125,6 +140,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         if (currentSocket === ws) {
           workerSockets.delete(ws.data.workerId);
           if (ws.data.connectionEpoch === workerConnectionEpochs.get(ws.data.workerId)) workerConnectionEpochs.delete(ws.data.workerId);
+          sendWorkerStatus(browserSockets, ws.data.workerId, "offline");
         }
       }
       browserSockets.delete(ws);
@@ -168,6 +184,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           admissionState: worker.admission_state,
           dispatcher: options.dispatcher,
         });
+        sendWorkerStatus(browserSockets, ws.data.workerId, "online");
       } else if (frame.type === "doctor" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && frame.workerId === ws.data.workerId && frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload)) {
         const epoch = ws.data.connectionEpoch;
         if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
@@ -225,7 +242,8 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         const user = await options.current(request);
         if (!user) return json({ code: "unauthorized", message: "Authentication required", requestId: options.requestId() }, 401);
         const organizationId = url.searchParams.get("organizationId") ?? "";
-        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(organizationId)) return json({ code: "invalid_request", message: "A concrete organization is required" }, 400);
+        if (organizationId !== "all" && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(organizationId)) return json({ code: "invalid_request", message: "A concrete organization is required" }, 400);
+        if (organizationId === "all" && !user.isGlobalAdmin) return json({ code: "not_found", message: "Organization not found" }, 404);
         const rawCursor = Number(url.searchParams.get("cursor") ?? 0);
         const cursor = Number.isSafeInteger(rawCursor) && rawCursor >= 0 ? rawCursor : 0;
         if (!await canSubscribeToOrganization(options.db, user, organizationId)) return json({ code: "not_found", message: "Organization not found" }, 404);

@@ -287,7 +287,13 @@ export class WindowsContainerDriver implements RuntimeDriver {
     const inspections = await this.enumerateOwnedContainers();
     if (inspections.length === 0) return [];
     const runningIds = inspections.flatMap((inspection) => inspection.State?.Status === "running" && typeof inspection.Id === "string" ? [inspection.Id] : []);
-    const stats = await this.collectContainerStats(runningIds);
+    let stats: { rows: DockerStats[]; disappeared: Set<string> };
+    try {
+      stats = await this.collectContainerStats(runningIds);
+    } catch (error) {
+      console.warn("Windows container metrics unavailable; publishing inventory without metrics", { error: error instanceof Error ? error.message : String(error) });
+      stats = { rows: [], disappeared: new Set() };
+    }
     const disappeared = new Set([...stats.disappeared].map((id) => id.toLowerCase()));
     const statsById = new Map<string, DockerStats>();
     for (const row of stats.rows) {

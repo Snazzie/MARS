@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateKeyPairSync, verify as verifySignature } from "node:crypto";
-import { applyWorkerConfigure, availableMacMemoryBytes, buildMacWorkerAuthentication, buildMacWorkerJoinPayload, executeMacWorkerCommand, handleMacWorkerCommand, parseMacWorkerIdentity, runMacLeaseLifecycle, runWorkerJoin, startMacLeaseLifecycle } from "./mac-agent.ts";
+import { applyWorkerConfigure, availableMacMemoryBytes, buildMacWorkerAuthentication, buildMacWorkerJoinPayload, capacityForMacDoctor, executeMacWorkerCommand, handleMacWorkerCommand, parseMacWorkerIdentity, runMacLeaseLifecycle, runWorkerJoin, startMacLeaseLifecycle } from "./mac-agent.ts";
 
 test("awaits the live cache TTL before acknowledging macOS worker configuration", async () => {
   const workerId = "00000000-0000-4000-8000-000000000001";
@@ -95,6 +95,17 @@ test("keeps a failed valid macOS command from closing the health channel", async
   sent.push("pong", "doctor");
   expect(closed).toBe(false);
   expect(sent).toEqual(["pong", "doctor"]);
+});
+
+test("publishes a safe zero-capacity doctor sample when macOS capacity collection fails", () => {
+  expect(capacityForMacDoctor(() => { throw new Error("memory_pressure unavailable"); })).toEqual({
+    actualVcpu: 0,
+    actualMemoryBytes: 0,
+    actualStorageBytes: 0,
+    freeVcpu: 0,
+    freeMemoryBytes: 0,
+    freeStorageBytes: 0,
+  });
 });
 
 describe("macOS memory availability", () => {
