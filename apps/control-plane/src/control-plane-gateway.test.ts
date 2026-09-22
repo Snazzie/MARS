@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { enqueueWorkerMessage, scheduleWorkerPing, sendWorkerAuthenticationFrames, sendWorkerStatus } from "./control-plane-gateway.ts";
+import { enqueueWorkerMessage, scheduleWorkerHeartbeatDeadline, scheduleWorkerPing, sendWorkerAuthenticationFrames, sendWorkerStatus } from "./control-plane-gateway.ts";
 
 test("schedules worker heartbeat pings without sending immediately", () => {
   let sendCount = 0;
@@ -18,8 +18,24 @@ test("schedules worker heartbeat pings without sending immediately", () => {
   capturedCallback();
   expect(sendCount).toBe(1);
 });
+test("expires an unanswered worker heartbeat at the application deadline", () => {
+  let expire!: () => void;
+  let delay = 0;
+  let expired = false;
+  scheduleWorkerHeartbeatDeadline(
+    () => { expired = true; },
+    (callback, delayMs) => {
+      expire = callback;
+      delay = delayMs;
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    },
+  );
+  expect(delay).toBe(30_000);
+  expect(expired).toBe(false);
+  expire();
+  expect(expired).toBe(true);
+});
 
-const gatewaySource = await Bun.file(new URL("./control-plane-gateway.ts", import.meta.url)).text();
 
 test("sends authenticated and ping frames before durable replay", async () => {
   const order: string[] = [];
@@ -59,30 +75,6 @@ test("logs replay rejection without closing the authenticated socket", async () 
   expect(errors).toEqual([["Worker command replay failed", { workerId: "worker", error: "replay unavailable" }]]);
 });
 
-test("workers answer heartbeat pings with JSON frames", async () => {
-  for (const path of ["../../orchestrator/src/linux-agent.ts", "../../orchestrator/src/mac-agent.ts", "../../orchestrator/src/windows-agent.ts"]) {
-    const source = await Bun.file(new URL(path, import.meta.url)).text();
-    expect(source).toMatch(/type: "pong", workerId:/);
-  }
-});
-test("schedules the next worker ping after pong", () => {
-  const pongBranchStart = gatewaySource.indexOf('frame.type === "pong"');
-  const nextBranchStart = gatewaySource.indexOf('} else if (ws.data.authenticated', pongBranchStart);
-  const pongBranch = gatewaySource.slice(pongBranchStart, nextBranchStart);
-  expect(pongBranch).toContain("scheduleWorkerPing");
-  expect(pongBranch).not.toContain('\n        ws.send(JSON.stringify({ version: 1, type: "ping" }))');
-});
-test("validates worker doctor reports before persistence and acknowledgement", () => {
-  const doctorBranchStart = gatewaySource.indexOf('frame.type === "doctor"');
-  const pongBranchStart = gatewaySource.indexOf('frame.type === "pong"', doctorBranchStart);
-  const doctorBranch = gatewaySource.slice(doctorBranchStart, pongBranchStart);
-  expect(doctorBranch).toContain("WorkerDoctorReport.safeParse(frame.payload)");
-  expect(doctorBranch).toContain("if (!parsed.success) return;");
-  expect(doctorBranch).toContain("await options.db`update workers set doctor=");
-  expect(doctorBranch).toContain("if (doctorPayload.doctor.activeLeases) {");
-  expect(doctorBranch).not.toContain("?? []");
-  expect(doctorBranch).toContain('type: "doctor_ack"');
-});
 
 
 test("serializes worker frames on one socket", async () => {

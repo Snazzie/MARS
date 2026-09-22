@@ -106,7 +106,9 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     JOIN workers w ON (p.worker_id IS NULL OR p.worker_id=w.id) AND p.platform = ANY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(w.guest_platforms)='array' THEN w.guest_platforms ELSE (w.guest_platforms #>> '{}')::jsonb END))
       AND p.driver = CASE WHEN w.platform='macos-arm64' AND p.platform IN ('macos-arm64','linux-arm64') THEN 'tart-vm' WHEN p.platform=w.platform THEN CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN CASE WHEN w.doctor->'doctor'->>'runtimeMode'='vm' THEN 'windows-hyperv' ELSE 'windows-hyperv-container' END WHEN 'macos-arm64' THEN 'tart-vm' END ELSE NULL END
       AND (p.driver <> 'tart-vm' OR w.doctor->'artifactDigests'->>p.platform = p.image_digest)
-    WHERE p.enabled=true AND w.draining=false`;
+    WHERE p.enabled=true AND w.draining=false
+      AND w.last_heartbeat_at > now()-interval '60 seconds'
+      AND w.doctor_observed_at > now()-interval '60 seconds'`;
 
   const workerByPool = new Map<string, { workerId: string; encryptionPublicKey: string; imageDigest: string; guestPlatform: string; driver: RuntimeDriverNameValue; resources: PoolResourcesValue }>();
   const sqlCandidates = candidateRows.map((row) => {

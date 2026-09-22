@@ -8,7 +8,7 @@ import { z } from "zod";
 import type { Lease, RuntimeLease } from "./runtime.ts";
 import { createTartVmRuntime, resolveTartExecutable, TartVmDriver } from "./tart.ts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
-import { retryControlPlaneOperation, waitForWorkerSocketClose, workerRuntimeVersions } from "./worker-client.ts";
+import { retryControlPlaneOperation, waitForWorkerSocketClose, workerRuntimeVersions, WorkerEventTransport } from "./worker-client.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 import { collectWorkerServiceLogs } from "./worker-service-logs.ts";
 import { openLeasePickupState, leasePickupStateFile, writeLeasePickupState, type LeasePickupStateController } from "./lease-pickup-state.ts";
@@ -300,12 +300,32 @@ async function macMachineUuid(): Promise<string> {
   if (!uuid) throw new Error("macOS machine UUID is unavailable");
   return uuid.toLowerCase();
 }
+async function runMacCommand(command: string[], timeoutMs = 15_000): Promise<{ code: number; stdout: string }> {
+  const process = Bun.spawn(command, { stdout: "pipe", stderr: "ignore" });
+  const stdout = new Response(process.stdout).text();
+  const timeout = setTimeout(() => process.kill(), timeoutMs);
+  try {
+    return { code: await process.exited, stdout: await stdout };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 export async function currentMacDoctor(): Promise<WorkerDoctorData> {
-  const tart = Bun.spawnSync([resolveTartExecutable(Bun.env.MARS_TART_EXECUTABLE), "--version"]);
-  const probe = tart.exitCode === 0;
+  const tartExecutable = resolveTartExecutable(Bun.env.MARS_TART_EXECUTABLE);
+  const tart = await runMacCommand([tartExecutable, "--version"]).catch(() => ({ code: -1, stdout: "" }));
+  const probe = tart.code === 0;
+  const macosBaseImage = Bun.env.MARS_TART_MACOS_BASE_IMAGE ?? Bun.env.MARS_TART_BASE_IMAGE ?? "mars-macos-worker";
+  const linuxBaseImage = Bun.env.MARS_TART_LINUX_ARM64_BASE_IMAGE ?? "ghcr.io/cirruslabs/ubuntu:latest";
+  const tartList = await runMacCommand([tartExecutable, "list", "--format", "json"]).catch(() => ({ code: -1, stdout: "" }));
+  let localImages = false;
+  try {
+    const entries = JSON.parse(tartList.stdout) as Array<{ Name?: unknown }>;
+    const names = new Set(entries.map(entry => entry.Name).filter((name): name is string => typeof name === "string"));
+    localImages = tartList.code === 0 && names.has(macosBaseImage) && names.has(linuxBaseImage);
+  } catch {}
   let egress = false;
   try {
-    const response = await fetch("https://api.github.com", { method: "HEAD" });
+    const response = await fetch("https://api.github.com", { method: "HEAD", signal: AbortSignal.timeout(5_000) });
     egress = response.ok || response.status < 500;
   } catch {}
   const macosDigest = Bun.env.MARS_TART_MACOS_IMAGE_DIGEST?.trim();
@@ -314,7 +334,7 @@ export async function currentMacDoctor(): Promise<WorkerDoctorData> {
   const artifactDigests = { "macos-arm64": macosDigest ?? "", "linux-arm64": linuxDigest ?? "" };
   const immutableImages = digestPattern.test(artifactDigests["macos-arm64"]) && digestPattern.test(artifactDigests["linux-arm64"]);
   const contractVersion = Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim();
-  const failures = [!probe && "Tart runtime probe failed", !egress && "GitHub egress probe failed", !immutableImages && "Both immutable Tart image digests are required", !WorkerContractVersion.safeParse(contractVersion).success && "Worker contract version is missing or invalid"].filter(Boolean);
+  const failures = [!probe && "Tart runtime probe failed", !localImages && "Prepared Tart base images are unavailable", !egress && "GitHub egress probe failed", !immutableImages && "Both immutable Tart image digests are required", !WorkerContractVersion.safeParse(contractVersion).success && "Worker contract version is missing or invalid"].filter(Boolean);
   return WorkerDoctorData.parse({ runtimeMode: "tart", artifactSource: "registry", ...(immutableImages ? { artifactDigests, artifactDigest: artifactDigests["macos-arm64"], artifactIdentity: artifactDigests["macos-arm64"] } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableImages, remediation: failures.length ? failures.join("; ") : null });
 }
 async function currentMacWorkerJoinPayload(code: string, publicKey: string, encryptionPublicKey: string, vmUuid?: string, machineUuid?: string): Promise<MacWorkerJoinPayload> {
@@ -401,8 +421,8 @@ async function enrollMacWorker(controlPlane: URL, identity: MacWorkerIdentity): 
 }
 
 async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, driver: TartVmDriver, limits: MacWorkerLimits, cache: WorkerCacheConfiguration, cacheService: ActionCacheService, pickupState: LeasePickupStateController): Promise<never> {
-  const doctorReport = await currentMacDoctor();
   const activeLeases = new Map<string, Promise<void>>();
+  const eventTransport = new WorkerEventTransport();
   for (;;) {
     let ws: WebSocket;
     try {
@@ -419,8 +439,12 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
     const publishInventory = () => { void writeLeasePickupState(leasePickupStateFile(), pickupState.acceptingLeases, activeLeases.size); };
     const sendDoctor = () => {
       publishInventory();
-      if (ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { ...workerRuntimeVersions(), doctor: { ...doctorReport, acceptingLeases: pickupState.acceptingLeases, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacityForMacDoctor() } }));
+      void currentMacDoctor().then(doctorReport => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { ...workerRuntimeVersions(), doctor: { ...doctorReport, inventoryObservedAt: new Date().toISOString(), acceptingLeases: pickupState.acceptingLeases, preserveLeases: identity.preserveLeases === true, activeLeases: [...activeLeases.keys()] }, capacity: capacityForMacDoctor() } }));
+      }).catch(error => {
+        console.error("Mac worker doctor collection failed", { workerId: identity.workerId, error: error instanceof Error ? error.message : String(error) });
+      });
     };
     ws.onmessage = async event => {
       let frame: { type?: string; nonce?: string } & Partial<WorkerCommand>;
@@ -436,10 +460,11 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           return;
         }
         if (frame.type === "authenticated") {
+          eventTransport.bind(ws);
           console.log("Mac worker authenticated", { workerId: identity.workerId });
           if (Bun.env.MARS_JOIN_CODE_FILE) await unlink(Bun.env.MARS_JOIN_CODE_FILE).catch(() => {});
           await emitActionCacheSnapshot(cacheService, (type, payload) => {
-            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(workerEvent(identity.workerId, type, payload)));
+            eventTransport.send(workerEvent(identity.workerId, type, payload));
           });
           sendDoctor();
           return;
@@ -450,6 +475,10 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           return;
         }
         if (frame.type === "doctor_ack") return;
+        if (frame.type === "event_ack" && typeof (frame as Record<string, unknown>).eventId === "string") {
+          eventTransport.acknowledge((frame as Record<string, unknown>).eventId as string);
+          return;
+        }
       } catch {
         ws.close(1011, "worker command failed");
         return;
@@ -473,9 +502,7 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           setPreserveLeases: enabled => { identity.preserveLeases = enabled; },
           acceptingLeases: () => pickupState.acceptingLeases,
           saveIdentity: () => saveMacWorkerIdentity(identity),
-          send: eventToSend => {
-            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(eventToSend));
-          },
+          send: eventToSend => eventTransport.send(eventToSend),
           sendDoctor,
         });
       } catch (error) {
@@ -489,6 +516,7 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
       }
     };
     await closed;
+    eventTransport.unbind(ws);
     await Bun.sleep(1_000);
   }
 }

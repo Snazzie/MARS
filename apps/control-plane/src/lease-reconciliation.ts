@@ -49,7 +49,7 @@ async function markTerminalLease(deps: StaleLeaseReconciliationDeps, row: StaleL
   const state = terminalLeaseState({ conclusion });
   await deps.db`UPDATE runner_leases SET state=${state}, terminal_result=${jsonParameter(deps.db, { reason: "github_reconciled", conclusion })}::jsonb, cleanup_state='pending', updated_at=now() WHERE id=${row.leaseId} AND nonce=${row.nonce} AND state NOT IN ('completed','failed','reaped')`;
 }
-export async function reconcileWorkerInventory(db: DatabaseClient, workerId: string, activeLeaseIds: readonly string[]): Promise<number> {
+export async function reconcileWorkerInventory(db: DatabaseClient, workerId: string, activeLeaseIds: readonly string[], inventoryObservedAt = new Date().toISOString()): Promise<number> {
   const ids = [...new Set(activeLeaseIds)];
   const terminalResult = jsonParameter(db, { reason: "worker_inventory_missing" });
   const rows = ids.length === 0
@@ -64,6 +64,7 @@ export async function reconcileWorkerInventory(db: DatabaseClient, workerId: str
             state IN ('dispatched','provisioning','sandbox_ready','online','busy')
             OR (state IN ('completed','failed') AND cleanup_state IN ('pending','failed'))
           )
+          AND updated_at<=${inventoryObservedAt}
         RETURNING id
       `
     : await db<Array<{ id: string }>>`
@@ -77,6 +78,7 @@ export async function reconcileWorkerInventory(db: DatabaseClient, workerId: str
             state IN ('dispatched','provisioning','sandbox_ready','online','busy')
             OR (state IN ('completed','failed') AND cleanup_state IN ('pending','failed'))
           )
+          AND updated_at<=${inventoryObservedAt}
           AND NOT EXISTS (
             SELECT 1
             FROM jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb) AS active(id)

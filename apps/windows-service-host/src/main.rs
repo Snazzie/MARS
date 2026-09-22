@@ -3,6 +3,7 @@ use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::os::windows::io::AsRawHandle;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
@@ -13,14 +14,19 @@ use windows_service::service::{
 };
 use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
 use windows_service::service_dispatcher;
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD,
+};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, QueryInformationJobObject, SetInformationJobObject,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
     JobObjectExtendedLimitInformation, TerminateJobObject,
 };
-use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcessId, OpenThread, ResumeThread, CREATE_SUSPENDED, THREAD_SUSPEND_RESUME,
+};
 
 const SERVICE_NAME: &str = "MarsWorker";
 
@@ -206,6 +212,39 @@ fn log_path() -> PathBuf {
         .join("worker.log")
 }
 
+fn resume_child(child: &Child) -> io::Result<()> {
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+    let mut found = false;
+    let mut ok = unsafe { Thread32First(snapshot, &mut entry) };
+    while ok != 0 {
+        if entry.th32OwnerProcessID == child.id() {
+            let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
+            if thread.is_null() {
+                unsafe { CloseHandle(snapshot) };
+                return Err(io::Error::last_os_error());
+            }
+            let resumed = unsafe { ResumeThread(thread) };
+            unsafe { CloseHandle(thread) };
+            if resumed == u32::MAX {
+                unsafe { CloseHandle(snapshot) };
+                return Err(io::Error::last_os_error());
+            }
+            found = true;
+        }
+        ok = unsafe { Thread32Next(snapshot, &mut entry) };
+    }
+    unsafe { CloseHandle(snapshot) };
+    if !found {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "worker primary thread not found"));
+    }
+    Ok(())
+}
+
 fn spawn_worker(executable: &Path, args: &[OsString]) -> io::Result<(Child, Job)> {
     let log = log_path();
     if let Some(parent) = log.parent() {
@@ -213,16 +252,18 @@ fn spawn_worker(executable: &Path, args: &[OsString]) -> io::Result<(Child, Job)
     }
     let stdout = OpenOptions::new().create(true).append(true).open(&log)?;
     let stderr = stdout.try_clone()?;
+    let job = Job::new()?;
     let mut child = Command::new(executable)
         .args(args)
         .stdin(Stdio::null())
         .stdout(stdout)
         .stderr(stderr)
+        .creation_flags(CREATE_SUSPENDED)
         .spawn()?;
     append_record("child_spawned", Some(child.id()), None, Some(executable.to_string_lossy().as_ref()), None);
-    let job = Job::new()?;
-    if let Err(error) = job.assign(&child) {
+    if let Err(error) = job.assign(&child).and_then(|()| resume_child(&child)) {
         let _ = child.kill();
+        let _ = child.wait();
         append_record("service_host_error", Some(child.id()), Some(TerminationCause::ServiceHostError), Some(&error.to_string()), None);
         return Err(error);
     }

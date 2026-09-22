@@ -11,14 +11,18 @@ import { activateAuthenticatedWorkerConnection } from "./worker-connection.ts";
 import { handleAuthenticatedWorkerEvent } from "./worker-lifecycle.ts";
 
 
-type WorkerSocketData = { actor: "worker"; workerId: string; challenge?: Buffer; authenticated: boolean; connectionEpoch?: number; authTimer?: ReturnType<typeof setTimeout>; heartbeatTimer?: ReturnType<typeof setTimeout> };
+type WorkerSocketData = { actor: "worker"; workerId: string; challenge?: Buffer; authenticated: boolean; closed?: boolean; connectionEpoch?: number; authTimer?: ReturnType<typeof setTimeout>; heartbeatTimer?: ReturnType<typeof setTimeout>; heartbeatDeadlineTimer?: ReturnType<typeof setTimeout> };
 type BrowserSocketData = { actor: "browser"; organizationId: string; cursor: number };
 export type ControlPlaneSocketData = WorkerSocketData | BrowserSocketData;
 type GatewayServer = Server<ControlPlaneSocketData>;
 export const WORKER_HEARTBEAT_INTERVAL_MS = 10_000;
+export const WORKER_HEARTBEAT_TIMEOUT_MS = 30_000;
 type ScheduleTimeout = (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
 export function scheduleWorkerPing(sendPing: () => void, scheduleTimeout: ScheduleTimeout = setTimeout): ReturnType<typeof setTimeout> {
   return scheduleTimeout(sendPing, WORKER_HEARTBEAT_INTERVAL_MS);
+}
+export function scheduleWorkerHeartbeatDeadline(expire: () => void, scheduleTimeout: ScheduleTimeout = setTimeout): ReturnType<typeof setTimeout> {
+  return scheduleTimeout(expire, WORKER_HEARTBEAT_TIMEOUT_MS);
 }
 export async function sendWorkerAuthenticationFrames(input: {
   socket: Pick<AuthenticatedWorkerSocket, "send">;
@@ -126,6 +130,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
       }
     },
     close(ws) {
+      if (ws.data.actor === "worker") ws.data.closed = true;
       if (ws.data.actor === "worker") {
         if (ws.data.authTimer) {
           clearTimeout(ws.data.authTimer);
@@ -135,16 +140,31 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           clearTimeout(ws.data.heartbeatTimer);
           ws.data.heartbeatTimer = undefined;
         }
+        if (ws.data.heartbeatDeadlineTimer) {
+          clearTimeout(ws.data.heartbeatDeadlineTimer);
+          ws.data.heartbeatDeadlineTimer = undefined;
+        }
         options.dispatcher.unregister(ws.data.workerId, ws);
         const currentSocket = workerSockets.get(ws.data.workerId);
         if (currentSocket === ws) {
           workerSockets.delete(ws.data.workerId);
           if (ws.data.connectionEpoch === workerConnectionEpochs.get(ws.data.workerId)) workerConnectionEpochs.delete(ws.data.workerId);
+          void options.db`update workers set connection_state='offline' where id=${ws.data.workerId}`;
           sendWorkerStatus(browserSockets, ws.data.workerId, "offline");
         }
       }
       browserSockets.delete(ws);
     },
+  };
+  const armHeartbeatDeadline = (ws: ServerWebSocket<ControlPlaneSocketData>, epoch: number): void => {
+    if (ws.data.actor !== "worker") return;
+    const data = ws.data;
+    clearTimeout(data.heartbeatDeadlineTimer);
+    data.heartbeatDeadlineTimer = scheduleWorkerHeartbeatDeadline(() => {
+      data.heartbeatDeadlineTimer = undefined;
+      if (!data.authenticated || workerSockets.get(data.workerId) !== ws || workerConnectionEpochs.get(data.workerId) !== epoch) return;
+      ws.close(4000, "worker heartbeat timeout");
+    });
   };
 
 
@@ -153,16 +173,15 @@ export function createControlPlaneGateway(options: GatewayOptions) {
     const workerData = ws.data;
     try {
       if (typeof message === "string" ? message.length > 256 * 1024 : message.byteLength > 256 * 1024) return ws.close(1009, "worker frame too large");
-      const frame = JSON.parse(String(message)) as { type?: string; signature?: string; workerId?: string; encryptionPublicKey?: string; payload?: Record<string, unknown> };
+      const frame = JSON.parse(String(message)) as { id?: string; type?: string; signature?: string; workerId?: string; encryptionPublicKey?: string; payload?: Record<string, unknown> };
       if (frame.type === "authenticate" && frame.workerId === ws.data.workerId && frame.signature && typeof frame.encryptionPublicKey === "string") {
         const epoch = ws.data.connectionEpoch;
-        if (!epoch || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return ws.close(4001, "superseded");
+        if (!epoch || ws.data.closed) return ws.close(4001, "superseded");
         if (!ws.data.challenge) return ws.close(1008, "worker authentication failed");
         const [worker] = await options.db`select public_key,encryption_public_key,admission_state from workers where id=${ws.data.workerId}`;
         const canonical = Buffer.from(`${ws.data.challenge.toString("base64url")}\n${ws.data.workerId}\n${frame.encryptionPublicKey}`);
         if (!worker || !verifyWorkerSignature(worker.public_key, canonical, decodeWorkerSignature(frame.signature))) return ws.close(1008, "worker authentication failed");
         if (worker.encryption_public_key && worker.encryption_public_key !== frame.encryptionPublicKey) return ws.close(1008, "worker encryption key mismatch");
-        if (workerConnectionEpochs.get(ws.data.workerId) !== epoch) return ws.close(4001, "superseded");
         const activated = await activateAuthenticatedWorkerConnection({
           db: options.db,
           workerId: ws.data.workerId,
@@ -170,7 +189,12 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           socket: ws,
           workerSockets,
           dispatcher: options.dispatcher,
-          isCurrent: () => workerConnectionEpochs.get(workerData.workerId) === epoch,
+          isCurrent: () => !workerData.closed,
+          activate: () => {
+            if (workerData.closed) return false;
+            workerConnectionEpochs.set(workerData.workerId, epoch);
+            return true;
+          },
           markAuthenticated: () => {
             workerData.authTimer && clearTimeout(workerData.authTimer);
             workerData.authTimer = undefined;
@@ -184,6 +208,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           admissionState: worker.admission_state,
           dispatcher: options.dispatcher,
         });
+        armHeartbeatDeadline(ws, epoch);
         sendWorkerStatus(browserSockets, ws.data.workerId, "online");
       } else if (frame.type === "doctor" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && frame.workerId === ws.data.workerId && frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload)) {
         const epoch = ws.data.connectionEpoch;
@@ -194,18 +219,22 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         const doctorPayload = parsed.data;
         await options.db`update workers set doctor=${jsonParameter(options.db, doctorPayload)}, release_version=${doctorPayload.releaseVersion}, contract_version=${doctorPayload.contractVersion}, doctor_observed_at=now(), last_heartbeat_at=now() where id=${ws.data.workerId}`;
         void options.triggerReconciliation();
-        if (doctorPayload.doctor.activeLeases) {
-          await reconcileWorkerInventory(options.db, ws.data.workerId, doctorPayload.doctor.activeLeases);
+        if (doctorPayload.doctor.activeLeases && doctorPayload.doctor.inventoryObservedAt) {
+          await reconcileWorkerInventory(options.db, ws.data.workerId, doctorPayload.doctor.activeLeases, doctorPayload.doctor.inventoryObservedAt);
         }
         if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
         ws.send(JSON.stringify({ version: 1, type: "doctor_ack", workerId: ws.data.workerId }));
       } else if (frame.type === "pong" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch) {
+        clearTimeout(workerData.heartbeatDeadlineTimer);
+        workerData.heartbeatDeadlineTimer = undefined;
         await options.db`update workers set last_heartbeat_at=now() where id=${ws.data.workerId}`;
         clearTimeout(workerData.heartbeatTimer);
         const epoch = workerData.connectionEpoch;
+        if (epoch === undefined) return;
         workerData.heartbeatTimer = scheduleWorkerPing(() => {
           workerData.heartbeatTimer = undefined;
           if (!workerData.authenticated || workerSockets.get(workerData.workerId) !== ws || workerConnectionEpochs.get(workerData.workerId) !== epoch) return;
+          armHeartbeatDeadline(ws, epoch);
           ws.send(JSON.stringify({ version: 1, type: "ping" }));
         });
       } else if (ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch && frame.workerId === ws.data.workerId) {
@@ -221,11 +250,13 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           console.log(`Worker configuration acknowledgement: ${ws.data.workerId} accepted=${acknowledged}`);
           options.dispatcher.handleEvent(frame, ws);
           void options.triggerReconciliation();
+          if (acknowledged && typeof frame.id === "string") ws.send(JSON.stringify({ version: 1, type: "event_ack", workerId: ws.data.workerId, eventId: frame.id }));
         } else {
           const accepted = await handleAuthenticatedWorkerEvent(options.db, options.dispatcher, frame, ws);
           if (frame.type === "lease.declined" && accepted) void options.triggerReconciliation();
           if (!accepted) throw new Error("invalid worker event");
           console.log(`Worker event: ${ws.data.workerId} type=${frame.type}`);
+          if (typeof frame.id === "string") ws.send(JSON.stringify({ version: 1, type: "event_ack", workerId: ws.data.workerId, eventId: frame.id }));
         }
       }
     } catch (error) {
@@ -259,13 +290,8 @@ export function createControlPlaneGateway(options: GatewayOptions) {
       if (!workerId) return json({ error: "workerId required" }, 400);
       const [worker] = await options.db`select admission_state from workers where id=${workerId}`;
       if (!worker || worker.admission_state === "revoked" || worker.admission_state === "rejected") return json({ code: "worker_unavailable", message: "Worker is unknown or revoked" }, 403);
-      const previousEpoch = workerConnectionEpochs.get(workerId);
       const connectionEpoch = ++nextWorkerConnectionEpoch;
-      workerConnectionEpochs.set(workerId, connectionEpoch);
-      if (server.upgrade(request, { data: { actor: "worker", workerId, authenticated: false, connectionEpoch } })) return undefined;
-      if (workerConnectionEpochs.get(workerId) === connectionEpoch) {
-        if (previousEpoch === undefined) workerConnectionEpochs.delete(workerId); else workerConnectionEpochs.set(workerId, previousEpoch);
-      }
+      if (server.upgrade(request, { data: { actor: "worker", workerId, authenticated: false, closed: false, connectionEpoch } })) return undefined;
       return json({ error: "websocket upgrade failed" }, 400);
     }
     return options.httpFetch(request);

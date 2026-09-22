@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { retryControlPlaneOperation, waitForWorkerSocketClose } from "./worker-client.ts";
+import { retryControlPlaneOperation, waitForWorkerSocketClose, WorkerEventTransport } from "./worker-client.ts";
 
 test("reconnects when a worker websocket errors without closing", async () => {
   class FaultingSocket extends EventTarget {
@@ -11,6 +11,52 @@ test("reconnects when a worker websocket errors without closing", async () => {
   socket.dispatchEvent(new Event("error"));
   await closed;
   expect(socket.closeCalls).toBe(1);
+});
+test("keeps an opened worker websocket alive past its connection deadline", async () => {
+  class OpenSocket extends EventTarget {
+    readyState: number = WebSocket.CONNECTING;
+    closeCalls = 0;
+    close(): void { this.closeCalls += 1; this.dispatchEvent(new Event("close")); }
+  }
+  const socket = new OpenSocket();
+  let timeout!: () => void;
+  let cancelled = false;
+  const closed = waitForWorkerSocketClose(
+    socket as unknown as WebSocket,
+    10,
+    callback => { timeout = () => { if (!cancelled) callback(); }; return 1 as unknown as ReturnType<typeof setTimeout>; },
+    () => { cancelled = true; },
+  );
+  socket.readyState = WebSocket.OPEN;
+  socket.dispatchEvent(new Event("open"));
+  expect(cancelled).toBe(true);
+  timeout();
+  expect(socket.closeCalls).toBe(0);
+  socket.close();
+  await closed;
+});
+
+test("retains worker events until the control plane acknowledges them", () => {
+  class RecordingSocket extends EventTarget {
+    readyState = WebSocket.OPEN;
+    sent: string[] = [];
+    send(value: string): void { this.sent.push(value); }
+  }
+  const transport = new WorkerEventTransport();
+  const first = new RecordingSocket();
+  const second = new RecordingSocket();
+  const event = { version: 1 as const, id: crypto.randomUUID(), workerId: crypto.randomUUID(), type: "runner.finished", occurredAt: new Date().toISOString(), payload: {} };
+  transport.bind(first as unknown as WebSocket);
+  transport.send(event);
+  transport.unbind(first as unknown as WebSocket);
+  transport.bind(second as unknown as WebSocket);
+  expect(first.sent).toHaveLength(1);
+  expect(second.sent).toEqual([JSON.stringify(event)]);
+  transport.acknowledge(event.id);
+  transport.unbind(second as unknown as WebSocket);
+  const third = new RecordingSocket();
+  transport.bind(third as unknown as WebSocket);
+  expect(third.sent).toEqual([]);
 });
 
 test("retries transient control-plane failures until the operation succeeds", async () => {
@@ -33,6 +79,18 @@ test("retries transient control-plane failures until the operation succeeds", as
   expect(result).toBe("ready");
   expect(attempts).toBe(3);
   expect(sleeps).toEqual([1_000, 1_000]);
+});
+test("retries transient control-plane HTTP responses", async () => {
+  let attempts = 0;
+  const sleeps: number[] = [];
+  const response = await retryControlPlaneOperation(
+    "test operation",
+    async () => new Response(null, { status: ++attempts === 1 ? 503 : 204 }),
+    async milliseconds => { sleeps.push(milliseconds); },
+  );
+  expect(response.status).toBe(204);
+  expect(attempts).toBe(2);
+  expect(sleeps).toEqual([1_000]);
 });
 
 test("does not sleep after an immediately successful control-plane operation", async () => {

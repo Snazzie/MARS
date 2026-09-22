@@ -13,6 +13,9 @@ test("ARM64 broker installs Docker Compose v2 from the Docker repository", async
   expect(dockerfile).toContain("download.docker.com/linux/debian/gpg");
   expect(dockerfile).toContain("docker-ce-cli docker-compose-plugin");
   expect(dockerfile).toContain("linux-container-worker");
+  expect(dockerfile).toContain("COPY --from=build /out/mars-orchestrator /usr/local/bin/mars-orchestrator");
+  const compose = await readFile("deploy/workers/linux-arm64-broker-compose.yaml", "utf8");
+  expect(compose).toContain("MARS_LINUX_CONTAINER_IMAGE: ${MARS_JOB_IMAGE:");
 });
 
 test("golden appliance contract is immutable and secret-free", async () => {

@@ -20,4 +20,5 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /var/lib/mars/config /var/lib/mars/action-cache
+COPY --from=build /out/mars-orchestrator /usr/local/bin/mars-orchestrator
 ENTRYPOINT ["/usr/local/bin/mars-orchestrator", "linux-container-worker"]

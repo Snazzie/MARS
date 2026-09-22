@@ -11,7 +11,7 @@ import { downloadWindowsImageBuildArtifacts } from "./windows-image-build.ts";
 import type { RuntimeDriver } from "./runtime.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
-import { retryControlPlaneOperation, waitForWorkerSocketClose, workerRuntimeVersions } from "./worker-client.ts";
+import { retryControlPlaneOperation, waitForWorkerSocketClose, workerRuntimeVersions, WorkerEventTransport } from "./worker-client.ts";
 import { openLeasePickupState, leasePickupStateFile, writeLeasePickupState, type LeasePickupStateController } from "./lease-pickup-state.ts";
 
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
@@ -19,17 +19,26 @@ type Identity = { workerId: string; publicKey: string; privateKey: string; encry
 const identityPath = () => Bun.env.MARS_WORKER_IDENTITY_FILE ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Mars", "worker-identity.json");
 const event = (workerId: string, type: string, payload: Record<string, unknown>): WorkerEvent => WorkerEvent.parse({ version: 1, id: randomUUID(), workerId, type, occurredAt: new Date().toISOString(), payload });
 const keys = () => { const signing = generateKeyPairSync("ed25519"), encryption = generateKeyPairSync("x25519"); return { workerId: "", publicKey: signing.publicKey.export({ format: "pem", type: "spki" }).toString(), privateKey: signing.privateKey.export({ format: "pem", type: "pkcs8" }).toString(), encryptionPublicKey: encryption.publicKey.export({ format: "pem", type: "spki" }).toString(), encryptionPrivateKey: encryption.privateKey.export({ format: "pem", type: "pkcs8" }).toString() }; };
-const machineUuid = async () => { if (Bun.env.MARS_MACHINE_UUID) return Bun.env.MARS_MACHINE_UUID; const process = Bun.spawn(["powershell.exe", "-NoProfile", "-Command", "(Get-CimInstance Win32_ComputerSystemProduct).UUID"], { stdout: "pipe" }); return (await new Response(process.stdout).text()).trim(); };
+const runBoundedCommand = async (command: string[], timeoutMs = 15_000): Promise<{ code: number; stdout: string }> => {
+  const process = Bun.spawn(command, { stdout: "pipe", stderr: "ignore" });
+  const stdout = new Response(process.stdout).text();
+  const timeout = setTimeout(() => process.kill(), timeoutMs);
+  try {
+    return { code: await process.exited, stdout: await stdout };
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+const machineUuid = async () => { if (Bun.env.MARS_MACHINE_UUID) return Bun.env.MARS_MACHINE_UUID; return (await runBoundedCommand(["powershell.exe", "-NoProfile", "-Command", "(Get-CimInstance Win32_ComputerSystemProduct).UUID"])).stdout.trim(); };
 const createIdentity = async (): Promise<Identity> => ({ ...keys(), vmUuid: Bun.env.MARS_VM_UUID ?? randomUUID(), machineUuid: await machineUuid() });
-const runPowerShellJson = async (command: string): Promise<Record<string, number>> => { const process = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command], { stdout: "pipe", stderr: "pipe" }); const output = (await new Response(process.stdout).text()).trim(); if (await process.exited !== 0) throw new Error(`Windows capacity query failed: ${output}`); const value = JSON.parse(output) as Record<string, number>; if (Object.values(value).some((entry) => !Number.isFinite(entry) || entry <= 0)) throw new Error("Windows capacity query returned invalid values"); return value; };
+const runPowerShellJson = async (command: string): Promise<Record<string, number>> => { const result = await runBoundedCommand(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command]); const output = result.stdout.trim(); if (result.code !== 0) throw new Error(`Windows capacity query failed: ${output}`); const value = JSON.parse(output) as Record<string, number>; if (Object.values(value).some((entry) => !Number.isFinite(entry) || entry <= 0)) throw new Error("Windows capacity query returned invalid values"); return value; };
 const capacity = async (): Promise<WorkerCapacityData> => {
   const value = await runPowerShellJson("$system=Get-CimInstance Win32_ComputerSystem -ErrorAction Stop; $cpu=(Get-CimInstance Win32_Processor -ErrorAction Stop | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum; $available=(Get-Counter '\\Memory\\Available Bytes' -ErrorAction Stop).CounterSamples[0].CookedValue; $disk=Get-CimInstance Win32_LogicalDisk -ErrorAction Stop | Where-Object DeviceID -eq 'C:'; if (-not $disk) { throw 'C: drive not found' }; [pscustomobject]@{vcpu=[double]$cpu; memory=[double]$system.TotalPhysicalMemory; freeMemory=[double]$available; storage=[double]$disk.Size; freeStorage=[double]$disk.FreeSpace} | ConvertTo-Json -Compress");
   return { actualVcpu: value.vcpu, freeVcpu: value.vcpu, actualMemoryBytes: value.memory, freeMemoryBytes: value.freeMemory, actualStorageBytes: value.storage, freeStorageBytes: value.freeStorage };
 };
 const commandSucceeds = async (command: string[]): Promise<boolean> => {
   try {
-    const process = Bun.spawn(command, { stdout: "ignore", stderr: "ignore" });
-    return await process.exited === 0;
+    return (await runBoundedCommand(command)).code === 0;
   } catch {
     return false;
   }
@@ -40,12 +49,12 @@ const localImageVerification = async (image: string): Promise<{ manifest: boolea
   try {
     const manifest = JSON.parse((await readFile(path, "utf8")).replace(/^\uFEFF/, "")) as { schemaVersion?: number; image?: string; imageId?: string; runtimeProbe?: { mediaFoundation?: boolean; runnerCacheRegistration?: boolean; dns?: boolean; tcp443?: boolean } };
     if (manifest.schemaVersion !== 1 || manifest.image !== image || !manifest.imageId || !manifest.runtimeProbe?.mediaFoundation || !manifest.runtimeProbe.runnerCacheRegistration || !manifest.runtimeProbe.dns || !manifest.runtimeProbe.tcp443) return { manifest: false, entrypoint: false };
-    const imageIdProcess = Bun.spawn(["docker.exe", "image", "inspect", "--format", "{{.Id}}", image], { stdout: "pipe", stderr: "ignore" });
-    const imageId = (await new Response(imageIdProcess.stdout).text()).trim();
-    if (await imageIdProcess.exited !== 0 || imageId !== manifest.imageId) return { manifest: false, entrypoint: false };
-    const entrypointProcess = Bun.spawn(["docker.exe", "image", "inspect", "--format", "{{json .}}", image], { stdout: "pipe", stderr: "ignore" });
-    const imageInspection = JSON.parse((await new Response(entrypointProcess.stdout).text()).trim()) as { Config?: { Entrypoint?: unknown } };
-    return { manifest: true, entrypoint: (await entrypointProcess.exited) === 0 && isExpectedWindowsEntrypoint(imageInspection.Config?.Entrypoint), imageId };
+    const imageIdResult = await runBoundedCommand(["docker.exe", "image", "inspect", "--format", "{{.Id}}", image]);
+    const imageId = imageIdResult.stdout.trim();
+    if (imageIdResult.code !== 0 || imageId !== manifest.imageId) return { manifest: false, entrypoint: false };
+    const entrypointResult = await runBoundedCommand(["docker.exe", "image", "inspect", "--format", "{{json .}}", image]);
+    const imageInspection = JSON.parse(entrypointResult.stdout.trim()) as { Config?: { Entrypoint?: unknown } };
+    return { manifest: true, entrypoint: entrypointResult.code === 0 && isExpectedWindowsEntrypoint(imageInspection.Config?.Entrypoint), imageId };
   } catch {
     return { manifest: false, entrypoint: false };
   }
@@ -305,40 +314,39 @@ type WindowsWorkerCommandContext = {
   identity: Identity;
   activeLeases: Map<string, Promise<void>>;
   acceptingLeases?: () => boolean;
-  send: (data: string) => void;
-  refreshDoctor: () => Promise<void>;
+  send: (event: WorkerEvent) => void;
   sendDoctor: () => void;
 };
 
 
 const normalizedError = (error: unknown): string => error instanceof Error ? error.message : String(error);
 export async function executeWindowsWorkerCommand(command: WorkerCommand, context: WindowsWorkerCommandContext): Promise<void> {
-  const { mode, limits, cache, cacheService, driver, identity, activeLeases, acceptingLeases, send, refreshDoctor, sendDoctor } = context;
+  const { mode, limits, cache, cacheService, driver, identity, activeLeases, acceptingLeases, send, sendDoctor } = context;
   if (command.type === "worker.collect_logs") {
-    return send(JSON.stringify(await collectWorkerServiceLogs(command)));
+    return send(await collectWorkerServiceLogs(command));
   }
   if (command.type === "worker.set_lease_preservation") {
     const enabled = (command.payload as Record<string, unknown>).enabled;
     if (typeof enabled !== "boolean") throw new Error("lease preservation command invalid");
     identity.preserveLeases = enabled;
     await save(identity);
-    return send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: null })));
+    return send(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: null }));
   }
   if (command.type === "worker.configure") {
     const payload = WorkerConfigurePayload.parse(command.payload);
     const observed = await applyWindowsWorkerConfiguration(limits, cache, payload, cacheService);
-    return send(JSON.stringify(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed })));
+    return send(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed }));
   }
   if (command.type === "worker.runner_cache_purge") {
-    return send(JSON.stringify(await applyWindowsRunnerCachePurge(command, cacheService)));
+    return send(await applyWindowsRunnerCachePurge(command, cacheService));
   }
   if (command.type === "worker.build_image") {
-    await buildWindowsImage(command, workerEvent => send(JSON.stringify(workerEvent)));
-    await refreshDoctor();
+    await buildWindowsImage(command, send);
+    sendDoctor();
     return;
   }
   if (command.type === "tart.stop_lease" || command.type === "windows-container.stop_lease" || command.type === "hyperv.stop_lease") {
-    return runWindowsLeaseCleanup(command, driver, workerEvent => send(JSON.stringify(workerEvent)), identity.preserveLeases === true, sendDoctor);
+    return runWindowsLeaseCleanup(command, driver, send, identity.preserveLeases === true, sendDoctor);
   }
   if (command.type === "windows-container.create_lease" || command.type === "hyperv.create_lease") {
     const expectedType = mode === "container" ? "windows-container.create_lease" : "hyperv.create_lease";
@@ -347,10 +355,10 @@ export async function executeWindowsWorkerCommand(command: WorkerCommand, contex
     if (!cipher) throw new Error("lease bootstrap payload invalid");
     const bootstrap: LeaseBootstrapEnvelope = openLeaseBootstrap(cipher, identity.encryptionPrivateKey);
     if (acceptingLeases && !acceptingLeases()) {
-      return send(JSON.stringify(event(command.workerId, "lease.declined", { commandId: command.id, leaseId: command.leaseId, nonce: bootstrap.nonce, reason: "pickup_paused" })));
+      return send(event(command.workerId, "lease.declined", { commandId: command.id, leaseId: command.leaseId, nonce: bootstrap.nonce, reason: "pickup_paused" }));
     }
-    send(JSON.stringify(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId })));
-    await startWindowsLeaseLifecycle(command, driver, bootstrap, workerEvent => send(JSON.stringify(workerEvent)), activeLeases, () => identity.preserveLeases === true, cache.runnerCacheEnabled ? cacheService : undefined, sendDoctor);
+    send(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId }));
+    await startWindowsLeaseLifecycle(command, driver, bootstrap, send, activeLeases, () => identity.preserveLeases === true, cache.runnerCacheEnabled ? cacheService : undefined, sendDoctor);
   }
 }
 export function dispatchWindowsWorkerFrame(
@@ -407,15 +415,15 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
   await reconcileWindowsRuntime(identity, driver);
   if (!identity.workerId) identity = await enroll(controlPlane, identity);
   const pickupState = await openLeasePickupState(leasePickupStateFile());
-  let doctorReport = await windowsDoctor(identity.preserveLeases === true);
   const activeLeases = new Map<string, Promise<void>>();
+  const eventTransport = new WorkerEventTransport();
   const publishInventory = () => { void writeLeasePickupState(leasePickupStateFile(), pickupState.acceptingLeases, activeLeases.size); };
   const sendDoctor = async (ws: WebSocket): Promise<void> => {
     publishInventory();
     try {
-      const [currentCapacity, containers] = await Promise.all([capacity(), driver.listContainerStatuses()]);
+      const [currentDoctor, currentCapacity, containers] = await Promise.all([windowsDoctor(identity.preserveLeases === true), capacity(), driver.listContainerStatuses()]);
       const report = buildWindowsDoctorReport({
-        doctor: { ...doctorReport, acceptingLeases: pickupState.acceptingLeases },
+        doctor: { ...currentDoctor, inventoryObservedAt: new Date().toISOString(), acceptingLeases: pickupState.acceptingLeases },
         capacity: currentCapacity,
         containers,
         activeLeases: [...activeLeases.keys()],
@@ -441,11 +449,16 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
           const frame = JSON.parse(String(message.data)) as Record<string, unknown>;
           if (frame.type === "challenge") return ws.send(JSON.stringify(auth(String(frame.nonce), identity)));
           if (frame.type === "authenticated") {
+            eventTransport.bind(ws);
             if (Bun.env.MARS_JOIN_CODE_FILE) await unlink(Bun.env.MARS_JOIN_CODE_FILE).catch(() => {});
             await emitActionCacheSnapshot(cacheService, (type, payload) => {
-              if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(event(identity.workerId, type, payload)));
+              eventTransport.send(event(identity.workerId, type, payload));
             });
             await sendDoctor(ws);
+            return;
+          }
+          if (frame.type === "event_ack" && typeof frame.eventId === "string") {
+            eventTransport.acknowledge(frame.eventId);
             return;
           }
           dispatchWindowsWorkerFrame(frame, {
@@ -462,8 +475,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
               acceptingLeases: () => pickupState.acceptingLeases,
               identity,
               activeLeases,
-              send: data => ws.send(data),
-              refreshDoctor: async () => { doctorReport = await windowsDoctor(identity.preserveLeases === true); },
+              send: workerEvent => eventTransport.send(workerEvent),
               sendDoctor: () => { void sendDoctor(ws); },
             }),
           });
@@ -472,6 +484,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
         }
       };
       await closed;
+      eventTransport.unbind(ws);
       await Bun.sleep(1000);
     }
   };

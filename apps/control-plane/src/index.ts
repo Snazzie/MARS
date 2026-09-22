@@ -464,6 +464,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
     async markSent(commandId: string): Promise<void> { await db`update commands set state='sent' where id=${commandId} and state='pending'`; },
     async acknowledge(commandId: string): Promise<void> { await db`update commands set state='acknowledged' where id=${commandId} and state in ('pending','sent')`; },
   };
+  await db`update workers set connection_state='offline' where connection_state<>'offline'`;
   const dispatcher = options.dispatcher ?? new WorkerCommandDispatcher(15_000, commandStore);
   const requestSources = new WeakMap<Request, string>();
   const startedAt = new Date().toISOString();

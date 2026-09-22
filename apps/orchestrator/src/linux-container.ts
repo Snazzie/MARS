@@ -44,7 +44,15 @@ function checked(result: DockerResult, operation: string): string {
 
 async function defaultDocker(args: string[]): Promise<DockerResult> {
   const process = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe" });
-  return { code: await process.exited, stdout: await new Response(process.stdout).text(), stderr: await new Response(process.stderr).text() };
+  const stdout = new Response(process.stdout).text();
+  const stderr = new Response(process.stderr).text();
+  const longRunning = args[0] === "wait" || (args[0] === "logs" && args.includes("--follow"));
+  const timeout = longRunning ? undefined : setTimeout(() => process.kill(), 30_000);
+  try {
+    return { code: await process.exited, stdout: await stdout, stderr: await stderr };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function parseJson(value: string, operation: string): Record<string, unknown> {
@@ -124,15 +132,18 @@ export class LinuxContainerDriver implements RuntimeDriver {
     if (info.os.toLowerCase() !== "linux") throw new Error("Linux Docker engine is required");
     if (!["arm64", "aarch64"].includes(info.architecture.toLowerCase())) throw new Error("ARM64 Docker engine is required");
     await this.inspectImage();
+    checked(await this.docker(["network", "inspect", this.config.network]), "network inspect");
   }
   async validateHost(): Promise<{ runtimeReady: boolean; networkReady: boolean; imageReady: boolean; architecture: string; engineOs: string; entrypointReady: boolean; artifactDigest: string }> {
     try {
       const info = await readDockerInfo(this.docker);
       const image = await this.inspectImage();
+      const network = await this.docker(["network", "inspect", this.config.network]);
       const architecture = info.architecture.toLowerCase();
       const engineOs = info.os.toLowerCase();
-      const ready = engineOs === "linux" && ["arm64", "aarch64"].includes(architecture);
-      return { runtimeReady: ready, networkReady: ready, imageReady: true, architecture, engineOs, entrypointReady: isExpectedLinuxContainerEntrypoint(image.Config?.Entrypoint), artifactDigest: this.config.image };
+      const networkReady = network.code === 0;
+      const ready = engineOs === "linux" && ["arm64", "aarch64"].includes(architecture) && networkReady;
+      return { runtimeReady: ready, networkReady, imageReady: true, architecture, engineOs, entrypointReady: isExpectedLinuxContainerEntrypoint(image.Config?.Entrypoint), artifactDigest: this.config.image };
     } catch {
       return { runtimeReady: false, networkReady: false, imageReady: false, architecture: "", engineOs: "", entrypointReady: false, artifactDigest: this.config.image };
     }

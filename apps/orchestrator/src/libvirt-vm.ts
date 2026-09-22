@@ -13,7 +13,14 @@ type Owned = { lease: Lease; domain: string; overlay: string; channel: string; r
 
 const defaultHostCommand: HostCommandRunner = async (executable, args, stdin) => {
   const proc = Bun.spawn([executable, ...args], { stdin: stdin === undefined ? undefined : new Blob([stdin]), stdout: "pipe", stderr: "pipe" });
-  return { code: await proc.exited, stdout: await new Response(proc.stdout).text(), stderr: await new Response(proc.stderr).text() };
+  const stdout = new Response(proc.stdout).text();
+  const stderr = new Response(proc.stderr).text();
+  const timeout = setTimeout(() => proc.kill(), 30_000);
+  try {
+    return { code: await proc.exited, stdout: await stdout, stderr: await stderr };
+  } finally {
+    clearTimeout(timeout);
+  }
 };
 const safeChild = (root: string, value: string) => isAbsolute(value) && relative(root, value) !== "" && !relative(root, value).startsWith("..") && !relative(root, value).includes("/");
 export function renderLinuxVmDomain(template: string, values: { name: string; uuid: string; mac: string; vcpu: number; memoryMiB: number; overlay: string; network: string; channel: string; leaseId: string }): string {
@@ -31,6 +38,7 @@ export class LibvirtVmDriver implements RuntimeDriver {
   readonly name = "linux-libvirt-vm" as const;
   private readonly leases = new Map<string, Owned>();
   private reserved = 0;
+  private goldenVerification?: { dev: number; ino: number; size: number; mtimeMs: number; digest: string };
   constructor(private readonly config: LinuxVmConfig, private readonly host: HostCommandRunner = defaultHostCommand, private readonly templateReader: (path: string) => Promise<string> = (path) => readFile(path, "utf8")) {}
   validatePool(resources: PoolResources): void { validateResources(resources, this.config.limits); }
   async validateHost(): Promise<{ runtimeReady: boolean; libvirtReady: boolean; networkReady: boolean; cloneStorageReady: boolean; goldenDigest?: string; remediation?: string }> {
@@ -40,13 +48,18 @@ export class LibvirtVmDriver implements RuntimeDriver {
       const network = await this.host("virsh", ["-c", "qemu:///system", "net-info", this.config.network]);
       const golden = await stat(this.config.goldenDisk);
       if (!golden.isFile() || (golden.mode & 0o222) !== 0) throw new Error("golden_disk_not_read_only");
-      const digest = await sha256File(this.config.goldenDisk);
+      const cached = this.goldenVerification;
+      const digest = cached && cached.dev === golden.dev && cached.ino === golden.ino && cached.size === golden.size && cached.mtimeMs === golden.mtimeMs
+        ? cached.digest
+        : await sha256File(this.config.goldenDisk);
+      this.goldenVerification = { dev: golden.dev, ino: golden.ino, size: golden.size, mtimeMs: golden.mtimeMs, digest };
       if (digest !== this.config.goldenDigest) throw new Error("golden_disk_digest_mismatch");
       const image = await this.host("qemu-img", ["info", "--output=json", this.config.goldenDisk]);
       const info = JSON.parse(image.stdout) as { format?: string };
       await access(this.config.cloneRoot, constants.W_OK); await access(this.config.channelRoot, constants.W_OK);
-      const ready = version.code === 0 && caps.code === 0 && network.code === 0 && image.code === 0 && info.format === "qcow2";
-      return { runtimeReady: ready, libvirtReady: version.code === 0 && caps.code === 0, networkReady: network.code === 0, cloneStorageReady: ready, goldenDigest: digest, ...(ready ? {} : { remediation: "libvirt host probes failed" }) };
+      const networkActive = network.code === 0 && /^Active:\s+yes$/mi.test(network.stdout);
+      const ready = version.code === 0 && caps.code === 0 && networkActive && image.code === 0 && info.format === "qcow2";
+      return { runtimeReady: ready, libvirtReady: version.code === 0 && caps.code === 0, networkReady: networkActive, cloneStorageReady: ready, goldenDigest: digest, ...(ready ? {} : { remediation: "libvirt host probes failed" }) };
     } catch (error) { return { runtimeReady: false, libvirtReady: false, networkReady: false, cloneStorageReady: false, remediation: error instanceof Error ? error.message : String(error) }; }
   }
   async reserveCapacity(resources: PoolResources): Promise<void> { this.validatePool(resources); if (this.reserved + resources.concurrency > this.config.limits.maxConcurrentPods) throw new Error("capacity exhausted"); this.reserved += resources.concurrency; }

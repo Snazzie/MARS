@@ -32,6 +32,8 @@ test("Linux installer consumes and verifies all manifest-provided broker assets"
   expect(linux.indexOf("download_verified")).toBeLessThan(linux.indexOf("docker compose"));
   expect(linux).toContain("Ubuntu 24.04");
   expect(linux).toContain("/dev/kvm is required");
+  expect(linux).toContain('IDENTITY_FILE="$CONFIG_DIR/worker-identity.json"');
+  expect(linux).toContain('if [[ "$UPGRADE" -eq 1 && ! -s "$IDENTITY_FILE" ]]');
 });
 
 test("Linux broker image and Compose preserve non-root writable paths and cache ports", () => {
@@ -79,6 +81,7 @@ test("Windows installer supports container and VM runtimes with isolated prerequ
   expect(windows).toContain("Register-ResumeTask");
   expect(windows).toContain("'-WindowsTrayScriptUrl',$WindowsTrayScriptUrl,'-WindowsTrayScriptSha256',$WindowsTrayScriptSha256");
   expect(windows).toContain("Remove-ResumeTask");
+  expect(windows).toContain("New-ScheduledTaskSettingsSet -RestartCount 120");
 });
 test("Windows installer allows container NAT traffic to the authenticated cache ports", () => {
   expect(windows).toContain("New-NetFirewallRule -DisplayName 'Mars Worker Cache'");
@@ -196,6 +199,7 @@ test("macOS installer consumes verified routes and only configures LaunchAgent a
   expect(mac).toContain("download_verified \"$MARS_ORCHESTRATOR_URL\"");
   expect(mac).toContain("download_verified \"$MARS_MACOS_JOB_AGENT_URL\"");
   expect(mac).toContain("download_verified \"$IMAGE_PREPARATION_SCRIPT_URL\"");
+  expect(mac).toContain('--dump-header "$headers" --output "$destination" "$url"');
   expect(mac).toContain("chmod +x \"$ORCHESTRATOR_STAGE\" \"$MACOS_JOB_AGENT_STAGE\" \"$LINUX_JOB_AGENT_STAGE\"");
   expect(mac).toContain("--platform macos-arm64");
   expect(mac).toContain("--platform linux-arm64");

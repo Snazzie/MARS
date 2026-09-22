@@ -50,7 +50,10 @@ export function useDashboardInvalidations(organizationId: string | undefined): v
       url.searchParams.set("organizationId", organizationId);
       url.searchParams.set("cursor", String(cursor));
       socket = new WebSocket(url);
-      socket.onopen = () => { attempt = 0; };
+      socket.onopen = () => {
+        attempt = 0;
+        void client.invalidateQueries({ predicate: query => workerStatusQueryKey(query.queryKey) });
+      };
       socket.onmessage = (event) => {
         if (event.data === "pong") return;
         let value: unknown;

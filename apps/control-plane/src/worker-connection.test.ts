@@ -8,7 +8,8 @@ test("reconciles configuration before making a socket dispatchable", async () =>
   const workerSockets = new Map<string, typeof socket>();
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
-    if (query.includes("last_heartbeat_at=now()")) order.push("online");
+    if (query.includes("last_heartbeat_at=now()")) order.push("heartbeat");
+    if (query.includes("connection_state='online'")) order.push("online");
     return [];
   }) as never;
 
@@ -22,7 +23,7 @@ test("reconciles configuration before making a socket dispatchable", async () =>
     dispatcher: { register: () => order.push("register") },
   });
 
-  expect(order).toEqual(["reconcile", "online", "authenticated", "register"]);
+  expect(order).toEqual(["reconcile", "heartbeat", "authenticated", "register", "online"]);
   expect(workerSockets.get(workerId)).toBe(socket);
 });
 test("refreshes heartbeat for an already-enrolled worker on reconnect", async () => {
@@ -64,18 +65,24 @@ test("marks enrollment authenticated and clears the one-use hash atomically", as
   expect(queries.some(query => query.includes("enrollment_authenticated_at=now()") && query.includes("enrollment_code_hash=null"))).toBe(true);
 });
 
-test("does not persist connection state on authentication", async () => {
-  const queries: string[] = [];
-  await activateAuthenticatedWorkerConnection({
-    db: (async (strings: TemplateStringsArray) => { queries.push(strings.join(" ")); return []; }) as never,
+test("does not expose a socket that closes while authentication is in flight", async () => {
+  const socket = { send: () => {}, close: () => {} };
+  const workerSockets = new Map<string, typeof socket>();
+  let checks = 0;
+  let registered = false;
+  const activated = await activateAuthenticatedWorkerConnection({
+    db: (async () => []) as never,
     workerId: "worker",
-    socket: { send: () => {}, close: () => {} },
-    workerSockets: new Map(),
+    socket,
+    workerSockets,
     reconcile: async () => ({ state: "ready", commandId: null }),
+    isCurrent: () => ++checks === 1,
     markAuthenticated: () => {},
-    dispatcher: { register: () => {} },
+    dispatcher: { register: () => { registered = true; } },
   });
-  expect(queries.join(" ")).not.toContain("connection_state");
+  expect(activated).toBe(false);
+  expect(registered).toBe(false);
+  expect(workerSockets.size).toBe(0);
 });
 test("does not expose a socket when reconciliation fails", async () => {
   const order: string[] = [];

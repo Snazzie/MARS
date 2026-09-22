@@ -11,6 +11,7 @@ export async function activateAuthenticatedWorkerConnection<Socket extends Authe
   dispatcher: Pick<WorkerCommandDispatcher, "register">;
   markAuthenticated: () => void;
   isCurrent?: () => boolean;
+  activate?: () => boolean;
   reconcile?: typeof reconcileWorkerConfigurationOnConnect;
 }): Promise<boolean> {
   await (input.reconcile ?? reconcileWorkerConfigurationOnConnect)(input.db, input.workerId);
@@ -22,8 +23,10 @@ export async function activateAuthenticatedWorkerConnection<Socket extends Authe
   }
   await input.db`update workers set last_heartbeat_at=now() where id=${input.workerId}`;
   if (input.isCurrent && !input.isCurrent()) return false;
+  if (input.activate && !input.activate()) return false;
   input.markAuthenticated();
   input.workerSockets.set(input.workerId, input.socket);
   input.dispatcher.register(input.workerId, input.socket);
+  await input.db`update workers set connection_state='online' where id=${input.workerId}`;
   return true;
 }

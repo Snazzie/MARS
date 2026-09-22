@@ -126,7 +126,6 @@ test("keeps the Windows health channel alive when a valid command fails", async 
       identity: { workerId, publicKey: "", privateKey: "", encryptionPublicKey: "", encryptionPrivateKey: "" },
       activeLeases: new Map(),
       send: () => { throw new Error("command acknowledgement must not be sent"); },
-      refreshDoctor: async () => {},
       sendDoctor: () => {},
     }).catch(error => {
       failureObserved.resolve();

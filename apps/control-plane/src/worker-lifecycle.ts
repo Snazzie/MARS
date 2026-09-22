@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { jsonParameter, persistJobResourceSample, recordJobTimingSnapshot, applyWorkerCacheTelemetry, invalidateDashboard, type DatabaseClient, type JobTimingSnapshotInput } from "@mars/db";
 import { WorkerEvent, WorkerEventPayload, WorkerCacheTelemetry } from "@mars/contracts";
@@ -40,8 +40,13 @@ export function aggregateResourceSamples(samples: Array<{ occurredAt: string; cp
 async function persistDiagnosticChunk(workerId: string, payload: { diagnosticId: string; sequence: number; content: string }): Promise<void> {
   const root = Bun.env.MARS_DIAGNOSTICS_ROOT ?? join(Bun.env.DATA_ROOT ?? "/var/lib/mars", "diagnostics");
   const directory = join(root, workerId, payload.diagnosticId);
+  const path = join(directory, `${String(payload.sequence).padStart(8, "0")}.log`);
   await mkdir(directory, { recursive: true });
-  await writeFile(join(directory, `${String(payload.sequence).padStart(8, "0")}.log`), payload.content, { encoding: "utf8", flag: "wx" });
+  try {
+    await writeFile(path, payload.content, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST" || await readFile(path, "utf8") !== payload.content) throw error;
+  }
 }
 
 export async function handleAuthenticatedWorkerEvent(

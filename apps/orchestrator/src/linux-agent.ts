@@ -6,7 +6,7 @@ import { statfsSync } from "node:fs";
 import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerObservedConfiguration, WorkerConfigurePayload, WorkerRunnerCachePurgePayload, WorkerCommand, WorkerDoctorData, WorkerEvent, type WorkerCapacityData, type WorkerLimits } from "@mars/contracts";
 import { z } from "zod";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
-import { authenticateWorker, retryControlPlaneOperation, waitForWorkerSocketClose, workerRuntimeVersions, workerSocketUrl, type WorkerIdentity } from "./worker-client.ts";
+import { authenticateWorker, retryControlPlaneOperation, waitForWorkerSocketClose, workerRuntimeVersions, workerSocketUrl, WorkerEventTransport, type WorkerIdentity } from "./worker-client.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 import type { LibvirtVmDriver } from "./libvirt-vm.ts";
 import type { RuntimeDriver } from "./runtime.ts";
@@ -192,6 +192,7 @@ async function connectLinuxWorker(
   cacheService: ActionCacheService,
 ): Promise<never> {
   const activeLeases = new Map<string, Promise<void>>();
+  const eventTransport = new WorkerEventTransport();
   let doctor = await linuxDoctor(driver, digest, channelRoot);
   for (;;) {
     const ws = new WebSocket(workerSocketUrl(baseUrl.toString(), identity.workerId));
@@ -202,29 +203,34 @@ async function connectLinuxWorker(
         frame = JSON.parse(String(event.data)) as { type?: string; nonce?: string } & Partial<WorkerCommand>;
         if (frame.type === "challenge" && frame.nonce) return ws.send(JSON.stringify(authenticateWorker(frame.nonce, identity)));
         if (frame.type === "authenticated") {
+          eventTransport.bind(ws);
           if (Bun.env.MARS_JOIN_CODE_FILE) await unlink(Bun.env.MARS_JOIN_CODE_FILE).catch(() => {});
           await emitActionCacheSnapshot(cacheService, (type, payload) => {
-            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(workerEvent(identity.workerId, type, payload)));
+            eventTransport.send(workerEvent(identity.workerId, type, payload));
           });
           doctor = await linuxDoctor(driver, digest, channelRoot);
-          return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { ...workerRuntimeVersions(), doctor: { ...doctor, activeLeases: [...activeLeases.keys()] }, capacity: linuxCapacity() } }));
+          return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { ...workerRuntimeVersions(), doctor: { ...doctor, inventoryObservedAt: new Date().toISOString(), activeLeases: [...activeLeases.keys()] }, capacity: linuxCapacity() } }));
         }
         if (frame.type === "ping") {
           ws.send(JSON.stringify({ version: 1, type: "pong", workerId: identity.workerId }));
           doctor = await linuxDoctor(driver, digest, channelRoot);
-          return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { ...workerRuntimeVersions(), doctor: { ...doctor, activeLeases: [...activeLeases.keys()] }, capacity: linuxCapacity() } }));
+          return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: { ...workerRuntimeVersions(), doctor: { ...doctor, inventoryObservedAt: new Date().toISOString(), activeLeases: [...activeLeases.keys()] }, capacity: linuxCapacity() } }));
         }
         if (frame.type === "doctor_ack") return;
+        if (frame.type === "event_ack" && typeof (frame as Record<string, unknown>).eventId === "string") {
+          eventTransport.acknowledge((frame as Record<string, unknown>).eventId as string);
+          return;
+        }
         const command = WorkerCommand.parse(frame);
         void executeLinuxWorkerCommand(command, resources, {
           driver,
           encryptionPrivateKey: identity.encryptionPrivateKey,
           runtimeReady: () => doctor.runtimeReady === true,
-          send: (value) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); },
+          send: value => eventTransport.send(value),
           activeLeases,
           cacheService,
-        }).then((response) => {
-          if (response && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(response));
+        }).then(response => {
+          if (response) eventTransport.send(response);
         }).catch((error: unknown) => {
           console.error("Linux worker command failed", {
             workerId: command.workerId,
@@ -239,6 +245,7 @@ async function connectLinuxWorker(
       }
     };
     await closed;
+    eventTransport.unbind(ws);
     await Bun.sleep(1_000);
   }
 }
@@ -267,7 +274,7 @@ export async function runLinuxWorker(baseUrl: string, driver: LibvirtVmDriver, l
 }
 export async function runDockerLinuxWorker(baseUrl: string, driver: RuntimeDriver & { validateHost(): Promise<{ runtimeReady: boolean; networkReady: boolean; imageReady: boolean; architecture: string; engineOs: string; entrypointReady: boolean; artifactDigest: string }>; listContainerStatuses(): Promise<unknown[]>; reconcileOrphans(): Promise<void> }, limits: WorkerLimits): Promise<void> {
   if (!baseUrl) throw new Error("MARS_CONTROL_PLANE_URL is required");
-  const host = await driver.validateHost();
+  let host = await driver.validateHost();
   if (!host.runtimeReady) throw new Error("Linux ARM Docker runtime is not ready");
   await driver.reconcileOrphans();
   const resources: LinuxWorkerResources = { appliance: { vcpu: cpus().length, memoryBytes: totalmem(), storageBytes: linuxCapacity().actualStorageBytes }, runtime: limits, cache: WorkerCacheConfiguration.parse({}) };
@@ -288,6 +295,13 @@ export async function runDockerLinuxWorker(baseUrl: string, driver: RuntimeDrive
       await saveIdentity(enrolled);
     }
     const activeLeases = new Map<string, Promise<void>>();
+    const eventTransport = new WorkerEventTransport();
+    const sendDoctor = async (ws: WebSocket): Promise<void> => {
+      host = await driver.validateHost();
+      const containers = await driver.listContainerStatuses().catch(() => []);
+      const doctor = WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: host.runtimeReady, probe: true, egress: true, imageSignatures: host.imageReady, networkReady: host.networkReady, inventoryObservedAt: new Date().toISOString(), acceptingLeases: true, activeLeases: [...activeLeases.keys()], containers });
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: enrolled.workerId, payload: { ...workerRuntimeVersions(), doctor, capacity: linuxCapacity() } }));
+    };
     for (;;) {
       const ws = new WebSocket(workerSocketUrl(controlPlane.toString(), enrolled.workerId));
       const closed = waitForWorkerSocketClose(ws);
@@ -296,21 +310,25 @@ export async function runDockerLinuxWorker(baseUrl: string, driver: RuntimeDrive
           const frame = JSON.parse(String(event.data)) as { type?: string; nonce?: string } & Partial<WorkerCommand>;
           if (frame.type === "challenge" && frame.nonce) return ws.send(JSON.stringify(authenticateWorker(frame.nonce, enrolled)));
           if (frame.type === "authenticated") {
+            eventTransport.bind(ws);
             if (Bun.env.MARS_JOIN_CODE_FILE) await unlink(Bun.env.MARS_JOIN_CODE_FILE).catch(() => {});
-            await emitActionCacheSnapshot(cacheService, (type, payload) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(workerEvent(enrolled.workerId, type, payload))); });
-            const containers = await driver.listContainerStatuses().catch(() => []);
-            const doctor = WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: host.runtimeReady, probe: true, egress: true, imageSignatures: host.imageReady, networkReady: host.networkReady, acceptingLeases: true, activeLeases: [...activeLeases.keys()], containers });
-            return ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: enrolled.workerId, payload: { ...workerRuntimeVersions(), doctor, capacity: linuxCapacity() } }));
+            await emitActionCacheSnapshot(cacheService, (type, payload) => { eventTransport.send(workerEvent(enrolled.workerId, type, payload)); });
+            return sendDoctor(ws);
           }
-          if (frame.type === "ping") { ws.send(JSON.stringify({ version: 1, type: "pong", workerId: enrolled.workerId })); return; }
+          if (frame.type === "ping") { ws.send(JSON.stringify({ version: 1, type: "pong", workerId: enrolled.workerId })); return sendDoctor(ws); }
           if (frame.type === "doctor_ack") return;
+          if (frame.type === "event_ack" && typeof (frame as Record<string, unknown>).eventId === "string") {
+            eventTransport.acknowledge((frame as Record<string, unknown>).eventId as string);
+            return;
+          }
           const command = WorkerCommand.parse(frame);
-          void executeLinuxWorkerCommand(command, resources, { driver, encryptionPrivateKey: enrolled.encryptionPrivateKey, runtimeReady: () => host.runtimeReady, send: (value) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); }, activeLeases, cacheService }, "linux-container").then((response) => { if (response && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(response)); }).catch((error: unknown) => { console.error("Linux ARM worker command failed", { commandId: command.id, type: command.type, error: error instanceof Error ? error.message : String(error) }); });
+          void executeLinuxWorkerCommand(command, resources, { driver, encryptionPrivateKey: enrolled.encryptionPrivateKey, runtimeReady: () => host.runtimeReady, send: value => eventTransport.send(value), activeLeases, cacheService }, "linux-container").then(response => { if (response) eventTransport.send(response); }).catch((error: unknown) => { console.error("Linux ARM worker command failed", { commandId: command.id, type: command.type, error: error instanceof Error ? error.message : String(error) }); });
         } catch {
           ws.close(1011, "worker command failed");
         }
       };
       await closed;
+      eventTransport.unbind(ws);
       await Bun.sleep(1_000);
     }
   } finally {

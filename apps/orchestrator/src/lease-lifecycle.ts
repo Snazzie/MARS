@@ -121,9 +121,9 @@ export async function runLeaseLifecycle(
   const logs = runtime.logs;
   const runnerLogs = logs ? (async () => {
     for await (const content of logs) {
-      for (let offset = 0; offset < content.length; offset += 256 * 1024) {
+      for (let offset = 0; offset < content.length; offset += 240 * 1024) {
         const occurredAt = new Date().toISOString();
-        emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "job.log", occurredAt, payload: { jobId: bootstrap.jobId, stepId: null, sequence: logSequence++, content: content.slice(offset, offset + 256 * 1024), occurredAt } });
+        emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "job.log", occurredAt, payload: { jobId: bootstrap.jobId, stepId: null, sequence: logSequence++, content: content.slice(offset, offset + 240 * 1024), occurredAt } });
       }
     }
   })().catch(error => {

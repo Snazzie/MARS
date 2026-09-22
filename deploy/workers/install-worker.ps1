@@ -209,7 +209,8 @@ function Register-ResumeTask {
   $argumentText = ($resumeParameters | ForEach-Object { Quote-TaskArgument ([string]$_) }) -join ' '
   $action = New-ScheduledTaskAction -Execute 'PowerShell.exe' -Argument "-NoLogo -NoProfile -ExecutionPolicy Bypass -File $(Quote-TaskArgument $ScriptPath) $argumentText"
   $trigger = New-ScheduledTaskTrigger -AtStartup; $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-  Register-ScheduledTask -TaskName 'MarsWorkerInstallResume' -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+  $settings = New-ScheduledTaskSettingsSet -RestartCount 120 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable
+  Register-ScheduledTask -TaskName 'MarsWorkerInstallResume' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 }
 function Remove-ResumeTask { Unregister-ScheduledTask -TaskName 'MarsWorkerInstallResume' -Confirm:$false -ErrorAction SilentlyContinue }
 function Resolve-CachePort([string]$Name, [int]$DefaultPort) {

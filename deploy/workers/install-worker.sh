@@ -145,8 +145,9 @@ ACTION_CACHE_ROOT=${MARS_ACTION_CACHE_ROOT:-$CONFIG_DIR/action-cache}
 STATE_FILE=/var/lib/mars/install-state.json
 LOG_FILE=/var/log/mars/install.log
 JOIN_CODE_FILE="$CONFIG_DIR/join-code"
+IDENTITY_FILE="$CONFIG_DIR/worker-identity.json"
 mkdir -p "$CONFIG_DIR" "$GOLDEN_ROOT" "$CLONE_ROOT" "$CHANNEL_ROOT" "$ACTION_CACHE_ROOT" /var/lib/mars /var/log/mars
-if [[ "$UPGRADE" -eq 1 && ! -s "$JOIN_CODE_FILE" ]]; then echo 'Upgrade requires an existing worker enrollment state.' >&2; exit 1; fi
+if [[ "$UPGRADE" -eq 1 && ! -s "$IDENTITY_FILE" ]]; then echo 'Upgrade requires an existing worker identity.' >&2; exit 1; fi
 exec > >(tee -a "$LOG_FILE") 2>&1
 write_state() {
   local stage="$1" status="$2"
@@ -193,14 +194,17 @@ pass 'libvirtd, Docker, and the default NAT network are active'
 write_state virtualization complete
 
 stage 'Persisting enrollment state' state
-if [[ ! -f "$JOIN_CODE_FILE" ]]; then
+if [[ "$UPGRADE" -eq 0 && ! -f "$JOIN_CODE_FILE" ]]; then
   printf '%s\n' "$JOIN_CODE" > "$JOIN_CODE_FILE"
 fi
-# The broker runs as UID/GID 10001. Keep the credential private to that
-# service group while allowing it to read and unlink the file after auth.
-chown root:10001 "$CONFIG_DIR" "$JOIN_CODE_FILE"
+# The broker runs as UID/GID 10001. Keep credentials private to that
+# service group while allowing it to read and unlink the join code after auth.
+chown root:10001 "$CONFIG_DIR"
 chmod 0770 "$CONFIG_DIR"
-chmod 0640 "$JOIN_CODE_FILE"
+if [[ -f "$JOIN_CODE_FILE" ]]; then
+  chown root:10001 "$JOIN_CODE_FILE"
+  chmod 0640 "$JOIN_CODE_FILE"
+fi
 write_state state complete
 
 download_asset() {

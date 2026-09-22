@@ -73,6 +73,8 @@ trap cleanup EXIT INT TERM
 download_verified() {
   local url="$1" expected="$2" destination="$3" name="$4" security=()
   local headers="$destination.headers"
+  [[ "$url" == https://* ]] && security=(--proto '=https' --tlsv1.2)
+  curl --silent --show-error --fail --max-time 300 --location "${security[@]}" --dump-header "$headers" --output "$destination" "$url"
   local actual="$(shasum -a 256 "$destination" | cut -d ' ' -f 1)"; [[ "$actual" == "$expected" ]] || { echo "$name checksum mismatch: expected $expected, got $actual" >&2; return 1; }
   local response_hash=""; [[ -f "$headers" ]] && response_hash="$(awk 'BEGIN{IGNORECASE=1} tolower($1)=="x-content-sha256:" {gsub("\r","",$2); print $2; exit}' "$headers")"; [[ -z "$response_hash" || "$response_hash" == "$expected" ]] || { echo "$name response hash mismatch" >&2; return 1; }; rm -f "$headers"
 }
