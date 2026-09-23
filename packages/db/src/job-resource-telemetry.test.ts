@@ -23,7 +23,7 @@ test("renews an active lease when a resource heartbeat is received", async () =>
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
     queries.push(query);
-    if (query.includes("SELECT j.organization_id")) return [{ organizationId: "org", runId: "run" }];
+    if (query.includes("SELECT j.organization_id")) return [{ organizationId: "org", runId: "run", state: "online" }];
     if (query.includes("INSERT INTO dashboard_job_resource_samples")) return [{ occurredAt }];
     return [];
   }) as unknown as Sql<{}>;
@@ -37,7 +37,7 @@ test("does not renew a lease for a duplicate sample", async () => {
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
     queries.push(query);
-    if (query.includes("SELECT j.organization_id")) return [{ organizationId: "org", runId: "run" }];
+    if (query.includes("SELECT j.organization_id")) return [{ organizationId: "org", runId: "run", state: "online" }];
     return [];
   }) as unknown as Sql<{}>;
 
@@ -50,7 +50,7 @@ test("stores delayed telemetry without extending the lease", async () => {
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
     queries.push(query);
-    if (query.includes("SELECT j.organization_id")) return [{ organizationId: "org", runId: "run" }];
+    if (query.includes("SELECT j.organization_id")) return [{ organizationId: "org", runId: "run", state: "online" }];
     if (query.includes("INSERT INTO dashboard_job_resource_samples")) return [{ occurredAt }];
     return [];
   }) as unknown as Sql<{}>;
@@ -64,7 +64,7 @@ test("does not extend the startup deadline for a sandbox-ready lease", async () 
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
     queries.push(query);
-    if (query.includes("SELECT j.organization_id")) return [{ organizationId: "org", runId: "run" }];
+    if (query.includes("SELECT j.organization_id")) return [{ organizationId: "org", runId: "run", state: "sandbox_ready" }];
     if (query.includes("INSERT INTO dashboard_job_resource_samples")) return [{ occurredAt }];
     return [];
   }) as unknown as Sql<{}>;
@@ -74,4 +74,33 @@ test("does not extend the startup deadline for a sandbox-ready lease", async () 
   expect(renewal).toBeDefined();
   expect(renewal).not.toContain("sandbox_ready");
   expect(renewal).toContain("state IN ('online','busy')");
+});
+
+test("acknowledges a late sample for a reaped lease without storing it", async () => {
+  const queries: string[] = [];
+  const db = (async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ");
+    queries.push(query);
+    if (query.includes("SELECT j.organization_id")) return [{ organizationId: "org", runId: "run", state: "reaped" }];
+    return [];
+  }) as unknown as Sql<{}>;
+
+  await expect(persistJobResourceSample(db, workerId, sampleEvent(), Date.parse(occurredAt))).resolves.toBe("ignored");
+  expect(queries.some(query => query.includes("INSERT INTO dashboard_job_resource_samples"))).toBe(false);
+});
+
+test("acknowledges expired telemetry without querying or storing it", async () => {
+  const queries: string[] = [];
+  const db = (async (strings: TemplateStringsArray) => {
+    queries.push(strings.join(" "));
+    return [];
+  }) as unknown as Sql<{}>;
+
+  await expect(persistJobResourceSample(db, workerId, sampleEvent(), Date.parse(occurredAt) + 24 * 60 * 60_000 + 1)).resolves.toBe("ignored");
+  expect(queries).toEqual([]);
+});
+
+test("rejects samples for an unknown lease", async () => {
+  const db = (async () => []) as unknown as Sql<{}>;
+  await expect(persistJobResourceSample(db, workerId, sampleEvent(), Date.parse(occurredAt))).resolves.toBe("rejected");
 });

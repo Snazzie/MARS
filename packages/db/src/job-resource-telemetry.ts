@@ -1,7 +1,7 @@
 import { WorkerEvent, WorkerEventPayload, type JobResourceSample } from "@mars/contracts";
 import type { DatabaseClient } from "./index.ts";
 
-export type JobResourceSampleResult = "stored" | "duplicate" | "rejected";
+export type JobResourceSampleResult = "stored" | "duplicate" | "ignored" | "rejected";
 export type JobResourceTelemetryDb = DatabaseClient;
 const LEASE_HEARTBEAT_TTL_MS = 10 * 60_000;
 
@@ -12,15 +12,16 @@ export async function persistJobResourceSample(db: JobResourceTelemetryDb, worke
   if (!payload.success || payload.data.type !== "job.resource_sample") return "rejected";
   const sample = payload.data.payload;
   const occurredMs = Date.parse(sample.occurredAt);
-  if (!Number.isFinite(occurredMs) || occurredMs > now + 30_000 || occurredMs < now - 24 * 60 * 60_000) return "rejected";
-  const [lease] = await db<{ organizationId: string; runId: string }[]>`
-    SELECT j.organization_id AS "organizationId", j.run_id AS "runId"
+  if (!Number.isFinite(occurredMs) || occurredMs > now + 30_000) return "rejected";
+  if (occurredMs < now - 24 * 60 * 60_000) return "ignored";
+  const [lease] = await db<{ organizationId: string; runId: string; state: string }[]>`
+    SELECT j.organization_id AS "organizationId", j.run_id AS "runId", l.state
     FROM runner_leases l JOIN dashboard_jobs j ON j.github_job_id=l.github_job_id
     WHERE l.id=${sample.leaseId} AND l.worker_id=${workerId} AND j.id=${sample.jobId}
-      AND l.state NOT IN ('completed','failed','reaped','expired')
     LIMIT 1
   `;
   if (!lease) return "rejected";
+  if (lease.state === "completed" || lease.state === "failed" || lease.state === "reaped" || lease.state === "expired") return "ignored";
   const inserted = await db<{ occurredAt: string }[]>`
     INSERT INTO dashboard_job_resource_samples
       (organization_id,run_id,job_id,lease_id,occurred_at,cpu_usage_percent,cpu_time_ms,memory_working_set_bytes,memory_limit_bytes,disk_usage_bytes)
