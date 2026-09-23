@@ -33,17 +33,25 @@ export async function readLeasePickupState(path: string): Promise<boolean> {
   return !(await readState(path)).paused;
 }
 
-export async function writeLeasePickupState(path: string, acceptingLeases: boolean, activeCount = 0): Promise<void> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, JSON.stringify({ paused: !acceptingLeases, activeCount }), { flag: "wx", mode: 0o600 });
-    await chmod(temporary, 0o600);
-    await rename(temporary, path);
-  } catch (error) {
-    await Bun.file(temporary).delete().catch(() => {});
-    throw error;
-  }
+const pendingWrites = new Map<string, Promise<void>>();
+export function writeLeasePickupState(path: string, acceptingLeases: boolean, activeCount = 0): Promise<void> {
+  const previous = pendingWrites.get(path);
+  const write = (previous ?? Promise.resolve()).catch(() => {}).then(async () => {
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, JSON.stringify({ paused: !acceptingLeases, activeCount }), { flag: "wx", mode: 0o600 });
+      await chmod(temporary, 0o600);
+      await rename(temporary, path);
+    } catch (error) {
+      await Bun.file(temporary).delete().catch(() => {});
+      throw error;
+    }
+  });
+  pendingWrites.set(path, write);
+  const clear = () => { if (pendingWrites.get(path) === write) pendingWrites.delete(path); };
+  void write.then(clear, clear);
+  return write;
 }
 
 export async function openLeasePickupState(path: string): Promise<LeasePickupStateController> {
