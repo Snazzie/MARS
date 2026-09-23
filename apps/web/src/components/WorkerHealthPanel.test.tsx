@@ -184,7 +184,7 @@ test("renders managed containers with their matching jobs and explicit unmatched
   })} />);
   expect(markup).toContain("Managed containers");
   expect(markup).toContain("<caption>Current managed containers and resource usage</caption>");
-  for (const heading of ["Container", "State", "CPU", "Memory", "Disk", "Freshness", "Job ID", "Repository / name", "Lease state", "Age", "vCPU", "Storage", "Concurrency"]) expect(markup).toContain(`<th scope="col">${heading}</th>`);
+  for (const heading of ["Container", "State", "CPU", "Memory", "Disk", "Freshness", "Job ID", "Repository / name", "Lease state", "Age", "vCPU", "Storage"]) expect(markup).toContain(`<th scope="col">${heading}</th>`);
   expect(markup).toContain("<strong>alpha</strong>");
   expect(markup).toContain("<strong>beta</strong>");
   const rows = [...markup.matchAll(/<tr>[\s\S]*?<\/tr>/g)].map(([row]) => row);
@@ -196,7 +196,7 @@ test("renders managed containers with their matching jobs and explicit unmatched
   expect(alphaRow).toContain("<td>- / 4</td>");
   expect(alphaRow).toContain("<td>- / 3.0 GiB</td>");
   expect(alphaRow).toContain("<td>- / 4.0 GiB</td>");
-  expect(alphaRow).toContain("<td>- / 5</td>");
+  expect(alphaRow).not.toContain("<td>- / 5</td>");
   expect(alphaRow).not.toContain("<td>99</td>");
   const betaRow = rows.find((row) => row.includes("<strong>beta</strong>")) ?? "";
   expect(betaRow).toContain("No job assigned");

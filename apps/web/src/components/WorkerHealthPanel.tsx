@@ -178,7 +178,7 @@ function shortenContainerId(containerId: string): string {
   return `${containerId.slice(0, 12)}…`;
 }
 
-function JobCells({ job }: { job: WorkerHealth["jobs"][number] }) {
+function JobCells({ job, includeConcurrency = true }: { job: WorkerHealth["jobs"][number]; includeConcurrency?: boolean }) {
   return <>
     <td>{job.jobId ?? "Unavailable telemetry"}</td>
     <td>{job.repositoryFullName ?? job.repositoryName ?? "Unavailable telemetry"}</td>
@@ -187,7 +187,7 @@ function JobCells({ job }: { job: WorkerHealth["jobs"][number] }) {
     <td>- / {job.requested.vcpu}</td>
     <td>- / {formatBytes(job.requested.memoryBytes)}</td>
     <td>- / {formatBytes(job.requested.storageBytes)}</td>
-    <td>- / {job.requested.concurrency}</td>
+    {includeConcurrency && <td>- / {job.requested.concurrency}</td>}
   </>;
 }
 
@@ -214,16 +214,16 @@ function VmWorkloadsSection({ jobs }: { jobs: WorkerHealth["jobs"] }) {
   </div>;
 }
 
-function ManagedContainersSection({ health, idPrefix }: { health: WorkerHealth; idPrefix: string }) {
+function ManagedContainersSection({ health, idPrefix, limits }: { health: WorkerHealth; idPrefix: string; limits?: WorkerDetail["limits"] }) {
   const jobsByLeaseId = new Map(health.jobs.map((job) => [job.leaseId, job]));
   const unassignedJobs = health.jobs.filter((job) => !health.containers.some((container) => container.leaseId === job.leaseId));
   const vmMode = health.runtimeMode === "vm" || health.runtimeMode === "tart";
   return <section className="worker-health-section" aria-labelledby={`${idPrefix}-containers-heading`}>
-    <h3 id={`${idPrefix}-containers-heading`}>{vmMode ? "Managed workloads" : "Managed containers"}</h3>
+    <h3 id={`${idPrefix}-containers-heading`}>{vmMode ? "Managed workloads" : "Managed containers"}{!vmMode && limits && <span className="worker-health-section-meta"> · Concurrency {limits.maxConcurrentPods}</span>}</h3>
     {vmMode ? health.jobs.length > 0 ? <VmWorkloadsSection jobs={health.jobs} /> : <p className="worker-health-empty">No active workloads</p> : health.containers.length === 0 ? <p className="worker-health-empty">No managed containers reported.</p> : <div className="worker-health-table-wrap">
       <table className="worker-health-table worker-health-container-table">
         <caption>Current managed containers and resource usage</caption>
-        <thead><tr><th scope="col">Container</th><th scope="col">State</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Disk</th><th scope="col">Freshness</th><th scope="col">Job ID</th><th scope="col">Repository / name</th><th scope="col">Lease state</th><th scope="col">Age</th><th scope="col">vCPU</th><th scope="col">Memory</th><th scope="col">Storage</th><th scope="col">Concurrency</th></tr></thead>
+        <thead><tr><th scope="col">Container</th><th scope="col">State</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Disk</th><th scope="col">Freshness</th><th scope="col">Job ID</th><th scope="col">Repository / name</th><th scope="col">Lease state</th><th scope="col">Age</th><th scope="col">vCPU</th><th scope="col">Memory</th><th scope="col">Storage</th></tr></thead>
         <tbody>{health.containers.map((container) => {
           const job = jobsByLeaseId.get(container.leaseId);
           return <tr key={container.containerId}>
@@ -233,7 +233,7 @@ function ManagedContainersSection({ health, idPrefix }: { health: WorkerHealth; 
             <td>{formatContainerBytes(container.memoryWorkingSetBytes)}{" "}<small>{container.memoryLimitBytes == null ? "Not reported" : `of ${formatBytes(container.memoryLimitBytes)}`}</small></td>
             <td>{formatContainerBytes(container.diskUsageBytes)}{" "}<small>Writable-layer use</small></td>
             <td><time dateTime={container.sampledAt}>{formatContainerAge(container.sampledAt)}</time></td>
-            {job ? <JobCells job={job} /> : <td colSpan={8}>No job assigned</td>}
+            {job ? <JobCells job={job} includeConcurrency={false} /> : <td colSpan={7}>No job assigned</td>}
           </tr>;
         })}</tbody>
       </table>
@@ -258,6 +258,6 @@ export function WorkerHealthPanel({ workerId, health, loading = false, error, li
     </div>}
     <UsageSection health={health} idPrefix={idPrefix} limits={limits} />
     <CacheSection health={health} idPrefix={idPrefix} cacheMetrics={cacheMetrics} />
-    <ManagedContainersSection health={health} idPrefix={idPrefix} />
+    <ManagedContainersSection health={health} idPrefix={idPrefix} limits={limits} />
   </section>;
 }
