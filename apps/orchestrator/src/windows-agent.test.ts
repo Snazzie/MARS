@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkerConfigurePayload, WorkerDoctorData, WorkerDoctorReport, type LeaseBootstrapEnvelope, type WorkerCapacityData, type WorkerCommand, type WorkerContainerStatus, type WorkerEvent } from "@mars/contracts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
-import { applyWindowsRunnerCachePurge, applyWindowsWorkerConfiguration, buildWindowsDoctorReport, dispatchWindowsWorkerFrame, executeWindowsWorkerCommand, reconcileWindowsRuntime, runWindowsLeaseCleanup, startWindowsLeaseLifecycle, verifiedWindowsVmImage } from "./windows-agent.ts";
-const doctor = WorkerDoctorData.parse({ runtimeMode: "container", runtimeReady: true, probe: true, egress: true, imageSignatures: true });
+import { applyWindowsRunnerCachePurge, applyWindowsWorkerConfiguration, buildWindowsDoctorReport, dispatchWindowsWorkerFrame, executeWindowsWorkerCommand, reconcileWindowsRuntime, runWindowsLeaseCleanup, startWindowsLeaseLifecycle, verifiedWindowsVmImage, windowsDoctor } from "./windows-agent.ts";
+const doctor = WorkerDoctorData.parse({ runtimeMode: "container", runtimeReady: true, probe: true, imageSignatures: true });
 const capacity: WorkerCapacityData = { actualVcpu: 8, actualMemoryBytes: 16, actualStorageBytes: 32, freeVcpu: 7, freeMemoryBytes: 15, freeStorageBytes: 31 };
 const containerStatuses: WorkerContainerStatus[] = [{
   containerId: "a".repeat(64),
@@ -28,6 +28,29 @@ const containerStatuses: WorkerContainerStatus[] = [{
   diskUsageBytes: 8192,
   sampledAt: "2026-08-31T12:00:00.000Z",
 }];
+
+test("Windows doctor uses local evidence without GitHub requests", async () => {
+  const oldFetch = globalThis.fetch;
+  const oldRuntime = Bun.env.MARS_WINDOWS_RUNTIME;
+  const oldDigest = Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST;
+  let fetchCalls = 0;
+  try {
+    Bun.env.MARS_WINDOWS_RUNTIME = "vm";
+    delete Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST;
+    globalThis.fetch = Object.assign(async () => { fetchCalls += 1; throw new Error("network unavailable"); }, { preconnect: oldFetch.preconnect });
+    const report = await windowsDoctor();
+    expect(fetchCalls).toBe(0);
+    expect(report.runtimeReady).toBe(false);
+    expect(report.remediation).toContain("image-state.json");
+    expect(report).not.toHaveProperty("egress");
+  } finally {
+    globalThis.fetch = oldFetch;
+    if (oldRuntime === undefined) delete Bun.env.MARS_WINDOWS_RUNTIME;
+    else Bun.env.MARS_WINDOWS_RUNTIME = oldRuntime;
+    if (oldDigest === undefined) delete Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST;
+    else Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST = oldDigest;
+  }
+});
 test("validates installed Windows VM identity and rejects stale service digests", async () => {
   const programData = await mkdtemp(join(tmpdir(), "mars-windows-image-state-"));
   const checkpoint = join(programData, "checkpoint");

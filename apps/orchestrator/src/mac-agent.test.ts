@@ -156,7 +156,7 @@ describe("worker join payload", () => {
       encryptionPublicKey: "x25519",
       vmUuid,
       machineUuid,
-      doctor: { probe: true, egress: true },
+      doctor: { probe: true },
       capacity,
     });
 
@@ -170,7 +170,7 @@ describe("worker join payload", () => {
       encryptionPublicKey: "x25519",
       vmUuid,
       machineUuid,
-      doctor: { probe: true, egress: true, containers: [] },
+      doctor: { probe: true, containers: [] },
       capacity,
     });
   });

@@ -101,12 +101,12 @@ At worker startup, orphan reconciliation removes Mars-owned VMs and lease direct
 
 ### Readiness and routing
 
-A VM worker reports `runtimeMode: "vm"`, `artifactSource: "template"`, and the checkpoint archive digest in doctor data. It is ready only when:
-
+The worker is ready only when:
 - the configured extracted checkpoint directory exists;
-- the checkpoint archive digest is pinned;
-- the Hyper-V host probe succeeds; and
-- GitHub egress succeeds.
+- the checkpoint archive digest is pinned; and
+- the Hyper-V host probe succeeds.
+
+GitHub egress is not a worker-daemon readiness prerequisite. The control plane performs authenticated GitHub operations, while job runtimes retain their normal GitHub network access.
 
 Windows VM pools use driver `windows-hyperv`; Windows container pools use `windows-hyperv-container`. Pool creation, default-pool selection, enablement checks, queued-job reconciliation, and atomic lease reservation all compare the pool driver with the worker's reported runtime mode.
 

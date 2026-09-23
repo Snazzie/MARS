@@ -292,7 +292,7 @@ export async function runDockerLinuxWorker(baseUrl: string, driver: RuntimeDrive
     let enrolled = identity;
     if (!enrolled.workerId) {
       const code = await readEnrollmentCode();
-      const payload = WorkerBootstrapRequest.parse({ code, computerName: hostname(), platform: "linux-arm64", ...workerRuntimeVersions(), publicKey: enrolled.publicKey, encryptionPublicKey: enrolled.encryptionPublicKey, vmUuid: enrolled.vmUuid, machineUuid: enrolled.machineUuid, doctor: WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: host.runtimeReady, probe: true, egress: true, imageSignatures: host.imageReady, networkReady: host.networkReady, acceptingLeases: true }), capacity: linuxCapacity() });
+      const payload = WorkerBootstrapRequest.parse({ code, computerName: hostname(), platform: "linux-arm64", ...workerRuntimeVersions(), publicKey: enrolled.publicKey, encryptionPublicKey: enrolled.encryptionPublicKey, vmUuid: enrolled.vmUuid, machineUuid: enrolled.machineUuid, doctor: WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: host.runtimeReady, probe: true, imageSignatures: host.imageReady, networkReady: host.networkReady, acceptingLeases: true }), capacity: linuxCapacity() });
       const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", controlPlane), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) }));
       if (!response.ok) throw new Error(`worker join failed: ${response.status}`);
       const joined = await response.json() as { workerId?: string };
@@ -305,7 +305,7 @@ export async function runDockerLinuxWorker(baseUrl: string, driver: RuntimeDrive
     const sendDoctor = async (ws: WebSocket): Promise<void> => {
       host = await driver.validateHost();
       const containers = await driver.listContainerStatuses().catch(() => []);
-      const doctor = WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: host.runtimeReady, probe: true, egress: true, imageSignatures: host.imageReady, networkReady: host.networkReady, inventoryObservedAt: new Date().toISOString(), acceptingLeases: true, activeLeases: [...activeLeases.keys()], containers });
+      const doctor = WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: host.runtimeReady, probe: true, imageSignatures: host.imageReady, networkReady: host.networkReady, inventoryObservedAt: new Date().toISOString(), acceptingLeases: true, activeLeases: [...activeLeases.keys()], containers });
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: enrolled.workerId, payload: { ...workerRuntimeVersions(), doctor, capacity: linuxCapacity() } }));
     };
     for (;;) {

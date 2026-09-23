@@ -76,11 +76,15 @@ test("rejects invalid out-of-memory measurements", () => {
   })).toThrow();
 });
 test("accepts worker-local runtime readiness without a registry digest", () => {
-  expect(WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "worker_local", artifactIdentity: "mars/windows-job:local", runtimeReady: true, probe: true, egress: true, imageSignatures: true })).toMatchObject({
+  expect(WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "worker_local", artifactIdentity: "mars/windows-job:local", runtimeReady: true, probe: true, imageSignatures: true })).toMatchObject({
     artifactSource: "worker_local",
     artifactIdentity: "mars/windows-job:local",
     runtimeReady: true,
   });
+});
+
+test("accepts legacy worker doctor egress during protocol rollout", () => {
+  expect(WorkerDoctorData.parse({ runtimeReady: true, egress: false, containers: [] })).toEqual({ runtimeReady: true, egress: false, containers: [] });
 });
 test("accepts worker-reported active lease inventory", () => {
   expect(WorkerDoctorData.parse({

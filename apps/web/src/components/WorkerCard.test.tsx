@@ -278,7 +278,7 @@ test("uses a compact identity and operations layout without artifact or standalo
 });
 
 test("shows applying configuration until the desired revision is acknowledged", () => {
-  const worker = workerFixture({ configurationState: "applying", configurationRevision: "b".repeat(64), doctor: { egress: true } });
+  const worker = workerFixture({ configurationState: "applying", configurationRevision: "b".repeat(64) });
   const markup = renderCard(worker);
   expect(markup).toContain("Applying configuration");
   expect(markup).toContain("Live worker health");

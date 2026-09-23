@@ -144,7 +144,7 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
     finally { setPurgePending(false); }
   };
   const effectiveConfigurationState = worker.configurationState === "ready" && worker.configurationRevision !== worker.appliedConfigurationRevision ? "applying" : worker.configurationState;
-  const runtimeReady = worker.doctor?.runtimeReady === true && worker.doctor.probe === true && worker.doctor.egress === true && worker.doctor.imageSignatures === true;
+  const runtimeReady = worker.doctor?.runtimeReady === true && worker.doctor.probe === true && worker.doctor.imageSignatures === true;
   const cache = worker.cache;
   const desiredRunnerCacheEnabled = cache?.desiredRunnerCacheEnabled ?? true;
   const desiredRunnerCacheMaxGiB = cache?.desiredRunnerCacheMaxGiB ?? 20;

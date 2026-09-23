@@ -1,12 +1,11 @@
 import type { RuntimePlatform, WorkerDoctor as WorkerDoctorDto } from "@mars/contracts";
 
-type CheckKey = keyof Pick<WorkerDoctorDto, "nestedKvm" | "kvmModules" | "probe" | "egress" | "imageSignatures" | "blockVolume">;
+type CheckKey = keyof Pick<WorkerDoctorDto, "nestedKvm" | "kvmModules" | "probe" | "imageSignatures" | "blockVolume">;
 type Check = { key: CheckKey; label: string; platforms: RuntimePlatform[] };
 const checks: Check[] = [
   { key: "nestedKvm", label: "Nested KVM", platforms: ["linux-x64"] },
   { key: "kvmModules", label: "KVM and vhost modules", platforms: ["linux-x64"] },
   { key: "probe", label: "Runtime host probe", platforms: ["linux-x64", "linux-arm64", "windows-x64", "macos-arm64"] },
-  { key: "egress", label: "GitHub egress", platforms: ["linux-x64", "linux-arm64", "windows-x64", "macos-arm64"] },
   { key: "imageSignatures", label: "Immutable artifact reference", platforms: ["linux-x64", "linux-arm64", "windows-x64", "macos-arm64"] },
   { key: "blockVolume", label: "Block volume support", platforms: ["linux-x64"] },
 ];

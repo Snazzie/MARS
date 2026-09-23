@@ -111,21 +111,13 @@ export const windowsDoctor = async (preserveLeases = false): Promise<WorkerDocto
   const probe = runtimeMode === "container"
     ? await commandSucceeds(["docker.exe", "info", "--format", "{{.OSType}}"])
     : await commandSucceeds(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-VMHost -ErrorAction Stop | Out-Null"]);
-  let egress = false;
-  try {
-    const response = await fetch("https://api.github.com/meta", { signal: AbortSignal.timeout(5_000), headers: { "user-agent": "mars-worker-doctor" } });
-    egress = response.ok;
-  } catch {
-    egress = false;
-  }
   const failures = [
     !probe && `${runtimeMode === "container" ? "Windows container host" : "Hyper-V host"} probe failed`,
-    !egress && "GitHub egress probe failed",
     !immutableArtifact && (runtimeMode === "container" ? "Verified Windows container image manifest is missing or stale" : vmImage?.remediation ?? "Verified Windows VM image state is missing or invalid"),
     runtimeMode === "container" && localManifest && !localVerification.entrypoint && "Windows container image entrypoint is invalid",
   ].filter((failure): failure is string => Boolean(failure));
   const artifactDigest = runtimeMode === "vm" ? vmImage?.digest : localVerification.imageId ?? (digestPinned ? artifactValue : undefined);
-  return WorkerDoctorData.parse({ runtimeMode, preserveLeases, ...(runtimeMode === "container" ? { artifactSource: "worker_local", ...(artifactValue ? { artifactIdentity: artifactValue } : {}) } : { artifactSource: "template" }), ...(artifactDigest ? { artifactDigest } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
+  return WorkerDoctorData.parse({ runtimeMode, preserveLeases, ...(runtimeMode === "container" ? { artifactSource: "worker_local", ...(artifactValue ? { artifactIdentity: artifactValue } : {}) } : { artifactSource: "template" }), ...(artifactDigest ? { artifactDigest } : {}), runtimeReady: failures.length === 0, probe, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
 };
 const joinCode = async () => { const path = Bun.env.MARS_JOIN_CODE_FILE; if (path) return (await readFile(path, "utf8")).trim(); const reader = Bun.stdin.stream().getReader(); const { value } = await reader.read(); reader.releaseLock(); return Buffer.from(value ?? []).toString("utf8").trim(); };
 const save = async (identity: Identity) => { const path = identityPath(); await mkdir(dirname(path), { recursive: true }); await writeFile(path, JSON.stringify(identity) + "\n", { mode: 0o600 }); };

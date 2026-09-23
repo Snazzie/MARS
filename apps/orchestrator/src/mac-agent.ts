@@ -323,19 +323,14 @@ export async function currentMacDoctor(): Promise<WorkerDoctorData> {
     const names = new Set(entries.map(entry => entry.Name).filter((name): name is string => typeof name === "string"));
     localImages = tartList.code === 0 && names.has(macosBaseImage) && names.has(linuxBaseImage);
   } catch {}
-  let egress = false;
-  try {
-    const response = await fetch("https://api.github.com", { method: "HEAD", signal: AbortSignal.timeout(5_000) });
-    egress = response.ok || response.status < 500;
-  } catch {}
   const macosDigest = Bun.env.MARS_TART_MACOS_IMAGE_DIGEST?.trim();
   const linuxDigest = Bun.env.MARS_TART_LINUX_ARM64_IMAGE_DIGEST?.trim();
   const digestPattern = /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i;
   const artifactDigests = { "macos-arm64": macosDigest ?? "", "linux-arm64": linuxDigest ?? "" };
   const immutableImages = digestPattern.test(artifactDigests["macos-arm64"]) && digestPattern.test(artifactDigests["linux-arm64"]);
   const contractVersion = Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim();
-  const failures = [!probe && "Tart runtime probe failed", !localImages && "Prepared Tart base images are unavailable", !egress && "GitHub egress probe failed", !immutableImages && "Both immutable Tart image digests are required", !WorkerContractVersion.safeParse(contractVersion).success && "Worker contract version is missing or invalid"].filter(Boolean);
-  return WorkerDoctorData.parse({ runtimeMode: "tart", artifactSource: "registry", ...(immutableImages ? { artifactDigests, artifactDigest: artifactDigests["macos-arm64"], artifactIdentity: artifactDigests["macos-arm64"] } : {}), runtimeReady: failures.length === 0, probe, egress, imageSignatures: immutableImages, remediation: failures.length ? failures.join("; ") : null });
+  const failures = [!probe && "Tart runtime probe failed", !localImages && "Prepared Tart base images are unavailable", !immutableImages && "Both immutable Tart image digests are required", !WorkerContractVersion.safeParse(contractVersion).success && "Worker contract version is missing or invalid"].filter(Boolean);
+  return WorkerDoctorData.parse({ runtimeMode: "tart", artifactSource: "registry", ...(immutableImages ? { artifactDigests, artifactDigest: artifactDigests["macos-arm64"], artifactIdentity: artifactDigests["macos-arm64"] } : {}), runtimeReady: failures.length === 0, probe, imageSignatures: immutableImages, remediation: failures.length ? failures.join("; ") : null });
 }
 async function currentMacWorkerJoinPayload(code: string, publicKey: string, encryptionPublicKey: string, vmUuid?: string, machineUuid?: string): Promise<MacWorkerJoinPayload> {
   const stableMachineUuid = machineUuid ?? await macMachineUuid();

@@ -333,7 +333,7 @@ function workerDoctor(value: unknown): WorkerDetail["doctor"] {
   const source = { ...nested, ...wrapper };
   if (!Object.keys(source).length) return null;
   const candidate: Record<string, unknown> = {};
-  for (const key of ["nestedKvm", "kvmModules", "probe", "egress", "imageSignatures", "blockVolume", "runtimeReady", "preserveLeases", "acceptingLeases"]) {
+  for (const key of ["nestedKvm", "kvmModules", "probe", "imageSignatures", "blockVolume", "runtimeReady", "preserveLeases", "acceptingLeases"]) {
     if (typeof source[key] === "boolean") candidate[key] = source[key];
   }
   if (["idle", "building", "ready", "failed"].includes(String(source.runtimeBuildState))) candidate.runtimeBuildState = source.runtimeBuildState;

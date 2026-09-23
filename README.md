@@ -90,6 +90,79 @@ docker compose up -d postgres
 ```
 
 Local development ports and service behavior are defined in `scripts/dev.ts` and `scripts/dev-ports.ts`.
+
+### Upgrade a local Windows worker from the current checkout
+
+Use this when the local control plane cannot issue a release-catalog upgrade target. It downloads artifacts from the running local control plane, verifies SHA-256 values, and invokes the existing identity-preserving installer upgrade. Do not run it while jobs are active.
+
+1. From the repository root, build the Windows worker artifacts and drain the worker in the dashboard. Wait until its active sandboxes and health jobs are both zero:
+
+   ```powershell
+   bun run build:windows-worker
+   ```
+
+2. Generate a temporary PowerShell script. Set `$controlPlane` to the local API origin and `$repo` to this checkout's absolute path. The script computes hashes from the build outputs; it does not need a release token or GitHub release:
+
+   ```powershell
+   $repo = (Get-Location).Path
+   $controlPlane = 'http://127.0.0.1:3000'
+   $temporaryScript = Join-Path $env:TEMP ('mars-local-upgrade-' + [guid]::NewGuid().ToString('N') + '.ps1')
+   $body = @'
+   $ErrorActionPreference = 'Stop'
+   $repo = '__REPO__'
+   $controlPlane = '__CONTROL_PLANE__'
+   function Hash([string]$Path) {
+     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Missing build artifact: $Path" }
+     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+   }
+   $orchestrator = Join-Path $repo 'apps\orchestrator\dist\mars-orchestrator.exe'
+   $serviceHost = Join-Path $repo 'apps\windows-service-host\target\release\mars-service-host.exe'
+   $tray = Join-Path $repo 'deploy\workers\mars-worker-tray.ps1'
+   function LocalEnvValue([string]$Name) {
+     foreach ($file in @('.env.development', '.env')) {
+       $path = Join-Path $repo $file
+       if (Test-Path -LiteralPath $path) {
+         foreach ($line in Get-Content -LiteralPath $path) {
+           if ($line -match ('^' + [regex]::Escape($Name) + '=(.*)$')) {
+             return $Matches[1].Trim().Trim('"').Trim("'")
+           }
+         }
+       }
+     }
+     return $null
+   }
+   $workerVersion = LocalEnvValue 'MARS_WORKER_VERSION'
+   if (-not $workerVersion) { $workerVersion = '0.0.0' }
+   $contractVersion = LocalEnvValue 'MARS_WORKER_CONTRACT_VERSION'
+   if (-not $contractVersion) { throw 'Set MARS_WORKER_CONTRACT_VERSION in .env.development or .env.' }
+   & (Join-Path $repo 'deploy\workers\install-worker.ps1') `
+     -ControlPlaneUrl $controlPlane -WindowsRuntime 'container' -WindowsArtifactMode 'local' `
+     -WorkerVersion $workerVersion -WorkerContractVersion $contractVersion `
+     -WindowsOrchestratorUrl "$controlPlane/api/workers/orchestrator?audience=windows-x64" `
+     -WindowsOrchestratorSha256 (Hash $orchestrator) `
+     -WindowsServiceHostUrl "$controlPlane/api/workers/service-host?audience=windows-x64" `
+     -WindowsServiceHostSha256 (Hash $serviceHost) `
+     -WindowsTrayScriptUrl "$controlPlane/api/workers/windows-tray-script" `
+     -WindowsTrayScriptSha256 (Hash $tray) -Upgrade
+   '@
+   $body = $body.Replace('__REPO__', $repo.Replace("'", "''")).Replace('__CONTROL_PLANE__', $controlPlane)
+   Set-Content -LiteralPath $temporaryScript -Value $body -Encoding utf8
+   ```
+
+3. Run the temporary script elevated and wait for it to finish:
+
+   ```powershell
+   try {
+     $process = Start-Process powershell.exe -Verb RunAs -Wait -PassThru `
+       -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$temporaryScript`""
+     if ($process.ExitCode -ne 0) { throw "Worker upgrade failed with exit code $($process.ExitCode)" }
+   } finally {
+     Remove-Item -LiteralPath $temporaryScript -Force -ErrorAction SilentlyContinue
+   }
+   ```
+
+The installer requires the worker identity and `MarsWorker` service to exist. It preserves identity and runtime data, replaces the orchestrator, service host, and tray script, and restarts the service. Check `C:\ProgramData\Mars\install.log`, then confirm the service is running and the worker has reconnected with a fresh doctor report. If any jobs remain active, wait for them to finish rather than stopping the service.
+
 Development log APIs require a global administrator. Outside production, the
 existing `MARS_DEV_TOKEN` from the untracked `.env.development` may be supplied
 as `Authorization: Bearer <token>`; never commit the token.
