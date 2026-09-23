@@ -204,6 +204,14 @@ test("acknowledges a durable stop command when its reaped event arrives", async 
   expect(accepted).toBe(true);
   expect(dispatched).toEqual([expect.objectContaining({ type: "lease.reaped", payload: expect.objectContaining({ commandId }) }), socket]);
 });
+test("accepts signed integer runner exit codes while rejecting malformed exit codes", async () => {
+  const { db } = acceptingDb();
+  const frame = event("runner.finished", { leaseId, nonce, exitCode: -1 });
+  const accepted = await handleAuthenticatedWorkerEvent(db, { handleEvent() { return false; } }, frame, { send() {} });
+  expect(accepted).toBe(true);
+
+  expect(await handleAuthenticatedWorkerEvent(db, { handleEvent() { return false; } }, { ...frame, payload: { ...frame.payload, exitCode: 1.5 } }, { send() {} })).toBe(false);
+});
 test("rejects malformed or unauthenticated lifecycle events without touching storage", async () => {
   const { db, calls } = acceptingDb();
   expect(await applyWorkerLeaseEvent(db, event("sandbox_attested", { leaseId, nonce: "short", runtimeInstanceId: "vm", observed: { vcpu: 1, memoryBytes: 1, storageBytes: 1 } }))).toBe(false);

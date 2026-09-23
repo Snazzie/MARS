@@ -21,6 +21,7 @@ export async function listReplayableWorkerCommands(db: DatabaseClient, workerId:
   const rows = await db`SELECT c.id,c.version,c.type,c.worker_id AS "workerId",c.lease_id AS "leaseId",c.occurred_at AS "occurredAt",c.payload
     FROM commands c LEFT JOIN runner_leases l ON l.id=c.lease_id
     WHERE c.worker_id=${workerId} AND c.state IN ('pending','sent')
+      AND (c.type <> 'worker.configure' OR c.id=(SELECT configuration_command_id FROM workers WHERE id=${workerId}))
       AND (
         c.lease_id IS NULL
         OR (

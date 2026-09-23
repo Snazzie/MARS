@@ -25,6 +25,24 @@ test("records the active desired configuration after an exact acknowledgement", 
   expect(queries.some(query => query.includes("worker.configuration_applied"))).toBe(true);
   expect(queries.every(query => !query.includes("select payload from commands"))).toBe(true);
 });
+test("acknowledges a stale configuration command only when it belongs to this worker", async () => {
+  const workerId = "cbb0e9d8-23ff-480e-8465-408197c0c2d2";
+  const desiredCommandId = "b430a582-a516-48a6-abb9-72c1af04a8c3";
+  const staleCommandId = "d430a582-a516-48a6-abb9-72c1af04a8c3";
+  const revision = "a".repeat(64);
+  const desired = { appliance: { vcpu: 2, memoryBytes: 4, storageBytes: 8 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 4, maxConcurrentPods: 1 }, guestPlatforms: ["macos-arm64"], cache: { ttlSeconds: 172800, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 } };
+  let staleCommandExists = true;
+  const query = async (strings: TemplateStringsArray) => {
+    const text = strings.join(" ");
+    if (text.includes("configuration_revision as")) return [{ configurationRevision: revision, configurationCommandId: desiredCommandId, desiredConfiguration: desired }];
+    if (text.includes("select id from commands")) return staleCommandExists ? [{ id: staleCommandId }] : [];
+    return [];
+  };
+  const db = Object.assign(query, {}) as never;
+  expect(await applyWorkerConfigurationAcknowledgement(db, { workerId, payload: { commandId: staleCommandId, workerId, revision, observed: desired } })).toBe("stale");
+  staleCommandExists = false;
+  expect(await applyWorkerConfigurationAcknowledgement(db, { workerId, payload: { commandId: crypto.randomUUID(), workerId, revision, observed: desired } })).toBe(false);
+});
 
 test("keeps the last applied configuration when the current acknowledgement mismatches", async () => {
   const commandId = "b430a582-a516-48a6-abb9-72c1af04a8c3";

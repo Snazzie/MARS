@@ -42,7 +42,7 @@ test("includes worker cache descriptor in Windows container bootstrap", async ()
     if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 1_000_000_000, Memory: 1024 } }]), stderr: "" };
     return { code: 0, stdout: "0", stderr: "" };
   };
-  const driver = new WindowsContainerDriver({ image: "repo@sha256:" + "a".repeat(64), prefix: "mars", bootstrapRoot: root, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 }, readyTimeoutMs: 100, jobTimeoutMs: 100 }, docker);
+  const driver = new WindowsContainerDriver({ image: "repo@sha256:" + "a".repeat(64), prefix: "mars", bootstrapRoot: root, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 }, readyTimeoutMs: 100, jobTimeoutMs: 100, dnsServers: ["1.1.1.1"] }, docker);
   const leaseId = "33333333-3333-4333-8333-333333333333";
   await driver.createLease({ id: leaseId, jobId: "job", contractVersion: "0.1.0", imageDigest: "repo@sha256:" + "a".repeat(64), resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config", workerCache });
   expect(JSON.parse(await readFile(join(root, leaseId, "bootstrap.json"), "utf8")).workerCache).toEqual(workerCache);
@@ -420,6 +420,41 @@ test("waits for Docker to become ready before validating the image", async () =>
   expect(infoAttempts).toBe(2);
 });
 
+test("waits for Docker's Windows API to become available before orphan reconciliation", async () => {
+  let infoAttempts = 0;
+  let psAttempts = 0;
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "info" && ++infoAttempts === 1) return { code: 1, stdout: "", stderr: "error during connect: open //./pipe/docker_engine: The system cannot find the file specified." };
+    if (args[0] === "info") return { code: 0, stdout: "windows\n", stderr: "" };
+    if (args[0] === "ps") { psAttempts += 1; return { code: 0, stdout: "", stderr: "" }; }
+    throw new Error(`unexpected Docker command: ${args[0]}`);
+  };
+  await new WindowsContainerDriver(collectorConfig, docker).reconcileOrphans();
+  expect(infoAttempts).toBe(2);
+  expect(psAttempts).toBe(1);
+});
+
+test("does not retry permission errors on the Docker pipe", async () => {
+  let infoAttempts = 0;
+  const docker: DockerRunner = async () => {
+    infoAttempts += 1;
+    return { code: 1, stdout: "", stderr: "error during connect: open //./pipe/docker_engine: Access is denied." };
+  };
+  await expect(new WindowsContainerDriver(collectorConfig, docker).reconcileOrphans()).rejects.toThrow("docker info failed: error during connect");
+  expect(infoAttempts).toBe(1);
+});
+
+test("requires the Windows Docker engine before orphan reconciliation", async () => {
+  let psAttempts = 0;
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "info") return { code: 0, stdout: "linux\n", stderr: "" };
+    if (args[0] === "ps") { psAttempts += 1; return { code: 0, stdout: "", stderr: "" }; }
+    throw new Error(`unexpected Docker command: ${args[0]}`);
+  };
+  await expect(new WindowsContainerDriver(collectorConfig, docker).reconcileOrphans()).rejects.toThrow("Windows Docker engine is required");
+  expect(psAttempts).toBe(0);
+});
+
 const collectorConfig = {
   image: "repo@sha256:" + "a".repeat(64),
   prefix: "mars",
@@ -573,6 +608,7 @@ test("reconciles only fully labeled UUID-owned containers without sampling", asy
   await Bun.write(join(root, "not-owned", "marker"), "keep");
   const removed: string[] = [];
   const docker: DockerRunner = async (args) => {
+    if (args[0] === "info") return { code: 0, stdout: "windows\n", stderr: "" };
     if (args[0] === "ps") return { code: 0, stdout: [validA, validB, managedOnly, leaseOnly, malformed].map((id) => id.slice(0, 12)).join("\n"), stderr: "" };
     if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([
       { Id: validA, Name: "/valid-a", Config: { Labels: { "mars.managed": "true", "mars.lease-id": leaseA } }, State: { Status: "running" } },

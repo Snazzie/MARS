@@ -1,5 +1,5 @@
 import type { Server, ServerWebSocket } from "bun";
-import { WorkerDoctorReport } from "@mars/contracts";
+import { WorkerConfiguredPayload, WorkerDoctorReport, WorkerEvent } from "@mars/contracts";
 import { jsonParameter, type DashboardDb } from "@mars/db";
 import { canSubscribeToOrganization, loadBrowserInvalidations } from "./browser-invalidations.ts";
 import { reconcileWorkerInventory } from "./lease-reconciliation.ts";
@@ -171,9 +171,11 @@ export function createControlPlaneGateway(options: GatewayOptions) {
   async function handleWorkerMessage(ws: ServerWebSocket<ControlPlaneSocketData>, message: string | Buffer): Promise<void> {
     if (ws.data.actor !== "worker") return;
     const workerData = ws.data;
+    let frameType = "unknown";
     try {
       if (typeof message === "string" ? message.length > 256 * 1024 : message.byteLength > 256 * 1024) return ws.close(1009, "worker frame too large");
       const frame = JSON.parse(String(message)) as { id?: string; type?: string; signature?: string; workerId?: string; encryptionPublicKey?: string; payload?: Record<string, unknown> };
+      frameType = typeof frame.type === "string" ? frame.type : "unknown";
       if (frame.type === "authenticate" && frame.workerId === ws.data.workerId && frame.signature && typeof frame.encryptionPublicKey === "string") {
         const epoch = ws.data.connectionEpoch;
         if (!epoch || ws.data.closed) return ws.close(4001, "superseded");
@@ -239,18 +241,23 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         });
       } else if (ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch && frame.workerId === ws.data.workerId) {
         if (frame.type === "worker.configured") {
-          const acknowledged = await applyWorkerConfigurationAcknowledgement(options.db, { workerId: ws.data.workerId, payload: frame.payload });
+          const configuredEvent = WorkerEvent.safeParse(frame);
+          const configuredPayload = WorkerConfiguredPayload.safeParse(frame.payload);
+          if (!configuredEvent.success || !configuredPayload.success || configuredPayload.data.workerId !== ws.data.workerId) throw new Error("invalid worker configuration acknowledgement");
+          const acknowledged = await applyWorkerConfigurationAcknowledgement(options.db, { workerId: ws.data.workerId, payload: configuredPayload.data });
           if (!acknowledged) {
-            const payload = frame.payload && typeof frame.payload === "object" ? frame.payload as Record<string, unknown> : {};
-            const [state] = await options.db`SELECT configuration_command_id AS "commandId", configuration_revision AS revision, desired_configuration AS desired FROM workers WHERE id=${ws.data.workerId}`;
-            console.error("Worker configuration acknowledgement rejected", { workerId: ws.data.workerId, commandId: payload.commandId, revision: payload.revision, expectedCommandId: state?.commandId, expectedRevision: state?.revision, observed: payload.observed, desired: state?.desired });
-          } else {
+            console.error("Worker configuration acknowledgement rejected", {
+              workerId: ws.data.workerId,
+              commandId: configuredPayload.data.commandId,
+              revision: configuredPayload.data.revision,
+            });
+          } else if (acknowledged === true) {
             await options.refreshDefaultPools();
+            options.dispatcher.handleEvent(frame, ws);
+            void options.triggerReconciliation();
           }
-          console.log(`Worker configuration acknowledgement: ${ws.data.workerId} accepted=${acknowledged}`);
-          options.dispatcher.handleEvent(frame, ws);
-          void options.triggerReconciliation();
-          if (acknowledged && typeof frame.id === "string") ws.send(JSON.stringify({ version: 1, type: "event_ack", workerId: ws.data.workerId, eventId: frame.id }));
+          console.log(`Worker configuration acknowledgement: ${ws.data.workerId} accepted=${acknowledged === true}`);
+          if (typeof frame.id === "string") ws.send(JSON.stringify({ version: 1, type: "event_ack", workerId: ws.data.workerId, eventId: frame.id }));
         } else {
           const accepted = await handleAuthenticatedWorkerEvent(options.db, options.dispatcher, frame, ws);
           if (frame.type === "lease.declined" && accepted) void options.triggerReconciliation();
@@ -260,7 +267,11 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         }
       }
     } catch (error) {
-      console.error("Worker websocket frame failed", { workerId: ws.data.workerId, error: error instanceof Error ? error.message : String(error) });
+      console.error("Worker websocket frame failed", {
+        workerId: ws.data.workerId,
+        frameType,
+        error: error instanceof Error ? error.message : String(error),
+      });
       ws.close(1008, "invalid worker frame");
     }
   }

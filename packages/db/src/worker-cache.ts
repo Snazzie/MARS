@@ -52,6 +52,9 @@ export async function applyWorkerCacheTelemetry(db: SqlDb, input: TelemetryEvent
     if (!validRunnerStatus(payload)) return false;
     const status = payload;
     return await db.begin(async (tx) => {
+      const [active] = await tx<{ generation?: unknown }[]>`SELECT generation FROM worker_cache_status WHERE worker_id=${input.workerId}`;
+      if (!active) return false;
+      if (active.generation !== status.generation) return true;
       const updated = await tx`UPDATE worker_cache_status SET runner_cache_enabled=${status.enabled},runner_cache_max_gib=${status.maxGiB},runner_cache_size_bytes=${status.sizeBytes},runner_cache_entry_count=${status.entryCount},runner_cache_hit_count=${status.hitCount ?? 0},runner_cache_miss_count=${status.missCount ?? 0},runner_cache_observed_at=${status.observedAt} WHERE worker_id=${input.workerId} AND generation=${status.generation} RETURNING worker_id`;
       return updated.length > 0;
     });
@@ -59,10 +62,10 @@ export async function applyWorkerCacheTelemetry(db: SqlDb, input: TelemetryEvent
   if (input.type === "worker.cache_entry_upsert") {
     const entry = payload.entry;
     if (!uuid(payload.generation) || !validEntry(entry)) return false;
+    const values = entryValues(entry);
     const generation = payload.generation;
     const [active] = await db<{ generation?: unknown }[]>`SELECT generation FROM worker_cache_status WHERE worker_id=${input.workerId}`;
-    if (typeof active?.generation === "string" && active.generation !== generation) return false;
-    const values = entryValues(entry);
+    if (typeof active?.generation === "string" && active.generation !== generation) return true;
     await db`INSERT INTO worker_cache_entries (worker_id,entry_id,github_repository_id,cache_key_preview,cache_key_hash,scope_preview,scope_hash,version_hash,size_bytes,created_at,last_accessed_at,expires_at,observed_generation) SELECT ${input.workerId},${values[0]},${values[1]},${values[2]},${values[3]},${values[4]},${values[5]},${values[6]},${values[7]},${values[8]},${values[9]},${values[10]},${generation} FROM worker_cache_status WHERE worker_id=${input.workerId} AND generation=${generation} ON CONFLICT (worker_id,entry_id) DO UPDATE SET github_repository_id=excluded.github_repository_id,cache_key_preview=excluded.cache_key_preview,cache_key_hash=excluded.cache_key_hash,scope_preview=excluded.scope_preview,scope_hash=excluded.scope_hash,version_hash=excluded.version_hash,size_bytes=excluded.size_bytes,created_at=excluded.created_at,last_accessed_at=excluded.last_accessed_at,expires_at=excluded.expires_at,observed_generation=excluded.observed_generation WHERE worker_cache_entries.observed_generation=${generation} AND worker_cache_entries.observed_generation=(SELECT generation FROM worker_cache_status WHERE worker_id=${input.workerId})`;
     await refreshWorkerCacheSummary(db, input.workerId, generation);
     return true;
@@ -94,7 +97,7 @@ export async function applyWorkerCacheTelemetry(db: SqlDb, input: TelemetryEvent
     const snapshotId = payload.snapshotId;
     const sequence = payload.sequence;
     const [active] = await db<{ activeSnapshotId?: unknown }[]>`SELECT active_snapshot_id AS "activeSnapshotId" FROM worker_cache_status WHERE worker_id=${input.workerId}`;
-    if (active?.activeSnapshotId !== snapshotId) return false;
+    if (active?.activeSnapshotId !== snapshotId) return true;
     for (const entry of payload.entries as CacheEntry[]) {
       const values = entryValues(entry);
       await db`INSERT INTO worker_cache_snapshot_entries (worker_id,snapshot_id,sequence,entry_id,github_repository_id,cache_key_preview,cache_key_hash,scope_preview,scope_hash,version_hash,size_bytes,created_at,last_accessed_at,expires_at,observed_generation,staged_at) VALUES (${input.workerId},${snapshotId},${sequence},${values[0]},${values[1]},${values[2]},${values[3]},${values[4]},${values[5]},${values[6]},${values[7]},${values[8]},${values[9]},${values[10]},(SELECT generation FROM worker_cache_status WHERE worker_id=${input.workerId}),now()) ON CONFLICT DO NOTHING`;
@@ -111,14 +114,14 @@ export async function applyWorkerCacheTelemetry(db: SqlDb, input: TelemetryEvent
     return await db.begin(async (tx) => {
       const [active] = await tx<{ activeSnapshotId?: unknown; lastCompletedSnapshotId?: unknown }[]>`SELECT active_snapshot_id AS "activeSnapshotId",last_completed_snapshot_id AS "lastCompletedSnapshotId" FROM worker_cache_status WHERE worker_id=${input.workerId} FOR UPDATE`;
       if (active?.lastCompletedSnapshotId === snapshotId && active.activeSnapshotId == null) return true;
-      if (active?.activeSnapshotId !== snapshotId) return false;
+      if (active?.activeSnapshotId !== snapshotId) return true;
       const pages = await tx`SELECT count(DISTINCT sequence)::int AS count FROM worker_cache_snapshot_entries WHERE worker_id=${input.workerId} AND snapshot_id=${snapshotId}`;
-      const count = Number(pages[0]?.count ?? 0);
       const rows = await tx`SELECT count(*)::int AS count FROM worker_cache_snapshot_entries WHERE worker_id=${input.workerId} AND snapshot_id=${snapshotId}`;
+      const count = Number(pages[0]?.count ?? 0);
       if (count !== pageCount || Number(rows[0]?.count ?? 0) !== entryCount) {
         await tx`DELETE FROM worker_cache_snapshot_entries WHERE worker_id=${input.workerId} AND snapshot_id=${snapshotId}`;
         await tx`UPDATE worker_cache_status SET active_snapshot_id=NULL,active_snapshot_started_at=NULL WHERE worker_id=${input.workerId} AND active_snapshot_id=${snapshotId}`;
-        return false;
+        return true;
       }
       await tx`DELETE FROM worker_cache_entries WHERE worker_id=${input.workerId}`;
       await tx`INSERT INTO worker_cache_entries (worker_id,entry_id,github_repository_id,cache_key_preview,cache_key_hash,scope_preview,scope_hash,version_hash,size_bytes,created_at,last_accessed_at,expires_at,observed_generation) SELECT worker_id,entry_id,github_repository_id,cache_key_preview,cache_key_hash,scope_preview,scope_hash,version_hash,size_bytes,created_at,last_accessed_at,expires_at,observed_generation FROM worker_cache_snapshot_entries WHERE worker_id=${input.workerId} AND snapshot_id=${snapshotId}`;

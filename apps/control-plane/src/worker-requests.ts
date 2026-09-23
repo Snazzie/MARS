@@ -163,7 +163,7 @@ export async function purgeWorkerRunnerCache(
   return response.result;
 }
 
-export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event: { workerId: string; payload: unknown }): Promise<boolean> {
+export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event: { workerId: string; payload: unknown }): Promise<boolean | "stale"> {
   const input = event.payload as Record<string, unknown>;
   const observed = WorkerObservedConfiguration.safeParse(input?.observed);
   const commandId = typeof input?.commandId === "string" ? input.commandId : "";
@@ -174,6 +174,10 @@ export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event
     try { desiredInput = JSON.parse(desiredInput); } catch { desiredInput = null; }
   }
   const desired = WorkerConfiguration.safeParse(desiredInput);
+  if (worker && (worker.configurationCommandId !== commandId || worker.configurationRevision !== revision)) {
+    const [previous] = await db<{ id: string }[]>`select id from commands where id=${commandId} and worker_id=${event.workerId} and type='worker.configure'`;
+    return previous ? "stale" : false;
+  }
   const exact = observed.success && desired.success && worker?.configurationCommandId === commandId && worker.configurationRevision === revision && canonical(observed.data) === canonical(desired.data);
   if (!exact) {
     if (worker?.configurationCommandId === commandId && worker.configurationRevision === revision) await db`update workers set configuration_state='error' where id=${event.workerId} and configuration_command_id=${commandId} and configuration_revision=${revision}`;

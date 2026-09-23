@@ -60,12 +60,15 @@ export function isExpectedWindowsEntrypoint(value: unknown): boolean {
 async function defaultDocker(args: string[]): Promise<DockerResult> { const process = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe" }); return { code: await process.exited, stdout: await new Response(process.stdout).text(), stderr: await new Response(process.stderr).text() }; }
 function checked(result: DockerResult, operation: string): string { if (result.code !== 0) throw new Error(`${operation} failed: ${result.stderr.replaceAll(/\r?\n/g, " ").slice(0, 500)}`); return result.stdout.trim(); }
 function parseMemoryBytes(value: string): number { const match = value.replaceAll(",", "").match(/([\d.]+)\s*([KMG]?i?B)/i); if (!match) return 0; const units: Record<string, number> = { b: 1, kb: 1024, kib: 1024, mb: 1024 ** 2, mib: 1024 ** 2, gb: 1024 ** 3, gib: 1024 ** 3 }; return Math.round(Number(match[1]) * (units[match[2]!.toLowerCase()] ?? 1)); }
+const transientDockerUnavailable = /the system cannot find the file specified|no such file or directory|connection refused|actively refused|is the docker daemon running|cannot connect to (the )?docker (daemon|engine)|cannot connect to docker_engine/i;
 async function waitForDockerEngine(docker: DockerRunner): Promise<string> {
   let delayMs = 1_000;
   for (;;) {
     const result = await docker(["info", "--format", "{{.OSType}}"]);
     if (result.code === 0) return result.stdout.trim();
-    console.warn(`Docker engine unavailable; retrying in ${delayMs}ms: ${result.stderr.replaceAll(/\r?\n/g, " ").slice(0, 500)}`);
+    const lastError = result.stderr.replaceAll(/\r?\n/g, " ").slice(0, 500);
+    if (/permission denied|access is denied/i.test(lastError) || !transientDockerUnavailable.test(lastError)) checked(result, "docker info");
+    console.warn(`Docker engine unavailable; retrying in ${delayMs}ms: ${lastError}`);
     await Bun.sleep(delayMs);
     delayMs = Math.min(delayMs * 2, 30_000);
   }
@@ -267,6 +270,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
     return { rows, disappeared };
   }
   async reconcileOrphans(): Promise<void> {
+    if (await waitForDockerEngine(this.docker) !== "windows") throw new Error("Windows Docker engine is required");
     const candidates = await this.enumerateOwnedContainers();
     const errors: Error[] = [];
     await Promise.all(candidates.map(async (inspection) => {
