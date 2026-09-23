@@ -182,6 +182,9 @@ export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event
   return db.begin(async tx => {
     const updated = await tx`update workers set configuration_state='ready',applied_configuration_revision=configuration_revision,configuration_applied_at=now() where id=${event.workerId} and configuration_command_id=${commandId} and configuration_revision=${revision} returning id`;
     if (!updated[0]) return false;
+    if (!observed.data.cache.runnerCacheEnabled) {
+      await tx`update worker_cache_status set ready=false,runner_cache_enabled=false,runner_cache_observed_at=now() where worker_id=${event.workerId}`;
+    }
     await tx`insert into audit_events (actor,type,payload) values ('worker','worker.configuration_applied',${jsonParameter(tx, { workerId: event.workerId, commandId, revision })}::jsonb)`;
     return true;
   });

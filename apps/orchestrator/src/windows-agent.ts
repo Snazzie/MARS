@@ -416,7 +416,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
   if (!identity.workerId) identity = await enroll(controlPlane, identity);
   const pickupState = await openLeasePickupState(leasePickupStateFile());
   const activeLeases = new Map<string, Promise<void>>();
-  const eventTransport = new WorkerEventTransport();
+  const eventTransport = new WorkerEventTransport(() => cacheService.runnerCacheStatus().enabled);
   const publishInventory = () => { void writeLeasePickupState(leasePickupStateFile(), pickupState.acceptingLeases, activeLeases.size); };
   const sendDoctor = async (ws: WebSocket): Promise<void> => {
     publishInventory();
@@ -466,18 +466,26 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
             send: data => ws.send(data),
             close: () => ws.close(1011, "worker command failed"),
             sendDoctor: () => sendDoctor(ws),
-            execute: command => executeWindowsWorkerCommand(command, {
-              mode: mode === "container" ? "container" : "vm",
-              limits,
-              cache,
-              cacheService,
-              driver,
-              acceptingLeases: () => pickupState.acceptingLeases,
-              identity,
-              activeLeases,
-              send: workerEvent => eventTransport.send(workerEvent),
-              sendDoctor: () => { void sendDoctor(ws); },
-            }),
+            execute: async command => {
+              const cacheWasEnabled = cacheService.runnerCacheStatus().enabled;
+              await executeWindowsWorkerCommand(command, {
+                mode: mode === "container" ? "container" : "vm",
+                limits,
+                cache,
+                cacheService,
+                driver,
+                acceptingLeases: () => pickupState.acceptingLeases,
+                identity,
+                activeLeases,
+                send: workerEvent => eventTransport.send(workerEvent),
+                sendDoctor: () => { void sendDoctor(ws); },
+              });
+              if (command.type === "worker.configure" && !cacheWasEnabled && cacheService.runnerCacheStatus().enabled) {
+                await emitActionCacheSnapshot(cacheService, (type, payload) => {
+                  eventTransport.send(event(identity.workerId, type, payload));
+                });
+              }
+            },
           });
         } catch {
           ws.close(1011, "worker command failed");

@@ -45,11 +45,20 @@ export function waitForWorkerSocketClose(socket: WebSocket, connectionTimeoutMs 
 }
 const MAX_TRANSIENT_OUTBOX_BYTES = 64 * 1024 * 1024;
 const TRANSIENT_EVENT_TYPES = new Set(["job.log", "job.resource_sample"]);
+const isCacheEvent = (type: string): boolean => type.startsWith("worker.cache_") || type === "worker.runner_cache_status";
 export class WorkerEventTransport {
   private socket?: WebSocket;
-  private readonly pending = new Map<string, { encoded: string; transient: boolean }>();
+  private readonly pending = new Map<string, { encoded: string; transient: boolean; cacheEvent: boolean }>();
   private transientBytes = 0;
+  constructor(private readonly cacheEventsEnabled: () => boolean = () => true) {}
+  private discardDisabledCacheEvents(): void {
+    if (this.cacheEventsEnabled()) return;
+    for (const [id, pending] of this.pending) {
+      if (pending.cacheEvent) this.pending.delete(id);
+    }
+  }
   bind(socket: WebSocket): void {
+    this.discardDisabledCacheEvents();
     this.socket = socket;
     this.flush();
   }
@@ -63,6 +72,8 @@ export class WorkerEventTransport {
     this.pending.delete(eventId);
   }
   send(event: WorkerEvent): void {
+    this.discardDisabledCacheEvents();
+    if (isCacheEvent(event.type) && !this.cacheEventsEnabled()) return;
     const encoded = JSON.stringify(event);
     const transient = TRANSIENT_EVENT_TYPES.has(event.type);
     if (transient) {
@@ -76,7 +87,7 @@ export class WorkerEventTransport {
       if (bytes > MAX_TRANSIENT_OUTBOX_BYTES) return;
       this.transientBytes += bytes;
     }
-    this.pending.set(event.id, { encoded, transient });
+    this.pending.set(event.id, { encoded, transient, cacheEvent: isCacheEvent(event.type) });
     this.sendEncoded(encoded);
   }
   private flush(): void {

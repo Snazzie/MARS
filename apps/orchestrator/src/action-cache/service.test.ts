@@ -319,6 +319,22 @@ test("emits a complete cache snapshot envelope for an empty cache", async () => 
   expect(frames[1]?.payload).toMatchObject({ pageCount: 0, entryCount: 0, sizeBytes: "0" });
   expect(frames[2]?.payload).toMatchObject({ enabled: true, maxGiB: 20, entryCount: 0, sizeBytes: "0" });
 });
+test("disabled cache emits no snapshot or mutation events", async () => {
+  const service = await startActionCacheService({ root: await root(), controlPlaneOrigin: "https://control.example.test", ttlSeconds: 3600, runnerCacheEnabled: false, proxyPort: 0, dataPort: 0, discoverAdvertiseHost: async () => "127.0.0.1" });
+  services.push(service);
+  const frames: string[] = [];
+  await emitActionCacheSnapshot(service, type => frames.push(type));
+  await service.applyTtl(60);
+  service.setRunnerCacheMaxGiB(12);
+  service.setRunnerCacheEnabled(true);
+  expect(frames).toEqual([]);
+  await emitActionCacheSnapshot(service, type => frames.push(type));
+  expect(frames).toEqual(["worker.cache_snapshot_begin", "worker.cache_snapshot_end", "worker.runner_cache_status"]);
+  service.setRunnerCacheEnabled(false);
+  await emitActionCacheSnapshot(service, type => frames.push(type));
+  await service.purgeRunnerCache();
+  expect(frames).toEqual(["worker.cache_snapshot_begin", "worker.cache_snapshot_end", "worker.runner_cache_status"]);
+});
 
 test("requires active per-lease credentials for proxy CONNECT", async () => {
   const service = await startActionCacheService({ root: await root(), controlPlaneOrigin: "https://control.example.test", ttlSeconds: 3600, proxyPort: 0, dataPort: 0, discoverAdvertiseHost: async () => "127.0.0.1" });
@@ -615,6 +631,7 @@ test("runtime cache toggle revokes the entire worker cache service and preserves
     path: tarballPath,
   });
   expect(miss.headers["x-mars-package-cache"]).toBe("MISS");
+  const eventsBeforeDisable = telemetry.length;
 
   service.setRunnerCacheEnabled(false);
   expect(service.status().ready).toBe(false);
@@ -629,7 +646,7 @@ test("runtime cache toggle revokes the entire worker cache service and preserves
     entryCount: actionsBeforePurge.entryCount,
     sizeBytes: actionsBeforePurge.sizeBytes,
   });
-  expect(telemetry.some((event) => event.type === "worker.runner_cache_status" && event.payload.enabled === false)).toBe(true);
+  expect(telemetry).toHaveLength(eventsBeforeDisable);
 
   service.setRunnerCacheEnabled(true);
   const replacement = service.transport("44444444-4444-4444-8444-444444444444", leaseExpiry());

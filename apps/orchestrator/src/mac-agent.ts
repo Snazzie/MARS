@@ -422,7 +422,7 @@ async function enrollMacWorker(controlPlane: URL, identity: MacWorkerIdentity): 
 
 async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, driver: TartVmDriver, limits: MacWorkerLimits, cache: WorkerCacheConfiguration, cacheService: ActionCacheService, pickupState: LeasePickupStateController): Promise<never> {
   const activeLeases = new Map<string, Promise<void>>();
-  const eventTransport = new WorkerEventTransport();
+  const eventTransport = new WorkerEventTransport(() => cacheService.runnerCacheStatus().enabled);
   for (;;) {
     let ws: WebSocket;
     try {
@@ -491,6 +491,7 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
         return;
       }
       try {
+        const cacheWasEnabled = cacheService.runnerCacheStatus().enabled;
         await executeMacWorkerCommand(command, {
           driver,
           limits,
@@ -505,6 +506,11 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           send: eventToSend => eventTransport.send(eventToSend),
           sendDoctor,
         });
+        if (command.type === "worker.configure" && !cacheWasEnabled && cacheService.runnerCacheStatus().enabled) {
+          await emitActionCacheSnapshot(cacheService, (type, payload) => {
+            eventTransport.send(workerEvent(identity.workerId, type, payload));
+          });
+        }
       } catch (error) {
         console.error("Mac worker command failed", {
           workerId: command.workerId,

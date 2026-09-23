@@ -58,6 +58,28 @@ test("retains worker events until the control plane acknowledges them", () => {
   transport.bind(third as unknown as WebSocket);
   expect(third.sent).toEqual([]);
 });
+test("drops unacknowledged cache frames while disabled without losing other events", () => {
+  let enabled = true;
+  const transport = new WorkerEventTransport(() => enabled);
+  const sent: string[] = [];
+  const socket = { readyState: WebSocket.OPEN, send(value: string) { sent.push(value); } } as WebSocket;
+  const workerId = crypto.randomUUID();
+  const make = (type: string) => ({ version: 1 as const, id: crypto.randomUUID(), workerId, type, occurredAt: new Date().toISOString(), payload: {} });
+  transport.bind(socket);
+  transport.send(make("worker.cache_snapshot_begin"));
+  transport.send(make("runner.finished"));
+  transport.unbind(socket);
+  enabled = false;
+  const reconnect = { readyState: WebSocket.OPEN, send(value: string) { sent.push(value); } } as WebSocket;
+  transport.bind(reconnect);
+  transport.send(make("worker.runner_cache_status"));
+  expect(sent.map(value => JSON.parse(value).type)).toEqual(["worker.cache_snapshot_begin", "runner.finished", "runner.finished"]);
+  enabled = true;
+  transport.unbind(reconnect);
+  const afterEnable: string[] = [];
+  transport.bind({ readyState: WebSocket.OPEN, send(value: string) { afterEnable.push(value); } } as WebSocket);
+  expect(afterEnable.map(value => JSON.parse(value).type)).toEqual(["runner.finished"]);
+});
 
 test("retries transient control-plane failures until the operation succeeds", async () => {
   let attempts = 0;

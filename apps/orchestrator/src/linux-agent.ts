@@ -192,7 +192,7 @@ async function connectLinuxWorker(
   cacheService: ActionCacheService,
 ): Promise<never> {
   const activeLeases = new Map<string, Promise<void>>();
-  const eventTransport = new WorkerEventTransport();
+  const eventTransport = new WorkerEventTransport(() => cacheService.runnerCacheStatus().enabled);
   let doctor = await linuxDoctor(driver, digest, channelRoot);
   for (;;) {
     const ws = new WebSocket(workerSocketUrl(baseUrl.toString(), identity.workerId));
@@ -222,6 +222,7 @@ async function connectLinuxWorker(
           return;
         }
         const command = WorkerCommand.parse(frame);
+        const cacheWasEnabled = cacheService.runnerCacheStatus().enabled;
         void executeLinuxWorkerCommand(command, resources, {
           driver,
           encryptionPrivateKey: identity.encryptionPrivateKey,
@@ -229,8 +230,13 @@ async function connectLinuxWorker(
           send: value => eventTransport.send(value),
           activeLeases,
           cacheService,
-        }).then(response => {
+        }).then(async response => {
           if (response) eventTransport.send(response);
+          if (command.type === "worker.configure" && !cacheWasEnabled && cacheService.runnerCacheStatus().enabled) {
+            await emitActionCacheSnapshot(cacheService, (type, payload) => {
+              eventTransport.send(workerEvent(identity.workerId, type, payload));
+            });
+          }
         }).catch((error: unknown) => {
           console.error("Linux worker command failed", {
             workerId: command.workerId,
@@ -295,7 +301,7 @@ export async function runDockerLinuxWorker(baseUrl: string, driver: RuntimeDrive
       await saveIdentity(enrolled);
     }
     const activeLeases = new Map<string, Promise<void>>();
-    const eventTransport = new WorkerEventTransport();
+    const eventTransport = new WorkerEventTransport(() => cacheService.runnerCacheStatus().enabled);
     const sendDoctor = async (ws: WebSocket): Promise<void> => {
       host = await driver.validateHost();
       const containers = await driver.listContainerStatuses().catch(() => []);
@@ -312,7 +318,9 @@ export async function runDockerLinuxWorker(baseUrl: string, driver: RuntimeDrive
           if (frame.type === "authenticated") {
             eventTransport.bind(ws);
             if (Bun.env.MARS_JOIN_CODE_FILE) await unlink(Bun.env.MARS_JOIN_CODE_FILE).catch(() => {});
-            await emitActionCacheSnapshot(cacheService, (type, payload) => { eventTransport.send(workerEvent(enrolled.workerId, type, payload)); });
+            await emitActionCacheSnapshot(cacheService, (type, payload) => {
+              eventTransport.send(workerEvent(enrolled.workerId, type, payload));
+            });
             return sendDoctor(ws);
           }
           if (frame.type === "ping") { ws.send(JSON.stringify({ version: 1, type: "pong", workerId: enrolled.workerId })); return sendDoctor(ws); }
@@ -322,7 +330,15 @@ export async function runDockerLinuxWorker(baseUrl: string, driver: RuntimeDrive
             return;
           }
           const command = WorkerCommand.parse(frame);
-          void executeLinuxWorkerCommand(command, resources, { driver, encryptionPrivateKey: enrolled.encryptionPrivateKey, runtimeReady: () => host.runtimeReady, send: value => eventTransport.send(value), activeLeases, cacheService }, "linux-container").then(response => { if (response) eventTransport.send(response); }).catch((error: unknown) => { console.error("Linux ARM worker command failed", { commandId: command.id, type: command.type, error: error instanceof Error ? error.message : String(error) }); });
+          const cacheWasEnabled = cacheService.runnerCacheStatus().enabled;
+          void executeLinuxWorkerCommand(command, resources, { driver, encryptionPrivateKey: enrolled.encryptionPrivateKey, runtimeReady: () => host.runtimeReady, send: value => eventTransport.send(value), activeLeases, cacheService }, "linux-container").then(async response => {
+            if (response) eventTransport.send(response);
+            if (command.type === "worker.configure" && !cacheWasEnabled && cacheService.runnerCacheStatus().enabled) {
+              await emitActionCacheSnapshot(cacheService, (type, payload) => {
+                eventTransport.send(workerEvent(enrolled.workerId, type, payload));
+              });
+            }
+          }).catch((error: unknown) => { console.error("Linux ARM worker command failed", { commandId: command.id, type: command.type, error: error instanceof Error ? error.message : String(error) }); });
         } catch {
           ws.close(1011, "worker command failed");
         }

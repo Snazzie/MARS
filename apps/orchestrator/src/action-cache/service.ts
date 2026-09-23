@@ -75,22 +75,32 @@ export interface ActionCacheService {
 }
 
 export async function emitActionCacheSnapshot(service: Pick<ActionCacheService, "status" | "runnerCacheStatus" | "snapshotPages" | "setTelemetrySink">, send: (type: string, payload: Record<string, unknown>) => void): Promise<void> {
+  if (!service.runnerCacheStatus().enabled) {
+    service.setTelemetrySink(null);
+    return;
+  }
   const snapshotId = randomUUID();
   const queued: Array<{ type: string; payload: Record<string, unknown> }> = [];
   service.setTelemetrySink((type, payload) => queued.push({ type, payload }));
   const status = service.status();
+  if (!service.runnerCacheStatus().enabled) return;
   send("worker.cache_snapshot_begin", { snapshotId, status });
   let pageCount = 0;
   let entryCount = 0;
   for await (const entries of service.snapshotPages(100)) {
+    if (!service.runnerCacheStatus().enabled) return;
     send("worker.cache_snapshot_page", { snapshotId, sequence: pageCount, entries });
     pageCount += 1;
     entryCount += entries.length;
   }
+  if (!service.runnerCacheStatus().enabled) return;
   send("worker.cache_snapshot_end", { snapshotId, pageCount, entryCount, sizeBytes: status.sizeBytes });
   send("worker.runner_cache_status", service.runnerCacheStatus());
   service.setTelemetrySink(send);
-  for (const event of queued) send(event.type, event.payload);
+  for (const event of queued) {
+    if (!service.runnerCacheStatus().enabled) break;
+    send(event.type, event.payload);
+  }
 }
 const ACTION_CACHE_HOSTS = [
   "results-receiver.actions.githubusercontent.com",
@@ -599,7 +609,7 @@ class PersistentActionCacheService implements ActionCacheService {
     };
   }
   #emitRunnerCacheStatus(type: "worker.runner_cache_status" = "worker.runner_cache_status", _payload?: Record<string, unknown>): void {
-    this.#telemetrySink?.(type, this.runnerCacheStatus());
+    if (this.#runnerCacheEnabled) this.#telemetrySink?.(type, this.runnerCacheStatus());
   }
 
   async applyTtl(ttlSeconds: number): Promise<void> {
@@ -653,7 +663,9 @@ class PersistentActionCacheService implements ActionCacheService {
   }
   setTelemetrySink(sink: ActionCacheTelemetrySink | null): void {
     this.#telemetrySink = sink;
-    this.#store.setTelemetrySink(sink);
+    this.#store.setTelemetrySink(sink ? (type, payload) => {
+      if (this.#runnerCacheEnabled) sink(type, payload);
+    } : null);
   }
 
   async close(): Promise<void> {
