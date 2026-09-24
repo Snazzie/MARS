@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "bun run scripts/dev.ts",
     "dev:windows-worker": "bun run scripts/dev-windows-worker.ts",
+    "dev:mac-worker": "bun run scripts/dev-mac-worker.ts",
     "typecheck": "bun run --filter '*' typecheck",
     "lint": "bun run --filter '*' lint",
     "test": "bun test",

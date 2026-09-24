@@ -103,6 +103,16 @@ bun run dev:windows-worker
 
 The command verifies or builds the local Windows job image and runs the orchestrator in the foreground. It does not install, stop, or modify the `MarsWorker` service; it refuses to start while that service is running. Its separate worker identity and image manifest live in `%LOCALAPPDATA%\Mars\dev-worker`. On first join, approve and configure the pending worker in the control plane before it is schedulable. Press Ctrl-C to stop the foreground worker. The production installer remains the supported path for service workers.
 
+### Run a foreground macOS development worker
+
+On an Apple Silicon Mac with Bun, Tart, Xcode Command Line Tools, and prepared macOS and Linux Tart images from the macOS worker installer, set `MARS_DEV_TOKEN` to the token used by the development control plane at `https://mars.snazzie.space`. Drain the installed worker and wait for active jobs to finish before manually unloading its LaunchAgent with `launchctl bootout "gui/$(id -u)/com.mars.worker"`. This command refuses to run while the LaunchAgent is loaded and never changes it.
+
+```bash
+bun run dev:mac-worker
+```
+
+The command builds the menu-bar status item locally and runs the macOS orchestrator in the foreground. It reads the installed image manifests but does not modify the installed images or worker identity. Its own identity, UUID, lease state, and cache live under `~/Library/Application Support/Mars/dev-worker`; the first join uses the development token and requires approval and configuration in the control plane before scheduling. Press Ctrl-C to stop it. Restore the installed worker afterward with `launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.mars.worker.plist"`. The macOS installer remains the supported path for a persistent worker.
+
 ### Upgrade a local Windows worker from the current checkout
 
 Use this when the local control plane cannot issue a release-catalog upgrade target. It downloads artifacts from the running local control plane, verifies SHA-256 values, and invokes the existing identity-preserving installer upgrade. Do not run it while jobs are active.
