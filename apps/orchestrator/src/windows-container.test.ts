@@ -253,6 +253,31 @@ test("waits for a containerized job to exit without a worker deadline", async ()
   await driver.removeLease("11111111-1111-4111-8111-111111111111");
 });
 
+test("observes a crashed container even when docker wait never returns", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-windows-container-"));
+  roots.push(root);
+  const docker: DockerRunner = async args => {
+    if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
+    if (args[0] === "wait") return Promise.withResolvers<Awaited<ReturnType<DockerRunner>>>().promise;
+    if (args[0] === "inspect" && args[1] === "--format") return { code: 0, stdout: JSON.stringify({ Running: false, ExitCode: 137 }), stderr: "" };
+    if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 2_000_000_000, Memory: 8 * 1024 ** 3 } }]), stderr: "" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const driver = new WindowsContainerDriver({
+    image: "mars/windows-job:local", prefix: "mars", bootstrapRoot: root,
+    limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
+    readyTimeoutMs: 100, allowLocalImage: true,
+  }, docker);
+  const lease = await driver.createLease({
+    id: "11111111-1111-4111-8111-111111111111", jobId: "job",
+    contractVersion: "0.1.0", imageDigest: "mars/windows-job:local",
+    resources: { vcpu: 2, memoryBytes: 8 * 1024 ** 3, storageBytes: 10 * 1024 ** 3, concurrency: 1 },
+    nonce: "n".repeat(32), encodedJitConfig: "config",
+  });
+  expect(await lease.completion).toBe(137);
+  await driver.removeLease("11111111-1111-4111-8111-111111111111");
+}, 10_000);
+
 test("removes a container when startup fails after creation", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-windows-container-"));
   roots.push(root);

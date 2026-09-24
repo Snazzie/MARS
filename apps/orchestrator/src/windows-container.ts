@@ -213,11 +213,29 @@ export class WindowsContainerDriver implements RuntimeDriver {
     } catch (error) { await this.removeLease(lease.id).catch(() => undefined); throw error; }
   }
   private async wait(name: string): Promise<number> {
-    const result = await this.docker(["wait", name]);
-    if (result.code !== 0) throw new Error("container completion failed");
-    const code = Number(result.stdout.trim());
-    if (!Number.isInteger(code)) throw new Error("container exit code invalid");
-    return code;
+    const waiting = this.docker(["wait", name]).then(result => {
+      if (result.code !== 0) throw new Error("container completion failed");
+      const code = Number(result.stdout.trim());
+      if (!Number.isInteger(code)) throw new Error("container exit code invalid");
+      return code;
+    });
+    let settled = false;
+    void waiting.finally(() => { settled = true; }).catch(() => {});
+    while (!settled) {
+      await Promise.race([waiting.then(() => {}, () => {}), Bun.sleep(5_000)]);
+      if (settled) break;
+      const result = await this.docker(["inspect", "--format", "{{json .State}}", name]);
+      if (result.code !== 0) {
+        if (isDockerNotFound(result)) throw new Error("container disappeared before completion");
+        continue;
+      }
+      const state = JSON.parse(result.stdout) as { Running?: boolean; ExitCode?: number };
+      if (state.Running === false) {
+        if (!Number.isInteger(state.ExitCode)) throw new Error("container exit code invalid");
+        return state.ExitCode!;
+      }
+    }
+    return waiting;
   }
   private async inspectManagedContainers(ids: string[]): Promise<DockerInspection[]> {
     const batch = await this.docker(["inspect", "--size", ...ids]);
