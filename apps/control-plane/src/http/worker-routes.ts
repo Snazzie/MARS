@@ -1380,12 +1380,20 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     const asset = (await releaseManifestFor(c, "macos-arm64"))?.platforms["macos-arm64"]?.imagePreparationScript;
     return asset ? await proxyPackagedResponse(asset.url, "prepare-tart-job-image.sh", asset.sha256, "binary", c.req.raw.signal, proxyPolicy, artifactAdmission, artifactCache) ?? unavailable(c, ["tart-image-preparation"]) : unavailable(c, ["manifest:macos-arm64.imagePreparationScript"]);
   });
+  app.get("/api/workers/dev-windows-image-build", async c => {
+    if (!deps.devWindowsImageBuild) return c.json({ error: "not found" }, 404);
+    const user = await auth(c);
+    if (!user) return c.json({ error: "unauthorized" }, 401);
+    if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403);
+    const payload = await deps.devWindowsImageBuild();
+    return payload ? c.json(payload, { headers: noStore() }) : c.json({ error: "Windows container build inputs unavailable" }, 503);
+  });
   app.post("/api/workers/join", async c => {
     const source = deps.requestSource(c.req.raw);
     if (!limiter.allow(source)) return c.json({ error: "invalid or rotated bootstrap credential" }, 429);
     try {
       const body = await c.req.json();
-      const result = await requestPendingWorker(deps.db, body);
+      const result = await (deps.workerJoin ?? requestPendingWorker)(deps.db, body);
       limiter.clear(source);
       return c.json(result, { status: result.status === "created" ? 201 : 200 });
     } catch (error) {
@@ -1394,9 +1402,9 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       throw error;
     }
   });
-  app.post("/api/workers/bootstrap/initialize", async (c) => { const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401); if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403); if (!idempotency(c)) return c.json({ error: "Idempotency-Key required" }, 400); try { const result = await initializeWorkerBootstrap(deps.db, user.id); return c.json(result, { status: 201, headers: noStore() }); } catch (error) { if (error instanceof Error && error.message === "already initialized") return c.json({ error: "bootstrap credential is already initialized" }, 409); throw error; } });
+  app.post("/api/workers/bootstrap/initialize", async (c) => { const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401); if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403); if (deps.disableWorkerBootstrapManagement) return c.json({ error: "development bootstrap code is fixed" }, 409); if (!idempotency(c)) return c.json({ error: "Idempotency-Key required" }, 400); try { const result = await initializeWorkerBootstrap(deps.db, user.id); return c.json(result, { status: 201, headers: noStore() }); } catch (error) { if (error instanceof Error && error.message === "already initialized") return c.json({ error: "bootstrap credential is already initialized" }, 409); throw error; } });
   app.get("/api/workers/bootstrap", async (c) => { const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401); if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403); return c.json(await getWorkerBootstrapStatus(deps.db), { headers: noStore() }); });
-  app.post("/api/workers/bootstrap/rotate", async (c) => { const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401); if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403); if (!idempotency(c)) return c.json({ error: "Idempotency-Key required" }, 400); try { const result = await rotateWorkerBootstrap(deps.db, user.id); return c.json(result, { status: 201, headers: noStore() }); } catch (error) { if (error instanceof Error && error.message === "bootstrap credential is not initialized") return c.json({ error: "bootstrap credential is not initialized" }, 409); throw error; } });
+  app.post("/api/workers/bootstrap/rotate", async (c) => { const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401); if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403); if (deps.disableWorkerBootstrapManagement) return c.json({ error: "development bootstrap code is fixed" }, 409); if (!idempotency(c)) return c.json({ error: "Idempotency-Key required" }, 400); try { const result = await rotateWorkerBootstrap(deps.db, user.id); return c.json(result, { status: 201, headers: noStore() }); } catch (error) { if (error instanceof Error && error.message === "bootstrap credential is not initialized") return c.json({ error: "bootstrap credential is not initialized" }, 409); throw error; } });
   app.post("/api/workers/pending/:workerId/approve", async (c) => { const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401); if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403); if (!idempotency(c)) return c.json({ error: "Idempotency-Key required" }, 400); const body = await approvalBody(c); if (!body) return c.json({ error: "invalid approval request" }, 400); await approvePendingWorker(deps.db, c.req.param("workerId"), body, user.id); await deps.onWorkerChanged(c.req.param("workerId")); return c.json({ ok: true }); });
   app.post("/api/workers/pending/:workerId/configure", async (c) => {
     const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401);

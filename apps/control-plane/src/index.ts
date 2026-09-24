@@ -1,5 +1,5 @@
 import { completeOnboardingIfReady, createDb, ensureDatabase, migrateDatabase, jsonParameter, type DashboardDb } from "@mars/db";
-import { CURRENT_WORKER_CONTRACT_VERSION, WorkerReleaseOciDigest, sanitizeDiagnosticText, type WorkerCommand, type WorkerReleaseManifest } from "@mars/contracts";
+import { CURRENT_WORKER_CONTRACT_VERSION, WorkerReleaseOciDigest, sanitizeDiagnosticText, type WorkerBuildImagePayload, type WorkerCommand, type WorkerReleaseManifest } from "@mars/contracts";
 import type { Server } from "bun";
 import { getSession, SecretBox, type SessionUser } from "./auth.ts";
 import { configureRunLifecycle } from "./runs.ts";
@@ -343,6 +343,9 @@ export type ControlPlaneStartOptions = {
   controlPlaneLogs?: ControlPlaneLogSource;
   webRoot?: URL;
   workerInstallerRoot?: URL;
+  workerJoin?: ControlPlaneHttpDeps["workerJoin"];
+  devWindowsImageBuild?: (build: ControlPlaneHttpDeps["windowsContainerBuild"], publicOrigin: string | null) => Promise<WorkerBuildImagePayload | null>;
+  disableWorkerBootstrapManagement?: boolean;
 };
 
 type DatabaseBootstrapDependencies = {
@@ -445,7 +448,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const windowsContainerBuild = !production
     ? createDevelopmentWindowsContainerBuild({
       publicOrigin: initialized.setup.publicOrigin() ?? configuredPublicOrigin ?? null,
-      artifacts: developmentWindowsArtifacts && { container: developmentWindowsArtifacts.container },
+      artifacts: developmentWindowsArtifacts,
       buildArtifacts: windowsContainerArtifacts,
     })
     : undefined;
@@ -486,7 +489,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const dispatchHealth = new DispatchHealthMonitor(reconciliationIntervalMs);
   const githubApp = options.githubApp ?? new GitHubAppService({ db, secretBox, publicOrigin: initialized.setup.publicOrigin, webhookOrigin: () => configuredWebhookOrigin });
   const githubRateLimits = new GithubRateLimitGate();
-  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, developmentWindowsArtifacts, developmentLinuxArtifacts, developmentLinuxArm64Artifacts, developmentMacosArtifacts, windowsContainerBuild, windowsContainerArtifacts, workerInstallerRoot, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerChanged: () => ensureDefaultPools(db, env.DEFAULT_IMAGES), health: () => ({ buildId: controlPlaneBuildId(), startedAt, discovery: discoveryHealth.snapshot() }), dispatchHealth: organizationIds => dispatchHealth.snapshot(organizationIds), controlPlaneLogs: options.controlPlaneLogs });
+  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, developmentWindowsArtifacts, developmentLinuxArtifacts, developmentLinuxArm64Artifacts, developmentMacosArtifacts, windowsContainerBuild, windowsContainerArtifacts, workerInstallerRoot, workerJoin: options.workerJoin, devWindowsImageBuild: options.devWindowsImageBuild ? () => options.devWindowsImageBuild!(windowsContainerBuild, initialized.setup.publicOrigin() ?? configuredPublicOrigin ?? null) : undefined, disableWorkerBootstrapManagement: options.disableWorkerBootstrapManagement, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerChanged: () => ensureDefaultPools(db, env.DEFAULT_IMAGES), health: () => ({ buildId: controlPlaneBuildId(), startedAt, discovery: discoveryHealth.snapshot() }), dispatchHealth: organizationIds => dispatchHealth.snapshot(organizationIds), controlPlaneLogs: options.controlPlaneLogs });
   let triggerReconciliation = () => Promise.resolve();
   const gateway = createControlPlaneGateway({ db, httpFetch: async request => await httpApp.fetch(request), current, requestSource: (request, activeServer) => { requestSources.set(request, activeServer.requestIP(request)?.address ?? "unknown"); return requestSources.get(request) ?? "unknown"; }, dispatcher, refreshDefaultPools: () => ensureDefaultPools(db, env.DEFAULT_IMAGES), triggerReconciliation: () => triggerReconciliation(), requestId: () => crypto.randomUUID() });
   let server!: Server<ControlPlaneSocketData>;

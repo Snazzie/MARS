@@ -78,6 +78,33 @@ test("rejects consumed-code replay with a different key or machine identity", as
   await expect(requestPendingWorker(db, input)).rejects.toMatchObject({ code: "identity_conflict", status: 409 });
 });
 
+test("reusable development code enrolls distinct identities without touching bootstrap credentials", async () => {
+  const code = "A".repeat(43);
+  const codeHash = createHash("sha256").update(Buffer.from(code, "base64url")).digest();
+  const workers: Array<{ id: string; vmUuid: string; machineUuid: string; fingerprint: string; encryptionPublicKey: string }> = [];
+  const queries: string[] = [];
+  const tx = Object.assign((strings: TemplateStringsArray, ...values: unknown[]) => {
+    const sql = strings.join(" ");
+    queries.push(sql);
+    if (sql.includes("from workers")) return workers.filter(row => [row.vmUuid, row.machineUuid, row.fingerprint].some(value => values.includes(value))).map(row => ({ ...row, admissionState: "pending", enrollmentAuthenticatedAt: null }));
+    if (sql.includes("insert into workers")) {
+      const id = `00000000-0000-4000-8000-${String(workers.length + 1).padStart(12, "0")}`;
+      workers.push({ id, vmUuid: String(values[9]), machineUuid: String(values[10]), fingerprint: String(values[8]), encryptionPublicKey: String(values[7]) });
+      return [{ id }];
+    }
+    return [];
+  }, { json: (value: unknown) => value });
+  const db = Object.assign(((strings: TemplateStringsArray) => []) as unknown as Sql<{}>, { begin: async (fn: (transaction: unknown) => unknown) => fn(tx) });
+  const input = { code, computerName: "host", platform: "linux-x64" as const, releaseVersion: "0.1.0", contractVersion: "0.1.0", publicKey: "key-one", encryptionPublicKey: "enc-one", vmUuid: "00000000-0000-4000-8000-000000000011", machineUuid: "00000000-0000-4000-8000-000000000012", doctor: { probe: true }, capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 } };
+  const credential = { codeHash, reusable: true as const };
+  expect((await requestPendingWorker(db, input, undefined, undefined, credential)).status).toBe("created");
+  expect((await requestPendingWorker(db, { ...input, vmUuid: "00000000-0000-4000-8000-000000000021", machineUuid: "00000000-0000-4000-8000-000000000022", publicKey: "key-two", encryptionPublicKey: "enc-two" }, undefined, undefined, credential)).status).toBe("created");
+  await expect(requestPendingWorker(db, { ...input, code: "B".repeat(43) }, undefined, undefined, credential)).rejects.toMatchObject({ status: 401 });
+  await expect(requestPendingWorker(db, { ...input, machineUuid: "00000000-0000-4000-8000-000000000022" }, undefined, undefined, credential)).rejects.toMatchObject({ status: 409 });
+  expect(workers).toHaveLength(2);
+  expect(queries.some(query => query.includes("worker_bootstrap_credentials"))).toBe(false);
+});
+
 test("replays completed configuration idempotency response without mutating", async () => {
   const result = { revision: "r", fingerprint: "f", commandId: "c" };
   const queries: string[] = [];

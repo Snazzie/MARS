@@ -263,6 +263,24 @@ test("persists attributed and unattributed log chunks idempotently and rejects u
   expect(await handleAuthenticatedWorkerEvent(unknownDb, { handleEvent() { return false; } }, attributed, { send() {} })).toBe(false);
 });
 
+test("acknowledges delayed logs for a terminal lease without persisting them", async () => {
+  const jobId = "44444444-4444-4444-8444-444444444444";
+  const queries: string[] = [];
+  const db = Object.assign(async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ");
+    queries.push(query);
+    return query.includes("l.state IN ('reaped','failed')") ? [{ "?column?": 1 }] : [];
+  }, {}) as never;
+  const accepted = await handleAuthenticatedWorkerEvent(
+    db, { handleEvent() { return false; } },
+    event("job.log", { jobId, stepId: null, sequence: 0, content: "late", occurredAt: new Date().toISOString() }),
+    { send() {} },
+  );
+  expect(accepted).toBe(true);
+  expect(queries).toHaveLength(2);
+  expect(queries.every(query => !query.includes("INSERT"))).toBe(true);
+});
+
 test("persists authenticated diagnostic chunks under the configured root", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-diagnostics-"));
   const previous = Bun.env.MARS_DIAGNOSTICS_ROOT;

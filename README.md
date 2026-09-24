@@ -91,6 +91,18 @@ docker compose up -d postgres
 
 Local development ports and service behavior are defined in `scripts/dev.ts` and `scripts/dev-ports.ts`.
 
+### Run a development Windows container worker without installing a service
+
+On a Windows host with Docker Desktop in **Windows container mode** and Hyper-V available, set the same `MARS_DEV_TOKEN` used by the development control plane at `https://mars.snazzie.space`. That deployment must run `scripts/control-plane-dev-entry.ts` with the dev enrollment and image-payload adapters; a production deployment or mismatched token cannot enroll this worker.
+
+In a separate terminal from `bun run dev`, run from this checkout:
+
+```powershell
+bun run dev:windows-worker
+```
+
+The command verifies or builds the local Windows job image and runs the orchestrator in the foreground. It does not install, stop, or modify the `MarsWorker` service; it refuses to start while that service is running. Its separate worker identity and image manifest live in `%LOCALAPPDATA%\Mars\dev-worker`. On first join, approve and configure the pending worker in the control plane before it is schedulable. Press Ctrl-C to stop the foreground worker. The production installer remains the supported path for service workers.
+
 ### Upgrade a local Windows worker from the current checkout
 
 Use this when the local control plane cannot issue a release-catalog upgrade target. It downloads artifacts from the running local control plane, verifies SHA-256 values, and invokes the existing identity-preserving installer upgrade. Do not run it while jobs are active.

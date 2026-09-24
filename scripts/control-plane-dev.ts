@@ -1,6 +1,6 @@
 import { watch, type FSWatcher } from "node:fs";
 
-const childCommand = ["bun", "--watch", "run", "apps/control-plane/src/index.ts"];
+const childCommand = ["bun", "--watch", "run", "scripts/control-plane-dev-entry.ts"];
 let child: Bun.Subprocess | null = null;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let restarting = false;
