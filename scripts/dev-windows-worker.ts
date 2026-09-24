@@ -44,7 +44,9 @@ async function main(): Promise<void> {
   }
 
   const response = await fetch(`${controlPlane}/api/workers/dev-windows-image-build`, { headers: { authorization: `Bearer ${token}` } });
-  if (!response.ok) throw new Error(`Development image payload unavailable (HTTP ${response.status}); deploy the dev control-plane adapter with matching MARS_DEV_TOKEN`);
+  if (!response.ok) throw new Error(response.status === 503
+    ? "Development image payload unavailable (HTTP 503): control plane is missing Windows container build inputs"
+    : `Development image payload unavailable (HTTP ${response.status}); verify the dev control-plane adapter and matching MARS_DEV_TOKEN`);
   const payload = WorkerBuildImagePayload.parse(await response.json());
   if (payload.image !== image || createHash("sha256").update(workerBuildImageContentDescriptor(payload)).digest("hex") !== payload.contentSha256) throw new Error("Development image payload identity or content digest mismatch");
   for (const artifact of [...Object.values(payload.artifacts), payload.runner, payload.git, payload.vcRuntime]) {
@@ -74,6 +76,8 @@ async function main(): Promise<void> {
       MARS_WORKER_VERSION: "0.0.0",
       MARS_WORKER_CONTRACT_VERSION: CURRENT_WORKER_CONTRACT_VERSION,
       MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST: manifestPath,
+      MARS_ACTION_CACHE_ROOT: join(root, "action-cache"),
+      MARS_LEASE_PICKUP_STATE_FILE: join(root, "lease-pickup.json"),
       MARS_WORKER_IDENTITY_FILE: identityPath,
       MARS_MACHINE_UUID: machineUuid,
       ...(credentialPath ? { MARS_JOIN_CODE_FILE: credentialPath } : { MARS_JOIN_CODE_FILE: "" }),

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Sql } from "../packages/db/src/index.ts";
 import { requestPendingWorker, type WorkerRequestResult } from "../apps/control-plane/src/worker-requests.ts";
 import { WorkerBootstrapRequest } from "../packages/contracts/src/index.ts";
@@ -19,5 +19,5 @@ export async function devWindowsImageBuild(build: Parameters<NonNullable<Control
   if (!build || !publicOrigin) return null;
   const paths = [build.builderPath, build.verifierPath, build.containerfilePath, build.entrypointPath, build.jobAgentPath];
   if (!(await Promise.all(paths.map(path => Bun.file(path).exists()))).every(Boolean)) return null;
-  return createWorkerImageBuildPayload({ baseUrl: publicOrigin, buildId: "dev-windows-worker", image: "mars/windows-job:local", build });
+  return createWorkerImageBuildPayload({ baseUrl: publicOrigin, buildId: randomUUID(), image: "mars/windows-job:local", build });
 }

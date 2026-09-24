@@ -448,7 +448,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const windowsContainerBuild = !production
     ? createDevelopmentWindowsContainerBuild({
       publicOrigin: initialized.setup.publicOrigin() ?? configuredPublicOrigin ?? null,
-      artifacts: developmentWindowsArtifacts && { container: developmentWindowsArtifacts.container },
+      artifacts: developmentWindowsArtifacts,
       buildArtifacts: windowsContainerArtifacts,
     })
     : undefined;

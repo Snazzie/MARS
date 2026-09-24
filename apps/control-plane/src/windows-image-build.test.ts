@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { expect, test } from "bun:test";
 import { createWorkerImageBuildPayload } from "./windows-image-build.ts";
 import { createDevelopmentWindowsContainerBuild } from "./index.ts";
+import { devWindowsImageBuild } from "../../../scripts/dev-worker-join.ts";
+import { workerBuildImageContentDescriptor } from "@mars/contracts";
 
 test("binds the worker build command to the authoritative artifact bytes", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-image-payload-"));
@@ -76,12 +78,9 @@ test("parses a local development image build with proxied dependencies and prese
       jobAgentPath: join(root, "agent.exe"),
     });
     expect(build).toBeDefined();
-    const payload = await createWorkerImageBuildPayload({
-      baseUrl: "https://control.test",
-      buildId: randomUUID(),
-      image: "mars/windows-job:local",
-      build: build!,
-    });
+    const payload = await devWindowsImageBuild(build, "https://control.test");
+    if (!payload) throw new Error("development image build inputs unexpectedly unavailable");
+    expect(payload.contentSha256).toBe(createHash("sha256").update(workerBuildImageContentDescriptor(payload)).digest("hex"));
     expect(payload.runner).toEqual({ url: "https://control.test/api/workers/windows-runner", sha256: hash });
     expect(payload.git).toEqual({ url: "https://control.test/api/workers/windows-git", sha256: hash });
     expect(payload.vcRuntime).toEqual({ url: "https://control.test/api/workers/windows-vc-runtime", sha256: hash });
