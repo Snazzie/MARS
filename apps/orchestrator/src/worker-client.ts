@@ -14,30 +14,36 @@ export function workerSocketUrl(baseUrl: string, workerId: string): string { con
 export function authenticateWorker(challenge: string, identity: WorkerIdentity): Record<string, string> { const canonical = `${challenge}\n${identity.workerId}\n${identity.encryptionPublicKey}`; return { type: "authenticate", workerId: identity.workerId, encryptionPublicKey: identity.encryptionPublicKey, signature: signMessage(null, Buffer.from(canonical), identity.privateKey).toString("base64url") }; }
 type ConnectionTimeoutHandle = ReturnType<typeof setTimeout>;
 type ScheduleConnectionTimeout = (callback: () => void, delayMs: number) => ConnectionTimeoutHandle;
-export function waitForWorkerSocketClose(socket: WebSocket, connectionTimeoutMs = 30_000, scheduleTimeout: ScheduleConnectionTimeout = setTimeout, cancelTimeout: (handle: ConnectionTimeoutHandle | undefined) => void = clearTimeout): Promise<void> {
+export function waitForWorkerSocketClose(socket: WebSocket, connectionTimeoutMs = 30_000, scheduleTimeout: ScheduleConnectionTimeout = setTimeout, cancelTimeout: (handle: ConnectionTimeoutHandle | undefined) => void = clearTimeout, heartbeatTimeoutMs = 60_000): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
   let settled = false;
   let timeout: ConnectionTimeoutHandle | undefined;
-  const connected = () => {
+  const expire = (reason: string) => {
+    try { socket.close(1000, reason); } finally { finish(); }
+  };
+  const armHeartbeat = () => {
     cancelTimeout(timeout);
-    timeout = undefined;
+    timeout = scheduleTimeout(() => expire("worker heartbeat timeout"), heartbeatTimeoutMs);
+  };
+  const connected = () => {
+    if (settled) return;
+    armHeartbeat();
   };
   const finish = () => {
     if (settled) return;
     settled = true;
-    connected();
+    cancelTimeout(timeout);
+    timeout = undefined;
     socket.removeEventListener("open", connected);
+    socket.removeEventListener("message", armHeartbeat);
     socket.removeEventListener("close", finish);
     socket.removeEventListener("error", fail);
     resolve();
   };
-  const fail = () => {
-    try { socket.close(); } finally { finish(); }
-  };
-  timeout = scheduleTimeout(() => {
-    try { socket.close(1000, "worker connection timeout"); } finally { finish(); }
-  }, connectionTimeoutMs);
+  const fail = () => expire("worker socket error");
+  timeout = scheduleTimeout(() => expire("worker connection timeout"), connectionTimeoutMs);
   socket.addEventListener("open", connected);
+  socket.addEventListener("message", armHeartbeat);
   socket.addEventListener("close", finish);
   socket.addEventListener("error", fail);
   if (socket.readyState === WebSocket.OPEN) connected();

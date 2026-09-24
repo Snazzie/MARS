@@ -35,6 +35,36 @@ test("keeps an opened worker websocket alive past its connection deadline", asyn
   socket.close();
   await closed;
 });
+test("reconnects an open worker socket after control-plane pings stop", async () => {
+  class SilentSocket extends EventTarget {
+    readyState: number = WebSocket.CONNECTING;
+    closeCalls = 0;
+    close(): void { this.closeCalls += 1; this.dispatchEvent(new Event("close")); }
+  }
+  const timers = new Map<number, () => void>();
+  const delays: number[] = [];
+  let nextId = 0;
+  const socket = new SilentSocket();
+  const closed = waitForWorkerSocketClose(
+    socket as unknown as WebSocket,
+    30_000,
+    (callback, delay) => { const id = ++nextId; delays.push(delay); timers.set(id, callback); return id as never; },
+    handle => { timers.delete(handle as unknown as number); },
+    60_000,
+  );
+  socket.readyState = WebSocket.OPEN;
+  socket.dispatchEvent(new Event("open"));
+  expect(delays).toEqual([30_000, 60_000]);
+  const firstDeadline = nextId;
+  socket.dispatchEvent(new MessageEvent("message", { data: '{"type":"ping"}' }));
+  expect(timers.has(firstDeadline)).toBe(false);
+  expect(delays).toEqual([30_000, 60_000, 60_000]);
+  timers.get(nextId)!();
+  await closed;
+  expect(socket.closeCalls).toBe(1);
+  expect(timers.size).toBe(0);
+});
+
 
 test("retains worker events until the control plane acknowledges them", () => {
   class RecordingSocket extends EventTarget {
