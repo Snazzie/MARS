@@ -210,8 +210,8 @@ test("macOS installer consumes verified routes and only configures LaunchAgent a
 });
 
 
-const macRuntimeTest = test.skip;
-macRuntimeTest("macOS fresh enrollment replaces stale state before LaunchAgent bootstrap", async () => {
+const macRuntimeTest = process.platform === "darwin" ? test : test.skip;
+macRuntimeTest("macOS install and upgrade refresh images without replacing identity", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-mac-installer-"));
   const fakeBin = join(root, "bin");
   const appDir = join(root, "Library/Application Support/Mars");
@@ -250,11 +250,12 @@ printf '{"preparedDigest":"mars-%s-job@sha256:%s"}\n' "$platform" '${"b".repeat(
   await writeFake("sudo", '[[ "$1" == "-n" ]] && shift; exec "$@"');
   await writeFake("tart", '[[ "$1" == "--version" ]] && exit 0; exit 0');
   await writeFake("launchctl", 'print -r -- "$*" >> "$MARS_LAUNCHCTL_LOG"; exit 0');
+  await writeFake("sips", 'out=""; while [[ $# -gt 0 ]]; do [[ "$1" == "--out" ]] && out="$2"; shift; done; print icon > "$out"');
   await writeFake("curl", `
 output=""
 url=""
 for ((i=1; i<=$#; i++)); do
-  [[ "\${@[$i]}" == "--output" ]] && output="\${@[$((i + 1))]}"
+  [[ "\${@[$i]}" == "--output" || "\${@[$i]}" == "-o" ]] && output="\${@[$((i + 1))]}"
   url="\${@[$i]}"
 done
 if [[ -n "$output" ]]; then
@@ -263,6 +264,7 @@ if [[ -n "$output" ]]; then
     *mars-macos-job-agent|*mars-linux-arm64-job-agent|*runner.tar.gz) cp "$MARS_JOB_AGENT_PAYLOAD" "$output" ;;
     *prepare-tart-job-image.sh) cp "$MARS_PREPARER_PAYLOAD" "$output" ;;
     *mars-status-item) cp "$MARS_ORCHESTRATOR_PAYLOAD" "$output" ;;
+    *.svg) print '<svg/>' > "$output" ;;
   esac
 fi
 `);
@@ -308,6 +310,23 @@ fi
     expect(await Bun.file(join(appDir, "worker-identity.json")).exists()).toBe(false);
     const events = (await readFile(launchctlLog, "utf8")).trim().split("\n");
     expect(events.findIndex(event => event.includes("bootout"))).toBeLessThan(events.findIndex(event => event.includes("bootstrap")));
+    const identity = '{"workerId":"preserved-worker"}\n';
+    const identityFile = join(appDir, "worker-identity.json");
+    await writeFile(identityFile, identity, { mode: 0o600 });
+    const upgrade = Bun.spawn(["zsh", "deploy/workers/install-worker-macos.sh", "--upgrade"], {
+      cwd: process.cwd(), env: { ...env, MARS_WORKER_VERSION: "1.1.0" }, stdout: "pipe", stderr: "pipe",
+    });
+    const [upgradeExitCode, upgradeStdout, upgradeStderr] = await Promise.all([
+      upgrade.exited, new Response(upgrade.stdout).text(), new Response(upgrade.stderr).text(),
+    ]);
+    expect(upgradeExitCode, `${upgradeStdout}\n${upgradeStderr}`).toBe(0);
+    expect(await readFile(identityFile, "utf8")).toBe(identity);
+    expect(await readFile(join(appDir, "join-code"), "utf8")).toBe(`${code}\n`);
+    const launcher = await readFile(join(appDir, "run-worker.sh"), "utf8");
+    expect(launcher).toContain("MARS_WORKER_VERSION=1.1.0");
+    expect(launcher).toContain("MARS_TART_MACOS_IMAGE_DIGEST=");
+    expect(launcher).toContain("MARS_TART_LINUX_ARM64_IMAGE_DIGEST=");
+    expect(launcher).toContain("export MARS_JOIN_CODE_FILE=''");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

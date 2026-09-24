@@ -67,6 +67,9 @@ curl --silent --show-error --fail --max-time 20 --location "${CURL_SECURITY[@]}"
 DOWNLOAD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mars-worker.XXXXXX")"
 APP_DIR="$HOME/Library/Application Support/Mars"; STATE_FILE="$APP_DIR/install-state.json"; LOG_FILE="$APP_DIR/install.log"
 ORCHESTRATOR_STAGE="$DOWNLOAD_DIR/mars-orchestrator"; MACOS_JOB_AGENT_STAGE="$DOWNLOAD_DIR/mars-macos-job-agent"; LINUX_JOB_AGENT_STAGE="$DOWNLOAD_DIR/mars-linux-arm64-job-agent"; LINUX_RUNNER_STAGE="$DOWNLOAD_DIR/runner.tar.gz"; PREPARER_STAGE="$DOWNLOAD_DIR/prepare-tart-job-image.sh"; STATUS_ITEM_STAGE="$DOWNLOAD_DIR/mars-status-item"; ICON_STAGE="$DOWNLOAD_DIR/mars-icon.png"
+if [[ "$UPGRADE" -eq 1 ]]; then
+  [[ -x "$APP_DIR/mars-orchestrator" && -s "$APP_DIR/worker-identity.json" ]] || { echo 'Upgrade requires an existing macOS worker identity.' >&2; exit 1; }
+fi
 cleanup() { local exit_code=$?; rm -rf "$DOWNLOAD_DIR"; unset JOIN_CODE; exit "$exit_code"; }
 trap cleanup EXIT INT TERM
 
@@ -78,22 +81,6 @@ download_verified() {
   local actual="$(shasum -a 256 "$destination" | cut -d ' ' -f 1)"; [[ "$actual" == "$expected" ]] || { echo "$name checksum mismatch: expected $expected, got $actual" >&2; return 1; }
   local response_hash=""; [[ -f "$headers" ]] && response_hash="$(awk 'BEGIN{IGNORECASE=1} tolower($1)=="x-content-sha256:" {gsub("\r","",$2); print $2; exit}' "$headers")"; [[ -z "$response_hash" || "$response_hash" == "$expected" ]] || { echo "$name response hash mismatch" >&2; return 1; }; rm -f "$headers"
 }
-if [[ "$UPGRADE" -eq 1 ]]; then
-  [[ -x "$HOME/Library/Application Support/Mars/mars-orchestrator" ]] || { echo 'Upgrade requires an existing macOS worker.' >&2; exit 1; }
-  UPGRADE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mars-worker-upgrade.XXXXXX")"
-  trap 'rm -rf "$UPGRADE_DIR"; exit $?' EXIT INT TERM
-  download_verified "$MARS_ORCHESTRATOR_URL" "$MARS_ORCHESTRATOR_SHA256" "$UPGRADE_DIR/mars-orchestrator" orchestrator
-  download_verified "$MARS_MACOS_JOB_AGENT_URL" "$MARS_MACOS_JOB_AGENT_SHA256" "$UPGRADE_DIR/mars-macos-job-agent" 'macOS job agent'
-  download_verified "$MARS_LINUX_ARM64_JOB_AGENT_URL" "$MARS_LINUX_ARM64_JOB_AGENT_SHA256" "$UPGRADE_DIR/mars-linux-arm64-job-agent" 'Linux ARM64 job agent'
-  chmod 755 "$UPGRADE_DIR/mars-orchestrator" "$UPGRADE_DIR/mars-macos-job-agent" "$UPGRADE_DIR/mars-linux-arm64-job-agent"
-  launchctl bootout "gui/$UID/com.mars.worker" >/dev/null 2>&1 || true
-  mv -f "$UPGRADE_DIR/mars-orchestrator" "$HOME/Library/Application Support/Mars/mars-orchestrator"
-  mv -f "$UPGRADE_DIR/mars-macos-job-agent" "$HOME/Library/Application Support/Mars/mars-macos-job-agent"
-  mv -f "$UPGRADE_DIR/mars-linux-arm64-job-agent" "$HOME/Library/Application Support/Mars/mars-linux-arm64-job-agent"
-  launchctl bootstrap "gui/$UID" "$HOME/Library/LaunchAgents/com.mars.worker.plist"
-  launchctl kickstart -k "gui/$UID/com.mars.worker"
-  exit 0
-fi
 download_verified "$MARS_ORCHESTRATOR_URL" "$MARS_ORCHESTRATOR_SHA256" "$ORCHESTRATOR_STAGE" orchestrator
 download_verified "$MARS_MACOS_JOB_AGENT_URL" "$MARS_MACOS_JOB_AGENT_SHA256" "$MACOS_JOB_AGENT_STAGE" 'macOS job agent'
 download_verified "$MARS_LINUX_ARM64_JOB_AGENT_URL" "$MARS_LINUX_ARM64_JOB_AGENT_SHA256" "$LINUX_JOB_AGENT_STAGE" 'Linux ARM64 job agent'
@@ -104,6 +91,16 @@ curl --silent --show-error --fail --location "${PUBLIC_BASE_URL%/}/mars-icon.svg
 sips -s format png "$DOWNLOAD_DIR/mars-icon.svg" --out "$ICON_STAGE" >/dev/null
 chmod +x "$ORCHESTRATOR_STAGE" "$MACOS_JOB_AGENT_STAGE" "$LINUX_JOB_AGENT_STAGE" "$PREPARER_STAGE" "$STATUS_ITEM_STAGE"
 CHECK=0
+write_state() {
+  local stage="$1" state_status="$2" updated_at state_tmp
+  updated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  mkdir -p "$APP_DIR"
+  state_tmp="$STATE_FILE.tmp.$$"
+  printf '{"stage":"%s","status":"%s","updatedAt":"%s"}\n' "$stage" "$state_status" "$updated_at" > "$state_tmp"
+  chmod 600 "$state_tmp"
+  mv -f "$state_tmp" "$STATE_FILE"
+  printf '[%s] %s %s\n' "$updated_at" "$stage" "$state_status" >> "$LOG_FILE"
+}
 check() { CHECK=$((CHECK + 1)); print "[$CHECK/8] $1"; write_state "$2" started; }
 pass() { print "  [ok] $1"; }
 TART_BIN="${TART_BIN:-$(command -v tart 2>/dev/null || true)}"
@@ -124,8 +121,20 @@ write_state tart-image complete; pass "Prepared local Tart images: $MACOS_IMAGE 
 launchctl bootout "gui/$UID/com.mars.worker" >/dev/null 2>&1 || true
 ORCHESTRATOR="$APP_DIR/mars-orchestrator"; MACOS_JOB_AGENT="$APP_DIR/mars-macos-job-agent"; LINUX_JOB_AGENT="$APP_DIR/mars-linux-arm64-job-agent"; STATUS_ITEM="$APP_DIR/mars-status-item"; ICON="$APP_DIR/mars-icon.png"; mv -f "$ORCHESTRATOR_STAGE" "$ORCHESTRATOR"; mv -f "$MACOS_JOB_AGENT_STAGE" "$MACOS_JOB_AGENT"; mv -f "$LINUX_JOB_AGENT_STAGE" "$LINUX_JOB_AGENT"; mv -f "$STATUS_ITEM_STAGE" "$STATUS_ITEM"; mv -f "$ICON_STAGE" "$ICON"; chmod 755 "$ORCHESTRATOR" "$MACOS_JOB_AGENT" "$LINUX_JOB_AGENT" "$STATUS_ITEM"; write_state artifacts complete
 check 'Persisting the protected one-use enrollment code' enrollment
-JOIN_CODE_FILE="$APP_DIR/join-code"; IDENTITY_FILE="$APP_DIR/worker-identity.json"; rm -f "$IDENTITY_FILE"; JOIN_CODE_TMP="$JOIN_CODE_FILE.tmp.$$"; printf '%s\n' "$JOIN_CODE" > "$JOIN_CODE_TMP"; chmod 600 "$JOIN_CODE_TMP"; mv -f "$JOIN_CODE_TMP" "$JOIN_CODE_FILE"; write_state enrollment complete
+JOIN_CODE_FILE="$APP_DIR/join-code"; IDENTITY_FILE="$APP_DIR/worker-identity.json"
+if [[ "$UPGRADE" -eq 0 ]]; then
+  rm -f "$IDENTITY_FILE"
+  JOIN_CODE_TMP="$JOIN_CODE_FILE.tmp.$$"
+  printf '%s\n' "$JOIN_CODE" > "$JOIN_CODE_TMP"
+  chmod 600 "$JOIN_CODE_TMP"
+  mv -f "$JOIN_CODE_TMP" "$JOIN_CODE_FILE"
+else
+  [[ -s "$IDENTITY_FILE" ]] || { echo 'Worker identity disappeared during upgrade.' >&2; exit 1; }
+  JOIN_CODE_FILE=""
+fi
+write_state enrollment complete
 LAUNCHER="$APP_DIR/run-worker.sh"; PLIST="$HOME/Library/LaunchAgents/com.mars.worker.plist"; XML_LAUNCHER="${LAUNCHER//&/&amp;}"; XML_LAUNCHER="${XML_LAUNCHER//</&lt;}"; XML_LAUNCHER="${XML_LAUNCHER//>/&gt;}"; XML_LAUNCHER="${XML_LAUNCHER//\"/&quot;}"
+mkdir -p "$(dirname "$PLIST")"
 check 'Installing the user-scoped LaunchAgent atomically' service
 LAUNCHER_TMP="$LAUNCHER.tmp.$$"; PLIST_TMP="$PLIST.tmp.$$"
 cat > "$LAUNCHER_TMP" <<EOF
@@ -169,4 +178,5 @@ cat > "$PLIST_TMP" <<EOF
 EOF
 mv -f "$PLIST_TMP" "$PLIST"; write_state service complete
 check 'Starting the worker LaunchAgent' startup
-sleep 1; launchctl bootstrap "gui/$UID" "$PLIST" || { sleep 2; launchctl bootstrap "gui/$UID" "$PLIST"; }; launchctl kickstart -k "gui/$UID/com.mars.worker"; write_state complete complete; CLEANUP_DONE=1; pass 'Worker started; join-code remains until authenticated'
+sleep 1; launchctl bootstrap "gui/$UID" "$PLIST" || { sleep 2; launchctl bootstrap "gui/$UID" "$PLIST"; }; launchctl kickstart -k "gui/$UID/com.mars.worker"; write_state complete complete; CLEANUP_DONE=1
+if [[ "$UPGRADE" -eq 1 ]]; then pass 'Worker images and runtime upgraded; identity preserved'; else pass 'Worker started; join-code remains until authenticated'; fi
