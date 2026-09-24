@@ -163,6 +163,73 @@ Use this when the local control plane cannot issue a release-catalog upgrade tar
 
 The installer requires the worker identity and `MarsWorker` service to exist. It preserves identity and runtime data, replaces the orchestrator, service host, and tray script, and restarts the service. Check `C:\ProgramData\Mars\install.log`, then confirm the service is running and the worker has reconnected with a fresh doctor report. If any jobs remain active, wait for them to finish rather than stopping the service.
 
+### Recover a local macOS worker connected to the dev instance
+
+Use the existing worker identity; **do not re-enroll** an adopted worker. On the
+Mac, inspect the user LaunchAgent and the installed runtime before changing
+anything:
+
+```bash
+app="$HOME/Library/Application Support/Mars"
+launchctl print "gui/$(id -u)/com.mars.worker"
+cat "$app/install-state.json"
+codesign --verify --deep --strict "$app/mars-orchestrator"
+codesign --verify --deep --strict "$app/mars-macos-job-agent"
+```
+
+`state = spawn scheduled` with `last exit reason = OS_REASON_CODESIGNING`
+and `invalid signature (code or signature have been modified)` from `codesign`
+means macOS cannot run the installed binary. If no installer is currently
+replacing binaries, re-sign the installed macOS executables and restart
+the existing LaunchAgent:
+
+```bash
+codesign --force --sign - --timestamp=none "$app/mars-orchestrator" "$app/mars-macos-job-agent"
+codesign --verify --deep --strict "$app/mars-orchestrator"
+codesign --verify --deep --strict "$app/mars-macos-job-agent"
+launchctl kickstart -k "gui/$(id -u)/com.mars.worker"
+launchctl print "gui/$(id -u)/com.mars.worker"
+```
+
+The installer signs its staged macOS executables, but verify the **installed**
+copies if LaunchAgent reports a signing failure. Do not sign while an upgrade
+is running; inspect `install-state.json` and installer processes first. Logs
+are at `$app/worker.log`, `$app/worker.error.log`, and `$app/install.log`.
+Old connection errors in append-only logs do not establish current status.
+
+In the dashboard, check the worker is **adopted**, **online**, and
+**configuration ready**, with a fresh doctor report showing `runtimeReady:
+true`, `imageSignatures: true`, and `acceptingLeases: true`. If doctor says
+the prepared Tart images or digests are unavailable, check the local image
+manifests and Tart images (`tart list --source local --quiet`), and finish
+image preparation before accepting jobs. If the worker is **draining**,
+select **Resume** in the dashboard once it is ready. Draining remains set
+across a service restart; a live connection alone does not make it schedulable.
+Do not restart or upgrade a worker with active jobs just to clear draining.
+
+For a non-production dev instance with `MARS_DEV_TOKEN` configured, an admin
+can verify the same state from the API without exposing the token in logs:
+
+```bash
+base=https://mars.snazzie.space
+worker_id=YOUR_WORKER_UUID
+# Load MARS_DEV_TOKEN from the untracked .env.development or your secret store.
+curl --fail-with-body -sS -H "Authorization: Bearer $MARS_DEV_TOKEN" \
+  "$base/api/organizations/all/workers/$worker_id" |
+  jq '{connectionState, admissionState, configurationState, draining, doctor, activeSandboxes}'
+curl --fail-with-body -sS -H "Authorization: Bearer $MARS_DEV_TOKEN" \
+  "$base/api/workers/$worker_id/health" |
+  jq '{connection, jobs}'
+```
+
+A fresh heartbeat proves connectivity; a job in `dispatched` or
+`sandbox_ready` proves assignment and sandbox provisioning, **not** job
+completion. Verify the job outcome separately in the run. For routing,
+macOS workflows use the composite label `mars-macos-arm64-2vcpu-4g`
+(see [worker routing labels](docs/worker-routing-labels.md)).
+
+### Development log APIs
+
 Development log APIs require a global administrator. Outside production, the
 existing `MARS_DEV_TOKEN` from the untracked `.env.development` may be supplied
 as `Authorization: Bearer <token>`; never commit the token.
