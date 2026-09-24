@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   beginOrganizationGithubInstall,
+  getControlPlaneLogs,
   getGithubConnection,
   getGithubOrganizationSettings,
   getGithubRateLimit,
@@ -11,6 +12,7 @@ import {
   refreshGithubConnection,
   uninstallOrganizationGithub,
 } from "../api.ts";
+import type { ControlPlaneLogLevel } from "../api.ts";
 import { useTheme, themeOptions } from "../theme.ts";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
 
@@ -22,6 +24,39 @@ function number(value: number) {
 function githubError(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
+function ControlPlaneLogs() {
+  const [level, setLevel] = useState<ControlPlaneLogLevel | "">("");
+  const [search, setSearch] = useState("");
+  const [contains, setContains] = useState("");
+  const logs = useQuery({
+    queryKey: ["control-plane-logs", level, contains],
+    queryFn: () => getControlPlaneLogs({ level: level || undefined, contains: contains || undefined }),
+    refetchInterval: 5_000,
+    refetchIntervalInBackground: false,
+  });
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setContains(search.trim());
+  };
+
+  return <section className="settings-deployment" aria-labelledby="control-plane-logs-title">
+    <div className="panel-heading"><div><p className="eyebrow">Deployment diagnostics</p><h2 id="control-plane-logs-title">Control-plane logs</h2></div><button className="button secondary" type="button" onClick={() => void logs.refetch()} disabled={logs.isFetching}>Refresh</button></div>
+    <p className="form-help">Recent logs from this control-plane process, retained in memory until restart. Showing the latest 200 matching entries; updates every 5 seconds.</p>
+    <form className="control-plane-log-filters" onSubmit={submit}>
+      <label>Level <select value={level} onChange={(event) => setLevel(event.target.value as ControlPlaneLogLevel | "")}><option value="">All levels</option><option value="log">Log</option><option value="warn">Warning</option><option value="error">Error</option></select></label>
+      <label>Contains <input type="search" maxLength={200} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search messages" /></label>
+      <button className="button secondary" type="submit">Search logs</button>
+    </form>
+    {logs.isLoading && <p className="settings-status" role="status">Loading control-plane logs…</p>}
+    {logs.error && <div className="form-error" role="alert">Unable to load control-plane logs: {logs.error instanceof Error ? logs.error.message : "Try again."} <button className="button secondary" type="button" onClick={() => void logs.refetch()}>Retry logs</button></div>}
+    {!logs.error && logs.data && (logs.data.items.length === 0
+      ? <p className="settings-status">No matching logs in this process.</p>
+      : <div className="control-plane-log-output" role="log" aria-label="Control-plane log output" tabIndex={0}>{logs.data.items.map((entry) =>
+        <div className={`control-plane-log-line control-plane-log-${entry.level}`} key={entry.sequence}><time dateTime={entry.occurredAt}>{entry.occurredAt}</time> <span className="control-plane-log-level">{entry.level}</span> <span>{entry.message}</span></div>,
+      )}</div>)}
+  </section>;
+}
+
 
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -117,6 +152,7 @@ export function SettingsPage() {
           {!connection.error && connection.data?.connected && !rateLimit.error && rateLimit.data && <div className="settings-rate-limit"><dl className="settings-rate-limit-grid"><div><dt>Remaining</dt><dd className="settings-rate-limit-remaining">{number(rateLimit.data.remaining)}</dd></div><div><dt>Limit</dt><dd>{number(rateLimit.data.limit)}</dd></div><div><dt>Used</dt><dd>{number(rateLimit.data.used)}</dd></div><div><dt>Reset time</dt><dd><time dateTime={rateLimit.data.resetAt}>{new Date(rateLimit.data.resetAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time></dd></div></dl><button className="button secondary" type="button" onClick={() => void rateLimit.refetch()} disabled={rateLimit.isFetching && !rateLimit.data}>Refresh rate limit</button></div>}
         </section>
       </section>
+      {me.data?.isGlobalAdmin && <ControlPlaneLogs />}
     </>
   );
 }

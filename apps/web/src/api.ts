@@ -137,6 +137,23 @@ export const getMe = () => request("/api/me", DashboardOperator);
 export const getHealth = () => requestHealth();
 export const getWorkerHealth = (workerId: string) =>
   request(`/api/workers/${workerId}/health`, WorkerHealth, { cache: "no-store" });
+const controlPlaneLogPage = z.object({
+  items: z.array(z.object({
+    sequence: z.number().int(),
+    occurredAt: z.string().datetime({ offset: true }),
+    level: z.enum(["log", "warn", "error"]),
+    message: z.string(),
+  })),
+  nextCursor: z.number().int().nullable(),
+});
+
+export type ControlPlaneLogLevel = "log" | "warn" | "error";
+export function getControlPlaneLogs({ level, contains }: { level?: ControlPlaneLogLevel; contains?: string } = {}) {
+  const query = new URLSearchParams({ limit: "200" });
+  if (level) query.set("level", level);
+  if (contains) query.set("contains", contains);
+  return request(`/api/admin/logs?${query}`, controlPlaneLogPage, { cache: "no-store" });
+}
 export const logout = () => request("/api/auth/logout", DashboardOkResponse, { method: "POST" });
 export const getOrganizations = () => request("/api/organizations", z.array(OrganizationSummary));
 export const getCostCenter = (organizationId: string, period: OverviewDto["period"] = "24h", provider: CostCenterDto["pricingProvider"] = "github") =>

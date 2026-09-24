@@ -107,3 +107,18 @@ test("settings exposes connected identity, management actions, and quota values"
   expect(html).toContain("Reset time");
   expect(html).toContain("Refresh rate limit");
 });
+
+test("only global admins see control-plane logs in deployment settings", () => {
+  const client = settingsClient({ connected: false });
+  client.setQueryData(["control-plane-logs", "", ""], {
+    items: [{ sequence: 1, occurredAt: "2026-09-24T12:00:00.000Z", level: "error", message: "worker <failed>" }],
+    nextCursor: 1,
+  });
+  expect(markup(client)).not.toContain("Control-plane logs");
+  client.setQueryData(["me"], { id: "admin", login: "admin", isGlobalAdmin: true });
+  const html = markup(client);
+  expect(html).toContain("Control-plane logs");
+  expect(html).toContain("worker &lt;failed&gt;");
+  expect(html).toContain('dateTime="2026-09-24T12:00:00.000Z"');
+  expect(html).toContain("Search logs");
+});

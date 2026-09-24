@@ -1272,3 +1272,15 @@ a:active {
   .worker-list-leases{min-width:0;text-align:left}
   .worker-list-arrow{margin-left:auto}
 }
+
+.control-plane-log-filters{display:flex;flex-wrap:wrap;align-items:end;gap:12px}
+.control-plane-log-filters label{display:grid;gap:6px;min-width:140px;color:var(--ui-text-muted)}
+.control-plane-log-filters input,.control-plane-log-filters select{background:var(--ui-surface-raised);border:1px solid var(--ui-border);border-radius:6px;color:var(--ui-text);min-height:40px;padding:8px}
+.control-plane-log-filters input{min-width:220px}
+.control-plane-log-output{background:var(--ui-log-surface);color:var(--ui-log-text);border-radius:6px;max-height:480px;overflow:auto;padding:14px;font:12px/1.6 "IBM Plex Mono",monospace}
+.control-plane-log-output:focus-visible{outline:2px solid var(--ui-primary);outline-offset:2px}
+.control-plane-log-line{white-space:pre-wrap;overflow-wrap:anywhere}
+.control-plane-log-line time{color:color-mix(in srgb,var(--ui-log-text) 70%,transparent)}
+.control-plane-log-level{display:inline-block;min-width:5ch;text-transform:uppercase}
+.control-plane-log-error .control-plane-log-level{color:#ff8b9a}
+.control-plane-log-warn .control-plane-log-level{color:#ffb454}
