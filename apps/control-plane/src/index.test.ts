@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { initializeDatabase, configureControlPlaneLogBuffer, configureErrorFileLogging, configureTimestampedConsoleLogging, formatJobReconciliationReport, resolveWebhookOrigin, createDevelopmentWindowsContainerBuild, resolveDevelopmentWindowsArtifacts, resolveDevelopmentLinuxArtifacts, resolveDevelopmentMacosArtifacts, controlPlaneBuildId } from "./index.ts";
+import { initializeDatabase, configureControlPlaneLogBuffer, configureErrorFileLogging, configureTimestampedConsoleLogging, formatJobReconciliationReport, resolveWebhookOrigin, createDevelopmentWindowsContainerBuild, resolveDevelopmentWindowsArtifacts, resolveDevelopmentLinuxArtifacts, resolveDevelopmentMacosArtifacts, controlPlaneBuildId, resolveWorkerReleaseManifest } from "./index.ts";
 
 test("requires an explicit webhook origin at startup", () => {
   const previous = Bun.env.GITHUB_WEBHOOK_URL;
@@ -15,6 +15,17 @@ test("requires an explicit webhook origin at startup", () => {
     if (previous === undefined) delete Bun.env.GITHUB_WEBHOOK_URL;
     else Bun.env.GITHUB_WEBHOOK_URL = previous;
   }
+});
+
+test("loads the configured immutable worker manifest in production", async () => {
+  const manifest = { schemaVersion: 5 } as never;
+  let requested: string | undefined;
+  const loaded = await resolveWorkerReleaseManifest(true, "https://github.com/Snazzie/MARS/releases/download/worker-v1.2.3/worker-release-manifest.json", undefined, async (source) => {
+    requested = String(source);
+    return manifest;
+  });
+  expect(requested).toContain("/worker-v1.2.3/worker-release-manifest.json");
+  expect(loaded).toBe(manifest);
 });
 test("health identity uses the baked build SHA and rejects blank values", () => {
   expect(controlPlaneBuildId("abc123")).toBe("abc123");

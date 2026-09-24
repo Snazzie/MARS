@@ -259,6 +259,21 @@ test("maps worker configuration state to readiness labels", () => {
   expect(workerReadinessLabel("error")).toBe("Error");
   expect(workerReadinessLabel("applying")).toBe("Applying configuration");
 });
+test("shows runtime failure as worker readiness and renders doctor remediation", () => {
+  const markup = renderCard(workerFixture({
+    doctor: {
+      runtimeMode: "tart",
+      runtimeReady: false,
+      probe: true,
+      imageSignatures: false,
+      remediation: "Prepared Tart base images are unavailable; Both immutable Tart image digests are required",
+    },
+  }));
+  expect(markup).toContain("Runtime not ready");
+  expect(markup).toContain("Remediation required");
+  expect(markup).toContain("Both immutable Tart image digests are required");
+  expect(markup).not.toContain(">Ready</span>");
+});
 test("renders operational and readiness status in the worker card", () => {
   const worker = workerFixture();
   const markup = renderCard(worker);

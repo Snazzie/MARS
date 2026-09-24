@@ -26,7 +26,7 @@ function formatBytes(value: string | null | undefined): string {
   return `${bytes} B`;
 }
 export function workerOperationalLabel(worker: Pick<WorkerDetail, "connectionState" | "draining">): "Online" | "Offline" | "Draining" { return worker.draining ? "Draining" : worker.connectionState === "online" ? "Online" : "Offline"; }
-export function workerReadinessLabel(state: WorkerDetail["configurationState"]): "Ready" | "Applying configuration" | "Needs configuration" | "Error" { return state === "ready" ? "Ready" : state === "applying" ? "Applying configuration" : state === "error" ? "Error" : "Needs configuration"; }
+export function workerReadinessLabel(state: WorkerDetail["configurationState"], runtimeReady?: boolean): "Ready" | "Runtime not ready" | "Applying configuration" | "Needs configuration" | "Error" { return state === "ready" ? runtimeReady === false ? "Runtime not ready" : "Ready" : state === "applying" ? "Applying configuration" : state === "error" ? "Error" : "Needs configuration"; }
 function appliedAt(value: string): string { return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(value)); }
 function telemetryAt(value: string | null): ReactNode {
   return value ? <time dateTime={value}>{appliedAt(value)}</time> : "Never";
@@ -149,7 +149,7 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
   const desiredRunnerCacheEnabled = cache?.desiredRunnerCacheEnabled ?? true;
   const desiredRunnerCacheMaxGiB = cache?.desiredRunnerCacheMaxGiB ?? 20;
   const [cacheInventoryOpen, setCacheInventoryOpen] = useState(false);
-  const readinessLabel = workerReadinessLabel(effectiveConfigurationState);
+  const readinessLabel = workerReadinessLabel(effectiveConfigurationState, worker.doctor ? runtimeReady : undefined);
   const applied = worker.appliedConfigurationRevision && worker.configurationAppliedAt
     ? { revision: worker.appliedConfigurationRevision.slice(0, 12), at: appliedAt(worker.configurationAppliedAt) }
     : null;
@@ -166,7 +166,7 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
     <header className="worker-card-header">
       <div className="worker-card-identity">
         <WorkerNameEditor worker={worker} organizationId={organizationId} canManage={canManage} onChange={onChange} />
-        <div className="worker-statuses" aria-label="Worker status"><span className={`status-pill status-${connectionState}`}>{connectionState}</span>{heartbeatStale && <span className="status-pill status-stale">stale heartbeat</span>}{doctorStale && <span className="status-pill status-stale">stale doctor</span>}{worker.draining && <span className="status-pill status-draining">new leases paused</span>}<span className={`status-pill status-${effectiveConfigurationState}`}>{readinessLabel}</span><span className={`status-pill status-${worker.admissionState}`}>{worker.admissionState}</span></div>
+        <div className="worker-statuses" aria-label="Worker status"><span className={`status-pill status-${connectionState}`}>{connectionState}</span>{heartbeatStale && <span className="status-pill status-stale">stale heartbeat</span>}{doctorStale && <span className="status-pill status-stale">stale doctor</span>}<span className={`status-pill status-${readinessLabel === "Runtime not ready" ? "error" : effectiveConfigurationState}`}>{readinessLabel}</span><span className={`status-pill status-${worker.admissionState}`}>{worker.admissionState}</span></div>
         <p className="worker-meta">{worker.platform} · guests: {worker.guestPlatforms.join(", ")} · {worker.driver} · <span className="worker-fingerprint">key <code tabIndex={0} title={worker.fingerprint}>{worker.fingerprint}</code></span></p>
       </div>
       <div className="worker-card-controls">
@@ -189,6 +189,7 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
     {active && effectiveConfigurationState === "ready" && worker.doctor?.runtimeBuildState === "building" && <p className="pending-note" role="status">Building local runtime image. Scheduling remains paused until the worker reports completion.</p>}
     {active && effectiveConfigurationState === "ready" && !runtimeReady && worker.doctor?.runtimeBuildState !== "building" && <p className="pending-note" role="status">Runtime image is not ready. Scheduling remains paused until the worker reports a verified local runtime.</p>}
     {active && effectiveConfigurationState === "error" && <p className="pending-note" role="alert">Configuration update failed.{applied ? <> Last applied <time dateTime={worker.configurationAppliedAt!}>{applied.at}</time> · revision <code>{applied.revision}</code>.</> : " No configuration has been acknowledged."}</p>}
+    <WorkerDoctor doctor={worker.doctor} platform={worker.platform} dispatchReady={active && runtimeReady && effectiveConfigurationState === "ready" && worker.connectionState === "online" && !worker.draining} />
     <WorkerHealthPanel workerId={worker.id} health={healthQuery.data} loading={healthQuery.isLoading} error={healthQuery.error} limits={worker.limits} showConnectionStatus={false} cacheMetrics={cache ? <WorkerCacheMetrics workerId={worker.id} cache={cache} /> : undefined} />
     {active && <section className="worker-section worker-cache-panel" aria-label="Cache inventory"><div className="panel-kicker">Cache inventory</div><div className="worker-cache-actions">{cache?.ready && cache.entryCount != null && cache.entryCount > 0 ? <details onToggle={(event) => setCacheInventoryOpen(event.currentTarget.open)}><summary>Browse cache inventory</summary>{cacheInventoryOpen && cacheInventory(worker.id)}</details> : <span className="muted">{!cache?.ready ? "Cache inventory unavailable." : cache.entryCount == null ? "Cache telemetry not reported." : "No GitHub Actions cache entries."}</span>}{canManage && <button type="button" className="control-button" onClick={() => { void purge(); }} disabled={purgePending}>{purgePending ? "Purging…" : "Purge runner cache"}</button>}</div>{purgeError && <p className="form-error" role="alert">{purgeError}</p>}{purgeSuccess && <p className="pending-note" role="status">Runner cache purge requested.</p>}</section>}
     <dialog ref={dialog} className="worker-config-dialog" onCancel={closeConfiguration} aria-label="Configure worker">{configuring && <WorkerConfigurationForm worker={{ id: worker.id, admissionState: worker.admissionState, platform: worker.platform, guestPlatforms: worker.guestPlatforms, draining: worker.draining, activeSandboxes: worker.activeSandboxes, capacity: capacityData, limits: worker.limits, desiredCacheTtlSeconds: cache?.desiredTtlSeconds, desiredRunnerCacheEnabled, desiredRunnerCacheMaxGiB }} organizationId={organizationId} onConfigured={() => { closeConfiguration(); onChange(); }} />}</dialog>

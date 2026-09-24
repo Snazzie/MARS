@@ -24,7 +24,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { initializeControlPlaneSetup } from "./control-plane-setup.ts";
 import { httpOrigin, publicHttpOrigin } from "./http-origin.ts";
-import { WorkerReleaseCatalog } from "./worker-release.ts";
+import { loadWorkerReleaseManifest, WorkerReleaseCatalog } from "./worker-release.ts";
 import { WorkerUpgradeService } from "./worker-upgrade.ts";
 import { createControlPlaneGateway, type ControlPlaneSocketData } from "./control-plane-gateway.ts";
 
@@ -361,6 +361,17 @@ export function controlPlaneBuildId(value = Bun.env.MARS_BUILD_ID): string {
   return value?.trim() || "unknown";
 }
 
+export async function resolveWorkerReleaseManifest(
+  production: boolean,
+  source?: string,
+  provided?: WorkerReleaseManifest,
+  loader: typeof loadWorkerReleaseManifest = loadWorkerReleaseManifest,
+): Promise<WorkerReleaseManifest | undefined> {
+  if (provided) return provided;
+  if (!production) return undefined;
+  return await loader(source);
+}
+
 export async function startControlPlane(options: ControlPlaneStartOptions = {}) {
   const required = (name: string): string => { const value = Bun.env[name]; if (!value) throw new Error(`${name} is required`); return value; };
   const production = Bun.env.NODE_ENV === "production";
@@ -402,7 +413,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const workerReleaseManifestUrl = Bun.env.MARS_WORKER_RELEASE_MANIFEST_URL?.trim();
   if (production && !workerReleaseContractVersion) throw new Error("MARS_WORKER_CONTRACT_VERSION is required");
   const workerReleaseCatalog = new WorkerReleaseCatalog({ controlPlaneContractVersion: workerReleaseContractVersion });
-  const workerReleaseManifest = options.workerReleaseManifest;
+  const workerReleaseManifest = await resolveWorkerReleaseManifest(production, workerReleaseManifestUrl, options.workerReleaseManifest);
   const env = {
     DEFAULT_IMAGES: {
       "linux-x64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_X64,

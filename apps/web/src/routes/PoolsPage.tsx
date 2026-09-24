@@ -6,7 +6,7 @@ import { Disclosure } from "../components/Disclosure.tsx";
 import { QueryState } from "../components/StateView.tsx";
 import { workerOperationalLabel, workerReadinessLabel } from "../components/WorkerCard.tsx";
 
-type PoolWorker = Pick<WorkerDetail, "id" | "name" | "platform" | "driver" | "connectionState" | "configurationState" | "configurationRevision" | "appliedConfigurationRevision" | "draining" | "artifactDigest" | "artifactDigests"> & { guestPlatforms?: WorkerDetail["guestPlatforms"]; runtimeMode?: WorkerDetail["runtimeMode"] };
+type PoolWorker = Pick<WorkerDetail, "id" | "name" | "platform" | "driver" | "connectionState" | "configurationState" | "configurationRevision" | "appliedConfigurationRevision" | "draining" | "artifactDigest" | "artifactDigests"> & { guestPlatforms?: WorkerDetail["guestPlatforms"]; runtimeMode?: WorkerDetail["runtimeMode"]; doctor?: WorkerDetail["doctor"] };
 type PoolIdentity = Pick<PoolSummary, "platform" | "driver" | "workerId" | "imageDigest">;
 const preparedDigest = (worker: PoolWorker, platform: PoolWorker["platform"]): string | null => platform === "macos-arm64" || platform === "linux-arm64" ? worker.artifactDigests?.[platform] ?? null : worker.artifactDigest ?? null;
 export type PoolWorkerCoverage = { online: number; ready: number; warning: string | null; operational: string | null; readiness: string | null };
@@ -18,13 +18,13 @@ export function poolWorkerCoverage(pool: PoolIdentity, workers: PoolWorker[] | u
     const digest = preparedDigest(worker, pool.platform);
     return guest && driver && digest === pool.imageDigest;
   });
-  const isReady = (worker: PoolWorker) => worker.connectionState === "online" && worker.configurationState === "ready" && worker.configurationRevision === worker.appliedConfigurationRevision && !worker.draining;
+  const isReady = (worker: PoolWorker) => worker.connectionState === "online" && worker.configurationState === "ready" && worker.configurationRevision === worker.appliedConfigurationRevision && worker.doctor?.runtimeReady === true && worker.doctor.probe === true && worker.doctor.imageSignatures === true && !worker.draining;
   if (pool.workerId) {
     const worker = matching[0];
     if (!worker) return { online: 0, ready: 0, warning: "Worker status unavailable", operational: null, readiness: null };
     const online = worker.connectionState === "online" ? 1 : 0;
     const ready = isReady(worker) ? 1 : 0;
-    return { online, ready, warning: ready === 0 ? "No ready workers" : null, operational: workerOperationalLabel(worker), readiness: workerReadinessLabel(worker.configurationState) };
+    return { online, ready, warning: ready === 0 ? "No ready workers" : null, operational: workerOperationalLabel(worker), readiness: workerReadinessLabel(worker.configurationState, worker.doctor?.runtimeReady === true && worker.doctor.probe === true && worker.doctor.imageSignatures === true) };
   }
   const online = matching.filter((worker) => worker.connectionState === "online").length;
   const ready = matching.filter(isReady).length;
