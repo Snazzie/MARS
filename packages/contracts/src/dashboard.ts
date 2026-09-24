@@ -366,7 +366,7 @@ export const WorkerUpgradeStatus = z.discriminatedUnion("available", [
   z.object({ available: z.literal(true), currentReleaseVersion: WorkerReleaseVersion, currentContractVersion: WorkerContractVersion, target: z.object({ releaseVersion: WorkerReleaseVersion, contractVersion: WorkerContractVersion, token: z.string().min(1) }).strict() }).strict(),
 ]);
 export type WorkerUpgradeStatus = z.infer<typeof WorkerUpgradeStatus>;
-export const PoolSummary = dto(strict({ id, organizationId: id.nullable(), workerId: id.nullable(), workerName: z.string().min(1).nullable(), name: z.string().min(1), platform: RuntimePlatform, driver: RuntimeDriverName, imageDigest: z.string().min(1), resources, labels: z.array(z.string().min(1)), triggerLabel: RunnerTriggerLabel.nullable(), enabled: z.boolean(), active: positiveSafe.or(z.literal(0)) }));
+export const PoolSummary = dto(strict({ id, organizationId: id.nullable(), workerId: id.nullable(), workerName: z.string().min(1).nullable(), name: z.string().min(1), platform: RuntimePlatform, driver: RuntimeDriverName, imageDigest: z.string(), resources, labels: z.array(z.string().min(1)), triggerLabel: RunnerTriggerLabel.nullable(), enabled: z.boolean(), active: positiveSafe.or(z.literal(0)) }));
 export type PoolSummary = z.infer<typeof PoolSummary>;
 const githubAccountType = z.enum(["User", "Organization"]);
 export const GithubConnectionSummary = dto(z.discriminatedUnion("connected", [

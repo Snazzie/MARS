@@ -1,9 +1,32 @@
 import { expect, test } from "bun:test";
 import { DashboardHealthResponse, DashboardWorkerMutationResponse, DashboardEndpoint, WorkerConfiguration } from "./dashboard-api.ts";
-import { JobResourceTrendResponse, WorkerHealth, WorkerDoctor } from "./dashboard.ts";
+import { CreatePoolRequest, JobResourceTrendResponse, PoolSummary, WorkerHealth, WorkerDoctor } from "./dashboard.ts";
 
 test("worker doctor accepts lease pickup state", () => {
   expect(WorkerDoctor.parse({ acceptingLeases: true })).toEqual({ acceptingLeases: true });
+});
+
+test("lists disabled default pools without an image while rejecting empty creation digests", () => {
+  const pool = {
+    id: "11111111-1111-4111-8111-111111111111",
+    organizationId: null,
+    workerId: null,
+    workerName: "Shared fleet",
+    name: "default-windows-x64",
+    platform: "windows-x64",
+    driver: "windows-hyperv",
+    imageDigest: "",
+    resources: { vcpu: 4, memoryBytes: 6 * 1024 ** 3, storageBytes: 30 * 1024 ** 3, concurrency: 1 },
+    labels: ["mars-windows-x64"],
+    triggerLabel: "mars-windows-x64",
+    enabled: false,
+    active: 0,
+  } as const;
+  expect(PoolSummary.parse(pool).imageDigest).toBe("");
+  expect(CreatePoolRequest.safeParse({
+    workerId: pool.id, name: pool.name, guestPlatform: pool.platform,
+    resources: pool.resources, triggerLabel: pool.triggerLabel, imageDigest: pool.imageDigest,
+  }).success).toBe(false);
 });
 
 const workerHealthFixture = {
