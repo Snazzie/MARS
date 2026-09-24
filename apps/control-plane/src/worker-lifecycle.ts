@@ -79,7 +79,16 @@ export async function handleAuthenticatedWorkerEvent(
     return true;
   }
   if (payload.data.type === "job.resource_sample") return (await persistJobResourceSample(db, event.data.workerId, event.data)) !== "rejected";
-  if (payload.data.type === "job.log") return await persistWorkerLogEvent(db, event.data.workerId, payload.data.payload);
+  if (payload.data.type === "job.log") {
+    if (await persistWorkerLogEvent(db, event.data.workerId, payload.data.payload)) return true;
+    const [terminal] = await db`SELECT 1 FROM dashboard_jobs j JOIN runner_leases l ON l.github_job_id=j.github_job_id
+      WHERE j.id=${payload.data.payload.jobId} AND l.worker_id=${event.data.workerId} AND l.state IN ('reaped','failed')
+        AND NOT EXISTS (SELECT 1 FROM runner_leases active WHERE active.github_job_id=j.github_job_id AND active.worker_id=${event.data.workerId} AND active.state NOT IN ('reaped','failed'))
+      LIMIT 1`;
+    if (!terminal) return false;
+    console.warn("Discarding log for terminal worker lease", { workerId: event.data.workerId, jobId: payload.data.payload.jobId, eventId: event.data.id });
+    return true;
+  }
   await applyWorkerLeaseEvent(db, event.data);
   if (typeof event.data.payload.commandId === "string") dispatcher.handleEvent(event.data, socket);
   return true;
