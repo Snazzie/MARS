@@ -2,29 +2,17 @@
 
 <img src="assets/mars-icon.svg" alt="MARS logo" width="320">
 
-**MARS (Managed Action Runner System)** is a self-hosted control plane and worker platform for running GitHub Actions workloads on managed infrastructure.
+**MARS (Managed Action Runner System)** is a self-hosted platform for managing GitHub Actions workers across Windows, macOS, and Linux. A central control plane connects GitHub, the dashboard, and worker hosts so teams can configure where workflows run.
 
-The repository contains the control-plane API and dashboard, worker runtimes for supported host platforms, job-agent and orchestration components, deployment assets, and contract tests.
+## Features
 
-> **Development status:** MARS is an active development baseline, not a production-ready platform. The supported issue #9 deployment is the Linux/amd64 control-plane hosting MVP only; job execution remains issue #6. See [IMPLEMENTATION-STATUS.md](IMPLEMENTATION-STATUS.md) for evidence and external blockers.
+- **One place to manage workers:** Onboard hosts, organize worker pools, inspect health and capacity, and approve new workers from the dashboard.
+- **Cross-platform routing:** Configure resource-aware `runs-on` labels for Windows x64, macOS ARM64, and Linux x64 pools, with CPU and memory requests per workflow. [Routing guide](docs/worker-routing-labels.md).
+- **Isolated job environments:** Windows workers offer Hyper-V-isolated containers or checkpoint-based Hyper-V VMs; macOS workers use Tart images. [Windows runtime options](docs/windows-worker-runtimes.md).
+- **GitHub integration:** Connect a GitHub App, receive signed webhooks, and manage runs and worker connections through the control plane.
+- **Self-hosted operations:** Deploy the control plane with your own PostgreSQL database and keep worker infrastructure under your control.
 
-## Repository layout
-
-- `apps/control-plane` — Hono/Bun API, GitHub integration, onboarding, worker and run management
-- `apps/web` — React dashboard
-- `apps/orchestrator` — worker-side runtime orchestration
-- `apps/job-agent` — job-agent protocol and claim handling
-- `apps/windows-service-host` — Windows worker service host
-- `packages/contracts` — shared API and domain contracts
-- `packages/db` — PostgreSQL schema, migrations, and query modules
-- `deploy/control-plane` — production-style container image and Compose deployment
-- `deploy/workers` — worker installers and runtime assets
-- `tests` — deployment, installer, integration, and smoke-test contracts
-- `docs` — focused operational and design documentation
-
-## How it works
-
-GitHub events enter the control plane, which manages organizations, workers, and runs. The dashboard exposes onboarding and worker management; orchestrators on worker hosts prepare isolated execution environments for jobs. Shared contracts connect the API, workers, and job agent.
+> **Development status:** MARS is not yet a production-ready runner platform. Control-plane hosting is the current Linux/amd64 deployment milestone; end-to-end GitHub Actions job execution remains unfinished. See [implementation status](IMPLEMENTATION-STATUS.md) for the precise scope and blockers.
 
 ## Get started
 
@@ -32,31 +20,6 @@ GitHub events enter the control plane, which manages organizations, workers, and
 - [Windows worker runtimes and prerequisites](docs/windows-worker-runtimes.md)
 - [Control-plane deployment guide](deploy/control-plane/README.md)
 - [Implementation status](IMPLEMENTATION-STATUS.md)
-
-## Deployment
-
-Issue #9 supports Linux/amd64 control-plane hosting only. The released control-plane image requires operator-managed PostgreSQL 17, a persistent data volume, and an immutable `MARS_CONTROL_PLANE_IMAGE` tag or digest.
-
-Required configuration includes:
-
-- `MARS_CONTROL_PLANE_IMAGE` (published `v<semver>` tag or full `@sha256:` digest)
-- `DATABASE_URL`
-- `PUBLIC_BASE_URL`
-- `GITHUB_WEBHOOK_URL`
-- optional `WORKER_BASE_URL`
-
-Validate and start the deployment with:
-
-```bash
-docker compose --env-file .env -f deploy/control-plane/compose.yaml config -q
-docker compose --env-file .env -f deploy/control-plane/compose.yaml up -d --wait
-```
-
-For complete Unraid, ingress, onboarding, backup, health-check, release evidence, upgrade, rollback, and restore instructions, see [`deploy/control-plane/README.md`](deploy/control-plane/README.md).
-
-## Security and persistence
-
-Keep `.env`, GitHub credentials, tunnel tokens, and the control-plane data volume out of source control. PostgreSQL and the control-plane data volume must be backed up and restored together because encrypted GitHub credentials depend on the persisted application master key.
 
 ## License
 
