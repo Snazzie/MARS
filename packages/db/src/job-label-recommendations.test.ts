@@ -69,6 +69,12 @@ describe("resource label recommendation policy", () => {
       "mars-windows-x64-8vcpu-16g",
     ], "windows-x64")?.original).toBe("mars-windows-x64-8vcpu-16g");
   });
+  test("recognizes versioned Ubuntu routes as Linux x64 routing labels", () => {
+    for (const version of ["22", "24", "26"]) {
+      expect(selectRoutingLabel([`mars-any-x64-2vcpu-4g`, `mars-ubuntu-${version}-4vcpu-8g`], "linux-x64")?.route).toBe(`mars-ubuntu-${version}`);
+      expect(selectRoutingLabel([`mars-ubuntu-${version}-4vcpu-8g`], "windows-x64")).toBeNull();
+    }
+  });
 });
 
 describe("getJobLabelRecommendation", () => {

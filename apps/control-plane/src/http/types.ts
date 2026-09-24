@@ -112,7 +112,7 @@ export type ControlPlaneHttpDeps = {
   browserOrigin(): string | null;
   secretBox: SecretBox;
   githubApp?: GitHubAppService;
-  defaultJobImages: Partial<Record<"linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64", string>>;
+  defaultJobImages: Partial<Record<"linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64", string>> & { ubuntuVersion?: "22" | "24" | "26" };
   workerReleaseManifest?: WorkerReleaseManifest;
   workerReleaseCatalog?: WorkerReleaseCatalog;
   workerUpgradeService?: WorkerUpgradeService;

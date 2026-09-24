@@ -3,7 +3,7 @@ import { runtimeDriverForPlatform, runtimeDriverForWorker, type GuestPlatform } 
 import { jsonParameter } from "@mars/db";
 import { storedWorkerDoctor, storedWorkerRuntimeMode, workerPoolEvidence } from "./worker-evidence.ts";
 
-type PoolDefaults = Partial<Record<GuestPlatform, string | undefined>>;
+type PoolDefaults = Partial<Record<GuestPlatform, string | undefined>> & { ubuntuVersion?: "22" | "24" | "26" };
 type WorkerLimits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
 const GIB = 1024 ** 3;
 
@@ -59,7 +59,7 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
       ?? { vcpu: 4, memoryBytes: 6 * GIB, storageBytes: 30 * GIB, concurrency: 1 };
     // Fresh installs expose inert pools until a configured worker supplies capacity
     // and an image digest is available.
-    const label = `mars-${platform}`;
+    const label = platform === "linux-x64" ? `mars-ubuntu-${images.ubuntuVersion ?? "24"}` : `mars-${platform}`;
     const labels = platform === "linux-arm64" ? [label, "ubuntu"] : [label];
     const name = `default-${platform}`;
     const enabled = Boolean(imageDigest && compatibleWorkers.length);

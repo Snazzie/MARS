@@ -68,6 +68,7 @@ export function recommendResourceLabels(input: ResourceLabelRecommendationInput)
 function selectRank(label: ParsedRunnerLabel, platform: string | null): number {
   const normalizedPlatform = platform?.trim().toLowerCase() ?? "";
   if (normalizedPlatform && label.route === `mars-${normalizedPlatform}`) return 3;
+  if (normalizedPlatform === "linux-x64" && /^mars-ubuntu-(22|24|26)$/.test(label.route)) return 3;
   if (label.route === "mars-any-x64" && normalizedPlatform.endsWith("-x64")) return 2;
   if (label.route === "mars-any") return 1;
   return 0;

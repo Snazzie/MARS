@@ -10,14 +10,19 @@ const candidate = (requestedLabels: string[], platform = "linux-x64", triggerLab
 });
 
 describe("runner label routing", () => {
-  test("selects an exact route over neutral alternatives", () => {
-    const options = parseRunnerLabels([
-      "mars-any-2vcpu-4g",
-      "mars-any-x64-3vcpu-5g",
-      "MARS-LINUX-X64-4vcpu-6g",
-    ]);
-    expect(options).not.toBeNull();
-    expect(selectProvisionOption(options!, { platform: "linux-x64", labels: ["mars-linux-x64"], triggerLabel: "mars-linux-x64" })).toMatchObject({ route: "mars-linux-x64", vcpu: 4, memoryGiB: 6 });
+  test("selects the exact Ubuntu image version over neutral alternatives", () => {
+    for (const version of ["22", "24", "26"]) {
+      const route = `mars-ubuntu-${version}`;
+      const options = parseRunnerLabels([
+        "mars-any-2vcpu-4g",
+        "mars-any-x64-3vcpu-5g",
+        `${route.toUpperCase()}-4vcpu-6g`,
+      ]);
+      expect(options).not.toBeNull();
+      expect(selectProvisionOption(options!, { platform: "linux-x64", labels: [route], triggerLabel: route })).toMatchObject({ route, vcpu: 4, memoryGiB: 6 });
+      const otherVersion = version === "22" ? "24" : "22";
+      expect(selectProvisionOption(parseRunnerLabels([`${route}-2vcpu-4g`])!, { platform: "linux-x64", labels: [`mars-ubuntu-${otherVersion}`], triggerLabel: `mars-ubuntu-${otherVersion}` })).toBeNull();
+    }
   });
 
   test("matches x64 neutral alternatives only on x64 pools", () => {

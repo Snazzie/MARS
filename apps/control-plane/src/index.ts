@@ -418,8 +418,13 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   if (production && !workerReleaseContractVersion) throw new Error("MARS_WORKER_CONTRACT_VERSION is required");
   const workerReleaseCatalog = new WorkerReleaseCatalog({ controlPlaneContractVersion: workerReleaseContractVersion });
   const workerReleaseManifest = await resolveWorkerReleaseManifest(production, workerReleaseManifestUrl, options.workerReleaseManifest);
+  const ubuntuVersion = Bun.env.DEFAULT_JOB_UBUNTU_VERSION?.trim() || "24";
+  if (!["22", "24", "26"].includes(ubuntuVersion)) throw new Error("DEFAULT_JOB_UBUNTU_VERSION must be 22, 24, or 26");
+  if (ubuntuVersion !== "24" && !Bun.env.DEFAULT_JOB_IMAGE_LINUX_X64) throw new Error("DEFAULT_JOB_IMAGE_LINUX_X64 is required for a non-24 Ubuntu version");
   const env = {
+    // This must describe the installed golden image, not merely the requested workflow label.
     DEFAULT_IMAGES: {
+      ubuntuVersion: ubuntuVersion as "22" | "24" | "26",
       "linux-x64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_X64 ?? (workerReleaseManifest?.platforms["linux-x64"]?.goldenImage ? `sha256:${workerReleaseManifest.platforms["linux-x64"].goldenImage.sha256}` : undefined),
       "linux-arm64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_ARM64 ?? workerReleaseManifest?.platforms["linux-arm64"]?.jobImage,
       "windows-x64": Bun.env.DEFAULT_JOB_IMAGE_WINDOWS_X64,

@@ -46,7 +46,7 @@ export function registerOnboardingRoutes(app: Hono<ControlPlaneEnv>, deps: Contr
       "windows-x64": deps.defaultJobImages["windows-x64"] ?? null,
       "macos-arm64": deps.defaultJobImages["macos-arm64"] ?? null,
     };
-    return c.json(OnboardingDetail.parse({ ...detail, defaultImageDigests }), { headers: { "cache-control": "no-store" } });
+    return c.json(OnboardingDetail.parse({ ...detail, defaultImageDigests, ubuntuVersion: deps.defaultJobImages.ubuntuVersion ?? "24" }), { headers: { "cache-control": "no-store" } });
   });
   app.put("/api/onboarding/worker", async (c) => {
     const user = await deps.currentUser(c.req.raw); if (!user) return c.json({ error:"unauthorized" },401); if (!user.isGlobalAdmin) return c.json({ error:"forbidden" },403); if (!hasKey(c)) return c.json({ error:"Idempotency-Key required" },400);

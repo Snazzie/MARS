@@ -67,6 +67,21 @@ test("creates a Tart Ubuntu ARM64 pool from a dual-platform Mac worker", async (
   expect(inserted.find((values) => values.includes("macos-arm64"))).toContain(macDigest);
 });
 
+test("routes each configured Ubuntu x64 image version through its own trigger label", async () => {
+  for (const version of ["22", "24", "26"] as const) {
+    const inserted: unknown[][] = [];
+    const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      if (strings.join(" ").toLowerCase().includes("insert into runner_pools")) inserted.push(values);
+      return [];
+    }, { json: (value: unknown) => value });
+    await ensureDefaultPools(db as never, { ubuntuVersion: version, "linux-x64": "sha256:image" });
+    const linux = inserted.find((values) => values.includes("linux-x64"))!;
+    expect(linux).toContain(`mars-ubuntu-${version}`);
+    expect(linux).toContainEqual([`mars-ubuntu-${version}`]);
+    expect(linux).not.toContain("mars-linux-x64");
+  }
+});
+
 test("lists all default pools before any worker or image is available", async () => {
   const inserted: unknown[][] = [];
   const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {

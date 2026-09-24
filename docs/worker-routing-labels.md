@@ -8,7 +8,13 @@ requested option must use the composite form:
 ```
 
 The route may be `mars-any`, `mars-any-x64`, or a pool trigger route such as
-`mars-windows-x64`. CPU and memory are required positive safe integers, and the
+`mars-windows-x64` or `mars-ubuntu-24`. Ubuntu x64 routes include the image's
+major version: `mars-ubuntu-22`, `mars-ubuntu-24`, or `mars-ubuntu-26`.
+The bundled Linux x64 golden image is Ubuntu 24; deployments using an Ubuntu 22
+or 26 golden image must set both `DEFAULT_JOB_UBUNTU_VERSION` and
+`DEFAULT_JOB_IMAGE_LINUX_X64` to that image's version and digest. A versioned
+route matches only a pool with the same trigger; requesting 26 never runs on a
+24 or 22 image. CPU and memory are required positive safe integers, and the
 suffixes are case-insensitive. For example:
 
 ```yaml
@@ -30,7 +36,7 @@ runs-on:
   - mars-windows-x64-4vcpu-20g
   - mars-windows-arm64-4vcpu-20g
   - mars-macos-arm64-4vcpu-10g
-  - mars-linux-x64-4vcpu-10g
+  - mars-ubuntu-24-4vcpu-10g
 ```
 
 The exact pool trigger route wins when it matches a pool. Otherwise

@@ -316,6 +316,18 @@ test("defaults each supported pool to one canonical platform architecture label"
     expect(html).not.toContain("self-hosted");
   }
 });
+test("shows the configured Ubuntu version instead of a generic Linux x64 route", () => {
+  for (const ubuntuVersion of ["22", "24", "26"] as const) {
+    const html = markup({
+      version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true,
+      step: "labels", worker, organizations: [], github: { appConfigured: true, organizationId: "org-1", installation: null, repositories: [] },
+      pool: null, ubuntuVersion,
+    });
+    expect(html).toContain(`runs-on: mars-ubuntu-${ubuntuVersion}`);
+    expect(html).not.toContain("mars-linux-x64");
+  }
+});
+
 test("keeps onboarding in Trigger labels while the smoke workflow is active", () => {
   const html = markup({
     version: 1,
