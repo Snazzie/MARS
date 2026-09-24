@@ -8,6 +8,7 @@ import type { DiscoveryHealthSnapshot } from "../discovery-health.ts";
 import type { WorkerReleaseCatalog } from "../worker-release.ts";
 import type { WorkerUpgradeService } from "../worker-upgrade.ts";
 import type { WorkerReleaseManifest } from "@mars/contracts";
+import type { DispatchHealthSnapshot } from "../dispatch-health.ts";
 export type ControlPlaneEnv = { Variables: { user: SessionUser } };
 
 export type DevelopmentArtifact = {
@@ -154,5 +155,6 @@ export type ControlPlaneHttpDeps = {
   workerConnected?: (workerId: string) => boolean;
   onWorkerChanged(workerId: string): void | Promise<void>;
   health(): ControlPlaneHealth;
+  dispatchHealth?: (organizationIds: readonly string[] | null) => DispatchHealthSnapshot;
   controlPlaneLogs?: ControlPlaneLogSource;
 };

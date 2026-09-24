@@ -151,17 +151,21 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
   const parsedPayload = WorkerEventPayload.safeParse({ type: event.type, payload: event.payload });
   if (!parsedPayload.success || parsedPayload.data.type === "command.accepted" || parsedPayload.data.type === "worker.build_completed" || parsedPayload.data.type === "worker.build_failed" || parsedPayload.data.type === "worker.cache_entry_upsert" || parsedPayload.data.type === "worker.cache_entry_deleted" || parsedPayload.data.type === "worker.cache_snapshot_begin" || parsedPayload.data.type === "worker.cache_snapshot_page" || parsedPayload.data.type === "worker.cache_snapshot_end" || parsedPayload.data.type === "worker.runner_cache_status" || parsedPayload.data.type === "diagnostic.chunk" || parsedPayload.data.type === "worker.logs" || parsedPayload.data.type === "job.log" || parsedPayload.data.type === "job.resource_sample") return false;
 
+  const transition = (applied: boolean, state: string): boolean => {
+    console.log("Worker lease transition", { workerId: event.workerId, eventId: event.id, eventType: event.type, leaseId: event.payload.leaseId, commandId: event.payload.commandId, state, applied });
+    return applied;
+  };
   if (parsedPayload.data.type === "sandbox_attested") {
     const payload = parsedPayload.data.payload;
     const rows = await db`UPDATE runner_leases SET state='sandbox_ready',runtime_instance_id=${payload.runtimeInstanceId},terminal_result=${jsonParameter(db, { observed: payload.observed })},expires_at=GREATEST(expires_at,now()+interval '10 minutes'),updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state='dispatched' RETURNING id`;
-    if (!rows[0]) return false;
+    if (!transition(Boolean(rows[0]), "sandbox_ready")) return false;
     await updateDashboardStatus(db, payload.leaseId, event.workerId, payload.nonce, "in_progress", event.occurredAt, null);
     return true;
   }
   if (parsedPayload.data.type === "lease.declined") {
     const payload = parsedPayload.data.payload;
     const rows = await db`UPDATE runner_leases SET state='failed',cleanup_state='none',terminal_result=${jsonParameter(db, { reason: "pickup_paused" })},updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('reserved','dispatched') RETURNING id`;
-    if (!rows[0]) return false;
+    if (!transition(Boolean(rows[0]), "failed")) return false;
     return true;
   }
   if (parsedPayload.data.type === "runner.finished") {
@@ -170,7 +174,7 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
     const state = failed ? "failed" : "completed";
     const terminalResult = payload.oom ? { exitCode: payload.exitCode, reason: "out_of_memory", oom: payload.oom } : { exitCode: payload.exitCode };
     const rows = await db`UPDATE runner_leases SET state=${state},terminal_result=${jsonParameter(db, terminalResult)},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('sandbox_ready','online','busy') RETURNING id`;
-    if (!rows[0]) return false;
+    if (!transition(Boolean(rows[0]), state)) return false;
     await updateDashboardStatus(db, payload.leaseId, event.workerId, payload.nonce, "completed", event.occurredAt, failed ? "failure" : "success", failed ? "failed" : "completed");
     return true;
   }
@@ -179,25 +183,36 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
     if (payload.reason === "cleanup_failed") {
       return db.begin(async tx => {
         const rows = await tx`UPDATE runner_leases SET cleanup_state='failed',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed') RETURNING id`;
-        if (!rows[0]) return false;
+        if (!transition(Boolean(rows[0]), "cleanup_failed")) return false;
         if (typeof payload.commandId === "string") await tx`UPDATE commands SET state='failed' WHERE id=${payload.commandId} AND worker_id=${event.workerId} AND lease_id=${payload.leaseId} AND state='acknowledged'`;
         return true;
       });
     }
     if (payload.reason === "debug_preserve") {
       const rows = await db`UPDATE runner_leases SET state='failed',terminal_result=${jsonParameter(db, { reason: payload.reason })},cleanup_state='debug_preserved',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed','sandbox_ready','online','busy') RETURNING id`;
-      if (!rows[0]) return false;
+      if (!transition(Boolean(rows[0]), "debug_preserved")) return false;
       await updateDashboardStatus(db, payload.leaseId, event.workerId, payload.nonce, "completed", event.occurredAt, "failure", "failed");
       return true;
     }
     const terminalResult = payload.oom ? { reason: payload.reason, oom: payload.oom } : { reason: payload.reason };
     const rows = await db`UPDATE runner_leases SET state='failed',terminal_result=${jsonParameter(db, terminalResult)},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('dispatched','provisioning','sandbox_ready','online','busy') RETURNING id`;
-    if (!rows[0]) return false;
+    if (!transition(Boolean(rows[0]), "failed")) return false;
     await updateDashboardStatus(db, payload.leaseId, event.workerId, payload.nonce, "completed", event.occurredAt, "failure", "failed");
     return true;
   }
   const payload = parsedPayload.data.payload;
   const rows = await db`UPDATE runner_leases SET state='reaped',cleanup_state='completed',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed') RETURNING id`;
+  let context: { commandType: string | null; terminalResult: { reason?: string; exitCode?: number } | null } | undefined;
+  try {
+    [context] = await db<Array<{ commandType: string | null; terminalResult: { reason?: string; exitCode?: number } | null }>>`
+      SELECT c.type AS "commandType", l.terminal_result AS "terminalResult"
+      FROM runner_leases l LEFT JOIN commands c ON c.id=${payload.commandId ?? null} AND c.lease_id=l.id AND c.worker_id=l.worker_id
+      WHERE l.id=${payload.leaseId} AND l.worker_id=${event.workerId}`;
+  } catch {
+    // Observability must not prevent acknowledgement of a committed lease transition.
+  }
+  const source = context?.commandType?.endsWith(".stop_lease") ? "control_plane_stop" : context?.commandType?.endsWith(".create_lease") ? "worker_lifecycle" : "unknown";
+  console.log("Worker lease transition", { workerId: event.workerId, eventId: event.id, eventType: event.type, leaseId: payload.leaseId, commandId: payload.commandId, state: "reaped", applied: Boolean(rows[0]), cleanupSource: source, terminalReason: context?.terminalResult?.reason ?? (context?.terminalResult?.exitCode === 0 ? "runner_succeeded" : context?.terminalResult?.exitCode != null ? "runner_failed" : "unknown") });
   if (!rows[0]) return false;
   await recordReapedJobTiming(db, payload.leaseId, event.occurredAt);
   return true;

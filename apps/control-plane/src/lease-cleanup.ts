@@ -48,8 +48,10 @@ export async function reapPendingLeases(input: {
     }
     try {
       await input.dispatch({ type: lease.cleanupType, workerId: lease.workerId, leaseId: lease.leaseId, payload: { nonce: lease.nonce } });
+      console.log("Lease cleanup dispatched", { leaseId: lease.leaseId, workerId: lease.workerId, commandType: lease.cleanupType });
       report.dispatched += 1;
-    } catch {
+    } catch (error) {
+      console.error("Lease cleanup dispatch failed", { leaseId: lease.leaseId, workerId: lease.workerId, commandType: lease.cleanupType, error: error instanceof Error ? error.message : String(error) });
       report.failed += 1;
     }
   }

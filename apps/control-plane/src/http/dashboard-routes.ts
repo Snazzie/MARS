@@ -113,7 +113,21 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
       : await listOrganizations(deps.db, user.id);
     return c.json(OrganizationSummary.array().parse(organizations));
   }));
-  app.get("/api/organizations/:organizationId/overview", safe(async (c) => { const org = c.req.param("organizationId"); const period = periodSchema.safeParse(c.req.query("period") || "24h"); if (!period.success) return error(c, 400, "invalid_period", "Invalid period", { issues: period.error.issues }); if (org === "all") return c.json(OverviewDto.parse(await getAllOverview(deps.db, c.get("user").id, period.data))); const denied = await guard(c, deps, org); if (denied) return denied; return c.json(OverviewDto.parse(await getOverview(deps.db, org, period.data))); }));
+  app.get("/api/organizations/:organizationId/overview", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const period = periodSchema.safeParse(c.req.query("period") || "24h");
+    if (!period.success) return error(c, 400, "invalid_period", "Invalid period", { issues: period.error.issues });
+    const user = c.get("user");
+    if (org === "all") {
+      const data = await getAllOverview(deps.db, user.id, period.data);
+      const organizationIds = deps.dispatchHealth ? (await listOrganizations(deps.db, user.id)).map(item => item.id) : [];
+      return c.json(OverviewDto.parse({ ...data, ...(deps.dispatchHealth ? { controlPlane: deps.dispatchHealth(organizationIds) } : {}) }));
+    }
+    const denied = await guard(c, deps, org);
+    if (denied) return denied;
+    const data = await getOverview(deps.db, org, period.data);
+    return c.json(OverviewDto.parse({ ...data, ...(deps.dispatchHealth ? { controlPlane: deps.dispatchHealth([org]) } : {}) }));
+  }));
   app.get("/api/organizations/:organizationId/cost-center", safe(async (c) => { const org = c.req.param("organizationId"); const period = periodSchema.safeParse(c.req.query("period") || "24h"); const pricingProvider = CostCenterPricingProvider.safeParse(c.req.query("provider") || "github"); if (!period.success) return error(c, 400, "invalid_period", "Invalid period", { issues: period.error.issues }); if (!pricingProvider.success) return error(c, 400, "invalid_provider", "Invalid pricing provider", { issues: pricingProvider.error.issues }); if (org !== "all") { const denied = await guard(c, deps, org); if (denied) return denied; } const data = await getGithubRunnerCostCenter(deps.db, org, period.data, c.get("user").id, pricingProvider.data); return c.json(CostCenterDto.parse({ organizationId: org, period: period.data, ...data })); }));
   app.get("/api/organizations/:organizationId/repositories", safe(async (c) => {
     const org = c.req.param("organizationId");

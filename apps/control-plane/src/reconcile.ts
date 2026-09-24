@@ -5,6 +5,7 @@ import type { LeaseReservation } from "@mars/db";
 
 
 export type QueuedRoutingJob = {
+  organizationId?: string;
   installationId: number;
   repositoryId: string | number;
   repository: string;
@@ -27,6 +28,8 @@ export type ReconcileDeps = {
   installationBlocked?: (installationId: number) => boolean;
   workerConnected?: (workerId: string) => boolean;
   preflight?: (job: QueuedRoutingJob) => Promise<boolean>;
+  onDecision?: (job: QueuedRoutingJob, code: string) => void;
+  unmatchedReason?: (job: QueuedRoutingJob) => string;
   reserve: (input: { workerId: string; poolId: string; githubJobId: number; routingKey: string; requested: { vcpu: number; memoryBytes: number; storageBytes: number; concurrency: number } }) => Promise<LeaseReservation>;
   jit: (input: { installationId: number; owner: string; repo: string; runnerName: string; labels: string[]; githubJobId: number }) => Promise<RunnerJitConfig>;
   dispatch: (reservation: LeaseReservation, jit: RunnerJitConfig) => Promise<void>;
@@ -46,14 +49,15 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
   }))));
   let nextJob = 0;
 
+  const decide = (job: QueuedRoutingJob, code: string) => deps.onDecision?.(job, code);
   const processJob = async (queued: QueuedRoutingJob): Promise<void> => {
-    if (seen.has(queued.jobId)) { report.skipped += 1; return; }
+    if (seen.has(queued.jobId)) { report.skipped += 1; decide(queued, "duplicate_job"); return; }
     seen.add(queued.jobId);
     await deps.upsert?.(queued);
     const requestedLabels = queued.labels.map((label) => label.trim()).filter(Boolean);
     const options = parseRunnerLabels(requestedLabels);
-    if (!options) { report.skipped += 1; return; }
-    if (deps.installationBlocked?.(queued.installationId)) { report.skipped += 1; return; }
+    if (!options) { report.skipped += 1; decide(queued, "invalid_provision_labels"); return; }
+    if (deps.installationBlocked?.(queued.installationId)) { report.skipped += 1; decide(queued, "installation_cooldown"); return; }
     const candidateOrder = deps.candidates.length > 1
       ? deps.candidates.map((_, index) => deps.candidates[(queued.jobId + index) % deps.candidates.length])
       : deps.candidates;
@@ -66,10 +70,10 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
       const candidate = { ...value, requestedLabels, pool: { ...value.pool, active: value.pool.active + reserved } };
       return fits(candidate) ? [{ candidate: value, option }] : [];
     });
-    if (blockedInstallations.has(queued.installationId)) { report.skipped += 1; return; }
-    if (compatible.length === 0) { report.skipped += 1; return; }
+    if (blockedInstallations.has(queued.installationId)) { report.skipped += 1; decide(queued, "installation_cooldown"); return; }
+    if (compatible.length === 0) { report.skipped += 1; decide(queued, deps.unmatchedReason?.(queued) ?? "no_eligible_worker_pool"); return; }
     const [owner, repo] = queued.repository.split("/", 2);
-    if (!owner || !repo) { report.failed += 1; return; }
+    if (!owner || !repo) { report.failed += 1; decide(queued, "invalid_repository"); return; }
     let capacityRejected = false;
     for (const selected of compatible) {
       const candidate = selected.candidate;
@@ -80,7 +84,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
       let jitFailed = false;
       try {
         const poolResources = PoolResources.safeParse(candidate.pool.resources);
-        if (!poolResources.success) { report.skipped += 1; return; }
+        if (!poolResources.success) { report.skipped += 1; decide(queued, "resource_ceiling"); return; }
         const requested = { ...poolResources.data, vcpu: option.vcpu, memoryBytes: option.memoryBytes };
         const claimed = await deps.reserve({
           workerId: candidate.worker.id,
@@ -92,6 +96,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
         reservation = claimed;
         if (deps.preflight && !(await deps.preflight(queued))) {
           report.skipped += 1;
+          decide(queued, "github_job_changed");
           await deps.release?.(claimed);
           return;
         }
@@ -102,6 +107,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
         });
         await deps.dispatch(claimed, jit);
         report.reserved += 1;
+        decide(queued, "dispatched");
         return;
       } catch (error) {
         const message = error instanceof Error ? error.message : "unknown";
@@ -109,6 +115,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
           capacityRejected = true;
         } else {
           console.error(`Reconcile job ${queued.jobId} failed: ${message}`);
+          decide(queued, message === "github_rate_limited" ? "github_rate_limited" : jitFailed ? "jit_failed" : "dispatch_failed");
           report.failed += 1;
           if (reservation) {
             if (jitFailed) blockedInstallations.add(queued.installationId);
@@ -119,6 +126,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
         }
         if (reservation) {
           await deps.release?.(reservation);
+          decide(queued, "capacity_exhausted");
           return;
         }
       } finally {
@@ -126,6 +134,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
       }
     }
     if (capacityRejected) report.deferred += 1;
+    if (capacityRejected) decide(queued, "capacity_exhausted");
   };
 
   const worker = async (): Promise<void> => {

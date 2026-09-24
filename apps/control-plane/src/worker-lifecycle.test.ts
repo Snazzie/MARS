@@ -54,6 +54,29 @@ test("records runner completion and final VM reap monotonically", async () => {
   expect(reaped.calls[0]!.query).toContain("state='reaped'");
   expect(reaped.calls[0]!.query).toContain("cleanup_state='completed'");
 });
+test("distinguishes duplicate reap events and identifies cleanup source and terminal reason", async () => {
+  let transitions = 0;
+  const db = (async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ");
+    if (query.includes("UPDATE runner_leases")) return transitions++ === 0 ? [{ id: leaseId }] : [];
+    if (query.includes("SELECT c.type")) return [{ commandType: "windows-container.stop_lease", terminalResult: { exitCode: 0 } }];
+    return [];
+  }) as unknown as DatabaseClient;
+  const observed: Record<string, unknown>[] = [];
+  const originalLog = console.log;
+  console.log = (message, detail) => { if (message === "Worker lease transition") observed.push(detail as Record<string, unknown>); };
+  try {
+    const reaped = event("lease.reaped", { leaseId, nonce, commandId: crypto.randomUUID() });
+    expect(await applyWorkerLeaseEvent(db, reaped)).toBe(true);
+    expect(await applyWorkerLeaseEvent(db, reaped)).toBe(false);
+  } finally {
+    console.log = originalLog;
+  }
+  expect(observed.map(({ applied, cleanupSource, terminalReason }) => ({ applied, cleanupSource, terminalReason }))).toEqual([
+    { applied: true, cleanupSource: "control_plane_stop", terminalReason: "runner_succeeded" },
+    { applied: false, cleanupSource: "control_plane_stop", terminalReason: "runner_succeeded" },
+  ]);
+});
 test("maps a nonzero runner exit to a failed terminal lease", async () => {
   const failed = acceptingDb();
   expect(await applyWorkerLeaseEvent(failed.db, event("runner.finished", { leaseId, nonce, exitCode: 17 }))).toBe(true);

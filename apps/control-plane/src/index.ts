@@ -14,6 +14,7 @@ import { reapPendingLeases } from "./lease-cleanup.ts";
 import { startReconciliationScheduler } from "./reconcile-loop.ts";
 import { pruneExpiredData } from "./retention.ts";
 import { DiscoveryHealthMonitor, isDiscoveryCycleSuccessful } from "./discovery-health.ts";
+import { DispatchHealthMonitor, type DispatchDecision } from "./dispatch-health.ts";
 import { createControlPlaneApp } from "./http/app.ts";
 import type { ControlPlaneHttpDeps, ControlPlaneLogLevel, ControlPlaneLogSource, DevelopmentArtifact, DevelopmentLinuxArtifacts, DevelopmentLinuxArm64Artifacts, DevelopmentMacosArtifacts, DevelopmentWindowsArtifacts } from "./http/types.ts";
 import type { ControlPlaneSetup } from "./control-plane-setup.ts";
@@ -482,9 +483,10 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const discoveryIntervalMs = Number(Bun.env.DISCOVERY_INTERVAL_MS ?? 300_000);
   const reconciliationIntervalMs = Number(Bun.env.JOB_RECONCILIATION_INTERVAL_MS ?? 5_000);
   const discoveryHealth = new DiscoveryHealthMonitor(discoveryIntervalMs, Date.parse(startedAt));
+  const dispatchHealth = new DispatchHealthMonitor(reconciliationIntervalMs);
   const githubApp = options.githubApp ?? new GitHubAppService({ db, secretBox, publicOrigin: initialized.setup.publicOrigin, webhookOrigin: () => configuredWebhookOrigin });
   const githubRateLimits = new GithubRateLimitGate();
-  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, developmentWindowsArtifacts, developmentLinuxArtifacts, developmentLinuxArm64Artifacts, developmentMacosArtifacts, windowsContainerBuild, windowsContainerArtifacts, workerInstallerRoot, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerChanged: () => ensureDefaultPools(db, env.DEFAULT_IMAGES), health: () => ({ buildId: controlPlaneBuildId(), startedAt, discovery: discoveryHealth.snapshot() }), controlPlaneLogs: options.controlPlaneLogs });
+  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, developmentWindowsArtifacts, developmentLinuxArtifacts, developmentLinuxArm64Artifacts, developmentMacosArtifacts, windowsContainerBuild, windowsContainerArtifacts, workerInstallerRoot, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerChanged: () => ensureDefaultPools(db, env.DEFAULT_IMAGES), health: () => ({ buildId: controlPlaneBuildId(), startedAt, discovery: discoveryHealth.snapshot() }), dispatchHealth: organizationIds => dispatchHealth.snapshot(organizationIds), controlPlaneLogs: options.controlPlaneLogs });
   let triggerReconciliation = () => Promise.resolve();
   const gateway = createControlPlaneGateway({ db, httpFetch: async request => await httpApp.fetch(request), current, requestSource: (request, activeServer) => { requestSources.set(request, activeServer.requestIP(request)?.address ?? "unknown"); return requestSources.get(request) ?? "unknown"; }, dispatcher, refreshDefaultPools: () => ensureDefaultPools(db, env.DEFAULT_IMAGES), triggerReconciliation: () => triggerReconciliation(), requestId: () => crypto.randomUUID() });
   let server!: Server<ControlPlaneSocketData>;
@@ -499,7 +501,12 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
     };
     let lastQueuedDiscoveryAt = 0;
     let lastGithubLeaseReconciliationAt = 0;
+    let lastDispatchStatusLogAt = 0;
+    let lastDispatchStatusSignature = "";
     const reconciliationScheduler = startReconciliationScheduler(async () => {
+      const decisions: DispatchDecision[] = [];
+      let inspected = 0;
+      let dispatchSucceeded = false;
       try {
         const report = await runQueuedJobReconciliation({
           db,
@@ -509,7 +516,18 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
           contractVersion: workerReleaseContractVersion ?? CURRENT_WORKER_CONTRACT_VERSION,
           installationBlocked: installationId => githubRateLimits.isCoolingDown(installationId),
           workerConnected: workerId => dispatcher.isConnected(workerId),
+          onDecision: decision => decisions.push(decision),
+          onQueueSize: size => { inspected = size; },
         });
+        dispatchHealth.markSuccess(decisions);
+        dispatchSucceeded = true;
+        const status = dispatchHealth.snapshot(null);
+        const signature = JSON.stringify({ inspected, reserved: report.reserved, reasons: status.reasons });
+        if (signature !== lastDispatchStatusSignature || Date.now() - lastDispatchStatusLogAt >= 60_000) {
+          console.log("Control plane dispatch status", { inspected, ...status });
+          lastDispatchStatusSignature = signature;
+          lastDispatchStatusLogAt = Date.now();
+        }
         const reconciliationMessage = formatJobReconciliationReport(report);
         if (reconciliationMessage) console.log(reconciliationMessage);
         if (Date.now() - lastGithubLeaseReconciliationAt >= 60_000) {
@@ -526,7 +544,13 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
           const pickup = await discoverQueuedRepositoryJobs(discoveryDeps);
           if (pickup.failed) console.error(`Queued GitHub job pickup: repositories=${pickup.repositories} discovered=${pickup.discovered} updated=${pickup.updated} failed=${pickup.failed}`);
         }
-      } catch (error) { console.error("Job reconciliation failed", error); } finally {
+      } catch (error) {
+        if (!dispatchSucceeded) {
+          dispatchHealth.markFailure();
+          console.error("Control plane dispatch status", dispatchHealth.snapshot(null));
+        }
+        console.error(dispatchSucceeded ? "Background lease reconciliation failed" : "Job reconciliation failed", error);
+      } finally {
         try { const cleanup = await reapPendingLeases({ db, dispatch: dispatcher.dispatch.bind(dispatcher), workerConnected: workerId => dispatcher.isConnected(workerId) }); if (cleanup.dispatched || cleanup.failed) console.log(`Lease cleanup tick: dispatched=${cleanup.dispatched} failed=${cleanup.failed} skipped=${cleanup.skipped}`); await completeOnboardingIfReady(db); } catch (error) { console.error("Lease cleanup failed", error); }
       }
     }, reconciliationIntervalMs);

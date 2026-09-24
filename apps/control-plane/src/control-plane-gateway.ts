@@ -262,7 +262,18 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           const accepted = await handleAuthenticatedWorkerEvent(options.db, options.dispatcher, frame, ws);
           if (frame.type === "lease.declined" && accepted) void options.triggerReconciliation();
           if (!accepted) throw new Error("invalid worker event");
-          console.log(`Worker event: ${ws.data.workerId} type=${frame.type}`);
+          if (frame.type !== "job.resource_sample" && frame.type !== "job.log") {
+            console.log("Worker event received", {
+              workerId: ws.data.workerId,
+              eventId: frame.id,
+              eventType: frame.type,
+              leaseId: frame.payload?.leaseId,
+              commandId: frame.payload?.commandId,
+              jobId: frame.payload?.jobId,
+              reason: frame.payload?.reason,
+              exitCode: frame.payload?.exitCode,
+            });
+          }
           if (typeof frame.id === "string") ws.send(JSON.stringify({ version: 1, type: "event_ack", workerId: ws.data.workerId, eventId: frame.id }));
         }
       }

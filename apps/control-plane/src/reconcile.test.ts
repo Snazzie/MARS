@@ -73,14 +73,18 @@ test("routes multi-platform alternatives to an online worker", async () => {
 });
 
 test("does not reserve beyond active pool capacity", async () => {
+  const decisions: string[] = [];
   const result = await reconcileQueuedJobs({
     queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 9, labels: ["mars-macos-arm64-2vcpu-4g"] }],
     candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 1, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
+    onDecision: (_job, code) => decisions.push(code),
+    unmatchedReason: () => "pool_concurrency",
     reserve: async () => { throw new Error("must not reserve"); },
     jit: async () => { throw new Error("must not generate"); },
     dispatch: async () => {},
   });
   expect(result.skipped).toBe(1);
+  expect(decisions).toEqual(["pool_concurrency"]);
 });
 
 test("uses every available pool slot for one installation", async () => {

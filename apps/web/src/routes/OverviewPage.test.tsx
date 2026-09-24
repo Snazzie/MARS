@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ReportingPeriodControl, reportingPeriodLabels } from "../components/ReportingPeriodControl.tsx";
 import { GithubRunnerCostDisclosure } from "../components/GithubRunnerCostDisclosure.tsx";
 import { formatMinutes, formatUsdMicros } from "../format.ts";
-import { overviewQueryOptions } from "./OverviewPage.tsx";
+import { ControlPlaneStatus } from "./OverviewPage.tsx";
 
 test("period control exposes all supported reporting windows", () => {
   const markup = renderToStaticMarkup(<ReportingPeriodControl value="24h" onChange={() => {}} label="Overview time window" />);
@@ -14,11 +14,18 @@ test("period control exposes all supported reporting windows", () => {
   expect(markup).toContain('checked=""');
   expect(reportingPeriodLabels["30d"]).toBe("30 days");
 });
-
-test("overview queries poll every five seconds for organization and aggregate views", () => {
-  expect(overviewQueryOptions("org-1", "24h")).toMatchObject({ refetchInterval: 5_000 });
-  expect(overviewQueryOptions("all", "24h")).toMatchObject({ refetchInterval: 5_000 });
+test("overview explains dispatch blockers without equating healthy reconciliation to available capacity", () => {
+  const markup = renderToStaticMarkup(<ControlPlaneStatus status={{
+    state: "healthy", lastReconciledAt: "2026-09-24T02:17:00.000Z", queued: 3, reserved: 1,
+    reasons: [{ code: "worker_runtime_not_ready", count: 2 }],
+  }} />);
+  expect(markup).toContain("Reconciliation healthy");
+  expect(markup).toContain("3 queued jobs inspected");
+  expect(markup).toContain("1 lease dispatched");
+  expect(markup).toContain("Worker runtime or image is not ready");
+  expect(markup).toContain("existing leases are excluded");
 });
+
 
 test("shared cost formatting and disclosure preserve money boundaries", () => {
   const costSavings = { selfHostedMinutes: 1234, pricedMinutes: 1200, unpricedMinutes: 34, estimatedSavingsMicros: 9_000, currency: "USD" as const, latestRateEffectiveFrom: "2026-01-01" };

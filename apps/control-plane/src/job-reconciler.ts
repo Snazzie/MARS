@@ -21,6 +21,8 @@ export interface JobReconciliationDeps {
   contractVersion: string;
   workerConnected?: (workerId: string) => boolean;
   installationBlocked?: (installationId: number) => boolean;
+  onDecision?: (decision: { organizationId: string; jobId: number; code: string }) => void;
+  onQueueSize?: (queued: number) => void;
   repositoryFullName?: string;
 }
 function jsonValue(value: unknown): unknown {
@@ -80,6 +82,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       AND (${deps.repositoryFullName ?? ""}='' OR repo.full_name=${deps.repositoryFullName ?? ""})
     ORDER BY j.queued_at ASC, j.github_job_id ASC
     FOR UPDATE OF j SKIP LOCKED`;
+  deps.onQueueSize?.(queuedRows.length);
   if (!queuedRows.length) return { reserved: 0, deferred: 0, skipped: 0, failed: 0 };
 
   const queuedByJob = new Map<number, typeof queuedRows[number]>();
@@ -130,6 +133,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
   const normalizedLabels = (labels: readonly string[]) => [...new Set(labels.map((label) => label.trim().toLowerCase()).filter(Boolean))];
   const reconciled = await reconcileQueuedJobs({
     queued: queuedRows.map((row) => ({
+      organizationId: String(row.organizationId),
       installationId: Number(row.installationId),
       repositoryId: String(row.repositoryId),
       repository: String(row.repository),
@@ -138,6 +142,16 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       labels: stringArray(row.labels),
     })),
     candidates,
+    onDecision: (job, code) => deps.onDecision?.({ organizationId: job.organizationId ?? "", jobId: job.jobId, code }),
+    unmatchedReason: (job) => {
+      if (sqlCandidates.length === 0) return "no_eligible_worker_pool";
+      const reasons = sqlCandidates.map(candidate => reason({
+        ...candidate,
+        requestedLabels: job.labels,
+        worker: { ...candidate.worker, connectionState: deps.workerConnected && !deps.workerConnected(candidate.worker.id) ? "offline" : candidate.worker.connectionState },
+      }));
+      return reasons.find(code => code !== "no_matching_labels" && code !== "admissible") ?? (reasons.includes("admissible") ? "pool_concurrency" : "no_matching_labels");
+    },
     workerConnected: deps.workerConnected,
     installationBlocked: (installationId) => blockedInstallations.has(installationId) || Boolean(deps.installationBlocked?.(installationId)),
     preflight: async (job) => {

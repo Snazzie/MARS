@@ -1284,3 +1284,13 @@ a:active {
 .control-plane-log-level{display:inline-block;min-width:5ch;text-transform:uppercase}
 .control-plane-log-error .control-plane-log-level{color:#ff8b9a}
 .control-plane-log-warn .control-plane-log-level{color:#ffb454}
+
+.dispatch-status-panel{grid-column:1/-1;background:var(--ui-surface);border:1px solid var(--ui-border);border-radius:var(--radius);padding:20px}
+.dispatch-status-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.dispatch-status-heading h2{font-size:1rem;margin:0}
+.dispatch-status-heading strong{font-size:.82rem;color:var(--ui-primary)}
+.dispatch-status-heading strong[data-state="degraded"]{color:var(--ui-danger,#d94f5c)}
+.dispatch-status-heading strong[data-state="starting"]{color:var(--ui-text-muted)}
+.dispatch-status-panel p,.dispatch-status-panel small{color:var(--ui-text-muted);font-size:.82rem}
+.dispatch-status-panel ul{list-style:none;margin:12px 0;padding:0;display:grid;gap:6px}
+.dispatch-status-panel li{display:flex;justify-content:space-between;gap:12px;font-size:.85rem}
