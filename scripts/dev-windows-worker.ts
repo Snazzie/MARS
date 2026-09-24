@@ -74,6 +74,7 @@ async function main(): Promise<void> {
       MARS_WINDOWS_CONTAINER_PREFIX: "mars-dev",
       MARS_ALLOW_LOCAL_CONTAINER_IMAGE: "true",
       MARS_WORKER_VERSION: "0.0.0",
+      MARS_DEV_WORKER_CONSOLE_LOGS: "true",
       MARS_WORKER_CONTRACT_VERSION: CURRENT_WORKER_CONTRACT_VERSION,
       MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST: manifestPath,
       MARS_ACTION_CACHE_ROOT: join(root, "action-cache"),

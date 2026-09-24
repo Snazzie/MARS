@@ -282,6 +282,21 @@ type WindowsWorkerCommandContext = {
 
 
 const normalizedError = (error: unknown): string => error instanceof Error ? error.message : String(error);
+export function logDevelopmentWorkerEvent(workerEvent: WorkerEvent): void {
+  if (workerEvent.type === "job.resource_sample") return;
+  if (workerEvent.type === "job.log") {
+    const content = workerEvent.payload.content;
+    if (typeof content === "string") process.stdout.write(content);
+    return;
+  }
+  console.log("Development worker event", {
+    type: workerEvent.type,
+    commandId: workerEvent.payload.commandId,
+    leaseId: workerEvent.payload.leaseId,
+    reason: workerEvent.payload.reason,
+    exitCode: workerEvent.payload.exitCode,
+  });
+}
 export async function executeWindowsWorkerCommand(command: WorkerCommand, context: WindowsWorkerCommandContext): Promise<void> {
   const { mode, limits, cache, cacheService, driver, identity, activeLeases, acceptingLeases, send, sendDoctor } = context;
   if (command.type === "worker.collect_logs") {
@@ -380,6 +395,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
   const pickupState = await openLeasePickupState(leasePickupStateFile());
   const activeLeases = new Map<string, Promise<void>>();
   const eventTransport = new WorkerEventTransport(() => cacheService.runnerCacheStatus().enabled);
+  const developmentConsole = Bun.env.MARS_DEV_WORKER_CONSOLE_LOGS === "true";
   const publishInventory = () => { void writeLeasePickupState(leasePickupStateFile(), pickupState.acceptingLeases, activeLeases.size); };
   const sendDoctor = async (ws: WebSocket): Promise<void> => {
     publishInventory();
@@ -407,11 +423,13 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
       url.searchParams.set("workerId", identity.workerId);
       const ws = await connectWorkerSocket(url.toString());
       const closed = waitForWorkerSocketClose(ws);
+      if (developmentConsole) ws.addEventListener("close", event => console.warn("Development worker connection closed", { workerId: identity.workerId, code: event.code, reason: event.reason }));
       ws.onmessage = async (message) => {
         try {
           const frame = JSON.parse(String(message.data)) as Record<string, unknown>;
           if (frame.type === "challenge") return ws.send(JSON.stringify(auth(String(frame.nonce), identity)));
           if (frame.type === "authenticated") {
+            if (developmentConsole) console.log("Development worker authenticated", { workerId: identity.workerId });
             eventTransport.bind(ws);
             if (Bun.env.MARS_JOIN_CODE_FILE) await unlink(Bun.env.MARS_JOIN_CODE_FILE).catch(() => {});
             await emitActionCacheSnapshot(cacheService, (type, payload) => {
@@ -430,6 +448,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
             close: () => ws.close(1011, "worker command failed"),
             sendDoctor: () => sendDoctor(ws),
             execute: async command => {
+              if (developmentConsole) console.log("Development worker command", { type: command.type, commandId: command.id, leaseId: command.leaseId });
               const cacheWasEnabled = cacheService.runnerCacheStatus().enabled;
               await executeWindowsWorkerCommand(command, {
                 mode: mode === "container" ? "container" : "vm",
@@ -440,7 +459,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
                 acceptingLeases: () => pickupState.acceptingLeases,
                 identity,
                 activeLeases,
-                send: workerEvent => eventTransport.send(workerEvent),
+                send: workerEvent => { if (developmentConsole) logDevelopmentWorkerEvent(workerEvent); eventTransport.send(workerEvent); },
                 sendDoctor: () => { void sendDoctor(ws); },
               });
               if (command.type === "worker.configure" && !cacheWasEnabled && cacheService.runnerCacheStatus().enabled) {
