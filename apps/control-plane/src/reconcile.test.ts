@@ -90,6 +90,7 @@ test("does not reserve beyond active pool capacity", async () => {
 test("uses every available pool slot for one installation", async () => {
   const jitInstallations: number[] = [];
   let lease = 0;
+  const requestedConcurrency: number[] = [];
   const result = await reconcileQueuedJobs({
     queued: [
       { installationId: 42, repositoryId: 1, repository: "acme/one", runId: 1, jobId: 1, labels: ["mars-windows-x64-2vcpu-4g"] },
@@ -97,11 +98,12 @@ test("uses every available pool slot for one installation", async () => {
       { installationId: 43, repositoryId: 3, repository: "acme/three", runId: 3, jobId: 3, labels: ["mars-windows-x64-2vcpu-4g"] },
     ],
     candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } }],
-    reserve: async (input) => ({ id: `lease-${++lease}`, nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested }),
+    reserve: async (input) => { requestedConcurrency.push(input.requested.concurrency); return { id: `lease-${++lease}`, nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested }; },
     jit: async ({ installationId }) => { jitInstallations.push(installationId); return { encodedJitConfig: "config", runnerName: "runner", labels: ["mars-windows-x64-2vcpu-4g"], expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
     dispatch: async () => {},
   });
   expect(jitInstallations).toEqual([42, 42, 43]);
+  expect(requestedConcurrency).toEqual([1, 1, 1]);
   expect(result).toEqual({ reserved: 3, deferred: 0, skipped: 0, failed: 0 });
 });
 test("dispatches three jobs concurrently when bounded capacity allows it", async () => {

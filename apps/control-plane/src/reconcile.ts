@@ -85,7 +85,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
       try {
         const poolResources = PoolResources.safeParse(candidate.pool.resources);
         if (!poolResources.success) { report.skipped += 1; decide(queued, "resource_ceiling"); return; }
-        const requested = { ...poolResources.data, vcpu: option.vcpu, memoryBytes: option.memoryBytes };
+        const requested = { ...poolResources.data, vcpu: option.vcpu, memoryBytes: option.memoryBytes, concurrency: 1 };
         const claimed = await deps.reserve({
           workerId: candidate.worker.id,
           poolId: candidate.pool.id,
