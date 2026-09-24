@@ -24,6 +24,11 @@ const worker = {
   capacity,
   limits: null,
 };
+test("offers Ubuntu ARM64 by default for a new Mac, without changing adopted Mac capability", () => {
+  const render = (admissionState: "pending" | "adopted") => renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><WorkerConfigurationForm worker={{ ...worker, platform: "macos-arm64", guestPlatforms: ["macos-arm64"], admissionState }} onConfigured={() => {}} /></QueryClientProvider>);
+  expect(render("pending")).toMatch(/name="allowUbuntuArm64" checked=""/);
+  expect(render("adopted")).toMatch(/name="allowUbuntuArm64"(?! checked)/);
+});
 test("bounds appliance allocation by total capacity, not free telemetry", () => {
   const client = new QueryClient();
   const markup = renderToStaticMarkup(<QueryClientProvider client={client}><WorkerConfigurationForm worker={{ ...worker, capacity: { ...capacity, freeVcpu: 2, freeMemoryBytes: 2 * 1024 ** 3, freeStorageBytes: 4 * 1024 ** 3 } }} onConfigured={() => {}} /></QueryClientProvider>);

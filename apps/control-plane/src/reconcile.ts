@@ -95,7 +95,8 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
           await deps.release?.(claimed);
           return;
         }
-        const jit = await deps.jit({ installationId: queued.installationId, owner, repo, runnerName: resolvedRunnerName(candidate.worker.name ?? "", candidate.worker.id, candidate.pool.platform), labels: requestedLabels, githubJobId: queued.jobId }).catch((error) => {
+        const runnerLabels = candidate.pool.platform === "linux-arm64" ? [...requestedLabels, "ubuntu"] : requestedLabels;
+        const jit = await deps.jit({ installationId: queued.installationId, owner, repo, runnerName: resolvedRunnerName(candidate.worker.name ?? "", candidate.worker.id, candidate.pool.platform), labels: runnerLabels, githubJobId: queued.jobId }).catch((error) => {
           jitFailed = true;
           throw error;
         });

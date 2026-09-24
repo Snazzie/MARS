@@ -13,7 +13,7 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
   const discard = useMutation({ mutationFn: rejectPendingWorker, onSuccess: () => onDiscard?.(), onError: (reason) => setError(reason instanceof Error ? reason.message : "Could not discard the pending worker.") });
   const platform = worker.platform ?? "linux-x64";
   const canEditGuests = !organizationId || (worker.draining === true && worker.activeSandboxes === 0);
-  const [allowLinux, setAllowLinux] = useState(() => worker.guestPlatforms?.includes(platform === "macos-arm64" ? "linux-arm64" : "linux-x64") ?? false);
+  const [allowLinux, setAllowLinux] = useState(() => worker.guestPlatforms?.includes(platform === "macos-arm64" ? "linux-arm64" : "linux-x64") || (platform === "macos-arm64" && !adopted));
   const [vcpu, setVcpu] = useState(String(c.actualVcpu));
   const [ram, setRam] = useState(initialGiB(c.actualMemoryBytes));
   const [disk, setDisk] = useState(initialGiB(c.actualStorageBytes));

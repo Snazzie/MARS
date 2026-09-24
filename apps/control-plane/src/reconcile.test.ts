@@ -36,6 +36,20 @@ test("dispatches an architecture-neutral job through an architecture-specific po
   expect(jitLabels).toEqual(["mars-any-2vcpu-4g"]);
   expect(runnerName).toMatch(/^mars-mac-studio-macos-arm64-[0-9a-f-]{36}$/);
 });
+
+test("registers Ubuntu only on a Linux ARM64 Tart guest", async () => {
+  const labels = ["mars-linux-arm64-2vcpu-4g"];
+  let jitLabels: string[] = [];
+  const result = await reconcileQueuedJobs({
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 6, labels }],
+    candidates: [{ requestedLabels: [], worker: { id: "mac", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "ubuntu-pool", platform: "linux-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-linux-arm64", "ubuntu"], triggerLabel: "mars-linux-arm64" } }],
+    reserve: async (input) => ({ id: "lease", nonce: "n".repeat(32), workerId: input.workerId, poolId: input.poolId, expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested }),
+    jit: async (input) => { jitLabels = input.labels; return { encodedJitConfig: "config", runnerName: input.runnerName, labels: input.labels, expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
+    dispatch: async () => {},
+  });
+  expect(result.reserved).toBe(1);
+  expect(jitLabels).toEqual([...labels, "ubuntu"]);
+});
 test("routes multi-platform alternatives to an online worker", async () => {
   let selectedWorker = "";
   const worker = (id: string, platform: string, connectionState: "online" | "offline") => ({

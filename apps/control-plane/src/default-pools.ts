@@ -43,11 +43,11 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
     let compatibleWorkers = configuredWorkers.filter(({ worker }) => guestPlatformsForWorker(worker).includes(platform));
     let driver = runtimeDriverForPlatform(platform);
     let imageDigest = images[platform];
-    if (platform === "linux-arm64") {
+    if (platform === "linux-arm64" || platform === "macos-arm64") {
       compatibleWorkers = compatibleWorkers.filter(({ worker }) => worker.platform === "macos-arm64");
       driver = "tart-vm";
-      imageDigest = compatibleWorkers.map(({ doctor }) => (doctor.artifactDigests && typeof doctor.artifactDigests === "object" ? (doctor.artifactDigests as Record<string, unknown>)["linux-arm64"] : undefined)).find((digest): digest is string => typeof digest === "string");
-      if (imageDigest) compatibleWorkers = compatibleWorkers.filter(({ doctor }) => doctor.artifactDigests && typeof doctor.artifactDigests === "object" && (doctor.artifactDigests as Record<string, unknown>)["linux-arm64"] === imageDigest);
+      imageDigest = compatibleWorkers.map(({ doctor }) => (doctor.artifactDigests && typeof doctor.artifactDigests === "object" ? (doctor.artifactDigests as Record<string, unknown>)[platform] : undefined)).find((digest): digest is string => typeof digest === "string");
+      if (imageDigest) compatibleWorkers = compatibleWorkers.filter(({ doctor }) => doctor.artifactDigests && typeof doctor.artifactDigests === "object" && (doctor.artifactDigests as Record<string, unknown>)[platform] === imageDigest);
     } else {
       if (platform === "windows-x64") driver = compatibleWorkers.some(({ doctor }) => doctor.runtimeMode !== "vm") ? "windows-hyperv-container" : "windows-hyperv";
       compatibleWorkers = compatibleWorkers.filter(({ worker, doctor }) => runtimeDriverForWorker(worker.platform, platform, storedWorkerRuntimeMode(doctor)) === driver);
@@ -59,12 +59,13 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
     const resources = poolResourcesForWorkers(compatibleWorkers.map(({ limits }) => limits));
     if (!resources || !imageDigest) continue;
     const label = `mars-${platform}`;
+    const labels = platform === "linux-arm64" ? [label, "ubuntu"] : [label];
     const name = `default-${platform}`;
     const [existing] = await db`select id from runner_pools where organization_id is null and (name=${name} or trigger_label=${label}) limit 1`;
     if (existing) {
-      await db`update runner_pools set worker_id=null,platform=${platform},driver=${driver},image_digest=${imageDigest},resources=${jsonParameter(db, resources)}::jsonb,labels=${jsonParameter(db, [label])}::jsonb,trigger_label=${label},enabled=true,name=${name} where id=${existing.id}`;
+      await db`update runner_pools set worker_id=null,platform=${platform},driver=${driver},image_digest=${imageDigest},resources=${jsonParameter(db, resources)}::jsonb,labels=${jsonParameter(db, labels)}::jsonb,trigger_label=${label},enabled=true,name=${name} where id=${existing.id}`;
     } else {
-      await db`insert into runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) values (null,null,${name},${platform},${driver},${imageDigest},${jsonParameter(db, resources)}::jsonb,${jsonParameter(db, [label])}::jsonb,${label},true)`;
+      await db`insert into runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) values (null,null,${name},${platform},${driver},${imageDigest},${jsonParameter(db, resources)}::jsonb,${jsonParameter(db, labels)}::jsonb,${label},true)`;
     }
   }
 }

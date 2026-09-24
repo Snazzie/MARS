@@ -49,6 +49,24 @@ test("recalculates shared pool concurrency after worker limits change", async ()
   expect(concurrency).toEqual([5, 10]);
 });
 
+test("creates a Tart Ubuntu ARM64 pool from a dual-platform Mac worker", async () => {
+  const digest = `mars-linux-arm64-job@sha256:${"a".repeat(64)}`;
+  const macDigest = `mars-macos-arm64-job@sha256:${"c".repeat(64)}`;
+  const inserted: unknown[][] = [];
+  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const query = strings.join(" ").toLowerCase();
+    if (query.includes("from workers")) return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64", "linux-arm64"], limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 }, doctor: { doctor: { runtimeMode: "tart", runtimeReady: true, artifactDigests: { "macos-arm64": macDigest, "linux-arm64": digest } } } }];
+    if (query.includes("select id from runner_pools")) return [];
+    if (query.includes("insert into runner_pools")) inserted.push(values);
+    return [];
+  }, { json: (value: unknown) => value });
+  await ensureDefaultPools(db as never, { "macos-arm64": `mars-macos-arm64-job@sha256:${"b".repeat(64)}` });
+  expect(inserted).toHaveLength(2);
+  expect(inserted.find((values) => values.includes("linux-arm64"))).toContainEqual(["mars-linux-arm64", "ubuntu"]);
+  expect(inserted.find((values) => values.includes("linux-arm64"))).toContain(digest);
+  expect(inserted.find((values) => values.includes("macos-arm64"))).toContain(macDigest);
+});
+
 test("clamps automatic pool resources to lower worker ceilings", () => {
   expect(poolResourcesForLimits({ maxVcpuPerPod: 1, maxMemoryBytesPerPod: GIB, maxStorageBytesPerPod: 5 * GIB, maxConcurrentPods: 1 })).toEqual({
     vcpu: 1,
