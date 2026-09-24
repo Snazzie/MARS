@@ -6,7 +6,7 @@ import { statfsSync } from "node:fs";
 import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerObservedConfiguration, WorkerConfigurePayload, WorkerRunnerCachePurgePayload, WorkerCommand, WorkerDoctorData, WorkerEvent, type WorkerCapacityData, type WorkerLimits } from "@mars/contracts";
 import { z } from "zod";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
-import { authenticateWorker, retryControlPlaneOperation, waitForWorkerSocketClose, workerRuntimeVersions, workerSocketUrl, WorkerEventTransport, type WorkerIdentity } from "./worker-client.ts";
+import { authenticateWorker, connectWorkerSocket, retryControlPlaneOperation, retryWorkerRuntime, waitForWorkerSocketClose, workerRuntimeVersions, workerSocketUrl, WorkerEventTransport, type WorkerIdentity } from "./worker-client.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 import type { LibvirtVmDriver } from "./libvirt-vm.ts";
 import type { RuntimeDriver } from "./runtime.ts";
@@ -195,7 +195,7 @@ async function connectLinuxWorker(
   const eventTransport = new WorkerEventTransport(() => cacheService.runnerCacheStatus().enabled);
   let doctor = await linuxDoctor(driver, digest, channelRoot);
   for (;;) {
-    const ws = new WebSocket(workerSocketUrl(baseUrl.toString(), identity.workerId));
+    const ws = await connectWorkerSocket(workerSocketUrl(baseUrl.toString(), identity.workerId));
     const closed = waitForWorkerSocketClose(ws);
     ws.onmessage = async (event) => {
       let frame: { type?: string; nonce?: string } & Partial<WorkerCommand>;
@@ -260,9 +260,11 @@ export async function runLinuxWorker(baseUrl: string, driver: LibvirtVmDriver, l
   const required = ["MARS_GOLDEN_DISK", "MARS_GOLDEN_DIGEST", "MARS_DOMAIN_TEMPLATE", "MARS_CLONE_ROOT", "MARS_CHANNEL_ROOT", "MARS_LIBVIRT_NETWORK"];
   const missing = required.filter((name) => !Bun.env[name]);
   if (missing.length) throw new Error(`missing Linux worker configuration: ${missing.join(", ")}`);
-  const host = await driver.validateHost();
-  if (!host.runtimeReady) throw new Error(host.remediation ?? "linux runtime host validation failed");
-  await driver.reconcileOrphans();
+  await retryWorkerRuntime("Linux VM host", async () => {
+    const host = await driver.validateHost();
+    if (!host.runtimeReady) throw new Error(host.remediation ?? "linux runtime host validation failed");
+    await driver.reconcileOrphans();
+  });
   const resources: LinuxWorkerResources = { appliance: { vcpu: cpus().length, memoryBytes: totalmem(), storageBytes: linuxCapacity().actualStorageBytes }, runtime: limits, cache: WorkerCacheConfiguration.parse({}) };
   const controlPlane = new URL(baseUrl);
   const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: resources.cache.ttlSeconds, runnerCacheEnabled: resources.cache.runnerCacheEnabled, runnerCacheMaxGiB: resources.cache.runnerCacheMaxGiB });
@@ -280,9 +282,12 @@ export async function runLinuxWorker(baseUrl: string, driver: LibvirtVmDriver, l
 }
 export async function runDockerLinuxWorker(baseUrl: string, driver: RuntimeDriver & { validateHost(): Promise<{ runtimeReady: boolean; networkReady: boolean; imageReady: boolean; architecture: string; engineOs: string; entrypointReady: boolean; artifactDigest: string }>; listContainerStatuses(): Promise<unknown[]>; reconcileOrphans(): Promise<void> }, limits: WorkerLimits): Promise<void> {
   if (!baseUrl) throw new Error("MARS_CONTROL_PLANE_URL is required");
-  let host = await driver.validateHost();
-  if (!host.runtimeReady) throw new Error("Linux ARM Docker runtime is not ready");
-  await driver.reconcileOrphans();
+  let host!: Awaited<ReturnType<typeof driver.validateHost>>;
+  await retryWorkerRuntime("Linux ARM Docker host", async () => {
+    host = await driver.validateHost();
+    if (!host.runtimeReady) throw new Error("Linux ARM Docker runtime is not ready");
+    await driver.reconcileOrphans();
+  });
   const resources: LinuxWorkerResources = { appliance: { vcpu: cpus().length, memoryBytes: totalmem(), storageBytes: linuxCapacity().actualStorageBytes }, runtime: limits, cache: WorkerCacheConfiguration.parse({}) };
   const controlPlane = new URL(baseUrl);
   const cacheService = await startActionCacheService({ controlPlaneOrigin: controlPlane.origin, ttlSeconds: resources.cache.ttlSeconds, runnerCacheEnabled: resources.cache.runnerCacheEnabled, runnerCacheMaxGiB: resources.cache.runnerCacheMaxGiB });
@@ -309,7 +314,7 @@ export async function runDockerLinuxWorker(baseUrl: string, driver: RuntimeDrive
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: enrolled.workerId, payload: { ...workerRuntimeVersions(), doctor, capacity: linuxCapacity() } }));
     };
     for (;;) {
-      const ws = new WebSocket(workerSocketUrl(controlPlane.toString(), enrolled.workerId));
+      const ws = await connectWorkerSocket(workerSocketUrl(controlPlane.toString(), enrolled.workerId));
       const closed = waitForWorkerSocketClose(ws);
       ws.onmessage = async (event) => {
         try {

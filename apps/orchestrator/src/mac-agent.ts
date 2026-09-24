@@ -8,7 +8,7 @@ import { z } from "zod";
 import type { Lease, RuntimeLease } from "./runtime.ts";
 import { createTartVmRuntime, resolveTartExecutable, TartVmDriver } from "./tart.ts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
-import { retryControlPlaneOperation, waitForWorkerSocketClose, workerRuntimeVersions, WorkerEventTransport } from "./worker-client.ts";
+import { connectWorkerSocket, retryControlPlaneOperation, waitForWorkerSocketClose, workerRuntimeVersions, WorkerEventTransport } from "./worker-client.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 import { collectWorkerServiceLogs } from "./worker-service-logs.ts";
 import { openLeasePickupState, leasePickupStateFile, writeLeasePickupState, type LeasePickupStateController } from "./lease-pickup-state.ts";
@@ -419,14 +419,7 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
   const activeLeases = new Map<string, Promise<void>>();
   const eventTransport = new WorkerEventTransport(() => cacheService.runnerCacheStatus().enabled);
   for (;;) {
-    let ws: WebSocket;
-    try {
-      ws = new WebSocket(buildMacWorkerSocketUrl(controlPlane.toString(), identity.workerId));
-    } catch (error) {
-      console.error("Mac worker connection attempt failed", { workerId: identity.workerId, error: error instanceof Error ? error.message : String(error) });
-      await Bun.sleep(1_000);
-      continue;
-    }
+    const ws = await connectWorkerSocket(buildMacWorkerSocketUrl(controlPlane.toString(), identity.workerId));
     const closed = waitForWorkerSocketClose(ws);
     ws.onclose = event => {
       console.error("Mac worker connection closed; reconnecting", { workerId: identity.workerId, code: event.code, reason: event.reason });

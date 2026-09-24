@@ -14,6 +14,48 @@ export function workerSocketUrl(baseUrl: string, workerId: string): string { con
 export function authenticateWorker(challenge: string, identity: WorkerIdentity): Record<string, string> { const canonical = `${challenge}\n${identity.workerId}\n${identity.encryptionPublicKey}`; return { type: "authenticate", workerId: identity.workerId, encryptionPublicKey: identity.encryptionPublicKey, signature: signMessage(null, Buffer.from(canonical), identity.privateKey).toString("base64url") }; }
 type ConnectionTimeoutHandle = ReturnType<typeof setTimeout>;
 type ScheduleConnectionTimeout = (callback: () => void, delayMs: number) => ConnectionTimeoutHandle;
+export async function connectWorkerSocket(
+  url: string,
+  createSocket: (url: string) => WebSocket = url => new WebSocket(url),
+  sleep: (milliseconds: number) => Promise<void> = Bun.sleep,
+): Promise<WebSocket> {
+  let unavailable = false;
+  for (;;) {
+    try {
+      const socket = createSocket(url);
+      if (unavailable) console.log("Worker socket connection restored");
+      return socket;
+    } catch (error) {
+      if (!unavailable) {
+        unavailable = true;
+        console.error("Worker socket creation failed; retrying", error);
+      }
+      await sleep(1_000);
+    }
+  }
+}
+
+export async function retryWorkerRuntime(
+  name: string,
+  prepare: () => Promise<void>,
+  sleep: (milliseconds: number) => Promise<void> = Bun.sleep,
+): Promise<void> {
+  let unavailable = false;
+  for (;;) {
+    try {
+      await prepare();
+      if (unavailable) console.log(`Worker runtime restored: ${name}`);
+      return;
+    } catch (error) {
+      if (!unavailable) {
+        unavailable = true;
+        console.error(`Worker runtime unavailable; retrying: ${name}`, error);
+      }
+      await sleep(1_000);
+    }
+  }
+}
+
 export function waitForWorkerSocketClose(socket: WebSocket, connectionTimeoutMs = 30_000, scheduleTimeout: ScheduleConnectionTimeout = setTimeout, cancelTimeout: (handle: ConnectionTimeoutHandle | undefined) => void = clearTimeout, heartbeatTimeoutMs = 60_000): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
   let settled = false;

@@ -11,7 +11,7 @@ import { downloadWindowsImageBuildArtifacts } from "./windows-image-build.ts";
 import type { RuntimeDriver } from "./runtime.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
-import { retryControlPlaneOperation, waitForWorkerSocketClose, workerRuntimeVersions, WorkerEventTransport } from "./worker-client.ts";
+import { connectWorkerSocket, retryControlPlaneOperation, retryWorkerRuntime, waitForWorkerSocketClose, workerRuntimeVersions, WorkerEventTransport } from "./worker-client.ts";
 import { openLeasePickupState, leasePickupStateFile, writeLeasePickupState, type LeasePickupStateController } from "./lease-pickup-state.ts";
 
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
@@ -404,7 +404,8 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
   } else {
     throw new Error(`Unsupported Windows runtime: ${mode}`);
   }
-  await reconcileWindowsRuntime(identity, driver);
+  const runtimeIdentity = identity;
+  await retryWorkerRuntime("Windows orphan reconciliation", () => reconcileWindowsRuntime(runtimeIdentity, driver));
   if (!identity.workerId) identity = await enroll(controlPlane, identity);
   const pickupState = await openLeasePickupState(leasePickupStateFile());
   const activeLeases = new Map<string, Promise<void>>();
@@ -434,7 +435,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
       const url = new URL("/api/v1/workers/connect", controlPlane);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       url.searchParams.set("workerId", identity.workerId);
-      const ws = new WebSocket(url);
+      const ws = await connectWorkerSocket(url.toString());
       const closed = waitForWorkerSocketClose(ws);
       ws.onmessage = async (message) => {
         try {

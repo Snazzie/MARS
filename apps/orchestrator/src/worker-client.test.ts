@@ -1,5 +1,32 @@
 import { expect, test } from "bun:test";
-import { retryControlPlaneOperation, waitForWorkerSocketClose, WorkerEventTransport } from "./worker-client.ts";
+import { connectWorkerSocket, retryControlPlaneOperation, retryWorkerRuntime, waitForWorkerSocketClose, WorkerEventTransport } from "./worker-client.ts";
+
+test("retries a synchronous socket creation failure and connects when the control plane returns", async () => {
+  let attempts = 0;
+  const delays: number[] = [];
+  const socket = {} as WebSocket;
+  const result = await connectWorkerSocket(
+    "ws://localhost/api/v1/workers/connect",
+    () => {
+      if (++attempts === 1) throw new Error("network unavailable");
+      return socket;
+    },
+    async delay => { delays.push(delay); },
+  );
+  expect(result).toBe(socket);
+  expect(attempts).toBe(2);
+  expect(delays).toEqual([1_000]);
+});
+
+test("waits for runtime recovery before connecting a worker", async () => {
+  let attempts = 0;
+  const sleeps: number[] = [];
+  await retryWorkerRuntime("Linux host", async () => {
+    if (++attempts < 3) throw new Error("runtime unavailable");
+  }, async delay => { sleeps.push(delay); });
+  expect(attempts).toBe(3);
+  expect(sleeps).toEqual([1_000, 1_000]);
+});
 
 test("reconnects when a worker websocket errors without closing", async () => {
   class FaultingSocket extends EventTarget {
