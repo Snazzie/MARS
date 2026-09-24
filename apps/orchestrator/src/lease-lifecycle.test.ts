@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { LeaseBootstrapEnvelope, WorkerCommand, WorkerEvent } from "@mars/contracts";
-import { initialMemoryPressureState, runLeaseLifecycle, updateMemoryPressure } from "./lease-lifecycle.ts";
+import { runLeaseLifecycle } from "./lease-lifecycle.ts";
 
 const command = { version: 1, id: "33333333-3333-4333-8333-333333333333", type: "windows-container.create_lease", workerId: "11111111-1111-4111-8111-111111111111", leaseId: "22222222-2222-4222-8222-222222222222", occurredAt: new Date().toISOString(), payload: {} } satisfies WorkerCommand;
 const bootstrap = { leaseId: command.leaseId!, jobId: command.leaseId!, nonce: "n".repeat(32), guestPlatform: "windows-x64", contractVersion: "0.1.0", imageDigest: `repo@sha256:${"a".repeat(64)}`, resources: { vcpu: 1, memoryBytes: 2, storageBytes: 3, concurrency: 1 }, encodedJitConfig: "secret", expiresAt: new Date(Date.now() + 60_000).toISOString() } satisfies LeaseBootstrapEnvelope;
@@ -122,25 +122,43 @@ test("fails lease provisioning closed when worker cache transport setup fails", 
   expect(events).toEqual([expect.objectContaining({ type: "lease.failed", payload: expect.objectContaining({ reason: "provisioning_failed" }) })]);
 });
 
-test("requires two consecutive near-limit samples before OOM detection", () => {
-  let state = initialMemoryPressureState();
-  let result = updateMemoryPressure(state, { memoryWorkingSetBytes: 96, memoryLimitBytes: 100 }, 100);
-  state = result.state;
-  expect(state.phase).toBe("pressured");
-  result = updateMemoryPressure(state, { memoryWorkingSetBytes: 97, memoryLimitBytes: 100 }, 100);
-  expect(result.state.phase).toBe("oom_detected");
-  expect(result.evidence?.reason).toBe("out_of_memory");
-  expect(result.shouldStop).toBe(true);
-});
-
-test("detects over-limit memory immediately and does not infer OOM from missing samples", () => {
-  const result = updateMemoryPressure(initialMemoryPressureState(), { memoryWorkingSetBytes: 101, memoryLimitBytes: 100 }, 100);
-  expect(result.evidence?.reason).toBe("out_of_memory");
-  expect(updateMemoryPressure(initialMemoryPressureState(), null, 100).evidence).toBeNull();
-});
+test("lets a job finish despite a memory sample above its configured limit", async () => {
+  const events: WorkerEvent[] = [];
+  let finish!: (exitCode: number) => void;
+  // Exercise the real periodic sampler; await its event rather than guessing a delay.
+  let sampled!: () => void;
+  const completion = new Promise<number>(resolve => { finish = resolve; });
+  const sampleObserved = new Promise<void>(resolve => { sampled = resolve; });
+  let gracefulStops = 0;
+  const driver = {
+    createLease: async () => ({
+      runtimeInstanceId: "runtime",
+      observed: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
+      completion,
+      sample: async () => {
+        return { cpuUsagePercent: 0, cpuTimeMs: 0, memoryWorkingSetBytes: 3, memoryLimitBytes: 2 };
+      },
+      state: "sandbox_attested" as const,
+    }),
+    requestGracefulStop: async () => { gracefulStops++; return true; },
+    stopLease: async () => {},
+    removeLease: async () => {},
+  };
+  const lifecycle = runLeaseLifecycle(command, driver, bootstrap, event => {
+    events.push(event);
+    if (event.type === "job.resource_sample") sampled();
+  });
+  await sampleObserved;
+  finish(0);
+  await lifecycle;
+  expect(gracefulStops).toBe(0);
+  expect(events.find(event => event.type === "runner.finished")?.payload).toMatchObject({ exitCode: 0 });
+  expect(events.some(event => event.type === "job.resource_sample")).toBe(true);
+}, 15_000);
 
 test("reports runner failure with termination evidence when completion rejects", async () => {
   const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+  const cleanup: string[] = [];
   const driver = {
     createLease: async () => ({
       runtimeInstanceId: "runtime",
@@ -148,14 +166,15 @@ test("reports runner failure with termination evidence when completion rejects",
       completion: Promise.reject(new Error("container disappeared")),
       state: "sandbox_attested" as const,
     }),
-    stopLease: async () => {},
-    removeLease: async () => {},
+    stopLease: async () => { cleanup.push("stop"); },
+    removeLease: async () => { cleanup.push("remove"); },
   };
   await runLeaseLifecycle(command, driver, bootstrap, event => events.push({ type: event.type, payload: event.payload }));
   const failure = events.find(event => event.type === "lease.failed");
   expect(failure?.payload).toMatchObject({ reason: "runner_failed", termination: { cause: "child_disappeared", exitObserved: false } });
   expect(failure?.payload).not.toHaveProperty("oom");
   expect(typeof failure?.payload.correlationId).toBe("string");
+  expect(cleanup).toEqual(["stop", "remove"]);
 });
 
 
