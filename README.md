@@ -105,13 +105,13 @@ The command verifies or builds the local Windows job image and runs the orchestr
 
 ### Run a foreground macOS development worker
 
-On an Apple Silicon Mac with Bun, Tart, Xcode Command Line Tools, and prepared macOS and Linux Tart images from the macOS worker installer, set `MARS_DEV_TOKEN` to the token used by the development control plane at `https://mars.snazzie.space`. Drain the installed worker and wait for active jobs to finish before manually unloading its LaunchAgent with `launchctl bootout "gui/$(id -u)/com.mars.worker"`. This command refuses to run while the LaunchAgent is loaded and never changes it.
+On an Apple Silicon Mac with Bun, Tart, Xcode Command Line Tools, and prepared macOS and Linux Tart images, set `MARS_DEV_TOKEN` to the token used by the development control plane at `https://mars.snazzie.space`. Place the corresponding `macos-tart-image-manifest.json` and `linux-arm64-tart-image-manifest.json` in `~/Library/Application Support/Mars/dev-worker` (copy them from an installed worker before uninstalling it). If an installed worker exists, drain it and wait for active jobs to finish before manually unloading its LaunchAgent with `launchctl bootout "gui/$(id -u)/com.mars.worker"`. This command refuses to run while the LaunchAgent is loaded and never changes it.
 
 ```bash
 bun run dev:mac-worker
 ```
 
-The command builds the menu-bar status item locally and runs the macOS orchestrator in the foreground. It reads the installed image manifests but does not modify the installed images or worker identity. Its own identity, UUID, lease state, and cache live under `~/Library/Application Support/Mars/dev-worker`; the first join uses the development token and requires approval and configuration in the control plane before scheduling. Press Ctrl-C to stop it. Restore the installed worker afterward with `launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.mars.worker.plist"`. The macOS installer remains the supported path for a persistent worker.
+The command builds the menu-bar status item locally and runs the macOS orchestrator in the foreground. It uses the prepared local Tart images and development manifests without modifying them. Its own identity, UUID, lease state, and cache live under `~/Library/Application Support/Mars/dev-worker`; the first join uses the development token and requires approval and configuration in the control plane before scheduling. Press Ctrl-C to stop it. If retaining an installed worker, restore it afterward with `launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.mars.worker.plist"`. The macOS installer remains the supported path for a persistent worker.
 
 ### Upgrade a local Windows worker from the current checkout
 

@@ -10,7 +10,7 @@ const controlPlane = "https://mars.snazzie.space";
 type ImageManifest = { localTarget: string; preparedDigest: string };
 
 async function preparedImage(platform: "macos" | "linux-arm64"): Promise<ImageManifest> {
-  const path = join(homedir(), "Library", "Application Support", "Mars", `${platform}-tart-image-manifest.json`);
+  const path = join(homedir(), "Library", "Application Support", "Mars", "dev-worker", `${platform}-tart-image-manifest.json`);
   let manifest: ImageManifest;
   try {
     manifest = JSON.parse(await readFile(path, "utf8")) as ImageManifest;
@@ -35,8 +35,8 @@ async function main(): Promise<void> {
   }
   const tart = Bun.spawnSync(["tart", "--version"]);
   if (tart.exitCode !== 0) throw new Error("Tart must be installed and available on PATH");
-  const [macos, linux] = await Promise.all([preparedImage("macos"), preparedImage("linux-arm64")]);
   const root = join(homedir(), "Library", "Application Support", "Mars", "dev-worker");
+  const [macos, linux] = await Promise.all([preparedImage("macos"), preparedImage("linux-arm64")]);
   await mkdir(root, { recursive: true, mode: 0o700 });
   const identityPath = join(root, "worker-identity.json");
   let enrolled = false;
@@ -58,7 +58,8 @@ async function main(): Promise<void> {
   }
   const temp = enrolled ? null : await mkdtemp(join(tmpdir(), "mars-dev-mac-credential-"));
   let child: Bun.Subprocess | null = null;
-  const stop = () => { child?.kill(); };
+  let stopping = false;
+  const stop = () => { stopping = true; child?.kill(); };
   try {
     const credentialPath = temp ? join(temp, "join-code") : undefined;
     if (credentialPath) await writeFile(credentialPath, `${deriveDevWorkerCode(token)}\n`, { flag: "wx", mode: 0o600 });
@@ -78,7 +79,7 @@ async function main(): Promise<void> {
       MARS_TART_LINUX_ARM64_BASE_IMAGE: linux.localTarget,
       MARS_TART_LINUX_ARM64_IMAGE_DIGEST: linux.preparedDigest,
       MARS_MACOS_STATUS_ITEM_EXECUTABLE: statusItem,
-      MARS_MACOS_STATUS_ITEM_ICON: join(homedir(), "Library", "Application Support", "Mars", "mars-icon.png"),
+      MARS_MACOS_STATUS_ITEM_ICON: join(root, "mars-icon.png"),
       MARS_LEASE_PICKUP_STATE_FILE: join(root, "lease-pickup.json"),
       MARS_ACTION_CACHE_ROOT: join(root, "action-cache"),
     };
@@ -86,7 +87,7 @@ async function main(): Promise<void> {
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);
     const exit = await child.exited;
-    if (exit !== 0) throw new Error(`Development macOS worker exited ${exit}`);
+    if (exit !== 0 && !stopping) throw new Error(`Development macOS worker exited ${exit}`);
   } finally {
     process.off("SIGINT", stop);
     process.off("SIGTERM", stop);
