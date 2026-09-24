@@ -173,6 +173,34 @@ describe("control-plane HTTP boundary", () => {
     const response = await createControlPlaneApp(fakeHttpDeps()).request("/api/workers/bootstrap/initialize", { method: "POST", headers: { "Idempotency-Key": "test" } });
     expect(response.status).toBe(401);
   });
+  test("development image payload requires an admin and complete build inputs", async () => {
+    const route = "/api/workers/dev-windows-image-build";
+    expect((await app.request(route)).status).toBe(404);
+    const admin = { id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true };
+    const payload = { buildId: "dev", image: "mars/windows-job:local", contentSha256: "a".repeat(64) };
+    const endpoint = createControlPlaneApp(fakeHttpDeps({
+      devWindowsImageBuild: async () => payload as never,
+      currentUser: async request => request.headers.get("authorization") === "Bearer valid" ? admin : null,
+    }));
+    expect((await endpoint.request(route)).status).toBe(401);
+    expect((await endpoint.request(route, { headers: { authorization: "Bearer invalid" } })).status).toBe(401);
+    expect((await endpoint.request(route, { headers: { authorization: "Bearer valid" } })).status).toBe(200);
+    expect(await (await endpoint.request(route, { headers: { authorization: "Bearer valid" } })).json()).toEqual(payload);
+    expect((await createControlPlaneApp(fakeHttpDeps({ devWindowsImageBuild: async () => null, currentUser: async () => admin })).request(route)).status).toBe(503);
+    const nonAdmin = createControlPlaneApp(fakeHttpDeps({ devWindowsImageBuild: async () => payload as never, currentUser: async () => ({ ...admin, isGlobalAdmin: false }) }));
+    expect((await nonAdmin.request(route)).status).toBe(403);
+  });
+  test("development enrollment disables bootstrap credential management", async () => {
+    const endpoint = createControlPlaneApp(fakeHttpDeps({
+      disableWorkerBootstrapManagement: true,
+      currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
+    }));
+    for (const action of ["initialize", "rotate"]) {
+      const response = await endpoint.request(`/api/workers/bootstrap/${action}`, { method: "POST" });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: "development bootstrap code is fixed" });
+    }
+  });
   test("requires a configured worker connection origin for installers", async () => {
     const response = await createControlPlaneApp(fakeHttpDeps()).request("/api/workers/installer?audience=linux-x64");
     expect(response.status).toBe(400);

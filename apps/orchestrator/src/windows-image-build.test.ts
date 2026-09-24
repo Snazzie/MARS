@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { expect, test } from "bun:test";
 import { WorkerBuildImagePayload, workerBuildImageContentDescriptor } from "@mars/contracts";
-import { downloadWindowsImageBuildArtifacts } from "./windows-image-build.ts";
+import { downloadWindowsImageBuildArtifacts, prepareWindowsContainerImage } from "./windows-image-build.ts";
 
 const sha = (value: string) => createHash("sha256").update(value).digest("hex");
 function payload() {
@@ -45,4 +45,10 @@ test("rejects an artifact whose received bytes do not match the command digest",
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("refuses altered image content before reusing or building an image", async () => {
+  const valid = payload();
+  const changed = { ...valid, artifacts: { ...valid.artifacts, jobAgent: { ...valid.artifacts.jobAgent, sha256: "f".repeat(64) } } };
+  await expect(prepareWindowsContainerImage(changed, join(tmpdir(), `missing-${randomUUID()}.json`))).rejects.toThrow("image build payload SHA-256 mismatch");
 });

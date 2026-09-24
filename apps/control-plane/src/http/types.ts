@@ -1,13 +1,15 @@
 import type { DashboardDb } from "@mars/db";
 import type { SessionUser, SecretBox } from "../auth.ts";
 import type { ControlPlaneSetup } from "../control-plane-setup.ts";
-import type { RequestLimiter } from "../worker-requests.ts";
+import type { RequestLimiter, WorkerRequestResult } from "../worker-requests.ts";
 import type { WorkerCommandDispatcher } from "../worker-dispatch.ts";
 import type { GitHubAppService } from "../github-app.ts";
 import type { DiscoveryHealthSnapshot } from "../discovery-health.ts";
 import type { WorkerReleaseCatalog } from "../worker-release.ts";
 import type { WorkerUpgradeService } from "../worker-upgrade.ts";
 import type { WorkerReleaseManifest } from "@mars/contracts";
+import type { WorkerBuildImagePayload } from "@mars/contracts";
+import type { Sql } from "@mars/db";
 import type { DispatchHealthSnapshot } from "../dispatch-health.ts";
 export type ControlPlaneEnv = { Variables: { user: SessionUser } };
 
@@ -151,6 +153,9 @@ export type ControlPlaneHttpDeps = {
   requestSource(request: Request): string;
   webRoot: URL;
   workerRequestLimiter?: RequestLimiter;
+  workerJoin?: (db: Sql<{}>, body: unknown) => Promise<WorkerRequestResult>;
+  devWindowsImageBuild?: () => Promise<WorkerBuildImagePayload | null>;
+  disableWorkerBootstrapManagement?: boolean;
   workerDispatcher?: WorkerCommandDispatcher;
   workerConnected?: (workerId: string) => boolean;
   onWorkerChanged(workerId: string): void | Promise<void>;

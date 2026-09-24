@@ -21,7 +21,7 @@ export function parseWorkerBootstrapRequest(input: unknown): WorkerBootstrapRequ
 export function parsePendingWorkerRequest(input: unknown): PendingWorkerRequest { return PendingWorkerRequest.parse(input); }
 export function parseApproveWorkerRequest(input: unknown): ApproveWorkerRequest { return ApproveWorkerRequest.parse(input); }
 
-export async function requestPendingWorker(db: Sql<{}>, input: z.input<typeof WorkerBootstrapRequest>, source?: string, limiter?: RequestLimiter): Promise<WorkerRequestResult> {
+export async function requestPendingWorker(db: Sql<{}>, input: z.input<typeof WorkerBootstrapRequest>, source?: string, limiter?: RequestLimiter, credentialOverride?: { codeHash: Buffer; reusable: true }): Promise<WorkerRequestResult> {
   const parsed = WorkerBootstrapRequest.parse(input);
   if (source && limiter && !limiter.allow(source)) throw new WorkerRequestError("invalid_bootstrap");
   const fp = fingerprint(parsed.publicKey);
@@ -30,9 +30,9 @@ export async function requestPendingWorker(db: Sql<{}>, input: z.input<typeof Wo
   const outcome = await db.begin(async tx => {
     const telemetry = { doctor: parsed.doctor, capacity: parsed.capacity };
     for (const key of lockKeys) await tx`select pg_advisory_xact_lock(hashtext(${`mars:worker:${key}`}))`;
-    const [activeCredential] = await tx<{ codeHash: Buffer; consumedAt: string | Date | null }[]>`select code_hash as "codeHash", consumed_at as "consumedAt" from worker_bootstrap_credentials where singleton=true and consumed_at is null for update`;
-    const [credential] = activeCredential ? [activeCredential] : await tx<{ codeHash: Buffer; consumedAt: string | Date | null }[]>`select code_hash as "codeHash", consumed_at as "consumedAt" from worker_bootstrap_credentials where singleton=true and consumed_at is not null for update`;
     const candidate = createHash("sha256").update(Buffer.from(parsed.code, "base64url")).digest();
+    const [activeCredential] = credentialOverride ? [credentialOverride] : await tx<{ codeHash: Buffer; consumedAt: string | Date | null }[]>`select code_hash as "codeHash", consumed_at as "consumedAt" from worker_bootstrap_credentials where singleton=true and consumed_at is null for update`;
+    const [credential] = activeCredential ? [activeCredential] : await tx<{ codeHash: Buffer; consumedAt: string | Date | null }[]>`select code_hash as "codeHash", consumed_at as "consumedAt" from worker_bootstrap_credentials where singleton=true and consumed_at is not null for update`;
     const codeMatches = credential && credential.codeHash.length === candidate.length && timingSafeEqual(credential.codeHash, candidate);
     if (!codeMatches) return { conflict: false as const, invalid: true as const };
     const rows = await tx<{
@@ -49,7 +49,7 @@ export async function requestPendingWorker(db: Sql<{}>, input: z.input<typeof Wo
       matchesWorkerIdentity(row, parsed, fp)
       && row.encryptionPublicKey === parsed.encryptionPublicKey,
     );
-    if (credential!.consumedAt) {
+    if (!credentialOverride && credential && "consumedAt" in credential && credential.consumedAt) {
       const replay = exactIdentity
         && exactIdentity.admissionState === "pending"
         && !exactIdentity.enrollmentAuthenticatedAt
@@ -61,12 +61,12 @@ export async function requestPendingWorker(db: Sql<{}>, input: z.input<typeof Wo
       return { status: "existing" as const, workerId: exactIdentity.id };
     }
     if (exactIdentity && exactIdentity.admissionState === "pending" && !exactIdentity.enrollmentAuthenticatedAt) {
-      await tx`update worker_bootstrap_credentials set consumed_at=now() where singleton=true and consumed_at is null`;
+      if (!credentialOverride) await tx`update worker_bootstrap_credentials set consumed_at=now() where singleton=true and consumed_at is null`;
       await tx`update workers set name=${parsed.computerName}, last_requested_at=now(), machine_uuid=${parsed.machineUuid}, encryption_public_key=${parsed.encryptionPublicKey}, enrollment_code_hash=${candidate}, release_version=${parsed.releaseVersion}, contract_version=${parsed.contractVersion}, doctor=${jsonParameter(tx, telemetry)}::jsonb, doctor_observed_at=now() where id=${exactIdentity.id} and admission_state='pending' and enrollment_authenticated_at is null`;
       return { status: "existing" as const, workerId: exactIdentity.id };
     }
     if (rows.length) return { conflict: true as const, invalid: false as const };
-    await tx`update worker_bootstrap_credentials set consumed_at=now() where singleton=true and consumed_at is null`;
+    if (!credentialOverride) await tx`update worker_bootstrap_credentials set consumed_at=now() where singleton=true and consumed_at is null`;
     const [created] = await tx<{ id: string }[]>`insert into workers (name,platform,release_version,contract_version,guest_platforms,admission_state,public_key,encryption_public_key,fingerprint,vm_uuid,machine_uuid,enrollment_code_hash,limits,doctor,last_requested_at,doctor_observed_at) values (${parsed.computerName},${parsed.platform},${parsed.releaseVersion},${parsed.contractVersion},${jsonParameter(tx, guestPlatforms)}::jsonb,'pending',${parsed.publicKey},${parsed.encryptionPublicKey},${fp},${parsed.vmUuid},${parsed.machineUuid},${candidate},null,${jsonParameter(tx, telemetry)}::jsonb,now(),now()) returning id`;
     await tx`insert into audit_events (actor,type,payload) values ('worker','worker.requested',${jsonParameter(tx, { workerId: created.id, vmUuid: parsed.vmUuid, fingerprint: fp, guestPlatforms })}::jsonb)`;
     return { status: "created" as const, workerId: created.id };
