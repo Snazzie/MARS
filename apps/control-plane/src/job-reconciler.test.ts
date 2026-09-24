@@ -368,7 +368,7 @@ test("reports requested labels for a job without a matching pool", async () => {
     const query = strings.join(" ").toLowerCase();
     if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels }];
     if (query.includes('p.id as "poolid"')) return [{
-      poolId: "pool", workerId: "worker", enabled: true, platform: "windows-x64",
+      poolId: "pool", poolName: "Windows pool", workerId: "worker", enabled: true, platform: "windows-x64",
       driver: "windows-hyperv-container", imageDigest: "sha256:image",
       resources: { vcpu: 2, memoryBytes: 4 * 1024 ** 3, storageBytes: 8, concurrency: 1 },
       labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64",
@@ -386,5 +386,33 @@ test("reports requested labels for a job without a matching pool", async () => {
     onDecision: decision => decisions.push(decision),
   });
   expect(report.skipped).toBe(1);
-  expect(decisions).toEqual([{ organizationId: "org", jobId: 42, code: "no_matching_labels", labels }]);
+  expect(decisions).toEqual([{ organizationId: "org", jobId: 42, code: "no_matching_labels", labels, pools: [{ poolId: "pool", poolName: "Windows pool", platform: "windows-x64", workerId: "worker", workerName: "", reason: "no_matching_labels" }] }]);
+});
+
+test("identifies configured pools when no worker reaches the candidate query", async () => {
+  const decisions: unknown[] = [];
+  const labels = ["mars-windows-x64-2vcpu-4g"];
+  const db = (async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ").toLowerCase();
+    if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels }];
+    if (query.includes("select p.id as \"poolid\", p.name as \"poolname\", p.platform")) return [
+      { poolId: "pool-1", poolName: "Windows pool", platform: "windows-x64", enabled: true },
+      { poolId: "pool-2", poolName: "Disabled pool", platform: "linux-arm64", enabled: false },
+    ];
+    return [];
+  }) as unknown as DatabaseClient;
+  const report = await runQueuedJobReconciliation({
+    db, contractVersion: "0.1.0", installationToken: async () => "token",
+    githubFetchForInstallation: () => async () => { throw new Error("unexpected GitHub request"); },
+    dispatcher: { dispatch: async () => { throw new Error("unexpected dispatch"); } },
+    onDecision: decision => decisions.push(decision),
+  });
+  expect(report.skipped).toBe(1);
+  expect(decisions).toEqual([{
+    organizationId: "org", jobId: 42, code: "no_eligible_worker_pool", labels,
+    pools: [
+      { poolId: "pool-1", poolName: "Windows pool", platform: "windows-x64", reason: "no_current_worker_candidate" },
+      { poolId: "pool-2", poolName: "Disabled pool", platform: "linux-arm64", reason: "pool_disabled" },
+    ],
+  }]);
 });

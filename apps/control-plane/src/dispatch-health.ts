@@ -1,4 +1,5 @@
-export type DispatchDecision = { organizationId: string; jobId: number; code: string; labels?: string[] };
+export type DispatchPoolDetail = { poolId: string; poolName: string; platform: string; workerId?: string; workerName?: string; reason: string };
+export type DispatchDecision = { organizationId: string; jobId: number; code: string; labels?: string[]; pools?: DispatchPoolDetail[] };
 export type DispatchHealthSnapshot = {
   state: "starting" | "healthy" | "degraded";
   lastReconciledAt: string | null;
@@ -18,8 +19,8 @@ export class DispatchHealthMonitor {
     const next = new Map(decisions.map(decision => [`${decision.organizationId}:${decision.jobId}`, decision]));
     for (const [key, decision] of next) {
       const previous = this.decisions.get(key);
-      if ((previous?.code !== decision.code || (decision.code === "no_matching_labels" && JSON.stringify(previous?.labels) !== JSON.stringify(decision.labels))) && decision.code !== "dispatched") {
-        console.log("Job dispatch blocked", { organizationId: decision.organizationId, jobId: decision.jobId, reason: decision.code, ...(decision.code === "no_matching_labels" ? { labels: decision.labels } : {}) });
+      if ((previous?.code !== decision.code || JSON.stringify(previous?.labels) !== JSON.stringify(decision.labels) || JSON.stringify(previous?.pools) !== JSON.stringify(decision.pools)) && decision.code !== "dispatched") {
+        console.log("Job dispatch blocked", { organizationId: decision.organizationId, jobId: decision.jobId, reason: decision.code, ...(decision.labels ? { labels: decision.labels } : {}), ...(decision.pools ? { pools: decision.pools } : {}) });
       }
     }
     for (const [key, previous] of this.decisions) {

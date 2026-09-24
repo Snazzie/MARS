@@ -43,3 +43,22 @@ test("logs requested labels when a job has no matching pool, including label cha
     console.log = original;
   }
 });
+
+test("logs the pool identity and logs again when its eligibility changes", () => {
+  const original = console.log;
+  const messages: unknown[][] = [];
+  console.log = (...args: unknown[]) => { messages.push(args); };
+  try {
+    const monitor = new DispatchHealthMonitor(5_000);
+    const blocked = { organizationId: "org", jobId: 42, code: "no_eligible_worker_pool", pools: [{ poolId: "pool", poolName: "Windows pool", platform: "windows-x64", reason: "no_current_worker_candidate" }] };
+    monitor.markSuccess([blocked]);
+    monitor.markSuccess([blocked]);
+    monitor.markSuccess([{ ...blocked, pools: [{ ...blocked.pools[0], reason: "pool_disabled" }] }]);
+    expect(messages).toEqual([
+      ["Job dispatch blocked", { organizationId: "org", jobId: 42, reason: "no_eligible_worker_pool", pools: blocked.pools }],
+      ["Job dispatch blocked", { organizationId: "org", jobId: 42, reason: "no_eligible_worker_pool", pools: [{ ...blocked.pools[0], reason: "pool_disabled" }] }],
+    ]);
+  } finally {
+    console.log = original;
+  }
+});

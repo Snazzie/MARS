@@ -7,6 +7,7 @@ import { dispatchLeaseBootstrap } from "./lease-dispatch.ts";
 import { isGithubRateLimitError } from "./github-rate-limit.ts";
 import { reconcileQueuedJobs, type ReconcileReport } from "./reconcile.ts";
 import { reason, type Candidate } from "./scheduler.ts";
+import type { DispatchPoolDetail } from "./dispatch-health.ts";
 import { applyGithubJobSnapshot, markGithubJobMissing, type GithubJobSnapshot } from "./runs.ts";
 import { storedWorkerDoctor, workerPoolEvidence } from "./worker-evidence.ts";
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -98,7 +99,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
   };
   const blockedInstallations = new Set<number>();
   const candidateRows = await deps.db`
-    SELECT p.id AS "poolId", p.organization_id AS "organizationId", p.worker_id AS "poolWorkerId",
+    SELECT p.id AS "poolId", p.name AS "poolName", p.organization_id AS "organizationId", p.worker_id AS "poolWorkerId",
       w.id AS "workerId", w.name AS "workerName", p.enabled, p.platform, p.driver, p.image_digest AS "imageDigest", p.resources, p.labels, p.trigger_label AS "triggerLabel",
       w.admission_state AS "admissionState", w.connection_state AS "connectionState", w.configuration_state AS "configurationState",
       w.configuration_revision AS "configurationRevision", w.applied_configuration_revision AS "appliedConfigurationRevision",
@@ -112,6 +113,20 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     WHERE p.enabled=true AND w.draining=false
       AND w.last_heartbeat_at > now()-interval '60 seconds'
       AND w.doctor_observed_at > now()-interval '60 seconds'`;
+  const poolsWithoutCandidates = new Map<string, DispatchPoolDetail[]>();
+  if (candidateRows.length === 0 && deps.onDecision) {
+    for (const organizationId of new Set(queuedRows.map(row => String(row.organizationId)))) {
+      const pools = await deps.db`
+        SELECT p.id AS "poolId", p.name AS "poolName", p.platform, p.enabled
+        FROM runner_pools p
+        WHERE p.organization_id IS NULL OR p.organization_id=${organizationId}::uuid
+        ORDER BY p.name, p.id`;
+      poolsWithoutCandidates.set(organizationId, pools.map(pool => ({
+        poolId: String(pool.poolId), poolName: String(pool.poolName), platform: String(pool.platform),
+        reason: pool.enabled ? "no_current_worker_candidate" : "pool_disabled",
+      })));
+    }
+  }
 
   const workerByPool = new Map<string, { workerId: string; encryptionPublicKey: string; imageDigest: string; guestPlatform: string; driver: RuntimeDriverNameValue; resources: PoolResourcesValue }>();
   const sqlCandidates = candidateRows.map((row) => {
@@ -121,6 +136,8 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     const concurrency = Number(resources.concurrency);
     workerByPool.set(`${poolId}:${workerId}`, { workerId, encryptionPublicKey: String(row.encryptionPublicKey ?? ""), imageDigest: String(row.imageDigest), guestPlatform: String(row.platform), driver: RuntimeDriverName.parse(String(row.driver)), resources });
     return {
+      organizationId: row.organizationId == null ? null : String(row.organizationId),
+      poolName: String(row.poolName ?? ""),
       requestedLabels: [],
       worker: candidateWorkerFromRow(row),
       pool: { id: poolId, enabled: Boolean(row.enabled), platform: String(row.platform), driver: String(row.driver), resources, concurrency, active: Number(row.active ?? 0), labels: stringArray(row.labels), triggerLabel: row.triggerLabel ? String(row.triggerLabel) : null },
@@ -130,6 +147,17 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     .filter((candidate) => !deps.workerConnected || deps.workerConnected(candidate.worker.id))
     .map((candidate) => ({ ...candidate, worker: { ...candidate.worker, connectionState: "online" } }));
 
+  const poolDetails = (job: { organizationId?: string; labels: string[] }): DispatchPoolDetail[] =>
+    candidateRows.length === 0 ? poolsWithoutCandidates.get(job.organizationId ?? "") ?? [] : sqlCandidates
+      .filter(candidate => candidate.organizationId === null || candidate.organizationId === job.organizationId)
+      .map(candidate => ({
+        poolId: candidate.pool.id, poolName: candidate.poolName, platform: candidate.pool.platform,
+        workerId: candidate.worker.id, workerName: candidate.worker.name,
+        reason: reason({
+          ...candidate, requestedLabels: job.labels,
+          worker: { ...candidate.worker, connectionState: deps.workerConnected && !deps.workerConnected(candidate.worker.id) ? "offline" : candidate.worker.connectionState },
+        }),
+      }));
   const normalizedLabels = (labels: readonly string[]) => [...new Set(labels.map((label) => label.trim().toLowerCase()).filter(Boolean))];
   const reconciled = await reconcileQueuedJobs({
     queued: queuedRows.map((row) => ({
@@ -142,7 +170,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       labels: stringArray(row.labels),
     })),
     candidates,
-    onDecision: (job, code) => deps.onDecision?.({ organizationId: job.organizationId ?? "", jobId: job.jobId, code, ...(code === "no_matching_labels" ? { labels: job.labels } : {}) }),
+    onDecision: (job, code) => deps.onDecision?.({ organizationId: job.organizationId ?? "", jobId: job.jobId, code, ...(code === "no_matching_labels" || code === "no_eligible_worker_pool" ? { labels: job.labels } : {}), ...(code !== "dispatched" ? { pools: poolDetails(job) } : {}) }),
     unmatchedReason: (job) => {
       if (sqlCandidates.length === 0) return "no_eligible_worker_pool";
       const reasons = sqlCandidates.map(candidate => reason({
