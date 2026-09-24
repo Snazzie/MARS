@@ -396,6 +396,21 @@ test("requests an idempotent graceful runner stop before forced cleanup", async 
   expect(calls.filter(args => args[0] === "exec")).toHaveLength(1);
   await driver.removeLease("66666666-6666-4666-8666-666666666666");
 });
+test("treats pool concurrency as a pool limit, not a per-container resource", () => {
+  const driver = new WindowsContainerDriver({
+    image: "mars/windows-job:local",
+    prefix: "mars",
+    bootstrapRoot: "C:\\mars-test",
+    limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
+    readyTimeoutMs: 100,
+    jobTimeoutMs: 100,
+    allowLocalImage: true,
+  });
+  const resources = { vcpu: 1, memoryBytes: 4 * 1024 ** 3, storageBytes: 5 * 1024 ** 3, concurrency: 3 };
+  expect(() => driver.validatePool(resources)).not.toThrow();
+  expect(() => driver.validatePool({ ...resources, memoryBytes: 9 * 1024 ** 3 })).toThrow("resource ceiling exceeded");
+});
+
 test("waits for Docker to become ready before validating the image", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-windows-docker-ready-"));
   roots.push(root);

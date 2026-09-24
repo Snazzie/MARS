@@ -4,7 +4,6 @@ import { isIP } from "node:net";
 import { join } from "node:path";
 import { WorkerContainerStatus, type PoolResources, type WorkerContainerStatus as WorkerContainerStatusData, type WorkerLimits } from "@mars/contracts";
 import type { Lease, RuntimeDriver, RuntimeLease } from "./runtime.ts";
-import { validateResources } from "./runtime.ts";
 
 export type DockerResult = { code: number; stdout: string; stderr: string };
 export type DockerRunner = (args: string[]) => Promise<DockerResult>;
@@ -174,7 +173,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
   constructor(private readonly config: WindowsContainerConfig, private readonly docker: DockerRunner = defaultDocker, private readonly powershell: PowerShellRunner = defaultPowerShell) {}
   private containerName(leaseId: string): string { return `${this.config.prefix}-${leaseId}`; }
   private bootstrapPath(leaseId: string): string { return join(this.config.bootstrapRoot, leaseId); }
-  validatePool(resources: PoolResources): void { validateResources(resources, this.config.limits); if (!digest.test(this.config.image) && !(this.config.allowLocalImage && this.config.image === localImage)) throw new Error("Windows container image must be digest pinned"); }
+  validatePool(resources: PoolResources): void { const limits = this.config.limits; if (resources.vcpu > limits.maxVcpuPerPod || resources.memoryBytes > limits.maxMemoryBytesPerPod || resources.storageBytes > limits.maxStorageBytesPerPod || limits.maxConcurrentPods < 1) throw new Error(`resource ceiling exceeded (requested vcpu=${resources.vcpu}, memoryBytes=${resources.memoryBytes}, storageBytes=${resources.storageBytes}; limits vcpu=${limits.maxVcpuPerPod}, memoryBytes=${limits.maxMemoryBytesPerPod}, storageBytes=${limits.maxStorageBytesPerPod})`); if (!digest.test(this.config.image) && !(this.config.allowLocalImage && this.config.image === localImage)) throw new Error("Windows container image must be digest pinned"); }
   async reserveCapacity(resources: PoolResources): Promise<void> {
     this.validatePool(resources);
     if (await waitForDockerEngine(this.docker) !== "windows") throw new Error("Windows Docker engine is required");
