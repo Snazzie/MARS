@@ -100,7 +100,7 @@ export const verifiedWindowsVmImage = async (
     return { ready: false, remediation: error instanceof Error ? error.message : String(error) };
   }
 };
-export const windowsDoctor = async (preserveLeases = false): Promise<WorkerDoctorData> => {
+export const windowsDoctor = async (preserveLeases = false, runProbe: typeof commandSucceeds = commandSucceeds): Promise<WorkerDoctorData> => {
   const runtimeMode = Bun.env.MARS_WINDOWS_RUNTIME === "container" ? "container" : "vm";
   const artifactValue = runtimeMode === "container" ? Bun.env.MARS_WINDOWS_CONTAINER_IMAGE : Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST;
   const localVerification = runtimeMode === "container" ? await localImageVerification(artifactValue ?? "") : { manifest: false, entrypoint: true };
@@ -109,8 +109,8 @@ export const windowsDoctor = async (preserveLeases = false): Promise<WorkerDocto
   const digestPinned = typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/.test(artifactValue);
   const immutableArtifact = runtimeMode === "container" ? localManifest || digestPinned : vmImage?.ready === true && vmImage.digest === artifactValue;
   const probe = runtimeMode === "container"
-    ? await commandSucceeds(["docker.exe", "info", "--format", "{{.OSType}}"])
-    : await commandSucceeds(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-VMHost -ErrorAction Stop | Out-Null"]);
+    ? await runProbe(["docker.exe", "info", "--format", "{{.OSType}}"])
+    : await runProbe(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-VMHost -ErrorAction Stop | Out-Null"]);
   const failures = [
     !probe && `${runtimeMode === "container" ? "Windows container host" : "Hyper-V host"} probe failed`,
     !immutableArtifact && (runtimeMode === "container" ? "Verified Windows container image manifest is missing or stale" : vmImage?.remediation ?? "Verified Windows VM image state is missing or invalid"),

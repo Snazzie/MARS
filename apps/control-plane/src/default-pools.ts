@@ -37,13 +37,12 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
   const configuredWorkers = workers
     .map((worker) => ({ worker, limits: (typeof worker.limits === "string" ? JSON.parse(worker.limits) : worker.limits) as WorkerLimits, doctor: storedWorkerDoctor(worker.doctor) }))
     .filter(({ worker }) => worker.limits);
-  if (!configuredWorkers.length) return;
-  const guestPlatforms = [...new Set(configuredWorkers.flatMap(({ worker }) => guestPlatformsForWorker(worker)))];
+  const guestPlatforms: GuestPlatform[] = ["linux-x64", "linux-arm64", "windows-x64", "macos-arm64"];
   for (const platform of guestPlatforms) {
     let compatibleWorkers = configuredWorkers.filter(({ worker }) => guestPlatformsForWorker(worker).includes(platform));
     let driver = runtimeDriverForPlatform(platform);
     let imageDigest = images[platform];
-    if (platform === "linux-arm64" || platform === "macos-arm64") {
+    if ((platform === "linux-arm64" || platform === "macos-arm64") && compatibleWorkers.some(({ worker }) => worker.platform === "macos-arm64")) {
       compatibleWorkers = compatibleWorkers.filter(({ worker }) => worker.platform === "macos-arm64");
       driver = "tart-vm";
       imageDigest = compatibleWorkers.map(({ doctor }) => (doctor.artifactDigests && typeof doctor.artifactDigests === "object" ? (doctor.artifactDigests as Record<string, unknown>)[platform] : undefined)).find((digest): digest is string => typeof digest === "string");
@@ -56,16 +55,20 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
         if (imageDigest) compatibleWorkers = compatibleWorkers.filter(({ doctor }) => { const evidence = workerPoolEvidence(doctor, driver, imageDigest!, platform); return evidence.ready && evidence.imageMatches; });
       }
     }
-    const resources = poolResourcesForWorkers(compatibleWorkers.map(({ limits }) => limits));
-    if (!resources || !imageDigest) continue;
+    const resources = poolResourcesForWorkers(compatibleWorkers.map(({ limits }) => limits))
+      ?? { vcpu: 4, memoryBytes: 6 * GIB, storageBytes: 30 * GIB, concurrency: 1 };
+    // Fresh installs expose inert pools until a configured worker supplies capacity
+    // and an image digest is available.
     const label = `mars-${platform}`;
     const labels = platform === "linux-arm64" ? [label, "ubuntu"] : [label];
     const name = `default-${platform}`;
+    const enabled = Boolean(imageDigest && compatibleWorkers.length);
     const [existing] = await db`select id from runner_pools where organization_id is null and (name=${name} or trigger_label=${label}) limit 1`;
     if (existing) {
-      await db`update runner_pools set worker_id=null,platform=${platform},driver=${driver},image_digest=${imageDigest},resources=${jsonParameter(db, resources)}::jsonb,labels=${jsonParameter(db, labels)}::jsonb,trigger_label=${label},enabled=true,name=${name} where id=${existing.id}`;
+      if (!imageDigest) continue;
+      await db`update runner_pools set worker_id=null,platform=${platform},driver=${driver},image_digest=${imageDigest},resources=${jsonParameter(db, resources)}::jsonb,labels=${jsonParameter(db, labels)}::jsonb,trigger_label=${label},enabled=${enabled},name=${name} where id=${existing.id}`;
     } else {
-      await db`insert into runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) values (null,null,${name},${platform},${driver},${imageDigest},${jsonParameter(db, resources)}::jsonb,${jsonParameter(db, labels)}::jsonb,${label},true)`;
+      await db`insert into runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) values (null,null,${name},${platform},${driver},${imageDigest ?? ""},${jsonParameter(db, resources)}::jsonb,${jsonParameter(db, labels)}::jsonb,${label},${enabled})`;
     }
   }
 }

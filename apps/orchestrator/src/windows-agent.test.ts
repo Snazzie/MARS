@@ -29,26 +29,56 @@ const containerStatuses: WorkerContainerStatus[] = [{
   sampledAt: "2026-08-31T12:00:00.000Z",
 }];
 
-test("Windows doctor uses local evidence without GitHub requests", async () => {
+test("Windows doctor ignores GitHub network failures but still requires local readiness evidence", async () => {
+  const programData = await mkdtemp(join(tmpdir(), "mars-windows-doctor-"));
+  const checkpoint = join(programData, "checkpoint");
+  const stateRoot = join(programData, "Mars", "vm-provisioning");
+  const digest = `sha256:${"a".repeat(64)}`;
+  const contentDigest = `sha256:${"b".repeat(64)}`;
   const oldFetch = globalThis.fetch;
-  const oldRuntime = Bun.env.MARS_WINDOWS_RUNTIME;
-  const oldDigest = Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST;
+  const oldEnv = {
+    runtime: Bun.env.MARS_WINDOWS_RUNTIME,
+    programData: Bun.env.ProgramData,
+    checkpointPath: Bun.env.MARS_WINDOWS_CHECKPOINT_PATH,
+    checkpointDigest: Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST,
+  };
   let fetchCalls = 0;
   try {
+    await mkdir(checkpoint, { recursive: true });
+    await mkdir(stateRoot, { recursive: true });
+    await writeFile(join(checkpoint, "image.vmcx"), "vm");
+    const probe = { passed: true, imageDigest: digest, contentDigest };
+    await writeFile(join(checkpoint, "manifest.json"), JSON.stringify({ format: 2, kind: "hyperv-checkpoint-export", imageDigest: digest, contentDigest, probe, files: [{ path: "image.vmcx", length: 2, sha256: `sha256:${"c".repeat(64)}` }] }));
+    await writeFile(join(stateRoot, "image-state.json"), JSON.stringify({ version: 1, imageDigest: digest, contentDigest, installedPath: checkpoint, ready: true, probe: { passed: true } }));
     Bun.env.MARS_WINDOWS_RUNTIME = "vm";
-    delete Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST;
+    Bun.env.ProgramData = programData;
+    Bun.env.MARS_WINDOWS_CHECKPOINT_PATH = checkpoint;
+    Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST = digest;
     globalThis.fetch = Object.assign(async () => { fetchCalls += 1; throw new Error("network unavailable"); }, { preconnect: oldFetch.preconnect });
-    const report = await windowsDoctor();
+
+    const ready = await windowsDoctor(false, async () => true);
     expect(fetchCalls).toBe(0);
-    expect(report.runtimeReady).toBe(false);
-    expect(report.remediation).toContain("image-state.json");
-    expect(report).not.toHaveProperty("egress");
+    expect(ready.runtimeReady).toBe(true);
+    expect(ready.imageSignatures).toBe(true);
+    expect(ready).not.toHaveProperty("egress");
+
+    Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST = `sha256:${"d".repeat(64)}`;
+    const missing = await windowsDoctor(false, async () => true);
+    expect(missing.runtimeReady).toBe(false);
+    expect(missing.remediation).toContain("digest");
+    expect(fetchCalls).toBe(0);
   } finally {
     globalThis.fetch = oldFetch;
-    if (oldRuntime === undefined) delete Bun.env.MARS_WINDOWS_RUNTIME;
-    else Bun.env.MARS_WINDOWS_RUNTIME = oldRuntime;
-    if (oldDigest === undefined) delete Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST;
-    else Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST = oldDigest;
+    for (const [name, value] of Object.entries({
+      MARS_WINDOWS_RUNTIME: oldEnv.runtime,
+      ProgramData: oldEnv.programData,
+      MARS_WINDOWS_CHECKPOINT_PATH: oldEnv.checkpointPath,
+      MARS_WINDOWS_CHECKPOINT_DIGEST: oldEnv.checkpointDigest,
+    })) {
+      if (value === undefined) delete Bun.env[name];
+      else Bun.env[name] = value;
+    }
+    await rm(programData, { recursive: true, force: true });
   }
 });
 test("validates installed Windows VM identity and rejects stale service digests", async () => {

@@ -21,7 +21,7 @@ export interface JobReconciliationDeps {
   contractVersion: string;
   workerConnected?: (workerId: string) => boolean;
   installationBlocked?: (installationId: number) => boolean;
-  onDecision?: (decision: { organizationId: string; jobId: number; code: string }) => void;
+  onDecision?: (decision: { organizationId: string; jobId: number; code: string; labels?: string[] }) => void;
   onQueueSize?: (queued: number) => void;
   repositoryFullName?: string;
 }
@@ -142,7 +142,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       labels: stringArray(row.labels),
     })),
     candidates,
-    onDecision: (job, code) => deps.onDecision?.({ organizationId: job.organizationId ?? "", jobId: job.jobId, code }),
+    onDecision: (job, code) => deps.onDecision?.({ organizationId: job.organizationId ?? "", jobId: job.jobId, code, ...(code === "no_matching_labels" ? { labels: job.labels } : {}) }),
     unmatchedReason: (job) => {
       if (sqlCandidates.length === 0) return "no_eligible_worker_pool";
       const reasons = sqlCandidates.map(candidate => reason({

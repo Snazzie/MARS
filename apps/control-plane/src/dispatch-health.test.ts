@@ -25,3 +25,21 @@ test("reports a stalled scheduler even before its first successful pass", () => 
   const monitor = new DispatchHealthMonitor(5_000, 0);
   expect(monitor.snapshot(null, 15_001)).toMatchObject({ state: "degraded", lastReconciledAt: null });
 });
+
+test("logs requested labels when a job has no matching pool, including label changes", () => {
+  const original = console.log;
+  const messages: unknown[][] = [];
+  console.log = (...args: unknown[]) => { messages.push(args); };
+  try {
+    const monitor = new DispatchHealthMonitor(5_000);
+    monitor.markSuccess([{ organizationId: "org", jobId: 42, code: "no_matching_labels", labels: ["ubuntu-latest"] }]);
+    monitor.markSuccess([{ organizationId: "org", jobId: 42, code: "no_matching_labels", labels: ["ubuntu-latest"] }]);
+    monitor.markSuccess([{ organizationId: "org", jobId: 42, code: "no_matching_labels", labels: ["mars-linux-arm64"] }]);
+    expect(messages).toEqual([
+      ["Job dispatch blocked", { organizationId: "org", jobId: 42, reason: "no_matching_labels", labels: ["ubuntu-latest"] }],
+      ["Job dispatch blocked", { organizationId: "org", jobId: 42, reason: "no_matching_labels", labels: ["mars-linux-arm64"] }],
+    ]);
+  } finally {
+    console.log = original;
+  }
+});

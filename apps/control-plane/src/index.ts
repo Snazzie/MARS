@@ -417,7 +417,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const workerReleaseManifest = await resolveWorkerReleaseManifest(production, workerReleaseManifestUrl, options.workerReleaseManifest);
   const env = {
     DEFAULT_IMAGES: {
-      "linux-x64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_X64,
+      "linux-x64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_X64 ?? (workerReleaseManifest?.platforms["linux-x64"]?.goldenImage ? `sha256:${workerReleaseManifest.platforms["linux-x64"].goldenImage.sha256}` : undefined),
       "linux-arm64": Bun.env.DEFAULT_JOB_IMAGE_LINUX_ARM64 ?? workerReleaseManifest?.platforms["linux-arm64"]?.jobImage,
       "windows-x64": Bun.env.DEFAULT_JOB_IMAGE_WINDOWS_X64,
       "macos-arm64": Bun.env.DEFAULT_JOB_IMAGE_MACOS_ARM64,

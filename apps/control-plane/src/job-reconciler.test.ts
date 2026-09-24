@@ -360,3 +360,31 @@ test("persists normalized labels and releases when GitHub queued labels change",
   expect(updatedLabels).toEqual(["mars-windows-x64-1vcpu-2g"]);
   expect(events).toEqual(["reserve", "preflight", "release"]);
 });
+
+test("reports requested labels for a job without a matching pool", async () => {
+  const labels = ["mars-linux-arm64-2vcpu-4g", "mars-macos-arm64-4vcpu-8g"];
+  const decisions: unknown[] = [];
+  const db = (async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ").toLowerCase();
+    if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels }];
+    if (query.includes('p.id as "poolid"')) return [{
+      poolId: "pool", workerId: "worker", enabled: true, platform: "windows-x64",
+      driver: "windows-hyperv-container", imageDigest: "sha256:image",
+      resources: { vcpu: 2, memoryBytes: 4 * 1024 ** 3, storageBytes: 8, concurrency: 1 },
+      labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64",
+      admissionState: "adopted", connectionState: "online", configurationState: "ready",
+      configurationRevision: "current", appliedConfigurationRevision: "current",
+      limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 },
+      doctor: windowsEvidence, active: 0,
+    }];
+    return [];
+  }) as unknown as DatabaseClient;
+  const report = await runQueuedJobReconciliation({
+    db, contractVersion: "0.1.0", installationToken: async () => "token",
+    githubFetchForInstallation: () => async () => { throw new Error("unexpected GitHub request"); },
+    dispatcher: { dispatch: async () => { throw new Error("unexpected dispatch"); } },
+    onDecision: decision => decisions.push(decision),
+  });
+  expect(report.skipped).toBe(1);
+  expect(decisions).toEqual([{ organizationId: "org", jobId: 42, code: "no_matching_labels", labels }]);
+});
