@@ -1,5 +1,7 @@
 # MARS
 
+<img src="assets/mars-icon.svg" alt="MARS logo" width="320">
+
 **MARS (Managed Action Runner System)** is a self-hosted control plane and worker platform for running GitHub Actions workloads on managed infrastructure.
 
 The repository contains the control-plane API and dashboard, worker runtimes for supported host platforms, job-agent and orchestration components, deployment assets, and contract tests.
