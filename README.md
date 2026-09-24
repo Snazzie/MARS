@@ -111,7 +111,7 @@ On an Apple Silicon Mac with Bun, Tart, Xcode Command Line Tools, and prepared m
 bun run dev:mac-worker
 ```
 
-The command builds the menu-bar status item locally and runs the macOS orchestrator in the foreground. It uses the prepared local Tart images and development manifests without modifying them. Its own identity, UUID, lease state, and cache live under `~/Library/Application Support/Mars/dev-worker`; the first join uses the development token and requires approval and configuration in the control plane before scheduling. Press Ctrl-C to stop it. If retaining an installed worker, restore it afterward with `launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.mars.worker.plist"`. The macOS installer remains the supported path for a persistent worker.
+The command builds the menu-bar status item locally and runs the macOS orchestrator in the foreground. It prints worker commands, lease lifecycle events, and live job output to the terminal (resource samples stay quiet); these console logs are enabled only for the development worker. It uses the prepared local Tart images and development manifests without modifying them. Its own identity, UUID, lease state, and cache live under `~/Library/Application Support/Mars/dev-worker`; the first join uses the development token and requires approval and configuration in the control plane before scheduling. Press Ctrl-C to stop it. If retaining an installed worker, restore it afterward with `launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.mars.worker.plist"`. The macOS installer remains the supported path for a persistent worker.
 
 ### Upgrade a local Windows worker from the current checkout
 

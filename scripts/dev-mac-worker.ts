@@ -70,6 +70,7 @@ async function main(): Promise<void> {
       ...process.env,
       MARS_CONTROL_PLANE_URL: controlPlane,
       MARS_WORKER_VERSION: "0.0.0",
+      MARS_DEV_WORKER_CONSOLE_LOGS: "true",
       MARS_WORKER_CONTRACT_VERSION: CURRENT_WORKER_CONTRACT_VERSION,
       MARS_WORKER_IDENTITY_FILE: identityPath,
       MARS_MACHINE_UUID: machineUuid,

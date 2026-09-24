@@ -414,10 +414,28 @@ async function enrollMacWorker(controlPlane: URL, identity: MacWorkerIdentity): 
     return enrolled;
   } finally { codeBytes.fill(0); }
 }
-
+export function logMacDevelopmentWorkerEvent(event: WorkerEvent): void {
+  if (event.type === "job.log") {
+    if (typeof event.payload.content === "string") process.stdout.write(event.payload.content);
+    return;
+  }
+  if (event.type === "job.resource_sample") return;
+  console.log("Development worker event", {
+    type: event.type,
+    commandId: event.payload.commandId,
+    leaseId: event.payload.leaseId,
+    reason: event.payload.reason,
+    exitCode: event.payload.exitCode,
+  });
+}
 async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, driver: TartVmDriver, limits: MacWorkerLimits, cache: WorkerCacheConfiguration, cacheService: ActionCacheService, pickupState: LeasePickupStateController): Promise<never> {
   const activeLeases = new Map<string, Promise<void>>();
   const eventTransport = new WorkerEventTransport(() => cacheService.runnerCacheStatus().enabled);
+  const developmentConsole = Bun.env.MARS_DEV_WORKER_CONSOLE_LOGS === "true";
+  const sendEvent = (event: WorkerEvent) => {
+    if (developmentConsole) logMacDevelopmentWorkerEvent(event);
+    eventTransport.send(event);
+  };
   for (;;) {
     const ws = await connectWorkerSocket(buildMacWorkerSocketUrl(controlPlane.toString(), identity.workerId));
     const closed = waitForWorkerSocketClose(ws);
@@ -479,6 +497,7 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
         return;
       }
       try {
+        if (developmentConsole) console.log("Development worker command", { type: command.type, commandId: command.id, leaseId: command.leaseId });
         const cacheWasEnabled = cacheService.runnerCacheStatus().enabled;
         await executeMacWorkerCommand(command, {
           driver,
@@ -491,7 +510,7 @@ async function connectMacWorker(controlPlane: URL, identity: MacWorkerIdentity, 
           setPreserveLeases: enabled => { identity.preserveLeases = enabled; },
           acceptingLeases: () => pickupState.acceptingLeases,
           saveIdentity: () => saveMacWorkerIdentity(identity),
-          send: eventToSend => eventTransport.send(eventToSend),
+          send: sendEvent,
           sendDoctor,
         });
         if (command.type === "worker.configure" && !cacheWasEnabled && cacheService.runnerCacheStatus().enabled) {
