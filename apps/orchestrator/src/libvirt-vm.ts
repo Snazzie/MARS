@@ -8,7 +8,7 @@ import { validateResources, type Lease, type RuntimeDriver, type RuntimeLease } 
 
 export type HostCommandResult = { code: number; stdout: string; stderr: string };
 export type HostCommandRunner = (executable: "virsh" | "qemu-img", args: string[], stdin?: string) => Promise<HostCommandResult>;
-export type LinuxVmConfig = { goldenDisk: string; goldenDigest: `sha256:${string}`; domainTemplate: string; cloneRoot: string; channelRoot: string; network: string; prefix: string; limits: WorkerLimits; guestReadyTimeoutMs: number; jobTimeoutMs: number };
+export type LinuxVmConfig = { goldenDisk: string; goldenDigest: `sha256:${string}`; domainTemplate: string; cloneRoot: string; channelRoot: string; network: string; prefix: string; limits: WorkerLimits; guestReadyTimeoutMs: number };
 type Owned = { lease: Lease; domain: string; overlay: string; channel: string; runtime?: RuntimeLease; socket?: { write(data: Uint8Array): void; end(): void } };
 
 const defaultHostCommand: HostCommandRunner = async (executable, args, stdin) => {

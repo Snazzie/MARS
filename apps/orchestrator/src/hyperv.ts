@@ -21,7 +21,7 @@ export interface HyperVRuntime {
   copyBootstrap(vmName: string, sourcePath: string, guestPath: string): Promise<void>;
   start(vmName: string): Promise<void>;
   waitForGuestReady(vmName: string, timeoutMs: number): Promise<void>;
-  waitForStop(vmName: string, timeoutMs: number): Promise<void>;
+  waitForStop(vmName: string): Promise<void>;
   stop(vmName: string): Promise<void>;
   remove(vmName: string): Promise<void>;
   removeFiles(path: string): Promise<void>;
@@ -40,7 +40,7 @@ export function createHyperVRuntime(run: HyperVRunner = defaultRunner): HyperVRu
     copyBootstrap: async (vmName, sourcePath, guestPath) => { await invoke("Copy-VMFile -Name $args[0] -SourcePath $args[1] -DestinationPath $args[2] -FileSource Host -CreateFullPath", [vmName, sourcePath, guestPath]); },
     start: async vmName => { await invoke("Start-VM -Name $args[0] | Out-Null", [vmName]); },
     waitForGuestReady: async (vmName, timeoutMs) => { await invoke("$deadline=(Get-Date).AddMilliseconds($args[1]); do { $heartbeat=Get-VMIntegrationService -VMName $args[0] -Name 'Heartbeat' -ErrorAction SilentlyContinue; if ($heartbeat -and $heartbeat.PrimaryStatusDescription -eq 'OK') { exit 0 }; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $deadline); exit 1", [vmName, String(timeoutMs)]); },
-    waitForStop: async (vmName, timeoutMs) => { await invoke("$deadline=(Get-Date).AddMilliseconds($args[1]); do { $state=(Get-VM -Name $args[0] -ErrorAction SilentlyContinue).State; if ($state -eq 'Off') { exit 0 }; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $deadline); exit 1", [vmName, String(timeoutMs)]); },
+    waitForStop: async vmName => { await invoke("while ($true) { $state=(Get-VM -Name $args[0] -ErrorAction SilentlyContinue).State; if ($state -eq 'Off') { exit 0 }; if (-not $state) { throw 'VM disappeared before stopping' }; Start-Sleep -Milliseconds 500 }", [vmName]); },
     stop: async vmName => { await invoke("Stop-VM -Name $args[0] -TurnOff -Force -ErrorAction SilentlyContinue", [vmName]); },
     remove: async vmName => { await invoke("Remove-VM -Name $args[0] -Force -ErrorAction SilentlyContinue", [vmName]); },
     removeFiles: async path => { await rm(path, { recursive: true, force: true }); },
@@ -71,7 +71,7 @@ export class HyperVDriver implements RuntimeDriver {
       await this.hyperv.start(vmName);
       await this.hyperv.waitForGuestReady(vmName, Number(Bun.env.MARS_HYPERV_READY_TIMEOUT_MS ?? 120_000));
       await this.hyperv.copyBootstrap(vmName, bootstrapPath, "C:\\ProgramData\\Mars\\bootstrap.json");
-      const completion = this.hyperv.waitForStop(vmName, Number(Bun.env.MARS_HYPERV_JOB_TIMEOUT_MS ?? 3_600_000)).then(() => 0);
+      const completion = this.hyperv.waitForStop(vmName).then(() => 0);
       const runtime: RuntimeLease = { runtimeInstanceId: vmName, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: bytesToGigabytes(lease.resources.storageBytes) * 1024 ** 3 }, state: "sandbox_attested", completion, sample: this.hyperv.sample ? () => this.hyperv.sample!(vmName) : undefined };
       this.leases.set(lease.id, { vmName, filesPath, runtime });
       return runtime;

@@ -9,7 +9,7 @@ export type DockerResult = { code: number; stdout: string; stderr: string };
 export type DockerRunner = (args: string[]) => Promise<DockerResult>;
 export type PowerShellResult = { code: number; stdout: string; stderr: string };
 export type PowerShellRunner = (command: string) => Promise<PowerShellResult>;
-export type WindowsContainerConfig = { image: string; prefix: string; bootstrapRoot: string; limits: WorkerLimits; readyTimeoutMs: number; jobTimeoutMs: number; allowLocalImage?: boolean; imageManifestPath?: string; requireLocalImageManifest?: boolean; dnsServers?: string[]; platform?: NodeJS.Platform };
+export type WindowsContainerConfig = { image: string; prefix: string; bootstrapRoot: string; limits: WorkerLimits; readyTimeoutMs: number; allowLocalImage?: boolean; imageManifestPath?: string; requireLocalImageManifest?: boolean; dnsServers?: string[]; platform?: NodeJS.Platform };
 export function parseWindowsContainerDnsServers(value: string | undefined): string[] {
   return [...new Set((value ?? "").split(",").map((server) => server.trim()).filter((server) => isIP(server) !== 0))];
 }
@@ -213,16 +213,11 @@ export class WindowsContainerDriver implements RuntimeDriver {
     } catch (error) { await this.removeLease(lease.id).catch(() => undefined); throw error; }
   }
   private async wait(name: string): Promise<number> {
-    const completion = this.docker(["wait", name]).then((result) => {
-      if (result.code !== 0) throw new Error("container completion failed");
-      const code = Number(result.stdout.trim());
-      if (!Number.isInteger(code)) throw new Error("container exit code invalid");
-      return code;
-    });
-    const timeout = Bun.sleep(this.config.jobTimeoutMs).then(() => {
-      throw new Error(`container job timed out after ${this.config.jobTimeoutMs}ms`);
-    });
-    return Promise.race([completion, timeout]);
+    const result = await this.docker(["wait", name]);
+    if (result.code !== 0) throw new Error("container completion failed");
+    const code = Number(result.stdout.trim());
+    if (!Number.isInteger(code)) throw new Error("container exit code invalid");
+    return code;
   }
   private async inspectManagedContainers(ids: string[]): Promise<DockerInspection[]> {
     const batch = await this.docker(["inspect", "--size", ...ids]);

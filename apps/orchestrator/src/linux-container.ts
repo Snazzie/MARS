@@ -12,7 +12,6 @@ export type LinuxContainerConfig = {
   prefix: string;
   network: string;
   limits: WorkerLimits;
-  jobTimeoutMs: number;
 };
 
 type DockerInspection = {
@@ -181,14 +180,11 @@ export class LinuxContainerDriver implements RuntimeDriver {
   }
 
   private async wait(name: string): Promise<number> {
-    const completion = this.docker(["wait", name]).then((result) => {
-      if (result.code !== 0) throw new Error("container completion failed");
-      const code = Number(result.stdout.trim());
-      if (!Number.isInteger(code)) throw new Error("container exit code invalid");
-      return code;
-    });
-    const timeout = Bun.sleep(this.config.jobTimeoutMs).then(() => { throw new Error(`container job timed out after ${this.config.jobTimeoutMs}ms`); });
-    return Promise.race([completion, timeout]);
+    const result = await this.docker(["wait", name]);
+    if (result.code !== 0) throw new Error("container completion failed");
+    const code = Number(result.stdout.trim());
+    if (!Number.isInteger(code)) throw new Error("container exit code invalid");
+    return code;
   }
 
   private sample(name: string, configuredMemoryBytes: number): () => Promise<{ cpuUsagePercent: number; cpuTimeMs: number; memoryWorkingSetBytes: number; memoryLimitBytes: number }> {

@@ -18,7 +18,7 @@ function fakeDocker(calls: string[][], architecture = "arm64"): DockerRunner {
     return { code: 0, stdout: "", stderr: "" };
   };
 }
-function config(overrides: Partial<LinuxContainerConfig> = {}): LinuxContainerConfig { return { image, prefix: "mars", network: "mars-linux-arm64", limits, jobTimeoutMs: 100, ...overrides }; }
+function config(overrides: Partial<LinuxContainerConfig> = {}): LinuxContainerConfig { return { image, prefix: "mars", network: "mars-linux-arm64", limits, ...overrides }; }
 
 test("requires native Linux ARM64 Docker and digest-pinned image", async () => {
   const driver = new LinuxContainerDriver(config(), fakeDocker([] , "amd64"));

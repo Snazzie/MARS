@@ -44,7 +44,6 @@ param(
   [string]$WindowsContainerImage = 'mars/windows-job:local',
   [string]$WindowsContainerPrefix = 'mars',
   [int]$WindowsContainerReadyTimeoutMs = 15000,
-  [int]$WindowsContainerJobTimeoutMs = 900000,
   [switch]$AllowInsecureHttp,
   [switch]$AllowLocalContainerImage,
   [switch]$Upgrade,
@@ -202,7 +201,7 @@ function Register-ResumeTask {
     '-WindowsContainerfileUrl',$WindowsContainerfileUrl,'-WindowsContainerfileSha256',$WindowsContainerfileSha256,
     '-WindowsContainerEntrypointUrl',$WindowsContainerEntrypointUrl,'-WindowsContainerEntrypointSha256',$WindowsContainerEntrypointSha256,
     '-WindowsContainerImage',$WindowsContainerImage,'-WindowsContainerPrefix',$WindowsContainerPrefix,
-    '-WindowsContainerReadyTimeoutMs',$WindowsContainerReadyTimeoutMs,'-WindowsContainerJobTimeoutMs',$WindowsContainerJobTimeoutMs,'-Resume'
+    '-WindowsContainerReadyTimeoutMs',$WindowsContainerReadyTimeoutMs,'-Resume'
   )
   if ($AcceptWindowsLicenseTerms) { $resumeParameters += '-AcceptWindowsLicenseTerms' }
   if ($AllowInsecureHttp) { $resumeParameters += '-AllowInsecureHttp' }; if ($AllowLocalContainerImage) { $resumeParameters += '-AllowLocalContainerImage' }; if ($Upgrade) { $resumeParameters += '-Upgrade' }
@@ -563,7 +562,7 @@ $trayPath = Join-Path $bin 'mars-worker-tray.ps1'; $trayAction = New-ScheduledTa
     $serviceEnvironment += "MARS_WINDOWS_CHECKPOINT_PATH=$checkpointPath","MARS_WINDOWS_CHECKPOINT_DIGEST=$($checkpoint.ImageDigest)"
     $switchName = [Environment]::GetEnvironmentVariable('MARS_HYPERV_SWITCH_NAME'); if (-not [string]::IsNullOrWhiteSpace($switchName)) { $serviceEnvironment += "MARS_HYPERV_SWITCH_NAME=$($switchName.Trim())" }
   } else {
-    $serviceEnvironment += "MARS_WINDOWS_CONTAINER_IMAGE=$WindowsContainerImage","MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST=$windowsImageManifestPath","MARS_WINDOWS_CONTAINER_PREFIX=$WindowsContainerPrefix","MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS=$WindowsContainerReadyTimeoutMs","MARS_WINDOWS_CONTAINER_JOB_TIMEOUT_MS=$WindowsContainerJobTimeoutMs"
+    $serviceEnvironment += "MARS_WINDOWS_CONTAINER_IMAGE=$WindowsContainerImage","MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST=$windowsImageManifestPath","MARS_WINDOWS_CONTAINER_PREFIX=$WindowsContainerPrefix","MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS=$WindowsContainerReadyTimeoutMs"
     $cacheOrigins = Resolve-ContainerCacheOrigins
     $serviceEnvironment += "MARS_CACHE_PROXY_URL=$($cacheOrigins.Proxy)","MARS_CACHE_ADVERTISE_URL=$($cacheOrigins.Advertise)"
     if ($AllowLocalContainerImage -or $WindowsContainerImage -eq 'mars/windows-job:local') { $serviceEnvironment += 'MARS_ALLOW_LOCAL_CONTAINER_IMAGE=true' }

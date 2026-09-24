@@ -380,7 +380,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
   if (mode === "container") {
     const image = Bun.env.MARS_WINDOWS_CONTAINER_IMAGE;
     if (!image) throw new Error("MARS_WINDOWS_CONTAINER_IMAGE is required in container mode");
-    driver = new WindowsContainerDriver({ image, prefix: Bun.env.MARS_WINDOWS_CONTAINER_PREFIX ?? "mars", bootstrapRoot: Bun.env.ProgramData ? `${Bun.env.ProgramData}\\Mars\\leases` : "C:\\ProgramData\\Mars\\leases", limits, readyTimeoutMs: Number(Bun.env.MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS ?? 15_000), jobTimeoutMs: Number(Bun.env.MARS_WINDOWS_CONTAINER_JOB_TIMEOUT_MS ?? 900_000), allowLocalImage: Bun.env.MARS_ALLOW_LOCAL_CONTAINER_IMAGE === "true", imageManifestPath: Bun.env.MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST, requireLocalImageManifest: image === "mars/windows-job:local", dnsServers: parseWindowsContainerDnsServers(Bun.env.MARS_WINDOWS_CONTAINER_DNS_SERVERS) });
+    driver = new WindowsContainerDriver({ image, prefix: Bun.env.MARS_WINDOWS_CONTAINER_PREFIX ?? "mars", bootstrapRoot: Bun.env.ProgramData ? `${Bun.env.ProgramData}\\Mars\\leases` : "C:\\ProgramData\\Mars\\leases", limits, readyTimeoutMs: Number(Bun.env.MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS ?? 15_000), allowLocalImage: Bun.env.MARS_ALLOW_LOCAL_CONTAINER_IMAGE === "true", imageManifestPath: Bun.env.MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST, requireLocalImageManifest: image === "mars/windows-job:local", dnsServers: parseWindowsContainerDnsServers(Bun.env.MARS_WINDOWS_CONTAINER_DNS_SERVERS) });
   } else if (mode === "vm") {
     const checkpointPath = Bun.env.MARS_WINDOWS_CHECKPOINT_PATH;
     const checkpointDigest = Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST;

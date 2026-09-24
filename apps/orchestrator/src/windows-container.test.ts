@@ -26,7 +26,6 @@ test("rejects a local image without a verified matching manifest", async () => {
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
-    jobTimeoutMs: 100,
     allowLocalImage: true,
     imageManifestPath: manifestPath,
     requireLocalImageManifest: true,
@@ -42,7 +41,7 @@ test("includes worker cache descriptor in Windows container bootstrap", async ()
     if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 1_000_000_000, Memory: 1024 } }]), stderr: "" };
     return { code: 0, stdout: "0", stderr: "" };
   };
-  const driver = new WindowsContainerDriver({ image: "repo@sha256:" + "a".repeat(64), prefix: "mars", bootstrapRoot: root, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 }, readyTimeoutMs: 100, jobTimeoutMs: 100, dnsServers: ["1.1.1.1"] }, docker);
+  const driver = new WindowsContainerDriver({ image: "repo@sha256:" + "a".repeat(64), prefix: "mars", bootstrapRoot: root, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 }, readyTimeoutMs: 100, dnsServers: ["1.1.1.1"] }, docker);
   const leaseId = "33333333-3333-4333-8333-333333333333";
   await driver.createLease({ id: leaseId, jobId: "job", contractVersion: "0.1.0", imageDigest: "repo@sha256:" + "a".repeat(64), resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config", workerCache });
   expect(JSON.parse(await readFile(join(root, leaseId, "bootstrap.json"), "utf8")).workerCache).toEqual(workerCache);
@@ -65,7 +64,6 @@ test("passes configured DNS servers to Docker create", async () => {
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
     dnsServers: ["10.36.172.244", " 2001:4860:4860::8888 ", "not-a-dns-server", ""],
-    jobTimeoutMs: 100,
   };
   const driver = new WindowsContainerDriver(config, docker);
 
@@ -117,7 +115,6 @@ test("discovers host DNS immediately before Docker create when no override is co
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
-    jobTimeoutMs: 100,
     platform: "win32" as const,
   };
   const driver = new WindowsContainerDriver(config, docker, powershell);
@@ -161,7 +158,6 @@ test("does not query host DNS on non-Windows platforms", async () => {
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
-    jobTimeoutMs: 100,
     platform: "linux" as const,
   };
   const driver = new WindowsContainerDriver(config, docker, powershell);
@@ -196,7 +192,6 @@ test("rejects a container when Docker applies different CPU or memory limits", a
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
-    jobTimeoutMs: 100,
     allowLocalImage: true,
   }, docker);
 
@@ -211,14 +206,15 @@ test("rejects a container when Docker applies different CPU or memory limits", a
   expect(calls).toContainEqual(["rm", "-f", "-v", "mars-44444444-4444-4444-8444-444444444444"]);
 });
 
-test("fails completion when a containerized job stops making terminal progress", async () => {
+test("waits for a containerized job to exit without a worker deadline", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-windows-container-"));
   roots.push(root);
   const calls: string[][] = [];
+  const exit = Promise.withResolvers<Awaited<ReturnType<DockerRunner>>>();
   const docker: DockerRunner = async (args) => {
     if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
     calls.push(args);
-    if (args[0] === "wait") return Promise.withResolvers<Awaited<ReturnType<DockerRunner>>>().promise;
+    if (args[0] === "wait") return exit.promise;
     if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 2_000_000_000, Memory: 8 * 1024 ** 3 } }]), stderr: "" };
     return { code: 0, stdout: "", stderr: "" };
   };
@@ -228,7 +224,6 @@ test("fails completion when a containerized job stops making terminal progress",
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
-    jobTimeoutMs: 10,
     allowLocalImage: true,
   }, docker);
   const lease = await driver.createLease({
@@ -251,7 +246,10 @@ test("fails completion when a containerized job stops making terminal progress",
   expect(createArgs).toContain("size=10737418240");
   expect(lease.observed).toEqual({ vcpu: 2, memoryBytes: 8 * 1024 ** 3, storageBytes: 10 * 1024 ** 3 });
 
-  await expect(lease.completion!).rejects.toThrow("container job timed out");
+  const outcome = await Promise.race([lease.completion!.then(() => "exited"), Bun.sleep(30).then(() => "running")]);
+  expect(outcome).toBe("running");
+  exit.resolve({ code: 0, stdout: "0", stderr: "" });
+  expect(await lease.completion).toBe(0);
   await driver.removeLease("11111111-1111-4111-8111-111111111111");
 });
 
@@ -271,7 +269,6 @@ test("removes a container when startup fails after creation", async () => {
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
-    jobTimeoutMs: 100,
     allowLocalImage: true,
   }, docker);
 
@@ -301,7 +298,6 @@ test("removes a known lease container and its anonymous volumes after a worker r
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
-    jobTimeoutMs: 100,
     allowLocalImage: true,
   }, docker);
 
@@ -329,7 +325,6 @@ test("copies runner and worker diagnostic logs from a stopped container", async 
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
-    jobTimeoutMs: 100,
     allowLocalImage: true,
   }, docker);
   await driver.createLease({ id: "77777777-7777-4777-8777-777777777777", jobId: "job", contractVersion: "0.1.0", imageDigest: "mars/windows-job:local", resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config" });
@@ -356,7 +351,6 @@ test("falls back to the configured memory limit when Docker stats reports an inv
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: configuredMemory, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
-    jobTimeoutMs: 100,
     allowLocalImage: true,
   }, docker);
   const lease = await driver.createLease({
@@ -387,7 +381,6 @@ test("requests an idempotent graceful runner stop before forced cleanup", async 
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1024, maxStorageBytesPerPod: 1024, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
-    jobTimeoutMs: 100,
     allowLocalImage: true,
   }, docker);
   await driver.createLease({ id: "66666666-6666-4666-8666-666666666666", jobId: "job", contractVersion: "0.1.0", imageDigest: "mars/windows-job:local", resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config" });
@@ -403,7 +396,6 @@ test("treats pool concurrency as a pool limit, not a per-container resource", ()
     bootstrapRoot: "C:\\mars-test",
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
-    jobTimeoutMs: 100,
     allowLocalImage: true,
   });
   const resources = { vcpu: 1, memoryBytes: 4 * 1024 ** 3, storageBytes: 5 * 1024 ** 3, concurrency: 3 };
@@ -428,7 +420,6 @@ test("waits for Docker to become ready before validating the image", async () =>
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1024, maxStorageBytesPerPod: 1024, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
-    jobTimeoutMs: 100,
   }, docker);
 
   await driver.reserveCapacity({ vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 });
@@ -476,7 +467,6 @@ const collectorConfig = {
   bootstrapRoot: "C:\\mars-test",
   limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 4 },
   readyTimeoutMs: 100,
-  jobTimeoutMs: 100,
 };
 
 test("enumerates managed containers and joins live stats with inspect metadata", async () => {
