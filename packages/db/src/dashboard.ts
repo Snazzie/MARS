@@ -466,9 +466,20 @@ export async function getWorkerHealth(db: DashboardDb, workerId: string, workerC
       r.name AS "repositoryName",l.state,
       COALESCE(l.updated_at,l.created_at) AS "startedAt",
       GREATEST(0,EXTRACT(EPOCH FROM (now()-COALESCE(l.updated_at,l.created_at))))::int AS "ageSeconds",
-      l.requested
+      l.requested,
+      s.cpu_usage_percent AS "sampleCpuUsagePercent",
+      s.memory_working_set_bytes AS "sampleMemoryWorkingSetBytes",
+      s.memory_limit_bytes AS "sampleMemoryLimitBytes",
+      s.disk_usage_bytes AS "sampleDiskUsageBytes",
+      s.occurred_at AS "sampledAt"
     FROM runner_leases l
     LEFT JOIN dashboard_jobs j ON j.github_job_id=l.github_job_id
+    LEFT JOIN LATERAL (
+      SELECT cpu_usage_percent,memory_working_set_bytes,memory_limit_bytes,disk_usage_bytes,occurred_at
+      FROM dashboard_job_resource_samples
+      WHERE organization_id=j.organization_id AND job_id=j.id AND lease_id=l.id
+      ORDER BY occurred_at DESC LIMIT 1
+    ) s ON true
     LEFT JOIN dashboard_runs dr ON dr.id=j.run_id
     LEFT JOIN dashboard_repositories r ON r.id=dr.repository_id
     WHERE l.worker_id=${workerId}
@@ -534,6 +545,13 @@ export async function getWorkerHealth(db: DashboardDb, workerId: string, workerC
         startedAt,
         ageSeconds: healthAge(row.ageSeconds, startedAt, observedAt),
         requested: requests[index]!,
+        sample: row.sampledAt == null ? null : {
+          cpuUsagePercent: Number(row.sampleCpuUsagePercent),
+          memoryWorkingSetBytes: healthDecimal(row.sampleMemoryWorkingSetBytes),
+          memoryLimitBytes: healthDecimal(row.sampleMemoryLimitBytes),
+          diskUsageBytes: row.sampleDiskUsageBytes == null ? null : healthDecimal(row.sampleDiskUsageBytes),
+          sampledAt: normalizeTimestamp(row.sampledAt),
+        },
       };
     }),
   });

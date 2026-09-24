@@ -183,7 +183,7 @@ function JobCells({ job, includeConcurrency = true }: { job: WorkerHealth["jobs"
     <td>{job.jobId ?? "Unavailable telemetry"}</td>
     <td>{job.repositoryFullName ?? job.repositoryName ?? "Unavailable telemetry"}</td>
     <td>{job.state}</td>
-    <td>{ageDisplay(job.ageSeconds, job.startedAt)}{workerTelemetryIsStale(job.ageSeconds) && <StatusBadge>Stale job telemetry</StatusBadge>}</td>
+    <td>{ageDisplay(job.ageSeconds, job.startedAt)}</td>
     <td>- / {job.requested.vcpu}</td>
     <td>- / {formatBytes(job.requested.memoryBytes)}</td>
     <td>- / {formatBytes(job.requested.storageBytes)}</td>
@@ -208,8 +208,21 @@ function VmWorkloadsSection({ jobs }: { jobs: WorkerHealth["jobs"] }) {
   return <div className="worker-health-table-wrap">
     <table className="worker-health-table">
       <caption>Managed VM workloads</caption>
-      <thead><tr><th scope="col">Job ID</th><th scope="col">Repository / name</th><th scope="col">Lease state</th><th scope="col">Age</th><th scope="col">vCPU</th><th scope="col">Memory</th><th scope="col">Storage</th><th scope="col">Concurrency</th></tr></thead>
-      <tbody>{jobs.map((job) => <tr key={job.leaseId}><JobCells job={job} /></tr>)}</tbody>
+      <thead><tr><th scope="col">Job ID</th><th scope="col">Repository / name</th><th scope="col">Lease state</th><th scope="col">Age</th><th scope="col">CPU usage</th><th scope="col">Memory use</th><th scope="col">Disk use</th><th scope="col">Sample</th><th scope="col">vCPU</th><th scope="col">Memory</th><th scope="col">Storage</th><th scope="col">Concurrency</th></tr></thead>
+      <tbody>{jobs.map((job) => <tr key={job.leaseId}>
+        <td>{job.jobId ?? "Unavailable telemetry"}</td>
+        <td>{job.repositoryFullName ?? job.repositoryName ?? "Unavailable telemetry"}</td>
+        <td>{job.state}</td>
+        <td>{ageDisplay(job.ageSeconds, job.startedAt)}</td>
+        <td>{formatContainerCpu(job.sample?.cpuUsagePercent ?? null)}</td>
+        <td>{formatContainerBytes(job.sample?.memoryWorkingSetBytes ?? null)}{job.sample && <> <small>of {formatBytes(job.sample.memoryLimitBytes)}</small></>}</td>
+        <td>{formatContainerBytes(job.sample?.diskUsageBytes ?? null)}</td>
+        <td>{job.sample ? <><time dateTime={job.sample.sampledAt}>{formatContainerAge(job.sample.sampledAt)}</time>{cacheStale(job.sample.sampledAt) && <StatusBadge tone="warning">Stale job telemetry</StatusBadge>}</> : "Not reported"}</td>
+        <td>{job.requested.vcpu}</td>
+        <td>{formatBytes(job.requested.memoryBytes)}</td>
+        <td>{formatBytes(job.requested.storageBytes)}</td>
+        <td>{job.requested.concurrency}</td>
+      </tr>)}</tbody>
     </table>
   </div>;
 }

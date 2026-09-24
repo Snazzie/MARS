@@ -245,6 +245,31 @@ test("renders VM and Tart leases as managed workloads instead of unassigned jobs
   }
 });
 
+test("shows fresh Tart VM resource samples without marking a long-running lease stale", () => {
+  const sampledAt = new Date(Date.now() - 10_000).toISOString();
+  const health = healthFixture({ runtimeMode: "tart", containers: [] });
+  health.jobs[0]!.ageSeconds = 310;
+  health.jobs[0]!.sample = { cpuUsagePercent: 37.5, memoryWorkingSetBytes: "1073741824", memoryLimitBytes: "10737418240", diskUsageBytes: "2147483648", sampledAt };
+  const markup = renderToStaticMarkup(<WorkerHealthPanel health={health} />);
+  expect(markup).toContain("37.5%");
+  expect(markup).toContain("1.0 GiB");
+  expect(markup).toContain("2.0 GiB");
+  expect(markup).toContain(`<time dateTime="${sampledAt}">`);
+  expect(markup).not.toContain("Stale job telemetry");
+});
+
+test("distinguishes missing and stale VM samples from workload age", () => {
+  const health = healthFixture({ runtimeMode: "tart", containers: [] });
+  health.jobs[0]!.ageSeconds = 600;
+  const missing = renderToStaticMarkup(<WorkerHealthPanel health={health} />);
+  expect(missing).toContain("Not reported");
+  expect(missing).not.toContain("Stale job telemetry");
+  health.jobs[0]!.sample = { cpuUsagePercent: 12, memoryWorkingSetBytes: "0", memoryLimitBytes: "10737418240", diskUsageBytes: null, sampledAt: new Date(Date.now() - 360_000).toISOString() };
+  const stale = renderToStaticMarkup(<WorkerHealthPanel health={health} />);
+  expect(stale).toContain("12.0%");
+  expect(stale).toContain("Stale job telemetry");
+});
+
 test("renders an explicit empty managed-container inventory", () => {
   const markup = renderToStaticMarkup(<WorkerHealthPanel health={healthFixture({ containers: [] })} />);
   expect(markup).toContain("No managed containers reported.");

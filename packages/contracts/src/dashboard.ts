@@ -317,6 +317,15 @@ export const WorkerHealthJobRequest = strict({
   storageBytes: decimalBytes,
   concurrency: nonnegativeSafeNumber,
 });
+export const WorkerHealthJobSample = dto(strict({
+  cpuUsagePercent: z.number().min(0).max(100),
+  memoryWorkingSetBytes: decimalBytes,
+  memoryLimitBytes: decimalBytes,
+  diskUsageBytes: decimalBytes.nullable(),
+  sampledAt: timestamp,
+}));
+export type WorkerHealthJobSample = z.infer<typeof WorkerHealthJobSample>;
+
 export type WorkerHealthJobRequest = z.infer<typeof WorkerHealthJobRequest>;
 
 export const WorkerHealthJob = dto(strict({
@@ -328,6 +337,7 @@ export const WorkerHealthJob = dto(strict({
   startedAt: timestamp.nullable(),
   ageSeconds: nonnegativeSafe.nullable(),
   requested: WorkerHealthJobRequest,
+  sample: WorkerHealthJobSample.nullable().optional(),
 }));
 export type WorkerHealthJob = z.infer<typeof WorkerHealthJob>;
 const workerHealthContainerId = z.string().regex(/^[0-9a-f]{64}$/);

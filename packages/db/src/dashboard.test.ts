@@ -89,7 +89,7 @@ test("worker health projects complete cache and active lease telemetry", async (
   const workerId = "86afd915-add3-407c-a6c1-1b46803ef713";
   const cacheGeneration = "11111111-1111-4111-8111-111111111111";
   const leases = [
-    { leaseId: "22222222-2222-4222-8222-222222222222", jobId: 42, repositoryFullName: "acme/project", repositoryName: "project", state: "busy", startedAt: new Date("2026-08-23T11:59:00.000Z"), ageSeconds: 60, requested: { vcpu: 2, memoryBytes: "100000000000000000000", storageBytes: "200000000000000000000", concurrency: 1 } },
+    { leaseId: "22222222-2222-4222-8222-222222222222", jobId: 42, repositoryFullName: "acme/project", repositoryName: "project", state: "busy", startedAt: new Date("2026-08-23T11:59:00.000Z"), ageSeconds: 60, requested: { vcpu: 2, memoryBytes: "100000000000000000000", storageBytes: "200000000000000000000", concurrency: 1 }, sampleCpuUsagePercent: "37.5", sampleMemoryWorkingSetBytes: "1073741824", sampleMemoryLimitBytes: "10737418240", sampleDiskUsageBytes: "2147483648", sampledAt: new Date("2026-08-23T11:59:50.000Z") },
     { leaseId: "33333333-3333-4333-8333-333333333333", jobId: null, repositoryFullName: null, repositoryName: null, state: "online", startedAt: null, ageSeconds: null, requested: { vcpu: 1, memoryBytes: "300", storageBytes: "400", concurrency: 1 } },
     { leaseId: "44444444-4444-4444-8444-444444444444", jobId: 43, repositoryFullName: null, repositoryName: null, state: "provisioning", startedAt: new Date("2026-08-23T11:58:00.000Z"), ageSeconds: 120, requested: { vcpu: 1, memoryBytes: "500", storageBytes: "600", concurrency: 1 } },
     { leaseId: "55555555-5555-4555-8555-555555555555", jobId: 44, repositoryFullName: "acme/other", repositoryName: "other", state: "reserved", startedAt: new Date("2026-08-23T11:57:00.000Z"), ageSeconds: 180, requested: { vcpu: 0.5, memoryBytes: "700", storageBytes: "800", concurrency: 1 } },
@@ -137,8 +137,8 @@ test("worker health projects complete cache and active lease telemetry", async (
     cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: 1800, effectiveRunnerCacheEnabled: true, effectiveRunnerCacheMaxGiB: 20, generation: cacheGeneration, sizeBytes: "100000000000000000000", entryCount: 12, runnerCacheSizeBytes: "300000000000000000000", runnerCacheEntryCount: 34, runnerCacheObservedAt: "2026-08-23T11:59:51.000Z" },
   });
   expect(health?.jobs).toEqual(expect.arrayContaining([
-    expect.objectContaining({ jobId: 42, repositoryFullName: "acme/project", repositoryName: "project", ageSeconds: 60 }),
-    expect.objectContaining({ jobId: null, repositoryFullName: null, repositoryName: null, ageSeconds: null }),
+    expect.objectContaining({ jobId: 42, repositoryFullName: "acme/project", repositoryName: "project", ageSeconds: 60, sample: { cpuUsagePercent: 37.5, memoryWorkingSetBytes: "1073741824", memoryLimitBytes: "10737418240", diskUsageBytes: "2147483648", sampledAt: "2026-08-23T11:59:50.000Z" } }),
+    expect.objectContaining({ jobId: null, repositoryFullName: null, repositoryName: null, ageSeconds: null, sample: null }),
   ]));
   expect(health?.jobs).toHaveLength(4);
 });

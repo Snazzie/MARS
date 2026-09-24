@@ -63,6 +63,13 @@ bun run dev:mac-worker
 
 The command builds the menu-bar status item locally and runs the macOS orchestrator in the foreground. It prints worker commands, lease lifecycle events, and live job output to the terminal (resource samples stay quiet); these console logs are enabled only for the development worker. It uses the prepared local Tart images and development manifests without modifying them. Its own identity, UUID, lease state, and cache live under `~/Library/Application Support/Mars/dev-worker`; the first join uses the development token and requires approval and configuration in the control plane before scheduling. Press Ctrl-C to stop it. If retaining an installed worker, restore it afterward with `launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.mars.worker.plist"`. The macOS installer remains the supported path for a persistent worker.
 
+In the worker health panel, **Managed VM workloads** shows the latest per-lease CPU,
+memory, and disk sample alongside requested capacity. Samples arrive roughly every
+five seconds while the runner is active; the sample column marks observations older
+than five minutes as stale. Lease age is time since the last lease state update, not
+sample freshness. If a running VM has no sample, check the foreground worker for
+`macOS VM resource sample failed` and the control-plane worker connection.
+
 ### Upgrade a local Windows worker from the current checkout
 
 Use this when the local control plane cannot issue a release-catalog upgrade target. It downloads artifacts from the running local control plane, verifies SHA-256 values, and invokes the existing identity-preserving installer upgrade. Do not run it while jobs are active.
