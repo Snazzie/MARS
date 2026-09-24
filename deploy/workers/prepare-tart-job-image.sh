@@ -32,7 +32,7 @@ done
 [[ "$PLATFORM" == "macos-arm64" || "$PLATFORM" == "linux-arm64" ]] || usage
 if [[ "$PLATFORM" == "linux-arm64" ]]; then
   [[ -n "$RUNNER_ARCHIVE_INPUT" && -f "$RUNNER_ARCHIVE_INPUT" ]] || { print -u2 "linux-arm64 requires --runner-archive"; exit 2; }
-  RUNNER_URL="bundled:${RUNNER_ARCHIVE_INPUT}"
+  RUNNER_URL="bundled:actions-runner-linux-arm64-${RUNNER_VERSION}.tar.gz"
   RUNNER_SHA256="$(shasum -a 256 "$RUNNER_ARCHIVE_INPUT" | cut -d ' ' -f 1)"
 fi
 [[ -n "$SOURCE" && -n "$TARGET" && -n "$JOB_AGENT" && -n "$OUTPUT_MANIFEST" ]] || usage
@@ -50,7 +50,13 @@ PROVENANCE_DIGEST="$(print -rn -- "$PROVENANCE" | shasum -a 256 | cut -d ' ' -f 
 PREPARED_DIGEST="mars-${PLATFORM}-job@sha256:${PROVENANCE_DIGEST}"
 EXPECTED_MANIFEST="{\"platform\":\"$PLATFORM\",\"source\":\"$SOURCE\",\"sourceDigest\":\"$SOURCE_DIGEST\",\"jobAgentSha256\":\"$JOB_AGENT_SHA256\",\"runnerUrl\":\"$RUNNER_URL\",\"runnerVersion\":\"$RUNNER_VERSION\",\"runnerSha256\":\"$RUNNER_SHA256\",\"preparationScriptSha256\":\"$PREPARATION_SCRIPT_SHA256\",\"localTarget\":\"$TARGET\",\"preparedDigest\":\"$PREPARED_DIGEST\"}"
 
-local_target_exists() { tart list --source local --quiet 2>/dev/null | grep -Fxq -- "$TARGET"; }
+function local_target_exists() {
+  local name
+  while IFS= read -r name; do
+    [[ "$name" == "$TARGET" ]] && return 0
+  done < <(tart list --source local --quiet 2>/dev/null)
+  return 1
+}
 # A complete manifest and local target are the reusable unit. No registry pull or
 # Tart mutation occurs when provenance still matches exactly.
 if [[ -f "$OUTPUT_MANIFEST" ]] && local_target_exists && [[ "$(cat "$OUTPUT_MANIFEST")" == "$EXPECTED_MANIFEST" ]]; then
@@ -117,7 +123,7 @@ tart exec -i "$STAGING_TARGET" "$RUNNER_SHELL" -c 'set -euo pipefail; rm -rf /tm
 tart exec -i "$STAGING_TARGET" "$RUNNER_SHELL" -c 'set -euo pipefail; umask 077; /bin/cat > /tmp/mars-job-agent' < "$JOB_AGENT"
 tart exec -i "$STAGING_TARGET" "$RUNNER_SHELL" -c 'set -euo pipefail; umask 077; /bin/cat > /tmp/mars-image-manifest.json' < "$MANIFEST"
 tart exec "$STAGING_TARGET" /usr/bin/sudo /bin/mkdir -p /opt /etc/mars /usr/local/bin
-if [[ "$PLATFORM" == "linux-arm64" ]]; then tart exec "$STAGING_TARGET" /usr/bin/sudo /opt/actions-runner/bin/installdependencies.sh; fi
+if [[ "$PLATFORM" == "linux-arm64" ]]; then tart exec "$STAGING_TARGET" /usr/bin/sudo /tmp/mars-actions-runner/bin/installdependencies.sh; fi
 tart exec "$STAGING_TARGET" /usr/bin/sudo /bin/mv /tmp/mars-actions-runner /opt/actions-runner
 tart exec "$STAGING_TARGET" /usr/bin/sudo /usr/bin/install -m 0755 /tmp/mars-job-agent /usr/local/bin/mars-job-agent
 tart exec "$STAGING_TARGET" /usr/bin/sudo /usr/bin/install -m 0644 /tmp/mars-image-manifest.json /etc/mars/image-manifest.json

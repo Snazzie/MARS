@@ -90,6 +90,10 @@ download_verified "$MARS_MACOS_STATUS_ITEM_URL" "$MARS_MACOS_STATUS_ITEM_SHA256"
 curl --silent --show-error --fail --location "${PUBLIC_BASE_URL%/}/mars-icon.svg" -o "$DOWNLOAD_DIR/mars-icon.svg"
 sips -s format png "$DOWNLOAD_DIR/mars-icon.svg" --out "$ICON_STAGE" >/dev/null
 chmod +x "$ORCHESTRATOR_STAGE" "$MACOS_JOB_AGENT_STAGE" "$LINUX_JOB_AGENT_STAGE" "$PREPARER_STAGE" "$STATUS_ITEM_STAGE"
+for executable in "$ORCHESTRATOR_STAGE" "$MACOS_JOB_AGENT_STAGE" "$STATUS_ITEM_STAGE"; do
+  codesign --force --sign - --timestamp=none "$executable"
+  codesign --verify --deep --strict "$executable"
+done
 CHECK=0
 write_state() {
   local stage="$1" state_status="$2" updated_at state_tmp
