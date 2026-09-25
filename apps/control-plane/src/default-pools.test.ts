@@ -36,9 +36,12 @@ test("recalculates shared pool concurrency after worker limits change", async ()
   const concurrency: number[] = [];
   const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join(" ").toLowerCase();
-    if (query.includes("from workers")) return limits.map((workerLimits) => ({ platform: "windows-x64", guestPlatforms: ["windows-x64"], limits: workerLimits, doctor: { doctor: { runtimeMode: "vm", runtimeReady: true, probe: true, imageSignatures: true, artifactDigest: "sha256:image" } } }));
-    if (query.includes("select id from runner_pools")) return [{ id: "pool" }];
-    if (query.includes("update runner_pools")) concurrency.push((values[3] as { concurrency: number }).concurrency);
+    if (query.includes("from workers")) return limits.map((workerLimits) => ({ platform: "windows-x64", guestPlatforms: ["windows-x64"], limits: workerLimits, desiredConfiguration: { selectedDriver: "windows-hyperv-container" }, doctor: { doctor: { capabilities: [{ driver: "windows-hyperv-container", guestPlatform: "windows-x64", ready: true, imageDigest: "sha256:image", remediation: null }] } } }));
+    if (query.includes("from runner_pools") && values.includes("default-windows-x64")) return [{ id: "pool", driver: "windows-hyperv-container", imageDigest: "sha256:image", platform: "windows-x64" }];
+    if (query.includes("update runner_pools")) {
+      const resources = values[0];
+      if (resources && typeof resources === "object" && "concurrency" in resources) concurrency.push(Number(resources.concurrency));
+    }
     return [];
   }, { json: (value: unknown) => value });
 
@@ -55,8 +58,8 @@ test("creates a Tart Ubuntu ARM64 pool from a dual-platform Mac worker", async (
   const inserted: unknown[][] = [];
   const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join(" ").toLowerCase();
-    if (query.includes("from workers")) return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64", "linux-arm64"], limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 }, doctor: { doctor: { runtimeMode: "tart", runtimeReady: true, artifactDigests: { "macos-arm64": macDigest, "linux-arm64": digest } } } }];
-    if (query.includes("select id from runner_pools")) return [];
+    if (query.includes("from workers")) return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64", "linux-arm64"], limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 }, desiredConfiguration: { selectedDriver: "tart-vm" }, doctor: { doctor: { capabilities: [{ driver: "tart-vm", guestPlatform: "macos-arm64", imageDigest: macDigest, ready: true }, { driver: "tart-vm", guestPlatform: "linux-arm64", imageDigest: digest, ready: true }] } } }];
+    if (query.includes("from runner_pools")) return [];
     if (query.includes("insert into runner_pools")) inserted.push(values);
     return [];
   }, { json: (value: unknown) => value });
@@ -110,8 +113,8 @@ test("pins Ubuntu x64 and ARM64 defaults without claiming worker capacity", asyn
   const arm64 = `ghcr.io/example/linux-arm64-job@sha256:${"b".repeat(64)}`;
   await ensureDefaultPools(db as never, { "linux-x64": x64, "linux-arm64": arm64 });
   expect(inserted).toHaveLength(4);
-  expect(inserted.find((values) => values.includes("linux-x64"))).toContain(x64);
-  expect(inserted.find((values) => values.includes("linux-arm64"))).toContain(arm64);
+  expect(inserted.find((values) => values.includes("linux-x64"))).toContain("");
+  expect(inserted.find((values) => values.includes("linux-arm64"))).toContain("");
   expect(inserted.find((values) => values.includes("linux-arm64"))).toContain("linux-docker-container");
   expect(inserted.find((values) => values.includes("linux-x64"))).toContain("linux-libvirt-vm");
   expect(inserted.find((values) => values.includes("linux-x64"))).toContain(false);
@@ -120,27 +123,27 @@ test("pins Ubuntu x64 and ARM64 defaults without claiming worker capacity", asyn
   expect(inserted.find((values) => values.includes("macos-arm64"))).toContain(false);
 });
 
-test("upgrades an inert default pool when image and worker evidence arrive", async () => {
+test("retains a default pool's driver and digest while readiness changes", async () => {
   let workers: Record<string, unknown>[] = [];
-  const updates: unknown[][] = [];
+  const updates: { query: string; values: unknown[] }[] = [];
   const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join(" ").toLowerCase();
     if (query.includes("from workers")) return workers;
-    if (query.includes("select id from runner_pools")) return [{ id: "existing-pool" }];
-    if (query.includes("update runner_pools")) updates.push(values);
+    if (query.includes("from runner_pools") && values.includes("default-linux-x64")) return [{ id: "existing-pool", driver: "linux-libvirt-vm", imageDigest: "sha256:pinned", platform: "linux-x64" }];
+    if (query.includes("update runner_pools")) updates.push({ query, values });
     return [];
   }, { json: (value: unknown) => value });
-  const image = `sha256:${"a".repeat(64)}`;
-  await ensureDefaultPools(db as never, {});
-  expect(updates).toEqual([]);
-  await ensureDefaultPools(db as never, { "linux-x64": image });
+  await ensureDefaultPools(db as never, { "linux-x64": "sha256:other" });
   expect(updates).toHaveLength(1);
-  expect(updates[0]).toContain(false);
-  workers = [{ platform: "linux-x64", guestPlatforms: ["linux-x64"], limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 }, doctor: {} }];
-  await ensureDefaultPools(db as never, { "linux-x64": image });
+  expect(updates[0]!.query).not.toContain("driver=");
+  expect(updates[0]!.query).not.toContain("image_digest=");
+  expect(updates[0]!.values[1]).toBe(false);
+  workers = [{ platform: "linux-x64", guestPlatforms: ["linux-x64"], limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 }, desiredConfiguration: { selectedDriver: "linux-libvirt-vm" }, doctor: { doctor: { capabilities: [{ driver: "linux-libvirt-vm", guestPlatform: "linux-x64", ready: true, imageDigest: "sha256:pinned" }] } } }];
+  await ensureDefaultPools(db as never, { "linux-x64": "sha256:other" });
   expect(updates).toHaveLength(2);
-  expect(updates[1]).toContain(image);
-  expect(updates[1]).toContain(true);
+  expect(updates[1]!.query).not.toContain("driver=");
+  expect(updates[1]!.query).not.toContain("image_digest=");
+  expect(updates[1]!.values[1]).toBe(true);
 });
 
 test("clamps automatic pool resources to lower worker ceilings", () => {

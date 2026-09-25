@@ -347,11 +347,11 @@ describe("control-plane HTTP boundary", () => {
         workerReleaseManifest: undefined,
         workerInstallerRoot: pathToFileURL(`${root}/`),
         developmentWindowsArtifacts: { orchestrator, serviceHost, jobAgent, trayScript, vm: { checkpoint, provisioner } },
-      })).request("/api/workers/installer?audience=windows-x64&runtime=vm&vmSource=checkpoint&connectOrigin=https://control-plane.test");
+      })).request("/api/workers/installer?audience=windows-x64&vmSource=checkpoint&connectOrigin=https://control-plane.test");
       const installer = await response.text();
 
       expect(response.status).toBe(200);
-      expect(installer).toContain("$WindowsRuntime = 'vm'");
+      expect(installer).not.toContain("$WindowsRuntime = 'vm'");
       expect(installer).toContain("/api/workers/windows-vm-checkpoint");
       expect(installer).toContain("/api/workers/windows-vm-provisioner");
       expect(installer).not.toContain("MARS_WINDOWS_CONTAINER_BASE_IMAGE=mcr.");

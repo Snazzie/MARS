@@ -3,11 +3,12 @@ import { buildWindowsUpgradeCommand } from "./WorkerActions.tsx";
 
 test("builds a Windows upgrade command from the selected control-plane installer", () => {
   const command = buildWindowsUpgradeCommand("worker/id", "https://control.example/", "https://adapter.example");
-  expect(command).toContain("https://adapter.example/api/workers/installer?audience=windows-x64&runtime=container&upgrade=true&connectOrigin=https%3A%2F%2Fadapter.example");
+  expect(command).toContain("https://adapter.example/api/workers/installer?audience=windows-x64&upgrade=true&connectOrigin=https%3A%2F%2Fadapter.example");
   expect(command).not.toContain("releases/latest/download");
   expect(command).toContain("-ControlPlaneUrl 'https://adapter.example'");
   expect(command).toContain("powershell.exe -NoProfile -ExecutionPolicy Bypass");
-  expect(command).toContain("-Upgrade -WindowsRuntime 'container'");
+  expect(command).toContain("-Upgrade");
+  expect(command).not.toContain("-WindowsRuntime");
   expect(command).toContain("Remove-Item -LiteralPath $script");
 });
 
@@ -18,17 +19,17 @@ test("allows localhost control planes to use HTTP for the installer and worker c
   expect(command).not.toContain("--tlsv1.3");
 });
 
-test("preserves the Windows VM runtime during upgrades", () => {
-  const command = buildWindowsUpgradeCommand("worker", "https://control.example", "https://control.example", "vm");
-  expect(command).toContain("runtime=vm");
-  expect(command).toContain("-WindowsRuntime 'vm'");
+test("does not infer or retain a Windows runtime selection during upgrades", () => {
+  const command = buildWindowsUpgradeCommand("worker", "https://control.example", "https://control.example");
+  expect(command).not.toContain("runtime=vm");
+  expect(command).not.toContain("-WindowsRuntime");
 });
 
 test("uses the control-plane installer endpoint for development upgrades", () => {
   const command = buildWindowsUpgradeCommand("worker/id", "http://localhost:3000", "http://localhost:3000");
   expect(command).toContain("http://localhost:3000/api/workers/installer?");
   expect(command).toContain("audience=windows-x64");
-  expect(command).toContain("runtime=container");
+  expect(command).not.toContain("runtime=");
   expect(command).toContain("connectOrigin=http%3A%2F%2Flocalhost%3A3000");
   expect(command).not.toContain("releases/latest/download");
 });
@@ -42,7 +43,7 @@ test("uses the control-plane origin instead of the Vite browser origin for local
 
 test("uses the control-plane installer endpoint for production upgrades", () => {
   const command = buildWindowsUpgradeCommand("worker/id", "https://control.example");
-  expect(command).toContain("https://control.example/api/workers/installer?audience=windows-x64&runtime=container&upgrade=true&connectOrigin=https%3A%2F%2Fcontrol.example");
+  expect(command).toContain("https://control.example/api/workers/installer?audience=windows-x64&upgrade=true&connectOrigin=https%3A%2F%2Fcontrol.example");
   expect(command).not.toContain("releases/latest/download");
 });
 test("renders upgrade preparation errors outside the closed action confirmation dialog", async () => {
@@ -55,7 +56,4 @@ test("uses TLS for production control-plane installer downloads", () => {
   const command = buildWindowsUpgradeCommand("worker/id", "https://control.example", "https://control.example");
   expect(command).toContain("--proto '=https' --tlsv1.3");
   expect(command).not.toContain("releases/latest/download");
-});
-test("refuses to generate an upgrade for an unknown Windows runtime", () => {
-  expect(() => buildWindowsUpgradeCommand("worker/id", "https://control.example", "https://control.example", null)).toThrow("runtime is unknown");
 });

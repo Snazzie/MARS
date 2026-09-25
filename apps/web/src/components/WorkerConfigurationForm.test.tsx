@@ -107,3 +107,17 @@ test("rejects non-positive Cache TTL values before configuring", () => {
   const markup = renderToStaticMarkup(<QueryClientProvider client={client}><WorkerConfigurationForm worker={worker} organizationId="org-1" onConfigured={() => {}} /></QueryClientProvider>);
   expect(markup).toContain('min="1"');
 });
+test("Windows runtime choices require a ready advertised capability and warn about process isolation", () => {
+  const windowsWorker = { ...worker, platform: "windows-x64" as const, guestPlatforms: ["windows-x64" as const], selectedDriver: "windows-process-container" as const, capabilities: [
+    { driver: "windows-process-container" as const, guestPlatform: "windows-x64" as const, imageDigest: `sha256:${"a".repeat(64)}`, ready: true, remediation: null },
+    { driver: "windows-hyperv-container" as const, guestPlatform: "windows-x64" as const, imageDigest: null, ready: false, remediation: "Install the verified Windows image." },
+  ] };
+  const html = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><WorkerConfigurationForm worker={windowsWorker} onConfigured={() => {}} /></QueryClientProvider>);
+  expect(html).toContain("Docker Linux container");
+  expect(html).toContain("Docker Windows container (process isolation)");
+  expect(html).toContain("Docker Windows container (Hyper-V isolation)");
+  expect(html).toContain("Windows Hyper-V VM");
+  expect(html).toContain("Install the verified Windows image.");
+  expect(html).toContain("does not provide the Hyper-V host boundary");
+  expect(html).not.toContain("Allow Linux VMs");
+});

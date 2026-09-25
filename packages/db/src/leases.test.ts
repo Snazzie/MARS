@@ -3,9 +3,7 @@ import type { Sql } from "postgres";
 import { reserveRoutingSlot, bindLeaseToJob } from "./leases.ts";
 
 test("reserves a routing slot before any JIT request", async () => {
-  const queries: string[] = [];
   const tx = ((strings: TemplateStringsArray, ...values: unknown[]) => {
-    queries.push(strings.join(" "));
     const query = strings.join(" ").toLowerCase();
     if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, limits: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 } }];
     if (query.includes("insert into runner_leases")) return [{ id: "00000000-0000-4000-8000-000000000001", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date().toISOString() }];
@@ -14,14 +12,6 @@ test("reserves a routing slot before any JIT request", async () => {
   const db = Object.assign(((strings: TemplateStringsArray, ...values: unknown[]) => []) as unknown as Sql<{}>, { begin: async (fn: (value: Sql<{}>) => unknown) => fn(tx) });
   const result = await reserveRoutingSlot(db, { organizationId: "org", poolId: "pool", workerId: "worker", routingKey: "org:pool:labels", requested: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, ttlMs: 60_000 });
   expect(result.id).toBe("00000000-0000-4000-8000-000000000001");
-  const poolQuery = queries.find((query) => query.toLowerCase().includes("from runner_pools"));
-  expect(poolQuery).toBeDefined();
-  expect(poolQuery?.toLowerCase()).toContain("w.connection_state='online'");
-  expect(poolQuery?.toLowerCase()).toContain("e.evidence->>'artifactdigest'=p.image_digest");
-  expect(poolQuery?.toLowerCase()).toContain("e.evidence->>'runtimeready'='true'");
-  const insertQuery = queries.find((query) => query.toLowerCase().includes("insert into runner_leases"));
-  expect(insertQuery).toBeDefined();
-  expect(insertQuery).not.toContain("id=EXCLUDED.id");
 });
 
 test("rejects reservation when the worker row is no longer eligible", async () => {

@@ -12,6 +12,8 @@ export type LinuxContainerConfig = {
   prefix: string;
   network: string;
   limits: WorkerLimits;
+  architecture?: "arm64" | "amd64";
+  platform?: "linux/arm64" | "linux/amd64";
 };
 
 type DockerInspection = {
@@ -101,27 +103,36 @@ async function readDockerInfo(docker: DockerRunner): Promise<{ os: string; archi
 
 export class LinuxContainerDriver implements RuntimeDriver {
   readonly name = "linux-docker-container" as const;
+  private readonly architecture: "arm64" | "amd64";
+  private readonly dockerPlatform: "linux/arm64" | "linux/amd64";
+  private readonly platformLabel: "linux-arm64" | "linux-x64";
   private readonly leases = new Map<string, { name: string; root: string; runtime: RuntimeLease }>();
   private readonly gracefulStops = new Set<string>();
 
-  constructor(private readonly config: LinuxContainerConfig, private readonly docker: DockerRunner = defaultDocker) {}
+  constructor(private readonly config: LinuxContainerConfig, private readonly docker: DockerRunner = defaultDocker) {
+    this.architecture = config.architecture ?? "arm64";
+    this.dockerPlatform = config.platform ?? (this.architecture === "amd64" ? "linux/amd64" : "linux/arm64");
+    if (this.dockerPlatform !== (this.architecture === "amd64" ? "linux/amd64" : "linux/arm64")) throw new Error("Linux Docker platform does not match configured architecture");
+    this.platformLabel = this.architecture === "amd64" ? "linux-x64" : "linux-arm64";
+  }
 
   private containerName(leaseId: string): string { return `${this.config.prefix}-${leaseId}`; }
-  private bootstrapPath(leaseId: string): string { return join(tmpdir(), "mars-linux-arm64", leaseId); }
+  private bootstrapPath(leaseId: string): string { return join(tmpdir(), `mars-${this.platformLabel}`, leaseId); }
 
   validatePool(resources: PoolResources): void {
     validateResources(resources, this.config.limits);
-    if (!digestPattern.test(this.config.image)) throw new Error("Linux ARM container image must be digest pinned");
+    if (!digestPattern.test(this.config.image)) throw new Error("Linux container image must be digest pinned");
   }
 
   private async inspectImage(): Promise<DockerInspection> {
     const parsed = JSON.parse(await this.docker(["image", "inspect", "--format", "{{json .}}", this.config.image]).then((result) => checked(result, "image inspect"))) as unknown;
     const image = (Array.isArray(parsed) ? parsed[0] : parsed) as DockerInspection | undefined;
-    if (!image) throw new Error("configured Linux ARM image is unavailable");
+    if (!image) throw new Error("configured Linux image is unavailable");
     const repoDigests = Array.isArray(image.RepoDigests) ? image.RepoDigests : [];
     if (!repoDigests.includes(this.config.image)) throw new Error("requested image digest is not present");
-    if (image.Os !== "linux" || !["arm64", "aarch64"].includes(String(image.Architecture))) throw new Error("Linux ARM image architecture is invalid");
-    if (!isExpectedLinuxContainerEntrypoint(image.Config?.Entrypoint)) throw new Error("Linux ARM container image entrypoint is invalid");
+    const aliases = this.architecture === "amd64" ? ["amd64", "x86_64"] : ["arm64", "aarch64"];
+    if (image.Os !== "linux" || !aliases.includes(String(image.Architecture).toLowerCase())) throw new Error(`Linux ${this.platformLabel} image architecture is invalid`);
+    if (!isExpectedLinuxContainerEntrypoint(image.Config?.Entrypoint)) throw new Error("Linux container image entrypoint is invalid");
     return image;
   }
 
@@ -129,7 +140,8 @@ export class LinuxContainerDriver implements RuntimeDriver {
     this.validatePool(resources);
     const info = await readDockerInfo(this.docker);
     if (info.os.toLowerCase() !== "linux") throw new Error("Linux Docker engine is required");
-    if (!["arm64", "aarch64"].includes(info.architecture.toLowerCase())) throw new Error("ARM64 Docker engine is required");
+    const aliases = this.architecture === "amd64" ? ["amd64", "x86_64"] : ["arm64", "aarch64"];
+    if (!aliases.includes(info.architecture.toLowerCase())) throw new Error(`${this.platformLabel} Docker engine is required`);
     await this.inspectImage();
     checked(await this.docker(["network", "inspect", this.config.network]), "network inspect");
   }
@@ -140,8 +152,9 @@ export class LinuxContainerDriver implements RuntimeDriver {
       const network = await this.docker(["network", "inspect", this.config.network]);
       const architecture = info.architecture.toLowerCase();
       const engineOs = info.os.toLowerCase();
+      const aliases = this.architecture === "amd64" ? ["amd64", "x86_64"] : ["arm64", "aarch64"];
       const networkReady = network.code === 0;
-      const ready = engineOs === "linux" && ["arm64", "aarch64"].includes(architecture) && networkReady;
+      const ready = engineOs === "linux" && aliases.includes(architecture) && networkReady;
       return { runtimeReady: ready, networkReady, imageReady: true, architecture, engineOs, entrypointReady: isExpectedLinuxContainerEntrypoint(image.Config?.Entrypoint), artifactDigest: this.config.image };
     } catch {
       return { runtimeReady: false, networkReady: false, imageReady: false, architecture: "", engineOs: "", entrypointReady: false, artifactDigest: this.config.image };
@@ -149,7 +162,7 @@ export class LinuxContainerDriver implements RuntimeDriver {
   }
 
   async createLease(lease: Lease): Promise<RuntimeLease> {
-    if (lease.imageDigest !== this.config.image) throw new Error("lease image digest does not match Linux ARM container image");
+    if (lease.imageDigest !== this.config.image) throw new Error(`lease image digest does not match ${this.platformLabel} container image`);
     await this.reserveCapacity(lease.resources);
     const root = this.bootstrapPath(lease.id);
     const bootstrap = join(root, "bootstrap.json");
@@ -157,13 +170,13 @@ export class LinuxContainerDriver implements RuntimeDriver {
     await mkdir(root, { recursive: true });
     await writeFile(bootstrap, JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig, ...(lease.workerCache ? { workerCache: lease.workerCache } : {}) }), { mode: 0o600, flag: "wx" });
     try {
-      checked(await this.docker(["create", "--name", name, "--platform", "linux/arm64", "--network", this.config.network, "--log-driver", "json-file", "--log-opt", "max-size=50m", "--log-opt", "max-file=3", "--label", "mars.managed=true", "--label", "mars.platform=linux-arm64", "--label", `mars.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), this.config.image]), "docker create");
+      checked(await this.docker(["create", "--name", name, "--platform", this.dockerPlatform, "--network", this.config.network, "--log-driver", "json-file", "--log-opt", "max-size=50m", "--log-opt", "max-file=3", "--label", "mars.managed=true", "--label", `mars.platform=${this.platformLabel}`, "--label", `mars.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), this.config.image]), "docker create");
       checked(await this.docker(["cp", bootstrap, `${name}:/var/lib/mars/bootstrap/bootstrap.json`]), "docker cp");
       await rm(bootstrap, { force: true });
       checked(await this.docker(["start", name]), "docker start");
       const inspection = parseInspect(checked(await this.docker(["inspect", name]), "docker inspect"))[0];
       const labels = inspection?.Config?.Labels ?? {};
-      if (labels["mars.managed"] !== "true" || labels["mars.platform"] !== "linux-arm64" || labels["mars.lease-id"] !== lease.id) throw new Error("container labels do not attest lease ownership");
+      if (labels["mars.managed"] !== "true" || labels["mars.platform"] !== this.platformLabel || labels["mars.lease-id"] !== lease.id) throw new Error("container labels do not attest lease ownership");
       if (inspection?.Config?.Image !== this.config.image && !(Array.isArray(inspection?.RepoDigests) && inspection.RepoDigests.includes(this.config.image))) throw new Error("started container image does not match requested digest");
       const observedVcpu = Number(inspection?.HostConfig?.NanoCpus ?? 0) / 1_000_000_000;
       const observedMemory = Number(inspection?.HostConfig?.Memory ?? 0);
@@ -197,14 +210,14 @@ export class LinuxContainerDriver implements RuntimeDriver {
   }
 
   private async ownedContainers(): Promise<DockerInspection[]> {
-    const ids = checked(await this.docker(["ps", "-a", "--filter", "label=mars.managed=true", "--filter", "label=mars.platform=linux-arm64", "--filter", "label=mars.lease-id", "--format", "{{.ID}}"]), "docker ps").split(/\r?\n/).map((id) => id.trim()).filter(Boolean);
+    const ids = checked(await this.docker(["ps", "-a", "--filter", "label=mars.managed=true", "--filter", `label=mars.platform=${this.platformLabel}`, "--filter", "label=mars.lease-id", "--format", "{{.ID}}"]), "docker ps").split(/\r?\n/).map((id) => id.trim()).filter(Boolean);
     if (!ids.length) return [];
     const result = await this.docker(["inspect", "--size", ...ids]);
     if (result.code !== 0) {
       if (notFound.test(`${result.stdout} ${result.stderr}`)) return [];
       checked(result, "docker inspect");
     }
-    return parseInspect(checked(result, "docker inspect")).filter((inspection) => inspection.Config?.Labels?.["mars.managed"] === "true" && inspection.Config?.Labels?.["mars.platform"] === "linux-arm64" && typeof inspection.Config?.Labels?.["mars.lease-id"] === "string");
+    return parseInspect(checked(result, "docker inspect")).filter((inspection) => inspection.Config?.Labels?.["mars.managed"] === "true" && inspection.Config?.Labels?.["mars.platform"] === this.platformLabel && typeof inspection.Config?.Labels?.["mars.lease-id"] === "string");
   }
 
   async reconcileOrphans(): Promise<void> {

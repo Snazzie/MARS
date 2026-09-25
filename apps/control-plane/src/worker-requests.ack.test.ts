@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
-import { applyWorkerConfigurationAcknowledgement } from "./worker-requests.ts";
+import { applyWorkerConfigurationAcknowledgement, applyWorkerConfigurationFailure } from "./worker-requests.ts";
 
 test("records the active desired configuration after an exact acknowledgement", async () => {
   const commandId = "b430a582-a516-48a6-abb9-72c1af04a8c3";
   const workerId = "cbb0e9d8-23ff-480e-8465-408197c0c2d2";
   const revision = "a".repeat(64);
-  const expected = { appliance: { vcpu: 2, memoryBytes: 4, storageBytes: 8 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 4, maxConcurrentPods: 1 }, guestPlatforms: ["macos-arm64"], cache: { ttlSeconds: 172800, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 } };
+  const expected = { appliance: { vcpu: 2, memoryBytes: 4, storageBytes: 8 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 4, maxConcurrentPods: 1 }, guestPlatforms: ["macos-arm64"], selectedDriver: "tart-vm", cache: { ttlSeconds: 172800, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 } };
   const queries: string[] = [];
   const query = async (strings: TemplateStringsArray) => {
     const text = strings.join(" ");
@@ -30,7 +30,7 @@ test("acknowledges a stale configuration command only when it belongs to this wo
   const desiredCommandId = "b430a582-a516-48a6-abb9-72c1af04a8c3";
   const staleCommandId = "d430a582-a516-48a6-abb9-72c1af04a8c3";
   const revision = "a".repeat(64);
-  const desired = { appliance: { vcpu: 2, memoryBytes: 4, storageBytes: 8 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 4, maxConcurrentPods: 1 }, guestPlatforms: ["macos-arm64"], cache: { ttlSeconds: 172800, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 } };
+  const desired = { appliance: { vcpu: 2, memoryBytes: 4, storageBytes: 8 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 4, maxConcurrentPods: 1 }, guestPlatforms: ["macos-arm64"], selectedDriver: "tart-vm", cache: { ttlSeconds: 172800, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 } };
   let staleCommandExists = true;
   const query = async (strings: TemplateStringsArray) => {
     const text = strings.join(" ");
@@ -48,7 +48,7 @@ test("keeps the last applied configuration when the current acknowledgement mism
   const commandId = "b430a582-a516-48a6-abb9-72c1af04a8c3";
   const workerId = "cbb0e9d8-23ff-480e-8465-408197c0c2d2";
   const revision = "a".repeat(64);
-  const desired = { appliance: { vcpu: 2, memoryBytes: 4, storageBytes: 8 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 4, maxConcurrentPods: 1 }, guestPlatforms: ["macos-arm64"], cache: { ttlSeconds: 172800, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 } };
+  const desired = { appliance: { vcpu: 2, memoryBytes: 4, storageBytes: 8 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 4, maxConcurrentPods: 1 }, guestPlatforms: ["macos-arm64"], selectedDriver: "tart-vm", cache: { ttlSeconds: 172800, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 } };
   const queries: string[] = [];
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
@@ -60,4 +60,30 @@ test("keeps the last applied configuration when the current acknowledgement mism
   expect(result).toBe(false);
   expect(queries.some(query => query.includes("configuration_state='error'") && query.includes("configuration_command_id="))).toBe(true);
   expect(queries.every(query => !query.includes("configuration_applied_at=now()"))).toBe(true);
+});
+
+test("failed apply marks only the matching current command as error", async () => {
+  const workerId = "cbb0e9d8-23ff-480e-8465-408197c0c2d2";
+  const commandId = "b430a582-a516-48a6-abb9-72c1af04a8c3";
+  const staleId = "d430a582-a516-48a6-abb9-72c1af04a8c3";
+  const revision = "a".repeat(64);
+  let state = "applying";
+  const query = async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const sql = strings.join(" ");
+    if (sql.includes("update workers set configuration_state='error'")) {
+      if (values[1] === commandId && values[2] === revision) {
+        state = "error";
+        return [{ id: workerId }];
+      }
+      return [];
+    }
+    if (sql.includes("select id from commands")) return values[0] === staleId ? [{ id: staleId }] : [];
+    return [];
+  };
+  const db = Object.assign(query, { begin: async (fn: (tx: typeof query) => unknown) => fn(query) }) as never;
+  const payload = { workerId, commandId, revision, reason: "Process isolation probe failed" };
+  expect(await applyWorkerConfigurationFailure(db, { workerId, payload: { ...payload, commandId: staleId } })).toBe("stale");
+  expect(state).toBe("applying");
+  expect(await applyWorkerConfigurationFailure(db, { workerId, payload })).toBe(true);
+  expect(state).toBe("error");
 });

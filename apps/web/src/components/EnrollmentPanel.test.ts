@@ -39,7 +39,8 @@ test("aborts before invoking Linux/macOS installer when curl fails", () => {
 test("uses the selected control-plane installer endpoint for every platform", () => {
   for (const audience of ["linux-x64", "windows-x64", "macos-arm64"] as const) {
     const command = buildInstallerCommands("https://control.example", audience, "code")[0]?.command ?? "";
-    expect(command).toContain(`https://control.example/api/workers/installer?audience=${audience}&runtime=container&connectOrigin=https%3A%2F%2Fcontrol.example`);
+    expect(command).toContain(`https://control.example/api/workers/installer?audience=${audience}&connectOrigin=https%3A%2F%2Fcontrol.example`);
+    if (audience === "windows-x64") expect(command).not.toContain("runtime=");
     expect(command).not.toContain("releases/latest/download");
   }
 });
@@ -47,7 +48,7 @@ test("uses the control-plane installer endpoint in development", () => {
   const command = buildInstallerCommands("http://localhost:3000", "windows-x64", "code")[0]?.command ?? "";
   expect(command).toContain("http://localhost:3000/api/workers/installer?");
   expect(command).toContain("audience=windows-x64");
-  expect(command).toContain("runtime=container");
+  expect(command).not.toContain("runtime=");
   expect(command).toContain("connectOrigin=http%3A%2F%2Flocalhost%3A3000");
   expect(command).toContain("-ControlPlaneUrl 'http://localhost:3000'");
   expect(command).not.toContain("releases/latest/download");
@@ -56,20 +57,20 @@ test("uses the control-plane installer endpoint in production", () => {
   const command = buildInstallerCommands("https://control.example", "windows-x64", "code")[0]?.command ?? "";
   expect(command).toContain("https://control.example/api/workers/installer?");
   expect(command).toContain("audience=windows-x64");
-  expect(command).toContain("runtime=container");
+  expect(command).not.toContain("runtime=");
   expect(command).toContain("connectOrigin=https%3A%2F%2Fcontrol.example");
   expect(command).not.toContain("releases/latest/download");
 });
 test("builds a licensed ISO Hyper-V VM enrollment command", () => {
-  const command = buildInstallerCommands("https://control.example", "windows-x64", "code", "vm", {
+  const command = buildInstallerCommands("https://control.example", "windows-x64", "code", {
     source: "iso",
     sourcePath: "D:\\Windows '11'.iso",
     sourceSha256: "a".repeat(64),
     imageName: "Windows 11 Pro",
     acceptWindowsLicenseTerms: true,
   })[0]?.command ?? "";
-  expect(command).toContain("runtime=vm&vmSource=iso");
-  expect(command).toContain("-WindowsRuntime 'vm'");
+  expect(command).toContain("audience=windows-x64&vmSource=iso");
+  expect(command).not.toContain("-WindowsRuntime");
   expect(command).toContain("-WindowsSourcePath 'D:\\Windows ''11''.iso'");
   expect(command).toContain("-WindowsImageName 'Windows 11 Pro' -AcceptWindowsLicenseTerms");
 });
@@ -77,12 +78,12 @@ test("builds a licensed ISO Hyper-V VM enrollment command", () => {
 test("refuses incomplete local VM source fields and accepts prepared checkpoints", () => {
   expect(validWindowsVmImageOptions({ source: "iso", sourcePath: "D:\\Windows.iso", sourceSha256: "A".repeat(64), imageName: "Windows 11 Pro", acceptWindowsLicenseTerms: true })).toBe(false);
   expect(validWindowsVmImageOptions({ source: "checkpoint" })).toBe(true);
-  expect(() => buildInstallerCommands("https://control.example", "windows-x64", "code", "vm", { source: "vhdx" })).toThrow("source fields are invalid");
+  expect(() => buildInstallerCommands("https://control.example", "windows-x64", "code", { source: "vhdx" })).toThrow("source fields are invalid");
 });
 test("builds only the selected platform installer command", () => {
   const commands = buildInstallerCommands("https://control.example", "windows-x64", "one-use-code");
   expect(commands).toHaveLength(1);
-  expect(commands[0]?.label).toBe("Windows x64 (container)");
+  expect(commands[0]?.label).toBe("Windows x64");
   expect(commands[0]?.command).toContain("powershell.exe");
   expect(commands[0]?.command).toContain("-ControlPlaneUrl 'https://control.example'");
   expect(commands[0]?.command).toContain("-Code 'one-use-code'");

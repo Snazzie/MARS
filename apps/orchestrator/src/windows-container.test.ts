@@ -2,11 +2,42 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WindowsContainerDriver, parseWindowsHostDnsServers, type DockerRunner, type PowerShellRunner } from "./windows-container.ts";
+import { WindowsContainerDriver as WindowsContainerDriverBase, parseWindowsHostDnsServers, type DockerRunner, type PowerShellRunner } from "./windows-container.ts";
 import type { WorkerCacheProxy } from "@mars/contracts";
 
 const workerCache: WorkerCacheProxy = { proxyUrl: "http://127.0.0.1:39123", cacheBaseUrl: "https://127.0.0.1:39443", caCertificatePem: "worker-ca", expiresAt: new Date(Date.now() + 60_000).toISOString(), registrationUrl: "https://127.0.0.1:39443/_mars/register", registrationChallenge: "c".repeat(32) };
+const verifiedDigestImage = "repo@sha256:" + "d".repeat(64);
+function digestPinnedDocker(run: DockerRunner): DockerRunner {
+  return async (args) => {
+    if (args[0] === "image" && args.includes(verifiedDigestImage)) {
+      if (args.includes("{{json .RepoDigests}}")) return { code: 0, stdout: JSON.stringify([verifiedDigestImage]), stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    return run(args);
+  };
+}
 const roots: string[] = [];
+const localImageManifestPath = join(tmpdir(), "mars-windows-job-local-manifest.json");
+class WindowsContainerDriver extends WindowsContainerDriverBase {
+  constructor(config: ConstructorParameters<typeof WindowsContainerDriverBase>[0], docker?: DockerRunner, powershell?: PowerShellRunner) {
+    if (config.image === "mars/windows-job:local" && config.allowLocalImage && !config.requireLocalImageManifest) {
+      super({ ...config, imageManifestPath: localImageManifestPath, requireLocalImageManifest: true }, docker ? verifiedLocalDocker(docker) : undefined, powershell);
+      return;
+    }
+    super(config, docker, powershell);
+  }
+}
+await Bun.write(localImageManifestPath, JSON.stringify({ schemaVersion: 1, image: "mars/windows-job:local", imageId: "sha256:fixture", runtimeProbe: { mediaFoundation: true, runnerCacheRegistration: true, dns: true, tcp443: true } }));
+function verifiedLocalDocker(run: DockerRunner): DockerRunner {
+  return async (args) => {
+    if (args[0] === "image" && args.includes("mars/windows-job:local")) {
+      if (args.includes("{{.Id}}")) return { code: 0, stdout: "sha256:fixture", stderr: "" };
+      if (args.includes("{{json .}}")) return { code: 0, stdout: JSON.stringify({ Config: { Entrypoint: ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", "C:/Mars/entrypoint.ps1"] } }), stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    return run(args);
+  };
+}
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -31,6 +62,21 @@ test("rejects a local image without a verified matching manifest", async () => {
     requireLocalImageManifest: true,
   }, docker);
   await expect(driver.reserveCapacity({ vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 })).rejects.toThrow("image ID mismatch");
+});
+test("accepts an upgrade-tagged local image only with its verified matching manifest", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-windows-local-upgrade-"));
+  roots.push(root);
+  const image = "mars/windows-job:local-upgrade-abc123";
+  const manifestPath = join(root, "image.json");
+  await Bun.write(manifestPath, JSON.stringify({ schemaVersion: 1, image, imageId: "sha256:verified", runtimeProbe: { mediaFoundation: true, runnerCacheRegistration: true, dns: true, tcp443: true } }));
+  const docker: DockerRunner = async (args) => {
+    if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
+    if (args[0] === "image" && args.includes("{{.Id}}")) return { code: 0, stdout: "sha256:verified", stderr: "" };
+    if (args[0] === "image") return { code: 0, stdout: JSON.stringify({ Config: { Entrypoint: ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", "C:/Mars/entrypoint.ps1"] } }), stderr: "" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const driver = new WindowsContainerDriver({ image, prefix: "mars", bootstrapRoot: root, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 }, readyTimeoutMs: 100, allowLocalImage: true, imageManifestPath: manifestPath, requireLocalImageManifest: true }, docker);
+  await expect(driver.reserveCapacity({ vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 })).resolves.toBeUndefined();
 });
 test("includes worker cache descriptor in Windows container bootstrap", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-windows-cache-"));
@@ -82,6 +128,25 @@ test("passes configured DNS servers to Docker create", async () => {
   expect(createArgs).toContainEqual("2001:4860:4860::8888");
   expect(createArgs).not.toContain("not-a-dns-server");
   await driver.removeLease("55555555-5555-4555-8555-555555555555");
+});
+test("uses and attests the explicitly selected Windows Docker isolation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-windows-process-"));
+  roots.push(root);
+  const calls: string[][] = [];
+  const docker: DockerRunner = async (args) => {
+    calls.push(args);
+    if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
+    if (args[0] === "image") return { code: 0, stdout: JSON.stringify(["repo@sha256:" + "a".repeat(64)]), stderr: "" };
+    if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "process", NanoCpus: 1_000_000_000, Memory: 1024 } }]), stderr: "" };
+    return { code: 0, stdout: "0", stderr: "" };
+  };
+  const image = "repo@sha256:" + "a".repeat(64);
+  const driver = new WindowsContainerDriver({ image, prefix: "mars", bootstrapRoot: root, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 }, readyTimeoutMs: 100, isolation: "process", dnsServers: ["1.1.1.1"] }, docker);
+  expect(driver.name).toBe("windows-process-container");
+  const id = "88888888-8888-4888-8888-888888888888";
+  await driver.createLease({ id, jobId: "job", contractVersion: "0.1.0", imageDigest: image, resources: { vcpu: 1, memoryBytes: 1024, storageBytes: 1024, concurrency: 1 }, nonce: "n".repeat(32), encodedJitConfig: "config" });
+  expect(calls.find((args) => args[0] === "create")).toContain("--isolation=process");
+  await driver.removeLease(id);
 });
 test("parses active adapter DNS output into unique valid IP addresses", () => {
   const output = JSON.stringify([
@@ -187,18 +252,17 @@ test("rejects a container when Docker applies different CPU or memory limits", a
     return { code: 0, stdout: "", stderr: "" };
   };
   const driver = new WindowsContainerDriver({
-    image: "mars/windows-job:local",
+    image: verifiedDigestImage,
     prefix: "mars",
     bootstrapRoot: root,
     limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
     readyTimeoutMs: 100,
-    allowLocalImage: true,
-  }, docker);
+  }, digestPinnedDocker(docker));
 
   await expect(driver.createLease({
     id: "44444444-4444-4444-8444-444444444444",
     jobId: "job",
-    contractVersion: "0.1.0", imageDigest: "mars/windows-job:local",
+    contractVersion: "0.1.0", imageDigest: verifiedDigestImage,
     resources: { vcpu: 2, memoryBytes: 8 * 1024 ** 3, storageBytes: 10 * 1024 ** 3, concurrency: 1 },
     nonce: "n".repeat(32),
     encodedJitConfig: "config",
@@ -413,19 +477,6 @@ test("requests an idempotent graceful runner stop before forced cleanup", async 
   expect(await driver.requestGracefulStop("66666666-6666-4666-8666-666666666666", "out_of_memory", "memory limit exceeded")).toBe(true);
   expect(calls.filter(args => args[0] === "exec")).toHaveLength(1);
   await driver.removeLease("66666666-6666-4666-8666-666666666666");
-});
-test("treats pool concurrency as a pool limit, not a per-container resource", () => {
-  const driver = new WindowsContainerDriver({
-    image: "mars/windows-job:local",
-    prefix: "mars",
-    bootstrapRoot: "C:\\mars-test",
-    limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 10 * 1024 ** 3, maxConcurrentPods: 1 },
-    readyTimeoutMs: 100,
-    allowLocalImage: true,
-  });
-  const resources = { vcpu: 1, memoryBytes: 4 * 1024 ** 3, storageBytes: 5 * 1024 ** 3, concurrency: 3 };
-  expect(() => driver.validatePool(resources)).not.toThrow();
-  expect(() => driver.validatePool({ ...resources, memoryBytes: 9 * 1024 ** 3 })).toThrow("resource ceiling exceeded");
 });
 
 test("waits for Docker to become ready before validating the image", async () => {

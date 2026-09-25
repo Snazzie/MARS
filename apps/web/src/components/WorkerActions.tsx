@@ -11,18 +11,17 @@ const copy: Record<Action, { label: string; confirm: string; variant: "primary" 
  remove: { label: "Remove", confirm: "Remove this worker? Pools will be disabled and the worker will be revoked after active leases finish.", variant: "destructive" },
 };
 function quotePowerShell(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
-function installerUrl(origin: string, platform: string, token: string, runtimeMode: "container" | "vm" = "container"): string {
- return `${origin}/api/workers/installer?audience=${platform}&runtime=${platform === "windows-x64" ? runtimeMode : "container"}&upgrade=true&connectOrigin=${encodeURIComponent(origin)}&target=${encodeURIComponent(token)}`;
+function installerUrl(origin: string, platform: string, token: string): string {
+ return `${origin}/api/workers/installer?audience=${platform}&upgrade=true&connectOrigin=${encodeURIComponent(origin)}&target=${encodeURIComponent(token)}`;
 }
-export function buildWindowsUpgradeCommand(workerId: string, origin: string, connectOrigin: string = origin, runtimeMode: "container" | "vm" | null = "container", token = ""): string {
+export function buildWindowsUpgradeCommand(workerId: string, origin: string, connectOrigin: string = origin, token = ""): string {
  const selectedOrigin = new URL(connectOrigin || origin).origin;
- if (runtimeMode !== "container" && runtimeMode !== "vm") throw new Error("Windows worker runtime is unknown");
  if (!/^https?:$/.test(new URL(selectedOrigin).protocol)) throw new Error("Upgrade origin must use HTTP or HTTPS");
  const controlPlane = quotePowerShell(selectedOrigin);
- const installer = installerUrl(selectedOrigin, "windows-x64", token, runtimeMode);
+ const installer = installerUrl(selectedOrigin, "windows-x64", token);
  const installerProtocol = installer.startsWith("http:") ? "http" : "https";
  const tls = installerProtocol === "https" ? " --tlsv1.3" : "";
- return `# Mars worker ${workerId}\n$script = Join-Path $env:TEMP ("mars-upgrade-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${installerProtocol}'${tls} --output $script '${installer}'\n  if ($LASTEXITCODE -ne 0) { throw "Upgrade command download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -ControlPlaneUrl ${controlPlane} -Upgrade -WindowsRuntime '${runtimeMode}'${selectedOrigin.startsWith("http:") ? " -AllowInsecureHttp" : ""}\n} finally {\n  Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n}`;
+ return `# Mars worker ${workerId}\n$script = Join-Path $env:TEMP ("mars-upgrade-" + [guid]::NewGuid() + ".ps1")\ntry {\n  curl.exe --fail --proto '=${installerProtocol}'${tls} --output $script '${installer}'\n  if ($LASTEXITCODE -ne 0) { throw "Upgrade command download failed with exit code $LASTEXITCODE" }\n  powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -ControlPlaneUrl ${controlPlane} -Upgrade${selectedOrigin.startsWith("http:") ? " -AllowInsecureHttp" : ""}\n} finally {\n  Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n}`;
 }
 export function buildUpgradeCommand(workerId: string, origin: string, connectOrigin: string, platform: string, token: string): string {
  const selectedOrigin = new URL(connectOrigin || origin).origin;
@@ -34,7 +33,7 @@ export function buildUpgradeCommand(workerId: string, origin: string, connectOri
  const shell = platform === "macos-arm64" ? "zsh" : "sudo bash";
  return `# Mars worker ${workerId}\ntmp=$(mktemp)\ntrap 'rm -f "$tmp"' EXIT\ncurl --fail --proto '=https'${tls} --output "$tmp" '${installer}'\n${shell} "$tmp" --upgrade --control-plane-url '${selectedOrigin}'`;
 }
-export function WorkerActions({ organizationId, workerId, admissionState, draining, activeSandboxes = 0, platform, runtimeMode, currentReleaseVersion, currentContractVersion, onComplete }: { organizationId: string; workerId: string; admissionState: string; draining: boolean; activeSandboxes?: number; platform?: string; runtimeMode?: "container" | "vm" | null; currentReleaseVersion?: string | null; currentContractVersion?: string | null; onComplete: () => void }) {
+export function WorkerActions({ organizationId, workerId, admissionState, draining, activeSandboxes = 0, platform, currentReleaseVersion, currentContractVersion, onComplete }: { organizationId: string; workerId: string; admissionState: string; draining: boolean; activeSandboxes?: number; platform?: string; currentReleaseVersion?: string | null; currentContractVersion?: string | null; onComplete: () => void }) {
  const [action, setAction] = useState<Action | null>(null);
  const [upgradeCommand, setUpgradeCommand] = useState<string | null>(null);
  const [upgradeTarget, setUpgradeTarget] = useState<{ releaseVersion: string; contractVersion: string } | null>(null);
@@ -51,7 +50,7 @@ export function WorkerActions({ organizationId, workerId, admissionState, draini
    if (!status || !status.available) return;
    const connectOrigin = (await getWorkerControlPlaneUrls())[0];
    setUpgradeTarget({ releaseVersion: status.target.releaseVersion, contractVersion: status.target.contractVersion });
-   setUpgradeCommand(platform === "windows-x64" ? buildWindowsUpgradeCommand(workerId, window.location.origin, connectOrigin, runtimeMode, status.target.token) : buildUpgradeCommand(workerId, window.location.origin, connectOrigin, platform!, status.target.token));
+   setUpgradeCommand(platform === "windows-x64" ? buildWindowsUpgradeCommand(workerId, window.location.origin, connectOrigin, status.target.token) : buildUpgradeCommand(workerId, window.location.origin, connectOrigin, platform!, status.target.token));
   } catch (reason) { setUpgradeError(reason instanceof ApiRequestError ? reason.message : reason instanceof Error ? reason.message : "The upgrade command could not be prepared."); }
  }
  function close() { dialog.current?.close(); setAction(null); setUpgradeCommand(null); setUpgradeTarget(null); setError(null); setUpgradeError(null); }

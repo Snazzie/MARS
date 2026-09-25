@@ -330,7 +330,7 @@ test("global admins can create the control-plane default pool without an organiz
   const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join(" ");
     queries.push(query);
-    if (query.includes("FROM workers")) return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64"], doctor: { runtimeReady: true, artifactDigests: { "macos-arm64": `macos-arm64@sha256:${"a".repeat(64)}` } }, admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "a", appliedConfigurationRevision: "a", draining: false, limits: { maxVcpuPerPod: 4, maxMemoryBytes: 8, maxStorageBytes: 20, maxConcurrentPods: 2 } }];
+    if (query.includes("FROM workers")) return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64"], desiredConfiguration: { selectedDriver: "tart-vm" }, doctor: { capabilities: [{ driver: "tart-vm", guestPlatform: "macos-arm64", imageDigest: `macos-arm64@sha256:${"a".repeat(64)}`, ready: true, remediation: null }] }, admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "a", appliedConfigurationRevision: "a", lastDoctorAt: new Date().toISOString(), draining: false, limits: { maxVcpuPerPod: 4, maxMemoryBytes: 8, maxStorageBytes: 20, maxConcurrentPods: 2 } }];
     if (query.includes("runner_pools") && query.includes("RETURNING id")) return [{ id: "00000000-0000-4000-8000-000000000003" }];
     if (query.includes("dashboard_mutations")) return [{ idempotency_key: "global-pool" }];
     return [];
@@ -349,7 +349,7 @@ test("global pool creation rejects duplicate names and labels", async () => {
   const db = Object.assign(async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
     queries.push(query);
-    if (query.includes("FROM workers")) return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64"], doctor: { runtimeReady: true, artifactDigests: { "macos-arm64": `macos-arm64@sha256:${"a".repeat(64)}` } }, admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "a", appliedConfigurationRevision: "a", draining: false }];
+    if (query.includes("FROM workers")) return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64"], desiredConfiguration: { selectedDriver: "tart-vm" }, doctor: { capabilities: [{ driver: "tart-vm", guestPlatform: "macos-arm64", imageDigest: `macos-arm64@sha256:${"a".repeat(64)}`, ready: true, remediation: null }] }, admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "a", appliedConfigurationRevision: "a", lastDoctorAt: new Date().toISOString(), draining: false }];
     if (query.includes("FROM runner_pools")) return [{ id: "00000000-0000-4000-8000-000000000003", name: "macos-smoke", triggerLabel: "mars-macos" }];
     return [];
   }, {}) as never;
@@ -457,6 +457,7 @@ test("global admins receive strict no-store worker health without secrets", asyn
       leaseId: "22222222-2222-4222-8222-222222222222",
       state: "busy",
       startedAt: "2026-08-23T11:59:00.000Z",
+      sample: null,
       ageSeconds: 60,
       requested: { vcpu: 2, memoryBytes: "10", storageBytes: "20", concurrency: 1 },
     }],

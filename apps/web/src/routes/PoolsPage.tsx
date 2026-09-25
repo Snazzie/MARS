@@ -1,23 +1,23 @@
 import { useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CreatePoolRequest, runtimeDriverForWorker, type PoolSummary, type WorkerDetail } from "@mars/contracts";
+import { CreatePoolRequest, selectedRuntimeDriver, type PoolSummary, type WorkerDetail } from "@mars/contracts";
 import { ApiRequestError, deleteGlobalPool, getGlobalPools, getWorkers, mutateGlobalPool, saveGlobalPool } from "../api.ts";
 import { Disclosure } from "../components/Disclosure.tsx";
 import { QueryState } from "../components/StateView.tsx";
 import { workerOperationalLabel, workerReadinessLabel } from "../components/WorkerCard.tsx";
 
-type PoolWorker = Pick<WorkerDetail, "id" | "name" | "platform" | "driver" | "connectionState" | "configurationState" | "configurationRevision" | "appliedConfigurationRevision" | "draining" | "artifactDigest" | "artifactDigests"> & { guestPlatforms?: WorkerDetail["guestPlatforms"]; runtimeMode?: WorkerDetail["runtimeMode"]; doctor?: WorkerDetail["doctor"] };
+type PoolWorker = Pick<WorkerDetail, "id" | "name" | "platform" | "driver" | "selectedDriver" | "connectionState" | "configurationState" | "configurationRevision" | "appliedConfigurationRevision" | "draining" | "artifactDigest" | "artifactDigests"> & { guestPlatforms?: WorkerDetail["guestPlatforms"]; doctor?: WorkerDetail["doctor"] };
 type PoolIdentity = Pick<PoolSummary, "platform" | "driver" | "workerId" | "imageDigest">;
-const preparedDigest = (worker: PoolWorker, platform: PoolWorker["platform"]): string | null => platform === "macos-arm64" || platform === "linux-arm64" ? worker.artifactDigests?.[platform] ?? null : worker.artifactDigest ?? null;
+const capabilityFor = (worker: PoolWorker, platform: WorkerDetail["platform"]) => worker.doctor?.capabilities?.find((item) => item.driver === worker.selectedDriver && item.guestPlatform === platform && item.ready);
+const preparedDigest = (worker: PoolWorker, platform: PoolWorker["platform"]): string | null => capabilityFor(worker, platform)?.imageDigest ?? (platform === "macos-arm64" || platform === "linux-arm64" ? worker.artifactDigests?.[platform] ?? null : worker.artifactDigest ?? null);
 export type PoolWorkerCoverage = { online: number; ready: number; warning: string | null; operational: string | null; readiness: string | null };
 export function poolWorkerCoverage(pool: PoolIdentity, workers: PoolWorker[] | undefined): PoolWorkerCoverage {
   if (!workers) return { online: 0, ready: 0, warning: "Worker status unavailable", operational: null, readiness: null };
-  const matching = pool.workerId ? workers.filter((worker) => worker.id === pool.workerId) : workers.filter((worker) => {
-    const guest = worker.guestPlatforms?.includes(pool.platform) ?? worker.platform === pool.platform;
-    const driver = runtimeDriverForWorker(worker.platform, pool.platform, worker.runtimeMode) === pool.driver;
-    const digest = preparedDigest(worker, pool.platform);
-    return guest && driver && digest === pool.imageDigest;
-  });
+  const matching = workers.filter((worker) => (!pool.workerId || worker.id === pool.workerId) &&
+    (worker.guestPlatforms?.includes(pool.platform) ?? worker.platform === pool.platform) &&
+    worker.selectedDriver === pool.driver &&
+    selectedRuntimeDriver(worker.platform, pool.platform, worker.selectedDriver) === pool.driver &&
+    capabilityFor(worker, pool.platform)?.imageDigest === pool.imageDigest);
   const isReady = (worker: PoolWorker) => worker.connectionState === "online" && worker.configurationState === "ready" && worker.configurationRevision === worker.appliedConfigurationRevision && worker.doctor?.runtimeReady === true && worker.doctor.probe === true && worker.doctor.imageSignatures === true && !worker.draining;
   if (pool.workerId) {
     const worker = matching[0];
@@ -35,8 +35,8 @@ function bytes(value: number) { if (value >= 1024 ** 3) return `${(value / 1024 
 const gib = (value: number) => Math.max(1, Math.round(value / 1024 ** 3));
 
 function PoolEditor({ pool, workers, onCancel, onSave, pending, error }: { pool: PoolSummary | null; workers: WorkerDetail[]; onCancel: () => void; onSave: (value: CreatePoolRequest) => void; pending: boolean; error: string | null }) {
-  const compatible = workers.filter((worker) => worker.platform !== "linux-x64" && worker.admissionState === "adopted" && worker.configurationState === "ready" && worker.configurationRevision === worker.appliedConfigurationRevision && !worker.draining);
-  const initialWorker = compatible.find((worker) => worker.guestPlatforms.includes(pool?.platform ?? "windows-x64")) ?? compatible[0];
+  const compatible = workers.filter((worker) => worker.admissionState === "adopted" && worker.configurationState === "ready" && worker.configurationRevision === worker.appliedConfigurationRevision && !worker.draining && (!pool || worker.selectedDriver === pool.driver) && worker.guestPlatforms.some((guest) => worker.doctor?.capabilities?.some((item) => item.driver === worker.selectedDriver && item.guestPlatform === guest && item.ready && item.imageDigest !== null)));
+  const initialWorker = compatible.find((worker) => worker.guestPlatforms.includes(pool?.platform ?? "windows-x64") && worker.doctor?.capabilities?.some((item) => item.driver === worker.selectedDriver && item.guestPlatform === (pool?.platform ?? "windows-x64") && item.ready)) ?? compatible[0];
   const [workerId, setWorkerId] = useState(initialWorker?.id ?? "");
   const worker = compatible.find((candidate) => candidate.id === workerId);
   const [platform, setPlatform] = useState(pool?.platform ?? initialWorker?.guestPlatforms[0] ?? "windows-x64");
@@ -54,9 +54,9 @@ function PoolEditor({ pool, workers, onCancel, onSave, pending, error }: { pool:
   }}>
     <h2>{pool ? `Edit ${pool.name}` : "Create runner pool"}</h2>
     <p>New and edited pools remain disabled until a compatible worker is online and recently healthy.</p>
-    <label>Reference worker<select value={workerId} required onChange={(event) => { const id = event.target.value; const selected = compatible.find((candidate) => candidate.id === id); setWorkerId(id); if (selected) { const nextPlatform = selected.guestPlatforms[0]; setPlatform(nextPlatform); setDigest(preparedDigest(selected, nextPlatform) ?? ""); } }}>{compatible.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label>
-    <label>Guest platform<select value={platform} onChange={(event) => { const nextPlatform = event.target.value as typeof platform; setPlatform(nextPlatform); setDigest(worker ? preparedDigest(worker, nextPlatform) ?? "" : ""); }}>{worker?.guestPlatforms.map((guest) => <option key={guest} value={guest}>{guest}</option>)}</select></label>
-    <p>Runtime driver: <code>{worker ? runtimeDriverForWorker(worker.platform, platform, worker.runtimeMode) ?? "Unsupported" : "Select a worker"}</code></p>
+    <label>Reference worker<select value={workerId} required onChange={(event) => { const id = event.target.value; const selected = compatible.find((candidate) => candidate.id === id); setWorkerId(id); if (selected) { const nextPlatform = selected.guestPlatforms.find((guest) => selected.doctor?.capabilities?.some((item) => item.driver === selected.selectedDriver && item.guestPlatform === guest && item.ready && item.imageDigest !== null)) ?? selected.guestPlatforms[0]; setPlatform(nextPlatform); setDigest(preparedDigest(selected, nextPlatform) ?? ""); } }}>{compatible.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label>
+    <label>Guest platform<select value={platform} onChange={(event) => { const nextPlatform = event.target.value as typeof platform; setPlatform(nextPlatform); setDigest(worker ? preparedDigest(worker, nextPlatform) ?? "" : ""); }}>{worker?.guestPlatforms.filter((guest) => worker.doctor?.capabilities?.some((item) => item.driver === worker.selectedDriver && item.guestPlatform === guest && item.ready && item.imageDigest !== null)).map((guest) => <option key={guest} value={guest}>{guest}</option>)}</select></label>
+    <p>Selected runtime driver: <code>{worker?.selectedDriver ?? "Select a worker"}</code></p>
     <label>Pool name<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
     <label>Canonical trigger label<input required pattern="[a-z0-9][a-z0-9._-]{0,62}" value={label} onChange={(event) => setLabel(event.target.value)} /></label>
     <label>Immutable image or checkpoint digest<input required value={digest} pattern="(?:[^@\s]+@)?sha256:[0-9a-fA-F]{64}" onChange={(event) => setDigest(event.target.value)} /></label>

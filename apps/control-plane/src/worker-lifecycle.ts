@@ -209,6 +209,7 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
     await updateDashboardStatus(db, payload.leaseId, event.workerId, payload.nonce, "completed", event.occurredAt, "failure", "failed");
     return true;
   }
+  if (parsedPayload.data.type !== "lease.reaped") return false;
   const payload = parsedPayload.data.payload;
   const rows = await db`UPDATE runner_leases SET state='reaped',cleanup_state='completed',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed') RETURNING id`;
   let context: { commandType: string | null; terminalResult: { reason?: string; exitCode?: number } | null } | undefined;

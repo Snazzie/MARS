@@ -81,10 +81,10 @@ export async function getOnboardingDetail(
   const status = await getOnboardingStatus(db, auth, setup);
   const selectedRow = first(await db`
     SELECT w.id,w.name,w.platform,w.release_version AS "releaseVersion",w.contract_version AS "contractVersion",w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",
-      w.connection_state AS "connectionState",w.configuration_state AS "configurationState",
+      w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.desired_configuration AS "desiredConfiguration",
       w.public_key AS "publicKey",w.fingerprint,w.vm_uuid AS "vmUuid",
-      w.machine_uuid AS "machineUuid",w.doctor,w.limits,
-      w.configuration_revision AS "configurationRevision"
+      w.machine_uuid AS "machineUuid",w.doctor,w.limits,w.doctor_observed_at AS "doctorObservedAt",
+      w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision"
     FROM workers w JOIN system_onboarding so ON so.worker_id=w.id
     WHERE so.singleton=true
   `);
@@ -164,7 +164,11 @@ export async function getOnboardingDetail(
       visibility: row.visibility, available: row.available, installationId: String(row.installationId), discoveryState, discoveryRetryAt,
     } as RepositorySummary;
   });
-  const workerDriver = worker?.platform === "linux-x64" ? "linux-libvirt-vm" : worker?.platform === "windows-x64" ? worker.doctor?.runtimeMode === "vm" ? "windows-hyperv" : "windows-hyperv-container" : worker?.platform === "macos-arm64" ? "tart-vm" : null;
+  const desired = typeof selectedRow?.desiredConfiguration === "string" ? JSON.parse(selectedRow.desiredConfiguration) : selectedRow?.desiredConfiguration;
+  const configReady = selectedRow?.configurationState === "ready" && selectedRow.configurationRevision === selectedRow.appliedConfigurationRevision && selectedRow.doctorObservedAt != null && Date.now() - new Date(String(selectedRow.doctorObservedAt)).getTime() < 60_000;
+  const workerDriver = configReady ? desired?.selectedDriver : undefined;
+  const workerDoctor = objectValue(selectedRow?.doctor);
+  const doctor = workerDoctor.doctor && typeof workerDoctor.doctor === "object" ? workerDoctor.doctor as Record<string, unknown> : workerDoctor;
   const workerGuestPlatforms = worker?.guestPlatforms ?? (worker ? [worker.platform] : []);
   const poolRows = worker ? await db`
     SELECT p.id,p.organization_id AS "organizationId",p.worker_id AS "workerId",'Shared fleet' AS "workerName",
@@ -174,7 +178,14 @@ export async function getOnboardingDetail(
     WHERE p.organization_id IS NULL AND p.enabled=true
     ORDER BY p.name,p.id
   ` : [];
-  const poolRow = poolRows.find((candidate) => candidate.driver === workerDriver && workerGuestPlatforms.includes(candidate.platform as OnboardingWorker["platform"]));
+  const poolRow = poolRows.find((candidate) => {
+    if (candidate.driver !== workerDriver || !workerGuestPlatforms.includes(candidate.platform as OnboardingWorker["platform"])) return false;
+    return Array.isArray(doctor.capabilities) && doctor.capabilities.some((item) => item && typeof item === "object"
+      && (item as Record<string, unknown>).driver === candidate.driver
+      && (item as Record<string, unknown>).guestPlatform === candidate.platform
+      && (item as Record<string, unknown>).ready === true
+      && (item as Record<string, unknown>).imageDigest === candidate.imageDigest);
+  });
   const pool = poolRow ? {
     id: String(poolRow.id), organizationId: poolRow.organizationId == null ? null : String(poolRow.organizationId), workerId: poolRow.workerId == null ? null : String(poolRow.workerId), workerName: String(poolRow.workerName),
     name: String(poolRow.name), platform: poolRow.platform, driver: poolRow.driver, imageDigest: String(poolRow.imageDigest),
@@ -281,12 +292,14 @@ export async function completeOnboardingIfReady(db: OnboardingDb, options: { ski
   const ready = options.skipVerification
     ? await db`
       SELECT 1 FROM workers w
-      WHERE w.id=${String(row.workerId)} AND w.admission_state='adopted' AND w.configuration_state='ready'
+      WHERE w.id=${String(row.workerId)} AND w.admission_state='adopted' AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.doctor_observed_at>now()-interval '60 seconds'
         AND EXISTS (
           SELECT 1 FROM runner_pools p
+          CROSS JOIN LATERAL (SELECT CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END AS evidence) e
           WHERE p.organization_id IS NULL AND p.enabled=true AND p.platform=ANY(SELECT jsonb_array_elements_text(w.guest_platforms))
-            AND p.driver=CASE WHEN w.platform='macos-arm64' AND p.platform IN ('macos-arm64','linux-arm64') THEN 'tart-vm' WHEN p.platform=w.platform THEN CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN CASE WHEN w.doctor->'doctor'->>'runtimeMode'='vm' THEN 'windows-hyperv' ELSE 'windows-hyperv-container' END WHEN 'macos-arm64' THEN 'tart-vm' END ELSE NULL END
-            AND (p.driver <> 'tart-vm' OR w.doctor->'artifactDigests'->>p.platform=p.image_digest)
+            AND p.driver=w.desired_configuration->>'selectedDriver'
+            AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.evidence->'capabilities')='array' THEN e.evidence->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=p.driver AND capability->>'guestPlatform'=p.platform AND capability->>'ready'='true' AND capability->>'imageDigest'=p.image_digest)
+        )
       LIMIT 1
     `
     : await db`
@@ -294,12 +307,17 @@ export async function completeOnboardingIfReady(db: OnboardingDb, options: { ski
       JOIN dashboard_runs r ON r.organization_id=${String(row.organizationId)}
         AND r.github_run_id=${numberValue(row.verificationGithubRunId)}
         AND r.status='completed' AND r.conclusion='success'
+      CROSS JOIN LATERAL (SELECT CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END AS evidence) e
       WHERE w.id=${String(row.workerId)} AND w.admission_state='adopted' AND w.configuration_state='ready'
+        AND w.configuration_revision=w.applied_configuration_revision AND w.doctor_observed_at>now()-interval '60 seconds'
         AND EXISTS (
           SELECT 1 FROM dashboard_jobs j
           JOIN runner_leases l ON l.github_job_id=j.github_job_id
+          JOIN runner_pools p ON p.id=l.pool_id
           WHERE j.organization_id=r.organization_id AND j.run_id=r.id
             AND l.pool_id=${String(row.verificationPoolId)} AND l.state='reaped'
+            AND p.driver=w.desired_configuration->>'selectedDriver'
+            AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.evidence->'capabilities')='array' THEN e.evidence->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=p.driver AND capability->>'guestPlatform'=p.platform AND capability->>'ready'='true' AND capability->>'imageDigest'=p.image_digest)
         )
       LIMIT 1
     `;

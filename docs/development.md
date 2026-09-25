@@ -115,7 +115,7 @@ Use this when the local control plane cannot issue a release-catalog upgrade tar
    $contractVersion = LocalEnvValue 'MARS_WORKER_CONTRACT_VERSION'
    if (-not $contractVersion) { throw 'Set MARS_WORKER_CONTRACT_VERSION in .env.development or .env.' }
    & (Join-Path $repo 'deploy\workers\install-worker.ps1') `
-     -ControlPlaneUrl $controlPlane -WindowsRuntime 'container' -WindowsArtifactMode 'local' `
+     -ControlPlaneUrl $controlPlane -WindowsArtifactMode 'local' `
      -WorkerVersion $workerVersion -WorkerContractVersion $contractVersion `
      -WindowsOrchestratorUrl "$controlPlane/api/workers/orchestrator?audience=windows-x64" `
      -WindowsOrchestratorSha256 (Hash $orchestrator) `

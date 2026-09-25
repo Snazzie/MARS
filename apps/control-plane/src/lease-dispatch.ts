@@ -36,6 +36,7 @@ export async function dispatchLeaseBootstrap(dispatcher: Dispatcher, input: Leas
   const commandByDriver: Record<LeaseDispatchInput["driver"], string> = {
     "linux-libvirt-vm": "linux-vm.create_lease",
     "linux-docker-container": "linux-container.create_lease",
+    "windows-process-container": "windows-container.create_lease",
     "windows-hyperv": "hyperv.create_lease",
     "windows-hyperv-container": "windows-container.create_lease",
     "tart-vm": "tart.create_lease",

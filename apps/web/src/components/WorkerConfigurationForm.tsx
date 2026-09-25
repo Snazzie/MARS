@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
-import type { WorkerCapacityData, WorkerLimits } from "@mars/contracts";
+import { runtimeDriverForPlatform, type RuntimeDriverName, type WorkerCapacityData, type WorkerLimits, type WorkerRuntimeCapability } from "@mars/contracts";
 import { configurePendingWorker, configureWorker, rejectPendingWorker, type WorkerConfigurationInput } from "../api.ts";
-type Props = { worker: { id: string; admissionState: "pending" | "adopted" | "rejected" | "revoked"; platform?: "linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64"; guestPlatforms?: ("linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64")[]; draining?: boolean; activeSandboxes?: number; capacity: WorkerCapacityData; limits: WorkerLimits | null; desiredCacheTtlSeconds?: number; desiredRunnerCacheEnabled?: boolean; desiredRunnerCacheMaxGiB?: number }; organizationId?: string; onConfigured(): void; onDiscard?(): void };
+type Props = { worker: { id: string; admissionState: "pending" | "adopted" | "rejected" | "revoked"; platform?: "linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64"; guestPlatforms?: ("linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64")[]; selectedDriver?: RuntimeDriverName | null; capabilities?: WorkerRuntimeCapability[]; draining?: boolean; activeSandboxes?: number; capacity: WorkerCapacityData; limits: WorkerLimits | null; desiredCacheTtlSeconds?: number; desiredRunnerCacheEnabled?: boolean; desiredRunnerCacheMaxGiB?: number }; organizationId?: string; onConfigured(): void; onDiscard?(): void };
+const runtimeDriverForHost = (platform: "linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64"): RuntimeDriverName => runtimeDriverForPlatform(platform);
 const GIB = 1024 ** 3;
 const initialGiB = (bytes: number) => { const value = Math.floor(bytes / GIB); return value > 0 ? String(value) : ""; };
 const parsePositiveInteger = (value: string) => { if (!/^\d+$/.test(value)) return null; const parsed = Number(value); return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null; };
@@ -14,6 +15,7 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
   const platform = worker.platform ?? "linux-x64";
   const canEditGuests = !organizationId || (worker.draining === true && worker.activeSandboxes === 0);
   const [allowLinux, setAllowLinux] = useState(() => worker.guestPlatforms?.includes(platform === "macos-arm64" ? "linux-arm64" : "linux-x64") || (platform === "macos-arm64" && !adopted));
+  const [selectedDriver, setSelectedDriver] = useState<RuntimeDriverName | "">(() => worker.selectedDriver && worker.capabilities?.some((item) => item.driver === worker.selectedDriver) ? worker.selectedDriver : "");
   const [vcpu, setVcpu] = useState(String(c.actualVcpu));
   const [ram, setRam] = useState(initialGiB(c.actualMemoryBytes));
   const [disk, setDisk] = useState(initialGiB(c.actualStorageBytes));
@@ -29,7 +31,14 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
   const [runnerCacheMaxGiB, setRunnerCacheMaxGiB] = useState(() => String(worker.desiredRunnerCacheMaxGiB ?? 20));
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const capabilityHelp = platform === "windows-x64" ? <div><label className="checkbox-field"><input type="checkbox" name="allowLinux" checked={allowLinux} disabled={!canEditGuests || pending} onChange={(event) => setAllowLinux(event.target.checked)} /> Allow Linux VMs</label>{organizationId && !canEditGuests && <p className="field-help">Drain this worker and wait for active jobs to finish before changing guest operating systems.</p>}</div> : platform === "macos-arm64" ? <div><label className="checkbox-field"><input type="checkbox" name="allowUbuntuArm64" checked={allowLinux} disabled={!canEditGuests || pending} onChange={(event) => setAllowLinux(event.target.checked)} /> Allow Ubuntu ARM64 VMs</label>{organizationId && !canEditGuests && <p className="field-help">Drain this worker and wait for active jobs to finish before changing guest operating systems.</p>}</div> : null;
+  const windowsOptions: { driver: RuntimeDriverName; guestPlatform: "linux-x64" | "windows-x64"; label: string }[] = [
+    { driver: "linux-docker-container", guestPlatform: "linux-x64", label: "Docker Linux container" },
+    { driver: "windows-process-container", guestPlatform: "windows-x64", label: "Docker Windows container (process isolation)" },
+    { driver: "windows-hyperv-container", guestPlatform: "windows-x64", label: "Docker Windows container (Hyper-V isolation)" },
+    { driver: "windows-hyperv", guestPlatform: "windows-x64", label: "Windows Hyper-V VM" },
+  ];
+  const selectedCapability = worker.capabilities?.find((item) => item.driver === selectedDriver && item.ready);
+  const capabilityHelp = platform === "windows-x64" ? <fieldset><legend>Runtime capability</legend><p>Select the runtime this worker will use. Only advertised, ready capabilities can be selected.</p>{windowsOptions.map((option) => { const capability = worker.capabilities?.find((item) => item.driver === option.driver && item.guestPlatform === option.guestPlatform); return <label key={option.driver}><input type="radio" name="selectedDriver" value={option.driver} checked={selectedDriver === option.driver} disabled={pending || !capability?.ready || (organizationId !== undefined && !canEditGuests)} onChange={() => setSelectedDriver(option.driver)} /> {option.label} {!capability ? "(not advertised)" : !capability.ready ? "(not ready)" : ""}{capability?.remediation && <small>{capability.remediation}</small>}</label>; })}{selectedDriver === "windows-process-container" && <p role="alert"><strong>Lower isolation:</strong> Docker Windows process isolation does not provide the Hyper-V host boundary.</p>}{organizationId && !canEditGuests && <p className="field-help">Drain this worker and wait for active jobs to finish before changing runtime capability.</p>}</fieldset> : platform === "macos-arm64" ? <div><label className="checkbox-field"><input type="checkbox" name="allowUbuntuArm64" checked={allowLinux} disabled={!canEditGuests || pending} onChange={(event) => setAllowLinux(event.target.checked)} /> Allow Ubuntu ARM64 VMs</label>{organizationId && !canEditGuests && <p className="field-help">Drain this worker and wait for active jobs to finish before changing guest operating systems.</p>}</div> : null;
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const applianceVcpu = parsePositiveInteger(vcpu);
@@ -42,17 +51,19 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
     const ttlHours = parsePositiveInteger(cacheTtlHours);
     const maxGiB = parsePositiveInteger(runnerCacheMaxGiB);
     if (!applianceVcpu || !applianceMemory || !applianceStorage || !podVcpu || !podMemory || !podStorage || !maxConcurrentPods || !ttlHours || !maxGiB) return setError("All resource values, Cache TTL, and runner cache size must be positive whole numbers.");
+    if (platform === "windows-x64" && (!selectedDriver || !selectedCapability)) return setError("Select an advertised, ready runtime capability.");
     if (ttlHours > Math.floor(Number.MAX_SAFE_INTEGER / (60 * 60))) return setError("Cache TTL is too large.");
     if (maxGiB > Number.MAX_SAFE_INTEGER) return setError("Runner cache size is too large.");
     const ttlSeconds = ttlHours * 60 * 60;
     if (!Number.isSafeInteger(ttlSeconds)) return setError("Cache TTL is too large.");
     if (applianceVcpu > c.actualVcpu || applianceMemory > c.actualMemoryBytes || applianceStorage > c.actualStorageBytes) return setError("Appliance resources cannot exceed the worker's total capacity.");
     if (podVcpu > applianceVcpu || podMemory > applianceMemory || podStorage > applianceStorage) return setError("Per-job ceilings cannot exceed appliance resources.");
-    const guestPlatforms: WorkerConfigurationInput["guestPlatforms"] = platform === "windows-x64" ? (allowLinux ? ["windows-x64", "linux-x64"] : ["windows-x64"]) : platform === "macos-arm64" ? (allowLinux ? ["macos-arm64", "linux-arm64"] : ["macos-arm64"]) : [platform];
+    const guestPlatforms: WorkerConfigurationInput["guestPlatforms"] = platform === "windows-x64" ? [selectedCapability!.guestPlatform] : platform === "macos-arm64" ? (allowLinux ? ["macos-arm64", "linux-arm64"] : ["macos-arm64"]) : [platform];
     const input: WorkerConfigurationInput = {
       appliance: { vcpu: applianceVcpu, memoryBytes: applianceMemory, storageBytes: applianceStorage },
       runtime: { maxVcpuPerPod: podVcpu, maxMemoryBytesPerPod: podMemory, maxStorageBytesPerPod: podStorage, maxConcurrentPods },
       guestPlatforms,
+      selectedDriver: platform === "windows-x64" ? selectedCapability!.driver : runtimeDriverForHost(platform),
       cache: { ttlSeconds, runnerCacheEnabled, runnerCacheMaxGiB: maxGiB },
     };
     setError(null);

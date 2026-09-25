@@ -128,6 +128,7 @@ test("sends worker configuration as a POST request", async () => {
       appliance: { vcpu: 1, memoryBytes: 1024 ** 3, storageBytes: 1024 ** 3 },
       runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1024 ** 3, maxStorageBytesPerPod: 1024 ** 3, maxConcurrentPods: 1 },
       guestPlatforms: ["linux-x64"],
+      selectedDriver: "linux-libvirt-vm",
     });
     expect(method).toBe("POST");
   } finally {

@@ -118,18 +118,18 @@ test("replays completed configuration idempotency response without mutating", as
     begin: async (fn: (transaction: unknown) => unknown) => fn(tx),
   });
   const dispatcher = { replayConnected() { throw new Error("must not dispatch replay for duplicate"); } } as unknown as WorkerCommandDispatcher;
-  const configuration = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 } };
+  const configuration = { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }, selectedDriver: "tart-vm" as const };
   await expect(configurePendingWorker(db, "worker", configuration, "admin", dispatcher, "same-key")).resolves.toEqual(result);
   expect(queries.some(query => query.includes("update workers"))).toBe(false);
 });
 test("accepts independent per-job ceilings without multiplying by concurrency", async () => {
   const tx = (strings: TemplateStringsArray) => {
     const sql = strings.join(" ");
-    if (sql.includes("select id, doctor")) return [{ id: "worker", doctor: { capacity: { freeVcpu: 1, freeMemoryBytes: 1, freeStorageBytes: 1 } }, admissionState: "pending", platform: "macos-arm64", guestPlatforms: ["macos-arm64"], draining: false }];
+    if (sql.includes("select id, doctor")) return [{ id: "worker", doctor: { doctor: { capabilities: [{ driver: "tart-vm", guestPlatform: "macos-arm64", imageDigest: "sha256:" + "a".repeat(64), ready: true, remediation: null }] }, capacity: { freeVcpu: 1, freeMemoryBytes: 1, freeStorageBytes: 1 } }, doctorObservedAt: new Date(), admissionState: "pending", platform: "macos-arm64", guestPlatforms: ["macos-arm64"], draining: false }];
     return [];
   };
   const db = Object.assign(((strings: TemplateStringsArray) => []) as unknown as Sql<{}>, { begin: async (fn: (transaction: unknown) => unknown) => fn(tx) });
-  const configuration = { appliance: { vcpu: 4, memoryBytes: 4 * 1024 ** 3, storageBytes: 30 * 1024 ** 3 }, runtime: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 10 } };
+  const configuration = { appliance: { vcpu: 4, memoryBytes: 4 * 1024 ** 3, storageBytes: 30 * 1024 ** 3 }, runtime: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 10 }, selectedDriver: "tart-vm" as const };
   await expect(configurePendingWorker(db, "worker", configuration, "admin")).resolves.toMatchObject({ revision: expect.any(String), fingerprint: expect.any(String), commandId: expect.any(String) });
 });
 
@@ -140,13 +140,15 @@ test("stores desired configuration and waits for acknowledgement", async () => {
     const query = strings.join(" ");
     queries.push(query);
     parameters.push(values);
+    if (query.includes("select count(*)::int as count from runner_leases")) return [{ count: 0 }];
     if (query.includes("select id, doctor")) return [{
       id: "worker",
-      doctor: { capacity: { freeVcpu: 4, freeMemoryBytes: 4 * 1024 ** 3, freeStorageBytes: 30 * 1024 ** 3 } },
+      doctor: { doctor: { capabilities: [{ driver: "windows-hyperv-container", guestPlatform: "windows-x64", imageDigest: "sha256:" + "a".repeat(64), ready: true, remediation: null }] }, capacity: { freeVcpu: 4, freeMemoryBytes: 4 * 1024 ** 3, freeStorageBytes: 30 * 1024 ** 3 } },
+      doctorObservedAt: new Date(),
       admissionState: "adopted",
       platform: "windows-x64",
       guestPlatforms: ["windows-x64"],
-      draining: false,
+      draining: true,
     }];
     return [];
   };
@@ -157,6 +159,7 @@ test("stores desired configuration and waits for acknowledgement", async () => {
     appliance: { vcpu: 4, memoryBytes: 4 * 1024 ** 3, storageBytes: 30 * 1024 ** 3 },
     runtime: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 },
     guestPlatforms: ["windows-x64" as const],
+    selectedDriver: "windows-hyperv-container" as const,
     cache: { ttlSeconds: 3600 },
   };
   await configurePendingWorker(db, "worker", configuration, "admin");

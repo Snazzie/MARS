@@ -10,14 +10,21 @@ export type WorkerGuestPlatforms = z.infer<typeof WorkerGuestPlatforms>;
 export function validateWorkerGuestPlatforms(hostPlatform: RuntimePlatform, guestPlatforms: WorkerGuestPlatforms): boolean {
   if (guestPlatforms.length === 0 || new Set(guestPlatforms).size !== guestPlatforms.length) return false;
   if (hostPlatform === "macos-arm64") return guestPlatforms.length === 1 && guestPlatforms[0] === "macos-arm64" || guestPlatforms.length === 2 && guestPlatforms.includes("macos-arm64") && guestPlatforms.includes("linux-arm64");
+  if (hostPlatform === "windows-x64") return guestPlatforms.length === 1 && (guestPlatforms[0] === "windows-x64" || guestPlatforms[0] === "linux-x64");
   return guestPlatforms.length === 1 && guestPlatforms[0] === hostPlatform;
 }
-export const RuntimeDriverName = z.enum(["linux-libvirt-vm", "linux-docker-container", "windows-hyperv", "windows-hyperv-container", "tart-vm"]);
+export const RuntimeDriverName = z.enum(["linux-libvirt-vm", "linux-docker-container", "windows-hyperv", "windows-hyperv-container", "windows-process-container", "tart-vm"]);
 export type RuntimeDriverName = z.infer<typeof RuntimeDriverName>;
-export function runtimeDriverForWorker(hostPlatform: RuntimePlatform, guestPlatform: GuestPlatform, runtimeMode?: "container" | "vm" | "tart" | null): RuntimeDriverName | null {
-  if (hostPlatform === "macos-arm64" && (guestPlatform === "macos-arm64" || guestPlatform === "linux-arm64")) return "tart-vm";
-  if (hostPlatform === "windows-x64" && guestPlatform === "windows-x64") return runtimeMode === "vm" ? "windows-hyperv" : "windows-hyperv-container";
-  return hostPlatform === guestPlatform ? runtimeDriverForPlatform(hostPlatform) : null;
+export function selectedRuntimeDriver(hostPlatform: RuntimePlatform, guestPlatform: GuestPlatform, driver: RuntimeDriverName): RuntimeDriverName | null {
+  if (hostPlatform === "macos-arm64" && (guestPlatform === "macos-arm64" || guestPlatform === "linux-arm64")) return driver === "tart-vm" ? driver : null;
+  if (hostPlatform === "windows-x64" && guestPlatform === "linux-x64") return driver === "linux-docker-container" ? driver : null;
+  if (hostPlatform === "windows-x64" && guestPlatform === "windows-x64") return ["windows-hyperv", "windows-hyperv-container", "windows-process-container"].includes(driver) ? driver : null;
+  if (hostPlatform === "linux-x64" && guestPlatform === "linux-x64") return driver === "linux-libvirt-vm" ? driver : null;
+  if (hostPlatform === "linux-arm64" && guestPlatform === "linux-arm64") return driver === "linux-docker-container" ? driver : null;
+  return null;
+}
+export function legacyRuntimeDriver(hostPlatform: RuntimePlatform, runtimeMode?: "container" | "vm" | "tart" | null): RuntimeDriverName {
+  return hostPlatform === "windows-x64" && runtimeMode === "vm" ? "windows-hyperv" : runtimeDriverForPlatform(hostPlatform);
 }
 export function runtimeDriverForPlatform(platform: RuntimePlatform): RuntimeDriverName {
   switch (platform) {
@@ -257,6 +264,7 @@ export const WorkerEventPayload = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sandbox_attested"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32), runtimeInstanceId: z.string().min(1), observed: z.object({ vcpu: positiveSafe, memoryBytes: positiveSafe, storageBytes: positiveSafe }).strict(), correlationId: z.string().uuid().optional() }).strict() }),
   z.object({ type: z.literal("runner.finished"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32), exitCode: z.number().int().safe(), oom: OutOfMemoryResult.optional(), termination: RuntimeTerminationEvidence.optional(), correlationId: z.string().uuid().optional() }).strict() }),
   z.object({ type: z.literal("worker.build_completed"), payload: WorkerBuildImageEventPayload }).strict(),
+  z.object({ type: z.literal("worker.configuration_failed"), payload: z.object({ commandId: z.string().uuid(), workerId: z.string().uuid(), revision: z.string().regex(/^[a-f0-9]{64}$/), reason: z.string().min(1).max(1000) }).strict() }),
   z.object({ type: z.literal("worker.build_failed"), payload: WorkerBuildImageFailedPayload }).strict(),
   z.object({ type: z.literal("lease.reaped"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32), correlationId: z.string().uuid().optional() }).strict() }),
   z.object({ type: z.literal("lease.failed"), payload: z.object({ commandId: z.string().uuid().optional(), leaseId: z.string().uuid(), nonce: z.string().min(32), reason: z.enum(["provisioning_failed","runner_failed","cleanup_failed","debug_preserve","out_of_memory"]), oom: OutOfMemoryResult.optional(), termination: RuntimeTerminationEvidence.optional(), correlationId: z.string().uuid().optional() }).strict() }),
@@ -288,6 +296,7 @@ const workerConfigurationShape = {
   appliance: WorkerApplianceConfiguration,
   runtime: WorkerLimits,
   guestPlatforms: WorkerGuestPlatforms,
+  selectedDriver: RuntimeDriverName,
 };
 export const WorkerConfiguration = z.object({
   ...workerConfigurationShape,
@@ -300,8 +309,9 @@ export const WorkerObservedConfiguration = z.object({
   cache: RequiredWorkerCacheConfiguration,
 }).strict();
 export type WorkerObservedConfiguration = z.infer<typeof WorkerObservedConfiguration>;
-// Durable configure commands may predate newer cache policy fields; defaults apply only while parsing commands.
+// Only durable commands from older releases may omit the selected driver.
 export const WorkerConfigurePayload = WorkerObservedConfiguration.extend({
+  selectedDriver: RuntimeDriverName.optional(),
   cache: WorkerCacheConfiguration,
   workerId: z.string().uuid(),
   revision: z.string().regex(/^[a-f0-9]{64}$/),
@@ -324,7 +334,15 @@ export const WorkerContainerStatus = z.object({
   sampledAt: z.string().datetime({ offset: true }),
 }).strict();
 export type WorkerContainerStatus = z.infer<typeof WorkerContainerStatus>;
-export const WorkerDoctorData = z.object({ nestedKvm: z.boolean().optional(), kvmModules: z.boolean().optional(), probe: z.boolean().optional(), egress: z.boolean().optional(), imageSignatures: z.boolean().optional(), blockVolume: z.boolean().optional(), libvirtReady: z.boolean().optional(), networkReady: z.boolean().optional(), cloneStorageReady: z.boolean().optional(), realVmSmoke: z.boolean().optional(), smokeArtifactDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/).optional(), smokeObservedAt: z.string().datetime({ offset: true }).optional(), inventoryObservedAt: z.string().datetime({ offset: true }).optional(), runtimeMode: z.enum(["container", "vm", "tart"]).optional(), artifactSource: z.enum(["worker_local", "registry", "template"]).optional(), artifactIdentity: z.string().min(1).optional(), artifactDigest: z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/).optional(), artifactDigests: z.record(z.enum(["macos-arm64", "linux-arm64"]), z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/)).optional(), runtimeReady: z.boolean().optional(), runtimeBuildState: z.enum(["idle", "building", "ready", "failed"]).optional(), runtimeBuildMessage: z.string().max(1000).nullable().optional(), remediation: z.string().nullable().optional(), actualVcpu: boundedResource.optional(), actualMemoryBytes: boundedResource.optional(), actualStorageBytes: boundedResource.optional(), freeVcpu: boundedResource.optional(), freeMemoryBytes: boundedResource.optional(), freeStorageBytes: boundedResource.optional(), activeLeases: z.array(z.string().uuid()).optional(), preserveLeases: z.boolean().optional(), acceptingLeases: z.boolean().optional(), containers: z.array(WorkerContainerStatus).default([]) }).strict();
+export const WorkerRuntimeCapability = z.object({
+  driver: RuntimeDriverName,
+  guestPlatform: GuestPlatform,
+  imageDigest: z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/).nullable(),
+  ready: z.boolean(),
+  remediation: z.string().nullable(),
+}).strict().refine((capability) => !capability.ready || capability.imageDigest !== null, "Ready capabilities require a verified image");
+export type WorkerRuntimeCapability = z.infer<typeof WorkerRuntimeCapability>;
+export const WorkerDoctorData = z.object({ nestedKvm: z.boolean().optional(), kvmModules: z.boolean().optional(), probe: z.boolean().optional(), egress: z.boolean().optional(), imageSignatures: z.boolean().optional(), blockVolume: z.boolean().optional(), libvirtReady: z.boolean().optional(), networkReady: z.boolean().optional(), cloneStorageReady: z.boolean().optional(), realVmSmoke: z.boolean().optional(), smokeArtifactDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/).optional(), smokeObservedAt: z.string().datetime({ offset: true }).optional(), inventoryObservedAt: z.string().datetime({ offset: true }).optional(), runtimeMode: z.enum(["container", "vm", "tart"]).optional(), artifactSource: z.enum(["worker_local", "registry", "template"]).optional(), artifactIdentity: z.string().min(1).optional(), artifactDigest: z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/).optional(), artifactDigests: z.record(z.enum(["macos-arm64", "linux-arm64"]), z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/)).optional(), runtimeReady: z.boolean().optional(), runtimeBuildState: z.enum(["idle", "building", "ready", "failed"]).optional(), runtimeBuildMessage: z.string().max(1000).nullable().optional(), remediation: z.string().nullable().optional(), actualVcpu: boundedResource.optional(), actualMemoryBytes: boundedResource.optional(), actualStorageBytes: boundedResource.optional(), freeVcpu: boundedResource.optional(), freeMemoryBytes: boundedResource.optional(), freeStorageBytes: boundedResource.optional(), activeLeases: z.array(z.string().uuid()).optional(), preserveLeases: z.boolean().optional(), acceptingLeases: z.boolean().optional(), containers: z.array(WorkerContainerStatus).default([]), capabilities: z.array(WorkerRuntimeCapability).refine((items) => new Set(items.map(({ driver, guestPlatform }) => `${driver}:${guestPlatform}`)).size === items.length, "Capabilities must be unique").optional() }).strict();
 export const WorkerCapacityData = z.object({ actualVcpu: boundedResource, actualMemoryBytes: boundedResource, actualStorageBytes: boundedResource, freeVcpu: boundedResource, freeMemoryBytes: boundedResource, freeStorageBytes: boundedResource }).strict();
 export const WorkerDoctorReport = z.object({ releaseVersion: WorkerReleaseVersion, contractVersion: WorkerContractVersion, doctor: WorkerDoctorData, capacity: WorkerCapacityData }).strict();
 export type WorkerDoctorReport = z.infer<typeof WorkerDoctorReport>;

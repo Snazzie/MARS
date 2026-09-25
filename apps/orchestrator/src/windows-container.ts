@@ -9,7 +9,7 @@ export type DockerResult = { code: number; stdout: string; stderr: string };
 export type DockerRunner = (args: string[]) => Promise<DockerResult>;
 export type PowerShellResult = { code: number; stdout: string; stderr: string };
 export type PowerShellRunner = (command: string) => Promise<PowerShellResult>;
-export type WindowsContainerConfig = { image: string; prefix: string; bootstrapRoot: string; limits: WorkerLimits; readyTimeoutMs: number; allowLocalImage?: boolean; imageManifestPath?: string; requireLocalImageManifest?: boolean; dnsServers?: string[]; platform?: NodeJS.Platform };
+export type WindowsContainerConfig = { image: string; prefix: string; bootstrapRoot: string; limits: WorkerLimits; readyTimeoutMs: number; isolation?: "process" | "hyperv"; allowLocalImage?: boolean; imageManifestPath?: string; requireLocalImageManifest?: boolean; dnsServers?: string[]; platform?: NodeJS.Platform };
 export function parseWindowsContainerDnsServers(value: string | undefined): string[] {
   return [...new Set((value ?? "").split(",").map((server) => server.trim()).filter((server) => isIP(server) !== 0))];
 }
@@ -51,7 +51,6 @@ export async function discoverWindowsHostDnsServers(run: PowerShellRunner = defa
   return parseWindowsHostDnsServers(result.stdout);
 }
 const digest = /^[^@\s]+@sha256:[0-9a-f]{64}$/;
-const localImage = "mars/windows-job:local";
 const expectedWindowsEntrypoint = ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-File", "C:/Mars/entrypoint.ps1"] as const;
 export function isExpectedWindowsEntrypoint(value: unknown): boolean {
   return Array.isArray(value) && value.length === expectedWindowsEntrypoint.length && expectedWindowsEntrypoint.every((entry, index) => value[index] === entry);
@@ -167,17 +166,21 @@ async function copyRunnerDiagnostics(root: string, containerName: string, run: (
 }
 
 export class WindowsContainerDriver implements RuntimeDriver {
-  readonly name = "windows-hyperv-container" as const;
+  readonly name: "windows-process-container" | "windows-hyperv-container";
+  private readonly isolation: "process" | "hyperv";
   private readonly gracefulStops = new Set<string>();
   private readonly leases = new Map<string, { name: string; root: string; runtime: RuntimeLease }>();
-  constructor(private readonly config: WindowsContainerConfig, private readonly docker: DockerRunner = defaultDocker, private readonly powershell: PowerShellRunner = defaultPowerShell) {}
+  constructor(private readonly config: WindowsContainerConfig, private readonly docker: DockerRunner = defaultDocker, private readonly powershell: PowerShellRunner = defaultPowerShell) {
+    this.isolation = config.isolation ?? "hyperv";
+    this.name = this.isolation === "process" ? "windows-process-container" : "windows-hyperv-container";
+  }
   private containerName(leaseId: string): string { return `${this.config.prefix}-${leaseId}`; }
   private bootstrapPath(leaseId: string): string { return join(this.config.bootstrapRoot, leaseId); }
-  validatePool(resources: PoolResources): void { const limits = this.config.limits; if (resources.vcpu > limits.maxVcpuPerPod || resources.memoryBytes > limits.maxMemoryBytesPerPod || resources.storageBytes > limits.maxStorageBytesPerPod || limits.maxConcurrentPods < 1) throw new Error(`resource ceiling exceeded (requested vcpu=${resources.vcpu}, memoryBytes=${resources.memoryBytes}, storageBytes=${resources.storageBytes}; limits vcpu=${limits.maxVcpuPerPod}, memoryBytes=${limits.maxMemoryBytesPerPod}, storageBytes=${limits.maxStorageBytesPerPod})`); if (!digest.test(this.config.image) && !(this.config.allowLocalImage && this.config.image === localImage)) throw new Error("Windows container image must be digest pinned"); }
+  validatePool(resources: PoolResources): void { const limits = this.config.limits; if (resources.vcpu > limits.maxVcpuPerPod || resources.memoryBytes > limits.maxMemoryBytesPerPod || resources.storageBytes > limits.maxStorageBytesPerPod || limits.maxConcurrentPods < 1) throw new Error(`resource ceiling exceeded (requested vcpu=${resources.vcpu}, memoryBytes=${resources.memoryBytes}, storageBytes=${resources.storageBytes}; limits vcpu=${limits.maxVcpuPerPod}, memoryBytes=${limits.maxMemoryBytesPerPod}, storageBytes=${limits.maxStorageBytesPerPod})`); if (!digest.test(this.config.image) && !(this.config.allowLocalImage && this.config.requireLocalImageManifest)) throw new Error("Windows container image must be digest pinned or have a required verified local manifest"); }
   async reserveCapacity(resources: PoolResources): Promise<void> {
     this.validatePool(resources);
     if (await waitForDockerEngine(this.docker) !== "windows") throw new Error("Windows Docker engine is required");
-    if (this.config.allowLocalImage && this.config.image === localImage) {
+    if (this.config.allowLocalImage && this.config.requireLocalImageManifest) {
       await validateLocalManifest(this.config, this.docker);
       checked(await this.docker(["image", "inspect", this.config.image]), "image inspect");
     } else {
@@ -200,10 +203,10 @@ export class WindowsContainerDriver implements RuntimeDriver {
           : [];
       if ((this.config.platform ?? process.platform) === "win32" && dnsServers.length === 0) throw new Error("No usable Windows host DNS servers were discovered and no explicit DNS servers are configured");
       const dnsArgs = dnsServers.flatMap((server) => ["--dns", server]);
-      checked(await this.docker(["create", "--name", name, "--log-driver", "json-file", "--log-opt", "max-size=50m", "--log-opt", "max-file=3", "--isolation=hyperv", "--label", "mars.managed=true", "--label", `mars.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), "--storage-opt", `size=${lease.resources.storageBytes}`, "--mount", `type=bind,source=${root},target=C:\\ProgramData\\Mars\\bootstrap,readonly`, ...dnsArgs, this.config.image]), "docker create");
+      checked(await this.docker(["create", "--name", name, "--log-driver", "json-file", "--log-opt", "max-size=50m", "--log-opt", "max-file=3", `--isolation=${this.isolation}`, "--label", "mars.managed=true", "--label", `mars.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), "--storage-opt", `size=${lease.resources.storageBytes}`, "--mount", `type=bind,source=${root},target=C:\\ProgramData\\Mars\\bootstrap,readonly`, ...dnsArgs, this.config.image]), "docker create");
       checked(await this.docker(["start", name]), "docker start");
       const inspect = JSON.parse(checked(await this.docker(["inspect", name]), "docker inspect")) as Array<{ HostConfig?: { Isolation?: string; NanoCpus?: number; Memory?: number } }>;
-      if (inspect[0]?.HostConfig?.Isolation?.toLowerCase() !== "hyperv") throw new Error("container isolation is not Hyper-V");
+      if (inspect[0]?.HostConfig?.Isolation?.toLowerCase() !== this.isolation) throw new Error(`container isolation is not ${this.isolation}`);
       const observedVcpu = inspect[0]?.HostConfig?.NanoCpus;
       const observedMemoryBytes = inspect[0]?.HostConfig?.Memory;
       if (observedVcpu !== lease.resources.vcpu * 1_000_000_000 || observedMemoryBytes !== lease.resources.memoryBytes) throw new Error("container resource limits do not match requested values");

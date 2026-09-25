@@ -7,6 +7,7 @@ test("post-enrollment configuration is strict and excludes organization binding"
   const configuration = {
     appliance: { vcpu: 4, memoryBytes: 16 * 1024 ** 3, storageBytes: 100 * 1024 ** 3 },
     runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 40 * 1024 ** 3, maxConcurrentPods: 2 },
+    selectedDriver: "tart-vm",
   };
   expect(WorkerConfiguration.safeParse(configuration).success).toBe(true);
   expect(WorkerConfiguration.safeParse({ ...configuration, organizationId: "org" }).success).toBe(false);

@@ -14,6 +14,7 @@ const workerFixture = (overrides: Partial<WorkerDetail> = {}): WorkerDetail => (
   name: "mac-worker",
   platform: "macos-arm64",
   driver: "tart-vm",
+  selectedDriver: "tart-vm",
   guestPlatforms: ["macos-arm64"],
   admissionState: "adopted",
   connectionState: "online",
@@ -278,6 +279,7 @@ test("renders operational and readiness status in the worker card", () => {
   const worker = workerFixture();
   const markup = renderCard(worker);
   expect(markup).toContain(">online</span>");
+  expect(markup).toContain("selected: tart-vm");
   expect(markup).not.toContain("Needs configuration");
 });
 

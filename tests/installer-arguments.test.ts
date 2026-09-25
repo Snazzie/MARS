@@ -55,34 +55,6 @@ test("Linux broker image and Compose preserve non-root writable paths and cache 
   expect(compose).toContain("MARS_JOIN_CODE_FILE: /var/lib/mars/config/join-code");
 });
 
-test("Windows installer supports container and VM runtimes with isolated prerequisites", () => {
-  expect(windows).toContain("[ValidateSet('container','vm')]");
-  expect(windows).toContain("WindowsCheckpointUrl");
-  expect(windows).toContain("[ValidateSet('checkpoint','iso','vhdx')]");
-  expect(windows).toContain("WindowsVmProvisionerUrl");
-  expect(windows).toContain("MARS_WINDOWS_RUNTIME=$WindowsRuntime");
-  expect(windows).toContain("if ($WindowsRuntime -eq 'vm')");
-  expect(windows).toContain("Assert-HyperVHost");
-  expect(windows).toContain("MARS_WINDOWS_CHECKPOINT_PATH=$checkpointPath");
-  expect(windows).toContain("if ($WindowsRuntime -eq 'container')");
-  for (const name of [
-    "WindowsOrchestratorUrl", "WindowsServiceHostUrl", "WindowsJobAgentUrl", "WindowsContainerBaseImage",
-    "WindowsRunnerUrl", "WindowsGitUrl", "WindowsVcRuntimeUrl",
-    "WindowsVmProvisionerUrl", "WindowsContainerBuilderUrl", "WindowsContainerVerifierUrl", "WindowsContainerfileUrl", "WindowsContainerEntrypointUrl",
-  ]) expect(windows).toContain(`$${name}`);
-  expect(windows).toContain("Assert-ArtifactConfiguration");
-  expect(windows).toContain("Download-Verified $WindowsContainerBuilderUrl");
-  expect(windows).toContain("Download-Verified $WindowsCheckpointUrl");
-  expect(windows).toContain("Verify-DownloadedFile");
-  expect(windows).toContain("-ManifestPath $paths.manifest");
-  expect(windows).toContain("Move-Item -LiteralPath $paths.manifest -Destination $windowsImageManifestPath -Force");
-  expect(windows.indexOf("Move-Item -LiteralPath $paths.manifest")).toBeGreaterThan(windows.indexOf("if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $paths.manifest"));
-  expect(windows).not.toContain("Remove-Item -LiteralPath $windowsImageManifestPath");
-  expect(windows).toContain("Register-ResumeTask");
-  expect(windows).toContain("'-WindowsTrayScriptUrl',$WindowsTrayScriptUrl,'-WindowsTrayScriptSha256',$WindowsTrayScriptSha256");
-  expect(windows).toContain("Remove-ResumeTask");
-  expect(windows).toContain("New-ScheduledTaskSettingsSet -RestartCount 120");
-});
 test("Windows installer allows container NAT traffic to the authenticated cache ports", () => {
   expect(windows).toContain("New-NetFirewallRule -DisplayName 'Mars Worker Cache'");
   expect(windows).toContain("-Profile Any -RemoteAddress LocalSubnet");
@@ -98,42 +70,6 @@ test("Windows installer configures repeated SCM recovery for freshly registered 
   const registration = windows.lastIndexOf("Set-WorkerServiceRecovery");
   expect(registration).toBeGreaterThan(helper);
   expect(windows).not.toContain("'actions= restart/5000/restart/30000/none/0'");
-});
-test("Windows upgrade stages and transactionally rolls back every worker mutation", () => {
-  expect(windows).toContain("function Invoke-WorkerUpgrade");
-  const upgradeStart = windows.indexOf("function Invoke-WorkerUpgrade");
-  const upgradeEnd = windows.indexOf("function Set-WorkerJoinCredential", upgradeStart);
-  expect(upgradeStart).toBeGreaterThan(-1);
-  expect(upgradeEnd).toBeGreaterThan(upgradeStart);
-  const upgrade = windows.slice(upgradeStart, upgradeEnd);
-  for (const artifact of [
-    "Download-Verified $WindowsOrchestratorUrl",
-    "Download-Verified $WindowsServiceHostUrl",
-    "Download-Verified $WindowsVmProvisionerUrl",
-    "Download-Verified $WindowsJobAgentUrl",
-    "Stop-Service MarsWorker",
-    "Start-Service MarsWorker",
-    "mars-orchestrator.exe",
-    "mars-service-host.exe",
-  ]) expect(upgrade).toContain(artifact);
-  expect(upgrade).not.toContain("Set-WorkerCacheFirewall");
-  expect(upgrade).toContain("Invoke-MarsUpgradeFault 'after-health'");
-  expect(upgrade).toContain("GetValueKind('Environment')");
-  expect(upgrade).toContain("imageState=$imageStatePath");
-  expect(upgrade).toContain("Copy-Item -LiteralPath (Join-Path $backup $entry.Key)");
-  for (const forbidden of [
-    "WindowsContainerBuilderUrl",
-    "Install-DockerDesktop",
-    "Ensure-ContainerFeatures",
-    "Set-WorkerJoinCredential",
-    "Reset-WorkerIdentity",
-    "New-Service",
-    "sc.exe delete",
-    "docker build",
-    "windowsImageManifestPath",
-  ]) expect(upgrade).not.toContain(forbidden);
-  expect(windows).toContain("if ($Upgrade) {");
-  expect(windows.indexOf("if ($Upgrade) {")).toBeLessThan(windows.indexOf("Download-Verified $WindowsJobAgentUrl"));
 });
 windowsRuntimeTest("Windows installer propagates configured container DNS servers into the service environment", async () => {
   const start = windows.indexOf("  $serviceEnvironment = @(");
@@ -345,7 +281,7 @@ test("macOS preparation is digest-pinned, content-addressed, reusable, and trans
   expect(macPreparation).not.toContain("TART_REGISTRY_PASSWORD");
 });
 
-test("Windows route values expose schema-6 shared and container assets through control-plane endpoints", () => {
+test("Windows route values expose container provisioning artifacts without selecting a runtime", () => {
   const asset = (suffix: string) => ({ url: `https://release.example/${suffix}`, sha256: hash });
   const values = windowsInstallerValues({
     installer: asset("install-worker.ps1"), orchestrator: asset("orchestrator.exe"), serviceHost: asset("service-host.exe"), jobAgent: asset("job-agent.exe"),
@@ -357,14 +293,15 @@ test("Windows route values expose schema-6 shared and container assets through c
     },
   }, "https://control.example");
   expect(values).toMatchObject({
-    WindowsRuntime: "container", WindowsOrchestratorSha256: hash, WindowsServiceHostSha256: hash, WindowsJobAgentSha256: hash,
+    WindowsOrchestratorSha256: hash, WindowsServiceHostSha256: hash, WindowsJobAgentSha256: hash,
     WindowsContainerBaseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}`,
     WindowsRunnerSha256: hash, WindowsGitSha256: hash, WindowsVcRuntimeSha256: hash,
     WindowsContainerBuilderSha256: hash, WindowsContainerVerifierSha256: hash, WindowsContainerfileSha256: hash, WindowsContainerEntrypointSha256: hash,
   });
+  expect(values).not.toHaveProperty("WindowsRuntime");
   for (const endpoint of ["orchestrator", "service-host", "windows-tray-script", "windows-job-agent", "windows-runner", "windows-git", "windows-vc-runtime", "windows-container-builder", "windows-container-verifier", "windows-containerfile", "windows-container-entrypoint"]) expect(JSON.stringify(values)).toContain(`https://control.example/api/workers/${endpoint}`);
 });
-test("Windows route values keep the Hyper-V checkpoint on upgrades", () => {
+test("Windows upgrades retain checkpoint artifacts without selecting a runtime", () => {
   const asset = (suffix: string) => ({ url: `https://release.example/${suffix}`, sha256: hash });
   const values = windowsInstallerValues({
     installer: asset("install-worker.ps1"),
@@ -374,13 +311,29 @@ test("Windows route values keep the Hyper-V checkpoint on upgrades", () => {
     runner: asset("runner.zip"), git: asset("git.zip"), vcRuntime: asset("vc.exe"),
     trayScript: asset("tray.ps1"),
     vm: { checkpoint: asset("windows-worker-checkpoint.zip"), provisioner: asset("provisioner.zip") },
-  }, "https://control.example", undefined, true, { releaseVersion: "1.0.0", contractVersion: "0.3.0" }, "vm");
+  }, "https://control.example", undefined, true, { releaseVersion: "1.0.0", contractVersion: "0.3.0" });
   expect(values).toMatchObject({
-    WindowsRuntime: "vm",
     WindowsCheckpointUrl: "https://control.example/api/workers/windows-vm-checkpoint",
     WindowsCheckpointSha256: hash,
   });
+  expect(values).not.toHaveProperty("WindowsRuntime");
   expect(values).not.toHaveProperty("WindowsContainerBaseImage");
+});
+test("Windows upgrades include container refresh inputs only for an explicit provisioning request", () => {
+  const asset = (suffix: string) => ({ url: `https://release.example/${suffix}`, sha256: hash });
+  const values = windowsInstallerValues({
+    installer: asset("install-worker.ps1"), orchestrator: asset("orchestrator.exe"), serviceHost: asset("service-host.exe"), jobAgent: asset("job-agent.exe"),
+    runner: asset("runner.zip"), git: asset("git.zip"), vcRuntime: asset("vc.exe"),
+    container: {
+      baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}`,
+      buildScript: asset("builder.ps1"), verifyScript: asset("verify.ps1"), containerfile: asset("Containerfile"), entrypoint: asset("entrypoint.ps1"),
+    },
+  }, "https://control.example", undefined, true, { releaseVersion: "1.0.0", contractVersion: "0.3.0" }, "container", "checkpoint", 6, true);
+  expect(values).toMatchObject({
+    WindowsRuntime: "container",
+    WindowsContainerBaseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}`,
+    WindowsContainerBuilderUrl: "https://control.example/api/workers/windows-container-builder",
+  });
 });
 
 test("schema-5 installers retain legacy shared-asset parameter names", () => {

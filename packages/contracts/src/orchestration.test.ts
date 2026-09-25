@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig, RuntimeTerminationEvidence, WorkerBuildImagePayload, WorkerContainerStatus, WorkerDoctorData, WorkerDoctorReport, WorkerImageBuildSpec, sanitizeDiagnosticText, runtimeDriverForPlatform, runtimeDriverForWorker } from "./orchestration.ts";
+import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig, RuntimeTerminationEvidence, WorkerBuildImagePayload, WorkerContainerStatus, WorkerDoctorData, WorkerDoctorReport, WorkerImageBuildSpec, WorkerRuntimeCapability, selectedRuntimeDriver, sanitizeDiagnosticText, runtimeDriverForPlatform } from "./orchestration.ts";
 import * as orchestration from "./orchestration.ts";
 
 test("parses a GitHub JIT config with a one-time lease binding", () => {
@@ -23,9 +23,19 @@ test("parses a GitHub JIT config with a one-time lease binding", () => {
 test("maps Linux ARM64 to the Docker runtime driver", () => {
   expect(runtimeDriverForPlatform("linux-arm64")).toBe("linux-docker-container");
 });
-test("maps Windows workers to their selected runtime driver", () => {
-  expect(runtimeDriverForWorker("windows-x64", "windows-x64", "container")).toBe("windows-hyperv-container");
-  expect(runtimeDriverForWorker("windows-x64", "windows-x64", "vm")).toBe("windows-hyperv");
+test("allows only explicit host and guest compatible driver selections", () => {
+  expect(selectedRuntimeDriver("windows-x64", "windows-x64", "windows-process-container")).toBe("windows-process-container");
+  expect(selectedRuntimeDriver("windows-x64", "linux-x64", "linux-docker-container")).toBe("linux-docker-container");
+  expect(selectedRuntimeDriver("windows-x64", "linux-x64", "windows-hyperv")).toBeNull();
+  expect(selectedRuntimeDriver("linux-x64", "linux-x64", "windows-process-container")).toBeNull();
+  expect(selectedRuntimeDriver("macos-arm64", "linux-arm64", "tart-vm")).toBe("tart-vm");
+});
+
+test("requires verified immutable artifacts and unique advertised modes", () => {
+  const capability = { driver: "windows-process-container", guestPlatform: "windows-x64", imageDigest: `sha256:${"a".repeat(64)}`, ready: true, remediation: null } as const;
+  expect(WorkerRuntimeCapability.safeParse({ ...capability, imageDigest: null }).success).toBe(false);
+  expect(WorkerDoctorData.safeParse({ capabilities: [capability, capability] }).success).toBe(false);
+  expect(WorkerDoctorData.parse({ capabilities: [capability] }).capabilities).toEqual([capability]);
 });
 
 test("rejects JIT config without runner labels", () => {
@@ -181,12 +191,14 @@ test("defaults omitted runner cache settings", () => {
     appliance: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
     runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 3, maxConcurrentPods: 1 },
     guestPlatforms: ["linux-x64"],
+    selectedDriver: "linux-libvirt-vm",
   });
   expect(configuration.cache).toEqual({ ttlSeconds: 172800, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 });
   expect(orchestration.WorkerConfiguration.parse({
     appliance: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
     runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 3, maxConcurrentPods: 1 },
     guestPlatforms: ["linux-x64"],
+    selectedDriver: "linux-libvirt-vm",
     cache: { ttlSeconds: 3600 },
   }).cache).toEqual({ ttlSeconds: 3600, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 });
 });
@@ -196,6 +208,7 @@ test("parses explicit runner cache settings and rejects invalid caps", () => {
     appliance: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
     runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 3, maxConcurrentPods: 1 },
     guestPlatforms: ["linux-x64"],
+    selectedDriver: "linux-libvirt-vm",
     cache: { ttlSeconds: 3600, runnerCacheEnabled: false, runnerCacheMaxGiB: 7 },
   }).cache).toEqual({ ttlSeconds: 3600, runnerCacheEnabled: false, runnerCacheMaxGiB: 7 });
   expect(orchestration.WorkerCacheConfiguration.safeParse({ runnerCacheMaxGiB: 0 }).success).toBe(false);
@@ -210,6 +223,7 @@ test("parses an explicitly disabled runner cache", () => {
     appliance: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
     runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 3, maxConcurrentPods: 1 },
     guestPlatforms: ["linux-x64"],
+    selectedDriver: "linux-libvirt-vm",
     cache: { ttlSeconds: 3600, runnerCacheEnabled: false, runnerCacheMaxGiB: 20 },
   }).cache).toEqual({ ttlSeconds: 3600, runnerCacheEnabled: false, runnerCacheMaxGiB: 20 });
 });
@@ -219,6 +233,7 @@ test("requires runner cache settings in observed configuration", () => {
     appliance: { vcpu: 1, memoryBytes: 2, storageBytes: 3 },
     runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 3, maxConcurrentPods: 1 },
     guestPlatforms: ["linux-x64"],
+    selectedDriver: "linux-libvirt-vm",
   };
   const acknowledgement = {
     commandId: "11111111-1111-4111-8111-111111111111",

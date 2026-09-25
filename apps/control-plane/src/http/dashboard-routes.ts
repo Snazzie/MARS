@@ -7,10 +7,10 @@ import { adoptWorker, renameWorker } from "../workers.ts";
 import { configurePendingWorker, purgeWorkerRunnerCache } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 import { createWorkerImageBuildPayload } from "../windows-image-build.ts";
-import { ApiError, CostCenterDto, CostCenterPricingProvider, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth, JobLabelRecommendation, JobLabelRecommendationQuery, GithubConnectionSummary, GithubRateLimitStats, WorkerEventPayload, WorkerUpgradeStatus, runtimeDriverForWorker } from "@mars/contracts";
+import { ApiError, CostCenterDto, CostCenterPricingProvider, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth, JobLabelRecommendation, JobLabelRecommendationQuery, GithubConnectionSummary, GithubRateLimitStats, WorkerEventPayload, WorkerUpgradeStatus, RuntimePlatform, RuntimeDriverName, selectedRuntimeDriver } from "@mars/contracts";
 import { WorkerDispatchError } from "../worker-dispatch.ts";
 import { WorkerReleaseCatalogUnavailable } from "../worker-release.ts";
-import { storedWorkerRuntimeMode, workerPoolEvidence } from "../worker-evidence.ts";
+import { workerPoolEvidence } from "../worker-evidence.ts";
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
@@ -411,12 +411,19 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     return c.json(CursorPage(PoolSummary).parse(await listGlobalPools(deps.db, q.limit, q.cursor ?? null)));
   }));
   const poolWorker = async (body: z.infer<typeof CreatePoolRequest>): Promise<{ driver: string } | { error: "not_found" | "worker_not_ready" | "worker_runtime_not_ready" | "worker_image_mismatch" | "worker_guest_platform_unsupported" | "runtime_unsupported" }> => {
-    const [worker] = await deps.db`SELECT platform,guest_platforms AS "guestPlatforms",admission_state AS "admissionState",configuration_state AS "configurationState",configuration_revision AS "configurationRevision",applied_configuration_revision AS "appliedConfigurationRevision",doctor FROM workers WHERE id=${body.workerId}`;
+    const [worker] = await deps.db`SELECT platform,guest_platforms AS "guestPlatforms",admission_state AS "admissionState",configuration_state AS "configurationState",configuration_revision AS "configurationRevision",applied_configuration_revision AS "appliedConfigurationRevision",desired_configuration AS "desiredConfiguration",doctor_observed_at AS "lastDoctorAt",doctor FROM workers WHERE id=${body.workerId}`;
     if (!worker) return { error: "not_found" as const };
-    if (worker.admissionState !== "adopted" || worker.configurationState !== "ready" || worker.configurationRevision !== worker.appliedConfigurationRevision) return { error: "worker_not_ready" as const };
+    if (worker.admissionState !== "adopted" || worker.configurationState !== "ready" || worker.configurationRevision !== worker.appliedConfigurationRevision || !worker.lastDoctorAt || Date.now() - new Date(String(worker.lastDoctorAt)).getTime() >= 60_000) return { error: "worker_not_ready" as const };
     if (!(Array.isArray(worker.guestPlatforms) ? worker.guestPlatforms : [worker.platform]).includes(body.guestPlatform)) return { error: "worker_guest_platform_unsupported" as const };
-    const driver = runtimeDriverForWorker(worker.platform, body.guestPlatform, storedWorkerRuntimeMode(worker.doctor));
-    if (!driver) return { error: "runtime_unsupported" as const };
+    const desired = typeof worker.desiredConfiguration === "string" ? JSON.parse(worker.desiredConfiguration) : worker.desiredConfiguration;
+    const driver = desired?.selectedDriver;
+    if (typeof driver !== "string" || !RuntimeDriverName.safeParse(driver).success || !RuntimePlatform.safeParse(worker.platform).success) return { error: "runtime_unsupported" as const };
+    const compatible = worker.platform === "windows-x64"
+      ? body.guestPlatform === "linux-x64" ? driver === "linux-docker-container" : body.guestPlatform === "windows-x64" && ["windows-process-container", "windows-hyperv-container", "windows-hyperv"].includes(driver)
+      : worker.platform === "linux-x64" ? body.guestPlatform === "linux-x64" && driver === "linux-libvirt-vm"
+      : worker.platform === "linux-arm64" ? body.guestPlatform === "linux-arm64" && driver === "linux-docker-container"
+      : worker.platform === "macos-arm64" && ["macos-arm64", "linux-arm64"].includes(body.guestPlatform) && driver === "tart-vm";
+    if (!compatible) return { error: "runtime_unsupported" as const };
     const evidence = workerPoolEvidence(worker.doctor, driver, body.imageDigest, body.guestPlatform);
     if (!evidence.ready) return { error: "worker_runtime_not_ready" };
     if (!evidence.imageMatches) return { error: "worker_image_mismatch" };
@@ -469,7 +476,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const [pool] = await deps.db`SELECT id,platform,driver,image_digest AS "imageDigest" FROM runner_pools WHERE id=${poolId} AND organization_id IS NULL`;
     if (!pool) return error(c, 404, "not_found", "Pool not found");
     if (action === "enable") {
-      const readyWorkers = await deps.db`SELECT w.id FROM workers w CROSS JOIN LATERAL (SELECT CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END AS evidence) e WHERE w.admission_state='adopted' AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false AND w.last_heartbeat_at>now()-interval '60 seconds' AND w.doctor_observed_at>now()-interval '60 seconds' AND ${pool.platform}=ANY(SELECT jsonb_array_elements_text(w.guest_platforms)) AND ${pool.driver}=CASE WHEN w.platform='macos-arm64' AND ${pool.platform} IN ('macos-arm64','linux-arm64') THEN 'tart-vm' WHEN ${pool.platform}=w.platform THEN CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN CASE WHEN e.evidence->>'runtimeMode'='vm' THEN 'windows-hyperv' ELSE 'windows-hyperv-container' END WHEN 'macos-arm64' THEN 'tart-vm' END ELSE NULL END AND e.evidence->>'runtimeReady'='true' AND CASE WHEN ${pool.driver}='tart-vm' THEN e.evidence->'artifactDigests'->>${pool.platform}=${pool.imageDigest} WHEN ${pool.driver}='linux-libvirt-vm' THEN e.evidence->>'artifactDigest'=${pool.imageDigest} AND e.evidence->>'smokeArtifactDigest'=${pool.imageDigest} AND e.evidence->>'libvirtReady'='true' AND e.evidence->>'networkReady'='true' AND e.evidence->>'cloneStorageReady'='true' AND e.evidence->>'imageSignatures'='true' AND e.evidence->>'realVmSmoke'='true' WHEN ${pool.driver}='linux-docker-container' THEN e.evidence->>'artifactDigest'=${pool.imageDigest} AND e.evidence->>'networkReady'='true' AND e.evidence->>'imageSignatures'='true' WHEN ${pool.driver} IN ('windows-hyperv','windows-hyperv-container') THEN e.evidence->>'artifactDigest'=${pool.imageDigest} AND e.evidence->>'probe'='true' AND e.evidence->>'imageSignatures'='true' ELSE false END`;
+      const readyWorkers = await deps.db`SELECT w.id FROM workers w CROSS JOIN LATERAL (SELECT CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END AS evidence) e WHERE w.admission_state='adopted' AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false AND w.last_heartbeat_at>now()-interval '60 seconds' AND w.doctor_observed_at>now()-interval '60 seconds' AND ${pool.platform}=ANY(SELECT jsonb_array_elements_text(w.guest_platforms)) AND ${pool.driver}=w.desired_configuration->>'selectedDriver' AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.evidence->'capabilities')='array' THEN e.evidence->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=${pool.driver} AND capability->>'guestPlatform'=${pool.platform} AND capability->>'ready'='true' AND capability->>'imageDigest'=${pool.imageDigest})`;
       const ready = readyWorkers.find(worker => !deps.workerConnected || deps.workerConnected(String(worker.id)));
       if (!ready) return error(c, 409, "no_compatible_ready_worker", "No compatible ready worker is connected for this pool");
     }
@@ -482,12 +489,13 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const idem = requireMutation(c); if (idem) return idem;
     const body = CreatePoolRequest.parse(await c.req.json());
-    const [w] = await deps.db`SELECT platform,guest_platforms AS "guestPlatforms",admission_state AS "admissionState",configuration_state AS "configurationState",draining,limits,doctor FROM workers WHERE id=${body.workerId}`;
-    if (w.platform === "linux-x64") return error(c, 422, "runtime_unsupported", "Linux runners are not available in this release");
-    if (w.admissionState !== "adopted" || (deps.workerConnected ? !deps.workerConnected(body.workerId) : false) || w.configurationState !== "ready" || w.draining) return error(c, 422, "worker_not_ready", "Worker is not ready");
+    const [w] = await deps.db`SELECT platform,guest_platforms AS "guestPlatforms",admission_state AS "admissionState",configuration_state AS "configurationState",configuration_revision AS "configurationRevision",applied_configuration_revision AS "appliedConfigurationRevision",desired_configuration AS "desiredConfiguration",doctor_observed_at AS "lastDoctorAt",draining,limits,doctor FROM workers WHERE id=${body.workerId}`;
+    if (!w || (w.platform === "linux-x64" && body.guestPlatform === "linux-x64")) return error(c, 422, "runtime_unsupported", "Linux-host x64 runners are not available in this release");
+    if (w.admissionState !== "adopted" || (deps.workerConnected ? !deps.workerConnected(body.workerId) : false) || w.configurationState !== "ready" || w.configurationRevision !== w.appliedConfigurationRevision || w.draining || !w.lastDoctorAt || Date.now() - new Date(String(w.lastDoctorAt)).getTime() >= 60_000) return error(c, 422, "worker_not_ready", "Worker is not ready");
     if (!(Array.isArray(w.guestPlatforms) ? w.guestPlatforms : [w.platform]).includes(body.guestPlatform)) return error(c, 422, "worker_guest_platform_unsupported", "Worker does not support the requested guest platform");
-    const driver = runtimeDriverForWorker(w.platform, body.guestPlatform, storedWorkerRuntimeMode(w.doctor));
-    if (!driver) return error(c, 422, "runtime_unsupported", "Worker cannot provide the requested runtime");
+    const desired = typeof w.desiredConfiguration === "string" ? JSON.parse(w.desiredConfiguration) : w.desiredConfiguration;
+    const driver = desired?.selectedDriver;
+    if (typeof driver !== "string" || !RuntimeDriverName.safeParse(driver).success || !RuntimePlatform.safeParse(w.platform).success || selectedRuntimeDriver(RuntimePlatform.parse(w.platform), body.guestPlatform, RuntimeDriverName.parse(driver)) !== driver) return error(c, 422, "runtime_unsupported", "Worker has no compatible selected runtime");
     const evidence = workerPoolEvidence(w.doctor, driver, body.imageDigest, body.guestPlatform);
     if (!evidence.ready) return error(c, 422, "worker_runtime_not_ready", "Worker runtime host evidence is not ready");
     if (!evidence.imageMatches) return error(c, 422, "worker_image_mismatch", "Worker image evidence does not match the requested digest");

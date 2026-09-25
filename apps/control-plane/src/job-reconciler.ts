@@ -55,7 +55,7 @@ export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate[
     configurationState: String(row.configurationState ?? row.worker_configuration_state),
     configurationRevision: nullableString(row.configurationRevision ?? row.worker_configuration_revision),
     appliedConfigurationRevision: nullableString(row.appliedConfigurationRevision ?? row.worker_applied_configuration_revision),
-    runtimeReady: doctorRecord.runtimeReady === true,
+    runtimeReady: evidence.ready,
     imageEvidenceReady: evidence.ready && evidence.imageMatches,
     acceptingLeases: doctorRecord.acceptingLeases !== false,
     limits: jsonValue(row.limits ?? row.worker_limits),
@@ -108,9 +108,9 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
         AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')) AS active
     FROM runner_pools p
     JOIN workers w ON (p.worker_id IS NULL OR p.worker_id=w.id) AND p.platform = ANY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(w.guest_platforms)='array' THEN w.guest_platforms ELSE (w.guest_platforms #>> '{}')::jsonb END))
-      AND p.driver = CASE WHEN w.platform='macos-arm64' AND p.platform IN ('macos-arm64','linux-arm64') THEN 'tart-vm' WHEN p.platform=w.platform THEN CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN CASE WHEN w.doctor->'doctor'->>'runtimeMode'='vm' THEN 'windows-hyperv' ELSE 'windows-hyperv-container' END WHEN 'macos-arm64' THEN 'tart-vm' END ELSE NULL END
-      AND (p.driver <> 'tart-vm' OR (CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END)->'artifactDigests'->>p.platform = p.image_digest)
-    WHERE p.enabled=true AND w.draining=false
+      AND p.driver = w.desired_configuration->>'selectedDriver'
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END->'capabilities')='array' THEN CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=p.driver AND capability->>'guestPlatform'=p.platform AND capability->>'ready'='true' AND capability->>'imageDigest'=p.image_digest)
+    WHERE p.enabled=true AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false
       AND w.last_heartbeat_at > now()-interval '60 seconds'
       AND w.doctor_observed_at > now()-interval '60 seconds'`;
   const poolsWithoutCandidates = new Map<string, DispatchPoolDetail[]>();

@@ -499,7 +499,7 @@ export function linuxArm64InstallerValues(platform: LinuxArm64InstallerMetadata,
 
 export type WindowsVmImageSource = "checkpoint" | "iso" | "vhdx";
 
-export function windowsInstallerValues(platform: WindowsWorkerRelease | undefined, connectOrigin: string, development?: NonNullable<ControlPlaneHttpDeps["developmentWindowsArtifacts"]>, upgrade = false, versions: { releaseVersion: string; contractVersion: string; targetToken?: string } = { releaseVersion: "0.0.0", contractVersion: Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.2.0" }, runtime: "container" | "vm" = "container", vmSource: WindowsVmImageSource = "checkpoint", installerContract: 5 | 6 = 6): InstallerValues {
+export function windowsInstallerValues(platform: WindowsWorkerRelease | undefined, connectOrigin: string, development?: NonNullable<ControlPlaneHttpDeps["developmentWindowsArtifacts"]>, upgrade = false, versions: { releaseVersion: string; contractVersion: string; targetToken?: string } = { releaseVersion: "0.0.0", contractVersion: Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.2.0" }, runtime: "container" | "vm" = "container", vmSource: WindowsVmImageSource = "checkpoint", installerContract: 5 | 6 = 6, provisioningRefresh = false): InstallerValues {
   const source = platform ?? (development ? ({
     installer: development.orchestrator,
     orchestrator: development.orchestrator,
@@ -549,7 +549,7 @@ export function windowsInstallerValues(platform: WindowsWorkerRelease | undefine
   };
   return {
     WindowsArtifactMode: platform ? "production" : "local",
-    WindowsRuntime: runtime,
+    ...(upgrade && provisioningRefresh ? { WindowsRuntime: runtime } : {}),
     WorkerVersion: versions.releaseVersion,
     WorkerContractVersion: versions.contractVersion,
     WindowsOrchestratorUrl: artifact("/api/workers/orchestrator?audience=windows-x64"),
@@ -561,7 +561,7 @@ export function windowsInstallerValues(platform: WindowsWorkerRelease | undefine
     ...((upgrade || runtime === "vm") && checkpoint ? { WindowsCheckpointUrl: artifact("/api/workers/windows-vm-checkpoint"), WindowsCheckpointSha256: checkpoint.sha256 } : {}),
     ...((upgrade || runtime === "vm") && provisioner ? { WindowsVmProvisionerUrl: artifact("/api/workers/windows-vm-provisioner"), WindowsVmProvisionerSha256: provisioner.sha256 } : {}),
     ...((upgrade || runtime === "container" || vmSource !== "checkpoint") ? sharedValues : {}),
-    ...(runtime === "container" && !upgrade ? {
+    ...(runtime === "container" && (!upgrade || provisioningRefresh) ? {
       WindowsContainerBaseImage: container!.baseImage,
       WindowsContainerImage: "mars/windows-job:local",
       WindowsContainerBuilderUrl: artifact("/api/workers/windows-container-builder"),
@@ -1211,12 +1211,16 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
   app.get("/api/workers/linux-compose", linuxCompose);
   app.get("/api/workers/installer", async (c) => {
     const audience = c.req.query("audience") as "linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64" | undefined;
-    const runtime = c.req.query("runtime") ?? "container";
+    const legacyRuntime = c.req.query("runtime");
     const upgrade = c.req.query("upgrade") === "true";
     const targetToken = c.req.query("target");
     const requestedVmSource = c.req.query("vmSource");
-    if (requestedVmSource && (audience !== "windows-x64" || runtime !== "vm" || upgrade)) {
-      return c.json({ code: "invalid_vm_source", message: "vmSource is valid only for a fresh Windows VM enrollment" }, 400);
+    const runtime = audience === "windows-x64" && (legacyRuntime === "vm" || requestedVmSource) ? "vm" : "container";
+    if (audience === "windows-x64" && legacyRuntime !== undefined && legacyRuntime !== "container" && legacyRuntime !== "vm") {
+      return c.json({ code: "unsupported_runtime", message: "Windows runtime must be container or vm" }, 400);
+    }
+    if (requestedVmSource && (audience !== "windows-x64" || upgrade)) {
+      return c.json({ code: "invalid_vm_source", message: "vmSource is valid only for a fresh Windows VM provisioning request" }, 400);
     }
     if (requestedVmSource && !["checkpoint", "iso", "vhdx"].includes(requestedVmSource)) {
       return c.json({ code: "invalid_vm_source", message: "Windows VM source must be checkpoint, iso, or vhdx" }, 400);
@@ -1318,7 +1322,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
         values = linuxArm64InstallerValues({ brokerImage: arm.brokerImage, jobImage: arm.jobImage, compose: { url: "", sha256: arm.compose.sha256 } }, connectOrigin, "local", { releaseVersion: "0.0.0", contractVersion: Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.2.0", targetToken });
       } else values = linuxArm64InstallerValues(release as LinuxArm64WorkerRelease, connectOrigin, "production", { releaseVersion, contractVersion: selectedManifest!.contractVersion, targetToken });
     } else if (audience === "windows-x64") {
-      values = windowsInstallerValues(release as WindowsWorkerRelease | undefined, connectOrigin, development as DevelopmentWindowsArtifacts | undefined, upgrade, { releaseVersion, contractVersion: selectedManifest?.contractVersion ?? (Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() || CURRENT_WORKER_CONTRACT_VERSION), targetToken }, runtime as "container" | "vm", vmSource, selectedManifest?.schemaVersion ?? 6);
+      values = windowsInstallerValues(release as WindowsWorkerRelease | undefined, connectOrigin, development as DevelopmentWindowsArtifacts | undefined, upgrade, { releaseVersion, contractVersion: selectedManifest?.contractVersion ?? (Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() || CURRENT_WORKER_CONTRACT_VERSION), targetToken }, runtime as "container" | "vm", vmSource, selectedManifest?.schemaVersion ?? 6, upgrade && legacyRuntime !== undefined);
     } else if (development) {
       const macos = development as DevelopmentMacosArtifacts;
       const contractVersion = selectedManifest?.contractVersion ?? Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.3.0";

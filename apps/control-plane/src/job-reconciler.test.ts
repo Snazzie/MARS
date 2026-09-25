@@ -11,7 +11,7 @@ test("keeps queued jobs eligible while their workflow run is in progress", () =>
   expect(isDispatchableRunStatus("completed")).toBe(false);
 });
 
-const windowsEvidence = { runtimeMode: "container", runtimeReady: true, probe: true, imageSignatures: true, artifactDigest: "sha256:image" };
+const windowsEvidence = { capabilities: [{ driver: "windows-hyperv-container", guestPlatform: "windows-x64", ready: true, imageDigest: "sha256:image", remediation: null }] };
 const row = {
   worker_admission_state: "adopted",
   worker_connection_state: "online",

@@ -38,7 +38,10 @@ describe("Linux worker.configure", () => {
     expect(resources).toEqual({ appliance: { vcpu: 8, memoryBytes: 16_000, storageBytes: 64_000 }, runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_000, maxStorageBytesPerPod: 16_000, maxConcurrentPods: 4 }, cache: { ttlSeconds: 7200, runnerCacheEnabled: false, runnerCacheMaxGiB: 12 } });
     expect(event.type).toBe("worker.configured");
     expect(event.workerId).toBe(workerId);
-    expect(event.payload).toEqual({ commandId: command.id, workerId, revision: "a".repeat(64), observed: { appliance: resources.appliance, runtime: resources.runtime, guestPlatforms: ["linux-x64"], cache: resources.cache } });
+    expect(event.payload).toEqual({ commandId: command.id, workerId, revision: "a".repeat(64), observed: { appliance: resources.appliance, runtime: resources.runtime, guestPlatforms: ["linux-x64"], selectedDriver: "linux-libvirt-vm", cache: resources.cache } });
+  });
+  test("rejects a selected driver that cannot run the configured guest", async () => {
+    await expect(applyLinuxWorkerConfigure({ ...command, payload: { ...command.payload, selectedDriver: "linux-docker-container" } }, { appliance: { vcpu: 1, memoryBytes: 1, storageBytes: 1 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 }, cache: { ttlSeconds: 60, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 } }, { applyTtl: async () => {}, setRunnerCacheEnabled: () => {}, setRunnerCacheMaxGiB: () => {} })).rejects.toThrow("incompatible");
   });
 
   test("consumes only worker.configure", async () => {

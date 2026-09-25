@@ -56,16 +56,17 @@ test("Windows doctor ignores GitHub network failures but still requires local re
     Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST = digest;
     globalThis.fetch = Object.assign(async () => { fetchCalls += 1; throw new Error("network unavailable"); }, { preconnect: oldFetch.preconnect });
 
-    const ready = await windowsDoctor(false, async () => true);
+    const ready = await windowsDoctor(false, async () => true, "windows-hyperv");
     expect(fetchCalls).toBe(0);
     expect(ready.runtimeReady).toBe(true);
     expect(ready.imageSignatures).toBe(true);
+    expect(ready.capabilities?.some((entry) => entry.driver === "windows-hyperv" && entry.ready)).toBe(true);
     expect(ready).not.toHaveProperty("egress");
 
     Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST = `sha256:${"d".repeat(64)}`;
-    const missing = await windowsDoctor(false, async () => true);
+    const missing = await windowsDoctor(false, async () => true, "windows-hyperv");
     expect(missing.runtimeReady).toBe(false);
-    expect(missing.remediation).toContain("digest");
+    expect(missing.remediation).toContain("No selected");
     expect(fetchCalls).toBe(0);
   } finally {
     globalThis.fetch = oldFetch;
@@ -128,6 +129,7 @@ test("awaits the live cache TTL before acknowledging Windows configuration", asy
     appliance: { vcpu: 32, memoryBytes: 64 * 1024 ** 3, storageBytes: 1_000 * 1024 ** 3 },
     runtime: { maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 },
     guestPlatforms: ["windows-x64"],
+    selectedDriver: "windows-hyperv-container",
     cache: { ttlSeconds: 3600, runnerCacheEnabled: false, runnerCacheMaxGiB: 12 },
   });
   let release!: () => void;
@@ -143,6 +145,38 @@ test("awaits the live cache TTL before acknowledging Windows configuration", asy
   expect(limits).toEqual({ maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 });
   expect(cache).toEqual({ ttlSeconds: 3600, runnerCacheEnabled: false, runnerCacheMaxGiB: 12 });
   expect(observed.cache).toEqual(payload.cache);
+});
+
+test("refuses to switch Windows runtime while a lease is active", async () => {
+  const payload = WorkerConfigurePayload.parse({
+    workerId: "11111111-1111-4111-8111-111111111111",
+    revision: "a".repeat(64),
+    fingerprint: "b".repeat(64),
+    appliance: { vcpu: 4, memoryBytes: 8, storageBytes: 16 },
+    runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 },
+    guestPlatforms: ["windows-x64"],
+    selectedDriver: "windows-process-container",
+    cache: { ttlSeconds: 3600, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 },
+  });
+  const workerId = payload.workerId;
+  const identity = { workerId, publicKey: "", privateKey: "", encryptionPublicKey: "", encryptionPrivateKey: "", selectedDriver: "windows-hyperv-container" as const, guestPlatform: "windows-x64" as const };
+  const sent: WorkerEvent[] = [];
+  let switches = 0;
+  await executeWindowsWorkerCommand({ version: 1, id: "33333333-3333-4333-8333-333333333333", type: "worker.configure", workerId, leaseId: null, occurredAt: new Date().toISOString(), payload }, {
+    limits: { ...payload.runtime },
+    cache: { ...payload.cache },
+    cacheService: {} as never,
+    driver: {} as never,
+    applyDriver: async () => { switches++; },
+    identity,
+    activeLeases: new Map([["22222222-2222-4222-8222-222222222222", Promise.resolve()]]),
+    send: event => sent.push(event),
+    sendDoctor: () => {},
+  });
+  expect(switches).toBe(0);
+  expect(identity.selectedDriver).toBe("windows-hyperv-container");
+  expect(sent.map(event => event.type)).toEqual(["worker.configuration_failed"]);
+  expect(sent[0]?.payload).toMatchObject({ commandId: "33333333-3333-4333-8333-333333333333", revision: payload.revision });
 });
 
 test("purges the Windows runner cache before acknowledging", async () => {
@@ -171,7 +205,6 @@ test("keeps the Windows health channel alive when a valid command fails", async 
     close: () => { closed += 1; },
     sendDoctor: async () => { sent.push({ version: 1, type: "doctor", workerId, payload: {} }); },
     execute: (next: WorkerCommand) => executeWindowsWorkerCommand(next, {
-      mode: "container",
       limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 4, maxConcurrentPods: 1 },
       cache: { ttlSeconds: 60, runnerCacheEnabled: true, runnerCacheMaxGiB: 1 },
       cacheService: {} as never,

@@ -39,6 +39,7 @@ describe("dashboard contracts", () => {
       platform: "windows-x64",
       guestPlatforms: ["windows-x64"],
       driver: "windows-hyperv-container",
+      selectedDriver: "windows-hyperv-container",
       admissionState: "adopted",
       connectionState: "online",
       configurationState: "applying",

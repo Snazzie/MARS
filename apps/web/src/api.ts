@@ -315,6 +315,7 @@ export type WorkerConfigurationInput = {
   appliance: z.infer<typeof WorkerConfiguration>["appliance"];
   runtime: z.infer<typeof WorkerConfiguration>["runtime"];
   guestPlatforms: z.infer<typeof WorkerConfiguration>["guestPlatforms"];
+  selectedDriver: z.infer<typeof WorkerConfiguration>["selectedDriver"];
   cache?: { ttlSeconds?: number; runnerCacheEnabled?: boolean; runnerCacheMaxGiB?: number };
 };
 export function getWorkerCache(workerId: string, { cursor, query = "", limit = 50 }: { cursor?: string | null; query?: string; limit?: number } = {}) {

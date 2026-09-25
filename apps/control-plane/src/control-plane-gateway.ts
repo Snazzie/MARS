@@ -6,7 +6,7 @@ import { reconcileWorkerInventory } from "./lease-reconciliation.ts";
 import { verifyWorkerSignature } from "./workers.ts";
 import { createWorkerChallenge, decodeWorkerSignature } from "./worker-socket.ts";
 import { WorkerCommandDispatcher, containsSecret, type AuthenticatedWorkerSocket } from "./worker-dispatch.ts";
-import { applyWorkerConfigurationAcknowledgement } from "./worker-requests.ts";
+import { applyWorkerConfigurationAcknowledgement, applyWorkerConfigurationFailure } from "./worker-requests.ts";
 import { activateAuthenticatedWorkerConnection } from "./worker-connection.ts";
 import { handleAuthenticatedWorkerEvent } from "./worker-lifecycle.ts";
 
@@ -257,6 +257,12 @@ export function createControlPlaneGateway(options: GatewayOptions) {
             void options.triggerReconciliation();
           }
           console.log(`Worker configuration acknowledgement: ${ws.data.workerId} accepted=${acknowledged === true}`);
+        } else if (frame.type === "worker.configuration_failed") {
+          const failedEvent = WorkerEvent.safeParse(frame);
+          if (!failedEvent.success || failedEvent.data.type !== "worker.configuration_failed" || failedEvent.data.payload.workerId !== ws.data.workerId) throw new Error("invalid worker configuration failure");
+          const failed = await applyWorkerConfigurationFailure(options.db, { workerId: ws.data.workerId, payload: failedEvent.data.payload });
+          if (!failed) throw new Error("worker configuration failure rejected");
+          if (failed === true) void options.triggerReconciliation();
           if (typeof frame.id === "string") ws.send(JSON.stringify({ version: 1, type: "event_ack", workerId: ws.data.workerId, eventId: frame.id }));
         } else {
           const accepted = await handleAuthenticatedWorkerEvent(options.db, options.dispatcher, frame, ws);

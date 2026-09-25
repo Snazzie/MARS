@@ -24,10 +24,10 @@ export async function reserveRoutingSlot(sql: DatabaseClient, input: LeaseReserv
       WHERE p.id=${input.poolId}
         AND p.enabled=true AND w.admission_state='adopted' AND w.connection_state='online'
         AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false
-        AND w.last_heartbeat_at > now()-interval '60 seconds' AND w.doctor_observed_at > now()-interval '60 seconds' AND e.evidence->>'runtimeReady'='true'
+        AND w.last_heartbeat_at > now()-interval '60 seconds' AND w.doctor_observed_at > now()-interval '60 seconds'
         AND p.platform=ANY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(w.guest_platforms)='array' THEN w.guest_platforms ELSE (w.guest_platforms #>> '{}')::jsonb END))
-        AND p.driver=CASE WHEN w.platform='macos-arm64' AND p.platform IN ('macos-arm64','linux-arm64') THEN 'tart-vm' WHEN p.platform=w.platform THEN CASE w.platform WHEN 'linux-x64' THEN 'linux-libvirt-vm' WHEN 'linux-arm64' THEN 'linux-docker-container' WHEN 'windows-x64' THEN CASE WHEN e.evidence->>'runtimeMode'='vm' THEN 'windows-hyperv' ELSE 'windows-hyperv-container' END WHEN 'macos-arm64' THEN 'tart-vm' END ELSE NULL END
-        AND CASE WHEN p.driver='tart-vm' THEN e.evidence->'artifactDigests'->>p.platform=p.image_digest WHEN p.driver='linux-libvirt-vm' THEN e.evidence->>'artifactDigest'=p.image_digest AND e.evidence->>'smokeArtifactDigest'=p.image_digest AND e.evidence->>'libvirtReady'='true' AND e.evidence->>'networkReady'='true' AND e.evidence->>'cloneStorageReady'='true' AND e.evidence->>'imageSignatures'='true' AND e.evidence->>'realVmSmoke'='true' WHEN p.driver='linux-docker-container' THEN e.evidence->>'artifactDigest'=p.image_digest AND e.evidence->>'networkReady'='true' AND e.evidence->>'imageSignatures'='true' WHEN p.driver IN ('windows-hyperv','windows-hyperv-container') THEN e.evidence->>'artifactDigest'=p.image_digest AND e.evidence->>'probe'='true' AND e.evidence->>'imageSignatures'='true' ELSE false END
+        AND p.driver=w.desired_configuration->>'selectedDriver'
+        AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.evidence->'capabilities')='array' THEN e.evidence->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=p.driver AND capability->>'guestPlatform'=p.platform AND capability->>'ready'='true' AND capability->>'imageDigest'=p.image_digest)
         AND COALESCE(e.evidence->>'acceptingLeases','true') <> 'false' FOR UPDATE OF p, w`;
     if (!eligible[0]) throw new Error("worker_not_eligible");
     const poolResources = typeof eligible[0].resources === "string" ? JSON.parse(eligible[0].resources) : eligible[0].resources;
@@ -53,7 +53,7 @@ export async function reserveRoutingSlot(sql: DatabaseClient, input: LeaseReserv
     if (!inserted[0]) throw new Error("job_already_claimed");
     await tx`UPDATE commands SET state='failed'
       WHERE lease_id=${inserted[0].id}
-        AND type IN ('linux-vm.create_lease','windows-container.create_lease','hyperv.create_lease','tart.create_lease')
+        AND type IN ('linux-vm.create_lease','linux-container.create_lease','windows-container.create_lease','hyperv.create_lease','tart.create_lease')
         AND state IN ('pending','sent')`;
     if (input.githubJobId !== undefined) await tx`UPDATE dashboard_jobs SET requested=${jsonParameter(tx, input.requested)}::jsonb WHERE github_job_id=${input.githubJobId}`;
     return inserted;

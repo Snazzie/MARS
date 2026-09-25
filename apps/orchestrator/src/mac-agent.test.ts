@@ -46,9 +46,15 @@ test("awaits the live cache TTL before acknowledging macOS worker configuration"
       appliance: command.payload.appliance,
       runtime: command.payload.runtime,
       guestPlatforms: ["macos-arm64"],
+      selectedDriver: "tart-vm",
       cache: { ttlSeconds: 5400, runnerCacheEnabled: false, runnerCacheMaxGiB: 12 },
     },
   });
+});
+test("rejects an incompatible selected driver on macOS", async () => {
+  const workerId = "00000000-0000-4000-8000-000000000001";
+  const command: WorkerCommand = { version: 1, id: "00000000-0000-4000-8000-000000000002", type: "worker.configure", workerId, leaseId: null, occurredAt: "2026-08-23T00:00:00.000Z", payload: { workerId, appliance: { vcpu: 1, memoryBytes: 1000, storageBytes: 1000 }, runtime: { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1000, maxStorageBytesPerPod: 1000, maxConcurrentPods: 1 }, guestPlatforms: ["linux-x64"], selectedDriver: "tart-vm", cache: { ttlSeconds: 60, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 }, revision: "a".repeat(64), fingerprint: "b".repeat(64) } };
+  await expect(applyWorkerConfigure(command, { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1000, maxStorageBytesPerPod: 1000, maxConcurrentPods: 1 }, { ttlSeconds: 60, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 }, { applyTtl: async () => {}, setRunnerCacheEnabled: () => {}, setRunnerCacheMaxGiB: () => {} })).rejects.toThrow("incompatible");
 });
 
 test("purges the macOS runner cache before acknowledging", async () => {

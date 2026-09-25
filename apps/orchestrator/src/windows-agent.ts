@@ -2,11 +2,12 @@ import { generateKeyPairSync, sign as signMessage, randomUUID } from "node:crypt
 import { dirname, join, resolve } from "node:path";
 import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
-import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, WorkerDoctorData, WorkerDoctorReport, WorkerEvent, type WorkerCapacityData, type WorkerContainerStatus, type LeaseBootstrapEnvelope } from "@mars/contracts";
+import { WorkerBootstrapRequest, WorkerBuildImagePayload, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, WorkerDoctorData, WorkerDoctorReport, WorkerEvent, type WorkerCapacityData, type WorkerContainerStatus, type LeaseBootstrapEnvelope, selectedRuntimeDriver, legacyRuntimeDriver } from "@mars/contracts";
 import { collectWorkerServiceLogs } from "./worker-service-logs.ts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
 import { createHyperVRuntime, HyperVDriver } from "./hyperv.ts";
 import { WindowsContainerDriver, isExpectedWindowsEntrypoint, parseWindowsContainerDnsServers } from "./windows-container.ts";
+import { LinuxContainerDriver } from "./linux-container.ts";
 import { prepareWindowsContainerImage } from "./windows-image-build.ts";
 import type { RuntimeDriver } from "./runtime.ts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
@@ -15,7 +16,7 @@ import { connectWorkerSocket, retryControlPlaneOperation, retryWorkerRuntime, wa
 import { openLeasePickupState, leasePickupStateFile, writeLeasePickupState, type LeasePickupStateController } from "./lease-pickup-state.ts";
 
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
-type Identity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string; vmUuid?: string; machineUuid?: string; preserveLeases?: boolean };
+type Identity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string; vmUuid?: string; machineUuid?: string; preserveLeases?: boolean; selectedDriver?: string; guestPlatform?: string };
 const identityPath = () => Bun.env.MARS_WORKER_IDENTITY_FILE ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Mars", "worker-identity.json");
 const event = (workerId: string, type: string, payload: Record<string, unknown>): WorkerEvent => WorkerEvent.parse({ version: 1, id: randomUUID(), workerId, type, occurredAt: new Date().toISOString(), payload });
 const keys = () => { const signing = generateKeyPairSync("ed25519"), encryption = generateKeyPairSync("x25519"); return { workerId: "", publicKey: signing.publicKey.export({ format: "pem", type: "spki" }).toString(), privateKey: signing.privateKey.export({ format: "pem", type: "pkcs8" }).toString(), encryptionPublicKey: encryption.publicKey.export({ format: "pem", type: "spki" }).toString(), encryptionPrivateKey: encryption.privateKey.export({ format: "pem", type: "pkcs8" }).toString() }; };
@@ -44,8 +45,8 @@ const commandSucceeds = async (command: string[]): Promise<boolean> => {
   }
 };
 const localImageVerification = async (image: string): Promise<{ manifest: boolean; entrypoint: boolean; imageId?: string }> => {
-  if (image !== "mars/windows-job:local") return { manifest: false, entrypoint: false };
   const path = Bun.env.MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST ?? join(Bun.env.ProgramData ?? "C:\\ProgramData", "Mars", "windows-job-image.json");
+  if (!/@sha256:[0-9a-f]{64}$/.test(image) && Bun.env.MARS_ALLOW_LOCAL_CONTAINER_IMAGE !== "true") return { manifest: false, entrypoint: false };
   try {
     const manifest = JSON.parse((await readFile(path, "utf8")).replace(/^\uFEFF/, "")) as { schemaVersion?: number; image?: string; imageId?: string; runtimeProbe?: { mediaFoundation?: boolean; runnerCacheRegistration?: boolean; dns?: boolean; tcp443?: boolean } };
     if (manifest.schemaVersion !== 1 || manifest.image !== image || !manifest.imageId || !manifest.runtimeProbe?.mediaFoundation || !manifest.runtimeProbe.runnerCacheRegistration || !manifest.runtimeProbe.dns || !manifest.runtimeProbe.tcp443) return { manifest: false, entrypoint: false };
@@ -100,24 +101,62 @@ export const verifiedWindowsVmImage = async (
     return { ready: false, remediation: error instanceof Error ? error.message : String(error) };
   }
 };
-export const windowsDoctor = async (preserveLeases = false, runProbe: typeof commandSucceeds = commandSucceeds): Promise<WorkerDoctorData> => {
-  const runtimeMode = Bun.env.MARS_WINDOWS_RUNTIME === "container" ? "container" : "vm";
-  const artifactValue = runtimeMode === "container" ? Bun.env.MARS_WINDOWS_CONTAINER_IMAGE : Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST;
-  const localVerification = runtimeMode === "container" ? await localImageVerification(artifactValue ?? "") : { manifest: false, entrypoint: true };
-  const vmImage = runtimeMode === "vm" ? await verifiedWindowsVmImage() : undefined;
-  const localManifest = localVerification.manifest;
-  const digestPinned = typeof artifactValue === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/.test(artifactValue);
-  const immutableArtifact = runtimeMode === "container" ? localManifest || digestPinned : vmImage?.ready === true && vmImage.digest === artifactValue;
-  const probe = runtimeMode === "container"
-    ? await runProbe(["docker.exe", "info", "--format", "{{.OSType}}"])
-    : await runProbe(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-VMHost -ErrorAction Stop | Out-Null"]);
-  const failures = [
-    !probe && `${runtimeMode === "container" ? "Windows container host" : "Hyper-V host"} probe failed`,
-    !immutableArtifact && (runtimeMode === "container" ? "Verified Windows container image manifest is missing or stale" : vmImage?.remediation ?? "Verified Windows VM image state is missing or invalid"),
-    runtimeMode === "container" && localManifest && !localVerification.entrypoint && "Windows container image entrypoint is invalid",
-  ].filter((failure): failure is string => Boolean(failure));
-  const artifactDigest = runtimeMode === "vm" ? vmImage?.digest : localVerification.imageId ?? (digestPinned ? artifactValue : undefined);
-  return WorkerDoctorData.parse({ runtimeMode, preserveLeases, ...(runtimeMode === "container" ? { artifactSource: "worker_local", ...(artifactValue ? { artifactIdentity: artifactValue } : {}) } : { artifactSource: "template" }), ...(artifactDigest ? { artifactDigest } : {}), runtimeReady: failures.length === 0, probe, imageSignatures: immutableArtifact, remediation: failures.length ? failures.join("; ") : null });
+type WindowsCapability = NonNullable<WorkerDoctorData["capabilities"]>[number];
+let sandboxProbeCache: { key: string; expiresAt: number; capabilities: WindowsCapability[] } | undefined;
+async function probeWindowsIsolation(image: string, isolation: "process" | "hyperv"): Promise<boolean> {
+  const name = `mars-probe-${randomUUID()}`;
+  try {
+    const created = await runBoundedCommand(["docker.exe", "create", "--name", name, `--isolation=${isolation}`, image, "powershell.exe", "-NoProfile", "-Command", "exit 0"]);
+    if (created.code !== 0 || (await runBoundedCommand(["docker.exe", "start", name])).code !== 0) return false;
+    const inspected = await runBoundedCommand(["docker.exe", "inspect", "--format", "{{.HostConfig.Isolation}}", name]);
+    return inspected.code === 0 && inspected.stdout.trim().toLowerCase() === isolation;
+  } finally {
+    await runBoundedCommand(["docker.exe", "rm", "-f", name]).catch(() => ({ code: 1, stdout: "" }));
+  }
+}
+export const windowsDoctor = async (preserveLeases = false, runProbe: typeof commandSucceeds = commandSucceeds, appliedDriver?: RuntimeSelection): Promise<WorkerDoctorData> => {
+  const info = await runBoundedCommand(["docker.exe", "info", "--format", "{{json .}}"]).catch(() => ({ code: 1, stdout: "" }));
+  let engineOs = "", architecture = "";
+  try {
+    const parsed = JSON.parse(info.stdout) as { OSType?: string; Architecture?: string };
+    engineOs = String(parsed.OSType ?? "").toLowerCase();
+    architecture = String(parsed.Architecture ?? "").toLowerCase();
+  } catch { /* engine unavailable */ }
+  const image = Bun.env.MARS_WINDOWS_CONTAINER_IMAGE;
+  const linuxImage = Bun.env.MARS_LINUX_X64_CONTAINER_IMAGE;
+  const vmImage = await verifiedWindowsVmImage();
+  const vmReady = await runProbe(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$switchName = if ($env:MARS_HYPERV_SWITCH_NAME) { $env:MARS_HYPERV_SWITCH_NAME } else { 'Default Switch' }; Get-VMHost -ErrorAction Stop | Out-Null; Get-VMSwitch -Name $switchName -ErrorAction Stop | Out-Null"]);
+  const windowsVerification = engineOs === "windows" && image ? await localImageVerification(image) : undefined;
+  const linuxDriver = engineOs === "linux" && linuxImage && /^[^@\s]+@sha256:[0-9a-f]{64}$/.test(linuxImage)
+    ? new LinuxContainerDriver({ image: linuxImage, prefix: "mars-windows-linux-x64", network: Bun.env.MARS_LINUX_CONTAINER_NETWORK ?? "mars-linux-x64", limits: { maxVcpuPerPod: 64, maxMemoryBytesPerPod: Number.MAX_SAFE_INTEGER, maxStorageBytesPerPod: Number.MAX_SAFE_INTEGER, maxConcurrentPods: 64 }, architecture: "amd64", platform: "linux/amd64" })
+    : undefined;
+  const linuxHost = linuxDriver ? await linuxDriver.validateHost() : undefined;
+  const cacheKey = JSON.stringify([engineOs, architecture, image, windowsVerification?.imageId, windowsVerification?.manifest, windowsVerification?.entrypoint, linuxImage, linuxHost?.runtimeReady, vmImage.digest, vmImage.ready, vmReady]);
+  let capabilities: WindowsCapability[] = [];
+  if (sandboxProbeCache?.key === cacheKey && sandboxProbeCache.expiresAt > Date.now()) capabilities = [...sandboxProbeCache.capabilities];
+  else {
+    if (engineOs === "windows" && ["amd64", "x86_64"].includes(architecture) && image) {
+      const verification = await localImageVerification(image);
+      if (verification.manifest && verification.entrypoint && verification.imageId) {
+        for (const isolation of ["process", "hyperv"] as const) {
+          const ready = await probeWindowsIsolation(image, isolation).catch(() => false);
+          capabilities.push({ driver: isolation === "process" ? "windows-process-container" : "windows-hyperv-container", guestPlatform: "windows-x64", imageDigest: ready ? verification.imageId : null, ready, remediation: ready ? null : `${isolation} isolation probe failed` });
+        }
+      }
+    }
+    if (engineOs === "linux" && ["amd64", "x86_64"].includes(architecture) && linuxImage && /^[^@\s]+@sha256:[0-9a-f]{64}$/.test(linuxImage)) {
+      const linuxDriver = new LinuxContainerDriver({ image: linuxImage, prefix: "mars-windows-linux-x64", network: Bun.env.MARS_LINUX_CONTAINER_NETWORK ?? "mars-linux-x64", limits: { maxVcpuPerPod: 64, maxMemoryBytesPerPod: Number.MAX_SAFE_INTEGER, maxStorageBytesPerPod: Number.MAX_SAFE_INTEGER, maxConcurrentPods: 64 }, architecture: "amd64", platform: "linux/amd64" });
+      const host = await linuxDriver.validateHost();
+      capabilities.push({ driver: "linux-docker-container", guestPlatform: "linux-x64", imageDigest: host.runtimeReady ? linuxImage : null, ready: host.runtimeReady, remediation: host.runtimeReady ? null : "Linux x64 engine, image, entrypoint, or network validation failed" });
+    }
+    if (vmReady && vmImage.ready && vmImage.digest) capabilities.push({ driver: "windows-hyperv", guestPlatform: "windows-x64", imageDigest: vmImage.digest, ready: true, remediation: null });
+    sandboxProbeCache = { key: cacheKey, expiresAt: Date.now() + 300_000, capabilities };
+  }
+  const selectedDriver = appliedDriver;
+  const selected = capabilities.find((capability) => capability.driver === selectedDriver && capability.guestPlatform === (selectedDriver === "linux-docker-container" ? "linux-x64" : "windows-x64"));
+  const runtimeMode = selectedDriver === "windows-hyperv" ? "vm" : "container";
+  const probe = info.code === 0 || vmReady;
+  return WorkerDoctorData.parse({ runtimeMode, preserveLeases, artifactSource: runtimeMode === "container" ? "worker_local" : "template", ...(selected?.imageDigest ? { artifactDigest: selected.imageDigest } : {}), runtimeReady: selected?.ready ?? false, probe, imageSignatures: Boolean(selected?.imageDigest), remediation: selected?.remediation ?? "No selected Windows runtime is ready", capabilities });
 };
 const joinCode = async () => { const path = Bun.env.MARS_JOIN_CODE_FILE; if (path) return (await readFile(path, "utf8")).trim(); const reader = Bun.stdin.stream().getReader(); const { value } = await reader.read(); reader.releaseLock(); return Buffer.from(value ?? []).toString("utf8").trim(); };
 const save = async (identity: Identity) => { const path = identityPath(); await mkdir(dirname(path), { recursive: true }); await writeFile(path, JSON.stringify(identity) + "\n", { mode: 0o600 }); };
@@ -151,6 +190,27 @@ async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> {
   await save(result);
   return result;
 }
+type RuntimeSelection = "windows-hyperv-container" | "windows-process-container" | "windows-hyperv" | "linux-docker-container";
+const isRuntimeSelection = (driver: string): driver is RuntimeSelection =>
+  driver === "windows-hyperv-container" || driver === "windows-process-container" || driver === "windows-hyperv" || driver === "linux-docker-container";
+function createSelectedWindowsDriver(selected: RuntimeSelection | undefined, limits: Limits): WindowsRuntimeDriver | null {
+  if (selected === "windows-hyperv-container" || selected === "windows-process-container") {
+    const image = Bun.env.MARS_WINDOWS_CONTAINER_IMAGE;
+    if (!image) throw new Error("MARS_WINDOWS_CONTAINER_IMAGE is required for the applied runtime");
+    return new WindowsContainerDriver({ image, isolation: selected === "windows-process-container" ? "process" : "hyperv", prefix: Bun.env.MARS_WINDOWS_CONTAINER_PREFIX ?? "mars", bootstrapRoot: Bun.env.ProgramData ? `${Bun.env.ProgramData}\\Mars\\leases` : "C:\\ProgramData\\Mars\\leases", limits, readyTimeoutMs: Number(Bun.env.MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS ?? 15_000), allowLocalImage: Bun.env.MARS_ALLOW_LOCAL_CONTAINER_IMAGE === "true", imageManifestPath: Bun.env.MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST, requireLocalImageManifest: !/@sha256:[0-9a-f]{64}$/.test(image), dnsServers: parseWindowsContainerDnsServers(Bun.env.MARS_WINDOWS_CONTAINER_DNS_SERVERS) });
+  }
+  if (selected === "windows-hyperv") {
+    const checkpointPath = Bun.env.MARS_WINDOWS_CHECKPOINT_PATH, checkpointDigest = Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST;
+    if (!checkpointPath || !checkpointDigest) throw new Error("Windows Hyper-V checkpoint path and digest are required");
+    return new HyperVDriver(createHyperVRuntime(), checkpointPath, checkpointDigest, Bun.env.MARS_HYPERV_VM_PREFIX ?? "mars", limits);
+  }
+  if (selected === "linux-docker-container") {
+    const image = Bun.env.MARS_LINUX_X64_CONTAINER_IMAGE;
+    if (!image) throw new Error("MARS_LINUX_X64_CONTAINER_IMAGE is required");
+    return new LinuxContainerDriver({ image, prefix: "mars-windows-linux-x64", network: Bun.env.MARS_LINUX_CONTAINER_NETWORK ?? "mars-linux-x64", limits, architecture: "amd64", platform: "linux/amd64" });
+  }
+  return null;
+}
 type WindowsRuntimeDriver = Pick<RuntimeDriver, "reserveCapacity" | "createLease" | "stopLease" | "removeLease"> & { listContainerStatuses: () => Promise<WorkerContainerStatus[]>; reconcileOrphans: () => Promise<void> };
 function emitWindowsWorkerEvent(workerId: string, leaseId: string | null, send: (workerEvent: WorkerEvent) => void, workerEvent: WorkerEvent): void {
   try {
@@ -180,7 +240,9 @@ export async function applyWindowsWorkerConfiguration(
   payload: WorkerConfigurePayload,
   cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled" | "setRunnerCacheMaxGiB">,
 ): Promise<WorkerObservedConfiguration> {
-  const observed = WorkerObservedConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms, cache: payload.cache });
+  const selectedDriver = payload.selectedDriver ?? legacyRuntimeDriver("windows-x64", "container");
+  if (payload.guestPlatforms.length !== 1 || selectedRuntimeDriver("windows-x64", payload.guestPlatforms[0]!, selectedDriver) !== selectedDriver) throw new Error("worker configuration driver is incompatible with Windows");
+  const observed = WorkerObservedConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms, selectedDriver, cache: payload.cache });
   await cacheService.applyTtl(observed.cache.ttlSeconds);
   cacheService.setRunnerCacheEnabled(observed.cache.runnerCacheEnabled);
   cacheService.setRunnerCacheMaxGiB(observed.cache.runnerCacheMaxGiB);
@@ -201,7 +263,7 @@ export async function runWindowsLeaseCleanup(
   preserveLeases = false,
   inventoryChanged?: () => void,
 ): Promise<void> {
-  if (!["tart.stop_lease", "windows-container.stop_lease", "hyperv.stop_lease"].includes(command.type) || !command.leaseId) throw new Error("Windows lease cleanup command invalid");
+  if (!["tart.stop_lease", "windows-container.stop_lease", "hyperv.stop_lease", "linux-container.stop_lease"].includes(command.type) || !command.leaseId) throw new Error("Windows lease cleanup command invalid");
   const nonce = String((command.payload as Record<string, unknown>).nonce ?? "");
   const payload = { commandId: command.id, leaseId: command.leaseId, nonce };
   const emit = (workerEvent: WorkerEvent) => emitWindowsWorkerEvent(command.workerId, command.leaseId, send, workerEvent);
@@ -268,11 +330,11 @@ export function startWindowsLeaseLifecycle(
 }
 
 type WindowsWorkerCommandContext = {
-  mode: "container" | "vm";
   limits: Limits;
   cache: WorkerCacheConfiguration;
   cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled" | "setRunnerCacheMaxGiB" | "purgeRunnerCache" | "transport" | "unregisterLease">;
   driver: WindowsRuntimeDriver;
+  applyDriver?: (selected: RuntimeSelection) => Promise<void>;
   identity: Identity;
   activeLeases: Map<string, Promise<void>>;
   acceptingLeases?: () => boolean;
@@ -298,7 +360,7 @@ export function logDevelopmentWorkerEvent(workerEvent: WorkerEvent): void {
   });
 }
 export async function executeWindowsWorkerCommand(command: WorkerCommand, context: WindowsWorkerCommandContext): Promise<void> {
-  const { mode, limits, cache, cacheService, driver, identity, activeLeases, acceptingLeases, send, sendDoctor } = context;
+  const { limits, cache, cacheService, driver, applyDriver, identity, activeLeases, acceptingLeases, send, sendDoctor } = context;
   if (command.type === "worker.collect_logs") {
     return send(await collectWorkerServiceLogs(command));
   }
@@ -311,8 +373,27 @@ export async function executeWindowsWorkerCommand(command: WorkerCommand, contex
   }
   if (command.type === "worker.configure") {
     const payload = WorkerConfigurePayload.parse(command.payload);
-    const observed = await applyWindowsWorkerConfiguration(limits, cache, payload, cacheService);
-    return send(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed }));
+    try {
+      if (activeLeases.size) throw new Error("Cannot change Windows runtime while leases are active");
+      const selectedDriver = payload.selectedDriver ?? legacyRuntimeDriver("windows-x64", "container");
+      const capabilities = (await windowsDoctor(identity.preserveLeases === true)).capabilities ?? [];
+      const capability = capabilities.find((entry) => entry.driver === selectedDriver && entry.guestPlatform === payload.guestPlatforms[0]);
+      if (!isRuntimeSelection(selectedDriver)) throw new Error("Selected Windows runtime driver is unsupported");
+      if (!capability?.ready) throw new Error("Selected Windows runtime capability is not ready");
+      const observed = await applyWindowsWorkerConfiguration(limits, cache, payload, cacheService);
+      if (identity.selectedDriver !== selectedDriver) {
+        if (!applyDriver) throw new Error("Runtime driver switching is unavailable");
+        await applyDriver(selectedDriver);
+      }
+      identity.selectedDriver = selectedDriver;
+      identity.guestPlatform = payload.guestPlatforms[0];
+      await save(identity);
+      send(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed }));
+      sendDoctor();
+    } catch (error) {
+      send(event(command.workerId, "worker.configuration_failed", { commandId: command.id, workerId: command.workerId, revision: payload.revision, reason: normalizedError(error) }));
+    }
+    return;
   }
   if (command.type === "worker.runner_cache_purge") {
     return send(await applyWindowsRunnerCachePurge(command, cacheService));
@@ -322,15 +403,18 @@ export async function executeWindowsWorkerCommand(command: WorkerCommand, contex
     sendDoctor();
     return;
   }
-  if (command.type === "tart.stop_lease" || command.type === "windows-container.stop_lease" || command.type === "hyperv.stop_lease") {
+  if (command.type === "tart.stop_lease" || command.type === "windows-container.stop_lease" || command.type === "hyperv.stop_lease" || command.type === "linux-container.stop_lease") {
+    const expectedStop = identity.selectedDriver === "windows-hyperv" ? "hyperv.stop_lease" : identity.selectedDriver === "linux-docker-container" ? "linux-container.stop_lease" : "windows-container.stop_lease";
+    if (command.type !== expectedStop) throw new Error(`Selected Windows runtime rejects ${command.type}`);
     return runWindowsLeaseCleanup(command, driver, send, identity.preserveLeases === true, sendDoctor);
   }
-  if (command.type === "windows-container.create_lease" || command.type === "hyperv.create_lease") {
-    const expectedType = mode === "container" ? "windows-container.create_lease" : "hyperv.create_lease";
-    if (command.type !== expectedType) throw new Error(`Windows runtime mode ${mode} rejects ${command.type}`);
+  if (command.type === "windows-container.create_lease" || command.type === "hyperv.create_lease" || command.type === "linux-container.create_lease") {
+    const expectedType = identity.selectedDriver === "windows-hyperv" ? "hyperv.create_lease" : identity.selectedDriver === "linux-docker-container" ? "linux-container.create_lease" : "windows-container.create_lease";
+    if (command.type !== expectedType || !identity.selectedDriver) throw new Error(`Selected Windows runtime rejects ${command.type}`);
     const cipher = (command.payload as { bootstrapCiphertext?: Parameters<typeof openLeaseBootstrap>[0] }).bootstrapCiphertext;
     if (!cipher) throw new Error("lease bootstrap payload invalid");
     const bootstrap: LeaseBootstrapEnvelope = openLeaseBootstrap(cipher, identity.encryptionPrivateKey);
+    if (bootstrap.guestPlatform !== identity.guestPlatform) throw new Error("Lease guest platform does not match selected Windows runtime");
     if (acceptingLeases && !acceptingLeases()) {
       return send(event(command.workerId, "lease.declined", { commandId: command.id, leaseId: command.leaseId, nonce: bootstrap.nonce, reason: "pickup_paused" }));
     }
@@ -375,22 +459,32 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
     identity = await createIdentity();
     await save(identity);
   }
-  const mode = Bun.env.MARS_WINDOWS_RUNTIME ?? "vm";
-  let driver: WindowsRuntimeDriver;
-  if (mode === "container") {
-    const image = Bun.env.MARS_WINDOWS_CONTAINER_IMAGE;
-    if (!image) throw new Error("MARS_WINDOWS_CONTAINER_IMAGE is required in container mode");
-    driver = new WindowsContainerDriver({ image, prefix: Bun.env.MARS_WINDOWS_CONTAINER_PREFIX ?? "mars", bootstrapRoot: Bun.env.ProgramData ? `${Bun.env.ProgramData}\\Mars\\leases` : "C:\\ProgramData\\Mars\\leases", limits, readyTimeoutMs: Number(Bun.env.MARS_WINDOWS_CONTAINER_READY_TIMEOUT_MS ?? 15_000), allowLocalImage: Bun.env.MARS_ALLOW_LOCAL_CONTAINER_IMAGE === "true", imageManifestPath: Bun.env.MARS_WINDOWS_CONTAINER_IMAGE_MANIFEST, requireLocalImageManifest: image === "mars/windows-job:local", dnsServers: parseWindowsContainerDnsServers(Bun.env.MARS_WINDOWS_CONTAINER_DNS_SERVERS) });
-  } else if (mode === "vm") {
-    const checkpointPath = Bun.env.MARS_WINDOWS_CHECKPOINT_PATH;
-    const checkpointDigest = Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST;
-    if (!checkpointPath || !checkpointDigest) throw new Error("Windows Hyper-V checkpoint path and digest are required in VM mode");
-    driver = new HyperVDriver(createHyperVRuntime(), checkpointPath, checkpointDigest, Bun.env.MARS_HYPERV_VM_PREFIX ?? "mars", limits);
-  } else {
-    throw new Error(`Unsupported Windows runtime: ${mode}`);
+  let selectedDriver = (identity.selectedDriver as RuntimeSelection | undefined) ?? (Bun.env.MARS_WINDOWS_RUNTIME === "container" ? "windows-hyperv-container" : Bun.env.MARS_WINDOWS_RUNTIME === "vm" ? "windows-hyperv" : undefined);
+  if (!identity.selectedDriver && selectedDriver) {
+    const report = await windowsDoctor(identity.preserveLeases === true, commandSucceeds, selectedDriver);
+    if (report.capabilities?.some(capability => capability.driver === selectedDriver && capability.ready)) {
+      identity.selectedDriver = selectedDriver;
+      identity.guestPlatform = "windows-x64";
+      await save(identity);
+    } else selectedDriver = undefined;
   }
-  const runtimeIdentity = identity;
-  await retryWorkerRuntime("Windows orphan reconciliation", () => reconcileWindowsRuntime(runtimeIdentity, driver));
+  let activeDriver = createSelectedWindowsDriver(selectedDriver, limits);
+  const driver: WindowsRuntimeDriver = {
+    reserveCapacity: async resources => { if (!activeDriver) throw new Error("Worker is discovery-only"); return activeDriver.reserveCapacity(resources); },
+    createLease: async lease => { if (!activeDriver) throw new Error("Worker is discovery-only"); return activeDriver.createLease(lease); },
+    stopLease: async leaseId => { if (activeDriver) await activeDriver.stopLease(leaseId); },
+    removeLease: async leaseId => { if (activeDriver) await activeDriver.removeLease(leaseId); },
+    listContainerStatuses: async () => activeDriver ? activeDriver.listContainerStatuses() : [],
+    reconcileOrphans: async () => { if (activeDriver) await activeDriver.reconcileOrphans(); },
+  };
+  const applyDriver = async (next: RuntimeSelection) => {
+    await driver.reconcileOrphans();
+    const replacement = createSelectedWindowsDriver(next, limits);
+    if (!replacement) throw new Error("Selected Windows runtime driver could not be created");
+    await replacement.reconcileOrphans();
+    activeDriver = replacement;
+  };
+  if (selectedDriver) await retryWorkerRuntime("Windows orphan reconciliation", () => reconcileWindowsRuntime(identity!, driver));
   if (!identity.workerId) identity = await enroll(controlPlane, identity);
   const pickupState = await openLeasePickupState(leasePickupStateFile());
   const activeLeases = new Map<string, Promise<void>>();
@@ -400,7 +494,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
   const sendDoctor = async (ws: WebSocket): Promise<void> => {
     publishInventory();
     try {
-      const [currentDoctor, currentCapacity, containers] = await Promise.all([windowsDoctor(identity.preserveLeases === true), capacity(), driver.listContainerStatuses()]);
+      const [currentDoctor, currentCapacity, containers] = await Promise.all([windowsDoctor(identity.preserveLeases === true, commandSucceeds, identity.selectedDriver as RuntimeSelection | undefined), capacity(), driver.listContainerStatuses()]);
       const report = buildWindowsDoctorReport({
         doctor: { ...currentDoctor, inventoryObservedAt: new Date().toISOString(), acceptingLeases: pickupState.acceptingLeases },
         capacity: currentCapacity,
@@ -451,11 +545,11 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
               if (developmentConsole) console.log("Development worker command", { type: command.type, commandId: command.id, leaseId: command.leaseId });
               const cacheWasEnabled = cacheService.runnerCacheStatus().enabled;
               await executeWindowsWorkerCommand(command, {
-                mode: mode === "container" ? "container" : "vm",
                 limits,
                 cache,
                 cacheService,
                 driver,
+                applyDriver,
                 acceptingLeases: () => pickupState.acceptingLeases,
                 identity,
                 activeLeases,

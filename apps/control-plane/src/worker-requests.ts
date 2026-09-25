@@ -1,6 +1,6 @@
 import type { Sql } from "@mars/db";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, validateWorkerGuestPlatforms, CURRENT_WORKER_CONTRACT_VERSION, parseWorkerContractVersion, type GuestPlatform } from "@mars/contracts";
+import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerDoctorData, WorkerRunnerCachePurgePayload, validateWorkerGuestPlatforms, selectedRuntimeDriver, CURRENT_WORKER_CONTRACT_VERSION, parseWorkerContractVersion, type GuestPlatform, type RuntimeDriverName } from "@mars/contracts";
 import { z } from "zod";
 import { jsonParameter } from "@mars/db";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
@@ -91,6 +91,7 @@ export async function approvePendingWorker(db: Sql<{}>, workerId: string, input:
 export type WorkerConfigurationInput = {
   appliance: { vcpu: number; memoryBytes: number; storageBytes: number };
   runtime: { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
+  selectedDriver: RuntimeDriverName;
   guestPlatforms?: GuestPlatform[];
   cache?: { ttlSeconds?: number; runnerCacheEnabled?: boolean; runnerCacheMaxGiB?: number };
 };
@@ -109,20 +110,32 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, conf
   const revision = createHash("sha256").update(canonical(parsed)).digest("hex");
   const fp = createHash("sha256").update(`${workerId}:${revision}`).digest("hex");
   const commandId = randomUUID();
-  const payload: WorkerConfigurePayload = { workerId, appliance: parsed.appliance, runtime: parsed.runtime, guestPlatforms: parsed.guestPlatforms, cache: parsed.cache, revision, fingerprint: fp };
+  const payload: WorkerConfigurePayload = { workerId, appliance: parsed.appliance, runtime: parsed.runtime, guestPlatforms: parsed.guestPlatforms, selectedDriver: parsed.selectedDriver, cache: parsed.cache, revision, fingerprint: fp };
   const response = await db.begin(async tx => {
     if (idempotencyKey) {
       await tx`select pg_advisory_xact_lock(hashtext(${`mars:configure:${workerId}:${idempotencyKey}`}))`;
       const prior = await tx<{ response: { revision: string; fingerprint: string; commandId?: string } | null }[]>`select response from worker_mutations where worker_id=${workerId} and idempotency_key=${idempotencyKey}`;
       if (prior[0]?.response) return prior[0].response;
     }
-    const rows = await tx<{ id: string; doctor: unknown; admissionState: string; platform: GuestPlatform; guestPlatforms: GuestPlatform[]; draining: boolean; contractVersion: string | null }[]>`select id, doctor, admission_state as "admissionState", platform, guest_platforms as "guestPlatforms", draining, contract_version as "contractVersion" from workers where id=${workerId} for update`;
+    const rows = await tx<{ id: string; doctor: unknown; doctorObservedAt: string | Date | null; admissionState: string; platform: GuestPlatform; guestPlatforms: GuestPlatform[]; draining: boolean; contractVersion: string | null; desiredConfiguration: unknown }[]>`select id, doctor, doctor_observed_at as "doctorObservedAt", admission_state as "admissionState", platform, guest_platforms as "guestPlatforms", draining, contract_version as "contractVersion", desired_configuration as "desiredConfiguration" from workers where id=${workerId} for update`;
     const row = rows[0]; if (!row || !["pending", "adopted"].includes(row.admissionState)) throw new Error("worker configuration conflict");
+    if (!validateWorkerGuestPlatforms(row.platform, parsed.guestPlatforms) || parsed.guestPlatforms.some(guest => selectedRuntimeDriver(row.platform, guest, parsed.selectedDriver) !== parsed.selectedDriver)) throw new Error("worker driver is incompatible with host or guest platform");
+    const doctorInput = typeof row.doctor === "string" ? (() => { try { return JSON.parse(row.doctor); } catch { return null; } })() : row.doctor;
+    const doctorReport = doctorInput && typeof doctorInput === "object" && "doctor" in doctorInput ? doctorInput.doctor : null;
+    const doctor = WorkerDoctorData.safeParse(doctorReport);
+    const ageMs = row.doctorObservedAt ? Date.now() - new Date(row.doctorObservedAt).getTime() : Number.POSITIVE_INFINITY;
+    const fresh = ageMs >= 0 && ageMs <= 5 * 60_000;
+    const capabilities = doctor.success ? doctor.data.capabilities : undefined;
+    if (!fresh || !capabilities || parsed.guestPlatforms.some(guest => !capabilities.some(item => item.driver === parsed.selectedDriver && item.guestPlatform === guest && item.ready && typeof item.imageDigest === "string" && /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/.test(item.imageDigest)))) throw new Error("selected worker capability is not currently advertised and ready");
     if (parsed.guestPlatforms.length > 1 && (!row.contractVersion || compareContractVersions(row.contractVersion, CURRENT_WORKER_CONTRACT_VERSION) < 0)) throw new Error("worker contract does not support dual-platform configuration");
     const priorPlatforms = Array.isArray(row.guestPlatforms) ? row.guestPlatforms : [row.platform];
-    if (row.admissionState === "adopted" && canonical(priorPlatforms) !== canonical(parsed.guestPlatforms)) {
+    let priorInput = row.desiredConfiguration;
+    if (typeof priorInput === "string") { try { priorInput = JSON.parse(priorInput); } catch { priorInput = null; } }
+    const prior = WorkerConfiguration.safeParse(priorInput);
+    const priorDriver = prior.success ? prior.data.selectedDriver : null;
+    if (row.admissionState === "adopted" && (canonical(priorPlatforms) !== canonical(parsed.guestPlatforms) || priorDriver !== parsed.selectedDriver)) {
       const [{ count }] = await tx<{ count: number }[]>`select count(*)::int as count from runner_leases where worker_id=${workerId} and state not in ('completed','reaped','failed')`;
-      if (!row.draining || Number(count) !== 0) throw new Error("worker guest platform configuration requires drained worker");
+      if (!row.draining || Number(count) !== 0) throw new Error("worker driver or guest platform configuration requires drained worker");
     }
     await tx`update workers set limits=${jsonParameter(tx, parsed.runtime)}::jsonb, guest_platforms=${jsonParameter(tx, parsed.guestPlatforms)}::jsonb, desired_configuration=${jsonParameter(tx, parsed)}::jsonb, admission_state='adopted', configuration_state='applying', configuration_revision=${revision}, configuration_command_id=${commandId} where id=${workerId}`;
     await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,'worker.configure',${workerId},null,now(),${jsonParameter(tx, payload)}::jsonb)`;
@@ -193,7 +206,21 @@ export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event
     return true;
   });
 }
-export async function reconcileWorkerConfigurationOnConnect(db: Sql<{}>, workerId: string): Promise<{ state: "unconfigured" | "applying" | "ready"; commandId: string | null }> {
+const WorkerConfigureFailure = z.object({ commandId: z.string().uuid(), workerId: z.string().uuid(), revision: z.string().regex(/^[a-f0-9]{64}$/), reason: z.string().min(1).max(1000) }).strict();
+export async function applyWorkerConfigurationFailure(db: Sql<{}>, event: { workerId: string; payload: unknown }): Promise<boolean | "stale"> {
+  const payload = WorkerConfigureFailure.safeParse(event.payload);
+  if (!payload.success || payload.data.workerId !== event.workerId) return false;
+  return db.begin(async tx => {
+    const rows = await tx<{ id: string }[]>`update workers set configuration_state='error' where id=${event.workerId} and configuration_command_id=${payload.data.commandId} and configuration_revision=${payload.data.revision} returning id`;
+    if (!rows[0]) {
+      const [previous] = await tx<{ id: string }[]>`select id from commands where id=${payload.data.commandId} and worker_id=${event.workerId} and type='worker.configure'`;
+      return previous ? "stale" : false;
+    }
+    await tx`insert into audit_events (actor,type,payload) values ('worker','worker.configuration_failed',${jsonParameter(tx, { workerId: event.workerId, commandId: payload.data.commandId, revision: payload.data.revision, reason: payload.data.reason })}::jsonb)`;
+    return true;
+  });
+}
+export async function reconcileWorkerConfigurationOnConnect(db: Sql<{}>, workerId: string): Promise<{ state: "unconfigured" | "applying" | "ready" | "error"; commandId: string | null }> {
   return db.begin(async tx => {
     const [worker] = await tx<{ desiredConfiguration: unknown; configurationRevision: string | null; appliedConfigurationRevision: string | null; configurationCommandId: string | null }[]>`select desired_configuration AS "desiredConfiguration", configuration_revision AS "configurationRevision", applied_configuration_revision AS "appliedConfigurationRevision", configuration_command_id AS "configurationCommandId" from workers where id=${workerId} for update`;
     if (!worker) throw new Error("worker configuration unavailable");
@@ -205,7 +232,12 @@ export async function reconcileWorkerConfigurationOnConnect(db: Sql<{}>, workerI
       await tx`update workers set configuration_state='unconfigured', configuration_command_id=null where id=${workerId}`;
       return { state: "unconfigured", commandId: null };
     }
-    const desired = WorkerConfiguration.parse(desiredInput);
+    const parsedDesired = WorkerConfiguration.safeParse(desiredInput);
+    if (!parsedDesired.success) {
+      await tx`update workers set configuration_state='error' where id=${workerId}`;
+      return { state: "error", commandId: null };
+    }
+    const desired = parsedDesired.data;
     const revision = worker.configurationRevision ?? createHash("sha256").update(canonical(desired)).digest("hex");
     if (worker.appliedConfigurationRevision === revision) {
       await tx`update workers set configuration_state='applying', configuration_revision=${revision} where id=${workerId}`;
@@ -225,7 +257,7 @@ export async function reconcileWorkerConfigurationOnConnect(db: Sql<{}>, workerI
     }
     const commandId = randomUUID();
     const fingerprint = createHash("sha256").update(`${workerId}:${revision}`).digest("hex");
-    const payload: WorkerConfigurePayload = { workerId, appliance: desired.appliance, runtime: desired.runtime, guestPlatforms: desired.guestPlatforms, cache: desired.cache, revision, fingerprint };
+    const payload: WorkerConfigurePayload = { workerId, appliance: desired.appliance, runtime: desired.runtime, guestPlatforms: desired.guestPlatforms, selectedDriver: desired.selectedDriver, cache: desired.cache, revision, fingerprint };
     await tx`update commands set state='failed' where worker_id=${workerId} and type='worker.configure' and state in ('pending','sent')`;
     await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,${"worker.configure"},${workerId},null,now(),${jsonParameter(tx, payload)}::jsonb)`;
     await tx`update workers set configuration_state='applying', configuration_revision=${revision}, configuration_command_id=${commandId} where id=${workerId}`;

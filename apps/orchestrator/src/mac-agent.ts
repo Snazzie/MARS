@@ -3,7 +3,7 @@ import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promi
 import { dirname } from "node:path";
 import { statfsSync } from "node:fs";
 import { cpus, hostname, totalmem } from "node:os";
-import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerContractVersion, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, WorkerDoctorData, WorkerEvent, type LeaseBootstrapEnvelope, type WorkerCapacityData } from "@mars/contracts";
+import { WorkerBootstrapRequest, WorkerCacheConfiguration, WorkerCommand, WorkerConfigurePayload, WorkerContractVersion, WorkerObservedConfiguration, WorkerRunnerCachePurgePayload, WorkerDoctorData, WorkerEvent, legacyRuntimeDriver, selectedRuntimeDriver, type LeaseBootstrapEnvelope, type WorkerCapacityData } from "@mars/contracts";
 import { z } from "zod";
 import type { Lease, RuntimeLease } from "./runtime.ts";
 import { createTartVmRuntime, resolveTartExecutable, TartVmDriver } from "./tart.ts";
@@ -37,7 +37,9 @@ export async function applyWorkerConfigure(
   cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled" | "setRunnerCacheMaxGiB">,
 ): Promise<WorkerEvent> {
   const payload = WorkerConfigurePayload.parse(command.payload);
-  const observed = WorkerObservedConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms, cache: payload.cache });
+  const selectedDriver = payload.selectedDriver ?? legacyRuntimeDriver("macos-arm64");
+  if (payload.guestPlatforms.some(platform => selectedRuntimeDriver("macos-arm64", platform, selectedDriver) !== selectedDriver)) throw new Error("worker configuration driver is incompatible with macOS ARM64");
+  const observed = WorkerObservedConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms, selectedDriver, cache: payload.cache });
   await cacheService.applyTtl(observed.cache.ttlSeconds);
   cacheService.setRunnerCacheEnabled(observed.cache.runnerCacheEnabled);
   cacheService.setRunnerCacheMaxGiB(observed.cache.runnerCacheMaxGiB);
@@ -313,24 +315,26 @@ async function runMacCommand(command: string[], timeoutMs = 15_000): Promise<{ c
 export async function currentMacDoctor(): Promise<WorkerDoctorData> {
   const tartExecutable = resolveTartExecutable(Bun.env.MARS_TART_EXECUTABLE);
   const tart = await runMacCommand([tartExecutable, "--version"]).catch(() => ({ code: -1, stdout: "" }));
-  const probe = tart.code === 0;
   const macosBaseImage = Bun.env.MARS_TART_MACOS_BASE_IMAGE ?? Bun.env.MARS_TART_BASE_IMAGE ?? "mars-macos-worker";
   const linuxBaseImage = Bun.env.MARS_TART_LINUX_ARM64_BASE_IMAGE ?? "ghcr.io/cirruslabs/ubuntu:latest";
   const tartList = await runMacCommand([tartExecutable, "list", "--format", "json"]).catch(() => ({ code: -1, stdout: "" }));
-  let localImages = false;
+  let localNames = new Set<string>();
   try {
     const entries = JSON.parse(tartList.stdout) as Array<{ Name?: unknown }>;
-    const names = new Set(entries.map(entry => entry.Name).filter((name): name is string => typeof name === "string"));
-    localImages = tartList.code === 0 && names.has(macosBaseImage) && names.has(linuxBaseImage);
+    localNames = new Set(entries.map(entry => entry.Name).filter((name): name is string => typeof name === "string"));
   } catch {}
   const macosDigest = Bun.env.MARS_TART_MACOS_IMAGE_DIGEST?.trim();
   const linuxDigest = Bun.env.MARS_TART_LINUX_ARM64_IMAGE_DIGEST?.trim();
   const digestPattern = /^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/i;
-  const artifactDigests = { "macos-arm64": macosDigest ?? "", "linux-arm64": linuxDigest ?? "" };
-  const immutableImages = digestPattern.test(artifactDigests["macos-arm64"]) && digestPattern.test(artifactDigests["linux-arm64"]);
-  const contractVersion = Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim();
-  const failures = [!probe && "Tart runtime probe failed", !localImages && "Prepared Tart base images are unavailable", !immutableImages && "Both immutable Tart image digests are required", !WorkerContractVersion.safeParse(contractVersion).success && "Worker contract version is missing or invalid"].filter(Boolean);
-  return WorkerDoctorData.parse({ runtimeMode: "tart", artifactSource: "registry", ...(immutableImages ? { artifactDigests, artifactDigest: artifactDigests["macos-arm64"], artifactIdentity: artifactDigests["macos-arm64"] } : {}), runtimeReady: failures.length === 0, probe, imageSignatures: immutableImages, remediation: failures.length ? failures.join("; ") : null });
+  const contractReady = WorkerContractVersion.safeParse(Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim()).success;
+  const probeReady = tart.code === 0;
+  const capabilities = [
+    { driver: "tart-vm", guestPlatform: "macos-arm64", imageDigest: macosDigest && digestPattern.test(macosDigest) ? macosDigest : null, ready: probeReady && localNames.has(macosBaseImage) && !!macosDigest && digestPattern.test(macosDigest) && contractReady, remediation: !probeReady ? "Tart runtime probe failed" : !localNames.has(macosBaseImage) ? "Prepared macOS Tart base image is unavailable" : !macosDigest || !digestPattern.test(macosDigest) ? "Immutable macOS Tart image digest is required" : !contractReady ? "Worker contract version is missing or invalid" : null },
+    { driver: "tart-vm", guestPlatform: "linux-arm64", imageDigest: linuxDigest && digestPattern.test(linuxDigest) ? linuxDigest : null, ready: probeReady && localNames.has(linuxBaseImage) && !!linuxDigest && digestPattern.test(linuxDigest) && contractReady, remediation: !probeReady ? "Tart runtime probe failed" : !localNames.has(linuxBaseImage) ? "Prepared Linux ARM64 Tart base image is unavailable" : !linuxDigest || !digestPattern.test(linuxDigest) ? "Immutable Linux ARM64 image digest is required" : !contractReady ? "Worker contract version is missing or invalid" : null },
+  ];
+  const immutableImages = capabilities.every(capability => capability.imageDigest !== null);
+  const failures = [!probeReady && "Tart runtime probe failed", capabilities.some(capability => !capability.ready) && "One or more configured Tart guest images are unavailable or unverified"].filter(Boolean);
+  return WorkerDoctorData.parse({ runtimeMode: "tart", artifactSource: "registry", ...(immutableImages ? { artifactDigests: { "macos-arm64": macosDigest!, "linux-arm64": linuxDigest! }, artifactDigest: macosDigest, artifactIdentity: macosDigest } : {}), runtimeReady: capabilities.some(capability => capability.ready), probe: probeReady, imageSignatures: immutableImages, remediation: failures.length ? failures.join("; ") : null, capabilities });
 }
 async function currentMacWorkerJoinPayload(code: string, publicKey: string, encryptionPublicKey: string, vmUuid?: string, machineUuid?: string): Promise<MacWorkerJoinPayload> {
   const stableMachineUuid = machineUuid ?? await macMachineUuid();
