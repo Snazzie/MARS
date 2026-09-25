@@ -8,14 +8,11 @@ permissions:
 
 jobs:
   retry:
-    runs-on: [mars-windows-x64-2vcpu-4g, mars-retry-3]
+    runs-on: [mars-any-2vcpu-4g, mars-retry-3]
     timeout-minutes: 15
     steps:
-      - name: Fail initial attempt intentionally
-        if: ${{ github.run_attempt == '1' }}
-        shell: powershell
-        run: exit 1
-      - name: Succeed after GitHub reruns the job
-        if: ${{ github.run_attempt != '1' }}
-        shell: powershell
-        run: Write-Host "Mars retry smoke succeeded on attempt $env:GITHUB_RUN_ATTEMPT"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Fail once and succeed on GitHub rerun
+        run: bun -e "if (process.env.GITHUB_RUN_ATTEMPT === '1') process.exit(1); console.log('Mars retry smoke succeeded on attempt', process.env.GITHUB_RUN_ATTEMPT)"
