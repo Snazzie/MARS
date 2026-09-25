@@ -41,9 +41,9 @@ docker compose up -d postgres
 
 Local development ports and service behavior are defined in `scripts/dev.ts` and `scripts/dev-ports.ts`.
 
-### Run a development Windows container worker without installing a service
+### Run a foreground Windows development worker
 
-On a Windows host with Docker Desktop in **Windows container mode** and Hyper-V available, set the same `MARS_DEV_TOKEN` used by the development control plane at `https://mars.snazzie.space`. That deployment must run `scripts/control-plane-dev-entry.ts` with the dev enrollment and image-payload adapters; a production deployment or mismatched token cannot enroll this worker.
+On a Windows host, set the same `MARS_DEV_TOKEN` used by the development control plane at `https://mars.snazzie.space`. That deployment must run `scripts/control-plane-dev-entry.ts` with the dev enrollment adapter; a production deployment or mismatched token cannot enroll this worker. Docker is optional for discovery. With an active Windows Docker engine, the launcher also requires the development image-payload adapter and builds/verifies the local Windows job image. It does not switch Docker engines. For Linux Docker jobs, provision a verified digest-pinned x64 runner image and set `MARS_LINUX_X64_CONTAINER_IMAGE` before starting the worker.
 
 In a separate terminal from `bun run dev`, run from this checkout:
 
@@ -51,7 +51,7 @@ In a separate terminal from `bun run dev`, run from this checkout:
 bun run dev:windows-worker
 ```
 
-The command verifies or builds the local Windows job image and runs the orchestrator in the foreground. It does not install, stop, or modify the `MarsWorker` service; it refuses to start while that service is running. Its separate worker identity and image manifest live in `%LOCALAPPDATA%\Mars\dev-worker`. On first join, approve and configure the pending worker in the control plane before it is schedulable. Press Ctrl-C to stop the foreground worker. The production installer remains the supported path for service workers.
+The command runs the orchestrator in the foreground; without a ready runtime it can enroll and report capabilities but cannot run jobs. It does not install, stop, or modify the `MarsWorker` service; it refuses to start while that service is running. Its separate worker identity and image manifest live in `%LOCALAPPDATA%\Mars\dev-worker`. On first join, approve and configure the pending worker in the control plane before it is schedulable. Press Ctrl-C to stop the foreground worker. The production installer remains the supported path for service workers.
 
 ### Run a foreground macOS development worker
 

@@ -83,7 +83,7 @@ export async function secureWorkerPrivatePath(path: string, directory = false, p
     return;
   }
   if (!currentWindowsSid) {
-    const identity = Bun.spawnSync(["whoami.exe", "/user", "/fo", "csv", "/nh"]);
+    const identity = Bun.spawnSync([win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "whoami.exe"), "/user", "/fo", "csv", "/nh"]);
     const output = new TextDecoder().decode(identity.stdout);
     currentWindowsSid = output.match(/S-\d+(?:-\d+)+/)?.[0] ?? null;
     if (identity.exitCode !== 0 || !currentWindowsSid) throw new Error("could not resolve the worker Windows security identifier");
@@ -91,7 +91,7 @@ export async function secureWorkerPrivatePath(path: string, directory = false, p
   const permission = directory ? "(OI)(CI)F" : "F";
   const grants = [`*${currentWindowsSid}:${permission}`];
   if (currentWindowsSid !== "S-1-5-18") grants.push(`*S-1-5-18:${permission}`);
-  const result = Bun.spawnSync(["icacls.exe", path, "/inheritance:r", "/grant:r", ...grants]);
+  const result = Bun.spawnSync([win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "icacls.exe"), path, "/inheritance:r", "/grant:r", ...grants]);
   if (result.exitCode !== 0) throw new Error(`could not secure worker-private cache path: ${new TextDecoder().decode(result.stderr).trim()}`);
 }
 

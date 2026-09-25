@@ -1416,7 +1416,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     if (!idempotency(c)) return c.json({ error: "Idempotency-Key required" }, 400);
     try {
       const body = await c.req.json();
-      const parsed = WorkerConfiguration.safeParse({ appliance: body.appliance, runtime: body.runtime, guestPlatforms: body.guestPlatforms });
+      const parsed = WorkerConfiguration.safeParse({ appliance: body.appliance, runtime: body.runtime, guestPlatforms: body.guestPlatforms, selectedDriver: body.selectedDriver });
       if (!parsed.success) return c.json({ error: "invalid worker configuration" }, 400);
       const key = c.req.header("Idempotency-Key")!.trim();
       const [prior] = await deps.db<{ response: Record<string, unknown> | null }[]>`select response from worker_mutations where worker_id=${c.req.param("workerId")} and idempotency_key=${key}`;

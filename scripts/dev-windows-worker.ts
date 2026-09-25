@@ -22,7 +22,7 @@ async function main(): Promise<void> {
   const service = await command(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$s=Get-Service -Name MarsWorker -ErrorAction SilentlyContinue; if ($s -and $s.Status -eq 'Running') { 'running' } else { 'stopped' }"]);
   if (service !== "stopped") throw new Error("MarsWorker service is running; stop it manually before starting a separate development worker");
   const dockerMode = await command(["docker.exe", "info", "--format", "{{.OSType}}"]).catch(() => "");
-  if (dockerMode.toLowerCase() !== "windows") throw new Error("Docker must be running in Windows container mode");
+  if (dockerMode.toLowerCase() !== "windows") console.log("Windows Docker engine unavailable; starting worker for capability discovery without building a Windows job image");
 
   const root = join(Bun.env.LOCALAPPDATA ?? join(Bun.env.USERPROFILE ?? "", "AppData", "Local"), "Mars", "dev-worker");
   await mkdir(root, { recursive: true });
@@ -43,18 +43,20 @@ async function main(): Promise<void> {
     if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw new Error("Development worker identity is unreadable; refusing to replace it", { cause: error });
   }
 
-  const response = await fetch(`${controlPlane}/api/workers/dev-windows-image-build`, { headers: { authorization: `Bearer ${token}` } });
-  if (!response.ok) throw new Error(response.status === 503
-    ? "Development image payload unavailable (HTTP 503): control plane is missing Windows container build inputs"
-    : `Development image payload unavailable (HTTP ${response.status}); verify the dev control-plane adapter and matching MARS_DEV_TOKEN`);
-  const payload = WorkerBuildImagePayload.parse(await response.json());
-  if (payload.image !== image || createHash("sha256").update(workerBuildImageContentDescriptor(payload)).digest("hex") !== payload.contentSha256) throw new Error("Development image payload identity or content digest mismatch");
-  for (const artifact of [...Object.values(payload.artifacts), payload.runner, payload.git, payload.vcRuntime]) {
-    const url = new URL(artifact.url);
-    if (url.protocol !== "https:" || url.username || url.password) throw new Error("Development image artifacts require credential-free HTTPS URLs");
+  if (dockerMode.toLowerCase() === "windows") {
+    const response = await fetch(`${controlPlane}/api/workers/dev-windows-image-build`, { headers: { authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error(response.status === 503
+      ? "Development image payload unavailable (HTTP 503): control plane is missing Windows container build inputs"
+      : `Development image payload unavailable (HTTP ${response.status}); verify the dev control-plane adapter and matching MARS_DEV_TOKEN`);
+    const payload = WorkerBuildImagePayload.parse(await response.json());
+    if (payload.image !== image || createHash("sha256").update(workerBuildImageContentDescriptor(payload)).digest("hex") !== payload.contentSha256) throw new Error("Development image payload identity or content digest mismatch");
+    for (const artifact of [...Object.values(payload.artifacts), payload.runner, payload.git, payload.vcRuntime]) {
+      const url = new URL(artifact.url);
+      if (url.protocol !== "https:" || url.username || url.password) throw new Error("Development image artifacts require credential-free HTTPS URLs");
+    }
+    const { imageId } = await prepareWindowsContainerImage(payload, manifestPath);
+    console.log(`Verified development Windows image ${imageId}`);
   }
-  const { imageId } = await prepareWindowsContainerImage(payload, manifestPath);
-  console.log(`Verified development Windows image ${imageId}`);
 
   const temp = enrolled ? null : await mkdtemp(join(root, "credential-"));
   let child: Bun.Subprocess | null = null;
@@ -69,7 +71,7 @@ async function main(): Promise<void> {
     const env = {
       ...process.env,
       MARS_CONTROL_PLANE_URL: controlPlane,
-      MARS_WINDOWS_RUNTIME: "container",
+      MARS_WINDOWS_RUNTIME: "",
       MARS_WINDOWS_CONTAINER_IMAGE: image,
       MARS_WINDOWS_CONTAINER_PREFIX: "mars-dev",
       MARS_ALLOW_LOCAL_CONTAINER_IMAGE: "true",
