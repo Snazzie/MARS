@@ -7,7 +7,7 @@
 ## Features
 
 - **Pool the hardware you already have:** Bring workers on different hosts into a centrally managed runner fleet.
-- **Install with one copied command:** Choose a supported platform in the dashboard, copy its generated install command, and run it on your hardware to install the worker and join the control plane; approve the pending worker before it accepts jobs.
+- **Install with one copied command:** Choose a supported platform in the dashboard, copy its generated install command, and run it on your hardware. Under **All workspaces → Workers**, expand the pending worker's **Review and approve** panel, verify its fingerprint and public key, set resource limits, and approve it before it accepts jobs. Action cache settings are optional and collapsed by default.
 - **Run multiple jobs per worker:** Allocate a worker's capacity across concurrent jobs instead of dedicating a whole machine to each job.
 - **Share workers across organizations:** Use one worker fleet for repositories in multiple GitHub organizations.
 - **Request the compute you need:** Specify CPU and memory in resource-aware `runs-on` labels, and route jobs to compatible pools. [Routing guide](docs/worker-routing-labels.md).

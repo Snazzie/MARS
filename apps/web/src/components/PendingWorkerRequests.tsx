@@ -1,7 +1,6 @@
-import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import type { PendingWorkerRequestData } from "@mars/contracts";
-import { ApiRequestError, getPendingWorkerRequests, isUnauthorized, rejectPendingWorker } from "../api.ts";
+import { ApiRequestError, getPendingWorkerRequests, isUnauthorized } from "../api.ts";
 import { QueryState } from "./StateView.tsx";
 import { WorkerConfigurationForm } from "./WorkerConfigurationForm.tsx";
 
@@ -14,14 +13,27 @@ export function pendingWorkerQueryOptions() {
 
 export function PendingWorkerRequests({ organizationId, workers, error, isLoading, retry }: Props) {
   const client = useQueryClient();
-  const [mutationError, setMutationError] = useState<string | null>(null);
   const refresh = () => {
     void client.invalidateQueries({ queryKey: ["pending-workers"] });
     void client.invalidateQueries({ queryKey: ["org", organizationId, "workers"] });
   };
-  const reject = useMutation({ mutationFn: rejectPendingWorker, onSuccess: refresh, onError: (cause) => setMutationError(cause instanceof Error ? cause.message : "Rejection failed") });
   if (error && isUnauthorized(error)) return <QueryState error={error} isLoading={false} />;
   if (error instanceof ApiRequestError && error.status === 403) return <section className="pending-workers state-view state-error"><h2>Authorization required</h2><p>Only global administrators can review pending workers.</p></section>;
   if (isLoading && workers.length === 0) return <QueryState error={null} isLoading />;
-  return <section className="pending-workers" aria-labelledby="pending-workers-title"><div><h2 id="pending-workers-title">Workers awaiting approval</h2><p className="pending-note">Review and configure workers from <strong>All workspaces</strong>. Approval applies the resource limits and makes the worker available for scheduling.</p></div>{error && <QueryState error={error} isLoading={false} retry={retry} />}{mutationError && <p className="form-error" role="alert">{mutationError}</p>}{workers.length === 0 ? <p className="pending-empty">No workers are waiting for approval.</p> : workers.map((worker) => <article className="pending-worker" key={worker.id}><h3>{worker.name ?? worker.vmUuid}</h3><p>{worker.platform} · {worker.fingerprint}</p><p><strong>Public key</strong><br /><code>{worker.publicKey}</code></p><WorkerConfigurationForm worker={{ ...worker, selectedDriver: null, capabilities: worker.doctor.capabilities }} onConfigured={refresh} /><button type="button" disabled={reject.isPending} onClick={() => reject.mutate(worker.id)}>Reject worker</button></article>)}</section>;
+  return <section className="pending-workers" aria-labelledby="pending-workers-title">
+    <div><h2 id="pending-workers-title">Workers awaiting approval</h2><p className="pending-note">Review each worker's identity and limits before making it available for scheduling.</p></div>
+    {error && <QueryState error={error} isLoading={false} retry={retry} />}
+    {workers.length === 0 ? <p className="pending-empty">No workers are waiting for approval.</p> : workers.map((worker) =>
+      <article className="pending-worker" key={worker.id}>
+        <div className="pending-worker-heading"><div><h3>{worker.name ?? worker.computerName}</h3><p>{worker.platform} · {worker.vmUuid}</p></div><span className="status-pill status-pending">Awaiting approval</span></div>
+        <details className="pending-worker-review">
+          <summary>Review and approve <span aria-hidden="true">→</span></summary>
+          <div className="pending-worker-details">
+            <p className="field-help">Verify this identity against the host before approving.</p>
+            <dl><div><dt>Fingerprint</dt><dd><code>{worker.fingerprint}</code></dd></div><div><dt>Public key</dt><dd><code>{worker.publicKey}</code></dd></div></dl>
+            <WorkerConfigurationForm worker={{ ...worker, selectedDriver: null, capabilities: worker.doctor.capabilities }} onConfigured={refresh} onDiscard={refresh} />
+          </div>
+        </details>
+      </article>)}
+  </section>;
 }

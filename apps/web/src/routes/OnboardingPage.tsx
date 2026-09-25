@@ -168,9 +168,8 @@ function GithubStep({ detail }: { detail: OnboardingDetail }) {
   </div>;
 }
 function WorkerSetupStep({ detail, onSelect, onDone, onDiscard, edit = false }: { detail: OnboardingDetail; onSelect: (id: string) => void; onDone: () => void; onDiscard?: () => void; edit?: boolean }) {
-  const discard = useMutation({ mutationFn: rejectPendingWorker, onSuccess: () => onDiscard?.() });
   if (!detail.worker) return <WorkerStep onSelect={onSelect} />;
-  return <div><h3>Worker enrollment</h3><p>Selected worker: {detail.worker.name ?? detail.worker.vmUuid}</p>{detail.worker.admissionState === "pending" && onDiscard && <button className="button destructive" type="button" onClick={() => { if (window.confirm("Discard this pending worker and generate a new installation?")) discard.mutate(detail.worker!.id); }} disabled={discard.isPending}>Discard and reinstall</button>}{discard.error && <p role="alert">{discard.error instanceof Error ? discard.error.message : "Could not discard the pending worker."}</p>}<ResourceStep detail={detail} onDone={onDone} onDiscard={onDiscard} edit={edit} /></div>;
+  return <div><h3>Worker enrollment</h3><p>Selected worker: {detail.worker.name ?? detail.worker.vmUuid}</p><ResourceStep detail={detail} onDone={onDone} onDiscard={onDiscard} edit={edit} /></div>;
 }
 const canonicalRunnerLabel = (platform: "linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64", ubuntuVersion: "22" | "24" | "26") => platform === "linux-x64" ? `mars-ubuntu-${ubuntuVersion}` : `mars-${platform}`;
 function LabelsStep({ detail, onSkip }: { detail: OnboardingDetail; onSkip: () => void }) {

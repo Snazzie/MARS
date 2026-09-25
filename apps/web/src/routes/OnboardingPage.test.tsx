@@ -140,9 +140,10 @@ test("worker step renders enrollment inline and requires explicit selection", ()
   expect(html).toContain("Use this worker");
   expect(html).toContain("Discard and reinstall");
 });
-test("selected pending worker can be discarded for reinstall", () => {
+test("selected pending worker exposes a single rejection action beside approval", () => {
   const html = markup({ version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "worker", worker: { ...worker, admissionState: "pending", configurationState: "unconfigured" }, organizations: [], github: { appConfigured: false, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: null });
-  expect(html).toContain("Discard and reinstall");
+  expect(html.match(/>Reject worker<\/button>/g)?.length).toBe(1);
+  expect(html).not.toContain("Discard and reinstall");
 });
 
 test("completed review does not invent a selected worker", () => {
