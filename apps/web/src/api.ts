@@ -279,7 +279,7 @@ export function buildWorkerImage(workerId: string, spec: z.input<typeof WorkerIm
   });
 }
 
-export async function mutateWorker(organizationId: string, workerId: string, action: "reject" | "drain" | "resume" | "remove"): Promise<{ ok: boolean }> {
+export async function mutateWorker(organizationId: string, workerId: string, action: "adopt" | "reject" | "drain" | "resume" | "remove"): Promise<{ ok: boolean }> {
   const idempotencyKey = crypto.randomUUID();
   return request(`/api/organizations/${organizationId}/workers/${workerId}/${action}`, DashboardOkResponse, {
     method: "POST",

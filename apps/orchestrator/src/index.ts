@@ -20,10 +20,10 @@ if (import.meta.main && Bun.argv[2] === "mac-worker") {
   const driver = new LibvirtVmDriver({ goldenDisk: Bun.env.MARS_GOLDEN_DISK!, goldenDigest: Bun.env.MARS_GOLDEN_DIGEST! as `sha256:${string}`, domainTemplate: Bun.env.MARS_DOMAIN_TEMPLATE!, cloneRoot: Bun.env.MARS_CLONE_ROOT!, channelRoot: Bun.env.MARS_CHANNEL_ROOT!, network: Bun.env.MARS_LIBVIRT_NETWORK!, prefix: "mars", limits, guestReadyTimeoutMs: Number(Bun.env.GUEST_READY_TIMEOUT_MS ?? 120_000) });
   await runLinuxWorker(baseUrl, driver, limits);
 } else if (import.meta.main && (Bun.argv[2] === "linux-container-worker" || Bun.argv[2] === "docker-linux-worker")) {
-  const required = ["MARS_LINUX_CONTAINER_IMAGE", "MARS_LINUX_CONTAINER_NETWORK"] as const;
+  const required = ["MARS_LINUX_ARM64_CONTAINER_IMAGE", "MARS_LINUX_CONTAINER_NETWORK"] as const;
   const missing = required.filter((name) => !Bun.env[name]);
-  if (!baseUrl || missing.length || !/^.+@sha256:[0-9a-f]{64}$/.test(Bun.env.MARS_LINUX_CONTAINER_IMAGE ?? "")) throw new Error(`Linux ARM container worker configuration missing or invalid: ${[...(baseUrl ? [] : ["MARS_CONTROL_PLANE_URL"]), ...missing, ...(/^.+@sha256:[0-9a-f]{64}$/.test(Bun.env.MARS_LINUX_CONTAINER_IMAGE ?? "") ? [] : ["MARS_LINUX_CONTAINER_IMAGE"])].join(", ")}`);
-  const driver = new LinuxContainerDriver({ image: Bun.env.MARS_LINUX_CONTAINER_IMAGE!, prefix: "mars-linux-arm64", network: Bun.env.MARS_LINUX_CONTAINER_NETWORK!, limits });
+  if (!baseUrl || missing.length || !/^.+@sha256:[0-9a-f]{64}$/.test(Bun.env.MARS_LINUX_ARM64_CONTAINER_IMAGE ?? "")) throw new Error(`Linux ARM container worker configuration missing or invalid: ${[...(baseUrl ? [] : ["MARS_CONTROL_PLANE_URL"]), ...missing, ...(/^.+@sha256:[0-9a-f]{64}$/.test(Bun.env.MARS_LINUX_ARM64_CONTAINER_IMAGE ?? "") ? [] : ["MARS_LINUX_ARM64_CONTAINER_IMAGE"])].join(", ")}`);
+  const driver = new LinuxContainerDriver({ image: Bun.env.MARS_LINUX_ARM64_CONTAINER_IMAGE!, prefix: "mars-linux-arm64", network: Bun.env.MARS_LINUX_CONTAINER_NETWORK!, limits, jobTimeoutMs: Number(Bun.env.JOB_TIMEOUT_MS ?? 900_000) });
   await runDockerLinuxWorker(baseUrl, driver, limits);
 } else if (import.meta.main) {
   console.error("usage: mars-orchestrator <linux-worker|linux-container-worker|mac-worker|windows-worker>");

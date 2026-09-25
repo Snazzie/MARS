@@ -3,8 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Button } from "@astryxdesign/core/Button";
 import { ApiRequestError, getWorkerControlPlaneUrls, getWorkerUpgrade, mutateWorker } from "../api.ts";
 
-type Action = "reject" | "drain" | "resume" | "remove";
+type Action = "adopt" | "reject" | "drain" | "resume" | "remove";
 const copy: Record<Action, { label: string; confirm: string; variant: "primary" | "secondary" | "destructive" }> = {
+ adopt: { label: "Adopt", confirm: "Adopt this worker? Configure its resources before enabling scheduling.", variant: "primary" },
  reject: { label: "Reject", confirm: "Reject this worker? Its enrollment will be revoked and it will not receive work.", variant: "destructive" },
  drain: { label: "Pause new leases", confirm: "Pause new lease assignment for this worker? Existing leases will finish normally.", variant: "secondary" },
  resume: { label: "Resume new leases", confirm: "Resume new lease assignment for this worker? It will become eligible after configuration and runtime checks are ready.", variant: "primary" },
@@ -60,6 +61,7 @@ export function WorkerActions({ organizationId, workerId, admissionState, draini
  const supportsUpgrade = platform === "windows-x64";
  return <>
   <div className="worker-actions" aria-label="Worker actions">
+   {admissionState === "pending" && <Button label="Adopt" variant="primary" clickAction={() => open("adopt")} />}
    {admissionState === "adopted" && <><Button label={draining ? "Resume new leases" : "Pause new leases"} variant="secondary" clickAction={() => open(draining ? "resume" : "drain")} />{supportsUpgrade && <Button label={targetInfo ? `Upgrade to v${targetInfo.releaseVersion}` : "Upgrade"} variant="secondary" isDisabled={!targetInfo} clickAction={() => void openUpgrade()} />}{<Button label="Remove" variant="destructive" clickAction={() => open("remove")} />}</>}
   </div>
   {upgradeError && <p className="inline-error" role="alert">{upgradeError}</p>}
