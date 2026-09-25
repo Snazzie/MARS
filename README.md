@@ -1,6 +1,6 @@
 # MARS
 
-<img src="assets/mars-icon.svg" alt="MARS logo" width="320">
+<img src="assets/mars-logo.png" alt="MARS logo" width="320">
 
 **MARS (Managed Action Runner System)** brings scattered Windows, macOS, and Linux hardware together as your own GitHub Actions runner cluster. Manage workers centrally while choosing the platform and compute resources each workflow needs.
 
