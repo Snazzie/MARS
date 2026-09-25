@@ -34,6 +34,7 @@ Existing GitHub App installations need **Actions: write** permission approved an
 
 - [Development setup and worker commands](docs/development.md)
 - [Windows worker runtimes and prerequisites](docs/windows-worker-runtimes.md)
+- [GPU runner evaluation and deferred design](docs/gpu-runner-evaluation.md)
 - [Control-plane deployment guide](deploy/control-plane/README.md)
 - [Implementation status](IMPLEMENTATION-STATUS.md)
 
