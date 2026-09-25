@@ -39,12 +39,12 @@ export class GithubJobsClient {
   private readonly fetcher: Fetcher;
   private readonly apiBase: string;
   constructor(options: GithubJobsClientOptions) { this.token = options.token; this.fetcher = options.fetch ?? fetch; this.apiBase = options.apiBase ?? "https://api.github.com"; }
-  private async request(path: string, init: RequestInit = {}): Promise<Record<string, unknown>> {
+  private async request(path: string, init: RequestInit = {}, emptyResponse = false): Promise<Record<string, unknown>> {
     const headers = new Headers(init.headers);
     headers.set("accept", "application/vnd.github+json"); headers.set("content-type", "application/json"); headers.set("x-github-api-version", "2026-03-10"); headers.set("authorization", `Bearer ${await this.token()}`);
     const response = await this.fetcher(`${this.apiBase}${path}`, { ...init, headers });
     if (!response.ok) { console.error(`GitHub jobs request failed: ${response.status} ${path}`); throw new Error(`github_${response.status}`); }
-    const value: unknown = response.status === 204 ? {} : await response.json();
+    const value: unknown = emptyResponse || response.status === 204 ? {} : await response.json();
     return value && typeof value === "object" ? value as Record<string, unknown> : {};
   }
   private async requestText(path: string, maxBytes: number): Promise<string> {
@@ -101,6 +101,9 @@ export class GithubJobsClient {
     return run;
   }
   async getJob(owner: string, repo: string, jobId: number): Promise<GithubJobSnapshot> { return this.parseJob(await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/jobs/${jobId}`)); }
+  async rerunJob(owner: string, repo: string, jobId: number): Promise<void> {
+    await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/jobs/${jobId}/rerun`, { method: "POST" }, true);
+  }
   async listJobs(owner: string, repo: string, runId: number, runAttempt: number, page: number): Promise<{ totalCount: number; jobs: GithubJobSnapshot[] }> {
     const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100&page=${page}`);
     const jobs = Array.isArray(value.jobs) ? value.jobs.filter((x): x is Record<string, unknown> => Boolean(x && typeof x === "object")).map(x => this.parseJob(x)) : [];

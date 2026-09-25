@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { JobLabelRecommendation } from "@mars/contracts";
-import { formatRunnerLabel, parseRunnerLabels } from "@mars/contracts";
+import { formatRunnerLabel, parseJobRunnerLabels, parseRunnerLabels } from "@mars/contracts";
 import { createRunnerWorkflowPr, getRunnerWorkflowFiles, previewRunnerWorkflowPr } from "../api.ts";
 
 type FocusedRecommendation = Partial<Pick<JobLabelRecommendation, "currentRoutingLabel" | "currentPlatform" | "currentLabels" | "recommendedVcpu" | "recommendedMemoryGiB" | "p95CpuPeakPercent" | "p95MemoryPeakBytes" | "successfulRunCount">> & {
@@ -51,10 +51,10 @@ export const handleRunnerWorkflowEscape = (event: KeyboardEvent, onClose: () => 
 export const formatRunnerWorkflowRunsOn = (value: string | string[]) => Array.isArray(value) ? value.join(", ") : value;
 
 export function areRunnerWorkflowLabelsValid(labels: readonly string[], expectedCurrentLabels?: readonly string[]): boolean {
-  const parsed = parseRunnerLabels(labels);
+  const parsed = parseJobRunnerLabels(labels)?.options;
   if (!parsed) return false;
   if (!expectedCurrentLabels) return true;
-  const expected = parseRunnerLabels(expectedCurrentLabels);
+  const expected = parseJobRunnerLabels(expectedCurrentLabels)?.options;
   if (!expected) return false;
   const expectedRoutes = new Set(expected.map((label) => label.route));
   const requestedRoutes = new Set(parsed.map((label) => label.route));

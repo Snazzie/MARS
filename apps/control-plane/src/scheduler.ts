@@ -1,4 +1,4 @@
-import { ANY_RUNNER_LABEL, ANY_X64_RUNNER_LABEL, parseRunnerLabels, PoolResources, type ParsedRunnerLabel, WorkerLimits } from "@mars/contracts";
+import { ANY_RUNNER_LABEL, ANY_X64_RUNNER_LABEL, parseJobRunnerLabels, PoolResources, type ParsedRunnerLabel, WorkerLimits } from "@mars/contracts";
 
 export interface Candidate {
   worker: { admissionState:string; connectionState:string; configurationState:string; configurationRevision:string|null; appliedConfigurationRevision:string|null; runtimeReady?: boolean; imageEvidenceReady?: boolean; acceptingLeases?: boolean; limits: unknown };
@@ -24,7 +24,7 @@ export function selectProvisionOption(
 }
 
 export function fits(candidate: Candidate): boolean {
-  const options = parseRunnerLabels(candidate.requestedLabels);
+  const options = parseJobRunnerLabels(candidate.requestedLabels)?.options;
   if (!options) return false;
   const option = selectProvisionOption(options, candidate.pool);
   if (!option) return false;
@@ -36,7 +36,7 @@ export function fits(candidate: Candidate): boolean {
 }
 
 export function reason(candidate: Candidate): string {
-  const options = parseRunnerLabels(candidate.requestedLabels);
+  const options = parseJobRunnerLabels(candidate.requestedLabels)?.options;
   if (!options) return "invalid_provision_labels";
   const option = selectProvisionOption(options, candidate.pool);
   if (!option) return "no_matching_labels";

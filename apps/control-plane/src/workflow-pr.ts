@@ -1,5 +1,5 @@
 import YAML, { isMap, isScalar, isSeq, type Document } from "yaml";
-import { parseRunnerLabels } from "@mars/contracts";
+import { parseJobRunnerLabels } from "@mars/contracts";
 
 export interface WorkflowJobPreview {
   id: string;
@@ -114,23 +114,30 @@ function focusedLabels(currentRunsOn: string | readonly string[], labels: readon
   const current = runsOnValues(currentRunsOn);
   if (!labels.length) throw new Error("Cannot replace selected workflows: labels cannot be empty");
 
-  const currentParsed = parseRunnerLabels(current);
-  const requestedParsed = parseRunnerLabels(labels);
+  const currentParsed = parseJobRunnerLabels(current);
+  const requestedParsed = parseJobRunnerLabels(labels);
   if (!currentParsed || !requestedParsed) {
     throw new Error("Focused workflow labels must contain valid composite runner labels");
   }
 
-  const currentRoutes = new Set(currentParsed.map((label) => label.route));
-  const requestedRoutes = new Set(requestedParsed.map((label) => label.route));
+  const currentRoutes = new Set(currentParsed.options.map((label) => label.route));
+  const requestedRoutes = new Set(requestedParsed.options.map((label) => label.route));
   if (currentRoutes.size !== requestedRoutes.size || [...currentRoutes].some((route) => !requestedRoutes.has(route))) {
     throw new Error("Focused workflow labels must preserve the existing routing label set");
   }
 
-  const requestedByRoute = new Map(requestedParsed.map((label) => [label.route, label]));
-  return currentParsed.map((label, index) => {
-    const requested = requestedByRoute.get(label.route)!;
-    return label.vcpu === requested.vcpu && label.memoryGiB === requested.memoryGiB ? current[index]! : requested.original;
-  });
+  const requestedByRoute = new Map(requestedParsed.options.map((label) => [label.route, label]));
+  const updated = current.map((label) => {
+    const existing = currentParsed.options.find((option) => option.original === label.trim());
+    if (!existing) return requestedParsed.maxRetries === null ? label : null;
+    const requested = requestedByRoute.get(existing.route)!;
+    return existing.vcpu === requested.vcpu && existing.memoryGiB === requested.memoryGiB ? label : requested.original;
+  }).filter((label): label is string => label !== null);
+  if (requestedParsed.maxRetries !== null) {
+    const directive = labels.find((label) => /^mars-retry-/i.test(label.trim()))!;
+    updated.push(directive);
+  }
+  return updated;
 }
 
 function runsOnValues(value: string | readonly string[]): string[] {

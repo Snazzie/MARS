@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseRunnerLabels } from "@mars/contracts";
+import { parseJobRunnerLabels, parseRunnerLabels } from "@mars/contracts";
 import { fits, reason, selectProvisionOption, type Candidate } from "./scheduler.ts";
 
 const GiB = 1024 ** 3;
@@ -42,6 +42,22 @@ describe("runner label routing", () => {
     expect(parseRunnerLabels(["self-hosted", "linux", "x64"])).toBeNull();
     expect(parseRunnerLabels(["mars-linux-x64-2vcpu-4g", "MARS-LINUX-X64-3vcpu-5g"])).toBeNull();
     expect(parseRunnerLabels(["mars-linux-x64-2vcpu-4g", "mars-linux-x64-2vcpu-4g"])).toBeNull();
+  });
+
+  test("routes one composite label alongside a bounded retry directive", () => {
+    const labels = ["mars-linux-x64-2vcpu-4g", " MARS-RETRY-3 "];
+    expect(parseJobRunnerLabels(labels)).toMatchObject({ maxRetries: 3, options: [{ route: "mars-linux-x64" }] });
+    expect(parseRunnerLabels(labels)).toBeNull();
+    expect(fits(candidate(labels))).toBe(true);
+    expect(reason(candidate(labels))).toBe("admissible");
+  });
+
+  test("rejects duplicate, zero, noncanonical, and malformed retry directives", () => {
+    for (const directive of ["mars-retry-0", "mars-retry-01", "mars-retry-11", "mars-retry-3x", "mars-retry-", "mars-retry--1"]) {
+      expect(parseJobRunnerLabels(["mars-any-2vcpu-4g", directive])).toBeNull();
+    }
+    expect(parseJobRunnerLabels(["mars-any-2vcpu-4g", "mars-retry-3", "MARS-RETRY-2"])).toBeNull();
+    expect(parseJobRunnerLabels(["mars-retry-3"])).toBeNull();
   });
 });
 

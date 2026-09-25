@@ -4,6 +4,7 @@ import type { Server } from "bun";
 import { getSession, SecretBox, type SessionUser } from "./auth.ts";
 import { configureRunLifecycle } from "./runs.ts";
 import { discoverAvailableRepositoryJobs, discoverQueuedRepositoryJobs } from "./job-discovery.ts";
+import { retryFailedGithubJobs } from "./job-retry.ts";
 import { WorkerCommandDispatcher, listReplayableWorkerCommands } from "./worker-dispatch.ts";
 import { createRequestLimiter } from "./worker-requests.ts";
 import { GitHubAppService } from "./github-app.ts";
@@ -569,6 +570,10 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
         if (isDiscoveryCycleSuccessful(report)) discoveryHealth.markSuccess();
         if (report.failed) console.error(`GitHub job discovery: repositories=${report.repositories} discovered=${report.discovered} updated=${report.updated} failed=${report.failed}`);
       } catch (error) { console.error("GitHub job discovery failed", error); }
+      try {
+        const retry = await retryFailedGithubJobs(discoveryDeps);
+        if (retry.requested || retry.failed) console.log(`GitHub job retries: requested=${retry.requested} skipped=${retry.skipped} failed=${retry.failed}`);
+      } catch (error) { console.error("GitHub job retry cycle failed", error); }
     }, discoveryIntervalMs, false);
     triggerReconciliation = reconciliationScheduler.trigger;
     const runRetention = async () => { try { console.log("Retention pruner", await pruneExpiredData(db)); } catch (error) { console.error("Retention pruning failed", error); } };

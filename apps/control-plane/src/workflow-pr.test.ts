@@ -79,6 +79,16 @@ jobs:
   expect(output).toContain("echo lint");
 });
 
+test("focused resource edit retains retry directive unless explicitly replaced", () => {
+  const input = content.replace("ubuntu-latest", "[mars-retry-3, mars-any-2vcpu-4g]");
+  const files = discoverWorkflowFiles([{ path: ".github/workflows/ci.yml", content: input }]);
+  const request = (labels: string[]) => previewWorkflowMutation({
+    files, selectedPath: ".github/workflows/ci.yml", selectedJobId: "test", labels,
+  }).jobs[0]!.proposedRunsOn;
+  expect(request(["mars-any-4vcpu-8g"])).toEqual(["mars-retry-3", "mars-any-4vcpu-8g"]);
+  expect(request(["mars-any-4vcpu-8g", "mars-retry-2"])).toEqual(["mars-any-4vcpu-8g", "mars-retry-2"]);
+});
+
 test("focused mutation rejects old syntax, malformed alternatives, duplicates, and route changes", () => {
   const focusedContent = content.replace("ubuntu-latest", "[mars-windows-x64-4vcpu-8g, mars-macos-arm64-2vcpu-4g]");
   const files = discoverWorkflowFiles([{ path: ".github/workflows/ci.yml", content: focusedContent }]);

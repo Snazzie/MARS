@@ -72,6 +72,7 @@ describe("GitHub App onboarding", () => {
     expect(launch.manifest).not.toContain("installation_repositories");
     const manifest = JSON.parse(launch.manifest);
     expect(manifest.default_events).toEqual(["workflow_job", "membership"]);
+    expect(manifest.default_permissions.actions).toBe("write");
     expect(manifest.default_permissions.contents).toBe("write");
     expect(manifest.default_permissions.pull_requests).toBe("write");
     expect(manifest.hook_attributes).toEqual({ url: "https://hooks.example.test/api/github/webhooks", active: true });

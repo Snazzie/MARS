@@ -1,0 +1,2 @@
+ALTER TABLE "dashboard_runs" ADD COLUMN "retry_requested_attempt" integer;--> statement-breakpoint
+ALTER TABLE "dashboard_runs" ADD COLUMN "retry_eligible_since" timestamp with time zone DEFAULT now() NOT NULL;

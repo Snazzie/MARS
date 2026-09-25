@@ -337,6 +337,8 @@ export const dashboardRuns = pgTable("dashboard_runs", {
 	completedAt: timestamp("completed_at", { withTimezone: true, mode: 'string' }),
 	runtimeBoundary: text("runtime_boundary"),
 	runAttempt: integer("run_attempt").default(1).notNull(),
+	retryRequestedAttempt: integer("retry_requested_attempt"),
+	retryEligibleSince: timestamp("retry_eligible_since", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	actionGraphResolvedAt: timestamp("action_graph_resolved_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
 	uniqueIndex("dashboard_runs_github_id_idx").using("btree", table.organizationId.asc().nullsLast(), table.githubRunId.asc().nullsLast()).where(sql`(github_run_id IS NOT NULL)`),

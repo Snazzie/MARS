@@ -29,6 +29,13 @@
       "when": 1789763363097,
       "tag": "0003_premium_black_widow",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790295108765,
+      "tag": "0004_friendly_post",
+      "breakpoints": true
     }
   ]
 }

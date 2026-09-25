@@ -14,6 +14,19 @@ test("generates repository-scoped JIT config with labels", async () => {
   expect(requests[0].headers.get("authorization")).toBe("Bearer installation-token");
 });
 
+test("requests a single authenticated GitHub job rerun without requiring a response body", async () => {
+  const requests: Request[] = [];
+  const client = new GithubJobsClient({ token: async () => "installation-token", fetch: async (input, init) => {
+    requests.push(new Request(input, init));
+    return new Response(null, { status: 201 });
+  } });
+  await client.rerunJob("acme", "project", 42);
+  expect(requests).toHaveLength(1);
+  expect(requests[0]!.url).toBe("https://api.github.com/repos/acme/project/actions/jobs/42/rerun");
+  expect(requests[0]!.method).toBe("POST");
+  expect(requests[0]!.headers.get("authorization")).toBe("Bearer installation-token");
+});
+
 test("does not hide a missing JIT config response", async () => {
   const client = new GithubJobsClient({ token: async () => "token", fetch: async () => Response.json({}) });
   await expect(client.generateJitConfig({ owner: "acme", repo: "project", runnerName: "ws-1", runnerGroupId: 1, workFolder: "_work", labels: ["self-hosted"] })).rejects.toThrow("github_jit_config_missing");

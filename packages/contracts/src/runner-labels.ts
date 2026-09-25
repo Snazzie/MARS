@@ -81,6 +81,28 @@ export function parseRunnerLabels(labels: readonly string[]): ParsedRunnerLabel[
   return parsed;
 }
 
+/** Separate an optional bounded GitHub retry directive from routing labels. */
+export function parseJobRunnerLabels(labels: readonly string[]): { options: ParsedRunnerLabel[]; maxRetries: number | null } | null {
+  if (!Array.isArray(labels)) return null;
+  const routing: string[] = [];
+  let maxRetries: number | null = null;
+  for (const input of labels) {
+    if (typeof input !== "string") return null;
+    const label = input.trim();
+    if (/^mars-retry-/i.test(label)) {
+      const match = /^mars-retry-([1-9][0-9]*)$/i.exec(label);
+      if (!match || maxRetries !== null) return null;
+      const value = Number(match[1]);
+      if (!Number.isInteger(value) || value > 10) return null;
+      maxRetries = value;
+    } else {
+      routing.push(label);
+    }
+  }
+  const options = parseRunnerLabels(routing);
+  return options ? { options, maxRetries } : null;
+}
+
 /** Format a canonical lowercase composite runner label. */
 export function formatRunnerLabel(route: string, vcpu: number, memoryGiB: number): string {
   if (typeof route !== "string") throw new RangeError("Invalid runner route");
