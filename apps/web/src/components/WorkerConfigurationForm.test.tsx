@@ -24,11 +24,6 @@ const worker = {
   capacity,
   limits: null,
 };
-test("offers Ubuntu ARM64 by default for a new Mac, without changing adopted Mac capability", () => {
-  const render = (admissionState: "pending" | "adopted") => renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><WorkerConfigurationForm worker={{ ...worker, platform: "macos-arm64", guestPlatforms: ["macos-arm64"], admissionState }} onConfigured={() => {}} /></QueryClientProvider>);
-  expect(render("pending")).toMatch(/name="allowUbuntuArm64" checked=""/);
-  expect(render("adopted")).toMatch(/name="allowUbuntuArm64"(?! checked)/);
-});
 test("bounds appliance allocation by total capacity, not free telemetry", () => {
   const client = new QueryClient();
   const markup = renderToStaticMarkup(<QueryClientProvider client={client}><WorkerConfigurationForm worker={{ ...worker, capacity: { ...capacity, freeVcpu: 2, freeMemoryBytes: 2 * 1024 ** 3, freeStorageBytes: 4 * 1024 ** 3 } }} onConfigured={() => {}} /></QueryClientProvider>);
@@ -120,4 +115,15 @@ test("Windows runtime choices require a ready advertised capability and warn abo
   expect(html).toContain("Install the verified Windows image.");
   expect(html).toContain("does not provide the Hyper-V host boundary");
   expect(html).not.toContain("Allow Linux VMs");
+});
+test("shows the detected Linux ARM64 Docker capability and its readiness state", () => {
+  const windowsWorker = { ...worker, platform: "windows-x64" as const, capabilities: [
+    { driver: "linux-docker-container" as const, guestPlatform: "linux-arm64" as const, imageDigest: null, ready: false, remediation: "Verify the pinned ARM64 image and network." },
+  ] };
+  const html = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><WorkerConfigurationForm worker={windowsWorker} onConfigured={() => {}} /></QueryClientProvider>);
+  expect(html).toContain("Docker Linux container (ARM64)");
+  expect(html).toContain("(not ready)");
+  expect(html).toContain("Verify the pinned ARM64 image and network.");
+  expect(html).not.toContain("Docker Linux container (not advertised)");
+  expect(html).not.toContain('name="selectedDriver-linux-x64"');
 });

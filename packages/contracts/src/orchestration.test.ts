@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig, RuntimeTerminationEvidence, WorkerBuildImagePayload, WorkerContainerStatus, WorkerDoctorData, WorkerDoctorReport, WorkerImageBuildSpec, WorkerRuntimeCapability, selectedRuntimeDriver, sanitizeDiagnosticText, runtimeDriverForPlatform } from "./orchestration.ts";
+import { LeaseBootstrapEnvelope, OutOfMemoryResult, RunnerJitConfig, RuntimeTerminationEvidence, WorkerBuildImagePayload, WorkerContainerStatus, WorkerDoctorData, WorkerDoctorReport, WorkerImageBuildSpec, WorkerRuntimeCapability, selectedRuntimeDriver, validateWorkerGuestPlatforms, sanitizeDiagnosticText, runtimeDriverForPlatform } from "./orchestration.ts";
 import * as orchestration from "./orchestration.ts";
 
 test("parses a GitHub JIT config with a one-time lease binding", () => {
@@ -29,6 +29,12 @@ test("allows only explicit host and guest compatible driver selections", () => {
   expect(selectedRuntimeDriver("windows-x64", "linux-x64", "windows-hyperv")).toBeNull();
   expect(selectedRuntimeDriver("linux-x64", "linux-x64", "windows-process-container")).toBeNull();
   expect(selectedRuntimeDriver("macos-arm64", "linux-arm64", "tart-vm")).toBe("tart-vm");
+});
+test("allows a Windows x64 worker to advertise only Linux ARM64 Docker guests", () => {
+  expect(validateWorkerGuestPlatforms("windows-x64", ["linux-arm64"])).toBe(true);
+  expect(selectedRuntimeDriver("windows-x64", "linux-arm64", "linux-docker-container")).toBe("linux-docker-container");
+  expect(selectedRuntimeDriver("windows-x64", "linux-arm64", "windows-hyperv-container")).toBeNull();
+  expect(validateWorkerGuestPlatforms("windows-x64", ["linux-arm64", "windows-x64"])).toBe(false);
 });
 
 test("requires verified immutable artifacts and unique advertised modes", () => {

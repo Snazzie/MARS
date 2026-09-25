@@ -102,6 +102,13 @@ export const verifiedWindowsVmImage = async (
   }
 };
 type WindowsCapability = NonNullable<WorkerDoctorData["capabilities"]>[number];
+export function linuxDockerCapability(engineOs: string, architecture: string, image: string | undefined, runtimeReady: boolean): WindowsCapability | null {
+  if (engineOs !== "linux" || !["amd64", "x86_64", "arm64", "aarch64"].includes(architecture)) return null;
+  const arm = architecture === "arm64" || architecture === "aarch64";
+  const guestPlatform = arm ? "linux-arm64" : "linux-x64";
+  const ready = runtimeReady && Boolean(image && /^[^@\s]+@sha256:[0-9a-f]{64}$/.test(image));
+  return { driver: "linux-docker-container", guestPlatform, imageDigest: ready ? image! : null, ready, remediation: ready ? null : !image ? `Set MARS_LINUX_${arm ? "ARM64" : "X64"}_CONTAINER_IMAGE to a digest-pinned verified ${guestPlatform} job image` : !/^[^@\s]+@sha256:[0-9a-f]{64}$/.test(image) ? "Linux job image must be digest pinned" : "Linux Docker job image, entrypoint, architecture, or network validation failed" };
+}
 let sandboxProbeCache: { key: string; expiresAt: number; capabilities: WindowsCapability[] } | undefined;
 async function probeWindowsIsolation(image: string, isolation: "process" | "hyperv"): Promise<boolean> {
   const name = `mars-probe-${randomUUID()}`;
@@ -123,15 +130,18 @@ export const windowsDoctor = async (preserveLeases = false, runProbe: typeof com
     architecture = String(parsed.Architecture ?? "").toLowerCase();
   } catch { /* engine unavailable */ }
   const image = Bun.env.MARS_WINDOWS_CONTAINER_IMAGE;
-  const linuxImage = Bun.env.MARS_LINUX_X64_CONTAINER_IMAGE;
+  const linuxImage = ["arm64", "aarch64"].includes(architecture) ? Bun.env.MARS_LINUX_ARM64_CONTAINER_IMAGE : Bun.env.MARS_LINUX_X64_CONTAINER_IMAGE;
   const vmImage = await verifiedWindowsVmImage();
   const vmReady = await runProbe(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$switchName = if ($env:MARS_HYPERV_SWITCH_NAME) { $env:MARS_HYPERV_SWITCH_NAME } else { 'Default Switch' }; Get-VMHost -ErrorAction Stop | Out-Null; Get-VMSwitch -Name $switchName -ErrorAction Stop | Out-Null"]);
   const windowsVerification = engineOs === "windows" && image ? await localImageVerification(image) : undefined;
-  const linuxDriver = engineOs === "linux" && linuxImage && /^[^@\s]+@sha256:[0-9a-f]{64}$/.test(linuxImage)
-    ? new LinuxContainerDriver({ image: linuxImage, prefix: "mars-windows-linux-x64", network: Bun.env.MARS_LINUX_CONTAINER_NETWORK ?? "mars-linux-x64", limits: { maxVcpuPerPod: 64, maxMemoryBytesPerPod: Number.MAX_SAFE_INTEGER, maxStorageBytesPerPod: Number.MAX_SAFE_INTEGER, maxConcurrentPods: 64 }, architecture: "amd64", platform: "linux/amd64" })
+  const linuxArchitecture = ["arm64", "aarch64"].includes(architecture) ? "arm64" : "amd64";
+  const linuxGuest = linuxArchitecture === "arm64" ? "linux-arm64" : "linux-x64";
+  const linuxNetwork = Bun.env.MARS_LINUX_CONTAINER_NETWORK ?? `mars-linux-${linuxArchitecture === "arm64" ? "arm64" : "x64"}`;
+  const linuxDriver = engineOs === "linux" && ["amd64", "x86_64", "arm64", "aarch64"].includes(architecture) && linuxImage && /^[^@\s]+@sha256:[0-9a-f]{64}$/.test(linuxImage)
+    ? new LinuxContainerDriver({ image: linuxImage, prefix: `mars-windows-linux-${linuxArchitecture === "arm64" ? "arm64" : "x64"}`, network: linuxNetwork, limits: { maxVcpuPerPod: 64, maxMemoryBytesPerPod: Number.MAX_SAFE_INTEGER, maxStorageBytesPerPod: Number.MAX_SAFE_INTEGER, maxConcurrentPods: 64 }, architecture: linuxArchitecture })
     : undefined;
   const linuxHost = linuxDriver ? await linuxDriver.validateHost() : undefined;
-  const cacheKey = JSON.stringify([engineOs, architecture, image, windowsVerification?.imageId, windowsVerification?.manifest, windowsVerification?.entrypoint, linuxImage, linuxHost?.runtimeReady, vmImage.digest, vmImage.ready, vmReady]);
+  const cacheKey = JSON.stringify([engineOs, architecture, image, windowsVerification?.imageId, windowsVerification?.manifest, windowsVerification?.entrypoint, linuxImage, linuxNetwork, linuxHost?.runtimeReady, vmImage.digest, vmImage.ready, vmReady]);
   let capabilities: WindowsCapability[] = [];
   if (sandboxProbeCache?.key === cacheKey && sandboxProbeCache.expiresAt > Date.now()) capabilities = [...sandboxProbeCache.capabilities];
   else {
@@ -144,16 +154,13 @@ export const windowsDoctor = async (preserveLeases = false, runProbe: typeof com
         }
       }
     }
-    if (engineOs === "linux" && ["amd64", "x86_64"].includes(architecture) && linuxImage && /^[^@\s]+@sha256:[0-9a-f]{64}$/.test(linuxImage)) {
-      const linuxDriver = new LinuxContainerDriver({ image: linuxImage, prefix: "mars-windows-linux-x64", network: Bun.env.MARS_LINUX_CONTAINER_NETWORK ?? "mars-linux-x64", limits: { maxVcpuPerPod: 64, maxMemoryBytesPerPod: Number.MAX_SAFE_INTEGER, maxStorageBytesPerPod: Number.MAX_SAFE_INTEGER, maxConcurrentPods: 64 }, architecture: "amd64", platform: "linux/amd64" });
-      const host = await linuxDriver.validateHost();
-      capabilities.push({ driver: "linux-docker-container", guestPlatform: "linux-x64", imageDigest: host.runtimeReady ? linuxImage : null, ready: host.runtimeReady, remediation: host.runtimeReady ? null : "Linux x64 engine, image, entrypoint, or network validation failed" });
-    }
+    const linuxCapability = linuxDockerCapability(engineOs, architecture, linuxImage, linuxHost?.runtimeReady === true);
+    if (linuxCapability) capabilities.push(linuxCapability);
     if (vmReady && vmImage.ready && vmImage.digest) capabilities.push({ driver: "windows-hyperv", guestPlatform: "windows-x64", imageDigest: vmImage.digest, ready: true, remediation: null });
     sandboxProbeCache = { key: cacheKey, expiresAt: Date.now() + 300_000, capabilities };
   }
   const selectedDriver = appliedDriver;
-  const selected = capabilities.find((capability) => capability.driver === selectedDriver && capability.guestPlatform === (selectedDriver === "linux-docker-container" ? "linux-x64" : "windows-x64"));
+  const selected = capabilities.find((capability) => capability.driver === selectedDriver && (selectedDriver !== "linux-docker-container" || capability.guestPlatform === linuxGuest));
   const runtimeMode = selectedDriver === "windows-hyperv" ? "vm" : "container";
   const probe = info.code === 0 || vmReady;
   return WorkerDoctorData.parse({ runtimeMode, preserveLeases, artifactSource: runtimeMode === "container" ? "worker_local" : "template", ...(selected?.imageDigest ? { artifactDigest: selected.imageDigest } : {}), runtimeReady: selected?.ready ?? false, probe, imageSignatures: Boolean(selected?.imageDigest), remediation: selected?.remediation ?? "No selected Windows runtime is ready", capabilities });
@@ -197,7 +204,7 @@ async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> {
 type RuntimeSelection = "windows-hyperv-container" | "windows-process-container" | "windows-hyperv" | "linux-docker-container";
 const isRuntimeSelection = (driver: string): driver is RuntimeSelection =>
   driver === "windows-hyperv-container" || driver === "windows-process-container" || driver === "windows-hyperv" || driver === "linux-docker-container";
-function createSelectedWindowsDriver(selected: RuntimeSelection | undefined, limits: Limits): WindowsRuntimeDriver | null {
+function createSelectedWindowsDriver(selected: RuntimeSelection | undefined, limits: Limits, guestPlatform?: string): WindowsRuntimeDriver | null {
   if (selected === "windows-hyperv-container" || selected === "windows-process-container") {
     const image = Bun.env.MARS_WINDOWS_CONTAINER_IMAGE;
     if (!image) throw new Error("MARS_WINDOWS_CONTAINER_IMAGE is required for the applied runtime");
@@ -209,9 +216,10 @@ function createSelectedWindowsDriver(selected: RuntimeSelection | undefined, lim
     return new HyperVDriver(createHyperVRuntime(), checkpointPath, checkpointDigest, Bun.env.MARS_HYPERV_VM_PREFIX ?? "mars", limits);
   }
   if (selected === "linux-docker-container") {
-    const image = Bun.env.MARS_LINUX_X64_CONTAINER_IMAGE;
-    if (!image) throw new Error("MARS_LINUX_X64_CONTAINER_IMAGE is required");
-    return new LinuxContainerDriver({ image, prefix: "mars-windows-linux-x64", network: Bun.env.MARS_LINUX_CONTAINER_NETWORK ?? "mars-linux-x64", limits, architecture: "amd64", platform: "linux/amd64" });
+    const arm = guestPlatform === "linux-arm64";
+    const image = arm ? Bun.env.MARS_LINUX_ARM64_CONTAINER_IMAGE : Bun.env.MARS_LINUX_X64_CONTAINER_IMAGE;
+    if (!image) throw new Error(`${arm ? "MARS_LINUX_ARM64_CONTAINER_IMAGE" : "MARS_LINUX_X64_CONTAINER_IMAGE"} is required`);
+    return new LinuxContainerDriver({ image, prefix: `mars-windows-linux-${arm ? "arm64" : "x64"}`, network: Bun.env.MARS_LINUX_CONTAINER_NETWORK ?? `mars-linux-${arm ? "arm64" : "x64"}`, limits, architecture: arm ? "arm64" : "amd64" });
   }
   return null;
 }
@@ -338,7 +346,7 @@ type WindowsWorkerCommandContext = {
   cache: WorkerCacheConfiguration;
   cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled" | "setRunnerCacheMaxGiB" | "purgeRunnerCache" | "transport" | "unregisterLease">;
   driver: WindowsRuntimeDriver;
-  applyDriver?: (selected: RuntimeSelection) => Promise<void>;
+  applyDriver?: (selected: RuntimeSelection, guestPlatform: string) => Promise<void>;
   identity: Identity;
   activeLeases: Map<string, Promise<void>>;
   acceptingLeases?: () => boolean;
@@ -385,9 +393,9 @@ export async function executeWindowsWorkerCommand(command: WorkerCommand, contex
       if (!isRuntimeSelection(selectedDriver)) throw new Error("Selected Windows runtime driver is unsupported");
       if (!capability?.ready) throw new Error("Selected Windows runtime capability is not ready");
       const observed = await applyWindowsWorkerConfiguration(limits, cache, payload, cacheService);
-      if (identity.selectedDriver !== selectedDriver) {
+      if (identity.selectedDriver !== selectedDriver || identity.guestPlatform !== payload.guestPlatforms[0]) {
         if (!applyDriver) throw new Error("Runtime driver switching is unavailable");
-        await applyDriver(selectedDriver);
+        await applyDriver(selectedDriver, payload.guestPlatforms[0]!);
       }
       identity.selectedDriver = selectedDriver;
       identity.guestPlatform = payload.guestPlatforms[0];
@@ -466,13 +474,14 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
   let selectedDriver = (identity.selectedDriver as RuntimeSelection | undefined) ?? (Bun.env.MARS_WINDOWS_RUNTIME === "container" ? "windows-hyperv-container" : Bun.env.MARS_WINDOWS_RUNTIME === "vm" ? "windows-hyperv" : undefined);
   if (!identity.selectedDriver && selectedDriver) {
     const report = await windowsDoctor(identity.preserveLeases === true, commandSucceeds, selectedDriver);
-    if (report.capabilities?.some(capability => capability.driver === selectedDriver && capability.ready)) {
+    const ready = report.capabilities?.find(capability => capability.driver === selectedDriver && capability.ready);
+    if (ready) {
       identity.selectedDriver = selectedDriver;
-      identity.guestPlatform = "windows-x64";
+      identity.guestPlatform = ready.guestPlatform;
       await save(identity);
     } else selectedDriver = undefined;
   }
-  let activeDriver = createSelectedWindowsDriver(selectedDriver, limits);
+  let activeDriver = createSelectedWindowsDriver(selectedDriver, limits, identity.guestPlatform);
   const driver: WindowsRuntimeDriver = {
     reserveCapacity: async resources => { if (!activeDriver) throw new Error("Worker is discovery-only"); return activeDriver.reserveCapacity(resources); },
     createLease: async lease => { if (!activeDriver) throw new Error("Worker is discovery-only"); return activeDriver.createLease(lease); },
@@ -481,9 +490,9 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
     listContainerStatuses: async () => activeDriver ? activeDriver.listContainerStatuses() : [],
     reconcileOrphans: async () => { if (activeDriver) await activeDriver.reconcileOrphans(); },
   };
-  const applyDriver = async (next: RuntimeSelection) => {
+  const applyDriver = async (next: RuntimeSelection, guestPlatform: string) => {
     await driver.reconcileOrphans();
-    const replacement = createSelectedWindowsDriver(next, limits);
+    const replacement = createSelectedWindowsDriver(next, limits, guestPlatform);
     if (!replacement) throw new Error("Selected Windows runtime driver could not be created");
     await replacement.reconcileOrphans();
     activeDriver = replacement;

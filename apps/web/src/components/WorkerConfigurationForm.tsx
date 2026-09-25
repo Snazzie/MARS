@@ -15,6 +15,10 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
   const platform = worker.platform ?? "linux-x64";
   const canEditGuests = !organizationId || (worker.draining === true && worker.activeSandboxes === 0);
   const [allowLinux, setAllowLinux] = useState(() => worker.guestPlatforms?.includes(platform === "macos-arm64" ? "linux-arm64" : "linux-x64") || (platform === "macos-arm64" && !adopted));
+  const [selectedGuestPlatform, setSelectedGuestPlatform] = useState<"linux-x64" | "linux-arm64" | "windows-x64" | null>(() => {
+    const guest = worker.selectedDriver ? worker.capabilities?.find((item) => item.driver === worker.selectedDriver && item.ready)?.guestPlatform : undefined;
+    return guest === "linux-x64" || guest === "linux-arm64" || guest === "windows-x64" ? guest : null;
+  });
   const [selectedDriver, setSelectedDriver] = useState<RuntimeDriverName | "">(() => worker.selectedDriver && worker.capabilities?.some((item) => item.driver === worker.selectedDriver) ? worker.selectedDriver : "");
   const [vcpu, setVcpu] = useState(String(c.actualVcpu));
   const [ram, setRam] = useState(initialGiB(c.actualMemoryBytes));
@@ -31,14 +35,15 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
   const [runnerCacheMaxGiB, setRunnerCacheMaxGiB] = useState(() => String(worker.desiredRunnerCacheMaxGiB ?? 20));
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const windowsOptions: { driver: RuntimeDriverName; guestPlatform: "linux-x64" | "windows-x64"; label: string }[] = [
+  const windowsOptions: { driver: RuntimeDriverName; guestPlatform: "linux-x64" | "linux-arm64" | "windows-x64"; label: string }[] = [
     { driver: "linux-docker-container", guestPlatform: "linux-x64", label: "Docker Linux container" },
+    { driver: "linux-docker-container", guestPlatform: "linux-arm64", label: "Docker Linux container (ARM64)" },
     { driver: "windows-process-container", guestPlatform: "windows-x64", label: "Docker Windows container (process isolation)" },
     { driver: "windows-hyperv-container", guestPlatform: "windows-x64", label: "Docker Windows container (Hyper-V isolation)" },
     { driver: "windows-hyperv", guestPlatform: "windows-x64", label: "Windows Hyper-V VM" },
   ];
-  const selectedCapability = worker.capabilities?.find((item) => item.driver === selectedDriver && item.ready);
-  const capabilityHelp = platform === "windows-x64" ? <fieldset><legend>Runtime capability</legend><p>Select the runtime this worker will use. Only advertised, ready capabilities can be selected.</p>{windowsOptions.map((option) => { const capability = worker.capabilities?.find((item) => item.driver === option.driver && item.guestPlatform === option.guestPlatform); return <label key={option.driver}><input type="radio" name="selectedDriver" value={option.driver} checked={selectedDriver === option.driver} disabled={pending || !capability?.ready || (organizationId !== undefined && !canEditGuests)} onChange={() => setSelectedDriver(option.driver)} /> {option.label} {!capability ? "(not advertised)" : !capability.ready ? "(not ready)" : ""}{capability?.remediation && <small>{capability.remediation}</small>}</label>; })}{selectedDriver === "windows-process-container" && <p role="alert"><strong>Lower isolation:</strong> Docker Windows process isolation does not provide the Hyper-V host boundary.</p>}{organizationId && !canEditGuests && <p className="field-help">Drain this worker and wait for active jobs to finish before changing runtime capability.</p>}</fieldset> : platform === "macos-arm64" ? <div><label className="checkbox-field"><input type="checkbox" name="allowUbuntuArm64" checked={allowLinux} disabled={!canEditGuests || pending} onChange={(event) => setAllowLinux(event.target.checked)} /> Allow Ubuntu ARM64 VMs</label>{organizationId && !canEditGuests && <p className="field-help">Drain this worker and wait for active jobs to finish before changing guest operating systems.</p>}</div> : null;
+  const selectedCapability = worker.capabilities?.find((item) => item.driver === selectedDriver && item.guestPlatform === selectedGuestPlatform && item.ready);
+  const capabilityHelp = platform === "windows-x64" ? <fieldset><legend>Runtime capability</legend><p>Select the runtime this worker will use. Only advertised, ready capabilities can be selected.</p>{windowsOptions.filter((option) => !(option.guestPlatform === "linux-x64" && worker.capabilities?.some((item) => item.driver === "linux-docker-container" && item.guestPlatform === "linux-arm64"))).map((option) => { const capability = worker.capabilities?.find((item) => item.driver === option.driver && item.guestPlatform === option.guestPlatform); return <label key={`${option.driver}:${option.guestPlatform}`}><input type="radio" name={`selectedDriver-${option.guestPlatform}`} value={option.driver} checked={selectedDriver === option.driver && selectedGuestPlatform === option.guestPlatform} disabled={pending || !capability?.ready || (organizationId !== undefined && !canEditGuests)} onChange={() => { setSelectedDriver(option.driver); setSelectedGuestPlatform(option.guestPlatform); }} /> {option.label} {!capability ? "(not advertised)" : !capability.ready ? "(not ready)" : ""}{capability?.remediation ? ` — ${capability.remediation}` : ""}{option.driver === "windows-process-container" && capability?.ready ? " (does not provide the Hyper-V host boundary)" : ""}</label>; })}</fieldset> : null;
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const applianceVcpu = parsePositiveInteger(vcpu);

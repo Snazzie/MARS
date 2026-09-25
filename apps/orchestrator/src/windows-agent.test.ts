@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkerConfigurePayload, WorkerDoctorData, WorkerDoctorReport, type LeaseBootstrapEnvelope, type WorkerCapacityData, type WorkerCommand, type WorkerContainerStatus, type WorkerEvent } from "@mars/contracts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
-import { applyWindowsRunnerCachePurge, applyWindowsWorkerConfiguration, buildWindowsDoctorReport, dispatchWindowsWorkerFrame, executeWindowsWorkerCommand, reconcileWindowsRuntime, runWindowsLeaseCleanup, startWindowsLeaseLifecycle, verifiedWindowsVmImage, windowsDoctor } from "./windows-agent.ts";
+import { applyWindowsRunnerCachePurge, applyWindowsWorkerConfiguration, buildWindowsDoctorReport, dispatchWindowsWorkerFrame, executeWindowsWorkerCommand, linuxDockerCapability, reconcileWindowsRuntime, runWindowsLeaseCleanup, startWindowsLeaseLifecycle, verifiedWindowsVmImage, windowsDoctor } from "./windows-agent.ts";
 const doctor = WorkerDoctorData.parse({ runtimeMode: "container", runtimeReady: true, probe: true, imageSignatures: true });
 const capacity: WorkerCapacityData = { actualVcpu: 8, actualMemoryBytes: 16, actualStorageBytes: 32, freeVcpu: 7, freeMemoryBytes: 15, freeStorageBytes: 31 };
 const containerStatuses: WorkerContainerStatus[] = [{
@@ -28,6 +28,17 @@ const containerStatuses: WorkerContainerStatus[] = [{
   diskUsageBytes: 8192,
   sampledAt: "2026-08-31T12:00:00.000Z",
 }];
+
+test("advertises native Linux Docker even before its ARM64 job image is ready", () => {
+  const missing = linuxDockerCapability("linux", "aarch64", undefined, false);
+  expect(missing).toMatchObject({ driver: "linux-docker-container", guestPlatform: "linux-arm64", ready: false, imageDigest: null });
+  expect(missing?.remediation).toContain("MARS_LINUX_ARM64_CONTAINER_IMAGE");
+  const image = `ghcr.io/example/linux-arm64-job@sha256:${"a".repeat(64)}`;
+  expect(linuxDockerCapability("linux", "arm64", image, false)).toMatchObject({ guestPlatform: "linux-arm64", ready: false, imageDigest: null });
+  expect(linuxDockerCapability("linux", "arm64", image, true)).toMatchObject({ guestPlatform: "linux-arm64", ready: true, imageDigest: image });
+  expect(linuxDockerCapability("windows", "arm64", image, true)).toBeNull();
+  expect(linuxDockerCapability("linux", "amd64", undefined, false)).toMatchObject({ guestPlatform: "linux-x64", ready: false });
+});
 
 test("Windows doctor ignores GitHub network failures but still requires local readiness evidence", async () => {
   const programData = await mkdtemp(join(tmpdir(), "mars-windows-doctor-"));
@@ -145,6 +156,26 @@ test("awaits the live cache TTL before acknowledging Windows configuration", asy
   expect(limits).toEqual({ maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10 * 1024 ** 3, maxStorageBytesPerPod: 30 * 1024 ** 3, maxConcurrentPods: 3 });
   expect(cache).toEqual({ ttlSeconds: 3600, runnerCacheEnabled: false, runnerCacheMaxGiB: 12 });
   expect(observed.cache).toEqual(payload.cache);
+});
+
+test("accepts a Linux ARM64 Docker selection on a Windows worker and rejects the wrong guest", async () => {
+  const limits = { maxVcpuPerPod: 1, maxMemoryBytesPerPod: 1, maxStorageBytesPerPod: 1, maxConcurrentPods: 1 };
+  const cache = { ttlSeconds: 60, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 };
+  const config = WorkerConfigurePayload.parse({
+    workerId: "11111111-1111-4111-8111-111111111111",
+    revision: "a".repeat(64),
+    fingerprint: "b".repeat(64),
+    appliance: { vcpu: 8, memoryBytes: 16, storageBytes: 32 },
+    runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 },
+    guestPlatforms: ["linux-arm64"],
+    selectedDriver: "linux-docker-container",
+    cache: { ttlSeconds: 3600, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 },
+  });
+  const service = { applyTtl: async () => {}, setRunnerCacheEnabled: () => {}, setRunnerCacheMaxGiB: () => {} };
+  const observed = await applyWindowsWorkerConfiguration(limits, cache, config, service);
+  expect(observed.guestPlatforms).toEqual(["linux-arm64"]);
+  expect(observed.selectedDriver).toBe("linux-docker-container");
+  await expect(applyWindowsWorkerConfiguration(limits, cache, { ...config, guestPlatforms: ["macos-arm64"] }, service)).rejects.toThrow("incompatible");
 });
 
 test("refuses to switch Windows runtime while a lease is active", async () => {

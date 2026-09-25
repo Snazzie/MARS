@@ -10,14 +10,14 @@ export type WorkerGuestPlatforms = z.infer<typeof WorkerGuestPlatforms>;
 export function validateWorkerGuestPlatforms(hostPlatform: RuntimePlatform, guestPlatforms: WorkerGuestPlatforms): boolean {
   if (guestPlatforms.length === 0 || new Set(guestPlatforms).size !== guestPlatforms.length) return false;
   if (hostPlatform === "macos-arm64") return guestPlatforms.length === 1 && guestPlatforms[0] === "macos-arm64" || guestPlatforms.length === 2 && guestPlatforms.includes("macos-arm64") && guestPlatforms.includes("linux-arm64");
-  if (hostPlatform === "windows-x64") return guestPlatforms.length === 1 && (guestPlatforms[0] === "windows-x64" || guestPlatforms[0] === "linux-x64");
+  if (hostPlatform === "windows-x64") return guestPlatforms.length === 1 && (guestPlatforms[0] === "windows-x64" || guestPlatforms[0] === "linux-x64" || guestPlatforms[0] === "linux-arm64");
   return guestPlatforms.length === 1 && guestPlatforms[0] === hostPlatform;
 }
 export const RuntimeDriverName = z.enum(["linux-libvirt-vm", "linux-docker-container", "windows-hyperv", "windows-hyperv-container", "windows-process-container", "tart-vm"]);
 export type RuntimeDriverName = z.infer<typeof RuntimeDriverName>;
 export function selectedRuntimeDriver(hostPlatform: RuntimePlatform, guestPlatform: GuestPlatform, driver: RuntimeDriverName): RuntimeDriverName | null {
   if (hostPlatform === "macos-arm64" && (guestPlatform === "macos-arm64" || guestPlatform === "linux-arm64")) return driver === "tart-vm" ? driver : null;
-  if (hostPlatform === "windows-x64" && guestPlatform === "linux-x64") return driver === "linux-docker-container" ? driver : null;
+  if (hostPlatform === "windows-x64" && (guestPlatform === "linux-x64" || guestPlatform === "linux-arm64")) return driver === "linux-docker-container" ? driver : null;
   if (hostPlatform === "windows-x64" && guestPlatform === "windows-x64") return ["windows-hyperv", "windows-hyperv-container", "windows-process-container"].includes(driver) ? driver : null;
   if (hostPlatform === "linux-x64" && guestPlatform === "linux-x64") return driver === "linux-libvirt-vm" ? driver : null;
   if (hostPlatform === "linux-arm64" && guestPlatform === "linux-arm64") return driver === "linux-docker-container" ? driver : null;

@@ -418,11 +418,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const desired = typeof worker.desiredConfiguration === "string" ? JSON.parse(worker.desiredConfiguration) : worker.desiredConfiguration;
     const driver = desired?.selectedDriver;
     if (typeof driver !== "string" || !RuntimeDriverName.safeParse(driver).success || !RuntimePlatform.safeParse(worker.platform).success) return { error: "runtime_unsupported" as const };
-    const compatible = worker.platform === "windows-x64"
-      ? body.guestPlatform === "linux-x64" ? driver === "linux-docker-container" : body.guestPlatform === "windows-x64" && ["windows-process-container", "windows-hyperv-container", "windows-hyperv"].includes(driver)
-      : worker.platform === "linux-x64" ? body.guestPlatform === "linux-x64" && driver === "linux-libvirt-vm"
-      : worker.platform === "linux-arm64" ? body.guestPlatform === "linux-arm64" && driver === "linux-docker-container"
-      : worker.platform === "macos-arm64" && ["macos-arm64", "linux-arm64"].includes(body.guestPlatform) && driver === "tart-vm";
+    const compatible = selectedRuntimeDriver(RuntimePlatform.parse(worker.platform), body.guestPlatform, RuntimeDriverName.parse(driver)) === driver;
     if (!compatible) return { error: "runtime_unsupported" as const };
     const evidence = workerPoolEvidence(worker.doctor, driver, body.imageDigest, body.guestPlatform);
     if (!evidence.ready) return { error: "worker_runtime_not_ready" };
