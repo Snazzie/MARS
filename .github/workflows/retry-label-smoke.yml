@@ -1,0 +1,21 @@
+name: Mars retry label smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  retry:
+    runs-on: [mars-windows-x64-2vcpu-4g, mars-retry-3]
+    timeout-minutes: 15
+    steps:
+      - name: Fail initial attempt intentionally
+        if: ${{ github.run_attempt == '1' }}
+        shell: pwsh
+        run: exit 1
+      - name: Succeed after GitHub reruns the job
+        if: ${{ github.run_attempt != '1' }}
+        shell: pwsh
+        run: Write-Host "Mars retry smoke succeeded on attempt $env:GITHUB_RUN_ATTEMPT"
