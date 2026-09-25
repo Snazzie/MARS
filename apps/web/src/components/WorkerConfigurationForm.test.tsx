@@ -102,19 +102,21 @@ test("rejects non-positive Cache TTL values before configuring", () => {
   const markup = renderToStaticMarkup(<QueryClientProvider client={client}><WorkerConfigurationForm worker={worker} organizationId="org-1" onConfigured={() => {}} /></QueryClientProvider>);
   expect(markup).toContain('min="1"');
 });
-test("Windows runtime choices require a ready advertised capability and warn about process isolation", () => {
+test("Windows runtime choices share one radio group and disable unavailable capabilities", () => {
   const windowsWorker = { ...worker, platform: "windows-x64" as const, guestPlatforms: ["windows-x64" as const], selectedDriver: "windows-process-container" as const, capabilities: [
     { driver: "windows-process-container" as const, guestPlatform: "windows-x64" as const, imageDigest: `sha256:${"a".repeat(64)}`, ready: true, remediation: null },
     { driver: "windows-hyperv-container" as const, guestPlatform: "windows-x64" as const, imageDigest: null, ready: false, remediation: "Install the verified Windows image." },
   ] };
   const html = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><WorkerConfigurationForm worker={windowsWorker} onConfigured={() => {}} /></QueryClientProvider>);
-  expect(html).toContain("Docker Linux container");
-  expect(html).toContain("Docker Windows container (process isolation)");
-  expect(html).toContain("Docker Windows container (Hyper-V isolation)");
-  expect(html).toContain("Windows Hyper-V VM");
+  const dom = new Window();
+  dom.document.body.innerHTML = html;
+  const radios = Array.from(dom.document.querySelectorAll("input")).filter((input) => input.type === "radio" && input.closest(".worker-runtime-option"));
+  expect(radios.length).toBe(5);
+  expect(radios.every((radio) => radio.name === "selectedDriver")).toBe(true);
+  expect(radios.find((radio) => radio.value === "windows-process-container:windows-x64")?.checked).toBe(true);
+  expect(radios.find((radio) => radio.value === "windows-hyperv-container:windows-x64")?.disabled).toBe(true);
+  expect(radios.find((radio) => radio.value === "linux-docker-container:linux-x64")?.disabled).toBe(true);
   expect(html).toContain("Install the verified Windows image.");
-  expect(html).toContain("does not provide the Hyper-V host boundary");
-  expect(html).not.toContain("Allow Linux VMs");
 });
 test("shows the detected Linux ARM64 Docker capability and its readiness state", () => {
   const windowsWorker = { ...worker, platform: "windows-x64" as const, capabilities: [
@@ -122,8 +124,7 @@ test("shows the detected Linux ARM64 Docker capability and its readiness state",
   ] };
   const html = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><WorkerConfigurationForm worker={windowsWorker} onConfigured={() => {}} /></QueryClientProvider>);
   expect(html).toContain("Docker Linux container (ARM64)");
-  expect(html).toContain("(not ready)");
+  expect(html).toContain("Not ready");
   expect(html).toContain("Verify the pinned ARM64 image and network.");
-  expect(html).not.toContain("Docker Linux container (not advertised)");
-  expect(html).not.toContain('name="selectedDriver-linux-x64"');
+  expect(html).not.toContain('value="linux-docker-container:linux-x64"');
 });
