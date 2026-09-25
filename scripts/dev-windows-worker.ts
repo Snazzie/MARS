@@ -5,7 +5,6 @@ import { WorkerBuildImagePayload, workerBuildImageContentDescriptor, CURRENT_WOR
 import { prepareWindowsContainerImage } from "../apps/orchestrator/src/windows-image-build.ts";
 import { deriveDevWorkerCode } from "./dev-worker-join.ts";
 
-const controlPlane = "https://mars.snazzie.space";
 const image = "mars/windows-job:local";
 
 async function command(args: string[], env: Record<string, string> = {}): Promise<string> {
@@ -19,6 +18,9 @@ async function main(): Promise<void> {
   if (process.platform !== "win32") throw new Error("dev:windows-worker requires Windows");
   const token = Bun.env.MARS_DEV_TOKEN?.trim();
   if (!token) throw new Error("MARS_DEV_TOKEN is required");
+  const server = new URL(Bun.env.MARS_DEV_CONTROL_PLANE_URL?.trim() || "https://mars.snazzie.space");
+  if (server.username || server.password || (server.protocol !== "https:" && !(server.protocol === "http:" && ["127.0.0.1", "localhost"].includes(server.hostname)))) throw new Error("MARS_DEV_CONTROL_PLANE_URL requires HTTPS or loopback HTTP");
+  const controlPlane = server.origin;
   const service = await command(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$s=Get-Service -Name MarsWorker -ErrorAction SilentlyContinue; if ($s -and $s.Status -eq 'Running') { 'running' } else { 'stopped' }"]);
   if (service !== "stopped") throw new Error("MarsWorker service is running; stop it manually before starting a separate development worker");
 
