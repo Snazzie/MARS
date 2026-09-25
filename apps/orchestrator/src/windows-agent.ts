@@ -184,7 +184,11 @@ async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> {
   await save(persisted);
   const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), computerName: hostname(), platform: "windows-x64", ...workerRuntimeVersions(), publicKey: persisted.publicKey, encryptionPublicKey: persisted.encryptionPublicKey, vmUuid, machineUuid: machine, doctor: await windowsDoctor(), capacity: await capacity() });
   const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }));
-  if (!response.ok) throw new Error(`worker join failed: ${response.status}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: unknown } | null;
+    const reason = typeof body?.error === "string" ? `: ${body.error}` : "";
+    throw new Error(`worker join failed: ${response.status}${reason} (${baseUrl.origin})`);
+  }
   const joined = await response.json() as { workerId: string };
   const result = { ...persisted, workerId: joined.workerId };
   await save(result);

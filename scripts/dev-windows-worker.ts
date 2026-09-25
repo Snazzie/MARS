@@ -21,8 +21,6 @@ async function main(): Promise<void> {
   if (!token) throw new Error("MARS_DEV_TOKEN is required");
   const service = await command(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$s=Get-Service -Name MarsWorker -ErrorAction SilentlyContinue; if ($s -and $s.Status -eq 'Running') { 'running' } else { 'stopped' }"]);
   if (service !== "stopped") throw new Error("MarsWorker service is running; stop it manually before starting a separate development worker");
-  const dockerMode = await command(["docker.exe", "info", "--format", "{{.OSType}}"]).catch(() => "");
-  if (dockerMode.toLowerCase() !== "windows") console.log("Windows Docker engine unavailable; starting worker for capability discovery without building a Windows job image");
 
   const root = join(Bun.env.LOCALAPPDATA ?? join(Bun.env.USERPROFILE ?? "", "AppData", "Local"), "Mars", "dev-worker");
   await mkdir(root, { recursive: true });
@@ -43,7 +41,9 @@ async function main(): Promise<void> {
     if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw new Error("Development worker identity is unreadable; refusing to replace it", { cause: error });
   }
 
-  if (dockerMode.toLowerCase() === "windows") {
+  if (Bun.env.MARS_DEV_BUILD_WINDOWS_IMAGE === "true") {
+    const dockerMode = await command(["docker.exe", "info", "--format", "{{.OSType}}"]).catch(() => "");
+    if (dockerMode.toLowerCase() !== "windows") throw new Error("Windows image preparation requires an active Windows Docker engine; omit MARS_DEV_BUILD_WINDOWS_IMAGE to discover the current host capabilities");
     const response = await fetch(`${controlPlane}/api/workers/dev-windows-image-build`, { headers: { authorization: `Bearer ${token}` } });
     if (!response.ok) throw new Error(response.status === 503
       ? "Development image payload unavailable (HTTP 503): control plane is missing Windows container build inputs"

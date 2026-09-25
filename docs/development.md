@@ -43,7 +43,7 @@ Local development ports and service behavior are defined in `scripts/dev.ts` and
 
 ### Run a foreground Windows development worker
 
-On a Windows host, set the same `MARS_DEV_TOKEN` used by the development control plane at `https://mars.snazzie.space`. That deployment must run `scripts/control-plane-dev-entry.ts` with the dev enrollment adapter; a production deployment or mismatched token cannot enroll this worker. Docker is optional for discovery. With an active Windows Docker engine, the launcher also requires the development image-payload adapter and builds/verifies the local Windows job image. It does not switch Docker engines. For Linux Docker jobs, provision a verified digest-pinned x64 runner image and set `MARS_LINUX_X64_CONTAINER_IMAGE` before starting the worker.
+On a Windows host, set the same `MARS_DEV_TOKEN` used by the development control plane at `https://mars.snazzie.space`. That deployment must run the current checkout's `scripts/control-plane-dev-entry.ts` and shared worker contracts; an older deployment can reject a valid worker doctor report with HTTP 400. A production deployment or mismatched token cannot enroll this worker. The launcher does not select or switch Docker engines: the worker discovers the active engine and any verified runtime images. To prepare the local Windows job image explicitly, switch Docker to the Windows engine yourself and run with `MARS_DEV_BUILD_WINDOWS_IMAGE=true`; the development image-payload adapter must be available. For Linux Docker jobs, provision a verified digest-pinned x64 runner image and set `MARS_LINUX_X64_CONTAINER_IMAGE` before starting the worker.
 
 In a separate terminal from `bun run dev`, run from this checkout:
 
