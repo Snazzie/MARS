@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import { access, readFile, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { relative, join, isAbsolute } from "node:path";
+import { validateExclusiveCpuIds } from "./cpu-inventory.ts";
 import { WorkerLimits, type PoolResources } from "@mars/contracts";
 import { validateResources, type Lease, type RuntimeDriver, type RuntimeLease } from "./runtime.ts";
 
@@ -23,10 +24,10 @@ const defaultHostCommand: HostCommandRunner = async (executable, args, stdin) =>
   }
 };
 const safeChild = (root: string, value: string) => isAbsolute(value) && relative(root, value) !== "" && !relative(root, value).startsWith("..") && !relative(root, value).includes("/");
-export function renderLinuxVmDomain(template: string, values: { name: string; uuid: string; mac: string; vcpu: number; memoryMiB: number; overlay: string; network: string; channel: string; leaseId: string }): string {
+export function renderLinuxVmDomain(template: string, values: { name: string; uuid: string; mac: string; vcpu: number; memoryMiB: number; overlay: string; network: string; channel: string; leaseId: string; cpuSet?: string }): string {
   const escaped = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
-  const replacements: Record<string, string> = { DOMAIN_NAME: values.name, DOMAIN_UUID: values.uuid, MAC_ADDRESS: values.mac, VCPU: String(values.vcpu), MEMORY_MIB: String(values.memoryMiB), OVERLAY_PATH: escaped(values.overlay), NETWORK: escaped(values.network), CHANNEL_SOCKET: escaped(values.channel), LEASE_ID: escaped(values.leaseId) };
-  return template.replace(/\{\{([A-Z_]+)\}\}/g, (_, key) => replacements[key] ?? `{{${key}}}`);
+  const replacements: Record<string, string> = { DOMAIN_NAME: values.name, DOMAIN_UUID: values.uuid, MAC_ADDRESS: values.mac, VCPU_ELEMENT: `<vcpu placement='static'${values.cpuSet ? ` cpuset='${values.cpuSet}'` : ""}>${values.vcpu}</vcpu>`, MEMORY_MIB: String(values.memoryMiB), OVERLAY_PATH: escaped(values.overlay), NETWORK: escaped(values.network), CHANNEL_SOCKET: escaped(values.channel), LEASE_ID: escaped(values.leaseId) };
+  return template.replace(/\{\{([A-Z_]+)\}\}/g, (_, key) => replacements[key] ?? `{{${key}}`);
 }
 export async function sha256File(path: string): Promise<string> {
   const hash = createHash("sha256");
@@ -66,23 +67,57 @@ export class LibvirtVmDriver implements RuntimeDriver {
   async createLease(lease: Lease): Promise<RuntimeLease> {
     if (this.leases.has(lease.id)) throw new Error("duplicate lease");
     this.validatePool(lease.resources);
+    if (lease.cpuMode !== "exclusive" && lease.cpuIds?.length) throw new Error("shared VM cannot claim CPU IDs");
+    const cpuSet = lease.cpuMode === "exclusive" ? await validateExclusiveCpuIds(lease.cpuIds, lease.resources.vcpu) : undefined;
     const domain = `${this.config.prefix}-${lease.id}`; const overlay = join(this.config.cloneRoot, `${lease.id}.qcow2`); const channel = join(this.config.channelRoot, `${lease.id}.sock`);
     if (!safeChild(this.config.cloneRoot, overlay) || !safeChild(this.config.channelRoot, channel)) throw new Error("unsafe lease path");
     const owned: Owned = { lease, domain, overlay, channel }; this.leases.set(lease.id, owned); this.reserved += lease.resources.concurrency;
     try {
       const clone = await this.host("qemu-img", ["create", "-f", "qcow2", "-F", "qcow2", "-b", this.config.goldenDisk, overlay]); if (clone.code !== 0) throw new Error(clone.stderr || "clone failed");
-      const template = await this.templateReader(this.config.domainTemplate); const macBytes = randomBytes(3).toString("hex").match(/../g)!; const xml = renderLinuxVmDomain(template, { name: domain, uuid: randomUUID(), mac: `52:54:00:${macBytes.join(":")}`, vcpu: lease.resources.vcpu, memoryMiB: Math.ceil(lease.resources.memoryBytes / 1024 ** 2), overlay, network: this.config.network, channel, leaseId: lease.id });
+      const template = await this.templateReader(this.config.domainTemplate); const macBytes = randomBytes(3).toString("hex").match(/../g)!; const xml = renderLinuxVmDomain(template, { name: domain, uuid: randomUUID(), mac: `52:54:00:${macBytes.join(":")}`, vcpu: lease.resources.vcpu, cpuSet, memoryMiB: Math.ceil(lease.resources.memoryBytes / 1024 ** 2), overlay, network: this.config.network, channel, leaseId: lease.id });
       const defined = await this.host("virsh", ["-c", "qemu:///system", "define", "--validate", "/dev/stdin"], xml); if (defined.code !== 0) throw new Error(defined.stderr || "define failed");
+      if (cpuSet) {
+        const domainXml = await this.host("virsh", ["-c", "qemu:///system", "dumpxml", "--inactive", domain]);
+        if (domainXml.code !== 0 || !domainXml.stdout.includes(`cpuset='${cpuSet}'`) && !domainXml.stdout.includes(`cpuset="${cpuSet}"`)) throw new Error("defined VM CPU affinity does not match exclusive claim");
+        if (await validateExclusiveCpuIds(lease.cpuIds, lease.resources.vcpu) !== cpuSet) throw new Error("exclusive CPU inventory changed before VM start");
+      }
       const started = await this.host("virsh", ["-c", "qemu:///system", "start", domain]); if (started.code !== 0) throw new Error(started.stderr || "start failed");
       const runtime: RuntimeLease = { runtimeInstanceId: domain, observed: { vcpu: lease.resources.vcpu, memoryBytes: lease.resources.memoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: Promise.resolve(0), logs: this.guestLogs(owned) }; owned.runtime = runtime;
       return runtime;
-    } catch (error) { await this.stopLease(lease.id).catch(() => undefined); throw error; }
+    } catch (error) { try { await this.stopLease(lease.id); } catch (cleanupError) { throw new AggregateError([error, cleanupError], "Linux VM provisioning and cleanup failed"); } throw error; }
   }
   private async awaitGuest(owned: Owned): Promise<number> { await new Promise((resolve) => setTimeout(resolve, this.config.guestReadyTimeoutMs)); throw new Error("linux guest ready timeout"); }
   private async *guestLogs(_owned: Owned): AsyncIterable<string> { return; }
   async inspectLease(leaseId: string): Promise<RuntimeLease> { const owned = this.leases.get(leaseId); if (!owned?.runtime) throw new Error("lease not found"); return owned.runtime; }
-  async stopLease(leaseId: string): Promise<void> { const owned = this.leases.get(leaseId); if (!owned) return; await this.host("virsh", ["-c", "qemu:///system", "shutdown", owned.domain]); await new Promise((resolve) => setTimeout(resolve, 10_000)); await this.host("virsh", ["-c", "qemu:///system", "destroy", owned.domain]).catch(() => undefined); await this.host("virsh", ["-c", "qemu:///system", "undefine", owned.domain, "--nvram"]).catch(() => undefined); await rm(owned.channel, { force: true }).catch(() => undefined); await rm(owned.overlay, { force: true }).catch(() => undefined); this.leases.delete(leaseId); this.reserved = Math.max(0, this.reserved - owned.lease.resources.concurrency); }
+  async stopLease(leaseId: string): Promise<void> {
+    const owned = this.leases.get(leaseId);
+    if (!owned) return;
+    await this.host("virsh", ["-c", "qemu:///system", "shutdown", owned.domain]);
+    await Bun.sleep(10_000);
+    const destroyed = await this.host("virsh", ["-c", "qemu:///system", "destroy", owned.domain]);
+    if (destroyed.code !== 0 && !/not running|domain not found|failed to get domain/i.test(destroyed.stderr)) throw new Error(destroyed.stderr || "VM destroy failed");
+    const undefinedDomain = await this.host("virsh", ["-c", "qemu:///system", "undefine", owned.domain, "--nvram"]);
+    if (undefinedDomain.code !== 0 && !/domain not found|failed to get domain/i.test(undefinedDomain.stderr)) throw new Error(undefinedDomain.stderr || "VM undefine failed");
+    await rm(owned.channel, { force: true });
+    await rm(owned.overlay, { force: true });
+    this.leases.delete(leaseId);
+    this.reserved = Math.max(0, this.reserved - owned.lease.resources.concurrency);
+  }
   async removeLease(leaseId: string): Promise<void> { await this.stopLease(leaseId); }
   async collectDiagnostics(leaseId: string): Promise<Record<string, unknown>> { const owned = this.leases.get(leaseId); return owned ? { domain: owned.domain, overlay: owned.overlay, channel: owned.channel } : {}; }
-  async reconcileOrphans(): Promise<void> { const domains = await this.host("virsh", ["-c", "qemu:///system", "list", "--all", "--name"]); if (domains.code !== 0) return; for (const domain of domains.stdout.split("\n").map((v) => v.trim()).filter(Boolean)) { if (!domain.startsWith(`${this.config.prefix}-`)) continue; const leaseId = domain.slice(this.config.prefix.length + 1); if (!/^[0-9a-f-]{36}$/.test(leaseId)) continue; await this.host("virsh", ["-c", "qemu:///system", "destroy", domain]).catch(() => undefined); await this.host("virsh", ["-c", "qemu:///system", "undefine", domain, "--nvram"]).catch(() => undefined); if (safeChild(this.config.cloneRoot, join(this.config.cloneRoot, `${leaseId}.qcow2`))) await rm(join(this.config.cloneRoot, `${leaseId}.qcow2`), { force: true }); if (safeChild(this.config.channelRoot, join(this.config.channelRoot, `${leaseId}.sock`))) await rm(join(this.config.channelRoot, `${leaseId}.sock`), { force: true }); } }
+  async reconcileOrphans(): Promise<void> {
+    const domains = await this.host("virsh", ["-c", "qemu:///system", "list", "--all", "--name"]);
+    if (domains.code !== 0) throw new Error(domains.stderr || "VM inventory failed");
+    for (const domain of domains.stdout.split("\n").map(v => v.trim()).filter(Boolean)) {
+      if (!domain.startsWith(`${this.config.prefix}-`)) continue;
+      const leaseId = domain.slice(this.config.prefix.length + 1);
+      if (!/^[0-9a-f-]{36}$/.test(leaseId)) continue;
+      const destroyed = await this.host("virsh", ["-c", "qemu:///system", "destroy", domain]);
+      if (destroyed.code !== 0 && !/not running/i.test(destroyed.stderr)) throw new Error(destroyed.stderr || "orphan VM destroy failed");
+      const undefinedDomain = await this.host("virsh", ["-c", "qemu:///system", "undefine", domain, "--nvram"]);
+      if (undefinedDomain.code !== 0) throw new Error(undefinedDomain.stderr || "orphan VM undefine failed");
+      if (safeChild(this.config.cloneRoot, join(this.config.cloneRoot, `${leaseId}.qcow2`))) await rm(join(this.config.cloneRoot, `${leaseId}.qcow2`), { force: true });
+      if (safeChild(this.config.channelRoot, join(this.config.channelRoot, `${leaseId}.sock`))) await rm(join(this.config.channelRoot, `${leaseId}.sock`), { force: true });
+    }
+  }
 }

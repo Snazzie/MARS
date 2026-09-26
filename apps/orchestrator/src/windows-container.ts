@@ -4,6 +4,7 @@ import { isIP } from "node:net";
 import { join } from "node:path";
 import { WorkerContainerStatus, type PoolResources, type WorkerContainerStatus as WorkerContainerStatusData, type WorkerLimits } from "@mars/contracts";
 import type { Lease, RuntimeDriver, RuntimeLease } from "./runtime.ts";
+import { assertUnpinnedLease } from "./runtime.ts";
 
 export type DockerResult = { code: number; stdout: string; stderr: string };
 export type DockerRunner = (args: string[]) => Promise<DockerResult>;
@@ -189,6 +190,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
     }
   }
   async createLease(lease: Lease): Promise<RuntimeLease> {
+    assertUnpinnedLease(lease);
     await this.reserveCapacity(lease.resources);
     const root = this.bootstrapPath(lease.id);
     await mkdir(root, { recursive: true });
@@ -213,7 +215,7 @@ export class WindowsContainerDriver implements RuntimeDriver {
       const runtime: RuntimeLease = { runtimeInstanceId: name, observed: { vcpu: observedVcpu / 1_000_000_000, memoryBytes: observedMemoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: this.wait(name), sample: dockerSample(name, lease.resources.memoryBytes, this.docker) };
       this.leases.set(lease.id, { name, root, runtime });
       return runtime;
-    } catch (error) { await this.removeLease(lease.id).catch(() => undefined); throw error; }
+    } catch (error) { try { await this.removeLease(lease.id); } catch (cleanupError) { throw new AggregateError([error, cleanupError], "Windows container provisioning and cleanup failed"); } throw error; }
   }
   private async wait(name: string): Promise<number> {
     const waiting = this.docker(["wait", name]).then(result => {

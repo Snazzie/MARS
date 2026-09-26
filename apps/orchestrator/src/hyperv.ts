@@ -2,7 +2,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PoolResources, WorkerContainerStatus } from "@mars/contracts";
 import type { Lease, RuntimeDriver, RuntimeLease } from "./runtime.ts";
-import { validateResources } from "./runtime.ts";
+import { assertUnpinnedLease, validateResources } from "./runtime.ts";
 
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
 type HyperVResult = { code: number; stdout: string; stderr: string };
@@ -42,9 +42,9 @@ export function createHyperVRuntime(run: HyperVRunner = defaultRunner): HyperVRu
     waitForGuestReady: async (vmName, timeoutMs) => { await invoke("$deadline=(Get-Date).AddMilliseconds($args[1]); do { $heartbeat=Get-VMIntegrationService -VMName $args[0] -Name 'Heartbeat' -ErrorAction SilentlyContinue; if ($heartbeat -and $heartbeat.PrimaryStatusDescription -eq 'OK') { exit 0 }; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $deadline); exit 1", [vmName, String(timeoutMs)]); },
     waitForStop: async vmName => { await invoke("while ($true) { $state=(Get-VM -Name $args[0] -ErrorAction SilentlyContinue).State; if ($state -eq 'Off') { exit 0 }; if (-not $state) { throw 'VM disappeared before stopping' }; Start-Sleep -Milliseconds 500 }", [vmName]); },
     stop: async vmName => { await invoke("Stop-VM -Name $args[0] -TurnOff -Force -ErrorAction SilentlyContinue", [vmName]); },
-    remove: async vmName => { await invoke("Remove-VM -Name $args[0] -Force -ErrorAction SilentlyContinue", [vmName]); },
+    remove: async vmName => { await invoke("$vm=Get-VM -Name $args[0] -ErrorAction SilentlyContinue; if ($vm) { Remove-VM -VM $vm -Force -ErrorAction Stop }", [vmName]); },
     removeFiles: async path => { await rm(path, { recursive: true, force: true }); },
-    reconcileOrphans: async (prefix, filesRoot) => { await invoke("Get-VM -Name ($args[0]+'-*') -ErrorAction SilentlyContinue | ForEach-Object { Stop-VM -VM $_ -TurnOff -Force -ErrorAction SilentlyContinue; Remove-VM -VM $_ -Force -ErrorAction SilentlyContinue }; Get-ChildItem -LiteralPath $args[1] -Filter ($args[0]+'-*') -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue", [prefix, filesRoot]); },
+    reconcileOrphans: async (prefix, filesRoot) => { await invoke("Get-VM -Name ($args[0]+'-*') -ErrorAction SilentlyContinue | ForEach-Object { if ($_.State -ne 'Off') { Stop-VM -VM $_ -TurnOff -Force -ErrorAction Stop }; Remove-VM -VM $_ -Force -ErrorAction Stop }; Get-ChildItem -LiteralPath $args[1] -Filter ($args[0]+'-*') -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction Stop", [prefix, filesRoot]); },
     sample: async vmName => { const value = JSON.parse(await invoke("Get-VM -Name $args[0] | Select-Object CPUUsage,MemoryAssigned | ConvertTo-Json -Compress", [vmName])) as { CPUUsage?: number; MemoryAssigned?: number }; return { cpuUsagePercent: Math.max(0, Math.min(100, Number(value.CPUUsage ?? 0))), cpuTimeMs: 0, memoryWorkingSetBytes: Number(value.MemoryAssigned ?? 0), memoryLimitBytes: Math.max(1, Number(value.MemoryAssigned ?? 0)) }; },
   };
 }
@@ -59,6 +59,7 @@ export class HyperVDriver implements RuntimeDriver {
     return [];
   }
   async createLease(lease: Lease): Promise<RuntimeLease> {
+    assertUnpinnedLease(lease);
     if (lease.imageDigest !== this.checkpointDigest) throw new Error("lease image digest does not match Hyper-V checkpoint");
     this.validatePool(lease.resources);
     await mkdir(this.bootstrapRoot, { recursive: true });
@@ -76,11 +77,14 @@ export class HyperVDriver implements RuntimeDriver {
       this.leases.set(lease.id, { vmName, filesPath, runtime });
       return runtime;
     } catch (error) {
-      await this.hyperv.stop(vmName).catch(() => undefined); await this.hyperv.remove(vmName).catch(() => undefined); await this.hyperv.removeFiles(filesPath).catch(() => undefined); throw error;
+      await this.hyperv.stop(vmName).catch(() => undefined);
+      try { await this.hyperv.remove(vmName); await this.hyperv.removeFiles(filesPath); }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], "Hyper-V provisioning and cleanup failed"); }
+      throw error;
     } finally { await rm(bootstrapPath, { force: true }); }
   }
   async inspectLease(leaseId: string): Promise<RuntimeLease> { const lease = this.leases.get(leaseId); if (!lease) throw new Error("sandbox not found"); return lease.runtime; }
   async stopLease(leaseId: string): Promise<void> { const lease = this.leases.get(leaseId); if (lease) await this.hyperv.stop(lease.vmName); }
-  async removeLease(leaseId: string): Promise<void> { const lease = this.leases.get(leaseId); if (!lease) return; await this.hyperv.remove(lease.vmName).catch(() => undefined); await this.hyperv.removeFiles(lease.filesPath).catch(() => undefined); this.leases.delete(leaseId); }
+  async removeLease(leaseId: string): Promise<void> { const lease = this.leases.get(leaseId); if (!lease) return; await this.hyperv.remove(lease.vmName); await this.hyperv.removeFiles(lease.filesPath); this.leases.delete(leaseId); }
   async collectDiagnostics(leaseId: string): Promise<Record<string, unknown>> { const runtime = await this.inspectLease(leaseId); return { driver: this.name, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed }; }
 }

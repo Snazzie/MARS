@@ -18,7 +18,7 @@ function fakeDocker(calls: string[][], architecture = "arm64"): DockerRunner {
     return { code: 0, stdout: "", stderr: "" };
   };
 }
-function config(overrides: Partial<LinuxContainerConfig> = {}): LinuxContainerConfig { return { image, prefix: "mars", network: "mars-linux-arm64", limits, ...overrides }; }
+function config(overrides: Partial<LinuxContainerConfig> = {}): LinuxContainerConfig { return { image, prefix: "mars", network: "mars-linux-arm64", limits, hostPlacement: "linux-pin", ...overrides }; }
 
 test("rejects an ARM64 configuration when the Docker engine reports AMD64", async () => {
   const driver = new LinuxContainerDriver(config(), fakeDocker([] , "amd64"));
@@ -33,6 +33,7 @@ test("creates a labeled ARM container with exact limits and bootstrap handoff", 
   const runtime = await driver.createLease(lease);
   expect(runtime.observed).toEqual({ vcpu: 2, memoryBytes: 1024, storageBytes: 2048 });
   expect(calls.find((args) => args[0] === "create")).toEqual(expect.arrayContaining(["--platform", "linux/arm64", "--network", "mars-linux-arm64", "--cpus", "2", "--memory", "1024", "--label", "mars.platform=linux-arm64", "--label", `mars.lease-id=${lease.id}`, image]));
+  expect(calls.find((args) => args[0] === "create")).not.toContain("--cpuset-cpus");
   expect(calls.find((args) => args[0] === "cp")).toEqual(expect.arrayContaining([expect.stringContaining(join(tmpdir(), "mars-linux-arm64")), expect.stringContaining(":/var/lib/mars/bootstrap/bootstrap.json")]));
   await expect(access(join(tmpdir(), "mars-linux-arm64", lease.id, "bootstrap.json"))).rejects.toThrow();
   await driver.removeLease(lease.id);
@@ -53,4 +54,17 @@ test("creates an x64 Linux container with isolated ownership and validates x64 i
   const create = calls.find((args) => args[0] === "create")!;
   expect(create).toEqual(expect.arrayContaining(["--platform", "linux/amd64", "--label", "mars.platform=linux-x64", "--network", "mars-linux-x64", x64Image]));
   await driver.removeLease(lease.id);
+});
+
+test("rejects an exclusive claim without a permitted Linux host inventory", async () => {
+  const calls: string[][] = [];
+  const driver = new LinuxContainerDriver(config(), fakeDocker(calls));
+  await expect(driver.createLease({ ...lease, cpuMode: "exclusive", cpuIds: [0, 1] })).rejects.toThrow("no longer allowed");
+  expect(calls.some(args => args[0] === "create")).toBe(false);
+});
+
+test("Windows-hosted Linux Docker refuses CPU claims and concurrent guests", async () => {
+  const calls: string[][] = [];
+  const driver = new LinuxContainerDriver(config({ hostPlacement: "serialized-no-pin", limits: { ...limits, maxConcurrentPods: 1 } }), fakeDocker(calls));
+  await expect(driver.createLease({ ...lease, cpuMode: "exclusive", cpuIds: [0, 1] })).rejects.toThrow("cannot claim CPU IDs");
 });

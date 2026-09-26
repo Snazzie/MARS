@@ -8,6 +8,7 @@ import { configurePendingWorker, purgeWorkerRunnerCache } from "../worker-reques
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 import { createWorkerImageBuildPayload } from "../windows-image-build.ts";
 import { ApiError, CostCenterDto, CostCenterPricingProvider, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, CreatePoolRequest, WorkerConfiguration, WorkerImageBuildSpec, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth, JobLabelRecommendation, JobLabelRecommendationQuery, GithubConnectionSummary, GithubRateLimitStats, WorkerEventPayload, WorkerUpgradeStatus, RuntimePlatform, RuntimeDriverName, selectedRuntimeDriver } from "@mars/contracts";
+import { supportsExclusiveCpuPlacement } from "@mars/contracts";
 import { WorkerDispatchError } from "../worker-dispatch.ts";
 import { WorkerReleaseCatalogUnavailable } from "../worker-release.ts";
 import { workerPoolEvidence } from "../worker-evidence.ts";
@@ -410,10 +411,12 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const q = parseQuery(c); if (q instanceof Response) return q;
     return c.json(CursorPage(PoolSummary).parse(await listGlobalPools(deps.db, q.limit, q.cursor ?? null)));
   }));
-  const poolWorker = async (body: z.infer<typeof CreatePoolRequest>): Promise<{ driver: string } | { error: "not_found" | "worker_not_ready" | "worker_runtime_not_ready" | "worker_image_mismatch" | "worker_guest_platform_unsupported" | "runtime_unsupported" }> => {
-    const [worker] = await deps.db`SELECT platform,guest_platforms AS "guestPlatforms",admission_state AS "admissionState",configuration_state AS "configurationState",configuration_revision AS "configurationRevision",applied_configuration_revision AS "appliedConfigurationRevision",desired_configuration AS "desiredConfiguration",doctor_observed_at AS "lastDoctorAt",doctor FROM workers WHERE id=${body.workerId}`;
+  const poolWorker = async (body: z.infer<typeof CreatePoolRequest>): Promise<{ driver: string } | { error: "not_found" | "worker_not_ready" | "worker_runtime_not_ready" | "worker_image_mismatch" | "worker_guest_platform_unsupported" | "runtime_unsupported" | "exclusive_requires_concurrency_one" | "exclusive_worker_unsupported" }> => {
+    const [worker] = await deps.db`SELECT platform,contract_version AS "contractVersion",limits,guest_platforms AS "guestPlatforms",admission_state AS "admissionState",configuration_state AS "configurationState",configuration_revision AS "configurationRevision",applied_configuration_revision AS "appliedConfigurationRevision",desired_configuration AS "desiredConfiguration",doctor_observed_at AS "lastDoctorAt",doctor FROM workers WHERE id=${body.workerId}`;
     if (!worker) return { error: "not_found" as const };
     if (worker.admissionState !== "adopted" || worker.configurationState !== "ready" || worker.configurationRevision !== worker.appliedConfigurationRevision || !worker.lastDoctorAt || Date.now() - new Date(String(worker.lastDoctorAt)).getTime() >= 60_000) return { error: "worker_not_ready" as const };
+    if (body.cpuMode === "exclusive" && !supportsExclusiveCpuPlacement(String(worker.contractVersion ?? ""))) return { error: "exclusive_worker_unsupported" };
+    if (body.cpuMode === "exclusive" && !String(worker.platform).startsWith("linux-") && (body.resources.concurrency !== 1 || Number(worker.limits?.maxConcurrentPods) !== 1)) return { error: "exclusive_requires_concurrency_one" };
     if (!(Array.isArray(worker.guestPlatforms) ? worker.guestPlatforms : [worker.platform]).includes(body.guestPlatform)) return { error: "worker_guest_platform_unsupported" as const };
     const desired = typeof worker.desiredConfiguration === "string" ? JSON.parse(worker.desiredConfiguration) : worker.desiredConfiguration;
     const driver = desired?.selectedDriver;
@@ -431,10 +434,10 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const body = CreatePoolRequest.parse(await c.req.json());
     if (body.poolId) return error(c, 400, "invalid_request", "Use the pool update endpoint to edit an existing pool");
     const selected = await poolWorker(body);
-    if ("error" in selected) return selected.error === "not_found" ? error(c, 404, "not_found", "Worker not found") : error(c, 422, selected.error, selected.error === "worker_not_ready" ? "Worker configuration has not been reconciled" : selected.error === "worker_runtime_not_ready" ? "Worker runtime host evidence is not ready" : selected.error === "worker_image_mismatch" ? "Worker image evidence does not match the requested digest" : "Worker does not support the requested guest platform");
+    if ("error" in selected) return selected.error === "not_found" ? error(c, 404, "not_found", "Worker not found") : error(c, 422, selected.error, selected.error === "exclusive_requires_concurrency_one" ? "Windows/macOS exclusive pools require pool concurrency 1 and worker runtime.maxConcurrentPods 1" : selected.error === "exclusive_worker_unsupported" ? "Exclusive pools require worker contract 0.4.0 or newer" : selected.error === "worker_not_ready" ? "Worker configuration has not been reconciled" : selected.error === "worker_runtime_not_ready" ? "Worker runtime host evidence is not ready" : selected.error === "worker_image_mismatch" ? "Worker image evidence does not match the requested digest" : "Worker does not support the requested guest platform");
     const [duplicate] = await deps.db`SELECT id FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel}) LIMIT 1`;
     if (duplicate) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
-    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${body.guestPlatform},${selected.driver},${body.imageDigest},${jsonParameter(deps.db, body.resources)}::jsonb,${jsonParameter(deps.db, [body.triggerLabel])}::jsonb,${body.triggerLabel},false) RETURNING id`;
+    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,cpu_mode,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${body.guestPlatform},${selected.driver},${body.imageDigest},${jsonParameter(deps.db, body.resources)}::jsonb,${body.cpuMode},${jsonParameter(deps.db, [body.triggerLabel])}::jsonb,${body.triggerLabel},false) RETURNING id`;
     await deps.db`INSERT INTO audit_events (organization_id,actor,type,payload) VALUES (NULL,${c.get("user").id},'pool.created',${jsonParameter(deps.db, { poolId: pool.id, workerId: body.workerId, guestPlatform: body.guestPlatform, triggerLabel: body.triggerLabel, scope: "control-plane" })}::jsonb)`;
     return c.json({ id: String(pool.id), labels: [body.triggerLabel] });
   }));
@@ -443,21 +446,21 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const idem = requireMutation(c); if (idem) return idem;
     const poolId = c.req.param("poolId");
     const body = CreatePoolRequest.parse({ ...await c.req.json(), poolId });
-    const [existing] = await deps.db`SELECT p.id,p.enabled,(SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS active FROM runner_pools p WHERE p.id=${poolId} AND p.organization_id IS NULL`;
+    const [existing] = await deps.db`SELECT p.id,p.enabled,(SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.state <> 'reaped') AS active FROM runner_pools p WHERE p.id=${poolId} AND p.organization_id IS NULL`;
     if (!existing) return error(c, 404, "not_found", "Pool not found");
     if (existing.enabled || Number(existing.active) !== 0) return error(c, 409, "pool_in_use", "Disable the pool and wait for active leases to be reaped before editing");
     const selected = await poolWorker(body);
-    if ("error" in selected) return error(c, selected.error === "not_found" ? 404 : 422, selected.error, selected.error === "not_found" ? "Worker not found" : selected.error === "worker_runtime_not_ready" ? "Worker runtime host evidence is not ready" : selected.error === "worker_image_mismatch" ? "Worker image evidence does not match the requested digest" : "Worker is not compatible with this pool");
+    if ("error" in selected) return error(c, selected.error === "not_found" ? 404 : 422, selected.error, selected.error === "exclusive_requires_concurrency_one" ? "Windows/macOS exclusive pools require pool concurrency 1 and worker runtime.maxConcurrentPods 1" : selected.error === "exclusive_worker_unsupported" ? "Exclusive pools require worker contract 0.4.0 or newer" : selected.error === "not_found" ? "Worker not found" : selected.error === "worker_runtime_not_ready" ? "Worker runtime host evidence is not ready" : selected.error === "worker_image_mismatch" ? "Worker image evidence does not match the requested digest" : "Worker is not compatible with this pool");
     const [duplicate] = await deps.db`SELECT id FROM runner_pools WHERE organization_id IS NULL AND id<>${poolId} AND (name=${body.name} OR trigger_label=${body.triggerLabel}) LIMIT 1`;
     if (duplicate) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
-    await deps.db`UPDATE runner_pools SET name=${body.name},platform=${body.guestPlatform},driver=${selected.driver},image_digest=${body.imageDigest},resources=${jsonParameter(deps.db, body.resources)}::jsonb,labels=${jsonParameter(deps.db, [body.triggerLabel])}::jsonb,trigger_label=${body.triggerLabel} WHERE id=${poolId} AND organization_id IS NULL`;
+    await deps.db`UPDATE runner_pools SET name=${body.name},platform=${body.guestPlatform},driver=${selected.driver},image_digest=${body.imageDigest},resources=${jsonParameter(deps.db, body.resources)}::jsonb,cpu_mode=${body.cpuMode},labels=${jsonParameter(deps.db, [body.triggerLabel])}::jsonb,trigger_label=${body.triggerLabel} WHERE id=${poolId} AND organization_id IS NULL`;
     return c.json({ id: poolId, labels: [body.triggerLabel] });
   }));
   app.delete("/api/pools/:poolId", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const idem = requireMutation(c); if (idem) return idem;
     const poolId = c.req.param("poolId");
-    const [pool] = await deps.db`SELECT p.id,p.enabled,(SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS active FROM runner_pools p WHERE p.id=${poolId} AND p.organization_id IS NULL`;
+    const [pool] = await deps.db`SELECT p.id,p.enabled,(SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.state <> 'reaped') AS active FROM runner_pools p WHERE p.id=${poolId} AND p.organization_id IS NULL`;
     if (!pool) return error(c, 404, "not_found", "Pool not found");
     if (pool.enabled || Number(pool.active) !== 0) return error(c, 409, "pool_in_use", "Disable the pool and wait for active leases to be reaped before deleting");
     await deps.db`DELETE FROM runner_pools WHERE id=${poolId} AND organization_id IS NULL`;
@@ -469,11 +472,12 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!["enable", "disable"].includes(action)) return error(c, 404, "not_found", "Resource not found");
     const idem = requireMutation(c); if (idem) return idem;
     const poolId = c.req.param("poolId");
-    const [pool] = await deps.db`SELECT id,platform,driver,image_digest AS "imageDigest" FROM runner_pools WHERE id=${poolId} AND organization_id IS NULL`;
+    const [pool] = await deps.db`SELECT id,platform,driver,image_digest AS "imageDigest",cpu_mode AS "cpuMode",resources FROM runner_pools WHERE id=${poolId} AND organization_id IS NULL`;
     if (!pool) return error(c, 404, "not_found", "Pool not found");
     if (action === "enable") {
-      const readyWorkers = await deps.db`SELECT w.id FROM workers w CROSS JOIN LATERAL (SELECT CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END AS evidence) e WHERE w.admission_state='adopted' AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false AND w.last_heartbeat_at>now()-interval '60 seconds' AND w.doctor_observed_at>now()-interval '60 seconds' AND ${pool.platform}=ANY(SELECT jsonb_array_elements_text(w.guest_platforms)) AND ${pool.driver}=w.desired_configuration->>'selectedDriver' AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.evidence->'capabilities')='array' THEN e.evidence->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=${pool.driver} AND capability->>'guestPlatform'=${pool.platform} AND capability->>'ready'='true' AND capability->>'imageDigest'=${pool.imageDigest})`;
-      const ready = readyWorkers.find(worker => !deps.workerConnected || deps.workerConnected(String(worker.id)));
+      const readyWorkers = await deps.db`SELECT w.id,w.platform,w.limits,w.contract_version AS "contractVersion" FROM workers w CROSS JOIN LATERAL (SELECT CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END AS evidence) e WHERE w.admission_state='adopted' AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false AND w.last_heartbeat_at>now()-interval '60 seconds' AND w.doctor_observed_at>now()-interval '60 seconds' AND ${pool.platform}=ANY(SELECT jsonb_array_elements_text(w.guest_platforms)) AND ${pool.driver}=w.desired_configuration->>'selectedDriver' AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.evidence->'capabilities')='array' THEN e.evidence->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=${pool.driver} AND capability->>'guestPlatform'=${pool.platform} AND capability->>'ready'='true' AND capability->>'imageDigest'=${pool.imageDigest})`;
+      const ready = readyWorkers.find(worker => (!deps.workerConnected || deps.workerConnected(String(worker.id))) && (pool.cpuMode !== "exclusive" || supportsExclusiveCpuPlacement(String(worker.contractVersion ?? "")) && (String(worker.platform).startsWith("linux-") || Number(pool.resources?.concurrency) === 1 && Number(worker.limits?.maxConcurrentPods) === 1)));
+      if (!ready && pool.cpuMode === "exclusive" && readyWorkers.some(worker => !String(worker.platform).startsWith("linux-") && (Number(pool.resources?.concurrency) !== 1 || Number(worker.limits?.maxConcurrentPods) !== 1))) return error(c, 422, "exclusive_requires_concurrency_one", "Windows/macOS exclusive pools require pool concurrency 1 and worker runtime.maxConcurrentPods 1");
       if (!ready) return error(c, 409, "no_compatible_ready_worker", "No compatible ready worker is connected for this pool");
     }
     await deps.db`UPDATE runner_pools SET enabled=${action === "enable"} WHERE id=${poolId} AND organization_id IS NULL`;
@@ -485,9 +489,11 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const idem = requireMutation(c); if (idem) return idem;
     const body = CreatePoolRequest.parse(await c.req.json());
-    const [w] = await deps.db`SELECT platform,guest_platforms AS "guestPlatforms",admission_state AS "admissionState",configuration_state AS "configurationState",configuration_revision AS "configurationRevision",applied_configuration_revision AS "appliedConfigurationRevision",desired_configuration AS "desiredConfiguration",doctor_observed_at AS "lastDoctorAt",draining,limits,doctor FROM workers WHERE id=${body.workerId}`;
+    const [w] = await deps.db`SELECT platform,contract_version AS "contractVersion",guest_platforms AS "guestPlatforms",admission_state AS "admissionState",configuration_state AS "configurationState",configuration_revision AS "configurationRevision",applied_configuration_revision AS "appliedConfigurationRevision",desired_configuration AS "desiredConfiguration",doctor_observed_at AS "lastDoctorAt",draining,limits,doctor FROM workers WHERE id=${body.workerId}`;
     if (!w || (w.platform === "linux-x64" && body.guestPlatform === "linux-x64")) return error(c, 422, "runtime_unsupported", "Linux-host x64 runners are not available in this release");
     if (w.admissionState !== "adopted" || (deps.workerConnected ? !deps.workerConnected(body.workerId) : false) || w.configurationState !== "ready" || w.configurationRevision !== w.appliedConfigurationRevision || w.draining || !w.lastDoctorAt || Date.now() - new Date(String(w.lastDoctorAt)).getTime() >= 60_000) return error(c, 422, "worker_not_ready", "Worker is not ready");
+    if (body.cpuMode === "exclusive" && !supportsExclusiveCpuPlacement(String(w.contractVersion ?? ""))) return error(c, 422, "exclusive_worker_unsupported", "Exclusive pools require worker contract 0.4.0 or newer");
+    if (body.cpuMode === "exclusive" && !String(w.platform).startsWith("linux-") && (body.resources.concurrency !== 1 || Number(w.limits?.maxConcurrentPods) !== 1)) return error(c, 422, "exclusive_requires_concurrency_one", "Windows/macOS exclusive pools require pool concurrency 1 and worker runtime.maxConcurrentPods 1");
     if (!(Array.isArray(w.guestPlatforms) ? w.guestPlatforms : [w.platform]).includes(body.guestPlatform)) return error(c, 422, "worker_guest_platform_unsupported", "Worker does not support the requested guest platform");
     const desired = typeof w.desiredConfiguration === "string" ? JSON.parse(w.desiredConfiguration) : w.desiredConfiguration;
     const driver = desired?.selectedDriver;
@@ -496,25 +502,35 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!evidence.ready) return error(c, 422, "worker_runtime_not_ready", "Worker runtime host evidence is not ready");
     if (!evidence.imageMatches) return error(c, 422, "worker_image_mismatch", "Worker image evidence does not match the requested digest");
     const labels = [body.triggerLabel];
-    const [duplicate] = await deps.db`SELECT id,name,trigger_label AS "triggerLabel" FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel})`;
+    const [duplicate] = await deps.db`SELECT id,name,trigger_label AS "triggerLabel",enabled,cpu_mode AS "cpuMode",resources FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel})`;
     if (body.poolId) {
-      const [existing] = await deps.db`SELECT id FROM runner_pools WHERE id=${body.poolId} AND organization_id IS NULL`;
+      const [existing] = await deps.db`SELECT id,enabled,cpu_mode AS "cpuMode",resources FROM runner_pools WHERE id=${body.poolId} AND organization_id IS NULL`;
       if (!existing) return error(c, 404, "not_found", "Resource not found");
+      if (existing.enabled) return error(c, 409, "pool_in_use", "Disable the pool before editing");
+      if (existing.cpuMode !== body.cpuMode || JSON.stringify(existing.resources) !== JSON.stringify(body.resources)) {
+        const [active] = await deps.db`SELECT id FROM runner_leases WHERE pool_id=${body.poolId} AND state <> 'reaped' LIMIT 1`;
+        if (active) return error(c, 409, "pool_in_use", "Wait for every lease to be reaped before changing mode or resources");
+      }
       if (duplicate && String(duplicate.id) !== body.poolId) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
-      await deps.db`UPDATE runner_pools SET worker_id=NULL,platform=${body.guestPlatform},driver=${driver},image_digest=${body.imageDigest},resources=${jsonParameter(deps.db, body.resources)},labels=${jsonParameter(deps.db, labels)},name=${body.name},trigger_label=${body.triggerLabel},enabled=true WHERE id=${body.poolId}`;
+      await deps.db`UPDATE runner_pools SET worker_id=NULL,platform=${body.guestPlatform},driver=${driver},image_digest=${body.imageDigest},resources=${jsonParameter(deps.db, body.resources)},cpu_mode=${body.cpuMode},labels=${jsonParameter(deps.db, labels)},name=${body.name},trigger_label=${body.triggerLabel},enabled=true WHERE id=${body.poolId}`;
       await invalidateDashboard(deps.db, org, ["pools", "onboarding"]);
       return c.json({ id: body.poolId, labels });
     }
     if (duplicate) {
       if (duplicate.name !== body.name || duplicate.triggerLabel !== body.triggerLabel) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
-      await deps.db`UPDATE runner_pools SET worker_id=NULL,platform=${body.guestPlatform},driver=${driver},image_digest=${body.imageDigest},resources=${jsonParameter(deps.db, body.resources)}::jsonb,labels=${jsonParameter(deps.db, labels)}::jsonb,enabled=true WHERE id=${duplicate.id}`;
+      if (duplicate.enabled) return error(c, 409, "pool_in_use", "Disable the pool before editing");
+      if (duplicate.cpuMode !== body.cpuMode || JSON.stringify(duplicate.resources) !== JSON.stringify(body.resources)) {
+        const [active] = await deps.db`SELECT id FROM runner_leases WHERE pool_id=${duplicate.id} AND state <> 'reaped' LIMIT 1`;
+        if (active) return error(c, 409, "pool_in_use", "Wait for every lease to be reaped before changing mode or resources");
+      }
+      await deps.db`UPDATE runner_pools SET worker_id=NULL,platform=${body.guestPlatform},driver=${driver},image_digest=${body.imageDigest},resources=${jsonParameter(deps.db, body.resources)}::jsonb,cpu_mode=${body.cpuMode},labels=${jsonParameter(deps.db, labels)}::jsonb,enabled=true WHERE id=${duplicate.id}`;
       await completeOnboardingIfReady(deps.db);
       await invalidateDashboard(deps.db, org, ["pools", "onboarding"]);
       return c.json({ id: String(duplicate.id), labels });
     }
     const key = c.req.header("idempotency-key")!;
     if (!(await dashboardMutation(deps.db, org, key))) return c.json({ ok: true });
-    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${body.guestPlatform},${driver},${body.imageDigest},${jsonParameter(deps.db, body.resources)}::jsonb,${jsonParameter(deps.db, labels)}::jsonb,${body.triggerLabel},true) RETURNING id`;
+    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,cpu_mode,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${body.guestPlatform},${driver},${body.imageDigest},${jsonParameter(deps.db, body.resources)}::jsonb,${body.cpuMode},${jsonParameter(deps.db, labels)}::jsonb,${body.triggerLabel},true) RETURNING id`;
     await deps.db`INSERT INTO audit_events (organization_id,actor,type,payload) VALUES (NULL,${c.get("user").id},'pool.created',${jsonParameter(deps.db, { poolId: pool.id, workerId: body.workerId, guestPlatform: body.guestPlatform, triggerLabel: body.triggerLabel, scope: "control-plane" })}::jsonb)`;
     await completeOnboardingIfReady(deps.db);
     await invalidateDashboard(deps.db, org, ["pools", "onboarding"]);

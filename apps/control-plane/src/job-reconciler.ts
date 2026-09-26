@@ -58,6 +58,12 @@ export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate[
     runtimeReady: evidence.ready,
     imageEvidenceReady: evidence.ready && evidence.imageMatches,
     acceptingLeases: doctorRecord.acceptingLeases !== false,
+    hostPlatform: String(row.hostPlatform ?? ""),
+    contractVersion: nullableString(row.contractVersion),
+    availableCpuIds: Array.isArray(doctorRecord.availableCpuIds) ? doctorRecord.availableCpuIds : undefined,
+    claimedCpuIds: Array.isArray(jsonValue(row.claimedCpuIds)) ? jsonValue(row.claimedCpuIds) as number[] : [],
+    unreapedLeases: Number(row.unreapedLeases ?? 0),
+    modeConflict: row.modeConflict === true,
     limits: jsonValue(row.limits ?? row.worker_limits),
   };
 }
@@ -100,10 +106,13 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
   const blockedInstallations = new Set<number>();
   const candidateRows = await deps.db`
     SELECT p.id AS "poolId", p.name AS "poolName", p.organization_id AS "organizationId", p.worker_id AS "poolWorkerId",
-      w.id AS "workerId", w.name AS "workerName", p.enabled, p.platform, p.driver, p.image_digest AS "imageDigest", p.resources, p.labels, p.trigger_label AS "triggerLabel",
+      w.id AS "workerId", w.name AS "workerName", w.platform AS "hostPlatform", w.contract_version AS "contractVersion", p.cpu_mode AS "cpuMode", p.enabled, p.platform, p.driver, p.image_digest AS "imageDigest", p.resources, p.labels, p.trigger_label AS "triggerLabel",
       w.admission_state AS "admissionState", w.connection_state AS "connectionState", w.configuration_state AS "configurationState",
       w.configuration_revision AS "configurationRevision", w.applied_configuration_revision AS "appliedConfigurationRevision",
       w.limits, w.doctor, w.encryption_public_key AS "encryptionPublicKey",
+      (SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state <> 'reaped') AS "unreapedLeases",
+      EXISTS (SELECT 1 FROM runner_leases l WHERE l.worker_id=w.id AND l.state <> 'reaped' AND l.cpu_mode <> p.cpu_mode) AS "modeConflict",
+      COALESCE((SELECT jsonb_agg(cpu.value::int) FROM runner_leases l CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(l.cpu_ids,'[]'::jsonb)) AS cpu(value) WHERE l.worker_id=w.id AND l.state <> 'reaped'), '[]'::jsonb) AS "claimedCpuIds",
       (SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.worker_id=w.id
         AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')) AS active
     FROM runner_pools p
@@ -140,7 +149,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       poolName: String(row.poolName ?? ""),
       requestedLabels: [],
       worker: candidateWorkerFromRow(row),
-      pool: { id: poolId, enabled: Boolean(row.enabled), platform: String(row.platform), driver: String(row.driver), resources, concurrency, active: Number(row.active ?? 0), labels: stringArray(row.labels), triggerLabel: row.triggerLabel ? String(row.triggerLabel) : null },
+      pool: { id: poolId, enabled: Boolean(row.enabled), platform: String(row.platform), driver: String(row.driver), resources, cpuMode: row.cpuMode === "exclusive" ? "exclusive" as const : "shared" as const, concurrency, active: Number(row.active ?? 0), labels: stringArray(row.labels), triggerLabel: row.triggerLabel ? String(row.triggerLabel) : null },
     };
   });
   const candidates = sqlCandidates
@@ -238,7 +247,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       const target = workerByPool.get(`${reservation.poolId}:${reservation.workerId}`);
       if (!target?.encryptionPublicKey) throw new Error("worker_encryption_key_missing");
       const [dashboardJob] = await deps.db`SELECT id FROM dashboard_jobs WHERE github_job_id=${reservation.jobId ?? -1}`;
-      const envelope: LeaseBootstrapEnvelope = { leaseId: reservation.id, jobId: String(dashboardJob?.id ?? reservation.id), nonce: reservation.nonce, guestPlatform: target.guestPlatform as LeaseBootstrapEnvelope["guestPlatform"], contractVersion: deps.contractVersion, encodedJitConfig: jit.encodedJitConfig, expiresAt: reservation.expiresAt, imageDigest: target.imageDigest, resources: reservation.requested };
+      const envelope: LeaseBootstrapEnvelope = { leaseId: reservation.id, jobId: String(dashboardJob?.id ?? reservation.id), nonce: reservation.nonce, guestPlatform: target.guestPlatform as LeaseBootstrapEnvelope["guestPlatform"], contractVersion: deps.contractVersion, encodedJitConfig: jit.encodedJitConfig, expiresAt: reservation.expiresAt, imageDigest: target.imageDigest, resources: reservation.requested, cpuMode: reservation.cpuMode, ...(reservation.cpuIds === null ? {} : { cpuIds: reservation.cpuIds }) };
       await dispatchLeaseBootstrap(deps.dispatcher, { ...envelope, driver: target.driver, workerId: target.workerId, workerEncryptionPublicKey: target.encryptionPublicKey });
       await deps.db`UPDATE runner_leases SET state='dispatched', updated_at=now() WHERE id=${reservation.id} AND state='reserved'`;
     },

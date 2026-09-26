@@ -8,10 +8,11 @@ import { z } from "zod";
 import type { Lease, RuntimeLease } from "./runtime.ts";
 import { createTartVmRuntime, resolveTartExecutable, TartVmDriver } from "./tart.ts";
 import { openLeaseBootstrap } from "../../control-plane/src/lease-dispatch.ts";
-import { connectWorkerSocket, retryControlPlaneOperation, waitForWorkerSocketClose, workerRuntimeVersions, WorkerEventTransport } from "./worker-client.ts";
+import { connectWorkerSocket, retryControlPlaneOperation, retryWorkerRuntime, waitForWorkerSocketClose, workerRuntimeVersions, WorkerEventTransport } from "./worker-client.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 import { collectWorkerServiceLogs } from "./worker-service-logs.ts";
 import { openLeasePickupState, leasePickupStateFile, writeLeasePickupState, type LeasePickupStateController } from "./lease-pickup-state.ts";
+import { admitWorkerLease } from "./lease-lifecycle.ts";
 import { MacStatusItemSupervisor, statusItemExecutable } from "./mac-status-item.ts";
 export interface MacWorkerLimits { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number }
 export interface MacWorkerJoinInput {
@@ -82,7 +83,7 @@ export async function runMacLeaseLifecycle(
   };
   let runtime: RuntimeLease;
   try {
-    runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, contractVersion: bootstrap.contractVersion, guestPlatform: bootstrap.guestPlatform, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
+    runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, contractVersion: bootstrap.contractVersion, guestPlatform: bootstrap.guestPlatform, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, cpuMode: bootstrap.cpuMode, cpuIds: bootstrap.cpuIds, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
   } catch (error) {
     console.error("macOS lease provisioning failed", { leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
     send(workerEvent(command.workerId, "lease.failed", { commandId: command.id, leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, reason: "provisioning_failed" }));
@@ -143,7 +144,9 @@ export function startMacLeaseLifecycle(
 ): Promise<void> {
   const existing = active.get(bootstrap.leaseId);
   if (existing) return existing;
+  const releaseAdmission = admitWorkerLease(bootstrap, active);
   const lifecycle = runMacLeaseLifecycle(command, driver, bootstrap, send, preserveLeases(), inventoryChanged).finally(() => {
+    releaseAdmission();
     if (active.get(bootstrap.leaseId) === lifecycle) active.delete(bootstrap.leaseId);
     try { inventoryChanged?.(); } catch (error) {
       console.error("macOS worker inventory notification failed", { workerId: command.workerId, leaseId: bootstrap.leaseId, error: error instanceof Error ? error.message : String(error) });
@@ -172,7 +175,7 @@ export async function handleMacWorkerCommand(command: WorkerCommand, driver: Tar
     if (!payload.bootstrapCiphertext) throw new Error("lease bootstrap payload invalid");
     const bootstrap = openLeaseBootstrap(payload.bootstrapCiphertext, encryptionPrivateKey);
     if (bootstrap.leaseId !== command.leaseId) throw new Error("lease bootstrap mismatch");
-    const runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, contractVersion: bootstrap.contractVersion, guestPlatform: bootstrap.guestPlatform, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
+    const runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, contractVersion: bootstrap.contractVersion, guestPlatform: bootstrap.guestPlatform, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, cpuMode: bootstrap.cpuMode, cpuIds: bootstrap.cpuIds, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig });
     return workerEvent(command.workerId, "sandbox_attested", { commandId: command.id, leaseId: command.leaseId, nonce: bootstrap.nonce, runtimeInstanceId: runtime.runtimeInstanceId, observed: runtime.observed });
   }
   if (command.type === "tart.stop_lease" && command.leaseId) {
@@ -566,6 +569,7 @@ export async function runMacWorker(baseUrl: string, limits: MacWorkerLimits, cac
       identity = { workerId: "", ...createKeyPair(), machineUuid, vmUuid: (Bun.env.MARS_VM_UUID ?? machineUuid).toLowerCase() };
       await saveMacWorkerIdentity(identity);
     }
+    if (identity.preserveLeases !== true) await retryWorkerRuntime("macOS Tart orphan reconciliation", () => driver.reconcileOrphans());
     if (!identity.workerId) identity = await enrollMacWorker(controlPlane, identity);
     return await connectMacWorker(controlPlane, identity, driver, limits, cache, cacheService, pickupState);
   } finally {

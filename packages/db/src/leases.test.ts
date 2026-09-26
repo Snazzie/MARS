@@ -37,6 +37,7 @@ test("reserves when current free capacity already includes active leases", async
   const tx = ((strings: TemplateStringsArray) => {
     const query = strings.join(" ").toLowerCase();
     if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 10, memoryBytes: 10, storageBytes: 10, concurrency: 10 }, limits: { maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10, maxStorageBytesPerPod: 10, maxConcurrentPods: 10 }, doctor: { capacity: { freeVcpu: 4, freeMemoryBytes: 4, freeStorageBytes: 4 } } }];
+    if (query.startsWith('select cpu_mode as "cpumode"')) return [];
     if (query.includes("from runner_leases")) return [{ count: 1, vcpu: 3, memoryBytes: 3, storageBytes: 3 }];
     if (query.includes("insert into runner_leases")) return [{ id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date().toISOString() }];
     return [];
@@ -64,6 +65,7 @@ test("rejects a job when aggregate worker capacity is exhausted", async () => {
   const tx = ((strings: TemplateStringsArray) => {
     const query = strings.join(" ").toLowerCase();
     if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", poolConcurrency: 10, resources: { vcpu: 10, memoryBytes: 10, storageBytes: 10, concurrency: 10 }, limits: { maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10, maxStorageBytesPerPod: 10, maxConcurrentPods: 10 }, doctor: { capacity: { freeVcpu: 4, freeMemoryBytes: 4, freeStorageBytes: 4 } } }];
+    if (query.startsWith('select cpu_mode as "cpumode"')) return [];
     if (query.includes("from runner_leases")) return [{ count: 1, vcpu: 3, memoryBytes: 3, storageBytes: 3 }];
     return [];
   }) as unknown as Sql<{}>;
@@ -74,6 +76,7 @@ test("rejects a reservation when active leases plus request exceed actual capaci
   const tx = ((strings: TemplateStringsArray) => {
     const query = strings.join(" ").toLowerCase();
     if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 10, memoryBytes: 10, storageBytes: 10, concurrency: 10 }, limits: { maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10, maxStorageBytesPerPod: 10, maxConcurrentPods: 10 }, doctor: { capacity: { actualVcpu: 8, actualMemoryBytes: 8, actualStorageBytes: 8, freeVcpu: 8, freeMemoryBytes: 8, freeStorageBytes: 8 } } }];
+    if (query.startsWith('select cpu_mode as "cpumode"')) return [];
     if (query.includes("from runner_leases")) return [{ count: 1, vcpu: 7, memoryBytes: 7, storageBytes: 7 }];
     return [];
   }) as unknown as Sql<{}>;
@@ -85,6 +88,7 @@ test("rejects a job when doctor-reported free memory is exhausted", async () => 
   const tx = ((strings: TemplateStringsArray) => {
     const query = strings.join(" ").toLowerCase();
     if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", poolConcurrency: 10, resources: { vcpu: 10, memoryBytes: 10, storageBytes: 10, concurrency: 10 }, limits: { maxVcpuPerPod: 10, maxMemoryBytesPerPod: 10, maxStorageBytesPerPod: 10, maxConcurrentPods: 10 }, doctor: { capacity: { freeVcpu: 10, freeMemoryBytes: 4, freeStorageBytes: 10 } } }];
+    if (query.startsWith('select cpu_mode as "cpumode"')) return [];
     if (query.includes("from runner_leases")) return [{ count: 1, vcpu: 1, memoryBytes: 1, storageBytes: 1 }];
     return [];
   }) as unknown as Sql<{}>;
@@ -170,4 +174,38 @@ test("does not query organization capacity while reserving within worker and poo
     ttlMs: 60_000,
   })).resolves.toMatchObject({ id: "lease" });
   expect(queries.some(query => query.includes("organization_settings"))).toBe(false);
+});
+
+test("exclusive Linux reservations hold disjoint CPU IDs until reaped", async () => {
+  const claims: { cpuMode: string; cpuIds: number[]; state: string }[] = [];
+  let inventory = [0, 1, 2, 3];
+  const resources = { vcpu: 2, memoryBytes: 1, storageBytes: 1, concurrency: 3 };
+  const tx = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+    const query = strings.join(" ").toLowerCase();
+    if (query.includes("from runner_pools")) return [{ resources, cpuMode: "exclusive", hostPlatform: "linux-arm64", contractVersion: "0.4.0", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 2, maxStorageBytesPerPod: 2, maxConcurrentPods: 3 }, doctor: { doctor: { availableCpuIds: inventory }, capacity: { actualVcpu: 4, actualMemoryBytes: 10, actualStorageBytes: 10, freeVcpu: 4, freeMemoryBytes: 10, freeStorageBytes: 10 } } }];
+    if (query.startsWith("select count(*)") && query.includes("pool_id=")) return [{ count: claims.filter(claim => claim.state !== "reaped").length }];
+    if (query.startsWith("select count(*)")) return [{ count: claims.filter(claim => claim.state !== "reaped").length, vcpu: claims.filter(claim => claim.state !== "reaped").length * 2, memoryBytes: 0, storageBytes: 0 }];
+    if (query.startsWith('select cpu_mode as "cpumode"')) return claims.filter(claim => claim.state !== "reaped");
+    if (query.includes("insert into runner_leases")) {
+      const cpuIds = values[8] as number[];
+      claims.push({ cpuMode: "exclusive", cpuIds, state: "reserved" });
+      return [{ id: `lease-${claims.length}`, nonce: "n".repeat(32), workerId: "worker", poolId: "pool", requested: resources, cpuMode: "exclusive", cpuIds, expiresAt: new Date().toISOString() }];
+    }
+    return [];
+  }) as unknown as Sql<{}>;
+  const db = Object.assign(((strings: TemplateStringsArray) => []) as unknown as Sql<{}>, { begin: async (fn: (value: Sql<{}>) => unknown) => fn(tx) });
+  const input = { organizationId: "org", poolId: "pool", workerId: "worker", routingKey: "org:pool", requested: resources, ttlMs: 60_000 };
+  expect((await reserveRoutingSlot(db, input)).cpuIds).toEqual([0, 1]);
+  expect((await reserveRoutingSlot(db, input)).cpuIds).toEqual([2, 3]);
+  await expect(reserveRoutingSlot(db, input)).rejects.toThrow("worker_capacity_exhausted");
+  claims[0]!.state = "failed";
+  await expect(reserveRoutingSlot(db, input)).rejects.toThrow("worker_capacity_exhausted");
+  claims[0]!.state = "reaped";
+  expect((await reserveRoutingSlot(db, input)).cpuIds).toEqual([0, 1]);
+  for (const claim of claims) claim.state = "reaped";
+  claims.push({ cpuMode: "shared", cpuIds: [], state: "failed" });
+  await expect(reserveRoutingSlot(db, input)).rejects.toThrow("worker_capacity_exhausted");
+  claims.at(-1)!.state = "reaped";
+  inventory = [];
+  await expect(reserveRoutingSlot(db, input)).rejects.toThrow("worker_capacity_exhausted");
 });

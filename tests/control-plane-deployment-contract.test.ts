@@ -150,7 +150,7 @@ test("schema-6 release fixture keeps unavailable platforms explicit", async () =
   const manifest = JSON.parse(await read("deploy/control-plane/release-manifest.json"));
   expect(manifest).toMatchObject({
     schemaVersion: 6,
-    contractVersion: "0.3.0",
+    contractVersion: "0.4.0",
     platforms: { "linux-x64": null, "linux-arm64": null, "windows-x64": null, "macos-arm64": null },
   });
   expect(manifest).not.toHaveProperty("windowsContainerBuild");

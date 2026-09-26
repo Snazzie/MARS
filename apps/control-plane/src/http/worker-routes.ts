@@ -1333,7 +1333,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       });
     } else if (development) {
       const macos = development as DevelopmentMacosArtifacts;
-      const contractVersion = selectedManifest?.contractVersion ?? Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.3.0";
+      const contractVersion = selectedManifest?.contractVersion ?? Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? CURRENT_WORKER_CONTRACT_VERSION;
       const macosJobAgent = macos.macosJobAgent ?? macos.jobAgent;
       const linuxArm64JobAgent = macos.linuxArm64JobAgent ?? macos.jobAgent;
       const linuxArm64Runner = macos.linuxArm64Runner ?? macos.jobAgent;
@@ -1341,7 +1341,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       const tartLinuxArm64SourceImage = macos.tartLinuxArm64Image ?? macos.tartImage;
       if (!macos.orchestrator || !macosJobAgent || !linuxArm64JobAgent || !linuxArm64Runner || !macos.imagePreparationScript || !tartMacosSourceImage || !tartLinuxArm64SourceImage || !WorkerContractVersion.safeParse(contractVersion).success) return unavailable(c, [`platform:${audience}`]);
       values = macosInstallerValues({ orchestrator: { url: "", sha256: macos.orchestrator.sha256 }, macosJobAgent: { url: "", sha256: macosJobAgent.sha256 }, linuxArm64JobAgent: { url: "", sha256: linuxArm64JobAgent.sha256 }, linuxArm64Runner: { url: "", sha256: linuxArm64Runner.sha256 }, imagePreparationScript: { url: "", sha256: macos.imagePreparationScript.sha256 }, tartMacosSourceImage, tartLinuxArm64SourceImage }, connectOrigin, contractVersion, "local", { releaseVersion: "0.0.0", targetToken });
-    } else values = macosInstallerValues(release as MacosWorkerRelease, connectOrigin, selectedManifest?.contractVersion ?? "0.3.0", "production", { releaseVersion, targetToken });
+    } else values = macosInstallerValues(release as MacosWorkerRelease, connectOrigin, selectedManifest?.contractVersion ?? CURRENT_WORKER_CONTRACT_VERSION, "production", { releaseVersion, targetToken });
     const generated = injectInstallerOrigin(source, connectOrigin, values, audience === "windows-x64" || audience === "linux-arm64");
     if (generated.includes("__PLACEHOLDER__") || /__[A-Za-z0-9_]+__/.test(generated)) return unavailable(c, [`installer:${file}`]);
     return new Response(generated, { headers: noStore() });

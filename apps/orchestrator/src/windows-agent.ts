@@ -10,7 +10,7 @@ import { WindowsContainerDriver, isExpectedWindowsEntrypoint, parseWindowsContai
 import { LinuxContainerDriver } from "./linux-container.ts";
 import { prepareWindowsContainerImage } from "./windows-image-build.ts";
 import type { RuntimeDriver } from "./runtime.ts";
-import { runLeaseLifecycle } from "./lease-lifecycle.ts";
+import { admitWorkerLease, runLeaseLifecycle } from "./lease-lifecycle.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 import { connectWorkerSocket, retryControlPlaneOperation, retryWorkerRuntime, waitForWorkerSocketClose, workerRuntimeVersions, WorkerEventTransport } from "./worker-client.ts";
 import { openLeasePickupState, leasePickupStateFile, writeLeasePickupState, type LeasePickupStateController } from "./lease-pickup-state.ts";
@@ -150,7 +150,7 @@ export const windowsDoctor = async (preserveLeases = false, runProbe: typeof com
   const linuxGuest = linuxArchitecture === "arm64" ? "linux-arm64" : "linux-x64";
   const linuxNetwork = Bun.env.MARS_LINUX_CONTAINER_NETWORK ?? `mars-linux-${linuxArchitecture === "arm64" ? "arm64" : "x64"}`;
   const linuxDriver = engineOs === "linux" && (hostPlatform !== "windows-arm64" || ["arm64", "aarch64"].includes(architecture)) && ["amd64", "x86_64", "arm64", "aarch64"].includes(architecture) && linuxImage && /^[^@\s]+@sha256:[0-9a-f]{64}$/.test(linuxImage)
-    ? new LinuxContainerDriver({ image: linuxImage, prefix: `mars-windows-linux-${linuxArchitecture === "arm64" ? "arm64" : "x64"}`, network: linuxNetwork, limits: { maxVcpuPerPod: 64, maxMemoryBytesPerPod: Number.MAX_SAFE_INTEGER, maxStorageBytesPerPod: Number.MAX_SAFE_INTEGER, maxConcurrentPods: 64 }, architecture: linuxArchitecture })
+    ? new LinuxContainerDriver({ image: linuxImage, prefix: `mars-windows-linux-${linuxArchitecture === "arm64" ? "arm64" : "x64"}`, network: linuxNetwork, limits: { maxVcpuPerPod: 64, maxMemoryBytesPerPod: Number.MAX_SAFE_INTEGER, maxStorageBytesPerPod: Number.MAX_SAFE_INTEGER, maxConcurrentPods: 64 }, architecture: linuxArchitecture, hostPlacement: "serialized-no-pin" })
     : undefined;
   const linuxHost = linuxDriver ? await linuxDriver.validateHost() : undefined;
   const cacheKey = JSON.stringify([hostPlatform, engineOs, architecture, image, windowsVerification?.imageId, windowsVerification?.manifest, windowsVerification?.entrypoint, linuxImage, linuxNetwork, linuxHost?.runtimeReady, vmImage.digest, vmImage.ready, vmReady]);
@@ -232,7 +232,7 @@ function createSelectedWindowsDriver(selected: RuntimeSelection | undefined, lim
     const arm = guestPlatform === "linux-arm64";
     const image = arm ? Bun.env.MARS_LINUX_ARM64_CONTAINER_IMAGE : Bun.env.MARS_LINUX_X64_CONTAINER_IMAGE;
     if (!image) throw new Error(`${arm ? "MARS_LINUX_ARM64_CONTAINER_IMAGE" : "MARS_LINUX_X64_CONTAINER_IMAGE"} is required`);
-    return new LinuxContainerDriver({ image, prefix: `mars-windows-linux-${arm ? "arm64" : "x64"}`, network: Bun.env.MARS_LINUX_CONTAINER_NETWORK ?? `mars-linux-${arm ? "arm64" : "x64"}`, limits, architecture: arm ? "arm64" : "amd64" });
+    return new LinuxContainerDriver({ image, prefix: `mars-windows-linux-${arm ? "arm64" : "x64"}`, network: Bun.env.MARS_LINUX_CONTAINER_NETWORK ?? `mars-linux-${arm ? "arm64" : "x64"}`, limits, architecture: arm ? "arm64" : "amd64", hostPlacement: "serialized-no-pin" });
   }
   return null;
 }
@@ -327,6 +327,7 @@ export function startWindowsLeaseLifecycle(
 ): Promise<void> {
   const existing = active.get(bootstrap.leaseId);
   if (existing) return existing;
+  const releaseAdmission = admitWorkerLease(bootstrap, active);
   let terminal = false;
   const notifyInventory = (type: string) => {
     if (type !== "sandbox_attested" && type !== "lease.reaped" && type !== "lease.failed") return;
@@ -346,6 +347,7 @@ export function startWindowsLeaseLifecycle(
     }
   };
   const lifecycle = runLeaseLifecycle(command, driver, bootstrap, emit, { preserveLeases, cacheService }).finally(() => {
+    releaseAdmission();
     if (active.get(bootstrap.leaseId) === lifecycle) active.delete(bootstrap.leaseId);
     if (terminal) {
       try { inventoryChanged?.(); } catch (error) {

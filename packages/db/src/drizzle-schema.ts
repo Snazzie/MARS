@@ -77,12 +77,14 @@ export const runnerPools = pgTable("runner_pools", {
 	driver: text().notNull(),
 	imageDigest: text("image_digest").notNull(),
 	resources: jsonb().notNull(),
+	cpuMode: text("cpu_mode").default('shared').notNull(),
 	labels: jsonb().notNull(),
 	triggerLabel: text("trigger_label"),
 	enabled: boolean().default(false).notNull(),
 }, (table) => [
 	uniqueIndex("runner_pools_global_name_idx").using("btree", table.name.asc().nullsLast()).where(sql`(organization_id IS NULL)`),
 	uniqueIndex("runner_pools_global_trigger_idx").using("btree", table.triggerLabel.asc().nullsLast()).where(sql`((organization_id IS NULL) AND (trigger_label IS NOT NULL))`),
+	check("runner_pools_cpu_mode_check", sql`${table.cpuMode} IN ('shared', 'exclusive')`),
 	foreignKey({
 			columns: [table.organizationId],
 			foreignColumns: [organizations.id],
@@ -141,6 +143,8 @@ export const runnerLeases = pgTable("runner_leases", {
 	githubJobId: bigint("github_job_id", { mode: "number" }),
 	state: text().notNull(),
 	requested: jsonb().notNull(),
+	cpuMode: text("cpu_mode").default('shared').notNull(),
+	cpuIds: jsonb("cpu_ids"),
 	nonce: text().notNull(),
 	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).notNull(),
 	runtimeInstanceId: text("runtime_instance_id"),
@@ -166,6 +170,7 @@ export const runnerLeases = pgTable("runner_leases", {
 			name: "runner_leases_worker_id_fkey"
 		}),
 	unique("runner_leases_github_job_id_key").on(table.githubJobId),
+	check("runner_leases_cpu_mode_check", sql`${table.cpuMode} IN ('shared', 'exclusive')`),
 ]);
 
 export const jobClaims = pgTable("job_claims", {

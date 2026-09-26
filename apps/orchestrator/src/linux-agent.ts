@@ -12,6 +12,7 @@ import type { LibvirtVmDriver } from "./libvirt-vm.ts";
 import type { RuntimeDriver } from "./runtime.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 import { collectWorkerServiceLogs } from "./worker-service-logs.ts";
+import { allowedCpuIds } from "./cpu-inventory.ts";
 export type LinuxWorkerResources = {
   appliance: { vcpu: number; memoryBytes: number; storageBytes: number };
   runtime: { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
@@ -167,7 +168,7 @@ async function linuxDoctor(driver: LibvirtVmDriver, digest: string, channelRoot:
   } catch {}
   const digestValid = /^sha256:[0-9a-f]{64}$/.test(digest);
   const ready = host.runtimeReady && smoke && digestValid;
-  return WorkerDoctorData.parse({ runtimeMode: "vm", artifactSource: "worker_local", artifactDigest: digest, runtimeReady: ready, libvirtReady: host.libvirtReady, networkReady: host.networkReady, cloneStorageReady: host.cloneStorageReady, realVmSmoke: smoke, imageSignatures: true, smokeArtifactDigest: smoke ? digest : undefined, smokeObservedAt: smoke ? new Date().toISOString() : undefined, remediation: host.remediation ?? (smoke ? null : "real Linux VM smoke evidence is missing"), capabilities: [{ driver: "linux-libvirt-vm", guestPlatform: "linux-x64", imageDigest: digestValid ? digest : null, ready, remediation: ready ? null : host.remediation ?? "verified immutable Linux VM image and smoke evidence are required" }] });
+  return WorkerDoctorData.parse({ runtimeMode: "vm", artifactSource: "worker_local", artifactDigest: digest, runtimeReady: ready, libvirtReady: host.libvirtReady, networkReady: host.networkReady, cloneStorageReady: host.cloneStorageReady, realVmSmoke: smoke, imageSignatures: true, smokeArtifactDigest: smoke ? digest : undefined, smokeObservedAt: smoke ? new Date().toISOString() : undefined, availableCpuIds: await allowedCpuIds(), remediation: host.remediation ?? (smoke ? null : "real Linux VM smoke evidence is missing"), capabilities: [{ driver: "linux-libvirt-vm", guestPlatform: "linux-x64", imageDigest: digestValid ? digest : null, ready, remediation: ready ? null : host.remediation ?? "verified immutable Linux VM image and smoke evidence are required" }] });
 }
 async function enrollLinuxWorker(baseUrl: URL, identity: WorkerIdentity, driver: LibvirtVmDriver, digest: string, channelRoot: string): Promise<WorkerIdentity> {
   const vmUuid = identity.vmUuid ?? Bun.env.MARS_VM_UUID ?? randomUUID();
@@ -304,7 +305,7 @@ export async function runDockerLinuxWorker(baseUrl: string, driver: RuntimeDrive
       const code = await readEnrollmentCode();
       const digestValid = /^sha256:[0-9a-f]{64}$/.test(host.artifactDigest);
       const capability = { driver: "linux-docker-container", guestPlatform: "linux-arm64", imageDigest: digestValid ? host.artifactDigest : null, ready: host.runtimeReady && digestValid, remediation: host.runtimeReady && digestValid ? null : "Docker ARM64 runtime and verified immutable image are required" };
-      const payload = WorkerBootstrapRequest.parse({ code, computerName: hostname(), platform: "linux-arm64", ...workerRuntimeVersions(), publicKey: enrolled.publicKey, encryptionPublicKey: enrolled.encryptionPublicKey, vmUuid: enrolled.vmUuid, machineUuid: enrolled.machineUuid, doctor: WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: capability.ready, probe: true, imageSignatures: host.imageReady, networkReady: host.networkReady, acceptingLeases: true, capabilities: [capability] }), capacity: linuxCapacity() });
+      const payload = WorkerBootstrapRequest.parse({ code, computerName: hostname(), platform: "linux-arm64", ...workerRuntimeVersions(), publicKey: enrolled.publicKey, encryptionPublicKey: enrolled.encryptionPublicKey, vmUuid: enrolled.vmUuid, machineUuid: enrolled.machineUuid, doctor: WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: capability.ready, probe: true, imageSignatures: host.imageReady, networkReady: host.networkReady, availableCpuIds: await allowedCpuIds(), acceptingLeases: true, capabilities: [capability] }), capacity: linuxCapacity() });
       const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", controlPlane), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(30_000) }));
       if (!response.ok) throw new Error(`worker join failed: ${response.status}`);
       const joined = await response.json() as { workerId?: string };
@@ -319,7 +320,7 @@ export async function runDockerLinuxWorker(baseUrl: string, driver: RuntimeDrive
       const containers = await driver.listContainerStatuses().catch(() => []);
       const digestValid = /^sha256:[0-9a-f]{64}$/.test(host.artifactDigest);
       const capability = { driver: "linux-docker-container", guestPlatform: "linux-arm64", imageDigest: digestValid ? host.artifactDigest : null, ready: host.runtimeReady && digestValid, remediation: host.runtimeReady && digestValid ? null : "Docker ARM64 runtime and verified immutable image are required" };
-      const doctor = WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: capability.ready, probe: true, imageSignatures: host.imageReady, networkReady: host.networkReady, inventoryObservedAt: new Date().toISOString(), acceptingLeases: true, activeLeases: [...activeLeases.keys()], containers, capabilities: [capability] });
+      const doctor = WorkerDoctorData.parse({ runtimeMode: "container", artifactSource: "registry", artifactDigest: host.artifactDigest, runtimeReady: capability.ready, probe: true, imageSignatures: host.imageReady, networkReady: host.networkReady, inventoryObservedAt: new Date().toISOString(), availableCpuIds: await allowedCpuIds(), acceptingLeases: true, activeLeases: [...activeLeases.keys()], containers, capabilities: [capability] });
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: enrolled.workerId, payload: { ...workerRuntimeVersions(), doctor, capacity: linuxCapacity() } }));
     };
     for (;;) {

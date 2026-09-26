@@ -2,7 +2,7 @@
   <name>{{DOMAIN_NAME}}</name>
   <uuid>{{DOMAIN_UUID}}</uuid>
   <memory unit='MiB'>{{MEMORY_MIB}}</memory>
-  <vcpu placement='static'>{{VCPU}}</vcpu>
+  {{VCPU_ELEMENT}}
   <metadata><mars:lease xmlns:mars='urn:mars' managed='true' id='{{LEASE_ID}}'/></metadata>
   <os><type arch='x86_64' machine='q35'>hvm</type><boot dev='hd'/></os>
   <features><acpi/><apic/><vmport state='off'/></features>

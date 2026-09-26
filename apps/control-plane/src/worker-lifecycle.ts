@@ -173,7 +173,7 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
   }
   if (parsedPayload.data.type === "lease.declined") {
     const payload = parsedPayload.data.payload;
-    const rows = await db`UPDATE runner_leases SET state='failed',cleanup_state='none',terminal_result=${jsonParameter(db, { reason: "pickup_paused" })},updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('reserved','dispatched') RETURNING id`;
+    const rows = await db`UPDATE runner_leases SET state='failed',cleanup_state='pending',terminal_result=${jsonParameter(db, { reason: "pickup_paused" })},updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('reserved','dispatched') RETURNING id`;
     if (!transition(Boolean(rows[0]), "failed")) return false;
     return true;
   }
