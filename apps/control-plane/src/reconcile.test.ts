@@ -175,6 +175,28 @@ test("continues other installations after a rate-limited JIT attempt", async () 
   expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 1, failed: 1 });
 });
  
+test("a job-specific JIT failure does not starve later jobs in the same installation", async () => {
+  const attempts: number[] = [];
+  const dispatched: number[] = [];
+  const queued = [1, 2].map(jobId => ({ installationId: 42, repositoryId: jobId, repository: "acme/project", runId: jobId, jobId, labels: ["mars-macos-arm64-2vcpu-4g"] }));
+  const result = await reconcileQueuedJobs({
+    queued,
+    maxConcurrent: 1,
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 2 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 2 }, concurrency: 2, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
+    reserve: async ({ githubJobId, requested }) => ({ id: `lease-${githubJobId}`, jobId: githubJobId, nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested, cpuMode: "shared" as const, cpuIds: null }),
+    jit: async ({ githubJobId }) => {
+      attempts.push(githubJobId);
+      if (githubJobId === 1) throw new Error("github_422");
+      return { encodedJitConfig: "config", runnerName: "runner", labels: queued[1]!.labels, expiresAt: new Date(Date.now() + 60_000).toISOString() };
+    },
+    dispatch: async reservation => { dispatched.push(reservation.jobId!); },
+    release: async () => {},
+  });
+  expect(attempts).toEqual([1, 2]);
+  expect(dispatched).toEqual([2]);
+  expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 1 });
+});
+
 test("resumes routing after an installation cooldown clears", async () => {
   let blocked = true;
   const calls: string[] = [];

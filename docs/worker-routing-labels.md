@@ -70,6 +70,10 @@ its labels without depending on their order or casing. The lease enters
 attestation or failure can advance it; a failed send releases the reservation for
 cleanup.
 
+An individual JIT registration failure does not prevent other queued jobs in the
+same installation from being considered; an installation-wide GitHub rate limit
+still pauses its requests until the cooldown clears.
+
 ## Pool CPU modes
 
 Pools default to **Shared**, which limits CPU time per job but does not reserve

@@ -118,7 +118,6 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
           decide(queued, message === "github_rate_limited" ? "github_rate_limited" : jitFailed ? "jit_failed" : "dispatch_failed");
           report.failed += 1;
           if (reservation) {
-            if (jitFailed) blockedInstallations.add(queued.installationId);
             await deps.release?.(reservation);
           }
           if (message === "github_rate_limited") blockedInstallations.add(queued.installationId);
