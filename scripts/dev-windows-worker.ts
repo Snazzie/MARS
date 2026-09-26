@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { WorkerBuildImagePayload, workerBuildImageContentDescriptor, CURRENT_WORKER_CONTRACT_VERSION } from "../packages/contracts/src/index.ts";
 import { prepareWindowsContainerImage } from "../apps/orchestrator/src/windows-image-build.ts";
-import { deriveDevWorkerCode } from "./dev-worker-join.ts";
+import { deriveDevWorkerCode, renewRevokedDevWorker } from "./dev-worker-join.ts";
 
 const image = "mars/windows-job:local";
 
@@ -34,13 +34,18 @@ async function main(): Promise<void> {
     machineUuid = randomUUID();
     await writeFile(machinePath, `${machineUuid}\n`, { flag: "wx", mode: 0o600 });
   }
-  let enrolled = false;
+  let identity: { workerId?: string } | undefined;
   try {
-    const identity: unknown = JSON.parse(await readFile(identityPath, "utf8"));
-    if (!identity || typeof identity !== "object" || ("workerId" in identity && typeof identity.workerId !== "string")) throw new Error("invalid worker identity");
-    enrolled = "workerId" in identity && Boolean(identity.workerId);
+    const parsed: unknown = JSON.parse(await readFile(identityPath, "utf8"));
+    if (!parsed || typeof parsed !== "object" || ("workerId" in parsed && typeof parsed.workerId !== "string")) throw new Error("invalid worker identity");
+    identity = parsed as { workerId?: string };
   } catch (error) {
     if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw new Error("Development worker identity is unreadable; refusing to replace it", { cause: error });
+  }
+  let enrolled = Boolean(identity?.workerId);
+  if (identity?.workerId && await renewRevokedDevWorker(identityPath, identity.workerId, controlPlane, token)) {
+    enrolled = false;
+    console.log("Revoked development worker replaced; requesting approval for a new worker");
   }
 
   if (Bun.env.MARS_DEV_BUILD_WINDOWS_IMAGE === "true") {
