@@ -32,6 +32,17 @@ const runBoundedCommand = async (command: string[], timeoutMs = 15_000): Promise
 };
 const machineUuid = async () => { if (Bun.env.MARS_MACHINE_UUID) return Bun.env.MARS_MACHINE_UUID; return (await runBoundedCommand(["powershell.exe", "-NoProfile", "-Command", "(Get-CimInstance Win32_ComputerSystemProduct).UUID"])).stdout.trim(); };
 const createIdentity = async (): Promise<Identity> => ({ ...keys(), vmUuid: Bun.env.MARS_VM_UUID ?? randomUUID(), machineUuid: await machineUuid() });
+export type WindowsHostPlatform = "windows-arm64" | "windows-x64";
+export function windowsPlatformFromProcessorArchitecture(architecture: number): WindowsHostPlatform {
+  if (architecture === 12) return "windows-arm64";
+  if (architecture === 9) return "windows-x64";
+  throw new Error(`Unsupported Windows processor architecture: ${architecture}`);
+}
+export const detectWindowsHostPlatform = async (): Promise<WindowsHostPlatform> => {
+  const output = await runBoundedCommand(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "(Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1 -ExpandProperty Architecture)"]);
+  if (output.code !== 0) throw new Error(`Windows host architecture query failed: ${output.stdout}`);
+  return windowsPlatformFromProcessorArchitecture(Number(output.stdout.trim()));
+};
 const runPowerShellJson = async (command: string): Promise<Record<string, number>> => { const result = await runBoundedCommand(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command]); const output = result.stdout.trim(); if (result.code !== 0) throw new Error(`Windows capacity query failed: ${output}`); const value = JSON.parse(output) as Record<string, number>; if (Object.values(value).some((entry) => !Number.isFinite(entry) || entry <= 0)) throw new Error("Windows capacity query returned invalid values"); return value; };
 const capacity = async (): Promise<WorkerCapacityData> => {
   const value = await runPowerShellJson("$system=Get-CimInstance Win32_ComputerSystem -ErrorAction Stop; $cpu=(Get-CimInstance Win32_Processor -ErrorAction Stop | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum; $available=(Get-Counter '\\Memory\\Available Bytes' -ErrorAction Stop).CounterSamples[0].CookedValue; $disk=Get-CimInstance Win32_LogicalDisk -ErrorAction Stop | Where-Object DeviceID -eq 'C:'; if (-not $disk) { throw 'C: drive not found' }; [pscustomobject]@{vcpu=[double]$cpu; memory=[double]$system.TotalPhysicalMemory; freeMemory=[double]$available; storage=[double]$disk.Size; freeStorage=[double]$disk.FreeSpace} | ConvertTo-Json -Compress");
@@ -121,7 +132,8 @@ async function probeWindowsIsolation(image: string, isolation: "process" | "hype
     await runBoundedCommand(["docker.exe", "rm", "-f", name]).catch(() => ({ code: 1, stdout: "" }));
   }
 }
-export const windowsDoctor = async (preserveLeases = false, runProbe: typeof commandSucceeds = commandSucceeds, appliedDriver?: RuntimeSelection): Promise<WorkerDoctorData> => {
+export const windowsDoctor = async (preserveLeases = false, runProbe: typeof commandSucceeds = commandSucceeds, appliedDriver?: RuntimeSelection, hostPlatform?: WindowsHostPlatform): Promise<WorkerDoctorData> => {
+  hostPlatform ??= await detectWindowsHostPlatform();
   const info = await runBoundedCommand(["docker.exe", "info", "--format", "{{json .}}"]).catch(() => ({ code: 1, stdout: "" }));
   let engineOs = "", architecture = "";
   try {
@@ -137,15 +149,15 @@ export const windowsDoctor = async (preserveLeases = false, runProbe: typeof com
   const linuxArchitecture = ["arm64", "aarch64"].includes(architecture) ? "arm64" : "amd64";
   const linuxGuest = linuxArchitecture === "arm64" ? "linux-arm64" : "linux-x64";
   const linuxNetwork = Bun.env.MARS_LINUX_CONTAINER_NETWORK ?? `mars-linux-${linuxArchitecture === "arm64" ? "arm64" : "x64"}`;
-  const linuxDriver = engineOs === "linux" && ["amd64", "x86_64", "arm64", "aarch64"].includes(architecture) && linuxImage && /^[^@\s]+@sha256:[0-9a-f]{64}$/.test(linuxImage)
+  const linuxDriver = engineOs === "linux" && (hostPlatform !== "windows-arm64" || ["arm64", "aarch64"].includes(architecture)) && ["amd64", "x86_64", "arm64", "aarch64"].includes(architecture) && linuxImage && /^[^@\s]+@sha256:[0-9a-f]{64}$/.test(linuxImage)
     ? new LinuxContainerDriver({ image: linuxImage, prefix: `mars-windows-linux-${linuxArchitecture === "arm64" ? "arm64" : "x64"}`, network: linuxNetwork, limits: { maxVcpuPerPod: 64, maxMemoryBytesPerPod: Number.MAX_SAFE_INTEGER, maxStorageBytesPerPod: Number.MAX_SAFE_INTEGER, maxConcurrentPods: 64 }, architecture: linuxArchitecture, hostPlacement: "serialized-no-pin" })
     : undefined;
   const linuxHost = linuxDriver ? await linuxDriver.validateHost() : undefined;
-  const cacheKey = JSON.stringify([engineOs, architecture, image, windowsVerification?.imageId, windowsVerification?.manifest, windowsVerification?.entrypoint, linuxImage, linuxNetwork, linuxHost?.runtimeReady, vmImage.digest, vmImage.ready, vmReady]);
+  const cacheKey = JSON.stringify([hostPlatform, engineOs, architecture, image, windowsVerification?.imageId, windowsVerification?.manifest, windowsVerification?.entrypoint, linuxImage, linuxNetwork, linuxHost?.runtimeReady, vmImage.digest, vmImage.ready, vmReady]);
   let capabilities: WindowsCapability[] = [];
   if (sandboxProbeCache?.key === cacheKey && sandboxProbeCache.expiresAt > Date.now()) capabilities = [...sandboxProbeCache.capabilities];
   else {
-    if (engineOs === "windows" && ["amd64", "x86_64"].includes(architecture) && image) {
+    if (hostPlatform === "windows-x64" && engineOs === "windows" && ["amd64", "x86_64"].includes(architecture) && image) {
       const verification = await localImageVerification(image);
       if (verification.manifest && verification.entrypoint && verification.imageId) {
         for (const isolation of ["process", "hyperv"] as const) {
@@ -155,8 +167,8 @@ export const windowsDoctor = async (preserveLeases = false, runProbe: typeof com
       }
     }
     const linuxCapability = linuxDockerCapability(engineOs, architecture, linuxImage, linuxHost?.runtimeReady === true, linuxHost?.imageReady && !linuxHost.networkReady ? linuxNetwork : undefined);
-    if (linuxCapability) capabilities.push(linuxCapability);
-    if (vmReady && vmImage.ready && vmImage.digest) capabilities.push({ driver: "windows-hyperv", guestPlatform: "windows-x64", imageDigest: vmImage.digest, ready: true, remediation: null });
+    if (linuxCapability && (hostPlatform !== "windows-arm64" || linuxCapability.guestPlatform === "linux-arm64")) capabilities.push(linuxCapability);
+    if (hostPlatform === "windows-x64" && vmReady && vmImage.ready && vmImage.digest) capabilities.push({ driver: "windows-hyperv", guestPlatform: "windows-x64", imageDigest: vmImage.digest, ready: true, remediation: null });
     sandboxProbeCache = { key: cacheKey, expiresAt: Date.now() + 300_000, capabilities };
   }
   const selectedDriver = appliedDriver;
@@ -189,7 +201,8 @@ async function enroll(baseUrl: URL, identity: Identity): Promise<Identity> {
   const machine = identity.machineUuid ?? await machineUuid();
   const persisted = { ...identity, vmUuid, machineUuid: machine };
   await save(persisted);
-  const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), computerName: hostname(), platform: "windows-x64", ...workerRuntimeVersions(), publicKey: persisted.publicKey, encryptionPublicKey: persisted.encryptionPublicKey, vmUuid, machineUuid: machine, doctor: await windowsDoctor(), capacity: await capacity() });
+  const platform = await detectWindowsHostPlatform();
+  const payload = WorkerBootstrapRequest.parse({ code: await joinCode(), computerName: hostname(), platform, ...workerRuntimeVersions(), publicKey: persisted.publicKey, encryptionPublicKey: persisted.encryptionPublicKey, vmUuid, machineUuid: machine, doctor: await windowsDoctor(false, commandSucceeds, undefined, platform), capacity: await capacity() });
   const response = await retryControlPlaneOperation("worker enrollment", () => fetch(new URL("/api/workers/join", baseUrl), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }));
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: unknown } | null;
@@ -234,8 +247,9 @@ function emitWindowsWorkerEvent(workerId: string, leaseId: string | null, send: 
 export async function reconcileWindowsRuntime(identity: Pick<Identity, "preserveLeases">, driver: Pick<WindowsRuntimeDriver, "reconcileOrphans">): Promise<void> {
   if (identity.preserveLeases !== true) await driver.reconcileOrphans();
 }
-export function buildWindowsDoctorReport(input: { doctor: WorkerDoctorData; capacity: WorkerCapacityData; containers: WorkerContainerStatus[]; activeLeases: string[]; preserveLeases: boolean; versions?: { releaseVersion: string; contractVersion: string } }): WorkerDoctorReport {
+export function buildWindowsDoctorReport(input: { doctor: WorkerDoctorData; capacity: WorkerCapacityData; containers: WorkerContainerStatus[]; activeLeases: string[]; preserveLeases: boolean; hostPlatform: WindowsHostPlatform; versions?: { releaseVersion: string; contractVersion: string } }): WorkerDoctorReport {
   return WorkerDoctorReport.parse({
+    hostPlatform: input.hostPlatform,
     ...(input.versions ?? workerRuntimeVersions()),
     doctor: {
       ...input.doctor,
@@ -251,9 +265,11 @@ export async function applyWindowsWorkerConfiguration(
   cache: WorkerCacheConfiguration,
   payload: WorkerConfigurePayload,
   cacheService: Pick<ActionCacheService, "applyTtl" | "setRunnerCacheEnabled" | "setRunnerCacheMaxGiB">,
+  hostPlatform?: WindowsHostPlatform,
 ): Promise<WorkerObservedConfiguration> {
-  const selectedDriver = payload.selectedDriver ?? legacyRuntimeDriver("windows-x64", "container");
-  if (payload.guestPlatforms.length !== 1 || selectedRuntimeDriver("windows-x64", payload.guestPlatforms[0]!, selectedDriver) !== selectedDriver) throw new Error("worker configuration driver is incompatible with Windows");
+  hostPlatform ??= await detectWindowsHostPlatform();
+  const selectedDriver = payload.selectedDriver ?? legacyRuntimeDriver(hostPlatform, "container");
+  if (payload.guestPlatforms.length !== 1 || selectedRuntimeDriver(hostPlatform, payload.guestPlatforms[0]!, selectedDriver) !== selectedDriver) throw new Error("worker configuration driver is incompatible with Windows");
   const observed = WorkerObservedConfiguration.parse({ appliance: payload.appliance, runtime: payload.runtime, guestPlatforms: payload.guestPlatforms, selectedDriver, cache: payload.cache });
   await cacheService.applyTtl(observed.cache.ttlSeconds);
   cacheService.setRunnerCacheEnabled(observed.cache.runnerCacheEnabled);
@@ -474,6 +490,13 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
     await save(identity);
   }
   let selectedDriver = (identity.selectedDriver as RuntimeSelection | undefined) ?? (Bun.env.MARS_WINDOWS_RUNTIME === "container" ? "windows-hyperv-container" : Bun.env.MARS_WINDOWS_RUNTIME === "vm" ? "windows-hyperv" : undefined);
+  const hostPlatform = await detectWindowsHostPlatform();
+  if (hostPlatform === "windows-arm64" && (selectedDriver === "windows-hyperv" || selectedDriver === "windows-hyperv-container" || selectedDriver === "windows-process-container")) {
+    selectedDriver = undefined;
+    delete identity.selectedDriver;
+    delete identity.guestPlatform;
+    await save(identity);
+  }
   if (!identity.selectedDriver && selectedDriver) {
     const report = await windowsDoctor(identity.preserveLeases === true, commandSucceeds, selectedDriver);
     const ready = report.capabilities?.find(capability => capability.driver === selectedDriver && capability.ready);
@@ -509,13 +532,14 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
   const sendDoctor = async (ws: WebSocket): Promise<void> => {
     publishInventory();
     try {
-      const [currentDoctor, currentCapacity, containers] = await Promise.all([windowsDoctor(identity.preserveLeases === true, commandSucceeds, identity.selectedDriver as RuntimeSelection | undefined), capacity(), driver.listContainerStatuses()]);
+      const [currentDoctor, currentCapacity, containers] = await Promise.all([windowsDoctor(identity.preserveLeases === true, commandSucceeds, identity.selectedDriver as RuntimeSelection | undefined, hostPlatform), capacity(), driver.listContainerStatuses()]);
       const report = buildWindowsDoctorReport({
         doctor: { ...currentDoctor, inventoryObservedAt: new Date().toISOString(), acceptingLeases: pickupState.acceptingLeases },
         capacity: currentCapacity,
         containers,
         activeLeases: [...activeLeases.keys()],
         preserveLeases: identity.preserveLeases === true,
+        hostPlatform,
       });
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ version: 1, type: "doctor", workerId: identity.workerId, payload: report }));

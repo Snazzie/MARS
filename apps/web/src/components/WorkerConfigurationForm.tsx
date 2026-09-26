@@ -1,9 +1,9 @@
 import { useState, type FormEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { runtimeDriverForPlatform, type RuntimeDriverName, type WorkerCapacityData, type WorkerLimits, type WorkerRuntimeCapability } from "@mars/contracts";
+import { runtimeDriverForPlatform, type RuntimePlatform, type RuntimeDriverName, type WorkerCapacityData, type WorkerLimits, type WorkerRuntimeCapability } from "@mars/contracts";
 import { configurePendingWorker, configureWorker, rejectPendingWorker, type WorkerConfigurationInput } from "../api.ts";
-type Props = { worker: { id: string; admissionState: "pending" | "adopted" | "rejected" | "revoked"; platform?: "linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64"; guestPlatforms?: ("linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64")[]; selectedDriver?: RuntimeDriverName | null; capabilities?: WorkerRuntimeCapability[]; draining?: boolean; activeSandboxes?: number; capacity: WorkerCapacityData; limits: WorkerLimits | null; desiredCacheTtlSeconds?: number; desiredRunnerCacheEnabled?: boolean; desiredRunnerCacheMaxGiB?: number }; organizationId?: string; onConfigured(): void; onDiscard?(): void };
-const runtimeDriverForHost = (platform: "linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64"): RuntimeDriverName => runtimeDriverForPlatform(platform);
+type Props = { worker: { id: string; admissionState: "pending" | "adopted" | "rejected" | "revoked"; platform?: RuntimePlatform; guestPlatforms?: RuntimePlatform[]; selectedDriver?: RuntimeDriverName | null; capabilities?: WorkerRuntimeCapability[]; draining?: boolean; activeSandboxes?: number; capacity: WorkerCapacityData; limits: WorkerLimits | null; desiredCacheTtlSeconds?: number; desiredRunnerCacheEnabled?: boolean; desiredRunnerCacheMaxGiB?: number }; organizationId?: string; onConfigured(): void; onDiscard?(): void };
+const runtimeDriverForHost = (platform: RuntimePlatform): RuntimeDriverName => runtimeDriverForPlatform(platform);
 const GIB = 1024 ** 3;
 const initialGiB = (bytes: number) => { const value = Math.floor(bytes / GIB); return value > 0 ? String(value) : ""; };
 const parsePositiveInteger = (value: string) => { if (!/^\d+$/.test(value)) return null; const parsed = Number(value); return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null; };
@@ -43,10 +43,10 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
     { driver: "windows-hyperv", guestPlatform: "windows-x64", label: "Windows Hyper-V VM" },
   ];
   const selectedCapability = worker.capabilities?.find((item) => item.driver === selectedDriver && item.guestPlatform === selectedGuestPlatform && item.ready);
-  const capabilityHelp = platform === "windows-x64" ? <fieldset className="worker-runtime-fieldset">
+  const capabilityHelp = (platform === "windows-x64" || platform === "windows-arm64") ? <fieldset className="worker-runtime-fieldset">
     <legend>Runtime capability</legend>
     <p className="field-help">Choose an advertised, ready runtime.</p>
-    <div className="worker-runtime-options">{windowsOptions.filter((option) => !(option.guestPlatform === "linux-x64" && worker.capabilities?.some((item) => item.driver === "linux-docker-container" && item.guestPlatform === "linux-arm64"))).map((option) => {
+    <div className="worker-runtime-options">{windowsOptions.filter((option) => platform !== "windows-arm64" ? !(option.guestPlatform === "linux-x64" && worker.capabilities?.some((item) => item.driver === "linux-docker-container" && item.guestPlatform === "linux-arm64")) : option.guestPlatform === "linux-arm64").map((option) => {
       const capability = worker.capabilities?.find((item) => item.driver === option.driver && item.guestPlatform === option.guestPlatform);
       const note = !capability ? "Not advertised" : !capability.ready ? `Not ready${capability.remediation ? ` — ${capability.remediation}` : ""}` : option.driver === "windows-process-container" ? "Does not provide the Hyper-V host boundary" : capability.remediation;
       return <label className="worker-runtime-option" key={`${option.driver}:${option.guestPlatform}`}>
@@ -67,19 +67,19 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
     const ttlHours = parsePositiveInteger(cacheTtlHours);
     const maxGiB = parsePositiveInteger(runnerCacheMaxGiB);
     if (!applianceVcpu || !applianceMemory || !applianceStorage || !podVcpu || !podMemory || !podStorage || !maxConcurrentPods || !ttlHours || !maxGiB) return setError("All resource values, Cache TTL, and runner cache size must be positive whole numbers.");
-    if (platform === "windows-x64" && (!selectedDriver || !selectedCapability)) return setError("Select an advertised, ready runtime capability.");
+    if ((platform === "windows-x64" || platform === "windows-arm64") && (!selectedDriver || !selectedCapability)) return setError("Select an advertised, ready runtime capability.");
     if (ttlHours > Math.floor(Number.MAX_SAFE_INTEGER / (60 * 60))) return setError("Cache TTL is too large.");
     if (maxGiB > Number.MAX_SAFE_INTEGER) return setError("Runner cache size is too large.");
     const ttlSeconds = ttlHours * 60 * 60;
     if (!Number.isSafeInteger(ttlSeconds)) return setError("Cache TTL is too large.");
     if (applianceVcpu > c.actualVcpu || applianceMemory > c.actualMemoryBytes || applianceStorage > c.actualStorageBytes) return setError("Appliance resources cannot exceed the worker's total capacity.");
     if (podVcpu > applianceVcpu || podMemory > applianceMemory || podStorage > applianceStorage) return setError("Per-job ceilings cannot exceed appliance resources.");
-    const guestPlatforms: WorkerConfigurationInput["guestPlatforms"] = platform === "windows-x64" ? [selectedCapability!.guestPlatform] : platform === "macos-arm64" ? (allowLinux ? ["macos-arm64", "linux-arm64"] : ["macos-arm64"]) : [platform];
+    const guestPlatforms: WorkerConfigurationInput["guestPlatforms"] = platform === "windows-x64" || platform === "windows-arm64" ? [selectedCapability!.guestPlatform] : platform === "macos-arm64" ? (allowLinux ? ["macos-arm64", "linux-arm64"] : ["macos-arm64"]) : [platform];
     const input: WorkerConfigurationInput = {
       appliance: { vcpu: applianceVcpu, memoryBytes: applianceMemory, storageBytes: applianceStorage },
       runtime: { maxVcpuPerPod: podVcpu, maxMemoryBytesPerPod: podMemory, maxStorageBytesPerPod: podStorage, maxConcurrentPods },
       guestPlatforms,
-      selectedDriver: platform === "windows-x64" ? selectedCapability!.driver : runtimeDriverForHost(platform),
+      selectedDriver: platform === "windows-x64" || platform === "windows-arm64" ? selectedCapability!.driver : runtimeDriverForHost(platform),
       cache: { ttlSeconds, runnerCacheEnabled, runnerCacheMaxGiB: maxGiB },
     };
     setError(null);
