@@ -244,6 +244,10 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       return client.generateJitConfig({ owner: input.owner, repo: input.repo, runnerName: input.runnerName, workFolder: "_work", labels: input.labels });
     },
     dispatch: async (reservation, jit) => {
+      if (jit.runnerId !== undefined) {
+        const [stored] = await deps.db`UPDATE runner_leases SET runner_id=${jit.runnerId}, runner_name=${jit.runnerName}, updated_at=now() WHERE id=${reservation.id} AND state='reserved' RETURNING id`;
+        if (!stored) throw new Error("lease_not_reserved");
+      }
       const target = workerByPool.get(`${reservation.poolId}:${reservation.workerId}`);
       if (!target?.encryptionPublicKey) throw new Error("worker_encryption_key_missing");
       const [dashboardJob] = await deps.db`SELECT id FROM dashboard_jobs WHERE github_job_id=${reservation.jobId ?? -1}`;

@@ -5,10 +5,11 @@ test("generates repository-scoped JIT config with labels", async () => {
   const requests: Request[] = [];
   const client = new GithubJobsClient({ token: async () => "installation-token", fetch: async (input, init) => {
     requests.push(new Request(input, init));
-    return Response.json({ encoded_jit_config: "secret-config" });
+    return Response.json({ encoded_jit_config: "secret-config", runner: { id: 42 } });
   }});
   const result = await client.generateJitConfig({ owner: "acme", repo: "project", runnerName: "ws-1", runnerGroupId: 7, workFolder: "_work", labels: ["mars-macos-arm64-2vcpu-4g"] });
   expect(result.encodedJitConfig).toBe("secret-config");
+  expect(result.runnerId).toBe(42);
   expect(requests[0].url).toBe("https://api.github.com/repos/acme/project/actions/runners/generate-jitconfig");
   expect(await requests[0].json()).toEqual({ name: "ws-1", runner_group_id: 7, work_folder: "_work", labels: ["mars-macos-arm64-2vcpu-4g"] });
   expect(requests[0].headers.get("authorization")).toBe("Bearer installation-token");

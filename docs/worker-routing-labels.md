@@ -74,6 +74,16 @@ An individual JIT registration failure does not prevent other queued jobs in the
 same installation from being considered; an installation-wide GitHub rate limit
 still pauses its requests until the cooldown clears.
 
+The control plane records GitHub's JIT runner ID on the reserved lease. After the
+worker has reaped the lease, it deregisters that runner by ID; GitHub 404 is
+treated as already removed, and other failures retry without losing the ID.
+Older registrations without a recorded ID are reclaimed in bounded batches:
+only offline, non-busy repository runners with a generated Mars name, a known
+worker name, and a `mars-` label qualify, and only when the repository has no
+active leases. The cleanup prioritizes repositories with queued jobs and
+pauses during GitHub installation rate limits. Other self-hosted runners are
+not touched.
+
 ## Pool CPU modes
 
 Pools default to **Shared**, which limits CPU time per job but does not reserve

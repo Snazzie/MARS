@@ -119,11 +119,26 @@ export class GithubJobsClient {
   async getJobLogs(owner: string, repo: string, jobId: number, maxBytes = 10 * 1024 * 1024): Promise<string> {
     return this.requestText(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/jobs/${jobId}/logs`, maxBytes);
   }
-  async generateJitConfig(input: GenerateJitConfigInput): Promise<RunnerJitConfig> {
+  async generateJitConfig(input: GenerateJitConfigInput): Promise<RunnerJitConfig & { runnerId: number }> {
     if (!input.labels.length) throw new Error("github_jit_labels_missing");
     const result = await this.request(`/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/actions/runners/generate-jitconfig`, { method: "POST", body: JSON.stringify({ name: input.runnerName, runner_group_id: input.runnerGroupId ?? 1, work_folder: input.workFolder, labels: input.labels }) });
     const config = RunnerJitConfig.safeParse({ encodedJitConfig: result.encoded_jit_config, runnerName: input.runnerName, labels: input.labels, expiresAt: new Date(Date.now() + 55 * 60_000).toISOString() });
-    if (!config.success) throw new Error("github_jit_config_missing");
-    return config.data;
+    const runner = result.runner;
+    const runnerId = runner && typeof runner === "object" && "id" in runner ? runner.id : undefined;
+    if (!config.success || typeof runnerId !== "number" || !Number.isSafeInteger(runnerId) || runnerId <= 0) throw new Error("github_jit_config_missing");
+    return { ...config.data, runnerId };
+  }
+  async deleteRunner(owner: string, repo: string, runnerId: number): Promise<void> {
+    await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runners/${runnerId}`, { method: "DELETE" }, true);
+  }
+  async listRunners(owner: string, repo: string, page: number): Promise<{ totalCount: number; runners: Array<{ id: number; name: string; status: string; busy: boolean; labels: string[] }> }> {
+    const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runners?per_page=100&page=${page}`);
+    const runners = Array.isArray(value.runners) ? value.runners.map((raw: unknown) => {
+      if (!raw || typeof raw !== "object" || !("id" in raw)) throw new Error("github_payload_invalid");
+      const runner = raw;
+      const labels = "labels" in runner && Array.isArray(runner.labels) ? runner.labels.flatMap((label: unknown) => label && typeof label === "object" && "name" in label && typeof label.name === "string" ? [label.name] : []) : [];
+      return { id: positiveSafeInteger(runner.id), name: "name" in runner ? stringValue(runner.name) : "", status: "status" in runner ? stringValue(runner.status) : "", busy: "busy" in runner && runner.busy === true, labels };
+    }) : [];
+    return { totalCount: Number(value.total_count) || runners.length, runners };
   }
 }

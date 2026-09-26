@@ -31,8 +31,8 @@ export type ReconcileDeps = {
   onDecision?: (job: QueuedRoutingJob, code: string) => void;
   unmatchedReason?: (job: QueuedRoutingJob) => string;
   reserve: (input: { workerId: string; poolId: string; githubJobId: number; routingKey: string; requested: { vcpu: number; memoryBytes: number; storageBytes: number; concurrency: number } }) => Promise<LeaseReservation>;
-  jit: (input: { installationId: number; owner: string; repo: string; runnerName: string; labels: string[]; githubJobId: number }) => Promise<RunnerJitConfig>;
-  dispatch: (reservation: LeaseReservation, jit: RunnerJitConfig) => Promise<void>;
+  jit: (input: { installationId: number; owner: string; repo: string; runnerName: string; labels: string[]; githubJobId: number }) => Promise<RunnerJitConfig & { runnerId?: number }>;
+  dispatch: (reservation: LeaseReservation, jit: RunnerJitConfig & { runnerId?: number }) => Promise<void>;
   release?: (reservation: LeaseReservation) => Promise<void>;
   maxConcurrent?: number;
 };

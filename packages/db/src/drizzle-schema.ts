@@ -141,6 +141,8 @@ export const runnerLeases = pgTable("runner_leases", {
 	routingKey: text("routing_key").notNull(),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	githubJobId: bigint("github_job_id", { mode: "number" }),
+	runnerId: bigint("runner_id", { mode: "number" }),
+	runnerName: text("runner_name"),
 	state: text().notNull(),
 	requested: jsonb().notNull(),
 	cpuMode: text("cpu_mode").default('shared').notNull(),

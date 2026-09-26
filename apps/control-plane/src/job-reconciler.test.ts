@@ -116,6 +116,11 @@ test("preflights unordered labels and marks the lease dispatched before sending,
       events.push("reserve");
       return [{ id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: { vcpu: 1, memoryBytes: 4 * 1024 ** 3, storageBytes: 1, concurrency: 1 }, jobId: 42 }];
     }
+    if (query.includes("update runner_leases set runner_id=")) {
+      expect(leaseState).toBe("reserved");
+      events.push("record-runner");
+      return [{ id: "lease" }];
+    }
     if (query.includes("update runner_leases set state='dispatched'")) {
       expect(leaseState).toBe("reserved");
       leaseState = "dispatched";
@@ -143,7 +148,7 @@ test("preflights unordered labels and marks the lease dispatched before sending,
     events.push("jit");
     expect(init?.method).toBe("POST");
     expect(JSON.parse(String(init?.body)).name).toMatch(/^D2E0B2D7893B-windows-x64-[0-9a-f-]{36}$/);
-    return new Response(JSON.stringify({ encoded_jit_config: "encoded-config" }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ encoded_jit_config: "encoded-config", runner: { id: 987 } }), { status: 200, headers: { "content-type": "application/json" } });
   };
   const dispatcher = { dispatch: async () => {
     expect(leaseState).toBe("dispatched");
@@ -158,7 +163,7 @@ test("preflights unordered labels and marks the lease dispatched before sending,
     dispatcher,
   });
   expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
-  expect(events).toEqual(["reserve", "preflight", "jit", "mark-dispatched", "dispatch"]);
+  expect(events).toEqual(["reserve", "preflight", "jit", "record-runner", "mark-dispatched", "dispatch"]);
   failSend = true;
   events.length = 0;
   const failed = await runQueuedJobReconciliation({
@@ -167,7 +172,7 @@ test("preflights unordered labels and marks the lease dispatched before sending,
   });
   expect(failed).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 1 });
   expect(leaseState).toBe("failed");
-  expect(events).toEqual(["reserve", "preflight", "jit", "mark-dispatched", "dispatch", "release"]);
+  expect(events).toEqual(["reserve", "preflight", "jit", "record-runner", "mark-dispatched", "dispatch", "release"]);
 });
 
 test("does not reserve or dispatch when exact GitHub job preflight reports 404", async () => {

@@ -12,6 +12,7 @@ import { runQueuedJobReconciliation } from "./job-reconciler.ts";
 import type { ReconcileReport } from "./reconcile.ts";
 import { reconcileExpiredLeasesWithGithub } from "./lease-reconciliation.ts";
 import { reapPendingLeases } from "./lease-cleanup.ts";
+import { cleanGithubRunners } from "./github-runner-cleanup.ts";
 import { startReconciliationScheduler } from "./reconcile-loop.ts";
 import { pruneExpiredData } from "./retention.ts";
 import { DiscoveryHealthMonitor, isDiscoveryCycleSuccessful } from "./discovery-health.ts";
@@ -575,6 +576,17 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
         if (retry.requested || retry.failed) console.log(`GitHub job retries: requested=${retry.requested} skipped=${retry.skipped} failed=${retry.failed}`);
       } catch (error) { console.error("GitHub job retry cycle failed", error); }
     }, discoveryIntervalMs, false);
+    startReconciliationScheduler(async () => {
+      try {
+        const cleanup = await cleanGithubRunners({
+          db,
+          installationToken: installationId => githubApp.getInstallationToken(installationId),
+          githubFetchForInstallation: installationId => githubRateLimits.scopedFetch(installationId, "background"),
+          installationBlocked: installationId => githubRateLimits.isBackgroundBlocked(installationId),
+        });
+        if (cleanup.deleted || cleanup.failed) console.log("GitHub runner cleanup", cleanup);
+      } catch (error) { console.error("GitHub runner cleanup failed", error); }
+    }, 15_000, false);
     triggerReconciliation = reconciliationScheduler.trigger;
     const runRetention = async () => { try { console.log("Retention pruner", await pruneExpiredData(db)); } catch (error) { console.error("Retention pruning failed", error); } };
     void runRetention();
