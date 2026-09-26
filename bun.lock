@@ -88,6 +88,13 @@
         "postgres": "^3.4.5",
       },
     },
+    "packages/worker-join": {
+      "name": "mars-worker-join",
+      "version": "0.1.0",
+      "bin": {
+        "mars-worker-join": "./bin/mars-worker-join.mjs",
+      },
+    },
   },
   "packages": {
     "@astryxdesign/core": ["@astryxdesign/core@0.3.0", "", { "dependencies": { "intl-messageformat": "^11.2.9" }, "peerDependencies": { "@stylexjs/stylex": "^0.19.0", "react": ">=19.0.0", "react-dom": ">=19.0.0" } }, "sha512-t2hHvR7AcwW0oKrnxCwbdEEE5Ytgy0Ug61DcYAl9BxAuV5z4XL0/kMo5DiPvX9jbDxzysmOa8ClnXqzxouRUVQ=="],
@@ -541,6 +548,8 @@
     "lucide-react": ["lucide-react@1.31.0", "", { "peerDependencies": { "react": "^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0" } }, "sha512-G8u2eEtoHUnUa9f8lbvqDhCiORMnYLdUEo06EEG9MQvHQrInKcX3Pa2TH39MM5qyzRcWETxB0+aOwAPI1g1kEg=="],
 
     "magic-string": ["magic-string@0.30.21", "", { "dependencies": { "@jridgewell/sourcemap-codec": "^1.5.5" } }, "sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ=="],
+
+    "mars-worker-join": ["mars-worker-join@workspace:packages/worker-join"],
 
     "ms": ["ms@2.1.3", "", {}, "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=="],
 
