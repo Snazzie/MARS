@@ -45,7 +45,7 @@ function PoolEditor({ pool, workers, onCancel, onSave, pending, error }: { pool:
   const [digest, setDigest] = useState(pool?.imageDigest ?? (initialWorker ? preparedDigest(initialWorker, pool?.platform ?? "windows-x64") ?? "" : ""));
   const [vcpu, setVcpu] = useState(pool?.resources.vcpu ?? 1);
   const [memoryGiB, setMemoryGiB] = useState(gib(pool?.resources.memoryBytes ?? 4 * 1024 ** 3));
-  const [storageGiB, setStorageGiB] = useState(gib(pool?.resources.storageBytes ?? 20 * 1024 ** 3));
+  const [storageGiB, setStorageGiB] = useState(gib(pool?.resources.storageBytes ?? 30 * 1024 ** 3));
   const [concurrency, setConcurrency] = useState(pool?.resources.concurrency ?? 1);
   const [cpuMode, setCpuMode] = useState(pool?.cpuMode ?? "shared");
   return <form className="pool-editor" onSubmit={(event) => {

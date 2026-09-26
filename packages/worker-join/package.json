@@ -1,0 +1,9 @@
+{
+  "name": "mars-worker-join",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "bin": { "mars-worker-join": "./bin/mars-worker-join.mjs" },
+  "files": ["bin/"],
+  "publishConfig": { "access": "public" }
+}

@@ -39,6 +39,10 @@ export function validWindowsVmImageOptions(options: WindowsVmImageOptions): bool
 }
 
 
+export function buildNpxJoinCommand(origin: string, code: string): string {
+  return `npx --yes mars-worker-join@0.1.0 --control-plane-url ${new URL(origin).origin} --join-code ${code}`;
+}
+
 export function buildInstallerCommand(installer: string, audience: RuntimePlatform, code?: string, connectOrigin?: string, vmOptions?: WindowsVmImageOptions): string {
   if (!["linux-x64", "linux-arm64", "windows-x64", "macos-arm64"].includes(audience)) throw new Error("Unsupported installer audience");
   const url = new URL(installer);
@@ -148,7 +152,10 @@ export function EnrollmentPanel({ workers, onConnected, showRotation = true }: E
     ...(customScriptPath || customScriptSha256 ? { customScriptPath, customScriptSha256 } : {}),
   };
   const validSource = audience !== "windows-x64" || !provisionWindowsVm || windowsVmSource === "checkpoint" || validWindowsVmImageOptions(vmOptions);
-  const commandBlocks = reveal && validSelectedUrl && validSource ? buildInstallerCommands(selectedUrl, audience, reveal.code, provisionWindowsVm ? vmOptions : undefined) : [];
+  const commandBlocks = reveal && validSelectedUrl && validSource ? [
+    ...(!provisionWindowsVm || audience !== "windows-x64" ? [{ label: "npx (default worker runtime)", command: buildNpxJoinCommand(selectedUrl, reveal.code) }] : []),
+    ...buildInstallerCommands(selectedUrl, audience, reveal.code, provisionWindowsVm ? vmOptions : undefined),
+  ] : [];
   async function create() {
     if (showRotation && status?.initialized && !window.confirm("Rotate the bootstrap code? The previous code will stop working immediately.")) return;
     setPending(true);
@@ -176,7 +183,7 @@ export function EnrollmentPanel({ workers, onConnected, showRotation = true }: E
       <label>Target platform<select value={audience} onChange={(event) => setAudience(event.target.value as RuntimePlatform)}><option value="linux-x64">Linux x64</option><option value="linux-arm64">Linux ARM64 (Docker Desktop)</option><option value="windows-x64">Windows x64</option><option value="macos-arm64">macOS arm64</option></select></label>
       {audience === "windows-x64" && <><label><input type="checkbox" checked={provisionWindowsVm} onChange={(event) => setProvisionWindowsVm(event.target.checked)} />Provision a Hyper-V VM image during installation (optional)</label>{provisionWindowsVm && <><label>VM image provisioning source<select value={windowsVmSource} onChange={(event) => setWindowsVmSource(event.target.value as WindowsVmImageSource)}><option value="iso">Build from Windows ISO</option><option value="vhdx">Build from generalized VHDX</option><option value="checkpoint">Download prepared checkpoint</option></select></label>{windowsVmSource !== "checkpoint" && <><label>Local {windowsVmSource.toUpperCase()} path<input value={windowsSourcePath} onChange={(event) => setWindowsSourcePath(event.target.value)} /></label><label>Local {windowsVmSource.toUpperCase()} SHA-256<input value={windowsSourceSha256} onChange={(event) => setWindowsSourceSha256(event.target.value)} /></label>{windowsVmSource === "iso" && <><label>Windows image name<input value={windowsImageName} onChange={(event) => setWindowsImageName(event.target.value)} /></label><label><input type="checkbox" checked={acceptWindowsLicenseTerms} onChange={(event) => setAcceptWindowsLicenseTerms(event.target.checked)} />I confirm I am licensed to use this Windows media and accept its license terms</label></>}</>}<label>Custom provisioning script path (optional)<input value={customScriptPath} onChange={(event) => setCustomScriptPath(event.target.value)} /></label><label>Custom provisioning script SHA-256 (optional)<input value={customScriptSha256} onChange={(event) => setCustomScriptSha256(event.target.value)} /></label>{!validSource && <p className="form-error" role="alert">Complete the selected VM source fields using lowercase SHA-256 values.</p>}</>}</>}
       <label>Control-plane URL<select value={controlPlaneUrl} onChange={(event) => setControlPlaneUrl(event.target.value)}>{controlPlaneUrls.map((url) => <option key={url} value={url}>{url}</option>)}</select></label>
-      {reveal ? <div><p><strong>Bootstrap code (showing once)</strong></p><code>{reveal.code}</code><p>Copy the command below and run it on the target machine.</p>{commandBlocks.map(({ label, command: block }) => <div key={label}><h3>{label}</h3><pre>{block}</pre><Button label="Copy install command" variant="secondary" clickAction={() => void navigator.clipboard.writeText(block)} /></div>)}</div> : <div><p>Choose a target platform and approved control-plane URL, then generate a one-use bootstrap code.</p><Button label="Generate bootstrap code" variant="primary" clickAction={() => void create()} isDisabled={pending || !status || !validSelectedUrl || !validSource} /></div>}
+      {reveal ? <div><p><strong>Bootstrap code (showing once)</strong></p><code>{reveal.code}</code><p>Copy a command below and run it on the target machine. Review, configure, and approve the pending worker in the UI before it can receive jobs.</p>{commandBlocks.map(({ label, command: block }) => <div key={label}><h3>{label}</h3><pre>{block}</pre><Button label="Copy install command" variant="secondary" clickAction={() => void navigator.clipboard.writeText(block)} /></div>)}</div> : <div><p>Choose a target platform and approved control-plane URL, then generate a one-use bootstrap code.</p><Button label="Generate bootstrap code" variant="primary" clickAction={() => void create()} isDisabled={pending || !status || !validSelectedUrl || !validSource} /></div>}
     </>}
     {error && <div role="alert" className="form-error"><p>{error}</p>{!status && <Button label="Retry" variant="secondary" clickAction={() => void load()} isDisabled={pending} />}</div>}
   </section>;

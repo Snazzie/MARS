@@ -84,6 +84,51 @@ test("maps a nonzero runner exit to a failed terminal lease", async () => {
   expect(failed.calls[0]!.values).toContainEqual({ exitCode: 17 });
 });
 
+test("provisioning failure leaves the queued job dispatchable until GitHub reports completion", async () => {
+  let leaseState = "dispatched";
+  let cleanupState = "none";
+  let terminalResult: unknown = null;
+  let jobStatus = "queued";
+  let runStatus = "queued";
+  const db = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const query = strings.join(" ");
+    if (query.includes("UPDATE runner_leases")) {
+      if (query.includes("state IN ('dispatched','provisioning'") && leaseState === "dispatched") {
+        leaseState = "failed";
+        cleanupState = "pending";
+        terminalResult = values.find(value => typeof value === "object");
+        return [{ id: leaseId }];
+      }
+      if (query.includes("state IN ('sandbox_ready','online','busy')") && leaseState === "sandbox_ready") {
+        leaseState = "completed";
+        cleanupState = "pending";
+        return [{ id: leaseId }];
+      }
+      return [];
+    }
+    if (query.includes("UPDATE dashboard_jobs")) {
+      jobStatus = String(values[0]);
+      return [{ organizationId: "org-1" }];
+    }
+    if (query.includes("UPDATE dashboard_runs")) {
+      runStatus = String(values[0]);
+      return [];
+    }
+    return [];
+  }) as unknown as DatabaseClient;
+  expect(await applyWorkerLeaseEvent(db, event("lease.failed", { leaseId, nonce, reason: "provisioning_failed" }))).toBe(true);
+  expect({ leaseState, cleanupState, terminalResult, jobStatus, runStatus }).toEqual({
+    leaseState: "failed", cleanupState: "pending", terminalResult: { reason: "provisioning_failed" },
+    jobStatus: "queued", runStatus: "queued",
+  });
+  const dispatchable = () => jobStatus === "queued" && (runStatus === "queued" || runStatus === "in_progress") && leaseState === "failed";
+  expect(dispatchable()).toBe(true);
+  leaseState = "sandbox_ready";
+  expect(await applyWorkerLeaseEvent(db, event("runner.finished", { leaseId, nonce, exitCode: 0 }))).toBe(true);
+  expect({ jobStatus, runStatus }).toEqual({ jobStatus: "completed", runStatus: "completed" });
+  expect(dispatchable()).toBe(false);
+});
+
 
 test("marks cleanup failure and releases its acknowledged stop for retry", async () => {
   const { db, calls } = acceptingDb();

@@ -365,14 +365,14 @@ describe("repository authorization lifecycle", () => {
   });
 });
 
-test("fast pickup polls only queued runs for one configured repository", async () => {
+test("fast pickup polls queued, pending, and in-progress run pages for one repository", async () => {
   const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
   const requests: string[] = [];
   const db = (async (strings: TemplateStringsArray) => strings.join(" ").includes("FROM dashboard_repositories repo") ? [repository] : []) as never;
   const githubFetch = async (input: RequestInfo | URL) => {
     const url = String(input);
     requests.push(url);
-    if (url.includes("status=queued") || !url.includes("status=")) return Response.json({
+    if (url.includes("status=queued")) return Response.json({
       total_count: 1,
       workflow_runs: [{
         id: 77,
@@ -390,7 +390,7 @@ test("fast pickup polls only queued runs for one configured repository", async (
         updated_at: "2026-08-15T04:00:00Z",
       }],
     });
-    if (url.includes("/actions/runs/77/jobs")) return Response.json({ total_count: 0, jobs: [] });
+    if (url.includes("/actions/runs/77/attempts/1/jobs")) return Response.json({ total_count: 0, jobs: [] });
     return Response.json({ total_count: 0, workflow_runs: [] });
   };
 
@@ -401,9 +401,9 @@ test("fast pickup polls only queued runs for one configured repository", async (
     repositoryFullName: "acme/repo",
   });
 
-  expect(requests).toHaveLength(2);
-  expect(requests[0]).not.toContain("status=");
-  expect(requests.some((url) => url.includes("status=in_progress") || url.includes("status=completed") || url.includes("status=pending") || url.includes("status=queued"))).toBe(false);
+  expect(report.failed).toBe(0);
+  expect(requests.filter(url => url.includes("/actions/runs?")).map(url => new URL(url).searchParams.get("status"))).toEqual(["queued", "pending", "in_progress"]);
+  expect(requests.filter(url => url.includes("/actions/runs/77/attempts/1/jobs"))).toHaveLength(1);
 });
 test("fast pickup includes GitHub pending runs", async () => {
   const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
@@ -412,7 +412,7 @@ test("fast pickup includes GitHub pending runs", async () => {
   const githubFetch = async (input: RequestInfo | URL) => {
     const url = String(input);
     requests.push(url);
-    if (!url.includes("status=")) return Response.json({
+    if (url.includes("status=pending")) return Response.json({
       total_count: 1,
       workflow_runs: [{
         id: 77, run_number: 77, run_attempt: 1, name: "CI", event: "pull_request", head_branch: "main", head_sha: "a".repeat(40),
@@ -420,7 +420,7 @@ test("fast pickup includes GitHub pending runs", async () => {
         run_started_at: null, updated_at: "2026-08-15T04:00:00Z",
       }],
     });
-    if (url.includes("/actions/runs/77/jobs")) return Response.json({ total_count: 0, jobs: [] });
+    if (url.includes("/actions/runs/77/attempts/1/jobs")) return Response.json({ total_count: 0, jobs: [] });
     return Response.json({ total_count: 0, workflow_runs: [] });
   };
 
@@ -432,8 +432,53 @@ test("fast pickup includes GitHub pending runs", async () => {
   });
 
   expect(report).toMatchObject({ repositories: 1, discovered: 0, failed: 0 });
-  expect(requests.some((url) => !url.includes("status="))).toBe(true);
+  expect(requests.some(url => url.includes("status=pending"))).toBe(true);
+  expect(requests.some(url => url.includes("/actions/runs/77/attempts/1/jobs"))).toBe(true);
 });
+test("filtered queued pickup restores a locally completed failed run and job", async () => {
+  const repository = { repositoryId: "repository", organizationId: "org", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
+  let runStatus = "completed", jobStatus = "completed";
+  let runConclusion: string | null = "failure", jobConclusion: string | null = "failure";
+  const requests: string[] = [];
+  const execute = async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const query = strings.join(" ");
+    if (query.includes("FROM dashboard_repositories repo")) return [repository];
+    if (query.includes("FROM dashboard_installations")) return [{ id: "installation", organization_id: "org" }];
+    if (query.includes("SELECT id FROM dashboard_repositories")) return [{ id: "repository" }];
+    if (query.startsWith("UPDATE dashboard_runs SET status='queued'") && runStatus === "completed") {
+      runStatus = "queued"; runConclusion = null;
+    }
+    if (query.startsWith("UPDATE dashboard_jobs SET status='queued'") && jobStatus === "completed") {
+      jobStatus = "queued"; jobConclusion = null;
+    }
+    if (query.startsWith("INSERT INTO dashboard_runs")) return [{ id: "run", status: runStatus, run_attempt: 1 }];
+    if (query.startsWith("INSERT INTO dashboard_jobs")) return [{ id: "job", status: jobStatus, run_attempt: 1 }];
+    return [];
+  };
+  const db = Object.assign(execute, { begin: async (callback: (tx: typeof execute) => Promise<unknown>) => callback(execute) }) as never;
+  configureRunLifecycle(db);
+  const githubFetch = async (input: RequestInfo | URL) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.includes("status=queued")) return Response.json({ total_count: 1, workflow_runs: [{
+      id: 77, run_number: 77, run_attempt: 1, name: "CI", event: "push", head_branch: "main", head_sha: "a".repeat(40),
+      actor: { login: "octocat" }, status: "queued", conclusion: null, created_at: "2026-08-15T04:00:00Z",
+      run_started_at: null, updated_at: "2026-08-15T04:00:00Z",
+    }] });
+    if (url.includes("/attempts/1/jobs")) return Response.json({ total_count: 1, jobs: [{
+      id: 88, run_id: 77, run_attempt: 1, name: "build", status: "queued", conclusion: null,
+      labels: ["self-hosted"], created_at: "2026-08-15T04:00:00Z", started_at: null, completed_at: null, steps: [],
+    }] });
+    return Response.json({ total_count: 0, workflow_runs: [] });
+  };
+  const report = await discoverQueuedRepositoryJobs({ db, installationToken: async () => "token", githubFetchForInstallation: () => githubFetch });
+  expect(report).toMatchObject({ repositories: 1, discovered: 1, updated: 1, failed: 0 });
+  expect(requests.some(url => url.includes("status=queued"))).toBe(true);
+  expect({ runStatus, jobStatus }).toEqual({ runStatus: "queued", jobStatus: "queued" });
+  expect(runConclusion).toBeNull();
+  expect(jobConclusion).toBeNull();
+});
+
 
 test("stops only the rate-limited installation's remaining repositories", async () => {
   const rows = [

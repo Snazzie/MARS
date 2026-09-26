@@ -25,7 +25,7 @@ export function WorkerConfigurationForm({ worker, organizationId, onConfigured, 
   const [disk, setDisk] = useState(initialGiB(c.actualStorageBytes));
   const [maxVcpu, setMaxVcpu] = useState(() => adopted && worker.limits ? String(worker.limits.maxVcpuPerPod) : String(Math.max(1, Math.floor(c.actualVcpu / 2))));
   const [maxRam, setMaxRam] = useState(() => adopted && worker.limits ? initialGiB(worker.limits.maxMemoryBytesPerPod) : initialGiB(Math.floor(c.actualMemoryBytes / 2)));
-  const [maxDisk, setMaxDisk] = useState(() => adopted && worker.limits ? initialGiB(worker.limits.maxStorageBytesPerPod) : initialGiB(Math.floor(c.actualStorageBytes / 2)));
+  const [maxDisk, setMaxDisk] = useState(() => adopted && worker.limits ? initialGiB(worker.limits.maxStorageBytesPerPod) : initialGiB(Math.min(30 * GIB, Math.floor(c.actualStorageBytes / 2))));
   const [concurrency, setConcurrency] = useState(() => adopted && worker.limits ? String(worker.limits.maxConcurrentPods) : "1");
   const [cacheTtlHours, setCacheTtlHours] = useState(() => {
     const seconds = worker.desiredCacheTtlSeconds ?? 48 * 60 * 60;

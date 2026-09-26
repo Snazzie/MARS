@@ -303,6 +303,17 @@ test("shows applying configuration until the desired revision is acknowledged", 
   expect(markup).not.toContain("Configuration updated");
 });
 
+test("does not show stale operator action for a ready Windows runtime", () => {
+  const markup = renderCard(workerFixture({
+    platform: "windows-x64",
+    selectedDriver: "windows-hyperv-container",
+    doctor: { runtimeMode: "container", runtimeReady: true, probe: true, imageSignatures: true, remediation: "No selected Windows runtime is ready" },
+  }));
+  expect(markup).toContain("Ready for dispatch");
+  expect(markup).not.toContain("Operator action");
+  expect(markup).not.toContain("No selected Windows runtime is ready");
+});
+
 test("shows the exact applied revision and acknowledgement time", () => {
   const worker = workerFixture();
   const markup = renderCard(worker);
