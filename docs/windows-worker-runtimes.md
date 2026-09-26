@@ -1,6 +1,6 @@
 ## Windows worker capabilities
 
-Windows workers enroll in discovery-only mode. Their doctor report advertises **verified** runtime capabilities; configuration selects exactly one. An advertised mode never runs jobs until explicitly selected and acknowledged. Pool creation and scheduling require the selected driver, matching guest platform and immutable image/checkpoint digest, fresh doctor evidence, and a ready configuration revision. Changing selection requires draining the worker and waiting for active leases to finish.
+Windows workers enroll in discovery-only mode. Their doctor report advertises **verified** runtime capabilities; configuration selects exactly one. An advertised mode never runs jobs until explicitly selected and acknowledged. Pool creation and scheduling require the selected driver, matching guest platform and immutable image/checkpoint digest, fresh doctor evidence, and a ready configuration revision. The first configuration of an approved but unconfigured worker does not require draining; changing an existing selection requires draining the worker and waiting for active leases to finish.
 
 | Selection | Guest | Requirement | Isolation boundary |
 | --- | --- | --- | --- |

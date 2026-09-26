@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { LogChunk, OverviewDto, RepositorySummary, RunDetail, RunSummary, WorkerDetail, WorkerHealth } from "@mars/contracts";
-import { getAllOverview, getOverview, getRunDetail, getWorkerHealth, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRepositories, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks, queueRepositoryDiscoveryRecheck, type DashboardDb } from "./dashboard.ts";
+import { getAllOverview, getOverview, getRunDetail, getWorkerDetail, getWorkerHealth, listAllRepositories, listAllRuns, listAllPools, listAllWorkers, listRepositories, listRuns, listWorkers, listPools, listLogChunks, listStepLogChunks, queueRepositoryDiscoveryRecheck, type DashboardDb } from "./dashboard.ts";
 
 test("overview uses active runner leases for the load numerator", async () => {
   const queries: string[] = [];
@@ -576,6 +576,13 @@ test("all-workspace worker listing hides rejected workers by default", async () 
 test("all-workspace worker listing includes workers across organizations", async () => {
   const db = (async () => [{ id: "w-1", organizationId: "org-1", name: "linux-one", platform: "linux-x64", admissionState: "adopted", connectionState: "online", configurationState: "ready", fingerprint: "sha256:one", limits: null, doctor: null, activeSandboxes: 0, draining: false }, { id: "w-2", organizationId: "org-2", name: "mac-two", platform: "macos-arm64", admissionState: "pending", connectionState: "offline", configurationState: "unconfigured", fingerprint: "sha256:two", limits: null, doctor: null, activeSandboxes: 0, draining: false }]) as never;
   expect((await listAllWorkers(db, "user-1")).items.map((worker) => worker.organizationId)).toEqual(["org-1", "org-2"]);
+});
+
+test("global worker detail finds a fleet worker without an organization", async () => {
+  const worker = { id: "worker-1", name: "arm-worker", platform: "windows-x64", admissionState: "adopted", connectionState: "online", configurationState: "unconfigured", fingerprint: "abc", limits: null, doctor: null, activeSandboxes: 0, draining: false };
+  const db = (async (strings: TemplateStringsArray) => strings.join(" ").includes("w.organization_id=") ? [] : [worker]) as never;
+  expect(await getWorkerDetail(db, "all", worker.id)).toMatchObject({ id: worker.id, name: worker.name });
+  expect(await getWorkerDetail(db, "11111111-1111-4111-8111-111111111111", worker.id)).toBeNull();
 });
 
 test("all-workspace listings preserve tenant membership and workspace IDs", async () => {

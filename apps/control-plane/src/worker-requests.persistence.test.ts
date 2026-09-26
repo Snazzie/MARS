@@ -133,6 +133,25 @@ test("accepts independent per-job ceilings without multiplying by concurrency", 
   await expect(configurePendingWorker(db, "worker", configuration, "admin")).resolves.toMatchObject({ revision: expect.any(String), fingerprint: expect.any(String), commandId: expect.any(String) });
 });
 
+test("configures a newly approved worker without draining, but requires drain to switch a configured driver", async () => {
+  const imageDigest = "ghcr.io/example/job@sha256:" + "a".repeat(64);
+  const configuration = { appliance: { vcpu: 12, memoryBytes: 32 * 1024 ** 3, storageBytes: 1024 * 1024 ** 3 }, runtime: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 20 * 1024 ** 3, maxConcurrentPods: 1 }, guestPlatforms: ["linux-arm64" as const], selectedDriver: "linux-docker-container" as const };
+  let previous: unknown = null;
+  const tx = (strings: TemplateStringsArray) => {
+    const query = strings.join(" ");
+    if (query.includes("select id, doctor")) return [{
+      id: "worker", doctor: { doctor: { capabilities: [{ driver: configuration.selectedDriver, guestPlatform: "linux-arm64", imageDigest, ready: true, remediation: null }] } },
+      doctorObservedAt: new Date(), admissionState: "adopted", platform: "windows-x64", guestPlatforms: ["windows-x64"], draining: false, desiredConfiguration: previous,
+    }];
+    if (query.includes("select count(*)::int as count from runner_leases")) return [{ count: 0 }];
+    return [];
+  };
+  const db = Object.assign(((strings: TemplateStringsArray) => []) as unknown as Sql<{}>, { begin: async (fn: (transaction: unknown) => unknown) => fn(tx) });
+  await expect(configurePendingWorker(db, "worker", configuration, "admin")).resolves.toMatchObject({ revision: expect.any(String) });
+  previous = { ...configuration, guestPlatforms: ["windows-x64"], selectedDriver: "windows-hyperv-container" };
+  await expect(configurePendingWorker(db, "worker", configuration, "admin")).rejects.toThrow("requires drained worker");
+});
+
 test("stores desired configuration and waits for acknowledgement", async () => {
   const queries: string[] = [];
   const parameters: unknown[][] = [];

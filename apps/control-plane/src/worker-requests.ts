@@ -133,7 +133,7 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, conf
     if (typeof priorInput === "string") { try { priorInput = JSON.parse(priorInput); } catch { priorInput = null; } }
     const prior = WorkerConfiguration.safeParse(priorInput);
     const priorDriver = prior.success ? prior.data.selectedDriver : null;
-    if (row.admissionState === "adopted" && (canonical(priorPlatforms) !== canonical(parsed.guestPlatforms) || priorDriver !== parsed.selectedDriver)) {
+    if (row.admissionState === "adopted" && prior.success && (canonical(priorPlatforms) !== canonical(parsed.guestPlatforms) || priorDriver !== parsed.selectedDriver)) {
       const [{ count }] = await tx<{ count: number }[]>`select count(*)::int as count from runner_leases where worker_id=${workerId} and state not in ('completed','reaped','failed')`;
       if (!row.draining || Number(count) !== 0) throw new Error("worker driver or guest platform configuration requires drained worker");
     }
