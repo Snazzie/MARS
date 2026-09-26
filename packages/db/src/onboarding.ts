@@ -172,7 +172,7 @@ export async function getOnboardingDetail(
   const workerGuestPlatforms = worker?.guestPlatforms ?? (worker ? [worker.platform] : []);
   const poolRows = worker ? await db`
     SELECT p.id,p.organization_id AS "organizationId",p.worker_id AS "workerId",'Shared fleet' AS "workerName",
-      p.name,p.platform,p.driver,p.image_digest AS "imageDigest",p.resources,p.labels,p.trigger_label AS "triggerLabel",
+      p.name,p.platform,p.driver,p.image_digest AS "imageDigest",p.resources,p.cpu_mode AS "cpuMode",p.labels,p.trigger_label AS "triggerLabel",
       p.enabled,(SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.state NOT IN ('completed','reaped','failed')) AS active
     FROM runner_pools p
     WHERE p.organization_id IS NULL AND p.enabled=true
@@ -189,7 +189,7 @@ export async function getOnboardingDetail(
   const pool = poolRow ? {
     id: String(poolRow.id), organizationId: poolRow.organizationId == null ? null : String(poolRow.organizationId), workerId: poolRow.workerId == null ? null : String(poolRow.workerId), workerName: String(poolRow.workerName),
     name: String(poolRow.name), platform: poolRow.platform, driver: poolRow.driver, imageDigest: String(poolRow.imageDigest),
-    resources: objectValue(poolRow.resources), labels: Array.isArray(poolRow.labels) ? poolRow.labels : (() => { try { return JSON.parse(String(poolRow.labels)); } catch { return []; } })(), triggerLabel: poolRow.triggerLabel, enabled: poolRow.enabled, active: numberValue(poolRow.active),
+    resources: objectValue(poolRow.resources), cpuMode: poolRow.cpuMode === "exclusive" ? "exclusive" : "shared", labels: Array.isArray(poolRow.labels) ? poolRow.labels : (() => { try { return JSON.parse(String(poolRow.labels)); } catch { return []; } })(), triggerLabel: poolRow.triggerLabel, enabled: poolRow.enabled, active: numberValue(poolRow.active),
   } as PoolSummary : null;
   const verificationGithubRunId = stateRow?.verificationGithubRunId == null ? null : numberValue(stateRow.verificationGithubRunId);
   const verificationRun = organizationId && verificationGithubRunId ? first(await db`

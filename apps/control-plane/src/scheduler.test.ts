@@ -93,3 +93,28 @@ test("blocks a worker whose local runtime is not ready", () => {
   expect(fits(value)).toBe(false);
   expect(reason(value)).toBe("worker_runtime_not_ready");
 });
+
+test("exclusive placement requires contract support and available worker-wide CPUs", () => {
+  const value = candidate(["mars-linux-x64-2vcpu-4g"]);
+  value.pool.cpuMode = "exclusive";
+  value.pool.resources = { vcpu: 2, memoryBytes: 4 * GiB, storageBytes: 1, concurrency: 2 };
+  value.worker.hostPlatform = "linux-x64";
+  value.worker.contractVersion = "0.3.0";
+  value.worker.availableCpuIds = [0, 1, 2, 3];
+  expect(fits(value)).toBe(false);
+  value.worker.contractVersion = "0.4.0";
+  value.worker.claimedCpuIds = [0, 1];
+  expect(fits(value)).toBe(true);
+  value.worker.claimedCpuIds = [0, 1, 2];
+  expect(fits(value)).toBe(false);
+  expect(reason(value)).toBe("exclusive_capacity_unavailable");
+  value.worker.claimedCpuIds = [];
+  value.worker.availableCpuIds = undefined;
+  expect(fits(value)).toBe(false);
+  value.worker.hostPlatform = "windows-x64";
+  value.worker.unreapedLeases = 1;
+  expect(fits(value)).toBe(false);
+  value.worker.unreapedLeases = 0;
+  value.pool.resources = { vcpu: 2, memoryBytes: 4 * GiB, storageBytes: 1, concurrency: 1 };
+  expect(fits(value)).toBe(true);
+});

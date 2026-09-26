@@ -64,6 +64,29 @@ allow it. Reservations re-check resource and concurrency limits atomically befor
 work is assigned. The worker appliance capacity remains the aggregate maximum
 CPU, memory, and storage Mars may use at one time.
 
+## Pool CPU modes
+
+Pools default to **Shared**, which limits CPU time per job but does not reserve
+particular host CPUs. Select **Exclusive** in the pool editor to avoid overlap
+between managed jobs on the same worker. The mode belongs to the pool, not the
+workflow label; existing routes and resource suffixes do not change.
+
+On Linux-hosted Docker or libvirt workers, exclusive jobs claim disjoint
+**logical** host CPU IDs and pin each guest to its claim. A job requesting two
+vCPUs needs two permitted logical CPUs; it queues if none are free. Claims stay
+reserved until the guest is verified removed and the lease is reaped. Sibling
+hyperthreads may still share a physical core; the host OS and unrelated
+processes are not excluded. An unavailable CPU inventory prevents exclusive
+placement rather than reverting to shared.
+
+On Windows- or macOS-hosted workers, including Windows-hosted Linux Docker,
+exclusive means **one managed guest at a time**, not host CPU pinning. Set both
+pool concurrency and worker `runtime.maxConcurrentPods` to 1. Pool creation or
+enablement rejects higher limits. Shared and exclusive leases never overlap on
+one worker; disable a pool and wait for its leases to be reaped before changing
+its mode or resources. Exclusive placement requires worker contract 0.4.0 or
+newer; older workers can still run shared pools.
+
 ## Invalid labels
 
 The job remains unroutable when any requested option is invalid or conflicting.

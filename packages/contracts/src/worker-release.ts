@@ -30,10 +30,17 @@ export function compareWorkerReleaseVersions(left: string, right: string): -1 | 
 }
 export const WorkerContractVersion = z.string().regex(semverPattern, "major.minor.patch worker contract version required");
 export type WorkerContractVersion = z.infer<typeof WorkerContractVersion>;
-export const CURRENT_WORKER_CONTRACT_VERSION = WorkerContractVersion.parse("0.3.0");
+export const CURRENT_WORKER_CONTRACT_VERSION = WorkerContractVersion.parse("0.4.0");
 
 export function parseWorkerContractVersion(value: string): { major: number; minor: number; patch: number } {
   return parseSemVer(value, "contract version");
+}
+export function supportsExclusiveCpuPlacement(version: string | null | undefined): boolean {
+  if (!version) return false;
+  try {
+    const { major, minor } = parseWorkerContractVersion(version);
+    return major > 0 || minor >= 4;
+  } catch { return false; }
 }
 
 export function isWorkerContractCompatible(controlPlaneVersion: string, workerVersion: string): boolean {

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isWorkerContractCompatible, type GuestPlatform, type PoolResources, type WorkerCacheProxy } from "@mars/contracts";
 import type { Lease, RuntimeDriver, RuntimeLease } from "./runtime.ts";
-import { validateResources } from "./runtime.ts";
+import { assertUnpinnedLease, validateResources } from "./runtime.ts";
 
 type TartImage = { baseImage: string; imageDigest: string };
 type TartImages = Record<"macos-arm64" | "linux-arm64", TartImage>;
@@ -83,6 +83,7 @@ export interface TartVmRuntime {
   startRunner(vmName: string): TartRunnerExecution;
   stop(vmName: string): Promise<void>;
   remove(vmName: string): Promise<void>;
+  listManaged?(): Promise<string[]>;
   sample?(vmName: string, guestPlatform?: GuestPlatform): Promise<{ cpuUsagePercent: number; cpuTimeMs: number; memoryWorkingSetBytes: number; memoryLimitBytes: number; diskUsageBytes: number }>;
 }
 
@@ -154,6 +155,14 @@ export function createTartVmRuntime(tartExecutable = resolveTartExecutable(Bun.e
       const [cpu, rss, mem, disk] = stdout.trim().split(/\s+/).map(Number);
       return { cpuUsagePercent: Math.max(0, Math.min(100, cpu || 0)), cpuTimeMs: 0, memoryWorkingSetBytes: Math.max(0, (rss || 0) * 1024), memoryLimitBytes: Math.max(1, mem || 1), diskUsageBytes: Math.max(0, (disk || 0) * 1024) };
     },
+    listManaged: async () => {
+      const process = Bun.spawn([tartExecutable, "list", "--format", "json"], { stdout: "pipe", stderr: "pipe" });
+      const [stdout, stderr, code] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
+      if (code !== 0) throw new Error(`tart inventory failed: ${stderr.trim()}`);
+      const parsed: unknown = JSON.parse(stdout);
+      if (!Array.isArray(parsed) || parsed.some(item => !item || typeof item !== "object" || typeof (item.name ?? item.Name) !== "string")) throw new Error("tart inventory returned invalid JSON");
+      return parsed.map(item => String(item.name ?? item.Name));
+    },
     stop: async vmName => { await run(["stop", vmName]); processes.delete(vmName); },
     remove: async vmName => { await run(["delete", vmName]); processes.delete(vmName); },
   };
@@ -180,9 +189,19 @@ export class TartVmDriver implements RuntimeDriver {
   }
 
   validatePool(resources: PoolResources): void { validateResources(resources, this.limits); }
+  async reconcileOrphans(): Promise<void> {
+    if (!this.tart.listManaged) throw new Error("tart inventory unavailable; cannot advertise exclusive readiness");
+    const names = await this.tart.listManaged();
+    for (const name of names) {
+      if (!name.startsWith(`${this.namePrefix}-`)) continue;
+      await this.tart.stop(name).catch(error => { if (!/not running/i.test(String(error))) throw error; });
+      await this.tart.remove(name);
+    }
+  }
   async reserveCapacity(resources: PoolResources): Promise<void> { this.validatePool(resources); }
 
   async createLease(lease: Lease): Promise<RuntimeLease> {
+    assertUnpinnedLease(lease);
     if (!isWorkerContractCompatible(lease.contractVersion, this.workerContractVersion)) throw new Error(`worker contract ${this.workerContractVersion || "unknown"} is not supported by control plane contract ${lease.contractVersion}`);
     const guestPlatform = lease.guestPlatform ?? "macos-arm64";
     const image = guestPlatform === "macos-arm64" || guestPlatform === "linux-arm64" ? this.images[guestPlatform] : undefined;
@@ -205,7 +224,7 @@ export class TartVmDriver implements RuntimeDriver {
         return runtime;
       } catch (error) {
         await this.tart.stop(vmName).catch(() => undefined);
-        await this.tart.remove(vmName).catch(() => undefined);
+        try { await this.tart.remove(vmName); } catch (cleanupError) { throw new AggregateError([error, cleanupError], "Tart provisioning and cleanup failed"); }
         throw error;
       }
     } finally {

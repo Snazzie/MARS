@@ -6,6 +6,7 @@ import { z } from "zod";
 import { type Lease, type RuntimeDriver, type RuntimeLease } from "./runtime.ts";
 import { validateResources } from "./runtime.ts";
 import type { DockerResult, DockerRunner } from "./windows-container.ts";
+import { validateExclusiveCpuIds } from "./cpu-inventory.ts";
 
 export type LinuxContainerConfig = {
   image: string;
@@ -14,6 +15,7 @@ export type LinuxContainerConfig = {
   limits: WorkerLimits;
   architecture?: "arm64" | "amd64";
   platform?: "linux/arm64" | "linux/amd64";
+  hostPlacement: "linux-pin" | "serialized-no-pin";
 };
 
 type DockerInspection = {
@@ -24,7 +26,7 @@ type DockerInspection = {
   Architecture?: unknown;
   State?: { Status?: unknown };
   Config?: { Image?: unknown; Entrypoint?: unknown; Labels?: Record<string, unknown> };
-  HostConfig?: { NanoCpus?: unknown; Memory?: unknown };
+  HostConfig?: { NanoCpus?: unknown; Memory?: unknown; CpusetCpus?: unknown };
   SizeRw?: unknown;
 };
 type WorkerContainerStatusData = z.infer<typeof WorkerContainerStatus>;
@@ -164,13 +166,18 @@ export class LinuxContainerDriver implements RuntimeDriver {
   async createLease(lease: Lease): Promise<RuntimeLease> {
     if (lease.imageDigest !== this.config.image) throw new Error(`lease image digest does not match ${this.platformLabel} container image`);
     await this.reserveCapacity(lease.resources);
+    if (lease.cpuMode !== "exclusive" && lease.cpuIds?.length) throw new Error("shared lease cannot claim CPU IDs");
+    const cpuSet = lease.cpuMode === "exclusive" && this.config.hostPlacement === "linux-pin" ? await validateExclusiveCpuIds(lease.cpuIds, lease.resources.vcpu) : undefined;
+    if (lease.cpuMode === "exclusive" && this.config.hostPlacement === "serialized-no-pin" && lease.cpuIds !== undefined) throw new Error("serialized exclusive lease cannot claim CPU IDs");
+    if (lease.cpuMode === "exclusive" && this.config.hostPlacement === "serialized-no-pin" && (this.config.limits.maxConcurrentPods !== 1 || (await this.ownedContainers()).length > 0)) throw new Error("exclusive Windows-hosted Docker worker already has a managed guest or concurrency exceeds one");
     const root = this.bootstrapPath(lease.id);
     const bootstrap = join(root, "bootstrap.json");
     const name = this.containerName(lease.id);
     await mkdir(root, { recursive: true });
     await writeFile(bootstrap, JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig, ...(lease.workerCache ? { workerCache: lease.workerCache } : {}) }), { mode: 0o600, flag: "wx" });
     try {
-      checked(await this.docker(["create", "--name", name, "--platform", this.dockerPlatform, "--network", this.config.network, "--log-driver", "json-file", "--log-opt", "max-size=50m", "--log-opt", "max-file=3", "--label", "mars.managed=true", "--label", `mars.platform=${this.platformLabel}`, "--label", `mars.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), this.config.image]), "docker create");
+      if (cpuSet && await validateExclusiveCpuIds(lease.cpuIds, lease.resources.vcpu) !== cpuSet) throw new Error("exclusive CPU inventory changed before Docker create");
+      checked(await this.docker(["create", "--name", name, "--platform", this.dockerPlatform, "--network", this.config.network, "--log-driver", "json-file", "--log-opt", "max-size=50m", "--log-opt", "max-file=3", "--label", "mars.managed=true", "--label", `mars.platform=${this.platformLabel}`, "--label", `mars.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), ...(cpuSet ? ["--cpuset-cpus", cpuSet] : []), this.config.image]), "docker create");
       checked(await this.docker(["cp", bootstrap, `${name}:/var/lib/mars/bootstrap/bootstrap.json`]), "docker cp");
       await rm(bootstrap, { force: true });
       checked(await this.docker(["start", name]), "docker start");
@@ -181,11 +188,13 @@ export class LinuxContainerDriver implements RuntimeDriver {
       const observedVcpu = Number(inspection?.HostConfig?.NanoCpus ?? 0) / 1_000_000_000;
       const observedMemory = Number(inspection?.HostConfig?.Memory ?? 0);
       if (observedVcpu !== lease.resources.vcpu || observedMemory !== lease.resources.memoryBytes) throw new Error("container resource limits do not match requested values");
+      if (cpuSet && inspection?.HostConfig?.CpusetCpus !== cpuSet) throw new Error("container CPU affinity does not match exclusive claim");
       const runtime: RuntimeLease = { runtimeInstanceId: name, observed: { vcpu: observedVcpu, memoryBytes: observedMemory, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: this.wait(name), sample: this.sample(name, lease.resources.memoryBytes) };
       this.leases.set(lease.id, { name, root, runtime });
       return runtime;
     } catch (error) {
-      await this.removeLease(lease.id).catch(() => undefined);
+      try { await this.removeLease(lease.id); }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], "Linux container provisioning and cleanup failed"); }
       throw error;
     } finally {
       await rm(bootstrap, { force: true });

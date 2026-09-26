@@ -17,6 +17,7 @@ test("lists disabled default pools without an image while rejecting empty creati
     driver: "windows-hyperv",
     imageDigest: "",
     resources: { vcpu: 4, memoryBytes: 6 * 1024 ** 3, storageBytes: 30 * 1024 ** 3, concurrency: 1 },
+    cpuMode: "shared",
     labels: ["mars-windows-x64"],
     triggerLabel: "mars-windows-x64",
     enabled: false,

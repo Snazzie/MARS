@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { RunnerTriggerLabel } from "./runner-labels.ts";
-import { positiveSafe, OutOfMemoryResult, PoolResources, RuntimeDriverName, RuntimePlatform, WorkerLimits, GuestPlatform, ConfigurationState, WorkerRuntimeCapability } from "./orchestration.ts";
+import { positiveSafe, OutOfMemoryResult, PoolResources, RuntimeDriverName, RuntimePlatform, WorkerLimits, GuestPlatform, ConfigurationState, WorkerRuntimeCapability, CpuMode } from "./orchestration.ts";
 import { WorkerContractVersion, WorkerReleaseVersion } from "./worker-release.ts";
 
 const id = z.string().min(1);
@@ -144,7 +144,7 @@ export type RepositorySummary = z.infer<typeof RepositorySummary>;
 const runSummaryShape = { id, organizationId, repositoryId: id, repositoryName: z.string().min(1), runNumber: positiveSafe, workflowName: z.string().min(1), event: z.string().min(1), branch: z.string().min(1), commitSha: z.string().regex(/^[0-9a-f]{7,64}$/i), actorLogin: z.string().min(1), status: z.enum(["queued", "in_progress", "completed"]), conclusion: z.enum(["success", "failure", "cancelled", "skipped", "neutral"]).nullable(), queuedAt: timestamp, startedAt: timestamp.nullable(), completedAt: timestamp.nullable(), durationMs: positiveSafe.or(z.literal(0)), runtimeBoundary: z.enum(["Kata VM-backed container", "Hyper-V isolated container", "Process-isolated Windows container", "Docker Linux container", "Tart VM"]).nullable(), allocationState: z.enum(["mars", "external"]).optional() };
 export const RunSummary = dto(strict(runSummaryShape));
 export type RunSummary = z.infer<typeof RunSummary>;
-export const CreatePoolRequest = dto(strict({ poolId: id.optional(), workerId: id, name: z.string().min(1), guestPlatform: GuestPlatform.default("macos-arm64"), resources, triggerLabel: RunnerTriggerLabel, imageDigest: z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/) }));
+export const CreatePoolRequest = dto(strict({ poolId: id.optional(), workerId: id, name: z.string().min(1), guestPlatform: GuestPlatform.default("macos-arm64"), resources, cpuMode: CpuMode.default("shared"), triggerLabel: RunnerTriggerLabel, imageDigest: z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/) }));
 export type CreatePoolRequest = z.infer<typeof CreatePoolRequest>;
 export const RunStep = dto(strict({ id, name: z.string().min(1), number: z.number().int().nonnegative(), status: z.enum(["queued", "in_progress", "completed"]), conclusion: z.string().nullable(), queuedAt: timestamp, startedAt: timestamp.nullable(), completedAt: timestamp.nullable(), durationMs: positiveSafe.or(z.literal(0)) }));
 export type RunStep = z.infer<typeof RunStep>;
@@ -376,7 +376,7 @@ export const WorkerUpgradeStatus = z.discriminatedUnion("available", [
   z.object({ available: z.literal(true), currentReleaseVersion: WorkerReleaseVersion, currentContractVersion: WorkerContractVersion, target: z.object({ releaseVersion: WorkerReleaseVersion, contractVersion: WorkerContractVersion, token: z.string().min(1) }).strict() }).strict(),
 ]);
 export type WorkerUpgradeStatus = z.infer<typeof WorkerUpgradeStatus>;
-export const PoolSummary = dto(strict({ id, organizationId: id.nullable(), workerId: id.nullable(), workerName: z.string().min(1).nullable(), name: z.string().min(1), platform: RuntimePlatform, driver: RuntimeDriverName, imageDigest: z.string(), resources, labels: z.array(z.string().min(1)), triggerLabel: RunnerTriggerLabel.nullable(), enabled: z.boolean(), active: positiveSafe.or(z.literal(0)) }));
+export const PoolSummary = dto(strict({ id, organizationId: id.nullable(), workerId: id.nullable(), workerName: z.string().min(1).nullable(), name: z.string().min(1), platform: RuntimePlatform, driver: RuntimeDriverName, imageDigest: z.string(), resources, cpuMode: CpuMode, labels: z.array(z.string().min(1)), triggerLabel: RunnerTriggerLabel.nullable(), enabled: z.boolean(), active: positiveSafe.or(z.literal(0)) }));
 export type PoolSummary = z.infer<typeof PoolSummary>;
 const githubAccountType = z.enum(["User", "Organization"]);
 export const GithubConnectionSummary = dto(z.discriminatedUnion("connected", [

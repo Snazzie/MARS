@@ -1,6 +1,15 @@
 import { type LeaseBootstrapEnvelope, type RuntimeTerminationEvidence, type WorkerCacheProxy, type WorkerCommand, type WorkerEvent } from "@mars/contracts";
 import type { RuntimeDriver } from "./runtime.ts";
 
+const workerModes = new WeakMap<Map<string, Promise<void>>, Map<string, "shared" | "exclusive">>();
+export function admitWorkerLease(bootstrap: LeaseBootstrapEnvelope, active: Map<string, Promise<void>>): () => void {
+  const modes = workerModes.get(active) ?? new Map<string, "shared" | "exclusive">();
+  if (!workerModes.has(active)) workerModes.set(active, modes);
+  const mode = bootstrap.cpuMode ?? "shared";
+  if (mode === "exclusive" && active.size > 0 || mode === "shared" && [...modes.values()].includes("exclusive")) throw new Error("exclusive worker already has an active managed guest");
+  modes.set(bootstrap.leaseId, mode);
+  return () => { modes.delete(bootstrap.leaseId); };
+}
 
 function fallbackTermination(cause: RuntimeTerminationEvidence["cause"], exitCode: number | null, elapsedMs: number, sampleCount: number, lastSampleOccurredAt: string | null, samplingGapMs: number | null): RuntimeTerminationEvidence {
   return {
@@ -60,7 +69,7 @@ export async function runLeaseLifecycle(
   try {
   let runtime;
   try {
-    runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, contractVersion: bootstrap.contractVersion, guestPlatform: bootstrap.guestPlatform, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig, ...(workerCache ? { workerCache } : {}) });
+    runtime = await driver.createLease({ id: bootstrap.leaseId, jobId: bootstrap.jobId, contractVersion: bootstrap.contractVersion, guestPlatform: bootstrap.guestPlatform, imageDigest: bootstrap.imageDigest, resources: bootstrap.resources, cpuMode: bootstrap.cpuMode, cpuIds: bootstrap.cpuIds, nonce: bootstrap.nonce, encodedJitConfig: bootstrap.encodedJitConfig, ...(workerCache ? { workerCache } : {}) });
   } catch (error) {
     console.error("Lease provisioning failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) });
     emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "provisioning_failed" } });

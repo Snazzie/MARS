@@ -1,5 +1,8 @@
-import { PoolResources, type GuestPlatform, type RuntimeTerminationEvidence, type WorkerCacheProxy } from "@mars/contracts";
-export interface Lease { id:string; jobId:string; contractVersion:string; guestPlatform?: GuestPlatform; imageDigest:string; resources:PoolResources; nonce:string; encodedJitConfig:string; workerCache?: WorkerCacheProxy; }
+import { PoolResources, type CpuMode, type GuestPlatform, type RuntimeTerminationEvidence, type WorkerCacheProxy } from "@mars/contracts";
+export interface Lease { id:string; jobId:string; contractVersion:string; guestPlatform?: GuestPlatform; imageDigest:string; resources:PoolResources; cpuMode?:CpuMode; cpuIds?:number[]; nonce:string; encodedJitConfig:string; workerCache?: WorkerCacheProxy; }
+export function assertUnpinnedLease(lease: Lease): void {
+  if (lease.cpuIds !== undefined) throw new Error("unpinned worker cannot claim host CPU IDs");
+}
 export interface RuntimeLease {
   runtimeInstanceId:string;
   observed:{vcpu:number;memoryBytes:number;storageBytes:number};

@@ -1,9 +1,23 @@
 import { expect, test } from "bun:test";
 import type { LeaseBootstrapEnvelope, WorkerCommand, WorkerEvent } from "@mars/contracts";
-import { runLeaseLifecycle } from "./lease-lifecycle.ts";
+import { admitWorkerLease, runLeaseLifecycle } from "./lease-lifecycle.ts";
 
 const command = { version: 1, id: "33333333-3333-4333-8333-333333333333", type: "windows-container.create_lease", workerId: "11111111-1111-4111-8111-111111111111", leaseId: "22222222-2222-4222-8222-222222222222", occurredAt: new Date().toISOString(), payload: {} } satisfies WorkerCommand;
 const bootstrap = { leaseId: command.leaseId!, jobId: command.leaseId!, nonce: "n".repeat(32), guestPlatform: "windows-x64", contractVersion: "0.1.0", imageDigest: `repo@sha256:${"a".repeat(64)}`, resources: { vcpu: 1, memoryBytes: 2, storageBytes: 3, concurrency: 1 }, encodedJitConfig: "secret", expiresAt: new Date(Date.now() + 60_000).toISOString() } satisfies LeaseBootstrapEnvelope;
+test("serialized exclusive admission refuses concurrent shared or exclusive guests", () => {
+  const active = new Map<string, Promise<void>>();
+  const exclusive = { ...bootstrap, cpuMode: "exclusive" as const };
+  const release = admitWorkerLease(exclusive, active);
+  active.set(exclusive.leaseId, Promise.resolve());
+  expect(() => admitWorkerLease({ ...exclusive, leaseId: "44444444-4444-4444-8444-444444444444" }, active)).toThrow("active managed guest");
+  expect(() => admitWorkerLease({ ...bootstrap, leaseId: "55555555-5555-4555-8555-555555555555" }, active)).toThrow("active managed guest");
+  active.delete(exclusive.leaseId);
+  release();
+  const sharedRelease = admitWorkerLease(bootstrap, active);
+  active.set(bootstrap.leaseId, Promise.resolve());
+  expect(() => admitWorkerLease(exclusive, active)).toThrow("active managed guest");
+  sharedRelease();
+});
 
 test("cleanup still removes a lease after stop failure", async () => {
   const events: string[] = [];

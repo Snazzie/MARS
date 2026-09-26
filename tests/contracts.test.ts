@@ -18,7 +18,7 @@ describe("pool creation contracts", () => {
   };
 
   test("accepts immutable pool requests and canonical trigger labels", () => {
-    expect(CreatePoolRequest.parse(valid)).toEqual(valid);
+    expect(CreatePoolRequest.parse(valid)).toEqual({ ...valid, cpuMode: "shared" });
     expect(RunnerTriggerLabel.parse("custom.label-1")).toBe("custom.label-1");
   });
 

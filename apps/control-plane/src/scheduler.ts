@@ -1,8 +1,8 @@
-import { ANY_RUNNER_LABEL, ANY_X64_RUNNER_LABEL, parseJobRunnerLabels, PoolResources, type ParsedRunnerLabel, WorkerLimits } from "@mars/contracts";
+import { ANY_RUNNER_LABEL, ANY_X64_RUNNER_LABEL, parseJobRunnerLabels, PoolResources, type ParsedRunnerLabel, WorkerLimits, supportsExclusiveCpuPlacement } from "@mars/contracts";
 
 export interface Candidate {
-  worker: { admissionState:string; connectionState:string; configurationState:string; configurationRevision:string|null; appliedConfigurationRevision:string|null; runtimeReady?: boolean; imageEvidenceReady?: boolean; acceptingLeases?: boolean; limits: unknown };
-  pool: { enabled:boolean; platform:string; resources:unknown; concurrency:number; active:number; labels:string[]; triggerLabel:string|null };
+  worker: { admissionState:string; connectionState:string; configurationState:string; configurationRevision:string|null; appliedConfigurationRevision:string|null; runtimeReady?: boolean; imageEvidenceReady?: boolean; acceptingLeases?: boolean; limits: unknown; hostPlatform?: string; contractVersion?: string | null; availableCpuIds?: number[]; claimedCpuIds?: number[]; unreapedLeases?: number; modeConflict?: boolean };
+  pool: { enabled:boolean; platform:string; resources:unknown; concurrency:number; active:number; labels:string[]; triggerLabel:string|null; cpuMode?: "shared" | "exclusive" };
   requestedLabels:string[];
 }
 
@@ -23,6 +23,16 @@ export function selectProvisionOption(
   return options.find((option) => option.route.toLowerCase() === ANY_RUNNER_LABEL) ?? null;
 }
 
+function exclusiveAvailable(candidate: Candidate, vcpu: number, concurrency: number, maxConcurrentPods: number): boolean {
+  if (candidate.worker.modeConflict) return false;
+  if (candidate.pool.cpuMode !== "exclusive") return true;
+  if (!supportsExclusiveCpuPlacement(candidate.worker.contractVersion)) return false;
+  if (!candidate.worker.hostPlatform?.startsWith("linux-")) return concurrency === 1 && maxConcurrentPods === 1 && (candidate.worker.unreapedLeases ?? 0) === 0;
+  const inventory = candidate.worker.availableCpuIds;
+  if (!inventory?.length || inventory.some((id, index) => !Number.isInteger(id) || id < 0 || index > 0 && id <= inventory[index - 1]!)) return false;
+  const claimed = new Set(candidate.worker.claimedCpuIds ?? []);
+  return inventory.reduce((count, id) => count + Number(!claimed.has(id)), 0) >= vcpu;
+}
 export function fits(candidate: Candidate): boolean {
   const options = parseJobRunnerLabels(candidate.requestedLabels)?.options;
   if (!options) return false;
@@ -32,7 +42,7 @@ export function fits(candidate: Candidate): boolean {
   const limits = WorkerLimits.safeParse(candidate.worker.limits);
   const resources = PoolResources.safeParse(candidate.pool.resources);
   if (!limits.success || !resources.success || candidate.pool.active >= resources.data.concurrency) return false;
-  return option.vcpu <= limits.data.maxVcpuPerPod && option.memoryBytes <= limits.data.maxMemoryBytesPerPod && resources.data.storageBytes <= limits.data.maxStorageBytesPerPod;
+  return exclusiveAvailable(candidate, option.vcpu, resources.data.concurrency, limits.data.maxConcurrentPods) && option.vcpu <= limits.data.maxVcpuPerPod && option.memoryBytes <= limits.data.maxMemoryBytesPerPod && resources.data.storageBytes <= limits.data.maxStorageBytesPerPod;
 }
 
 export function reason(candidate: Candidate): string {
@@ -50,5 +60,6 @@ export function reason(candidate: Candidate): string {
   const limits = WorkerLimits.safeParse(candidate.worker.limits);
   if (!resources.success || !limits.success) return "resource_ceiling";
   if (candidate.pool.active >= resources.data.concurrency) return "pool_concurrency";
+  if (!exclusiveAvailable(candidate, option.vcpu, resources.data.concurrency, limits.data.maxConcurrentPods)) return "exclusive_capacity_unavailable";
   return option.vcpu <= limits.data.maxVcpuPerPod && option.memoryBytes <= limits.data.maxMemoryBytesPerPod && resources.data.storageBytes <= limits.data.maxStorageBytesPerPod ? "admissible" : "resource_ceiling";
 }

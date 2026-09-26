@@ -23,7 +23,7 @@ if (import.meta.main && Bun.argv[2] === "mac-worker") {
   const required = ["MARS_LINUX_ARM64_CONTAINER_IMAGE", "MARS_LINUX_CONTAINER_NETWORK"] as const;
   const missing = required.filter((name) => !Bun.env[name]);
   if (!baseUrl || missing.length || !/^.+@sha256:[0-9a-f]{64}$/.test(Bun.env.MARS_LINUX_ARM64_CONTAINER_IMAGE ?? "")) throw new Error(`Linux ARM container worker configuration missing or invalid: ${[...(baseUrl ? [] : ["MARS_CONTROL_PLANE_URL"]), ...missing, ...(/^.+@sha256:[0-9a-f]{64}$/.test(Bun.env.MARS_LINUX_ARM64_CONTAINER_IMAGE ?? "") ? [] : ["MARS_LINUX_ARM64_CONTAINER_IMAGE"])].join(", ")}`);
-  const driver = new LinuxContainerDriver({ image: Bun.env.MARS_LINUX_ARM64_CONTAINER_IMAGE!, prefix: "mars-linux-arm64", network: Bun.env.MARS_LINUX_CONTAINER_NETWORK!, limits });
+  const driver = new LinuxContainerDriver({ image: Bun.env.MARS_LINUX_ARM64_CONTAINER_IMAGE!, prefix: "mars-linux-arm64", network: Bun.env.MARS_LINUX_CONTAINER_NETWORK!, limits, hostPlacement: "linux-pin" });
   await runDockerLinuxWorker(baseUrl, driver, limits);
 } else if (import.meta.main) {
   console.error("usage: mars-orchestrator <linux-worker|linux-container-worker|mac-worker|windows-worker>");
