@@ -499,7 +499,7 @@ export function linuxArm64InstallerValues(platform: LinuxArm64InstallerMetadata,
 
 export type WindowsVmImageSource = "checkpoint" | "iso" | "vhdx";
 
-export function windowsInstallerValues(platform: WindowsWorkerRelease | undefined, connectOrigin: string, development?: NonNullable<ControlPlaneHttpDeps["developmentWindowsArtifacts"]>, upgrade = false, versions: { releaseVersion: string; contractVersion: string; targetToken?: string } = { releaseVersion: "0.0.0", contractVersion: Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.2.0" }, runtime: "container" | "vm" = "container", vmSource: WindowsVmImageSource = "checkpoint", installerContract: 5 | 6 = 6, provisioningRefresh = false): InstallerValues {
+export function windowsInstallerValues(platform: WindowsWorkerRelease | undefined, connectOrigin: string, development?: NonNullable<ControlPlaneHttpDeps["developmentWindowsArtifacts"]>, upgrade = false, versions: { releaseVersion: string; contractVersion: string; targetToken?: string } = { releaseVersion: "0.0.0", contractVersion: Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.2.0" }, runtime: "container" | "vm" = "container", vmSource: WindowsVmImageSource = "checkpoint", installerContract: 5 | 6 = 6, provisioningRefresh = false, linuxImages: { x64?: string; arm64?: string } = {}): InstallerValues {
   const source = platform ?? (development ? ({
     installer: development.orchestrator,
     orchestrator: development.orchestrator,
@@ -552,6 +552,8 @@ export function windowsInstallerValues(platform: WindowsWorkerRelease | undefine
     ...(upgrade && provisioningRefresh ? { WindowsRuntime: runtime } : {}),
     WorkerVersion: versions.releaseVersion,
     WorkerContractVersion: versions.contractVersion,
+    ...(linuxImages.x64 ? { LinuxX64ContainerImage: linuxImages.x64 } : {}),
+    ...(linuxImages.arm64 ? { LinuxArm64ContainerImage: linuxImages.arm64 } : {}),
     WindowsOrchestratorUrl: artifact("/api/workers/orchestrator?audience=windows-x64"),
     WindowsOrchestratorSha256: source.orchestrator.sha256,
     WindowsServiceHostUrl: artifact("/api/workers/service-host?audience=windows-x64"),
@@ -1322,7 +1324,10 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
         values = linuxArm64InstallerValues({ brokerImage: arm.brokerImage, jobImage: arm.jobImage, compose: { url: "", sha256: arm.compose.sha256 } }, connectOrigin, "local", { releaseVersion: "0.0.0", contractVersion: Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.2.0", targetToken });
       } else values = linuxArm64InstallerValues(release as LinuxArm64WorkerRelease, connectOrigin, "production", { releaseVersion, contractVersion: selectedManifest!.contractVersion, targetToken });
     } else if (audience === "windows-x64") {
-      values = windowsInstallerValues(release as WindowsWorkerRelease | undefined, connectOrigin, development as DevelopmentWindowsArtifacts | undefined, upgrade, { releaseVersion, contractVersion: selectedManifest?.contractVersion ?? (Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() || CURRENT_WORKER_CONTRACT_VERSION), targetToken }, runtime as "container" | "vm", vmSource, selectedManifest?.schemaVersion ?? 6, upgrade && legacyRuntime !== undefined);
+      values = windowsInstallerValues(release as WindowsWorkerRelease | undefined, connectOrigin, development as DevelopmentWindowsArtifacts | undefined, upgrade, { releaseVersion, contractVersion: selectedManifest?.contractVersion ?? (Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() || CURRENT_WORKER_CONTRACT_VERSION), targetToken }, runtime as "container" | "vm", vmSource, selectedManifest?.schemaVersion ?? 6, upgrade && legacyRuntime !== undefined, {
+        x64: Bun.env.MARS_LINUX_X64_CONTAINER_IMAGE?.trim(),
+        arm64: selectedManifest?.platforms["linux-arm64"]?.jobImage ?? Bun.env.MARS_LINUX_ARM64_CONTAINER_IMAGE?.trim(),
+      });
     } else if (development) {
       const macos = development as DevelopmentMacosArtifacts;
       const contractVersion = selectedManifest?.contractVersion ?? Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() ?? "0.3.0";

@@ -7,6 +7,8 @@ param(
   [ValidateSet('production','local')][string]$WindowsArtifactMode = 'production',
   [string]$WorkerVersion = '',
   [string]$WorkerContractVersion = '',
+  [string]$LinuxX64ContainerImage = '',
+  [string]$LinuxArm64ContainerImage = '',
   [string]$WindowsOrchestratorUrl = '',
   [string]$WindowsOrchestratorSha256 = '',
   [string]$WindowsTrayScriptUrl = '',
@@ -157,6 +159,8 @@ function Assert-HostPreflight {
   if ($os.Caption -notmatch '^Microsoft Windows 11 (Pro|Enterprise)') { throw 'Windows 11 Pro or Enterprise is required.' }
   if ($WorkerVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') { throw 'WorkerVersion must use major.minor.patch.' }
   if ($WorkerContractVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') { throw 'WorkerContractVersion must use major.minor.patch.' }
+  if ($LinuxX64ContainerImage -and $LinuxX64ContainerImage -notmatch '^[^@\s]+@sha256:[0-9a-f]{64}$') { throw 'LinuxX64ContainerImage must be a digest-pinned OCI reference.' }
+  if ($LinuxArm64ContainerImage -and $LinuxArm64ContainerImage -notmatch '^[^@\s]+@sha256:[0-9a-f]{64}$') { throw 'LinuxArm64ContainerImage must be a digest-pinned OCI reference.' }
   if (-not [Environment]::Is64BitOperatingSystem) { throw 'Windows x64 is required.' }
 }
 function Quote-TaskArgument([string]$Value) { return "'" + $Value.Replace("'", "''") + "'" }
@@ -164,7 +168,7 @@ function Register-ResumeTask {
   param([string]$ScriptPath)
   $resumeParameters = @(
     '-ControlPlaneUrl',$ControlPlaneUrl,'-JoinCodeFile',$JoinCodeFile,'-WindowsArtifactMode',$WindowsArtifactMode,
-    '-WorkerVersion',$WorkerVersion,'-WorkerContractVersion',$WorkerContractVersion,'-WindowsRuntime',$WindowsRuntime,
+    '-WorkerVersion',$WorkerVersion,'-WorkerContractVersion',$WorkerContractVersion,'-LinuxX64ContainerImage',$LinuxX64ContainerImage,'-LinuxArm64ContainerImage',$LinuxArm64ContainerImage,'-WindowsRuntime',$WindowsRuntime,
     '-WindowsVmImageSource',$WindowsVmImageSource,'-WindowsSourcePath',$WindowsSourcePath,'-WindowsSourceSha256',$WindowsSourceSha256,
     '-WindowsImageName',$WindowsImageName,'-WindowsCustomProvisioningScriptPath',$WindowsCustomProvisioningScriptPath,'-WindowsCustomProvisioningScriptSha256',$WindowsCustomProvisioningScriptSha256,
     '-WindowsOrchestratorUrl',$WindowsOrchestratorUrl,'-WindowsOrchestratorSha256',$WindowsOrchestratorSha256,
@@ -191,7 +195,6 @@ function Register-ResumeTask {
   $settings = New-ScheduledTaskSettingsSet -RestartCount 120 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable
   Register-ScheduledTask -TaskName 'MarsWorkerInstallResume' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 }
-function Remove-ResumeTask { Unregister-ScheduledTask -TaskName 'MarsWorkerInstallResume' -Confirm:$false -ErrorAction SilentlyContinue }
 function Resolve-CachePort([string]$Name, [int]$DefaultPort) {
   $raw = [Environment]::GetEnvironmentVariable($Name); if ([string]::IsNullOrWhiteSpace($raw)) { return $DefaultPort }
   $port = 0; if (-not [int]::TryParse($raw, [ref]$port) -or $port -lt 1 -or $port -gt 65535) { throw "$Name must be an integer between 1 and 65535." }; return $port
@@ -544,6 +547,8 @@ try {
   $workerLogPath = Join-Path $root 'logs\worker.log'; $previousWorkerLogPath = Join-Path $root 'logs\worker.previous.log'; if (Test-Path -LiteralPath $workerLogPath) { New-Item -ItemType Directory -Force -Path (Split-Path $previousWorkerLogPath) | Out-Null; Move-Item -LiteralPath $workerLogPath -Destination $previousWorkerLogPath -Force }
   $service = New-Service -Name MarsWorker -BinaryPathName "`"$serviceHost`" `"$exe`" windows-worker" -StartupType Automatic -ErrorAction Stop
   $serviceEnvironment = @("MARS_CONTROL_PLANE_URL=$ControlPlaneUrl","MARS_JOIN_CODE_FILE=$JoinCodeFile","MARS_LEASE_PICKUP_STATE_FILE=$userState\lease-pickup.json","MARS_WORKER_VERSION=$WorkerVersion","MARS_WORKER_CONTRACT_VERSION=$WorkerContractVersion")
+  if ($LinuxX64ContainerImage) { $serviceEnvironment += "MARS_LINUX_X64_CONTAINER_IMAGE=$LinuxX64ContainerImage" }
+  if ($LinuxArm64ContainerImage) { $serviceEnvironment += "MARS_LINUX_ARM64_CONTAINER_IMAGE=$LinuxArm64ContainerImage" }
   if ($checkpoint) {
     $serviceEnvironment += "MARS_WINDOWS_CHECKPOINT_PATH=$($checkpoint.Path)","MARS_WINDOWS_CHECKPOINT_DIGEST=$($checkpoint.ImageDigest)"
   } elseif (Test-Path -LiteralPath (Join-Path $root 'vm-provisioning\image-state.json')) {
@@ -558,7 +563,7 @@ try {
     $serviceEnvironment += "MARS_CACHE_PROXY_URL=$($cacheOrigins.Proxy)","MARS_CACHE_ADVERTISE_URL=$($cacheOrigins.Advertise)"
     if ($AllowLocalContainerImage -or $WindowsContainerImage -eq 'mars/windows-job:local') { $serviceEnvironment += 'MARS_ALLOW_LOCAL_CONTAINER_IMAGE=true' }
   }
-  foreach ($name in @('MARS_ACTION_CACHE_ROOT','MARS_CACHE_PROXY_PORT','MARS_CACHE_DATA_PORT','MARS_CACHE_TOKEN_ISSUER','MARS_CACHE_JWKS_URL','MARS_WINDOWS_CONTAINER_DNS_SERVERS','MARS_HYPERV_SWITCH_NAME','MARS_LINUX_X64_CONTAINER_IMAGE','MARS_LINUX_ARM64_CONTAINER_IMAGE','MARS_LINUX_CONTAINER_NETWORK')) { $value = [Environment]::GetEnvironmentVariable($name); if (-not [string]::IsNullOrWhiteSpace($value)) { $serviceEnvironment += "$name=$value" } }
+  foreach ($name in @('MARS_ACTION_CACHE_ROOT','MARS_CACHE_PROXY_PORT','MARS_CACHE_DATA_PORT','MARS_CACHE_TOKEN_ISSUER','MARS_CACHE_JWKS_URL','MARS_WINDOWS_CONTAINER_DNS_SERVERS','MARS_HYPERV_SWITCH_NAME','MARS_LINUX_CONTAINER_NETWORK')) { $value = [Environment]::GetEnvironmentVariable($name); if (-not [string]::IsNullOrWhiteSpace($value)) { $serviceEnvironment += "$name=$value" } }
   New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\MarsWorker' -Name Environment -PropertyType MultiString -Value $serviceEnvironment -Force | Out-Null
   Set-WorkerServiceRecovery
   Write-Host '[7/7] Starting worker service and waiting for enrollment'; try { Start-Service MarsWorker -ErrorAction Stop; $service = Get-Service MarsWorker -ErrorAction Stop; $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running,[TimeSpan]::FromSeconds(30)); Start-Sleep -Seconds 2; $service.Refresh(); if ($service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running) { throw "MarsWorker stopped immediately with status $($service.Status)." } } catch { $startupError = $_.Exception.Message; $recoveryDeadline = (Get-Date).AddSeconds(15); do { Start-Sleep -Milliseconds 500; $currentService = Get-Service MarsWorker -ErrorAction SilentlyContinue } while ($currentService -and $currentService.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running -and (Get-Date) -lt $recoveryDeadline); if (-not $currentService -or $currentService.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running) { throw "MarsWorker failed to reach Running. Startup error: $startupError" }; Write-Warning "MarsWorker recovered after initial startup failure: $startupError" }

@@ -62,6 +62,12 @@ test("Windows installer allows container NAT traffic to the authenticated cache 
   expect(windows).toContain("https://host.docker.internal:8789");
   expect(windows).not.toContain("docker.exe network inspect nat");
 });
+
+test("Windows installer carries verified Linux container images into the service", () => {
+  expect(windows).toContain("[string]$LinuxArm64ContainerImage = ''");
+  expect(windows).toContain("MARS_LINUX_ARM64_CONTAINER_IMAGE=$LinuxArm64ContainerImage");
+  expect(windows).toContain("'-LinuxArm64ContainerImage',$LinuxArm64ContainerImage");
+});
 test("Windows installer configures repeated SCM recovery for freshly registered workers", () => {
   expect(windows).toContain("function Set-WorkerServiceRecovery");
   expect(windows).toContain("sc.exe failure MarsWorker 'reset= 86400' 'actions= restart/5000/restart/30000/restart/60000'");
@@ -291,9 +297,10 @@ test("Windows route values expose container provisioning artifacts without selec
       baseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}`,
       buildScript: asset("builder.ps1"), verifyScript: asset("verify.ps1"), containerfile: asset("Containerfile"), entrypoint: asset("entrypoint.ps1"),
     },
-  }, "https://control.example");
+  }, "https://control.example", undefined, false, undefined, "container", "checkpoint", 6, false, { arm64: `ghcr.io/snazzie/mars/linux-arm64-job@sha256:${hash}` });
   expect(values).toMatchObject({
     WindowsOrchestratorSha256: hash, WindowsServiceHostSha256: hash, WindowsJobAgentSha256: hash,
+    LinuxArm64ContainerImage: `ghcr.io/snazzie/mars/linux-arm64-job@sha256:${hash}`,
     WindowsContainerBaseImage: `mcr.microsoft.com/windows/server:ltsc2025@sha256:${hash}`,
     WindowsRunnerSha256: hash, WindowsGitSha256: hash, WindowsVcRuntimeSha256: hash,
     WindowsContainerBuilderSha256: hash, WindowsContainerVerifierSha256: hash, WindowsContainerfileSha256: hash, WindowsContainerEntrypointSha256: hash,
