@@ -13,8 +13,9 @@ export async function activateAuthenticatedWorkerConnection<Socket extends Authe
   isCurrent?: () => boolean;
   activate?: () => boolean;
   reconcile?: typeof reconcileWorkerConfigurationOnConnect;
+  sameProcess?: boolean;
 }): Promise<boolean> {
-  await (input.reconcile ?? reconcileWorkerConfigurationOnConnect)(input.db, input.workerId);
+  await (input.reconcile ?? reconcileWorkerConfigurationOnConnect)(input.db, input.workerId, input.sameProcess);
   if (input.isCurrent && !input.isCurrent()) return false;
   if (input.encryptionPublicKey) {
     await input.db`update workers set encryption_public_key=COALESCE(encryption_public_key,${input.encryptionPublicKey}), enrollment_authenticated_at=now(), enrollment_code_hash=null where id=${input.workerId} and enrollment_authenticated_at is null`;

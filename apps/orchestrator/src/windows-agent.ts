@@ -491,6 +491,7 @@ export function dispatchWindowsWorkerFrame(
 
 async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache: WorkerCacheConfiguration, cacheService: ActionCacheService): Promise<never> {
   const controlPlane = new URL(baseUrl);
+  const processId = randomUUID();
   let identity = await load();
   if (!identity) {
     identity = await createIdentity();
@@ -574,7 +575,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
       ws.onmessage = async (message) => {
         try {
           const frame = JSON.parse(String(message.data)) as Record<string, unknown>;
-          if (frame.type === "challenge") return ws.send(JSON.stringify(auth(String(frame.nonce), identity)));
+          if (frame.type === "challenge") return ws.send(JSON.stringify({ ...auth(String(frame.nonce), identity), processId }));
           if (frame.type === "authenticated") {
             if (developmentConsole) console.log("Development worker authenticated", { workerId: identity.workerId });
             eventTransport.bind(ws);

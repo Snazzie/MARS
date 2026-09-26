@@ -146,6 +146,8 @@ Use this when the local control plane cannot issue a release-catalog upgrade tar
 
 The installer requires the worker identity and `MarsWorker` service to exist. It preserves identity and runtime data, replaces the orchestrator, service host, and tray script, and restarts the service. Check `C:\ProgramData\Mars\install.log`, then confirm the service is running and the worker has reconnected with a fresh doctor report. If any jobs remain active, wait for them to finish rather than stopping the service.
 
+Windows worker network reconnects from the same running process keep an acknowledged configuration ready; no dashboard Apply is needed. A `MarsWorker` process or control-plane restart replays the durable desired configuration before scheduling because in-memory runtime limits must be restored. If the worker remains unready, inspect its doctor capability/remediation and configuration failure rather than repeatedly applying unchanged settings.
+
 ### Recover a local macOS worker connected to the dev instance
 
 Use the existing worker identity; **do not re-enroll** an adopted worker. On the

@@ -220,9 +220,9 @@ export async function applyWorkerConfigurationFailure(db: Sql<{}>, event: { work
     return true;
   });
 }
-export async function reconcileWorkerConfigurationOnConnect(db: Sql<{}>, workerId: string): Promise<{ state: "unconfigured" | "applying" | "ready" | "error"; commandId: string | null }> {
+export async function reconcileWorkerConfigurationOnConnect(db: Sql<{}>, workerId: string, sameProcess = false): Promise<{ state: "unconfigured" | "applying" | "ready" | "error"; commandId: string | null }> {
   return db.begin(async tx => {
-    const [worker] = await tx<{ desiredConfiguration: unknown; configurationRevision: string | null; appliedConfigurationRevision: string | null; configurationCommandId: string | null }[]>`select desired_configuration AS "desiredConfiguration", configuration_revision AS "configurationRevision", applied_configuration_revision AS "appliedConfigurationRevision", configuration_command_id AS "configurationCommandId" from workers where id=${workerId} for update`;
+    const [worker] = await tx<{ desiredConfiguration: unknown; configurationRevision: string | null; appliedConfigurationRevision: string | null; configurationCommandId: string | null; configurationState: string }[]>`select desired_configuration AS "desiredConfiguration", configuration_revision AS "configurationRevision", applied_configuration_revision AS "appliedConfigurationRevision", configuration_command_id AS "configurationCommandId", configuration_state AS "configurationState" from workers where id=${workerId} for update`;
     if (!worker) throw new Error("worker configuration unavailable");
     let desiredInput = worker.desiredConfiguration;
     if (typeof desiredInput === "string") {
@@ -239,6 +239,9 @@ export async function reconcileWorkerConfigurationOnConnect(db: Sql<{}>, workerI
     }
     const desired = parsedDesired.data;
     const revision = worker.configurationRevision ?? createHash("sha256").update(canonical(desired)).digest("hex");
+    if (sameProcess && worker.configurationState === "ready" && worker.configurationRevision && worker.configurationRevision === worker.appliedConfigurationRevision) {
+      return { state: "ready", commandId: worker.configurationCommandId };
+    }
     if (worker.appliedConfigurationRevision === revision) {
       await tx`update workers set configuration_state='applying', configuration_revision=${revision} where id=${workerId}`;
     }

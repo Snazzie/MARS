@@ -82,6 +82,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
   const browserSockets = new Set<ServerWebSocket<ControlPlaneSocketData>>();
   const replayingBrowserSockets = new WeakSet<ServerWebSocket<ControlPlaneSocketData>>();
   const workerConnectionEpochs = new Map<string, number>();
+  const workerProcesses = new Map<string, string>();
   const workerMessageTails = new WeakMap<object, Promise<void>>();
 
   let nextWorkerConnectionEpoch = 0;
@@ -174,7 +175,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
     let frameType = "unknown";
     try {
       if (typeof message === "string" ? message.length > 256 * 1024 : message.byteLength > 256 * 1024) return ws.close(1009, "worker frame too large");
-      const frame = JSON.parse(String(message)) as { id?: string; type?: string; signature?: string; workerId?: string; encryptionPublicKey?: string; payload?: Record<string, unknown> };
+      const frame = JSON.parse(String(message)) as { id?: string; type?: string; signature?: string; workerId?: string; encryptionPublicKey?: string; processId?: string; payload?: Record<string, unknown> };
       frameType = typeof frame.type === "string" ? frame.type : "unknown";
       if (frame.type === "authenticate" && frame.workerId === ws.data.workerId && frame.signature && typeof frame.encryptionPublicKey === "string") {
         const epoch = ws.data.connectionEpoch;
@@ -184,6 +185,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         const canonical = Buffer.from(`${ws.data.challenge.toString("base64url")}\n${ws.data.workerId}\n${frame.encryptionPublicKey}`);
         if (!worker || !verifyWorkerSignature(worker.public_key, canonical, decodeWorkerSignature(frame.signature))) return ws.close(1008, "worker authentication failed");
         if (worker.encryption_public_key && worker.encryption_public_key !== frame.encryptionPublicKey) return ws.close(1008, "worker encryption key mismatch");
+        const processId = typeof frame.processId === "string" && /^[0-9a-f-]{36}$/.test(frame.processId) ? frame.processId : null;
         const activated = await activateAuthenticatedWorkerConnection({
           db: options.db,
           workerId: ws.data.workerId,
@@ -191,6 +193,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           socket: ws,
           workerSockets,
           dispatcher: options.dispatcher,
+          sameProcess: processId !== null && workerProcesses.get(ws.data.workerId) === processId,
           isCurrent: () => !workerData.closed,
           activate: () => {
             if (workerData.closed) return false;
@@ -204,6 +207,8 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           },
         });
         if (!activated) return ws.close(4001, "superseded");
+        if (processId) workerProcesses.set(ws.data.workerId, processId);
+        else workerProcesses.delete(ws.data.workerId);
         await sendWorkerAuthenticationFrames({
           socket: ws,
           workerId: ws.data.workerId,

@@ -10,7 +10,7 @@ const desired = {
   cache: { ttlSeconds: 86400, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 },
 };
 
-function database(rows: { desiredConfiguration: unknown; configurationRevision: string | null; appliedConfigurationRevision?: string | null; configurationCommandId: string | null }, command: unknown[] = []) {
+function database(rows: { desiredConfiguration: unknown; configurationRevision: string | null; appliedConfigurationRevision?: string | null; configurationCommandId: string | null; configurationState?: string }, command: unknown[] = []) {
   const queries: string[] = [];
   const values: unknown[][] = [];
   const tx = (strings: TemplateStringsArray, ...params: unknown[]) => {
@@ -38,6 +38,29 @@ test("replays the acknowledged configuration on every worker reconnect", async (
     .resolves.toEqual({ state: "applying", commandId: expect.any(String) });
   expect(fixture.queries.filter(query => query.includes("insert into commands"))).toHaveLength(1);
   expect(fixture.queries.some(query => query.includes("configuration_state='applying'"))).toBe(true);
+});
+
+test("keeps an acknowledged configuration ready when the same Windows process reconnects", async () => {
+  const revision = "a".repeat(64);
+  const commandId = "b430a582-a516-48a6-abb9-72c1af04a8c3";
+  const fixture = database({
+    desiredConfiguration: desired, configurationRevision: revision,
+    appliedConfigurationRevision: revision, configurationCommandId: commandId, configurationState: "ready",
+  });
+  expect(await reconcileWorkerConfigurationOnConnect(fixture.db, "cbb0e9d8-23ff-480e-8465-408197c0c2d2", true))
+    .toEqual({ state: "ready", commandId });
+  expect(fixture.queries).toHaveLength(1);
+});
+
+test("replays configuration on reconnect if it was not acknowledged", async () => {
+  const revision = "a".repeat(64);
+  const fixture = database({
+    desiredConfiguration: desired, configurationRevision: revision,
+    appliedConfigurationRevision: revision, configurationCommandId: null, configurationState: "error",
+  });
+  expect(await reconcileWorkerConfigurationOnConnect(fixture.db, "cbb0e9d8-23ff-480e-8465-408197c0c2d2", true))
+    .toEqual({ state: "applying", commandId: expect.any(String) });
+  expect(fixture.queries.some(query => query.includes("insert into commands"))).toBe(true);
 });
 
 
