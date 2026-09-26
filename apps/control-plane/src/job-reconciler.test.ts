@@ -79,14 +79,16 @@ test("returns a complete report when no queued jobs are available", async () => 
   expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 0 });
 });
 
-test("registers an any-label job with its resolved worker and platform", async () => {
+test("preflights unordered labels and marks the lease dispatched before sending, releasing failed sends", async () => {
   const events: string[] = [];
   const { publicKey } = generateKeyPairSync("x25519");
   const workerEncryptionPublicKey = publicKey.export({ format: "pem", type: "spki" }).toString();
+  let leaseState = "reserved";
+  let failSend = false;
   let db: DatabaseClient;
   db = Object.assign((async (strings: TemplateStringsArray) => {
     const query = strings.join(" ").toLowerCase();
-    if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", githubRunId: 77, runAttempt: 1, repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels: ["mars-any-2vcpu-4g"] }];
+    if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", githubRunId: 77, runAttempt: 1, repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels: ["mars-any-2vcpu-4g", "mars-windows-x64-2vcpu-4g"] }];
     if (query.includes('p.id as "poolid"')) return [{
       poolId: "pool",
       organizationId: "org",
@@ -110,8 +112,21 @@ test("registers an any-label job with its resolved worker and platform", async (
       active: 0,
     }];
     if (query.includes("insert into runner_leases")) {
+      leaseState = "reserved";
       events.push("reserve");
       return [{ id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: { vcpu: 1, memoryBytes: 4 * 1024 ** 3, storageBytes: 1, concurrency: 1 }, jobId: 42 }];
+    }
+    if (query.includes("update runner_leases set state='dispatched'")) {
+      expect(leaseState).toBe("reserved");
+      leaseState = "dispatched";
+      events.push("mark-dispatched");
+      return [{ id: "lease" }];
+    }
+    if (query.includes("update runner_leases set state='failed'")) {
+      expect(leaseState).toBe("dispatched");
+      leaseState = "failed";
+      events.push("release");
+      return [];
     }
     if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 2, memoryBytes: 4 * 1024 ** 3, storageBytes: 8, concurrency: 1 }, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 }, doctor: { capacity: { freeVcpu: 2, freeMemoryBytes: 4 * 1024 ** 3, freeStorageBytes: 8 } } }];
     if (query.includes("from runner_leases")) return [];
@@ -123,14 +138,18 @@ test("registers an any-label job with its resolved worker and platform", async (
     if (url.endsWith("/actions/jobs/42")) {
       events.push("preflight");
       expect(init?.method).toBeUndefined();
-      return Response.json({ id: 42, run_id: 77, run_attempt: 1, status: "queued", name: "build", labels: ["mars-any-2vcpu-4g"], created_at: "2026-08-22T10:31:46Z" });
+      return Response.json({ id: 42, run_id: 77, run_attempt: 1, status: "queued", name: "build", labels: ["MARS-WINDOWS-X64-2VCPU-4G", "mars-any-2vcpu-4g"], created_at: "2026-08-22T10:31:46Z" });
     }
     events.push("jit");
     expect(init?.method).toBe("POST");
     expect(JSON.parse(String(init?.body)).name).toMatch(/^D2E0B2D7893B-windows-x64-[0-9a-f-]{36}$/);
     return new Response(JSON.stringify({ encoded_jit_config: "encoded-config" }), { status: 200, headers: { "content-type": "application/json" } });
   };
-  const dispatcher = { dispatch: async () => { events.push("dispatch"); } };
+  const dispatcher = { dispatch: async () => {
+    expect(leaseState).toBe("dispatched");
+    events.push("dispatch");
+    if (failSend) throw new Error("worker socket send failed");
+  } };
   const result = await runQueuedJobReconciliation({
     db,
     contractVersion: "0.1.0",
@@ -139,7 +158,16 @@ test("registers an any-label job with its resolved worker and platform", async (
     dispatcher,
   });
   expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
-  expect(events).toEqual(["reserve", "preflight", "jit", "dispatch"]);
+  expect(events).toEqual(["reserve", "preflight", "jit", "mark-dispatched", "dispatch"]);
+  failSend = true;
+  events.length = 0;
+  const failed = await runQueuedJobReconciliation({
+    db, contractVersion: "0.1.0", installationToken: async () => "token",
+    githubFetchForInstallation: () => fetcher, dispatcher,
+  });
+  expect(failed).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 1 });
+  expect(leaseState).toBe("failed");
+  expect(events).toEqual(["reserve", "preflight", "jit", "mark-dispatched", "dispatch", "release"]);
 });
 
 test("does not reserve or dispatch when exact GitHub job preflight reports 404", async () => {

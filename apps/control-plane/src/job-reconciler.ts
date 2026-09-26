@@ -167,7 +167,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
           worker: { ...candidate.worker, connectionState: deps.workerConnected && !deps.workerConnected(candidate.worker.id) ? "offline" : candidate.worker.connectionState },
         }),
       }));
-  const normalizedLabels = (labels: readonly string[]) => [...new Set(labels.map((label) => label.trim().toLowerCase()).filter(Boolean))];
+  const normalizedLabels = (labels: readonly string[]) => [...new Set(labels.map((label) => label.trim().toLowerCase()).filter(Boolean))].sort();
   const reconciled = await reconcileQueuedJobs({
     queued: queuedRows.map((row) => ({
       organizationId: String(row.organizationId),
@@ -248,10 +248,11 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       if (!target?.encryptionPublicKey) throw new Error("worker_encryption_key_missing");
       const [dashboardJob] = await deps.db`SELECT id FROM dashboard_jobs WHERE github_job_id=${reservation.jobId ?? -1}`;
       const envelope: LeaseBootstrapEnvelope = { leaseId: reservation.id, jobId: String(dashboardJob?.id ?? reservation.id), nonce: reservation.nonce, guestPlatform: target.guestPlatform as LeaseBootstrapEnvelope["guestPlatform"], contractVersion: deps.contractVersion, encodedJitConfig: jit.encodedJitConfig, expiresAt: reservation.expiresAt, imageDigest: target.imageDigest, resources: reservation.requested, cpuMode: reservation.cpuMode, ...(reservation.cpuIds === null ? {} : { cpuIds: reservation.cpuIds }) };
+      const [claimed] = await deps.db`UPDATE runner_leases SET state='dispatched', updated_at=now() WHERE id=${reservation.id} AND state='reserved' RETURNING id`;
+      if (!claimed) throw new Error("lease_not_reserved");
       await dispatchLeaseBootstrap(deps.dispatcher, { ...envelope, driver: target.driver, workerId: target.workerId, workerEncryptionPublicKey: target.encryptionPublicKey });
-      await deps.db`UPDATE runner_leases SET state='dispatched', updated_at=now() WHERE id=${reservation.id} AND state='reserved'`;
     },
-    release: async (reservation) => { await deps.db`UPDATE runner_leases SET state='failed', cleanup_state='pending', updated_at=now() WHERE id=${reservation.id} AND state='reserved'`; },
+    release: async (reservation) => { await deps.db`UPDATE runner_leases SET state='failed', cleanup_state='pending', updated_at=now() WHERE id=${reservation.id} AND state IN ('reserved','dispatched')`; },
   });
   return reconciled;
 }

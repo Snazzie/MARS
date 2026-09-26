@@ -64,6 +64,12 @@ allow it. Reservations re-check resource and concurrency limits atomically befor
 work is assigned. The worker appliance capacity remains the aggregate maximum
 CPU, memory, and storage Mars may use at one time.
 
+Before dispatch, Mars rechecks the exact queued job against GitHub and compares
+its labels without depending on their order or casing. The lease enters
+`dispatched` before the worker receives its create command so an immediate worker
+attestation or failure can advance it; a failed send releases the reservation for
+cleanup.
+
 ## Pool CPU modes
 
 Pools default to **Shared**, which limits CPU time per job but does not reserve
