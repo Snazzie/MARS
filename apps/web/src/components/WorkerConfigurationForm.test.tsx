@@ -128,3 +128,16 @@ test("shows the detected Linux ARM64 Docker capability and its readiness state",
   expect(html).toContain("Verify the pinned ARM64 image and network.");
   expect(html).not.toContain('value="linux-docker-container:linux-x64"');
 });
+test("allows an approved, unconfigured Windows ARM worker to select its ready Linux runtime", () => {
+  const windowsWorker = { ...worker, platform: "windows-x64" as const, guestPlatforms: ["windows-x64" as const], selectedDriver: null, draining: false, activeSandboxes: 0, capabilities: [
+    { driver: "linux-docker-container" as const, guestPlatform: "linux-arm64" as const, imageDigest: `ghcr.io/example/job@sha256:${"a".repeat(64)}`, ready: true, remediation: null },
+  ] };
+  const html = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><WorkerConfigurationForm worker={windowsWorker} organizationId="all" onConfigured={() => {}} /></QueryClientProvider>);
+  const dom = new Window();
+  dom.document.body.innerHTML = html;
+  expect((dom.document.querySelector('input[value="linux-docker-container:linux-arm64"]') as HTMLInputElement | null)?.disabled).toBe(false);
+  expect((dom.document.querySelector('input[value="windows-process-container:windows-x64"]') as HTMLInputElement | null)?.disabled).toBe(true);
+  const configured = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><WorkerConfigurationForm worker={{ ...windowsWorker, selectedDriver: "windows-hyperv-container" }} organizationId="all" onConfigured={() => {}} /></QueryClientProvider>);
+  dom.document.body.innerHTML = configured;
+  expect((dom.document.querySelector('input[value="linux-docker-container:linux-arm64"]') as HTMLInputElement | null)?.disabled).toBe(true);
+});
