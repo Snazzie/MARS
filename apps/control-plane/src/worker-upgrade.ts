@@ -20,6 +20,8 @@ export class WorkerUpgradeService {
     const currentReleaseVersion = WorkerReleaseVersion.safeParse(worker.releaseVersion);
     const currentContractVersion = WorkerContractVersion.safeParse(worker.contractVersion);
     if (!currentReleaseVersion.success || !currentContractVersion.success) return { available: false, currentReleaseVersion: null, currentContractVersion: null };
+    // Windows ARM64 has no native worker release artifact in the current catalog.
+    if (worker.platform === "windows-arm64") return { available: false, currentReleaseVersion: worker.releaseVersion, currentContractVersion: worker.contractVersion };
     const target = await this.catalog.findNextCompatible(worker.releaseVersion, worker.platform);
     if (!target) return { available: false, currentReleaseVersion: worker.releaseVersion, currentContractVersion: worker.contractVersion };
     const token = this.issue({ workerId: worker.id, platform: worker.platform, currentReleaseVersion: worker.releaseVersion, targetReleaseVersion: target.releaseVersion, targetManifestUrl: target.manifestUrl, expiresAt: this.now() + 24 * 60 * 60_000 });

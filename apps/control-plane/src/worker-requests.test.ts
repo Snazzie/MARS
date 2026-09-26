@@ -74,6 +74,29 @@ test("pending worker DTO ignores database-only columns", () => {
   });
 });
 
+test("pending Windows ARM64 worker exposes its Linux ARM64 guest", () => {
+  const row = {
+    id: "00000000-0000-4000-8000-000000000003",
+    name: "arm-laptop",
+    platform: "windows-arm64",
+    releaseVersion: "0.1.0",
+    contractVersion: "0.1.0",
+    admissionState: "pending",
+    connectionState: "offline",
+    configurationState: "unconfigured",
+    publicKey: "ed25519-public",
+    fingerprint: "fingerprint",
+    vmUuid: "00000000-0000-4000-8000-000000000001",
+    machineUuid: "00000000-0000-4000-8000-000000000002",
+    limits: null,
+    doctor: {
+      doctor: { capabilities: [] },
+      capacity: { actualVcpu: 4, actualMemoryBytes: 4096, actualStorageBytes: 8192, freeVcpu: 4, freeMemoryBytes: 4096, freeStorageBytes: 8192 },
+    },
+  };
+  expect(pendingWorkerDto(row)).toMatchObject({ platform: "windows-arm64", guestPlatforms: ["linux-arm64"] });
+});
+
 test("pending worker DTO fails closed when legacy telemetry lacks capacity", () => {
   const row = {
     id: "00000000-0000-0000-0000-000000000003",

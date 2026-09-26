@@ -25,7 +25,7 @@ export async function requestPendingWorker(db: Sql<{}>, input: z.input<typeof Wo
   const parsed = WorkerBootstrapRequest.parse(input);
   if (source && limiter && !limiter.allow(source)) throw new WorkerRequestError("invalid_bootstrap");
   const fp = fingerprint(parsed.publicKey);
-  const guestPlatforms: GuestPlatform[] = parsed.platform === "windows-x64" ? ["windows-x64"] : [parsed.platform];
+  const guestPlatforms: GuestPlatform[] = parsed.platform === "windows-arm64" ? ["linux-arm64"] : parsed.platform === "windows-x64" ? ["windows-x64"] : [parsed.platform];
   const lockKeys = [`machine:${parsed.machineUuid}`, `vm:${parsed.vmUuid}`, `fingerprint:${fp}`].sort();
   const outcome = await db.begin(async tx => {
     const telemetry = { doctor: parsed.doctor, capacity: parsed.capacity };

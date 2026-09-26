@@ -986,7 +986,7 @@ export function pendingWorkerDto(row: Record<string, unknown>, workerConnected?:
   const rawTelemetry = (row.doctor && typeof row.doctor === "object" ? row.doctor : {}) as Record<string, unknown>;
   const telemetry = "doctor" in rawTelemetry || "capacity" in rawTelemetry ? rawTelemetry : { doctor: rawTelemetry, capacity: {} };
   const rawGuestPlatforms = typeof row.guestPlatforms === "string" ? (() => { try { return JSON.parse(row.guestPlatforms); } catch { return null; } })() : row.guestPlatforms;
-  const guestPlatforms = Array.isArray(rawGuestPlatforms) ? rawGuestPlatforms : row.platform === "windows-x64" ? ["windows-x64"] : [row.platform];
+  const guestPlatforms = Array.isArray(rawGuestPlatforms) ? rawGuestPlatforms : row.platform === "windows-arm64" ? ["linux-arm64"] : row.platform === "windows-x64" ? ["windows-x64"] : [row.platform];
   const capacity = telemetry.capacity && typeof telemetry.capacity === "object" ? telemetry.capacity : {};
   const normalizedCapacity = {
     actualVcpu: 0,

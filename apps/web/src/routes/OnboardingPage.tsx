@@ -171,7 +171,7 @@ function WorkerSetupStep({ detail, onSelect, onDone, onDiscard, edit = false }: 
   if (!detail.worker) return <WorkerStep onSelect={onSelect} />;
   return <div><h3>Worker enrollment</h3><p>Selected worker: {detail.worker.name ?? detail.worker.vmUuid}</p><ResourceStep detail={detail} onDone={onDone} onDiscard={onDiscard} edit={edit} /></div>;
 }
-const canonicalRunnerLabel = (platform: "linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64", ubuntuVersion: "22" | "24" | "26") => platform === "linux-x64" ? `mars-ubuntu-${ubuntuVersion}` : `mars-${platform}`;
+const canonicalRunnerLabel = (platform: "linux-x64" | "linux-arm64" | "windows-x64" | "windows-arm64" | "macos-arm64", ubuntuVersion: "22" | "24" | "26") => platform === "linux-x64" ? `mars-ubuntu-${ubuntuVersion}` : `mars-${platform}`;
 function LabelsStep({ detail, onSkip }: { detail: OnboardingDetail; onSkip: () => void }) {
   if (detail.pool) return <div><OnboardingVerificationStep detail={detail} /><button className="button" type="button" onClick={onSkip}>Continue to dashboard</button></div>;
   const platforms = detail.worker?.guestPlatforms ?? (detail.worker ? [detail.worker.platform] : []);

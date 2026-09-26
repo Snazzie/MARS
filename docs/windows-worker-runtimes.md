@@ -2,6 +2,8 @@
 
 Windows workers enroll in discovery-only mode. Their doctor report advertises **verified** runtime capabilities; configuration selects exactly one. An advertised mode never runs jobs until explicitly selected and acknowledged. Pool creation and scheduling require the selected driver, matching guest platform and immutable image/checkpoint digest, fresh doctor evidence, and a ready configuration revision. The first configuration of an approved but unconfigured worker does not require draining; changing an existing selection requires draining the worker and waiting for active leases to finish.
 
+The Windows worker reports the physical Windows CPU architecture (`windows-x64` or `windows-arm64`), not the architecture of its executable under emulation or its Docker engine. Windows ARM64 hosts can select only a verified Linux ARM64 Docker guest; Windows x64 containers and Hyper-V VM checkpoints are not advertised as supported there. An already-enrolled ARM64 host previously labeled `windows-x64` is corrected by its next authenticated doctor report after updating the worker and control plane. That correction clears its old runtime configuration and drains the worker; configure a ready Linux ARM64 capability and undrain it before scheduling jobs. The current release catalog has no Windows ARM64 worker upgrade artifact.
+
 | Selection | Guest | Requirement | Isolation boundary |
 | --- | --- | --- | --- |
 | Docker Linux | Linux x64 or ARM64 (native engine architecture) | Active Linux Docker engine; matching digest-pinned `MARS_LINUX_X64_CONTAINER_IMAGE` or `MARS_LINUX_ARM64_CONTAINER_IMAGE` from the Linux job image, verified entrypoint and `MARS_LINUX_CONTAINER_NETWORK` (default `mars-linux-x64` or `mars-linux-arm64`) | Docker Linux container |

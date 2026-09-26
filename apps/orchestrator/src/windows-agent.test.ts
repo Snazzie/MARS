@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkerConfigurePayload, WorkerDoctorData, WorkerDoctorReport, type LeaseBootstrapEnvelope, type WorkerCapacityData, type WorkerCommand, type WorkerContainerStatus, type WorkerEvent } from "@mars/contracts";
 import { runLeaseLifecycle } from "./lease-lifecycle.ts";
-import { applyWindowsRunnerCachePurge, applyWindowsWorkerConfiguration, buildWindowsDoctorReport, dispatchWindowsWorkerFrame, executeWindowsWorkerCommand, linuxDockerCapability, reconcileWindowsRuntime, runWindowsLeaseCleanup, startWindowsLeaseLifecycle, verifiedWindowsVmImage, windowsDoctor } from "./windows-agent.ts";
+import { applyWindowsRunnerCachePurge, applyWindowsWorkerConfiguration, buildWindowsDoctorReport, dispatchWindowsWorkerFrame, executeWindowsWorkerCommand, linuxDockerCapability, reconcileWindowsRuntime, runWindowsLeaseCleanup, startWindowsLeaseLifecycle, verifiedWindowsVmImage, windowsDoctor, windowsPlatformFromProcessorArchitecture } from "./windows-agent.ts";
 const doctor = WorkerDoctorData.parse({ runtimeMode: "container", runtimeReady: true, probe: true, imageSignatures: true });
 const capacity: WorkerCapacityData = { actualVcpu: 8, actualMemoryBytes: 16, actualStorageBytes: 32, freeVcpu: 7, freeMemoryBytes: 15, freeStorageBytes: 31 };
 const containerStatuses: WorkerContainerStatus[] = [{
@@ -28,6 +28,12 @@ const containerStatuses: WorkerContainerStatus[] = [{
   diskUsageBytes: 8192,
   sampledAt: "2026-08-31T12:00:00.000Z",
 }];
+
+test("detects native Windows processor architecture rather than emulated process architecture", () => {
+  expect(windowsPlatformFromProcessorArchitecture(12)).toBe("windows-arm64");
+  expect(windowsPlatformFromProcessorArchitecture(9)).toBe("windows-x64");
+  expect(() => windowsPlatformFromProcessorArchitecture(0)).toThrow("Unsupported Windows processor architecture");
+});
 
 test("advertises native Linux Docker even before its ARM64 job image is ready", () => {
   const missing = linuxDockerCapability("linux", "aarch64", undefined, false);
@@ -68,7 +74,7 @@ test("Windows doctor ignores GitHub network failures but still requires local re
     Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST = digest;
     globalThis.fetch = Object.assign(async () => { fetchCalls += 1; throw new Error("network unavailable"); }, { preconnect: oldFetch.preconnect });
 
-    const ready = await windowsDoctor(false, async () => true, "windows-hyperv");
+    const ready = await windowsDoctor(false, async () => true, "windows-hyperv", "windows-x64");
     expect(fetchCalls).toBe(0);
     expect(ready.runtimeReady).toBe(true);
     expect(ready.imageSignatures).toBe(true);
@@ -76,7 +82,7 @@ test("Windows doctor ignores GitHub network failures but still requires local re
     expect(ready).not.toHaveProperty("egress");
 
     Bun.env.MARS_WINDOWS_CHECKPOINT_DIGEST = `sha256:${"d".repeat(64)}`;
-    const missing = await windowsDoctor(false, async () => true, "windows-hyperv");
+    const missing = await windowsDoctor(false, async () => true, "windows-hyperv", "windows-x64");
     expect(missing.runtimeReady).toBe(false);
     expect(missing.remediation).toContain("No selected");
     expect(fetchCalls).toBe(0);
@@ -121,12 +127,14 @@ test("builds a parsed Windows doctor report with the complete container inventor
     containers: containerStatuses,
     activeLeases: ["44444444-4444-4444-8444-444444444444"],
     preserveLeases: true,
+    hostPlatform: "windows-x64",
     versions: { releaseVersion: "0.1.0", contractVersion: "0.1.0" },
   });
   expect(WorkerDoctorReport.parse(report)).toEqual({
     releaseVersion: "0.1.0",
     contractVersion: "0.1.0",
     doctor: { ...doctor, containers: containerStatuses, activeLeases: ["44444444-4444-4444-8444-444444444444"], preserveLeases: true },
+    hostPlatform: "windows-x64",
     capacity,
   });
 });
@@ -148,7 +156,7 @@ test("awaits the live cache TTL before acknowledging Windows configuration", asy
   const applied = new Promise<void>((resolve) => { release = resolve; });
   const enabledStates: boolean[] = [];
   const maxCaps: number[] = [];
-  const result = applyWindowsWorkerConfiguration(limits, cache, payload, { applyTtl: () => applied, setRunnerCacheEnabled: (enabled) => enabledStates.push(enabled), setRunnerCacheMaxGiB: (maxGiB) => maxCaps.push(maxGiB) });
+  const result = applyWindowsWorkerConfiguration(limits, cache, payload, { applyTtl: () => applied, setRunnerCacheEnabled: (enabled) => enabledStates.push(enabled), setRunnerCacheMaxGiB: (maxGiB) => maxCaps.push(maxGiB) }, "windows-x64");
   expect(cache).toEqual({ ttlSeconds: 60, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 });
   release();
   const observed = await result;
@@ -173,10 +181,11 @@ test("accepts a Linux ARM64 Docker selection on a Windows worker and rejects the
     cache: { ttlSeconds: 3600, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 },
   });
   const service = { applyTtl: async () => {}, setRunnerCacheEnabled: () => {}, setRunnerCacheMaxGiB: () => {} };
-  const observed = await applyWindowsWorkerConfiguration(limits, cache, config, service);
+  const observed = await applyWindowsWorkerConfiguration(limits, cache, config, service, "windows-arm64");
   expect(observed.guestPlatforms).toEqual(["linux-arm64"]);
   expect(observed.selectedDriver).toBe("linux-docker-container");
-  await expect(applyWindowsWorkerConfiguration(limits, cache, { ...config, guestPlatforms: ["macos-arm64"] }, service)).rejects.toThrow("incompatible");
+  await expect(applyWindowsWorkerConfiguration(limits, cache, { ...config, guestPlatforms: ["macos-arm64"] }, service, "windows-arm64")).rejects.toThrow("incompatible");
+  await expect(applyWindowsWorkerConfiguration(limits, cache, { ...config, guestPlatforms: ["windows-x64"], selectedDriver: "windows-hyperv-container" }, service, "windows-arm64")).rejects.toThrow("incompatible");
 });
 
 test("refuses to switch Windows runtime while a lease is active", async () => {

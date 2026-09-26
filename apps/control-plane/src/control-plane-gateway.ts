@@ -219,6 +219,11 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         const parsed = WorkerDoctorReport.safeParse(frame.payload);
         if (!parsed.success) return;
         const doctorPayload = parsed.data;
+        if (doctorPayload.hostPlatform === "windows-arm64") {
+          // The original Windows worker enrolled ARM64 hosts as x64. Retire the old
+          // configuration before changing platform so x64 pools cannot schedule it.
+          await options.db`update workers set platform='windows-arm64', guest_platforms=${jsonParameter(options.db, ["linux-arm64"])}::jsonb, configuration_state='unconfigured', desired_configuration=null, configuration_revision=null, configuration_command_id=null, applied_configuration_revision=null, configuration_applied_at=null, draining=true where id=${ws.data.workerId} and platform='windows-x64'`;
+        }
         await options.db`update workers set doctor=${jsonParameter(options.db, doctorPayload)}, release_version=${doctorPayload.releaseVersion}, contract_version=${doctorPayload.contractVersion}, doctor_observed_at=now(), last_heartbeat_at=now() where id=${ws.data.workerId}`;
         void options.triggerReconciliation();
         if (doctorPayload.doctor.activeLeases && doctorPayload.doctor.inventoryObservedAt) {
