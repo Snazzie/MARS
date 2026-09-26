@@ -175,7 +175,7 @@ export const windowsDoctor = async (preserveLeases = false, runProbe: typeof com
   const selected = capabilities.find((capability) => capability.driver === selectedDriver && (selectedDriver !== "linux-docker-container" || capability.guestPlatform === linuxGuest));
   const runtimeMode = selectedDriver === "windows-hyperv" ? "vm" : "container";
   const probe = info.code === 0 || vmReady;
-  return WorkerDoctorData.parse({ runtimeMode, preserveLeases, artifactSource: runtimeMode === "container" ? "worker_local" : "template", ...(selected?.imageDigest ? { artifactDigest: selected.imageDigest } : {}), runtimeReady: selected?.ready ?? false, probe, imageSignatures: Boolean(selected?.imageDigest), remediation: selected?.remediation ?? "No selected Windows runtime is ready", capabilities });
+  return WorkerDoctorData.parse({ runtimeMode, preserveLeases, artifactSource: runtimeMode === "container" ? "worker_local" : "template", ...(selected?.imageDigest ? { artifactDigest: selected.imageDigest } : {}), runtimeReady: selected?.ready ?? false, probe, imageSignatures: Boolean(selected?.imageDigest), remediation: selected ? selected.remediation : "No selected Windows runtime is ready", capabilities });
 };
 const joinCode = async () => { const path = Bun.env.MARS_JOIN_CODE_FILE; if (path) return (await readFile(path, "utf8")).trim(); const reader = Bun.stdin.stream().getReader(); const { value } = await reader.read(); reader.releaseLock(); return Buffer.from(value ?? []).toString("utf8").trim(); };
 const save = async (identity: Identity) => { const path = identityPath(); await mkdir(dirname(path), { recursive: true }); await writeFile(path, JSON.stringify(identity) + "\n", { mode: 0o600 }); };

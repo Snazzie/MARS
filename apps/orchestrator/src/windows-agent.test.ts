@@ -78,6 +78,7 @@ test("Windows doctor ignores GitHub network failures but still requires local re
     expect(fetchCalls).toBe(0);
     expect(ready.runtimeReady).toBe(true);
     expect(ready.imageSignatures).toBe(true);
+    expect(ready.remediation).toBeNull();
     expect(ready.capabilities?.some((entry) => entry.driver === "windows-hyperv" && entry.ready)).toBe(true);
     expect(ready).not.toHaveProperty("egress");
 
