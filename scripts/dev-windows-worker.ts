@@ -70,7 +70,16 @@ async function main(): Promise<void> {
       await writeFile(credentialPath, `${deriveDevWorkerCode(token)}\n`, { flag: "wx", mode: 0o600 });
       await command(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$p=$env:MARS_DEV_CREDENTIAL_PATH; $acl=Get-Acl -LiteralPath $p; $acl.SetAccessRuleProtection($true,$false); $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; $rule=New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow'); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $p -AclObject $acl"], { MARS_DEV_CREDENTIAL_PATH: credentialPath });
     }
+    const dockerMode = await command(["docker.exe", "info", "--format", "{{.OSType}}/{{.Architecture}}"]).catch(() => "");
+    const linuxArchitecture = dockerMode.toLowerCase().trim();
     const linuxArm64ContainerImage = Bun.env.MARS_LINUX_ARM64_CONTAINER_IMAGE?.trim() || Bun.env.MARS_LINUX_ARM64_JOB_IMAGE?.trim();
+    const linuxX64ContainerImage = Bun.env.MARS_LINUX_X64_CONTAINER_IMAGE?.trim();
+    const linuxImage = ["linux/arm64", "linux/aarch64"].includes(linuxArchitecture) ? linuxArm64ContainerImage : ["linux/amd64", "linux/x86_64"].includes(linuxArchitecture) ? linuxX64ContainerImage : undefined;
+    if (linuxImage) {
+      const network = Bun.env.MARS_LINUX_CONTAINER_NETWORK?.trim() || (linuxArchitecture === "linux/amd64" || linuxArchitecture === "linux/x86_64" ? "mars-linux-x64" : "mars-linux-arm64");
+      const existing = await command(["docker.exe", "network", "inspect", network]).then(() => true, () => false);
+      if (!existing) await command(["docker.exe", "network", "create", "--driver", "bridge", network]);
+    }
     const env = {
       ...process.env,
       MARS_CONTROL_PLANE_URL: controlPlane,
@@ -87,6 +96,7 @@ async function main(): Promise<void> {
       MARS_WORKER_IDENTITY_FILE: identityPath,
       MARS_MACHINE_UUID: machineUuid,
       ...(linuxArm64ContainerImage ? { MARS_LINUX_ARM64_CONTAINER_IMAGE: linuxArm64ContainerImage } : {}),
+      ...(linuxX64ContainerImage ? { MARS_LINUX_X64_CONTAINER_IMAGE: linuxX64ContainerImage } : {}),
       ...(credentialPath ? { MARS_JOIN_CODE_FILE: credentialPath } : { MARS_JOIN_CODE_FILE: "" }),
     };
     child = Bun.spawn(["bun", "run", "apps/orchestrator/src/index.ts", "windows-worker"], { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });

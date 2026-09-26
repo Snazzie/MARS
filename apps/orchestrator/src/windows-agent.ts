@@ -102,12 +102,12 @@ export const verifiedWindowsVmImage = async (
   }
 };
 type WindowsCapability = NonNullable<WorkerDoctorData["capabilities"]>[number];
-export function linuxDockerCapability(engineOs: string, architecture: string, image: string | undefined, runtimeReady: boolean): WindowsCapability | null {
+export function linuxDockerCapability(engineOs: string, architecture: string, image: string | undefined, runtimeReady: boolean, missingNetwork?: string): WindowsCapability | null {
   if (engineOs !== "linux" || !["amd64", "x86_64", "arm64", "aarch64"].includes(architecture)) return null;
   const arm = architecture === "arm64" || architecture === "aarch64";
   const guestPlatform = arm ? "linux-arm64" : "linux-x64";
   const ready = runtimeReady && Boolean(image && /^[^@\s]+@sha256:[0-9a-f]{64}$/.test(image));
-  return { driver: "linux-docker-container", guestPlatform, imageDigest: ready ? image! : null, ready, remediation: ready ? null : !image ? `Set MARS_LINUX_${arm ? "ARM64" : "X64"}_CONTAINER_IMAGE to a digest-pinned verified ${guestPlatform} job image` : !/^[^@\s]+@sha256:[0-9a-f]{64}$/.test(image) ? "Linux job image must be digest pinned" : "Linux Docker job image, entrypoint, architecture, or network validation failed" };
+  return { driver: "linux-docker-container", guestPlatform, imageDigest: ready ? image! : null, ready, remediation: ready ? null : !image ? `Set MARS_LINUX_${arm ? "ARM64" : "X64"}_CONTAINER_IMAGE to a digest-pinned verified ${guestPlatform} job image` : !/^[^@\s]+@sha256:[0-9a-f]{64}$/.test(image) ? "Linux job image must be digest pinned" : missingNetwork ? `Create Docker network ${missingNetwork} or configure MARS_LINUX_CONTAINER_NETWORK` : "Linux Docker job image, entrypoint, architecture, or network validation failed" };
 }
 let sandboxProbeCache: { key: string; expiresAt: number; capabilities: WindowsCapability[] } | undefined;
 async function probeWindowsIsolation(image: string, isolation: "process" | "hyperv"): Promise<boolean> {
@@ -154,7 +154,7 @@ export const windowsDoctor = async (preserveLeases = false, runProbe: typeof com
         }
       }
     }
-    const linuxCapability = linuxDockerCapability(engineOs, architecture, linuxImage, linuxHost?.runtimeReady === true);
+    const linuxCapability = linuxDockerCapability(engineOs, architecture, linuxImage, linuxHost?.runtimeReady === true, linuxHost?.imageReady && !linuxHost.networkReady ? linuxNetwork : undefined);
     if (linuxCapability) capabilities.push(linuxCapability);
     if (vmReady && vmImage.ready && vmImage.digest) capabilities.push({ driver: "windows-hyperv", guestPlatform: "windows-x64", imageDigest: vmImage.digest, ready: true, remediation: null });
     sandboxProbeCache = { key: cacheKey, expiresAt: Date.now() + 300_000, capabilities };

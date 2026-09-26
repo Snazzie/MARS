@@ -35,6 +35,7 @@ test("advertises native Linux Docker even before its ARM64 job image is ready", 
   expect(missing?.remediation).toContain("MARS_LINUX_ARM64_CONTAINER_IMAGE");
   const image = `ghcr.io/example/linux-arm64-job@sha256:${"a".repeat(64)}`;
   expect(linuxDockerCapability("linux", "arm64", image, false)).toMatchObject({ guestPlatform: "linux-arm64", ready: false, imageDigest: null });
+  expect(linuxDockerCapability("linux", "arm64", image, false, "mars-linux-arm64")?.remediation).toBe("Create Docker network mars-linux-arm64 or configure MARS_LINUX_CONTAINER_NETWORK");
   expect(linuxDockerCapability("linux", "arm64", image, true)).toMatchObject({ guestPlatform: "linux-arm64", ready: true, imageDigest: image });
   expect(linuxDockerCapability("windows", "arm64", image, true)).toBeNull();
   expect(linuxDockerCapability("linux", "amd64", undefined, false)).toMatchObject({ guestPlatform: "linux-x64", ready: false });
