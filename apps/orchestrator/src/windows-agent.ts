@@ -244,8 +244,15 @@ function emitWindowsWorkerEvent(workerId: string, leaseId: string | null, send: 
     console.error("Worker event delivery failed", { workerId, leaseId, type: workerEvent.type, error: error instanceof Error ? error.message : String(error) });
   }
 }
-export async function reconcileWindowsRuntime(identity: Pick<Identity, "preserveLeases">, driver: Pick<WindowsRuntimeDriver, "reconcileOrphans">): Promise<void> {
-  if (identity.preserveLeases !== true) await driver.reconcileOrphans();
+export async function reconcileWindowsRuntime(identity: Pick<Identity, "preserveLeases">, driver: Pick<WindowsRuntimeDriver, "reconcileOrphans">): Promise<boolean> {
+  if (identity.preserveLeases === true) return true;
+  try {
+    await driver.reconcileOrphans();
+    return true;
+  } catch (error) {
+    console.error("Windows runtime unavailable; worker will report unavailable", error);
+    return false;
+  }
 }
 export function buildWindowsDoctorReport(input: { doctor: WorkerDoctorData; capacity: WorkerCapacityData; containers: WorkerContainerStatus[]; activeLeases: string[]; preserveLeases: boolean; hostPlatform: WindowsHostPlatform; versions?: { releaseVersion: string; contractVersion: string } }): WorkerDoctorReport {
   return WorkerDoctorReport.parse({
@@ -512,7 +519,14 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
     createLease: async lease => { if (!activeDriver) throw new Error("Worker is discovery-only"); return activeDriver.createLease(lease); },
     stopLease: async leaseId => { if (activeDriver) await activeDriver.stopLease(leaseId); },
     removeLease: async leaseId => { if (activeDriver) await activeDriver.removeLease(leaseId); },
-    listContainerStatuses: async () => activeDriver ? activeDriver.listContainerStatuses() : [],
+    listContainerStatuses: async () => {
+      if (!activeDriver) return [];
+      try { return await activeDriver.listContainerStatuses(); }
+      catch (error) {
+        console.error("Windows runtime container inventory unavailable", error);
+        return [];
+      }
+    },
     reconcileOrphans: async () => { if (activeDriver) await activeDriver.reconcileOrphans(); },
   };
   const applyDriver = async (next: RuntimeSelection, guestPlatform: string) => {
@@ -522,7 +536,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
     await replacement.reconcileOrphans();
     activeDriver = replacement;
   };
-  if (selectedDriver) await retryWorkerRuntime("Windows orphan reconciliation", () => reconcileWindowsRuntime(identity!, driver));
+  if (selectedDriver) await reconcileWindowsRuntime(identity, driver);
   if (!identity.workerId) identity = await enroll(controlPlane, identity);
   const pickupState = await openLeasePickupState(leasePickupStateFile());
   const activeLeases = new Map<string, Promise<void>>();

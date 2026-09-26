@@ -292,8 +292,12 @@ test("preserves Windows runtimes when lease preservation is enabled", async () =
   await reconcileWindowsRuntime({ preserveLeases: true }, { reconcileOrphans: async () => { reconciled = true; } });
   expect(reconciled).toBe(false);
 });
-test("aborts startup continuation when orphan reconciliation fails", async () => {
-  await expect(reconcileWindowsRuntime({ preserveLeases: false }, { reconcileOrphans: async () => { throw new Error("docker unavailable"); } })).rejects.toThrow("docker unavailable");
+test("continues startup when Windows runtime orphan reconciliation fails", async () => {
+  const continued: string[] = [];
+  const available = await reconcileWindowsRuntime({ preserveLeases: false }, { reconcileOrphans: async () => { throw new Error("docker unavailable"); } });
+  continued.push("doctor");
+  expect(available).toBe(false);
+  expect(continued).toEqual(["doctor"]);
 });
 
 test("reports Windows container provisioning failures instead of leaving the lease dispatched", async () => {
