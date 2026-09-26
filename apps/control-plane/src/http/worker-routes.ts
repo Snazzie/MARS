@@ -1326,7 +1326,10 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     } else if (audience === "windows-x64") {
       values = windowsInstallerValues(release as WindowsWorkerRelease | undefined, connectOrigin, development as DevelopmentWindowsArtifacts | undefined, upgrade, { releaseVersion, contractVersion: selectedManifest?.contractVersion ?? (Bun.env.MARS_WORKER_CONTRACT_VERSION?.trim() || CURRENT_WORKER_CONTRACT_VERSION), targetToken }, runtime as "container" | "vm", vmSource, selectedManifest?.schemaVersion ?? 6, upgrade && legacyRuntime !== undefined, {
         x64: Bun.env.MARS_LINUX_X64_CONTAINER_IMAGE?.trim(),
-        arm64: selectedManifest?.platforms["linux-arm64"]?.jobImage ?? Bun.env.MARS_LINUX_ARM64_CONTAINER_IMAGE?.trim(),
+        arm64: selectedManifest?.platforms["linux-arm64"]?.jobImage
+          ?? deps.developmentLinuxArm64Artifacts?.jobImage
+          ?? Bun.env.MARS_LINUX_ARM64_CONTAINER_IMAGE?.trim()
+          ?? Bun.env.MARS_LINUX_ARM64_JOB_IMAGE?.trim(),
       });
     } else if (development) {
       const macos = development as DevelopmentMacosArtifacts;

@@ -70,6 +70,7 @@ async function main(): Promise<void> {
       await writeFile(credentialPath, `${deriveDevWorkerCode(token)}\n`, { flag: "wx", mode: 0o600 });
       await command(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$p=$env:MARS_DEV_CREDENTIAL_PATH; $acl=Get-Acl -LiteralPath $p; $acl.SetAccessRuleProtection($true,$false); $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; $rule=New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow'); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $p -AclObject $acl"], { MARS_DEV_CREDENTIAL_PATH: credentialPath });
     }
+    const linuxArm64ContainerImage = Bun.env.MARS_LINUX_ARM64_CONTAINER_IMAGE?.trim() || Bun.env.MARS_LINUX_ARM64_JOB_IMAGE?.trim();
     const env = {
       ...process.env,
       MARS_CONTROL_PLANE_URL: controlPlane,
@@ -85,6 +86,7 @@ async function main(): Promise<void> {
       MARS_LEASE_PICKUP_STATE_FILE: join(root, "lease-pickup.json"),
       MARS_WORKER_IDENTITY_FILE: identityPath,
       MARS_MACHINE_UUID: machineUuid,
+      ...(linuxArm64ContainerImage ? { MARS_LINUX_ARM64_CONTAINER_IMAGE: linuxArm64ContainerImage } : {}),
       ...(credentialPath ? { MARS_JOIN_CODE_FILE: credentialPath } : { MARS_JOIN_CODE_FILE: "" }),
     };
     child = Bun.spawn(["bun", "run", "apps/orchestrator/src/index.ts", "windows-worker"], { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
