@@ -320,9 +320,14 @@ export async function discoverQueuedRepositoryJobs(deps: DiscoveryDeps): Promise
       const [owner, repo] = fullName.split("/", 2);
       if (!owner || !repo || fullName.split("/").length !== 2) throw new Error("repository_name_invalid");
       const client = new GithubJobsClient({ token: () => deps.installationToken(installationId), fetch: deps.githubFetchForInstallation(installationId) });
-      const active = await client.listRuns(owner, repo, undefined, 1);
-      const runs = active.runs.filter(run => run.status === "queued" || run.status === "in_progress");
-      for (const run of runs) {
+      const runs = new Map<string, GithubRunSnapshot>();
+      for (const status of ["queued", "pending", "in_progress"] as const) {
+        const active = await client.listRuns(owner, repo, status, 1);
+        for (const run of active.runs) {
+          if (run.status === "queued" || run.status === "in_progress") runs.set(`${run.id}:${run.runAttempt}`, run);
+        }
+      }
+      for (const run of runs.values()) {
         let listing: { items: GithubJobSnapshot[]; complete: boolean };
         try {
           listing = await pages(async page => {
