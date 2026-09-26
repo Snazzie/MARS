@@ -40,7 +40,7 @@ export function validWindowsVmImageOptions(options: WindowsVmImageOptions): bool
 
 
 export function buildNpxJoinCommand(origin: string, code: string): string {
-  return `npx --yes mars-worker-join@0.1.0 --control-plane-url ${new URL(origin).origin} --join-code ${code}`;
+  return `npx --yes @snazzie/mars-worker-cli@0.1.0 --control-plane-url ${new URL(origin).origin} --join-code ${code}`;
 }
 
 export function buildInstallerCommand(installer: string, audience: RuntimePlatform, code?: string, connectOrigin?: string, vmOptions?: WindowsVmImageOptions): string {

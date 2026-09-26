@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const usage = 'Usage: mars-worker-join --control-plane-url <origin> --join-code <code>';
+const usage = 'Usage: mars-worker-cli --control-plane-url <origin> --join-code <code>';
 const audiences = {
   'win32/x64': 'windows-x64',
   'win32/arm64': 'linux-arm64',
@@ -48,7 +48,7 @@ async function main() {
   const script = await response.text();
   if (!script.trim()) throw new Error('Installer response is empty');
 
-  const directory = await mkdtemp(join(tmpdir(), 'mars-worker-join-'));
+  const directory = await mkdtemp(join(tmpdir(), 'mars-worker-cli-'));
   try {
     if (process.platform !== 'win32') await (await import('node:fs/promises')).chmod(directory, 0o700);
     const scriptPath = join(directory, process.platform === 'win32' ? 'installer.ps1' : 'installer.sh');

@@ -1,9 +1,9 @@
 {
-  "name": "mars-worker-join",
+  "name": "@snazzie/mars-worker-cli",
   "version": "0.1.0",
   "type": "module",
   "engines": { "node": ">=20" },
-  "bin": { "mars-worker-join": "./bin/mars-worker-join.mjs" },
+  "bin": { "mars-worker-cli": "./bin/mars-worker-cli.mjs" },
   "files": ["bin/"],
   "publishConfig": { "access": "public" }
 }

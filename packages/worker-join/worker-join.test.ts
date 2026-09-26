@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const cli = fileURLToPath(new URL('./bin/mars-worker-join.mjs', import.meta.url));
+const cli = fileURLToPath(new URL('./bin/mars-worker-cli.mjs', import.meta.url));
 const code = 'a'.repeat(43);
 const run = (...args: string[]) => spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
 
