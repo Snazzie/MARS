@@ -45,7 +45,33 @@ describe("runner label routing", () => {
     expect(reason(mac)).toBe("admissible");
     expect(reason(windows)).toBe("admissible");
     windows.pool.labels = ["mars-ubuntu-arm64-container"];
-    expect(reason(windows)).toBe("no_matching_labels");
+    expect(reason(windows)).toBe("admissible");
+  });
+
+  test("matches OS-family routes across architectures and restricts explicit architecture", () => {
+    for (const [family, platforms] of [
+      ["ubuntu", ["linux-x64", "linux-arm64"]],
+      ["windows", ["windows-x64", "windows-arm64"]],
+      ["macos", ["macos-x64", "macos-arm64"]],
+    ] as const) {
+      for (const platform of platforms) {
+        const value = candidate([`mars-${family}-2vcpu-4g`], platform);
+        expect(reason(value)).toBe("admissible");
+        value.requestedLabels = [`mars-${family}-${platform.endsWith("-x64") ? "x64" : "arm64"}-2vcpu-4g`];
+        expect(reason(value)).toBe("admissible");
+        value.requestedLabels = [`mars-${family}-${platform.endsWith("-x64") ? "arm64" : "x64"}-2vcpu-4g`];
+        expect(reason(value)).toBe("no_matching_labels");
+      }
+    }
+    expect(reason(candidate(["mars-ubuntu-2vcpu-4g"], "windows-x64"))).toBe("no_matching_labels");
+    expect(reason(candidate(["mars-windows-2vcpu-4g"], "macos-arm64"))).toBe("no_matching_labels");
+    expect(reason(candidate(["mars-macos-2vcpu-4g"], "linux-arm64"))).toBe("no_matching_labels");
+  });
+
+  test("prefers an architecture-specific option over the OS-family alternative", () => {
+    const options = parseRunnerLabels(["mars-ubuntu-2vcpu-4g", "mars-ubuntu-arm64-3vcpu-5g"])!;
+    expect(selectProvisionOption(options, { platform: "linux-arm64", labels: ["mars-ubuntu-arm64"], triggerLabel: "mars-ubuntu-arm64" })?.vcpu).toBe(3);
+    expect(selectProvisionOption(options, { platform: "linux-x64", labels: ["mars-ubuntu-24"], triggerLabel: "mars-ubuntu-24" })?.vcpu).toBe(2);
   });
 
   test("matches x64 neutral alternatives only on x64 pools", () => {
@@ -87,10 +113,15 @@ describe("runner label routing", () => {
 describe("composite resource labels", () => {
   test("parses route and mandatory resources", () => {
     expect(parseRunnerLabels(["MARS-LINUX-X64-2VCPU-6G"])).toMatchObject([{ original: "MARS-LINUX-X64-2VCPU-6G", route: "mars-linux-x64", vcpu: 2, memoryGiB: 6, memoryBytes: 6 * GiB }]);
+    expect(parseRunnerLabels(["MARS-UBUNTU-2VCPU-6G", "mars-windows-2vcpu-4g", "mars-macos-2vcpu-4g"])).toMatchObject([
+      { route: "mars-ubuntu", vcpu: 2, memoryBytes: 6 * GiB },
+      { route: "mars-windows", vcpu: 2, memoryBytes: 4 * GiB },
+      { route: "mars-macos", vcpu: 2, memoryBytes: 4 * GiB },
+    ]);
   });
 
   test("rejects standalone, missing, zero, and overflow resources", () => {
-    for (const labels of [["2vcpu"], ["15g"], ["mars-linux-x64"], ["mars-linux-x64-0vcpu-4g"], ["mars-linux-x64-2vcpu-0g"], ["mars-linux-x64-2vcpu-9007199254740991g"]]) {
+    for (const labels of [["2vcpu"], ["15g"], ["mars-ubuntu"], ["mars-windows"], ["mars-macos"], ["mars-ubuntu-arm64"], ["mars-linux-x64"], ["mars-linux-x64-0vcpu-4g"], ["mars-linux-x64-2vcpu-0g"], ["mars-linux-x64-2vcpu-9007199254740991g"]]) {
       expect(parseRunnerLabels(labels)).toBeNull();
     }
   });
@@ -100,6 +131,8 @@ describe("composite resource labels", () => {
     expect(fits(value)).toBe(true);
     value.requestedLabels = ["mars-linux-x64-5vcpu-6g"];
     expect(fits(value)).toBe(false);
+    expect(reason(value)).toBe("resource_ceiling");
+    value.requestedLabels = ["mars-ubuntu-5vcpu-6g"];
     expect(reason(value)).toBe("resource_ceiling");
   });
 

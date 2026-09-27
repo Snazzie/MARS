@@ -15,23 +15,34 @@ export function orderCandidatesByLoad<T extends Candidate & { worker: Candidate[
   const load = (candidate: T) => candidate.pool.active + (reservedByPool.get(`${candidate.pool.id}:${candidate.worker.id}`) ?? 0);
   return candidates.map((_, index) => candidates[(jobId + index) % candidates.length]!).sort((left, right) => load(left) - load(right));
 }
+const OS_FAMILY_ROUTE = /^mars-(ubuntu|windows|macos)(?:-(x64|arm64))?$/;
+
+function matchesOsPlatform(route: string, platform: string): boolean {
+  const match = OS_FAMILY_ROUTE.exec(route);
+  if (!match) return true;
+  const family = match[1] === "ubuntu" ? "linux" : match[1];
+  return platform.startsWith(`${family}-`) && (!match[2] || platform === `${family}-${match[2]}`);
+}
+
 export function selectProvisionOption(
   options: readonly ParsedRunnerLabel[],
   pool: { platform: string; labels: string[]; triggerLabel: string | null },
 ): ParsedRunnerLabel | null {
+  const platform = pool.platform.trim().toLowerCase();
   const trigger = pool.triggerLabel?.trim().toLowerCase();
   if (trigger) {
-    const exact = options.find(option => option.route === trigger);
+    const exact = options.find(option => option.route === trigger && matchesOsPlatform(option.route, platform));
     if (exact) return exact;
   }
-  const alias = options.find(option => pool.labels.some(label => label.startsWith("mars-") && label.toLowerCase() === option.route));
+  const alias = options.find(option => matchesOsPlatform(option.route, platform) && pool.labels.some(label => label.startsWith("mars-") && label.toLowerCase() === option.route));
   if (alias) return alias;
-  const platform = pool.platform.trim().toLowerCase();
+  const family = options.find(option => OS_FAMILY_ROUTE.test(option.route) && matchesOsPlatform(option.route, platform));
+  if (family) return family;
   if (platform.endsWith("-x64")) {
-    const x64 = options.find((option) => option.route.toLowerCase() === ANY_X64_RUNNER_LABEL);
+    const x64 = options.find((option) => option.route === ANY_X64_RUNNER_LABEL);
     if (x64) return x64;
   }
-  return options.find((option) => option.route.toLowerCase() === ANY_RUNNER_LABEL) ?? null;
+  return options.find((option) => option.route === ANY_RUNNER_LABEL) ?? null;
 }
 
 function exclusiveAvailable(candidate: Candidate, vcpu: number, concurrency: number, maxConcurrentPods: number): boolean {

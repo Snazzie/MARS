@@ -7,15 +7,20 @@ requested option must use the composite form:
 <route>-<vcpu>vcpu-<memoryGiB>g
 ```
 
-The route may be `mars-any`, `mars-any-x64`, or a pool trigger route such as
-`mars-windows-x64` or `mars-ubuntu-24`. Ubuntu x64 routes include the image's
-major version: `mars-ubuntu-22`, `mars-ubuntu-24`, or `mars-ubuntu-26`.
-The bundled Linux x64 golden image is Ubuntu 24; deployments using an Ubuntu 22
-or 26 golden image must set both `DEFAULT_JOB_UBUNTU_VERSION` and
-`DEFAULT_JOB_IMAGE_LINUX_X64` to that image's version and digest. A versioned
-route matches only a pool with the same trigger; requesting 26 never runs on a
-24 or 22 image. CPU and memory are required positive safe integers, and the
-suffixes are case-insensitive. For example:
+The route may be `mars-any`, `mars-any-x64`, an OS family (`mars-ubuntu`,
+`mars-windows`, `mars-macos`), or a pool trigger route such as
+`mars-windows-x64` or `mars-ubuntu-24`. OS-family routes match any available
+guest architecture for that OS; adding `-x64` or `-arm64` restricts the guest
+architecture. For example, `mars-ubuntu-4vcpu-6g` matches both Ubuntu x64 and
+ARM64 pools, while `mars-ubuntu-arm64-4vcpu-6g` matches only ARM64 pools.
+Ubuntu x64 versioned routes include the image's major version:
+`mars-ubuntu-22`, `mars-ubuntu-24`, or `mars-ubuntu-26`. The bundled Linux x64
+golden image is Ubuntu 24; deployments using an Ubuntu 22 or 26 golden image
+must set both `DEFAULT_JOB_UBUNTU_VERSION` and `DEFAULT_JOB_IMAGE_LINUX_X64`
+to that image's version and digest. A versioned route matches only a pool with
+the same trigger; requesting 26 never runs on a 24 or 22 image. CPU and memory
+are required positive safe integers even when architecture is omitted, and
+the suffixes are case-insensitive. For example:
 
 ```yaml
 runs-on: mars-any-4vcpu-10g
@@ -40,9 +45,10 @@ runs-on:
 ```
 
 The exact pool trigger route wins when it matches a pool. Other `mars-` routes
-advertised by the pool match next. Otherwise `mars-any-x64` matches only pools
-whose platform ends in `-x64`, and `mars-any` matches every platform. This
-precedence is independent of the order of labels in the workflow.
+advertised by the pool match next, followed by a matching OS-family route.
+Otherwise `mars-any-x64` matches only pools whose platform ends in `-x64`,
+and `mars-any` matches every platform. This precedence is independent of the
+order of labels in the workflow.
 `mars-windows-arm64` is accepted as a route and preserved by workflow editing,
 but no Windows ARM64 worker pool is currently available, so that alternative
 cannot be selected today.
@@ -57,9 +63,11 @@ an existing Tart pool. Each worker must still report a ready matching image.
 ## How routing works
 
 1. Mars parses the complete requested label set and rejects blank, malformed, or
-   duplicate alternatives.
+   duplicate alternatives. A bare `mars-ubuntu`, `mars-windows`, or
+   `mars-macos` is invalid without the CPU and memory suffix.
 2. The scheduler selects the most specific matching alternative for each eligible
-   pool: exact trigger, then a pool route alias, then `mars-any-x64`, then `mars-any`.
+   pool: exact trigger, then a pool route alias, then an OS-family route,
+   then `mars-any-x64`, then `mars-any`.
 3. The selected option's vCPU and memory are checked against the worker's per-job
    ceilings. Mars never fills in missing resource values from pool defaults.
 4. Storage and concurrency continue to come from the selected pool and existing

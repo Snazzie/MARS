@@ -5,16 +5,20 @@ test("reserves a runner slot before requesting JIT config", async () => {
   const order: string[] = [];
   let routingKey = "";
   let runnerName = "";
+  let requested: { vcpu: number; memoryBytes: number } | undefined;
+  let jitLabels: string[] = [];
   const result = await reconcileQueuedJobs({
-    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["mars-macos-arm64-2vcpu-4g"] }],
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 4, labels: ["mars-macos-2vcpu-4g"] }],
     candidates: [{ requestedLabels: [], worker: { id: "worker", name: "mars-mac-studio", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64" } }],
-    reserve: async (input) => { order.push("reserve"); routingKey = input.routingKey; return { id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested, cpuMode: "shared" as const, cpuIds: null }; },
-    jit: async (input) => { order.push("jit"); runnerName = input.runnerName; return { encodedJitConfig: "config", runnerName: input.runnerName, labels: ["mars-macos-arm64-2vcpu-4g"], expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
+    reserve: async (input) => { order.push("reserve"); routingKey = input.routingKey; requested = input.requested; return { id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested, cpuMode: "shared" as const, cpuIds: null }; },
+    jit: async (input) => { order.push("jit"); runnerName = input.runnerName; jitLabels = input.labels; return { encodedJitConfig: "config", runnerName: input.runnerName, labels: input.labels, expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
     dispatch: async () => { order.push("dispatch"); },
   });
   expect(result.reserved).toBe(1);
   expect(order).toEqual(["reserve", "jit", "dispatch"]);
-  expect(routingKey).toBe("acme/project:4:mars-macos-arm64-2vcpu-4g");
+  expect(routingKey).toBe("acme/project:4:mars-macos-2vcpu-4g");
+  expect(requested).toMatchObject({ vcpu: 2, memoryBytes: 4 * 1024 ** 3 });
+  expect(jitLabels).toEqual(["mars-macos-2vcpu-4g"]);
   expect(runnerName).toMatch(/^mars-mac-studio-macos-arm64-[0-9a-f-]{36}$/);
 });
 
@@ -97,7 +101,7 @@ test("uses every available pool slot for one installation", async () => {
       { installationId: 42, repositoryId: 2, repository: "acme/two", runId: 2, jobId: 2, labels: ["mars-windows-x64-2vcpu-4g"] },
       { installationId: 43, repositoryId: 3, repository: "acme/three", runId: 3, jobId: 3, labels: ["mars-windows-x64-2vcpu-4g"] },
     ],
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", platform: "windows-x64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } }],
     reserve: async (input) => { requestedConcurrency.push(input.requested.concurrency); return { id: `lease-${++lease}`, nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested, cpuMode: "shared" as const, cpuIds: null }; },
     jit: async ({ installationId }) => { jitInstallations.push(installationId); return { encodedJitConfig: "config", runnerName: "runner", labels: ["mars-windows-x64-2vcpu-4g"], expiresAt: new Date(Date.now() + 60_000).toISOString() }; },
     dispatch: async () => {},
@@ -108,7 +112,7 @@ test("uses every available pool slot for one installation", async () => {
 });
 test("dispatches three jobs concurrently when bounded capacity allows it", async () => {
   const queued = [1, 2, 3].map((jobId) => ({ installationId: 1, repositoryId: jobId, repository: `acme/project-${jobId}`, runId: jobId, jobId, labels: ["mars-windows-x64-2vcpu-4g"] }));
-  const candidate = { requestedLabels: [], worker: { id: "worker", admissionState: "adopted" as const, connectionState: "online" as const, configurationState: "ready" as const, runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } };
+  const candidate = { requestedLabels: [], worker: { id: "worker", admissionState: "adopted" as const, connectionState: "online" as const, configurationState: "ready" as const, runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", platform: "windows-x64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } };
   let activePreflights = 0;
   let maxActivePreflights = 0;
   let releasePreflight!: () => void;
@@ -142,7 +146,7 @@ test("does not block a later job when an earlier job is already claimed", async 
       { installationId: 42, repositoryId: 1, repository: "acme/one", runId: 1, jobId: 1, labels: ["mars-windows-x64-2vcpu-4g"] },
       { installationId: 42, repositoryId: 2, repository: "acme/two", runId: 2, jobId: 2, labels: ["mars-windows-x64-2vcpu-4g"] },
     ],
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", platform: "windows-x64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } }],
     reserve: async ({ githubJobId, requested }) => { if (githubJobId === 1) throw new Error("job_already_claimed"); reservedJobs.push(githubJobId); return { id: `lease-${githubJobId}`, nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested, cpuMode: "shared" as const, cpuIds: null }; },
     jit: async () => ({ encodedJitConfig: "config", runnerName: "runner", labels: ["mars-windows-x64-2vcpu-4g"], expiresAt: new Date(Date.now() + 60_000).toISOString() }),
     dispatch: async () => {},
@@ -160,7 +164,7 @@ test("continues other installations after a rate-limited JIT attempt", async () 
       { installationId: 43, repositoryId: 3, repository: "acme/three", runId: 3, jobId: 3, labels: ["mars-windows-x64-2vcpu-4g"] },
     ],
     maxConcurrent: 1,
-    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", platform: "macos-arm64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } }],
+    candidates: [{ requestedLabels: [], worker: { id: "worker", admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 3 } }, pool: { id: "pool", platform: "windows-x64", enabled: true, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 3 }, concurrency: 3, active: 0, labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64" } }],
     reserve: async ({ githubJobId, requested }) => { reservedJobs.push(githubJobId); return { id: `lease-${githubJobId}`, nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested, cpuMode: "shared" as const, cpuIds: null }; },
     jit: async ({ installationId }) => {
       jitInstallations.push(installationId);
