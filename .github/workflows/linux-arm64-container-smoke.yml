@@ -1,0 +1,18 @@
+name: Linux ARM64 container runner smoke
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: mars-ubuntu-arm64-container-2vcpu-4g
+    timeout-minutes: 10
+    steps:
+      - name: Verify job runs inside ARM64 guest
+        shell: bash
+        run: |
+          test "$RUNNER_OS" = Linux
+          test "$(uname -m)" = aarch64
+          printf 'Runner %s completed on %s\n' "$RUNNER_NAME" "$(uname -m)"

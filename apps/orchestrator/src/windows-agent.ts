@@ -236,7 +236,7 @@ function createSelectedWindowsDriver(selected: RuntimeSelection | undefined, lim
   }
   return null;
 }
-type WindowsRuntimeDriver = Pick<RuntimeDriver, "reserveCapacity" | "createLease" | "stopLease" | "removeLease"> & { listContainerStatuses: () => Promise<WorkerContainerStatus[]>; reconcileOrphans: () => Promise<void> };
+type WindowsRuntimeDriver = Pick<RuntimeDriver, "reserveCapacity" | "createLease" | "stopLease" | "removeLease"> & Pick<RuntimeDriver, "collectRawDiagnostics"> & { listContainerStatuses: () => Promise<WorkerContainerStatus[]>; reconcileOrphans: () => Promise<void> };
 function emitWindowsWorkerEvent(workerId: string, leaseId: string | null, send: (workerEvent: WorkerEvent) => void, workerEvent: WorkerEvent): void {
   try {
     send(workerEvent);
@@ -520,6 +520,10 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
     createLease: async lease => { if (!activeDriver) throw new Error("Worker is discovery-only"); return activeDriver.createLease(lease); },
     stopLease: async leaseId => { if (activeDriver) await activeDriver.stopLease(leaseId); },
     removeLease: async leaseId => { if (activeDriver) await activeDriver.removeLease(leaseId); },
+    collectRawDiagnostics: async leaseId => {
+      if (!activeDriver?.collectRawDiagnostics) return "";
+      return activeDriver.collectRawDiagnostics(leaseId);
+    },
     listContainerStatuses: async () => {
       if (!activeDriver) return [];
       try { return await activeDriver.listContainerStatuses(); }
