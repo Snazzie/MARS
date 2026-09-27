@@ -99,6 +99,13 @@ test("renders VM-specific Windows controls without container image actions", () 
   expect(markup).toContain("Preserve failed VMs");
   expect(markup).not.toContain("Build local image");
 });
+test("shows routing prefixes from configured guests rather than host OS", () => {
+  const lenovo = renderCard(workerFixture({ platform: "windows-arm64", guestPlatforms: ["linux-arm64"] }));
+  expect(lenovo).toContain("Routing prefixes: mars-ubuntu");
+  expect(lenovo).not.toContain("Routing prefixes: mars-windows");
+  expect(renderCard(workerFixture({ guestPlatforms: ["macos-arm64", "linux-arm64"] }))).toContain("Routing prefixes: mars-macos, mars-ubuntu");
+  expect(renderCard(workerFixture({ platform: "windows-x64", guestPlatforms: ["windows-x64"] }))).toContain("Routing prefixes: mars-windows");
+});
 test("offers friendly renaming only to worker administrators", () => {
   expect(renderCard(workerFixture(), undefined, true)).toContain(">Rename</button>");
   expect(renderCard(workerFixture(), undefined, false)).not.toContain(">Rename</button>");

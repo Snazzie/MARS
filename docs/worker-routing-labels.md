@@ -13,6 +13,11 @@ The route may be `mars-any`, `mars-any-x64`, an OS family (`mars-ubuntu`,
 guest architecture for that OS; adding `-x64` or `-arm64` restricts the guest
 architecture. For example, `mars-ubuntu-4vcpu-6g` matches both Ubuntu x64 and
 ARM64 pools, while `mars-ubuntu-arm64-4vcpu-6g` matches only ARM64 pools.
+The worker details card lists the OS-family routing prefixes for its configured
+guest platforms (for example, a Windows ARM64 host running Linux ARM64 guests
+shows `mars-ubuntu`, not `mars-windows`). These are prefixes, not complete
+`runs-on` labels or a guarantee that an enabled, ready matching pool exists.
+
 Ubuntu x64 versioned routes include the image's major version:
 `mars-ubuntu-22`, `mars-ubuntu-24`, or `mars-ubuntu-26`. The bundled Linux x64
 golden image is Ubuntu 24; deployments using an Ubuntu 22 or 26 golden image
