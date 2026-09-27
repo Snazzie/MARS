@@ -41,6 +41,10 @@ docker compose up -d postgres
 
 Local development ports and service behavior are defined in `scripts/dev.ts` and `scripts/dev-ports.ts`.
 
+Run `bun run dev:worker` on Windows or Apple Silicon macOS; the command selects
+the existing host-specific launcher and rejects other hosts. Each launcher
+retains its own runtime prerequisites and worker identity.
+
 ### Run a foreground Windows development worker
 
 On a Windows host, set the same `MARS_DEV_TOKEN` used by the development control plane at `https://mars.snazzie.space`. That deployment must run the current checkout's `scripts/control-plane-dev-entry.ts` and shared worker contracts; an older deployment can reject a valid worker doctor report with HTTP 400. A production deployment or mismatched token cannot enroll this worker. The launcher does not select or switch Docker engines: the worker discovers and advertises the active Linux Docker engine even without an image (the capability remains not ready). To prepare the local Windows job image explicitly, switch Docker to the Windows engine yourself and run with `MARS_DEV_BUILD_WINDOWS_IMAGE=true`; the development image-payload adapter must be available. To run Linux Docker jobs, provision a verified digest-pinned image for the engine architecture and set `MARS_LINUX_ARM64_CONTAINER_IMAGE` or `MARS_LINUX_X64_CONTAINER_IMAGE` before starting the worker. With a matching image configured and an active Linux engine, the launcher creates the missing `MARS_LINUX_CONTAINER_NETWORK` (default `mars-linux-arm64` or `mars-linux-x64`) before starting the worker. The development `MARS_LINUX_ARM64_JOB_IMAGE` value also supplies the ARM64 container image.
@@ -48,7 +52,7 @@ On a Windows host, set the same `MARS_DEV_TOKEN` used by the development control
 In a separate terminal from `bun run dev`, run from this checkout:
 
 ```powershell
-bun run dev:windows-worker
+bun run dev:worker
 ```
 
 To use the control plane from this checkout instead of the default remote development deployment, start `bun run dev` with PostgreSQL and the development environment configured, then run `$env:MARS_DEV_CONTROL_PLANE_URL = 'http://127.0.0.1:3000'` before launching the worker. Use the same `MARS_DEV_TOKEN` in both processes. Pushing a worker change to `main` does not update an already-running control plane at `mars.snazzie.space`; it must be updated and restarted before it can parse new doctor fields.
@@ -62,7 +66,7 @@ On restart, the launcher checks the saved worker's admission state using `MARS_D
 On an Apple Silicon Mac with Bun, Tart, Xcode Command Line Tools, and prepared macOS and Linux Tart images, set `MARS_DEV_TOKEN` to the token used by the development control plane at `https://mars.snazzie.space`. Place the corresponding `macos-tart-image-manifest.json` and `linux-arm64-tart-image-manifest.json` in `~/Library/Application Support/Mars/dev-worker` (copy them from an installed worker before uninstalling it). If an installed worker exists, drain it and wait for active jobs to finish before manually unloading its LaunchAgent with `launchctl bootout "gui/$(id -u)/com.mars.worker"`. This command refuses to run while the LaunchAgent is loaded and never changes it.
 
 ```bash
-bun run dev:mac-worker
+bun run dev:worker
 ```
 
 The command builds the menu-bar status item locally and runs the macOS orchestrator in the foreground. It prints worker commands, lease lifecycle events, and live job output to the terminal (resource samples stay quiet); these console logs are enabled only for the development worker. It uses the prepared local Tart images and development manifests without modifying them. Its own identity, UUID, lease state, and cache live under `~/Library/Application Support/Mars/dev-worker`; the first join uses the development token and requires approval and configuration in the control plane before scheduling. Press Ctrl-C to stop it. If retaining an installed worker, restore it afterward with `launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.mars.worker.plist"`. The macOS installer remains the supported path for a persistent worker.

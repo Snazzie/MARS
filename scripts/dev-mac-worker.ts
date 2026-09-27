@@ -25,7 +25,7 @@ async function preparedImage(platform: "macos" | "linux-arm64"): Promise<ImageMa
 }
 
 async function main(): Promise<void> {
-  if (process.platform !== "darwin" || process.arch !== "arm64") throw new Error("dev:mac-worker requires Apple Silicon macOS");
+  if (process.platform !== "darwin" || process.arch !== "arm64") throw new Error("dev:worker requires Apple Silicon macOS for this launcher");
   const token = Bun.env.MARS_DEV_TOKEN?.trim();
   if (!token) throw new Error("MARS_DEV_TOKEN is required");
   const service = Bun.spawnSync(["launchctl", "print", `gui/${process.getuid!()}/com.mars.worker`]);

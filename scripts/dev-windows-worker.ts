@@ -15,7 +15,7 @@ async function command(args: string[], env: Record<string, string> = {}): Promis
 }
 
 async function main(): Promise<void> {
-  if (process.platform !== "win32") throw new Error("dev:windows-worker requires Windows");
+  if (process.platform !== "win32") throw new Error("dev:worker requires Windows for this launcher");
   const token = Bun.env.MARS_DEV_TOKEN?.trim();
   if (!token) throw new Error("MARS_DEV_TOKEN is required");
   const server = new URL(Bun.env.MARS_DEV_CONTROL_PLANE_URL?.trim() || "https://mars.snazzie.space");
