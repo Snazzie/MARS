@@ -76,6 +76,24 @@ test("routes multi-platform alternatives to an online worker", async () => {
   expect(selectedWorker).toBe("online");
 });
 
+test("retries a failed runner on another compatible worker", async () => {
+  const chosen: string[] = [];
+  const candidate = (id: string) => ({
+    requestedLabels: [],
+    worker: { id, admissionState: "adopted", connectionState: "online", configurationState: "ready", runtimeReady: true, configurationRevision: "current", appliedConfigurationRevision: "current", limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 12 * 1024 ** 3, maxStorageBytesPerPod: 100, maxConcurrentPods: 1 } },
+    pool: { id, platform: "linux-arm64", enabled: true, resources: { vcpu: 2, memoryBytes: 10 * 1024 ** 3, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: ["mars-ubuntu-arm64"], triggerLabel: "mars-ubuntu-arm64" },
+  });
+  const result = await reconcileQueuedJobs({
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 2, labels: ["mars-ubuntu-arm64-2vcpu-10g"], lastFailedWorkerId: "tart" }],
+    candidates: [candidate("tart"), candidate("container")],
+    reserve: async input => { chosen.push(input.workerId); return { id: "lease", nonce: "n".repeat(32), workerId: input.workerId, poolId: input.poolId, expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: input.requested, cpuMode: "shared" as const, cpuIds: null }; },
+    jit: async input => ({ encodedJitConfig: "config", runnerName: input.runnerName, labels: input.labels, expiresAt: new Date(Date.now() + 60_000).toISOString() }),
+    dispatch: async () => {},
+  });
+  expect(result.reserved).toBe(1);
+  expect(chosen).toEqual(["container"]);
+});
+
 test("does not reserve beyond active pool capacity", async () => {
   const decisions: string[] = [];
   const result = await reconcileQueuedJobs({

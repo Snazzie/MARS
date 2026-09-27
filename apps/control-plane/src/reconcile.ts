@@ -12,6 +12,7 @@ export type QueuedRoutingJob = {
   runId: string | number;
   jobId: number;
   labels: string[];
+  lastFailedWorkerId?: string;
 };
 
 const MAX_RUNNER_NAME_LENGTH = 128;
@@ -59,6 +60,9 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
     if (!options) { report.skipped += 1; decide(queued, "invalid_provision_labels"); return; }
     if (deps.installationBlocked?.(queued.installationId)) { report.skipped += 1; decide(queued, "installation_cooldown"); return; }
     const candidateOrder = orderCandidatesByLoad(deps.candidates, queued.jobId, reservedByPool);
+    if (queued.lastFailedWorkerId && candidateOrder.some(candidate => candidate.worker.id !== queued.lastFailedWorkerId)) {
+      candidateOrder.sort((left, right) => Number(left.worker.id === queued.lastFailedWorkerId) - Number(right.worker.id === queued.lastFailedWorkerId));
+    }
     const compatible = candidateOrder.flatMap((value) => {
       if (deps.workerConnected && !deps.workerConnected(value.worker.id)) return [];
       const option = selectProvisionOption(options, value.pool);

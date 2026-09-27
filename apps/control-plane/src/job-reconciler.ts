@@ -72,13 +72,16 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
   const queuedRows = await deps.db`
     SELECT j.github_job_id AS "jobId", r.id AS "runId", r.github_run_id AS "githubRunId", r.run_attempt AS "runAttempt",
       r.repository_id AS "repositoryId", r.organization_id AS "organizationId", i.github_installation_id AS "installationId",
-      repo.github_repository_id AS "githubRepositoryId", repo.full_name AS repository, j.name AS "jobName", j.requested_labels AS labels
+      repo.github_repository_id AS "githubRepositoryId", repo.full_name AS repository, j.name AS "jobName", j.requested_labels AS labels,
+      CASE WHEN prior.state='reaped' AND prior.terminal_result->>'exitCode' IS NOT NULL
+        AND prior.terminal_result->>'exitCode' <> '0' THEN prior.worker_id END AS "lastFailedWorkerId"
     FROM dashboard_jobs j
     JOIN dashboard_runs r ON r.id=j.run_id
     JOIN dashboard_repositories repo ON repo.id=r.repository_id
       AND repo.organization_id=r.organization_id AND repo.available=true
     JOIN dashboard_installations i ON i.id=repo.installation_id
       AND i.organization_id=r.organization_id AND i.state='approved'
+    LEFT JOIN runner_leases prior ON prior.github_job_id=j.github_job_id
     WHERE j.status='queued' AND r.status IN ('queued','in_progress')
       AND NOT EXISTS (
         SELECT 1 FROM runner_leases l
@@ -177,6 +180,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       runId: String(row.runId),
       jobId: Number(row.jobId),
       labels: stringArray(row.labels),
+      lastFailedWorkerId: row.lastFailedWorkerId ? String(row.lastFailedWorkerId) : undefined,
     })),
     candidates,
     onDecision: (job, code) => {
