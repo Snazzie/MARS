@@ -41,9 +41,10 @@ docker compose up -d postgres
 
 Local development ports and service behavior are defined in `scripts/dev.ts` and `scripts/dev-ports.ts`.
 
-Run `bun run dev:worker` on Windows or Apple Silicon macOS; the command selects
-the existing host-specific launcher and rejects other hosts. Each launcher
-retains its own runtime prerequisites and worker identity.
+Run `bun run dev:worker` on Windows x64/ARM64, Apple Silicon macOS, or Linux
+x64/ARM64. It chooses the existing worker runtime for the host; the worker
+reports its actual runtime capabilities to the control plane. Host-specific
+runtime prerequisites still apply.
 
 ### Run a foreground Windows development worker
 
@@ -70,6 +71,21 @@ bun run dev:worker
 ```
 
 The command builds the menu-bar status item locally and runs the macOS orchestrator in the foreground. It prints worker commands, lease lifecycle events, and live job output to the terminal (resource samples stay quiet); these console logs are enabled only for the development worker. It uses the prepared local Tart images and development manifests without modifying them. Its own identity, UUID, lease state, and cache live under `~/Library/Application Support/Mars/dev-worker`; the first join uses the development token and requires approval and configuration in the control plane before scheduling. Press Ctrl-C to stop it. If retaining an installed worker, restore it afterward with `launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.mars.worker.plist"`. The macOS installer remains the supported path for a persistent worker.
+
+### Run a foreground Linux development worker
+
+Set `MARS_DEV_TOKEN` to the development control plane's token and run
+`bun run dev:worker`. Linux x64 uses the existing libvirt VM worker and requires
+`MARS_GOLDEN_DISK`, `MARS_GOLDEN_DIGEST`, `MARS_DOMAIN_TEMPLATE`,
+`MARS_CLONE_ROOT`, `MARS_CHANNEL_ROOT`, and `MARS_LIBVIRT_NETWORK`.
+Linux ARM64 uses the existing Docker worker and requires
+`MARS_LINUX_ARM64_CONTAINER_IMAGE` (immutable digest) and
+`MARS_LINUX_CONTAINER_NETWORK`. These runtimes currently require their image
+and host prerequisites before enrollment; the launcher does not provision them.
+The development identity and cache live under `~/.local/share/Mars/dev-worker`,
+separate from an installed worker. Distinct `mars-dev` VM/container prefixes
+prevent the development worker from taking over installed worker guests. Review
+and approve the new worker in the UI before scheduling.
 
 In the worker health panel, **Managed VM workloads** shows the latest per-lease CPU,
 memory, and disk sample alongside requested capacity. Samples arrive roughly every
