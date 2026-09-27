@@ -7,4 +7,5 @@ COPY mars-job-agent /usr/local/bin/mars-job-agent
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/mars-job-agent /usr/local/bin/entrypoint.sh
 RUN /opt/actions-runner/bin/Runner.Listener --version
+RUN timeout 2 /usr/local/bin/entrypoint.sh; test "$?" -eq 124
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
