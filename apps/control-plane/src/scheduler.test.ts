@@ -1,12 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import { parseJobRunnerLabels, parseRunnerLabels } from "@mars/contracts";
-import { fits, reason, selectProvisionOption, type Candidate } from "./scheduler.ts";
+import { fits, orderCandidatesByLoad, reason, selectProvisionOption, type Candidate } from "./scheduler.ts";
 
 const GiB = 1024 ** 3;
 const candidate = (requestedLabels: string[], platform = "linux-x64", triggerLabel: string | null = `mars-${platform}`): Candidate => ({
   worker: { admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "current", appliedConfigurationRevision: "current", runtimeReady: true, limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GiB, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 } },
   pool: { enabled: true, platform, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, concurrency: 1, active: 0, labels: [`mars-${platform}`], triggerLabel },
   requestedLabels,
+});
+
+test("orders worker pools by active and in-flight leases while rotating equal loads", () => {
+  const pools = [0, 1, 2].map((index) => ({
+    ...candidate(["mars-linux-x64-1vcpu-1g"]),
+    worker: { ...candidate([]).worker, id: `worker-${index}` },
+    pool: { ...candidate([]).pool, id: `pool-${index}`, active: index === 0 ? 2 : 0 },
+  }));
+  expect(orderCandidatesByLoad(pools, 0, new Map()).map(({ worker }) => worker.id)).toEqual(["worker-1", "worker-2", "worker-0"]);
+  expect(orderCandidatesByLoad(pools, 0, new Map([["pool-1:worker-1", 1]])).map(({ worker }) => worker.id)).toEqual(["worker-2", "worker-1", "worker-0"]);
+  expect(orderCandidatesByLoad(pools.slice(1), 1, new Map()).map(({ worker }) => worker.id)).toEqual(["worker-2", "worker-1"]);
 });
 
 describe("runner label routing", () => {
