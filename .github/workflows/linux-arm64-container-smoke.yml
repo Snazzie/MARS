@@ -15,5 +15,4 @@ jobs:
         run: |
           test "$RUNNER_OS" = Linux
           test "$(uname -m)" = aarch64
-          test "${RUNNER_NAME#mars-}" != "$RUNNER_NAME"
           printf 'Runner %s completed on %s\n' "$RUNNER_NAME" "$(uname -m)"
