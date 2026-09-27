@@ -4,6 +4,13 @@ import { LinuxContainerDriver } from "./linux-container.ts";
 import { runWindowsWorker } from "./windows-agent.ts";
 import { runMacWorker } from "./mac-agent.ts";
 
+if (import.meta.main) {
+  for (const level of ["log", "warn", "error"] as const) {
+    const original = console[level].bind(console);
+    console[level] = (...args: unknown[]) => original(`[${new Date().toISOString()}]`, ...args);
+  }
+}
+
 const limits = { maxVcpuPerPod: Number(Bun.env.MAX_VCPU_PER_POD ?? 4), maxMemoryBytesPerPod: Number(Bun.env.MAX_MEMORY_BYTES_PER_POD ?? 6 * 1024 ** 3), maxStorageBytesPerPod: Number(Bun.env.MAX_STORAGE_BYTES_PER_POD ?? 30 * 1024 ** 3), maxConcurrentPods: Number(Bun.env.MAX_CONCURRENT_PODS ?? 3) };
 const baseUrl = Bun.env.MARS_CONTROL_PLANE_URL;
 

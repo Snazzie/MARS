@@ -1,5 +1,5 @@
 import type { Server, ServerWebSocket } from "bun";
-import { WorkerConfiguredPayload, WorkerDoctorReport, WorkerEvent } from "@mars/contracts";
+import { WorkerConfiguredPayload, WorkerDoctorReport, WorkerEvent, sanitizeDiagnosticText } from "@mars/contracts";
 import { jsonParameter, type DashboardDb } from "@mars/db";
 import { canSubscribeToOrganization, loadBrowserInvalidations } from "./browser-invalidations.ts";
 import { reconcileWorkerInventory } from "./lease-reconciliation.ts";
@@ -130,7 +130,8 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         ws.send("pong");
       }
     },
-    close(ws) {
+    close(ws, code, reason) {
+      if (ws.data.actor === "worker") console.warn("Worker websocket closed", { workerId: ws.data.workerId, connectionEpoch: ws.data.connectionEpoch, authenticated: ws.data.authenticated, current: workerSockets.get(ws.data.workerId) === ws, code, reason: sanitizeDiagnosticText(String(reason), 256) });
       if (ws.data.actor === "worker") ws.data.closed = true;
       if (ws.data.actor === "worker") {
         if (ws.data.authTimer) {
@@ -267,6 +268,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
             void options.triggerReconciliation();
           }
           console.log(`Worker configuration acknowledgement: ${ws.data.workerId} accepted=${acknowledged === true}`);
+          if (typeof frame.id === "string") ws.send(JSON.stringify({ version: 1, type: "event_ack", workerId: ws.data.workerId, eventId: frame.id }));
         } else if (frame.type === "worker.configuration_failed") {
           const failedEvent = WorkerEvent.safeParse(frame);
           if (!failedEvent.success || failedEvent.data.type !== "worker.configuration_failed" || failedEvent.data.payload.workerId !== ws.data.workerId) throw new Error("invalid worker configuration failure");
@@ -296,8 +298,10 @@ export function createControlPlaneGateway(options: GatewayOptions) {
     } catch (error) {
       console.error("Worker websocket frame failed", {
         workerId: ws.data.workerId,
+        connectionEpoch: ws.data.connectionEpoch,
         frameType,
         error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof Error && error.cause ? { cause: error.cause instanceof Error ? error.cause.message : String(error.cause) } : {}),
       });
       ws.close(1008, "invalid worker frame");
     }

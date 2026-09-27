@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { enqueueWorkerMessage, scheduleWorkerHeartbeatDeadline, scheduleWorkerPing, sendWorkerAuthenticationFrames, sendWorkerStatus } from "./control-plane-gateway.ts";
+import { createControlPlaneGateway, enqueueWorkerMessage, scheduleWorkerHeartbeatDeadline, scheduleWorkerPing, sendWorkerAuthenticationFrames, sendWorkerStatus } from "./control-plane-gateway.ts";
 
 test("schedules worker heartbeat pings without sending immediately", () => {
   let sendCount = 0;
@@ -101,4 +101,40 @@ test("serializes worker frames on one socket", async () => {
   releaseFirst();
   await Promise.all([firstRun, secondRun]);
   expect(order).toEqual(["begin", "begin-done", "end"]);
+});
+
+test("records the rejected worker frame and disconnect context without logging frame contents", async () => {
+  const errors: unknown[][] = [];
+  const warnings: unknown[][] = [];
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  console.error = (...args) => errors.push(args);
+  console.warn = (...args) => warnings.push(args);
+  try {
+    const gateway = createControlPlaneGateway({
+      db: (() => []) as never,
+      httpFetch: async () => new Response(),
+      current: async () => null,
+      requestSource: () => "test",
+      dispatcher: { unregister() {} } as never,
+      triggerReconciliation: async () => {},
+      refreshDefaultPools: async () => {},
+      requestId: () => crypto.randomUUID(),
+    });
+    const closed: unknown[][] = [];
+    const socket = {
+      data: { actor: "worker", workerId: crypto.randomUUID(), connectionEpoch: 7, authenticated: false },
+      close: (...args: unknown[]) => closed.push(args),
+    } as never;
+    await gateway.websocket.message?.(socket, "{secret: do-not-log}");
+    expect(closed).toEqual([[1008, "invalid worker frame"]]);
+    expect(errors[0]?.[0]).toBe("Worker websocket frame failed");
+    expect(errors[0]?.[1]).toMatchObject({ connectionEpoch: 7, frameType: "unknown" });
+    expect(JSON.stringify(errors)).not.toContain("do-not-log");
+    gateway.websocket.close?.(socket, 1008, "invalid worker frame");
+    expect(warnings[0]?.[1]).toMatchObject({ connectionEpoch: 7, authenticated: false, current: false, code: 1008, reason: "invalid worker frame" });
+  } finally {
+    console.error = originalError;
+    console.warn = originalWarn;
+  }
 });

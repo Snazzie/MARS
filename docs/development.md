@@ -228,6 +228,13 @@ as `Authorization: Bearer <token>`; never commit the token.
 
 Both responses use `Cache-Control: no-store`.
 
+The development control-plane entry point enables the admin log buffer and
+prefixes console output with UTC ISO-8601 timestamps, as does the worker entry
+point. For websocket code `1008`, filter admin logs by worker ID: the frame
+failure includes the frame type, connection epoch, and error without recording
+the frame body; the close record includes code, reason, and whether the socket
+was current. Logs are process-local and disappear when the control plane exits.
+
 
 Useful commands:
 
