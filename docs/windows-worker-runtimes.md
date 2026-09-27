@@ -21,6 +21,8 @@ The Linux ARM64 job image must include Ubuntu's `libicu74` and the `openssl` com
 
 With the worker cache proxy enabled, the Linux guest combines its system CA bundle with the lease's proxy CA and passes it as `SSL_CERT_FILE` to the .NET runner. Without that trust, the runner can connect to the broker but fail job initialization against `results-receiver.actions.githubusercontent.com` with `PartialChain`; GitHub may keep the job queued even after the container exits. A successful container exit alone is not a successful GitHub job: verify the workflow's GitHub conclusion.
 
+Linux ARM64 Ubuntu Git uses the GnuTLS SSL backend even when the `openssl` command is installed. The job agent must leave Git's backend unset for Linux checkouts while supplying the combined CA bundle through `http.sslCAInfo` and `GIT_SSL_CAINFO`; forcing `http.sslBackend=openssl` makes checkout fail with “Unsupported SSL backend 'openssl'”. Git for Windows retains its OpenSSL backend configuration.
+
 The installer downloads the worker independently of the runtime and does not install Docker, enable host features or switch the active engine. Optional provisioning inputs may prepare a Windows job image on an already-active Windows engine or provision a Hyper-V checkpoint. Upgrades retain both provisioned artifacts and service settings. Existing `-WindowsRuntime` arguments are provisioning inputs for older automation, not the selected execution mode.
 
 To prepare a Windows VM checkpoint once:

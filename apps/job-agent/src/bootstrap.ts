@@ -113,8 +113,7 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
       env.XDG_CONFIG_HOME = caDirectory;
       const gitConfigPath = join(caDirectory, "git-ca.config");
       await writeFile(gitConfigPath, `[http]
-	sslBackend = openssl
-	sslVerify = true
+${platform === "windows-x64" ? "\tsslBackend = openssl\n" : ""}	sslVerify = true
 	sslCAInfo = ${caPath.replaceAll("\\", "/")}
 `, { mode: 0o600, flag: "wx" });
       env.HTTP_PROXY = proxy.proxyUrl;
@@ -126,15 +125,19 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
       env.NODE_EXTRA_CA_CERTS = caPath;
       env.node_extra_ca_certs = caPath;
       if (platform !== "windows-x64") env.SSL_CERT_FILE = caPath;
-      env.GIT_CONFIG_COUNT = "3";
-      env.GIT_CONFIG_KEY_0 = "http.sslBackend";
-      env.GIT_CONFIG_VALUE_0 = "openssl";
-      env.GIT_CONFIG_KEY_1 = "http.sslVerify";
-      env.GIT_CONFIG_VALUE_1 = "true";
-      env.GIT_CONFIG_KEY_2 = "http.sslCAInfo";
-      env.GIT_CONFIG_VALUE_2 = caPath;
+      const gitSettings = [
+        ...(platform === "windows-x64" ? [["http.sslBackend", "openssl"]] : []),
+        ["http.sslVerify", "true"],
+        ["http.sslCAInfo", caPath],
+      ];
+      env.GIT_CONFIG_COUNT = String(gitSettings.length);
+      for (const [index, [key, value]] of gitSettings.entries()) {
+        env[`GIT_CONFIG_KEY_${index}`] = key;
+        env[`GIT_CONFIG_VALUE_${index}`] = value;
+      }
       env.GIT_CONFIG_GLOBAL = gitConfigPath;
-      env.GIT_SSL_BACKEND = "openssl";
+      if (platform === "windows-x64") env.GIT_SSL_BACKEND = "openssl";
+      else delete env.GIT_SSL_BACKEND;
       env.GIT_SSL_CAINFO = caPath;
       env.MARS_WORKER_CACHE_REGISTRATION_URL = proxy.registrationUrl;
       env.MARS_WORKER_CACHE_REGISTRATION_CHALLENGE = proxy.registrationChallenge;

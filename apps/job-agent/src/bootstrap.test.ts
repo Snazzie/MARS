@@ -60,11 +60,13 @@ test("official runner receives worker cache proxy variables and a temporary CA",
   roots.push(root);
   await writeWorkerCacheCapability(root);
   const outputPath = join(root, "cache-env");
+  const gitOutputPath = join(root, "git-output");
   await writeLinuxRunner(root, `#!/bin/sh
 printf '%s\n%s\n%s\n%s\n' "$HTTP_PROXY" "$http_proxy" "$HTTPS_PROXY" "$https_proxy" > '${outputPath}'
 printf '%s\n' "$NO_PROXY" "$no_proxy" >> '${outputPath}'
 printf '%s\n' "$NODE_EXTRA_CA_CERTS" "$node_extra_ca_certs" >> '${outputPath}'
-printf '%s\n' "$GIT_SSL_BACKEND" "$GIT_SSL_CAINFO" >> '${outputPath}'
+printf '%s\n' "$GIT_SSL_BACKEND" "$GIT_SSL_CAINFO" "$GIT_CONFIG_COUNT" "$GIT_CONFIG_KEY_0" "$GIT_CONFIG_VALUE_0" "$GIT_CONFIG_KEY_1" "$GIT_CONFIG_VALUE_1" >> '${outputPath}'
+git -c http.proxy= ls-remote https://127.0.0.1:1 HEAD > '${gitOutputPath}' 2>&1 || :
 test -s "$NODE_EXTRA_CA_CERTS"
 cat "$NODE_EXTRA_CA_CERTS" >> '${outputPath}'
 printf '%s\n' "$SSL_CERT_FILE" >> '${outputPath}'
@@ -78,11 +80,14 @@ printf '%s\n' "$SSL_CERT_FILE" >> '${outputPath}'
   expect(new URL(workerCache.proxyUrl).password).not.toBe("");
   expect(output).toContain(`${workerCache.caCertificatePem}`);
   expect(output).toContain(`${(await readFile("/etc/ssl/certs/ca-certificates.crt", "utf8")).trimEnd()}\n${workerCache.caCertificatePem}`);
-  expect(output).toContain("openssl\n");
   const caPath = output.split("\n")[6];
+  expect(output).toContain(`\n\n${caPath}\n2\nhttp.sslVerify\ntrue\nhttp.sslCAInfo\n${caPath}\n`);
   expect(output.trimEnd().endsWith(caPath)).toBe(true);
   expect(caPath).toBeTruthy();
   expect(await Bun.file(caPath).exists()).toBe(false);
+  const gitOutput = await Bun.file(gitOutputPath).text();
+  expect(gitOutput).toContain("Failed to connect");
+  expect(gitOutput).not.toContain("Unsupported SSL backend");
 });
 test("Windows run.cmd descendant receives worker cache environment", async () => {
   if (process.platform !== "win32") return;
