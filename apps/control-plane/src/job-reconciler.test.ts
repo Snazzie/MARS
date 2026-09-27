@@ -399,7 +399,7 @@ test("reports requested labels for a job without a matching pool", async () => {
   const decisions: unknown[] = [];
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ").toLowerCase();
-    if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels }];
+    if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", githubRunId: "35985554985", jobName: "Build and test (Ubuntu)", repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels }];
     if (query.includes('p.id as "poolid"')) return [{
       poolId: "pool", poolName: "Windows pool", workerId: "worker", enabled: true, platform: "windows-x64",
       driver: "windows-hyperv-container", imageDigest: "sha256:image",
@@ -419,7 +419,7 @@ test("reports requested labels for a job without a matching pool", async () => {
     onDecision: decision => decisions.push(decision),
   });
   expect(report.skipped).toBe(1);
-  expect(decisions).toEqual([{ organizationId: "org", jobId: 42, code: "no_matching_labels", labels, pools: [{ poolId: "pool", poolName: "Windows pool", platform: "windows-x64", workerId: "worker", workerName: "", reason: "no_matching_labels" }] }]);
+  expect(decisions).toEqual([{ organizationId: "org", jobId: 42, code: "no_matching_labels", labels, repository: "acme/project", githubRunId: "35985554985", jobName: "Build and test (Ubuntu)", pools: [{ poolId: "pool", poolName: "Windows pool", platform: "windows-x64", workerId: "worker", workerName: "", reason: "no_matching_labels" }] }]);
 });
 
 test("identifies configured pools when no worker reaches the candidate query", async () => {

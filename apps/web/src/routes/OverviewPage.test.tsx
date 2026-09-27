@@ -25,6 +25,16 @@ test("overview explains dispatch blockers without equating healthy reconciliatio
   expect(markup).toContain("Worker runtime or image is not ready");
   expect(markup).toContain("existing leases are excluded");
 });
+test("blocked job links identify repository and job name and target the GitHub job", () => {
+  const markup = renderToStaticMarkup(<ControlPlaneStatus status={{
+    state: "healthy", lastReconciledAt: "2026-09-27T08:23:21.000Z", queued: 1, reserved: 0,
+    reasons: [{ code: "invalid_provision_labels", count: 1 }],
+    blockedJobs: [{ jobId: 108558550787, code: "invalid_provision_labels", labels: ["mars-ubuntu-arm64"], repository: "BetterTaskManager/BetterTaskManagerPrivate", githubRunId: "35985554985", jobName: "Build and test (Ubuntu)" }],
+  }} />);
+  expect(markup).toContain('href="https://github.com/BetterTaskManager/BetterTaskManagerPrivate/actions/runs/35985554985/job/108558550787"');
+  expect(markup).toContain("BetterTaskManager/BetterTaskManagerPrivate · Build and test (Ubuntu)");
+  expect(markup).toContain("mars-ubuntu-arm64");
+});
 
 
 test("shared cost formatting and disclosure preserve money boundaries", () => {

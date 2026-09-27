@@ -1,11 +1,13 @@
 export type DispatchPoolDetail = { poolId: string; poolName: string; platform: string; workerId?: string; workerName?: string; reason: string };
-export type DispatchDecision = { organizationId: string; jobId: number; code: string; labels?: string[]; pools?: DispatchPoolDetail[] };
+export type DispatchDecision = { organizationId: string; jobId: number; code: string; labels?: string[]; pools?: DispatchPoolDetail[]; repository?: string; githubRunId?: string; jobName?: string };
 export type DispatchHealthSnapshot = {
   state: "starting" | "healthy" | "degraded";
   lastReconciledAt: string | null;
   queued: number;
   reserved: number;
   reasons: Array<{ code: string; count: number }>;
+  healthReason?: "reconciliation_failed" | "reconciliation_stale";
+  blockedJobs?: Array<{ jobId: number; code: string; labels: string[]; repository?: string; githubRunId?: string; jobName?: string }>;
 };
 
 export class DispatchHealthMonitor {
@@ -42,12 +44,15 @@ export class DispatchHealthMonitor {
     for (const decision of decisions) {
       if (decision.code !== "dispatched") counts.set(decision.code, (counts.get(decision.code) ?? 0) + 1);
     }
+    const healthReason = this.failed ? "reconciliation_failed" : at - (this.lastSuccessAt ?? this.startedAt) > this.intervalMs * 3 ? "reconciliation_stale" : undefined;
     return {
-      state: this.failed || at - (this.lastSuccessAt ?? this.startedAt) > this.intervalMs * 3 ? "degraded" : this.lastSuccessAt === null ? "starting" : "healthy",
+      state: healthReason ? "degraded" : this.lastSuccessAt === null ? "starting" : "healthy",
       lastReconciledAt: this.lastSuccessAt === null ? null : new Date(this.lastSuccessAt).toISOString(),
       queued: decisions.length,
       reserved: decisions.filter(decision => decision.code === "dispatched").length,
       reasons: [...counts].map(([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count || a.code.localeCompare(b.code)),
+      ...(healthReason ? { healthReason } : {}),
+      blockedJobs: decisions.filter(decision => decision.code !== "dispatched").map(({ jobId, code, labels, repository, githubRunId, jobName }) => ({ jobId, code, labels: labels ?? [], ...(repository && githubRunId && jobName ? { repository, githubRunId, jobName } : {}) })),
     };
   }
 }

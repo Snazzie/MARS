@@ -46,8 +46,16 @@ export function ControlPlaneStatus({ status }: { status: OverviewDto["controlPla
   return <section className="dispatch-status-panel" aria-label="Control plane dispatch status">
     <div className="dispatch-status-heading"><h2>Control plane</h2><strong data-state={status.state}>{label}</strong></div>
     <p>{status.lastReconciledAt ? <>Last successful reconciliation <time dateTime={status.lastReconciledAt}>{new Date(status.lastReconciledAt).toLocaleString()}</time></> : "No successful reconciliation yet"}</p>
+    {status.healthReason === "reconciliation_failed" && <p>The latest job reconciliation failed. Job blockers below are from the last successful pass; check control-plane logs for the failure.</p>}
+    {status.healthReason === "reconciliation_stale" && <p>Reconciliation has not completed within the expected interval. Job blockers below may be stale; check control-plane logs.</p>}
     <p>{status.queued} queued jobs inspected · {status.reserved} {status.reserved === 1 ? "lease" : "leases"} dispatched on last pass</p>
     {status.reasons.length ? <ul>{status.reasons.map(({ code, count }) => <li key={code}><span>{dispatchReasons[code] ?? code.replaceAll("_", " ")}</span><b>{count}</b></li>)}</ul> : <p>{status.queued ? "No dispatch blockers reported on the last pass." : "No eligible queued jobs were inspected on the last pass."}</p>}
+    {status.blockedJobs?.length ? <details><summary>Blocked jobs ({status.blockedJobs.length})</summary><ul>{status.blockedJobs.map(({ jobId, code, labels, repository, githubRunId, jobName }) => {
+      const href = repository && /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(repository) && githubRunId && /^[0-9]+$/.test(githubRunId)
+        ? `https://github.com/${repository}/actions/runs/${githubRunId}/job/${jobId}` : null;
+      const title = repository && jobName ? `${repository} · ${jobName}` : `Job ${jobId}`;
+      return <li key={jobId}>{href ? <a href={href} target="_blank" rel="noopener noreferrer">{title}</a> : <strong>{title}</strong>} (job {jobId}): {dispatchReasons[code] ?? code.replaceAll("_", " ")} · Requested labels: {labels.length ? labels.join(", ") : "(none)"}{code === "invalid_provision_labels" && <span> — Use a routing label such as mars-any-2vcpu-4g.</span>}</li>;
+    })}</ul></details> : null}
     <small>Only jobs eligible for reconciliation are counted; unavailable repositories, unapproved installations, or existing leases are excluded.</small>
   </section>;
 }

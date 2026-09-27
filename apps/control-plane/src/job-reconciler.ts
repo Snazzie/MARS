@@ -22,7 +22,7 @@ export interface JobReconciliationDeps {
   contractVersion: string;
   workerConnected?: (workerId: string) => boolean;
   installationBlocked?: (installationId: number) => boolean;
-  onDecision?: (decision: { organizationId: string; jobId: number; code: string; labels?: string[] }) => void;
+  onDecision?: (decision: { organizationId: string; jobId: number; code: string; labels?: string[]; repository?: string; githubRunId?: string; jobName?: string }) => void;
   onQueueSize?: (queued: number) => void;
   repositoryFullName?: string;
 }
@@ -72,7 +72,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
   const queuedRows = await deps.db`
     SELECT j.github_job_id AS "jobId", r.id AS "runId", r.github_run_id AS "githubRunId", r.run_attempt AS "runAttempt",
       r.repository_id AS "repositoryId", r.organization_id AS "organizationId", i.github_installation_id AS "installationId",
-      repo.github_repository_id AS "githubRepositoryId", repo.full_name AS repository, j.requested_labels AS labels
+      repo.github_repository_id AS "githubRepositoryId", repo.full_name AS repository, j.name AS "jobName", j.requested_labels AS labels
     FROM dashboard_jobs j
     JOIN dashboard_runs r ON r.id=j.run_id
     JOIN dashboard_repositories repo ON repo.id=r.repository_id
@@ -179,7 +179,10 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       labels: stringArray(row.labels),
     })),
     candidates,
-    onDecision: (job, code) => deps.onDecision?.({ organizationId: job.organizationId ?? "", jobId: job.jobId, code, ...(code === "no_matching_labels" || code === "no_eligible_worker_pool" ? { labels: job.labels } : {}), ...(code !== "dispatched" ? { pools: poolDetails(job) } : {}) }),
+    onDecision: (job, code) => {
+      const row = queuedByJob.get(job.jobId);
+      deps.onDecision?.({ organizationId: job.organizationId ?? "", jobId: job.jobId, code, ...(code !== "dispatched" ? { labels: job.labels, pools: poolDetails(job), ...(row?.githubRunId && row?.jobName ? { repository: job.repository, githubRunId: String(row.githubRunId), jobName: String(row.jobName) } : {}) } : {}) });
+    },
     unmatchedReason: (job) => {
       if (sqlCandidates.length === 0) return "no_eligible_worker_pool";
       const reasons = sqlCandidates.map(candidate => reason({
