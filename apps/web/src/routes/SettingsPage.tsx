@@ -1,17 +1,15 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   beginOrganizationGithubInstall,
   getControlPlaneLogs,
   getGithubConnection,
-  getWorkers,
   getGithubOrganizationSettings,
   getGithubRateLimit,
   getMe,
   getOrganizations,
   logout,
   refreshGithubConnection,
-  setWorkerLeasePreservation,
   uninstallOrganizationGithub,
 } from "../api.ts";
 import type { ControlPlaneLogLevel } from "../api.ts";
@@ -59,40 +57,6 @@ function ControlPlaneLogs() {
   </section>;
 }
 
-
-function WorkerLeaseSettings() {
-  const client = useQueryClient();
-  const workers = useInfiniteQuery({
-    queryKey: ["settings", "workers"],
-    queryFn: ({ pageParam }: { pageParam: string | null }) => getWorkers("all", false, pageParam),
-    initialPageParam: null as string | null,
-    getNextPageParam: (page) => page.nextCursor ?? undefined,
-  });
-  const preservation = useMutation({
-    mutationFn: ({ workerId, enabled }: { workerId: string; enabled: boolean }) => setWorkerLeasePreservation("all", workerId, enabled),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: ["settings", "workers"] });
-      void client.invalidateQueries({ queryKey: ["org"] });
-    },
-  });
-  const active = workers.data?.pages.flatMap(page => page.items).filter(worker => worker.admissionState === "adopted") ?? [];
-  return <section className="settings-deployment" aria-labelledby="worker-lease-settings-title">
-    <div className="panel-heading"><div><p className="eyebrow">Worker diagnostics</p><h2 id="worker-lease-settings-title">Preserve failed leases</h2></div></div>
-    <p className="form-help">Preserved failed runtimes retain diagnostic evidence and block retries of the same job. Turning preservation off schedules their cleanup; inspect the evidence first.</p>
-    {workers.isLoading && <p role="status">Loading workers…</p>}
-    {workers.error && <p className="form-error" role="alert">Unable to load workers: {workers.error.message}</p>}
-    {active.map(worker => <div className="worker-policy-control" key={worker.id}>
-      <label><input type="checkbox" checked={worker.preserveLeases === true} disabled={preservation.isPending} onChange={(event) => {
-        const enabled = event.currentTarget.checked;
-        if (!enabled && !window.confirm(`Turn off lease preservation for ${worker.name}? Preserved failed runtimes will be cleaned up and their diagnostic evidence may be lost.`)) return;
-        preservation.mutate({ workerId: worker.id, enabled });
-      }} /> {worker.name} — preserve failed {worker.runtimeMode === "vm" ? "VMs" : "containers"}</label>
-    </div>)}
-    {!workers.isLoading && !workers.error && active.length === 0 && <p>No adopted workers.</p>}
-    {workers.hasNextPage && <button type="button" className="button secondary" disabled={workers.isFetchingNextPage} onClick={() => void workers.fetchNextPage()}>{workers.isFetchingNextPage ? "Loading…" : "Load more workers"}</button>}
-    {preservation.error && <p className="form-error" role="alert">Unable to update lease preservation: {preservation.error.message}</p>}
-  </section>;
-}
 
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -188,7 +152,6 @@ export function SettingsPage() {
           {!connection.error && connection.data?.connected && !rateLimit.error && rateLimit.data && <div className="settings-rate-limit"><dl className="settings-rate-limit-grid"><div><dt>Remaining</dt><dd className="settings-rate-limit-remaining">{number(rateLimit.data.remaining)}</dd></div><div><dt>Limit</dt><dd>{number(rateLimit.data.limit)}</dd></div><div><dt>Used</dt><dd>{number(rateLimit.data.used)}</dd></div><div><dt>Reset time</dt><dd><time dateTime={rateLimit.data.resetAt}>{new Date(rateLimit.data.resetAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time></dd></div></dl><button className="button secondary" type="button" onClick={() => void rateLimit.refetch()} disabled={rateLimit.isFetching && !rateLimit.data}>Refresh rate limit</button></div>}
         </section>
       </section>
-      {me.data?.isGlobalAdmin && <WorkerLeaseSettings />}
       {me.data?.isGlobalAdmin && <ControlPlaneLogs />}
     </>
   );
