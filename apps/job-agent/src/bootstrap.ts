@@ -279,7 +279,7 @@ export async function runGuestService(
   completionMode: "shutdown" | "exit" = "shutdown",
   shutdown: (platform: "windows-x64" | "linux-x64" | "linux-arm64") => Promise<void> | void = defaultGuestShutdown,
   probeAdapter: WindowsProbeAdapter = windowsProbeAdapter,
-): Promise<void> {
+): Promise<number> {
   const raw = await waitForGuestBootstrap(bootstrapPath, Number.POSITIVE_INFINITY);
   await unlink(bootstrapPath).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== "EPERM" && error.code !== "EROFS" && error.code !== "EACCES") throw error;
@@ -289,15 +289,16 @@ export async function runGuestService(
     if (platform !== "windows-x64") throw new Error("provisioning probes require windows-x64");
     await runWindowsProvisioningProbe(bootstrap.nonce, runnerRoot, probeAdapter);
     await shutdown(platform);
-    return;
+    return 0;
   }
   const exitCode = await runRunnerWithWorkerCache(bootstrap.encodedJitConfig, runnerRoot, platform, bootstrap.workerCache);
   if (bootstrap.callbackUrl) {
     const response = await fetch(bootstrap.callbackUrl, { method: "POST", headers: { authorization: `Bearer ${bootstrap.callbackToken!}`, "content-type": "application/json" }, body: JSON.stringify({ leaseId: bootstrap.leaseId, nonce: bootstrap.nonce, exitCode }) });
     if (!response.ok) throw new Error(`lease callback failed: ${response.status}`);
   }
-  if (completionMode === "exit") return;
+  if (completionMode === "exit") return exitCode;
   await shutdown(platform);
+  return exitCode;
 }
 
 async function defaultGuestShutdown(platform: "windows-x64" | "linux-x64" | "linux-arm64"): Promise<void> {

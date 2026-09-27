@@ -176,18 +176,18 @@ test("launches the macOS and Linux runner listener directly", () => {
   expect(runnerCommandForPlatform("windows-x64")).toEqual(["cmd.exe", "/c", "run.cmd"]);
   expect(runnerCommandForPlatform("linux-x64")).toEqual(["./bin/Runner.Listener", "run"]);
 });
-test("container completion exits instead of shutting down a guest", async () => {
+test("container completion reports the runner exit code without shutting down a guest", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-job-agent-"));
   roots.push(root);
   const bootstrapPath = join(root, "bootstrap.json");
   await writeFile(bootstrapPath, JSON.stringify({ version: 1, leaseId: "lease", nonce: "nonce", encodedJitConfig: "jit" }));
   let shutdowns = 0;
   if (process.platform === "win32") {
-    await writeFile(join(root, "run.cmd"), "@echo off\r\nexit /b 0\r\n");
-    await runGuestService("windows-x64", bootstrapPath, root, "exit", async () => { shutdowns++; });
+    await writeFile(join(root, "run.cmd"), "@echo off\r\nexit /b 17\r\n");
+    expect(await runGuestService("windows-x64", bootstrapPath, root, "exit", async () => { shutdowns++; })).toBe(17);
   } else {
-    await writeLinuxRunner(root, "#!/bin/sh\nexit 0\n");
-    await runGuestService("linux-x64", bootstrapPath, root, "exit", async () => { shutdowns++; });
+    await writeLinuxRunner(root, "#!/bin/sh\nexit 17\n");
+    expect(await runGuestService("linux-arm64", bootstrapPath, root, "exit", async () => { shutdowns++; })).toBe(17);
   }
   expect(shutdowns).toBe(0);
 });

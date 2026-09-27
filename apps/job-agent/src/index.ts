@@ -14,7 +14,7 @@ if (Bun.argv[2] === "bootstrap") {
   const completionMode = cliArgument(Bun.argv, "--completion-mode") ?? "shutdown";
   if (!["windows-x64", "linux-x64", "linux-arm64"].includes(platform) || !["shutdown", "exit"].includes(completionMode) || (platform !== "linux-x64" && !bootstrapPath) || (platform === "linux-x64" && bootstrapPath)) throw new Error("usage: mars-job-agent guest-service --platform windows-x64|linux-x64|linux-arm64 --completion-mode shutdown|exit [--bootstrap-file PATH]");
   if (platform === "linux-x64") await runLinuxVirtioGuest(undefined, runnerRoot);
-  else await runGuestService(platform, bootstrapPath!, runnerRoot, completionMode as "shutdown" | "exit");
+  else process.exitCode = await runGuestService(platform, bootstrapPath!, runnerRoot, completionMode as "shutdown" | "exit");
 } else {
   if (Bun.argv[2] !== "accept-claim" || !Bun.argv.includes("--stdin")) throw new Error("usage: mars-job-agent accept-claim --stdin");
   const claim=Buffer.from(await Bun.stdin.bytes()); if(claim.length < 32) throw new Error("claim missing");
