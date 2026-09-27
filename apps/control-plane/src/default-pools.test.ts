@@ -70,6 +70,42 @@ test("creates a Tart Ubuntu ARM64 pool from a dual-platform Mac worker", async (
   expect(inserted.find((values) => values.includes("macos-arm64"))).toContain(macDigest);
 });
 
+test("keeps the Tart Ubuntu pool and provisions a Docker pool for an ARM64 Windows worker", async () => {
+  const tartDigest = `mars-linux-arm64-job@sha256:${"a".repeat(64)}`;
+  const dockerDigest = `ghcr.io/example/job@sha256:${"b".repeat(64)}`;
+  const limits = { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 };
+  const mac = { platform: "macos-arm64", guestPlatforms: ["macos-arm64", "linux-arm64"], limits, desiredConfiguration: { selectedDriver: "tart-vm" }, doctor: { doctor: { capabilities: [{ driver: "tart-vm", guestPlatform: "linux-arm64", imageDigest: tartDigest, ready: true }] } } };
+  const windows = { platform: "windows-arm64", guestPlatforms: ["linux-arm64"], limits, desiredConfiguration: { selectedDriver: "linux-docker-container" }, doctor: { doctor: { capabilities: [{ driver: "linux-docker-container", guestPlatform: "linux-arm64", imageDigest: dockerDigest, ready: true }] } } };
+  let workers = [mac, windows];
+  const inserted: unknown[][] = [];
+  const updated: unknown[][] = [];
+  let alternate: { id: string; driver: string; imageDigest: string } | undefined;
+  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const query = strings.join(" ").toLowerCase();
+    if (query.includes("from workers")) return workers;
+    if (query.includes("from runner_pools") && values.includes("default-linux-arm64")) return [{ id: "mac-pool", platform: "linux-arm64", driver: "tart-vm", imageDigest: tartDigest }];
+    if (query.includes("from runner_pools") && values.includes("default-linux-arm64-container")) return alternate ? [alternate] : [];
+    if (query.includes("insert into runner_pools")) {
+      inserted.push(values);
+      if (values.includes("default-linux-arm64-container")) alternate = { id: "docker-pool", driver: "linux-docker-container", imageDigest: dockerDigest };
+    }
+    if (query.includes("update runner_pools")) updated.push(values);
+    return [];
+  }, { json: (value: unknown) => value });
+
+  await ensureDefaultPools(db as never, {});
+  expect(inserted.filter(values => values.includes("default-linux-arm64-container"))).toHaveLength(1);
+  const dockerPool = inserted.find(values => values.includes("default-linux-arm64-container"));
+  expect(dockerPool).toContain(dockerDigest);
+  expect(dockerPool).toContainEqual(["mars-ubuntu-arm64", "mars-ubuntu-arm64-container", "ubuntu"]);
+  expect(updated.filter(values => values.includes("mac-pool")).at(-1)).toContain(true);
+  workers = [mac];
+  await ensureDefaultPools(db as never, {});
+  expect(inserted.filter(values => values.includes("default-linux-arm64-container"))).toHaveLength(1);
+  expect(updated.find(values => values.includes("docker-pool"))).toContain(false);
+  expect(updated.filter(values => values.includes("mac-pool")).at(-1)).toContain(true);
+});
+
 test("routes each configured Ubuntu x64 image version through its own trigger label", async () => {
   for (const version of ["22", "24", "26"] as const) {
     const inserted: unknown[][] = [];

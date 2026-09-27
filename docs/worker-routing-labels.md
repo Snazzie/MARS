@@ -39,19 +39,27 @@ runs-on:
   - mars-ubuntu-24-4vcpu-10g
 ```
 
-The exact pool trigger route wins when it matches a pool. Otherwise
-`mars-any-x64` matches only pools whose platform ends in `-x64`, and `mars-any`
-matches every platform. This precedence is independent of the order of labels in
-the workflow. `mars-windows-arm64` is accepted as a route and preserved by
-workflow editing, but no Windows ARM64 worker pool is currently available, so
-that alternative cannot be selected today.
+The exact pool trigger route wins when it matches a pool. Other `mars-` routes
+advertised by the pool match next. Otherwise `mars-any-x64` matches only pools
+whose platform ends in `-x64`, and `mars-any` matches every platform. This
+precedence is independent of the order of labels in the workflow.
+`mars-windows-arm64` is accepted as a route and preserved by workflow editing,
+but no Windows ARM64 worker pool is currently available, so that alternative
+cannot be selected today.
+
+The `mars-ubuntu-arm64` route can use either a Tart VM on macOS or a Linux
+Docker container on a compatible Windows ARM64 worker. The control plane keeps
+separate pools for their different drivers and image digests, while both pools
+accept a composite request such as `mars-ubuntu-arm64-4vcpu-6g`. The Docker
+pool has its own `mars-ubuntu-arm64-container` trigger; it does not replace
+an existing Tart pool. Each worker must still report a ready matching image.
 
 ## How routing works
 
 1. Mars parses the complete requested label set and rejects blank, malformed, or
    duplicate alternatives.
 2. The scheduler selects the most specific matching alternative for each eligible
-   pool: exact trigger, then `mars-any-x64`, then `mars-any`.
+   pool: exact trigger, then a pool route alias, then `mars-any-x64`, then `mars-any`.
 3. The selected option's vCPU and memory are checked against the worker's per-job
    ceilings. Mars never fills in missing resource values from pool defaults.
 4. Storage and concurrency continue to come from the selected pool and existing

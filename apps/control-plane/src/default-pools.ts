@@ -37,6 +37,7 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
   const configuredWorkers = workers
     .map((worker) => ({ worker, limits: (typeof worker.limits === "string" ? JSON.parse(worker.limits) : worker.limits) as WorkerLimits, doctor: storedWorkerDoctor(worker.doctor), desired: typeof worker.desiredConfiguration === "string" ? JSON.parse(worker.desiredConfiguration) : worker.desiredConfiguration }))
     .filter(({ worker, limits, doctor, desired }) => worker.limits && Array.isArray(doctor.capabilities) && desired && typeof desired.selectedDriver === "string");
+  let primaryArm64Driver: string | undefined;
   const guestPlatforms: GuestPlatform[] = ["linux-x64", "linux-arm64", "windows-x64", "macos-arm64"];
   for (const platform of guestPlatforms) {
     let choices = configuredWorkers.flatMap(({ worker, limits, doctor, desired }) => {
@@ -83,6 +84,7 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
     const name = `default-${platform}`;
     const enabled = Boolean(imageDigest && choices.length);
     const [existing] = await db`select id,driver,image_digest as "imageDigest",platform from runner_pools where organization_id is null and (name=${name} or trigger_label=${label}) limit 1`;
+    if (platform === "linux-arm64") primaryArm64Driver = String(existing?.driver ?? driver);
     if (existing) {
       const retained = configuredWorkers.filter(({ worker, doctor, desired }) => desired.selectedDriver === existing.driver && guestPlatformsForWorker(worker).includes(existing.platform as GuestPlatform) && workerPoolEvidence(doctor, String(existing.driver), String(existing.imageDigest), String(existing.platform)).ready && workerPoolEvidence(doctor, String(existing.driver), String(existing.imageDigest), String(existing.platform)).imageMatches);
       const retainedResources = poolResourcesForWorkers(retained.map(({ limits }) => limits)) ?? resources;
@@ -93,6 +95,32 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
     } else {
       await db`insert into runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) values (null,null,${name},${platform},${driver},${imageDigest ?? ""},${jsonParameter(db, resources)}::jsonb,${jsonParameter(db, labels)}::jsonb,${label},${enabled})`;
     }
+  }
+  // An ARM64 Tart VM and a Docker container need different image digests, but
+  // share the same Ubuntu route. Keep the original pool (and its active leases)
+  // intact while advertising the other runtime through an additional pool.
+  const alternateDriver = primaryArm64Driver === "tart-vm" ? "linux-docker-container" : "tart-vm";
+  const alternateName = `default-linux-arm64-${alternateDriver === "tart-vm" ? "tart" : "container"}`;
+  const alternates = configuredWorkers.filter(({ worker, doctor, desired }) =>
+    desired.selectedDriver === alternateDriver && guestPlatformsForWorker(worker).includes("linux-arm64") &&
+    (doctor.capabilities as Record<string, unknown>[]).some(capability =>
+      capability.driver === alternateDriver && capability.guestPlatform === "linux-arm64" && capability.ready === true && typeof capability.imageDigest === "string"));
+  const [alternate] = await db`select id,driver,image_digest as "imageDigest" from runner_pools where organization_id is null and name=${alternateName} limit 1`;
+  if (!alternates.length && !alternate) return;
+  const digest = (alternates[0]?.doctor.capabilities as Record<string, unknown>[] | undefined)
+    ?.find(capability => capability.driver === alternateDriver && capability.guestPlatform === "linux-arm64")?.imageDigest;
+  const imageDigest = String(alternate?.imageDigest ?? digest ?? "");
+  const ready = alternates.filter(({ doctor }) => {
+    const evidence = workerPoolEvidence(doctor, alternateDriver, imageDigest, "linux-arm64");
+    return evidence.ready && evidence.imageMatches;
+  });
+  const resources = poolResourcesForWorkers(ready.map(({ limits }) => limits))
+    ?? { vcpu: 4, memoryBytes: 6 * GIB, storageBytes: 30 * GIB, concurrency: 1 };
+  if (alternate) {
+    await db`update runner_pools set resources=${jsonParameter(db, resources)}::jsonb,enabled=${ready.length > 0} where id=${alternate.id}`;
+  } else {
+    const trigger = `mars-ubuntu-arm64-${alternateDriver === "tart-vm" ? "tart" : "container"}`;
+    await db`insert into runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) values (null,null,${alternateName},'linux-arm64',${alternateDriver},${imageDigest},${jsonParameter(db, resources)}::jsonb,${jsonParameter(db, ["mars-ubuntu-arm64", trigger, "ubuntu"])}::jsonb,${trigger},${ready.length > 0})`;
   }
 }
 

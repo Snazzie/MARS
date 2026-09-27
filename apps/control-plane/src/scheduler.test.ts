@@ -36,6 +36,18 @@ describe("runner label routing", () => {
     }
   });
 
+  test("routes the same Ubuntu ARM64 request to Tart and Docker pools", () => {
+    const labels = ["mars-ubuntu-arm64-2vcpu-4g"];
+    const mac = candidate(labels, "linux-arm64", "mars-ubuntu-arm64");
+    mac.pool.labels = ["mars-ubuntu-arm64", "ubuntu"];
+    const windows = candidate(labels, "linux-arm64", "mars-ubuntu-arm64-container");
+    windows.pool.labels = ["mars-ubuntu-arm64", "mars-ubuntu-arm64-container", "ubuntu"];
+    expect(reason(mac)).toBe("admissible");
+    expect(reason(windows)).toBe("admissible");
+    windows.pool.labels = ["mars-ubuntu-arm64-container"];
+    expect(reason(windows)).toBe("no_matching_labels");
+  });
+
   test("matches x64 neutral alternatives only on x64 pools", () => {
     const options = parseRunnerLabels(["mars-any-x64-2vcpu-4g"]);
     expect(options).not.toBeNull();

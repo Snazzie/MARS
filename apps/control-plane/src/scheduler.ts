@@ -21,9 +21,11 @@ export function selectProvisionOption(
 ): ParsedRunnerLabel | null {
   const trigger = pool.triggerLabel?.trim().toLowerCase();
   if (trigger) {
-    const exact = options.find((option) => option.route.toLowerCase() === trigger);
+    const exact = options.find(option => option.route === trigger);
     if (exact) return exact;
   }
+  const alias = options.find(option => pool.labels.some(label => label.startsWith("mars-") && label.toLowerCase() === option.route));
+  if (alias) return alias;
   const platform = pool.platform.trim().toLowerCase();
   if (platform.endsWith("-x64")) {
     const x64 = options.find((option) => option.route.toLowerCase() === ANY_X64_RUNNER_LABEL);
