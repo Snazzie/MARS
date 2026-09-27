@@ -38,6 +38,7 @@ const dispatchReasons: Record<string, string> = {
   invalid_repository: "Invalid repository identity",
   jit_failed: "Runner registration failed",
   dispatch_failed: "Lease dispatch failed",
+  lease_preserved_for_debugging: "Failed lease retained for debugging",
   duplicate_job: "Duplicate queued job",
 };
 export function ControlPlaneStatus({ status }: { status: OverviewDto["controlPlane"] }) {
@@ -54,9 +55,9 @@ export function ControlPlaneStatus({ status }: { status: OverviewDto["controlPla
       const href = repository && /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(repository) && githubRunId && /^[0-9]+$/.test(githubRunId)
         ? `https://github.com/${repository}/actions/runs/${githubRunId}/job/${jobId}` : null;
       const title = repository && jobName ? `${repository} · ${jobName}` : `Job ${jobId}`;
-      return <li key={jobId}>{href ? <a href={href} target="_blank" rel="noopener noreferrer">{title}</a> : <strong>{title}</strong>} (job {jobId}): {dispatchReasons[code] ?? code.replaceAll("_", " ")} · Requested labels: {labels.length ? labels.join(", ") : "(none)"}{code === "invalid_provision_labels" && <span> — Use a routing label such as mars-any-2vcpu-4g.</span>}</li>;
+      return <li key={jobId}>{href ? <a href={href} target="_blank" rel="noopener noreferrer">{title}</a> : <strong>{title}</strong>} (job {jobId}): {dispatchReasons[code] ?? code.replaceAll("_", " ")} · Requested labels: {labels.length ? labels.join(", ") : "(none)"}{code === "invalid_provision_labels" && <span> — Use a routing label such as mars-any-2vcpu-4g.</span>}{code === "lease_preserved_for_debugging" && <span> — Inspect the preserved worker diagnostics before disabling lease preservation and cleaning up the lease.</span>}</li>;
     })}</ul></details> : null}
-    <small>Only jobs eligible for reconciliation are counted; unavailable repositories, unapproved installations, or existing leases are excluded.</small>
+    <small>Only jobs eligible for reconciliation are counted; unavailable repositories, unapproved installations, and active or pending-cleanup leases are excluded. Debug-preserved leases remain visible as blockers.</small>
   </section>;
 }
 function OverviewContent({ data, period }: { data: OverviewDto; period: DashboardPeriod }) {

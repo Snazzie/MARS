@@ -94,6 +94,20 @@ test("retries a failed runner on another compatible worker", async () => {
   expect(chosen).toEqual(["container"]);
 });
 
+test("keeps a debug-preserved lease blocked without attempting another reservation", async () => {
+  const decisions: string[] = [];
+  const result = await reconcileQueuedJobs({
+    queued: [{ installationId: 1, repositoryId: 2, repository: "acme/project", runId: 3, jobId: 2, labels: ["mars-ubuntu-arm64-2vcpu-10g"], leasePreserved: true }],
+    candidates: [],
+    onDecision: (_job, code) => decisions.push(code),
+    reserve: async () => { throw new Error("must not reserve preserved lease"); },
+    jit: async () => { throw new Error("must not register runner"); },
+    dispatch: async () => { throw new Error("must not dispatch"); },
+  });
+  expect(result).toEqual({ reserved: 0, deferred: 0, skipped: 1, failed: 0 });
+  expect(decisions).toEqual(["lease_preserved_for_debugging"]);
+});
+
 test("does not reserve beyond active pool capacity", async () => {
   const decisions: string[] = [];
   const result = await reconcileQueuedJobs({

@@ -74,7 +74,8 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       r.repository_id AS "repositoryId", r.organization_id AS "organizationId", i.github_installation_id AS "installationId",
       repo.github_repository_id AS "githubRepositoryId", repo.full_name AS repository, j.name AS "jobName", j.requested_labels AS labels,
       CASE WHEN prior.state='reaped' AND prior.terminal_result->>'exitCode' IS NOT NULL
-        AND prior.terminal_result->>'exitCode' <> '0' THEN prior.worker_id END AS "lastFailedWorkerId"
+        AND prior.terminal_result->>'exitCode' <> '0' THEN prior.worker_id END AS "lastFailedWorkerId",
+      (prior.cleanup_state='debug_preserved') AS "leasePreserved"
     FROM dashboard_jobs j
     JOIN dashboard_runs r ON r.id=j.run_id
     JOIN dashboard_repositories repo ON repo.id=r.repository_id
@@ -180,6 +181,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       runId: String(row.runId),
       jobId: Number(row.jobId),
       labels: stringArray(row.labels),
+      leasePreserved: row.leasePreserved === true,
       lastFailedWorkerId: row.lastFailedWorkerId ? String(row.lastFailedWorkerId) : undefined,
     })),
     candidates,

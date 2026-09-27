@@ -13,6 +13,7 @@ export type QueuedRoutingJob = {
   jobId: number;
   labels: string[];
   lastFailedWorkerId?: string;
+  leasePreserved?: boolean;
 };
 
 const MAX_RUNNER_NAME_LENGTH = 128;
@@ -58,6 +59,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
     const requestedLabels = queued.labels.map((label) => label.trim()).filter(Boolean);
     const options = parseJobRunnerLabels(requestedLabels)?.options;
     if (!options) { report.skipped += 1; decide(queued, "invalid_provision_labels"); return; }
+    if (queued.leasePreserved) { report.skipped += 1; decide(queued, "lease_preserved_for_debugging"); return; }
     if (deps.installationBlocked?.(queued.installationId)) { report.skipped += 1; decide(queued, "installation_cooldown"); return; }
     const candidateOrder = orderCandidatesByLoad(deps.candidates, queued.jobId, reservedByPool);
     if (queued.lastFailedWorkerId && candidateOrder.some(candidate => candidate.worker.id !== queued.lastFailedWorkerId)) {
