@@ -6,6 +6,15 @@ export interface Candidate {
   requestedLabels:string[];
 }
 
+
+export function orderCandidatesByLoad<T extends Candidate & { worker: Candidate["worker"] & { id: string }; pool: Candidate["pool"] & { id: string } }>(
+  candidates: readonly T[],
+  jobId: number,
+  reservedByPool: ReadonlyMap<string, number>,
+): T[] {
+  const load = (candidate: T) => candidate.pool.active + (reservedByPool.get(`${candidate.pool.id}:${candidate.worker.id}`) ?? 0);
+  return candidates.map((_, index) => candidates[(jobId + index) % candidates.length]!).sort((left, right) => load(left) - load(right));
+}
 export function selectProvisionOption(
   options: readonly ParsedRunnerLabel[],
   pool: { platform: string; labels: string[]; triggerLabel: string | null },

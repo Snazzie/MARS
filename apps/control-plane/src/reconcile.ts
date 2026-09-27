@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { parseJobRunnerLabels, PoolResources, type RunnerJitConfig } from "@mars/contracts";
-import { selectProvisionOption, fits, type Candidate } from "./scheduler.ts";
+import { selectProvisionOption, fits, orderCandidatesByLoad, type Candidate } from "./scheduler.ts";
 import type { LeaseReservation } from "@mars/db";
 
 
@@ -58,9 +58,7 @@ export async function reconcileQueuedJobs(deps: ReconcileDeps): Promise<Reconcil
     const options = parseJobRunnerLabels(requestedLabels)?.options;
     if (!options) { report.skipped += 1; decide(queued, "invalid_provision_labels"); return; }
     if (deps.installationBlocked?.(queued.installationId)) { report.skipped += 1; decide(queued, "installation_cooldown"); return; }
-    const candidateOrder = deps.candidates.length > 1
-      ? deps.candidates.map((_, index) => deps.candidates[(queued.jobId + index) % deps.candidates.length])
-      : deps.candidates;
+    const candidateOrder = orderCandidatesByLoad(deps.candidates, queued.jobId, reservedByPool);
     const compatible = candidateOrder.flatMap((value) => {
       if (deps.workerConnected && !deps.workerConnected(value.worker.id)) return [];
       const option = selectProvisionOption(options, value.pool);
