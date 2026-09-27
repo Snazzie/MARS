@@ -19,6 +19,8 @@ On a Windows host running a Linux Docker guest, a zero `runner.finished` exit co
 
 The Linux ARM64 job image must include Ubuntu's `libicu74`: the .NET Actions Runner aborts before creating a new `_diag` log when ICU is absent. The image build runs `Runner.Listener --version` to catch that missing runtime dependency. A worker doctor report validates the image digest and entrypoint, not all of the runner's shared libraries. Rebuild and publish a new immutable job-image digest, update the worker's `MARS_LINUX_ARM64_CONTAINER_IMAGE` and its pool image digest, then refresh the worker's configuration; a `git pull` or worker restart does not alter the previously pinned image.
 
+With the worker cache proxy enabled, the Linux guest combines its system CA bundle with the lease's proxy CA and passes it as `SSL_CERT_FILE` to the .NET runner. Without that trust, the runner can connect to the broker but fail job initialization against `results-receiver.actions.githubusercontent.com` with `PartialChain`; GitHub may keep the job queued even after the container exits. A successful container exit alone is not a successful GitHub job: verify the workflow's GitHub conclusion.
+
 The installer downloads the worker independently of the runtime and does not install Docker, enable host features or switch the active engine. Optional provisioning inputs may prepare a Windows job image on an already-active Windows engine or provision a Hyper-V checkpoint. Upgrades retain both provisioned artifacts and service settings. Existing `-WindowsRuntime` arguments are provisioning inputs for older automation, not the selected execution mode.
 
 To prepare a Windows VM checkpoint once:

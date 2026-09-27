@@ -102,6 +102,8 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
         } catch {
           publicCa = "";
         }
+      } else {
+        publicCa = await readFile("/etc/ssl/certs/ca-certificates.crt", "utf8");
       }
       await writeFile(caPath, `${publicCa}${publicCa.endsWith("\n") || !publicCa ? "" : "\n"}${proxy.caCertificatePem}`, { mode: 0o600, flag: "wx" });
       const configuredBunRoot = Bun.env.XDG_CONFIG_HOME?.trim() || Bun.env.HOME?.trim() || Bun.env.USERPROFILE?.trim();
@@ -123,6 +125,7 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
       env.no_proxy = "127.0.0.1,::1";
       env.NODE_EXTRA_CA_CERTS = caPath;
       env.node_extra_ca_certs = caPath;
+      if (platform !== "windows-x64") env.SSL_CERT_FILE = caPath;
       env.GIT_CONFIG_COUNT = "3";
       env.GIT_CONFIG_KEY_0 = "http.sslBackend";
       env.GIT_CONFIG_VALUE_0 = "openssl";

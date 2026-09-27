@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cliArgument, consumeGuestJitConfig, consumeGuestJitConfigWithWorkerCache, mergeBunInstallCa, parseGuestBootstrap, runGuestService, runOneTimeJitBootstrap, runWindowsProvisioningProbe, runnerCommandForPlatform, waitForGuestBootstrap, type WindowsProbeAdapter } from "./bootstrap.ts";
@@ -67,6 +67,7 @@ printf '%s\n' "$NODE_EXTRA_CA_CERTS" "$node_extra_ca_certs" >> '${outputPath}'
 printf '%s\n' "$GIT_SSL_BACKEND" "$GIT_SSL_CAINFO" >> '${outputPath}'
 test -s "$NODE_EXTRA_CA_CERTS"
 cat "$NODE_EXTRA_CA_CERTS" >> '${outputPath}'
+printf '%s\n' "$SSL_CERT_FILE" >> '${outputPath}'
 `);
 
   await consumeGuestJitConfigWithWorkerCache("encoded-jit-config", root, "linux-x64", workerCache);
@@ -76,8 +77,10 @@ cat "$NODE_EXTRA_CA_CERTS" >> '${outputPath}'
   expect(new URL(workerCache.proxyUrl).username).not.toBe("");
   expect(new URL(workerCache.proxyUrl).password).not.toBe("");
   expect(output).toContain(`${workerCache.caCertificatePem}`);
+  expect(output).toContain(`${(await readFile("/etc/ssl/certs/ca-certificates.crt", "utf8")).trimEnd()}\n${workerCache.caCertificatePem}`);
   expect(output).toContain("openssl\n");
   const caPath = output.split("\n")[6];
+  expect(output.trimEnd().endsWith(caPath)).toBe(true);
   expect(caPath).toBeTruthy();
   expect(await Bun.file(caPath).exists()).toBe(false);
 });
