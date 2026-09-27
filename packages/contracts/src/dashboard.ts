@@ -358,6 +358,7 @@ export type WorkerHealthContainer = z.infer<typeof WorkerHealthContainer>;
 export const WorkerHealth = dto(strict({
   observedAt: timestamp.nullable(),
   runtimeMode: z.enum(["container", "vm", "tart"]).nullable().optional(),
+  configuration: strict({ state: ConfigurationState, failureReason: z.string().nullable() }),
   connection: WorkerHealthConnection,
   usage: WorkerHealthUsage,
   cache: WorkerHealthCache,

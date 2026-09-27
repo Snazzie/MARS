@@ -32,6 +32,7 @@ function discoveryRecheckApiDb(result: "queued" | "not_found" | "not_paused" = "
 const healthWorkerId = "86afd915-add3-407c-a6c1-1b46803ef713";
 function workerHealthApiDb(worker: Record<string, unknown> | null = {
   id: healthWorkerId,
+  configurationState: "ready",
   connectionState: "offline",
   heartbeatAgeSeconds: 1,
   doctorAgeSeconds: 2,
@@ -411,6 +412,7 @@ test("global admins receive strict no-store worker health without secrets", asyn
   expect(body).toEqual({
     observedAt: "2026-08-23T12:00:00.000Z",
     runtimeMode: null,
+    configuration: { state: "ready", failureReason: null },
     connection: {
       state: "online",
       lastHeartbeatAt: "2026-08-23T11:59:59.000Z",

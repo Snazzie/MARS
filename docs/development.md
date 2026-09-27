@@ -246,7 +246,13 @@ as `Authorization: Bearer <token>`; never commit the token.
   redacted service-log tail from a connected worker. The worker must run an
   artifact that supports `worker.collect_logs`.
 
-Both responses use `Cache-Control: no-store`.
+Log responses use `Cache-Control: no-store`.
+
+`GET /api/workers/:workerId/health` returns the global-admin-only worker
+health snapshot, including `configuration.state` and
+`configuration.failureReason`. The reason is `null` unless the current
+configuration command failed and reported a matching reason. Unknown workers
+return 404; the response uses `Cache-Control: no-store`.
 
 The development control-plane entry point enables the admin log buffer and
 prefixes console output with UTC ISO-8601 timestamps, as does the worker entry

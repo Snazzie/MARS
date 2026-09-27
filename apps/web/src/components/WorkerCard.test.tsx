@@ -76,6 +76,7 @@ const cacheFixture = (overrides: Partial<WorkerCacheSummary> = {}): WorkerCacheS
 const cacheWorkerFixture = (overrides: Partial<WorkerDetail> = {}, cache = cacheFixture()) => ({ ...workerFixture(overrides), cache });
 const liveHealthFixture = (connection: Partial<WorkerHealth["connection"]> = {}): WorkerHealth => ({
   observedAt: new Date().toISOString(),
+  configuration: { state: "ready", failureReason: null },
   connection: { state: "online", lastHeartbeatAt: new Date().toISOString(), lastDoctorAt: new Date().toISOString(), heartbeatAgeSeconds: 1, doctorAgeSeconds: 2, ...connection },
   usage: { cpu: { actual: 1, reserved: 0, free: 1 }, memoryBytes: { actual: "1", reserved: "0", free: "1" }, storageBytes: { actual: "1", reserved: "0", free: "1" }, pods: { actual: 1, reserved: 0, free: 1 } },
   cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: null, effectiveRunnerCacheEnabled: null, effectiveRunnerCacheMaxGiB: null, ready: false, generation: null, sizeBytes: "0", entryCount: 0, runnerCacheSizeBytes: "0", runnerCacheEntryCount: 0, observedAt: null, runnerCacheObservedAt: null, error: null },
@@ -431,6 +432,7 @@ test("polls live health on mount without an expansion flag", async () => {
     requested = String(input);
     return new Response(JSON.stringify({
       observedAt: null,
+      configuration: { state: "ready", failureReason: null },
       connection: { state: "online", lastHeartbeatAt: null, lastDoctorAt: null, heartbeatAgeSeconds: null, doctorAgeSeconds: null },
       usage: { cpu: { actual: 1, reserved: 0, free: 1 }, memoryBytes: { actual: "1", reserved: "0", free: "1" }, storageBytes: { actual: "1", reserved: "0", free: "1" }, pods: { actual: 1, reserved: 0, free: 1 } },
       cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: null, effectiveRunnerCacheEnabled: null, effectiveRunnerCacheMaxGiB: null, ready: false, generation: null, sizeBytes: "0", entryCount: 0, runnerCacheSizeBytes: "0", runnerCacheEntryCount: 0, observedAt: null, runnerCacheObservedAt: null, error: null },
