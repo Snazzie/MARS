@@ -250,8 +250,8 @@ export function getRepositories(organizationId: string, {
   if (cursor) query.set("cursor", cursor);
   return request(`/api/organizations/${organizationId}/repositories?${query}`, CursorPage(RepositorySummary));
 }
-export const getWorkers = (organizationId: string, includeInactive = false) =>
-  request(`/api/organizations/${organizationId}/workers?includeInactive=${includeInactive ? "true" : "false"}`, CursorPage(WorkerDetail));
+export const getWorkers = (organizationId: string, includeInactive = false, cursor?: string | null) =>
+  request(`/api/organizations/${organizationId}/workers?includeInactive=${includeInactive ? "true" : "false"}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, CursorPage(WorkerDetail));
 export const getWorker = (organizationId: string, workerId: string) =>
   request(`/api/organizations/${organizationId}/workers/${workerId}`, WorkerDetail);
 export const getWorkerUpgrade = (workerId: string) =>

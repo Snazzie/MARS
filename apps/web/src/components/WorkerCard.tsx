@@ -125,6 +125,7 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
   const [preservationPending, setPreservationPending] = useState(false);
   const [preservationError, setPreservationError] = useState<string | null>(null);
   const togglePreservation = async (enabled: boolean) => {
+    if (!enabled && !window.confirm(`Turn off lease preservation for ${worker.name}? Preserved failed runtimes will be cleaned up and their diagnostic evidence may be lost.`)) return;
     setPreservationPending(true);
     setPreservationError(null);
     try { await setWorkerLeasePreservation(organizationId, worker.id, enabled); onChange(); }

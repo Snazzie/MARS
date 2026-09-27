@@ -122,3 +122,22 @@ test("only global admins see control-plane logs in deployment settings", () => {
   expect(html).toContain('dateTime="2026-09-24T12:00:00.000Z"');
   expect(html).toContain("Search logs");
 });
+
+test("global admin settings show per-worker lease preservation without exposing it to other users", () => {
+  const client = settingsClient({ connected: false });
+  client.setQueryData(["settings", "workers"], {
+    pages: [{ items: [
+      { id: "worker-1", name: "lenovo", admissionState: "adopted", runtimeMode: "container", preserveLeases: true },
+      { id: "worker-2", name: "Mac.local", admissionState: "adopted", runtimeMode: "vm", preserveLeases: false },
+    ], nextCursor: null }],
+    pageParams: [null],
+  });
+  expect(markup(client)).not.toContain("Preserve failed leases");
+  client.setQueryData(["me"], { id: "admin", login: "admin", isGlobalAdmin: true });
+  const html = markup(client);
+  expect(html).toContain("Preserve failed leases");
+  expect(html).toContain("lenovo — preserve failed containers");
+  expect(html).toContain("Mac.local — preserve failed VMs");
+  expect(html).toContain("inspect the evidence first");
+  expect(html).toContain('type="checkbox" checked=""');
+});
