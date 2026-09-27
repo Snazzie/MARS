@@ -80,8 +80,15 @@ Set `MARS_DEV_TOKEN` to the development control plane's token and run
 `MARS_CLONE_ROOT`, `MARS_CHANNEL_ROOT`, and `MARS_LIBVIRT_NETWORK`.
 Linux ARM64 uses the existing Docker worker and requires
 `MARS_LINUX_ARM64_CONTAINER_IMAGE` (immutable digest) and
-`MARS_LINUX_CONTAINER_NETWORK`. These runtimes currently require their image
-and host prerequisites before enrollment; the launcher does not provision them.
+`MARS_LINUX_CONTAINER_NETWORK`. The ARM64 job image built from
+`images/jobs/linux-arm64/Containerfile` includes `tar`, `gzip`, and `unzip`.
+JavaScript actions use the runner's bundled runtime; workflows should use
+`actions/setup-node`, `actions/setup-python`, or `actions/setup-java` for
+language toolchains. Docker-based container actions and service containers
+are not supported in these jobs; the job container has no Docker socket.
+Rebuild and deploy the image, then update the configured digest to use it.
+These runtimes currently require their image and host prerequisites before
+enrollment; the launcher does not provision them.
 The development identity and cache live under `~/.local/share/Mars/dev-worker`,
 separate from an installed worker. Distinct `mars-dev` VM/container prefixes
 prevent the development worker from taking over installed worker guests. Review
