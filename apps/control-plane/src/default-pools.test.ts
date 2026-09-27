@@ -65,7 +65,7 @@ test("creates a Tart Ubuntu ARM64 pool from a dual-platform Mac worker", async (
   }, { json: (value: unknown) => value });
   await ensureDefaultPools(db as never, { "macos-arm64": `mars-macos-arm64-job@sha256:${"b".repeat(64)}` });
   expect(inserted).toHaveLength(4);
-  expect(inserted.find((values) => values.includes("linux-arm64"))).toContainEqual(["mars-linux-arm64", "ubuntu"]);
+  expect(inserted.find((values) => values.includes("linux-arm64"))).toContainEqual(["mars-ubuntu-arm64", "ubuntu"]);
   expect(inserted.find((values) => values.includes("linux-arm64"))).toContain(digest);
   expect(inserted.find((values) => values.includes("macos-arm64"))).toContain(macDigest);
 });
@@ -100,7 +100,19 @@ test("lists all default pools before any worker or image is available", async ()
     expect(pool).toContain("");
     expect(pool).toContain(false);
   }
-  expect(inserted.find((values) => values.includes("linux-arm64"))).toContainEqual(["mars-linux-arm64", "ubuntu"]);
+  expect(inserted.find((values) => values.includes("linux-arm64"))).toContainEqual(["mars-ubuntu-arm64", "ubuntu"]);
+});
+
+test("updates the existing default ARM64 pool's broad Linux label", async () => {
+  const updates: unknown[][] = [];
+  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const query = strings.join(" ").toLowerCase();
+    if (query.includes("from runner_pools") && values.includes("default-linux-arm64")) return [{ id: "arm-pool", driver: "linux-docker-container", imageDigest: "sha256:image", platform: "linux-arm64" }];
+    if (query.includes("update runner_pools")) updates.push(values);
+    return [];
+  }, { json: (value: unknown) => value });
+  await ensureDefaultPools(db as never, {});
+  expect(updates).toContainEqual(["mars-ubuntu-arm64", ["mars-ubuntu-arm64", "ubuntu"], "arm-pool"]);
 });
 
 test("pins Ubuntu x64 and ARM64 defaults without claiming worker capacity", async () => {

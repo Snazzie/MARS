@@ -78,7 +78,7 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
     if (imageDigest) choices = choices.filter(({ doctor }) => workerPoolEvidence(doctor, driver, imageDigest!, platform).ready && workerPoolEvidence(doctor, driver, imageDigest!, platform).imageMatches);
     const resources = poolResourcesForWorkers(choices.map(({ limits }) => limits))
       ?? { vcpu: 4, memoryBytes: 6 * GIB, storageBytes: 30 * GIB, concurrency: 1 };
-    const label = platform === "linux-x64" ? `mars-ubuntu-${images.ubuntuVersion ?? "24"}` : `mars-${platform}`;
+    const label = platform === "linux-x64" ? `mars-ubuntu-${images.ubuntuVersion ?? "24"}` : platform === "linux-arm64" ? "mars-ubuntu-arm64" : `mars-${platform}`;
     const labels = platform === "linux-arm64" ? [label, "ubuntu"] : [label];
     const name = `default-${platform}`;
     const enabled = Boolean(imageDigest && choices.length);
@@ -86,6 +86,9 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
     if (existing) {
       const retained = configuredWorkers.filter(({ worker, doctor, desired }) => desired.selectedDriver === existing.driver && guestPlatformsForWorker(worker).includes(existing.platform as GuestPlatform) && workerPoolEvidence(doctor, String(existing.driver), String(existing.imageDigest), String(existing.platform)).ready && workerPoolEvidence(doctor, String(existing.driver), String(existing.imageDigest), String(existing.platform)).imageMatches);
       const retainedResources = poolResourcesForWorkers(retained.map(({ limits }) => limits)) ?? resources;
+      if (platform === "linux-arm64" && existing.platform === "linux-arm64") {
+        await db`update runner_pools set trigger_label=${label},labels=${jsonParameter(db, labels)}::jsonb where id=${existing.id} and trigger_label='mars-linux-arm64'`;
+      }
       await db`update runner_pools set resources=${jsonParameter(db, retainedResources)}::jsonb,enabled=${retained.length > 0} where id=${existing.id}`;
     } else {
       await db`insert into runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) values (null,null,${name},${platform},${driver},${imageDigest ?? ""},${jsonParameter(db, resources)}::jsonb,${jsonParameter(db, labels)}::jsonb,${label},${enabled})`;
