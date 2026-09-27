@@ -96,6 +96,7 @@ test("worker health projects complete cache and active lease telemetry", async (
   ];
   const db = workerHealthDb({
     worker: {
+      configurationState: "ready",
       heartbeatAgeSeconds: 1,
       doctorAgeSeconds: 2,
       connectionState: "offline",
@@ -264,9 +265,19 @@ test("worker health tolerates missing cache telemetry while retaining desired TT
   expect(health?.cache).toEqual({ desiredTtlSeconds: 7200, effectiveTtlSeconds: null, effectiveRunnerCacheEnabled: null, effectiveRunnerCacheMaxGiB: null, ready: false, generation: null, sizeBytes: null, entryCount: null, runnerCacheSizeBytes: null, runnerCacheEntryCount: null, observedAt: null, runnerCacheObservedAt: null, error: null });
 });
 
+test("worker health exposes the current configuration failure and clears it after recovery", async () => {
+  const failed = minimalWorkerHealthRow({ configurationState: "error", configurationFailureReason: "Docker image download failed" });
+  const recovered = minimalWorkerHealthRow({ configurationState: "ready", configurationFailureReason: null });
+  expect((await getWorkerHealth(workerHealthDb({ worker: failed, leases: [] }), failed.id, () => true))?.configuration)
+    .toEqual({ state: "error", failureReason: "Docker image download failed" });
+  expect((await getWorkerHealth(workerHealthDb({ worker: recovered, leases: [] }), recovered.id, () => true))?.configuration)
+    .toEqual({ state: "ready", failureReason: null });
+});
+
 function minimalWorkerHealthRow(overrides: Record<string, unknown> = {}) {
   return {
     id: "86afd915-add3-407c-a6c1-1b46803ef713",
+    configurationState: "ready",
     connectionState: "offline",
     heartbeatAgeSeconds: null,
     doctorAgeSeconds: null,

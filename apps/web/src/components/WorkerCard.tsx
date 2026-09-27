@@ -125,6 +125,7 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
   const [preservationPending, setPreservationPending] = useState(false);
   const [preservationError, setPreservationError] = useState<string | null>(null);
   const togglePreservation = async (enabled: boolean) => {
+    if (!enabled && !window.confirm(`Turn off lease preservation for ${worker.name}? Preserved failed runtimes will be cleaned up and their diagnostic evidence may be lost.`)) return;
     setPreservationPending(true);
     setPreservationError(null);
     try { await setWorkerLeasePreservation(organizationId, worker.id, enabled); onChange(); }
@@ -177,7 +178,12 @@ export function WorkerCard({ worker, organizationId, onChange, canManage = false
         {active && <Button label="Configure" variant="secondary" clickAction={openConfiguration} />}
       </div>
     </header>
-    {active && canManage && <div className="worker-policy-control"><label title="Keeps failed runtimes for inspection and consumes worker capacity until disabled."><input type="checkbox" checked={worker.preserveLeases === true} disabled={preservationPending} onChange={(event) => { void togglePreservation(event.currentTarget.checked); }} /> {worker.runtimeMode === "vm" ? "Preserve failed VMs" : "Preserve failed containers"}</label>{preservationError && <p className="form-error" role="alert">{preservationError}</p>}</div>}
+    {active && <section className="worker-section worker-policy-control" aria-label="Worker settings">
+      <div className="panel-kicker">Worker settings</div>
+      <label title="Keeps failed runtimes for inspection and consumes worker capacity until disabled."><input type="checkbox" checked={worker.preserveLeases === true} disabled={!canManage || preservationPending} onChange={(event) => { void togglePreservation(event.currentTarget.checked); }} /> {worker.runtimeMode === "vm" ? "Preserve failed VMs" : "Preserve failed containers"}</label>
+      <p className="form-help">Preserved failed leases block retries of the same job. Turning this off schedules cleanup and may remove their diagnostic evidence; inspect it first.</p>
+      {preservationError && <p className="form-error" role="alert">{preservationError}</p>}
+    </section>}
     <dl className="limits-list worker-telemetry worker-operational-strip">
       <div><dt>Last heartbeat</dt><dd>{telemetryAt(lastHeartbeatAt)}</dd></div>
       <div><dt>Last successful doctor</dt><dd>{telemetryAt(lastDoctorAt)}</dd></div>

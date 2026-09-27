@@ -47,6 +47,7 @@ test("settings keeps the deployment shell without per-organization resource cont
   expect(html).not.toContain("Memory per pod (GiB)");
   expect(html).not.toContain("Storage per pod (GiB)");
   expect(html).not.toContain("<table");
+  expect(html).not.toContain("Preserve failed leases");
 });
 
 test("settings exposes disconnected GitHub connection and unavailable quota states", () => {

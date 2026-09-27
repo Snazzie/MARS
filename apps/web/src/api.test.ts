@@ -3,6 +3,7 @@ import { ApiRequestError, configureWorker, getCostCenter, getGithubConnection, g
 import type { CostCenterDto, WorkerHealth } from "@mars/contracts";
 const workerHealth: WorkerHealth = {
   observedAt: "2026-08-23T12:00:00.000Z",
+  configuration: { state: "ready", failureReason: null },
   connection: { state: "online", lastHeartbeatAt: "2026-08-23T11:59:59.000Z", lastDoctorAt: "2026-08-23T11:59:58.000Z", heartbeatAgeSeconds: 1, doctorAgeSeconds: 2 },
   usage: {
     cpu: { actual: 2, reserved: 1, free: 1 },

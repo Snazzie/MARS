@@ -76,6 +76,7 @@ const cacheFixture = (overrides: Partial<WorkerCacheSummary> = {}): WorkerCacheS
 const cacheWorkerFixture = (overrides: Partial<WorkerDetail> = {}, cache = cacheFixture()) => ({ ...workerFixture(overrides), cache });
 const liveHealthFixture = (connection: Partial<WorkerHealth["connection"]> = {}): WorkerHealth => ({
   observedAt: new Date().toISOString(),
+  configuration: { state: "ready", failureReason: null },
   connection: { state: "online", lastHeartbeatAt: new Date().toISOString(), lastDoctorAt: new Date().toISOString(), heartbeatAgeSeconds: 1, doctorAgeSeconds: 2, ...connection },
   usage: { cpu: { actual: 1, reserved: 0, free: 1 }, memoryBytes: { actual: "1", reserved: "0", free: "1" }, storageBytes: { actual: "1", reserved: "0", free: "1" }, pods: { actual: 1, reserved: 0, free: 1 } },
   cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: null, effectiveRunnerCacheEnabled: null, effectiveRunnerCacheMaxGiB: null, ready: false, generation: null, sizeBytes: "0", entryCount: 0, runnerCacheSizeBytes: "0", runnerCacheEntryCount: 0, observedAt: null, runnerCacheObservedAt: null, error: null },
@@ -99,6 +100,60 @@ test("renders VM-specific Windows controls without container image actions", () 
   expect(markup).toContain("Preserve failed VMs");
   expect(markup).not.toContain("Build local image");
 });
+test("shows preservation in worker detail settings and limits changes to administrators", () => {
+  const worker = workerFixture({ name: "lenovo", preserveLeases: true, runtimeMode: "container" });
+  const admin = renderCard(worker, undefined, true);
+  expect(admin).toContain('aria-label="Worker settings"');
+  expect(admin).toContain("Preserve failed containers");
+  expect(admin).toContain("diagnostic evidence");
+  expect(admin).toContain('type="checkbox" checked=""');
+  const viewer = renderCard(worker);
+  expect(viewer).toContain('type="checkbox" disabled="" checked=""');
+});
+
+test("worker detail requires confirmation before releasing preserved leases", async () => {
+  const browser = new Window();
+  // @ts-expect-error test DOM globals
+  globalThis.document = browser.document;
+  // @ts-expect-error test DOM globals
+  globalThis.window = browser;
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const originalFetch = globalThis.fetch;
+  const originalConfirm = window.confirm;
+  let approved = false;
+  let requests = 0;
+  let refreshed = 0;
+  window.confirm = () => approved;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith("/lease-preservation")) {
+      requests += 1;
+      expect(init?.method).toBe("POST");
+      expect(JSON.parse(String(init?.body))).toEqual({ enabled: false });
+      return Response.json(workerFixture({ preserveLeases: false }));
+    }
+    return new Response("unavailable", { status: 503 });
+  }) as typeof fetch;
+  try {
+    await act(async () => { root.render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><WorkerCard worker={workerFixture({ preserveLeases: true })} organizationId="all" canManage onChange={() => { refreshed += 1; }} /></QueryClientProvider>); });
+    const checkbox = container.querySelector<HTMLInputElement>('[aria-label="Worker settings"] input[type="checkbox"]')!;
+    await act(async () => { checkbox.click(); });
+    expect(requests).toBe(0);
+    expect(checkbox.checked).toBe(true);
+    approved = true;
+    await act(async () => { checkbox.click(); await new Promise(resolve => setTimeout(resolve, 0)); });
+    expect(requests).toBe(1);
+    expect(refreshed).toBe(1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    window.confirm = originalConfirm;
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});
+
 test("shows routing prefixes from configured guests rather than host OS", () => {
   const lenovo = renderCard(workerFixture({ platform: "windows-arm64", guestPlatforms: ["linux-arm64"] }));
   expect(lenovo).toContain("Routing prefixes: mars-ubuntu");
@@ -377,6 +432,7 @@ test("polls live health on mount without an expansion flag", async () => {
     requested = String(input);
     return new Response(JSON.stringify({
       observedAt: null,
+      configuration: { state: "ready", failureReason: null },
       connection: { state: "online", lastHeartbeatAt: null, lastDoctorAt: null, heartbeatAgeSeconds: null, doctorAgeSeconds: null },
       usage: { cpu: { actual: 1, reserved: 0, free: 1 }, memoryBytes: { actual: "1", reserved: "0", free: "1" }, storageBytes: { actual: "1", reserved: "0", free: "1" }, pods: { actual: 1, reserved: 0, free: 1 } },
       cache: { desiredTtlSeconds: 3600, effectiveTtlSeconds: null, effectiveRunnerCacheEnabled: null, effectiveRunnerCacheMaxGiB: null, ready: false, generation: null, sizeBytes: "0", entryCount: 0, runnerCacheSizeBytes: "0", runnerCacheEntryCount: 0, observedAt: null, runnerCacheObservedAt: null, error: null },

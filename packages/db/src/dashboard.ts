@@ -446,6 +446,15 @@ export async function getWorkerHealth(db: DashboardDb, workerId: string, workerC
   const [worker] = await db<Record<string, unknown>[]>`
     SELECT w.id,w.platform,w.connection_state AS "connectionState",w.last_heartbeat_at AS "lastHeartbeatAt",
       w.doctor_observed_at AS "lastDoctorAt",w.doctor,w.limits,w.desired_configuration AS "desiredConfiguration",
+      w.configuration_state AS "configurationState",
+      CASE WHEN w.configuration_state='error' THEN (
+        SELECT a.payload->>'reason' FROM audit_events a
+        WHERE a.type='worker.configuration_failed'
+          AND a.payload->>'workerId'=w.id::text
+          AND a.payload->>'commandId'=w.configuration_command_id::text
+          AND a.payload->>'revision'=w.configuration_revision
+        ORDER BY a.created_at DESC LIMIT 1
+      ) ELSE NULL END AS "configurationFailureReason",
       now() AS "observedAt",
       GREATEST(0,EXTRACT(EPOCH FROM (now()-w.last_heartbeat_at)))::int AS "heartbeatAgeSeconds",
       GREATEST(0,EXTRACT(EPOCH FROM (now()-w.doctor_observed_at)))::int AS "doctorAgeSeconds",
@@ -505,6 +514,10 @@ export async function getWorkerHealth(db: DashboardDb, workerId: string, workerC
   return WorkerHealth.parse({
     observedAt,
     runtimeMode: doctor?.runtimeMode ?? (String(worker.platform) === "macos-arm64" ? "tart" : null),
+    configuration: {
+      state: ConfigurationState.parse(worker.configurationState),
+      failureReason: typeof worker.configurationFailureReason === "string" ? worker.configurationFailureReason : null,
+    },
     connection: {
       state: workerConnected(workerId) ? "online" : "offline",
       lastHeartbeatAt: normalizeTimestamp(worker.lastHeartbeatAt),
