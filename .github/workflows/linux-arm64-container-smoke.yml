@@ -16,3 +16,9 @@ jobs:
           test "$RUNNER_OS" = Linux
           test "$(uname -m)" = aarch64
           printf 'Runner %s completed on %s\n' "$RUNNER_NAME" "$(uname -m)"
+      - name: Verify archive tools in job image
+        shell: bash
+        run: |
+          tar --version
+          gzip --version
+          unzip -v
