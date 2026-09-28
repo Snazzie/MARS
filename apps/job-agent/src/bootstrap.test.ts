@@ -75,7 +75,7 @@ printf '%s\n' "$SSL_CERT_FILE" >> '${outputPath}'
   await consumeGuestJitConfigWithWorkerCache("encoded-jit-config", root, "linux-x64", workerCache);
 
   const output = await Bun.file(outputPath).text();
-  expect(output).toContain(`${workerCache.proxyUrl}\n${workerCache.proxyUrl}\n${workerCache.proxyUrl}\n${workerCache.proxyUrl}\n`);
+  expect(output).toContain(`${workerCache.proxyUrl}\n${workerCache.proxyUrl}\n${workerCache.proxyUrl}\n${workerCache.proxyUrl}\nlocalhost,127.0.0.1,::1\nlocalhost,127.0.0.1,::1\n`);
   expect(new URL(workerCache.proxyUrl).username).not.toBe("");
   expect(new URL(workerCache.proxyUrl).password).not.toBe("");
   expect(output).toContain(`${workerCache.caCertificatePem}`);
@@ -137,7 +137,7 @@ exit /b 0
 
   const lines = (await Bun.file(outputPath).text()).split(/\r?\n/);
   expect(lines.slice(0, 4)).toEqual(Array(4).fill(workerCache.proxyUrl));
-  expect(lines.slice(4, 6)).toEqual(["127.0.0.1,::1", "127.0.0.1,::1"]);
+  expect(lines.slice(4, 6)).toEqual(["localhost,127.0.0.1,::1", "localhost,127.0.0.1,::1"]);
   expect(lines[8]).toBe("openssl");
   expect(lines[9]).toBe(lines[6]);
   expect(lines.slice(10, 18)).toEqual(["3", "http.sslBackend", "openssl", "http.sslVerify", "true", "http.sslCAInfo", lines[6], workerCache.registrationUrl]);

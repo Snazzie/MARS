@@ -132,8 +132,8 @@ ${platform === "windows-x64" ? "\tsslBackend = openssl\n" : ""}	sslVerify = true
       env.http_proxy = proxy.proxyUrl;
       env.HTTPS_PROXY = proxy.proxyUrl;
       env.https_proxy = proxy.proxyUrl;
-      env.NO_PROXY = "127.0.0.1,::1";
-      env.no_proxy = "127.0.0.1,::1";
+      env.NO_PROXY = "localhost,127.0.0.1,::1";
+      env.no_proxy = "localhost,127.0.0.1,::1";
       env.NODE_EXTRA_CA_CERTS = caPath;
       env.node_extra_ca_certs = caPath;
       if (platform !== "windows-x64") env.SSL_CERT_FILE = caPath;
