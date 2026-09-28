@@ -45,7 +45,7 @@ test("loads worker health from the no-store endpoint and parses its contract", a
   }) as unknown as typeof fetch;
   try {
     const result = await getWorkerHealth("worker-1");
-    expect(requested).toBe("/api/workers/worker-1/health");
+    expect(requested).toBe("/api/workers/worker-1/health?configuration=1");
     expect(cache).toBe("no-store");
     expect(result).toMatchObject({ connection: { state: "online" }, cache: { generation: "11111111-1111-4111-8111-111111111111" } });
     expect(result.containers).toEqual(workerHealth.containers);

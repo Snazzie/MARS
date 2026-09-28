@@ -405,7 +405,7 @@ test("worker health returns a no-store not-found error for unknown workers", asy
 });
 
 test("global admins receive strict no-store worker health without secrets", async () => {
-  const response = await appFor(admin, workerHealthApiDb()).request(`/api/workers/${healthWorkerId}/health`, { headers: sessionHeaders });
+  const response = await appFor(admin, workerHealthApiDb()).request(`/api/workers/${healthWorkerId}/health?configuration=1`, { headers: sessionHeaders });
   expect(response.status).toBe(200);
   expect(response.headers.get("cache-control")).toBe("no-store");
   const body = await response.json();
@@ -465,4 +465,15 @@ test("global admins receive strict no-store worker health without secrets", asyn
     }],
   });
   expect(JSON.stringify(body)).not.toContain("do-not-return");
+});
+
+test("worker health preserves the legacy response shape for older dashboards", async () => {
+  const app = appFor(admin, workerHealthApiDb());
+  const legacy = await app.request(`/api/workers/${healthWorkerId}/health`, { headers: sessionHeaders });
+  const expanded = await app.request(`/api/workers/${healthWorkerId}/health?configuration=1`, { headers: sessionHeaders });
+  expect(legacy.status).toBe(200);
+  expect(legacy.headers.get("cache-control")).toBe("no-store");
+  const { configuration, ...originalShape } = await expanded.json();
+  expect(configuration).toEqual({ state: "ready", failureReason: null });
+  expect(await legacy.json()).toEqual(originalShape);
 });

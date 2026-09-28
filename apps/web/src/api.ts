@@ -136,7 +136,7 @@ async function requestHealth(): Promise<z.output<typeof DashboardHealthResponse>
 export const getMe = () => request("/api/me", DashboardOperator);
 export const getHealth = () => requestHealth();
 export const getWorkerHealth = (workerId: string) =>
-  request(`/api/workers/${workerId}/health`, WorkerHealth, { cache: "no-store" });
+  request(`/api/workers/${workerId}/health?configuration=1`, WorkerHealth, { cache: "no-store" });
 const controlPlaneLogPage = z.object({
   items: z.array(z.object({
     sequence: z.number().int(),

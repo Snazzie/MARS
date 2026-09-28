@@ -455,7 +455,7 @@ test("polls live health on mount without an expansion flag", async () => {
       root.render(<QueryClientProvider client={client}><WorkerCard worker={workerFixture()} organizationId="all" onChange={() => {}} /></QueryClientProvider>);
     });
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
-    expect(requested).toBe("/api/workers/86afd915-add3-407c-a6c1-1b46803ef713/health");
+    expect(requested).toBe("/api/workers/86afd915-add3-407c-a6c1-1b46803ef713/health?configuration=1");
     expect(container.querySelector("#worker-health-86afd915-add3-407c-a6c1-1b46803ef713-panel")).not.toBeNull();
     expect(container.querySelector(".worker-health-container-table")?.textContent).toContain("card-container");
   } finally {

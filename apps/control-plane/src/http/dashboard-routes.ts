@@ -344,7 +344,11 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   app.get("/api/workers/:workerId/health", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const health = await getWorkerHealth(deps.db, c.req.param("workerId"), deps.workerConnected ?? (() => false));
-    return health ? c.json(WorkerHealth.parse(health), { headers: { "cache-control": "no-store" } }) : error(c, 404, "not_found", "Resource not found");
+    if (!health) return error(c, 404, "not_found", "Resource not found");
+    const parsed = WorkerHealth.parse(health);
+    if (c.req.query("configuration") === "1") return c.json(parsed, { headers: { "cache-control": "no-store" } });
+    const { configuration: _configuration, ...legacyHealth } = parsed;
+    return c.json(legacyHealth, { headers: { "cache-control": "no-store" } });
   }));
   app.post("/api/organizations/:organizationId/workers/:workerId/lease-preservation", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");

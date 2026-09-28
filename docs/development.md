@@ -256,8 +256,9 @@ as `Authorization: Bearer <token>`; never commit the token.
 Log responses use `Cache-Control: no-store`.
 
 `GET /api/workers/:workerId/health` returns the global-admin-only worker
-health snapshot, including `configuration.state` and
-`configuration.failureReason`. The reason is `null` unless the current
+health snapshot. Add `?configuration=1` to include `configuration.state` and
+`configuration.failureReason`; without it, the response retains the original
+shape for older dashboards. The reason is `null` unless the current
 configuration command failed and reported a matching reason. Unknown workers
 return 404; the response uses `Cache-Control: no-store`.
 
