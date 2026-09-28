@@ -19,7 +19,13 @@ On a Windows host running a Linux Docker guest, a zero `runner.finished` exit co
 
 The Linux ARM64 job image must include Ubuntu's `libicu74` and the `openssl` command: the .NET Actions Runner aborts before creating a new `_diag` log when ICU is absent, and jobs invoking OpenSSL need its CLI installed. The image build checks `Runner.Listener --version` and `openssl version`. A worker doctor report validates the image digest and entrypoint, not all of the runner's shared libraries or job tools. Rebuild and publish a new immutable job-image digest, update the worker's `MARS_LINUX_ARM64_CONTAINER_IMAGE` and its pool image digest, then refresh the worker's configuration; a `git pull` or worker restart does not alter the previously pinned image.
 
-With the worker cache proxy enabled, the Linux guest combines its system CA bundle with the lease's proxy CA and passes it as `SSL_CERT_FILE` to the .NET runner. Without that trust, the runner can connect to the broker but fail job initialization against `results-receiver.actions.githubusercontent.com` with `PartialChain`; GitHub may keep the job queued even after the container exits. A successful container exit alone is not a successful GitHub job: verify the workflow's GitHub conclusion.
+When building the Linux ARM64 job image from a Windows checkout, CRLF in
+`entrypoint.sh` makes the container exit 127 with `/usr/bin/env: 'sh\r': No such file
+or directory`. The release build and Containerfile normalize the script to LF; the
+image build also executes the entrypoint briefly before publishing. Existing
+images are immutable and must be rebuilt and repinned in both the worker and pool.
+
+With the worker cache proxy enabled, the Linux ARM64 guest installs the lease's proxy CA into its container trust store before starting the .NET runner, then removes it on exit. It also combines the public and proxy CA bundles for `SSL_CERT_FILE`, Node, and Git. Merely setting `SSL_CERT_FILE` did not prevent `PartialChain` errors from the runner's results-service WebSocket and job setup. GitHub can report a failed setup even when the runner process exits zero; verify the workflow's GitHub conclusion.
 
 Linux ARM64 Ubuntu Git uses the GnuTLS SSL backend even when the `openssl` command is installed. The job agent must leave Git's backend unset for Linux checkouts while supplying the combined CA bundle through `http.sslCAInfo` and `GIT_SSL_CAINFO`; forcing `http.sslBackend=openssl` makes checkout fail with “Unsupported SSL backend 'openssl'”. Git for Windows retains its OpenSSL backend configuration.
 

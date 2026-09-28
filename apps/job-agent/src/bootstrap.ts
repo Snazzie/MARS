@@ -76,11 +76,18 @@ export function mergeBunInstallCa(source: string, caPath: string): string {
   return merged.join("\n");
 }
 
+async function refreshLinuxTrustStore(): Promise<void> {
+  const update = Bun.spawn(["update-ca-certificates"], { stdout: "ignore", stderr: "pipe" });
+  const [exitCode, stderr] = await Promise.all([update.exited, new Response(update.stderr).text()]);
+  if (exitCode !== 0) throw new Error(`Linux trust operation failed: ${stderr.trim() || `exit ${exitCode}`}`);
+}
+
 
 export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerRoot: string, platform: "windows-x64" | "linux-x64" | "linux-arm64", workerCache?: WorkerCacheProxy, onOutput?: (stream: "stdout" | "stderr", content: string) => void, windowsTrust: WindowsTrustAdapter = powerShellWindowsTrust): Promise<number> {
   RunnerJitConfig.shape.encodedJitConfig.parse(encodedJitConfig);
   let caDirectory: string | undefined;
   let addedRootThumbprint: string | undefined;
+  let linuxRootPath: string | undefined;
   try {
     const env: Record<string, string> = {
       ...Bun.env,
@@ -106,6 +113,11 @@ export async function runRunnerWithWorkerCache(encodedJitConfig: string, runnerR
         publicCa = await readFile("/etc/ssl/certs/ca-certificates.crt", "utf8");
       }
       await writeFile(caPath, `${publicCa}${publicCa.endsWith("\n") || !publicCa ? "" : "\n"}${proxy.caCertificatePem}`, { mode: 0o600, flag: "wx" });
+      if (platform === "linux-arm64") {
+        linuxRootPath = "/usr/local/share/ca-certificates/mars-worker-cache.crt";
+        await writeFile(linuxRootPath, proxy.caCertificatePem, { mode: 0o600 });
+        await refreshLinuxTrustStore();
+      }
       const configuredBunRoot = Bun.env.XDG_CONFIG_HOME?.trim() || Bun.env.HOME?.trim() || Bun.env.USERPROFILE?.trim();
       const existingBunfigPath = configuredBunRoot ? join(configuredBunRoot, ".bunfig.toml") : undefined;
       const existingBunfig = existingBunfigPath ? await readFile(existingBunfigPath, "utf8").catch(() => "") : "";
@@ -173,6 +185,14 @@ ${platform === "windows-x64" ? "\tsslBackend = openssl\n" : ""}	sslVerify = true
       try { await windowsTrust.removeRoot(addedRootThumbprint); } catch (error) { trustCleanupError = error; }
     }
     let caCleanupError: unknown;
+    if (linuxRootPath) {
+      try {
+        await unlink(linuxRootPath);
+        await refreshLinuxTrustStore();
+      } catch (error) {
+        trustCleanupError ??= error;
+      }
+    }
     if (caDirectory) {
       try { await rm(caDirectory, { recursive: true, force: true }); } catch (error) { caCleanupError = error; }
     }

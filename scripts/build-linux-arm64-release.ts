@@ -1,4 +1,4 @@
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "..");
@@ -33,7 +33,7 @@ await run(["bun", "build", "apps/orchestrator/src/index.ts", "--compile", "--tar
 await run(["bun", "build", "apps/job-agent/src/index.ts", "--compile", "--target=bun-linux-arm64", "--outfile=dist/linux-arm64/mars-job-agent"]);
 await run(["bun", "run", "scripts/build-linux-arm64-runner.ts", "dist/linux-arm64/runner.tar.gz"]);
 await copyFile(join(root, "deploy", "workers", "install-worker-linux-arm64.ps1"), join(dist, "install-worker-linux-arm64.ps1"));
-await copyFile(join(root, "images", "jobs", "linux-arm64", "entrypoint.sh"), join(dist, "entrypoint.sh"));
+await writeFile(join(dist, "entrypoint.sh"), (await readFile(join(root, "images", "jobs", "linux-arm64", "entrypoint.sh"), "utf8")).replace(/\r\n/g, "\n"));
 await copyFile(join(root, "deploy", "workers", "linux-arm64-broker-compose.yaml"), join(dist, "linux-arm64-broker-compose.yaml"));
 const baseDigest = await digest("ubuntu:24.04", "Ubuntu ARM64 base image");
 await run(["docker", "buildx", "build", "--platform", "linux/arm64", "--build-arg", `BASE_IMAGE=ubuntu:24.04@${baseDigest}`, "--push", "-f", "deploy/workers/linux-arm64-broker.Dockerfile", "-t", `${brokerImage}:arm64-worker-v${workerVersion}`, "-t", `${brokerImage}:arm64-candidate`, "."]);
