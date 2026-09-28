@@ -26,7 +26,9 @@ test("renders the price-over-time chart above the breakdown", () => {
   expect(markup).toContain("2026-01-01");
 });
 
-test("formats platform, runner, and partial minute values", () => {
+test("formats Ubuntu runner platforms, runner, and partial minute values", () => {
+  expect(formatPlatform("linux-x64")).toBe("Ubuntu x64");
+  expect(formatPlatform("linux-arm64")).toBe("Ubuntu ARM64");
   expect(formatPlatform("macos-arm64")).toBe("macOS arm64");
   expect(formatPlatform("other")).toBe("other");
   expect(formatRunner(rows[1]!)).toBe("No comparable GitHub-hosted runner");

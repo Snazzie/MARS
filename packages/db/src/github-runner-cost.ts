@@ -1,7 +1,7 @@
 import type { CostCenterBreakdown, CostCenterExternalBreakdown, CostCenterPricePoint, CostCenterPricingProvider, OverviewCostSavings, OverviewDto } from "@mars/contracts";
 import type { DatabaseClient } from "./index.ts";
 
-export type GithubRunnerPlatform = "linux-x64" | "windows-x64" | "macos-arm64";
+export type GithubRunnerPlatform = "linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64";
 export type GithubRunnerRate = Readonly<{ platform: GithubRunnerPlatform; vcpu: number; sku: string; rateMicros: number }>;
 export type GithubRunnerRateSchedule = Readonly<{ effectiveFrom: string; sourceUrl: string; rates: readonly GithubRunnerRate[] }>;
 export type GithubRunnerUsageGroup = Readonly<{ usageDate: string; platform: string; requestedVcpu: number; billableMinutes: number }>;
@@ -12,6 +12,7 @@ export const GITHUB_HOSTED_RATE_SCHEDULES: readonly GithubRunnerRateSchedule[] =
   effectiveFrom: "2026-01-01", sourceUrl: githubPricingUrl,
   rates: Object.freeze<GithubRunnerRate[]>([
     { platform: "linux-x64", vcpu: 1, sku: "actions_linux_slim", rateMicros: 2_000 }, { platform: "linux-x64", vcpu: 2, sku: "actions_linux", rateMicros: 6_000 }, { platform: "linux-x64", vcpu: 4, sku: "linux_4_core", rateMicros: 12_000 }, { platform: "linux-x64", vcpu: 8, sku: "linux_8_core", rateMicros: 22_000 }, { platform: "linux-x64", vcpu: 16, sku: "linux_16_core", rateMicros: 42_000 }, { platform: "linux-x64", vcpu: 32, sku: "linux_32_core", rateMicros: 82_000 }, { platform: "linux-x64", vcpu: 64, sku: "linux_64_core", rateMicros: 162_000 }, { platform: "linux-x64", vcpu: 96, sku: "linux_96_core", rateMicros: 252_000 },
+    { platform: "linux-arm64", vcpu: 1, sku: "actions_linux_slim", rateMicros: 2_000 }, { platform: "linux-arm64", vcpu: 2, sku: "actions_linux", rateMicros: 6_000 }, { platform: "linux-arm64", vcpu: 4, sku: "linux_4_core", rateMicros: 12_000 }, { platform: "linux-arm64", vcpu: 8, sku: "linux_8_core", rateMicros: 22_000 }, { platform: "linux-arm64", vcpu: 16, sku: "linux_16_core", rateMicros: 42_000 }, { platform: "linux-arm64", vcpu: 32, sku: "linux_32_core", rateMicros: 82_000 }, { platform: "linux-arm64", vcpu: 64, sku: "linux_64_core", rateMicros: 162_000 }, { platform: "linux-arm64", vcpu: 96, sku: "linux_96_core", rateMicros: 252_000 },
     { platform: "windows-x64", vcpu: 2, sku: "actions_windows", rateMicros: 10_000 }, { platform: "windows-x64", vcpu: 4, sku: "windows_4_core", rateMicros: 22_000 }, { platform: "windows-x64", vcpu: 8, sku: "windows_8_core", rateMicros: 42_000 }, { platform: "windows-x64", vcpu: 16, sku: "windows_16_core", rateMicros: 82_000 }, { platform: "windows-x64", vcpu: 32, sku: "windows_32_core", rateMicros: 162_000 }, { platform: "windows-x64", vcpu: 64, sku: "windows_64_core", rateMicros: 322_000 }, { platform: "windows-x64", vcpu: 96, sku: "windows_96_core", rateMicros: 552_000 },
     { platform: "macos-arm64", vcpu: 4, sku: "actions_macos", rateMicros: 62_000 }, { platform: "macos-arm64", vcpu: 5, sku: "macos_xl", rateMicros: 102_000 },
   ]),
@@ -32,6 +33,7 @@ export const AZURE_VM_RATE_SCHEDULES: readonly GithubRunnerRateSchedule[] = Obje
   effectiveFrom: "2026-01-01", sourceUrl: azureVmPricingUrl,
   rates: Object.freeze<GithubRunnerRate[]>([
     ...[2, 4, 8, 16, 32, 64].map((vcpu) => ({ platform: "linux-x64" as const, vcpu, sku: `Standard_D${vcpu}s_v5`, rateMicros: vcpu * 800 })),
+    ...[2, 4, 8, 16, 32, 64].map((vcpu) => ({ platform: "linux-arm64" as const, vcpu, sku: `Standard_D${vcpu}ps_v5`, rateMicros: vcpu * 800 })),
     ...[2, 4, 8, 16, 32, 64].map((vcpu) => ({ platform: "windows-x64" as const, vcpu, sku: `Standard_D${vcpu}s_v5_windows`, rateMicros: vcpu * 1_600 })),
   ]),
 }]);

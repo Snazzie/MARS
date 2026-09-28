@@ -9,6 +9,20 @@ test("calculator selects closest compatible same-platform runner with integer ar
   expect(result).toEqual({ selfHostedMinutes: 3, pricedMinutes: 3, unpricedMinutes: 0, estimatedSavingsMicros: 42_000, currency: "USD", latestRateEffectiveFrom: "2026-01-01" });
 });
 
+test("GitHub Ubuntu rates price Linux ARM64 jobs at the matching vCPU tier", () => {
+  const result = calculateGithubRunnerCostCenter([
+    { organizationId: "org", repositoryId: "repo", repositoryName: "app", usageDate: "2026-01-02", platform: "linux-arm64", requestedVcpu: 3, jobCount: 1, billableMinutes: 10 },
+  ]);
+  expect(result.breakdown[0]).toMatchObject({
+    platform: "linux-arm64",
+    githubRunnerSku: "linux_4_core",
+    githubRunnerVcpu: 4,
+    pricedMinutes: 10,
+    unpricedMinutes: 0,
+    estimatedSavingsMicros: 120_000,
+  });
+});
+
 test("dated schedules change rates exactly on effective date", () => {
   const later: GithubRunnerRateSchedule = { effectiveFrom: "2026-02-01", sourceUrl: "https://example.test/rate", rates: [{ platform: "windows-x64", vcpu: 2, sku: "new", rateMicros: 20_000 }] };
   const result = calculateGithubRunnerCostSavings([
@@ -19,13 +33,18 @@ test("dated schedules change rates exactly on effective date", () => {
   expect(result.latestRateEffectiveFrom).toBe("2026-02-01");
 });
 
-test("Azure VM pricing resolves supported Linux and Windows runner sizes", () => {
+test("Azure VM pricing resolves supported Linux and Windows runner sizes including Ubuntu ARM64", () => {
   const result = calculateGithubRunnerCostSavings([
     { usageDate: "2026-01-02", platform: "linux-x64", requestedVcpu: 3, billableMinutes: 2 },
+    { usageDate: "2026-01-02", platform: "linux-arm64", requestedVcpu: 2, billableMinutes: 1 },
     { usageDate: "2026-01-02", platform: "windows-x64", requestedVcpu: 4, billableMinutes: 1 },
     { usageDate: "2026-01-02", platform: "macos-arm64", requestedVcpu: 4, billableMinutes: 1 },
   ], AZURE_VM_RATE_SCHEDULES);
-  expect(result).toMatchObject({ selfHostedMinutes: 4, pricedMinutes: 3, unpricedMinutes: 1, estimatedSavingsMicros: 12_800, latestRateEffectiveFrom: "2026-01-01" });
+  expect(result).toMatchObject({ selfHostedMinutes: 5, pricedMinutes: 4, unpricedMinutes: 1, estimatedSavingsMicros: 14_400, latestRateEffectiveFrom: "2026-01-01" });
+  const arm = calculateGithubRunnerCostCenter([
+    { organizationId: "org", repositoryId: "repo", repositoryName: "app", usageDate: "2026-01-02", platform: "linux-arm64", requestedVcpu: 2, jobCount: 1, billableMinutes: 1 },
+  ], AZURE_VM_RATE_SCHEDULES);
+  expect(arm.breakdown[0]).toMatchObject({ githubRunnerSku: "Standard_D2ps_v5", githubRunnerVcpu: 2, pricedMinutes: 1, unpricedMinutes: 0 });
 });
 
 test("missing schedules and oversized requests remain explicitly unpriced", () => {

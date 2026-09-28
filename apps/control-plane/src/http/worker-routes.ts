@@ -13,6 +13,21 @@ import { verifyWorkerBootstrap, initializeWorkerBootstrap, rotateWorkerBootstrap
 import { approvePendingWorker, configurePendingWorker, createRequestLimiter, hasMachineIdentity, parseApproveWorkerRequest, requestPendingWorker, rejectPendingWorker } from "../worker-requests.ts";
 import { httpOrigin } from "../http-origin.ts";
 import type { WorkerReleaseTarget } from "../worker-release.ts";
+const WorkerConfigurationRequest = WorkerConfiguration.omit({ containerRecipeSha256: true });
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+const containerRecipePaths = {
+  "windows-x64": "../../../../images/jobs/windows/Containerfile",
+  "linux-x64": "../../../../images/jobs/linux/Containerfile",
+  "linux-arm64": "../../../../images/jobs/linux-arm64/Containerfile",
+} as const;
+
+async function readDefaultContainerRecipe(guestPlatform: string): Promise<string | null> {
+  if (!Object.hasOwn(containerRecipePaths, guestPlatform)) return null;
+  const path = containerRecipePaths[guestPlatform as keyof typeof containerRecipePaths];
+  return readFile(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+}
+
 function noStore(headers = new Headers()): Headers { headers.set("cache-control", "no-store"); return headers; }
 function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\"'\"'")}'`; }
 function powerShellQuote(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
@@ -1019,6 +1034,15 @@ function idempotency(c: Context<ControlPlaneEnv>): boolean { return Boolean(c.re
 export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlaneHttpDeps) {
   const approvalBody = async (c: Context<ControlPlaneEnv>) => { try { return parseApproveWorkerRequest(await c.req.json()); } catch { return null; } };
   const auth = async (c: Context<ControlPlaneEnv>) => deps.currentUser(c.req.raw);
+  app.get("/api/workers/container-recipes/:guestPlatform", async c => {
+    const user = await auth(c);
+    if (!user) return c.json({ error: "unauthorized" }, 401);
+    if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403);
+    const recipe = await readDefaultContainerRecipe(c.req.param("guestPlatform"));
+    return recipe === null
+      ? c.json({ error: "not found" }, 404)
+      : new Response(recipe, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
+  });
   const proxyOptions = deps.developmentArtifactProxy;
   const bounded = (value: number | undefined, fallback: number, minimum: number, maximum: number): number => {
     if (!Number.isFinite(value)) return fallback;
@@ -1424,7 +1448,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     if (!idempotency(c)) return c.json({ error: "Idempotency-Key required" }, 400);
     try {
       const body = await c.req.json();
-      const parsed = WorkerConfiguration.safeParse({ appliance: body.appliance, runtime: body.runtime, guestPlatforms: body.guestPlatforms, selectedDriver: body.selectedDriver });
+      const parsed = WorkerConfigurationRequest.safeParse(body);
       if (!parsed.success) return c.json({ error: "invalid worker configuration" }, 400);
       const key = c.req.header("Idempotency-Key")!.trim();
       const [prior] = await deps.db<{ response: Record<string, unknown> | null }[]>`select response from worker_mutations where worker_id=${c.req.param("workerId")} and idempotency_key=${key}`;

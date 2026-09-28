@@ -2305,3 +2305,18 @@ describe("Linux and macOS platform artifact sources", () => {
     expect(requested).toEqual(["https://93.184.216.34/linux-golden.qcow2"]);
   });
 });
+  test("serves raw default recipes only to global administrators for container guests", async () => {
+    const admin = { id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true };
+    const endpoint = createControlPlaneApp(fakeHttpDeps({ currentUser: async () => admin }));
+    for (const guest of ["windows-x64", "linux-x64", "linux-arm64"]) {
+      const response = await endpoint.request(`/api/workers/container-recipes/${guest}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+      expect(await response.text()).toContain("FROM ");
+    }
+    expect((await endpoint.request("/api/workers/container-recipes/macos-arm64")).status).toBe(404);
+    const memberEndpoint = createControlPlaneApp(fakeHttpDeps({
+      currentUser: async () => ({ ...admin, isGlobalAdmin: false }),
+    }));
+    expect((await memberEndpoint.request("/api/workers/container-recipes/windows-x64")).status).toBe(403);
+  });
