@@ -240,12 +240,14 @@ completion. Verify the job outcome separately in the run. For routing,
 macOS workflows use the composite label `mars-macos-arm64-2vcpu-4g`
 (see [worker routing labels](worker-routing-labels.md)).
 
-Queued GitHub job discovery runs independently of the dispatch pass. A slow
-discovery should not leave Dispatcher status stuck in a discovery phase or
-prevent already-queued eligible jobs from being reserved. If discovery finds
-new jobs, it requests an immediate dispatch pass; check the control-plane
-logs for `Queued GitHub job discovery started` and `finished` when diagnosing
-delayed ingestion.
+Queued GitHub job discovery runs immediately at startup, then on the in-process
+Bun cron schedule `JOB_QUEUED_DISCOVERY_CRON` (default `*/5 * * * *`, every five
+wall-clock minutes). A still-running discovery is not started twice. Discovery
+runs independently of the dispatch pass: a slow discovery does not prevent
+already-queued eligible jobs from being reserved. Newly ingested jobs request
+an immediate dispatch pass. Check the control-plane logs for
+`Queued GitHub job discovery started` and `Queued GitHub job discovery finished`
+when diagnosing delayed ingestion.
 
 ### Development log APIs
 

@@ -13,7 +13,7 @@ import type { ReconcileReport } from "./reconcile.ts";
 import { reconcileExpiredLeasesWithGithub } from "./lease-reconciliation.ts";
 import { reapPendingLeases } from "./lease-cleanup.ts";
 import { cleanGithubRunners } from "./github-runner-cleanup.ts";
-import { startReconciliationScheduler } from "./reconcile-loop.ts";
+import { startImmediateCron, startReconciliationScheduler } from "./reconcile-loop.ts";
 import { pruneExpiredData } from "./retention.ts";
 import { DiscoveryHealthMonitor, isDiscoveryCycleSuccessful } from "./discovery-health.ts";
 import { DispatchHealthMonitor, type DispatchDecision } from "./dispatch-health.ts";
@@ -567,7 +567,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
       }
     }, reconciliationIntervalMs);
     dispatchHealth.setSchedulerStatus(() => reconciliationScheduler.status());
-    startReconciliationScheduler(async () => {
+    startImmediateCron(Bun.env.JOB_QUEUED_DISCOVERY_CRON ?? "*/5 * * * *", async () => {
       const started = Date.now();
       console.log("Queued GitHub job discovery started", { at: new Date(started).toISOString() });
       try {
@@ -577,7 +577,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
       } catch (error) {
         console.error("Queued GitHub job discovery failed", error);
       }
-    }, Number(Bun.env.JOB_QUEUED_DISCOVERY_INTERVAL_MS ?? 300_000));
+    });
     startReconciliationScheduler(async () => {
       discoveryHealth.markAttempt();
       try {

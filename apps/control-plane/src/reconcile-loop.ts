@@ -33,3 +33,15 @@ export function startReconciliationScheduler(run: () => Promise<void>, intervalM
   return { stop() { stopped = true; clearInterval(timer); nextTickAt = 0; }, trigger: () => tick(true),
     status: () => ({ running, pending: rerun, nextTickAt: stopped ? null : nextTickAt, intervalMs }) };
 }
+
+export function startImmediateCron(schedule: string, run: () => Promise<void>): Bun.CronJob {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try { await run(); } finally { running = false; }
+  };
+  const job = Bun.cron(schedule, tick);
+  void tick();
+  return job;
+}

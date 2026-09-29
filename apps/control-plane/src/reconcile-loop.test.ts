@@ -1,5 +1,5 @@
-import { expect, test } from "bun:test";
-import { startReconciliationScheduler } from "./reconcile-loop.ts";
+import { expect, jest, test } from "bun:test";
+import { startImmediateCron, startReconciliationScheduler } from "./reconcile-loop.ts";
 
 test("runs immediately, prevents overlap, and stops future ticks", async () => {
   let calls = 0;
@@ -38,21 +38,33 @@ test("reports the active timer and queues a single pass while dispatch is busy",
   }
   expect(scheduler.status().nextTickAt).toBeNull();
 });
-test("a stalled discovery cycle does not delay dispatch reconciliation", async () => {
+test("queued discovery starts immediately, never overlaps, and does not block dispatch", async () => {
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date("2026-09-29T12:00:00Z"));
   let releaseDiscovery!: () => void;
   const discoveryGate = new Promise<void>(resolve => { releaseDiscovery = resolve; });
-  let dispatches = 0;
+  let discoveries = 0, dispatches = 0;
   const dispatch = startReconciliationScheduler(async () => { dispatches += 1; }, 60_000);
-  const discovery = startReconciliationScheduler(async () => { await discoveryGate; }, 60_000);
+  const discovery = startImmediateCron("*/5 * * * *", async () => {
+    discoveries += 1;
+    if (discoveries === 1) await discoveryGate;
+  });
   try {
-    expect(discovery.status().running).toBe(true);
+    expect(discoveries).toBe(1);
+    jest.advanceTimersByTime(5 * 60_000);
     await dispatch.trigger();
-    expect(dispatches).toBe(2);
-    expect(dispatch.status().running).toBe(false);
+    expect(dispatches).toBeGreaterThan(1);
+    expect(discoveries).toBe(1);
+    releaseDiscovery();
+    await discoveryGate;
+    await Promise.resolve();
+    jest.advanceTimersByTime(5 * 60_000);
+    expect(discoveries).toBe(2);
   } finally {
     releaseDiscovery();
     dispatch.stop();
     discovery.stop();
+    jest.useRealTimers();
   }
 });
 
