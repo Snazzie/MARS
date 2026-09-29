@@ -315,7 +315,10 @@ export async function discoverQueuedRepositoryJobs(deps: DiscoveryDeps): Promise
   for (const row of rows as Record<string, unknown>[]) {
     try {
       const installationId = Number(row.installationId);
-      if (deps.installationBlocked?.(installationId)) continue;
+      if (deps.installationBlocked?.(installationId)) {
+        console.warn("Queued GitHub job discovery skipped", { repository: row.fullName, installationId, reason: "installation_rate_limited" });
+        continue;
+      }
       const fullName = String(row.fullName ?? "");
       const [owner, repo] = fullName.split("/", 2);
       if (!owner || !repo || fullName.split("/").length !== 2) throw new Error("repository_name_invalid");
@@ -341,10 +344,14 @@ export async function discoverQueuedRepositoryJobs(deps: DiscoveryDeps): Promise
           report.updated += recoveredJobs.updated;
           continue;
         }
+        const queuedJobs: Array<{ jobId: number; queuedAt: string; ingested: boolean }> = [];
         for (const job of listing.items) {
           report.discovered += 1;
-          if (await applyGithubJobSnapshot({ installationId, repository: { id: Number(row.githubRepositoryId), name: String(row.name), fullName }, run, job, authoritative: true })) report.updated += 1;
+          const ingested = await applyGithubJobSnapshot({ installationId, repository: { id: Number(row.githubRepositoryId), name: String(row.name), fullName }, run, job, authoritative: true });
+          if (ingested) report.updated += 1;
+          if (job.status === "queued") queuedJobs.push({ jobId: job.id, queuedAt: job.queuedAt, ingested });
         }
+        if (queuedJobs.length) console.log("Queued GitHub jobs discovered", { repository: fullName, installationId, runId: run.id, runAttempt: run.runAttempt, jobs: queuedJobs });
         if (listing.complete) {
           const reconciled = await reconcileAbsentJobs(deps, client, owner, repo, row, run, run.id, run.runAttempt, new Set(listing.items.map(job => job.id)));
           report.discovered += reconciled.discovered;

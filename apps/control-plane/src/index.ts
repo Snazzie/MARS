@@ -554,8 +554,9 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
         if (Date.now() - lastQueuedDiscoveryAt >= Number(Bun.env.JOB_QUEUED_DISCOVERY_INTERVAL_MS ?? 300_000)) {
           lastQueuedDiscoveryAt = Date.now();
           dispatchHealth.markPhase("queued_job_discovery");
+          console.log("Queued GitHub job discovery started", { at: new Date(lastQueuedDiscoveryAt).toISOString() });
           const pickup = await discoverQueuedRepositoryJobs(discoveryDeps);
-          if (pickup.failed) console.error(`Queued GitHub job pickup: repositories=${pickup.repositories} discovered=${pickup.discovered} updated=${pickup.updated} failed=${pickup.failed}`);
+          console.log("Queued GitHub job discovery finished", { ...pickup, durationMs: Date.now() - lastQueuedDiscoveryAt });
         }
       } catch (error) {
         if (!dispatchSucceeded) {

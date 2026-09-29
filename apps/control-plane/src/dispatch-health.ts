@@ -43,6 +43,9 @@ export class DispatchHealthMonitor {
       if ((previous?.code !== decision.code || JSON.stringify(previous?.labels) !== JSON.stringify(decision.labels) || JSON.stringify(previous?.pools) !== JSON.stringify(decision.pools)) && decision.code !== "dispatched") {
         console.log("Job dispatch blocked", { organizationId: decision.organizationId, jobId: decision.jobId, reason: decision.code, ...(decision.labels ? { labels: decision.labels } : {}), ...(decision.pools ? { pools: decision.pools } : {}) });
       }
+      if (decision.code === "dispatched" && previous?.code !== "dispatched") {
+        console.log("Job dispatched", { organizationId: decision.organizationId, jobId: decision.jobId });
+      }
     }
     for (const [key, previous] of this.decisions) {
       if (previous.code !== "dispatched" && (!next.has(key) || next.get(key)?.code === "dispatched")) {

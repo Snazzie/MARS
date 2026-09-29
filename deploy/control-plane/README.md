@@ -188,6 +188,19 @@ check PostgreSQL reachability/permissions and `DATABASE_URL`, inspect
 `/api/readyz` and container logs, then check public URL and webhook routing.
 A readiness failure must not be hidden by restarting repeatedly.
 
+For a queued GitHub job that does not appear in the dispatcher, search
+`docker logs --timestamps "$CONTROL_PLANE_ID"` for its numeric GitHub job ID.
+`Queued GitHub job webhook` records delivery and whether ingestion succeeded;
+`Queued GitHub jobs discovered` records polling observations and ingestion.
+`Queued GitHub job not ingested` names an unapproved installation or unavailable
+repository. The discovery cycle start/finish records its duration and counts,
+including cycles with no eligible repositories; a start without a finish points
+to a stalled or failed cycle. `Job dispatch blocked`, `Job dispatched`, and
+`Job dispatch blocker cleared` trace the scheduler after ingestion. If the
+job has ingestion evidence but no dispatch decision, inspect its parent run
+status and active/pending-cleanup leases in the database. `/api/healthz` reports
+the separate full-discovery scheduler, not queued-job discovery.
+
 The `mars-data` volume (or Unraid appdata bind at
 `/mnt/user/appdata/mars-control-plane/data`) contains control-plane data,
 including the generated `app_master_key`. Back up the complete persistent

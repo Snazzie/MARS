@@ -56,9 +56,15 @@ export async function applyGithubJobSnapshot(input: { installationId:number; rep
   const authoritative = input.authoritative === true;
   const result = await sql.begin(async tx => {
     const [installation] = await tx`SELECT id,organization_id FROM dashboard_installations WHERE github_installation_id=${input.installationId} AND state='approved' FOR UPDATE`;
-    if (!installation) return [];
+    if (!installation) {
+      if (jobStatus === "queued") console.warn("Queued GitHub job not ingested", { installationId: input.installationId, repository: input.repository.fullName, runId: input.run.id, jobId: input.job.id, reason: "installation_not_approved" });
+      return [];
+    }
     const [repository] = await tx`SELECT id FROM dashboard_repositories WHERE organization_id=${installation.organization_id} AND installation_id=${installation.id} AND github_repository_id=${input.repository.id} AND available=true`;
-    if (!repository) return [];
+    if (!repository) {
+      if (jobStatus === "queued") console.warn("Queued GitHub job not ingested", { installationId: input.installationId, repository: input.repository.fullName, runId: input.run.id, jobId: input.job.id, reason: "repository_unavailable" });
+      return [];
+    }
     await tx`UPDATE dashboard_runs SET action_graph_resolved_at=NULL WHERE organization_id=${installation.organization_id} AND github_run_id=${input.run.id} AND run_attempt<${input.run.runAttempt}`;
     if (authoritative && runStatus !== "completed") {
       if (runStatus === "queued") {
