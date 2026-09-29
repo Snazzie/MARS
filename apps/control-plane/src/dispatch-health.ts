@@ -1,6 +1,6 @@
 export type DispatchPoolDetail = { poolId: string; poolName: string; platform: string; workerId?: string; workerName?: string; reason: string };
 export type DispatchDecision = { organizationId: string; jobId: number; code: string; labels?: string[]; pools?: DispatchPoolDetail[]; repository?: string; githubRunId?: string; jobName?: string };
-export type DispatchPhase = "dispatching" | "github_lease_reconciliation" | "queued_job_discovery" | "lease_cleanup" | "onboarding";
+export type DispatchPhase = "dispatching" | "github_lease_reconciliation" | "lease_cleanup" | "onboarding";
 
 export type DispatchHealthSnapshot = {
   state: "starting" | "healthy" | "degraded";

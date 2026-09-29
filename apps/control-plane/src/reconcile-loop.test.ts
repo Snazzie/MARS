@@ -38,6 +38,24 @@ test("reports the active timer and queues a single pass while dispatch is busy",
   }
   expect(scheduler.status().nextTickAt).toBeNull();
 });
+test("a stalled discovery cycle does not delay dispatch reconciliation", async () => {
+  let releaseDiscovery!: () => void;
+  const discoveryGate = new Promise<void>(resolve => { releaseDiscovery = resolve; });
+  let dispatches = 0;
+  const dispatch = startReconciliationScheduler(async () => { dispatches += 1; }, 60_000);
+  const discovery = startReconciliationScheduler(async () => { await discoveryGate; }, 60_000);
+  try {
+    expect(discovery.status().running).toBe(true);
+    await dispatch.trigger();
+    expect(dispatches).toBe(2);
+    expect(dispatch.status().running).toBe(false);
+  } finally {
+    releaseDiscovery();
+    dispatch.stop();
+    discovery.stop();
+  }
+});
+
 test("dispatches durable cleanup for terminal leases without an outstanding stop command", async () => {
   const modulePath = "./lease-cleanup.ts";
   const cleanup = await import(modulePath).catch(() => null) as null | {

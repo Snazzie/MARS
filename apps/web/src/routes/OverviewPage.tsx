@@ -51,7 +51,6 @@ const dispatchReasons: Record<string, string> = {
 const dispatchPhases: Record<NonNullable<OverviewDto["controlPlane"]>["currentPhase"] & string, string> = {
   dispatching: "Matching queued jobs, reserving workers, and sending leases",
   github_lease_reconciliation: "Checking existing leases with GitHub; new dispatch waits for this check",
-  queued_job_discovery: "Discovering queued GitHub jobs; new dispatch waits for discovery",
   lease_cleanup: "Cleaning up prior leases; new dispatch waits for cleanup",
   onboarding: "Checking worker onboarding; new dispatch waits for this check",
 };

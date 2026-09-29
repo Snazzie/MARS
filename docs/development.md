@@ -240,6 +240,13 @@ completion. Verify the job outcome separately in the run. For routing,
 macOS workflows use the composite label `mars-macos-arm64-2vcpu-4g`
 (see [worker routing labels](worker-routing-labels.md)).
 
+Queued GitHub job discovery runs independently of the dispatch pass. A slow
+discovery should not leave Dispatcher status stuck in a discovery phase or
+prevent already-queued eligible jobs from being reserved. If discovery finds
+new jobs, it requests an immediate dispatch pass; check the control-plane
+logs for `Queued GitHub job discovery started` and `finished` when diagnosing
+delayed ingestion.
+
 ### Development log APIs
 
 Development log APIs require a global administrator. Outside production, the

@@ -509,7 +509,6 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
       githubFetchForInstallation: (installationId: number) => githubRateLimits.scopedFetch(installationId, "background"),
       installationBlocked: (installationId: number) => githubRateLimits.isBackgroundBlocked(installationId),
     };
-    let lastQueuedDiscoveryAt = 0;
     let lastGithubLeaseReconciliationAt = 0;
     let lastDispatchStatusLogAt = 0;
     let lastDispatchStatusSignature = "";
@@ -551,13 +550,6 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
           });
           if (staleLeaseReport.completed || staleLeaseReport.released || staleLeaseReport.skipped) console.log(`GitHub stale lease reconciliation: inspected=${staleLeaseReport.inspected} completed=${staleLeaseReport.completed} released=${staleLeaseReport.released} stillActive=${staleLeaseReport.stillActive} skipped=${staleLeaseReport.skipped}`);
         }
-        if (Date.now() - lastQueuedDiscoveryAt >= Number(Bun.env.JOB_QUEUED_DISCOVERY_INTERVAL_MS ?? 300_000)) {
-          lastQueuedDiscoveryAt = Date.now();
-          dispatchHealth.markPhase("queued_job_discovery");
-          console.log("Queued GitHub job discovery started", { at: new Date(lastQueuedDiscoveryAt).toISOString() });
-          const pickup = await discoverQueuedRepositoryJobs(discoveryDeps);
-          console.log("Queued GitHub job discovery finished", { ...pickup, durationMs: Date.now() - lastQueuedDiscoveryAt });
-        }
       } catch (error) {
         if (!dispatchSucceeded) {
           dispatchHealth.markFailure(error);
@@ -575,6 +567,17 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
       }
     }, reconciliationIntervalMs);
     dispatchHealth.setSchedulerStatus(() => reconciliationScheduler.status());
+    startReconciliationScheduler(async () => {
+      const started = Date.now();
+      console.log("Queued GitHub job discovery started", { at: new Date(started).toISOString() });
+      try {
+        const pickup = await discoverQueuedRepositoryJobs(discoveryDeps);
+        console.log("Queued GitHub job discovery finished", { ...pickup, durationMs: Date.now() - started });
+        if (pickup.updated > 0) await reconciliationScheduler.trigger();
+      } catch (error) {
+        console.error("Queued GitHub job discovery failed", error);
+      }
+    }, Number(Bun.env.JOB_QUEUED_DISCOVERY_INTERVAL_MS ?? 300_000));
     startReconciliationScheduler(async () => {
       discoveryHealth.markAttempt();
       try {
