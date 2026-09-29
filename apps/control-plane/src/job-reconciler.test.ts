@@ -1,15 +1,10 @@
 import { generateKeyPairSync } from "node:crypto";
 import { expect, test } from "bun:test";
 import type { DatabaseClient } from "@mars/db";
-import { candidateWorkerFromRow, excludedPoolReason, getLiveDispatchPools, isDispatchableRunStatus, runQueuedJobReconciliation } from "./job-reconciler.ts";
+import { candidateWorkerFromRow, excludedPoolReason, getLiveDispatchPools, runQueuedJobReconciliation } from "./job-reconciler.ts";
+import { configureRunLifecycle } from "./runs.ts";
 import { fits, reason, type Candidate } from "./scheduler.ts";
 import { parseRunnerLabels } from "@mars/contracts";
-
-test("keeps queued jobs eligible while their workflow run is in progress", () => {
-  expect(isDispatchableRunStatus("queued")).toBe(true);
-  expect(isDispatchableRunStatus("in_progress")).toBe(true);
-  expect(isDispatchableRunStatus("completed")).toBe(false);
-});
 
 const windowsEvidence = { capabilities: [{ driver: "windows-hyperv-container", guestPlatform: "windows-x64", ready: true, imageDigest: "sha256:image", remediation: null }] };
 const row = {
@@ -83,12 +78,12 @@ test("preflights unordered labels and marks the lease dispatched before sending,
   const events: string[] = [];
   const { publicKey } = generateKeyPairSync("x25519");
   const workerEncryptionPublicKey = publicKey.export({ format: "pem", type: "spki" }).toString();
-  let leaseState = "reserved";
+  let leaseState = "reserved", runStatus = "in_progress", githubRunStatus = "queued";
   let failSend = false;
   let db: DatabaseClient;
   db = Object.assign((async (strings: TemplateStringsArray) => {
     const query = strings.join(" ").toLowerCase();
-    if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", githubRunId: 77, runAttempt: 1, repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels: ["mars-any-2vcpu-4g", "mars-windows-x64-2vcpu-4g"] }];
+    if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", githubRunId: 77, runAttempt: 1, runStatus, githubRepositoryId: 123, repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels: ["mars-any-2vcpu-4g", "mars-windows-x64-2vcpu-4g"] }];
     if (query.includes('p.id as "poolid"')) return [{
       poolId: "pool",
       organizationId: "org",
@@ -128,22 +123,32 @@ test("preflights unordered labels and marks the lease dispatched before sending,
       return [{ id: "lease" }];
     }
     if (query.includes("update runner_leases set state='failed'")) {
-      expect(leaseState).toBe("dispatched");
+      expect(["reserved", "dispatched"]).toContain(leaseState);
       leaseState = "failed";
       events.push("release");
       return [];
     }
+    if (query.includes("select id,organization_id from dashboard_installations")) return [{ id: "installation", organization_id: "org" }];
+    if (query.includes("select id from dashboard_repositories")) return [{ id: "repo" }];
+    if (query.includes("update dashboard_runs set status='queued'")) { runStatus = "queued"; return []; }
+    if (query.includes("insert into dashboard_runs")) return [{ id: "run" }];
+    if (query.includes("insert into dashboard_jobs")) return [{ id: "dashboard-job" }];
     if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 2, memoryBytes: 4 * 1024 ** 3, storageBytes: 8, concurrency: 1 }, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 }, doctor: { capacity: { freeVcpu: 2, freeMemoryBytes: 4 * 1024 ** 3, freeStorageBytes: 8 } } }];
     if (query.includes("from runner_leases")) return [];
     if (query.includes("select id from dashboard_jobs")) return [{ id: "dashboard-job" }];
     return [];
   }) as unknown as DatabaseClient, { begin: async (fn: (tx: DatabaseClient) => unknown) => fn(db) });
+  configureRunLifecycle(db as never);
   const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/actions/jobs/42")) {
       events.push("preflight");
       expect(init?.method).toBeUndefined();
       return Response.json({ id: 42, run_id: 77, run_attempt: 1, status: "queued", name: "build", labels: ["MARS-WINDOWS-X64-2VCPU-4G", "mars-any-2vcpu-4g"], created_at: "2026-08-22T10:31:46Z" });
+    }
+    if (url.endsWith("/actions/runs/77/attempts/1")) {
+      events.push("verify-run");
+      return Response.json({ id: 77, run_attempt: 1, run_number: 77, status: githubRunStatus, conclusion: githubRunStatus === "completed" ? "success" : null, name: "CI", created_at: "2026-08-22T10:31:46Z", updated_at: "2026-08-22T10:32:00Z" });
     }
     events.push("jit");
     expect(init?.method).toBe("POST");
@@ -164,6 +169,12 @@ test("preflights unordered labels and marks the lease dispatched before sending,
   });
   expect(result).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
   expect(events).toEqual(["reserve", "preflight", "jit", "record-runner", "mark-dispatched", "dispatch"]);
+  runStatus = "completed";
+  events.length = 0;
+  const recovered = await runQueuedJobReconciliation({ db, contractVersion: "0.1.0", installationToken: async () => "token", githubFetchForInstallation: () => fetcher, dispatcher });
+  expect(recovered).toEqual({ reserved: 1, deferred: 0, skipped: 0, failed: 0 });
+  expect(runStatus).toBe("queued");
+  expect(events).toEqual(["reserve", "preflight", "verify-run", "jit", "record-runner", "mark-dispatched", "dispatch"]);
   failSend = true;
   events.length = 0;
   const failed = await runQueuedJobReconciliation({
@@ -173,6 +184,12 @@ test("preflights unordered labels and marks the lease dispatched before sending,
   expect(failed).toEqual({ reserved: 0, deferred: 0, skipped: 0, failed: 1 });
   expect(leaseState).toBe("failed");
   expect(events).toEqual(["reserve", "preflight", "jit", "record-runner", "mark-dispatched", "dispatch", "release"]);
+  runStatus = "completed";
+  githubRunStatus = "completed";
+  events.length = 0;
+  const terminal = await runQueuedJobReconciliation({ db, contractVersion: "0.1.0", installationToken: async () => "token", githubFetchForInstallation: () => fetcher, dispatcher });
+  expect(terminal).toEqual({ reserved: 0, deferred: 0, skipped: 1, failed: 0 });
+  expect(events).toEqual(["reserve", "preflight", "verify-run", "release"]);
 });
 
 test("does not reserve or dispatch when exact GitHub job preflight reports 404", async () => {

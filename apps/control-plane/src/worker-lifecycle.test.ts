@@ -125,7 +125,7 @@ test("provisioning failure leaves the queued job dispatchable until GitHub repor
   expect(dispatchable()).toBe(true);
   leaseState = "sandbox_ready";
   expect(await applyWorkerLeaseEvent(db, event("runner.finished", { leaseId, nonce, exitCode: 0 }))).toBe(true);
-  expect({ jobStatus, runStatus }).toEqual({ jobStatus: "completed", runStatus: "completed" });
+  expect({ jobStatus, runStatus }).toEqual({ jobStatus: "completed", runStatus: "in_progress" });
   expect(dispatchable()).toBe(false);
 });
 

@@ -15,6 +15,13 @@ function makeStatefulSql() {
     queries.push(text);
     if (text.includes("SELECT id,organization_id FROM dashboard_installations")) return installations;
     if (text.includes("SELECT id FROM dashboard_repositories")) return repositories;
+    if (text.trimStart().startsWith("UPDATE dashboard_runs SET status=CASE WHEN started_at IS NULL")) {
+      const current = runs.get(`${values[0]}:${values[1]}`);
+      if (current && current.run_attempt === values[2] && current.status === "completed" && !jobs.has(`${values[3]}:${values[4]}`)) {
+        Object.assign(current, { status: current.started_at ? "in_progress" : "queued", conclusion: null, completed_at: null });
+      }
+      return [];
+    }
     if (text.startsWith("UPDATE dashboard_runs SET status='queued'")) {
       const current = [...runs.values()].find((run) => run.organization_id === values[0] && values.includes(run.github_run_id));
       const requestedAttempt = text.includes("run_attempt") ? values.find((value) => typeof value === "number" && value > 0 && !runs.has(`${values[0]}:${value}`)) : undefined;
@@ -208,6 +215,27 @@ test("authoritative same-attempt queued REST state repairs a locally terminal jo
   expect(fake.jobs.get("org:99")).toMatchObject({ status: "queued", conclusion: null, started_at: null, completed_at: null });
 });
 
+test("a newly queued webhook job reopens an erroneously terminal parent without replaying old jobs", async () => {
+  const fake = makeStatefulSql();
+  configureRunLifecycle(fake.sql as never);
+  const repository = { id: 123, name: "repo", fullName: "acme/repo" };
+  await applyGithubJobSnapshot({ installationId: 5, repository, run, job });
+  const storedRun = fake.runs.get("org:42")!;
+  Object.assign(storedRun, { status: "completed", conclusion: "failure", started_at: queuedAt, completed_at: "2026-08-13T00:04:00Z" });
+  const queuedWebhook = (id: number) => applyWorkflowJobWebhook({
+    installation: { id: 5 },
+    repository: { id: 123, name: "repo", full_name: "acme/repo" },
+    action: "queued",
+    workflow_job: { id, run_id: 42, run_attempt: 1, run_number: 7, name: "dependent", status: "queued", created_at: queuedAt, labels: ["mars-macos-arm64-2vcpu-10g"] },
+  });
+  await queuedWebhook(100);
+  expect(storedRun).toMatchObject({ status: "in_progress", conclusion: null, completed_at: null });
+  expect(fake.jobs.get("org:100")?.status).toBe("queued");
+  Object.assign(storedRun, { status: "completed", conclusion: "success", completed_at: "2026-08-13T00:10:00Z" });
+  await queuedWebhook(100);
+  expect(storedRun).toMatchObject({ status: "completed", conclusion: "success", completed_at: "2026-08-13T00:10:00Z" });
+});
+
 test("a completed workflow_job webhook does not terminalize a queued sibling", async () => {
   const fake = makeStatefulSql();
   configureRunLifecycle(fake.sql as never);
@@ -222,22 +250,20 @@ test("a completed workflow_job webhook does not terminalize a queued sibling", a
   expect(fake.jobs.get("org:1002")?.status).toBe("completed");
 });
 
-test("serializes the parent run before checking for remaining nonterminal jobs", async () => {
-  const queries: string[] = [];
-  const sql = Object.assign((strings: TemplateStringsArray, ...values: unknown[]) => {
-    const text = strings.join(" ");
-    const normalized = text.trimStart();
-    queries.push(text);
-    if (normalized.includes("UPDATE dashboard_jobs")) return [{ id: "job-99", run_id: "run-42" }];
-    if (normalized.includes("SELECT id FROM dashboard_runs")) return [{ id: "run-42" }];
+test("an omitted job does not complete its parent before GitHub reports the run completed", async () => {
+  let jobStatus = "queued";
+  let runStatus = "in_progress";
+  const sql = (async (strings: TemplateStringsArray) => {
+    if (strings.join(" ").includes("UPDATE dashboard_jobs") && jobStatus === "queued") {
+      jobStatus = "completed";
+      return [{ id: "job-99" }];
+    }
+    if (strings.join(" ").includes("UPDATE dashboard_runs")) runStatus = "completed";
     return [];
-  }, { begin: async <T>(callback: (tx: typeof sql) => Promise<T>) => callback(sql) });
-
-  expect(await markGithubJobMissing(sql as never, { organizationId: "org", githubJobId: 99, observedAt: queuedAt })).toBe(true);
-  const lockIndex = queries.findIndex((query) => query.trimStart().startsWith("SELECT id FROM dashboard_runs") && query.includes("FOR UPDATE"));
-  const parentUpdateIndex = queries.findIndex((query) => query.trimStart().startsWith("UPDATE dashboard_runs"));
-  expect(lockIndex).toBeGreaterThanOrEqual(0);
-  expect(parentUpdateIndex).toBeGreaterThan(lockIndex);
+  }) as never;
+  expect(await markGithubJobMissing(sql, { organizationId: "org", githubJobId: 99, observedAt: queuedAt })).toBe(true);
+  expect({ jobStatus, runStatus }).toEqual({ jobStatus: "completed", runStatus: "in_progress" });
+  expect(await markGithubJobMissing(sql, { organizationId: "org", githubJobId: 99, observedAt: queuedAt })).toBe(false);
 });
 test("step duration is monotonic-compatible for terminal timestamps", () => expect(stageDurationMs({ startedAt: "2026-08-13T00:01:00Z", completedAt: "2026-08-13T00:02:00Z" })).toBe(60_000));
 test("strict webhook step validation remains enforced", async () => { await expect(applyWorkflowJobWebhook({ installation: { id: 5 }, repository: { id: 123 }, workflow_job: { id: 99, run_id: 42, status: "queued", steps: [{ number: 0 }] } })).rejects.toThrow("github_payload_invalid"); });

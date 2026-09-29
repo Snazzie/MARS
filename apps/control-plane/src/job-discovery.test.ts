@@ -513,7 +513,7 @@ test("stops only the rate-limited installation's remaining repositories", async 
   expect(report.failed).toBe(1);
 });
 
-test("confirms omitted jobs from a complete attempt-qualified listing before terminalizing them", async () => {
+test("confirms omitted jobs from a complete attempt-qualified listing without completing the parent run", async () => {
   const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
   const requests: string[] = [];
   const updates: Array<{ query: string; values: unknown[] }> = [];
@@ -552,8 +552,7 @@ test("confirms omitted jobs from a complete attempt-qualified listing before ter
   const terminalJobUpdate = updates.find(({ query }) => query.includes("UPDATE dashboard_jobs") && query.includes("SET status='completed',stage='failed',conclusion="));
   expect(terminalJobUpdate).toBeDefined();
   expect(terminalJobUpdate?.query).toContain("completed_at=");
-  const terminalRunUpdate = updates.find(({ query }) => query.includes("UPDATE dashboard_runs") && query.includes("SET status='completed',conclusion="));
-  expect(terminalRunUpdate?.query).toContain("NOT EXISTS");
+  expect(updates.some(({ query }) => query.includes("UPDATE dashboard_runs") && query.includes("SET status='completed'"))).toBe(false);
   expect(updates.some(({ query }) => query.includes("UPDATE dashboard_repositories SET available=false"))).toBe(false);
 });
 

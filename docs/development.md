@@ -249,6 +249,14 @@ an immediate dispatch pass. Check the control-plane logs for
 `Queued GitHub job discovery started` and `Queued GitHub job discovery finished`
 when diagnosing delayed ingestion.
 
+The dispatcher normally routes queued jobs whose parent run is queued or in
+progress. A worker finishing one job does not finish its workflow run: GitHub
+can create downstream jobs later. Only GitHub's terminal run status completes
+the parent. For older locally completed runs with a queued job, dispatch first
+checks the current GitHub run and job, then restores the run if still active.
+If a queued job is absent from the dispatch queue, compare its parent run state
+and the `Queued GitHub job webhook` log before investigating worker availability.
+
 ### Development log APIs
 
 Development log APIs require a global administrator. Outside production, the

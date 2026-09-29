@@ -23,30 +23,13 @@ export async function recordRunStage(runId: string, stage: RunStage, timestamps:
   await sql`INSERT INTO dashboard_run_stages (organization_id, run_id, stage, started_at, completed_at) SELECT organization_id, id, ${stage}, ${timestamps.startedAt}, ${timestamps.completedAt ?? null} FROM dashboard_runs WHERE id=${runId} ON CONFLICT (organization_id, run_id, stage) DO UPDATE SET started_at=LEAST(dashboard_run_stages.started_at, EXCLUDED.started_at), completed_at=COALESCE(dashboard_run_stages.completed_at, EXCLUDED.completed_at)`;
 }
 export async function markGithubJobMissing(sql: Sql<{}>, input: { organizationId: string; githubJobId: number; observedAt: string }): Promise<boolean> {
-  return sql.begin(async tx => {
-    const [job] = await tx`
-      UPDATE dashboard_jobs
-      SET status='completed',stage='failed',conclusion=${"cancelled"},completed_at=${input.observedAt}
-      WHERE organization_id=${input.organizationId} AND github_job_id=${input.githubJobId} AND status <> 'completed'
-      RETURNING id,run_id
-    `;
-    if (!job) return false;
-    await tx`
-      SELECT id FROM dashboard_runs
-      WHERE organization_id=${input.organizationId} AND id=${job.run_id}
-      FOR UPDATE
-    `;
-    await tx`
-      UPDATE dashboard_runs
-      SET status='completed',conclusion=${"cancelled"},completed_at=${input.observedAt}
-      WHERE organization_id=${input.organizationId} AND id=${job.run_id}
-        AND NOT EXISTS (
-          SELECT 1 FROM dashboard_jobs
-          WHERE organization_id=${input.organizationId} AND run_id=${job.run_id} AND status <> 'completed'
-        )
-    `;
-    return true;
-  });
+  const rows = await sql`
+    UPDATE dashboard_jobs
+    SET status='completed',stage='failed',conclusion=${"cancelled"},completed_at=${input.observedAt}
+    WHERE organization_id=${input.organizationId} AND github_job_id=${input.githubJobId} AND status <> 'completed'
+    RETURNING id
+  `;
+  return rows.length > 0;
 }
 export async function applyGithubJobSnapshot(input: { installationId:number; repository:{id:number;name:string;fullName:string}; run:GithubRunSnapshot; job:GithubJobSnapshot; authoritative?: boolean }): Promise<boolean> {
   if (input.run.id !== input.job.runId || input.run.runAttempt !== input.job.runAttempt) throw new Error("github_payload_invalid");
@@ -64,6 +47,19 @@ export async function applyGithubJobSnapshot(input: { installationId:number; rep
     if (!repository) {
       if (jobStatus === "queued") console.warn("Queued GitHub job not ingested", { installationId: input.installationId, repository: input.repository.fullName, runId: input.run.id, jobId: input.job.id, reason: "repository_unavailable" });
       return [];
+    }
+    if (!authoritative && runStatus !== "completed" && jobStatus === "queued") {
+      await tx`
+        UPDATE dashboard_runs SET status=CASE WHEN started_at IS NULL THEN 'queued' ELSE 'in_progress' END,
+          conclusion=NULL,completed_at=NULL
+        WHERE organization_id=${installation.organization_id} AND github_run_id=${input.run.id}
+          AND run_attempt=${input.run.runAttempt} AND status='completed'
+          AND NOT EXISTS (
+            SELECT 1 FROM dashboard_jobs
+            WHERE organization_id=${installation.organization_id}
+              AND github_job_id=${input.job.id} AND run_attempt=${input.job.runAttempt}
+          )
+      `;
     }
     await tx`UPDATE dashboard_runs SET action_graph_resolved_at=NULL WHERE organization_id=${installation.organization_id} AND github_run_id=${input.run.id} AND run_attempt<${input.run.runAttempt}`;
     if (authoritative && runStatus !== "completed") {
