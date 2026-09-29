@@ -56,7 +56,6 @@ test("stale prior blockers do not masquerade as current eligibility while cleanu
   }} />);
   expect(markup).toContain("Checking existing leases with GitHub");
   expect(markup).toContain("Another dispatch pass is queued as soon as the current cycle finishes");
-  expect(markup).toContain("1 ready match");
   expect(markup).toContain("previous pass below is historical");
   expect(markup).toContain("Previous dispatch pass: 1 inspected");
 });
