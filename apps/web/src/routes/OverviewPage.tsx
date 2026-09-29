@@ -21,6 +21,13 @@ export function OverviewCostMetrics({ costSavings, period }: { costSavings: Over
 
 const dispatchReasons: Record<string, string> = {
   no_eligible_worker_pool: "No fresh, eligible worker pool",
+  no_configured_worker_for_pool: "No worker is configured for this pool's platform and driver",
+  worker_not_adopted: "Worker is not approved",
+  worker_draining: "Worker is draining",
+  worker_doctor_stale: "Worker runtime report is older than 60 seconds",
+  pool_image_mismatch: "Worker image does not match the pool image",
+  worker_not_eligible: "Worker does not meet the pool eligibility checks",
+  admissible: "Worker can accept this job",
   no_matching_labels: "No pool matches the job labels",
   worker_offline: "Matching worker is offline",
   worker_config_applying: "Worker configuration is applying",
@@ -41,30 +48,34 @@ const dispatchReasons: Record<string, string> = {
   lease_preserved_for_debugging: "Failed lease retained for debugging",
   duplicate_job: "Duplicate queued job",
 };
-export function ControlPlaneStatus({ status }: { status: OverviewDto["controlPlane"] }) {
-  if (!status) return <section className="dispatch-status-panel"><h2>Control plane</h2><p>Status unavailable</p></section>;
+export function ControlPlaneStatus({ status, queueReasons = [], awaiting = 0 }: { status: OverviewDto["controlPlane"]; queueReasons?: OverviewDto["queueReasons"]; awaiting?: number }) {
+  if (!status) return <section className="dispatch-status-panel" aria-label="Dispatcher status"><h2>Dispatcher status</h2><p>Status unavailable</p></section>;
   const label = status.state === "healthy" ? "Reconciliation healthy" : status.state === "degraded" ? "Reconciliation degraded" : "Awaiting first reconciliation";
-  return <section className="dispatch-status-panel" aria-label="Control plane dispatch status">
-    <div className="dispatch-status-heading"><h2>Control plane</h2><strong data-state={status.state}>{label}</strong></div>
+  return <section className="dispatch-status-panel" aria-label="Dispatcher status">
+    <div className="dispatch-status-heading"><h2>Dispatcher status</h2><strong data-state={status.state}>{label}</strong></div>
     <p>{status.lastReconciledAt ? <>Last successful reconciliation <time dateTime={status.lastReconciledAt}>{new Date(status.lastReconciledAt).toLocaleString()}</time></> : "No successful reconciliation yet"}</p>
-    {status.healthReason === "reconciliation_failed" && <p>The latest job reconciliation failed. Job blockers below are from the last successful pass; check control-plane logs for the failure.</p>}
-    {status.healthReason === "reconciliation_stale" && <p>Reconciliation has not completed within the expected interval. Job blockers below may be stale; check control-plane logs.</p>}
-    <p>{status.queued} queued jobs inspected · {status.reserved} {status.reserved === 1 ? "lease" : "leases"} dispatched on last pass</p>
+    {status.inProgressSince && <p>Dispatch reconciliation running since <time dateTime={status.inProgressSince}>{new Date(status.inProgressSince).toLocaleString()}</time>. A running pass does not overlap the next scheduled pass.</p>}
+    {status.healthReason === "reconciliation_failed" && <p>The latest job reconciliation failed{status.failureCode ? ` (${status.failureCode.replaceAll("_", " ")})` : ""}. Job blockers below are from the last successful pass; check control-plane logs for the failure.</p>}
+    {status.healthReason === "reconciliation_stale" && <p>Reconciliation has not completed within the expected interval. Job blockers below may be stale{status.inProgressSince ? " while the current pass runs" : ""}; check control-plane logs.</p>}
+    <p>{status.queued} dispatchable jobs inspected · {status.reserved} {status.reserved === 1 ? "lease" : "leases"} dispatched on last pass · {awaiting} awaiting dispatch now</p>
     {status.reasons.length ? <ul>{status.reasons.map(({ code, count }) => <li key={code}><span>{dispatchReasons[code] ?? code.replaceAll("_", " ")}</span><b>{count}</b></li>)}</ul> : <p>{status.queued ? "No dispatch blockers reported on the last pass." : "No eligible queued jobs were inspected on the last pass."}</p>}
-    {status.blockedJobs?.length ? <details><summary>Blocked jobs ({status.blockedJobs.length})</summary><ul>{status.blockedJobs.map(({ jobId, code, labels, repository, githubRunId, jobName }) => {
+    {queueReasons.some(item => item.code !== "eligible") && <div><h3>Why queued jobs are not inspected</h3><ul>{queueReasons.filter(item => item.code !== "eligible").map(({ code, count }) => <li key={code}><span>{({ run_not_dispatchable: "Parent run is no longer queued or in progress", repository_unavailable: "Repository is unavailable", installation_not_approved: "GitHub installation is not approved" } as Record<string, string>)[code]}</span><b>{count}</b></li>)}</ul></div>}
+    {queueReasons.some(item => item.code === "eligible") && status.queued === 0 && <p>{queueReasons.find(item => item.code === "eligible")?.count} jobs qualify for dispatch in the current queue, but the last completed reconciliation inspected none. Check the reconciliation timestamp and degraded state above.</p>}
+    {status.blockedJobs?.length ? <details><summary>Blocked jobs ({status.blockedJobs.length})</summary><ul>{status.blockedJobs.map(({ jobId, code, labels, pools, repository, githubRunId, jobName }) => {
       const href = repository && /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(repository) && githubRunId && /^[0-9]+$/.test(githubRunId)
         ? `https://github.com/${repository}/actions/runs/${githubRunId}/job/${jobId}` : null;
       const title = repository && jobName ? `${repository} · ${jobName}` : `Job ${jobId}`;
-      return <li key={jobId}>{href ? <a href={href} target="_blank" rel="noopener noreferrer">{title}</a> : <strong>{title}</strong>} (job {jobId}): {dispatchReasons[code] ?? code.replaceAll("_", " ")} · Requested labels: {labels.length ? labels.join(", ") : "(none)"}{code === "invalid_provision_labels" && <span> — Use a routing label such as mars-any-2vcpu-4g.</span>}{code === "lease_preserved_for_debugging" && <span> — Inspect the preserved worker diagnostics before disabling lease preservation and cleaning up the lease.</span>}</li>;
+      return <li key={jobId}>{href ? <a href={href} target="_blank" rel="noopener noreferrer">{title}</a> : <strong>{title}</strong>} (job {jobId}): {dispatchReasons[code] ?? code.replaceAll("_", " ")} · Requested labels: {labels.length ? labels.join(", ") : "(none)"}{code === "invalid_provision_labels" && <span> — Use a routing label such as mars-any-2vcpu-4g.</span>}{code === "lease_preserved_for_debugging" && <span> — Inspect the preserved worker diagnostics before disabling lease preservation and cleaning up the lease.</span>}
+        {pools?.length ? <details><summary>Pool diagnostics (all visible pools: {pools.length})</summary><ul>{pools.map(pool => <li key={`${pool.poolId}:${pool.workerId ?? ""}`}>{pool.poolName} ({pool.platform}{pool.workerName ? ` · ${pool.workerName}` : ""}): {dispatchReasons[pool.reason] ?? pool.reason.replaceAll("_", " ")}</li>)}</ul></details> : null}</li>;
     })}</ul></details> : null}
-    <small>Only jobs eligible for reconciliation are counted; unavailable repositories, unapproved installations, and active or pending-cleanup leases are excluded. Debug-preserved leases remain visible as blockers.</small>
+    <small>Queue breakdown reflects current database state; dispatch decisions reflect the last completed pass. Active and pending-cleanup leases are excluded from Awaiting dispatch. An enabled pool's ceiling does not guarantee an eligible worker.</small>
   </section>;
 }
 function OverviewContent({ data, period }: { data: OverviewDto; period: DashboardPeriod }) {
   return <div className="overview-grid">
     <section className="signal-panel"><div className="panel-kicker">Current load</div><div className="signal-value">{data.running}<span>/ {data.concurrency || "—"}</span></div><p>allocated job slots / configured ceiling</p><div className="load-track"><span style={{ width: `${Math.round(data.utilization.pods * 100)}%` }} /></div><div className="load-meta"><span className="load-awaiting">Awaiting dispatch <b>{data.queued}</b></span></div></section>
     <section className="metric-panel"><Metric label="Queue p50" value={`${Math.round(data.queueP50Ms / 1000)}s`} detail="median wait" /><Metric label="Queue p95" value={`${Math.round(data.queueP95Ms / 1000)}s`} detail="slowest cohort" /><Metric label="Duration p50" value={`${Math.round(data.durationP50Ms / 60000)}m`} detail="median runtime" /><Metric label="Duration p95" value={`${Math.round(data.durationP95Ms / 60000)}m`} detail="slowest cohort" /><OverviewCostMetrics costSavings={data.costSavings} period={period} /></section>
-    <ControlPlaneStatus status={data.controlPlane} />
+    <ControlPlaneStatus status={data.controlPlane} queueReasons={data.queueReasons} awaiting={data.queued} />
     <section className="chart-panel"><div className="panel-kicker">Pending vs running</div><JobActivityChart points={data.timeseries ?? []} /></section><section className="chart-panel"><div className="panel-kicker">Job outcomes</div><OutcomeBars outcomes={data.jobOutcomes ?? []} /></section><RunningContainers containers={data.runningContainers ?? []} />
   </div>;
 }

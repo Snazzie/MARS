@@ -7,15 +7,21 @@ export type DispatchHealthSnapshot = {
   reserved: number;
   reasons: Array<{ code: string; count: number }>;
   healthReason?: "reconciliation_failed" | "reconciliation_stale";
-  blockedJobs?: Array<{ jobId: number; code: string; labels: string[]; repository?: string; githubRunId?: string; jobName?: string }>;
+  inProgressSince?: string;
+  failureCode?: string;
+  blockedJobs?: Array<{ jobId: number; code: string; labels: string[]; pools?: DispatchPoolDetail[]; repository?: string; githubRunId?: string; jobName?: string }>;
 };
 
 export class DispatchHealthMonitor {
   private lastSuccessAt: number | null = null;
   private failed = false;
+  private inProgressAt: number | null = null;
+  private failureCode: string | null = null;
   private decisions = new Map<string, DispatchDecision>();
 
   constructor(private readonly intervalMs: number, private readonly startedAt = Date.now()) {}
+
+  markStarted(at = Date.now()): void { this.inProgressAt = at; }
 
   markSuccess(decisions: readonly DispatchDecision[], at = Date.now()): void {
     const next = new Map(decisions.map(decision => [`${decision.organizationId}:${decision.jobId}`, decision]));
@@ -33,9 +39,16 @@ export class DispatchHealthMonitor {
     this.decisions = next;
     this.lastSuccessAt = at;
     this.failed = false;
+    this.inProgressAt = null;
+    this.failureCode = null;
   }
 
-  markFailure(): void { this.failed = true; }
+  markFailure(error?: unknown): void {
+    this.failed = true;
+    this.inProgressAt = null;
+    const code = error && typeof error === "object" && "code" in error ? error.code : null;
+    this.failureCode = typeof code === "string" && /^[A-Z0-9]{5}$/.test(code) ? `SQLSTATE ${code}` : error instanceof TypeError ? "network_error" : "unexpected_error";
+  }
 
   snapshot(organizationIds: readonly string[] | null, at = Date.now()): DispatchHealthSnapshot {
     const allowed = organizationIds === null ? null : new Set(organizationIds);
@@ -52,7 +65,9 @@ export class DispatchHealthMonitor {
       reserved: decisions.filter(decision => decision.code === "dispatched").length,
       reasons: [...counts].map(([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count || a.code.localeCompare(b.code)),
       ...(healthReason ? { healthReason } : {}),
-      blockedJobs: decisions.filter(decision => decision.code !== "dispatched").map(({ jobId, code, labels, repository, githubRunId, jobName }) => ({ jobId, code, labels: labels ?? [], ...(repository && githubRunId && jobName ? { repository, githubRunId, jobName } : {}) })),
+      ...(this.inProgressAt === null ? {} : { inProgressSince: new Date(this.inProgressAt).toISOString() }),
+      ...(healthReason === "reconciliation_failed" && this.failureCode ? { failureCode: this.failureCode } : {}),
+      blockedJobs: decisions.filter(decision => decision.code !== "dispatched").map(({ jobId, code, labels, pools, repository, githubRunId, jobName }) => ({ jobId, code, labels: labels ?? [], ...(pools?.length ? { pools } : {}), ...(repository && githubRunId && jobName ? { repository, githubRunId, jobName } : {}) })),
     };
   }
 }

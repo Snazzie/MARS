@@ -1,12 +1,12 @@
 import type { DatabaseClient } from "@mars/db";
 import { jsonParameter, reserveRoutingSlot } from "@mars/db";
-import { PoolResources as PoolResourcesSchema, RuntimeDriverName, type PoolResources as PoolResourcesValue, type RuntimeDriverName as RuntimeDriverNameValue, type RunnerJitConfig, type LeaseBootstrapEnvelope } from "@mars/contracts";
+import { PoolResources as PoolResourcesSchema, RuntimeDriverName, parseJobRunnerLabels, type PoolResources as PoolResourcesValue, type RuntimeDriverName as RuntimeDriverNameValue, type RunnerJitConfig, type LeaseBootstrapEnvelope } from "@mars/contracts";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { dispatchLeaseBootstrap } from "./lease-dispatch.ts";
 import { isGithubRateLimitError } from "./github-rate-limit.ts";
 import { reconcileQueuedJobs, type ReconcileReport } from "./reconcile.ts";
-import { reason, type Candidate } from "./scheduler.ts";
+import { reason, selectProvisionOption, type Candidate } from "./scheduler.ts";
 import type { DispatchPoolDetail } from "./dispatch-health.ts";
 import { applyGithubJobSnapshot, markGithubJobMissing, type GithubJobSnapshot } from "./runs.ts";
 import { storedWorkerDoctor, workerPoolEvidence } from "./worker-evidence.ts";
@@ -68,6 +68,20 @@ export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate[
   };
 }
 
+export function excludedPoolReason(row: Record<string, unknown>, now = Date.now()): string {
+  if (row.enabled === false) return "pool_disabled";
+  if (!row.workerId) return "no_configured_worker_for_pool";
+  if (row.admissionState !== "adopted") return "worker_not_adopted";
+  if (row.draining === true) return "worker_draining";
+  if (row.configurationState !== "ready" || row.configurationRevision !== row.appliedConfigurationRevision) return "worker_config_applying";
+  if (row.connectionState !== "online" || !row.lastHeartbeatAt || now - new Date(String(row.lastHeartbeatAt)).getTime() >= 60_000) return "worker_offline";
+  if (!row.doctorObservedAt || now - new Date(String(row.doctorObservedAt)).getTime() >= 60_000) return "worker_doctor_stale";
+  const evidence = workerPoolEvidence(storedWorkerDoctor(jsonValue(row.doctor)), String(row.driver), String(row.imageDigest), String(row.platform));
+  if (!evidence.ready) return "worker_runtime_not_ready";
+  if (!evidence.imageMatches) return "pool_image_mismatch";
+  return "worker_not_eligible";
+}
+
 export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): Promise<ReconcileReport> {
   const queuedRows = await deps.db`
     SELECT j.github_job_id AS "jobId", r.id AS "runId", r.github_run_id AS "githubRunId", r.run_attempt AS "runAttempt",
@@ -126,18 +140,29 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     WHERE p.enabled=true AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false
       AND w.last_heartbeat_at > now()-interval '60 seconds'
       AND w.doctor_observed_at > now()-interval '60 seconds'`;
-  const poolsWithoutCandidates = new Map<string, DispatchPoolDetail[]>();
-  if (candidateRows.length === 0 && deps.onDecision) {
+  const excludedPools = new Map<string, Array<DispatchPoolDetail & { labels: string[]; triggerLabel: string | null }>>();
+  if (deps.onDecision) {
     for (const organizationId of new Set(queuedRows.map(row => String(row.organizationId)))) {
       const pools = await deps.db`
-        SELECT p.id AS "poolId", p.name AS "poolName", p.platform, p.enabled
+        SELECT p.id AS "poolId", p.name AS "poolName", p.platform, p.driver, p.image_digest AS "imageDigest", p.enabled, p.labels, p.trigger_label AS "triggerLabel",
+          w.id AS "workerId", w.name AS "workerName", w.admission_state AS "admissionState",
+          w.connection_state AS "connectionState", w.configuration_state AS "configurationState",
+          w.configuration_revision AS "configurationRevision", w.applied_configuration_revision AS "appliedConfigurationRevision",
+          w.draining, w.last_heartbeat_at AS "lastHeartbeatAt", w.doctor_observed_at AS "doctorObservedAt", w.doctor
         FROM runner_pools p
+        LEFT JOIN workers w ON (p.worker_id IS NULL OR p.worker_id=w.id)
+          AND p.platform = ANY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(w.guest_platforms)='array' THEN w.guest_platforms ELSE (w.guest_platforms #>> '{}')::jsonb END))
+          AND p.driver = w.desired_configuration->>'selectedDriver'
         WHERE p.organization_id IS NULL OR p.organization_id=${organizationId}::uuid
-        ORDER BY p.name, p.id`;
-      poolsWithoutCandidates.set(organizationId, pools.map(pool => ({
-        poolId: String(pool.poolId), poolName: String(pool.poolName), platform: String(pool.platform),
-        reason: pool.enabled ? "no_current_worker_candidate" : "pool_disabled",
-      })));
+        ORDER BY p.name, p.id, w.name`;
+      excludedPools.set(organizationId, pools
+        .filter(pool => !candidateRows.some(row => String(row.poolId) === String(pool.poolId) && String(row.workerId) === String(pool.workerId)))
+        .map(pool => ({
+          poolId: String(pool.poolId), poolName: String(pool.poolName), platform: String(pool.platform),
+          ...(pool.workerId ? { workerId: String(pool.workerId), workerName: String(pool.workerName ?? "") } : {}),
+          reason: excludedPoolReason(pool),
+          labels: stringArray(pool.labels), triggerLabel: pool.triggerLabel ? String(pool.triggerLabel) : null,
+        })));
     }
   }
 
@@ -160,8 +185,8 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     .filter((candidate) => !deps.workerConnected || deps.workerConnected(candidate.worker.id))
     .map((candidate) => ({ ...candidate, worker: { ...candidate.worker, connectionState: "online" } }));
 
-  const poolDetails = (job: { organizationId?: string; labels: string[] }): DispatchPoolDetail[] =>
-    candidateRows.length === 0 ? poolsWithoutCandidates.get(job.organizationId ?? "") ?? [] : sqlCandidates
+  const poolDetails = (job: { organizationId?: string; labels: string[] }): DispatchPoolDetail[] => [
+    ...sqlCandidates
       .filter(candidate => candidate.organizationId === null || candidate.organizationId === job.organizationId)
       .map(candidate => ({
         poolId: candidate.pool.id, poolName: candidate.poolName, platform: candidate.pool.platform,
@@ -170,7 +195,9 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
           ...candidate, requestedLabels: job.labels,
           worker: { ...candidate.worker, connectionState: deps.workerConnected && !deps.workerConnected(candidate.worker.id) ? "offline" : candidate.worker.connectionState },
         }),
-      }));
+      })),
+    ...(excludedPools.get(job.organizationId ?? "") ?? []).map(({ labels: _labels, triggerLabel: _triggerLabel, ...pool }) => pool),
+  ];
   const normalizedLabels = (labels: readonly string[]) => [...new Set(labels.map((label) => label.trim().toLowerCase()).filter(Boolean))].sort();
   const reconciled = await reconcileQueuedJobs({
     queued: queuedRows.map((row) => ({
@@ -196,6 +223,8 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
         requestedLabels: job.labels,
         worker: { ...candidate.worker, connectionState: deps.workerConnected && !deps.workerConnected(candidate.worker.id) ? "offline" : candidate.worker.connectionState },
       }));
+      const options = parseJobRunnerLabels(job.labels)?.options;
+      if (options && (excludedPools.get(job.organizationId ?? "") ?? []).some(pool => selectProvisionOption(options, pool))) return "no_eligible_worker_pool";
       return reasons.find(code => code !== "no_matching_labels" && code !== "admissible") ?? (reasons.includes("admissible") ? "pool_concurrency" : "no_matching_labels");
     },
     workerConnected: deps.workerConnected,

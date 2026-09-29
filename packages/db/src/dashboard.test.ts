@@ -7,6 +7,7 @@ test("overview uses active runner leases for the load numerator", async () => {
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
     queries.push(query);
+    if (query.includes("GROUP BY code")) return [{ code: "run_not_dispatchable", count: 1 }];
     if (query.includes("FROM dashboard_job_timing_snapshots")) return [];
     if (query.includes("SELECT l.id")) return [{ id: "lease-1", organizationId: "org-1", jobId: "job-1", runId: "run-1", jobName: "build", repositoryName: "acme/project", workflowName: "CI", workerName: "worker-1", runtime: "windows-hyperv-container", startedAt: new Date("2026-08-17T20:00:00.000Z"), cpuUsagePercent: 42.5, memoryWorkingSetBytes: 2_147_483_648, memoryLimitBytes: 4_294_967_296, diskUsageBytes: null, allocatedStorageBytes: 10_737_418_240, sampledAt: new Date("2026-08-17T20:05:00.000Z") }];
     if (query.includes("generate_series")) return [{ bucket: new Date("2026-08-12T10:00:00.000Z"), pending: 2, running: 1 }];
@@ -27,7 +28,7 @@ test("overview uses active runner leases for the load numerator", async () => {
     }];
   }) as never;
   const result = await getOverview(db, "org-1", "24h");
-  expect(OverviewDto.parse(result)).toMatchObject({ running: 2, concurrency: 10, utilization: { pods: 0.2 }, timeseries: [{ bucket: "2026-08-12T10:00:00.000Z", pending: 2, running: 1 }], runningContainers: [{ organizationId: "org-1", jobName: "build", cpuUsagePercent: 42.5 }] });
+  expect(OverviewDto.parse(result)).toMatchObject({ running: 2, concurrency: 10, queueReasons: [{ code: "run_not_dispatchable", count: 1 }], utilization: { pods: 0.2 }, timeseries: [{ bucket: "2026-08-12T10:00:00.000Z", pending: 2, running: 1 }], runningContainers: [{ organizationId: "org-1", jobName: "build", cpuUsagePercent: 42.5 }] });
   expect(queries.some((query) => query.includes("l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')") && query.includes("FROM runner_leases"))).toBe(true);
   expect(queries.some((query) => query.includes("j.status='queued'") && query.includes("NOT EXISTS") && query.includes("ql.cleanup_state IN ('pending','failed')"))).toBe(true);
   expect(queries.some((query) => query.includes("p.organization_id IS NULL") && query.includes("p.enabled"))).toBe(true);
@@ -37,6 +38,7 @@ test("aggregate overview preserves each running container organization", async (
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
     if (query.includes("FROM dashboard_job_timing_snapshots")) return [];
+    if (query.includes("GROUP BY code")) return [{ code: "eligible", count: 1 }];
     queries.push(query);
     if (query.includes("SELECT l.id")) return [{ id: "lease-1", organizationId: "org-2", jobId: "job-1", runId: "run-1", jobName: "build", repositoryName: "acme/project", workflowName: "CI", workerName: "worker-1", runtime: "windows-hyperv-container", startedAt: new Date("2026-08-17T20:00:00.000Z"), cpuUsagePercent: 42.5, memoryWorkingSetBytes: 2_147_483_648, memoryLimitBytes: 4_294_967_296, diskUsageBytes: null, allocatedStorageBytes: 10_737_418_240, sampledAt: new Date("2026-08-17T20:05:00.000Z") }];
     if (query.includes("generate_series")) return [];
@@ -51,6 +53,7 @@ test("overview outcome aggregation guards malformed scalar runner labels", async
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ");
     if (query.includes("FROM dashboard_job_timing_snapshots")) return [];
+    if (query.includes("GROUP BY code")) return [];
     if (query.includes("SELECT l.id")) return [];
     queries.push(query);
     if (query.includes("generate_series")) return [];

@@ -16,6 +16,7 @@
 - **Keep downloads local:** A worker-local caching proxy reduces repeated downloads of GitHub Actions resources.
 - **Choose the execution environment:** Route across Windows x64, macOS ARM64, and Linux x64 pools; Windows supports Hyper-V-isolated containers or checkpoint-based VMs, and macOS uses Tart images. [Windows runtime options](docs/windows-worker-runtimes.md).
 - **Manage the fleet from one place:** Onboard and approve workers, inspect health, and connect repositories through the control plane and dashboard.
+- **Diagnose dispatch from Overview:** The Dispatcher status panel shows the last completed scheduling pass, per-job blockers and pool eligibility, plus queued jobs excluded before scheduling (completed parent runs, unavailable repositories, or unapproved installations). A configured slot ceiling is not a count of workers able to accept jobs.
 
 > **Development status:** MARS is not yet a production-ready runner platform. Control-plane hosting is the current Linux/amd64 deployment milestone; end-to-end GitHub Actions job execution remains unfinished. See [implementation status](IMPLEMENTATION-STATUS.md) for the precise scope and blockers.
 

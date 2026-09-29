@@ -26,6 +26,12 @@ test("reports scoped dispatch blockers, recovery, and stale reconciliation", () 
 test("reports a stalled scheduler even before its first successful pass", () => {
   const monitor = new DispatchHealthMonitor(5_000, 0);
   expect(monitor.snapshot(null, 15_001)).toMatchObject({ state: "degraded", lastReconciledAt: null });
+  monitor.markStarted(16_000);
+  expect(monitor.snapshot(null, 16_001)).toMatchObject({ inProgressSince: new Date(16_000).toISOString(), healthReason: "reconciliation_stale" });
+  monitor.markFailure({ code: "57014" });
+  expect(monitor.snapshot(null, 16_002)).toMatchObject({ healthReason: "reconciliation_failed", failureCode: "SQLSTATE 57014" });
+  monitor.markSuccess([], 16_100);
+  expect(monitor.snapshot(null, 16_101).failureCode).toBeUndefined();
 });
 
 test("logs requested labels when a job has no matching pool, including label changes", () => {
@@ -56,6 +62,7 @@ test("logs the pool identity and logs again when its eligibility changes", () =>
     monitor.markSuccess([blocked]);
     monitor.markSuccess([blocked]);
     monitor.markSuccess([{ ...blocked, pools: [{ ...blocked.pools[0], reason: "pool_disabled" }] }]);
+    expect(monitor.snapshot(["org"], Date.now()).blockedJobs?.[0]?.pools).toEqual([{ ...blocked.pools[0], reason: "pool_disabled" }]);
     expect(messages).toEqual([
       ["Job dispatch blocked", { organizationId: "org", jobId: 42, reason: "no_eligible_worker_pool", pools: blocked.pools }],
       ["Job dispatch blocked", { organizationId: "org", jobId: 42, reason: "no_eligible_worker_pool", pools: [{ ...blocked.pools[0], reason: "pool_disabled" }] }],

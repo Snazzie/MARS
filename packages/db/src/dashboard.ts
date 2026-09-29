@@ -78,13 +78,34 @@ async function getOverviewRunningContainers(db: DashboardDb, organizationId: str
     id: String(row.id), organizationId: String(row.organizationId), jobId: String(row.jobId), runId: String(row.runId), jobName: String(row.jobName), repositoryName: String(row.repositoryName), workflowName: String(row.workflowName), workerName: String(row.workerName), runtime: String(row.runtime), startedAt: normalizeTimestamp(row.startedAt)!, sampledAt: row.sampledAt == null ? null : normalizeTimestamp(row.sampledAt), cpuUsagePercent: row.cpuUsagePercent == null ? null : Number(row.cpuUsagePercent), memoryWorkingSetBytes: row.memoryWorkingSetBytes == null ? null : Number(row.memoryWorkingSetBytes), memoryLimitBytes: row.memoryLimitBytes == null ? null : Number(row.memoryLimitBytes), diskUsageBytes: row.diskUsageBytes == null ? null : Number(row.diskUsageBytes), allocatedStorageBytes: Number(row.allocatedStorageBytes ?? 0),
   }));
 }
+async function getOverviewQueueReasons(db: DashboardDb, organizationId: string | null, userId: string | null): Promise<NonNullable<OverviewDto["queueReasons"]>> {
+  const rows = await db<{ code: "eligible" | "run_not_dispatchable" | "repository_unavailable" | "installation_not_approved"; count: number }[]>`
+    SELECT CASE
+      WHEN r.status NOT IN ('queued','in_progress') THEN 'run_not_dispatchable'
+      WHEN repo.available IS DISTINCT FROM true THEN 'repository_unavailable'
+      WHEN i.state IS DISTINCT FROM 'approved' THEN 'installation_not_approved'
+      ELSE 'eligible'
+    END AS code, count(*)::int AS count
+    FROM dashboard_jobs j
+    JOIN dashboard_runs r ON r.id=j.run_id
+    LEFT JOIN dashboard_repositories repo ON repo.id=r.repository_id AND repo.organization_id=r.organization_id
+    LEFT JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=r.organization_id
+    WHERE j.status='queued'
+      AND (${organizationId}::uuid IS NULL OR j.organization_id=${organizationId}::uuid)
+      AND (${userId}::text IS NULL OR EXISTS (SELECT 1 FROM memberships m WHERE m.organization_id=j.organization_id AND m.user_id=${userId}))
+      AND NOT EXISTS (SELECT 1 FROM runner_leases ql WHERE ql.organization_id=j.organization_id AND ql.github_job_id=j.github_job_id
+        AND (ql.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy') OR ql.cleanup_state IN ('pending','failed')))
+    GROUP BY code`;
+  return rows.map(({ code, count }) => ({ code, count: Number(count) }));
+}
+
 export async function getOverview(db: DashboardDb, organizationId: string, period: OverviewDto["period"]): Promise<OverviewDto> {
   const [row] = await db<OverviewDto[]>`SELECT ${organizationId}::text AS "organizationId", ${period}::text AS period, count(*) FILTER (WHERE j.status='queued' AND NOT EXISTS (SELECT 1 FROM runner_leases ql WHERE ql.organization_id=j.organization_id AND ql.github_job_id=j.github_job_id AND (ql.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy') OR ql.cleanup_state IN ('pending','failed'))))::int AS queued, (SELECT count(*)::int FROM runner_leases l JOIN dashboard_jobs active_j ON active_j.organization_id=l.organization_id AND active_j.github_job_id=l.github_job_id WHERE active_j.organization_id=${organizationId} AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')) AS running, count(*) FILTER (WHERE j.status='completed' AND j.conclusion='success')::int AS completed, count(*) FILTER (WHERE j.status='completed' AND j.conclusion <> 'success')::int AS failed, 0::int AS "queueP50Ms", 0::int AS "queueP95Ms", 0::int AS "durationP50Ms", 0::int AS "durationP95Ms", COALESCE((SELECT sum((p.resources->>'concurrency')::int)::int FROM runner_pools p WHERE p.enabled AND (p.organization_id=${organizationId} OR p.organization_id IS NULL)),0)::int AS concurrency FROM dashboard_jobs j WHERE j.organization_id=${organizationId}`;
-  return { ...row, utilization: overviewUtilization(row.running, row.concurrency), costSavings: await getGithubRunnerCostSavings(db, organizationId, period), timeseries: await getOverviewTimeseries(db, period, organizationId), jobOutcomes: await getOverviewJobOutcomes(db, organizationId, period), runningContainers: await getOverviewRunningContainers(db, organizationId) };
+  return { ...row, queueReasons: await getOverviewQueueReasons(db, organizationId, null), utilization: overviewUtilization(row.running, row.concurrency), costSavings: await getGithubRunnerCostSavings(db, organizationId, period), timeseries: await getOverviewTimeseries(db, period, organizationId), jobOutcomes: await getOverviewJobOutcomes(db, organizationId, period), runningContainers: await getOverviewRunningContainers(db, organizationId) };
 }
 export async function getAllOverview(db: DashboardDb, userId: string, period: OverviewDto["period"]): Promise<OverviewDto> {
   const [row] = await db<OverviewDto[]>`SELECT 'all' AS "organizationId", ${period}::text AS period, count(*) FILTER (WHERE j.status='queued' AND NOT EXISTS (SELECT 1 FROM runner_leases ql WHERE ql.organization_id=j.organization_id AND ql.github_job_id=j.github_job_id AND (ql.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy') OR ql.cleanup_state IN ('pending','failed'))))::int AS queued, (SELECT count(*)::int FROM runner_leases l JOIN dashboard_jobs active_j ON active_j.organization_id=l.organization_id AND active_j.github_job_id=l.github_job_id JOIN memberships am ON am.organization_id=active_j.organization_id AND am.user_id=${userId} WHERE l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')) AS running, count(*) FILTER (WHERE j.status='completed' AND j.conclusion='success')::int AS completed, count(*) FILTER (WHERE j.status='completed' AND j.conclusion <> 'success')::int AS failed, 0::int AS "queueP50Ms", 0::int AS "queueP95Ms", 0::int AS "durationP50Ms", 0::int AS "durationP95Ms", COALESCE((SELECT sum((p.resources->>'concurrency')::int)::int FROM runner_pools p LEFT JOIN memberships pm ON pm.organization_id=p.organization_id AND pm.user_id=${userId} WHERE p.enabled AND (p.organization_id IS NULL OR pm.user_id IS NOT NULL)),0)::int AS concurrency FROM dashboard_jobs j JOIN memberships m ON m.organization_id=j.organization_id AND m.user_id=${userId}`;
-  return { ...row, organizationId: "all", utilization: overviewUtilization(row.running, row.concurrency), costSavings: await getGithubRunnerCostSavings(db, "all", period, userId), timeseries: await getOverviewTimeseries(db, period, "all", userId), jobOutcomes: await getOverviewJobOutcomes(db, "all", period, userId), runningContainers: await getOverviewRunningContainers(db, "all", userId) };
+  return { ...row, organizationId: "all", queueReasons: await getOverviewQueueReasons(db, null, userId), utilization: overviewUtilization(row.running, row.concurrency), costSavings: await getGithubRunnerCostSavings(db, "all", period, userId), timeseries: await getOverviewTimeseries(db, period, "all", userId), jobOutcomes: await getOverviewJobOutcomes(db, "all", period, userId), runningContainers: await getOverviewRunningContainers(db, "all", userId) };
 }
 export async function listRepositories(
   db: DashboardDb,

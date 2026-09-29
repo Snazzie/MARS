@@ -517,6 +517,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
       const decisions: DispatchDecision[] = [];
       let inspected = 0;
       let dispatchSucceeded = false;
+      dispatchHealth.markStarted();
       try {
         const report = await runQueuedJobReconciliation({
           db,
@@ -556,7 +557,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
         }
       } catch (error) {
         if (!dispatchSucceeded) {
-          dispatchHealth.markFailure();
+          dispatchHealth.markFailure(error);
           console.error("Control plane dispatch status", dispatchHealth.snapshot(null));
         }
         console.error(dispatchSucceeded ? "Background lease reconciliation failed" : "Job reconciliation failed", error);

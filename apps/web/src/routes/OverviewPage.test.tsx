@@ -14,16 +14,21 @@ test("period control exposes all supported reporting windows", () => {
   expect(markup).toContain('checked=""');
   expect(reportingPeriodLabels["30d"]).toBe("30 days");
 });
-test("overview explains dispatch blockers without equating healthy reconciliation to available capacity", () => {
-  const markup = renderToStaticMarkup(<ControlPlaneStatus status={{
-    state: "healthy", lastReconciledAt: "2026-09-24T02:17:00.000Z", queued: 3, reserved: 1,
-    reasons: [{ code: "worker_runtime_not_ready", count: 2 }],
+test("dispatcher separates queued jobs excluded before scheduling from workers rejected by pool eligibility", () => {
+  const markup = renderToStaticMarkup(<ControlPlaneStatus awaiting={4} queueReasons={[
+    { code: "run_not_dispatchable", count: 3 }, { code: "eligible", count: 1 },
+  ]} status={{
+    state: "healthy", lastReconciledAt: "2026-09-24T02:17:00.000Z", queued: 1, reserved: 0,
+    reasons: [{ code: "no_eligible_worker_pool", count: 1 }],
+    blockedJobs: [{ jobId: 42, code: "no_eligible_worker_pool", labels: ["mars-windows-x64-2vcpu-4g"],
+      pools: [{ poolId: "pool", poolName: "Windows", platform: "windows-x64", workerId: "worker", workerName: "BEAST", reason: "worker_doctor_stale" }] }],
   }} />);
-  expect(markup).toContain("Reconciliation healthy");
-  expect(markup).toContain("3 queued jobs inspected");
-  expect(markup).toContain("1 lease dispatched");
-  expect(markup).toContain("Worker runtime or image is not ready");
-  expect(markup).toContain("active or pending-cleanup leases are excluded");
+  expect(markup).toContain('aria-label="Dispatcher status"');
+  expect(markup).toContain("3</b>");
+  expect(markup).toContain("Parent run is no longer queued or in progress");
+  expect(markup).toContain("Worker runtime report is older than 60 seconds");
+  expect(markup).toContain("Windows (windows-x64 · BEAST)");
+  expect(markup).toContain("4 awaiting dispatch now");
 });
 test("blocked job links identify repository and job name and target the GitHub job", () => {
   const markup = renderToStaticMarkup(<ControlPlaneStatus status={{
@@ -36,14 +41,12 @@ test("blocked job links identify repository and job name and target the GitHub j
   expect(markup).toContain("mars-ubuntu-arm64");
 });
 
-test("preserved leases show the diagnostic retention blocker", () => {
-  const markup = renderToStaticMarkup(<ControlPlaneStatus status={{
-    state: "healthy", lastReconciledAt: "2026-09-27T22:31:21.000Z", queued: 1, reserved: 0,
-    reasons: [{ code: "lease_preserved_for_debugging", count: 1 }],
-    blockedJobs: [{ jobId: 108721371952, code: "lease_preserved_for_debugging", labels: ["mars-ubuntu-arm64-2vcpu-10g"] }],
+test("dispatcher distinguishes an uninspected eligible queue from completed reconciliation", () => {
+  const markup = renderToStaticMarkup(<ControlPlaneStatus awaiting={2} queueReasons={[{ code: "eligible", count: 2 }]} status={{
+    state: "degraded", healthReason: "reconciliation_stale", lastReconciledAt: "2026-09-27T22:31:21.000Z", queued: 0, reserved: 0, reasons: [],
   }} />);
-  expect(markup).toContain("Failed lease retained for debugging");
-  expect(markup).toContain("Inspect the preserved worker diagnostics");
+  expect(markup).toContain("2 jobs qualify for dispatch");
+  expect(markup).toContain("Reconciliation has not completed");
 });
 
 

@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { expect, test } from "bun:test";
 import type { DatabaseClient } from "@mars/db";
-import { candidateWorkerFromRow, isDispatchableRunStatus, runQueuedJobReconciliation } from "./job-reconciler.ts";
+import { candidateWorkerFromRow, excludedPoolReason, isDispatchableRunStatus, runQueuedJobReconciliation } from "./job-reconciler.ts";
 import { fits, reason, type Candidate } from "./scheduler.ts";
 import { parseRunnerLabels } from "@mars/contracts";
 
@@ -428,7 +428,7 @@ test("identifies configured pools when no worker reaches the candidate query", a
   const db = (async (strings: TemplateStringsArray) => {
     const query = strings.join(" ").toLowerCase();
     if (query.includes("from dashboard_jobs j")) return [{ jobId: 42, runId: "run", repositoryId: "repo", organizationId: "org", installationId: 7, repository: "acme/project", labels }];
-    if (query.includes("select p.id as \"poolid\", p.name as \"poolname\", p.platform")) return [
+    if (query.includes("left join workers w")) return [
       { poolId: "pool-1", poolName: "Windows pool", platform: "windows-x64", enabled: true },
       { poolId: "pool-2", poolName: "Disabled pool", platform: "linux-arm64", enabled: false },
     ];
@@ -444,8 +444,23 @@ test("identifies configured pools when no worker reaches the candidate query", a
   expect(decisions).toEqual([{
     organizationId: "org", jobId: 42, code: "no_eligible_worker_pool", labels,
     pools: [
-      { poolId: "pool-1", poolName: "Windows pool", platform: "windows-x64", reason: "no_current_worker_candidate" },
+      { poolId: "pool-1", poolName: "Windows pool", platform: "windows-x64", reason: "no_configured_worker_for_pool" },
       { poolId: "pool-2", poolName: "Disabled pool", platform: "linux-arm64", reason: "pool_disabled" },
     ],
   }]);
+});
+
+test("identifies why a configured worker is excluded before pool matching", () => {
+  const now = Date.parse("2026-09-29T00:00:00.000Z");
+  const pool = {
+    enabled: true, workerId: "worker", admissionState: "adopted", draining: false,
+    connectionState: "online", configurationState: "ready", configurationRevision: "current",
+    appliedConfigurationRevision: "current", lastHeartbeatAt: new Date(now - 5_000),
+    doctorObservedAt: new Date(now - 5_000), driver: "windows-hyperv-container",
+    platform: "windows-x64", imageDigest: "sha256:expected", doctor: { doctor: windowsEvidence },
+  };
+  expect(excludedPoolReason(pool, now)).toBe("pool_image_mismatch");
+  expect(excludedPoolReason({ ...pool, imageDigest: "sha256:image" }, now)).toBe("worker_not_eligible");
+  expect(excludedPoolReason({ ...pool, doctorObservedAt: new Date(now - 61_000) }, now)).toBe("worker_doctor_stale");
+  expect(excludedPoolReason({ ...pool, connectionState: "offline" }, now)).toBe("worker_offline");
 });
