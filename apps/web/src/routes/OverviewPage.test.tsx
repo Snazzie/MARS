@@ -20,6 +20,9 @@ test("dispatcher separates queued jobs excluded before scheduling from workers r
   ]} status={{
     state: "healthy", lastReconciledAt: "2026-09-24T02:17:00.000Z", queued: 1, reserved: 0,
     reasons: [{ code: "no_eligible_worker_pool", count: 1 }],
+    nextScheduledAt: "2026-09-24T02:17:05.000Z", intervalMs: 5_000,
+    currentPoolsObservedAt: "2026-09-24T02:17:02.000Z",
+    currentPools: [{ poolId: "pool", poolName: "Windows", platform: "windows-x64", workerId: "worker", workerName: "BEAST", reason: "worker_doctor_stale" }],
     blockedJobs: [{ jobId: 42, code: "no_eligible_worker_pool", labels: ["mars-windows-x64-2vcpu-4g"],
       pools: [{ poolId: "pool", poolName: "Windows", platform: "windows-x64", workerId: "worker", workerName: "BEAST", reason: "worker_doctor_stale" }] }],
   }} />);
@@ -28,7 +31,9 @@ test("dispatcher separates queued jobs excluded before scheduling from workers r
   expect(markup).toContain("Parent run is no longer queued or in progress");
   expect(markup).toContain("Worker runtime report is older than 60 seconds");
   expect(markup).toContain("Windows (windows-x64 · BEAST)");
-  expect(markup).toContain("4 awaiting dispatch now");
+  expect(markup).toContain("Waiting for an eligible worker and pool");
+  expect(markup).toContain("next tick");
+  expect(markup).toContain("4 awaiting dispatch total");
 });
 test("blocked job links identify repository and job name and target the GitHub job", () => {
   const markup = renderToStaticMarkup(<ControlPlaneStatus status={{
@@ -41,12 +46,19 @@ test("blocked job links identify repository and job name and target the GitHub j
   expect(markup).toContain("mars-ubuntu-arm64");
 });
 
-test("dispatcher distinguishes an uninspected eligible queue from completed reconciliation", () => {
+test("stale prior blockers do not masquerade as current eligibility while cleanup delays dispatch", () => {
   const markup = renderToStaticMarkup(<ControlPlaneStatus awaiting={2} queueReasons={[{ code: "eligible", count: 2 }]} status={{
-    state: "degraded", healthReason: "reconciliation_stale", lastReconciledAt: "2026-09-27T22:31:21.000Z", queued: 0, reserved: 0, reasons: [],
+    state: "degraded", healthReason: "reconciliation_stale", lastReconciledAt: "2026-09-27T22:31:21.000Z", queued: 1, reserved: 0,
+    reasons: [{ code: "no_eligible_worker_pool", count: 1 }],
+    currentPhase: "github_lease_reconciliation", phaseSince: "2026-09-27T22:31:22.000Z",
+    dispatchPending: true, intervalMs: 5_000, nextScheduledAt: "2026-09-27T22:31:25.000Z",
+    currentPools: [{ poolId: "pool", poolName: "Mac", platform: "macos-arm64", workerName: "Mac.local", reason: "admissible" }],
   }} />);
-  expect(markup).toContain("2 jobs qualify for dispatch");
-  expect(markup).toContain("Reconciliation has not completed");
+  expect(markup).toContain("Checking existing leases with GitHub");
+  expect(markup).toContain("Another dispatch pass is queued as soon as the current cycle finishes");
+  expect(markup).toContain("1 ready match");
+  expect(markup).toContain("previous pass below is historical");
+  expect(markup).toContain("Previous dispatch pass: 1 inspected");
 });
 
 

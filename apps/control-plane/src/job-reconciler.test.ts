@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { expect, test } from "bun:test";
 import type { DatabaseClient } from "@mars/db";
-import { candidateWorkerFromRow, excludedPoolReason, isDispatchableRunStatus, runQueuedJobReconciliation } from "./job-reconciler.ts";
+import { candidateWorkerFromRow, excludedPoolReason, getLiveDispatchPools, isDispatchableRunStatus, runQueuedJobReconciliation } from "./job-reconciler.ts";
 import { fits, reason, type Candidate } from "./scheduler.ts";
 import { parseRunnerLabels } from "@mars/contracts";
 
@@ -460,7 +460,27 @@ test("identifies why a configured worker is excluded before pool matching", () =
     platform: "windows-x64", imageDigest: "sha256:expected", doctor: { doctor: windowsEvidence },
   };
   expect(excludedPoolReason(pool, now)).toBe("pool_image_mismatch");
-  expect(excludedPoolReason({ ...pool, imageDigest: "sha256:image" }, now)).toBe("worker_not_eligible");
+  expect(excludedPoolReason({ ...pool, imageDigest: "sha256:image" }, now)).toBe("admissible");
   expect(excludedPoolReason({ ...pool, doctorObservedAt: new Date(now - 61_000) }, now)).toBe("worker_doctor_stale");
   expect(excludedPoolReason({ ...pool, connectionState: "offline" }, now)).toBe("worker_offline");
+});
+
+test("current pool snapshot distinguishes a ready worker from a disabled or disconnected one", async () => {
+  const fresh = new Date();
+  const base = {
+    admissionState: "adopted", connectionState: "online", configurationState: "ready",
+    configurationRevision: "current", appliedConfigurationRevision: "current", draining: false,
+    lastHeartbeatAt: fresh, doctorObservedAt: fresh, doctor: { doctor: windowsEvidence },
+    driver: "windows-hyperv-container", platform: "windows-x64", imageDigest: "sha256:image",
+    resources: { vcpu: 2, memoryBytes: 4 * 1024 ** 3, storageBytes: 8, concurrency: 2 },
+    active: 0, enabled: true,
+  };
+  const db = (async () => [
+    { ...base, poolId: "ready", poolName: "Ready", workerId: "ready-worker", workerName: "BEAST" },
+    { ...base, poolId: "disconnected", poolName: "Disconnected", workerId: "offline-worker", workerName: "old host" },
+    { ...base, poolId: "disabled", poolName: "Disabled", workerId: "other", enabled: false },
+    { ...base, poolId: "full", poolName: "Full", workerId: "full-worker", active: 2 },
+  ]) as unknown as DatabaseClient;
+  const pools = await getLiveDispatchPools(db, ["org"], workerId => workerId !== "offline-worker");
+  expect(pools.map(({ reason }) => reason)).toEqual(["admissible", "worker_offline", "pool_disabled", "pool_concurrency"]);
 });

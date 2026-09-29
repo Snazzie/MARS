@@ -12,6 +12,7 @@ import { supportsExclusiveCpuPlacement } from "@mars/contracts";
 import { WorkerDispatchError } from "../worker-dispatch.ts";
 import { WorkerReleaseCatalogUnavailable } from "../worker-release.ts";
 import { workerPoolEvidence } from "../worker-evidence.ts";
+import { getLiveDispatchPools } from "../job-reconciler.ts";
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
@@ -122,12 +123,14 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (org === "all") {
       const data = await getAllOverview(deps.db, user.id, period.data);
       const organizationIds = deps.dispatchHealth ? (await listOrganizations(deps.db, user.id)).map(item => item.id) : [];
-      return c.json(OverviewDto.parse({ ...data, ...(deps.dispatchHealth ? { controlPlane: deps.dispatchHealth(organizationIds) } : {}) }));
+      const currentPools = deps.dispatchHealth ? await getLiveDispatchPools(deps.db, organizationIds, deps.workerConnected) : [];
+      return c.json(OverviewDto.parse({ ...data, ...(deps.dispatchHealth ? { controlPlane: { ...deps.dispatchHealth(organizationIds), currentPools, currentPoolsObservedAt: new Date().toISOString() } } : {}) }));
     }
     const denied = await guard(c, deps, org);
     if (denied) return denied;
     const data = await getOverview(deps.db, org, period.data);
-    return c.json(OverviewDto.parse({ ...data, ...(deps.dispatchHealth ? { controlPlane: deps.dispatchHealth([org]) } : {}) }));
+    const currentPools = deps.dispatchHealth ? await getLiveDispatchPools(deps.db, [org], deps.workerConnected) : [];
+    return c.json(OverviewDto.parse({ ...data, ...(deps.dispatchHealth ? { controlPlane: { ...deps.dispatchHealth([org]), currentPools, currentPoolsObservedAt: new Date().toISOString() } } : {}) }));
   }));
   app.get("/api/organizations/:organizationId/cost-center", safe(async (c) => { const org = c.req.param("organizationId"); const period = periodSchema.safeParse(c.req.query("period") || "24h"); const pricingProvider = CostCenterPricingProvider.safeParse(c.req.query("provider") || "github"); if (!period.success) return error(c, 400, "invalid_period", "Invalid period", { issues: period.error.issues }); if (!pricingProvider.success) return error(c, 400, "invalid_provider", "Invalid pricing provider", { issues: pricingProvider.error.issues }); if (org !== "all") { const denied = await guard(c, deps, org); if (denied) return denied; } const data = await getGithubRunnerCostCenter(deps.db, org, period.data, c.get("user").id, pricingProvider.data); return c.json(CostCenterDto.parse({ organizationId: org, period: period.data, ...data })); }));
   app.get("/api/organizations/:organizationId/repositories", safe(async (c) => {

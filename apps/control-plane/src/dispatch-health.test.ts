@@ -27,10 +27,19 @@ test("reports a stalled scheduler even before its first successful pass", () => 
   const monitor = new DispatchHealthMonitor(5_000, 0);
   expect(monitor.snapshot(null, 15_001)).toMatchObject({ state: "degraded", lastReconciledAt: null });
   monitor.markStarted(16_000);
+  monitor.setSchedulerStatus(() => ({ running: true, pending: true, nextTickAt: 20_000, intervalMs: 5_000 }));
+  monitor.markPhase("github_lease_reconciliation", 16_001);
+  expect(monitor.snapshot(null, 16_002)).toMatchObject({
+    currentPhase: "github_lease_reconciliation", phaseSince: new Date(16_001).toISOString(),
+    dispatchPending: true, nextScheduledAt: new Date(20_000).toISOString(), intervalMs: 5_000,
+  });
   expect(monitor.snapshot(null, 16_001)).toMatchObject({ inProgressSince: new Date(16_000).toISOString(), healthReason: "reconciliation_stale" });
   monitor.markFailure({ code: "57014" });
   expect(monitor.snapshot(null, 16_002)).toMatchObject({ healthReason: "reconciliation_failed", failureCode: "SQLSTATE 57014" });
   monitor.markSuccess([], 16_100);
+  expect(monitor.snapshot(null, 16_101).currentPhase).toBe("github_lease_reconciliation");
+  monitor.markIdle();
+  expect(monitor.snapshot(null, 16_102).currentPhase).toBeUndefined();
   expect(monitor.snapshot(null, 16_101).failureCode).toBeUndefined();
 });
 

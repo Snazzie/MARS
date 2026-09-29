@@ -48,20 +48,35 @@ const dispatchReasons: Record<string, string> = {
   lease_preserved_for_debugging: "Failed lease retained for debugging",
   duplicate_job: "Duplicate queued job",
 };
+const dispatchPhases: Record<NonNullable<OverviewDto["controlPlane"]>["currentPhase"] & string, string> = {
+  dispatching: "Matching queued jobs, reserving workers, and sending leases",
+  github_lease_reconciliation: "Checking existing leases with GitHub; new dispatch waits for this check",
+  queued_job_discovery: "Discovering queued GitHub jobs; new dispatch waits for discovery",
+  lease_cleanup: "Cleaning up prior leases; new dispatch waits for cleanup",
+  onboarding: "Checking worker onboarding; new dispatch waits for this check",
+};
+
 export function ControlPlaneStatus({ status, queueReasons = [], awaiting = 0 }: { status: OverviewDto["controlPlane"]; queueReasons?: OverviewDto["queueReasons"]; awaiting?: number }) {
   if (!status) return <section className="dispatch-status-panel" aria-label="Dispatcher status"><h2>Dispatcher status</h2><p>Status unavailable</p></section>;
   const label = status.state === "healthy" ? "Reconciliation healthy" : status.state === "degraded" ? "Reconciliation degraded" : "Awaiting first reconciliation";
+  const readyPools = status.currentPools?.filter(pool => pool.reason === "admissible").length ?? 0;
+  const eligibleJobs = queueReasons.find(item => item.code === "eligible")?.count ?? 0;
+  const nextTick = status.nextScheduledAt ? new Date(status.nextScheduledAt).toLocaleString() : null;
   return <section className="dispatch-status-panel" aria-label="Dispatcher status">
     <div className="dispatch-status-heading"><h2>Dispatcher status</h2><strong data-state={status.state}>{label}</strong></div>
-    <p>{status.lastReconciledAt ? <>Last successful reconciliation <time dateTime={status.lastReconciledAt}>{new Date(status.lastReconciledAt).toLocaleString()}</time></> : "No successful reconciliation yet"}</p>
-    {status.inProgressSince && <p>Dispatch reconciliation running since <time dateTime={status.inProgressSince}>{new Date(status.inProgressSince).toLocaleString()}</time>. A running pass does not overlap the next scheduled pass.</p>}
-    {status.healthReason === "reconciliation_failed" && <p>The latest job reconciliation failed{status.failureCode ? ` (${status.failureCode.replaceAll("_", " ")})` : ""}. Job blockers below are from the last successful pass; check control-plane logs for the failure.</p>}
-    {status.healthReason === "reconciliation_stale" && <p>Reconciliation has not completed within the expected interval. Job blockers below may be stale{status.inProgressSince ? " while the current pass runs" : ""}; check control-plane logs.</p>}
-    <p>{status.queued} dispatchable jobs inspected · {status.reserved} {status.reserved === 1 ? "lease" : "leases"} dispatched on last pass · {awaiting} awaiting dispatch now</p>
-    {status.reasons.length ? <ul>{status.reasons.map(({ code, count }) => <li key={code}><span>{dispatchReasons[code] ?? code.replaceAll("_", " ")}</span><b>{count}</b></li>)}</ul> : <p>{status.queued ? "No dispatch blockers reported on the last pass." : "No eligible queued jobs were inspected on the last pass."}</p>}
+    <p><strong>Now:</strong> {status.currentPhase ? dispatchPhases[status.currentPhase] : !status.nextScheduledAt ? "No dispatch timer is active" : eligibleJobs && status.currentPools && readyPools === 0 ? "Waiting for an eligible worker and pool" : "Waiting for the next dispatch tick"}{status.phaseSince && <> since <time dateTime={status.phaseSince}>{new Date(status.phaseSince).toLocaleString()}</time></>}.</p>
+    <p><strong>Next:</strong> {status.currentPhase && status.dispatchPending ? "Another dispatch pass is queued as soon as the current cycle finishes." : nextTick ? <>Dispatch timer every {status.intervalMs ? `${status.intervalMs / 1_000}s` : "configured interval"}; next tick <time dateTime={status.nextScheduledAt}>{nextTick}</time>{status.currentPhase ? " (or immediately after this cycle if the timer fires while it is busy)." : "."}</> : "No dispatch timer is active."}</p>
+    {status.currentPools ? <div><p><strong>Worker/pool eligibility now:</strong> {readyPools} ready match{readyPools === 1 ? "" : "es"} across {status.currentPools.length} worker/pool entr{status.currentPools.length === 1 ? "y" : "ies"}{status.currentPoolsObservedAt && <> as of <time dateTime={status.currentPoolsObservedAt}>{new Date(status.currentPoolsObservedAt).toLocaleString()}</time></>}.</p>
+      {status.currentPools.length ? <details><summary>Current pool checks ({status.currentPools.length})</summary><ul>{status.currentPools.map(pool => <li key={`${pool.poolId}:${pool.workerId ?? ""}`}>{pool.poolName} ({pool.platform}{pool.workerName ? ` · ${pool.workerName}` : ""}): {dispatchReasons[pool.reason] ?? pool.reason.replaceAll("_", " ")}</li>)}</ul></details> : <p>No configured pools are visible.</p>}</div> : <p>Current worker/pool eligibility is unavailable.</p>}
+    {status.lastReconciledAt ? <p>Last dispatch pass completed <time dateTime={status.lastReconciledAt}>{new Date(status.lastReconciledAt).toLocaleString()}</time>.</p> : <p>No dispatch pass has completed yet.</p>}
+    {status.healthReason === "reconciliation_failed" && <p>The latest dispatch pass failed{status.failureCode ? ` (${status.failureCode.replaceAll("_", " ")})` : ""}; see control-plane logs.</p>}
+    {status.healthReason === "reconciliation_stale" && <p>No dispatch pass completed within the expected interval. The previous pass below is historical, not a statement of current worker availability.</p>}
+    <p>{eligibleJobs} jobs qualify for dispatch now · {awaiting} awaiting dispatch total.</p>
     {queueReasons.some(item => item.code !== "eligible") && <div><h3>Why queued jobs are not inspected</h3><ul>{queueReasons.filter(item => item.code !== "eligible").map(({ code, count }) => <li key={code}><span>{({ run_not_dispatchable: "Parent run is no longer queued or in progress", repository_unavailable: "Repository is unavailable", installation_not_approved: "GitHub installation is not approved" } as Record<string, string>)[code]}</span><b>{count}</b></li>)}</ul></div>}
-    {queueReasons.some(item => item.code === "eligible") && status.queued === 0 && <p>{queueReasons.find(item => item.code === "eligible")?.count} jobs qualify for dispatch in the current queue, but the last completed reconciliation inspected none. Check the reconciliation timestamp and degraded state above.</p>}
-    {status.blockedJobs?.length ? <details><summary>Blocked jobs ({status.blockedJobs.length})</summary><ul>{status.blockedJobs.map(({ jobId, code, labels, pools, repository, githubRunId, jobName }) => {
+    <details><summary>Previous dispatch pass: {status.queued} inspected, {status.reserved} dispatched</summary>
+      {status.reasons.length ? <ul>{status.reasons.map(({ code, count }) => <li key={code}><span>{dispatchReasons[code] ?? code.replaceAll("_", " ")}</span><b>{count}</b></li>)}</ul> : <p>No blockers were recorded on that pass.</p>}
+    </details>
+    {status.blockedJobs?.length ? <details><summary>Previous pass blocked jobs ({status.blockedJobs.length})</summary><ul>{status.blockedJobs.map(({ jobId, code, labels, pools, repository, githubRunId, jobName }) => {
       const href = repository && /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(repository) && githubRunId && /^[0-9]+$/.test(githubRunId)
         ? `https://github.com/${repository}/actions/runs/${githubRunId}/job/${jobId}` : null;
       const title = repository && jobName ? `${repository} · ${jobName}` : `Job ${jobId}`;

@@ -543,6 +543,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
         if (reconciliationMessage) console.log(reconciliationMessage);
         if (Date.now() - lastGithubLeaseReconciliationAt >= 60_000) {
           lastGithubLeaseReconciliationAt = Date.now();
+          dispatchHealth.markPhase("github_lease_reconciliation");
           const staleLeaseReport = await reconcileExpiredLeasesWithGithub({
             db,
             installationToken: installationId => githubApp.getInstallationToken(installationId),
@@ -552,6 +553,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
         }
         if (Date.now() - lastQueuedDiscoveryAt >= Number(Bun.env.JOB_QUEUED_DISCOVERY_INTERVAL_MS ?? 300_000)) {
           lastQueuedDiscoveryAt = Date.now();
+          dispatchHealth.markPhase("queued_job_discovery");
           const pickup = await discoverQueuedRepositoryJobs(discoveryDeps);
           if (pickup.failed) console.error(`Queued GitHub job pickup: repositories=${pickup.repositories} discovered=${pickup.discovered} updated=${pickup.updated} failed=${pickup.failed}`);
         }
@@ -562,9 +564,16 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
         }
         console.error(dispatchSucceeded ? "Background lease reconciliation failed" : "Job reconciliation failed", error);
       } finally {
-        try { const cleanup = await reapPendingLeases({ db, dispatch: dispatcher.dispatch.bind(dispatcher), workerConnected: workerId => dispatcher.isConnected(workerId) }); if (cleanup.dispatched || cleanup.failed) console.log(`Lease cleanup tick: dispatched=${cleanup.dispatched} failed=${cleanup.failed} skipped=${cleanup.skipped}`); await completeOnboardingIfReady(db); } catch (error) { console.error("Lease cleanup failed", error); }
+        try {
+          dispatchHealth.markPhase("lease_cleanup");
+          const cleanup = await reapPendingLeases({ db, dispatch: dispatcher.dispatch.bind(dispatcher), workerConnected: workerId => dispatcher.isConnected(workerId) });
+          if (cleanup.dispatched || cleanup.failed) console.log(`Lease cleanup tick: dispatched=${cleanup.dispatched} failed=${cleanup.failed} skipped=${cleanup.skipped}`);
+          dispatchHealth.markPhase("onboarding");
+          await completeOnboardingIfReady(db);
+        } catch (error) { console.error("Lease cleanup failed", error); } finally { dispatchHealth.markIdle(); }
       }
     }, reconciliationIntervalMs);
+    dispatchHealth.setSchedulerStatus(() => reconciliationScheduler.status());
     startReconciliationScheduler(async () => {
       discoveryHealth.markAttempt();
       try {

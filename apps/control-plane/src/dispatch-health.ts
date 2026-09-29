@@ -1,5 +1,7 @@
 export type DispatchPoolDetail = { poolId: string; poolName: string; platform: string; workerId?: string; workerName?: string; reason: string };
 export type DispatchDecision = { organizationId: string; jobId: number; code: string; labels?: string[]; pools?: DispatchPoolDetail[]; repository?: string; githubRunId?: string; jobName?: string };
+export type DispatchPhase = "dispatching" | "github_lease_reconciliation" | "queued_job_discovery" | "lease_cleanup" | "onboarding";
+
 export type DispatchHealthSnapshot = {
   state: "starting" | "healthy" | "degraded";
   lastReconciledAt: string | null;
@@ -9,6 +11,11 @@ export type DispatchHealthSnapshot = {
   healthReason?: "reconciliation_failed" | "reconciliation_stale";
   inProgressSince?: string;
   failureCode?: string;
+  currentPhase?: DispatchPhase;
+  phaseSince?: string;
+  nextScheduledAt?: string;
+  dispatchPending?: boolean;
+  intervalMs?: number;
   blockedJobs?: Array<{ jobId: number; code: string; labels: string[]; pools?: DispatchPoolDetail[]; repository?: string; githubRunId?: string; jobName?: string }>;
 };
 
@@ -17,11 +24,17 @@ export class DispatchHealthMonitor {
   private failed = false;
   private inProgressAt: number | null = null;
   private failureCode: string | null = null;
+  private phase: DispatchPhase | null = null;
+  private phaseAt: number | null = null;
+  private schedulerStatus: (() => { running: boolean; pending: boolean; nextTickAt: number | null; intervalMs: number }) | null = null;
   private decisions = new Map<string, DispatchDecision>();
 
   constructor(private readonly intervalMs: number, private readonly startedAt = Date.now()) {}
 
-  markStarted(at = Date.now()): void { this.inProgressAt = at; }
+  setSchedulerStatus(status: () => { running: boolean; pending: boolean; nextTickAt: number | null; intervalMs: number }): void { this.schedulerStatus = status; }
+  markStarted(at = Date.now()): void { this.inProgressAt = at; this.markPhase("dispatching", at); }
+  markPhase(phase: DispatchPhase, at = Date.now()): void { this.phase = phase; this.phaseAt = at; }
+  markIdle(): void { this.inProgressAt = null; this.phase = null; this.phaseAt = null; }
 
   markSuccess(decisions: readonly DispatchDecision[], at = Date.now()): void {
     const next = new Map(decisions.map(decision => [`${decision.organizationId}:${decision.jobId}`, decision]));
@@ -39,13 +52,13 @@ export class DispatchHealthMonitor {
     this.decisions = next;
     this.lastSuccessAt = at;
     this.failed = false;
-    this.inProgressAt = null;
+    // The cycle still owns the timer until its background and cleanup phases finish.
     this.failureCode = null;
   }
 
   markFailure(error?: unknown): void {
     this.failed = true;
-    this.inProgressAt = null;
+    // A failed dispatch pass still runs its cleanup phase before the scheduler can tick again.
     const code = error && typeof error === "object" && "code" in error ? error.code : null;
     this.failureCode = typeof code === "string" && /^[A-Z0-9]{5}$/.test(code) ? `SQLSTATE ${code}` : error instanceof TypeError ? "network_error" : "unexpected_error";
   }
@@ -58,6 +71,7 @@ export class DispatchHealthMonitor {
       if (decision.code !== "dispatched") counts.set(decision.code, (counts.get(decision.code) ?? 0) + 1);
     }
     const healthReason = this.failed ? "reconciliation_failed" : at - (this.lastSuccessAt ?? this.startedAt) > this.intervalMs * 3 ? "reconciliation_stale" : undefined;
+    const scheduler = this.schedulerStatus?.();
     return {
       state: healthReason ? "degraded" : this.lastSuccessAt === null ? "starting" : "healthy",
       lastReconciledAt: this.lastSuccessAt === null ? null : new Date(this.lastSuccessAt).toISOString(),
@@ -66,6 +80,9 @@ export class DispatchHealthMonitor {
       reasons: [...counts].map(([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count || a.code.localeCompare(b.code)),
       ...(healthReason ? { healthReason } : {}),
       ...(this.inProgressAt === null ? {} : { inProgressSince: new Date(this.inProgressAt).toISOString() }),
+      ...(this.phase === null || this.phaseAt === null ? {} : { currentPhase: this.phase, phaseSince: new Date(this.phaseAt).toISOString() }),
+      ...(scheduler?.nextTickAt == null ? {} : { nextScheduledAt: new Date(scheduler.nextTickAt).toISOString() }),
+      ...(scheduler ? { dispatchPending: scheduler.pending, intervalMs: scheduler.intervalMs } : {}),
       ...(healthReason === "reconciliation_failed" && this.failureCode ? { failureCode: this.failureCode } : {}),
       blockedJobs: decisions.filter(decision => decision.code !== "dispatched").map(({ jobId, code, labels, pools, repository, githubRunId, jobName }) => ({ jobId, code, labels: labels ?? [], ...(pools?.length ? { pools } : {}), ...(repository && githubRunId && jobName ? { repository, githubRunId, jobName } : {}) })),
     };

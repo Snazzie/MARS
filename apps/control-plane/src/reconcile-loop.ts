@@ -1,6 +1,7 @@
 export interface ReconciliationScheduler {
   stop(): void;
   trigger(): Promise<void>;
+  status(): { running: boolean; pending: boolean; nextTickAt: number | null; intervalMs: number };
 }
 
 export function startReconciliationScheduler(run: () => Promise<void>, intervalMs = 5_000, runImmediately = true): ReconciliationScheduler {
@@ -8,11 +9,12 @@ export function startReconciliationScheduler(run: () => Promise<void>, intervalM
   let running = false;
   let rerun = false;
   let waiters: (() => void)[] = [];
-  const tick = async () => {
+  let nextTickAt = Date.now() + intervalMs;
+  const tick = async (waitForRerun = false) => {
     if (stopped) return;
     if (running) {
       rerun = true;
-      await new Promise<void>((resolve) => waiters.push(resolve));
+      if (waitForRerun) await new Promise<void>((resolve) => waiters.push(resolve));
       return;
     }
     running = true;
@@ -26,7 +28,8 @@ export function startReconciliationScheduler(run: () => Promise<void>, intervalM
       }
     }
   };
-  const timer = setInterval(() => { void tick(); }, intervalMs);
+  const timer = setInterval(() => { nextTickAt = Date.now() + intervalMs; void tick(); }, intervalMs);
   if (runImmediately) void tick();
-  return { stop() { stopped = true; clearInterval(timer); }, trigger: tick };
+  return { stop() { stopped = true; clearInterval(timer); nextTickAt = 0; }, trigger: () => tick(true),
+    status: () => ({ running, pending: rerun, nextTickAt: stopped ? null : nextTickAt, intervalMs }) };
 }

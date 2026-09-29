@@ -19,6 +19,25 @@ test("runs a requested reconciliation immediately after startup", async () => {
   expect(calls).toBe(2);
   scheduler.stop();
 });
+test("reports the active timer and queues a single pass while dispatch is busy", async () => {
+  let runs = 0;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const scheduler = startReconciliationScheduler(async () => { if (++runs === 1) await gate; }, 60_000);
+  try {
+    expect(scheduler.status()).toMatchObject({ running: true, pending: false, intervalMs: 60_000 });
+    expect(scheduler.status().nextTickAt).toBeGreaterThan(Date.now());
+    const next = scheduler.trigger();
+    expect(scheduler.status()).toMatchObject({ running: true, pending: true });
+    release();
+    await next;
+    expect(runs).toBe(2);
+    expect(scheduler.status().pending).toBe(false);
+  } finally {
+    scheduler.stop();
+  }
+  expect(scheduler.status().nextTickAt).toBeNull();
+});
 test("dispatches durable cleanup for terminal leases without an outstanding stop command", async () => {
   const modulePath = "./lease-cleanup.ts";
   const cleanup = await import(modulePath).catch(() => null) as null | {

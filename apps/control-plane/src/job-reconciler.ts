@@ -76,10 +76,42 @@ export function excludedPoolReason(row: Record<string, unknown>, now = Date.now(
   if (row.configurationState !== "ready" || row.configurationRevision !== row.appliedConfigurationRevision) return "worker_config_applying";
   if (row.connectionState !== "online" || !row.lastHeartbeatAt || now - new Date(String(row.lastHeartbeatAt)).getTime() >= 60_000) return "worker_offline";
   if (!row.doctorObservedAt || now - new Date(String(row.doctorObservedAt)).getTime() >= 60_000) return "worker_doctor_stale";
-  const evidence = workerPoolEvidence(storedWorkerDoctor(jsonValue(row.doctor)), String(row.driver), String(row.imageDigest), String(row.platform));
+  const doctor = storedWorkerDoctor(jsonValue(row.doctor));
+  const evidence = workerPoolEvidence(doctor, String(row.driver), String(row.imageDigest), String(row.platform));
   if (!evidence.ready) return "worker_runtime_not_ready";
   if (!evidence.imageMatches) return "pool_image_mismatch";
-  return "worker_not_eligible";
+  if (doctor.acceptingLeases === false) return "worker_pickup_paused";
+  return "admissible";
+}
+
+export async function getLiveDispatchPools(db: DatabaseClient, organizationIds: readonly string[], workerConnected?: (workerId: string) => boolean): Promise<DispatchPoolDetail[]> {
+  const rows = await db`
+    SELECT p.id AS "poolId", p.name AS "poolName", p.platform, p.driver, p.image_digest AS "imageDigest",
+      p.enabled, p.resources, w.id AS "workerId", w.name AS "workerName",
+      w.admission_state AS "admissionState", w.connection_state AS "connectionState",
+      w.configuration_state AS "configurationState", w.configuration_revision AS "configurationRevision",
+      w.applied_configuration_revision AS "appliedConfigurationRevision", w.draining,
+      w.last_heartbeat_at AS "lastHeartbeatAt", w.doctor_observed_at AS "doctorObservedAt", w.doctor,
+      (SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.worker_id=w.id
+        AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')) AS active
+    FROM runner_pools p
+    LEFT JOIN workers w ON (p.worker_id IS NULL OR p.worker_id=w.id)
+      AND p.platform = ANY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(w.guest_platforms)='array' THEN w.guest_platforms ELSE (w.guest_platforms #>> '{}')::jsonb END))
+      AND p.driver=w.desired_configuration->>'selectedDriver'
+    WHERE p.organization_id IS NULL OR p.organization_id IN (SELECT id::uuid FROM jsonb_array_elements_text(${JSON.stringify(organizationIds)}::jsonb) AS visible(id))
+    ORDER BY p.name,p.id,w.name`;
+  const now = Date.now();
+  return rows.map(row => {
+    const workerId = row.workerId ? String(row.workerId) : null;
+    let reason = excludedPoolReason(row, now);
+    if (reason === "admissible" && workerId && workerConnected && !workerConnected(workerId)) reason = "worker_offline";
+    const resources = PoolResourcesSchema.safeParse(jsonValue(row.resources));
+    if (reason === "admissible" && (!resources.success || Number(row.active) >= resources.data.concurrency)) reason = "pool_concurrency";
+    return {
+      poolId: String(row.poolId), poolName: String(row.poolName), platform: String(row.platform),
+      ...(workerId ? { workerId, workerName: String(row.workerName ?? "") } : {}), reason,
+    };
+  });
 }
 
 export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): Promise<ReconcileReport> {
