@@ -55,8 +55,14 @@ const dispatchPhases: Record<NonNullable<OverviewDto["controlPlane"]>["currentPh
   onboarding: "Checking worker onboarding; new dispatch waits for this check",
 };
 
-export function ControlPlaneStatus({ status, queueReasons = [], awaiting = 0 }: { status: OverviewDto["controlPlane"]; queueReasons?: OverviewDto["queueReasons"]; awaiting?: number }) {
-  if (!status) return <section className="dispatch-status-panel" aria-label="Dispatcher status"><div className="dispatch-status-heading"><div><span className="dispatch-kicker">Control plane / service</span><h2>Dispatcher status</h2></div><span className="dispatch-health" data-state="starting">Unavailable</span></div><p className="dispatch-empty">Dispatcher telemetry is unavailable.</p></section>;
+type DispatcherLoad = Pick<OverviewDto, "running" | "concurrency" | "utilization">;
+function CurrentLoad({ load }: { load: DispatcherLoad }) {
+  const utilization = Math.round(load.utilization.pods * 100);
+  return <div className="dispatch-load"><dt>Current load</dt><dd>{load.running}<span> / {load.concurrency || "—"}</span></dd><small>Allocated job slots / configured ceiling</small><div className="dispatch-load-track" aria-hidden="true"><span style={{ width: `${utilization}%` }} /></div><small>{utilization}% slot utilization</small></div>;
+}
+
+export function ControlPlaneStatus({ status, load, queueReasons = [], awaiting = 0 }: { status: OverviewDto["controlPlane"]; load: DispatcherLoad; queueReasons?: OverviewDto["queueReasons"]; awaiting?: number }) {
+  if (!status) return <section className="dispatch-status-panel" aria-label="Dispatcher status"><div className="dispatch-status-heading"><div><span className="dispatch-kicker">Control plane / service</span><h2>Dispatcher status</h2></div><span className="dispatch-health" data-state="starting">Unavailable</span></div><div className="dispatch-overview"><div className="dispatch-current"><span className="dispatch-kicker">Current activity</span><h3>Telemetry unavailable</h3><p>Live load and queue counts are shown independently of dispatcher health.</p></div><dl className="dispatch-metrics dispatch-metrics-partial"><CurrentLoad load={load} /><div><dt>Awaiting dispatch</dt><dd>{awaiting}</dd><small>Total queued jobs</small></div></dl></div></section>;
   const label = status.state === "healthy" ? "Reconciliation healthy" : status.state === "degraded" ? "Reconciliation degraded" : "Awaiting first reconciliation";
   const readyPools = status.currentPools?.filter(pool => pool.reason === "admissible").length ?? 0;
   const eligibleJobs = queueReasons.find(item => item.code === "eligible")?.count ?? 0;
@@ -67,6 +73,7 @@ export function ControlPlaneStatus({ status, queueReasons = [], awaiting = 0 }: 
     <div className="dispatch-overview">
       <div className="dispatch-current"><span className="dispatch-kicker">Current activity</span><h3>{phaseTitle}</h3><p>{status.currentPhase ? dispatchPhases[status.currentPhase] : !status.nextScheduledAt ? "No dispatch timer is active" : eligibleJobs && status.currentPools && readyPools === 0 ? "Waiting for an eligible worker and pool" : "Waiting for the next dispatch tick"}.</p>{status.phaseSince && <small>Since <time dateTime={status.phaseSince}>{new Date(status.phaseSince).toLocaleString()}</time></small>}</div>
       <dl className="dispatch-metrics">
+        <CurrentLoad load={load} />
         <div><dt>Awaiting dispatch</dt><dd>{awaiting}</dd><small>Total queued jobs</small></div>
         <div><dt>Qualify now</dt><dd>{eligibleJobs}</dd><small>Jobs eligible for inspection</small></div>
         <div><dt>Ready pool entries</dt><dd>{status.currentPools ? readyPools : "—"}<span> / {status.currentPools?.length ?? "—"}</span></dd><small>Before labels &amp; capacity checks</small></div>
@@ -97,9 +104,8 @@ export function ControlPlaneStatus({ status, queueReasons = [], awaiting = 0 }: 
 }
 function OverviewContent({ data, period }: { data: OverviewDto; period: DashboardPeriod }) {
   return <div className="overview-grid">
-    <section className="signal-panel"><div className="panel-kicker">Current load</div><div className="signal-value">{data.running}<span>/ {data.concurrency || "—"}</span></div><p>allocated job slots / configured ceiling</p><div className="load-track"><span style={{ width: `${Math.round(data.utilization.pods * 100)}%` }} /></div><div className="load-meta"><span className="load-awaiting">Awaiting dispatch <b>{data.queued}</b></span></div></section>
+    <ControlPlaneStatus status={data.controlPlane} load={data} queueReasons={data.queueReasons} awaiting={data.queued} />
     <section className="metric-panel"><Metric label="Queue p50" value={`${Math.round(data.queueP50Ms / 1000)}s`} detail="median wait" /><Metric label="Queue p95" value={`${Math.round(data.queueP95Ms / 1000)}s`} detail="slowest cohort" /><Metric label="Duration p50" value={`${Math.round(data.durationP50Ms / 60000)}m`} detail="median runtime" /><Metric label="Duration p95" value={`${Math.round(data.durationP95Ms / 60000)}m`} detail="slowest cohort" /><OverviewCostMetrics costSavings={data.costSavings} period={period} /></section>
-    <ControlPlaneStatus status={data.controlPlane} queueReasons={data.queueReasons} awaiting={data.queued} />
     <section className="chart-panel"><div className="panel-kicker">Pending vs running</div><JobActivityChart points={data.timeseries ?? []} /></section><section className="chart-panel"><div className="panel-kicker">Job outcomes</div><OutcomeBars outcomes={data.jobOutcomes ?? []} /></section><RunningContainers containers={data.runningContainers ?? []} />
   </div>;
 }

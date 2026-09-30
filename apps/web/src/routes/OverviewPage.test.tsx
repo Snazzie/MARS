@@ -1,9 +1,24 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { Window } from "happy-dom";
 import { ReportingPeriodControl, reportingPeriodLabels } from "../components/ReportingPeriodControl.tsx";
 import { GithubRunnerCostDisclosure } from "../components/GithubRunnerCostDisclosure.tsx";
 import { formatMinutes, formatUsdMicros } from "../format.ts";
 import { ControlPlaneStatus } from "./OverviewPage.tsx";
+const load = { running: 2, concurrency: 8, utilization: { pods: .25, vcpu: .2, memory: .1, storage: .1 } };
+
+test("load and queue remain visible when dispatcher telemetry is unavailable", () => {
+  const window = new Window();
+  for (const concurrency of [8, 0]) {
+    window.document.body.innerHTML = renderToStaticMarkup(<ControlPlaneStatus status={undefined} load={{ ...load, concurrency }} awaiting={4} />);
+    const metrics = Array.from(window.document.querySelectorAll("dl > div"));
+    const currentLoad = metrics.find(metric => metric.querySelector("dt")?.textContent === "Current load");
+    const awaiting = metrics.find(metric => metric.querySelector("dt")?.textContent === "Awaiting dispatch");
+    expect(currentLoad?.querySelector("dd")?.textContent).toBe(`2 / ${concurrency || "—"}`);
+    expect(currentLoad?.textContent).toContain("25% slot utilization");
+    expect(awaiting?.querySelector("dd")?.textContent).toBe("4");
+  }
+});
 
 test("period control exposes all supported reporting windows", () => {
   const markup = renderToStaticMarkup(<ReportingPeriodControl value="24h" onChange={() => {}} label="Overview time window" />);
@@ -15,7 +30,7 @@ test("period control exposes all supported reporting windows", () => {
   expect(reportingPeriodLabels["30d"]).toBe("30 days");
 });
 test("dispatcher separates queued jobs excluded before scheduling from workers rejected by pool eligibility", () => {
-  const markup = renderToStaticMarkup(<ControlPlaneStatus awaiting={4} queueReasons={[
+  const markup = renderToStaticMarkup(<ControlPlaneStatus load={load} awaiting={4} queueReasons={[
     { code: "run_not_dispatchable", count: 3 }, { code: "eligible", count: 1 },
   ]} status={{
     state: "healthy", lastReconciledAt: "2026-09-24T02:17:00.000Z", queued: 1, reserved: 0,
@@ -31,7 +46,7 @@ test("dispatcher separates queued jobs excluded before scheduling from workers r
   expect(markup).toContain("Waiting for an eligible worker and pool");
 });
 test("blocked job links identify repository and job name and target the GitHub job", () => {
-  const markup = renderToStaticMarkup(<ControlPlaneStatus status={{
+  const markup = renderToStaticMarkup(<ControlPlaneStatus load={load} status={{
     state: "healthy", lastReconciledAt: "2026-09-27T08:23:21.000Z", queued: 1, reserved: 0,
     reasons: [{ code: "invalid_provision_labels", count: 1 }],
     blockedJobs: [{ jobId: 108558550787, code: "invalid_provision_labels", labels: ["mars-ubuntu-arm64"], repository: "BetterTaskManager/BetterTaskManagerPrivate", githubRunId: "35985554985", jobName: "Build and test (Ubuntu)" }],
@@ -42,7 +57,7 @@ test("blocked job links identify repository and job name and target the GitHub j
 });
 
 test("stale prior blockers do not masquerade as current eligibility while cleanup delays dispatch", () => {
-  const markup = renderToStaticMarkup(<ControlPlaneStatus awaiting={2} queueReasons={[{ code: "eligible", count: 2 }]} status={{
+  const markup = renderToStaticMarkup(<ControlPlaneStatus load={load} awaiting={2} queueReasons={[{ code: "eligible", count: 2 }]} status={{
     state: "degraded", healthReason: "reconciliation_stale", lastReconciledAt: "2026-09-27T22:31:21.000Z", queued: 1, reserved: 0,
     reasons: [{ code: "no_eligible_worker_pool", count: 1 }],
     currentPhase: "github_lease_reconciliation", phaseSince: "2026-09-27T22:31:22.000Z",
