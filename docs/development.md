@@ -76,6 +76,18 @@ set `MARS_LINUX_ARM64_CONTAINER_IMAGE` takes precedence over
 `MARS_LINUX_ARM64_JOB_IMAGE`. For Linux, leave `http.sslBackend` unset: Ubuntu Git
 uses GnuTLS, and installing the OpenSSL CLI does not change Git's supported backend.
 
+Bun preserves inherited process variables ahead of `.env.development`. A stale
+Windows user-level `MARS_LINUX_ARM64_JOB_IMAGE` can therefore override the image
+pin in this checkout, including after a worker restart from the same terminal.
+When changing a persistent user-level pin, refresh the current PowerShell session
+before launching the worker; existing worker processes retain their old value:
+
+```powershell
+$env:MARS_LINUX_ARM64_JOB_IMAGE = [Environment]::GetEnvironmentVariable('MARS_LINUX_ARM64_JOB_IMAGE', 'User')
+bun -e 'console.log(Bun.env.MARS_LINUX_ARM64_CONTAINER_IMAGE?.trim() || Bun.env.MARS_LINUX_ARM64_JOB_IMAGE?.trim())'
+bun run dev:worker
+```
+
 The command runs the orchestrator in the foreground; without a ready runtime it can enroll and report capabilities but cannot run jobs. It does not install, stop, or modify the `MarsWorker` service; it refuses to start while that service is running. Its separate worker identity and image manifest live in `%LOCALAPPDATA%\Mars\dev-worker`. On first join, approve and configure the pending worker in the control plane before it is schedulable. Press Ctrl-C to stop the foreground worker. The production installer remains the supported path for service workers.
 
 On restart, the launcher checks the saved worker's admission state using `MARS_DEV_TOKEN`. If revoked, it archives the identity as `worker-identity.json.revoked-<worker ID>` and creates a fresh identity and a new pending worker for approval; the machine UUID remains stable. It does not replace an active worker or reset its identity when the admission check fails; verify the URL and token if the check returns an error. A remote control plane with older worker contracts may reject the new join with HTTP 400; update and restart that deployment or use the local control plane.
