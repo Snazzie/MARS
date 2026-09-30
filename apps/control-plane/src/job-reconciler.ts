@@ -40,8 +40,7 @@ function nullableString(value: unknown): string | null { return typeof value ===
 export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate["worker"] & { id: string; name?: string } {
   const doctorRecord = storedWorkerDoctor(jsonValue(row.doctor ?? row.worker_doctor));
   const driver = String(row.driver ?? "");
-  const poolDigest = String(row.imageDigest ?? row.image_digest ?? "");
-  const evidence = workerPoolEvidence(doctorRecord, driver, poolDigest, String(row.platform ?? ""));
+  const evidence = workerPoolEvidence(doctorRecord, driver, String(row.platform ?? ""));
   return {
     id: String(row.workerId ?? row.worker_id ?? ""),
     name: String(row.workerName ?? row.worker_name ?? ""),
@@ -51,7 +50,6 @@ export function candidateWorkerFromRow(row: Record<string, unknown>): Candidate[
     configurationRevision: nullableString(row.configurationRevision ?? row.worker_configuration_revision),
     appliedConfigurationRevision: nullableString(row.appliedConfigurationRevision ?? row.worker_applied_configuration_revision),
     runtimeReady: evidence.ready,
-    imageEvidenceReady: evidence.ready && evidence.imageMatches,
     acceptingLeases: doctorRecord.acceptingLeases !== false,
     hostPlatform: String(row.hostPlatform ?? ""),
     contractVersion: nullableString(row.contractVersion),
@@ -72,9 +70,8 @@ export function excludedPoolReason(row: Record<string, unknown>, now = Date.now(
   if (row.connectionState !== "online" || !row.lastHeartbeatAt || now - new Date(String(row.lastHeartbeatAt)).getTime() >= 60_000) return "worker_offline";
   if (!row.doctorObservedAt || now - new Date(String(row.doctorObservedAt)).getTime() >= 60_000) return "worker_doctor_stale";
   const doctor = storedWorkerDoctor(jsonValue(row.doctor));
-  const evidence = workerPoolEvidence(doctor, String(row.driver), String(row.imageDigest), String(row.platform));
+  const evidence = workerPoolEvidence(doctor, String(row.driver), String(row.platform));
   if (!evidence.ready) return "worker_runtime_not_ready";
-  if (!evidence.imageMatches) return "pool_image_mismatch";
   if (doctor.acceptingLeases === false) return "worker_pickup_paused";
   return "admissible";
 }
@@ -163,7 +160,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     FROM runner_pools p
     JOIN workers w ON (p.worker_id IS NULL OR p.worker_id=w.id) AND p.platform = ANY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(w.guest_platforms)='array' THEN w.guest_platforms ELSE (w.guest_platforms #>> '{}')::jsonb END))
       AND p.driver = w.desired_configuration->>'selectedDriver'
-      AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END->'capabilities')='array' THEN CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=p.driver AND capability->>'guestPlatform'=p.platform AND capability->>'ready'='true' AND capability->>'imageDigest'=p.image_digest)
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END->'capabilities')='array' THEN CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=p.driver AND capability->>'guestPlatform'=p.platform AND capability->>'ready'='true')
     WHERE p.enabled=true AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false
       AND w.last_heartbeat_at > now()-interval '60 seconds'
       AND w.doctor_observed_at > now()-interval '60 seconds'`;
@@ -193,13 +190,14 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     }
   }
 
-  const workerByPool = new Map<string, { workerId: string; encryptionPublicKey: string; imageDigest: string; guestPlatform: string; driver: RuntimeDriverNameValue; resources: PoolResourcesValue }>();
+  const workerByPool = new Map<string, { workerId: string; encryptionPublicKey: string; imageDigest: string | null; guestPlatform: string; driver: RuntimeDriverNameValue; resources: PoolResourcesValue }>();
   const sqlCandidates = candidateRows.map((row) => {
     const resources = PoolResourcesSchema.parse(jsonValue(row.resources));
     const poolId = String(row.poolId);
     const workerId = String(row.workerId);
     const concurrency = Number(resources.concurrency);
-    workerByPool.set(`${poolId}:${workerId}`, { workerId, encryptionPublicKey: String(row.encryptionPublicKey ?? ""), imageDigest: String(row.imageDigest), guestPlatform: String(row.platform), driver: RuntimeDriverName.parse(String(row.driver)), resources });
+    const evidence = workerPoolEvidence(row.doctor, String(row.driver), String(row.platform));
+    workerByPool.set(`${poolId}:${workerId}`, { workerId, encryptionPublicKey: String(row.encryptionPublicKey ?? ""), imageDigest: evidence.imageDigest, guestPlatform: String(row.platform), driver: RuntimeDriverName.parse(String(row.driver)), resources });
     return {
       organizationId: row.organizationId == null ? null : String(row.organizationId),
       poolName: String(row.poolName ?? ""),
@@ -326,6 +324,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
       }
       const target = workerByPool.get(`${reservation.poolId}:${reservation.workerId}`);
       if (!target?.encryptionPublicKey) throw new Error("worker_encryption_key_missing");
+      if (!target.imageDigest) throw new Error("worker_image_missing");
       const [dashboardJob] = await deps.db`SELECT id FROM dashboard_jobs WHERE github_job_id=${reservation.jobId ?? -1}`;
       const envelope: LeaseBootstrapEnvelope = { leaseId: reservation.id, jobId: String(dashboardJob?.id ?? reservation.id), nonce: reservation.nonce, guestPlatform: target.guestPlatform as LeaseBootstrapEnvelope["guestPlatform"], contractVersion: deps.contractVersion, encodedJitConfig: jit.encodedJitConfig, expiresAt: reservation.expiresAt, imageDigest: target.imageDigest, resources: reservation.requested, cpuMode: reservation.cpuMode, ...(reservation.cpuIds === null ? {} : { cpuIds: reservation.cpuIds }) };
       const [claimed] = await deps.db`UPDATE runner_leases SET state='dispatched', updated_at=now() WHERE id=${reservation.id} AND state='reserved' RETURNING id`;

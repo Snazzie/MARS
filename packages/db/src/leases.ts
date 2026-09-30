@@ -28,7 +28,7 @@ export async function reserveRoutingSlot(sql: DatabaseClient, input: LeaseReserv
         AND w.last_heartbeat_at > now()-interval '60 seconds' AND w.doctor_observed_at > now()-interval '60 seconds'
         AND p.platform=ANY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(w.guest_platforms)='array' THEN w.guest_platforms ELSE (w.guest_platforms #>> '{}')::jsonb END))
         AND p.driver=w.desired_configuration->>'selectedDriver'
-        AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.evidence->'capabilities')='array' THEN e.evidence->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=p.driver AND capability->>'guestPlatform'=p.platform AND capability->>'ready'='true' AND capability->>'imageDigest'=p.image_digest)
+        AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.evidence->'capabilities')='array' THEN e.evidence->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=p.driver AND capability->>'guestPlatform'=p.platform AND capability->>'ready'='true')
         AND COALESCE(e.evidence->>'acceptingLeases','true') <> 'false' FOR UPDATE OF p, w`;
     if (!eligible[0]) throw new Error("worker_not_eligible");
     const poolResources = typeof eligible[0].resources === "string" ? JSON.parse(eligible[0].resources) : eligible[0].resources;

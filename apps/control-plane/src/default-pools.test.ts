@@ -186,7 +186,7 @@ test("retains a default pool's driver and digest while readiness changes", async
   expect(updates[0]!.query).not.toContain("driver=");
   expect(updates[0]!.query).not.toContain("image_digest=");
   expect(updates[0]!.values[1]).toBe(false);
-  workers = [{ platform: "linux-x64", guestPlatforms: ["linux-x64"], limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 }, desiredConfiguration: { selectedDriver: "linux-libvirt-vm" }, doctor: { doctor: { capabilities: [{ driver: "linux-libvirt-vm", guestPlatform: "linux-x64", ready: true, imageDigest: "sha256:pinned" }] } } }];
+  workers = [{ platform: "linux-x64", guestPlatforms: ["linux-x64"], limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 }, desiredConfiguration: { selectedDriver: "linux-libvirt-vm" }, doctor: { doctor: { capabilities: [{ driver: "linux-libvirt-vm", guestPlatform: "linux-x64", ready: true, imageDigest: "sha256:new-worker-image" }] } } }];
   await ensureDefaultPools(db as never, { "linux-x64": "sha256:other" });
   expect(updates).toHaveLength(2);
   expect(updates[1]!.query).not.toContain("driver=");

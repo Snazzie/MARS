@@ -11,13 +11,13 @@ export function storedWorkerDoctor(value: unknown): StoredWorkerDoctor {
   return nested && typeof nested === "object" ? nested as StoredWorkerDoctor : record;
 }
 
-export function workerPoolEvidence(value: unknown, driver: string, imageDigest: string, guestPlatform?: string): { ready: boolean; imageMatches: boolean } {
+export function workerPoolEvidence(value: unknown, driver: string, guestPlatform: string): { ready: boolean; imageDigest: string | null } {
   const capabilities = storedWorkerDoctor(value).capabilities;
-  if (!Array.isArray(capabilities)) return { ready: false, imageMatches: false };
+  if (!Array.isArray(capabilities)) return { ready: false, imageDigest: null };
   const capability = capabilities.find((entry) => entry && typeof entry === "object"
     && (entry as Record<string, unknown>).driver === driver
     && (entry as Record<string, unknown>).guestPlatform === guestPlatform);
-  if (!capability || typeof capability !== "object") return { ready: false, imageMatches: false };
+  if (!capability || typeof capability !== "object") return { ready: false, imageDigest: null };
   const record = capability as Record<string, unknown>;
-  return { ready: record.ready === true, imageMatches: record.imageDigest === imageDigest };
+  return { ready: record.ready === true, imageDigest: typeof record.imageDigest === "string" ? record.imageDigest : null };
 }

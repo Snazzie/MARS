@@ -43,7 +43,7 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
     let choices = configuredWorkers.flatMap(({ worker, limits, doctor, desired }) => {
       const driver = String(desired.selectedDriver);
       return guestPlatformsForWorker(worker).includes(platform) && Array.isArray(doctor.capabilities)
-        && doctor.capabilities.some((item) => item && typeof item === "object" && (item as Record<string, unknown>).driver === driver && (item as Record<string, unknown>).guestPlatform === platform && (item as Record<string, unknown>).ready === true && typeof (item as Record<string, unknown>).imageDigest === "string")
+        && doctor.capabilities.some((item) => item && typeof item === "object" && (item as Record<string, unknown>).driver === driver && (item as Record<string, unknown>).guestPlatform === platform && (item as Record<string, unknown>).ready === true)
         ? [{ worker, limits, doctor, driver }] : [];
     });
     let driver = runtimeDriverForPlatform(platform);
@@ -76,17 +76,16 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
         return cap?.imageDigest;
       }).find((digest): digest is string => typeof digest === "string");
     }
-    if (imageDigest) choices = choices.filter(({ doctor }) => workerPoolEvidence(doctor, driver, imageDigest!, platform).ready && workerPoolEvidence(doctor, driver, imageDigest!, platform).imageMatches);
     const resources = poolResourcesForWorkers(choices.map(({ limits }) => limits))
       ?? { vcpu: 4, memoryBytes: 6 * GIB, storageBytes: 30 * GIB, concurrency: 1 };
     const label = platform === "linux-x64" ? `mars-ubuntu-${images.ubuntuVersion ?? "24"}` : platform === "linux-arm64" ? "mars-ubuntu-arm64" : `mars-${platform}`;
     const labels = platform === "linux-arm64" ? [label, "ubuntu"] : [label];
     const name = `default-${platform}`;
-    const enabled = Boolean(imageDigest && choices.length);
-    const [existing] = await db`select id,driver,image_digest as "imageDigest",platform from runner_pools where organization_id is null and (name=${name} or trigger_label=${label}) limit 1`;
+    const enabled = choices.length > 0;
+    const [existing] = await db`select id,driver,platform from runner_pools where organization_id is null and (name=${name} or trigger_label=${label}) limit 1`;
     if (platform === "linux-arm64") primaryArm64Driver = String(existing?.driver ?? driver);
     if (existing) {
-      const retained = configuredWorkers.filter(({ worker, doctor, desired }) => desired.selectedDriver === existing.driver && guestPlatformsForWorker(worker).includes(existing.platform as GuestPlatform) && workerPoolEvidence(doctor, String(existing.driver), String(existing.imageDigest), String(existing.platform)).ready && workerPoolEvidence(doctor, String(existing.driver), String(existing.imageDigest), String(existing.platform)).imageMatches);
+      const retained = configuredWorkers.filter(({ worker, doctor, desired }) => desired.selectedDriver === existing.driver && guestPlatformsForWorker(worker).includes(existing.platform as GuestPlatform) && workerPoolEvidence(doctor, String(existing.driver), String(existing.platform)).ready);
       const retainedResources = poolResourcesForWorkers(retained.map(({ limits }) => limits)) ?? resources;
       if (platform === "linux-arm64" && existing.platform === "linux-arm64") {
         await db`update runner_pools set trigger_label=${label},labels=${jsonParameter(db, labels)}::jsonb where id=${existing.id} and trigger_label='mars-linux-arm64'`;
@@ -96,24 +95,20 @@ export async function ensureDefaultPools(db: Sql<{}>, images: PoolDefaults): Pro
       await db`insert into runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,labels,trigger_label,enabled) values (null,null,${name},${platform},${driver},${imageDigest ?? ""},${jsonParameter(db, resources)}::jsonb,${jsonParameter(db, labels)}::jsonb,${label},${enabled})`;
     }
   }
-  // An ARM64 Tart VM and a Docker container need different image digests, but
-  // share the same Ubuntu route. Keep the original pool (and its active leases)
-  // intact while advertising the other runtime through an additional pool.
+  // Tart VMs and Docker containers share the Ubuntu route, but need separate
+  // driver pools. Keep the original pool and its active leases intact.
   const alternateDriver = primaryArm64Driver === "tart-vm" ? "linux-docker-container" : "tart-vm";
   const alternateName = `default-linux-arm64-${alternateDriver === "tart-vm" ? "tart" : "container"}`;
   const alternates = configuredWorkers.filter(({ worker, doctor, desired }) =>
     desired.selectedDriver === alternateDriver && guestPlatformsForWorker(worker).includes("linux-arm64") &&
     (doctor.capabilities as Record<string, unknown>[]).some(capability =>
-      capability.driver === alternateDriver && capability.guestPlatform === "linux-arm64" && capability.ready === true && typeof capability.imageDigest === "string"));
+      capability.driver === alternateDriver && capability.guestPlatform === "linux-arm64" && capability.ready === true));
   const [alternate] = await db`select id,driver,image_digest as "imageDigest" from runner_pools where organization_id is null and name=${alternateName} limit 1`;
   if (!alternates.length && !alternate) return;
   const digest = (alternates[0]?.doctor.capabilities as Record<string, unknown>[] | undefined)
     ?.find(capability => capability.driver === alternateDriver && capability.guestPlatform === "linux-arm64")?.imageDigest;
   const imageDigest = String(alternate?.imageDigest ?? digest ?? "");
-  const ready = alternates.filter(({ doctor }) => {
-    const evidence = workerPoolEvidence(doctor, alternateDriver, imageDigest, "linux-arm64");
-    return evidence.ready && evidence.imageMatches;
-  });
+  const ready = alternates.filter(({ doctor }) => workerPoolEvidence(doctor, alternateDriver, "linux-arm64").ready);
   const resources = poolResourcesForWorkers(ready.map(({ limits }) => limits))
     ?? { vcpu: 4, memoryBytes: 6 * GIB, storageBytes: 30 * GIB, concurrency: 1 };
   if (alternate) {

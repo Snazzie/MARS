@@ -5,6 +5,7 @@ import { candidateWorkerFromRow, excludedPoolReason, getLiveDispatchPools, runQu
 import { configureRunLifecycle } from "./runs.ts";
 import { fits, reason, type Candidate } from "./scheduler.ts";
 import { parseRunnerLabels } from "@mars/contracts";
+import { openLeaseBootstrap } from "./lease-dispatch.ts";
 
 const windowsEvidence = { capabilities: [{ driver: "windows-hyperv-container", guestPlatform: "windows-x64", ready: true, imageDigest: "sha256:image", remediation: null }] };
 const row = {
@@ -76,8 +77,9 @@ test("returns a complete report when no queued jobs are available", async () => 
 
 test("preflights unordered labels and marks the lease dispatched before sending, releasing failed sends", async () => {
   const events: string[] = [];
-  const { publicKey } = generateKeyPairSync("x25519");
+  const { publicKey, privateKey } = generateKeyPairSync("x25519");
   const workerEncryptionPublicKey = publicKey.export({ format: "pem", type: "spki" }).toString();
+  const workerEncryptionPrivateKey = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
   let leaseState = "reserved", runStatus = "in_progress", githubRunStatus = "queued";
   let failSend = false;
   let db: DatabaseClient;
@@ -92,7 +94,7 @@ test("preflights unordered labels and marks the lease dispatched before sending,
       enabled: true,
       platform: "windows-x64",
       driver: "windows-hyperv-container",
-      imageDigest: "sha256:image",
+      imageDigest: "sha256:stale-pool-image",
       resources: { vcpu: 2, memoryBytes: 4 * 1024 ** 3, storageBytes: 8, concurrency: 1 },
       labels: ["mars-windows-x64"],
       triggerLabel: "mars-windows-x64",
@@ -109,7 +111,7 @@ test("preflights unordered labels and marks the lease dispatched before sending,
     if (query.includes("insert into runner_leases")) {
       leaseState = "reserved";
       events.push("reserve");
-      return [{ id: "lease", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: { vcpu: 1, memoryBytes: 4 * 1024 ** 3, storageBytes: 1, concurrency: 1 }, jobId: 42 }];
+      return [{ id: "11111111-1111-4111-8111-111111111111", nonce: "n".repeat(32), workerId: "worker", poolId: "pool", expiresAt: new Date(Date.now() + 60_000).toISOString(), requested: { vcpu: 1, memoryBytes: 4 * 1024 ** 3, storageBytes: 1, concurrency: 1 }, jobId: 42 }];
     }
     if (query.includes("update runner_leases set runner_id=")) {
       expect(leaseState).toBe("reserved");
@@ -135,7 +137,7 @@ test("preflights unordered labels and marks the lease dispatched before sending,
     if (query.includes("insert into dashboard_jobs")) return [{ id: "dashboard-job" }];
     if (query.includes("from runner_pools")) return [{ id: "pool", workerId: "worker", resources: { vcpu: 2, memoryBytes: 4 * 1024 ** 3, storageBytes: 8, concurrency: 1 }, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4 * 1024 ** 3, maxStorageBytesPerPod: 8, maxConcurrentPods: 1 }, doctor: { capacity: { freeVcpu: 2, freeMemoryBytes: 4 * 1024 ** 3, freeStorageBytes: 8 } } }];
     if (query.includes("from runner_leases")) return [];
-    if (query.includes("select id from dashboard_jobs")) return [{ id: "dashboard-job" }];
+    if (query.includes("select id from dashboard_jobs")) return [{ id: "22222222-2222-4222-8222-222222222222" }];
     return [];
   }) as unknown as DatabaseClient, { begin: async (fn: (tx: DatabaseClient) => unknown) => fn(db) });
   configureRunLifecycle(db as never);
@@ -155,8 +157,10 @@ test("preflights unordered labels and marks the lease dispatched before sending,
     expect(JSON.parse(String(init?.body)).name).toMatch(/^D2E0B2D7893B-windows-x64-[0-9a-f-]{36}$/);
     return new Response(JSON.stringify({ encoded_jit_config: "encoded-config", runner: { id: 987 } }), { status: 200, headers: { "content-type": "application/json" } });
   };
-  const dispatcher = { dispatch: async () => {
+  const dispatcher = { dispatch: async (input: { payload: Record<string, unknown> }) => {
     expect(leaseState).toBe("dispatched");
+    const envelope = openLeaseBootstrap(input.payload.bootstrapCiphertext as Parameters<typeof openLeaseBootstrap>[0], workerEncryptionPrivateKey);
+    expect(envelope.imageDigest).toBe(windowsEvidence.capabilities[0]!.imageDigest);
     events.push("dispatch");
     if (failSend) throw new Error("worker socket send failed");
   } };
@@ -476,8 +480,8 @@ test("identifies why a configured worker is excluded before pool matching", () =
     doctorObservedAt: new Date(now - 5_000), driver: "windows-hyperv-container",
     platform: "windows-x64", imageDigest: "sha256:expected", doctor: { doctor: windowsEvidence },
   };
-  expect(excludedPoolReason(pool, now)).toBe("pool_image_mismatch");
-  expect(excludedPoolReason({ ...pool, imageDigest: "sha256:image" }, now)).toBe("admissible");
+  expect(excludedPoolReason(pool, now)).toBe("admissible");
+  expect(excludedPoolReason({ ...pool, doctor: { capabilities: [{ ...windowsEvidence.capabilities[0], ready: false }] } }, now)).toBe("worker_runtime_not_ready");
   expect(excludedPoolReason({ ...pool, doctorObservedAt: new Date(now - 61_000) }, now)).toBe("worker_doctor_stale");
   expect(excludedPoolReason({ ...pool, connectionState: "offline" }, now)).toBe("worker_offline");
 });

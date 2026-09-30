@@ -183,8 +183,7 @@ export async function getOnboardingDetail(
     return Array.isArray(doctor.capabilities) && doctor.capabilities.some((item) => item && typeof item === "object"
       && (item as Record<string, unknown>).driver === candidate.driver
       && (item as Record<string, unknown>).guestPlatform === candidate.platform
-      && (item as Record<string, unknown>).ready === true
-      && (item as Record<string, unknown>).imageDigest === candidate.imageDigest);
+      && (item as Record<string, unknown>).ready === true);
   });
   const pool = poolRow ? {
     id: String(poolRow.id), organizationId: poolRow.organizationId == null ? null : String(poolRow.organizationId), workerId: poolRow.workerId == null ? null : String(poolRow.workerId), workerName: String(poolRow.workerName),
@@ -298,7 +297,7 @@ export async function completeOnboardingIfReady(db: OnboardingDb, options: { ski
           CROSS JOIN LATERAL (SELECT CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END AS evidence) e
           WHERE p.organization_id IS NULL AND p.enabled=true AND p.platform=ANY(SELECT jsonb_array_elements_text(w.guest_platforms))
             AND p.driver=w.desired_configuration->>'selectedDriver'
-            AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.evidence->'capabilities')='array' THEN e.evidence->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=p.driver AND capability->>'guestPlatform'=p.platform AND capability->>'ready'='true' AND capability->>'imageDigest'=p.image_digest)
+            AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.evidence->'capabilities')='array' THEN e.evidence->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=p.driver AND capability->>'guestPlatform'=p.platform AND capability->>'ready'='true')
         )
       LIMIT 1
     `
@@ -317,7 +316,7 @@ export async function completeOnboardingIfReady(db: OnboardingDb, options: { ski
           WHERE j.organization_id=r.organization_id AND j.run_id=r.id
             AND l.pool_id=${String(row.verificationPoolId)} AND l.state='reaped'
             AND p.driver=w.desired_configuration->>'selectedDriver'
-            AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.evidence->'capabilities')='array' THEN e.evidence->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=p.driver AND capability->>'guestPlatform'=p.platform AND capability->>'ready'='true' AND capability->>'imageDigest'=p.image_digest)
+            AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.evidence->'capabilities')='array' THEN e.evidence->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=p.driver AND capability->>'guestPlatform'=p.platform AND capability->>'ready'='true')
         )
       LIMIT 1
     `;

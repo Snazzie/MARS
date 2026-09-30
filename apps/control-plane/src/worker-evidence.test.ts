@@ -9,9 +9,9 @@ test("normalizes both direct and persisted doctor report envelopes", () => {
   expect(storedWorkerDoctor(JSON.stringify({ releaseVersion: "1.0.0", doctor: readyWindowsVm, capacity: {} }))).toEqual(readyWindowsVm);
 });
 
-test("matches evidence only for the exact advertised ready capability and digest", () => {
-  expect(workerPoolEvidence({ doctor: readyWindowsVm }, "windows-hyperv", digest, "windows-x64")).toEqual({ ready: true, imageMatches: true });
-  expect(workerPoolEvidence({ doctor: readyWindowsVm }, "windows-hyperv", `sha256:${"b".repeat(64)}`, "windows-x64")).toEqual({ ready: true, imageMatches: false });
-  expect(workerPoolEvidence({ doctor: { capabilities: [{ ...readyWindowsVm.capabilities[0], ready: false }] } }, "windows-hyperv", digest, "windows-x64")).toEqual({ ready: false, imageMatches: true });
-  expect(workerPoolEvidence({ doctor: readyWindowsVm }, "windows-process-container", digest, "windows-x64")).toEqual({ ready: false, imageMatches: false });
+test("selects readiness and image from the advertised driver and guest platform", () => {
+  expect(workerPoolEvidence({ doctor: readyWindowsVm }, "windows-hyperv", "windows-x64")).toEqual({ ready: true, imageDigest: digest });
+  expect(workerPoolEvidence({ doctor: { capabilities: [{ ...readyWindowsVm.capabilities[0], ready: false }] } }, "windows-hyperv", "windows-x64")).toEqual({ ready: false, imageDigest: digest });
+  expect(workerPoolEvidence({ doctor: readyWindowsVm }, "windows-process-container", "windows-x64")).toEqual({ ready: false, imageDigest: null });
+  expect(workerPoolEvidence({ doctor: readyWindowsVm }, "windows-hyperv", "linux-arm64")).toEqual({ ready: false, imageDigest: null });
 });

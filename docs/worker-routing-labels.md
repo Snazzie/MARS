@@ -23,8 +23,8 @@ Ubuntu x64 versioned routes include the image's major version:
 golden image is Ubuntu 24; deployments using an Ubuntu 22 or 26 golden image
 must set both `DEFAULT_JOB_UBUNTU_VERSION` and `DEFAULT_JOB_IMAGE_LINUX_X64`
 to that image's version and digest. A versioned route matches only a pool with
-the same trigger; requesting 26 never runs on a 24 or 22 image. CPU and memory
-are required positive safe integers even when architecture is omitted, and
+the same trigger; workers assigned to that route must provide the advertised Ubuntu version.
+CPU and memory are required positive safe integers even when architecture is omitted, and
 the suffixes are case-insensitive. For example:
 
 ```yaml
@@ -60,10 +60,17 @@ cannot be selected today.
 
 The `mars-ubuntu-arm64` route can use either a Tart VM on macOS or a Linux
 Docker container on a compatible Windows ARM64 worker. The control plane keeps
-separate pools for their different drivers and image digests, while both pools
+separate pools for their different drivers, while both pools
 accept a composite request such as `mars-ubuntu-arm64-4vcpu-6g`. The Docker
 pool has its own `mars-ubuntu-arm64-container` trigger; it does not replace
-an existing Tart pool. Each worker must still report a ready matching image.
+an existing Tart pool.
+
+Worker membership matches the configured guest platform and selected driver to
+an advertised ready capability. Pool image hashes do not participate in matching,
+enablement, onboarding, or lease reservation. Each job uses the image advertised by
+the selected worker's matching capability, not the pool's stored image digest.
+Workers still verify their own immutable images; adoption, configuration,
+fresh heartbeat/doctor evidence, pickup, and capacity checks remain required.
 
 ## How routing works
 
