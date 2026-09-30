@@ -58,6 +58,15 @@ bun run dev:worker
 
 To use the control plane from this checkout instead of the default remote development deployment, start `bun run dev` with PostgreSQL and the development environment configured, then run `$env:MARS_DEV_CONTROL_PLANE_URL = 'http://127.0.0.1:3000'` before launching the worker. Use the same `MARS_DEV_TOKEN` in both processes. Pushing a worker change to `main` does not update an already-running control plane at `mars.snazzie.space`; it must be updated and restarted before it can parse new doctor fields.
 
+Linux container jobs embed `mars-job-agent` in the digest-pinned job image. Updating
+this checkout or restarting the orchestrator does not update that embedded binary.
+After changing job-agent trust configuration, rebuild and publish the job image,
+set `MARS_LINUX_ARM64_JOB_IMAGE` (or `MARS_LINUX_ARM64_CONTAINER_IMAGE`) to its new
+digest, then restart the foreground worker after active jobs finish. An explicitly
+set `MARS_LINUX_ARM64_CONTAINER_IMAGE` takes precedence over
+`MARS_LINUX_ARM64_JOB_IMAGE`. For Linux, leave `http.sslBackend` unset: Ubuntu Git
+uses GnuTLS, and installing the OpenSSL CLI does not change Git's supported backend.
+
 The command runs the orchestrator in the foreground; without a ready runtime it can enroll and report capabilities but cannot run jobs. It does not install, stop, or modify the `MarsWorker` service; it refuses to start while that service is running. Its separate worker identity and image manifest live in `%LOCALAPPDATA%\Mars\dev-worker`. On first join, approve and configure the pending worker in the control plane before it is schedulable. Press Ctrl-C to stop the foreground worker. The production installer remains the supported path for service workers.
 
 On restart, the launcher checks the saved worker's admission state using `MARS_DEV_TOKEN`. If revoked, it archives the identity as `worker-identity.json.revoked-<worker ID>` and creates a fresh identity and a new pending worker for approval; the machine UUID remains stable. It does not replace an active worker or reset its identity when the admission check fails; verify the URL and token if the check returns an error. A remote control plane with older worker contracts may reject the new join with HTTP 400; update and restart that deployment or use the local control plane.
