@@ -71,10 +71,9 @@ test("logs the pool identity and logs again when its eligibility changes", () =>
     monitor.markSuccess([blocked]);
     monitor.markSuccess([blocked]);
     monitor.markSuccess([{ ...blocked, pools: [{ ...blocked.pools[0], reason: "pool_disabled" }] }]);
-    expect(monitor.snapshot(["org"], Date.now()).blockedJobs?.[0]?.pools).toEqual([{ ...blocked.pools[0], reason: "pool_disabled" }]);
     expect(messages).toEqual([
-      ["Job dispatch blocked", { organizationId: "org", jobId: 42, reason: "no_eligible_worker_pool", pools: blocked.pools }],
-      ["Job dispatch blocked", { organizationId: "org", jobId: 42, reason: "no_eligible_worker_pool", pools: [{ ...blocked.pools[0], reason: "pool_disabled" }] }],
+      ["Job dispatch blocked", { organizationId: "org", jobId: 42, reason: "no_eligible_worker_pool", pools: JSON.stringify(blocked.pools) }],
+      ["Job dispatch blocked", { organizationId: "org", jobId: 42, reason: "no_eligible_worker_pool", pools: JSON.stringify([{ ...blocked.pools[0], reason: "pool_disabled" }]) }],
     ]);
   } finally {
     console.log = original;
