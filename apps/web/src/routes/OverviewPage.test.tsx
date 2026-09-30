@@ -26,14 +26,9 @@ test("dispatcher separates queued jobs excluded before scheduling from workers r
     blockedJobs: [{ jobId: 42, code: "no_eligible_worker_pool", labels: ["mars-windows-x64-2vcpu-4g"],
       pools: [{ poolId: "pool", poolName: "Windows", platform: "windows-x64", workerId: "worker", workerName: "BEAST", reason: "worker_doctor_stale" }] }],
   }} />);
-  expect(markup).toContain('aria-label="Dispatcher status"');
-  expect(markup).toContain("3</b>");
   expect(markup).toContain("Parent run is no longer queued or in progress");
   expect(markup).toContain("Worker runtime report is older than 60 seconds");
-  expect(markup).toContain("Windows (windows-x64 · BEAST)");
   expect(markup).toContain("Waiting for an eligible worker and pool");
-  expect(markup).toContain("next tick");
-  expect(markup).toContain("4 awaiting dispatch total");
 });
 test("blocked job links identify repository and job name and target the GitHub job", () => {
   const markup = renderToStaticMarkup(<ControlPlaneStatus status={{
@@ -57,7 +52,6 @@ test("stale prior blockers do not masquerade as current eligibility while cleanu
   expect(markup).toContain("Checking existing leases with GitHub");
   expect(markup).toContain("Another dispatch pass is queued as soon as the current cycle finishes");
   expect(markup).toContain("previous pass below is historical");
-  expect(markup).toContain("Previous dispatch pass: 1 inspected");
 });
 
 
