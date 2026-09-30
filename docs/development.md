@@ -41,6 +41,15 @@ docker compose up -d postgres
 
 Local development ports and service behavior are defined in `scripts/dev.ts` and `scripts/dev-ports.ts`.
 
+The Vite development server also watches frontend source, public assets, shared
+contract source, the web entry files, and the build's icon/lockfile inputs. Saves
+automatically rebuild `apps/web/dist`, which is the UI served by the control
+plane and its tunnel. Rapid saves are debounced and builds run one at a time;
+changes during a build trigger another pass. Wait for `[mars-ui] UI bundle
+updated`, then refresh the control-plane/tunnel page—no `bun run dev` restart is
+needed. Direct Vite pages continue to use HMR. Build errors appear in the web
+process logs; fix the error and save again to rebuild.
+
 Run `bun run dev:worker` on Windows x64/ARM64, Apple Silicon macOS, or Linux
 x64/ARM64. It chooses the existing worker runtime for the host; the worker
 reports its actual runtime capabilities to the control plane. Host-specific
