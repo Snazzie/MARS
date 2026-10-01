@@ -316,6 +316,17 @@ failure includes the frame type, connection epoch, and error without recording
 the frame body; the close record includes code, reason, and whether the socket
 was current. Logs are process-local and disappear when the control plane exits.
 
+Worker lifecycle events describe the runner lease, not the GitHub job outcome.
+Sandbox attestation does not mean GitHub assigned a job, and `runner.finished`
+(including exit code `125`) only completes or fails the lease and schedules
+cleanup. GitHub webhooks and authoritative discovery own job/run status. A job
+still queued on GitHub remains eligible for dispatch after lease cleanup.
+
+Run the PostgreSQL-backed runner-completion regressions against a migrated test
+database with `MARS_E2E_DATABASE_URL=<url> bun test tests/runner-completion.e2e.test.ts`.
+Each fixture rolls back. Coverage includes successful/failed runner exits,
+duplicate exits, cleanup, dispatch eligibility, and GitHub completion ordering.
+
 
 Useful commands:
 
