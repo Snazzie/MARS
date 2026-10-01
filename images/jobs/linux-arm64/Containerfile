@@ -2,7 +2,29 @@ ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 WORKDIR /opt/actions-runner
 COPY runner.tar.gz /tmp/runner.tar.gz
-RUN apt-get update && apt-get install --no-install-recommends -y ca-certificates bash git curl libicu74 openssl tar gzip unzip && rm -rf /var/lib/apt/lists/* && tar -xzf /tmp/runner.tar.gz -C /opt/actions-runner && rm /tmp/runner.tar.gz && mkdir -p /var/lib/mars/bootstrap
+RUN apt-get update \
+  && apt-get install --no-install-recommends -y \
+    ca-certificates bash git curl libicu74 openssl tar gzip unzip \
+    libglib2.0-0t64 \
+    libnspr4 \
+    libnss3 \
+    libatk1.0-0t64 \
+    libdbus-1-3 \
+    libx11-6 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libxcb1 \
+    libxkbcommon0 \
+    libasound2t64 \
+    libatspi2.0-0t64 \
+  && rm -rf /var/lib/apt/lists/* \
+  && tar -xzf /tmp/runner.tar.gz -C /opt/actions-runner \
+  && rm /tmp/runner.tar.gz \
+  && mkdir -p /var/lib/mars/bootstrap
 COPY mars-job-agent /usr/local/bin/mars-job-agent
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && chmod 0755 /usr/local/bin/mars-job-agent /usr/local/bin/entrypoint.sh

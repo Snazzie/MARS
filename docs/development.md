@@ -111,7 +111,9 @@ Set `MARS_DEV_TOKEN` to the development control plane's token and run
 Linux ARM64 uses the existing Docker worker and requires
 `MARS_LINUX_ARM64_CONTAINER_IMAGE` (immutable digest) and
 `MARS_LINUX_CONTAINER_NETWORK`. The ARM64 job image built from
-`images/jobs/linux-arm64/Containerfile` includes `tar`, `gzip`, and `unzip`.
+`images/jobs/linux-arm64/Containerfile` includes `tar`, `gzip`, and `unzip`,
+plus browser runtime libraries for GLib, NSPR/NSS, ATK/AT-SPI, D-Bus, X11,
+GBM, XCB, xkbcommon, and ALSA. Browser binaries are not bundled.
 JavaScript actions use the runner's bundled runtime; workflows should use
 `actions/setup-node`, `actions/setup-python`, or `actions/setup-java` for
 language toolchains. Docker-based container actions and service containers
