@@ -7,7 +7,6 @@ import { adoptWorker, renameWorker } from "../workers.ts";
 import { configurePendingWorker, purgeWorkerRunnerCache } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 import { ApiError, CostCenterDto, CostCenterPricingProvider, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, CreatePoolRequest, WorkerConfiguration, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth, JobLabelRecommendation, JobLabelRecommendationQuery, GithubConnectionSummary, GithubRateLimitStats, WorkerEventPayload, WorkerUpgradeStatus, RuntimePlatform, RuntimeDriverName, selectedRuntimeDriver } from "@mars/contracts";
-const WorkerConfigurationRequest = WorkerConfiguration.omit({ containerRecipeSha256: true });
 import { supportsExclusiveCpuPlacement } from "@mars/contracts";
 import { WorkerDispatchError } from "../worker-dispatch.ts";
 import { WorkerReleaseCatalogUnavailable } from "../worker-release.ts";
@@ -294,7 +293,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   app.post("/api/workers/:workerId/configure", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const idem = requireMutation(c); if (idem) return idem;
-    const result = await configurePendingWorker(deps.db, c.req.param("workerId"), WorkerConfigurationRequest.parse(await c.req.json()), c.get("user").id, deps.workerDispatcher, c.req.header("idempotency-key")!);
+    const result = await configurePendingWorker(deps.db, c.req.param("workerId"), WorkerConfiguration.parse(await c.req.json()), c.get("user").id, deps.workerDispatcher, c.req.header("idempotency-key")!);
     await deps.onWorkerChanged(c.req.param("workerId"));
     return c.json(DashboardWorkerMutationResponse.parse(result));
   }));

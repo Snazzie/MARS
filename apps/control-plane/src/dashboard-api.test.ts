@@ -97,6 +97,17 @@ const admin = { id: "u2", githubUserId: 2, login: "admin", isGlobalAdmin: true }
 function appFor(user: typeof member | typeof admin | null = member, db = fakeDb()) { return createControlPlaneApp({ db, setup: { publicOrigin: () => "https://x", publicOriginManaged: () => false, configure: async (origin: string) => origin, authenticate: async () => ({ userId: "admin", firstAdmin: true }) }, browserOrigin: () => "https://x", workerConnectionOrigins: () => ["https://x"], githubApp: { getOAuthCredentials: async () => ({ clientId: "id", clientSecret: "secret" }), getWebhookSecret: async () => "webhook" } as never, secretBox: new SecretBox(Buffer.alloc(32, 7).toString("base64")), defaultJobImages: {}, requestId: () => "req", requestSource: () => "test", webRoot: new URL("file:///tmp/"), workerInstallerRoot: new URL("file:///tmp/"), workerOrchestratorExecutable: new URL("file:///tmp/mars-orchestrator"), workerConnected: () => true, onWorkerChanged: () => undefined, currentUser: async () => user, health: () => ({ buildId: "test", startedAt: new Date().toISOString(), discovery: { lastAttemptAt: null, lastSuccessAt: null, stale: false, staleAfterMs: 60000 } }) }); }
 const sessionHeaders = { Cookie: "mars_session=test" };
 
+test("worker configuration endpoints reject missing required fields with a client error", async () => {
+  for (const path of ["/api/workers/11111111-1111-4111-8111-111111111111/configure", "/api/workers/pending/11111111-1111-4111-8111-111111111111/configure"]) {
+    const response = await appFor(admin).request(path, {
+      method: "POST",
+      headers: { ...sessionHeaders, "Content-Type": "application/json", "Idempotency-Key": "invalid-configuration" },
+      body: JSON.stringify({ guestPlatforms: ["windows-x64"], selectedDriver: "windows-hyperv-container" }),
+    });
+    expect(response.status).toBe(400);
+  }
+});
+
 test("session lookup normalizes PostgreSQL bigint GitHub IDs", async () => {
   const db = (async () => [{ id: "user-1", githubUserId: "153311365", login: "admin", isGlobalAdmin: true }]) as never;
   expect(await getSession(db, Buffer.alloc(32, 1).toString("base64url"))).toEqual({

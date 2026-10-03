@@ -13,7 +13,6 @@ import { verifyWorkerBootstrap, initializeWorkerBootstrap, rotateWorkerBootstrap
 import { approvePendingWorker, configurePendingWorker, createRequestLimiter, hasMachineIdentity, parseApproveWorkerRequest, requestPendingWorker, rejectPendingWorker } from "../worker-requests.ts";
 import { httpOrigin } from "../http-origin.ts";
 import type { WorkerReleaseTarget } from "../worker-release.ts";
-const WorkerConfigurationRequest = WorkerConfiguration.omit({ containerRecipeSha256: true });
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 const containerRecipePaths = {
@@ -1448,7 +1447,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     if (!idempotency(c)) return c.json({ error: "Idempotency-Key required" }, 400);
     try {
       const body = await c.req.json();
-      const parsed = WorkerConfigurationRequest.safeParse(body);
+      const parsed = WorkerConfiguration.safeParse(body);
       if (!parsed.success) return c.json({ error: "invalid worker configuration" }, 400);
       const key = c.req.header("Idempotency-Key")!.trim();
       const [prior] = await deps.db<{ response: Record<string, unknown> | null }[]>`select response from worker_mutations where worker_id=${c.req.param("workerId")} and idempotency_key=${key}`;

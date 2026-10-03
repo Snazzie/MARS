@@ -93,6 +93,9 @@ the server-side drain flag; a local pause blocks dispatch readiness independentl
 
 Run the native tray transition regression on Windows:
 `powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File tests/windows-worker-tray.test.ps1`.
+Also run `bun run typecheck` from the repository root before pushing runner
+changes. The Windows smoke workflow checks every workspace, including the control
+plane; a frontend-only typecheck does not cover worker configuration HTTP routes.
 
 To use the control plane from this checkout instead of the default remote development deployment, start `bun run dev` with PostgreSQL and the development environment configured, then run `$env:MARS_DEV_CONTROL_PLANE_URL = 'http://127.0.0.1:3000'` before launching the worker. Use the same `MARS_DEV_TOKEN` in both processes. Pushing a worker change to `main` does not update an already-running control plane at `mars.snazzie.space`; it must be updated and restarted before it can parse new doctor fields.
 
