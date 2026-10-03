@@ -43,7 +43,12 @@ export class GithubJobsClient {
     const headers = new Headers(init.headers);
     headers.set("accept", "application/vnd.github+json"); headers.set("content-type", "application/json"); headers.set("x-github-api-version", "2026-03-10"); headers.set("authorization", `Bearer ${await this.token()}`);
     const response = await this.fetcher(`${this.apiBase}${path}`, { ...init, headers });
-    if (!response.ok) { console.error(`GitHub jobs request failed: ${response.status} ${path}`); throw new Error(`github_${response.status}`); }
+    if (!response.ok) {
+      const body: unknown = await response.json().catch(() => null);
+      const message = body && typeof body === "object" && "message" in body ? nullableString(body.message) : null;
+      console.error(`GitHub jobs request failed: ${response.status} ${path}`, { message });
+      throw new Error(`github_${response.status}`, { cause: message });
+    }
     const value: unknown = emptyResponse || response.status === 204 ? {} : await response.json();
     return value && typeof value === "object" ? value as Record<string, unknown> : {};
   }
@@ -130,6 +135,11 @@ export class GithubJobsClient {
   }
   async deleteRunner(owner: string, repo: string, runnerId: number): Promise<void> {
     await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runners/${runnerId}`, { method: "DELETE" }, true);
+  }
+  async getRunner(owner: string, repo: string, runnerId: number): Promise<{ id: number; status: string; busy: boolean }> {
+    const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runners/${runnerId}`);
+    if (value.id !== runnerId || typeof value.status !== "string" || typeof value.busy !== "boolean") throw new Error("github_payload_invalid");
+    return { id: positiveSafeInteger(value.id), status: value.status, busy: value.busy };
   }
   async listRunners(owner: string, repo: string, page: number): Promise<{ totalCount: number; runners: Array<{ id: number; name: string; status: string; busy: boolean; labels: string[] }> }> {
     const value = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runners?per_page=100&page=${page}`);

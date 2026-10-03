@@ -48,6 +48,13 @@ worker to refresh its logged name. Frames rejected before authentication may
 have only the worker ID. Lease cleanup logs load the current name with the
 pending-lease query.
 
+GitHub runner cleanup failures include the repository, runner ID, and GitHub's
+JSON error message while preserving the `github_<status>` error code. After a
+tracked runner deletion returns `422`, cleanup fetches that runner and logs its
+`status` and `busy` fields. If inspection fails, `inspectionError` records that
+failure separately. A rejected deletion retains the registration for the next
+cleanup tick; neither `422` nor a failed inspection is treated as removal.
+
 The Vite development server also watches frontend source, public assets, shared
 contract source, the web entry files, and the build's icon/lockfile inputs. Saves
 automatically rebuild `apps/web/dist`, which is the UI served by the control

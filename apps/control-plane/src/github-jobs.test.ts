@@ -118,3 +118,27 @@ test("rejects oversized GitHub job logs", async () => {
   const client = new GithubJobsClient({ token: async () => "token", fetch: async () => new Response("x".repeat(1025), { headers: { "content-length": "1025" } }) });
   await expect(client.getJobLogs("acme", "project", 42, 1024)).rejects.toThrow("github_job_log_too_large");
 });
+
+test("preserves GitHub error detail without changing status-based error handling", async () => {
+  const client = new GithubJobsClient({ token: async () => "token", fetch: async () => Response.json({ message: "Runner is currently running a job" }, { status: 422 }) });
+  try {
+    await client.deleteRunner("acme", "project", 42);
+    throw new Error("Expected deletion to fail");
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("github_422");
+    expect((error as Error).cause).toBe("Runner is currently running a job");
+  }
+});
+
+test("preserves HTTP failure status when the error body is not JSON", async () => {
+  const client = new GithubJobsClient({ token: async () => "token", fetch: async () => new Response("upstream unavailable", { status: 503 }) });
+  await expect(client.deleteRunner("acme", "project", 42)).rejects.toThrow("github_503");
+});
+
+test("rejects runner diagnostics with unknown busy state or mismatched identity", async () => {
+  for (const payload of [{ id: 42, status: "online" }, { id: 43, status: "online", busy: true }]) {
+    const client = new GithubJobsClient({ token: async () => "token", fetch: async () => Response.json(payload) });
+    await expect(client.getRunner("acme", "project", 42)).rejects.toThrow("github_payload_invalid");
+  }
+});

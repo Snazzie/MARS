@@ -39,7 +39,24 @@ export async function cleanGithubRunners(input: {
     } catch (error) {
       if (!(error instanceof Error && error.message === "github_404")) {
         result.failed++;
-        console.error("GitHub runner cleanup failed", { leaseId: row.leaseId, error: error instanceof Error ? error.message : String(error) });
+        let runner: Awaited<ReturnType<GithubJobsClient["getRunner"]>> | undefined;
+        let inspectionError: string | undefined;
+        if (error instanceof Error && error.message === "github_422") {
+          try {
+            runner = await client(Number(row.installationId)).getRunner(owner, repo, Number(row.runnerId));
+          } catch (inspectionFailure) {
+            inspectionError = inspectionFailure instanceof Error ? inspectionFailure.message : String(inspectionFailure);
+          }
+        }
+        console.error("GitHub runner cleanup failed", {
+          leaseId: row.leaseId,
+          runnerId: Number(row.runnerId),
+          repository: row.repository,
+          error: error instanceof Error ? error.message : String(error),
+          githubMessage: error instanceof Error ? error.cause : undefined,
+          runner,
+          inspectionError,
+        });
         continue;
       }
     }
