@@ -67,7 +67,8 @@ async function main(): Promise<void> {
 
   const temp = enrolled ? null : await mkdtemp(join(root, "credential-"));
   let child: Bun.Subprocess | null = null;
-  const stop = () => { child?.kill(); };
+  let tray: Bun.Subprocess | null = null;
+  const stop = () => { child?.kill(); tray?.kill(); };
   try {
     let credentialPath: string | undefined;
     if (temp) {
@@ -104,6 +105,13 @@ async function main(): Promise<void> {
       ...(linuxX64ContainerImage ? { MARS_LINUX_X64_CONTAINER_IMAGE: linuxX64ContainerImage } : {}),
       ...(credentialPath ? { MARS_JOIN_CODE_FILE: credentialPath } : { MARS_JOIN_CODE_FILE: "" }),
     };
+    tray = Bun.spawn(["powershell.exe", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", join(import.meta.dir, "../deploy/workers/mars-worker-tray.ps1"), "-StateFile", env.MARS_LEASE_PICKUP_STATE_FILE, "-IconPath", join(import.meta.dir, "../assets/MARS.ico")], { stdin: "ignore", stdout: "inherit", stderr: "inherit" });
+    void tray.exited.then(exit => {
+      if (exit !== 0 && child?.exitCode === null) {
+        console.error(`Development Windows tray exited ${exit}`);
+        child.kill();
+      }
+    });
     child = Bun.spawn(["bun", "run", "apps/orchestrator/src/index.ts", "windows-worker"], { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);
@@ -113,6 +121,7 @@ async function main(): Promise<void> {
     process.off("SIGINT", stop);
     process.off("SIGTERM", stop);
     if (child && child.exitCode === null) { child.kill(); await child.exited; }
+    if (tray && tray.exitCode === null) { tray.kill(); await tray.exited; }
     if (temp) await rm(temp, { recursive: true, force: true });
   }
 }

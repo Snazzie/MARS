@@ -72,6 +72,15 @@ In a separate terminal from `bun run dev`, run from this checkout:
 bun run dev:worker
 ```
 
+The Windows development launcher starts the Mars system tray alongside the worker
+and closes it when the launcher exits. The tray's **Pause New Leases** /
+**Resume New Leases** actions use
+`%LOCALAPPDATA%\Mars\dev-worker\lease-pickup.json`; this local pause persists across
+restarts. It is independent of the dashboard's server-side drain flag: a worker
+can be resumed in the dashboard but still have local pickup paused. Use the tray
+to clear a local pause. Restart an already-running development launcher after
+updating the tray integration.
+
 To use the control plane from this checkout instead of the default remote development deployment, start `bun run dev` with PostgreSQL and the development environment configured, then run `$env:MARS_DEV_CONTROL_PLANE_URL = 'http://127.0.0.1:3000'` before launching the worker. Use the same `MARS_DEV_TOKEN` in both processes. Pushing a worker change to `main` does not update an already-running control plane at `mars.snazzie.space`; it must be updated and restarted before it can parse new doctor fields.
 
 Linux container jobs embed `mars-job-agent` in the digest-pinned job image. Updating
