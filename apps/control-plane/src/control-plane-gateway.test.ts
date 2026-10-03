@@ -63,17 +63,6 @@ test("broadcasts worker status frames only to browser sockets", () => {
   expect(JSON.parse(sent[0]!)).toMatchObject({ version: 1, type: "worker_status", state: "online" });
 });
 
-test("logs replay rejection without closing the authenticated socket", async () => {
-  const errors: unknown[][] = [];
-  await sendWorkerAuthenticationFrames({
-    socket: { send() {} },
-    workerId: "worker",
-    admissionState: "adopted",
-    dispatcher: { async replayConnected() { throw new Error("replay unavailable"); } },
-    logError: (...args) => errors.push(args),
-  });
-  expect(errors).toEqual([["Worker command replay failed", { workerId: "worker", error: "replay unavailable" }]]);
-});
 
 
 

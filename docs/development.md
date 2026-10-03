@@ -41,6 +41,13 @@ docker compose up -d postgres
 
 Local development ports and service behavior are defined in `scripts/dev.ts` and `scripts/dev-ports.ts`.
 
+Control-plane worker command, event, lease-transition, and connection logs include
+`workerName` alongside `workerId`. The name is loaded from the worker record during
+authentication and retained for that connection; reconnect after renaming a
+worker to refresh its logged name. Frames rejected before authentication may
+have only the worker ID. Lease cleanup logs load the current name with the
+pending-lease query.
+
 The Vite development server also watches frontend source, public assets, shared
 contract source, the web entry files, and the build's icon/lockfile inputs. Saves
 automatically rebuild `apps/web/dist`, which is the UI served by the control

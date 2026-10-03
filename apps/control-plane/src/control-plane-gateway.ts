@@ -11,7 +11,7 @@ import { activateAuthenticatedWorkerConnection } from "./worker-connection.ts";
 import { handleAuthenticatedWorkerEvent } from "./worker-lifecycle.ts";
 
 
-type WorkerSocketData = { actor: "worker"; workerId: string; challenge?: Buffer; authenticated: boolean; closed?: boolean; connectionEpoch?: number; authTimer?: ReturnType<typeof setTimeout>; heartbeatTimer?: ReturnType<typeof setTimeout>; heartbeatDeadlineTimer?: ReturnType<typeof setTimeout> };
+type WorkerSocketData = { actor: "worker"; workerId: string; workerName?: string; challenge?: Buffer; authenticated: boolean; closed?: boolean; connectionEpoch?: number; authTimer?: NodeJS.Timeout; heartbeatTimer?: NodeJS.Timeout; heartbeatDeadlineTimer?: NodeJS.Timeout };
 type BrowserSocketData = { actor: "browser"; organizationId: string; cursor: number };
 export type ControlPlaneSocketData = WorkerSocketData | BrowserSocketData;
 type GatewayServer = Server<ControlPlaneSocketData>;
@@ -25,18 +25,18 @@ export function scheduleWorkerHeartbeatDeadline(expire: () => void, scheduleTime
   return scheduleTimeout(expire, WORKER_HEARTBEAT_TIMEOUT_MS);
 }
 export async function sendWorkerAuthenticationFrames(input: {
-  socket: Pick<AuthenticatedWorkerSocket, "send">;
+  socket: Pick<AuthenticatedWorkerSocket, "send" | "data">;
   workerId: string;
   admissionState: string;
   dispatcher: Pick<WorkerCommandDispatcher, "replayConnected">;
-  logError?: (message: string, details: { workerId: string; error: string }) => void;
+  logError?: (message: string, details: { workerId: string; workerName?: string; error: string }) => void;
 }): Promise<void> {
   input.socket.send(JSON.stringify({ version: 1, type: "authenticated", workerId: input.workerId, admissionState: input.admissionState }));
   input.socket.send(JSON.stringify({ version: 1, type: "ping" }));
   try {
     await input.dispatcher.replayConnected(input.workerId);
   } catch (error) {
-    (input.logError ?? console.error)("Worker command replay failed", { workerId: input.workerId, error: error instanceof Error ? error.message : String(error) });
+    (input.logError ?? console.error)("Worker command replay failed", { workerId: input.workerId, workerName: input.socket.data?.workerName, error: error instanceof Error ? error.message : String(error) });
   }
 }
 export type WorkerStatusFrame = { version: 1; type: "worker_status"; workerId: string; state: "online" | "offline"; occurredAt: string };
@@ -131,7 +131,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
       }
     },
     close(ws, code, reason) {
-      if (ws.data.actor === "worker") console.warn("Worker websocket closed", { workerId: ws.data.workerId, connectionEpoch: ws.data.connectionEpoch, authenticated: ws.data.authenticated, current: workerSockets.get(ws.data.workerId) === ws, code, reason: sanitizeDiagnosticText(String(reason), 256) });
+      if (ws.data.actor === "worker") console.warn("Worker websocket closed", { workerId: ws.data.workerId, workerName: ws.data.workerName, connectionEpoch: ws.data.connectionEpoch, authenticated: ws.data.authenticated, current: workerSockets.get(ws.data.workerId) === ws, code, reason: sanitizeDiagnosticText(String(reason), 256) });
       if (ws.data.actor === "worker") ws.data.closed = true;
       if (ws.data.actor === "worker") {
         if (ws.data.authTimer) {
@@ -152,7 +152,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           workerSockets.delete(ws.data.workerId);
           if (ws.data.connectionEpoch === workerConnectionEpochs.get(ws.data.workerId)) workerConnectionEpochs.delete(ws.data.workerId);
           const lastDisconnect = { occurredAt: new Date().toISOString(), code, reason: sanitizeDiagnosticText(String(reason), 200) };
-          void options.db`update workers set connection_state='offline',doctor=COALESCE(doctor,'{}'::jsonb) || ${jsonParameter(options.db, { lastDisconnect })}::jsonb where id=${ws.data.workerId}`.catch(error => console.error("Worker disconnect persistence failed", { workerId: ws.data.actor === "worker" ? ws.data.workerId : null, error }));
+          void options.db`update workers set connection_state='offline',doctor=COALESCE(doctor,'{}'::jsonb) || ${jsonParameter(options.db, { lastDisconnect })}::jsonb where id=${ws.data.workerId}`.catch(error => console.error("Worker disconnect persistence failed", { workerId: ws.data.actor === "worker" ? ws.data.workerId : null, workerName: ws.data.actor === "worker" ? ws.data.workerName : undefined, error }));
           sendWorkerStatus(browserSockets, ws.data.workerId, "offline");
         }
       }
@@ -183,10 +183,11 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         const epoch = ws.data.connectionEpoch;
         if (!epoch || ws.data.closed) return ws.close(4001, "superseded");
         if (!ws.data.challenge) return ws.close(1008, "worker authentication failed");
-        const [worker] = await options.db`select public_key,encryption_public_key,admission_state from workers where id=${ws.data.workerId}`;
+        const [worker] = await options.db`select name,public_key,encryption_public_key,admission_state from workers where id=${ws.data.workerId}`;
         const canonical = Buffer.from(`${ws.data.challenge.toString("base64url")}\n${ws.data.workerId}\n${frame.encryptionPublicKey}`);
         if (!worker || !verifyWorkerSignature(worker.public_key, canonical, decodeWorkerSignature(frame.signature))) return ws.close(1008, "worker authentication failed");
         if (worker.encryption_public_key && worker.encryption_public_key !== frame.encryptionPublicKey) return ws.close(1008, "worker encryption key mismatch");
+        workerData.workerName = worker.name;
         const processId = typeof frame.processId === "string" && /^[0-9a-f-]{36}$/.test(frame.processId) ? frame.processId : null;
         const activated = await activateAuthenticatedWorkerConnection({
           db: options.db,
@@ -260,6 +261,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           if (!acknowledged) {
             console.error("Worker configuration acknowledgement rejected", {
               workerId: ws.data.workerId,
+              workerName: ws.data.workerName,
               commandId: configuredPayload.data.commandId,
               revision: configuredPayload.data.revision,
             });
@@ -268,7 +270,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
             options.dispatcher.handleEvent(frame, ws);
             void options.triggerReconciliation();
           }
-          console.log(`Worker configuration acknowledgement: ${ws.data.workerId} accepted=${acknowledged === true}`);
+          console.log("Worker configuration acknowledgement", { workerId: ws.data.workerId, workerName: ws.data.workerName, accepted: acknowledged === true });
           if (typeof frame.id === "string") ws.send(JSON.stringify({ version: 1, type: "event_ack", workerId: ws.data.workerId, eventId: frame.id }));
         } else if (frame.type === "worker.configuration_failed") {
           const failedEvent = WorkerEvent.safeParse(frame);
@@ -284,6 +286,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           if (frame.type !== "job.resource_sample" && frame.type !== "job.log") {
             console.log("Worker event received", {
               workerId: ws.data.workerId,
+              workerName: ws.data.workerName,
               eventId: frame.id,
               eventType: frame.type,
               leaseId: frame.payload?.leaseId,
@@ -299,6 +302,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
     } catch (error) {
       console.error("Worker websocket frame failed", {
         workerId: ws.data.workerId,
+        workerName: ws.data.workerName,
         connectionEpoch: ws.data.connectionEpoch,
         frameType,
         error: error instanceof Error ? error.message : String(error),

@@ -73,7 +73,7 @@ export async function handleAuthenticatedWorkerEvent(
       await persistDiagnosticChunk(event.data.workerId, payload.data.payload);
       return true;
     } catch (error) {
-      console.error("Worker diagnostic chunk persistence failed", { workerId: event.data.workerId, diagnosticId: payload.data.payload.diagnosticId, sequence: payload.data.payload.sequence, error: error instanceof Error ? error.message : String(error) });
+      console.error("Worker diagnostic chunk persistence failed", { workerId: event.data.workerId, workerName: socket.data?.workerName, diagnosticId: payload.data.payload.diagnosticId, sequence: payload.data.payload.sequence, error: error instanceof Error ? error.message : String(error) });
       return false;
     }
   }
@@ -81,7 +81,7 @@ export async function handleAuthenticatedWorkerEvent(
   if (payload.data.type === "worker.build_completed" || payload.data.type === "worker.build_failed") {
     const ready = payload.data.payload.runtimeReady;
     await db`UPDATE workers SET doctor=COALESCE(doctor,'{}'::jsonb) || ${JSON.stringify({ runtimeReady: ready, runtimeBuildState: ready ? "ready" : "failed", runtimeBuildMessage: ready ? null : payload.data.payload.message, artifactSource: "worker_local", artifactIdentity: payload.data.payload.image, ...(payload.data.payload.imageId ? { artifactDigest: payload.data.payload.imageId } : {}), remediation: ready ? null : payload.data.payload.message })}::jsonb, doctor_observed_at=now(), last_heartbeat_at=now(), connection_state='online' WHERE id=${event.data.workerId}`;
-    console.log("Windows image build event received", { workerId: event.data.workerId, type: payload.data.type, buildId: payload.data.payload.buildId, commandId: payload.data.payload.commandId, image: payload.data.payload.image, imageId: payload.data.payload.imageId, contentSha256: payload.data.payload.contentSha256, ...(payload.data.type === "worker.build_failed" ? { failureStage: payload.data.payload.failureStage, message: payload.data.payload.message } : {}) });
+    console.log("Windows image build event received", { workerId: event.data.workerId, workerName: socket.data?.workerName, type: payload.data.type, buildId: payload.data.payload.buildId, commandId: payload.data.payload.commandId, image: payload.data.payload.image, imageId: payload.data.payload.imageId, contentSha256: payload.data.payload.contentSha256, ...(payload.data.type === "worker.build_failed" ? { failureStage: payload.data.payload.failureStage, message: payload.data.payload.message } : {}) });
     dispatcher.handleEvent(event.data, socket);
     return true;
   }
@@ -93,10 +93,10 @@ export async function handleAuthenticatedWorkerEvent(
         AND NOT EXISTS (SELECT 1 FROM runner_leases active WHERE active.github_job_id=j.github_job_id AND active.worker_id=${event.data.workerId} AND active.state NOT IN ('reaped','failed'))
       LIMIT 1`;
     if (!terminal) return false;
-    console.warn("Discarding log for terminal worker lease", { workerId: event.data.workerId, jobId: payload.data.payload.jobId, eventId: event.data.id });
+    console.warn("Discarding log for terminal worker lease", { workerId: event.data.workerId, workerName: socket.data?.workerName, jobId: payload.data.payload.jobId, eventId: event.data.id });
     return true;
   }
-  await applyWorkerLeaseEvent(db, event.data);
+  await applyWorkerLeaseEvent(db, event.data, socket.data?.workerName);
   if (typeof event.data.payload.commandId === "string") dispatcher.handleEvent(event.data, socket);
   return true;
 }
@@ -145,7 +145,7 @@ async function recordReapedJobTiming(db: DatabaseClient, leaseId: string, reaped
   if (Object.values(snapshot).some(value => value === "undefined" || (typeof value === "number" && !Number.isFinite(value)))) return;
   await recordJobTimingSnapshot(db, snapshot);
 }
-export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown): Promise<boolean> {
+export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown, workerName?: string): Promise<boolean> {
   const parsedEvent = WorkerEvent.safeParse(input);
   if (!parsedEvent.success) return false;
   const event = parsedEvent.data;
@@ -153,7 +153,7 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
   if (!parsedPayload.success || parsedPayload.data.type === "command.accepted" || parsedPayload.data.type === "worker.build_completed" || parsedPayload.data.type === "worker.build_failed" || parsedPayload.data.type === "worker.cache_entry_upsert" || parsedPayload.data.type === "worker.cache_entry_deleted" || parsedPayload.data.type === "worker.cache_snapshot_begin" || parsedPayload.data.type === "worker.cache_snapshot_page" || parsedPayload.data.type === "worker.cache_snapshot_end" || parsedPayload.data.type === "worker.runner_cache_status" || parsedPayload.data.type === "diagnostic.chunk" || parsedPayload.data.type === "worker.logs" || parsedPayload.data.type === "job.log" || parsedPayload.data.type === "job.resource_sample") return false;
 
   const transition = (applied: boolean, state: string): boolean => {
-    console.log("Worker lease transition", { workerId: event.workerId, eventId: event.id, eventType: event.type, leaseId: event.payload.leaseId, commandId: event.payload.commandId, state, applied });
+    console.log("Worker lease transition", { workerId: event.workerId, workerName, eventId: event.id, eventType: event.type, leaseId: event.payload.leaseId, commandId: event.payload.commandId, state, applied });
     return applied;
   };
   if (parsedPayload.data.type === "sandbox_attested") {
@@ -213,7 +213,7 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
     // Observability must not prevent acknowledgement of a committed lease transition.
   }
   const source = context?.commandType?.endsWith(".stop_lease") ? "control_plane_stop" : context?.commandType?.endsWith(".create_lease") ? "worker_lifecycle" : "unknown";
-  console.log("Worker lease transition", { workerId: event.workerId, eventId: event.id, eventType: event.type, leaseId: payload.leaseId, commandId: payload.commandId, state: "reaped", applied: Boolean(rows[0]), cleanupSource: source, terminalReason: context?.terminalResult?.reason ?? (context?.terminalResult?.exitCode === 0 ? "runner_succeeded" : context?.terminalResult?.exitCode != null ? "runner_failed" : "unknown") });
+  console.log("Worker lease transition", { workerId: event.workerId, workerName, eventId: event.id, eventType: event.type, leaseId: payload.leaseId, commandId: payload.commandId, state: "reaped", applied: Boolean(rows[0]), cleanupSource: source, terminalReason: context?.terminalResult?.reason ?? (context?.terminalResult?.exitCode === 0 ? "runner_succeeded" : context?.terminalResult?.exitCode != null ? "runner_failed" : "unknown") });
   if (!rows[0]) return false;
   await recordReapedJobTiming(db, payload.leaseId, event.occurredAt);
   return true;

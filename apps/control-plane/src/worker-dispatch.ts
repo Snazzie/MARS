@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { WorkerCommand, WorkerEvent } from "@mars/contracts";
 import type { DatabaseClient } from "@mars/db";
 
-export interface AuthenticatedWorkerSocket { send(data: string): void; close?(code?: number, reason?: string): void; }
+export interface AuthenticatedWorkerSocket { readonly data?: { actor?: string; workerName?: string }; send(data: string): void; close?(code?: number, reason?: string): void; }
 export interface WorkerCommandStore {
   save(command: WorkerCommand): Promise<void>;
   listUnacknowledged(workerId: string): Promise<WorkerCommand[]>;
@@ -91,12 +91,12 @@ export class WorkerCommandDispatcher {
     const seen = new Set<string>();
     if (this.store) for (const command of await this.store.listUnacknowledged(workerId)) {
       if (!valid()) return; seen.add(command.id); this.durableWorkers.set(command.id, workerId);
-      try { socket.send(JSON.stringify(command)); await this.store.markSent?.(command.id); console.log("Worker command sent", { workerId, commandId: command.id, leaseId: command.leaseId, commandType: command.type, replay: true }); } catch { return; }
+      try { socket.send(JSON.stringify(command)); await this.store.markSent?.(command.id); console.log("Worker command sent", { workerId, workerName: socket.data?.workerName, commandId: command.id, leaseId: command.leaseId, commandType: command.type, replay: true }); } catch { return; }
     }
     for (const pending of this.pending.values()) {
       if (pending.command.workerId !== workerId || seen.has(pending.command.id)) continue;
       if (!valid()) return;
-      try { socket.send(JSON.stringify(pending.command)); await this.store?.markSent?.(pending.command.id); console.log("Worker command sent", { workerId, commandId: pending.command.id, leaseId: pending.command.leaseId, commandType: pending.command.type, replay: true }); } catch { return; }
+      try { socket.send(JSON.stringify(pending.command)); await this.store?.markSent?.(pending.command.id); console.log("Worker command sent", { workerId, workerName: socket.data?.workerName, commandId: pending.command.id, leaseId: pending.command.leaseId, commandType: pending.command.type, replay: true }); } catch { return; }
     }
   }
   unregister(workerId: string, socket?: AuthenticatedWorkerSocket): void {
@@ -152,7 +152,7 @@ export class WorkerCommandDispatcher {
       try {
         initialSocket.send(JSON.stringify(command));
         await this.store?.markSent?.(command.id);
-        console.log("Worker command sent", { workerId: command.workerId, commandId: command.id, leaseId: command.leaseId, commandType: command.type });
+        console.log("Worker command sent", { workerId: command.workerId, workerName: initialSocket.data?.workerName, commandId: command.id, leaseId: command.leaseId, commandType: command.type });
         return WorkerEvent.parse({ version: 1, id: randomUUID(), workerId: input.workerId, type: "command.accepted", occurredAt: new Date().toISOString(), payload: { commandId: command.id, leaseId: command.leaseId } });
       } catch { throw new WorkerDispatchError("worker socket send failed"); }
     });
