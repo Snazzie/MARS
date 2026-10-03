@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { openLeasePickupState, writeLeasePickupState } from "./lease-pickup-state.ts";
+import { openLeasePickupState, readLeasePickupState, writeLeasePickupInventory, writeLeasePickupState } from "./lease-pickup-state.ts";
 
 describe("lease pickup state", () => {
   test("missing state accepts and atomic replacement is observed", async () => {
@@ -31,6 +31,20 @@ describe("lease pickup state", () => {
       expect(await readdir(directory)).toEqual(["lease-pickup.json"]);
     } finally {
       Date.now = originalNow;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  test("inventory publication cannot overwrite a tray pause or resume", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mars-state-inventory-test-"));
+    const path = join(directory, "lease-pickup.json");
+    try {
+      for (const acceptingLeases of [false, true]) {
+        await writeLeasePickupState(path, acceptingLeases);
+        await Promise.all([writeLeasePickupInventory(path, 2), writeLeasePickupInventory(path, 0)]);
+        expect(await readLeasePickupState(path)).toBe(acceptingLeases);
+        expect(JSON.parse(await readFile(`${path}.inventory.json`, "utf8"))).toEqual({ activeCount: 0 });
+      }
+    } finally {
       await rm(directory, { recursive: true, force: true });
     }
   });

@@ -22,3 +22,16 @@ test("warns when a pool has no ready workers", () => {
   ]);
   expect(coverage).toMatchObject({ online: 0, ready: 0, warning: "No compatible ready worker" });
 });
+
+test("local pickup state gates shared and pinned pool readiness independently of draining", () => {
+  for (const workerId of [null, "w1"]) {
+    for (const acceptingLeases of [false, true, undefined]) {
+      const coverage = poolWorkerCoverage({ platform: "macos-arm64", driver: "tart-vm", workerId, imageDigest: "macos" }, [
+        { id: "w1", name: "worker-1", platform: "macos-arm64", driver: "tart-vm", selectedDriver: "tart-vm", artifactDigest: "macos", artifactDigests: { "macos-arm64": "macos" }, connectionState: "online", configurationState: "ready", configurationRevision: "a", appliedConfigurationRevision: "a", draining: false, doctor: { runtimeMode: "tart", runtimeReady: true, probe: true, imageSignatures: true, acceptingLeases, capabilities: [{ driver: "tart-vm", guestPlatform: "macos-arm64", imageDigest: "macos", ready: true, remediation: null }] } },
+      ]);
+      expect(coverage.online).toBe(1);
+      expect(coverage.ready).toBe(acceptingLeases === false ? 0 : 1);
+      expect(coverage.warning === null).toBe(acceptingLeases !== false);
+    }
+  }
+});

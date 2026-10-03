@@ -13,7 +13,7 @@ import type { RuntimeDriver } from "./runtime.ts";
 import { admitWorkerLease, runLeaseLifecycle } from "./lease-lifecycle.ts";
 import { emitActionCacheSnapshot, startActionCacheService, type ActionCacheService } from "./action-cache/service.ts";
 import { connectWorkerSocket, retryControlPlaneOperation, retryWorkerRuntime, waitForWorkerSocketClose, workerRuntimeVersions, WorkerEventTransport } from "./worker-client.ts";
-import { openLeasePickupState, leasePickupStateFile, writeLeasePickupState, type LeasePickupStateController } from "./lease-pickup-state.ts";
+import { openLeasePickupState, leasePickupStateFile, writeLeasePickupInventory, type LeasePickupStateController } from "./lease-pickup-state.ts";
 
 type Limits = { maxVcpuPerPod: number; maxMemoryBytesPerPod: number; maxStorageBytesPerPod: number; maxConcurrentPods: number };
 type Identity = { workerId: string; publicKey: string; privateKey: string; encryptionPublicKey: string; encryptionPrivateKey: string; vmUuid?: string; machineUuid?: string; preserveLeases?: boolean; selectedDriver?: string; guestPlatform?: string };
@@ -547,7 +547,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
   const activeLeases = new Map<string, Promise<void>>();
   const eventTransport = new WorkerEventTransport(() => cacheService.runnerCacheStatus().enabled);
   const developmentConsole = Bun.env.MARS_DEV_WORKER_CONSOLE_LOGS === "true";
-  const publishInventory = () => { void writeLeasePickupState(leasePickupStateFile(), pickupState.acceptingLeases, activeLeases.size); };
+  const publishInventory = () => { void writeLeasePickupInventory(leasePickupStateFile(), activeLeases.size).catch(error => console.error("Windows pickup inventory write failed", error)); };
   const sendDoctor = async (ws: WebSocket): Promise<void> => {
     publishInventory();
     try {

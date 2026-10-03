@@ -18,13 +18,13 @@ export function poolWorkerCoverage(pool: PoolIdentity, workers: PoolWorker[] | u
     worker.selectedDriver === pool.driver &&
     selectedRuntimeDriver(worker.platform, pool.platform, worker.selectedDriver) === pool.driver &&
     capabilityFor(worker, pool.platform)?.imageDigest === pool.imageDigest);
-  const isReady = (worker: PoolWorker) => worker.connectionState === "online" && worker.configurationState === "ready" && worker.configurationRevision === worker.appliedConfigurationRevision && worker.doctor?.runtimeReady === true && worker.doctor.probe === true && worker.doctor.imageSignatures === true && !worker.draining;
+  const isReady = (worker: PoolWorker) => worker.connectionState === "online" && worker.configurationState === "ready" && worker.configurationRevision === worker.appliedConfigurationRevision && worker.doctor?.runtimeReady === true && worker.doctor.probe === true && worker.doctor.imageSignatures === true && worker.doctor.acceptingLeases !== false && !worker.draining;
   if (pool.workerId) {
     const worker = matching[0];
     if (!worker) return { online: 0, ready: 0, warning: "Worker status unavailable", operational: null, readiness: null };
     const online = worker.connectionState === "online" ? 1 : 0;
     const ready = isReady(worker) ? 1 : 0;
-    return { online, ready, warning: ready === 0 ? "No ready workers" : null, operational: workerOperationalLabel(worker), readiness: workerReadinessLabel(worker.configurationState, worker.doctor?.runtimeReady === true && worker.doctor.probe === true && worker.doctor.imageSignatures === true) };
+    return { online, ready, warning: ready === 0 ? "No ready workers" : null, operational: workerOperationalLabel(worker), readiness: workerReadinessLabel(worker.configurationState, worker.doctor?.runtimeReady === true && worker.doctor.probe === true && worker.doctor.imageSignatures === true, worker.doctor?.acceptingLeases) };
   }
   const online = matching.filter((worker) => worker.connectionState === "online").length;
   const ready = matching.filter(isReady).length;

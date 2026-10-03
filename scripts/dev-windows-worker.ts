@@ -107,10 +107,7 @@ async function main(): Promise<void> {
     };
     tray = Bun.spawn(["powershell.exe", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", join(import.meta.dir, "../deploy/workers/mars-worker-tray.ps1"), "-StateFile", env.MARS_LEASE_PICKUP_STATE_FILE, "-IconPath", join(import.meta.dir, "../assets/MARS.ico")], { stdin: "ignore", stdout: "inherit", stderr: "inherit" });
     void tray.exited.then(exit => {
-      if (exit !== 0 && child?.exitCode === null) {
-        console.error(`Development Windows tray exited ${exit}`);
-        child.kill();
-      }
+      if (exit !== 0 && child?.exitCode === null) console.error(`Development Windows tray exited ${exit}; worker remains running`);
     });
     child = Bun.spawn(["bun", "run", "apps/orchestrator/src/index.ts", "windows-worker"], { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
     process.on("SIGINT", stop);

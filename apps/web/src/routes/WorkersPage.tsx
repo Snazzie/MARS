@@ -8,8 +8,8 @@ import { PendingWorkerRequests, pendingWorkerQueryOptions } from "../components/
 import { QueryState } from "../components/StateView.tsx";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
 
-export function workerRefetchInterval(workers: Array<Pick<WorkerDetail, "admissionState" | "configurationState" | "draining" | "activeSandboxes"> & { doctor?: WorkerDetail["doctor"] }> | undefined): 2000 | false {
-  return workers?.some((worker) => worker.admissionState === "adopted" && (worker.configurationState === "applying" || worker.doctor?.runtimeBuildState === "building" || (worker.draining && worker.activeSandboxes > 0))) ? 2_000 : false;
+export function workerRefetchInterval(workers: Array<Pick<WorkerDetail, "admissionState" | "configurationState" | "draining" | "activeSandboxes"> & { connectionState?: WorkerDetail["connectionState"]; doctor?: WorkerDetail["doctor"] }> | undefined): 2000 | 5000 | false {
+  return workers?.some((worker) => worker.admissionState === "adopted" && (worker.configurationState === "applying" || worker.doctor?.runtimeBuildState === "building" || (worker.draining && worker.activeSandboxes > 0))) ? 2_000 : workers?.some(worker => worker.admissionState === "adopted" && worker.connectionState === "online") ? 5_000 : false;
 }
 
 export function WorkersPage() {
@@ -44,6 +44,7 @@ export function WorkersPage() {
         <div className="worker-list-summary">
           <span className={`status-pill status-${worker.connectionState}`}>{worker.connectionState}</span>
           {worker.draining && <span className="status-pill status-draining">draining</span>}
+          {worker.doctor?.acceptingLeases === false && <span className="status-pill status-draining">pickup paused locally</span>}
           <span className="worker-list-leases">{worker.activeSandboxes} active {worker.activeSandboxes === 1 ? "lease" : "leases"}</span>
           <span className="worker-list-arrow" aria-hidden="true">→</span>
         </div>

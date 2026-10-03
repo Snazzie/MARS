@@ -7,8 +7,8 @@ type Action = "adopt" | "reject" | "drain" | "resume" | "remove";
 const copy: Record<Action, { label: string; confirm: string; variant: "primary" | "secondary" | "destructive" }> = {
  adopt: { label: "Adopt", confirm: "Adopt this worker? Configure its resources before enabling scheduling.", variant: "primary" },
  reject: { label: "Reject", confirm: "Reject this worker? Its enrollment will be revoked and it will not receive work.", variant: "destructive" },
- drain: { label: "Pause new leases", confirm: "Pause new lease assignment for this worker? Existing leases will finish normally.", variant: "secondary" },
- resume: { label: "Resume new leases", confirm: "Resume new lease assignment for this worker? It will become eligible after configuration and runtime checks are ready.", variant: "primary" },
+ drain: { label: "Pause in dashboard", confirm: "Pause new lease assignment in the control plane? Existing leases will finish normally. The machine's local tray setting is independent.", variant: "secondary" },
+ resume: { label: "Resume in dashboard", confirm: "Clear the control-plane pause? Configuration and runtime checks still apply. If pickup is paused locally, also select Resume New Leases in the machine's Mars tray.", variant: "primary" },
  remove: { label: "Remove", confirm: "Remove this worker? Pools will be disabled and the worker will be revoked after active leases finish.", variant: "destructive" },
 };
 function quotePowerShell(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
@@ -62,7 +62,7 @@ export function WorkerActions({ organizationId, workerId, admissionState, draini
  return <>
   <div className="worker-actions" aria-label="Worker actions">
    {admissionState === "pending" && <Button label="Adopt" variant="primary" clickAction={() => open("adopt")} />}
-   {admissionState === "adopted" && <><Button label={draining ? "Resume new leases" : "Pause new leases"} variant="secondary" clickAction={() => open(draining ? "resume" : "drain")} />{supportsUpgrade && <Button label={targetInfo ? `Upgrade to v${targetInfo.releaseVersion}` : "Upgrade"} variant="secondary" isDisabled={!targetInfo} clickAction={() => void openUpgrade()} />}{<Button label="Remove" variant="destructive" clickAction={() => open("remove")} />}</>}
+   {admissionState === "adopted" && <><Button label={draining ? copy.resume.label : copy.drain.label} variant="secondary" clickAction={() => open(draining ? "resume" : "drain")} />{supportsUpgrade && <Button label={targetInfo ? `Upgrade to v${targetInfo.releaseVersion}` : "Upgrade"} variant="secondary" isDisabled={!targetInfo} clickAction={() => void openUpgrade()} />}{<Button label="Remove" variant="destructive" clickAction={() => open("remove")} />}</>}
   </div>
   {upgradeError && <p className="inline-error" role="alert">{upgradeError}</p>}
   {upgradeCommand && <dialog open className="confirm-dialog" aria-labelledby="worker-upgrade-title"><form method="dialog"><p className="panel-kicker">Manual upgrade</p><h2 id="worker-upgrade-title">Upgrade to v{upgradeTarget?.releaseVersion}</h2><p>Current release: {currentReleaseVersion ?? "Unknown"}; current contract: {currentContractVersion ?? "Unknown"}. Target contract: {upgradeTarget?.contractVersion}. Drain this worker and wait for zero active jobs before running this command.</p><textarea aria-label="Worker upgrade command" readOnly value={upgradeCommand} /><div className="dialog-actions"><Button label="Close" variant="secondary" onClick={() => { setUpgradeCommand(null); setUpgradeError(null); }} /><Button label="Copy command" variant="primary" clickAction={() => void navigator.clipboard?.writeText(upgradeCommand)} /></div></form></dialog>}

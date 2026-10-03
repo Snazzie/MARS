@@ -337,6 +337,21 @@ test("shows runtime failure as worker readiness and renders doctor remediation",
   expect(markup).toContain("Both immutable Tart image digests are required");
   expect(markup).not.toContain(">Ready</span>");
 });
+
+test("a local pickup pause blocks dispatch readiness despite dashboard resume", () => {
+  const worker = workerFixture({
+    draining: false,
+    lastHeartbeatAt: new Date().toISOString(),
+    lastDoctorAt: new Date().toISOString(),
+    doctor: { runtimeMode: "tart", runtimeReady: true, probe: true, imageSignatures: true, acceptingLeases: false },
+  });
+  const paused = renderCard(worker);
+  expect(paused).toContain("Pickup paused locally");
+  expect(paused).not.toContain("Ready for dispatch");
+  const resumed = renderCard({ ...worker, doctor: { ...worker.doctor!, acceptingLeases: true } });
+  expect(resumed).not.toContain("Pickup paused locally");
+  expect(resumed).toContain("Ready for dispatch");
+});
 test("renders operational and readiness status in the worker card", () => {
   const worker = workerFixture();
   const markup = renderCard(worker);

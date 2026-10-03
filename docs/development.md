@@ -81,6 +81,19 @@ can be resumed in the dashboard but still have local pickup paused. Use the tray
 to clear a local pause. Restart an already-running development launcher after
 updating the tray integration.
 
+The Windows worker publishes running-lease counts separately in
+`lease-pickup.json.inventory.json`, so doctor reports cannot overwrite tray pause
+preferences. Tray reads allow atomic file replacement on Windows. Failed tray
+saves show an error instead of silently ignoring the action.
+
+The worker detail and fleet/pool views include the reported local pickup pause.
+Online adopted workers refresh every five seconds, so tray changes appear without
+reloading the page. **Pause in dashboard** / **Resume in dashboard** control only
+the server-side drain flag; a local pause blocks dispatch readiness independently.
+
+Run the native tray transition regression on Windows:
+`powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File tests/windows-worker-tray.test.ps1`.
+
 To use the control plane from this checkout instead of the default remote development deployment, start `bun run dev` with PostgreSQL and the development environment configured, then run `$env:MARS_DEV_CONTROL_PLANE_URL = 'http://127.0.0.1:3000'` before launching the worker. Use the same `MARS_DEV_TOKEN` in both processes. Pushing a worker change to `main` does not update an already-running control plane at `mars.snazzie.space`; it must be updated and restarted before it can parse new doctor fields.
 
 Linux container jobs embed `mars-job-agent` in the digest-pinned job image. Updating

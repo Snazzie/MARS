@@ -41,3 +41,10 @@ test("polls while an adopted worker is applying configuration", () => {
   expect(workerRefetchInterval([{ admissionState: "adopted", configurationState: "ready", draining: true, activeSandboxes: 0 }])).toBe(false);
   expect(workerRefetchInterval([{ admissionState: "adopted", configurationState: "ready", draining: false, activeSandboxes: 0 }])).toBe(false);
 });
+
+test("keeps polling configured online workers across local tray pause changes", () => {
+  for (const acceptingLeases of [true, false]) {
+    expect(workerRefetchInterval([{ admissionState: "adopted", configurationState: "ready", connectionState: "online", draining: false, activeSandboxes: 0, doctor: { runtimeMode: "tart", acceptingLeases } }])).toBe(5_000);
+  }
+  expect(workerRefetchInterval([{ admissionState: "adopted", configurationState: "ready", connectionState: "offline", draining: false, activeSandboxes: 0 }])).toBe(false);
+});
