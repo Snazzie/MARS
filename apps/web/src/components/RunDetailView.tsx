@@ -42,7 +42,7 @@ function statusLabel(data: RunDetail): string {
 }
 
 function jobStatusLabel(job: RunJob): string {
-  if (job.failureReason === "out_of_memory") return "out of memory";
+  if (job.failureReason) return job.failureReason.replaceAll("_", " ");
   return (job.conclusion ?? job.status).replaceAll("_", " ");
 }
 function DetailBadges({ values }: { values: readonly string[] }) {
@@ -59,6 +59,31 @@ function OomNotice({ job }: { job: RunJob }) {
   const peak = formatResourceValue(job.oom.memoryWorkingSetBytes, "bytes");
   const limit = formatResourceValue(job.oom.memoryLimitBytes, "bytes");
   return <p className="detail-meta" role="status">Memory limit exceeded: {peak} used of {limit}. {job.oom.gracefulStopAcknowledged ? "Runner stopped gracefully." : "Runner was terminated after memory pressure."}</p>;
+}
+function RuntimeNotice({ job }: { job: RunJob }) {
+  const termination = job.termination;
+  const container = termination?.container;
+  if (!job.failureReason && (!termination || termination.exitCode === 0)) return null;
+  return <section className="detail-meta" aria-label="Runner failure evidence">
+    <h3>Runner failure evidence</h3>
+    {job.failureReason === "runner_lost" && <p>Runner disappeared from worker inventory or its container was removed. This does not prove a crash or an OOM kill.</p>}
+    {container?.oomKilled === true && <p>Docker confirmed an OOM kill.</p>}
+    {termination ? <dl>
+      <div><dt>Termination observation</dt><dd>{termination.cause.replaceAll("_", " ")}</dd></div>
+      <div><dt>Exit code</dt><dd>{termination.exitObserved ? termination.exitCode : "Not observed"}</dd></div>
+      {container && <>
+        <div><dt>Container state</dt><dd>{container.status ?? "Unavailable"}</dd></div>
+        <div><dt>Docker OOM flag</dt><dd>{container.oomKilled === null ? "Unavailable" : container.oomKilled ? "Yes" : "No"}</dd></div>
+        {container.memoryLimitBytes !== null && <div><dt>RAM limit</dt><dd>{formatResourceValue(container.memoryLimitBytes, "bytes")}</dd></div>}
+        {container.memorySwapLimitBytes !== null && container.memorySwapLimitBytes !== 0 && <div><dt>RAM + swap limit (Linux)</dt><dd>{container.memorySwapLimitBytes === -1 ? "Unlimited" : formatResourceValue(container.memorySwapLimitBytes, "bytes")}</dd></div>}
+        {container.finishedAt && <div><dt>Container finished</dt><dd>{formatTimestamp(container.finishedAt)}</dd></div>}
+      </>}
+      <div><dt>Resource samples</dt><dd>{termination.sampleCount ?? "Unavailable"}{termination.lastSampleOccurredAt ? `; last ${formatTimestamp(termination.lastSampleOccurredAt)}` : ""}</dd></div>
+    </dl> : <p>No exit evidence was received. Check the worker diagnostic archive and host logs.</p>}
+    {container?.error && <p>Docker error: {container.error}</p>}
+    {container?.waitError && <p>Docker wait connection: {container.waitError}</p>}
+    {container?.inspectionError && <p>Docker inspection: {container.inspectionError}</p>}
+  </section>;
 }
 
 
@@ -94,7 +119,7 @@ export function RunDetailView({ data, organizationId }: { data: RunDetail; organ
       {selectedTab === "graph" ? <section id="run-graph-panel" role="tabpanel" aria-labelledby="run-graph-tab" className="run-tab-panel">
         <div className="run-graph-layout">
           <ActionGraph graph={data.actionGraph} selectedNodeId={selectedJobId} onNodeSelect={setSelectedJobId} />
-          {selectedJob ? <section className="run-job-logs" id={`job-${selectedJob.id}`}><header className="job-heading"><div><h2>{selectedJob.name}</h2><JobBadges job={selectedJob} /></div><span className={`status ${selectedJob.failureReason === "out_of_memory" ? "status-failure" : `status-${selectedJob.conclusion ?? selectedJob.status}`}`}>{jobStatusLabel(selectedJob)}</span></header><OomNotice job={selectedJob} /><LogViewer organizationId={organizationId} runId={data.id} jobId={selectedJob.id} logsState={selectedJob.logsState} steps={selectedJob.steps} /></section> : <p className="graph-selection-hint">Select a job in the dependency graph to inspect its logs.</p>}
+          {selectedJob ? <section className="run-job-logs" id={`job-${selectedJob.id}`}><header className="job-heading"><div><h2>{selectedJob.name}</h2><JobBadges job={selectedJob} /></div><span className={`status ${selectedJob.failureReason ? "status-failure" : `status-${selectedJob.conclusion ?? selectedJob.status}`}`}>{jobStatusLabel(selectedJob)}</span></header><OomNotice job={selectedJob} /><RuntimeNotice job={selectedJob} /><LogViewer organizationId={organizationId} runId={data.id} jobId={selectedJob.id} logsState={selectedJob.logsState} steps={selectedJob.steps} /></section> : <p className="graph-selection-hint">Select a job in the dependency graph to inspect its logs.</p>}
         </div>
       </section> : <section id="run-metrics-panel" role="tabpanel" aria-labelledby="run-metrics-tab" className="run-tab-panel">
         <RunTelemetry queuedAt={data.queuedAt} startedAt={data.startedAt} completedAt={data.completedAt} />

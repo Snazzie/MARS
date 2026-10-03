@@ -1,13 +1,13 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { join } from "node:path";
 import { WorkerContainerStatus, type PoolResources, type WorkerContainerStatus as WorkerContainerStatusData, type WorkerLimits } from "@mars/contracts";
 import type { Lease, RuntimeDriver, RuntimeLease } from "./runtime.ts";
 import { assertUnpinnedLease } from "./runtime.ts";
+import { archiveContainerDiagnostics, collectContainerDiagnostics, observeContainerCompletion, runDocker } from "./container-observability.ts";
 
 export type DockerResult = { code: number; stdout: string; stderr: string };
-export type DockerRunner = (args: string[]) => Promise<DockerResult>;
+export type DockerRunner = (args: string[], signal?: AbortSignal) => Promise<DockerResult>;
 export type PowerShellResult = { code: number; stdout: string; stderr: string };
 export type PowerShellRunner = (command: string) => Promise<PowerShellResult>;
 export type WindowsContainerConfig = { image: string; prefix: string; bootstrapRoot: string; limits: WorkerLimits; readyTimeoutMs: number; isolation?: "process" | "hyperv"; allowLocalImage?: boolean; imageManifestPath?: string; requireLocalImageManifest?: boolean; dnsServers?: string[]; platform?: NodeJS.Platform };
@@ -56,7 +56,6 @@ const expectedWindowsEntrypoint = ["powershell.exe", "-NoLogo", "-NoProfile", "-
 export function isExpectedWindowsEntrypoint(value: unknown): boolean {
   return Array.isArray(value) && value.length === expectedWindowsEntrypoint.length && expectedWindowsEntrypoint.every((entry, index) => value[index] === entry);
 }
-async function defaultDocker(args: string[]): Promise<DockerResult> { const process = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe" }); return { code: await process.exited, stdout: await new Response(process.stdout).text(), stderr: await new Response(process.stderr).text() }; }
 function checked(result: DockerResult, operation: string): string { if (result.code !== 0) throw new Error(`${operation} failed: ${result.stderr.replaceAll(/\r?\n/g, " ").slice(0, 500)}`); return result.stdout.trim(); }
 function parseMemoryBytes(value: string): number { const match = value.replaceAll(",", "").match(/([\d.]+)\s*([KMG]?i?B)/i); if (!match) return 0; const units: Record<string, number> = { b: 1, kb: 1024, kib: 1024, mb: 1024 ** 2, mib: 1024 ** 2, gb: 1024 ** 3, gib: 1024 ** 3 }; return Math.round(Number(match[1]) * (units[match[2]!.toLowerCase()] ?? 1)); }
 const transientDockerUnavailable = /the system cannot find the file specified|no such file or directory|connection refused|actively refused|is the docker daemon running|cannot connect to (the )?docker (daemon|engine)|cannot connect to docker_engine/i;
@@ -139,39 +138,13 @@ function inspectSize(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error("docker inspect SizeRw is invalid");
   return value;
 }
-const DIAGNOSTIC_LIMIT_BYTES = 10 * 1024 * 1024;
-function redactRunnerLog(text: string): string {
-  return text
-    .replaceAll(/(authorization\s*:\s*bearer\s+)[^\s\r\n]+/gi, "$1[REDACTED]")
-    .replaceAll(/([?&](?:token|sig|signature|access_token|oauth_token)=)[^&\s]+/gi, "$1[REDACTED]");
-}
-async function copyRunnerDiagnostics(root: string, containerName: string, run: (args: string[]) => Promise<DockerResult>): Promise<string> {
-  const destination = join(root, "runner-diag");
-  const copied = await run(["cp", `${containerName}:C:\\actions-runner\\_diag\\.`, destination]);
-  if (copied.code !== 0) return `=== runner _diag copy failed ===\n${copied.stderr || copied.stdout}`;
-  const files = (await readdir(destination, { withFileTypes: true }).catch(() => []))
-    .filter(file => file.isFile() && (/^Runner_.*\.log$/i.test(file.name) || /^Worker_.*\.log$/i.test(file.name)))
-    .sort((a, b) => a.name.localeCompare(b.name));
-  let bytes = 0;
-  const sections: string[] = [];
-  for (const file of files) {
-    if (bytes >= DIAGNOSTIC_LIMIT_BYTES) break;
-    const content = redactRunnerLog(await readFile(join(destination, file.name), "utf8").catch(() => ""));
-    const remaining = DIAGNOSTIC_LIMIT_BYTES - bytes;
-    const section = `=== runner _diag\\${file.name} ===\n${content.slice(0, remaining)}`;
-    sections.push(section);
-    bytes += Buffer.byteLength(section);
-  }
-  if (bytes >= DIAGNOSTIC_LIMIT_BYTES) sections.push("=== runner _diag truncated ===\n");
-  return sections.join("");
-}
 
 export class WindowsContainerDriver implements RuntimeDriver {
   readonly name: "windows-process-container" | "windows-hyperv-container";
   private readonly isolation: "process" | "hyperv";
   private readonly gracefulStops = new Set<string>();
   private readonly leases = new Map<string, { name: string; root: string; runtime: RuntimeLease }>();
-  constructor(private readonly config: WindowsContainerConfig, private readonly docker: DockerRunner = defaultDocker, private readonly powershell: PowerShellRunner = defaultPowerShell) {
+  constructor(private readonly config: WindowsContainerConfig, private readonly docker: DockerRunner = runDocker, private readonly powershell: PowerShellRunner = defaultPowerShell) {
     this.isolation = config.isolation ?? "hyperv";
     this.name = this.isolation === "process" ? "windows-process-container" : "windows-hyperv-container";
   }
@@ -212,35 +185,11 @@ export class WindowsContainerDriver implements RuntimeDriver {
       const observedVcpu = inspect[0]?.HostConfig?.NanoCpus;
       const observedMemoryBytes = inspect[0]?.HostConfig?.Memory;
       if (observedVcpu !== lease.resources.vcpu * 1_000_000_000 || observedMemoryBytes !== lease.resources.memoryBytes) throw new Error("container resource limits do not match requested values");
-      const runtime: RuntimeLease = { runtimeInstanceId: name, observed: { vcpu: observedVcpu / 1_000_000_000, memoryBytes: observedMemoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: this.wait(name), sample: dockerSample(name, lease.resources.memoryBytes, this.docker) };
+      const runtime: RuntimeLease = { runtimeInstanceId: name, observed: { vcpu: observedVcpu / 1_000_000_000, memoryBytes: observedMemoryBytes, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", sample: dockerSample(name, lease.resources.memoryBytes, this.docker) };
+      runtime.completion = observeContainerCompletion(name, runtime, this.docker);
       this.leases.set(lease.id, { name, root, runtime });
       return runtime;
     } catch (error) { try { await this.removeLease(lease.id); } catch (cleanupError) { throw new AggregateError([error, cleanupError], "Windows container provisioning and cleanup failed"); } throw error; }
-  }
-  private async wait(name: string): Promise<number> {
-    const waiting = this.docker(["wait", name]).then(result => {
-      if (result.code !== 0) throw new Error("container completion failed");
-      const code = Number(result.stdout.trim());
-      if (!Number.isInteger(code)) throw new Error("container exit code invalid");
-      return code;
-    });
-    let settled = false;
-    void waiting.finally(() => { settled = true; }).catch(() => {});
-    while (!settled) {
-      await Promise.race([waiting.then(() => {}, () => {}), Bun.sleep(5_000)]);
-      if (settled) break;
-      const result = await this.docker(["inspect", "--format", "{{json .State}}", name]);
-      if (result.code !== 0) {
-        if (isDockerNotFound(result)) throw new Error("container disappeared before completion");
-        continue;
-      }
-      const state = JSON.parse(result.stdout) as { Running?: boolean; ExitCode?: number };
-      if (state.Running === false) {
-        if (!Number.isInteger(state.ExitCode)) throw new Error("container exit code invalid");
-        return state.ExitCode!;
-      }
-    }
-    return waiting;
   }
   private async inspectManagedContainers(ids: string[]): Promise<DockerInspection[]> {
     const batch = await this.docker(["inspect", "--size", ...ids]);
@@ -294,6 +243,8 @@ export class WindowsContainerDriver implements RuntimeDriver {
       const id = inspection.Id as string;
       const leaseId = inspection.Config!.Labels!["mars.lease-id"] as string;
       try {
+        const raw = await collectContainerDiagnostics(id, "windows", this.docker);
+        await archiveContainerDiagnostics(Bun.env.MARS_DIAGNOSTICS_ROOT ?? join(this.config.bootstrapRoot, "diagnostics"), leaseId, `=== recovered after worker restart; pre-cleanup snapshot ===\n${raw}`);
         const result = await this.docker(["rm", "-f", "-v", id]);
         if (result.code !== 0 && !isDockerNotFound(result)) checked(result, "docker rm");
       } catch (error) {
@@ -378,27 +329,14 @@ export class WindowsContainerDriver implements RuntimeDriver {
       await rm(root, { recursive: true, force: true });
     }
   }
-  async collectDiagnostics(leaseId: string): Promise<Record<string, unknown>> { const lease = await this.inspectLease(leaseId); return { isolation: "hyperv", runtimeInstanceId: lease.runtimeInstanceId, observed: lease.observed }; }
+  async collectDiagnostics(leaseId: string): Promise<Record<string, unknown>> { const lease = await this.inspectLease(leaseId); return { isolation: this.isolation, runtimeInstanceId: lease.runtimeInstanceId, observed: lease.observed, termination: lease.termination }; }
   async collectRawDiagnostics(leaseId: string): Promise<string> {
     const owned = this.leases.get(leaseId);
     if (!owned) throw new Error("sandbox not found");
-    const { root } = owned;
-    const name = owned.runtime.runtimeInstanceId;
-    const run = async (args: string[]) => {
-      try { return await this.docker(args); } catch (error) { return { code: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) }; }
-    };
-    const [inspect, logs, workerLog] = await Promise.all([
-      run(["inspect", name]),
-      run(["logs", "--timestamps", name]),
-      run(["exec", name, "cmd.exe", "/c", "type", "C:\\ProgramData\\Mars\\logs\\worker.log"]),
-    ]);
-    const runnerDiag = await copyRunnerDiagnostics(root, name, run);
-    const bundle = [
-      "=== docker inspect ===\n", inspect.stdout || inspect.stderr,
-      "\n=== docker logs --timestamps ===\n", logs.stdout || logs.stderr,
-      "\n=== service worker.log ===\n", workerLog.stdout || workerLog.stderr,
-      "\n", runnerDiag,
-    ].join("");
-    return bundle.length > DIAGNOSTIC_LIMIT_BYTES ? `${bundle.slice(0, DIAGNOSTIC_LIMIT_BYTES)}\n=== diagnostic bundle truncated ===\n` : bundle;
+    const raw = await collectContainerDiagnostics(owned.name, "windows", this.docker);
+    const bundle = `=== runtime termination ===\n${JSON.stringify(owned.runtime.termination ?? null)}\n${raw}`;
+    try { await archiveContainerDiagnostics(Bun.env.MARS_DIAGNOSTICS_ROOT ?? join(this.config.bootstrapRoot, "diagnostics"), leaseId, bundle); }
+    catch (error) { console.error("Container diagnostic archive failed", { leaseId, error: error instanceof Error ? error.message : String(error) }); }
+    return bundle;
   }
 }

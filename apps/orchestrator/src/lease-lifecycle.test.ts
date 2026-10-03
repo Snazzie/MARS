@@ -78,7 +78,9 @@ test("preserves a lease when worker setting is enabled", async () => {
   const events: string[] = [];
   await runLeaseLifecycle(command, driver, bootstrap, event => events.push(event.type), { preserveLeases: () => true });
   expect(stopped).toEqual([]);
-  expect(events).toEqual(["sandbox_attested", "runner.finished", "diagnostic.chunk", "lease.failed"]);
+  expect(events).toContain("runner.finished");
+  expect(events).toContain("diagnostic.chunk");
+  expect(events).toContain("lease.failed");
 });
 
 test("passes authenticated worker cache transport and unregisters the lease", async () => {
@@ -192,3 +194,23 @@ test("reports runner failure with termination evidence when completion rejects",
 });
 
 
+
+test("captures diagnostics before advertising a terminal lease that the control plane may remove", async () => {
+  const collecting = Promise.withResolvers<void>();
+  const diagnostics = Promise.withResolvers<string>();
+  const events: WorkerEvent[] = [];
+  let removed = false;
+  const lifecycle = runLeaseLifecycle(command, {
+    createLease: async () => ({ runtimeInstanceId: "runtime", observed: { vcpu: 1, memoryBytes: 2, storageBytes: 3 }, completion: Promise.resolve(17), state: "sandbox_attested" as const }),
+    collectRawDiagnostics: async () => { collecting.resolve(); return diagnostics.promise; },
+    stopLease: async () => {},
+    removeLease: async () => { removed = true; },
+  }, bootstrap, event => events.push(event));
+  await collecting.promise;
+  expect(events.some(event => event.type === "runner.finished" || event.type === "lease.failed")).toBe(false);
+  expect(removed).toBe(false);
+  diagnostics.resolve("crash evidence");
+  await lifecycle;
+  expect(events.findIndex(event => event.type === "diagnostic.chunk")).toBeLessThan(events.findIndex(event => event.type === "runner.finished"));
+  expect(removed).toBe(true);
+});

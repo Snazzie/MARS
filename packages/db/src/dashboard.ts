@@ -1,5 +1,5 @@
 import type { DatabaseClient } from "./index.ts";
-import { CapacitySnapshot, ConnectionState, ConfigurationState, PoolSummary, RuntimeDriverName, RuntimePlatform, WorkerContainerStatus, WorkerDoctor, WorkerLimits, WorkerState, GuestPlatform, WorkerCacheSummary, WorkerHealth } from "@mars/contracts";
+import { CapacitySnapshot, ConnectionState, ConfigurationState, PoolSummary, RuntimeDriverName, RuntimePlatform, RuntimeTerminationEvidence, WorkerContainerStatus, WorkerDoctor, WorkerDisconnectEvidence, WorkerLimits, WorkerState, GuestPlatform, WorkerCacheSummary, WorkerHealth } from "@mars/contracts";
 import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, OverviewTimeseriesPoint, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail } from "@mars/contracts";
 import { jsonParameter } from "./json.ts";
 import { getGithubRunnerCostSavings } from "./github-runner-cost.ts";
@@ -257,6 +257,12 @@ export async function getRunDetail(db: DashboardDb, organizationId: string, runI
     const terminalObject = terminal && typeof terminal === "object" ? terminal as Record<string, unknown> : null;
     const oomCandidate = terminalObject?.oom;
     const oom = oomCandidate && typeof oomCandidate === "object" ? oomCandidate as RunJob["oom"] : null;
+    const parsedTermination = RuntimeTerminationEvidence.safeParse(terminalObject?.termination);
+    const termination = parsedTermination.success ? parsedTermination.data : null;
+    const reason = terminalObject?.reason;
+    const failureReason: RunJob["failureReason"] = reason === "out_of_memory" || oom || termination?.container?.oomKilled === true ? "out_of_memory"
+      : reason === "worker_inventory_missing" || reason === "runner_lost" || termination?.cause === "child_disappeared" ? "runner_lost"
+      : reason === "runner_failed" || typeof terminalObject?.exitCode === "number" && terminalObject.exitCode !== 0 ? "runner_failed" : null;
     return {
       id: String(row.id),
       name: String(row.name),
@@ -268,8 +274,9 @@ export async function getRunDetail(db: DashboardDb, organizationId: string, runI
       requested: jsonValue(row.requested) as RunJob["requested"],
       requestedLabels: Array.isArray(requestedLabels) ? requestedLabels.filter((label): label is string => typeof label === "string") : [],
       observed: row.observed == null ? null : jsonValue(row.observed) as RunJob["observed"],
-      failureReason: terminalObject?.reason === "out_of_memory" || oom ? "out_of_memory" : null,
+      failureReason,
       oom,
+      termination,
       steps: stepsByJob.get(String(row.id)) ?? [],
     };
   });
@@ -532,6 +539,9 @@ export async function getWorkerHealth(db: DashboardDb, workerId: string, workerC
   const desiredObject = desired && typeof desired === "object" ? desired as Record<string, unknown> : {};
   const desiredCache = desiredObject.cache && typeof desiredObject.cache === "object" ? desiredObject.cache as Record<string, unknown> : {};
   const doctor = workerDoctor(worker.doctor);
+  const storedDoctor = jsonValue(worker.doctor);
+  const disconnectValue = storedDoctor && typeof storedDoctor === "object" && "lastDisconnect" in storedDoctor ? storedDoctor.lastDisconnect : undefined;
+  const disconnect = WorkerDisconnectEvidence.safeParse(disconnectValue);
   return WorkerHealth.parse({
     observedAt,
     runtimeMode: doctor?.runtimeMode ?? (String(worker.platform) === "macos-arm64" ? "tart" : null),
@@ -545,6 +555,7 @@ export async function getWorkerHealth(db: DashboardDb, workerId: string, workerC
       lastDoctorAt: normalizeTimestamp(worker.lastDoctorAt),
       heartbeatAgeSeconds: healthAge(worker.heartbeatAgeSeconds, normalizeTimestamp(worker.lastHeartbeatAt), observedAt),
       doctorAgeSeconds: healthAge(worker.doctorAgeSeconds, normalizeTimestamp(worker.lastDoctorAt), observedAt),
+      ...(disconnect.success && disconnect.data ? { lastDisconnect: disconnect.data } : {}),
     },
     usage: {
       cpu: { actual: actualCpu, reserved: requests.reduce((sum, request) => sum + request.vcpu, 0), free: freeCpu },

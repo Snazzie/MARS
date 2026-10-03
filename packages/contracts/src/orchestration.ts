@@ -62,7 +62,7 @@ export const RuntimeTerminationCause = z.enum(["child_exit", "service_stop", "fo
 export type RuntimeTerminationCause = z.infer<typeof RuntimeTerminationCause>;
 export const RuntimeTerminationEvidence = z.object({
   cause: RuntimeTerminationCause,
-  exitCode: z.number().int().nonnegative().nullable(),
+  exitCode: z.number().int().safe().nullable(),
   exitObserved: z.boolean(),
   elapsedMs: z.number().int().nonnegative().safe(),
   childPid: z.number().int().positive().nullable(),
@@ -76,6 +76,17 @@ export const RuntimeTerminationEvidence = z.object({
   lastSampleOccurredAt: z.string().datetime({ offset: true }).nullable(),
   sampleCount: z.number().int().nonnegative().nullable(),
   samplingGapMs: z.number().int().nonnegative().nullable(),
+  container: z.object({
+    status: z.string().max(64).nullable(),
+    oomKilled: z.boolean().nullable(),
+    error: z.string().max(1024).nullable(),
+    startedAt: z.string().datetime({ offset: true }).nullable(),
+    finishedAt: z.string().datetime({ offset: true }).nullable(),
+    memoryLimitBytes: z.number().int().nonnegative().safe().nullable(),
+    memorySwapLimitBytes: z.number().int().min(-1).safe().nullable(),
+    waitError: z.string().max(1024).nullable(),
+    inspectionError: z.string().max(1024).nullable(),
+  }).strict().optional(),
 }).strict();
 export type RuntimeTerminationEvidence = z.infer<typeof RuntimeTerminationEvidence>;
 export const WorkerLimits = z.object({ maxVcpuPerPod: positiveSafe, maxMemoryBytesPerPod: positiveSafe, maxStorageBytesPerPod: positiveSafe, maxConcurrentPods: positiveSafe });

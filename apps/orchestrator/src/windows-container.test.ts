@@ -432,6 +432,7 @@ test("falls back to the configured memory limit when Docker stats reports an inv
     if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
     if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 2_000_000_000, Memory: configuredMemory } }]), stderr: "" };
     if (args[0] === "stats") return { code: 0, stdout: JSON.stringify({ CPUPerc: "8.48%", MemUsage: "10.52GiB / 1B" }), stderr: "" };
+    if (args[0] === "wait") return { code: 0, stdout: "0", stderr: "" };
     return { code: 0, stdout: "", stderr: "" };
   };
   const driver = new WindowsContainerDriver({
@@ -462,6 +463,7 @@ test("requests an idempotent graceful runner stop before forced cleanup", async 
     if (args[0] === "info") return { code: 0, stdout: "windows", stderr: "" };
     calls.push(args);
     if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ HostConfig: { Isolation: "hyperv", NanoCpus: 1_000_000_000, Memory: 1024 } }]), stderr: "" };
+    if (args[0] === "wait") return { code: 0, stdout: "0", stderr: "" };
     return { code: 0, stdout: "", stderr: "" };
   };
   const driver = new WindowsContainerDriver({
@@ -704,7 +706,7 @@ test("reconciles only fully labeled UUID-owned containers without sampling", asy
   };
   const driver = new WindowsContainerDriver({ ...collectorConfig, bootstrapRoot: root }, docker);
   await driver.reconcileOrphans();
-  expect(removed).toEqual([validA, validB]);
+  expect(new Set(removed)).toEqual(new Set([validA, validB]));
   expect(await Bun.file(join(root, "not-owned", "marker")).exists()).toBe(true);
   expect(await Bun.file(join(root, leaseA)).exists()).toBe(false);
   expect(await Bun.file(join(root, leaseB)).exists()).toBe(false);

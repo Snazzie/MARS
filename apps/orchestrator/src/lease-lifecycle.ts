@@ -112,20 +112,21 @@ export async function runLeaseLifecycle(
       }
     }
   })() : Promise.resolve();
+  let terminalEvent: WorkerEvent;
   try {
     const exitCode = await (runtime.completion ?? Promise.reject(new Error("runtime completion unavailable")));
     sampling = false;
     await sampler;
     await runnerLogs;
-    const termination = runtime.termination ?? fallbackTermination("child_exit", exitCode, Date.now() - startedAt, sampleCount, lastSampleOccurredAt, samplingGapMs);
-    emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "runner.finished", occurredAt: new Date().toISOString(), payload: { ...payload, exitCode, termination } });
+    const termination = { ...(runtime.termination ?? fallbackTermination("child_exit", exitCode, Date.now() - startedAt, sampleCount, lastSampleOccurredAt, samplingGapMs)), ...(runtime.termination?.container ? { lastSampleOccurredAt, sampleCount, samplingGapMs } : {}) };
+    terminalEvent = { version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "runner.finished", occurredAt: new Date().toISOString(), payload: { ...payload, exitCode, termination } };
   } catch (error) {
     sampling = false;
     await sampler;
     await runnerLogs;
-    const termination = runtime.termination ?? fallbackTermination("child_disappeared", null, Date.now() - startedAt, sampleCount, lastSampleOccurredAt, samplingGapMs);
+    const termination = { ...(runtime.termination ?? fallbackTermination("child_disappeared", null, Date.now() - startedAt, sampleCount, lastSampleOccurredAt, samplingGapMs)), ...(runtime.termination?.container ? { lastSampleOccurredAt, sampleCount, samplingGapMs } : {}) };
     console.error("Runner failed", { leaseId: bootstrap.leaseId, correlationId, cause: termination.cause, error: error instanceof Error ? error.message : String(error) });
-    emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "runner_failed", termination } });
+    terminalEvent = { version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "runner_failed", termination } };
   }
   if (driver.collectRawDiagnostics) {
     try {
@@ -140,6 +141,9 @@ export async function runLeaseLifecycle(
       console.error("Raw container diagnostics failed", { leaseId: bootstrap.leaseId, correlationId, error: error instanceof Error ? error.message : String(error) });
     }
   }
+  // Terminal events make the lease eligible for control-plane cleanup. Capture
+  // diagnostics first so that cleanup cannot race the stopped-container copy.
+  emit(terminalEvent);
   if (preserveLeasesForDebugging(options)) {
     console.warn("Lease cleanup disabled for debugging", { leaseId: bootstrap.leaseId, correlationId });
     emit({ version: 1, id: crypto.randomUUID(), workerId: command.workerId, type: "lease.failed", occurredAt: new Date().toISOString(), payload: { ...payload, reason: "debug_preserve" } });

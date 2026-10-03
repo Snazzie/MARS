@@ -269,6 +269,7 @@ export function WorkerHealthPanel({ workerId, health, loading = false, error, li
       {health.connection.heartbeatAgeSeconds == null && <StatusBadge tone="info">Unavailable telemetry</StatusBadge>}
       {health.connection.doctorAgeSeconds == null && <StatusBadge tone="info">Unavailable telemetry</StatusBadge>}
     </div>}
+    {health.connection.lastDisconnect && <p className="detail-meta">Last worker disconnect: <time dateTime={health.connection.lastDisconnect.occurredAt}>{new Date(health.connection.lastDisconnect.occurredAt).toLocaleString()}</time>; WebSocket code {health.connection.lastDisconnect.code}; {health.connection.lastDisconnect.reason || "No close reason received"}. A connection loss alone does not identify a process crash.</p>}
     <UsageSection health={health} idPrefix={idPrefix} limits={limits} />
     <CacheSection health={health} idPrefix={idPrefix} cacheMetrics={cacheMetrics} />
     <ManagedContainersSection health={health} idPrefix={idPrefix} limits={limits} />

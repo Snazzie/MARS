@@ -10,6 +10,8 @@ services:
       MARS_WORKER_CONTRACT_VERSION: ${MARS_WORKER_CONTRACT_VERSION:?worker contract version required}
       MARS_LINUX_ARM64_CONTAINER_IMAGE: ${MARS_JOB_IMAGE:?digest-pinned linux-arm64 job image required}
       MARS_LINUX_CONTAINER_NETWORK: mars-linux-arm64
+      MARS_DIAGNOSTICS_ROOT: /var/lib/mars/diagnostics
+      MARS_LINUX_CONTAINER_SWAP_BYTES: ${MARS_LINUX_CONTAINER_SWAP_BYTES:-}
       MARS_JOIN_CODE_FILE: /var/lib/mars/config/join-code
       MARS_WORKER_IDENTITY_FILE: /var/lib/mars/config/worker-identity.json
       MARS_ACTION_CACHE_ROOT: /var/lib/mars/action-cache

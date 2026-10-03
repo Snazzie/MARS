@@ -151,7 +151,8 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         if (currentSocket === ws) {
           workerSockets.delete(ws.data.workerId);
           if (ws.data.connectionEpoch === workerConnectionEpochs.get(ws.data.workerId)) workerConnectionEpochs.delete(ws.data.workerId);
-          void options.db`update workers set connection_state='offline' where id=${ws.data.workerId}`;
+          const lastDisconnect = { occurredAt: new Date().toISOString(), code, reason: sanitizeDiagnosticText(String(reason), 200) };
+          void options.db`update workers set connection_state='offline',doctor=COALESCE(doctor,'{}'::jsonb) || ${jsonParameter(options.db, { lastDisconnect })}::jsonb where id=${ws.data.workerId}`.catch(error => console.error("Worker disconnect persistence failed", { workerId: ws.data.actor === "worker" ? ws.data.workerId : null, error }));
           sendWorkerStatus(browserSockets, ws.data.workerId, "offline");
         }
       }
@@ -230,7 +231,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           // configuration before changing platform so x64 pools cannot schedule it.
           await options.db`update workers set platform='windows-arm64', guest_platforms=${jsonParameter(options.db, ["linux-arm64"])}::jsonb, configuration_state='unconfigured', desired_configuration=null, configuration_revision=null, configuration_command_id=null, applied_configuration_revision=null, configuration_applied_at=null, draining=true where id=${ws.data.workerId} and platform='windows-x64'`;
         }
-        await options.db`update workers set doctor=${jsonParameter(options.db, doctorPayload)}, release_version=${doctorPayload.releaseVersion}, contract_version=${doctorPayload.contractVersion}, doctor_observed_at=now(), last_heartbeat_at=now() where id=${ws.data.workerId}`;
+        await options.db`update workers set doctor=${jsonParameter(options.db, doctorPayload)}::jsonb || CASE WHEN doctor ? 'lastDisconnect' THEN jsonb_build_object('lastDisconnect',doctor->'lastDisconnect') ELSE '{}'::jsonb END, release_version=${doctorPayload.releaseVersion}, contract_version=${doctorPayload.contractVersion}, doctor_observed_at=now(), last_heartbeat_at=now() where id=${ws.data.workerId}`;
         void options.triggerReconciliation();
         if (doctorPayload.doctor.activeLeases && doctorPayload.doctor.inventoryObservedAt) {
           await reconcileWorkerInventory(options.db, ws.data.workerId, doctorPayload.doctor.activeLeases, doctorPayload.doctor.inventoryObservedAt);

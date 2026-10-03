@@ -32,6 +32,7 @@ test("lists disabled default pools without an image while rejecting empty creati
 
 const workerHealthFixture = {
   observedAt: "2026-08-23T12:00:00.000Z",
+  configuration: { state: "ready", failureReason: null },
   connection: {
     state: "online",
     lastHeartbeatAt: "2026-08-23T11:59:59.000Z",

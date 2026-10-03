@@ -331,6 +331,71 @@ database with `MARS_E2E_DATABASE_URL=<url> bun test tests/runner-completion.e2e.
 Each fixture rolls back. Coverage includes successful/failed runner exits,
 duplicate exits, cleanup, dispatch eligibility, and GitHub completion ordering.
 
+### Container failure evidence and memory resilience
+
+Select a job in the run graph to see **Runner failure evidence**. Container
+termination now retains the exit code, Docker `OOMKilled` flag, runtime error,
+start/finish timestamps, RAM and Linux RAM-plus-swap limits, and Docker wait or
+inspection failures. Exit `137` alone is not classified as OOM: only Docker's
+OOM flag or explicit OOM evidence confirms that reason. Missing inventory is
+reported as `runner_lost`, not as a proven crash. GitHub remains authoritative
+for the job outcome.
+
+Worker health includes `connection.lastDisconnect` after a disconnect is
+observed: UTC timestamp, WebSocket close code, and sanitized close reason.
+The control plane stores this in PostgreSQL and retains it through reconnects
+and subsequent doctor reports. A heartbeat timeout cannot distinguish a
+network outage, stalled worker, process crash, or host reboot by itself.
+
+Container diagnostics are captured before terminal events can trigger cleanup.
+They include bounded Docker state/limits, the last 2,000 timestamped console
+lines, copied `Runner_*.log` / `Worker_*.log` tails, and the Windows guest service
+log when available. Copying works with stopped containers; no `docker exec`
+or indefinitely following log stream is needed. Known credential assignments,
+Bearer authorization values, and signed URL tokens are redacted. Treat remaining
+workflow output as sensitive; restrict archive directory access and Windows ACLs.
+
+Workers save up to 100 distinct bundles, each capped at 10 MiB, named
+`<leaseId>-<bundleId>.log`. Repeated attempts do not overwrite earlier bundles.
+Set worker `MARS_DIAGNOSTICS_ROOT` to persistent storage; otherwise Windows uses
+`<bootstrapRoot>/diagnostics` (normally
+`C:\ProgramData\Mars\leases\diagnostics`) and Linux uses
+`<temporary-directory>/mars-linux-{arm64,x64}/diagnostics`. The ARM64 broker
+Compose file sets `/var/lib/mars/diagnostics` in its existing state volume.
+Startup orphan reconciliation archives a **pre-cleanup snapshot** before deleting
+an abandoned container; inspect these worker-local bundles after a worker crash.
+The control plane also stores uploaded chunks under
+`<MARS_DIAGNOSTICS_ROOT-or-DATA_ROOT/diagnostics>/<workerId>/<diagnosticId>/`,
+with `metadata.json` identifying the job and lease. Its existing diagnostics
+retention defaults to three days.
+
+Linux Docker containers now explicitly bound swap:
+
+- Unset/empty `MARS_LINUX_CONTAINER_SWAP_BYTES`: allow extra swap equal to the
+  lease RAM limit, matching Docker's existing implicit default.
+- `0`: disable container swap (`--memory-swap` equals `--memory`).
+- A nonnegative integer: allow that many extra swap bytes per container.
+  Docker's `--memory-swap` value is **RAM + swap**, not swap alone.
+
+Verify `swapon --show --bytes` on the **Docker engine host** and Docker's swap-limit
+support before relying on the allowance. Docker Desktop Linux needs swap in its
+Linux VM/WSL environment; paging on the Windows host alone does not establish
+guest swap availability. Provision host swap with the host's normal administration
+tools. Mars does not run privileged `swapon` commands or change system paging
+settings automatically. A host reporting no swap-limit support logs a warning.
+Swap is an emergency cushion, not schedulable RAM or a replacement for adequate
+RAM and concurrency headroom; the OOM killer remains enabled.
+
+Windows containers do not support the Linux swap flag. Keep host paging enabled
+and use a system-managed page file unless the host's operational policy requires
+otherwise. Increase pool RAM or reduce concurrency when failures demonstrate
+container memory exhaustion; a host page file does not remove a container's hard
+RAM limit. For unexplained process/host loss, correlate the archived timestamps
+with Windows System/Application events (service termination, HCS/Hyper-V, resource
+exhaustion) or Linux kernel/service journals. No archive can prove a root cause
+that the runtime or host never recorded.
+
+
 
 Useful commands:
 

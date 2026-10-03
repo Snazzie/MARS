@@ -13,7 +13,7 @@ function fakeDocker(calls: string[][], architecture = "arm64"): DockerRunner {
     calls.push(args);
     if (args[0] === "info") return { code: 0, stdout: JSON.stringify({ OSType: "linux", Architecture: architecture }), stderr: "" };
     if (args[0] === "image") return { code: 0, stdout: JSON.stringify({ RepoDigests: [image], Os: "linux", Architecture: "arm64", Config: { Entrypoint: ["/usr/local/bin/entrypoint.sh"] } }), stderr: "" };
-    if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ Id: "container-id", Config: { Image: image, Labels: { "mars.managed": "true", "mars.platform": "linux-arm64", "mars.lease-id": lease.id } }, HostConfig: { NanoCpus: 2_000_000_000, Memory: 1024 }, State: { Status: "running" } }]), stderr: "" };
+    if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ Id: "container-id", Config: { Image: image, Labels: { "mars.managed": "true", "mars.platform": "linux-arm64", "mars.lease-id": lease.id } }, HostConfig: { NanoCpus: 2_000_000_000, Memory: 1024, MemorySwap: 2048 }, State: { Status: "running" } }]), stderr: "" };
     if (args[0] === "wait") return { code: 0, stdout: "0", stderr: "" };
     return { code: 0, stdout: "", stderr: "" };
   };
@@ -45,7 +45,8 @@ test("creates an x64 Linux container with isolated ownership and validates x64 i
     calls.push(args);
     if (args[0] === "info") return { code: 0, stdout: JSON.stringify({ OSType: "linux", Architecture: "amd64" }), stderr: "" };
     if (args[0] === "image") return { code: 0, stdout: JSON.stringify({ RepoDigests: [x64Image], Os: "linux", Architecture: "amd64", Config: { Entrypoint: ["/usr/local/bin/entrypoint.sh"] } }), stderr: "" };
-    if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ Id: "x64-container", Config: { Image: x64Image, Labels: { "mars.managed": "true", "mars.platform": "linux-x64", "mars.lease-id": lease.id } }, HostConfig: { NanoCpus: 2_000_000_000, Memory: 1024 }, State: { Status: "running" } }]), stderr: "" };
+    if (args[0] === "inspect") return { code: 0, stdout: JSON.stringify([{ Id: "x64-container", Config: { Image: x64Image, Labels: { "mars.managed": "true", "mars.platform": "linux-x64", "mars.lease-id": lease.id } }, HostConfig: { NanoCpus: 2_000_000_000, Memory: 1024, MemorySwap: 2048 }, State: { Status: "running" } }]), stderr: "" };
+    if (args[0] === "wait") return { code: 0, stdout: "0", stderr: "" };
     return { code: 0, stdout: "", stderr: "" };
   };
   const x64Lease = { ...lease, imageDigest: x64Image };
@@ -67,4 +68,12 @@ test("Windows-hosted Linux Docker refuses CPU claims and concurrent guests", asy
   const calls: string[][] = [];
   const driver = new LinuxContainerDriver(config({ hostPlacement: "serialized-no-pin", limits: { ...limits, maxConcurrentPods: 1 } }), fakeDocker(calls));
   await expect(driver.createLease({ ...lease, cpuMode: "exclusive", cpuIds: [0, 1] })).rejects.toThrow("cannot claim CPU IDs");
+});
+
+test("rejects unsafe swap budgets before allocating a container", () => {
+  for (const swapBytes of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, NaN]) {
+    expect(() => new LinuxContainerDriver(config({ swapBytes }))).toThrow("nonnegative safe integer");
+  }
+  const driver = new LinuxContainerDriver(config({ swapBytes: Number.MAX_SAFE_INTEGER }));
+  expect(() => driver.validatePool(lease.resources)).toThrow("RAM plus swap");
 });

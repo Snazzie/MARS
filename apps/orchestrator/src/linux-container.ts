@@ -7,6 +7,7 @@ import { type Lease, type RuntimeDriver, type RuntimeLease } from "./runtime.ts"
 import { validateResources } from "./runtime.ts";
 import type { DockerResult, DockerRunner } from "./windows-container.ts";
 import { validateExclusiveCpuIds } from "./cpu-inventory.ts";
+import { archiveContainerDiagnostics, collectContainerDiagnostics, observeContainerCompletion, runDocker } from "./container-observability.ts";
 
 export type LinuxContainerConfig = {
   image: string;
@@ -16,6 +17,7 @@ export type LinuxContainerConfig = {
   architecture?: "arm64" | "amd64";
   platform?: "linux/arm64" | "linux/amd64";
   hostPlacement: "linux-pin" | "serialized-no-pin";
+  swapBytes?: number;
 };
 
 type DockerInspection = {
@@ -26,7 +28,7 @@ type DockerInspection = {
   Architecture?: unknown;
   State?: { Status?: unknown };
   Config?: { Image?: unknown; Entrypoint?: unknown; Labels?: Record<string, unknown> };
-  HostConfig?: { NanoCpus?: unknown; Memory?: unknown; CpusetCpus?: unknown };
+  HostConfig?: { NanoCpus?: unknown; Memory?: unknown; MemorySwap?: unknown; CpusetCpus?: unknown };
   SizeRw?: unknown;
 };
 type WorkerContainerStatusData = z.infer<typeof WorkerContainerStatus>;
@@ -34,7 +36,6 @@ type DockerStats = { ID?: unknown; Container?: unknown; CPUPerc?: unknown; MemUs
 const digestPattern = /^[^@\s]+@sha256:[0-9a-f]{64}$/;
 const expectedEntrypoint = ["/usr/local/bin/entrypoint.sh"] as const;
 const notFound = /no such container|no such object|container .* not found|does not exist/i;
-const diagnosticLimit = 10 * 1024 * 1024;
 
 export function isExpectedLinuxContainerEntrypoint(value: unknown): boolean {
   return Array.isArray(value) && value.length === expectedEntrypoint.length && value[0] === expectedEntrypoint[0];
@@ -45,18 +46,6 @@ function checked(result: DockerResult, operation: string): string {
   return result.stdout.trim();
 }
 
-async function defaultDocker(args: string[]): Promise<DockerResult> {
-  const process = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe" });
-  const stdout = new Response(process.stdout).text();
-  const stderr = new Response(process.stderr).text();
-  const longRunning = args[0] === "wait" || (args[0] === "logs" && args.includes("--follow"));
-  const timeout = longRunning ? undefined : setTimeout(() => process.kill(), 30_000);
-  try {
-    return { code: await process.exited, stdout: await stdout, stderr: await stderr };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
 
 function parseJson(value: string, operation: string): Record<string, unknown> {
   try {
@@ -90,17 +79,14 @@ function parseInspect(stdout: string): DockerInspection[] {
   return parsed as DockerInspection[];
 }
 
-function redact(value: string): string {
-  return value.replaceAll(/(authorization\s*:\s*bearer\s+)[^\s\r\n]+/gi, "$1[REDACTED]").replaceAll(/([?&](?:token|sig|signature|access_token|oauth_token)=)[^&\s]+/gi, "$1[REDACTED]");
-}
 
-async function readDockerInfo(docker: DockerRunner): Promise<{ os: string; architecture: string }> {
+async function readDockerInfo(docker: DockerRunner): Promise<{ os: string; architecture: string; swapLimitSupported: boolean | null }> {
   const result = await docker(["info", "--format", "{{json .}}"]);
   if (result.code !== 0) throw new Error(`Docker engine unavailable: ${result.stderr.slice(0, 500)}`);
   const raw = result.stdout.trim();
-  if (raw === "linux/arm64" || raw === "linux/aarch64") return { os: "linux", architecture: raw.slice("linux/".length) };
+  if (raw === "linux/arm64" || raw === "linux/aarch64") return { os: "linux", architecture: raw.slice("linux/".length), swapLimitSupported: null };
   const info = parseJson(raw, "docker info");
-  return { os: String(info.OSType ?? info.Os ?? ""), architecture: String(info.Architecture ?? info.architecture ?? "") };
+  return { os: String(info.OSType ?? info.Os ?? ""), architecture: String(info.Architecture ?? info.architecture ?? ""), swapLimitSupported: typeof info.SwapLimit === "boolean" ? info.SwapLimit : null };
 }
 
 export class LinuxContainerDriver implements RuntimeDriver {
@@ -110,8 +96,12 @@ export class LinuxContainerDriver implements RuntimeDriver {
   private readonly platformLabel: "linux-arm64" | "linux-x64";
   private readonly leases = new Map<string, { name: string; root: string; runtime: RuntimeLease }>();
   private readonly gracefulStops = new Set<string>();
+  private readonly swapBytes: number | undefined;
 
-  constructor(private readonly config: LinuxContainerConfig, private readonly docker: DockerRunner = defaultDocker) {
+  constructor(private readonly config: LinuxContainerConfig, private readonly docker: DockerRunner = runDocker) {
+    const configuredSwap = Bun.env.MARS_LINUX_CONTAINER_SWAP_BYTES?.trim();
+    this.swapBytes = config.swapBytes ?? (configuredSwap ? Number(configuredSwap) : undefined);
+    if (this.swapBytes !== undefined && (!Number.isSafeInteger(this.swapBytes) || this.swapBytes < 0)) throw new Error("MARS_LINUX_CONTAINER_SWAP_BYTES must be a nonnegative safe integer");
     this.architecture = config.architecture ?? "arm64";
     this.dockerPlatform = config.platform ?? (this.architecture === "amd64" ? "linux/amd64" : "linux/arm64");
     if (this.dockerPlatform !== (this.architecture === "amd64" ? "linux/amd64" : "linux/arm64")) throw new Error("Linux Docker platform does not match configured architecture");
@@ -124,6 +114,7 @@ export class LinuxContainerDriver implements RuntimeDriver {
   validatePool(resources: PoolResources): void {
     validateResources(resources, this.config.limits);
     if (!digestPattern.test(this.config.image)) throw new Error("Linux container image must be digest pinned");
+    if (!Number.isSafeInteger(resources.memoryBytes + (this.swapBytes ?? resources.memoryBytes))) throw new Error("RAM plus swap limit exceeds a safe integer");
   }
 
   private async inspectImage(): Promise<DockerInspection> {
@@ -142,6 +133,7 @@ export class LinuxContainerDriver implements RuntimeDriver {
     this.validatePool(resources);
     const info = await readDockerInfo(this.docker);
     if (info.os.toLowerCase() !== "linux") throw new Error("Linux Docker engine is required");
+    if (info.swapLimitSupported === false && (this.swapBytes ?? resources.memoryBytes) > 0) console.warn("Docker host does not support container swap limits; requested swap allowance cannot be enforced", { memoryBytes: resources.memoryBytes, swapBytes: this.swapBytes ?? resources.memoryBytes });
     const aliases = this.architecture === "amd64" ? ["amd64", "x86_64"] : ["arm64", "aarch64"];
     if (!aliases.includes(info.architecture.toLowerCase())) throw new Error(`${this.platformLabel} Docker engine is required`);
     await this.inspectImage();
@@ -173,11 +165,12 @@ export class LinuxContainerDriver implements RuntimeDriver {
     const root = this.bootstrapPath(lease.id);
     const bootstrap = join(root, "bootstrap.json");
     const name = this.containerName(lease.id);
+    const memorySwapLimit = lease.resources.memoryBytes + (this.swapBytes ?? lease.resources.memoryBytes);
     await mkdir(root, { recursive: true });
     await writeFile(bootstrap, JSON.stringify({ version: 1, leaseId: lease.id, nonce: lease.nonce, encodedJitConfig: lease.encodedJitConfig, ...(lease.workerCache ? { workerCache: lease.workerCache } : {}) }), { mode: 0o600, flag: "wx" });
     try {
       if (cpuSet && await validateExclusiveCpuIds(lease.cpuIds, lease.resources.vcpu) !== cpuSet) throw new Error("exclusive CPU inventory changed before Docker create");
-      checked(await this.docker(["create", "--name", name, "--platform", this.dockerPlatform, "--network", this.config.network, "--log-driver", "json-file", "--log-opt", "max-size=50m", "--log-opt", "max-file=3", "--label", "mars.managed=true", "--label", `mars.platform=${this.platformLabel}`, "--label", `mars.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), ...(cpuSet ? ["--cpuset-cpus", cpuSet] : []), this.config.image]), "docker create");
+      checked(await this.docker(["create", "--name", name, "--platform", this.dockerPlatform, "--network", this.config.network, "--log-driver", "json-file", "--log-opt", "max-size=50m", "--log-opt", "max-file=3", "--label", "mars.managed=true", "--label", `mars.platform=${this.platformLabel}`, "--label", `mars.lease-id=${lease.id}`, "--cpus", String(lease.resources.vcpu), "--memory", String(lease.resources.memoryBytes), "--memory-swap", String(memorySwapLimit), ...(cpuSet ? ["--cpuset-cpus", cpuSet] : []), this.config.image]), "docker create");
       checked(await this.docker(["cp", bootstrap, `${name}:/var/lib/mars/bootstrap/bootstrap.json`]), "docker cp");
       await rm(bootstrap, { force: true });
       checked(await this.docker(["start", name]), "docker start");
@@ -188,8 +181,10 @@ export class LinuxContainerDriver implements RuntimeDriver {
       const observedVcpu = Number(inspection?.HostConfig?.NanoCpus ?? 0) / 1_000_000_000;
       const observedMemory = Number(inspection?.HostConfig?.Memory ?? 0);
       if (observedVcpu !== lease.resources.vcpu || observedMemory !== lease.resources.memoryBytes) throw new Error("container resource limits do not match requested values");
+      if (inspection?.HostConfig?.MemorySwap !== memorySwapLimit) throw new Error("container RAM plus swap limit does not match requested value");
       if (cpuSet && inspection?.HostConfig?.CpusetCpus !== cpuSet) throw new Error("container CPU affinity does not match exclusive claim");
-      const runtime: RuntimeLease = { runtimeInstanceId: name, observed: { vcpu: observedVcpu, memoryBytes: observedMemory, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", completion: this.wait(name), sample: this.sample(name, lease.resources.memoryBytes) };
+      const runtime: RuntimeLease = { runtimeInstanceId: name, observed: { vcpu: observedVcpu, memoryBytes: observedMemory, storageBytes: lease.resources.storageBytes }, state: "sandbox_attested", sample: this.sample(name, lease.resources.memoryBytes) };
+      runtime.completion = observeContainerCompletion(name, runtime, this.docker);
       this.leases.set(lease.id, { name, root, runtime });
       return runtime;
     } catch (error) {
@@ -201,13 +196,6 @@ export class LinuxContainerDriver implements RuntimeDriver {
     }
   }
 
-  private async wait(name: string): Promise<number> {
-    const result = await this.docker(["wait", name]);
-    if (result.code !== 0) throw new Error("container completion failed");
-    const code = Number(result.stdout.trim());
-    if (!Number.isInteger(code)) throw new Error("container exit code invalid");
-    return code;
-  }
 
   private sample(name: string, configuredMemoryBytes: number): () => Promise<{ cpuUsagePercent: number; cpuTimeMs: number; memoryWorkingSetBytes: number; memoryLimitBytes: number }> {
     return async () => {
@@ -234,6 +222,9 @@ export class LinuxContainerDriver implements RuntimeDriver {
     const errors: Error[] = [];
     await Promise.all(candidates.map(async (inspection) => {
       try {
+        const leaseId = WorkerContainerStatus.shape.leaseId.parse(inspection.Config?.Labels?.["mars.lease-id"]);
+        const raw = await collectContainerDiagnostics(String(inspection.Id), "linux", this.docker);
+        await archiveContainerDiagnostics(Bun.env.MARS_DIAGNOSTICS_ROOT ?? join(tmpdir(), `mars-${this.platformLabel}`, "diagnostics"), leaseId, `=== recovered after worker restart; pre-cleanup snapshot ===\n${raw}`);
         const result = await this.docker(["rm", "-f", "-v", String(inspection.Id)]);
         if (result.code !== 0 && !notFound.test(`${result.stdout} ${result.stderr}`)) checked(result, "docker rm");
       } catch (error) { errors.push(error instanceof Error ? error : new Error(String(error))); }
@@ -297,19 +288,16 @@ export class LinuxContainerDriver implements RuntimeDriver {
 
   async collectDiagnostics(leaseId: string): Promise<Record<string, unknown>> {
     const lease = await this.inspectLease(leaseId);
-    return { driver: this.name, runtimeInstanceId: lease.runtimeInstanceId, observed: lease.observed, storageQuota: "admission_only", storageUsageTelemetry: true };
+    return { driver: this.name, runtimeInstanceId: lease.runtimeInstanceId, observed: lease.observed, termination: lease.termination, storageQuota: "admission_only", storageUsageTelemetry: true };
   }
 
   async collectRawDiagnostics(leaseId: string): Promise<string> {
     const lease = this.leases.get(leaseId);
     if (!lease) throw new Error("sandbox not found");
-    const run = async (args: string[]) => { try { return await this.docker(args); } catch (error) { return { code: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) }; } };
-    const [inspect, logs, diag] = await Promise.all([
-      run(["inspect", lease.name]),
-      run(["logs", "--timestamps", "--follow", lease.name]),
-      run(["exec", lease.name, "sh", "-c", "for f in /opt/actions-runner/_diag/Runner_*.log /opt/actions-runner/_diag/Worker_*.log; do test -f \"$f\" && cat \"$f\"; done"]),
-    ]);
-    const bundle = `=== docker inspect ===\n${redact(inspect.stdout || inspect.stderr)}\n=== docker logs --timestamps --follow ===\n${redact(logs.stdout || logs.stderr)}\n=== runner _diag ===\n${redact(diag.stdout || diag.stderr)}`;
-    return bundle.length > diagnosticLimit ? `${bundle.slice(0, diagnosticLimit)}\n=== diagnostic bundle truncated ===\n` : bundle;
+    const raw = await collectContainerDiagnostics(lease.name, "linux", this.docker);
+    const bundle = `=== runtime termination ===\n${JSON.stringify(lease.runtime.termination ?? null)}\n${raw}`;
+    try { await archiveContainerDiagnostics(Bun.env.MARS_DIAGNOSTICS_ROOT ?? join(tmpdir(), `mars-${this.platformLabel}`, "diagnostics"), leaseId, bundle); }
+    catch (error) { console.error("Container diagnostic archive failed", { leaseId, error: error instanceof Error ? error.message : String(error) }); }
+    return bundle;
   }
 }

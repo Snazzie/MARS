@@ -37,11 +37,18 @@ export function aggregateResourceSamples(samples: Array<{ occurredAt: string; cp
   return { telemetryState: (coverage ? "available" : "partial") as "available" | "partial", telemetrySampleCount: ordered.length, cpuAveragePercent: cpu.reduce((sum, value) => sum + value, 0) / cpu.length, cpuP50Percent: percentile(cpu, 0.5), cpuP95Percent: percentile(cpu, 0.95), cpuPeakPercent: Math.max(...cpu), cpuTimeMs: ordered.reduce((sum, sample) => sum + sample.cpuTimeMs, 0), memoryAverageBytes: Math.round(ordered.reduce((sum, sample) => sum + sample.memoryWorkingSetBytes, 0) / ordered.length), memoryPeakBytes: Math.max(...ordered.map(sample => sample.memoryWorkingSetBytes)) };
 }
 
-async function persistDiagnosticChunk(workerId: string, payload: { diagnosticId: string; sequence: number; content: string }): Promise<void> {
+async function persistDiagnosticChunk(workerId: string, payload: { jobId: string; leaseId: string; diagnosticId: string; sequence: number; content: string }): Promise<void> {
   const root = Bun.env.MARS_DIAGNOSTICS_ROOT ?? join(Bun.env.DATA_ROOT ?? "/var/lib/mars", "diagnostics");
   const directory = join(root, workerId, payload.diagnosticId);
   const path = join(directory, `${String(payload.sequence).padStart(8, "0")}.log`);
   await mkdir(directory, { recursive: true });
+  const metadataPath = join(directory, "metadata.json");
+  const metadata = JSON.stringify({ workerId, jobId: payload.jobId, leaseId: payload.leaseId, diagnosticId: payload.diagnosticId });
+  try {
+    await writeFile(metadataPath, metadata, { encoding: "utf8", flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST" || await readFile(metadataPath, "utf8") !== metadata) throw error;
+  }
   try {
     await writeFile(path, payload.content, { encoding: "utf8", flag: "wx" });
   } catch (error) {
@@ -165,9 +172,10 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
     // Runner process completion is not GitHub job completion; startup can fail
     // while GitHub still has the job queued. Webhooks/discovery own job status.
     const payload = parsedPayload.data.payload;
-    const failed = Boolean(payload.oom) || payload.exitCode !== 0;
+    const outOfMemory = Boolean(payload.oom) || payload.termination?.container?.oomKilled === true;
+    const failed = outOfMemory || payload.exitCode !== 0;
     const state = failed ? "failed" : "completed";
-    const terminalResult = payload.oom ? { exitCode: payload.exitCode, reason: "out_of_memory", oom: payload.oom } : { exitCode: payload.exitCode };
+    const terminalResult = { exitCode: payload.exitCode, ...(outOfMemory ? { reason: "out_of_memory" } : {}), ...(payload.oom ? { oom: payload.oom } : {}), ...(payload.termination ? { termination: payload.termination } : {}), ...(payload.correlationId ? { correlationId: payload.correlationId } : {}) };
     const rows = await db`UPDATE runner_leases SET state=${state},terminal_result=${jsonParameter(db, terminalResult)},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('sandbox_ready','online','busy') RETURNING id`;
     if (!transition(Boolean(rows[0]), state)) return false;
     return true;
@@ -183,11 +191,11 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown):
       });
     }
     if (payload.reason === "debug_preserve") {
-      const rows = await db`UPDATE runner_leases SET state='failed',terminal_result=${jsonParameter(db, { reason: payload.reason })},cleanup_state='debug_preserved',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed','sandbox_ready','online','busy') RETURNING id`;
+      const rows = await db`UPDATE runner_leases SET state='failed',terminal_result=COALESCE(terminal_result,'{}'::jsonb) || ${jsonParameter(db, { debugPreserved: true })}::jsonb,cleanup_state='debug_preserved',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed','sandbox_ready','online','busy') RETURNING id`;
       if (!transition(Boolean(rows[0]), "debug_preserved")) return false;
       return true;
     }
-    const terminalResult = payload.oom ? { reason: payload.reason, oom: payload.oom } : { reason: payload.reason };
+    const terminalResult = { reason: payload.termination?.container?.oomKilled === true ? "out_of_memory" : payload.reason, ...(payload.oom ? { oom: payload.oom } : {}), ...(payload.termination ? { termination: payload.termination } : {}), ...(payload.correlationId ? { correlationId: payload.correlationId } : {}) };
     const rows = await db`UPDATE runner_leases SET state='failed',terminal_result=${jsonParameter(db, terminalResult)},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('dispatched','provisioning','sandbox_ready','online','busy') RETURNING id`;
     if (!transition(Boolean(rows[0]), "failed")) return false;
     return true;
