@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { beginControlPlaneSetup, beginOnboardingGithubInstall, beginOnboardingGithubManifest, beginUnboundOnboardingGithubInstall, getOnboardingDetail, getOnboardingStatus, getRunnerWorkflowFiles, rejectPendingWorker, selectOnboardingWorker, skipOnboardingLabels, startOnboardingVerification, verifyOnboardingRepositories } from "../api.ts";
+import { beginControlPlaneSetup, beginUnboundOnboardingGithubInstall, getGithubOrganizationSettings, getOnboardingDetail, getOnboardingStatus, getRunnerWorkflowFiles, rejectPendingWorker, selectOnboardingWorker, skipOnboardingLabels, startOnboardingVerification, verifyOnboardingRepositories } from "../api.ts";
 import { EnrollmentPanel } from "../components/EnrollmentPanel.tsx";
 import { pendingWorkerQueryOptions } from "../components/PendingWorkerRequests.tsx";
 import { RunnerWorkflowPrModal } from "../components/RunnerWorkflowPrModal.tsx";
@@ -8,7 +8,7 @@ import { WorkerConfigurationForm } from "../components/WorkerConfigurationForm.t
 import { QueryState } from "../components/StateView.tsx";
 import type { OnboardingDetail, OnboardingStatus } from "@mars/contracts";
 
-const steps = [["setup", "Control plane"], ["github", "GitHub"], ["admin", "Admin"], ["worker", "Worker"], ["labels", "Trigger labels"]] as const;
+const steps = [["setup", "Control plane"], ["admin", "Admin"], ["github", "GitHub"], ["worker", "Worker"], ["labels", "Trigger labels"]] as const;
 const gib = (bytes: number) => Math.max(1, Math.round(bytes / 1024 ** 3));
 
 export function OnboardingPage() {
@@ -21,7 +21,7 @@ export function OnboardingPage() {
     enabled: Boolean(s?.authenticated && s.canManage),
     refetchInterval: (query) => {
       const value = query.state.data;
-      return s?.step === "worker" || (value?.step === "labels" && ["queued", "running", "reaping"].includes(value.verification?.state)) ? 2_000 : false;
+      return s?.step === "worker" || (value?.step === "labels" && (!value.pool || ["queued", "running", "reaping"].includes(value.verification?.state))) ? 2_000 : false;
     },
   });
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +34,7 @@ export function OnboardingPage() {
   if (s.step === "setup") return <SetupCard status={s} />;
   if (!s.authenticated) return <SignIn firstAdmin={!s.adminCreated} />;
   if (!s.canManage) return <main className="onboarding"><section className="onboarding-card"><h1>Administrator access required</h1><p>Your GitHub account is signed in, but it cannot configure this control plane.</p></section></main>;
+  if (detail.error) return <main className="onboarding"><h1>Setup details unavailable</h1><p role="alert">{detail.error instanceof Error ? detail.error.message : "Could not load setup details."}</p><button className="button secondary" type="button" onClick={() => void detail.refetch()}>Retry setup details</button></main>;
   const d = detail.data;
   if (!d) return <main className="onboarding"><p>Loading setup details…</p></main>;
   if (d.step === "complete") return <Complete detail={d} />;
@@ -43,8 +44,8 @@ export function OnboardingPage() {
   return <main className="onboarding"><header><p className="eyebrow">FIRST-RUN SETUP</p><h1>Get Mars ready</h1><p>Complete each verified step. Progress is saved on the control plane.</p></header>{error && <p role="alert" className="form-error">{error} <button className="button secondary" onClick={() => setError(null)}>Dismiss</button></p>}<div className="onboarding-layout"><nav aria-label="Onboarding steps"><ol className="onboarding-steps">{steps.map(([id, label], index) => <li key={id} className={index === activeStep ? "is-current" : index < currentIndex ? "is-complete" : "is-locked"}><span>{index + 1}</span><strong>{label}</strong></li>)}</ol></nav><section className="onboarding-task" aria-live="polite"><h2>{steps[activeStep]?.[1]}</h2>{activeStep === 0 ? <p>Administrator account is configured.</p> : <EditableStep detail={d} index={activeStep} onDone={() => { refresh(); setViewStep(null); }} onDiscard={() => { refresh(); setViewStep(null); }} onSelect={(id) => select.mutate({ workerId: id })} onSkip={() => skipLabels.mutate()} />}{activeStep > 0 && <div className="onboarding-navigation"><button type="button" onClick={() => setViewStep(Math.max(0, activeStep - 1))} disabled={activeStep === 0}>Back</button><button type="button" onClick={() => setViewStep(Math.min(currentIndex, activeStep + 1))} disabled={!viewingPastStep}>Next</button></div>}</section></div></main>;
 }
 function EditableStep({ detail, index, onDone, onDiscard, onSelect, onSkip }: { detail: OnboardingDetail; index: number; onDone: () => void; onDiscard: () => void; onSelect: (id: string) => void; onSkip: () => void }) {
-  if (index === 1) return <GithubStep detail={detail} />;
-  if (index === 3) return <WorkerSetupStep detail={detail} edit onSelect={onSelect} onDone={onDone} onDiscard={onDiscard} />;
+  if (index === 2) return <GithubStep detail={detail} />;
+  if (index === 3) return <WorkerSetupStep detail={detail} edit={detail.step !== "worker"} onSelect={onSelect} onDone={onDone} onDiscard={onDiscard} />;
   if (index === 4) return <LabelsStep detail={detail} onSkip={onSkip} />;
   return <p>Administrator account is configured.</p>;
 }
@@ -61,6 +62,8 @@ function SetupCard({ status }: { status: OnboardingStatus }) {
   return <main className="onboarding"><section className="onboarding-card">
     <p className="eyebrow">FIRST-RUN SETUP</p><h1>{status.publicBaseUrlManaged ? "Control plane origin configured" : "Connect this control plane"}</h1>
     {status.publicBaseUrlManaged ? <p role="status">Configured origin: <code>{managedOrigin}</code></p> : <p>Confirm the externally reachable HTTPS origin to create the GitHub App.</p>}
+    <p>This installation serves one GitHub account or organization. You can connect multiple repositories and workers within that account.</p>
+    <p>Have ready: an externally reachable HTTPS URL, permission to create and install a GitHub App, and a machine to run the Mars worker. GitHub will return you here after each authorization.</p>
     <form onSubmit={(event) => { event.preventDefault(); setError(null); setup.mutate({ publicBaseUrl: managedOrigin }); }}>
       {status.publicBaseUrlManaged ? <p>GitHub App setup will use the configured origin above.</p> : <label>Public URL<input aria-label="Public URL" type="url" value={managedOrigin} onChange={(event) => setPublicBaseUrl(event.target.value)} required /></label>}
       {error && <p role="alert" className="form-error">{error}</p>}
@@ -99,72 +102,41 @@ function submitGithubManifest(launch: { action: string; manifest: string }): voi
 }
 function GithubStep({ detail }: { detail: OnboardingDetail }) {
   const client = useQueryClient();
-  const [organizationId, setOrganizationId] = useState(detail.github.organizationId ?? "");
-  const [connectError, setConnectError] = useState<string | null>(null);
   const availableRepositories = detail.github.repositories.filter((repository) => repository.available);
   const hasInstallation = Boolean(detail.github.installation);
-  const hasUsableInstallation = hasInstallation && availableRepositories.length > 0;
   const selectionRemediation = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("github") === "repository-selection-required";
-  const refresh = () => {
-    void client.invalidateQueries({ queryKey: ["onboarding"] });
-    void client.invalidateQueries({ queryKey: ["onboarding-status"] });
-  };
+  const launch = useMutation({
+    mutationFn: async () => hasInstallation && detail.github.organizationId
+      ? getGithubOrganizationSettings(detail.github.organizationId)
+      : beginUnboundOnboardingGithubInstall(),
+    onSuccess: ({ location }) => window.location.assign(location),
+  });
   const verify = useMutation({
     mutationFn: verifyOnboardingRepositories,
-    onSuccess: refresh,
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ["onboarding"] });
+      void client.invalidateQueries({ queryKey: ["onboarding-status"] });
+    },
   });
-  const connect = async () => {
-    if (!organizationId) return;
-    setConnectError(null);
-    try {
-      if (detail.github.appConfigured) {
-        const result = await beginOnboardingGithubInstall({ organizationId });
-        window.location.assign(result.location);
-      } else {
-        submitGithubManifest(await beginOnboardingGithubManifest({ organizationId }));
-      }
-    } catch (cause) {
-      setConnectError(cause instanceof Error ? cause.message : "GitHub App setup failed");
-    }
-  };
-  const installUnbound = async () => {
-    setConnectError(null);
-    try {
-      const result = await beginUnboundOnboardingGithubInstall();
-      window.location.assign(result.location);
-    } catch (cause) {
-      setConnectError(cause instanceof Error ? cause.message : "GitHub App setup failed");
-    }
-  };
   return <div>
     <h3>Connect GitHub account</h3>
-    {!hasInstallation && !detail.github.appConfigured && <>
-      <p>Choose the GitHub account where Mars should run jobs. These are accounts available to your signed-in GitHub user, not existing Mars App installations.</p>
-      <p>Mars will create a GitHub App for this control plane before installing it in the selected account.</p>
-      <label>GitHub account
-        <select aria-label="GitHub account" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
-          <option value="">Select account</option>
-          {detail.organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
-        </select>
-      </label>
-      <button className="button" type="button" disabled={!organizationId} onClick={() => void connect()}>Create Mars GitHub App</button>
-      {connectError && <p role="alert" className="form-error">{connectError}</p>}
-    </>}
+    <p>This control plane supports one GitHub account or organization. Choose the account that owns the repositories you want to run.</p>
+    {!detail.github.appConfigured && <p role="alert">The GitHub App is not configured. <a href="/onboarding">Return to control-plane setup</a> to create it.</p>}
     {!hasInstallation && detail.github.appConfigured && <>
       <p>GitHub will ask which account or organization should receive the Mars App.</p>
-      <button className="button" type="button" onClick={() => void installUnbound()}>Install Mars GitHub App</button>
-      {connectError && <p role="alert" className="form-error">{connectError}</p>}
+      <p>Select at least one repository during installation. You will return here to enroll your worker.</p>
+      <button className="button" type="button" disabled={launch.isPending} onClick={() => launch.mutate()}>{launch.isPending ? "Opening GitHub…" : "Install Mars GitHub App"}</button>
     </>}
-    {hasInstallation && !hasUsableInstallation && <>
+    {hasInstallation && availableRepositories.length === 0 && <>
       <p role="status">GitHub App installed. Repository access is not verified.</p>
       <p>Select at least one repository in the GitHub App installation, then verify access here.</p>
       {selectionRemediation && <p role="alert">GitHub returned no available repositories. Update the installation repository access before verifying again.</p>}
+      <button className="button secondary" type="button" onClick={() => launch.mutate()} disabled={launch.isPending || !detail.github.organizationId}>{launch.isPending ? "Opening GitHub…" : "Manage installation access"}</button>
       <button className="button" type="button" onClick={() => verify.mutate()} disabled={verify.isPending}>{verify.isPending ? "Verifying repository access…" : "Verify repository access"}</button>
-      <button className="button secondary" type="button" onClick={() => void connect()} disabled={!organizationId}>Manage installation access</button>
       {verify.error && <p role="alert" className="form-error">{verify.error instanceof Error ? verify.error.message : "Repository verification failed"}</p>}
-      {connectError && <p role="alert" className="form-error">{connectError}</p>}
     </>}
-    {hasUsableInstallation && <p role="status">GitHub installation connected. Mars verified {availableRepositories.length} available {availableRepositories.length === 1 ? "repository" : "repositories"}.</p>}
+    {launch.error && <p role="alert" className="form-error">{launch.error instanceof Error ? launch.error.message : "Could not open GitHub. Try again."}</p>}
+    {hasInstallation && availableRepositories.length > 0 && <p role="status">GitHub installation connected. Mars verified {availableRepositories.length} available {availableRepositories.length === 1 ? "repository" : "repositories"}.</p>}
   </div>;
 }
 function WorkerSetupStep({ detail, onSelect, onDone, onDiscard, edit = false }: { detail: OnboardingDetail; onSelect: (id: string) => void; onDone: () => void; onDiscard?: () => void; edit?: boolean }) {

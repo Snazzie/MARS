@@ -412,13 +412,6 @@ export async function beginUnboundOnboardingGithubInstall() {
     body: "{}",
   });
 }
-export async function beginOnboardingGithubInstall(input: { organizationId: string }) {
-  return request(`/api/github/app/install`, DashboardLocationResponse, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
-    body: JSON.stringify(input),
-  });
-}
 export async function beginOrganizationGithubInstall(organizationId: string) {
   return request(`/api/organizations/${organizationId}/github/install`, DashboardLocationResponse, {
     method: "POST",
@@ -461,13 +454,6 @@ export async function uninstallOrganizationGithub(organizationId: string) {
 }
 export async function beginControlPlaneSetup(input: ControlPlaneSetupRequest) {
   return request("/api/setup/github-app", DashboardManifestResponse, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
-    body: JSON.stringify(input),
-  });
-}
-export async function beginOnboardingGithubManifest(input: { organizationId: string }) {
-  return request("/api/github/app/manifest", DashboardManifestResponse, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify(input),

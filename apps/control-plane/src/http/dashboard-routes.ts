@@ -607,6 +607,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
       return c.json({ location: result.location });
     } catch (cause) {
       const code = cause instanceof Error ? cause.message : "";
+      if (code === "single_tenant_required") return error(c, 409, code, "This control plane supports one GitHub account. Use the connected account or deploy a separate control plane.");
       if (code === "github_organization_already_connected") return error(c, 409, code, "This organization is already connected");
       throw cause;
     }

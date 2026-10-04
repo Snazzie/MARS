@@ -228,61 +228,6 @@ test("launches the GitHub account picker for an unbound installation", async () 
   }
 });
 
-test("registers an unconfigured GitHub App through the manifest flow", async () => {
-  const browser = new Window({ url: "http://localhost/onboarding" });
-  const previousDocument = globalThis.document;
-  const previousWindow = globalThis.window;
-  const previousFetch = globalThis.fetch;
-  // @ts-expect-error Happy DOM provides the browser globals React needs.
-  globalThis.document = browser.document;
-  // @ts-expect-error Happy DOM provides the browser globals React needs.
-  globalThis.window = browser;
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  const requests: string[] = [];
-  let submitted: HTMLFormElement | null = null;
-  const submittedForm = (): HTMLFormElement | null => submitted;
-  browser.HTMLFormElement.prototype.submit = function submit() { submitted = this as unknown as HTMLFormElement; };
-  globalThis.fetch = (async (input) => {
-    const path = String(input);
-    requests.push(path);
-    if (path === "/api/github/app/manifest") return Response.json({ action: "https://github.com/settings/apps/new?state=test", manifest: "{\"name\":\"mars\"}" });
-    if (path === "/api/github/app/install") return Response.json({ location: "http://localhost/onboarding" });
-    return Response.json({ code: "unexpected_request" }, { status: 500 });
-  }) as typeof globalThis.fetch;
-  const detail = { version: 1, onboardingRequired: true, adminCreated: true, authenticated: true, canManage: true, step: "github", worker, organizations: [{ id: "org-1", name: "Acme", login: "acme", repositoryCount: 0, workerCount: 0 }], github: { appConfigured: false, organizationId: null, installation: null, repositories: [] }, pool: null, defaultImageDigest: null };
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  client.setQueryData(["onboarding-status"], detail);
-  client.setQueryData(["onboarding"], detail);
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
-  try {
-    await act(async () => { root.render(<QueryClientProvider client={client}><OnboardingPage /></QueryClientProvider>); });
-    const select = container.querySelector<HTMLSelectElement>('select[aria-label="GitHub account"]') ?? container.querySelector<HTMLSelectElement>('select[aria-label="GitHub organization"]');
-    expect(select).not.toBeNull();
-    await act(async () => {
-      select!.value = "org-1";
-      select!.dispatchEvent(new browser.Event("change", { bubbles: true }) as unknown as Event);
-    });
-    const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find((candidate) => candidate.textContent?.includes("GitHub App"));
-    await act(async () => {
-      button?.click();
-      const { promise, resolve } = Promise.withResolvers<void>();
-      setTimeout(resolve, 0);
-      await promise;
-    });
-    expect(requests).toEqual(["/api/github/app/manifest"]);
-    expect(submittedForm()?.method).toBe("post");
-    expect(submittedForm()?.action).toBe("https://github.com/settings/apps/new?state=test");
-    expect(submittedForm()?.querySelector<HTMLInputElement>('input[name="manifest"]')?.value).toBe("{\"name\":\"mars\"}");
-  } finally {
-    await act(async () => { root.unmount(); });
-    container.remove();
-    globalThis.fetch = previousFetch;
-    globalThis.document = previousDocument;
-    globalThis.window = previousWindow;
-  }
-});
 
 
 

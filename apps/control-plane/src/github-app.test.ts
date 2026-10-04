@@ -253,6 +253,7 @@ describe("GitHub App onboarding", () => {
       if (query.includes("UPDATE system_onboarding SET organization_id")) return [];
       return [];
     }) as never;
+    Object.assign(sql, { begin: async (callback: (tx: typeof sql) => Promise<unknown>) => callback(sql) });
     const github = new GitHubAppService({ db: sql, fetch: async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/app/installations/42")) return Response.json({ account: { type: "Organization", id: 99 }, repository_selection: "all" });
@@ -352,19 +353,26 @@ describe("GitHub App onboarding", () => {
     expect(fakeDb.repositories.get("1")).toMatchObject({ available: false });
   });
 
-  test("starts a second organization installation without rebinding onboarding", async () => {
-    const github = service(async () => Response.json({}));
-    fakeDb.appConfig = { id: 9, slug: "mars-test", pem: "encrypted", clientSecret: "encrypted", webhookSecret: "encrypted" };
+  test("rejects a second tenant while allowing reconnection of the installed tenant", async () => {
+    const github = configuredService(async () => Response.json({}));
     fakeDb.organizations = new Map([
       [organizationId, { githubOrgId: 99 }],
       ["22222222-2222-4222-8222-222222222222", { githubOrgId: 100 }],
     ]);
+    fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "suspended", repositorySelection: "selected" });
+    await expect(github.beginOrganizationInstallation("admin-1", "22222222-2222-4222-8222-222222222222", "org-2-key")).rejects.toThrow("single_tenant_required");
+    await expect(github.beginOrganizationInstallation("admin-1", organizationId, "reconnect-key")).resolves.toMatchObject({ location: "https://github.com/apps/mars/installations/new" });
+  });
 
-    const launch = await github.beginOrganizationInstallation("admin-1", "22222222-2222-4222-8222-222222222222", "org-2-key");
-
-    expect(launch.location).toContain("github.com/apps/");
-    expect(launch.installCookie).toBeDefined();
-    expect([...fakeDb.setupStates.values()]).toHaveLength(1);
+  test("rejects a stale unbound callback for another tenant without consuming setup state", async () => {
+    const github = configuredService(async () => Response.json({ account: { id: 100, type: "Organization", login: "other" } }));
+    const launch = await github.beginUnboundInstallation("admin-1", "stale-key");
+    fakeDb.organizations!.set(organizationId, { githubOrgId: 99 });
+    fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "all" });
+    await expect(github.completeInstallation("admin-1", launch.installCookie!, 43)).rejects.toThrow("single_tenant_required");
+    expect(fakeDb.installations.has(43)).toBe(false);
+    expect([...fakeDb.organizations!.values()].some((organization) => organization.githubOrgId === 100)).toBe(false);
+    expect([...fakeDb.setupStates.values()][0]).not.toHaveProperty("consumedAt");
   });
 
   test("validates each webhook against the current decrypted secret and dispatches installation removal", async () => {

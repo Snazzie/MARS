@@ -55,6 +55,9 @@ export async function initializeControlPlaneSetup(db: DashboardDb, dataRoot: str
   let config = await readConfig(db);
   if (!config) { await db`insert into control_plane_config (singleton) values (true) on conflict (singleton) do nothing`; config = await readConfig(db); }
   await db`INSERT INTO system_onboarding (singleton) VALUES (true) ON CONFLICT (singleton) DO NOTHING`;
+  const tenants = await db<Array<{ organization_id: string }>>`SELECT organization_id FROM system_onboarding WHERE singleton=true AND organization_id IS NOT NULL UNION SELECT organization_id FROM dashboard_installations`;
+  if (tenants.length > 1) throw new Error("single_tenant_required: this database contains multiple connected GitHub accounts; separate them into independent control-plane deployments before starting");
+  if (tenants[0]) await db`UPDATE system_onboarding SET organization_id=${tenants[0].organization_id} WHERE singleton=true AND organization_id IS NULL`;
   config ??= { publicBaseUrl: null, setupCompletedAt: null };
   if (environmentOrigin) {
     await db`insert into control_plane_config (singleton, public_base_url) values (true, ${environmentOrigin}) on conflict (singleton) do update set public_base_url=excluded.public_base_url, updated_at=now()`;
