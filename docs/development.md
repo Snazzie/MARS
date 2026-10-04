@@ -64,6 +64,22 @@ updated`, then refresh the control-plane/tunnel page—no `bun run dev` restart 
 needed. Direct Vite pages continue to use HMR. Build errors appear in the web
 process logs; fix the error and save again to rebuild.
 
+Dashboard recovery and navigation:
+
+- Authenticated setup-status failures show a retry control rather than a blank page.
+- Settings keeps the normal navigation and workspace picker. Select a concrete GitHub
+  workspace before managing its installation; no installation is chosen automatically
+  for All workspaces. The selection survives reloads, and uninstall confirmation names
+  the affected account.
+- Runs search, queued-time ranges, and runner ownership are filtered on the server
+  before pagination, including All workspaces. Clear filters resets all three controls.
+  Charts represent the loaded matching runs, not the complete history.
+- Job and step logs retain all loaded chunks. Search covers loaded output; steps with
+  unsearched or partially loaded logs stay available to expand and load more output.
+- Pool create/edit and delete dialogs support Escape, modal focus, and focus restoration.
+  Invalid pool fields show inline feedback; uppercase SHA-256 hex is normalized on save.
+- Run-detail tabs support Left/Right arrows, Home, and End.
+
 Run `bun run dev:worker` on Windows x64/ARM64, Apple Silicon macOS, or Linux
 x64/ARM64. It chooses the existing worker runtime for the host; the worker
 reports its actual runtime capabilities to the control plane. Host-specific

@@ -5,7 +5,6 @@ import { getLogs, getStepLogs } from "../api.ts";
 import { QueryState } from "./StateView.tsx";
 
 const STEP_LOG_LIMIT = 100;
-const DISPLAY_LOG_LIMIT = 200;
 type JobLogPage = Awaited<ReturnType<typeof getLogs>>;
 type StepLogPage = Awaited<ReturnType<typeof getStepLogs>>;
 type LogViewerProps = {
@@ -61,7 +60,7 @@ function formatDuration(durationMs: number | null): string {
 }
 
 function orderedLogText(items: readonly { sequence: number; content: string }[]): string {
-  return [...items].sort((a, b) => a.sequence - b.sequence).slice(0, DISPLAY_LOG_LIMIT).map((chunk) => `${chunk.content}\n`).join("");
+  return [...items].sort((a, b) => a.sequence - b.sequence).map((chunk) => `${chunk.content}\n`).join("");
 }
 
 export function stepLogEmptyMessage(logsState: RunJob["logsState"]): string {
@@ -70,7 +69,7 @@ export function stepLogEmptyMessage(logsState: RunJob["logsState"]): string {
   return "No log lines were attributed to this step. Review the unattributed job logs below.";
 }
 
-function StepLogRow({ organizationId, runId, jobId, logsState, step, open, maxDurationMs, onOpenChange, onLoadedTextChange }: { organizationId: string; runId: string; jobId: string; logsState: RunJob["logsState"]; step: RunStep; open: boolean; maxDurationMs: number; onOpenChange: (open: boolean) => void; onLoadedTextChange: (text: string) => void }) {
+function StepLogRow({ organizationId, runId, jobId, logsState, step, open, maxDurationMs, onOpenChange, onLoadedTextChange }: { organizationId: string; runId: string; jobId: string; logsState: RunJob["logsState"]; step: RunStep; open: boolean; maxDurationMs: number; onOpenChange: (open: boolean) => void; onLoadedTextChange: (text: string, complete: boolean) => void }) {
   const query = useInfiniteQuery({
     queryKey: ["org", organizationId, "run", runId, "job", jobId, "step", step.id, "logs"],
     queryFn: ({ pageParam }) => getStepLogs(organizationId, runId, jobId, step.id, pageParam, STEP_LOG_LIMIT),
@@ -80,7 +79,7 @@ function StepLogRow({ organizationId, runId, jobId, logsState, step, open, maxDu
   });
   const items = query.data?.pages.flatMap((page) => page.items) ?? [];
   const text = orderedLogText(items);
-  useEffect(() => { if (query.data) onLoadedTextChange(text); }, [query.data, text, onLoadedTextChange]);
+  useEffect(() => { if (query.data) onLoadedTextChange(text, !query.hasNextPage); }, [query.data, query.hasNextPage, text, onLoadedTextChange]);
   const duration = deriveStepDuration(step);
   const status = normalizeStepResult(step);
   const tone = step.conclusion === "failure" ? "failure" : step.conclusion === "success" ? "success" : step.status === "in_progress" ? "running" : "muted";
@@ -98,7 +97,7 @@ function StepLogRow({ organizationId, runId, jobId, logsState, step, open, maxDu
       <div className="step-log-body">
         <QueryState error={query.error} isLoading={query.isLoading} isEmpty={false} retry={() => void query.refetch()} operationLabel="step logs" />
         {!query.isLoading && !query.error && items.length === 0 && <p className="log-meta">{stepLogEmptyMessage(logsState)}</p>}
-        {items.length > 0 && <><pre className="log-viewer" tabIndex={0} aria-label={`${step.name} log output`}>{text}</pre>{query.hasNextPage && <button className="button secondary" type="button" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage}>Load older output</button>}<p className="log-meta">Showing {items.length} ordered chunks.</p></>}
+        {items.length > 0 && <><pre className="log-viewer" tabIndex={0} aria-label={`${step.name} log output`}>{text}</pre>{query.hasNextPage && <button className="button secondary" type="button" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage}>{query.isFetchingNextPage ? "Loading…" : "Load more output"}</button>}<p className="log-meta">Showing {items.length} ordered chunks.</p></>}
       </div>
     </details>
   );
@@ -114,11 +113,11 @@ export function LogViewer({ organizationId, runId, jobId, logsState, steps = [] 
   });
   const [expandedStepIds, setExpandedStepIds] = useState<Set<string>>(() => new Set());
   const [search, setSearch] = useState("");
-  const [loadedTextByStep, setLoadedTextByStep] = useState<Record<string, string>>({});
-  const visibleSteps = useMemo(() => steps.filter((step) => stepMatchesSearch(step, loadedTextByStep[step.id] ?? "", search)), [steps, loadedTextByStep, search]);
+  const [loadedTextByStep, setLoadedTextByStep] = useState<Record<string, { text: string; complete: boolean }>>({});
+  const visibleSteps = useMemo(() => steps.filter((step) => !loadedTextByStep[step.id]?.complete || stepMatchesSearch(step, loadedTextByStep[step.id]?.text ?? "", search)), [steps, loadedTextByStep, search]);
   const maxStepDurationMs = Math.max(0, ...visibleSteps.map((step) => deriveStepDuration(step) ?? 0));
   const setStepExpanded = (stepId: string, expanded: boolean) => setExpandedStepIds((current) => { const next = new Set(current); expanded ? next.add(stepId) : next.delete(stepId); return next; });
-  const setLoadedText = (stepId: string, text: string) => setLoadedTextByStep((current) => current[stepId] === text ? current : { ...current, [stepId]: text });
+  const setLoadedText = (stepId: string, text: string, complete: boolean) => setLoadedTextByStep((current) => current[stepId]?.text === text && current[stepId]?.complete === complete ? current : { ...current, [stepId]: { text, complete } });
   const expandVisible = (expanded: boolean) => setExpandedStepIds((current) => { const next = new Set(current); visibleSteps.forEach((step) => expanded ? next.add(step.id) : next.delete(step.id)); return next; });
   const items = query.data?.pages.flatMap((page) => page.items) ?? [];
   const visibleItems = useMemo(() => filterLoadedLogChunks(items, search), [items, search]);
@@ -130,9 +129,17 @@ export function LogViewer({ organizationId, runId, jobId, logsState, steps = [] 
       <label className="step-log-search"><span>Search job steps and loaded logs</span><input aria-label="Search job steps and loaded logs" value={search} onInput={(event) => setSearch(event.currentTarget.value)} /></label>
       <div className="step-log-actions" aria-label="Step log actions"><button className="button secondary" type="button" onClick={() => expandVisible(true)}>Expand all</button><button className="button secondary" type="button" onClick={() => expandVisible(false)}>Collapse all</button></div>
     </div>
+    {search.trim() && <p className="log-meta">Steps with unsearched output remain available. Expand them and load more output to search their logs.</p>}
     <section className="step-log-list" aria-label="Job steps">
-      {steps.length === 0 ? <p className="log-meta">No attributed steps recorded.</p> : visibleSteps.length === 0 ? <p className="log-meta">No steps match this search.</p> : visibleSteps.map((step) => <StepLogRow key={step.id} organizationId={organizationId} runId={runId} jobId={jobId} logsState={logsState} step={step} open={expandedStepIds.has(step.id)} maxDurationMs={maxStepDurationMs} onOpenChange={(open) => setStepExpanded(step.id, open)} onLoadedTextChange={(text) => setLoadedText(step.id, text)} />)}
+      {steps.length === 0 ? <p className="log-meta">No attributed steps recorded.</p> : visibleSteps.length === 0 ? <p className="log-meta">No steps match this search.</p> : visibleSteps.map((step) => <StepLogRow key={step.id} organizationId={organizationId} runId={runId} jobId={jobId} logsState={logsState} step={step} open={expandedStepIds.has(step.id)} maxDurationMs={maxStepDurationMs} onOpenChange={(open) => setStepExpanded(step.id, open)} onLoadedTextChange={(text, complete) => setLoadedText(step.id, text, complete)} />)}
     </section>
-    <section className="unattributed-log-panel" aria-labelledby={`unattributed-logs-title-${jobId}`}><div className="panel-kicker" id={`unattributed-logs-title-${jobId}`}>Unattributed job logs</div><QueryState error={query.error} isLoading={query.isLoading} isEmpty={false} retry={() => void query.refetch()} operationLabel="logs" />{!query.isLoading && !query.error && visibleItems.length === 0 && <p className="log-meta">{search.trim() ? noMatchingJobMessage : items.length === 0 ? emptyJobMessage : noMatchingJobMessage}</p>}{visibleItems.length > 0 && <><pre className="log-viewer" tabIndex={0}>{orderedLogText(visibleItems)}</pre>{query.hasNextPage && <button className="button secondary" type="button" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage}>Load older output</button>}<p className="log-meta">Showing {items.length} loaded chunks.</p></>}</section>
+    <section className="unattributed-log-panel" aria-labelledby={`unattributed-logs-title-${jobId}`}>
+      <div className="panel-kicker" id={`unattributed-logs-title-${jobId}`}>Unattributed job logs</div>
+      <QueryState error={query.error} isLoading={query.isLoading} isEmpty={false} retry={() => void query.refetch()} operationLabel="logs" />
+      {!query.isLoading && !query.error && visibleItems.length === 0 && <p className="log-meta">{search.trim() ? noMatchingJobMessage : items.length === 0 ? emptyJobMessage : noMatchingJobMessage}</p>}
+      {visibleItems.length > 0 && <pre className="log-viewer" tabIndex={0} aria-label="Unattributed job log output">{orderedLogText(visibleItems)}</pre>}
+      {query.hasNextPage && <button className="button secondary" type="button" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage}>{query.isFetchingNextPage ? "Loading…" : "Load more output"}</button>}
+      {items.length > 0 && <p className="log-meta">Showing {visibleItems.length} matching chunks of {items.length} loaded chunks.</p>}
+    </section>
   </section>;
 }

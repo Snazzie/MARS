@@ -1405,3 +1405,18 @@ a:active {
 @media(max-width:600px){.dispatch-status-heading{padding:18px 16px}.dispatch-overview{padding:20px 16px}.dispatch-metrics>div{padding:6px 10px}.dispatch-metrics dt{font-size:.67rem}.dispatch-metrics dd{font-size:28px}.dispatch-schedule{grid-template-columns:1fr;margin:0 16px 18px;gap:14px}.dispatch-schedule>div+div{border-left:0;border-top:1px solid var(--ui-border);padding:14px 0 0}.dispatch-alert{margin:0 16px 18px}.dispatch-exclusions,.dispatch-disclosure>summary{padding:14px 16px}.dispatch-disclosure>summary small{display:block;margin:3px 0 0}.dispatch-disclosure-content{padding:0 16px 16px}.dispatch-pool-list li{grid-template-columns:1fr;gap:7px}.dispatch-status-panel .dispatch-blocked-jobs{padding:0 16px 16px}.dispatch-status-panel .dispatch-footnote{padding:12px 16px}.dispatch-history-tag{font-size:8px}}
 @media(max-width:600px){.dispatch-metrics{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:14px}.dispatch-metrics>div:nth-child(3){border-left:0}.dispatch-metrics>div:nth-child(n+3){border-top:1px solid var(--ui-border);padding-top:14px}}
 @media(prefers-reduced-motion:reduce){.dispatch-disclosure>summary:after{transition:none}}
+
+.pool-editor { display: grid; gap: 14px; }
+.pool-editor h2, .pool-editor p { margin: 0; }
+.pool-editor p { color: var(--ui-text-muted); line-height: 1.5; }
+.pool-editor label { display: grid; gap: 6px; min-width: 0; color: var(--ui-text-muted); font-size: .85rem; }
+.pool-editor input, .pool-editor select {
+  width: 100%; min-width: 0; min-height: 42px; padding: 9px 11px;
+  background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: 6px; color: var(--ui-text);
+}
+.pool-editor input:focus-visible, .pool-editor select:focus-visible { outline: 2px solid var(--ui-primary); outline-offset: 2px; }
+.pool-editor [aria-invalid="true"] { border-color: var(--ui-danger); }
+.pool-editor .inline-error { color: var(--ui-danger); }
+.pool-editor fieldset { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0; padding: 14px; border: 1px solid var(--ui-border); border-radius: 6px; }
+.pool-editor legend { padding: 0 6px; }
+@media (max-width: 700px) { .pool-editor fieldset { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

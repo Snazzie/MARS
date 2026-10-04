@@ -20,6 +20,10 @@ const querySchema = z.object({
   availability: z.enum(["available", "unavailable"]).optional(),
   visibility: z.enum(["public", "private", "internal"]).optional(),
 }).strict();
+const runsQuerySchema = querySchema.pick({ limit: true, cursor: true, search: true }).extend({
+  from: z.string().datetime({ offset: true }).optional(),
+  runner: z.enum(["all", "mars", "external"]).default("all"),
+}).strict();
 const periodSchema = z.enum(["24h", "7d", "30d"]);
 const timingQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50), cursor: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional(), from: z.string().datetime({ offset: true }).optional(), to: z.string().datetime({ offset: true }).optional(), repositoryId: z.string().uuid().optional(), workflow: z.string().max(200).optional(), jobName: z.string().max(200).optional(), platform: z.string().max(100).optional(), driver: z.string().max(100).optional(), vcpu: z.coerce.number().int().positive().optional(), concurrency: z.coerce.number().int().positive().optional(), outcome: z.enum(["success", "failure", "cancelled", "skipped", "neutral"]).optional() }).strict();
 const unixOrDateTimeSchema = z.preprocess((value) => {
@@ -144,12 +148,14 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   }));
   app.get("/api/organizations/:organizationId/runs", safe(async (c) => {
     const org = c.req.param("organizationId");
-    const q = parseQuery(c);
-    if (q instanceof Response) return q;
-    if (org === "all") return c.json(CursorPage(RunSummary).parse(await listAllRuns(deps.db, c.get("user").id, q.limit, q.cursor ?? null, q.search)));
+    const parsed = runsQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) return error(c, 400, "invalid_query", "Invalid run history query", { issues: parsed.error.issues });
+    const q = parsed.data;
+    const filters = { from: q.from, runner: q.runner };
+    if (org === "all") return c.json(CursorPage(RunSummary).parse(await listAllRuns(deps.db, c.get("user").id, q.limit, q.cursor ?? null, q.search, filters)));
     const denied = await guard(c, deps, org);
     if (denied) return denied;
-    return c.json(CursorPage(RunSummary).parse(await listRuns(deps.db, org, q.limit, q.cursor ?? null, q.search)));
+    return c.json(CursorPage(RunSummary).parse(await listRuns(deps.db, org, q.limit, q.cursor ?? null, q.search, filters)));
   }));
   app.get("/api/organizations/:organizationId/job-timings", safe(async (c) => {
     const org = c.req.param("organizationId");

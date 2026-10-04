@@ -14,9 +14,6 @@ const navigationLinks = [
   ["/workers", "Workers", "04"],
   ["/pools", "Pools", "05"],
 ] as const;
-const settingsLinks = [
-  ["/settings", "Settings"],
-] as const;
 const links = [...navigationLinks, ["/settings", "Settings", "06"]] as const;
 const helpByRoute: Record<(typeof links)[number][0], { label: string; text: string }> = {
   "/": { label: "About overview health", text: "What: workload outcomes and control-plane freshness for the selected workspace. How: change the time window to inspect trends. Fix: open Workers when capacity or runtime health is degraded, then Runs for individual failures." },
@@ -24,9 +21,8 @@ const helpByRoute: Record<(typeof links)[number][0], { label: string; text: stri
   "/repositories": { label: "About repository setup", text: "What: repositories available through the selected GitHub App installation. How: preview workflow label changes before opening a pull request. Fix: manage the installation when a repository is missing or access is stale." },
   "/workers": { label: "About worker readiness", text: "What: enrollment, connection, configuration, doctor checks, and free capacity. How: adopt a pending host, configure its supported runtime, then wait for the applied revision. Fix: follow the reported remediation and drain before removal." },
   "/pools": { label: "About shared pools", text: "What: global routing labels backed by compatible ready workers. How: keep labels canonical and only enable a pool after coverage is ready. Fix: disable the pool and wait for active leases before editing or deleting it." },
-  "/settings": { label: "About deployment settings", text: "What: resource ceilings for every organization in this deployment. How: edit a row and save to apply limits for that organization. Fix: lower limits when admission rejects a job or raise them deliberately when fleet capacity allows." },
+  "/settings": { label: "About deployment settings", text: "What: appearance, signed-in access, GitHub connections, and API quota. How: select a workspace before managing its GitHub installation. Fix: retry failed connection checks or manage repository access in GitHub." },
 };
-export function isSettingsRoute(pathname: string) { return pathname === "/settings" || pathname.startsWith("/settings/"); }
 export function AppShell() {
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const mobileNavigationRef = useRef<HTMLElement>(null);
@@ -34,7 +30,7 @@ export function AppShell() {
   const health = useQuery({ queryKey: ["health"], queryFn: getHealth, refetchInterval: (query) => query.state.error ? 10_000 : 5_000, refetchIntervalInBackground: false });
   const me = useQuery({ queryKey: ["me"], queryFn: getMe });
   const organizations = useQuery({ queryKey: ["organizations"], queryFn: getOrganizations, enabled: !me.isLoading && !me.error });
-  const { organizationId, setOrganizationId } = useOrganization(organizations.data ?? []);
+  const { organizationId, setOrganizationId } = useOrganization(organizations.data);
   useDashboardInvalidations(organizationId);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const state = me.isLoading || organizations.isLoading || me.error || organizations.error
@@ -42,7 +38,6 @@ export function AppShell() {
     : null;
   const currentLink = links.find(([to]) => to === location) ?? links.find(([to]) => location.startsWith(`${to}/`)) ?? links[0];
   const currentHelp = helpByRoute[currentLink[0]];
-  const settingsRoute = isSettingsRoute(location);
   useEffect(() => { setMobileMenuOpen(false); }, [location]);
   useEffect(() => {
     if (!mobileMenuOpen) return;
@@ -61,17 +56,12 @@ export function AppShell() {
       <aside className="rail">
         <div className="brand-lockup"><img className="brand-mark" src="/mars-icon.svg" alt="" /><span>MARS</span></div>
         <p className="rail-caption">Runner operations / 01</p>
-        {!settingsRoute && <label className="rail-org-picker">Workspace
+        <label className="rail-org-picker">Workspace
           <select aria-label="Select workspace" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
             <option value="all">All workspaces</option>
             {organizations.data?.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
           </select>
-        </label>}
-        {settingsRoute ? <nav aria-label="Settings navigation">
-          <p className="nav-label">Settings</p>
-          {settingsLinks.map(([to, label]) => <Link key={to} to={to} className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>{label}</span></Link>)}
-          <Link to="/" className="nav-link"><span>Overview</span></Link>
-        </nav> : <>
+        </label>
           <nav aria-label="Primary navigation">
             <p className="nav-label">Navigate</p>
             {navigationLinks.map(([to, label, number]) => (
@@ -81,7 +71,6 @@ export function AppShell() {
             ))}
           </nav>
           <div className="rail-settings"><Link to="/settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>Settings</span></Link></div>
-        </>}
         <div className="rail-footer" role="status" aria-live="polite"><span className={`online-dot ${health.data ? "" : "is-offline"}`} />Control plane <strong>{health.isLoading ? "checking" : health.data ? "connected" : "unreachable"}</strong>{health.data?.discovery.stale && <small> Discovery stale</small>}</div>
       </aside>
       <div className="console-body">
@@ -94,21 +83,16 @@ export function AppShell() {
           </div>
           <div className="mobile-header-context">
             <span>{currentLink[1]}</span>
-            {!settingsRoute && <label className="mobile-org-picker">Workspace
+            <label className="mobile-org-picker">Workspace
               <select aria-label="Select workspace" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
                 <option value="all">All workspaces</option>
                 {organizations.data?.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
               </select>
-            </label>}
+            </label>
           </div>
-          {mobileMenuOpen && <nav ref={mobileNavigationRef} id="mobile-navigation" className="mobile-navigation" aria-label={settingsRoute ? "Settings navigation" : "Mobile navigation"}>
-            {settingsRoute ? <>
-              {settingsLinks.map(([to, label]) => <Link key={to} to={to} className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>{label}</span></Link>)}
-              <Link to="/" className="nav-link"><span>Overview</span></Link>
-            </> : <>
+          {mobileMenuOpen && <nav ref={mobileNavigationRef} id="mobile-navigation" className="mobile-navigation" aria-label="Mobile navigation">
               {navigationLinks.map(([to, label, navNumber]) => <Link key={to} to={to} className="nav-link" activeProps={{ className: "nav-link is-active" }}><span className="nav-number">{navNumber}</span><span>{label}</span></Link>)}
               <div className="mobile-settings-nav"><Link to="/settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>Settings</span></Link></div>
-            </>}
           </nav>}
         </header>
         <main id="main-content" className="workspace" data-path={location}>

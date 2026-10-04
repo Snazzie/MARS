@@ -1,19 +1,11 @@
  import { Link } from "@tanstack/react-router";
- import { useEffect, useMemo, useState } from "react";
 import type { RunSummary } from "@mars/contracts";
 import { formatDuration } from "./RunTelemetry.tsx";
 
 export type RunHistoryRange = "all" | "1h" | "2h" | "4h" | "12h" | "1d" | "2d";
 export type RunHistoryRunnerFilter = "all" | "mars" | "external";
+export type RunHistoryFilters = { search: string; range: RunHistoryRange; runner: RunHistoryRunnerFilter };
 
-const RANGE_MS: Record<Exclude<RunHistoryRange, "all">, number> = {
-  "1h": 3_600_000,
-  "2h": 7_200_000,
-  "4h": 14_400_000,
-  "12h": 43_200_000,
-  "1d": 86_400_000,
-  "2d": 172_800_000,
-};
 
 const RANGE_LABELS: readonly RunHistoryRange[] = ["all", "1h", "2h", "4h", "12h", "1d", "2d"];
 const RUNNER_FILTER_LABELS: readonly { value: RunHistoryRunnerFilter; label: string }[] = [
@@ -22,31 +14,6 @@ const RUNNER_FILTER_LABELS: readonly { value: RunHistoryRunnerFilter; label: str
   { value: "external", label: "External" },
 ];
 
-export function filterRuns(
-  runs: readonly RunSummary[],
-  search: string,
-  range: RunHistoryRange,
-  nowMs: number,
-  runnerFilter: RunHistoryRunnerFilter = "all",
-): RunSummary[] {
-  const query = search.trim().toLowerCase();
-  const cutoff = range === "all" ? Number.NEGATIVE_INFINITY : nowMs - RANGE_MS[range];
-  return runs.filter((run) => {
-    const inRange = Date.parse(run.queuedAt) >= cutoff;
-    const matchesRunner = runnerFilter === "all" || run.allocationState === runnerFilter;
-    const result = run.conclusion ?? run.status.replace("_", " ");
-    const searchable = [
-      run.workflowName,
-      run.repositoryName,
-      run.branch,
-      run.actorLogin,
-      run.commitSha,
-      result,
-      run.runtimeBoundary ?? "",
-    ].join(" ").toLowerCase();
-    return inRange && matchesRunner && (!query || searchable.includes(query));
-  });
-}
 
 export function runDetailLink(run: RunSummary) {
   return {
@@ -103,43 +70,33 @@ function RunRow({ run, allowDetails, maxDuration }: { run: RunSummary; allowDeta
   return allowDetails ? <Link className="run-history-row" {...runDetailLink(run)}>{content}</Link> : <div className="run-history-row">{content}</div>;
 }
 
-export function RunHistory({ runs, allowDetails = true, nowMs = Date.now(), onSearchChange }: { runs: readonly RunSummary[]; allowDetails?: boolean; nowMs?: number; onSearchChange?: (value: string) => void }) {
-   const params = useMemo(() => typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search), []);
-   const [search, setSearch] = useState(params.get("q") ?? "");
-   const [range, setRange] = useState<RunHistoryRange>((params.get("range") as RunHistoryRange) || "all");
-   const [runnerFilter, setRunnerFilter] = useState<RunHistoryRunnerFilter>((params.get("runner") as RunHistoryRunnerFilter) || "all");
-   useEffect(() => {
-     if (typeof window === "undefined") return;
-     const next = new URLSearchParams(window.location.search);
-     if (search) next.set("q", search); else next.delete("q");
-     if (range !== "all") next.set("range", range); else next.delete("range");
-     if (runnerFilter !== "all") next.set("runner", runnerFilter); else next.delete("runner");
-     window.history.replaceState(null, "", `${window.location.pathname}${next.toString() ? `?${next}` : ""}${window.location.hash}`);
-   }, [search, range, runnerFilter]);
-  const visibleRuns = useMemo(() => filterRuns(runs, search, range, nowMs, runnerFilter), [runs, search, range, nowMs, runnerFilter]);
-  const maxDuration = Math.max(0, ...visibleRuns.map((run) => run.durationMs ?? 0));
-  const chartDescription = visibleRuns.length === 0
-    ? "No run durations match these filters."
-    : `${visibleRuns.length} run durations, scaled to a maximum of ${formatDuration(maxDuration)}.`;
+export function RunHistory({ runs, filters, onFiltersChange, allowDetails = true, resultsAvailable = true }: { runs: readonly RunSummary[]; filters: RunHistoryFilters; onFiltersChange: (filters: RunHistoryFilters) => void; allowDetails?: boolean; resultsAvailable?: boolean }) {
+  const { search, range, runner: runnerFilter } = filters;
+  const filtered = Boolean(search.trim() || range !== "all" || runnerFilter !== "all");
+  const maxDuration = Math.max(0, ...runs.map((run) => run.durationMs ?? 0));
+  const chartDescription = `${runs.length} loaded run durations, scaled to a maximum of ${formatDuration(maxDuration)}.`;
 
   return (
     <section className="run-history" aria-labelledby="run-history-title">
       <div className="run-history-toolbar">
-        <label className="run-history-search"> <span className="sr-only">Search runs</span><input value={search} onChange={(event) => { setSearch(event.target.value); onSearchChange?.(event.target.value); }} placeholder="Search workflow, branch, actor…" /></label>
+        <label className="run-history-search"><span className="sr-only">Search runs</span><input type="search" maxLength={200} value={search} onChange={(event) => onFiltersChange({ ...filters, search: event.target.value })} placeholder="Search workflow, branch, actor…" /></label>
         <div className="run-history-ranges" aria-label="Filter by queued time">
-          {RANGE_LABELS.map((item) => <button key={item} type="button" aria-pressed={range === item} onClick={() => setRange(item)}>{item === "all" ? "All" : item}</button>)}
+          {RANGE_LABELS.map((item) => <button key={item} type="button" aria-pressed={range === item} onClick={() => onFiltersChange({ ...filters, range: item })}>{item === "all" ? "All" : item}</button>)}
         </div>
         <div className="run-history-ranges run-history-runner-filters" aria-label="Filter by runner">
-          {RUNNER_FILTER_LABELS.map((item) => <button key={item.value} type="button" aria-pressed={runnerFilter === item.value} onClick={() => setRunnerFilter(item.value)}>{item.label}</button>)}
+          {RUNNER_FILTER_LABELS.map((item) => <button key={item.value} type="button" aria-pressed={runnerFilter === item.value} onClick={() => onFiltersChange({ ...filters, runner: item.value })}>{item.label}</button>)}
         </div>
+        {filtered && <button className="button secondary" type="button" onClick={() => onFiltersChange({ search: "", range: "all", runner: "all" })}>Clear filters</button>}
       </div>
-      <p className="filter-scope" role="note">Filters apply to the currently loaded runs.</p>
-      <div className="run-duration-chart" role="img" aria-label={chartDescription}>
-        {visibleRuns.map((run) => <span key={run.id} className={`run-duration-bar run-duration-bar-${statusDescriptor(run).tone}`} style={{ height: `${run.durationMs && maxDuration ? Math.max(12, (run.durationMs / maxDuration) * 100) : 12}%` }} />)}
-      </div>
-      <div className="run-history-list">
-        {visibleRuns.length === 0 ? <p className="run-history-empty">No runs match these filters.</p> : visibleRuns.map((run) => <RunRow key={run.id} run={run} allowDetails={allowDetails} maxDuration={maxDuration} />)}
-      </div>
+      <p className="filter-scope" role="note">Search and filters apply across all matching runs. Charts show the loaded results.</p>
+      {resultsAvailable && <>
+        {runs.length > 0 && <div className="run-duration-chart" role="img" aria-label={chartDescription}>
+          {runs.map((run) => <span key={run.id} className={`run-duration-bar run-duration-bar-${statusDescriptor(run).tone}`} style={{ height: `${run.durationMs && maxDuration ? Math.max(12, (run.durationMs / maxDuration) * 100) : 12}%` }} />)}
+        </div>}
+        <div className="run-history-list">
+          {runs.length === 0 ? <p className="run-history-empty" role="status">{filtered ? "No runs match these filters. Clear the filters or try another search." : "No workflow runs yet. Runs appear after a connected repository starts a workflow."}</p> : runs.map((run) => <RunRow key={run.id} run={run} allowDetails={allowDetails} maxDuration={maxDuration} />)}
+        </div>
+      </>}
     </section>
   );
 }

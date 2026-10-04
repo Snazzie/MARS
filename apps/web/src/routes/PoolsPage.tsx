@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CreatePoolRequest, selectedRuntimeDriver, type PoolSummary, type WorkerDetail } from "@mars/contracts";
 import { ApiRequestError, deleteGlobalPool, getGlobalPools, getWorkers, mutateGlobalPool, saveGlobalPool } from "../api.ts";
@@ -36,37 +36,59 @@ const gib = (value: number) => Math.max(1, Math.round(value / 1024 ** 3));
 
 function PoolEditor({ pool, workers, onCancel, onSave, pending, error }: { pool: PoolSummary | null; workers: WorkerDetail[]; onCancel: () => void; onSave: (value: CreatePoolRequest) => void; pending: boolean; error: string | null }) {
   const compatible = workers.filter((worker) => worker.admissionState === "adopted" && worker.configurationState === "ready" && worker.configurationRevision === worker.appliedConfigurationRevision && !worker.draining && (!pool || worker.selectedDriver === pool.driver) && worker.guestPlatforms.some((guest) => worker.doctor?.capabilities?.some((item) => item.driver === worker.selectedDriver && item.guestPlatform === guest && item.ready && item.imageDigest !== null)));
-  const initialWorker = compatible.find((worker) => worker.guestPlatforms.includes(pool?.platform ?? "windows-x64") && worker.doctor?.capabilities?.some((item) => item.driver === worker.selectedDriver && item.guestPlatform === (pool?.platform ?? "windows-x64") && item.ready)) ?? compatible[0];
+  const initialWorker = compatible.find((worker) => worker.id === pool?.workerId) ?? compatible.find((worker) => worker.guestPlatforms.includes(pool?.platform ?? "windows-x64") && worker.doctor?.capabilities?.some((item) => item.driver === worker.selectedDriver && item.guestPlatform === (pool?.platform ?? "windows-x64") && item.ready)) ?? compatible[0];
   const [workerId, setWorkerId] = useState(initialWorker?.id ?? "");
   const worker = compatible.find((candidate) => candidate.id === workerId);
   const [platform, setPlatform] = useState(pool?.platform ?? initialWorker?.guestPlatforms[0] ?? "windows-x64");
   const [name, setName] = useState(pool?.name ?? "");
   const [label, setLabel] = useState(pool?.triggerLabel ?? "");
-  const [digest, setDigest] = useState(pool?.imageDigest ?? (initialWorker ? preparedDigest(initialWorker, pool?.platform ?? "windows-x64") ?? "" : ""));
+  const [digest, setDigest] = useState(pool?.imageDigest ?? (initialWorker ? preparedDigest(initialWorker, pool?.platform ?? initialWorker.guestPlatforms[0]) ?? "" : ""));
   const [vcpu, setVcpu] = useState(pool?.resources.vcpu ?? 1);
   const [memoryGiB, setMemoryGiB] = useState(gib(pool?.resources.memoryBytes ?? 4 * 1024 ** 3));
   const [storageGiB, setStorageGiB] = useState(gib(pool?.resources.storageBytes ?? 30 * 1024 ** 3));
   const [concurrency, setConcurrency] = useState(pool?.resources.concurrency ?? 1);
   const [cpuMode, setCpuMode] = useState(pool?.cpuMode ?? "shared");
-  return <form className="pool-editor" onSubmit={(event) => {
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+  const fieldError = (field: string) => validationErrors[field] ? <small className="inline-error" id={`pool-error-${field}`}>{validationErrors[field]}</small> : null;
+  return <form className="pool-editor" noValidate onSubmit={(event) => {
     event.preventDefault();
-    const parsed = CreatePoolRequest.safeParse({ poolId: pool?.id, workerId, name, guestPlatform: platform, triggerLabel: label, imageDigest: digest, cpuMode, resources: { vcpu, memoryBytes: memoryGiB * 1024 ** 3, storageBytes: storageGiB * 1024 ** 3, concurrency } });
-    if (parsed.success) onSave(parsed.data);
+    const imageDigest = digest.trim().replace(/sha256:[0-9a-fA-F]{64}$/, (value) => value.toLowerCase());
+    const parsed = CreatePoolRequest.safeParse({ poolId: pool?.id, workerId, name: name.trim(), guestPlatform: platform, triggerLabel: label.trim(), imageDigest, cpuMode, resources: { vcpu, memoryBytes: memoryGiB * 1024 ** 3, storageBytes: storageGiB * 1024 ** 3, concurrency } });
+    if (!parsed.success) {
+      const issues: Record<string, string> = {};
+      for (const issue of parsed.error.issues) {
+        const field = issue.path.join(".");
+        const message = field === "triggerLabel" ? "Use 1–63 lowercase letters, numbers, dots, underscores or hyphens; start with a letter or number."
+          : field === "imageDigest" ? "Use sha256: followed by 64 hexadecimal characters, optionally prefixed by an image name and @."
+          : field === "name" ? "Enter a pool name." : issue.message;
+        issues[field] ??= message;
+      }
+      setValidationErrors(issues);
+      return;
+    }
+    setValidationErrors({});
+    onSave(parsed.data);
   }}>
     <h2>{pool ? `Edit ${pool.name}` : "Create runner pool"}</h2>
     <p>New and edited pools remain disabled until a compatible worker is online and recently healthy.</p>
-    <label>Reference worker<select value={workerId} required onChange={(event) => { const id = event.target.value; const selected = compatible.find((candidate) => candidate.id === id); setWorkerId(id); if (selected) { const nextPlatform = selected.guestPlatforms.find((guest) => selected.doctor?.capabilities?.some((item) => item.driver === selected.selectedDriver && item.guestPlatform === guest && item.ready && item.imageDigest !== null)) ?? selected.guestPlatforms[0]; setPlatform(nextPlatform); setDigest(preparedDigest(selected, nextPlatform) ?? ""); } }}>{compatible.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label>
+    <label>Reference worker<select value={workerId} required aria-invalid={Boolean(validationErrors.workerId)} aria-describedby="pool-error-workerId" onChange={(event) => { const id = event.target.value; const selected = compatible.find((candidate) => candidate.id === id); setWorkerId(id); if (selected) { const nextPlatform = selected.guestPlatforms.find((guest) => selected.doctor?.capabilities?.some((item) => item.driver === selected.selectedDriver && item.guestPlatform === guest && item.ready && item.imageDigest !== null)) ?? selected.guestPlatforms[0]; setPlatform(nextPlatform); setDigest(preparedDigest(selected, nextPlatform) ?? ""); } }}>{compatible.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select>{fieldError("workerId")}</label>
     <label>Guest platform<select value={platform} onChange={(event) => { const nextPlatform = event.target.value as typeof platform; setPlatform(nextPlatform); setDigest(worker ? preparedDigest(worker, nextPlatform) ?? "" : ""); }}>{worker?.guestPlatforms.filter((guest) => worker.doctor?.capabilities?.some((item) => item.driver === worker.selectedDriver && item.guestPlatform === guest && item.ready && item.imageDigest !== null)).map((guest) => <option key={guest} value={guest}>{guest}</option>)}</select></label>
     <p>Selected runtime driver: <code>{worker?.selectedDriver ?? "Select a worker"}</code></p>
-    <label>Pool name<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
-    <label>Canonical trigger label<input required pattern="[a-z0-9][a-z0-9._-]{0,62}" value={label} onChange={(event) => setLabel(event.target.value)} /></label>
-    <label>Immutable image or checkpoint digest<input required value={digest} pattern="(?:[^@\s]+@)?sha256:[0-9a-fA-F]{64}" onChange={(event) => setDigest(event.target.value)} /></label>
-    <fieldset><legend>Lease resources</legend><label>vCPU<input type="number" min="1" value={vcpu} onChange={(event) => setVcpu(Number(event.target.value))} /></label><label>Memory (GiB)<input type="number" min="1" value={memoryGiB} onChange={(event) => setMemoryGiB(Number(event.target.value))} /></label><label>Storage (GiB)<input type="number" min="1" value={storageGiB} onChange={(event) => setStorageGiB(Number(event.target.value))} /></label><label>Concurrency<input type="number" min="1" value={concurrency} onChange={(event) => setConcurrency(Number(event.target.value))} /></label></fieldset>
+    <label>Pool name<input required value={name} aria-invalid={Boolean(validationErrors.name)} aria-describedby="pool-error-name" onChange={(event) => setName(event.target.value)} />{fieldError("name")}</label>
+    <label>Canonical trigger label<input required pattern="[a-z0-9][a-z0-9._-]{0,62}" value={label} aria-invalid={Boolean(validationErrors.triggerLabel)} aria-describedby="pool-error-triggerLabel" onChange={(event) => setLabel(event.target.value)} />{fieldError("triggerLabel")}</label>
+    <label>Immutable image or checkpoint digest<input required value={digest} pattern="(?:[^@\s]+@)?sha256:[0-9a-fA-F]{64}" aria-invalid={Boolean(validationErrors.imageDigest)} aria-describedby="pool-error-imageDigest" onChange={(event) => setDigest(event.target.value)} />{fieldError("imageDigest")}</label>
+    <fieldset><legend>Lease resources</legend>{([
+      ["vCPU", "vcpu", vcpu, setVcpu],
+      ["Memory (GiB)", "memoryBytes", memoryGiB, setMemoryGiB],
+      ["Storage (GiB)", "storageBytes", storageGiB, setStorageGiB],
+      ["Concurrency", "concurrency", concurrency, setConcurrency],
+    ] as const).map(([title, field, value, setValue]) => <label key={field}>{title}<input type="number" min="1" step="1" required value={value} aria-invalid={Boolean(validationErrors[`resources.${field}`])} aria-describedby={`pool-error-resources.${field}`} onChange={(event) => setValue(Number(event.target.value))} />{fieldError(`resources.${field}`)}</label>)}</fieldset>
     <label>CPU mode<select value={cpuMode} onChange={(event) => setCpuMode(event.target.value as typeof cpuMode)}><option value="shared">Shared</option><option value="exclusive">Exclusive</option></select></label>
     <p>Shared caps CPU time. Linux-hosted exclusive pins disjoint logical CPUs and can run multiple jobs. Windows/macOS-hosted exclusive serializes managed jobs; set both pool concurrency and worker runtime.maxConcurrentPods to 1. Host processes and other workloads are not isolated.</p>
     {compatible.length === 0 && <p role="alert">No adopted worker has a fully reconciled configuration. Configure a worker before creating a pool.</p>}
+    {Object.keys(validationErrors).length > 0 && <p role="alert" className="inline-error">Correct the highlighted fields before saving the pool.</p>}
     {error && <p role="alert" className="inline-error">{error}</p>}
-    <div className="dialog-actions"><button className="button secondary" type="button" onClick={onCancel}>Cancel</button><button className="button" type="submit" disabled={pending || compatible.length === 0}>{pending ? "Saving…" : "Save disabled pool"}</button></div>
+    <div className="dialog-actions"><button className="button secondary" type="button" disabled={pending} onClick={onCancel}>Cancel</button><button className="button" type="submit" disabled={pending || compatible.length === 0}>{pending ? "Saving…" : "Save disabled pool"}</button></div>
   </form>;
 }
 
@@ -75,6 +97,15 @@ export function PoolsPage() {
   const [editing, setEditing] = useState<PoolSummary | "new" | null>(null);
   const [deleting, setDeleting] = useState<PoolSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const editorDialog = useRef<HTMLDialogElement>(null);
+  const deleteDialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = editing ? editorDialog.current : deleting ? deleteDialog.current : null;
+    if (!dialog) return;
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialog.showModal();
+    return () => { dialog.close(); if (trigger?.isConnected) trigger.focus(); };
+  }, [editing, deleting]);
   const query = useInfiniteQuery({ queryKey: ["pools", "global"], queryFn: ({ pageParam }: { pageParam: string | null }) => getGlobalPools(pageParam), initialPageParam: null, getNextPageParam: (page) => page.nextCursor ?? undefined });
   const workers = useQuery({ queryKey: ["workers", "global", false], queryFn: () => getWorkers("all", false) });
   const pools = query.data?.pages.flatMap((page) => page.items) ?? [];
@@ -87,7 +118,7 @@ export function PoolsPage() {
     <QueryState error={query.error} isLoading={query.isLoading} isEmpty={!query.isLoading && !query.error && pools.length === 0} retry={() => void query.refetch()} operationLabel="runner pools" />
     {pools.length > 0 && <section className="pool-grid" aria-label="Runner pools">{pools.map((pool) => { const coverage = poolWorkerCoverage(pool, workers.data?.items); const mutable = !pool.enabled && pool.active === 0; return <article className="pool-card" key={pool.id}><header className="panel-heading"><div><h2>{pool.name}</h2><p className="muted">{pool.workerName ?? "Shared fleet"} · {pool.platform}</p></div><span className={`status-pill ${pool.enabled ? "status-good" : "status-neutral"}`}>{pool.enabled ? "Enabled" : "Disabled"}</span></header><dl className="pool-stats"><div><dt>CPU mode</dt><dd>{pool.cpuMode === "exclusive" ? "Exclusive (Windows/macOS: serialized)" : "Shared"}</dd></div><div><dt>Active leases</dt><dd>{pool.active}</dd></div><div><dt>Compatible workers</dt><dd>{coverage.ready} ready / {coverage.online} online</dd></div><div><dt>Concurrency</dt><dd>{pool.resources.concurrency}</dd></div></dl>{coverage.warning && <p className="inline-warning">{coverage.warning}</p>}<p className="form-row"><code>{pool.triggerLabel ?? pool.labels.join(", ")}</code></p><Disclosure label="Advanced"><p className="muted">Driver: {pool.driver}</p><p className="muted">Image: <code>{pool.imageDigest}</code></p><p className="muted">Resources: {pool.resources.vcpu} vCPU · {bytes(pool.resources.memoryBytes)} memory · {bytes(pool.resources.storageBytes)} storage</p></Disclosure><div className="pool-actions"><button className="button" type="button" onClick={() => action.mutate({ poolId: pool.id, enabled: !pool.enabled })} disabled={action.isPending || (!pool.enabled && coverage.ready === 0)}>{pool.enabled ? "Disable" : "Enable"}</button><button className="button button-secondary" type="button" disabled={!mutable} title={mutable ? undefined : "Disable the pool and wait for active leases to be reaped"} onClick={() => { setError(null); setEditing(pool); }}>Edit</button><button className="button button-secondary" type="button" disabled={!mutable} title={mutable ? undefined : "Disable the pool and wait for active leases to be reaped"} onClick={() => { setError(null); setDeleting(pool); }}>Delete</button></div></article>; })}</section>}
     {query.hasNextPage && <button className="button secondary" type="button" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage}>{query.isFetchingNextPage ? "Loading…" : "Load more pools"}</button>}
-    {editing && <dialog open className="pool-dialog" aria-label={editing === "new" ? "Create pool" : "Edit pool"}><PoolEditor key={editing === "new" ? "new" : editing.id} pool={editing === "new" ? null : editing} workers={workers.data?.items ?? []} pending={save.isPending} error={error} onCancel={() => setEditing(null)} onSave={(value) => save.mutate(value)} /></dialog>}
-    {deleting && <dialog open className="confirm-dialog" aria-labelledby="delete-pool-title"><h2 id="delete-pool-title">Delete {deleting.name}?</h2><p>This permanently removes the disabled pool. Historical runs and logs remain.</p>{error && <p role="alert" className="inline-error">{error}</p>}<div className="dialog-actions"><button className="button secondary" type="button" onClick={() => setDeleting(null)}>Cancel</button><button className="button destructive" type="button" onClick={() => remove.mutate(deleting.id)} disabled={remove.isPending}>{remove.isPending ? "Deleting…" : "Delete pool"}</button></div></dialog>}
+    {editing && <dialog ref={editorDialog} className="worker-config-dialog pool-dialog" aria-label={editing === "new" ? "Create pool" : "Edit pool"} onCancel={(event) => { event.preventDefault(); if (!save.isPending) setEditing(null); }}><PoolEditor key={editing === "new" ? "new" : editing.id} pool={editing === "new" ? null : editing} workers={workers.data?.items ?? []} pending={save.isPending} error={error} onCancel={() => setEditing(null)} onSave={(value) => save.mutate(value)} /></dialog>}
+    {deleting && <dialog ref={deleteDialog} className="confirm-dialog" aria-labelledby="delete-pool-title" onCancel={(event) => { event.preventDefault(); if (!remove.isPending) setDeleting(null); }}><h2 id="delete-pool-title">Delete {deleting.name}?</h2><p>This permanently removes the disabled pool. Historical runs and logs remain.</p>{error && <p role="alert" className="inline-error">{error}</p>}<div className="dialog-actions"><button className="button secondary" type="button" onClick={() => setDeleting(null)} disabled={remove.isPending}>Cancel</button><button className="button destructive" type="button" onClick={() => remove.mutate(deleting.id)} disabled={remove.isPending}>{remove.isPending ? "Deleting…" : "Delete pool"}</button></div></dialog>}
   </>;
 }

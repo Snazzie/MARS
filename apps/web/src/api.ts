@@ -160,10 +160,12 @@ export const getCostCenter = (organizationId: string, period: OverviewDto["perio
   request(`/api/organizations/${organizationId}/cost-center?period=${period}${provider === "github" ? "" : `&provider=${provider}`}`, CostCenterDto);
 export const getOverview = (organizationId: string, period: OverviewDto["period"] = "24h") =>
   request(`/api/organizations/${organizationId}/overview?period=${period}`, OverviewDto);
-export function getRuns(organizationId: string, { cursor, search = "", limit = 50 }: { cursor?: string | null; search?: string; limit?: number } = {}) {
+export function getRuns(organizationId: string, { cursor, search = "", limit = 50, from, runner = "all" }: { cursor?: string | null; search?: string; limit?: number; from?: string; runner?: "all" | "mars" | "external" } = {}) {
   const query = new URLSearchParams({ limit: String(limit) });
   if (search) query.set("search", search);
   if (cursor) query.set("cursor", cursor);
+  if (from) query.set("from", from);
+  if (runner !== "all") query.set("runner", runner);
   return request(`/api/organizations/${organizationId}/runs?${query}`, CursorPage(RunSummary));
 }
 export function getJobTimingHistory(organizationId: string, params: { cursor?: string | null; from?: string; to?: string; platform?: string; vcpu?: number; concurrency?: number; limit?: number } = {}) {

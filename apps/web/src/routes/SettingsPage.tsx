@@ -14,7 +14,7 @@ import {
 } from "../api.ts";
 import type { ControlPlaneLogLevel } from "../api.ts";
 import { useTheme, themeOptions } from "../theme.ts";
-import { useOrganizationFromRoute } from "./useOrganization.ts";
+import { useOrganization } from "../organization.ts";
 
 
 function number(value: number) {
@@ -60,13 +60,14 @@ function ControlPlaneLogs() {
 
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
-  const { organizationId } = useOrganizationFromRoute();
   const client = useQueryClient();
   const me = useQuery({ queryKey: ["me"], queryFn: getMe });
   const signOut = useMutation({ mutationFn: logout, onSuccess: () => { client.clear(); window.location.assign("/onboarding"); } });
   const organizationsQuery = useQuery({ queryKey: ["organizations"], queryFn: getOrganizations });
   const organizations = organizationsQuery.data ?? [];
-  const githubOrganizationId = organizations.find((organization) => organization.id === organizationId)?.id ?? organizations[0]?.id ?? "";
+  const { organizationId, setOrganizationId } = useOrganization(organizationsQuery.data);
+  const githubOrganization = organizations.find((organization) => organization.id === organizationId);
+  const githubOrganizationId = githubOrganization?.id ?? "";
   const connection = useQuery({
     queryKey: ["org", githubOrganizationId, "github-connection"],
     queryFn: () => getGithubConnection(githubOrganizationId),
@@ -132,14 +133,22 @@ export function SettingsPage() {
       <section className="settings-account" aria-labelledby="account-title"><h2 id="account-title">Signed-in identity</h2><p>{me.data ? `GitHub account: ${me.data.login}` : "Loading GitHub identity…"}</p><button className="button secondary" type="button" onClick={() => signOut.mutate()} disabled={signOut.isPending}>{signOut.isPending ? "Signing out…" : "Sign out"}</button>{signOut.error && <p className="form-error" role="alert">{signOut.error instanceof Error ? signOut.error.message : "Sign out failed."}</p>}</section>
       <section className="settings-deployment" aria-labelledby="deployment-integrations-title">
         <div className="panel-heading"><div><p className="eyebrow">Deployment integrations</p><h2 id="deployment-integrations-title">GitHub connections</h2></div></div>
-        <p className="form-help">GitHub installation and API quota remain organization-scoped under the existing integration contract. The current organization is used when one is selected; otherwise the first available organization is shown.</p>
+        <p className="form-help">Select the workspace whose GitHub installation and API quota you want to manage.</p>
+        <label className="settings-theme-select">GitHub workspace
+          <select aria-label="Select GitHub workspace" value={githubOrganizationId} disabled={githubMutationPending} onChange={(event) => setOrganizationId(event.target.value || "all")}>
+            <option value="">Select a workspace</option>
+            {organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
+          </select>
+        </label>
+        {!githubOrganizationId && <p className="settings-status" role="status">Choose a workspace to view or change its GitHub connection.</p>}
+        {githubOrganizationId && <>
         <section className="settings-github-card" aria-labelledby="github-connection-title">
           <div className="panel-heading"><div><p className="eyebrow">Organization integration</p><h2 id="github-connection-title">GitHub connection</h2></div>{!connection.error && connection.data?.connected && <span className="status-ready">Connected</span>}</div>
-          <p className="form-help">Repository access uses the GitHub App installation selected for this organization.</p>
+          <p className="form-help">Managing the GitHub App installation for <strong>{githubOrganization?.login}</strong>.</p>
           {!connection.error && connection.isLoading && <p className="settings-status" role="status">Loading GitHub connection…</p>}
           {connection.error && <div className="form-error" role="alert"><p>Unable to load GitHub connection: {githubError(connection.error, "Try again.")}</p><button className="button secondary" type="button" onClick={() => void connection.refetch()}>Retry connection</button></div>}
           {!connection.error && connection.data?.connected === false && <div className="settings-github-disconnected"><p>No GitHub App installation is connected to this organization.</p><button className="button" type="button" onClick={() => install.mutate()} disabled={githubMutationPending}>{install.isPending ? "Opening GitHub…" : "Add GitHub connection"}</button></div>}
-          {!connection.error && connection.data?.connected && <div className="settings-github-connected"><dl className="settings-github-details"><div><dt>GitHub account</dt><dd>{connection.data.login ?? "Unavailable"}</dd></div><div><dt>Account type</dt><dd>{connection.data.accountType ?? "Unavailable"}</dd></div><div><dt>Installation</dt><dd>{connection.data.installationId ? `#${connection.data.installationId}` : "Connected"}</dd></div></dl><div className="settings-actions"><button className="button secondary" type="button" onClick={() => manageInstallation.mutate()} disabled={githubMutationPending}>{manageInstallation.isPending ? "Opening GitHub…" : "Manage installation"}</button><button className="button secondary" type="button" onClick={() => sync.mutate()} disabled={githubMutationPending}>{sync.isPending ? "Syncing…" : "Sync repositories"}</button><button className="button danger" type="button" onClick={() => { if (window.confirm("Uninstall Mars from this GitHub organization?")) remove.mutate(); }} disabled={githubMutationPending}>{remove.isPending ? "Removing…" : "Remove connection"}</button></div></div>}
+          {!connection.error && connection.data?.connected && <div className="settings-github-connected"><dl className="settings-github-details"><div><dt>GitHub account</dt><dd>{connection.data.login ?? "Unavailable"}</dd></div><div><dt>Account type</dt><dd>{connection.data.accountType ?? "Unavailable"}</dd></div><div><dt>Installation</dt><dd>{connection.data.installationId ? `#${connection.data.installationId}` : "Connected"}</dd></div></dl><div className="settings-actions"><button className="button secondary" type="button" onClick={() => manageInstallation.mutate()} disabled={githubMutationPending}>{manageInstallation.isPending ? "Opening GitHub…" : "Manage installation"}</button><button className="button secondary" type="button" onClick={() => sync.mutate()} disabled={githubMutationPending}>{sync.isPending ? "Syncing…" : "Sync repositories"}</button><button className="button destructive" type="button" onClick={() => { if (window.confirm(`Uninstall Mars from ${githubOrganization?.login}? Its repositories will no longer receive Mars jobs.`)) remove.mutate(); }} disabled={githubMutationPending}>{remove.isPending ? "Removing…" : "Remove connection"}</button></div></div>}
           {githubActionMessage && <p className="form-error" role="alert">{githubActionMessage}</p>}
         </section>
         <section className="settings-github-card" aria-labelledby="github-rate-limit-title">
@@ -151,6 +160,7 @@ export function SettingsPage() {
           {!connection.error && connection.data?.connected && rateLimit.error && <div className="form-error" role="alert"><p>GitHub rate limit unavailable: {githubError(rateLimit.error, "Try again.")}</p><button className="button secondary" type="button" onClick={() => void rateLimit.refetch()}>Retry rate limit</button></div>}
           {!connection.error && connection.data?.connected && !rateLimit.error && rateLimit.data && <div className="settings-rate-limit"><dl className="settings-rate-limit-grid"><div><dt>Remaining</dt><dd className="settings-rate-limit-remaining">{number(rateLimit.data.remaining)}</dd></div><div><dt>Limit</dt><dd>{number(rateLimit.data.limit)}</dd></div><div><dt>Used</dt><dd>{number(rateLimit.data.used)}</dd></div><div><dt>Reset time</dt><dd><time dateTime={rateLimit.data.resetAt}>{new Date(rateLimit.data.resetAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time></dd></div></dl><button className="button secondary" type="button" onClick={() => void rateLimit.refetch()} disabled={rateLimit.isFetching && !rateLimit.data}>Refresh rate limit</button></div>}
         </section>
+        </>}
       </section>
       {me.data?.isGlobalAdmin && <ControlPlaneLogs />}
     </>

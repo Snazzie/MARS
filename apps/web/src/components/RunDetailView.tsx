@@ -112,16 +112,25 @@ export function RunDetailView({ data, organizationId }: { data: RunDetail; organ
       {detail.schedulerReason && <p className="detail-meta">Scheduler block: {detail.schedulerReason}</p>}
     </section>
     <div className="detail-tabs">
-      <div className="detail-tab-list" role="tablist" aria-label="Run detail views">
+      <div className="detail-tab-list" role="tablist" aria-label="Run detail views" onKeyDown={(event) => {
+        let next: "graph" | "metrics";
+        if (event.key === "ArrowRight" || event.key === "ArrowLeft") next = selectedTab === "graph" ? "metrics" : "graph";
+        else if (event.key === "Home") next = "graph";
+        else if (event.key === "End") next = "metrics";
+        else return;
+        event.preventDefault();
+        setSelectedTab(next);
+        event.currentTarget.querySelector<HTMLButtonElement>(`#run-${next}-tab`)?.focus();
+      }}>
         <button type="button" role="tab" id="run-graph-tab" aria-selected={selectedTab === "graph"} aria-controls="run-graph-panel" tabIndex={selectedTab === "graph" ? 0 : -1} onClick={() => setSelectedTab("graph")}>Graph</button>
         <button type="button" role="tab" id="run-metrics-tab" aria-selected={selectedTab === "metrics"} aria-controls="run-metrics-panel" tabIndex={selectedTab === "metrics" ? 0 : -1} onClick={() => setSelectedTab("metrics")}>Metrics</button>
       </div>
-      {selectedTab === "graph" ? <section id="run-graph-panel" role="tabpanel" aria-labelledby="run-graph-tab" className="run-tab-panel">
+      {selectedTab === "graph" ? <section id="run-graph-panel" role="tabpanel" tabIndex={0} aria-labelledby="run-graph-tab" className="run-tab-panel">
         <div className="run-graph-layout">
           <ActionGraph graph={data.actionGraph} selectedNodeId={selectedJobId} onNodeSelect={setSelectedJobId} />
           {selectedJob ? <section className="run-job-logs" id={`job-${selectedJob.id}`}><header className="job-heading"><div><h2>{selectedJob.name}</h2><JobBadges job={selectedJob} /></div><span className={`status ${selectedJob.failureReason ? "status-failure" : `status-${selectedJob.conclusion ?? selectedJob.status}`}`}>{jobStatusLabel(selectedJob)}</span></header><OomNotice job={selectedJob} /><RuntimeNotice job={selectedJob} /><LogViewer organizationId={organizationId} runId={data.id} jobId={selectedJob.id} logsState={selectedJob.logsState} steps={selectedJob.steps} /></section> : <p className="graph-selection-hint">Select a job in the dependency graph to inspect its logs.</p>}
         </div>
-      </section> : <section id="run-metrics-panel" role="tabpanel" aria-labelledby="run-metrics-tab" className="run-tab-panel">
+      </section> : <section id="run-metrics-panel" role="tabpanel" tabIndex={0} aria-labelledby="run-metrics-tab" className="run-tab-panel">
         <RunTelemetry queuedAt={data.queuedAt} startedAt={data.startedAt} completedAt={data.completedAt} />
         <RunTimeline jobs={data.jobs} durations={stageDurations} />
         {data.jobs.map((job) => <section className="job-panel" id={`job-${job.id}`} key={job.id}><header className="job-heading"><div><h2><a href={jobDetailHref(data.id, organizationId, job.id)} target="_blank" rel="noreferrer" aria-label={`Open job ${job.name} in a new tab`}>{job.name}</a></h2><JobBadges job={job} /></div><DetailBadges values={job.requestedLabels} /></header><ResourceTable job={job} /></section>)}
