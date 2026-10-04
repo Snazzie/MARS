@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { createPkce, githubAuthorizeUrl, exchangeOAuth, syncGithubOrganizations } from "../github.ts";
+import { createPkce, githubAuthorizeUrl, exchangeOAuth } from "../github.ts";
 import { createSession, deleteSession, sha256 } from "../auth.ts";
 import { browserLocation } from "../http-origin.ts";
 
@@ -69,11 +69,14 @@ export function registerAuthRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlan
     let authentication: { userId: string; firstAdmin: boolean };
     try { authentication = await deps.setup.authenticate(user); }
     catch (error) {
+      if (error instanceof Error && error.message === "account_not_authorized") {
+        if (c.req.header("Accept")?.includes("text/html")) return c.redirect(browserLocation(deps.browserOrigin() ?? origin, "/onboarding?signin=not-authorized"), 302);
+        return c.json({ code: "account_not_authorized", message: "Sign in with an account that belongs to an installed GitHub organization. Contact the installation administrator for access." }, 403);
+      }
       if (error instanceof Error && ["setup_state_expired", "setup_admin_conflict"].includes(error.message)) return c.json({ error: "forbidden" }, 403);
       throw error;
     }
     const userId = authentication.userId;
-    await syncGithubOrganizations(deps.db, userId, user.accessToken, user);
     const [onboarding] = await deps.db`SELECT completed_at FROM system_onboarding WHERE singleton=true`;
     c.header("Set-Cookie", `mars_session=${await createSession(deps.db, userId)}; ${cookieAttributes(origin, "/", 604800)}`);
     if (encodedReturnTo) c.header("Set-Cookie", `oauth_return_to=; ${cookieAttributes(origin, "/api/auth", 0)}`, { append: true });

@@ -18,7 +18,7 @@ export async function deleteSession(sql: Sql<{}>, token: string | undefined): Pr
 }
 export async function getSession(sql: Sql<{}>, token: string | undefined): Promise<SessionUser | null> {
   if (!token) return null;
-  const [row] = await sql<Array<Omit<SessionUser, "githubUserId"> & { githubUserId: number | string }>>`select u.id,u.github_user_id as "githubUserId",u.login,u.is_global_admin as "isGlobalAdmin" from sessions s join users u on u.id=s.user_id where s.token_hash=${sha256(Buffer.from(token,"base64url"))} and s.expires_at>now()`;
+  const [row] = await sql<Array<Omit<SessionUser, "githubUserId"> & { githubUserId: number | string }>>`select u.id,u.github_user_id as "githubUserId",u.login,u.is_global_admin as "isGlobalAdmin" from sessions s join users u on u.id=s.user_id where s.token_hash=${sha256(Buffer.from(token,"base64url"))} and s.expires_at>now() AND (u.is_global_admin=true OR EXISTS (SELECT 1 FROM memberships m JOIN dashboard_installations i ON i.organization_id=m.organization_id WHERE m.user_id=u.id AND i.state IN ('pending','approved')))`;
   if (!row) return null;
   const githubUserId = Number(row.githubUserId);
   if (!Number.isSafeInteger(githubUserId)) throw new Error("session_github_user_id_invalid");

@@ -1,9 +1,10 @@
 import { mkdir, chmod, readFile, open } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import type { DashboardDb } from "@mars/db";
+import { jsonParameter, type DashboardDb } from "@mars/db";
 import type { TransactionSql } from "postgres";
 import { httpOrigin } from "./http-origin.ts";
+import { listGithubOrganizations, type OAuthUser } from "./github.ts";
 
 const SETUP_LOCK = "mars:control-plane-setup";
 const masterPath = (root: string) => join(root, "app_master_key");
@@ -40,7 +41,7 @@ export type ControlPlaneSetup = {
   publicOrigin(): string | null;
   publicOriginManaged(): boolean;
   configure(candidateOrigin: string): Promise<string>;
-  authenticate(githubUser: { id: number; login: string }): Promise<{ userId: string; firstAdmin: boolean }>;
+  authenticate(githubUser: OAuthUser): Promise<{ userId: string; firstAdmin: boolean }>;
 };
 type ConfigRow = { publicBaseUrl: string | null; setupCompletedAt: Date | string | null };
 async function readConfig(db: DashboardDb): Promise<ConfigRow | null> {
@@ -55,9 +56,6 @@ export async function initializeControlPlaneSetup(db: DashboardDb, dataRoot: str
   let config = await readConfig(db);
   if (!config) { await db`insert into control_plane_config (singleton) values (true) on conflict (singleton) do nothing`; config = await readConfig(db); }
   await db`INSERT INTO system_onboarding (singleton) VALUES (true) ON CONFLICT (singleton) DO NOTHING`;
-  const tenants = await db<Array<{ organization_id: string }>>`SELECT organization_id FROM system_onboarding WHERE singleton=true AND organization_id IS NOT NULL UNION SELECT organization_id FROM dashboard_installations`;
-  if (tenants.length > 1) throw new Error("single_tenant_required: this database contains multiple connected GitHub accounts; separate them into independent control-plane deployments before starting");
-  if (tenants[0]) await db`UPDATE system_onboarding SET organization_id=${tenants[0].organization_id} WHERE singleton=true AND organization_id IS NULL`;
   config ??= { publicBaseUrl: null, setupCompletedAt: null };
   if (environmentOrigin) {
     await db`insert into control_plane_config (singleton, public_base_url) values (true, ${environmentOrigin}) on conflict (singleton) do update set public_base_url=excluded.public_base_url, updated_at=now()`;
@@ -76,13 +74,32 @@ export async function initializeControlPlaneSetup(db: DashboardDb, dataRoot: str
       return persisted ?? origin;
     },
     authenticate: async githubUser => {
+      const [knownUser] = await db<Array<{ isGlobalAdmin: boolean }>>`SELECT is_global_admin AS "isGlobalAdmin" FROM users WHERE github_user_id=${githubUser.id}`;
+      const [installedOrganization] = await db`SELECT 1 FROM organizations o JOIN dashboard_installations i ON i.organization_id=o.id WHERE o.github_account_type='Organization' AND i.state IN ('pending','approved') LIMIT 1`;
+      const githubOrganizationIds = installedOrganization && !knownUser?.isGlobalAdmin
+        ? (await listGithubOrganizations(githubUser.accessToken)).map((organization) => organization.id)
+        : [];
       const result = await db.begin(async (tx: TransactionSql) => {
         await tx`select pg_advisory_xact_lock(hashtext(${SETUP_LOCK}))`;
         const rows = await tx<Array<{ setupCompletedAt: Date | string | null }>>`select setup_completed_at as "setupCompletedAt" from control_plane_config where singleton=true for update`;
         if (!rows[0]) throw new Error("setup_state_expired");
+        const [administrator] = await tx`SELECT id FROM users WHERE github_user_id=${githubUser.id} AND is_global_admin=true`;
+        const organizations = await tx<Array<{ id: string }>>`
+          SELECT DISTINCT o.id FROM organizations o JOIN dashboard_installations i ON i.organization_id=o.id
+          WHERE i.state IN ('pending','approved') AND (
+            ${Boolean(administrator)} OR
+            (o.github_account_type='User' AND o.github_org_id=${githubUser.id}) OR
+            (o.github_account_type='Organization' AND o.github_org_id IN (SELECT value::bigint FROM jsonb_array_elements_text(${jsonParameter(db, githubOrganizationIds)}::jsonb)))
+          )`;
+        if (rows[0].setupCompletedAt && !administrator && organizations.length === 0) throw new Error("account_not_authorized");
         const users = await tx<Array<{ id: string }>>`insert into users (github_user_id, login) values (${githubUser.id}, ${githubUser.login}) on conflict (github_user_id) do update set login=excluded.login returning id`;
         const user = users[0]; if (!user) throw new Error("setup_authenticate_failed");
-        if (rows[0].setupCompletedAt) return { userId: user.id, firstAdmin: false };
+        if (rows[0].setupCompletedAt) {
+          const organizationIds = organizations.map((organization) => organization.id);
+          await tx`DELETE FROM memberships WHERE user_id=${user.id} AND organization_id NOT IN (SELECT value::uuid FROM jsonb_array_elements_text(${jsonParameter(db, organizationIds)}::jsonb))`;
+          for (const organizationId of organizationIds) await tx`INSERT INTO memberships (organization_id,user_id,role) VALUES (${organizationId},${user.id},'member') ON CONFLICT (organization_id,user_id) DO NOTHING`;
+          return { userId: user.id, firstAdmin: false };
+        }
         const existing = await tx<Array<{ adminUserId: string | null }>>`select admin_user_id as "adminUserId" from system_onboarding where singleton=true for update`;
         if (existing[0]?.adminUserId && existing[0].adminUserId !== user.id) throw new Error("setup_admin_conflict");
         await tx`update users set is_global_admin=true where id=${user.id}`;

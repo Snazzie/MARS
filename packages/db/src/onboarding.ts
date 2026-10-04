@@ -124,7 +124,6 @@ export async function getOnboardingDetail(
       (SELECT count(DISTINCT p.worker_id)::int FROM runner_pools p WHERE p.organization_id=o.id) AS "workerCount"
     FROM organizations o JOIN memberships m ON m.organization_id=o.id
     WHERE m.user_id=(SELECT admin_user_id FROM system_onboarding WHERE singleton=true)
-      AND o.id=(SELECT organization_id FROM system_onboarding WHERE singleton=true)
     ORDER BY o.login
   `;
   const organizations: OrganizationSummary[] = organizationRows.map((row) => ({

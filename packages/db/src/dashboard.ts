@@ -23,10 +23,10 @@ export function cursorBoundary<T extends { id: string }>(items: T[], cursor: str
 }
 
 export async function listOrganizations(db: DashboardDb, userId: string): Promise<OrganizationSummary[]> {
-  return await db<OrganizationSummary[]>`SELECT o.id, o.login AS name, o.login, m.role, (SELECT count(*)::int FROM dashboard_repositories r WHERE r.organization_id=o.id) AS "repositoryCount", (SELECT count(DISTINCT p.worker_id)::int FROM runner_pools p WHERE p.organization_id=o.id) AS "workerCount" FROM organizations o JOIN memberships m ON m.organization_id=o.id WHERE m.user_id=${userId} AND o.id=(SELECT organization_id FROM system_onboarding WHERE singleton=true) ORDER BY o.login`;
+  return await db<OrganizationSummary[]>`SELECT o.id, o.login AS name, o.login, m.role, (SELECT count(*)::int FROM dashboard_repositories r WHERE r.organization_id=o.id) AS "repositoryCount", (SELECT count(DISTINCT p.worker_id)::int FROM runner_pools p WHERE p.organization_id=o.id) AS "workerCount" FROM organizations o JOIN memberships m ON m.organization_id=o.id WHERE m.user_id=${userId} AND EXISTS (SELECT 1 FROM dashboard_installations i WHERE i.organization_id=o.id AND i.state IN ('pending','approved')) ORDER BY o.login`;
 }
 export async function listAllOrganizations(db: DashboardDb, userId: string): Promise<OrganizationSummary[]> {
-  return await db<OrganizationSummary[]>`SELECT o.id, o.login AS name, o.login, COALESCE(m.role, 'admin') AS role, (SELECT count(*)::int FROM dashboard_repositories r WHERE r.organization_id=o.id) AS "repositoryCount", (SELECT count(DISTINCT p.worker_id)::int FROM runner_pools p WHERE p.organization_id=o.id) AS "workerCount" FROM organizations o LEFT JOIN memberships m ON m.organization_id=o.id AND m.user_id=${userId} WHERE o.id=(SELECT organization_id FROM system_onboarding WHERE singleton=true) ORDER BY o.login`;
+  return await db<OrganizationSummary[]>`SELECT o.id, o.login AS name, o.login, COALESCE(m.role, 'admin') AS role, (SELECT count(*)::int FROM dashboard_repositories r WHERE r.organization_id=o.id) AS "repositoryCount", (SELECT count(DISTINCT p.worker_id)::int FROM runner_pools p WHERE p.organization_id=o.id) AS "workerCount" FROM organizations o LEFT JOIN memberships m ON m.organization_id=o.id AND m.user_id=${userId} WHERE EXISTS (SELECT 1 FROM dashboard_installations i WHERE i.organization_id=o.id AND i.state IN ('pending','approved')) ORDER BY o.login`;
 }
 function normalizeOverviewTimeseries(rows: Array<Record<string, unknown>>): OverviewTimeseriesPoint[] {
   return rows.map((row) => {

@@ -34,11 +34,11 @@ Existing GitHub App installations need **Actions: write** permission approved an
 
 ## Get started
 
-Each control-plane installation is **single tenant**: one GitHub personal account or organization, with multiple users, repositories, and workers inside that tenant. The first installation binds the account; reconnecting or uninstalling its GitHub App does not permit switching to another account. Deploy a separate control plane with its own database and data directory for another tenant.
+Each control plane is a **private, administrator-managed installation**, not a public sign-up service. It can connect multiple GitHub organizations and personal accounts. Members of any actively installed organization can sign in with GitHub; a personal installation admits its account owner. Signing in does not create another workspace or grant administration.
 
 Open `/onboarding` to configure the public HTTPS URL, create the GitHub App, sign in as the administrator, install the App with access to at least one repository, and enroll and configure a worker. Setup progress is saved; repository access can be corrected in GitHub and verified without restarting setup.
 
-Existing databases with more than one connected GitHub account refuse startup rather than silently selecting a tenant or deleting data. Separate those accounts into independent deployments before upgrading. Unconnected workspace metadata from older sign-ins is retained but is not shown as a selectable tenant.
+After the first operator claims administration, unrelated GitHub accounts are rejected before creating a local user or session. Authorized members receive access only to their installed organizations; setup and installation management remain administrator-only. Existing installations and their data stay together—no tenant split or database migration is required.
 
 - [Development setup and worker commands](docs/development.md)
 - [Windows worker runtimes and prerequisites](docs/windows-worker-runtimes.md)

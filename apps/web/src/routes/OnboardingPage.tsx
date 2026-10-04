@@ -62,7 +62,7 @@ function SetupCard({ status }: { status: OnboardingStatus }) {
   return <main className="onboarding"><section className="onboarding-card">
     <p className="eyebrow">FIRST-RUN SETUP</p><h1>{status.publicBaseUrlManaged ? "Control plane origin configured" : "Connect this control plane"}</h1>
     {status.publicBaseUrlManaged ? <p role="status">Configured origin: <code>{managedOrigin}</code></p> : <p>Confirm the externally reachable HTTPS origin to create the GitHub App.</p>}
-    <p>This installation serves one GitHub account or organization. You can connect multiple repositories and workers within that account.</p>
+    <p>This is a private installation. Its administrator manages setup; members of installed GitHub organizations can sign in without creating a separate installation.</p>
     <p>Have ready: an externally reachable HTTPS URL, permission to create and install a GitHub App, and a machine to run the Mars worker. GitHub will return you here after each authorization.</p>
     <form onSubmit={(event) => { event.preventDefault(); setError(null); setup.mutate({ publicBaseUrl: managedOrigin }); }}>
       {status.publicBaseUrlManaged ? <p>GitHub App setup will use the configured origin above.</p> : <label>Public URL<input aria-label="Public URL" type="url" value={managedOrigin} onChange={(event) => setPublicBaseUrl(event.target.value)} required /></label>}
@@ -72,7 +72,19 @@ function SetupCard({ status }: { status: OnboardingStatus }) {
   </section></main>;
 }
 
-function SignIn({ firstAdmin }: { firstAdmin: boolean }) { return <main className="onboarding"><section className="onboarding-card onboarding-sign-in"><p className="eyebrow">{firstAdmin ? "WELCOME TO MARS" : "WELCOME BACK"}</p><h1>{firstAdmin ? "Create your administrator account" : "Sign in to Mars"}</h1><p>Use GitHub to verify your identity and securely manage this control plane.</p><a className="button" href="/api/auth/github">{firstAdmin ? "Continue with GitHub" : "Continue with GitHub"}</a><p>{firstAdmin ? "Create administrator with GitHub" : "Sign in with GitHub"}</p><p><strong>GitHub identity</strong><br />Only your GitHub identity is used for administrator access.</p><p className="security-note">Security note: setup data is shown only after your session is authorized.</p></section></main>; }
+function SignIn({ firstAdmin }: { firstAdmin: boolean }) {
+  const denied = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("signin") === "not-authorized";
+  return <main className="onboarding"><section className="onboarding-card onboarding-sign-in">
+    <p className="eyebrow">{firstAdmin ? "WELCOME TO MARS" : "WELCOME BACK"}</p>
+    <h1>{firstAdmin ? "Create your administrator account" : "Sign in to Mars"}</h1>
+    <p>{firstAdmin ? "Use GitHub to claim administration of this installation. This one-time setup is for the installation operator." : "Sign in with your GitHub identity. Members of installed GitHub organizations can access this installation; only its administrator can configure it."}</p>
+    {denied && <p className="form-error" role="alert">This GitHub account does not belong to an installed organization. Use an authorized account or contact the installation administrator. Public sign-up is disabled.</p>}
+    <a className="button" href="/api/auth/github">Continue with GitHub</a>
+    <p>{firstAdmin ? "Create administrator with GitHub" : "Sign in with GitHub"}</p>
+    <p><strong>GitHub identity</strong><br />Your organization membership determines access. Signing in does not create another installation or grant setup permissions.</p>
+    <p className="security-note">Security note: setup data is shown only after your session is authorized.</p>
+  </section></main>;
+}
 function ReviewSummary({ detail, through, onClose }: { detail: OnboardingDetail; through: number; onClose?: () => void }) {
   const org = detail.organizations.find((item) => item.id === detail.github.organizationId);
   return <aside className="onboarding-review">
@@ -120,7 +132,7 @@ function GithubStep({ detail }: { detail: OnboardingDetail }) {
   });
   return <div>
     <h3>Connect GitHub account</h3>
-    <p>This control plane supports one GitHub account or organization. Choose the account that owns the repositories you want to run.</p>
+    <p>Install the GitHub App in the accounts or organizations whose repositories you want to run. Their members can sign in; only the installation administrator can manage setup.</p>
     {!detail.github.appConfigured && <p role="alert">The GitHub App is not configured. <a href="/onboarding">Return to control-plane setup</a> to create it.</p>}
     {!hasInstallation && detail.github.appConfigured && <>
       <p>GitHub will ask which account or organization should receive the Mars App.</p>

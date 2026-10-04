@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeControlPlaneSetup, loadOrCreateMasterKey } from "./control-plane-setup.ts";
@@ -91,7 +91,7 @@ test("claims first administration during authentication under the setup lock", a
     begin: async (callback: (tx: never) => Promise<unknown>) => callback(db),
   });
   const { setup } = await initializeControlPlaneSetup(db, root);
-  await expect(setup.authenticate({ id: 7, login: "first-admin" })).resolves.toEqual({ userId: "user-1", firstAdmin: true });
+  await expect(setup.authenticate({ id: 7, login: "first-admin", accessToken: "token" })).resolves.toEqual({ userId: "user-1", firstAdmin: true });
   expect(queries.some((query) => query.includes("update users set is_global_admin=true"))).toBe(true);
   expect(queries.some((query) => query.includes("update control_plane_config set setup_completed_at"))).toBe(true);
 });
@@ -104,15 +104,32 @@ test("upserts a returning GitHub user without granting administration after setu
     queries.push(query);
     if (query.includes("select public_base_url")) return [{ publicBaseUrl: "https://control.example", setupCompletedAt: new Date() }];
     if (query.includes("select setup_completed_at")) return [{ setupCompletedAt: new Date() }];
+    if (query.includes("select distinct o.id")) return [{ id: "organization-1" }];
     if (query.includes("insert into users")) return [{ id: "user-2" }];
     return [];
   }) as never, {
     begin: async (callback: (tx: unknown) => Promise<unknown>) => callback(db),
   });
   const { setup } = await initializeControlPlaneSetup(db, root);
-  await expect(setup.authenticate({ id: 8, login: "returning-user" })).resolves.toEqual({ userId: "user-2", firstAdmin: false });
+  await expect(setup.authenticate({ id: 8, login: "returning-user", accessToken: "token" })).resolves.toEqual({ userId: "user-2", firstAdmin: false });
   expect(queries.some((query) => query.includes("update users set is_global_admin=true"))).toBe(false);
   expect(queries.some((query) => query.includes("update system_onboarding"))).toBe(false);
+});
+
+test("refuses unrelated GitHub users before persisting an account after setup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mars-setup-denied-"));
+  let createdUser = false;
+  const db = Object.assign((async (strings: TemplateStringsArray) => {
+    const query = strings.join(" ").toLowerCase();
+    if (query.includes("select public_base_url")) return [{ publicBaseUrl: "https://control.example", setupCompletedAt: new Date() }];
+    if (query.includes("select setup_completed_at")) return [{ setupCompletedAt: new Date() }];
+    if (query.includes("insert into users")) createdUser = true;
+    return [];
+  }) as never, { begin: async (callback: (tx: unknown) => Promise<unknown>) => callback(db) });
+  const { setup } = await initializeControlPlaneSetup(db, root);
+  await expect(setup.authenticate({ id: 99, login: "outsider", accessToken: "token" })).rejects.toThrow("account_not_authorized");
+  expect(createdUser).toBe(false);
+  await rm(root, { recursive: true, force: true });
 });
 test("seeds the system onboarding singleton idempotently before status reads", async () => {
   const root = await mkdtemp(join(tmpdir(), "mars-setup-onboarding-"));

@@ -142,14 +142,6 @@ export class GitHubAppService {
     await this.reconcileInstallationRepositories({ installation: { id: installationId }, action: "uninstalled" });
   }
 
-  private async tenantOrganizationId(): Promise<string | null> {
-    const ids = isSql(this.db)
-      ? (await this.db<Array<{ organization_id: string }>>`SELECT organization_id FROM system_onboarding WHERE singleton=true AND organization_id IS NOT NULL UNION SELECT organization_id FROM dashboard_installations`).map((row) => row.organization_id)
-      : [...new Set([...this.db.installations.values()].map((installation) => installation.organizationId))];
-    if (ids.length > 1) throw new Error("single_tenant_required");
-    return ids[0] ?? null;
-  }
-
   async beginUnboundInstallation(userId: string, idempotencyKey: string): Promise<{ location: string; installCookie?: string }> {
     const config = await this.getConfig();
     if (!config) throw new Error("github_app_unconfigured");
@@ -170,8 +162,6 @@ export class GitHubAppService {
   }
 
   async beginInstallation(userId: string, organizationId: string, idempotencyKey: string, bindOnboarding = true, purpose: SetupState["purpose"] = "install"): Promise<{ location: string; installCookie?: string }> {
-    const tenant = await this.tenantOrganizationId();
-    if (tenant && tenant !== organizationId) throw new Error("single_tenant_required");
     const config = await this.getConfig();
     if (!config) throw new Error("github_app_unconfigured");
     const slug = config.slug;
@@ -296,17 +286,11 @@ export class GitHubAppService {
 
   private async persistInstallation(organizationId: string, installationId: number, state: Installation["state"], repositorySelection: Installation["repositorySelection"], githubAccountId: number, repos: Repository[]): Promise<string> {
     if (!isSql(this.db)) {
-      const tenant = await this.tenantOrganizationId();
-      if (tenant && tenant !== organizationId) throw new Error("single_tenant_required");
       this.db.installations.set(installationId, { organizationId, githubInstallationId: installationId, state, repositorySelection, githubAccountId });
       for (const repo of repos) this.db.repositories.set(repo.id, { ...repo, organizationId });
       return String(installationId);
     }
     return this.db.begin(async (tx) => {
-      await tx`SELECT pg_advisory_xact_lock(hashtext('mars:single-tenant-installation'))`;
-      const tenants = await tx<Array<{ organization_id: string }>>`SELECT organization_id FROM system_onboarding WHERE singleton=true AND organization_id IS NOT NULL UNION SELECT organization_id FROM dashboard_installations`;
-      if (tenants.some((tenant) => tenant.organization_id !== organizationId)) throw new Error("single_tenant_required");
-      await tx`UPDATE system_onboarding SET organization_id=${organizationId} WHERE singleton=true AND (organization_id IS NULL OR organization_id=${organizationId})`;
       const rows = await tx<Array<{ id: string }>>`INSERT INTO dashboard_installations (organization_id,github_installation_id,state,repository_selection,github_account_id) VALUES (${organizationId},${installationId},${state},${repositorySelection},${githubAccountId}) ON CONFLICT (organization_id,github_installation_id) DO UPDATE SET state=excluded.state,repository_selection=excluded.repository_selection,github_account_id=excluded.github_account_id RETURNING id`;
       const installationRow = rows[0];
       if (!installationRow) throw new Error("github_installation_persist_failed");
@@ -323,11 +307,6 @@ export class GitHubAppService {
     const accountId = typeof account.id === "number" ? account.id : Number(account.id);
     const accountType = account.type === "User" || account.type === "Organization" ? account.type : null;
     const mismatchCode = accountType === "User" ? "wrong_github_account" : "wrong_organization";
-    const tenant = await this.tenantOrganizationId();
-    if (tenant) {
-      const expected = await this.organizationGithubAccount(tenant);
-      if (!expected || expected.id !== accountId || expected.type !== accountType) throw new Error("single_tenant_required");
-    }
     let organizationId: string;
     if (pending.organizationId !== null) {
       const expected = await this.organizationGithubAccount(pending.organizationId);

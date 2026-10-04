@@ -353,26 +353,24 @@ describe("GitHub App onboarding", () => {
     expect(fakeDb.repositories.get("1")).toMatchObject({ available: false });
   });
 
-  test("rejects a second tenant while allowing reconnection of the installed tenant", async () => {
-    const github = configuredService(async () => Response.json({}));
+  test("allows the administrator to connect another organization without rebinding onboarding", async () => {
+    const github = configuredService(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/app/installations/43")) return Response.json({ account: { id: 100, type: "Organization", login: "second-org" } });
+      if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/installation/repositories")) return Response.json({ repository_selection: "selected", repositories: [{ id: 88, full_name: "second-org/repo", visibility: "private" }] });
+      throw new Error(`Unexpected GitHub request ${url}`);
+    });
     fakeDb.organizations = new Map([
       [organizationId, { githubOrgId: 99 }],
       ["22222222-2222-4222-8222-222222222222", { githubOrgId: 100 }],
     ]);
-    fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "suspended", repositorySelection: "selected" });
-    await expect(github.beginOrganizationInstallation("admin-1", "22222222-2222-4222-8222-222222222222", "org-2-key")).rejects.toThrow("single_tenant_required");
-    await expect(github.beginOrganizationInstallation("admin-1", organizationId, "reconnect-key")).resolves.toMatchObject({ location: "https://github.com/apps/mars/installations/new" });
-  });
-
-  test("rejects a stale unbound callback for another tenant without consuming setup state", async () => {
-    const github = configuredService(async () => Response.json({ account: { id: 100, type: "Organization", login: "other" } }));
-    const launch = await github.beginUnboundInstallation("admin-1", "stale-key");
-    fakeDb.organizations!.set(organizationId, { githubOrgId: 99 });
-    fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "all" });
-    await expect(github.completeInstallation("admin-1", launch.installCookie!, 43)).rejects.toThrow("single_tenant_required");
-    expect(fakeDb.installations.has(43)).toBe(false);
-    expect([...fakeDb.organizations!.values()].some((organization) => organization.githubOrgId === 100)).toBe(false);
-    expect([...fakeDb.setupStates.values()][0]).not.toHaveProperty("consumedAt");
+    fakeDb.installations.set(42, { organizationId, githubInstallationId: 42, state: "approved", repositorySelection: "selected" });
+    const launch = await github.beginOrganizationInstallation("admin-1", "22222222-2222-4222-8222-222222222222", "org-2-key");
+    await expect(github.completeInstallation("admin-1", launch.installCookie!, 43)).resolves.toBe(false);
+    expect(fakeDb.installations.get(42)).toMatchObject({ organizationId, state: "approved" });
+    expect(fakeDb.installations.get(43)).toMatchObject({ organizationId: "22222222-2222-4222-8222-222222222222", state: "approved" });
+    expect(fakeDb.repositories.get("88")).toMatchObject({ fullName: "second-org/repo", available: true });
   });
 
   test("validates each webhook against the current decrypted secret and dispatches installation removal", async () => {

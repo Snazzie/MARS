@@ -9,17 +9,14 @@ export function githubAuthorizeUrl(base: string, clientId: string, flow: OAuthSt
 export interface OAuthUser { id: number; login: string; accessToken: string; }
 export interface GithubOrganization { id: number; login: string; }
 export async function exchangeOAuth(code: string, state: OAuthState, clientId: string, clientSecret: string, base: string): Promise<OAuthUser> { if (Date.now() - state.createdAt > 10 * 60_000) throw new Error("oauth state expired"); const response = await fetch("https://github.com/login/oauth/access_token", { method: "POST", headers: { accept: "application/json", "content-type": "application/json" }, body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, code, redirect_uri: `${base}/api/auth/github/callback`, code_verifier: state.verifier }) }); if (!response.ok) throw new Error("oauth exchange failed"); const token = (await response.json() as { access_token?: string }).access_token; if (!token) throw new Error("oauth token missing"); const profile = await fetch("https://api.github.com/user", { headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "mars-control-plane" } }); if (!profile.ok) throw new Error("github profile lookup failed"); const value = await profile.json() as { id?: number; login?: string }; if (typeof value.id !== "number" || typeof value.login !== "string") throw new Error("github profile invalid"); return { id: value.id, login: value.login, accessToken: token }; }
-export async function listGithubOrganizations(accessToken: string): Promise<GithubOrganization[]> { const response = await fetch("https://api.github.com/user/orgs?per_page=100", { headers: { authorization: `Bearer ${accessToken}`, accept: "application/vnd.github+json", "user-agent": "mars-control-plane" } }); if (!response.ok) throw new Error("github organization lookup failed"); const organizations = await response.json() as Array<{ id?: number; login?: string }>; return organizations.filter((organization): organization is GithubOrganization => typeof organization.id === "number" && typeof organization.login === "string" && organization.login.length > 0); }
-export async function syncGithubOrganizations(sql: Sql<{}>, userId: string, accessToken: string, githubUser: Pick<OAuthUser, "id" | "login">): Promise<void> {
-  const [tenant] = await sql`SELECT o.id,o.github_org_id,o.github_account_type FROM organizations o JOIN system_onboarding so ON so.organization_id=o.id WHERE so.singleton=true`;
-  if (!tenant) return;
-  const belongs = tenant.github_account_type === "User"
-    ? Number(tenant.github_org_id) === githubUser.id
-    : (await listGithubOrganizations(accessToken)).some((organization) => organization.id === Number(tenant.github_org_id));
-  if (belongs) {
-    await sql`INSERT INTO memberships (organization_id,user_id,role) VALUES (${tenant.id},${userId},'member') ON CONFLICT (organization_id,user_id) DO NOTHING`;
-  } else {
-    await sql`DELETE FROM memberships WHERE organization_id=${tenant.id} AND user_id=${userId}`;
+export async function listGithubOrganizations(accessToken: string): Promise<GithubOrganization[]> {
+  const organizations: GithubOrganization[] = [];
+  for (let page = 1; ; page++) {
+    const response = await fetch(`https://api.github.com/user/orgs?per_page=100&page=${page}`, { headers: { authorization: `Bearer ${accessToken}`, accept: "application/vnd.github+json", "user-agent": "mars-control-plane" } });
+    if (!response.ok) throw new Error("github organization lookup failed");
+    const rows = await response.json() as Array<{ id?: number; login?: string }>;
+    organizations.push(...rows.filter((organization): organization is GithubOrganization => typeof organization.id === "number" && typeof organization.login === "string" && organization.login.length > 0));
+    if (rows.length < 100) return organizations;
   }
 }
 export async function ensureBootstrapAdmin(sql: Sql<{}>, githubId: number, login: string, allowlisted: string): Promise<void> {
