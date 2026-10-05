@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, rename } from "node:fs/promises";
-import type { Sql } from "../packages/db/src/index.ts";
+import type { DatabaseClient } from "../packages/db/src/index.ts";
 import { requestPendingWorker, type WorkerRequestResult } from "../apps/control-plane/src/worker-requests.ts";
 import { WorkerBootstrapRequest } from "../packages/contracts/src/index.ts";
 import { createWorkerImageBuildPayload } from "../apps/control-plane/src/windows-image-build.ts";
@@ -37,7 +37,7 @@ export async function renewRevokedDevWorker(
   return true;
 }
 
-export function devWorkerEnrollmentAdapter(token: string): (db: Sql<{}>, body: unknown) => Promise<WorkerRequestResult> {
+export function devWorkerEnrollmentAdapter(token: string): (db: DatabaseClient, body: unknown) => Promise<WorkerRequestResult> {
   const codeHash = createHash("sha256").update(Buffer.from(deriveDevWorkerCode(token), "base64url")).digest();
   return (db, body) => requestPendingWorker(db, WorkerBootstrapRequest.parse(body), undefined, undefined, { codeHash, reusable: true });
 }

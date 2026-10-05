@@ -1,4 +1,30 @@
-import { createDb, getOverview, type DatabaseClient } from "../packages/db/src/index.ts";
+import { defineQueries, getOverview, schema, type DatabaseClient } from "../packages/db/src/index.ts";
+import { and, eq, sql } from "drizzle-orm";
+
+const liveSmokeQueries = defineQueries((db) => ({
+  repositoryOrganization: db.select({ organizationId: schema.dashboardRepositories.organizationId })
+    .from(schema.dashboardRepositories)
+    .where(and(eq(schema.dashboardRepositories.fullName, sql.placeholder("repository")), eq(schema.dashboardRepositories.available, true)))
+    .prepare("live-smoke-repository-organization"),
+  run: db.select({ id: schema.dashboardRuns.id, status: schema.dashboardRuns.status, conclusion: schema.dashboardRuns.conclusion })
+    .from(schema.dashboardRuns)
+    .innerJoin(schema.dashboardRepositories, and(eq(schema.dashboardRepositories.id, schema.dashboardRuns.repositoryId), eq(schema.dashboardRepositories.organizationId, schema.dashboardRuns.organizationId)))
+    .where(and(eq(schema.dashboardRepositories.fullName, sql.placeholder("repository")), eq(schema.dashboardRuns.githubRunId, sql.placeholder("runId"))))
+    .prepare("live-smoke-run"),
+  jobs: db.select({ status: schema.dashboardJobs.status, conclusion: schema.dashboardJobs.conclusion, runnerName: schema.dashboardJobs.runnerName })
+    .from(schema.dashboardJobs)
+    .where(eq(schema.dashboardJobs.runId, sql.placeholder("runId")))
+    .orderBy(schema.dashboardJobs.githubJobId)
+    .prepare("live-smoke-jobs"),
+  leases: db.select({ id: schema.runnerLeases.id, state: schema.runnerLeases.state })
+    .from(schema.runnerLeases)
+    .innerJoin(schema.dashboardJobs, and(eq(schema.dashboardJobs.organizationId, schema.runnerLeases.organizationId), eq(schema.dashboardJobs.githubJobId, schema.runnerLeases.githubJobId)))
+    .innerJoin(schema.dashboardRuns, eq(schema.dashboardRuns.id, schema.dashboardJobs.runId))
+    .innerJoin(schema.dashboardRepositories, and(eq(schema.dashboardRepositories.id, schema.dashboardRuns.repositoryId), eq(schema.dashboardRepositories.organizationId, schema.dashboardRuns.organizationId)))
+    .where(and(eq(schema.dashboardRepositories.fullName, sql.placeholder("repository")), eq(schema.dashboardRuns.githubRunId, sql.placeholder("runId"))))
+    .orderBy(schema.runnerLeases.createdAt)
+    .prepare("live-smoke-leases"),
+}));
 
 const DEFAULT_REPOSITORY = "Snazzie/mars";
 const DEFAULT_WORKFLOW = "macos-smoke.yml";
@@ -219,41 +245,16 @@ async function waitForFreshRun(options: LiveOptions, baselineIds: ReadonlySet<nu
 }
 
 async function repositoryOrganizationId(db: DatabaseClient, repository: string): Promise<string> {
-  const rows = await db<Array<{ organizationId: string }>>`
-    SELECT organization_id AS "organizationId"
-    FROM dashboard_repositories
-    WHERE full_name=${repository} AND available=true
-  `;
+  const rows = await liveSmokeQueries(db).repositoryOrganization.execute({ repository });
   if (rows.length !== 1) throw new Error("available_repository_not_unique");
   return rows[0].organizationId;
 }
 
 async function readDatabaseRunState(db: DatabaseClient, repository: string, organizationId: string, runId: number): Promise<DatabaseRunState> {
-  const runRows = await db<Array<{ id: string; status: string; conclusion: string | null }>>`
-    SELECT r.id,r.status,r.conclusion
-    FROM dashboard_runs r
-    JOIN dashboard_repositories repo ON repo.id=r.repository_id AND repo.organization_id=r.organization_id
-    WHERE repo.full_name=${repository} AND r.github_run_id=${runId}
-  `;
-  const run = runRows[0];
-  const jobs = run
-    ? await db<Array<{ status: string; conclusion: string | null; runnerName: string | null }>>`
-        SELECT status,conclusion,runner_name AS "runnerName"
-        FROM dashboard_jobs
-        WHERE run_id=${run.id}
-        ORDER BY github_job_id
-      `
-    : [];
+  const [run] = await liveSmokeQueries(db).run.execute({ repository, runId });
+  const jobs = run ? await liveSmokeQueries(db).jobs.execute({ runId: run.id }) : [];
   if (jobs.length > 1) throw new Error("fresh_run_job_count_invalid");
-  const leases = await db<Array<{ id: string; state: string }>>`
-    SELECT l.id,l.state
-    FROM runner_leases l
-    JOIN dashboard_jobs j ON j.organization_id=l.organization_id AND j.github_job_id=l.github_job_id
-    JOIN dashboard_runs r ON r.id=j.run_id
-    JOIN dashboard_repositories repo ON repo.id=r.repository_id AND repo.organization_id=r.organization_id
-    WHERE repo.full_name=${repository} AND r.github_run_id=${runId}
-    ORDER BY l.created_at
-  `;
+  const leases = await liveSmokeQueries(db).leases.execute({ repository, runId });
   if (leases.length > 1) throw new Error("fresh_run_lease_count_invalid");
   const overview = await getOverview(db, organizationId, "24h");
   return {
@@ -353,7 +354,7 @@ async function runLiveSmoke(): Promise<void> {
     await assertNoLeaseVms(options.tartExecutable);
     console.log(JSON.stringify({ event: "live_job_pickup_passed", runId: freshRun.id, leaseId: proof.leaseId, milestones: proof.milestones }));
   } finally {
-    await db.end({ timeout: 5 });
+    await db.$client.end({ timeout: 5 });
   }
 }
 
