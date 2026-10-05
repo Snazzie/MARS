@@ -32,6 +32,16 @@ runs-on: [mars-any-2vcpu-4g, mars-retry-3]
 
 Existing GitHub App installations need **Actions: write** permission approved and the installation reauthorized before automatic reruns work. Updating the app manifest alone does not grant this permission.
 
+## Cost estimates
+
+Overview savings and Cost Center estimates use the actual job interval from
+`started_at` to `completed_at`, excluding queue time, provisioning, and waiting
+for a ready runner to pick up the job. Jobs without a recorded start are excluded.
+Each started job is rounded up to whole billable minutes, with a one-minute minimum.
+The same runtime basis applies to GitHub, Blacksmith, and Azure VM comparisons.
+Existing history is recalculated from its recorded timestamps; no data migration
+is required.
+
 ## Get started
 
 Each control plane is a **private, administrator-managed installation**, not a public sign-up service. It can connect multiple GitHub organizations and personal accounts. Members of any actively installed organization can sign in with GitHub; a personal installation admits its account owner. Signing in does not create another workspace or grant administration.
