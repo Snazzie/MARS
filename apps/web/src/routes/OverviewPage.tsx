@@ -5,6 +5,7 @@ import { getOverview } from "../api.ts";
 import { QueryState } from "../components/StateView.tsx";
 import { OutcomeBars } from "../components/OutcomeBars.tsx";
 import { JobActivityChart } from "../components/JobActivityChart.tsx";
+import { TimeToStartChart } from "../components/TimeToStartChart.tsx";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
 import { RunningContainers } from "../components/RunningContainers.tsx";
 import { ReportingPeriodControl } from "../components/ReportingPeriodControl.tsx";
@@ -106,6 +107,7 @@ function OverviewContent({ data, period }: { data: OverviewDto; period: Dashboar
   return <div className="overview-grid">
     <ControlPlaneStatus status={data.controlPlane} load={data} queueReasons={data.queueReasons} awaiting={data.queued} />
     <section className="metric-panel"><Metric label="Queue p50" value={`${Math.round(data.queueP50Ms / 1000)}s`} detail="median wait" /><Metric label="Queue p95" value={`${Math.round(data.queueP95Ms / 1000)}s`} detail="slowest cohort" /><Metric label="Duration p50" value={`${Math.round(data.durationP50Ms / 60000)}m`} detail="median runtime" /><Metric label="Duration p95" value={`${Math.round(data.durationP95Ms / 60000)}m`} detail="slowest cohort" /><OverviewCostMetrics costSavings={data.costSavings} period={period} /></section>
+    <section className="chart-panel time-to-start-panel" aria-label="Time to start"><div className="panel-kicker">Time to start</div><p className="chart-empty">Queued to running · p50 median and p95 wait by job start time · {period === "24h" ? "hourly" : "daily"} buckets. Gaps mean no jobs started.</p><TimeToStartChart points={data.timeToStart} period={period} /></section>
     <section className="chart-panel"><div className="panel-kicker">Pending vs running</div><JobActivityChart points={data.timeseries ?? []} /></section><section className="chart-panel"><div className="panel-kicker">Job outcomes</div><OutcomeBars outcomes={data.jobOutcomes ?? []} /></section><RunningContainers containers={data.runningContainers ?? []} />
   </div>;
 }

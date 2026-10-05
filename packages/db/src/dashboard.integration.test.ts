@@ -79,12 +79,25 @@ integration("overview percentiles use valid observed timings within the reportin
         "30d": { queueP50Ms: 40_000, queueP95Ms: 67_000, durationP50Ms: 240_000, durationP95Ms: 402_000 },
       };
       for (const period of ["24h", "7d", "30d"] as const) {
-        expect(metrics(await getOverview(tx, organizationId, period))).toEqual(expected[period]);
-        expect(metrics(await getAllOverview(tx, userId, period))).toEqual(expected[period]);
+        const organization = await getOverview(tx, organizationId, period);
+        const aggregate = await getAllOverview(tx, userId, period);
+        expect(metrics(organization)).toEqual(expected[period]);
+        expect(metrics(aggregate)).toEqual(expected[period]);
+        expect(aggregate.timeToStart).toEqual(organization.timeToStart);
+        expect(organization.timeToStart.reduce((sum, point) => sum + point.sampleCount, 0)).toBe(period === "24h" ? 2 : period === "7d" ? 3 : 4);
+        expect(organization.timeToStart.filter(point => point.sampleCount === 0).every(point => point.p50Ms === null && point.p95Ms === null)).toBe(true);
+        if (period === "24h") {
+          expect(organization.timeToStart.filter(point => point.sampleCount > 0).map(({ sampleCount, p50Ms, p95Ms }) => ({ sampleCount, p50Ms, p95Ms }))).toEqual([
+            { sampleCount: 1, p50Ms: 30_000, p95Ms: 30_000 },
+            { sampleCount: 1, p50Ms: 10_000, p95Ms: 10_000 },
+          ]);
+        }
       }
       const empty = { queueP50Ms: 0, queueP95Ms: 0, durationP50Ms: 0, durationP95Ms: 0 };
       expect(metrics(await getOverview(tx, "10000000-0000-4000-8000-000000000003", "24h"))).toEqual(empty);
       expect(metrics(await getAllOverview(tx, "20000000-0000-4000-8000-000000000002", "24h"))).toEqual(empty);
+      const nonmember = await getAllOverview(tx, "20000000-0000-4000-8000-000000000002", "24h");
+      expect(nonmember.timeToStart.every(point => point.sampleCount === 0 && point.p50Ms === null && point.p95Ms === null)).toBe(true);
     });
   } finally {
     await db.$client.end({ timeout: 1 });

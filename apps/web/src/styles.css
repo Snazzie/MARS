@@ -1328,6 +1328,7 @@ a:active {
 .control-plane-log-warn .control-plane-log-level{color:#ffb454}
 
 .overview-grid>.metric-panel{grid-column:1/-1}
+.time-to-start-panel{grid-column:1/-1}
 .dispatch-status-panel{grid-column:1/-1;min-width:0;background:var(--ui-surface);border:1px solid var(--ui-border);border-radius:var(--radius);overflow:hidden;color:var(--ui-text)}
 .dispatch-status-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:22px 24px;border-bottom:1px solid var(--ui-border)}
 .dispatch-title{display:flex;align-items:center;gap:12px}

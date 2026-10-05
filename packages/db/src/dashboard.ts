@@ -91,6 +91,32 @@ async function getOverviewTimeseries(db: DashboardDb, period: OverviewDto["perio
   const currentIsReal = current && (current.bucket instanceof Date || (typeof current.bucket === "string" && !Number.isNaN(Date.parse(current.bucket))));
   return normalizeOverviewTimeseries([...rows, ...(currentIsReal ? [current] : [])]);
 }
+
+const timeToStartQueries = defineQueries((db) => {
+  const interval = sql`CASE ${sql.placeholder("period")} WHEN '24h' THEN interval '24 hours' WHEN '7d' THEN interval '7 days' ELSE interval '30 days' END`;
+  const unit = sql`CASE ${sql.placeholder("period")} WHEN '24h' THEN 'hour' ELSE 'day' END`;
+  const step = sql`CASE ${sql.placeholder("period")} WHEN '24h' THEN interval '1 hour' ELSE interval '1 day' END`;
+  const waitMs = sql`EXTRACT(EPOCH FROM (${schema.dashboardJobs.startedAt} - ${schema.dashboardJobs.queuedAt})) * 1000`;
+  return {
+    series: db.select({
+      bucket: sql<Date>`bucket`,
+      sampleCount: sql<number>`count(${schema.dashboardJobs.id})::int`,
+      p50Ms: sql<number | null>`(percentile_cont(0.5) WITHIN GROUP (ORDER BY ${waitMs}))::bigint`.mapWith(Number),
+      p95Ms: sql<number | null>`(percentile_cont(0.95) WITHIN GROUP (ORDER BY ${waitMs}))::bigint`.mapWith(Number),
+    }).from(sql`generate_series(date_trunc(${unit}, now() - ${interval}), date_trunc(${unit}, now()), ${step}) AS bucket`)
+      .leftJoin(schema.dashboardJobs, and(
+        sql`${schema.dashboardJobs.startedAt} >= bucket AND ${schema.dashboardJobs.startedAt} < bucket + ${step}`,
+        sql`${schema.dashboardJobs.startedAt} BETWEEN now() - ${interval} AND now()`,
+        sql`${schema.dashboardJobs.startedAt} >= ${schema.dashboardJobs.queuedAt}`,
+        sql`(${sql.placeholder("userId")}::text IS NULL OR EXISTS (SELECT 1 FROM ${schema.memberships} m WHERE m.organization_id=${schema.dashboardJobs.organizationId} AND m.user_id=${sql.placeholder("userId")}))`,
+        sql`(${sql.placeholder("userId")}::text IS NOT NULL OR ${schema.dashboardJobs.organizationId}=${sql.placeholder("organizationId")})`,
+      )).groupBy(sql`bucket`).orderBy(asc(sql`bucket`)).prepare("dashboard_overview_time_to_start"),
+  };
+});
+async function getOverviewTimeToStart(db: DashboardDb, period: OverviewDto["period"], organizationId: string | null, userId?: string): Promise<OverviewDto["timeToStart"]> {
+  const rows = await timeToStartQueries(db).series.execute({ period, organizationId, userId: userId ?? null });
+  return rows.map(row => ({ ...row, bucket: normalizeTimestamp(row.bucket)! }));
+}
 type OverviewJobOutcome = NonNullable<OverviewDto["jobOutcomes"]>[number];
 const outcomesQuery = defineQueries((db) => ({
   aggregate: db.select({
@@ -224,11 +250,11 @@ async function getOverviewQueueReasons(db: DashboardDb, organizationId: string |
 
 export async function getOverview(db: DashboardDb, organizationId: string, period: OverviewDto["period"]): Promise<OverviewDto> {
   const [row] = await overviewQueries(db).organization.execute({ organizationId, period }) as OverviewDto[];
-  return { ...row, queueReasons: await getOverviewQueueReasons(db, organizationId, null), utilization: overviewUtilization(row.running, row.concurrency), costSavings: await getGithubRunnerCostSavings(db, organizationId, period), timeseries: await getOverviewTimeseries(db, period, organizationId), jobOutcomes: await getOverviewJobOutcomes(db, organizationId, period), runningContainers: await getOverviewRunningContainers(db, organizationId) };
+  return { ...row, queueReasons: await getOverviewQueueReasons(db, organizationId, null), utilization: overviewUtilization(row.running, row.concurrency), costSavings: await getGithubRunnerCostSavings(db, organizationId, period), timeseries: await getOverviewTimeseries(db, period, organizationId), timeToStart: await getOverviewTimeToStart(db, period, organizationId), jobOutcomes: await getOverviewJobOutcomes(db, organizationId, period), runningContainers: await getOverviewRunningContainers(db, organizationId) };
 }
 export async function getAllOverview(db: DashboardDb, userId: string, period: OverviewDto["period"]): Promise<OverviewDto> {
   const [row] = await overviewQueries(db).all.execute({ userId, period }) as OverviewDto[];
-  return { ...row, organizationId: "all", queueReasons: await getOverviewQueueReasons(db, null, userId), utilization: overviewUtilization(row.running, row.concurrency), costSavings: await getGithubRunnerCostSavings(db, "all", period, userId), timeseries: await getOverviewTimeseries(db, period, null, userId), jobOutcomes: await getOverviewJobOutcomes(db, null, period, userId), runningContainers: await getOverviewRunningContainers(db, null, userId) };
+  return { ...row, organizationId: "all", queueReasons: await getOverviewQueueReasons(db, null, userId), utilization: overviewUtilization(row.running, row.concurrency), costSavings: await getGithubRunnerCostSavings(db, "all", period, userId), timeseries: await getOverviewTimeseries(db, period, null, userId), timeToStart: await getOverviewTimeToStart(db, period, null, userId), jobOutcomes: await getOverviewJobOutcomes(db, null, period, userId), runningContainers: await getOverviewRunningContainers(db, null, userId) };
 }
 
 const repositoryQueries = defineQueries((db) => ({
@@ -319,7 +345,6 @@ const runProjection = () => ({
   organizationId: schema.dashboardRuns.organizationId,
   repositoryId: schema.dashboardRuns.repositoryId,
   repositoryName: schema.dashboardRepositories.name,
-  fullName: schema.dashboardRepositories.fullName,
   runNumber: schema.dashboardRuns.runNumber,
   workflowName: schema.dashboardRuns.workflowName,
   event: schema.dashboardRuns.event,

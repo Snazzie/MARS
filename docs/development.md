@@ -79,6 +79,11 @@ Dashboard recovery and navigation:
   started time for completed jobs in that period, including failed jobs. Missing
   or reversed timestamp pairs are excluded; no samples returns zero. All workspaces
   aggregates only organizations where the current user has membership.
+- Overview's Time to start chart plots queue-wait p50/p95 by job start time:
+  hourly buckets for 24h, daily buckets for 7d/30d. Empty buckets have no samples
+  and break the lines rather than reporting zero wait. Hover a point for the
+  bucket timestamp, percentile waits, and number of jobs started. The chart uses
+  the same reporting-period and workspace scope as the overview queue metrics.
 - Job and step logs retain all loaded chunks. Search covers loaded output; steps with
   unsearched or partially loaded logs stay available to expand and load more output.
 - Pool create/edit and delete dialogs support Escape, modal focus, and focus restoration.
