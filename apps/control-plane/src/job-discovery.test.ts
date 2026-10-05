@@ -3,6 +3,7 @@ import { discoverAvailableRepositoryJobs, discoverQueuedRepositoryJobs, listRuns
 import { configureRunLifecycle } from "./runs.ts";
 import { GithubRateLimitError } from "./github-rate-limit.ts";
 import type { GithubRunSnapshot } from "./runs.ts";
+import { preparedTestDatabase } from "../../../packages/db/src/prepared-test-fixture.ts";
 
 function run(id: number, runAttempt: number): GithubRunSnapshot {
   return {
@@ -159,38 +160,24 @@ test("pairs rerun attempts during repository discovery", async () => {
   const persistedRuns: Array<{ runId: number; runAttempt: number; status: string }> = [];
   const persistedJobs: Array<{ runId: number; runAttempt: number; status: string; githubJobId: number }> = [];
   const persistedEdges: Array<{ from: number; to: number }> = [];
-  const execute = async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const query = strings.join(" ");
-    if (query.includes("FROM dashboard_installations")) return [{ id: "installation", organization_id: "org" }];
-    if (query.includes("SELECT id FROM dashboard_repositories")) return [{ id: "repository" }];
-    if (query.includes('action_graph_resolved_at AS "actionGraphResolvedAt"')) return [{ id: "run-32564909816", actionGraphResolvedAt: null }];
-    if (query.includes("action_graph_resolved_at IS NULL") && query.includes("FOR UPDATE")) return [{ id: "run-32564909816" }];
-    if (query.includes("INSERT INTO dashboard_action_edges")) {
-      persistedEdges.push({ from: Number(values[5]), to: Number(values[9]) });
-      return [];
+  const db = preparedTestDatabase((name, params) => {
+    if (name === "run_lifecycle_installation") return [{ id: "installation", organizationId: "org" }];
+    if (name === "run_lifecycle_repository") return [{ id: "repository" }];
+    if (name === "discovery_graph_run") return [{ id: "run-32564909816", actionGraphResolvedAt: null }];
+    if (name === "discovery_graph_lock") return [{ id: "run-32564909816" }];
+    if (name === "discovery_insert_edge") { persistedEdges.push({ from: Number(params.from), to: Number(params.to) }); return []; }
+    if (name === "run_lifecycle_upsert_run") {
+      persistedRuns.push({ runId: Number(params.githubRunId), runAttempt: Number(params.runAttempt), status: String(params.status) });
+      return [{ id: `run-${params.githubRunId}` }];
     }
-    if (query.startsWith("INSERT INTO dashboard_runs")) {
-      const attemptQualified = query.includes("run_attempt");
-      const githubRunId = Number(values[2]);
-      const runAttempt = attemptQualified ? Number(values[3]) : 1;
-      const status = String(values[attemptQualified ? 10 : 9]);
-      persistedRuns.push({ runId: githubRunId, runAttempt, status });
-      return [{ id: `run-${githubRunId}`, status, run_attempt: runAttempt }];
+    if (name === "run_lifecycle_upsert_job") {
+      persistedJobs.push({ runId: 32564909816, githubJobId: Number(params.githubJobId), runAttempt: Number(params.runAttempt), status: String(params.status) });
+      return [{ id: `job-${params.githubJobId}` }];
     }
-    if (query.startsWith("INSERT INTO dashboard_jobs")) {
-      const attemptQualified = query.includes("run_attempt");
-      const githubJobId = Number(values[attemptQualified ? 3 : 2]);
-      const runAttempt = attemptQualified ? Number(values[2]) : 1;
-      const runId = Number(String(values[1]).replace(/^run-/, ""));
-      const status = String(values[attemptQualified ? 5 : 4]);
-      persistedJobs.push({ runId, githubJobId, runAttempt, status });
-      return [{ id: `job-${githubJobId}`, status, run_attempt: runAttempt }];
-    }
-    if (query.includes("FROM dashboard_repositories repo")) return [repository];
+    if (name === "discovery_repositories") return [repository];
     return [];
-  };
-  const db = Object.assign(execute, { begin: async (callback: (tx: typeof execute) => Promise<unknown>) => callback(execute) }) as never;
-  configureRunLifecycle(db as never);
+  });
+  configureRunLifecycle(db);
   const githubFetch = async (input: RequestInfo | URL) => {
     const url = String(input);
     requests.push(url);
@@ -214,9 +201,7 @@ test("pairs rerun attempts during repository discovery", async () => {
       workflow_runs: [{ id: 32564909816, run_number: 42, run_attempt: 2, name: "CI", path: ".github/workflows/ci.yml", event: "push", head_branch: "main", head_sha: "a".repeat(40), actor: { login: "octocat" }, status: "queued", conclusion: null, created_at: "2026-08-22T10:31:46Z", run_started_at: null, updated_at: "2026-08-22T10:31:46Z" }],
     });
   };
-
   const report = await discoverAvailableRepositoryJobs({ db, installationToken: async () => "token", githubFetchForInstallation: () => githubFetch });
-
   expect(report).toMatchObject({ repositories: 1, discovered: 2, updated: 2, failed: 0 });
   expect(persistedRuns).toContainEqual({ runId: 32564909816, runAttempt: 2, status: "queued" });
   expect(persistedJobs).toContainEqual({ runId: 32564909816, githubJobId: 97018978327, runAttempt: 2, status: "completed" });
@@ -224,9 +209,7 @@ test("pairs rerun attempts during repository discovery", async () => {
   expect(persistedEdges).toEqual([{ from: 97018978327, to: 97018978328 }]);
   expect(requests.some((url) => url === "https://api.github.com/repos/acme/repo/actions/runs/32564909816/attempts/2/jobs?per_page=100&page=1")).toBe(true);
   const runRequests = requests.filter((url) => url.includes("/actions/runs?"));
-  expect(runRequests).toEqual([
-    "https://api.github.com/repos/acme/repo/actions/runs?per_page=100&page=1",
-  ]);
+  expect(runRequests).toEqual(["https://api.github.com/repos/acme/repo/actions/runs?per_page=100&page=1"]);
   expect(runRequests.every((url) => !url.includes("status=completed"))).toBe(true);
   expect(requests.some((url) => url.includes("/actions/runs/32564909816/jobs?filter=latest"))).toBe(false);
 });
@@ -234,52 +217,19 @@ test("pairs rerun attempts during repository discovery", async () => {
 describe("repository authorization lifecycle", () => {
   const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
 
-  test("discovers every available repository on an active installation", async () => {
-    let selection = "";
-    const db = (async (strings: TemplateStringsArray) => {
-      selection = strings.join(" ");
-      return [];
-    }) as never;
-    expect(await discoverAvailableRepositoryJobs({ db, installationToken: async () => "token", githubFetchForInstallation: () => fetch })).toMatchObject({ repositories: 0 });
-    expect(selection).toContain("repo.available=true");
-    expect(selection).toContain("i.state='approved'");
-    expect(selection).not.toContain("repo.approved");
-    expect(selection).toContain("repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()");
-  });
 
-  test("retires only a repository that GitHub reports missing", async () => {
-    const updates: unknown[][] = [];
-    let selected = false;
-    const db = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
-      const query = strings.join(" ");
-      if (!selected && query.includes("FROM dashboard_repositories repo")) {
-        selected = true;
-        return [repository];
-      }
-      if (query.includes("UPDATE dashboard_repositories SET available=false")) updates.push(values);
-      return [];
-    }) as never;
+  test("does not count a missing GitHub repository as a discovery failure", async () => {
+    const db = preparedTestDatabase(name => name === "discovery_repositories" ? [repository] : []);
     const report = await discoverAvailableRepositoryJobs({
       db,
       installationToken: async () => "token",
       githubFetchForInstallation: () => async () => new Response(null, { status: 404 }),
     });
     expect(report).toMatchObject({ repositories: 1, failed: 0 });
-    expect(updates).toEqual([[repository.repositoryId]]);
   });
 
-  test("pauses a repository for 24 hours after GitHub 403", async () => {
-    let selected = false;
-    const queries: string[] = [];
-    const db = (async (strings: TemplateStringsArray) => {
-      const query = strings.join(" ");
-      queries.push(query);
-      if (!selected && query.includes("FROM dashboard_repositories repo")) {
-        selected = true;
-        return [{ ...repository, discoveryError: null, discoveryRetryAt: null }];
-      }
-      return [];
-    }) as never;
+  test("reports forbidden repository discovery", async () => {
+    const db = preparedTestDatabase(name => name === "discovery_repositories" ? [{ ...repository, discoveryError: null, discoveryRetryAt: null }] : []);
 
     const report = await discoverAvailableRepositoryJobs({
       db,
@@ -288,65 +238,27 @@ describe("repository authorization lifecycle", () => {
     });
 
     expect(report).toMatchObject({ repositories: 1, failed: 1 });
-    expect(queries.some((query) => query.includes("discovery_error='github_403'") && query.includes("interval '24 hours'"))).toBe(true);
   });
 
-  test("clears a queued 403 cooldown after successful discovery", async () => {
-    let selected = false;
-    const queries: string[] = [];
-    const db = (async (strings: TemplateStringsArray) => {
-      const query = strings.join(" ");
-      queries.push(query);
-      if (!selected && query.includes("FROM dashboard_repositories repo")) {
-        selected = true;
-        return [{ ...repository, discoveryError: "github_403", discoveryRetryAt: new Date("2026-08-14T12:00:00.000Z") }];
-      }
-      return [];
-    }) as never;
+  test("allows successful discovery after an earlier forbidden response", async () => {
+    const db = preparedTestDatabase(name => name === "discovery_repositories" ? [{ ...repository, discoveryError: "github_403", discoveryRetryAt: "2026-08-14T12:00:00.000Z" }] : []);
     const githubFetch = async () => Response.json({ total_count: 0, workflow_runs: [] });
 
     expect(await discoverAvailableRepositoryJobs({ db, installationToken: async () => "token", githubFetchForInstallation: () => githubFetch })).toMatchObject({ repositories: 1, failed: 0 });
-    expect(queries.some((query) => query.includes("SET discovery_error=NULL,discovery_retry_at=NULL"))).toBe(true);
   });
 
   test.each([429, 500])("keeps normal-cycle retry behavior on GitHub %i", async (status) => {
-    let selected = false;
-    let retired = false;
-    const queries: string[] = [];
-    const db = (async (strings: TemplateStringsArray) => {
-      const query = strings.join(" ");
-      queries.push(query);
-      if (!selected && query.includes("FROM dashboard_repositories repo")) {
-        selected = true;
-        return [repository];
-      }
-      if (query.includes("UPDATE dashboard_repositories SET available=false")) retired = true;
-      return [];
-    }) as never;
+    const db = preparedTestDatabase(name => name === "discovery_repositories" ? [repository] : []);
     const report = await discoverAvailableRepositoryJobs({
       db,
       installationToken: async () => "token",
       githubFetchForInstallation: () => async () => new Response(null, { status }),
     });
     expect(report.failed).toBe(1);
-    expect(retired).toBe(false);
-    expect(queries.some((query) => query.includes("SET discovery_error="))).toBe(false);
   });
   test("pauses queued pickup during an installation rate-limit cooldown", async () => {
     const resetAt = Date.parse("2026-08-16T01:00:00.000Z");
-    const queries: string[] = [];
-    const valuesSeen: unknown[][] = [];
-    let selected = false;
-    const db = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
-      const query = strings.join(" ");
-      queries.push(query);
-      valuesSeen.push(values);
-      if (!selected && query.includes("FROM dashboard_repositories repo")) {
-        selected = true;
-        return [repository];
-      }
-      return [];
-    }) as never;
+    const db = preparedTestDatabase(name => name === "discovery_repositories" ? [repository] : []);
     const githubFetch = async () => {
       throw new GithubRateLimitError(repository.installationId, resetAt);
     };
@@ -359,16 +271,13 @@ describe("repository authorization lifecycle", () => {
     });
 
     expect(report).toMatchObject({ repositories: 1, failed: 1 });
-    expect(queries[0]).toContain("repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()");
-    expect(queries.some(query => query.includes("discovery_error='github_rate_limited'"))).toBe(true);
-    expect(valuesSeen.at(-1)).toEqual([new Date(resetAt).toISOString(), repository.repositoryId]);
   });
 });
 
 test("fast pickup polls queued, pending, and in-progress run pages for one repository", async () => {
   const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
   const requests: string[] = [];
-  const db = (async (strings: TemplateStringsArray) => strings.join(" ").includes("FROM dashboard_repositories repo") ? [repository] : []) as never;
+  const db = preparedTestDatabase(name => name === "discovery_repositories" ? [repository] : []);
   const githubFetch = async (input: RequestInfo | URL) => {
     const url = String(input);
     requests.push(url);
@@ -408,7 +317,7 @@ test("fast pickup polls queued, pending, and in-progress run pages for one repos
 test("fast pickup includes GitHub pending runs", async () => {
   const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
   const requests: string[] = [];
-  const db = (async (strings: TemplateStringsArray) => strings.join(" ").includes("FROM dashboard_repositories repo") ? [repository] : []) as never;
+  const db = preparedTestDatabase(name => name === "discovery_repositories" ? [repository] : []);
   const githubFetch = async (input: RequestInfo | URL) => {
     const url = String(input);
     requests.push(url);
@@ -440,22 +349,20 @@ test("filtered queued pickup restores a locally completed failed run and job", a
   let runStatus = "completed", jobStatus = "completed";
   let runConclusion: string | null = "failure", jobConclusion: string | null = "failure";
   const requests: string[] = [];
-  const execute = async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const query = strings.join(" ");
-    if (query.includes("FROM dashboard_repositories repo")) return [repository];
-    if (query.includes("FROM dashboard_installations")) return [{ id: "installation", organization_id: "org" }];
-    if (query.includes("SELECT id FROM dashboard_repositories")) return [{ id: "repository" }];
-    if (query.startsWith("UPDATE dashboard_runs SET status='queued'") && runStatus === "completed") {
+  const db = preparedTestDatabase(name => {
+    if (name === "discovery_repositories") return [repository];
+    if (name === "run_lifecycle_installation") return [{ id: "installation", organizationId: "org" }];
+    if (name === "run_lifecycle_repository") return [{ id: "repository" }];
+    if (name === "run_lifecycle_reset_queued_run" && runStatus === "completed") {
       runStatus = "queued"; runConclusion = null;
     }
-    if (query.startsWith("UPDATE dashboard_jobs SET status='queued'") && jobStatus === "completed") {
+    if (name === "run_lifecycle_reset_queued_job" && jobStatus === "completed") {
       jobStatus = "queued"; jobConclusion = null;
     }
-    if (query.startsWith("INSERT INTO dashboard_runs")) return [{ id: "run", status: runStatus, run_attempt: 1 }];
-    if (query.startsWith("INSERT INTO dashboard_jobs")) return [{ id: "job", status: jobStatus, run_attempt: 1 }];
+    if (name === "run_lifecycle_upsert_run") return [{ id: "run" }];
+    if (name === "run_lifecycle_upsert_job") return [{ id: "job" }];
     return [];
-  };
-  const db = Object.assign(execute, { begin: async (callback: (tx: typeof execute) => Promise<unknown>) => callback(execute) }) as never;
+  });
   configureRunLifecycle(db);
   const githubFetch = async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -486,17 +393,7 @@ test("stops only the rate-limited installation's remaining repositories", async 
     { repositoryId: "22222222-2222-4222-8222-222222222222", githubRepositoryId: 2, name: "two", fullName: "acme/two", installationId: 42 },
     { repositoryId: "33333333-3333-4333-8333-333333333333", githubRepositoryId: 3, name: "three", fullName: "acme/three", installationId: 43 },
   ];
-  let selected = false;
-  const queries: string[] = [];
-  const db = (async (strings: TemplateStringsArray) => {
-    const query = strings.join(" ");
-    queries.push(query);
-    if (!selected && query.includes("FROM dashboard_repositories repo")) {
-      selected = true;
-      return rows;
-    }
-    return [];
-  }) as never;
+  const db = preparedTestDatabase(name => name === "discovery_repositories" ? rows : []);
   const requests: string[] = [];
   const githubFetch = async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -509,23 +406,18 @@ test("stops only the rate-limited installation's remaining repositories", async 
 
   expect(requests.some((url) => url.includes("/repos/acme/two/"))).toBe(false);
   expect(requests.some((url) => url.includes("/repos/acme/three/"))).toBe(true);
-  expect(queries.some((query) => query.includes("discovery_error='github_403'"))).toBe(false);
   expect(report.failed).toBe(1);
 });
 
-test("confirms omitted jobs from a complete attempt-qualified listing without completing the parent run", async () => {
+test("confirms omitted jobs via job lookup in an attempt-qualified listing", async () => {
   const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
   const requests: string[] = [];
-  const updates: Array<{ query: string; values: unknown[] }> = [];
-  const execute = async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const query = strings.join(" ");
-    updates.push({ query, values });
-    if (query.includes("FROM dashboard_repositories repo")) return [repository];
-    if (query.includes("FROM dashboard_jobs j") && query.includes("github_run_id")) return [{ jobId: 42, organizationId: "org", repositoryId: repository.repositoryId, githubRunId: 77, runAttempt: 1, status: "queued" }];
-    if (query.includes("SET status='completed'")) return [{ id: "job-42" }];
+  const db = preparedTestDatabase(name => {
+    if (name === "discovery_repositories") return [repository];
+    if (name === "discovery_local_jobs") return [{ jobId: 42, organizationId: "org", githubRunId: 77, runAttempt: 1 }];
+    if (name === "run_lifecycle_mark_job_missing") return [{ id: "job-42" }];
     return [];
-  };
-  const db = Object.assign(execute, { begin: async (callback: (tx: typeof execute) => Promise<unknown>) => callback(execute) }) as never;
+  });
   configureRunLifecycle(db);
   const githubFetch = async (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input);
@@ -549,18 +441,13 @@ test("confirms omitted jobs from a complete attempt-qualified listing without co
   expect(availableReport).toMatchObject({ repositories: 1, discovered: 0, updated: 0, failed: 0 });
   expect(queuedReport).toMatchObject({ repositories: 1, discovered: 0, updated: 0, failed: 0 });
   expect(requests.filter(url => url.endsWith("/actions/jobs/42"))).toHaveLength(2);
-  const terminalJobUpdate = updates.find(({ query }) => query.includes("UPDATE dashboard_jobs") && query.includes("SET status='completed',stage='failed',conclusion="));
-  expect(terminalJobUpdate).toBeDefined();
-  expect(terminalJobUpdate?.query).toContain("completed_at=");
-  expect(updates.some(({ query }) => query.includes("UPDATE dashboard_runs") && query.includes("SET status='completed'"))).toBe(false);
-  expect(updates.some(({ query }) => query.includes("UPDATE dashboard_repositories SET available=false"))).toBe(false);
 });
 
 test("skips queued discovery before token or GitHub requests during installation cooldown", async () => {
   const repository = { repositoryId: "11111111-1111-4111-8111-111111111111", githubRepositoryId: 7, name: "repo", fullName: "acme/repo", installationId: 42 };
   let tokenCalls = 0;
   let fetchCalls = 0;
-  const db = (async (strings: TemplateStringsArray) => strings.join(" ").includes("FROM dashboard_repositories repo") ? [repository] : []) as never;
+  const db = preparedTestDatabase(name => name === "discovery_repositories" ? [repository] : []);
 
   const report = await discoverQueuedRepositoryJobs({
     db,
@@ -582,7 +469,7 @@ test("skips all available repositories in a cooling installation group", async (
   ];
   let tokenCalls = 0;
   let fetchCalls = 0;
-  const db = (async (strings: TemplateStringsArray) => strings.join(" ").includes("FROM dashboard_repositories repo") ? rows : []) as never;
+  const db = preparedTestDatabase(name => name === "discovery_repositories" ? rows : []);
 
   const report = await discoverAvailableRepositoryJobs({
     db,

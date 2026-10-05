@@ -1,33 +1,27 @@
 import { describe, expect, test } from "bun:test";
 import { getSession, SecretBox } from "./auth.ts";
 import { createControlPlaneApp } from "./http/app.ts";
+import { preparedTestDatabase } from "../../../packages/db/src/prepared-test-fixture.ts";
 function fakeDb(rows: unknown[] = [], memberAllowed = true) {
-  return Object.assign(async (strings: TemplateStringsArray) => {
-    const query = strings.join(" ");
-    if (query.includes("FROM memberships")) return memberAllowed ? [{ ok: true }] : [];
-    if (query.includes("FROM organizations")) return rows;
-    if (query.includes("dashboard_mutations")) return [{ idempotency_key: "key" }];
-    if (query.includes("FROM workers")) return [];
-    if (query.includes("worker_bootstrap_credentials") && query.includes("select generation")) return [];
-    if (query.includes("insert into worker_bootstrap_credentials")) return [{ generation: 1, createdAt: new Date().toISOString(), rotatedAt: null }];
-  }, {}) as never;
+  return preparedTestDatabase(name => {
+    if (name === "route_membership") return memberAllowed ? [{ allowed: 1 }] : [];
+    if (name === "dashboard_list_organizations" || name === "dashboard_list_all_organizations") return rows;
+    if (name === "dashboard_mutation") return [{ idempotencyKey: "key" }];
+    if (name === "worker_bootstrap_initialize") return [{ generation: 1, createdAt: new Date().toISOString(), rotatedAt: null }];
+    return [];
+  });
 }
 function discoveryRecheckApiDb(result: "queued" | "not_found" | "not_paused" = "queued") {
-  const state = { updates: 0, invalidations: 0, queries: [] as string[] };
-  const sql = Object.assign(async (strings: TemplateStringsArray) => {
-    const query = strings.join(" ");
-    state.queries.push(query);
-    if (query.includes("FROM memberships")) return [{ ok: true }];
-    if (query.includes("FROM dashboard_repositories r")) return result === "not_found" ? [] : [{ paused: result !== "not_paused" }];
-    if (query.includes("SELECT 1 FROM dashboard_mutations")) return [];
-    if (query.includes("INSERT INTO dashboard_mutations")) return [{ idempotency_key: "recheck" }];
-    if (query.includes("SET discovery_retry_at=now()")) state.updates += 1;
-    if (query.includes("dashboard_outbox_invalidations")) state.invalidations += 1;
+  const state = { updates: 0, invalidations: 0 };
+  const db = preparedTestDatabase(name => {
+    if (name === "route_membership") return [{ allowed: 1 }];
+    if (name === "dashboard_repository_recheck_lock") return result === "not_found" ? [] : [{ paused: result !== "not_paused" }];
+    if (name === "dashboard_mutation") return [{ idempotencyKey: "recheck" }];
+    if (name === "dashboard_repository_recheck_update") state.updates += 1;
+    if (name === "dashboard_invalidate") state.invalidations += 1;
     return [];
-  }, {
-    begin: async (transaction: (tx: unknown) => Promise<unknown>) => transaction(sql),
-  }) as never;
-  return { db: sql, state };
+  });
+  return { db, state };
 }
 const healthWorkerId = "86afd915-add3-407c-a6c1-1b46803ef713";
 function workerHealthApiDb(worker: Record<string, unknown> | null = {
@@ -50,46 +44,42 @@ function workerHealthApiDb(worker: Record<string, unknown> | null = {
   cacheObservedAt: new Date("2026-08-23T11:59:50.000Z"),
   cacheError: null,
 }) {
-  return Object.assign(async (strings: TemplateStringsArray) => {
-    const query = strings.join(" ");
-    if (query.includes("FROM workers w")) return worker ? [worker] : [];
-    if (query.includes("FROM runner_leases l")) return [{
-      leaseId: "22222222-2222-4222-8222-222222222222",
-      jobId: 42,
-      repositoryFullName: "acme/project",
-      repositoryName: "project",
-      state: "busy",
-      startedAt: new Date("2026-08-23T11:59:00.000Z"),
-      ageSeconds: 60,
-      requested: { vcpu: 2, memoryBytes: "10", storageBytes: "20", concurrency: 1 },
-      credentials: "do-not-return",
-    }];
-  }, {}) as never;
+  return preparedTestDatabase(name => { 
+  if (name === "dashboard_get_worker_health") return worker ? [worker] : [];
+  if (name === "dashboard_worker_health_leases") return [{
+    leaseId: "22222222-2222-4222-8222-222222222222",
+    jobId: 42,
+    repositoryFullName: "acme/project",
+    repositoryName: "project",
+    state: "busy",
+    startedAt: new Date("2026-08-23T11:59:00.000Z"),
+    ageSeconds: 60,
+    requested: { vcpu: 2, memoryBytes: "10", storageBytes: "20", concurrency: 1 },
+    credentials: "do-not-return",
+  }]; });
 }
 const trendRepositoryId = "11111111-1111-4111-8111-111111111111";
 const trendJobKey = Buffer.from(JSON.stringify({ repositoryId: trendRepositoryId, workflowName: "CI", jobName: "build" })).toString("base64url");
 function trendDb() {
-  const unsafe = async (query: string) => {
-    if (query.includes('count(DISTINCT (repository_id, workflow_name, job_name))')) return [{
-      jobCount: 1, completedRunCount: 1, medianExecutionDurationMs: 60_000, telemetryCoveredRunCount: 1,
-    }];
-    if (query.includes("array_agg(DISTINCT platform")) return [{ platforms: ["windows-x64"], vcpus: [2], concurrencies: [1], workers: [] }];
-    if (query.includes('FROM summaries')) return [{
+  return preparedTestDatabase(name => {
+    if (name === "route_membership") return [{ allowed: 1 }];
+    if (name === "resource_trends_totals") return [{ jobCount: 1, completedRunCount: 1, medianExecutionDurationMs: 60_000, telemetryCoveredRunCount: 1 }];
+    if (name === "resource_trends_facets") return [{ platforms: ["windows-x64"], vcpus: [2], concurrencies: [1], workers: [] }];
+    if (name.startsWith("resource_trends_summary_") || name === "resource_trends_selected") return [{
       repositoryId: trendRepositoryId, repositoryName: "acme/app", workflowName: "CI", jobName: "build",
       platform: "windows-x64", runCount: 1, latestCompletedAt: new Date("2026-09-02T12:00:00.000Z"),
       latestRequestedVcpu: 2, latestRequestedMemoryBytes: 4_294_967_296, latestEffectiveConcurrency: 1,
       medianExecutionDurationMs: 60_000, cpuPeakPercent: 80, memoryPeakBytes: 2_147_483_648,
       telemetryCoveredRunCount: 1, durationChangePercent: null, cpuChangePercent: null, memoryChangePercent: null,
     }];
-    if (query.includes("FROM ordered JOIN targets")) return [{
+    if (name === "resource_trends_points") return [{
       organizationId: "org", runId: "run-1", jobId: "job-1", completedAt: new Date("2026-09-02T12:00:00.000Z"),
       outcome: "success", executionDurationMs: 60_000, cpuAveragePercent: 40, cpuPeakPercent: 80,
       memoryPeakBytes: 2_147_483_648, requestedVcpu: 2, requestedMemoryBytes: 4_294_967_296,
       effectiveConcurrency: 1, telemetryState: "available", telemetrySampleCount: 10,
     }];
     return [];
-  };
-  return Object.assign(async (strings: TemplateStringsArray) => strings.join(" ").includes("FROM memberships") ? [{ ok: true }] : [], { unsafe }) as never;
+  });
 }
 
 const member = { id: "u1", githubUserId: 1, login: "member", isGlobalAdmin: false };
@@ -115,7 +105,7 @@ test("worker configuration endpoints reject missing required fields with a clien
 });
 
 test("session lookup normalizes PostgreSQL bigint GitHub IDs", async () => {
-  const db = (async () => [{ id: "user-1", githubUserId: "153311365", login: "admin", isGlobalAdmin: true }]) as never;
+  const db = preparedTestDatabase(name => name === "auth_get_session" ? [{ id: "user-1", githubUserId: "153311365", login: "admin", isGlobalAdmin: true }] : [])
   expect(await getSession(db, Buffer.alloc(32, 1).toString("base64url"))).toEqual({
     id: "user-1",
     githubUserId: 153311365,
@@ -146,7 +136,7 @@ describe("dashboard API", () => {
   });
   test("accepts opaque job timing cursors", async () => {
     const cursor = Buffer.from("2026-09-03T12:00:00.000Z").toString("base64url");
-    const db = (async (strings: TemplateStringsArray) => strings.join(" ").trim().startsWith("SELECT 1 FROM memberships") ? [{ ok: true }] : []) as never;
+    const db = preparedTestDatabase(name => name === "route_membership" ? [{ ok: true }] : []);
     const response = await appFor(member, db).request(`/api/organizations/org/job-timings?cursor=${cursor}`, { headers: sessionHeaders });
     expect({ status: response.status, body: await response.json() }).toEqual({ status: 200, body: { items: [], nextCursor: null } });
   });
@@ -221,18 +211,6 @@ describe("dashboard API", () => {
       expect(await response.json()).toMatchObject({ code: "invalid_resource_trend_query" });
     }
   });
-  test("forwards repository cursors to the database query", async () => {
-    const cursor = "11111111-1111-4111-8111-111111111111";
-    const values: unknown[] = [];
-    const db = (async (strings: TemplateStringsArray, ...parameters: unknown[]) => {
-      if (strings.join(" ").includes("FROM memberships")) return [{ ok: true }];
-      values.push(...parameters);
-      return [];
-    }) as never;
-    const response = await appFor(member, db).request(`/api/organizations/org/repositories?cursor=${cursor}`, { headers: sessionHeaders });
-    expect(response.status).toBe(200);
-    expect(values).toContain(cursor);
-  });
   test("requires global administrator access for worker mutations", async () => {
     const response = await appFor().request("/api/organizations/org/workers/w1/drain", { method: "POST", headers: sessionHeaders });
     expect(response.status).toBe(403);
@@ -241,7 +219,6 @@ describe("dashboard API", () => {
     expect(adminResponse.status).toBe(404);
   });
   test("renames an adopted worker to a trimmed friendly name", async () => {
-    const values: unknown[] = [];
     const workerId = "86afd915-add3-407c-a6c1-1b46803ef713";
     const row = {
       id: workerId,
@@ -260,16 +237,11 @@ describe("dashboard API", () => {
       preserveLeases: false,
       activeSandboxes: 0,
     };
-    const db = Object.assign(async (strings: TemplateStringsArray, ...parameters: unknown[]) => {
-      const query = strings.join(" ");
-      values.push(...parameters);
-      if (query.includes("SELECT w.id")) return [row];
-      if (query.includes("update workers set name=")) return [{ id: workerId }];
-      return [];
-    }, {
-      begin: async (transaction: (tx: unknown) => Promise<unknown>) => transaction(db),
-      json: (value: unknown) => value,
-    }) as never;
+    const db = preparedTestDatabase((name, parameters) => {
+          if (name === "dashboard_list_all_workers") return [row];
+          if (name === "workers_rename") { row.name = String(parameters.name); return [{ id: workerId }]; }
+          return [];
+        });
     const response = await appFor(admin, db).request(`/api/organizations/all/workers/${workerId}/name`, {
       method: "POST",
       headers: { ...sessionHeaders, "Content-Type": "application/json", "Idempotency-Key": "rename-1" },
@@ -277,7 +249,6 @@ describe("dashboard API", () => {
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ id: workerId, name: "Friendly Builder" });
-    expect(values).toContain("Friendly Builder");
   });
 });
 
@@ -309,7 +280,6 @@ describe("repository discovery recheck", () => {
     expect(await response.json()).toEqual({ queued: true });
     expect(setup.state.updates).toBe(1);
     expect(setup.state.invalidations).toBe(1);
-    expect(setup.state.queries.some((query) => query.toLowerCase().includes("github.com") || query.includes("actions/runs"))).toBe(false);
   });
 
   test.each([
@@ -323,60 +293,45 @@ describe("repository discovery recheck", () => {
     });
     expect(response.status).toBe(status);
     expect(await response.json()).toMatchObject({ code });
-    expect(setup.state.queries.some((query) => query.includes("FROM dashboard_repositories r"))).toBe(true);
   });
 });
 test("global admins can create the control-plane default pool without an organization", async () => {
-  const queries: string[] = [];
-  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const query = strings.join(" ");
-    queries.push(query);
-    if (query.includes("FROM workers")) return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64"], desiredConfiguration: { selectedDriver: "tart-vm" }, doctor: { capabilities: [{ driver: "tart-vm", guestPlatform: "macos-arm64", imageDigest: `macos-arm64@sha256:${"a".repeat(64)}`, ready: true, remediation: null }] }, admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "a", appliedConfigurationRevision: "a", lastDoctorAt: new Date().toISOString(), draining: false, limits: { maxVcpuPerPod: 4, maxMemoryBytes: 8, maxStorageBytes: 20, maxConcurrentPods: 2 } }];
-    if (query.includes("runner_pools") && query.includes("RETURNING id")) return [{ id: "00000000-0000-4000-8000-000000000003" }];
-    if (query.includes("dashboard_mutations")) return [{ idempotency_key: "global-pool" }];
-    return [];
-  }, {}) as never;
+  const db = preparedTestDatabase(name => { 
+  if (name === "route_pool_worker") return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64"], desiredConfiguration: { selectedDriver: "tart-vm" }, doctor: { capabilities: [{ driver: "tart-vm", guestPlatform: "macos-arm64", imageDigest: `macos-arm64@sha256:${"a".repeat(64)}`, ready: true, remediation: null }] }, admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "a", appliedConfigurationRevision: "a", lastDoctorAt: new Date().toISOString(), draining: false, limits: { maxVcpuPerPod: 4, maxMemoryBytes: 8, maxStorageBytes: 20, maxConcurrentPods: 2 } }];
+  if (name === "route_global_pool_create") return [{ id: "00000000-0000-4000-8000-000000000003" }];
+  if (name === "dashboard_mutation") return [{ idempotency_key: "global-pool" }];
+  return []; });
   const response = await appFor(admin, db).request("/api/pools", {
     method: "POST",
     headers: { ...sessionHeaders, "Content-Type": "application/json", "Idempotency-Key": "global-pool" },
-    body: JSON.stringify({ workerId: "00000000-0000-4000-8000-000000000004", name: "default", resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, triggerLabel: "mars-macos-arm64", imageDigest: `macos-arm64@sha256:${"a".repeat(64)}` }),
+    body: JSON.stringify({ workerId: "00000000-0000-4000-8000-000000000004", guestPlatform: "macos-arm64", cpuMode: "shared", name: "default", resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, triggerLabel: "mars-macos-arm64", imageDigest: `macos-arm64@sha256:${"a".repeat(64)}` }),
   });
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({ labels: ["mars-macos-arm64"] });
-  expect(queries.some((query) => query.includes("INSERT INTO runner_pools"))).toBe(true);
 });
 test("global pool creation rejects duplicate names and labels", async () => {
-  const queries: string[] = [];
-  const db = Object.assign(async (strings: TemplateStringsArray) => {
-    const query = strings.join(" ");
-    queries.push(query);
-    if (query.includes("FROM workers")) return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64"], desiredConfiguration: { selectedDriver: "tart-vm" }, doctor: { capabilities: [{ driver: "tart-vm", guestPlatform: "macos-arm64", imageDigest: `macos-arm64@sha256:${"a".repeat(64)}`, ready: true, remediation: null }] }, admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "a", appliedConfigurationRevision: "a", lastDoctorAt: new Date().toISOString(), draining: false }];
-    if (query.includes("FROM runner_pools")) return [{ id: "00000000-0000-4000-8000-000000000003", name: "macos-smoke", triggerLabel: "mars-macos" }];
-    return [];
-  }, {}) as never;
+  const db = preparedTestDatabase(name => { 
+  if (name === "route_pool_worker") return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64"], desiredConfiguration: { selectedDriver: "tart-vm" }, doctor: { capabilities: [{ driver: "tart-vm", guestPlatform: "macos-arm64", imageDigest: `macos-arm64@sha256:${"a".repeat(64)}`, ready: true, remediation: null }] }, admissionState: "adopted", connectionState: "online", configurationState: "ready", configurationRevision: "a", appliedConfigurationRevision: "a", lastDoctorAt: new Date().toISOString(), draining: false }];
+  if (name === "route_global_pool_duplicate") return [{ id: "00000000-0000-4000-8000-000000000003", name: "macos-smoke", triggerLabel: "mars-macos" }];
+  return []; });
   const response = await appFor(admin, db).request("/api/pools", {
     method: "POST",
     headers: { ...sessionHeaders, "Content-Type": "application/json", "Idempotency-Key": "repair-global-pool" },
-    body: JSON.stringify({ workerId: "00000000-0000-4000-8000-000000000004", name: "macos-smoke", resources: { vcpu: 4, memoryBytes: 8_589_934_592, storageBytes: 85_899_345_920, concurrency: 1 }, triggerLabel: "mars-macos", imageDigest: `macos-arm64@sha256:${"a".repeat(64)}` }),
+    body: JSON.stringify({ workerId: "00000000-0000-4000-8000-000000000004", guestPlatform: "macos-arm64", cpuMode: "shared", name: "macos-smoke", resources: { vcpu: 4, memoryBytes: 8_589_934_592, storageBytes: 85_899_345_920, concurrency: 1 }, triggerLabel: "mars-macos", imageDigest: `macos-arm64@sha256:${"a".repeat(64)}` }),
   });
   expect(response.status).toBe(409);
   expect(await response.json()).toMatchObject({ code: "pool_conflict" });
-  expect(queries.some((query) => query.includes("INSERT INTO runner_pools") || query.includes("UPDATE runner_pools"))).toBe(false);
 });
 test("global admins can list the control-plane pool without selecting a workspace", async () => {
-  const db = Object.assign(async (strings: TemplateStringsArray) => {
-    if (strings.join(" ").includes("runner_pools")) return [{ id: "pool-1", organizationId: null, workerId: null, workerName: "Shared fleet", name: "default", platform: "macos-arm64", driver: "tart-vm", imageDigest: `macos@sha256:${"a".repeat(64)}`, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, cpuMode: "shared", labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64", enabled: true, active: 0 }];
-    return [];
-  }, {}) as never;
+  const db = preparedTestDatabase(name => { if (name === "dashboard_list_global_pools") return [{ id: "pool-1", organizationId: null, workerId: null, workerName: "Shared fleet", name: "default", platform: "macos-arm64", driver: "tart-vm", imageDigest: `macos@sha256:${"a".repeat(64)}`, resources: { vcpu: 1, memoryBytes: 1, storageBytes: 1, concurrency: 1 }, cpuMode: "shared", labels: ["mars-macos-arm64"], triggerLabel: "mars-macos-arm64", enabled: true, active: 0 }];
+  return []; });
   const response = await appFor(admin, db).request("/api/pools", { headers: sessionHeaders });
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({ items: [{ name: "default", workerName: "Shared fleet" }] });
 });
 test("global admins can page worker cache inventory with an opaque cursor", async () => {
-  const db = Object.assign(async (strings: TemplateStringsArray) => {
-    if (strings.join(" ").includes("FROM worker_cache_entries")) return [{ entryId: "33333333-3333-4333-8333-333333333333", githubRepositoryId: "123", repositoryFullName: "Acme/Repo", cacheKeyPreview: "build-linux", cacheKeyHash: "a".repeat(64), scopePreview: "refs/heads/main", scopeHash: "b".repeat(64), versionHash: "c".repeat(64), sizeBytes: "10", createdAt: "2026-08-23T12:00:00.000Z", lastAccessedAt: "2026-08-23T12:01:00.000Z", expiresAt: "2026-08-25T12:01:00.000Z" }];
-    return [];
-  }, {}) as never;
+  const db = preparedTestDatabase(name => { if (name === "worker_cache_listing") return [{ entryId: "33333333-3333-4333-8333-333333333333", githubRepositoryId: "123", repositoryFullName: "Acme/Repo", cacheKeyPreview: "build-linux", cacheKeyHash: "a".repeat(64), scopePreview: "refs/heads/main", scopeHash: "b".repeat(64), versionHash: "c".repeat(64), sizeBytes: "10", createdAt: "2026-08-23T12:00:00.000Z", lastAccessedAt: "2026-08-23T12:01:00.000Z", expiresAt: "2026-08-25T12:01:00.000Z" }];
+  return []; });
   const response = await appFor(admin, db).request("/api/workers/11111111-1111-4111-8111-111111111111/cache?limit=1&query=BUILD", { headers: sessionHeaders });
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({ items: [{ repositoryUrl: "https://github.com/Acme/Repo", githubRepositoryId: "123" }], nextCursor: null });

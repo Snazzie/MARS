@@ -381,9 +381,30 @@ Sandbox attestation does not mean GitHub assigned a job, and `runner.finished`
 cleanup. GitHub webhooks and authoritative discovery own job/run status. A job
 still queued on GitHub remains eligible for dispatch after lease cleanup.
 
-Run the PostgreSQL-backed runner-completion regressions against a migrated test
-database with `MARS_E2E_DATABASE_URL=<url> bun test tests/runner-completion.e2e.test.ts`.
-Each fixture rolls back. Coverage includes successful/failed runner exits,
+Application query modules register fixed `defineQueries` families at module load.
+Import every required query module before calling `createDb` or
+`createDbFromClient`: startup compiles their explicit Drizzle builders once per
+client. Request handlers execute the cached statements with placeholders; late
+query registration is an error, not a lazy-compilation fallback. Do not use
+`db.query.*` or the removed callable SQL client for application persistence.
+Transaction callbacks reuse the database identity and cached queries, including
+nested savepoints; `$client` raw SQL is for migrations and administrative fixtures.
+PostgreSQL-specific expressions (including JSONB traversal, aggregate/window
+functions, and advisory locks) may use `sql` fragments inside these fixed
+builders. Schema migrations retain raw SQL. Worker-local Bun SQLite caches are
+outside this PostgreSQL migration.
+
+Run PostgreSQL-backed persistence regressions against a migrated, disposable test
+database:
+
+```sh
+MARS_E2E_DATABASE_URL=<url> bun test packages/db/src/prepared.integration.test.ts tests/job-pickup.e2e.test.ts tests/runner-completion.e2e.test.ts
+```
+
+Prepared-query tests use a test-owned schema and remove it afterward. Pickup
+fixtures roll back or delete their own rows; runner-completion fixtures roll back.
+Coverage includes transaction isolation, rollback/savepoints, membership-scoped
+resource trends, queued-job pickup, command replay, successful/failed runner exits,
 duplicate exits, cleanup, dispatch eligibility, and GitHub completion ordering.
 
 ### Container failure evidence and memory resilience

@@ -1,9 +1,62 @@
-import type { DatabaseClient } from "@mars/db";
+import { defineQueries, schema, type DatabaseClient } from "@mars/db";
+import { and, asc, desc, eq, gt, gte, isNull, isNotNull, lte, lt, ne, or, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import YAML from "yaml";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { GithubRateLimitError, isGithubRateLimitError } from "./github-rate-limit.ts";
 import { applyGithubJobSnapshot, markGithubJobMissing, type GithubJobSnapshot, type GithubRunSnapshot } from "./runs.ts";
 import { GITHUB_LOG_FORMAT_VERSION, syncCompletedGithubJobLogs } from "./github-job-log-sync.ts";
+
+const queries = defineQueries(db => {
+  const r = schema.dashboardRuns, j = schema.dashboardJobs, repo = schema.dashboardRepositories;
+  const i = schema.dashboardInstallations, checkpoint = schema.githubDiscoveryCheckpoints;
+  const p = sql.placeholder;
+  const source = alias(j, "source"), target = alias(j, "target");
+  const repositoryId = eq(r.repositoryId, p("repositoryId"));
+  const runIdentity = and(eq(r.organizationId, p("organizationId")), eq(r.id, p("runId")), eq(r.runAttempt, p("runAttempt")));
+  return {
+    graphRun: db.select({ id: r.id, actionGraphResolvedAt: r.actionGraphResolvedAt }).from(r)
+      .where(and(eq(r.organizationId, p("organizationId")), repositoryId, eq(r.githubRunId, p("githubRunId")), eq(r.runAttempt, p("runAttempt")))).prepare("discovery_graph_run"),
+    lockGraphRun: db.select({ id: r.id }).from(r).where(and(runIdentity, isNull(r.actionGraphResolvedAt))).for("update").prepare("discovery_graph_lock"),
+    deleteEdges: db.delete(schema.dashboardActionEdges).where(and(eq(schema.dashboardActionEdges.organizationId, p("organizationId")), eq(schema.dashboardActionEdges.runId, p("runId")))).prepare("discovery_delete_edges"),
+    insertEdge: db.insert(schema.dashboardActionEdges).select(db.select({
+      organizationId: sql<string>`${p("organizationId")}::uuid`.as("organization_id"), runId: sql<string>`${p("runId")}::uuid`.as("run_id"),
+      fromJobId: source.id, toJobId: target.id,
+    }).from(source).crossJoin(target).where(and(
+      eq(source.organizationId, p("organizationId")), eq(source.runId, p("runId")), eq(source.runAttempt, p("runAttempt")), eq(source.githubJobId, p("from")),
+      eq(target.organizationId, p("organizationId")), eq(target.runId, p("runId")), eq(target.runAttempt, p("runAttempt")), eq(target.githubJobId, p("to")),
+    ))).onConflictDoNothing().prepare("discovery_insert_edge"),
+    resolveGraph: db.update(r).set({ actionGraphResolvedAt: sql`now()` }).where(runIdentity).prepare("discovery_resolve_graph"),
+    localJobs: db.select({ jobId: j.githubJobId, organizationId: r.organizationId, githubRunId: r.githubRunId, runAttempt: j.runAttempt }).from(j)
+      .innerJoin(r, and(eq(r.organizationId, j.organizationId), eq(r.id, j.runId)))
+      .where(and(eq(r.organizationId, p("organizationId")), repositoryId, eq(r.githubRunId, p("githubRunId")), eq(j.runAttempt, p("runAttempt")), ne(j.status, "completed"))).prepare("discovery_local_jobs"),
+    checkpoint: db.select({ completedRunId: checkpoint.completedRunId, completedRunAttempt: checkpoint.completedRunAttempt }).from(checkpoint)
+      .where(eq(checkpoint.repositoryId, p("repositoryId"))).prepare("discovery_checkpoint"),
+    expireLogs: db.update(j).set({ logsState: "unavailable", logsSyncedAt: sql`now()`, logsError: "github_logs_expired", logsVersion: sql`${p("logsVersion")}` }).from(r)
+      .where(and(eq(j.runId, r.id), repositoryId, eq(j.status, "completed"), lt(j.completedAt, sql`now()-interval '90 days'`), lt(j.logsVersion, p("logsVersion")))).prepare("discovery_expire_logs"),
+    activeRuns: db.selectDistinct({ runId: r.githubRunId, runAttempt: r.runAttempt }).from(r).where(and(repositoryId, ne(r.status, "completed"))).prepare("discovery_active_runs"),
+    logBackfill: db.selectDistinct({ runId: r.githubRunId, runAttempt: j.runAttempt }).from(r).innerJoin(j, eq(j.runId, r.id))
+      .where(and(repositoryId, eq(j.status, "completed"), gte(j.completedAt, sql`now()-interval '90 days'`), or(eq(j.logsState, "pending"), lt(j.logsVersion, p("logsVersion")))))
+      .orderBy(desc(r.githubRunId)).limit(2).prepare("discovery_log_backfill"),
+    resolveTrivialGraphs: db.update(r).set({ actionGraphResolvedAt: sql`now()` }).where(and(repositoryId, isNull(r.actionGraphResolvedAt),
+      sql`(${db.select({ count: sql<number>`count(*)` }).from(j).where(and(eq(j.organizationId, r.organizationId), eq(j.runId, r.id), eq(j.runAttempt, r.runAttempt)))}) <= 1`,
+    )).prepare("discovery_resolve_trivial_graphs"),
+    graphBackfill: db.select({ runId: r.githubRunId, runAttempt: r.runAttempt }).from(r).where(and(repositoryId, isNull(r.actionGraphResolvedAt))).orderBy(desc(r.queuedAt)).limit(2).prepare("discovery_graph_backfill"),
+    saveCheckpoint: db.insert(checkpoint).values({ repositoryId: p("repositoryId"), completedRunId: p("runId"), completedRunAttempt: p("runAttempt"), updatedAt: sql`now()` })
+      .onConflictDoUpdate({ target: checkpoint.repositoryId, set: { completedRunId: sql`excluded.completed_run_id`, completedRunAttempt: sql`excluded.completed_run_attempt`, updatedAt: sql`now()` } }).prepare("discovery_save_checkpoint"),
+    repositories: db.select({
+      repositoryId: repo.id, organizationId: repo.organizationId, githubRepositoryId: repo.githubRepositoryId, name: repo.name,
+      fullName: repo.fullName, discoveryError: repo.discoveryError, discoveryRetryAt: repo.discoveryRetryAt, installationId: i.githubInstallationId,
+    }).from(repo).innerJoin(i, and(eq(i.id, repo.installationId), eq(i.organizationId, repo.organizationId)))
+      .where(and(eq(repo.available, true), eq(i.state, "approved"), or(isNull(repo.discoveryRetryAt), lte(repo.discoveryRetryAt, sql`now()`)),
+        sql`(${p("fullName")}::text IS NULL OR ${repo.fullName}=${p("fullName")}::text)`))
+      .orderBy(asc(repo.fullName)).prepare("discovery_repositories"),
+    rateLimited: db.update(repo).set({ discoveryError: "github_rate_limited", discoveryRetryAt: sql`${p("retryAt")}::timestamptz` }).where(eq(repo.id, p("repositoryId"))).prepare("discovery_rate_limited"),
+    clearError: db.update(repo).set({ discoveryError: null, discoveryRetryAt: null }).where(and(eq(repo.id, p("repositoryId")), or(isNotNull(repo.discoveryError), isNotNull(repo.discoveryRetryAt)))).prepare("discovery_clear_error"),
+    unavailable: db.update(repo).set({ available: false }).where(eq(repo.id, p("repositoryId"))).prepare("discovery_unavailable"),
+    forbidden: db.update(repo).set({ discoveryError: "github_403", discoveryRetryAt: sql`now()+interval '24 hours'` }).where(eq(repo.id, p("repositoryId"))).prepare("discovery_forbidden"),
+  };
+});
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 export type DiscoveryDeps = {
@@ -114,12 +167,7 @@ async function syncRunActionGraph(
   jobs: readonly GithubJobSnapshot[],
 ): Promise<void> {
   const organizationId = String(row.organizationId ?? "");
-  const [storedRun] = await deps.db`
-    SELECT id,action_graph_resolved_at AS "actionGraphResolvedAt"
-    FROM dashboard_runs
-    WHERE organization_id=${organizationId} AND repository_id=${String(row.repositoryId)}
-      AND github_run_id=${run.id} AND run_attempt=${run.runAttempt}
-  `;
+  const [storedRun] = await queries(deps.db).graphRun.execute({ organizationId, repositoryId: String(row.repositoryId), githubRunId: run.id, runAttempt: run.runAttempt });
   if (!storedRun || storedRun.actionGraphResolvedAt) return;
   let edges: WorkflowDependencyEdge[] = [];
   if (jobs.length > 1) {
@@ -128,32 +176,18 @@ async function syncRunActionGraph(
     const content = await client.getWorkflowFile(owner, repo, workflowPath, run.commitSha);
     edges = workflowDependencyEdges(content, jobs);
   }
-  await deps.db.begin(async tx => {
-    const [lockedRun] = await tx`
-      SELECT id FROM dashboard_runs
-      WHERE organization_id=${organizationId} AND id=${String(storedRun.id)}
-        AND run_attempt=${run.runAttempt} AND action_graph_resolved_at IS NULL
-      FOR UPDATE
-    `;
+  await deps.db.transaction(async tx => {
+    const identity = { organizationId, runId: storedRun.id, runAttempt: run.runAttempt };
+    const [lockedRun] = await queries(tx).lockGraphRun.execute(identity);
     if (!lockedRun) return;
-    await tx`DELETE FROM dashboard_action_edges WHERE organization_id=${organizationId} AND run_id=${String(storedRun.id)}`;
+    await queries(tx).deleteEdges.execute(identity);
     for (const edge of edges) {
-      await tx`
-        INSERT INTO dashboard_action_edges (organization_id,run_id,from_job_id,to_job_id)
-        SELECT ${organizationId},${String(storedRun.id)},source.id,target.id
-        FROM dashboard_jobs source CROSS JOIN dashboard_jobs target
-        WHERE source.organization_id=${organizationId} AND source.run_id=${String(storedRun.id)}
-          AND source.run_attempt=${run.runAttempt} AND source.github_job_id=${edge.from}
-          AND target.organization_id=${organizationId} AND target.run_id=${String(storedRun.id)}
-          AND target.run_attempt=${run.runAttempt} AND target.github_job_id=${edge.to}
-        ON CONFLICT DO NOTHING
-      `;
+      await queries(tx).insertEdge.execute({ ...identity, from: edge.from, to: edge.to });
     }
-    await tx`UPDATE dashboard_runs SET action_graph_resolved_at=now() WHERE organization_id=${organizationId} AND id=${String(storedRun.id)} AND run_attempt=${run.runAttempt}`;
+    await queries(tx).resolveGraph.execute(identity);
   });
 }
 
-type LocalNonterminalJob = { jobId: number; organizationId?: string; githubRunId: number; runAttempt: number };
 const missingGithubError = (error: unknown): boolean => {
   const code = error instanceof Error ? error.message : String(error);
   return code === "github_404" || code === "github_410";
@@ -184,17 +218,7 @@ async function reconcileAbsentJobs(
   runAttempt: number,
   returnedIds: Set<number>,
 ): Promise<{ discovered: number; updated: number }> {
-  const localJobs = await deps.db<LocalNonterminalJob[]>`
-    SELECT j.github_job_id AS "jobId",r.organization_id AS "organizationId",
-      r.github_run_id AS "githubRunId",j.run_attempt AS "runAttempt"
-    FROM dashboard_jobs j
-    JOIN dashboard_runs r ON r.organization_id=j.organization_id AND r.id=j.run_id
-    WHERE r.organization_id=${String(row.organizationId ?? "")}
-      AND r.repository_id=${String(row.repositoryId)}
-      AND r.github_run_id=${runId}
-      AND j.run_attempt=${runAttempt}
-      AND j.status <> 'completed'
-  `;
+  const localJobs = await queries(deps.db).localJobs.execute({ organizationId: String(row.organizationId ?? ""), repositoryId: String(row.repositoryId), githubRunId: runId, runAttempt });
   let discovered = 0, updated = 0;
   for (const local of localJobs) {
     if (returnedIds.has(Number(local.jobId))) continue;
@@ -237,28 +261,18 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
   const installationId = Number(row.installationId);
   const client = new GithubJobsClient({ token: () => deps.installationToken(installationId), fetch: deps.githubFetchForInstallation(installationId) });
   const runs = new Map<string, GithubRunSnapshot>();
-  const [checkpoint] = await deps.db`SELECT completed_run_id AS "completedRunId",completed_run_attempt AS "completedRunAttempt" FROM github_discovery_checkpoints WHERE repository_id=${String(row.repositoryId)}`;
+  const filter = { repositoryId: String(row.repositoryId) };
+  const [checkpoint] = await queries(deps.db).checkpoint.execute(filter);
   const completed = await listRunsSinceCompletedCheckpoint(
     page => client.listRuns(owner, repo, undefined, page),
     checkpoint?.completedRunId == null || checkpoint?.completedRunAttempt == null ? null : { runId: Number(checkpoint.completedRunId), runAttempt: Number(checkpoint.completedRunAttempt) },
   );
   for (const run of completed.runs) runs.set(`${run.id}:${run.runAttempt}`, run);
-  await deps.db`UPDATE dashboard_jobs j SET logs_state='unavailable',logs_synced_at=now(),logs_error='github_logs_expired',logs_version=${GITHUB_LOG_FORMAT_VERSION} FROM dashboard_runs r WHERE j.run_id=r.id AND r.repository_id=${String(row.repositoryId)} AND j.status='completed' AND j.completed_at<now()-interval '90 days' AND j.logs_version<${GITHUB_LOG_FORMAT_VERSION}`;
-  const activeLocal = await deps.db`SELECT DISTINCT r.github_run_id AS "runId",r.run_attempt AS "runAttempt" FROM dashboard_runs r WHERE r.repository_id=${String(row.repositoryId)} AND r.status<>'completed'`;
-  const logBackfill = await deps.db`SELECT DISTINCT r.github_run_id AS "runId",j.run_attempt AS "runAttempt" FROM dashboard_runs r JOIN dashboard_jobs j ON j.run_id=r.id WHERE r.repository_id=${String(row.repositoryId)} AND j.status='completed' AND j.completed_at>=now()-interval '90 days' AND (j.logs_state='pending' OR j.logs_version<${GITHUB_LOG_FORMAT_VERSION}) ORDER BY r.github_run_id DESC LIMIT 2`;
-  await deps.db`
-    UPDATE dashboard_runs r SET action_graph_resolved_at=now()
-    WHERE r.repository_id=${String(row.repositoryId)} AND r.action_graph_resolved_at IS NULL
-      AND (SELECT count(*) FROM dashboard_jobs j
-        WHERE j.organization_id=r.organization_id AND j.run_id=r.id AND j.run_attempt=r.run_attempt) <= 1
-  `;
-  const graphBackfill = await deps.db`
-    SELECT r.github_run_id AS "runId",r.run_attempt AS "runAttempt"
-    FROM dashboard_runs r
-    WHERE r.repository_id=${String(row.repositoryId)} AND r.action_graph_resolved_at IS NULL
-    ORDER BY r.queued_at DESC
-    LIMIT 2
-  `;
+  await queries(deps.db).expireLogs.execute({ ...filter, logsVersion: GITHUB_LOG_FORMAT_VERSION });
+  const activeLocal = await queries(deps.db).activeRuns.execute(filter);
+  const logBackfill = await queries(deps.db).logBackfill.execute({ ...filter, logsVersion: GITHUB_LOG_FORMAT_VERSION });
+  await queries(deps.db).resolveTrivialGraphs.execute(filter);
+  const graphBackfill = await queries(deps.db).graphBackfill.execute(filter);
   let discovered = 0, updated = 0;
   for (const item of [...activeLocal, ...logBackfill, ...graphBackfill]) {
     const runId = Number(item.runId), runAttempt = Number(item.runAttempt);
@@ -302,15 +316,13 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
     }
   }
   if (completed.newestCheckpoint !== null) {
-    await deps.db`INSERT INTO github_discovery_checkpoints (repository_id,completed_run_id,completed_run_attempt,updated_at) VALUES (${String(row.repositoryId)},${completed.newestCheckpoint.runId},${completed.newestCheckpoint.runAttempt},now()) ON CONFLICT (repository_id) DO UPDATE SET completed_run_id=excluded.completed_run_id,completed_run_attempt=excluded.completed_run_attempt,updated_at=now()`;
+    await queries(deps.db).saveCheckpoint.execute({ ...filter, runId: completed.newestCheckpoint.runId, runAttempt: completed.newestCheckpoint.runAttempt });
   }
   return { discovered, updated };
 }
 
 export async function discoverQueuedRepositoryJobs(deps: DiscoveryDeps): Promise<DiscoveryReport> {
-  const rows = deps.repositoryFullName
-    ? await deps.db`SELECT repo.id AS "repositoryId",repo.organization_id AS "organizationId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' AND (repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()) AND repo.full_name=${deps.repositoryFullName} ORDER BY repo.full_name`
-    : await deps.db`SELECT repo.id AS "repositoryId",repo.organization_id AS "organizationId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' AND (repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()) ORDER BY repo.full_name`;
+  const rows = await queries(deps.db).repositories.execute({ fullName: deps.repositoryFullName || null });
   const report: DiscoveryReport = { repositories: rows.length, discovered: 0, updated: 0, failed: 0 };
   for (const row of rows as Record<string, unknown>[]) {
     try {
@@ -362,7 +374,7 @@ export async function discoverQueuedRepositoryJobs(deps: DiscoveryDeps): Promise
       report.failed += 1;
       console.error(`Queued GitHub job discovery failed for ${String(row.fullName)}: ${error instanceof Error ? error.message : "unknown"}`);
       if (isGithubRateLimitError(error)) {
-        await deps.db`UPDATE dashboard_repositories SET discovery_error='github_rate_limited',discovery_retry_at=${rateLimitRetryAt(error)} WHERE id=${String(row.repositoryId)}`;
+        await queries(deps.db).rateLimited.execute({ repositoryId: String(row.repositoryId), retryAt: rateLimitRetryAt(error) });
         break;
       }
     }
@@ -379,9 +391,7 @@ function rateLimitRetryAt(error: unknown): string {
 }
 
 export async function discoverAvailableRepositoryJobs(deps: DiscoveryDeps): Promise<DiscoveryReport> {
-  const rows = deps.repositoryFullName
-    ? await deps.db`SELECT repo.id AS "repositoryId",repo.organization_id AS "organizationId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",repo.discovery_error AS "discoveryError",repo.discovery_retry_at AS "discoveryRetryAt",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' AND (repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()) AND repo.full_name=${deps.repositoryFullName} ORDER BY repo.full_name`
-    : await deps.db`SELECT repo.id AS "repositoryId",repo.organization_id AS "organizationId",repo.github_repository_id AS "githubRepositoryId",repo.name,repo.full_name AS "fullName",repo.discovery_error AS "discoveryError",repo.discovery_retry_at AS "discoveryRetryAt",i.github_installation_id AS "installationId" FROM dashboard_repositories repo JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=repo.organization_id WHERE repo.available=true AND i.state='approved' AND (repo.discovery_retry_at IS NULL OR repo.discovery_retry_at<=now()) ORDER BY repo.full_name`;
+  const rows = await queries(deps.db).repositories.execute({ fullName: deps.repositoryFullName || null });
   const report: DiscoveryReport = { repositories: rows.length, discovered: 0, updated: 0, failed: 0 };
   const byInstallation = new Map<number, Record<string, unknown>[]>();
   for (const row of rows as Record<string, unknown>[]) {
@@ -403,23 +413,23 @@ export async function discoverAvailableRepositoryJobs(deps: DiscoveryDeps): Prom
           report.discovered += value.discovered;
           report.updated += value.updated;
           if (row.discoveryError != null || row.discoveryRetryAt != null) {
-            await deps.db`UPDATE dashboard_repositories SET discovery_error=NULL,discovery_retry_at=NULL WHERE id=${String(row.repositoryId)} AND (discovery_error IS NOT NULL OR discovery_retry_at IS NOT NULL)`;
+            await queries(deps.db).clearError.execute({ repositoryId: String(row.repositoryId) });
           }
         } catch (error) {
           const code = error instanceof Error ? error.message : "unknown";
           report.failed += 1;
           console.error(`GitHub job discovery failed for ${String(row.fullName)}: ${code}`);
           if (isGithubRateLimitError(error)) {
-            await deps.db`UPDATE dashboard_repositories SET discovery_error='github_rate_limited',discovery_retry_at=${rateLimitRetryAt(error)} WHERE id=${String(row.repositoryId)}`;
+            await queries(deps.db).rateLimited.execute({ repositoryId: String(row.repositoryId), retryAt: rateLimitRetryAt(error) });
             break;
           }
           if (code === "github_404") {
-            await deps.db`UPDATE dashboard_repositories SET available=false WHERE id=${String(row.repositoryId)}`;
+            await queries(deps.db).unavailable.execute({ repositoryId: String(row.repositoryId) });
             report.failed -= 1;
             continue;
           }
           if (code === "github_403") {
-            await deps.db`UPDATE dashboard_repositories SET discovery_error='github_403',discovery_retry_at=now()+interval '24 hours' WHERE id=${String(row.repositoryId)}`;
+            await queries(deps.db).forbidden.execute({ repositoryId: String(row.repositoryId) });
           }
         }
       }

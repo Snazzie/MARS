@@ -1,4 +1,8 @@
 import type { CostCenterBreakdown, CostCenterExternalBreakdown, CostCenterPricePoint, CostCenterPricingProvider, OverviewCostSavings, OverviewDto } from "@mars/contracts";
+import { and, eq, sql } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import { defineQueries } from "./prepared.ts";
+import * as schema from "./drizzle-schema.ts";
 import type { DatabaseClient } from "./index.ts";
 
 export type GithubRunnerPlatform = "linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64";
@@ -97,56 +101,49 @@ export function calculateGithubExternalCostCenter(usage: readonly GithubExternal
   }), { externalMinutes: 0, externalPricedMinutes: 0, externalUnpricedMinutes: 0, estimatedExternalCostMicros: 0, externalBreakdown });
 }
 
+const costQueries = defineQueries((db) => {
+  const timing = schema.dashboardJobTimingSnapshots;
+  const jobs = schema.dashboardJobs;
+  const membershipScope = (org: AnyPgColumn) => sql`(${sql.placeholder("isAll")}::boolean AND ${org} IN (SELECT ${schema.memberships.organizationId} FROM ${schema.memberships} WHERE ${schema.memberships.userId}=${sql.placeholder("userId")}::uuid)) OR (NOT ${sql.placeholder("isAll")}::boolean AND ${org}=${sql.placeholder("organizationId")}::uuid)`;
+  const date = (at: AnyPgColumn) => sql<string>`(${at} AT TIME ZONE 'UTC')::date::text`;
+  const minutes = (duration: AnyPgColumn) => sql<number>`SUM(GREATEST(1, CEIL(${duration} / 60000.0)))::bigint`;
+  const externalLabelText = sql<string>`(SELECT lower(string_agg(value, ' ')) FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(${jobs.requestedLabels})='array' THEN ${jobs.requestedLabels} ELSE '[]'::jsonb END))`;
+  const hostedPlatform = sql<string>`CASE WHEN ${externalLabelText} LIKE '%macos%' THEN 'macos-arm64' WHEN ${externalLabelText} LIKE '%windows%' THEN 'windows-x64' WHEN ${externalLabelText} LIKE '%ubuntu%' OR ${externalLabelText} LIKE '%linux%' THEN 'linux-x64' ELSE NULL END`;
+  const externalScope = and(eq(jobs.status, "completed"), sql`${jobs.completedAt} IS NOT NULL`, sql`${jobs.startedAt} IS NOT NULL`,
+    sql`${jobs.completedAt} >= now() - ${sql.placeholder("period")}::interval`, sql`NOT EXISTS (SELECT 1 FROM ${timing} s WHERE s.organization_id=${jobs.organizationId} AND s.job_id=${jobs.id})`,
+    sql`(${membershipScope(jobs.organizationId)})`, sql`${externalLabelText} LIKE '%macos%' OR ${externalLabelText} LIKE '%windows%' OR ${externalLabelText} LIKE '%ubuntu%' OR ${externalLabelText} LIKE '%linux%'`);
+  const externalQuery = db.select({
+    organizationId: jobs.organizationId, repositoryId: schema.dashboardRuns.repositoryId, repositoryName: schema.dashboardRepositories.fullName,
+    usageDate: date(jobs.completedAt), platform: hostedPlatform, requestedVcpu: sql<number>`4`,
+    jobCount: sql<number>`COUNT(*)::bigint`, billableMinutes: sql<number>`SUM(GREATEST(1, CEIL(EXTRACT(EPOCH FROM (${jobs.completedAt} - ${jobs.startedAt})) / 60.0)))::bigint`,
+  }).from(jobs).innerJoin(schema.dashboardRuns, and(eq(schema.dashboardRuns.organizationId, jobs.organizationId), eq(schema.dashboardRuns.id, jobs.runId)))
+    .innerJoin(schema.dashboardRepositories, and(eq(schema.dashboardRepositories.organizationId, schema.dashboardRuns.organizationId), eq(schema.dashboardRepositories.id, schema.dashboardRuns.repositoryId)))
+    .where(externalScope).groupBy(jobs.organizationId, schema.dashboardRuns.repositoryId, schema.dashboardRepositories.fullName, date(jobs.completedAt), hostedPlatform);
+  return {
+    savings: db.select({ usageDate: date(timing.completedAt), platform: timing.platform, requestedVcpu: timing.requestedVcpu, billableMinutes: minutes(timing.executionDurationMs) })
+      .from(timing).where(and(sql`${timing.completedAt} >= now() - ${sql.placeholder("period")}::interval`, membershipScope(timing.organizationId)))
+      .groupBy(date(timing.completedAt), timing.platform, timing.requestedVcpu).prepare("github_runner_cost_savings"),
+    center: db.select({
+      organizationId: timing.organizationId, repositoryId: timing.repositoryId, repositoryName: timing.repositoryName,
+      usageDate: date(timing.completedAt), platform: timing.platform, requestedVcpu: timing.requestedVcpu,
+      jobCount: sql<number>`COUNT(*)::bigint`, billableMinutes: minutes(timing.executionDurationMs),
+    }).from(timing).where(and(sql`${timing.completedAt} >= now() - ${sql.placeholder("period")}::interval`, membershipScope(timing.organizationId)))
+      .groupBy(timing.organizationId, timing.repositoryId, timing.repositoryName, date(timing.completedAt), timing.platform, timing.requestedVcpu).prepare("github_runner_cost_center"),
+    external: externalQuery.prepare("github_runner_external_cost_center"),
+  };
+});
 const periodInterval = (period: OverviewDto["period"]) => period === "24h" ? "24 hours" : period === "7d" ? "7 days" : "30 days";
 
 export async function getGithubRunnerCostSavings(db: DatabaseClient, organizationId: string, period: OverviewDto["period"], userId?: string, provider: CostCenterPricingProvider = "github"): Promise<OverviewCostSavings> {
-  const rows = await db<Record<string, unknown>[]>`
-    SELECT (completed_at AT TIME ZONE 'UTC')::date::text AS "usageDate", platform, requested_vcpu AS "requestedVcpu",
-      SUM(GREATEST(1, CEIL(execution_duration_ms / 60000.0)))::bigint AS "billableMinutes"
-    FROM dashboard_job_timing_snapshots
-    WHERE completed_at >= now() - (${periodInterval(period)})::interval
-      AND ((${organizationId === "all"} AND organization_id IN (SELECT organization_id FROM memberships WHERE user_id=${userId ?? null}))
-        OR (${organizationId !== "all"} AND organization_id=${organizationId === "all" ? null : organizationId}::uuid))
-    GROUP BY (completed_at AT TIME ZONE 'UTC')::date, platform, requested_vcpu
-  `;
+  const rows = await costQueries(db).savings.execute({ period: periodInterval(period), isAll: organizationId === "all", organizationId: organizationId === "all" ? null : organizationId, userId: userId ?? null }) as Record<string, unknown>[];
   return calculateGithubRunnerCostSavings(rows.map((row) => ({ usageDate: String(row.usageDate), platform: String(row.platform), requestedVcpu: Number(row.requestedVcpu), billableMinutes: Number(row.billableMinutes) })), schedulesForProvider(provider));
 }
 
 export async function getGithubRunnerCostCenter(db: DatabaseClient, organizationId: string, period: OverviewDto["period"], userId?: string, provider: CostCenterPricingProvider = "github"): Promise<{ costSavings: OverviewCostSavings; externalMinutes: number; externalPricedMinutes: number; externalUnpricedMinutes: number; estimatedExternalCostMicros: number; breakdown: CostCenterBreakdown[]; externalBreakdown: CostCenterExternalBreakdown[]; priceOverTime: CostCenterPricePoint[] }> {
-  const rows = await db<Record<string, unknown>[]>`
-    SELECT organization_id AS "organizationId", repository_id AS "repositoryId", repository_name AS "repositoryName",
-      (completed_at AT TIME ZONE 'UTC')::date::text AS "usageDate", platform, requested_vcpu AS "requestedVcpu",
-      COUNT(*)::bigint AS "jobCount", SUM(GREATEST(1, CEIL(execution_duration_ms / 60000.0)))::bigint AS "billableMinutes"
-    FROM dashboard_job_timing_snapshots
-    WHERE completed_at >= now() - (${periodInterval(period)})::interval
-      AND ((${organizationId === "all"} AND organization_id IN (SELECT organization_id FROM memberships WHERE user_id=${userId ?? null}))
-        OR (${organizationId !== "all"} AND organization_id=${organizationId === "all" ? null : organizationId}::uuid))
-    GROUP BY organization_id, repository_id, repository_name, (completed_at AT TIME ZONE 'UTC')::date, platform, requested_vcpu
-  `;
-  const externalRows = await db<Record<string, unknown>[]>`
-    SELECT j.organization_id AS "organizationId", dr.repository_id AS "repositoryId", r.full_name AS "repositoryName",
-      (j.completed_at AT TIME ZONE 'UTC')::date::text AS "usageDate",
-      CASE
-        WHEN labels.text LIKE '%macos%' THEN 'macos-arm64'
-        WHEN labels.text LIKE '%windows%' THEN 'windows-x64'
-        WHEN labels.text LIKE '%ubuntu%' OR labels.text LIKE '%linux%' THEN 'linux-x64'
-        ELSE NULL
-      END AS platform,
-      4 AS "requestedVcpu",
-      COUNT(*)::bigint AS "jobCount",
-      SUM(GREATEST(1, CEIL(EXTRACT(EPOCH FROM (j.completed_at - j.started_at)) / 60.0)))::bigint AS "billableMinutes"
-    FROM dashboard_jobs j
-    JOIN dashboard_runs dr ON dr.organization_id=j.organization_id AND dr.id=j.run_id
-    JOIN dashboard_repositories r ON r.organization_id=dr.organization_id AND r.id=dr.repository_id
-    LEFT JOIN LATERAL (SELECT lower(string_agg(value, ' ')) AS text FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(j.requested_labels)='array' THEN j.requested_labels ELSE '[]'::jsonb END)) labels ON true
-    WHERE j.status='completed' AND j.completed_at IS NOT NULL AND j.started_at IS NOT NULL
-      AND j.completed_at >= now() - (${periodInterval(period)})::interval
-      AND NOT EXISTS (SELECT 1 FROM dashboard_job_timing_snapshots s WHERE s.organization_id=j.organization_id AND s.job_id=j.id)
-      AND (labels.text LIKE '%macos%' OR labels.text LIKE '%windows%' OR labels.text LIKE '%ubuntu%' OR labels.text LIKE '%linux%')
-      AND ((${organizationId === "all"} AND j.organization_id IN (SELECT organization_id FROM memberships WHERE user_id=${userId ?? null}))
-        OR (${organizationId !== "all"} AND j.organization_id=${organizationId === "all" ? null : organizationId}::uuid))
-    GROUP BY j.organization_id, dr.repository_id, r.full_name, (j.completed_at AT TIME ZONE 'UTC')::date, platform
-  `;
+  const [rows, externalRows] = await Promise.all([
+    costQueries(db).center.execute({ period: periodInterval(period), isAll: organizationId === "all", organizationId: organizationId === "all" ? null : organizationId, userId: userId ?? null }),
+    costQueries(db).external.execute({ period: periodInterval(period), isAll: organizationId === "all", organizationId: organizationId === "all" ? null : organizationId, userId: userId ?? null }),
+  ]) as [Record<string, unknown>[], Record<string, unknown>[]];
   const result = calculateGithubRunnerCostCenter(rows.map((row) => ({ organizationId: String(row.organizationId), repositoryId: String(row.repositoryId), repositoryName: String(row.repositoryName), usageDate: String(row.usageDate), platform: String(row.platform), requestedVcpu: Number(row.requestedVcpu), jobCount: Number(row.jobCount), billableMinutes: Number(row.billableMinutes) })), schedulesForProvider(provider));
   const external = calculateGithubExternalCostCenter(externalRows.filter((row) => row.platform).map((row) => ({ organizationId: String(row.organizationId), repositoryId: String(row.repositoryId), repositoryName: String(row.repositoryName), usageDate: String(row.usageDate), platform: String(row.platform), requestedVcpu: Number(row.requestedVcpu), jobCount: Number(row.jobCount), billableMinutes: Number(row.billableMinutes) })), schedulesForProvider(provider));
   return { ...result, ...external };

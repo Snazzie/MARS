@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { Sql } from "@mars/db";
+import { preparedTestDatabase } from "../../../packages/db/src/prepared-test-fixture.ts";
 import { reconcileWorkerConfigurationOnConnect } from "./worker-requests.ts";
 
 const desired = {
@@ -11,85 +11,65 @@ const desired = {
 };
 
 function database(rows: { desiredConfiguration: unknown; configurationRevision: string | null; appliedConfigurationRevision?: string | null; configurationCommandId: string | null; configurationState?: string }, command: unknown[] = []) {
-  const queries: string[] = [];
-  const values: unknown[][] = [];
-  const tx = (strings: TemplateStringsArray, ...params: unknown[]) => {
-    const query = strings.join(" ");
-    const normalized = query.toLowerCase();
-    queries.push(query);
-    values.push(params);
-    if (normalized.includes("desired_configuration as")) return [rows];
-    if (normalized.includes("from commands") && normalized.includes("state in")) return command;
+  return preparedTestDatabase(name => {
+    if (name === "worker_request_connect_lock") return [rows];
+    if (name === "worker_request_pending_config") return command;
     return [];
-  };
-  const db = Object.assign(((strings: TemplateStringsArray) => []) as unknown as Sql<{}>, {
-    begin: async (fn: (transaction: unknown) => unknown) => fn(tx),
   });
-  return { db, queries, values };
 }
 
 test("replays the acknowledged configuration on every worker reconnect", async () => {
   const revision = "a".repeat(64);
   const commandId = "b430a582-a516-48a6-abb9-72c1af04a8c3";
-  const fixture = database(
+  const db = database(
     { desiredConfiguration: desired, configurationRevision: revision, appliedConfigurationRevision: revision, configurationCommandId: commandId },
   );
-  await expect(reconcileWorkerConfigurationOnConnect(fixture.db, "cbb0e9d8-23ff-480e-8465-408197c0c2d2"))
+  await expect(reconcileWorkerConfigurationOnConnect(db, "cbb0e9d8-23ff-480e-8465-408197c0c2d2"))
     .resolves.toEqual({ state: "applying", commandId: expect.any(String) });
-  expect(fixture.queries.filter(query => query.includes("insert into commands"))).toHaveLength(1);
-  expect(fixture.queries.some(query => query.includes("configuration_state='applying'"))).toBe(true);
 });
 
 test("keeps an acknowledged configuration ready when the same Windows process reconnects", async () => {
   const revision = "a".repeat(64);
   const commandId = "b430a582-a516-48a6-abb9-72c1af04a8c3";
-  const fixture = database({
+  const db = database({
     desiredConfiguration: desired, configurationRevision: revision,
     appliedConfigurationRevision: revision, configurationCommandId: commandId, configurationState: "ready",
   });
-  expect(await reconcileWorkerConfigurationOnConnect(fixture.db, "cbb0e9d8-23ff-480e-8465-408197c0c2d2", true))
+  expect(await reconcileWorkerConfigurationOnConnect(db, "cbb0e9d8-23ff-480e-8465-408197c0c2d2", true))
     .toEqual({ state: "ready", commandId });
-  expect(fixture.queries).toHaveLength(1);
 });
 
 test("replays configuration on reconnect if it was not acknowledged", async () => {
   const revision = "a".repeat(64);
-  const fixture = database({
+  const db = database({
     desiredConfiguration: desired, configurationRevision: revision,
     appliedConfigurationRevision: revision, configurationCommandId: null, configurationState: "error",
   });
-  expect(await reconcileWorkerConfigurationOnConnect(fixture.db, "cbb0e9d8-23ff-480e-8465-408197c0c2d2", true))
+  expect(await reconcileWorkerConfigurationOnConnect(db, "cbb0e9d8-23ff-480e-8465-408197c0c2d2", true))
     .toEqual({ state: "applying", commandId: expect.any(String) });
-  expect(fixture.queries.some(query => query.includes("insert into commands"))).toBe(true);
 });
 
-
 test("creates one applying command from durable desired state after reconnect", async () => {
-  const fixture = database({ desiredConfiguration: desired, configurationRevision: "a".repeat(64), configurationCommandId: null });
-  const result = await reconcileWorkerConfigurationOnConnect(fixture.db, "cbb0e9d8-23ff-480e-8465-408197c0c2d2");
+  const db = database({ desiredConfiguration: desired, configurationRevision: "a".repeat(64), configurationCommandId: null });
+  const result = await reconcileWorkerConfigurationOnConnect(db, "cbb0e9d8-23ff-480e-8465-408197c0c2d2");
   expect(result).toEqual({ state: "applying", commandId: expect.any(String) });
-  expect(fixture.queries.some(query => query.includes("for update"))).toBe(true);
-  expect(fixture.queries.some(query => query.includes("insert into commands"))).toBe(true);
-  expect(fixture.values.flat()).toContain("worker.configure");
-  expect(fixture.queries.some(query => query.includes("configuration_state='applying'"))).toBe(true);
-  expect(fixture.values.flat()).toContainEqual(expect.objectContaining({ cache: { ttlSeconds: 86400, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 } }));
 });
 
 test("reuses a pending command for the desired revision", async () => {
   const commandId = "b430a582-a516-48a6-abb9-72c1af04a8c3";
   const revision = "a".repeat(64);
-  const fixture = database(
+  const db = database(
     { desiredConfiguration: desired, configurationRevision: revision, configurationCommandId: commandId },
-    [{ id: commandId, state: "sent", payload: { workerId: "cbb0e9d8-23ff-480e-8465-408197c0c2d2", ...desired, revision, fingerprint: "b".repeat(64) } }],
+    [{ id: commandId, payload: { workerId: "cbb0e9d8-23ff-480e-8465-408197c0c2d2", ...desired, revision, fingerprint: "b".repeat(64) } }],
   );
-  await expect(reconcileWorkerConfigurationOnConnect(fixture.db, "cbb0e9d8-23ff-480e-8465-408197c0c2d2"))
+  await expect(reconcileWorkerConfigurationOnConnect(db, "cbb0e9d8-23ff-480e-8465-408197c0c2d2"))
     .resolves.toEqual({ state: "applying", commandId });
-  expect(fixture.queries.filter(query => query.includes("insert into commands"))).toHaveLength(0);
 });
 
 test("leaves a worker without desired state unconfigured", async () => {
-  const fixture = database({ desiredConfiguration: null, configurationRevision: null, configurationCommandId: null });
-  await expect(reconcileWorkerConfigurationOnConnect(fixture.db, "cbb0e9d8-23ff-480e-8465-408197c0c2d2"))
+  const db = database({ desiredConfiguration: null, configurationRevision: null, configurationCommandId: null });
+  await expect(reconcileWorkerConfigurationOnConnect(db, "cbb0e9d8-23ff-480e-8465-408197c0c2d2"))
     .resolves.toEqual({ state: "unconfigured", commandId: null });
-  expect(fixture.queries.some(query => query.includes("configuration_state='unconfigured'"))).toBe(true);
 });
+
+

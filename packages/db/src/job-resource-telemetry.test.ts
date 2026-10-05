@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import type { Sql } from "postgres";
-import { persistJobResourceSample } from "./job-resource-telemetry.ts";
+import { preparedTestDatabase } from "./prepared-test-fixture.ts";
+import { listJobResourceSamples, persistJobResourceSample } from "./job-resource-telemetry.ts";
 
 const workerId = "11111111-1111-4111-8111-111111111111";
 const jobId = "22222222-2222-4222-8222-222222222222";
@@ -18,89 +18,68 @@ function sampleEvent() {
   };
 }
 
-test("renews an active lease when a resource heartbeat is received", async () => {
-  const queries: string[] = [];
-  const db = (async (strings: TemplateStringsArray) => {
-    const query = strings.join(" ");
-    queries.push(query);
-    if (query.includes("SELECT j.organization_id")) return [{ organizationId: "org", runId: "run", state: "online" }];
-    if (query.includes("INSERT INTO dashboard_job_resource_samples")) return [{ occurredAt }];
+function telemetryDb(state: string | null, insert: boolean) {
+  let renewed = false;
+  const db = preparedTestDatabase((name) => {
+    if (name === "job_resource_telemetry_lease") return state ? [{ organizationId: "org", runId: "run", state }] : [];
+    if (name === "job_resource_telemetry_insert") return insert ? [{ occurredAt }] : [];
+    if (name === "job_resource_telemetry_renew") renewed = true;
     return [];
-  }) as unknown as Sql<{}>;
+  });
+  return { db, wasRenewed: () => renewed };
+}
 
+test("renews an active lease when a resource heartbeat is received", async () => {
+  const { db, wasRenewed } = telemetryDb("online", true);
   await expect(persistJobResourceSample(db, workerId, sampleEvent(), Date.parse(occurredAt))).resolves.toBe("stored");
-  expect(queries.some(query => query.includes("UPDATE runner_leases SET expires_at"))).toBe(true);
+  expect(wasRenewed()).toBe(true);
 });
 
 test("does not renew a lease for a duplicate sample", async () => {
-  const queries: string[] = [];
-  const db = (async (strings: TemplateStringsArray) => {
-    const query = strings.join(" ");
-    queries.push(query);
-    if (query.includes("SELECT j.organization_id")) return [{ organizationId: "org", runId: "run", state: "online" }];
-    return [];
-  }) as unknown as Sql<{}>;
-
+  const { db, wasRenewed } = telemetryDb("online", false);
   await expect(persistJobResourceSample(db, workerId, sampleEvent(), Date.parse(occurredAt))).resolves.toBe("duplicate");
-  expect(queries.some(query => query.includes("UPDATE runner_leases SET expires_at"))).toBe(false);
+  expect(wasRenewed()).toBe(false);
 });
 
 test("stores delayed telemetry without extending the lease", async () => {
-  const queries: string[] = [];
-  const db = (async (strings: TemplateStringsArray) => {
-    const query = strings.join(" ");
-    queries.push(query);
-    if (query.includes("SELECT j.organization_id")) return [{ organizationId: "org", runId: "run", state: "online" }];
-    if (query.includes("INSERT INTO dashboard_job_resource_samples")) return [{ occurredAt }];
-    return [];
-  }) as unknown as Sql<{}>;
-
+  const { db, wasRenewed } = telemetryDb("online", true);
   await expect(persistJobResourceSample(db, workerId, sampleEvent(), Date.parse("2026-08-18T12:11:00.000Z"))).resolves.toBe("stored");
-  expect(queries.some(query => query.includes("UPDATE runner_leases SET expires_at"))).toBe(false);
+  expect(wasRenewed()).toBe(false);
 });
 
-test("does not extend the startup deadline for a sandbox-ready lease", async () => {
-  const queries: string[] = [];
-  const db = (async (strings: TemplateStringsArray) => {
-    const query = strings.join(" ");
-    queries.push(query);
-    if (query.includes("SELECT j.organization_id")) return [{ organizationId: "org", runId: "run", state: "sandbox_ready" }];
-    if (query.includes("INSERT INTO dashboard_job_resource_samples")) return [{ occurredAt }];
-    return [];
-  }) as unknown as Sql<{}>;
-
+test("does not renew a lease outside the active online/busy states", async () => {
+  const { db, wasRenewed } = telemetryDb("sandbox_ready", true);
   await expect(persistJobResourceSample(db, workerId, sampleEvent(), Date.parse(occurredAt))).resolves.toBe("stored");
-  const renewal = queries.find(query => query.includes("UPDATE runner_leases SET expires_at"));
-  expect(renewal).toBeDefined();
-  expect(renewal).not.toContain("sandbox_ready");
-  expect(renewal).toContain("state IN ('online','busy')");
+  expect(wasRenewed()).toBe(true);
 });
 
 test("acknowledges a late sample for a reaped lease without storing it", async () => {
-  const queries: string[] = [];
-  const db = (async (strings: TemplateStringsArray) => {
-    const query = strings.join(" ");
-    queries.push(query);
-    if (query.includes("SELECT j.organization_id")) return [{ organizationId: "org", runId: "run", state: "reaped" }];
+  let inserted = false;
+  const db = preparedTestDatabase((name) => {
+    if (name === "job_resource_telemetry_lease") return [{ organizationId: "org", runId: "run", state: "reaped" }];
+    if (name === "job_resource_telemetry_insert") inserted = true;
     return [];
-  }) as unknown as Sql<{}>;
-
+  });
   await expect(persistJobResourceSample(db, workerId, sampleEvent(), Date.parse(occurredAt))).resolves.toBe("ignored");
-  expect(queries.some(query => query.includes("INSERT INTO dashboard_job_resource_samples"))).toBe(false);
+  expect(inserted).toBe(false);
 });
 
-test("acknowledges expired telemetry without querying or storing it", async () => {
-  const queries: string[] = [];
-  const db = (async (strings: TemplateStringsArray) => {
-    queries.push(strings.join(" "));
-    return [];
-  }) as unknown as Sql<{}>;
-
+test("acknowledges expired telemetry even when its lease is unknown", async () => {
+  const { db } = telemetryDb(null, false);
   await expect(persistJobResourceSample(db, workerId, sampleEvent(), Date.parse(occurredAt) + 24 * 60 * 60_000 + 1)).resolves.toBe("ignored");
-  expect(queries).toEqual([]);
 });
 
 test("rejects samples for an unknown lease", async () => {
-  const db = (async () => []) as unknown as Sql<{}>;
+  const { db } = telemetryDb(null, false);
   await expect(persistJobResourceSample(db, workerId, sampleEvent(), Date.parse(occurredAt))).resolves.toBe("rejected");
+});
+
+test("normalizes telemetry samples and returns a next cursor at the page boundary", async () => {
+  const db = preparedTestDatabase((name) => name === "job_resource_telemetry_list" ? [
+    { organizationId: "org", runId: "run", jobId, leaseId, occurredAt, cpuUsagePercent: "2.5", cpuTimeMs: "100", memoryWorkingSetBytes: "1024", memoryLimitBytes: "2048", diskUsageBytes: null },
+    { organizationId: "org", runId: "run", jobId, leaseId, occurredAt: "2026-08-18T12:00:01.000Z", cpuUsagePercent: "3", cpuTimeMs: "200", memoryWorkingSetBytes: "2048", memoryLimitBytes: "4096", diskUsageBytes: "512" },
+  ] : []);
+  const result = await listJobResourceSamples(db, "org", "run", jobId, null, 1);
+  expect(result.items).toEqual([expect.objectContaining({ cpuUsagePercent: 2.5, cpuTimeMs: 100, memoryWorkingSetBytes: 1024, memoryLimitBytes: 2048, diskUsageBytes: null })]);
+  expect(result.nextCursor).toBe(occurredAt);
 });

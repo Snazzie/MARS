@@ -1,5 +1,8 @@
 import type { DatabaseClient } from "./index.ts";
 import { WorkerCacheSummary, type DashboardWorkerCacheEntry, type DashboardWorkerCachePage } from "@mars/contracts";
+import { and, count, desc, eq, lt, or, sql } from "drizzle-orm";
+import { defineQueries } from "./prepared.ts";
+import * as schema from "./drizzle-schema.ts";
 
 type SqlDb = DatabaseClient;
 type CacheEntry = {
@@ -33,29 +36,67 @@ function validRunnerStatus(value: unknown): value is { generation: string; enabl
   return uuid(status.generation) && typeof status.enabled === "boolean" && typeof status.maxGiB === "number" && Number.isSafeInteger(status.maxGiB) && status.maxGiB > 0 && typeof status.sizeBytes === "string" && /^(?:0|[1-9]\d*)$/.test(status.sizeBytes) && typeof status.entryCount === "number" && Number.isSafeInteger(status.entryCount) && status.entryCount >= 0 && (status.hitCount === undefined || (typeof status.hitCount === "number" && Number.isSafeInteger(status.hitCount) && status.hitCount >= 0)) && (status.missCount === undefined || (typeof status.missCount === "number" && Number.isSafeInteger(status.missCount) && status.missCount >= 0)) && typeof status.observedAt === "string" && Number.isFinite(Date.parse(status.observedAt));
 }
 
+const cacheQueries = defineQueries((db) => ({
+  sweepEntries: db.delete(schema.workerCacheSnapshotEntries).where(lt(schema.workerCacheSnapshotEntries.stagedAt, sql.placeholder("cutoff"))).prepare("worker_cache_sweep_entries"),
+  sweepStatuses: db.update(schema.workerCacheStatus).set({ activeSnapshotId: null, activeSnapshotStartedAt: null }).where(lt(schema.workerCacheStatus.activeSnapshotStartedAt, sql.placeholder("cutoff"))).prepare("worker_cache_sweep_status"),
+  refreshSummary: db.update(schema.workerCacheStatus).set({
+    entryCount: sql`(SELECT count(*)::int FROM ${schema.workerCacheEntries} WHERE ${schema.workerCacheEntries.workerId}=${sql.placeholder("workerId")})`,
+    sizeBytes: sql`(SELECT COALESCE(sum(${schema.workerCacheEntries.sizeBytes}),0) FROM ${schema.workerCacheEntries} WHERE ${schema.workerCacheEntries.workerId}=${sql.placeholder("workerId")})`,
+    observedAt: sql`now()`,
+  }).where(and(eq(schema.workerCacheStatus.workerId, sql.placeholder("workerId")), eq(schema.workerCacheStatus.generation, sql.placeholder("generation")))).prepare("worker_cache_refresh_summary"),
+  generation: db.select({ generation: schema.workerCacheStatus.generation }).from(schema.workerCacheStatus).where(eq(schema.workerCacheStatus.workerId, sql.placeholder("workerId"))).prepare("worker_cache_generation"),
+  runnerUpdate: db.update(schema.workerCacheStatus).set({
+    runnerCacheEnabled: sql`${sql.placeholder("enabled")}`, runnerCacheMaxGiB: sql`${sql.placeholder("maxGiB")}`,
+    runnerCacheSizeBytes: sql`${sql.placeholder("sizeBytes")}::bigint`, runnerCacheEntryCount: sql`${sql.placeholder("entryCount")}`,
+    runnerCacheHitCount: sql`${sql.placeholder("hitCount")}`, runnerCacheMissCount: sql`${sql.placeholder("missCount")}`,
+    runnerCacheObservedAt: sql`${sql.placeholder("observedAt")}::timestamptz`,
+  }).where(and(eq(schema.workerCacheStatus.workerId, sql.placeholder("workerId")), eq(schema.workerCacheStatus.generation, sql.placeholder("generation")))).returning({ workerId: schema.workerCacheStatus.workerId }).prepare("worker_cache_runner_status"),
+  entryUpsert: db.insert(schema.workerCacheEntries).select(db.select({ workerId: sql`${sql.placeholder("workerId")}`.as("worker_id"), entryId: sql`${sql.placeholder("entryId")}`.as("entry_id"), githubRepositoryId: sql`${sql.placeholder("githubRepositoryId")}`.as("github_repository_id"), cacheKeyPreview: sql`${sql.placeholder("cacheKeyPreview")}`.as("cache_key_preview"), cacheKeyHash: sql`${sql.placeholder("cacheKeyHash")}`.as("cache_key_hash"), scopePreview: sql`${sql.placeholder("scopePreview")}`.as("scope_preview"), scopeHash: sql`${sql.placeholder("scopeHash")}`.as("scope_hash"), versionHash: sql`${sql.placeholder("versionHash")}`.as("version_hash"), sizeBytes: sql`${sql.placeholder("sizeBytes")}`.as("size_bytes"), createdAt: sql`${sql.placeholder("createdAt")}`.as("created_at"), lastAccessedAt: sql`${sql.placeholder("lastAccessedAt")}`.as("last_accessed_at"), expiresAt: sql`${sql.placeholder("expiresAt")}`.as("expires_at"), observedGeneration: sql`${sql.placeholder("generation")}`.as("observed_generation") }).from(schema.workerCacheStatus).where(and(eq(schema.workerCacheStatus.workerId, sql.placeholder("workerId")), eq(schema.workerCacheStatus.generation, sql.placeholder("generation"))))).onConflictDoUpdate({ target: [schema.workerCacheEntries.workerId, schema.workerCacheEntries.entryId], set: { githubRepositoryId: sql`excluded.github_repository_id`, cacheKeyPreview: sql`excluded.cache_key_preview`, cacheKeyHash: sql`excluded.cache_key_hash`, scopePreview: sql`excluded.scope_preview`, scopeHash: sql`excluded.scope_hash`, versionHash: sql`excluded.version_hash`, sizeBytes: sql`excluded.size_bytes`, createdAt: sql`excluded.created_at`, lastAccessedAt: sql`excluded.last_accessed_at`, expiresAt: sql`excluded.expires_at`, observedGeneration: sql`excluded.observed_generation` } }).prepare("worker_cache_entry_upsert"),
+  entryDelete: db.delete(schema.workerCacheEntries).where(and(eq(schema.workerCacheEntries.workerId, sql.placeholder("workerId")), eq(schema.workerCacheEntries.entryId, sql.placeholder("entryId")), eq(schema.workerCacheEntries.observedGeneration, sql.placeholder("generation")), eq(schema.workerCacheEntries.observedGeneration, sql`(SELECT generation FROM ${schema.workerCacheStatus} WHERE ${schema.workerCacheStatus.workerId}=${sql.placeholder("workerId")})`))).prepare("worker_cache_entry_delete"),
+  snapshotLock: db.select({ activeSnapshotId: schema.workerCacheStatus.activeSnapshotId, lastCompletedSnapshotId: schema.workerCacheStatus.lastCompletedSnapshotId }).from(schema.workerCacheStatus).where(eq(schema.workerCacheStatus.workerId, sql.placeholder("workerId"))).for("update").prepare("worker_cache_snapshot_lock"),
+  snapshotDelete: db.delete(schema.workerCacheSnapshotEntries).where(and(eq(schema.workerCacheSnapshotEntries.workerId, sql.placeholder("workerId")), eq(schema.workerCacheSnapshotEntries.snapshotId, sql.placeholder("snapshotId")))).prepare("worker_cache_snapshot_delete"),
+  snapshotBegin: db.insert(schema.workerCacheStatus).values({ workerId: sql.placeholder("workerId"), generation: sql.placeholder("generation"), ready: sql.placeholder("ready"), ttlSeconds: sql.placeholder("ttlSeconds"), proxyOrigin: sql.placeholder("proxyOrigin"), cacheBaseUrl: sql.placeholder("cacheBaseUrl"), sizeBytes: sql.placeholder("sizeBytes"), entryCount: sql.placeholder("entryCount"), observedAt: sql.placeholder("observedAt"), error: sql.placeholder("error"), activeSnapshotId: sql.placeholder("snapshotId"), activeSnapshotStartedAt: sql`now()`, lastCompletedSnapshotId: sql.placeholder("lastCompletedSnapshotId") }).onConflictDoUpdate({ target: schema.workerCacheStatus.workerId, set: { generation: sql`excluded.generation`, ready: sql`excluded.ready`, ttlSeconds: sql`excluded.ttl_seconds`, proxyOrigin: sql`excluded.proxy_origin`, cacheBaseUrl: sql`excluded.cache_base_url`, sizeBytes: sql`excluded.size_bytes`, entryCount: sql`excluded.entry_count`, observedAt: sql`excluded.observed_at`, error: sql`excluded.error`, activeSnapshotId: sql`excluded.active_snapshot_id`, activeSnapshotStartedAt: sql`excluded.active_snapshot_started_at`, lastCompletedSnapshotId: sql`excluded.last_completed_snapshot_id`, runnerCacheEnabled: sql`CASE WHEN ${schema.workerCacheStatus.generation} IS DISTINCT FROM excluded.generation THEN NULL ELSE ${schema.workerCacheStatus.runnerCacheEnabled} END`, runnerCacheMaxGiB: sql`CASE WHEN ${schema.workerCacheStatus.generation} IS DISTINCT FROM excluded.generation THEN NULL ELSE ${schema.workerCacheStatus.runnerCacheMaxGiB} END`, runnerCacheSizeBytes: sql`CASE WHEN ${schema.workerCacheStatus.generation} IS DISTINCT FROM excluded.generation THEN NULL ELSE ${schema.workerCacheStatus.runnerCacheSizeBytes} END`, runnerCacheEntryCount: sql`CASE WHEN ${schema.workerCacheStatus.generation} IS DISTINCT FROM excluded.generation THEN NULL ELSE ${schema.workerCacheStatus.runnerCacheEntryCount} END`, runnerCacheHitCount: sql`CASE WHEN ${schema.workerCacheStatus.generation} IS DISTINCT FROM excluded.generation THEN 0 ELSE ${schema.workerCacheStatus.runnerCacheHitCount} END`, runnerCacheMissCount: sql`CASE WHEN ${schema.workerCacheStatus.generation} IS DISTINCT FROM excluded.generation THEN 0 ELSE ${schema.workerCacheStatus.runnerCacheMissCount} END`, runnerCacheObservedAt: sql`CASE WHEN ${schema.workerCacheStatus.generation} IS DISTINCT FROM excluded.generation THEN NULL ELSE ${schema.workerCacheStatus.runnerCacheObservedAt} END` } }).prepare("worker_cache_snapshot_begin"),
+  snapshotPage: db.insert(schema.workerCacheSnapshotEntries).values({ workerId: sql.placeholder("workerId"), snapshotId: sql.placeholder("snapshotId"), sequence: sql.placeholder("sequence"), entryId: sql.placeholder("entryId"), githubRepositoryId: sql.placeholder("githubRepositoryId"), cacheKeyPreview: sql.placeholder("cacheKeyPreview"), cacheKeyHash: sql.placeholder("cacheKeyHash"), scopePreview: sql.placeholder("scopePreview"), scopeHash: sql.placeholder("scopeHash"), versionHash: sql.placeholder("versionHash"), sizeBytes: sql.placeholder("sizeBytes"), createdAt: sql.placeholder("createdAt"), lastAccessedAt: sql.placeholder("lastAccessedAt"), expiresAt: sql.placeholder("expiresAt"), observedGeneration: sql`(SELECT generation FROM ${schema.workerCacheStatus} WHERE ${schema.workerCacheStatus.workerId}=${sql.placeholder("workerId")})`, stagedAt: sql`now()` }).onConflictDoNothing().prepare("worker_cache_snapshot_page"),
+  snapshotActive: db.select({ activeSnapshotId: schema.workerCacheStatus.activeSnapshotId }).from(schema.workerCacheStatus).where(eq(schema.workerCacheStatus.workerId, sql.placeholder("workerId"))).prepare("worker_cache_snapshot_active"),
+  snapshotPages: db.select({ count: sql<number>`count(DISTINCT ${schema.workerCacheSnapshotEntries.sequence})::int` }).from(schema.workerCacheSnapshotEntries).where(and(eq(schema.workerCacheSnapshotEntries.workerId, sql.placeholder("workerId")), eq(schema.workerCacheSnapshotEntries.snapshotId, sql.placeholder("snapshotId")))).prepare("worker_cache_snapshot_page_count"),
+  snapshotRows: db.select({ count: count() }).from(schema.workerCacheSnapshotEntries).where(and(eq(schema.workerCacheSnapshotEntries.workerId, sql.placeholder("workerId")), eq(schema.workerCacheSnapshotEntries.snapshotId, sql.placeholder("snapshotId")))).prepare("worker_cache_snapshot_entry_count"),
+  clearActive: db.update(schema.workerCacheStatus).set({ activeSnapshotId: null, activeSnapshotStartedAt: null }).where(and(eq(schema.workerCacheStatus.workerId, sql.placeholder("workerId")), eq(schema.workerCacheStatus.activeSnapshotId, sql.placeholder("snapshotId")))).prepare("worker_cache_clear_snapshot"),
+  clearEntries: db.delete(schema.workerCacheEntries).where(eq(schema.workerCacheEntries.workerId, sql.placeholder("workerId"))).prepare("worker_cache_clear_entries"),
+  snapshotPromote: db.insert(schema.workerCacheEntries).select(db.select({ workerId: schema.workerCacheSnapshotEntries.workerId, entryId: schema.workerCacheSnapshotEntries.entryId, githubRepositoryId: schema.workerCacheSnapshotEntries.githubRepositoryId, cacheKeyPreview: schema.workerCacheSnapshotEntries.cacheKeyPreview, cacheKeyHash: schema.workerCacheSnapshotEntries.cacheKeyHash, scopePreview: schema.workerCacheSnapshotEntries.scopePreview, scopeHash: schema.workerCacheSnapshotEntries.scopeHash, versionHash: schema.workerCacheSnapshotEntries.versionHash, sizeBytes: schema.workerCacheSnapshotEntries.sizeBytes, createdAt: schema.workerCacheSnapshotEntries.createdAt, lastAccessedAt: schema.workerCacheSnapshotEntries.lastAccessedAt, expiresAt: schema.workerCacheSnapshotEntries.expiresAt, observedGeneration: schema.workerCacheSnapshotEntries.observedGeneration }).from(schema.workerCacheSnapshotEntries).where(and(eq(schema.workerCacheSnapshotEntries.workerId, sql.placeholder("workerId")), eq(schema.workerCacheSnapshotEntries.snapshotId, sql.placeholder("snapshotId"))))).prepare("worker_cache_snapshot_promote"),
+  snapshotComplete: db.update(schema.workerCacheStatus).set({
+    sizeBytes: sql`${sql.placeholder("sizeBytes")}::bigint`, entryCount: sql`${sql.placeholder("entryCount")}`,
+    observedAt: sql`now()`, activeSnapshotId: null, activeSnapshotStartedAt: null,
+    lastCompletedSnapshotId: sql`${sql.placeholder("snapshotId")}::uuid`,
+  }).where(and(eq(schema.workerCacheStatus.workerId, sql.placeholder("workerId")), eq(schema.workerCacheStatus.activeSnapshotId, sql.placeholder("snapshotId")))).prepare("worker_cache_snapshot_complete"),
+  listing: db.select({ entryId: schema.workerCacheEntries.entryId, githubRepositoryId: schema.workerCacheEntries.githubRepositoryId, repositoryFullName: schema.dashboardRepositories.fullName, cacheKeyPreview: schema.workerCacheEntries.cacheKeyPreview, cacheKeyHash: schema.workerCacheEntries.cacheKeyHash, scopePreview: schema.workerCacheEntries.scopePreview, scopeHash: schema.workerCacheEntries.scopeHash, versionHash: schema.workerCacheEntries.versionHash, sizeBytes: schema.workerCacheEntries.sizeBytes, createdAt: schema.workerCacheEntries.createdAt, lastAccessedAt: schema.workerCacheEntries.lastAccessedAt, expiresAt: schema.workerCacheEntries.expiresAt }).from(schema.workerCacheEntries).leftJoin(schema.dashboardRepositories, eq(schema.dashboardRepositories.githubRepositoryId, schema.workerCacheEntries.githubRepositoryId)).where(and(eq(schema.workerCacheEntries.workerId, sql.placeholder("workerId")), or(sql`${sql.placeholder("cursorAt")}::timestamptz IS NULL`, lt(sql`(${schema.workerCacheEntries.lastAccessedAt},${schema.workerCacheEntries.entryId})`, sql`(${sql.placeholder("cursorAt")}::timestamptz,${sql.placeholder("cursorId")}::uuid)`)), or(sql`${sql.placeholder("query")} = ''`, sql`${schema.workerCacheEntries.cacheKeyPreview} ILIKE ${sql.placeholder("pattern")}`, sql`${schema.workerCacheEntries.scopePreview} ILIKE ${sql.placeholder("pattern")}`, sql`${schema.dashboardRepositories.fullName} ILIKE ${sql.placeholder("pattern")}`))).orderBy(desc(schema.workerCacheEntries.lastAccessedAt), desc(schema.workerCacheEntries.entryId)).limit(sql.placeholder("take")).prepare("worker_cache_listing"),
+  summary: db.select({ desiredConfiguration: schema.workers.desiredConfiguration, generation: schema.workerCacheStatus.generation, ready: schema.workerCacheStatus.ready, ttlSeconds: schema.workerCacheStatus.ttlSeconds, proxyOrigin: schema.workerCacheStatus.proxyOrigin, cacheBaseUrl: schema.workerCacheStatus.cacheBaseUrl, sizeBytes: schema.workerCacheStatus.sizeBytes, entryCount: schema.workerCacheStatus.entryCount, hitCount: schema.workerCacheStatus.hitCount, missCount: schema.workerCacheStatus.missCount, runnerCacheEnabled: schema.workerCacheStatus.runnerCacheEnabled, runnerCacheMaxGiB: schema.workerCacheStatus.runnerCacheMaxGiB, runnerCacheSizeBytes: schema.workerCacheStatus.runnerCacheSizeBytes, runnerCacheEntryCount: schema.workerCacheStatus.runnerCacheEntryCount, runnerCacheHitCount: schema.workerCacheStatus.runnerCacheHitCount, runnerCacheMissCount: schema.workerCacheStatus.runnerCacheMissCount, observedAt: schema.workerCacheStatus.observedAt, runnerCacheObservedAt: schema.workerCacheStatus.runnerCacheObservedAt, error: schema.workerCacheStatus.error }).from(schema.workers).leftJoin(schema.workerCacheStatus, eq(schema.workerCacheStatus.workerId, schema.workers.id)).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("worker_cache_summary"),
+}));
+
 export async function sweepWorkerCacheSnapshots(db: SqlDb, maxAgeSeconds = 86_400): Promise<void> {
   if (!Number.isSafeInteger(maxAgeSeconds) || maxAgeSeconds < 1) throw new Error("snapshot sweep age must be a positive safe integer");
   const cutoff = new Date(Date.now() - maxAgeSeconds * 1000).toISOString();
-  await db.begin(async (tx) => {
-    await tx`DELETE FROM worker_cache_snapshot_entries WHERE staged_at < ${cutoff}`;
-    await tx`UPDATE worker_cache_status SET active_snapshot_id=NULL,active_snapshot_started_at=NULL WHERE active_snapshot_started_at < ${cutoff}`;
+  const queries = cacheQueries(db);
+  await db.transaction(async (tx) => {
+    await queries.sweepEntries.execute({ cutoff });
+    await queries.sweepStatuses.execute({ cutoff });
   });
 }
 async function refreshWorkerCacheSummary(db: SqlDb, workerId: string, generation: string): Promise<void> {
-  await db`UPDATE worker_cache_status SET entry_count=(SELECT count(*)::int FROM worker_cache_entries WHERE worker_id=${workerId}),size_bytes=(SELECT COALESCE(sum(size_bytes),0) FROM worker_cache_entries WHERE worker_id=${workerId}),observed_at=now() WHERE worker_id=${workerId} AND generation=${generation}`;
+  await cacheQueries(db).refreshSummary.execute({ workerId, generation });
 }
 
 export async function applyWorkerCacheTelemetry(db: SqlDb, input: TelemetryEvent): Promise<boolean> {
   const payload = input.payload ?? {};
   if (!uuid(input.workerId)) return false;
+  const queries = cacheQueries(db);
   if (input.type === "worker.runner_cache_status") {
     if (!validRunnerStatus(payload)) return false;
     const status = payload;
-    return await db.begin(async (tx) => {
-      const [active] = await tx<{ generation?: unknown }[]>`SELECT generation FROM worker_cache_status WHERE worker_id=${input.workerId}`;
+    return await db.transaction(async () => {
+      const [active] = await queries.generation.execute({ workerId: input.workerId });
       if (!active) return false;
       if (active.generation !== status.generation) return true;
-      const updated = await tx`UPDATE worker_cache_status SET runner_cache_enabled=${status.enabled},runner_cache_max_gib=${status.maxGiB},runner_cache_size_bytes=${status.sizeBytes},runner_cache_entry_count=${status.entryCount},runner_cache_hit_count=${status.hitCount ?? 0},runner_cache_miss_count=${status.missCount ?? 0},runner_cache_observed_at=${status.observedAt} WHERE worker_id=${input.workerId} AND generation=${status.generation} RETURNING worker_id`;
+      const updated = await queries.runnerUpdate.execute({ workerId: input.workerId, generation: status.generation, enabled: status.enabled, maxGiB: status.maxGiB, sizeBytes: status.sizeBytes, entryCount: status.entryCount, hitCount: status.hitCount ?? 0, missCount: status.missCount ?? 0, observedAt: status.observedAt });
       return updated.length > 0;
     });
   }
@@ -64,17 +105,16 @@ export async function applyWorkerCacheTelemetry(db: SqlDb, input: TelemetryEvent
     if (!uuid(payload.generation) || !validEntry(entry)) return false;
     const values = entryValues(entry);
     const generation = payload.generation;
-    const [active] = await db<{ generation?: unknown }[]>`SELECT generation FROM worker_cache_status WHERE worker_id=${input.workerId}`;
+    const [active] = await queries.generation.execute({ workerId: input.workerId });
     if (typeof active?.generation === "string" && active.generation !== generation) return true;
-    await db`INSERT INTO worker_cache_entries (worker_id,entry_id,github_repository_id,cache_key_preview,cache_key_hash,scope_preview,scope_hash,version_hash,size_bytes,created_at,last_accessed_at,expires_at,observed_generation) SELECT ${input.workerId},${values[0]},${values[1]},${values[2]},${values[3]},${values[4]},${values[5]},${values[6]},${values[7]},${values[8]},${values[9]},${values[10]},${generation} FROM worker_cache_status WHERE worker_id=${input.workerId} AND generation=${generation} ON CONFLICT (worker_id,entry_id) DO UPDATE SET github_repository_id=excluded.github_repository_id,cache_key_preview=excluded.cache_key_preview,cache_key_hash=excluded.cache_key_hash,scope_preview=excluded.scope_preview,scope_hash=excluded.scope_hash,version_hash=excluded.version_hash,size_bytes=excluded.size_bytes,created_at=excluded.created_at,last_accessed_at=excluded.last_accessed_at,expires_at=excluded.expires_at,observed_generation=excluded.observed_generation WHERE worker_cache_entries.observed_generation=${generation} AND worker_cache_entries.observed_generation=(SELECT generation FROM worker_cache_status WHERE worker_id=${input.workerId})`;
+    await queries.entryUpsert.execute({ workerId: input.workerId, entryId: values[0], githubRepositoryId: values[1], cacheKeyPreview: values[2], cacheKeyHash: values[3], scopePreview: values[4], scopeHash: values[5], versionHash: values[6], sizeBytes: values[7], createdAt: values[8], lastAccessedAt: values[9], expiresAt: values[10], generation });
     await refreshWorkerCacheSummary(db, input.workerId, generation);
     return true;
   }
   if (input.type === "worker.cache_entry_deleted") {
     if (!uuid(payload.generation) || !uuid(payload.entryId)) return false;
     const generation = payload.generation;
-    const entryId = payload.entryId;
-    await db`DELETE FROM worker_cache_entries WHERE worker_id=${input.workerId} AND entry_id=${entryId} AND observed_generation=${generation} AND observed_generation=(SELECT generation FROM worker_cache_status WHERE worker_id=${input.workerId})`;
+    await queries.entryDelete.execute({ workerId: input.workerId, entryId: payload.entryId, generation });
     await refreshWorkerCacheSummary(db, input.workerId, generation);
     return true;
   }
@@ -83,12 +123,12 @@ export async function applyWorkerCacheTelemetry(db: SqlDb, input: TelemetryEvent
     const snapshotId = payload.snapshotId;
     const status = payload.status;
     await sweepWorkerCacheSnapshots(db);
-    await db.begin(async (tx) => {
-      const [active] = await tx<{ activeSnapshotId?: unknown; lastCompletedSnapshotId?: unknown }[]>`SELECT active_snapshot_id AS "activeSnapshotId",last_completed_snapshot_id AS "lastCompletedSnapshotId" FROM worker_cache_status WHERE worker_id=${input.workerId} FOR UPDATE`;
+    await db.transaction(async () => {
+      const [active] = await queries.snapshotLock.execute({ workerId: input.workerId });
       const lastCompletedSnapshotId: string | null = typeof active?.lastCompletedSnapshotId === "string" ? active.lastCompletedSnapshotId : null;
       if (lastCompletedSnapshotId === snapshotId && active?.activeSnapshotId == null) return;
-      await tx`DELETE FROM worker_cache_snapshot_entries WHERE worker_id=${input.workerId} AND snapshot_id=${snapshotId}`;
-      await tx`INSERT INTO worker_cache_status (worker_id,generation,ready,ttl_seconds,proxy_origin,cache_base_url,size_bytes,entry_count,observed_at,error,active_snapshot_id,active_snapshot_started_at,last_completed_snapshot_id) VALUES (${input.workerId},${status.generation},${status.ready},${status.ttlSeconds},${status.proxyOrigin},${status.cacheBaseUrl},${status.sizeBytes},${status.entryCount},${status.observedAt},${status.error},${snapshotId},now(),${lastCompletedSnapshotId}) ON CONFLICT (worker_id) DO UPDATE SET generation=excluded.generation,ready=excluded.ready,ttl_seconds=excluded.ttl_seconds,proxy_origin=excluded.proxy_origin,cache_base_url=excluded.cache_base_url,size_bytes=excluded.size_bytes,entry_count=excluded.entry_count,observed_at=excluded.observed_at,error=excluded.error,active_snapshot_id=excluded.active_snapshot_id,active_snapshot_started_at=excluded.active_snapshot_started_at,last_completed_snapshot_id=excluded.last_completed_snapshot_id,runner_cache_enabled=CASE WHEN worker_cache_status.generation IS DISTINCT FROM excluded.generation THEN NULL ELSE worker_cache_status.runner_cache_enabled END,runner_cache_max_gib=CASE WHEN worker_cache_status.generation IS DISTINCT FROM excluded.generation THEN NULL ELSE worker_cache_status.runner_cache_max_gib END,runner_cache_size_bytes=CASE WHEN worker_cache_status.generation IS DISTINCT FROM excluded.generation THEN NULL ELSE worker_cache_status.runner_cache_size_bytes END,runner_cache_entry_count=CASE WHEN worker_cache_status.generation IS DISTINCT FROM excluded.generation THEN NULL ELSE worker_cache_status.runner_cache_entry_count END,runner_cache_observed_at=CASE WHEN worker_cache_status.generation IS DISTINCT FROM excluded.generation THEN NULL ELSE worker_cache_status.runner_cache_observed_at END WHERE worker_cache_status.worker_id=${input.workerId}`;
+      await queries.snapshotDelete.execute({ workerId: input.workerId, snapshotId });
+      await queries.snapshotBegin.execute({ workerId: input.workerId, generation: status.generation, ready: status.ready, ttlSeconds: status.ttlSeconds, proxyOrigin: status.proxyOrigin, cacheBaseUrl: status.cacheBaseUrl, sizeBytes: status.sizeBytes, entryCount: status.entryCount, observedAt: status.observedAt, error: status.error, snapshotId, lastCompletedSnapshotId });
     });
     return true;
   }
@@ -96,11 +136,11 @@ export async function applyWorkerCacheTelemetry(db: SqlDb, input: TelemetryEvent
     if (!uuid(payload.snapshotId) || !safeInteger(payload.sequence) || payload.sequence < 0 || !Array.isArray(payload.entries) || payload.entries.length > 100 || !payload.entries.every(validEntry)) return false;
     const snapshotId = payload.snapshotId;
     const sequence = payload.sequence;
-    const [active] = await db<{ activeSnapshotId?: unknown }[]>`SELECT active_snapshot_id AS "activeSnapshotId" FROM worker_cache_status WHERE worker_id=${input.workerId}`;
+    const [active] = await queries.snapshotActive.execute({ workerId: input.workerId });
     if (active?.activeSnapshotId !== snapshotId) return true;
     for (const entry of payload.entries as CacheEntry[]) {
       const values = entryValues(entry);
-      await db`INSERT INTO worker_cache_snapshot_entries (worker_id,snapshot_id,sequence,entry_id,github_repository_id,cache_key_preview,cache_key_hash,scope_preview,scope_hash,version_hash,size_bytes,created_at,last_accessed_at,expires_at,observed_generation,staged_at) VALUES (${input.workerId},${snapshotId},${sequence},${values[0]},${values[1]},${values[2]},${values[3]},${values[4]},${values[5]},${values[6]},${values[7]},${values[8]},${values[9]},${values[10]},(SELECT generation FROM worker_cache_status WHERE worker_id=${input.workerId}),now()) ON CONFLICT DO NOTHING`;
+      await queries.snapshotPage.execute({ workerId: input.workerId, snapshotId, sequence, entryId: values[0], githubRepositoryId: values[1], cacheKeyPreview: values[2], cacheKeyHash: values[3], scopePreview: values[4], scopeHash: values[5], versionHash: values[6], sizeBytes: values[7], createdAt: values[8], lastAccessedAt: values[9], expiresAt: values[10] });
     }
     return true;
   }
@@ -111,22 +151,21 @@ export async function applyWorkerCacheTelemetry(db: SqlDb, input: TelemetryEvent
     const entryCount = payload.entryCount;
     const sizeBytes = payload.sizeBytes;
     await sweepWorkerCacheSnapshots(db);
-    return await db.begin(async (tx) => {
-      const [active] = await tx<{ activeSnapshotId?: unknown; lastCompletedSnapshotId?: unknown }[]>`SELECT active_snapshot_id AS "activeSnapshotId",last_completed_snapshot_id AS "lastCompletedSnapshotId" FROM worker_cache_status WHERE worker_id=${input.workerId} FOR UPDATE`;
+    return await db.transaction(async () => {
+      const [active] = await queries.snapshotLock.execute({ workerId: input.workerId });
       if (active?.lastCompletedSnapshotId === snapshotId && active.activeSnapshotId == null) return true;
       if (active?.activeSnapshotId !== snapshotId) return true;
-      const pages = await tx`SELECT count(DISTINCT sequence)::int AS count FROM worker_cache_snapshot_entries WHERE worker_id=${input.workerId} AND snapshot_id=${snapshotId}`;
-      const rows = await tx`SELECT count(*)::int AS count FROM worker_cache_snapshot_entries WHERE worker_id=${input.workerId} AND snapshot_id=${snapshotId}`;
-      const count = Number(pages[0]?.count ?? 0);
-      if (count !== pageCount || Number(rows[0]?.count ?? 0) !== entryCount) {
-        await tx`DELETE FROM worker_cache_snapshot_entries WHERE worker_id=${input.workerId} AND snapshot_id=${snapshotId}`;
-        await tx`UPDATE worker_cache_status SET active_snapshot_id=NULL,active_snapshot_started_at=NULL WHERE worker_id=${input.workerId} AND active_snapshot_id=${snapshotId}`;
+      const pages = await queries.snapshotPages.execute({ workerId: input.workerId, snapshotId });
+      const rows = await queries.snapshotRows.execute({ workerId: input.workerId, snapshotId });
+      if (Number(pages[0]?.count ?? 0) !== pageCount || Number(rows[0]?.count ?? 0) !== entryCount) {
+        await queries.snapshotDelete.execute({ workerId: input.workerId, snapshotId });
+        await queries.clearActive.execute({ workerId: input.workerId, snapshotId });
         return true;
       }
-      await tx`DELETE FROM worker_cache_entries WHERE worker_id=${input.workerId}`;
-      await tx`INSERT INTO worker_cache_entries (worker_id,entry_id,github_repository_id,cache_key_preview,cache_key_hash,scope_preview,scope_hash,version_hash,size_bytes,created_at,last_accessed_at,expires_at,observed_generation) SELECT worker_id,entry_id,github_repository_id,cache_key_preview,cache_key_hash,scope_preview,scope_hash,version_hash,size_bytes,created_at,last_accessed_at,expires_at,observed_generation FROM worker_cache_snapshot_entries WHERE worker_id=${input.workerId} AND snapshot_id=${snapshotId}`;
-      await tx`UPDATE worker_cache_status SET size_bytes=${sizeBytes},entry_count=${entryCount},observed_at=now(),active_snapshot_id=NULL,active_snapshot_started_at=NULL,last_completed_snapshot_id=${snapshotId} WHERE worker_id=${input.workerId} AND active_snapshot_id=${snapshotId}`;
-      await tx`DELETE FROM worker_cache_snapshot_entries WHERE worker_id=${input.workerId} AND snapshot_id=${snapshotId}`;
+      await queries.clearEntries.execute({ workerId: input.workerId });
+      await queries.snapshotPromote.execute({ workerId: input.workerId, snapshotId });
+      await queries.snapshotComplete.execute({ workerId: input.workerId, snapshotId, sizeBytes, entryCount });
+      await queries.snapshotDelete.execute({ workerId: input.workerId, snapshotId });
       return true;
     });
   }
@@ -153,14 +192,14 @@ export async function listWorkerCacheEntries(db: SqlDb, workerId: string, option
   const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 50)));
   const cursor = options.cursor ? decodeWorkerCacheCursor(options.cursor) : null;
   const query = options.query?.trim() ?? "";
-  const rows = await db<Record<string, unknown>[]>`SELECT e.entry_id AS "entryId",e.github_repository_id AS "githubRepositoryId",r.full_name AS "repositoryFullName",e.cache_key_preview AS "cacheKeyPreview",e.cache_key_hash AS "cacheKeyHash",e.scope_preview AS "scopePreview",e.scope_hash AS "scopeHash",e.version_hash AS "versionHash",e.size_bytes AS "sizeBytes",e.created_at AS "createdAt",e.last_accessed_at AS "lastAccessedAt",e.expires_at AS "expiresAt" FROM worker_cache_entries e LEFT JOIN dashboard_repositories r ON r.github_repository_id=e.github_repository_id WHERE e.worker_id=${workerId} AND (${cursor?.lastAccessedAt ?? null}::timestamptz IS NULL OR (e.last_accessed_at,e.entry_id)<(${cursor?.lastAccessedAt ?? null}::timestamptz,${cursor?.entryId ?? null}::uuid)) AND (${query}='' OR lower(COALESCE(r.full_name,'')) LIKE lower(${"%" + query + "%"}) OR lower(e.cache_key_preview) LIKE lower(${"%" + query + "%"}) OR lower(e.scope_preview) LIKE lower(${"%" + query + "%"}) OR e.cache_key_hash=${query} OR e.scope_hash=${query} OR e.version_hash=${query}) ORDER BY e.last_accessed_at DESC,e.entry_id LIMIT ${limit + 1}`;
-  const items = rows.slice(0, limit).map(normalizeEntry);
+  const rows = await cacheQueries(db).listing.execute({ workerId, cursorAt: cursor?.lastAccessedAt ?? null, cursorId: cursor?.entryId ?? null, query, pattern: `%${query}%`, take: limit + 1 });
+  const items = rows.slice(0, limit).map((row) => normalizeEntry(row as unknown as Record<string, unknown>));
   return { items, nextCursor: rows.length > limit && items.length ? encodeWorkerCacheCursor({ lastAccessedAt: items.at(-1)!.lastAccessedAt, entryId: items.at(-1)!.entryId }) : null };
 }
 
 export async function getWorkerCacheSummary(db: SqlDb, workerId: string, desiredTtlSeconds = 172800): Promise<WorkerCacheSummary> {
-  const [row] = await db<Record<string, unknown>[]>`SELECT desired_configuration AS "desiredConfiguration",s.generation,s.ready,s.ttl_seconds AS "ttlSeconds",s.proxy_origin AS "proxyOrigin",s.cache_base_url AS "cacheBaseUrl",s.size_bytes AS "sizeBytes",s.entry_count AS "entryCount",s.hit_count AS "hitCount",s.miss_count AS "missCount",s.runner_cache_enabled AS "runnerCacheEnabled",s.runner_cache_max_gib AS "runnerCacheMaxGiB",s.runner_cache_size_bytes AS "runnerCacheSizeBytes",s.runner_cache_entry_count AS "runnerCacheEntryCount",s.runner_cache_hit_count AS "runnerCacheHitCount",s.runner_cache_miss_count AS "runnerCacheMissCount",s.observed_at AS "observedAt",s.runner_cache_observed_at AS "runnerCacheObservedAt",s.error FROM workers w LEFT JOIN worker_cache_status s ON s.worker_id=w.id WHERE w.id=${workerId}`;
-  const desired = row?.desiredConfiguration && typeof row.desiredConfiguration === "object" ? (row.desiredConfiguration as Record<string, unknown>) : {};
+  const [row] = await cacheQueries(db).summary.execute({ workerId });
+  const desired = row?.desiredConfiguration && typeof row.desiredConfiguration === "object" ? row.desiredConfiguration as Record<string, unknown> : {};
   const cache = desired.cache && typeof desired.cache === "object" ? desired.cache as Record<string, unknown> : {};
-  return WorkerCacheSummary.parse({ desiredTtlSeconds: Number(cache.ttlSeconds ?? desiredTtlSeconds), desiredRunnerCacheEnabled: cache.runnerCacheEnabled !== false, desiredRunnerCacheMaxGiB: Number(cache.runnerCacheMaxGiB ?? 20), effectiveTtlSeconds: row?.ttlSeconds == null ? null : Number(row.ttlSeconds), effectiveRunnerCacheEnabled: row?.runnerCacheEnabled == null ? null : row.runnerCacheEnabled === true, effectiveRunnerCacheMaxGiB: row?.runnerCacheMaxGiB == null ? null : Number(row.runnerCacheMaxGiB), ready: row?.ready === true, proxyOrigin: row?.proxyOrigin == null ? null : String(row.proxyOrigin), cacheBaseUrl: row?.cacheBaseUrl == null ? null : String(row.cacheBaseUrl), sizeBytes: row?.observedAt == null ? null : decimal(row.sizeBytes), entryCount: row?.observedAt == null ? null : Number(row.entryCount ?? 0), hitCount: row?.observedAt == null ? 0 : Number(row.hitCount ?? 0), missCount: row?.observedAt == null ? 0 : Number(row.missCount ?? 0), runnerCacheSizeBytes: row?.runnerCacheObservedAt == null ? null : decimal(row.runnerCacheSizeBytes), runnerCacheEntryCount: row?.runnerCacheObservedAt == null ? null : Number(row.runnerCacheEntryCount ?? 0), runnerCacheHitCount: row?.runnerCacheObservedAt == null ? 0 : Number(row.runnerCacheHitCount ?? 0), runnerCacheMissCount: row?.runnerCacheObservedAt == null ? 0 : Number(row.runnerCacheMissCount ?? 0), observedAt: row?.observedAt == null ? null : timestamp(row.observedAt), runnerCacheObservedAt: row?.runnerCacheObservedAt == null ? null : timestamp(row.runnerCacheObservedAt), error: row?.error == null ? null : String(row.error) });
+  return WorkerCacheSummary.parse({ desiredTtlSeconds: Number(cache.ttlSeconds ?? desiredTtlSeconds), desiredRunnerCacheEnabled: cache.runnerCacheEnabled !== false, desiredRunnerCacheMaxGiB: Number(cache.runnerCacheMaxGiB ?? 20), effectiveTtlSeconds: row?.ttlSeconds == null ? null : Number(row.ttlSeconds), effectiveRunnerCacheEnabled: row?.runnerCacheEnabled == null ? null : row.runnerCacheEnabled === true, effectiveRunnerCacheMaxGiB: row?.runnerCacheMaxGiB == null ? null : Number(row.runnerCacheMaxGiB), ready: row?.ready === true, proxyOrigin: row?.proxyOrigin == null ? null : String(row.proxyOrigin), cacheBaseUrl: row?.cacheBaseUrl == null ? null : String(row.cacheBaseUrl), sizeBytes: row?.observedAt == null ? null : decimal(row.sizeBytes), entryCount: row?.observedAt == null ? null : Number(row.entryCount ?? 0), hitCount: row?.observedAt == null ? null : Number(row.hitCount ?? 0), missCount: row?.observedAt == null ? null : Number(row.missCount ?? 0), observedAt: row?.observedAt == null ? null : timestamp(row.observedAt), error: row?.error == null ? null : String(row.error), runnerCacheSizeBytes: row?.runnerCacheObservedAt == null ? null : decimal(row.runnerCacheSizeBytes), runnerCacheEntryCount: row?.runnerCacheObservedAt == null ? null : Number(row.runnerCacheEntryCount ?? 0), runnerCacheHitCount: row?.runnerCacheObservedAt == null ? null : Number(row.runnerCacheHitCount ?? 0), runnerCacheMissCount: row?.runnerCacheObservedAt == null ? null : Number(row.runnerCacheMissCount ?? 0), runnerCacheObservedAt: row?.runnerCacheObservedAt == null ? null : timestamp(row.runnerCacheObservedAt) });
 }

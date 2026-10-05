@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { preparedTestDatabase } from "../../../packages/db/src/prepared-test-fixture.ts";
 import { WorkerCommandDispatcher, listReplayableWorkerCommands } from "./worker-dispatch.ts";
 import type { WorkerCommand } from "@mars/contracts";
 
@@ -110,20 +111,19 @@ test("resolves a non-durable worker request from its correlated response", async
 
 test("replays terminal-lease stop commands until their cleanup event is acknowledged", async () => {
   const stopCommand = { ...command, type: "tart.stop_lease", leaseId: "22222222-2222-4222-8222-222222222222", occurredAt: new Date() };
-  const db = Object.assign(async () => [stopCommand], {}) as never;
+  const db = preparedTestDatabase(name => name === "worker_dispatch_replayable" ? [stopCommand] : []);
   const result = await listReplayableWorkerCommands(db, workerId);
   expect(result).toEqual([{ ...stopCommand, occurredAt: stopCommand.occurredAt.toISOString() }]);
 });
 test("does not replay lease commands whose lease row is gone", async () => {
-  const db = Object.assign(async () => [], {}) as never;
+  const db = preparedTestDatabase(() => []);
   const result = await listReplayableWorkerCommands(db, workerId);
   expect(result).toEqual([]);
 });
+
 test("normalizes database timestamp strings before validating commands", async () => {
-  const db = Object.assign(async () => [{ ...command, occurredAt: "2026-08-20 11:22:07.123+00" }], {}) as never;
-
+  const db = preparedTestDatabase(name => name === "worker_dispatch_replayable" ? [{ ...command, occurredAt: "2026-08-20 11:22:07.123+00" }] : []);
   const result = await listReplayableWorkerCommands(db, workerId);
-
   expect(result[0]!.occurredAt).toBe("2026-08-20T11:22:07.123Z");
 });
 

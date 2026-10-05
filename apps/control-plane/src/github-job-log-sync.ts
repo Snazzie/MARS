@@ -1,11 +1,38 @@
-import type { DatabaseClient } from "@mars/db";
+import { and, eq, lt, sql } from "drizzle-orm";
+import { defineQueries, schema, type DatabaseClient } from "@mars/db";
 import type { GithubJobsClient } from "./github-jobs.ts";
 import { attributeGithubJobLog } from "./github-job-logs.ts";
 import type { GithubJobSnapshot } from "./runs.ts";
-
 const LOG_CHUNK_BYTES = 64 * 1024;
 export const GITHUB_LOG_FORMAT_VERSION = 1;
 const permanentLogErrors = new Set(["github_404", "github_410", "github_job_log_too_large"]);
+const queries = defineQueries(db => ({
+  candidate: db.select({ id: schema.dashboardJobs.id, logsState: schema.dashboardJobs.logsState, logsVersion: schema.dashboardJobs.logsVersion })
+    .from(schema.dashboardJobs).where(and(eq(schema.dashboardJobs.githubJobId, sql.placeholder("jobId")), eq(schema.dashboardJobs.status, "completed")))
+    .limit(1).prepare("github_job_logs_candidate"),
+  unavailable: db.update(schema.dashboardJobs).set({ logsState: "unavailable", logsSyncedAt: sql`now()`, logsError: sql`${sql.placeholder("code")}`, logsVersion: GITHUB_LOG_FORMAT_VERSION })
+    .where(and(eq(schema.dashboardJobs.githubJobId, sql.placeholder("jobId")), lt(schema.dashboardJobs.logsVersion, GITHUB_LOG_FORMAT_VERSION)))
+    .prepare("github_job_logs_unavailable"),
+  locked: db.select({ id: schema.dashboardJobs.id, organizationId: schema.dashboardJobs.organizationId, runId: schema.dashboardJobs.runId, logsState: schema.dashboardJobs.logsState, logsVersion: schema.dashboardJobs.logsVersion })
+    .from(schema.dashboardJobs).where(and(eq(schema.dashboardJobs.githubJobId, sql.placeholder("jobId")), eq(schema.dashboardJobs.status, "completed")))
+    .for("update").limit(1).prepare("github_job_logs_locked"),
+  steps: db.select({ id: schema.dashboardJobSteps.id, number: schema.dashboardJobSteps.number }).from(schema.dashboardJobSteps)
+    .where(and(eq(schema.dashboardJobSteps.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardJobSteps.runId, sql.placeholder("runId")), eq(schema.dashboardJobSteps.jobId, sql.placeholder("jobId"))))
+    .prepare("github_job_logs_steps"),
+  deleteSteps: db.delete(schema.dashboardStepLogChunks).where(and(eq(schema.dashboardStepLogChunks.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardStepLogChunks.runId, sql.placeholder("runId")), eq(schema.dashboardStepLogChunks.jobId, sql.placeholder("jobId")))).prepare("github_job_logs_delete_steps"),
+  deleteJobs: db.delete(schema.dashboardLogChunks).where(and(eq(schema.dashboardLogChunks.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardLogChunks.runId, sql.placeholder("runId")), eq(schema.dashboardLogChunks.jobId, sql.placeholder("jobId")))).prepare("github_job_logs_delete_job"),
+  insertStep: db.insert(schema.dashboardStepLogChunks).values({
+    organizationId: sql.placeholder("organizationId"), runId: sql.placeholder("runId"), jobId: sql.placeholder("jobId"),
+    stepId: sql.placeholder("stepId"), sequence: sql.placeholder("sequence"), content: sql.placeholder("content"), occurredAt: sql.placeholder("occurredAt"),
+  }).prepare("github_job_logs_insert_step"),
+  insertJob: db.insert(schema.dashboardLogChunks).values({
+    organizationId: sql.placeholder("organizationId"), runId: sql.placeholder("runId"), jobId: sql.placeholder("jobId"),
+    sequence: sql.placeholder("sequence"), content: sql.placeholder("content"), occurredAt: sql.placeholder("occurredAt"),
+  }).prepare("github_job_logs_insert_job"),
+  markIngested: db.update(schema.dashboardJobs).set({ logsState: "ingested", logsSyncedAt: sql`now()`, logsError: null, logsVersion: GITHUB_LOG_FORMAT_VERSION })
+    .where(eq(schema.dashboardJobs.id, sql.placeholder("id"))).prepare("github_job_logs_mark_ingested"),
+}));
+
 
 export function chunkLogText(text: string, maxBytes = LOG_CHUNK_BYTES): string[] {
   if (!text) return [];
@@ -31,7 +58,7 @@ export async function syncCompletedGithubJobLogs(input: {
   now?: () => number;
 }): Promise<boolean> {
   if (input.job.status !== "completed") return false;
-  const [candidate] = await input.db`SELECT id,logs_state AS "logsState",logs_version AS "logsVersion" FROM dashboard_jobs WHERE github_job_id=${input.job.id} AND status='completed'`;
+  const [candidate] = await queries(input.db).candidate.execute({ jobId: input.job.id });
   if (!candidate || (candidate.logsState !== "pending" && Number(candidate.logsVersion) >= GITHUB_LOG_FORMAT_VERSION)) return false;
 
   let text: string;
@@ -46,20 +73,21 @@ export async function syncCompletedGithubJobLogs(input: {
       }
     }
     if (!permanentLogErrors.has(code)) throw error;
-    await input.db`UPDATE dashboard_jobs SET logs_state='unavailable',logs_synced_at=now(),logs_error=${code},logs_version=${GITHUB_LOG_FORMAT_VERSION} WHERE github_job_id=${input.job.id} AND logs_version<${GITHUB_LOG_FORMAT_VERSION}`;
+    await queries(input.db).unavailable.execute({ code, jobId: input.job.id });
     return false;
   }
 
   const attributed = attributeGithubJobLog(text, input.job.steps);
-  return input.db.begin(async tx => {
-    const [stored] = await tx`SELECT id,organization_id AS "organizationId",run_id AS "runId",logs_state AS "logsState",logs_version AS "logsVersion" FROM dashboard_jobs WHERE github_job_id=${input.job.id} AND status='completed' FOR UPDATE`;
+  return input.db.transaction(async tx => {
+    const statements = queries(tx as unknown as DatabaseClient);
+    const [stored] = await statements.locked.execute({ jobId: input.job.id });
     if (!stored || (stored.logsState !== "pending" && Number(stored.logsVersion) >= GITHUB_LOG_FORMAT_VERSION)) return false;
-    const stepRows = await tx`SELECT id,number FROM dashboard_job_steps WHERE organization_id=${stored.organizationId} AND run_id=${stored.runId} AND job_id=${stored.id}`;
+    const stepRows = await statements.steps.execute({ organizationId: stored.organizationId, runId: stored.runId, jobId: stored.id });
     const stepIds = new Map(stepRows.map(row => [Number(row.number), String(row.id)]));
     let unattributed = attributed.unattributed;
 
-    await tx`DELETE FROM dashboard_step_log_chunks WHERE organization_id=${stored.organizationId} AND run_id=${stored.runId} AND job_id=${stored.id}`;
-    await tx`DELETE FROM dashboard_log_chunks WHERE organization_id=${stored.organizationId} AND run_id=${stored.runId} AND job_id=${stored.id}`;
+    await statements.deleteSteps.execute({ organizationId: stored.organizationId, runId: stored.runId, jobId: stored.id });
+    await statements.deleteJobs.execute({ organizationId: stored.organizationId, runId: stored.runId, jobId: stored.id });
     for (const [stepNumber, stepText] of attributed.steps) {
       const stepId = stepIds.get(stepNumber);
       if (!stepId) {
@@ -69,14 +97,14 @@ export async function syncCompletedGithubJobLogs(input: {
       const step = input.job.steps.find(item => item.number === stepNumber);
       const chunks = chunkLogText(stepText);
       for (let sequence = 0; sequence < chunks.length; sequence += 1) {
-        await tx`INSERT INTO dashboard_step_log_chunks (organization_id,run_id,job_id,step_id,sequence,content,occurred_at) VALUES (${stored.organizationId},${stored.runId},${stored.id},${stepId},${sequence},${chunks[sequence]},${step?.startedAt ?? input.job.startedAt ?? input.job.queuedAt})`;
+        await statements.insertStep.execute({ organizationId: stored.organizationId, runId: stored.runId, jobId: stored.id, stepId, sequence, content: chunks[sequence]!, occurredAt: step?.startedAt ?? input.job.startedAt ?? input.job.queuedAt });
       }
     }
     const jobChunks = chunkLogText(unattributed);
     for (let sequence = 0; sequence < jobChunks.length; sequence += 1) {
-      await tx`INSERT INTO dashboard_log_chunks (organization_id,run_id,job_id,sequence,content,occurred_at) VALUES (${stored.organizationId},${stored.runId},${stored.id},${sequence},${jobChunks[sequence]},${input.job.startedAt ?? input.job.queuedAt})`;
+      await statements.insertJob.execute({ organizationId: stored.organizationId, runId: stored.runId, jobId: stored.id, sequence, content: jobChunks[sequence]!, occurredAt: input.job.startedAt ?? input.job.queuedAt });
     }
-    await tx`UPDATE dashboard_jobs SET logs_state='ingested',logs_synced_at=now(),logs_error=NULL,logs_version=${GITHUB_LOG_FORMAT_VERSION} WHERE id=${stored.id}`;
+    await statements.markIngested.execute({ id: stored.id });
     return true;
   });
 }

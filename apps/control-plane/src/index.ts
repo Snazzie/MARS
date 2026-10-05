@@ -1,4 +1,5 @@
-import { completeOnboardingIfReady, createDb, ensureDatabase, migrateDatabase, jsonParameter, type DashboardDb } from "@mars/db";
+import { and, asc, eq, ne, inArray, sql } from "drizzle-orm";
+import { defineQueries, schema, completeOnboardingIfReady, createDb, ensureDatabase, migrateDatabase, type DashboardDb } from "@mars/db";
 import { CURRENT_WORKER_CONTRACT_VERSION, WorkerReleaseOciDigest, sanitizeDiagnosticText, type WorkerBuildImagePayload, type WorkerCommand, type WorkerReleaseManifest } from "@mars/contracts";
 import type { Server } from "bun";
 import { getSession, SecretBox, type SessionUser } from "./auth.ts";
@@ -30,6 +31,13 @@ import { httpOrigin, publicHttpOrigin } from "./http-origin.ts";
 import { loadWorkerReleaseManifest, WorkerReleaseCatalog } from "./worker-release.ts";
 import { WorkerUpgradeService } from "./worker-upgrade.ts";
 import { createControlPlaneGateway, type ControlPlaneSocketData } from "./control-plane-gateway.ts";
+const startupQueries = defineQueries(db => ({
+  developmentAdmin: db.select({ id: schema.users.id, githubUserId: schema.users.githubUserId, login: schema.users.login, isGlobalAdmin: schema.users.isGlobalAdmin }).from(schema.users).where(eq(schema.users.isGlobalAdmin, true)).orderBy(asc(schema.users.createdAt)).limit(1).prepare("control_plane_development_admin"),
+  saveCommand: db.insert(schema.commands).values({ id: sql.placeholder("id"), version: sql.placeholder("version"), type: sql.placeholder("type"), workerId: sql.placeholder("workerId"), leaseId: sql.placeholder("leaseId"), occurredAt: sql.placeholder("occurredAt"), payload: sql.placeholder("payload") }).onConflictDoNothing({ target: schema.commands.id }).prepare("control_plane_save_command"),
+  markCommandSent: db.update(schema.commands).set({ state: "sent" }).where(and(eq(schema.commands.id, sql.placeholder("id")), eq(schema.commands.state, "pending"))).prepare("control_plane_command_sent"),
+  acknowledgeCommand: db.update(schema.commands).set({ state: "acknowledged" }).where(and(eq(schema.commands.id, sql.placeholder("id")), inArray(schema.commands.state, ["pending", "sent"]))).prepare("control_plane_command_acknowledged"),
+  offlineWorkers: db.update(schema.workers).set({ connectionState: "offline" }).where(ne(schema.workers.connectionState, "offline")).prepare("control_plane_workers_offline"),
+}));
 
 export function formatJobReconciliationReport(report: ReconcileReport): string | undefined {
   if (report.reserved === 0 && report.failed === 0) return undefined;
@@ -470,7 +478,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
     const authorization = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
     const supplied = authorization || request.headers.get("x-mars-dev-token")?.trim();
     if (devToken && supplied === devToken) {
-      const [admin] = await db<{ id: string; githubUserId: number | string; login: string; isGlobalAdmin: boolean }[]>`SELECT id,github_user_id AS "githubUserId",login,is_global_admin AS "isGlobalAdmin" FROM users WHERE is_global_admin=true ORDER BY created_at ASC LIMIT 1`;
+      const [admin] = await startupQueries(db).developmentAdmin.execute({});
       if (admin) return { id: admin.id, githubUserId: Number(admin.githubUserId), login: admin.login, isGlobalAdmin: true };
       return { id: "00000000-0000-4000-8000-000000000001", githubUserId: 0, login: "dev-admin", isGlobalAdmin: true };
     }
@@ -478,15 +486,15 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   });
   const commandStore = {
     async save(command: WorkerCommand): Promise<void> {
-      await db`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${command.id},${command.version},${command.type},${command.workerId},${command.leaseId},${command.occurredAt},${jsonParameter(db, command.payload)}) on conflict (id) do nothing`;
+      await startupQueries(db).saveCommand.execute({ id: command.id, version: command.version, type: command.type, workerId: command.workerId, leaseId: command.leaseId, occurredAt: command.occurredAt, payload: command.payload });
     },
     async listUnacknowledged(workerId: string): Promise<WorkerCommand[]> {
       return listReplayableWorkerCommands(db, workerId);
     },
-    async markSent(commandId: string): Promise<void> { await db`update commands set state='sent' where id=${commandId} and state='pending'`; },
-    async acknowledge(commandId: string): Promise<void> { await db`update commands set state='acknowledged' where id=${commandId} and state in ('pending','sent')`; },
+    async markSent(commandId: string): Promise<void> { await startupQueries(db).markCommandSent.execute({ id: commandId }); },
+    async acknowledge(commandId: string): Promise<void> { await startupQueries(db).acknowledgeCommand.execute({ id: commandId }); },
   };
-  await db`update workers set connection_state='offline' where connection_state<>'offline'`;
+  await startupQueries(db).offlineWorkers.execute({});
   const dispatcher = options.dispatcher ?? new WorkerCommandDispatcher(15_000, commandStore);
   const requestSources = new WeakMap<Request, string>();
   const startedAt = new Date().toISOString();

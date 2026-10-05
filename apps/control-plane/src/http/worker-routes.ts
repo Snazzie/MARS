@@ -1,3 +1,10 @@
+import { and, desc, eq, sql } from "drizzle-orm";
+import { defineQueries, schema } from "@mars/db";
+const workerRouteQueries = defineQueries((db) => ({
+  upgradeWorker: db.select({ id: schema.workers.id, platform: schema.workers.platform, releaseVersion: schema.workers.releaseVersion }).from(schema.workers).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("http_upgrade_worker"),
+  priorMutation: db.select({ response: schema.workerMutations.response }).from(schema.workerMutations).where(and(eq(schema.workerMutations.workerId, sql.placeholder("workerId")), eq(schema.workerMutations.idempotencyKey, sql.placeholder("key")))).prepare("http_worker_prior_mutation"),
+  pendingWorkers: db.select({ id: schema.workers.id, name: schema.workers.name, platform: schema.workers.platform, releaseVersion: schema.workers.releaseVersion, contractVersion: schema.workers.contractVersion, guestPlatforms: schema.workers.guestPlatforms, admissionState: schema.workers.admissionState, connectionState: schema.workers.connectionState, configurationState: schema.workers.configurationState, publicKey: schema.workers.publicKey, fingerprint: schema.workers.fingerprint, vmUuid: schema.workers.vmUuid, machineUuid: schema.workers.machineUuid, limits: schema.workers.limits, doctor: schema.workers.doctor, lastRequestedAt: schema.workers.lastRequestedAt }).from(schema.workers).where(eq(schema.workers.admissionState, "pending")).orderBy(desc(schema.workers.createdAt)).prepare("http_pending_workers"),
+}));
 import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
@@ -1257,7 +1264,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       try {
         const token = deps.workerUpgradeService.read(targetToken);
         if (token.platform !== audience) throw new Error("upgrade_target_stale");
-        const [worker] = await deps.db`select id,platform,release_version as "releaseVersion" from workers where id=${token.workerId}`;
+        const [worker] = await workerRouteQueries(deps.db).upgradeWorker.execute({ workerId: token.workerId });
         if (!worker || worker.platform !== audience) throw new Error("upgrade_target_stale");
         const selected = await deps.workerReleaseCatalog.release(token.targetReleaseVersion);
         await deps.workerUpgradeService.verify(targetToken, { id: String(worker.id), platform: worker.platform, releaseVersion: worker.releaseVersion }, selected);
@@ -1450,7 +1457,7 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       const parsed = WorkerConfiguration.safeParse(body);
       if (!parsed.success) return c.json({ error: "invalid worker configuration" }, 400);
       const key = c.req.header("Idempotency-Key")!.trim();
-      const [prior] = await deps.db<{ response: Record<string, unknown> | null }[]>`select response from worker_mutations where worker_id=${c.req.param("workerId")} and idempotency_key=${key}`;
+      const [prior] = await workerRouteQueries(deps.db).priorMutation.execute({ workerId: c.req.param("workerId"), key });
       if (prior?.response) return c.json(prior.response, { status: 202, headers: noStore() });
       const result = await configurePendingWorker(deps.db, c.req.param("workerId"), parsed.data, user.id, deps.workerDispatcher, key);
       await deps.onWorkerChanged(c.req.param("workerId"));
@@ -1462,6 +1469,6 @@ export function registerWorkerRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
       throw error;
     }
   });
-  app.get("/api/workers/pending", async (c) => { const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401); if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403); const rows = await deps.db`select id,name,platform,release_version as "releaseVersion",contract_version as "contractVersion",guest_platforms as "guestPlatforms",admission_state as "admissionState",connection_state as "connectionState",configuration_state as "configurationState",public_key as "publicKey",fingerprint,vm_uuid as "vmUuid",machine_uuid as "machineUuid",limits,doctor,last_requested_at as "lastRequestedAt" from workers where admission_state='pending' order by created_at desc`; return c.json(rows.map((row) => pendingWorkerDto(row, deps.workerConnected)).filter((row): row is NonNullable<typeof row> => row !== null)); });
+  app.get("/api/workers/pending", async (c) => { const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401); if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403); const rows = await workerRouteQueries(deps.db).pendingWorkers.execute(); return c.json(rows.map((row) => pendingWorkerDto(row as Record<string, unknown>, deps.workerConnected)), { headers: noStore() }); });
   app.post("/api/workers/pending/:workerId/reject", async (c) => { const user = await auth(c); if (!user) return c.json({ error: "unauthorized" }, 401); if (!user.isGlobalAdmin) return c.json({ error: "forbidden" }, 403); if (!idempotency(c)) return c.json({ error: "Idempotency-Key required" }, 400); await rejectPendingWorker(deps.db, c.req.param("workerId"), user.id); await deps.onWorkerChanged(c.req.param("workerId")); return c.json({ ok: true }); });
 }

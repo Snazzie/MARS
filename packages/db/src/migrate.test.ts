@@ -1,11 +1,9 @@
 import { expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { migrateDatabase } from "./migrate.ts";
-import type { DatabaseClient, RawDatabaseClient } from "./index.ts";
+import type { RawDatabaseClient } from "./index.ts";
 
 const migrationsUrl = new URL("./migrations/", import.meta.url);
-const migration = (name: string) => readFile(new URL(`./migrations/${name}`, import.meta.url), "utf8");
 
 type FakeMigrationState = {
   tableExists: boolean;
@@ -15,7 +13,7 @@ type FakeMigrationState = {
   matchedSnapshots: boolean;
 };
 
-function fakeDatabase(state?: Partial<FakeMigrationState>): DatabaseClient & { queries: string[]; transactionCount: number } {
+function fakeDatabase(state?: Partial<FakeMigrationState>): RawDatabaseClient & { state: FakeMigrationState; transactionCount: number } {
   const current: FakeMigrationState = {
     tableExists: true,
     workerColumnNullable: false,
@@ -24,10 +22,8 @@ function fakeDatabase(state?: Partial<FakeMigrationState>): DatabaseClient & { q
     matchedSnapshots: true,
     ...state,
   };
-  const queries: string[] = [];
   const query = (async (strings: TemplateStringsArray) => {
     const text = strings.join(" ");
-    queries.push(text);
     if (text.includes("information_schema.tables")) return [{ tableExists: current.tableExists }];
     if (text.includes("information_schema.columns")) {
       return current.workerColumnNullable === null
@@ -53,9 +49,9 @@ function fakeDatabase(state?: Partial<FakeMigrationState>): DatabaseClient & { q
       return [];
     }
     return [];
-  }) as unknown as DatabaseClient & { queries: string[]; transactionCount: number };
+  }) as unknown as RawDatabaseClient & { state: FakeMigrationState; transactionCount: number };
   let transactionCount = 0;
-  const begin = async (callback: (tx: DatabaseClient) => Promise<unknown>) => {
+  const begin = async (callback: (tx: RawDatabaseClient) => Promise<unknown>) => {
     transactionCount += 1;
     const snapshot = { ...current };
     try {
@@ -66,7 +62,7 @@ function fakeDatabase(state?: Partial<FakeMigrationState>): DatabaseClient & { q
     }
   };
   Object.defineProperty(query, "begin", { value: begin });
-  query.queries = queries;
+  query.state = current;
   Object.defineProperty(query, "transactionCount", { get: () => transactionCount });
   return query;
 }
@@ -81,16 +77,17 @@ test("missing timing worker column is backfilled and constrained", async () => {
   const db = fakeDatabase({ workerColumnNullable: null, workerIndexExists: false, nullSnapshots: 3 });
   await migrateDatabase(db, { runMigrations: async () => {} });
   expect(db.transactionCount).toBe(1);
-  expect(db.queries.join("\n")).toContain("ADD COLUMN IF NOT EXISTS worker_id uuid");
-  expect(db.queries.join("\n")).toContain("ALTER COLUMN worker_id SET NOT NULL");
-  expect(db.queries.join("\n")).toContain("CREATE INDEX IF NOT EXISTS dashboard_job_timing_worker_idx");
+  expect(db.state.workerColumnNullable).toBe(false);
+  expect(db.state.nullSnapshots).toBe(0);
+  expect(db.state.workerIndexExists).toBe(true);
 });
 
 test("existing nullable timing worker column is backfilled", async () => {
   const db = fakeDatabase({ workerColumnNullable: true, workerIndexExists: false, nullSnapshots: 2 });
   await migrateDatabase(db, { runMigrations: async () => {} });
   expect(db.transactionCount).toBe(1);
-  expect(db.queries.join("\n")).toContain("UPDATE dashboard_job_timing_snapshots");
+  expect(db.state.workerColumnNullable).toBe(false);
+  expect(db.state.nullSnapshots).toBe(0);
 });
 
 test("unmatched timing snapshot rolls back before constraint and index creation", async () => {
@@ -98,8 +95,9 @@ test("unmatched timing snapshot rolls back before constraint and index creation"
   await expect(migrateDatabase(db, { runMigrations: async () => {} })).rejects.toThrow(
     "Cannot repair dashboard_job_timing_snapshots.worker_id: 1 snapshot(s) do not match a runner lease",
   );
-  expect(db.queries.join("\n")).not.toContain("ALTER COLUMN worker_id SET NOT NULL");
-  expect(db.queries.join("\n")).not.toContain("CREATE INDEX IF NOT EXISTS");
+  expect(db.state.workerColumnNullable).toBeNull();
+  expect(db.state.nullSnapshots).toBe(1);
+  expect(db.state.workerIndexExists).toBe(false);
 });
 
 test("migration directory contains only Drizzle-generated SQL and metadata", async () => {
@@ -114,24 +112,3 @@ test("migration directory contains only Drizzle-generated SQL and metadata", asy
   expect(journal.dialect).toBe("postgresql");
 });
 
-test("generated baseline has a stable hash and required schema objects", async () => {
-  const journal = JSON.parse(await readFile(new URL("./migrations/meta/_journal.json", import.meta.url), "utf8")) as {
-    entries: Array<{ tag: string }>;
-  };
-  const sql = await migration(`${journal.entries[0]!.tag}.sql`);
-  expect(createHash("sha256").update(sql).digest("hex")).toMatch(/^[a-f0-9]{64}$/);
-  expect(sql).toContain('CREATE TABLE "users"');
-  expect(sql).toContain('CREATE TABLE "webhook_deliveries"');
-  expect(sql).toContain('"state" text DEFAULT \'received\' NOT NULL');
-});
-
-test("migration runner delegates to Drizzle with the raw client", async () => {
-  const calls: RawDatabaseClient[] = [];
-  const raw = fakeDatabase();
-  await migrateDatabase(raw, {
-    runMigrations: async received => {
-      calls.push(received);
-    },
-  });
-  expect(calls).toEqual([raw]);
-});

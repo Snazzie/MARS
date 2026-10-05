@@ -1,8 +1,48 @@
-import type { DatabaseClient } from "@mars/db";
 import { GithubJobsClient } from "./github-jobs.ts";
 
-type Registration = { leaseId: string; runnerId: number; installationId: number; repository: string };
-type Repository = { repository: string; installationId: number; queued: number };
+import { and, desc, eq, isNotNull, notInArray, sql } from "drizzle-orm";
+import { defineQueries, schema, type DatabaseClient } from "@mars/db";
+
+const queries = defineQueries(db => {
+  const queuedCount = db.select({ value: sql<number>`count(*)::int` }).from(schema.dashboardJobs)
+    .innerJoin(schema.dashboardRuns, eq(schema.dashboardRuns.id, schema.dashboardJobs.runId))
+    .where(and(eq(schema.dashboardRuns.repositoryId, schema.dashboardRepositories.id), eq(schema.dashboardJobs.status, "queued")));
+  return {
+    tracked: db.select({
+      leaseId: schema.runnerLeases.id,
+      runnerId: schema.runnerLeases.runnerId,
+      installationId: schema.dashboardInstallations.githubInstallationId,
+      repository: schema.dashboardRepositories.fullName,
+      workerName: schema.workers.name,
+    }).from(schema.runnerLeases)
+      .innerJoin(schema.dashboardJobs, and(eq(schema.dashboardJobs.githubJobId, schema.runnerLeases.githubJobId), eq(schema.dashboardJobs.organizationId, schema.runnerLeases.organizationId)))
+      .innerJoin(schema.dashboardRuns, eq(schema.dashboardRuns.id, schema.dashboardJobs.runId))
+      .innerJoin(schema.dashboardRepositories, eq(schema.dashboardRepositories.id, schema.dashboardRuns.repositoryId))
+      .innerJoin(schema.dashboardInstallations, eq(schema.dashboardInstallations.id, schema.dashboardRepositories.installationId))
+      .leftJoin(schema.workers, eq(schema.workers.id, schema.runnerLeases.workerId))
+      .where(and(isNotNull(schema.runnerLeases.runnerId), eq(schema.runnerLeases.state, "reaped"), eq(schema.runnerLeases.cleanupState, "completed")))
+      .limit(sql.placeholder("limit")).prepare("github_runner_cleanup_tracked"),
+    clearRunner: db.update(schema.runnerLeases).set({ runnerId: null, updatedAt: sql`now()` })
+      .where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.runnerId, sql.placeholder("runnerId")), eq(schema.runnerLeases.state, "reaped")))
+      .prepare("github_runner_cleanup_clear"),
+    repositories: db.select({
+      repository: schema.dashboardRepositories.fullName,
+      installationId: schema.dashboardInstallations.githubInstallationId,
+      queued: sql<number>`(${queuedCount})`.as("queued"),
+    }).from(schema.dashboardRepositories).innerJoin(schema.dashboardInstallations, eq(schema.dashboardInstallations.id, schema.dashboardRepositories.installationId))
+      .where(and(eq(schema.dashboardInstallations.state, "approved"), eq(schema.dashboardRepositories.available, true)))
+      .orderBy(desc(queuedCount), schema.dashboardRepositories.fullName).prepare("github_runner_cleanup_repositories"),
+    workers: db.select({ name: schema.workers.name, id: schema.workers.id }).from(schema.workers).prepare("github_runner_cleanup_workers"),
+    active: db.select({ id: schema.runnerLeases.id }).from(schema.runnerLeases)
+      .innerJoin(schema.dashboardJobs, and(eq(schema.dashboardJobs.githubJobId, schema.runnerLeases.githubJobId), eq(schema.dashboardJobs.organizationId, schema.runnerLeases.organizationId)))
+      .innerJoin(schema.dashboardRuns, eq(schema.dashboardRuns.id, schema.dashboardJobs.runId))
+      .innerJoin(schema.dashboardRepositories, eq(schema.dashboardRepositories.id, schema.dashboardRuns.repositoryId))
+      .where(and(eq(schema.dashboardRepositories.fullName, sql.placeholder("repository")), notInArray(schema.runnerLeases.state, ["reaped", "completed", "failed"])))
+      .limit(1).prepare("github_runner_cleanup_active"),
+    owned: db.select({ id: schema.runnerLeases.id }).from(schema.runnerLeases).where(eq(schema.runnerLeases.runnerId, sql.placeholder("runnerId"))).limit(1).prepare("github_runner_cleanup_owned"),
+  };
+});
+
 const GENERATED_RUNNER = /^(.+)-(windows-x64|windows-arm64|macos-arm64|linux-x64|linux-arm64)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 let legacyCursor = 0;
 
@@ -24,12 +64,8 @@ export async function cleanGithubRunners(input: {
     }
     return value;
   };
-  const tracked = await input.db<Registration[]>`SELECT l.id AS "leaseId", l.runner_id AS "runnerId", i.github_installation_id AS "installationId", r.full_name AS repository
-    FROM runner_leases l JOIN dashboard_jobs j ON j.github_job_id=l.github_job_id AND j.organization_id=l.organization_id
-    JOIN dashboard_runs run ON run.id=j.run_id JOIN dashboard_repositories r ON r.id=run.repository_id
-    JOIN dashboard_installations i ON i.id=r.installation_id
-    WHERE l.runner_id IS NOT NULL AND l.state='reaped' AND l.cleanup_state='completed'
-    LIMIT ${limit}`;
+  const prepared = queries(input.db);
+  const tracked = await prepared.tracked.execute({ limit });
   for (const row of tracked) {
     const [owner, repo] = row.repository.split("/", 2);
     if (input.installationBlocked?.(Number(row.installationId))) continue;
@@ -60,18 +96,15 @@ export async function cleanGithubRunners(input: {
         continue;
       }
     }
-    await input.db`UPDATE runner_leases SET runner_id=NULL, updated_at=now() WHERE id=${row.leaseId} AND runner_id=${row.runnerId} AND state='reaped'`;
+    await prepared.clearRunner.execute({ leaseId: row.leaseId, runnerId: Number(row.runnerId) });
     result.deleted++;
   }
   if (result.failed || result.deleted >= limit) return result;
 
   // Legacy registrations predate persisted runner IDs. Only reclaim offline runners
   // matching our naming format and a known worker, when no lease for the repo is live.
-  const repositories = await input.db<Repository[]>`SELECT r.full_name AS repository, i.github_installation_id AS "installationId",
-      (SELECT count(*)::int FROM dashboard_jobs j JOIN dashboard_runs run ON run.id=j.run_id WHERE run.repository_id=r.id AND j.status='queued') AS queued
-    FROM dashboard_repositories r JOIN dashboard_installations i ON i.id=r.installation_id
-    WHERE i.state='approved' AND r.available=true ORDER BY queued DESC, repository`;
-  const workers = await input.db<Array<{ name: string; id: string }>>`SELECT name, id FROM workers`;
+  const repositories = await prepared.repositories.execute();
+  const workers = await prepared.workers.execute();
   const names = new Set(workers.flatMap(worker => [worker.name, worker.id]));
   const preferred = repositories.findIndex(repo => Number(repo.queued) > 0 && !input.installationBlocked?.(Number(repo.installationId)));
   const start = preferred >= 0 ? preferred : legacyCursor % Math.max(1, repositories.length);
@@ -81,10 +114,7 @@ export async function cleanGithubRunners(input: {
     if (input.installationBlocked?.(Number(repository.installationId))) continue;
     const [owner, repo] = repository.repository.split("/", 2);
     if (!owner || !repo) continue;
-    const active = await input.db<Array<{ id: string }>>`SELECT l.id FROM runner_leases l
-      JOIN dashboard_jobs j ON j.github_job_id=l.github_job_id AND j.organization_id=l.organization_id
-      JOIN dashboard_runs run ON run.id=j.run_id JOIN dashboard_repositories r ON r.id=run.repository_id
-      WHERE r.full_name=${repository.repository} AND l.state NOT IN ('reaped','completed','failed') LIMIT 1`;
+    const active = await prepared.active.execute({ repository: repository.repository });
     if (active.length) continue;
     try {
       legacyCursor = index + 1;
@@ -95,7 +125,7 @@ export async function cleanGithubRunners(input: {
         const match = GENERATED_RUNNER.exec(runner.name);
         if (!match || !names.has(match[1]!) || runner.status !== "offline" || runner.busy || !runner.labels.some(label => label.toLowerCase().startsWith("mars-"))) continue;
         // Persisted registrations are handled above only after their lease is reaped.
-        const owned = await input.db<Array<{ id: string }>>`SELECT id FROM runner_leases WHERE runner_id=${runner.id} LIMIT 1`;
+        const owned = await prepared.owned.execute({ runnerId: runner.id });
         if (owned.length) continue;
         try {
           await github.deleteRunner(owner, repo, runner.id);

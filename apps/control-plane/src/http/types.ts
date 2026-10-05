@@ -9,7 +9,7 @@ import type { WorkerReleaseCatalog } from "../worker-release.ts";
 import type { WorkerUpgradeService } from "../worker-upgrade.ts";
 import type { WorkerReleaseManifest } from "@mars/contracts";
 import type { WorkerBuildImagePayload } from "@mars/contracts";
-import type { Sql } from "@mars/db";
+import type { DatabaseClient } from "@mars/db";
 import type { DispatchHealthSnapshot } from "../dispatch-health.ts";
 export type ControlPlaneEnv = { Variables: { user: SessionUser } };
 
@@ -153,7 +153,7 @@ export type ControlPlaneHttpDeps = {
   requestSource(request: Request): string;
   webRoot: URL;
   workerRequestLimiter?: RequestLimiter;
-  workerJoin?: (db: Sql<{}>, body: unknown) => Promise<WorkerRequestResult>;
+  workerJoin?: (db: DatabaseClient, body: unknown) => Promise<WorkerRequestResult>;
   devWindowsImageBuild?: () => Promise<WorkerBuildImagePayload | null>;
   disableWorkerBootstrapManagement?: boolean;
   workerDispatcher?: WorkerCommandDispatcher;

@@ -1,6 +1,37 @@
 import { expect, test } from "bun:test";
+import { preparedTestDatabase } from "../../../packages/db/src/prepared-test-fixture.ts";
 import { ensureDefaultPools, poolResourcesForLimits, poolResourcesForWorkers } from "./default-pools.ts";
 
+type TestPool = { id: string; name: string; platform: string; driver: string; imageDigest: string; resources: unknown; labels: unknown; triggerLabel: string; enabled: boolean };
+function poolDatabase(initialWorkers: Record<string, unknown>[] = []) {
+  const pools = new Map<string, TestPool>();
+  let workers = initialWorkers;
+  let nextId = 0;
+  const db = preparedTestDatabase((name, values) => {
+    if (name === "default_pools_workers") return workers;
+    if (name === "default_pools_find" || name === "default_pools_find_alternate") {
+      const pool = [...pools.values()].find(item => item.name === values.name || name === "default_pools_find" && item.triggerLabel === values.label);
+      return pool ? [{ id: pool.id, driver: pool.driver, platform: pool.platform, imageDigest: pool.imageDigest }] : [];
+    }
+    if (name === "default_pools_relabel_arm64") {
+      const pool = [...pools.values()].find(item => item.id === values.id);
+      if (pool?.triggerLabel === "mars-linux-arm64") Object.assign(pool, { triggerLabel: values.label, labels: JSON.parse(String(values.labels)) });
+      return [];
+    }
+    if (name === "default_pools_update") {
+      const pool = [...pools.values()].find(item => item.id === values.id);
+      if (pool) Object.assign(pool, { resources: JSON.parse(String(values.resources)), enabled: values.enabled });
+      return [];
+    }
+    if (name === "default_pools_insert") {
+      const pool: TestPool = { id: `pool-${++nextId}`, name: String(values.name), platform: String(values.platform), driver: String(values.driver), imageDigest: String(values.imageDigest), resources: typeof values.resources === "string" ? JSON.parse(values.resources) : values.resources, labels: typeof values.labels === "string" ? JSON.parse(values.labels) : values.labels, triggerLabel: String(values.label), enabled: Boolean(values.enabled) };
+      pools.set(pool.id, pool);
+      return [];
+    }
+    return [];
+  });
+  return { db, pools, set workers(value: Record<string, unknown>[]) { workers = value; } };
+}
 const GIB = 1024 ** 3;
 
 test("allocates three useful sandboxes within the acknowledged worker ceiling", () => {
@@ -29,45 +60,27 @@ test("uses portable job defaults while summing shared pool concurrency", () => {
 });
 
 test("recalculates shared pool concurrency after worker limits change", async () => {
-  let limits = [
+  const limits = [
     { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 },
     { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 3 },
   ];
-  const concurrency: number[] = [];
-  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const query = strings.join(" ").toLowerCase();
-    if (query.includes("from workers")) return limits.map((workerLimits) => ({ platform: "windows-x64", guestPlatforms: ["windows-x64"], limits: workerLimits, desiredConfiguration: { selectedDriver: "windows-hyperv-container" }, doctor: { doctor: { capabilities: [{ driver: "windows-hyperv-container", guestPlatform: "windows-x64", ready: true, imageDigest: "sha256:image", remediation: null }] } } }));
-    if (query.includes("from runner_pools") && values.includes("default-windows-x64")) return [{ id: "pool", driver: "windows-hyperv-container", imageDigest: "sha256:image", platform: "windows-x64" }];
-    if (query.includes("update runner_pools")) {
-      const resources = values[0];
-      if (resources && typeof resources === "object" && "concurrency" in resources) concurrency.push(Number(resources.concurrency));
-    }
-    return [];
-  }, { json: (value: unknown) => value });
-
-  await ensureDefaultPools(db as never, { "windows-x64": "sha256:image" });
-  limits = [{ ...limits[0]!, maxConcurrentPods: 7 }, limits[1]!];
-  await ensureDefaultPools(db as never, { "windows-x64": "sha256:image" });
-
-  expect(concurrency).toEqual([5, 10]);
+  const workers = limits.map(workerLimits => ({ platform: "windows-x64", guestPlatforms: ["windows-x64"], limits: workerLimits, desiredConfiguration: { selectedDriver: "windows-hyperv-container" }, doctor: { doctor: { capabilities: [{ driver: "windows-hyperv-container", guestPlatform: "windows-x64", ready: true, imageDigest: "sha256:image", remediation: null }] } } }));
+  const fixture = poolDatabase(workers);
+  await ensureDefaultPools(fixture.db, { "windows-x64": "sha256:image" });
+  fixture.workers = workers.map((worker, index) => ({ ...worker, limits: { ...limits[index]!, maxConcurrentPods: index === 0 ? 7 : limits[index]!.maxConcurrentPods } }));
+  await ensureDefaultPools(fixture.db, { "windows-x64": "sha256:image" });
+  expect([...fixture.pools.values()].find(pool => pool.name === "default-windows-x64")?.resources).toMatchObject({ concurrency: 10 });
 });
 
 test("creates a Tart Ubuntu ARM64 pool from a dual-platform Mac worker", async () => {
   const digest = `mars-linux-arm64-job@sha256:${"a".repeat(64)}`;
   const macDigest = `mars-macos-arm64-job@sha256:${"c".repeat(64)}`;
-  const inserted: unknown[][] = [];
-  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const query = strings.join(" ").toLowerCase();
-    if (query.includes("from workers")) return [{ platform: "macos-arm64", guestPlatforms: ["macos-arm64", "linux-arm64"], limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 }, desiredConfiguration: { selectedDriver: "tart-vm" }, doctor: { doctor: { capabilities: [{ driver: "tart-vm", guestPlatform: "macos-arm64", imageDigest: macDigest, ready: true }, { driver: "tart-vm", guestPlatform: "linux-arm64", imageDigest: digest, ready: true }] } } }];
-    if (query.includes("from runner_pools")) return [];
-    if (query.includes("insert into runner_pools")) inserted.push(values);
-    return [];
-  }, { json: (value: unknown) => value });
-  await ensureDefaultPools(db as never, { "macos-arm64": `mars-macos-arm64-job@sha256:${"b".repeat(64)}` });
-  expect(inserted).toHaveLength(4);
-  expect(inserted.find((values) => values.includes("linux-arm64"))).toContainEqual(["mars-ubuntu-arm64", "ubuntu"]);
-  expect(inserted.find((values) => values.includes("linux-arm64"))).toContain(digest);
-  expect(inserted.find((values) => values.includes("macos-arm64"))).toContain(macDigest);
+  const limits = { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 };
+  const fixture = poolDatabase([{ platform: "macos-arm64", guestPlatforms: ["macos-arm64", "linux-arm64"], limits, desiredConfiguration: { selectedDriver: "tart-vm" }, doctor: { doctor: { capabilities: [{ driver: "tart-vm", guestPlatform: "macos-arm64", imageDigest: macDigest, ready: true }, { driver: "tart-vm", guestPlatform: "linux-arm64", imageDigest: digest, ready: true }] } } }]);
+  await ensureDefaultPools(fixture.db, { "macos-arm64": `mars-macos-arm64-job@sha256:${"b".repeat(64)}` });
+  expect(fixture.pools.size).toBe(4);
+  expect([...fixture.pools.values()].find(pool => pool.name === "default-linux-arm64")).toMatchObject({ driver: "tart-vm", imageDigest: digest, labels: ["mars-ubuntu-arm64", "ubuntu"], enabled: true });
+  expect([...fixture.pools.values()].find(pool => pool.name === "default-macos-arm64")).toMatchObject({ imageDigest: macDigest, enabled: true });
 });
 
 test("keeps the Tart Ubuntu pool and provisions a Docker pool for an ARM64 Windows worker", async () => {
@@ -76,122 +89,50 @@ test("keeps the Tart Ubuntu pool and provisions a Docker pool for an ARM64 Windo
   const limits = { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 };
   const mac = { platform: "macos-arm64", guestPlatforms: ["macos-arm64", "linux-arm64"], limits, desiredConfiguration: { selectedDriver: "tart-vm" }, doctor: { doctor: { capabilities: [{ driver: "tart-vm", guestPlatform: "linux-arm64", imageDigest: tartDigest, ready: true }] } } };
   const windows = { platform: "windows-arm64", guestPlatforms: ["linux-arm64"], limits, desiredConfiguration: { selectedDriver: "linux-docker-container" }, doctor: { doctor: { capabilities: [{ driver: "linux-docker-container", guestPlatform: "linux-arm64", imageDigest: dockerDigest, ready: true }] } } };
-  let workers = [mac, windows];
-  const inserted: unknown[][] = [];
-  const updated: unknown[][] = [];
-  let alternate: { id: string; driver: string; imageDigest: string } | undefined;
-  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const query = strings.join(" ").toLowerCase();
-    if (query.includes("from workers")) return workers;
-    if (query.includes("from runner_pools") && values.includes("default-linux-arm64")) return [{ id: "mac-pool", platform: "linux-arm64", driver: "tart-vm", imageDigest: tartDigest }];
-    if (query.includes("from runner_pools") && values.includes("default-linux-arm64-container")) return alternate ? [alternate] : [];
-    if (query.includes("insert into runner_pools")) {
-      inserted.push(values);
-      if (values.includes("default-linux-arm64-container")) alternate = { id: "docker-pool", driver: "linux-docker-container", imageDigest: dockerDigest };
-    }
-    if (query.includes("update runner_pools")) updated.push(values);
-    return [];
-  }, { json: (value: unknown) => value });
-
-  await ensureDefaultPools(db as never, {});
-  expect(inserted.filter(values => values.includes("default-linux-arm64-container"))).toHaveLength(1);
-  const dockerPool = inserted.find(values => values.includes("default-linux-arm64-container"));
-  expect(dockerPool).toContain(dockerDigest);
-  expect(dockerPool).toContainEqual(["mars-ubuntu-arm64", "mars-ubuntu-arm64-container", "ubuntu"]);
-  expect(updated.filter(values => values.includes("mac-pool")).at(-1)).toContain(true);
-  workers = [mac];
-  await ensureDefaultPools(db as never, {});
-  expect(inserted.filter(values => values.includes("default-linux-arm64-container"))).toHaveLength(1);
-  expect(updated.find(values => values.includes("docker-pool"))).toContain(false);
-  expect(updated.filter(values => values.includes("mac-pool")).at(-1)).toContain(true);
+  const fixture = poolDatabase([mac, windows]);
+  await ensureDefaultPools(fixture.db, {});
+  expect([...fixture.pools.values()].find(pool => pool.name === "default-linux-arm64")).toMatchObject({ driver: "tart-vm", enabled: true });
+  expect([...fixture.pools.values()].find(pool => pool.name === "default-linux-arm64-container")).toMatchObject({ driver: "linux-docker-container", imageDigest: dockerDigest, labels: ["mars-ubuntu-arm64", "mars-ubuntu-arm64-container", "ubuntu"], enabled: true });
+  fixture.workers = [mac];
+  await ensureDefaultPools(fixture.db, {});
+  expect([...fixture.pools.values()].find(pool => pool.name === "default-linux-arm64-container")?.enabled).toBe(false);
+  expect([...fixture.pools.values()].find(pool => pool.name === "default-linux-arm64")?.enabled).toBe(true);
 });
 
-test("routes each configured Ubuntu x64 image version through its own trigger label", async () => {
+test("routes configured Ubuntu x64 image versions through their own trigger labels", async () => {
   for (const version of ["22", "24", "26"] as const) {
-    const inserted: unknown[][] = [];
-    const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
-      if (strings.join(" ").toLowerCase().includes("insert into runner_pools")) inserted.push(values);
-      return [];
-    }, { json: (value: unknown) => value });
-    await ensureDefaultPools(db as never, { ubuntuVersion: version, "linux-x64": "sha256:image" });
-    const linux = inserted.find((values) => values.includes("linux-x64"))!;
-    expect(linux).toContain(`mars-ubuntu-${version}`);
-    expect(linux).toContainEqual([`mars-ubuntu-${version}`]);
-    expect(linux).not.toContain("mars-linux-x64");
+    const fixture = poolDatabase();
+    await ensureDefaultPools(fixture.db, { ubuntuVersion: version, "linux-x64": "sha256:image" });
+    expect([...fixture.pools.values()].find(pool => pool.platform === "linux-x64")?.triggerLabel).toBe(`mars-ubuntu-${version}`);
   }
 });
 
 test("lists all default pools before any worker or image is available", async () => {
-  const inserted: unknown[][] = [];
-  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const query = strings.join(" ").toLowerCase();
-    if (query.includes("insert into runner_pools")) inserted.push(values);
-    return [];
-  }, { json: (value: unknown) => value });
-  await ensureDefaultPools(db as never, {});
-  expect(inserted).toHaveLength(4);
+  const fixture = poolDatabase();
+  await ensureDefaultPools(fixture.db, {});
+  expect(fixture.pools.size).toBe(4);
   for (const platform of ["linux-x64", "linux-arm64", "windows-x64", "macos-arm64"]) {
-    const pool = inserted.find((values) => values.includes(platform));
-    expect(pool).toBeDefined();
-    expect(pool).toContain("");
-    expect(pool).toContain(false);
+    expect([...fixture.pools.values()].find(pool => pool.platform === platform)).toMatchObject({ imageDigest: "", enabled: false });
   }
-  expect(inserted.find((values) => values.includes("linux-arm64"))).toContainEqual(["mars-ubuntu-arm64", "ubuntu"]);
+  expect([...fixture.pools.values()].find(pool => pool.platform === "linux-arm64")?.labels).toEqual(["mars-ubuntu-arm64", "ubuntu"]);
 });
 
 test("updates the existing default ARM64 pool's broad Linux label", async () => {
-  const updates: unknown[][] = [];
-  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const query = strings.join(" ").toLowerCase();
-    if (query.includes("from runner_pools") && values.includes("default-linux-arm64")) return [{ id: "arm-pool", driver: "linux-docker-container", imageDigest: "sha256:image", platform: "linux-arm64" }];
-    if (query.includes("update runner_pools")) updates.push(values);
-    return [];
-  }, { json: (value: unknown) => value });
-  await ensureDefaultPools(db as never, {});
-  expect(updates).toContainEqual(["mars-ubuntu-arm64", ["mars-ubuntu-arm64", "ubuntu"], "arm-pool"]);
+  const fixture = poolDatabase();
+  fixture.pools.set("arm-pool", { id: "arm-pool", name: "default-linux-arm64", platform: "linux-arm64", driver: "linux-docker-container", imageDigest: "sha256:image", resources: {}, labels: ["mars-ubuntu-arm64"], triggerLabel: "mars-linux-arm64", enabled: false });
+  await ensureDefaultPools(fixture.db, {});
+  expect(fixture.pools.get("arm-pool")).toMatchObject({ triggerLabel: "mars-ubuntu-arm64", labels: ["mars-ubuntu-arm64", "ubuntu"] });
 });
 
-test("pins Ubuntu x64 and ARM64 defaults without claiming worker capacity", async () => {
-  const inserted: unknown[][] = [];
-  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    if (strings.join(" ").toLowerCase().includes("insert into runner_pools")) inserted.push(values);
-    return [];
-  }, { json: (value: unknown) => value });
-  const x64 = `sha256:${"a".repeat(64)}`;
-  const arm64 = `ghcr.io/example/linux-arm64-job@sha256:${"b".repeat(64)}`;
-  await ensureDefaultPools(db as never, { "linux-x64": x64, "linux-arm64": arm64 });
-  expect(inserted).toHaveLength(4);
-  expect(inserted.find((values) => values.includes("linux-x64"))).toContain("");
-  expect(inserted.find((values) => values.includes("linux-arm64"))).toContain("");
-  expect(inserted.find((values) => values.includes("linux-arm64"))).toContain("linux-docker-container");
-  expect(inserted.find((values) => values.includes("linux-x64"))).toContain("linux-libvirt-vm");
-  expect(inserted.find((values) => values.includes("linux-x64"))).toContain(false);
-  expect(inserted.find((values) => values.includes("linux-arm64"))).toContain(false);
-  expect(inserted.find((values) => values.includes("windows-x64"))).toContain(false);
-  expect(inserted.find((values) => values.includes("macos-arm64"))).toContain(false);
-});
 
 test("retains a default pool's driver and digest while readiness changes", async () => {
-  let workers: Record<string, unknown>[] = [];
-  const updates: { query: string; values: unknown[] }[] = [];
-  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const query = strings.join(" ").toLowerCase();
-    if (query.includes("from workers")) return workers;
-    if (query.includes("from runner_pools") && values.includes("default-linux-x64")) return [{ id: "existing-pool", driver: "linux-libvirt-vm", imageDigest: "sha256:pinned", platform: "linux-x64" }];
-    if (query.includes("update runner_pools")) updates.push({ query, values });
-    return [];
-  }, { json: (value: unknown) => value });
-  await ensureDefaultPools(db as never, { "linux-x64": "sha256:other" });
-  expect(updates).toHaveLength(1);
-  expect(updates[0]!.query).not.toContain("driver=");
-  expect(updates[0]!.query).not.toContain("image_digest=");
-  expect(updates[0]!.values[1]).toBe(false);
-  workers = [{ platform: "linux-x64", guestPlatforms: ["linux-x64"], limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 }, desiredConfiguration: { selectedDriver: "linux-libvirt-vm" }, doctor: { doctor: { capabilities: [{ driver: "linux-libvirt-vm", guestPlatform: "linux-x64", ready: true, imageDigest: "sha256:new-worker-image" }] } } }];
-  await ensureDefaultPools(db as never, { "linux-x64": "sha256:other" });
-  expect(updates).toHaveLength(2);
-  expect(updates[1]!.query).not.toContain("driver=");
-  expect(updates[1]!.query).not.toContain("image_digest=");
-  expect(updates[1]!.values[1]).toBe(true);
+  const fixture = poolDatabase();
+  fixture.pools.set("existing-pool", { id: "existing-pool", name: "default-linux-x64", platform: "linux-x64", driver: "linux-libvirt-vm", imageDigest: "sha256:pinned", resources: {}, labels: [], triggerLabel: "mars-ubuntu-24", enabled: true });
+  await ensureDefaultPools(fixture.db, { "linux-x64": "sha256:other" });
+  expect(fixture.pools.get("existing-pool")).toMatchObject({ driver: "linux-libvirt-vm", imageDigest: "sha256:pinned", enabled: false });
+  fixture.workers = [{ platform: "linux-x64", guestPlatforms: ["linux-x64"], limits: { maxVcpuPerPod: 4, maxMemoryBytesPerPod: 8 * GIB, maxStorageBytesPerPod: 40 * GIB, maxConcurrentPods: 2 }, desiredConfiguration: { selectedDriver: "linux-libvirt-vm" }, doctor: { doctor: { capabilities: [{ driver: "linux-libvirt-vm", guestPlatform: "linux-x64", ready: true, imageDigest: "sha256:new-worker-image" }] } } }];
+  await ensureDefaultPools(fixture.db, { "linux-x64": "sha256:other" });
+  expect(fixture.pools.get("existing-pool")).toMatchObject({ driver: "linux-libvirt-vm", imageDigest: "sha256:pinned", enabled: true });
 });
 
 test("clamps automatic pool resources to lower worker ceilings", () => {

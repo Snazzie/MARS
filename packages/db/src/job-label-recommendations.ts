@@ -1,6 +1,9 @@
 import type { JobLabelRecommendation, JobLabelRecommendationQuery, ParsedRunnerLabel } from "@mars/contracts";
 import { JobLabelRecommendationQuery as JobLabelRecommendationQuerySchema, formatRunnerLabel, parseRunnerLabels } from "@mars/contracts";
 import type { DatabaseClient } from "./index.ts";
+import { defineQueries } from "./prepared.ts";
+import * as schema from "./drizzle-schema.ts";
+import { and, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 
 const MIN_SUCCESSFUL_RUNS = 5;
 const MIN_TELEMETRY_COVERAGE_PERCENT = 80;
@@ -102,41 +105,61 @@ export function buildOptimizedLabels(labels: readonly string[], vcpu: number, me
     : label);
 }
 
-const RECOMMENDATION_SQL = `WITH scoped AS (
-  SELECT s.*, j.requested_labels,
-    row_number() OVER (ORDER BY s.completed_at DESC, s.job_id DESC) AS latest_ordinal
-  FROM dashboard_job_timing_snapshots s
-  JOIN dashboard_jobs j
-    ON j.organization_id=s.organization_id AND j.id=s.job_id AND j.run_id=s.run_id
-  WHERE (
-    ($1 = 'all' AND s.organization_id IN (SELECT organization_id FROM memberships WHERE user_id=$7::uuid))
-    OR ($1 <> 'all' AND s.organization_id=$1::uuid)
-  )
-    AND s.completed_at >= $2::timestamptz
-    AND s.completed_at < $3::timestamptz
-    AND s.repository_id=$4::uuid
-    AND s.workflow_name=$5::text
-    AND s.job_name=$6::text
-), latest AS (
-  SELECT * FROM scoped WHERE latest_ordinal=1
-), successful AS (
-  SELECT s.* FROM scoped s
-  JOIN latest ON latest.platform=s.platform
-  WHERE s.outcome='success'
-), aggregate AS (
-  SELECT count(*)::bigint AS "successfulRunCount",
-    count(*) FILTER (WHERE cpu_peak_percent IS NOT NULL AND memory_peak_bytes IS NOT NULL)::bigint AS "coveredRunCount",
-    percentile_cont(0.95) WITHIN GROUP (ORDER BY cpu_peak_percent) FILTER (WHERE cpu_peak_percent IS NOT NULL) AS "p95CpuPeakPercent",
-    round((percentile_cont(0.95) WITHIN GROUP (ORDER BY memory_peak_bytes) FILTER (WHERE memory_peak_bytes IS NOT NULL))::numeric)::bigint AS "p95MemoryPeakBytes"
-  FROM successful
-)
-SELECT latest.requested_labels AS "currentLabels", latest.platform AS "currentPlatform",
-  aggregate."successfulRunCount", aggregate."coveredRunCount",
-  aggregate."p95CpuPeakPercent", aggregate."p95MemoryPeakBytes"
-FROM aggregate
-LEFT JOIN latest ON TRUE`;
-
 type RecommendationRow = Record<string, unknown>;
+
+const recommendationQueries = defineQueries((db) => {
+  const snapshots = schema.dashboardJobTimingSnapshots;
+  const jobs = schema.dashboardJobs;
+  const scoped = db.$with("scoped").as(db.select({
+    platform: snapshots.platform,
+    outcome: snapshots.outcome,
+    completedAt: snapshots.completedAt,
+    jobId: snapshots.jobId,
+    cpuPeakPercent: snapshots.cpuPeakPercent,
+    memoryPeakBytes: snapshots.memoryPeakBytes,
+    requestedLabels: jobs.requestedLabels,
+    latestOrdinal: sql<number>`row_number() OVER (ORDER BY ${snapshots.completedAt} DESC, ${snapshots.jobId} DESC)`.as("latest_ordinal"),
+  }).from(snapshots).innerJoin(jobs, and(
+    eq(jobs.organizationId, snapshots.organizationId),
+    eq(jobs.id, snapshots.jobId),
+    eq(jobs.runId, snapshots.runId),
+  )).where(and(
+    or(
+      and(sql`${sql.placeholder("organizationId")}='all'`, inArray(snapshots.organizationId, db.select({ organizationId: schema.memberships.organizationId }).from(schema.memberships).where(eq(schema.memberships.userId, sql.placeholder("userId"))))),
+      and(sql`${sql.placeholder("organizationId")}<>'all'`, eq(snapshots.organizationId, sql`${sql.placeholder("scopedOrganizationId")}::uuid`)),
+    ),
+    gte(snapshots.completedAt, sql.placeholder("from")),
+    lt(snapshots.completedAt, sql.placeholder("to")),
+    eq(snapshots.repositoryId, sql.placeholder("repositoryId")),
+    eq(snapshots.workflowName, sql.placeholder("workflowName")),
+    eq(snapshots.jobName, sql.placeholder("jobName")),
+  )));
+  const latest = db.$with("latest").as(db.select({
+    platform: scoped.platform,
+    requestedLabels: scoped.requestedLabels,
+  }).from(scoped).where(eq(scoped.latestOrdinal, 1)));
+  const successful = db.$with("successful").as(db.select({
+    cpuPeakPercent: scoped.cpuPeakPercent,
+    memoryPeakBytes: scoped.memoryPeakBytes,
+  }).from(scoped).innerJoin(latest, eq(latest.platform, scoped.platform)).where(eq(scoped.outcome, "success")));
+  const aggregate = db.$with("aggregate").as(db.select({
+    successfulRunCount: sql<number>`count(*)::bigint`.as("successful_run_count"),
+    coveredRunCount: sql<number>`count(*) FILTER (WHERE ${successful.cpuPeakPercent} IS NOT NULL AND ${successful.memoryPeakBytes} IS NOT NULL)::bigint`.as("covered_run_count"),
+    p95CpuPeakPercent: sql<number | null>`percentile_cont(0.95) WITHIN GROUP (ORDER BY ${successful.cpuPeakPercent}) FILTER (WHERE ${successful.cpuPeakPercent} IS NOT NULL)`.as("p95_cpu_peak_percent"),
+    p95MemoryPeakBytes: sql<number | null>`round((percentile_cont(0.95) WITHIN GROUP (ORDER BY ${successful.memoryPeakBytes}) FILTER (WHERE ${successful.memoryPeakBytes} IS NOT NULL))::numeric)::bigint`.as("p95_memory_peak_bytes"),
+  }).from(successful));
+  return {
+    get: db.with(scoped, latest, successful, aggregate).select({
+      currentLabels: latest.requestedLabels,
+      currentPlatform: latest.platform,
+      successfulRunCount: aggregate.successfulRunCount,
+      coveredRunCount: aggregate.coveredRunCount,
+      p95CpuPeakPercent: aggregate.p95CpuPeakPercent,
+      p95MemoryPeakBytes: aggregate.p95MemoryPeakBytes,
+    }).from(aggregate).leftJoin(latest, sql`true`).prepare("job_label_recommendation"),
+  };
+});
+
 
 function numberValue(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
@@ -205,15 +228,16 @@ export async function getJobLabelRecommendation(
   userId?: string,
 ): Promise<JobLabelRecommendation> {
   const validated = JobLabelRecommendationQuerySchema.parse(query);
-  const rows = await db.unsafe<RecommendationRow[]>(RECOMMENDATION_SQL, [
+  const rows = await recommendationQueries(db).get.execute({
     organizationId,
-    validated.from,
-    validated.to,
-    validated.repositoryId,
-    validated.workflowName,
-    validated.jobName,
-    userId ?? null,
-  ]);
-  return normalizeRecommendation(rows[0] ?? {});
+    scopedOrganizationId: organizationId === "all" ? null : organizationId,
+    from: validated.from,
+    to: validated.to,
+    repositoryId: validated.repositoryId,
+    workflowName: validated.workflowName,
+    jobName: validated.jobName,
+    userId: userId ?? null,
+  });
+  return normalizeRecommendation((rows[0] ?? {}) as RecommendationRow);
 }
 

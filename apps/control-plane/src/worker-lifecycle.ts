@@ -1,8 +1,30 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { jsonParameter, persistJobResourceSample, recordJobTimingSnapshot, applyWorkerCacheTelemetry, type DatabaseClient, type JobTimingSnapshotInput } from "@mars/db";
+import { defineQueries, persistJobResourceSample, recordJobTimingSnapshot, applyWorkerCacheTelemetry, schema, type DatabaseClient, type JobTimingSnapshotInput } from "@mars/db";
+import { and, eq, inArray, notInArray } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { WorkerEvent, WorkerEventPayload, WorkerCacheTelemetry } from "@mars/contracts";
 import type { AuthenticatedWorkerSocket, WorkerCommandDispatcher } from "./worker-dispatch.ts";
+const queries = defineQueries(db => ({
+  updateWorkerBuild: db.update(schema.workers).set({ doctor: sql`coalesce(${schema.workers.doctor},'{}'::jsonb) || ${sql.placeholder("doctor")}::jsonb`, doctorObservedAt: sql`now()`, lastHeartbeatAt: sql`now()`, connectionState: "online" }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("worker_lifecycle_build_update"),
+  terminalLogFence: db.select({ id: schema.dashboardJobs.id }).from(schema.dashboardJobs).innerJoin(schema.runnerLeases, eq(schema.runnerLeases.githubJobId, schema.dashboardJobs.githubJobId)).where(and(eq(schema.dashboardJobs.id, sql.placeholder("jobId")), eq(schema.runnerLeases.workerId, sql.placeholder("workerId")), inArray(schema.runnerLeases.state, ["reaped", "failed"]), sql`not exists (select 1 from runner_leases active where active.github_job_id=${schema.dashboardJobs.githubJobId} and active.worker_id=${sql.placeholder("workerId")} and active.state not in ('reaped','failed'))`)).limit(1).prepare("worker_lifecycle_terminal_log_fence"),
+  reapedTiming: db.select({ jobId: schema.dashboardJobs.id, organizationId: schema.dashboardJobs.organizationId, runId: schema.dashboardJobs.runId, githubJobId: schema.dashboardJobs.githubJobId, jobName: schema.dashboardJobs.name, queuedAt: schema.dashboardJobs.queuedAt, startedAt: schema.dashboardJobs.startedAt, completedAt: schema.dashboardJobs.completedAt, conclusion: schema.dashboardJobs.conclusion, repositoryId: schema.dashboardRuns.repositoryId, repositoryName: schema.runnerPools.name, workflowName: schema.dashboardRuns.workflowName, workerId: schema.runnerLeases.workerId, runtimeBoundary: schema.dashboardRuns.runtimeBoundary, poolId: schema.runnerLeases.poolId, requested: schema.runnerLeases.requested, terminalResult: schema.runnerLeases.terminalResult, platform: schema.runnerPools.platform, driver: schema.runnerPools.driver, artifactDigest: schema.runnerPools.imageDigest, allocationStartedAt: schema.dashboardRunStages.startedAt, sandboxReadyAt: sql<string | null>`(select started_at from dashboard_run_stages where organization_id=${schema.dashboardJobs.organizationId} and run_id=${schema.dashboardJobs.runId} and stage='sandbox_ready')`, reapingStartedAt: schema.runnerLeases.updatedAt }).from(schema.dashboardJobs).innerJoin(schema.dashboardRuns, and(eq(schema.dashboardRuns.organizationId, schema.dashboardJobs.organizationId), eq(schema.dashboardRuns.id, schema.dashboardJobs.runId))).innerJoin(schema.runnerLeases, eq(schema.runnerLeases.githubJobId, schema.dashboardJobs.githubJobId)).leftJoin(schema.runnerPools, eq(schema.runnerPools.id, schema.runnerLeases.poolId)).leftJoin(schema.dashboardRunStages, and(eq(schema.dashboardRunStages.organizationId, schema.dashboardJobs.organizationId), eq(schema.dashboardRunStages.runId, schema.dashboardJobs.runId), eq(schema.dashboardRunStages.stage, "allocating"))).where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.dashboardJobs.status, "completed"), sql`${schema.dashboardJobs.completedAt} is not null`)).limit(1).prepare("worker_lifecycle_reaped_timing"),
+  resourceSamples: db.select({ occurredAt: schema.dashboardJobResourceSamples.occurredAt, cpuUsagePercent: schema.dashboardJobResourceSamples.cpuUsagePercent, cpuTimeMs: schema.dashboardJobResourceSamples.cpuTimeMs, memoryWorkingSetBytes: schema.dashboardJobResourceSamples.memoryWorkingSetBytes }).from(schema.dashboardJobResourceSamples).where(and(eq(schema.dashboardJobResourceSamples.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardJobResourceSamples.runId, sql.placeholder("runId")), eq(schema.dashboardJobResourceSamples.jobId, sql.placeholder("jobId")), eq(schema.dashboardJobResourceSamples.leaseId, sql.placeholder("leaseId")))).orderBy(schema.dashboardJobResourceSamples.occurredAt).prepare("worker_lifecycle_resource_samples"),
+  attest: db.update(schema.runnerLeases).set({ state: "sandbox_ready", runtimeInstanceId: sql`${sql.placeholder("runtimeInstanceId")}`, terminalResult: sql`${sql.placeholder("terminalResult")}::jsonb`, expiresAt: sql`greatest(${schema.runnerLeases.expiresAt},now()+interval '10 minutes')`, updatedAt: sql`now()` }).where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.workerId, sql.placeholder("workerId")), eq(schema.runnerLeases.nonce, sql.placeholder("nonce")), eq(schema.runnerLeases.state, "dispatched"))).returning({ id: schema.runnerLeases.id }).prepare("worker_lifecycle_attest"),
+  decline: db.update(schema.runnerLeases).set({ state: "failed", cleanupState: "pending", terminalResult: sql`${sql.placeholder("terminalResult")}::jsonb`, updatedAt: sql`now()` }).where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.workerId, sql.placeholder("workerId")), eq(schema.runnerLeases.nonce, sql.placeholder("nonce")), inArray(schema.runnerLeases.state, ["reserved", "dispatched"]))).returning({ id: schema.runnerLeases.id }).prepare("worker_lifecycle_decline"),
+  finish: db.update(schema.runnerLeases).set({ state: sql`${sql.placeholder("state")}`, terminalResult: sql`${sql.placeholder("terminalResult")}::jsonb`, cleanupState: "pending", updatedAt: sql`now()` }).where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.workerId, sql.placeholder("workerId")), eq(schema.runnerLeases.nonce, sql.placeholder("nonce")), inArray(schema.runnerLeases.state, ["sandbox_ready", "online", "busy"]))).returning({ id: schema.runnerLeases.id }).prepare("worker_lifecycle_finish"),
+  cleanupFailed: db.update(schema.runnerLeases).set({ cleanupState: "failed", updatedAt: sql`now()` }).where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.workerId, sql.placeholder("workerId")), eq(schema.runnerLeases.nonce, sql.placeholder("nonce")), inArray(schema.runnerLeases.state, ["completed", "failed"]))).returning({ id: schema.runnerLeases.id }).prepare("worker_lifecycle_cleanup_failed"),
+  failStopCommand: db.update(schema.commands).set({ state: "failed" }).where(and(eq(schema.commands.id, sql.placeholder("commandId")), eq(schema.commands.workerId, sql.placeholder("workerId")), eq(schema.commands.leaseId, sql.placeholder("leaseId")), eq(schema.commands.state, "acknowledged"))).prepare("worker_lifecycle_fail_stop_command"),
+  debugPreserve: db.update(schema.runnerLeases).set({ state: "failed", terminalResult: sql`coalesce(${schema.runnerLeases.terminalResult},'{}'::jsonb) || ${sql`${sql.placeholder("debugResult")}::jsonb`}`, cleanupState: "debug_preserved", updatedAt: sql`now()` }).where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.workerId, sql.placeholder("workerId")), eq(schema.runnerLeases.nonce, sql.placeholder("nonce")), inArray(schema.runnerLeases.state, ["completed", "failed", "sandbox_ready", "online", "busy"]))).returning({ id: schema.runnerLeases.id }).prepare("worker_lifecycle_debug_preserve"),
+  fail: db.update(schema.runnerLeases).set({ state: "failed", terminalResult: sql`${sql.placeholder("terminalResult")}::jsonb`, cleanupState: "pending", updatedAt: sql`now()` }).where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.workerId, sql.placeholder("workerId")), eq(schema.runnerLeases.nonce, sql.placeholder("nonce")), inArray(schema.runnerLeases.state, ["dispatched", "provisioning", "sandbox_ready", "online", "busy"]))).returning({ id: schema.runnerLeases.id }).prepare("worker_lifecycle_fail"),
+  reap: db.update(schema.runnerLeases).set({ state: "reaped", cleanupState: "completed", updatedAt: sql`now()` }).where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.workerId, sql.placeholder("workerId")), eq(schema.runnerLeases.nonce, sql.placeholder("nonce")), inArray(schema.runnerLeases.state, ["completed", "failed"]))).returning({ id: schema.runnerLeases.id }).prepare("worker_lifecycle_reap"),
+  reapContext: db.select({ commandType: schema.commands.type, terminalResult: schema.runnerLeases.terminalResult }).from(schema.runnerLeases).leftJoin(schema.commands, and(eq(schema.commands.id, sql.placeholder("commandId")), eq(schema.commands.leaseId, schema.runnerLeases.id), eq(schema.commands.workerId, schema.runnerLeases.workerId))).where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.workerId, sql.placeholder("workerId")))).prepare("worker_lifecycle_reap_context"),
+  workerLogJob: db.select({ organizationId: schema.dashboardJobs.organizationId, runId: schema.dashboardJobs.runId, jobId: schema.dashboardJobs.id }).from(schema.dashboardJobs).innerJoin(schema.runnerLeases, eq(schema.runnerLeases.githubJobId, schema.dashboardJobs.githubJobId)).where(and(eq(schema.dashboardJobs.id, sql.placeholder("jobId")), eq(schema.runnerLeases.workerId, sql.placeholder("workerId")), notInArray(schema.runnerLeases.state, ["reaped", "failed"]))).prepare("worker_lifecycle_log_job"),
+  workerLogStep: db.select({ id: schema.dashboardJobSteps.id }).from(schema.dashboardJobSteps).where(and(eq(schema.dashboardJobSteps.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardJobSteps.runId, sql.placeholder("runId")), eq(schema.dashboardJobSteps.jobId, sql.placeholder("jobId")), eq(schema.dashboardJobSteps.id, sql.placeholder("stepId")))).prepare("worker_lifecycle_log_step"),
+  workerLogChunk: db.insert(schema.dashboardLogChunks).values({ organizationId: sql.placeholder("organizationId"), runId: sql.placeholder("runId"), jobId: sql.placeholder("jobId"), sequence: sql.placeholder("sequence"), content: sql.placeholder("content"), occurredAt: sql.placeholder("occurredAt") }).onConflictDoNothing().prepare("worker_lifecycle_log_chunk"),
+  workerStepLogChunk: db.insert(schema.dashboardStepLogChunks).values({ organizationId: sql.placeholder("organizationId"), runId: sql.placeholder("runId"), jobId: sql.placeholder("jobId"), stepId: sql.placeholder("stepId"), sequence: sql.placeholder("sequence"), content: sql.placeholder("content"), occurredAt: sql.placeholder("occurredAt") }).onConflictDoNothing().prepare("worker_lifecycle_step_log_chunk"),
+}));
+const q = queries;
 export type TimingBoundaryInputs = {
   queuedAt: string;
   startedAt: string | null;
@@ -80,7 +102,7 @@ export async function handleAuthenticatedWorkerEvent(
   if (payload.data.type === "worker.logs") return dispatcher.handleEvent(event.data, socket);
   if (payload.data.type === "worker.build_completed" || payload.data.type === "worker.build_failed") {
     const ready = payload.data.payload.runtimeReady;
-    await db`UPDATE workers SET doctor=COALESCE(doctor,'{}'::jsonb) || ${JSON.stringify({ runtimeReady: ready, runtimeBuildState: ready ? "ready" : "failed", runtimeBuildMessage: ready ? null : payload.data.payload.message, artifactSource: "worker_local", artifactIdentity: payload.data.payload.image, ...(payload.data.payload.imageId ? { artifactDigest: payload.data.payload.imageId } : {}), remediation: ready ? null : payload.data.payload.message })}::jsonb, doctor_observed_at=now(), last_heartbeat_at=now(), connection_state='online' WHERE id=${event.data.workerId}`;
+    await q(db).updateWorkerBuild.execute({ workerId: event.data.workerId, doctor: JSON.stringify({ runtimeReady: ready, runtimeBuildState: ready ? "ready" : "failed", runtimeBuildMessage: ready ? null : payload.data.payload.message, artifactSource: "worker_local", artifactIdentity: payload.data.payload.image, ...(payload.data.payload.imageId ? { artifactDigest: payload.data.payload.imageId } : {}), remediation: ready ? null : payload.data.payload.message }) });
     console.log("Windows image build event received", { workerId: event.data.workerId, workerName: socket.data?.workerName, type: payload.data.type, buildId: payload.data.payload.buildId, commandId: payload.data.payload.commandId, image: payload.data.payload.image, imageId: payload.data.payload.imageId, contentSha256: payload.data.payload.contentSha256, ...(payload.data.type === "worker.build_failed" ? { failureStage: payload.data.payload.failureStage, message: payload.data.payload.message } : {}) });
     dispatcher.handleEvent(event.data, socket);
     return true;
@@ -88,10 +110,7 @@ export async function handleAuthenticatedWorkerEvent(
   if (payload.data.type === "job.resource_sample") return (await persistJobResourceSample(db, event.data.workerId, event.data)) !== "rejected";
   if (payload.data.type === "job.log") {
     if (await persistWorkerLogEvent(db, event.data.workerId, payload.data.payload)) return true;
-    const [terminal] = await db`SELECT 1 FROM dashboard_jobs j JOIN runner_leases l ON l.github_job_id=j.github_job_id
-      WHERE j.id=${payload.data.payload.jobId} AND l.worker_id=${event.data.workerId} AND l.state IN ('reaped','failed')
-        AND NOT EXISTS (SELECT 1 FROM runner_leases active WHERE active.github_job_id=j.github_job_id AND active.worker_id=${event.data.workerId} AND active.state NOT IN ('reaped','failed'))
-      LIMIT 1`;
+    const [terminal] = await q(db).terminalLogFence.execute({ jobId: payload.data.payload.jobId, workerId: event.data.workerId });
     if (!terminal) return false;
     console.warn("Discarding log for terminal worker lease", { workerId: event.data.workerId, workerName: socket.data?.workerName, jobId: payload.data.payload.jobId, eventId: event.data.id });
     return true;
@@ -102,24 +121,7 @@ export async function handleAuthenticatedWorkerEvent(
 }
 
 async function recordReapedJobTiming(db: DatabaseClient, leaseId: string, reapedAt: string): Promise<void> {
-  const [row] = await db<Record<string, unknown>[]>`
-    SELECT j.id AS "jobId", j.organization_id AS "organizationId", j.run_id AS "runId",
-      j.github_job_id AS "githubJobId", j.name AS "jobName", j.queued_at AS "queuedAt",
-      j.started_at AS "startedAt", j.completed_at AS "completedAt", j.conclusion,
-      r.repository_id AS "repositoryId", p.name AS "repositoryName", r.workflow_name AS "workflowName",
-      l.worker_id AS "workerId", r.runtime_boundary AS "runtimeBoundary", l.pool_id AS "poolId", l.requested,
-      l.terminal_result AS "terminalResult", p.platform, p.driver, p.image_digest AS "artifactDigest",
-      s.started_at AS "allocationStartedAt",
-      (SELECT started_at FROM dashboard_run_stages WHERE organization_id=j.organization_id AND run_id=j.run_id AND stage='sandbox_ready') AS "sandboxReadyAt",
-      l.updated_at AS "reapingStartedAt"
-    FROM dashboard_jobs j
-    JOIN dashboard_runs r ON r.organization_id=j.organization_id AND r.id=j.run_id
-    JOIN runner_leases l ON l.github_job_id=j.github_job_id
-    LEFT JOIN runner_pools p ON p.id=l.pool_id
-    LEFT JOIN dashboard_run_stages s ON s.organization_id=j.organization_id AND s.run_id=j.run_id AND s.stage='allocating'
-    WHERE l.id=${leaseId} AND j.status='completed' AND j.completed_at IS NOT NULL
-    LIMIT 1
-  `;
+  const [row] = await q(db).reapedTiming.execute({ leaseId }) as Array<Record<string, unknown>>;
   if (!row) return;
   const requested = row.requested && typeof row.requested === "object" ? row.requested as Record<string, unknown> : null;
   const terminalResult = row.terminalResult && typeof row.terminalResult === "object" ? row.terminalResult as Record<string, unknown> : null;
@@ -127,7 +129,7 @@ async function recordReapedJobTiming(db: DatabaseClient, leaseId: string, reaped
   const queuedAt = asString(row.queuedAt), completedAt = asString(row.completedAt);
   if (!queuedAt || !completedAt || !requested) return;
   const startedAt = asString(row.startedAt);
-  const telemetryRows = await db<Record<string, unknown>[]>`SELECT occurred_at AS "occurredAt",cpu_usage_percent AS "cpuUsagePercent",cpu_time_ms AS "cpuTimeMs",memory_working_set_bytes AS "memoryWorkingSetBytes" FROM dashboard_job_resource_samples WHERE organization_id=${String(row.organizationId)} AND run_id=${String(row.runId)} AND job_id=${String(row.jobId)} AND lease_id=${leaseId} ORDER BY occurred_at`;
+  const telemetryRows = await q(db).resourceSamples.execute({ organizationId: String(row.organizationId), runId: String(row.runId), jobId: String(row.jobId), leaseId });
   const telemetry = aggregateResourceSamples(telemetryRows.map(sample => ({ occurredAt: asString(sample.occurredAt) ?? completedAt, cpuUsagePercent: Number(sample.cpuUsagePercent), cpuTimeMs: Number(sample.cpuTimeMs), memoryWorkingSetBytes: Number(sample.memoryWorkingSetBytes) })), startedAt ?? queuedAt, completedAt);
   const snapshot: JobTimingSnapshotInput = {
     organizationId: String(row.organizationId), jobId: String(row.jobId), runId: String(row.runId),
@@ -158,13 +160,13 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown, 
   };
   if (parsedPayload.data.type === "sandbox_attested") {
     const payload = parsedPayload.data.payload;
-    const rows = await db`UPDATE runner_leases SET state='sandbox_ready',runtime_instance_id=${payload.runtimeInstanceId},terminal_result=${jsonParameter(db, { observed: payload.observed })},expires_at=GREATEST(expires_at,now()+interval '10 minutes'),updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state='dispatched' RETURNING id`;
+    const rows = await q(db).attest.execute({ runtimeInstanceId: payload.runtimeInstanceId, terminalResult: JSON.stringify({ observed: payload.observed }), leaseId: payload.leaseId, workerId: event.workerId, nonce: payload.nonce });
     if (!transition(Boolean(rows[0]), "sandbox_ready")) return false;
     return true;
   }
   if (parsedPayload.data.type === "lease.declined") {
     const payload = parsedPayload.data.payload;
-    const rows = await db`UPDATE runner_leases SET state='failed',cleanup_state='pending',terminal_result=${jsonParameter(db, { reason: "pickup_paused" })},updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('reserved','dispatched') RETURNING id`;
+    const rows = await q(db).decline.execute({ terminalResult: JSON.stringify({ reason: "pickup_paused" }), leaseId: payload.leaseId, workerId: event.workerId, nonce: payload.nonce });
     if (!transition(Boolean(rows[0]), "failed")) return false;
     return true;
   }
@@ -176,39 +178,36 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown, 
     const failed = outOfMemory || payload.exitCode !== 0;
     const state = failed ? "failed" : "completed";
     const terminalResult = { exitCode: payload.exitCode, ...(outOfMemory ? { reason: "out_of_memory" } : {}), ...(payload.oom ? { oom: payload.oom } : {}), ...(payload.termination ? { termination: payload.termination } : {}), ...(payload.correlationId ? { correlationId: payload.correlationId } : {}) };
-    const rows = await db`UPDATE runner_leases SET state=${state},terminal_result=${jsonParameter(db, terminalResult)},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('sandbox_ready','online','busy') RETURNING id`;
+    const rows = await q(db).finish.execute({ state, terminalResult: JSON.stringify(terminalResult), leaseId: payload.leaseId, workerId: event.workerId, nonce: payload.nonce });
     if (!transition(Boolean(rows[0]), state)) return false;
     return true;
   }
   if (parsedPayload.data.type === "lease.failed") {
     const payload = parsedPayload.data.payload;
     if (payload.reason === "cleanup_failed") {
-      return db.begin(async tx => {
-        const rows = await tx`UPDATE runner_leases SET cleanup_state='failed',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed') RETURNING id`;
+      return db.transaction(async tx => {
+        const rows = await q(tx).cleanupFailed.execute({ leaseId: payload.leaseId, workerId: event.workerId, nonce: payload.nonce });
         if (!transition(Boolean(rows[0]), "cleanup_failed")) return false;
-        if (typeof payload.commandId === "string") await tx`UPDATE commands SET state='failed' WHERE id=${payload.commandId} AND worker_id=${event.workerId} AND lease_id=${payload.leaseId} AND state='acknowledged'`;
+        if (typeof payload.commandId === "string") await q(tx).failStopCommand.execute({ commandId: payload.commandId, workerId: event.workerId, leaseId: payload.leaseId });
         return true;
       });
     }
     if (payload.reason === "debug_preserve") {
-      const rows = await db`UPDATE runner_leases SET state='failed',terminal_result=COALESCE(terminal_result,'{}'::jsonb) || ${jsonParameter(db, { debugPreserved: true })}::jsonb,cleanup_state='debug_preserved',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed','sandbox_ready','online','busy') RETURNING id`;
+      const rows = await q(db).debugPreserve.execute({ debugResult: JSON.stringify({ debugPreserved: true }), leaseId: payload.leaseId, workerId: event.workerId, nonce: payload.nonce });
       if (!transition(Boolean(rows[0]), "debug_preserved")) return false;
       return true;
     }
     const terminalResult = { reason: payload.termination?.container?.oomKilled === true ? "out_of_memory" : payload.reason, ...(payload.oom ? { oom: payload.oom } : {}), ...(payload.termination ? { termination: payload.termination } : {}), ...(payload.correlationId ? { correlationId: payload.correlationId } : {}) };
-    const rows = await db`UPDATE runner_leases SET state='failed',terminal_result=${jsonParameter(db, terminalResult)},cleanup_state='pending',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('dispatched','provisioning','sandbox_ready','online','busy') RETURNING id`;
+    const rows = await q(db).fail.execute({ terminalResult: JSON.stringify(terminalResult), leaseId: payload.leaseId, workerId: event.workerId, nonce: payload.nonce });
     if (!transition(Boolean(rows[0]), "failed")) return false;
     return true;
   }
   if (parsedPayload.data.type !== "lease.reaped") return false;
   const payload = parsedPayload.data.payload;
-  const rows = await db`UPDATE runner_leases SET state='reaped',cleanup_state='completed',updated_at=now() WHERE id=${payload.leaseId} AND worker_id=${event.workerId} AND nonce=${payload.nonce} AND state IN ('completed','failed') RETURNING id`;
+  const rows = await q(db).reap.execute({ leaseId: payload.leaseId, workerId: event.workerId, nonce: payload.nonce });
   let context: { commandType: string | null; terminalResult: { reason?: string; exitCode?: number } | null } | undefined;
   try {
-    [context] = await db<Array<{ commandType: string | null; terminalResult: { reason?: string; exitCode?: number } | null }>>`
-      SELECT c.type AS "commandType", l.terminal_result AS "terminalResult"
-      FROM runner_leases l LEFT JOIN commands c ON c.id=${payload.commandId ?? null} AND c.lease_id=l.id AND c.worker_id=l.worker_id
-      WHERE l.id=${payload.leaseId} AND l.worker_id=${event.workerId}`;
+    [context] = await q(db).reapContext.execute({ commandId: payload.commandId ?? null, leaseId: payload.leaseId, workerId: event.workerId }) as typeof context[];
   } catch {
     // Observability must not prevent acknowledgement of a committed lease transition.
   }
@@ -222,21 +221,14 @@ export async function applyWorkerLeaseEvent(db: DatabaseClient, input: unknown, 
 type WorkerLogPayload = { jobId: string; stepId: string | null; sequence: number; content: string; occurredAt: string };
 
 export async function persistWorkerLogEvent(db: DatabaseClient, workerId: string, payload: WorkerLogPayload): Promise<boolean> {
-  const [job] = await db`SELECT j.organization_id AS "organizationId", j.run_id AS "runId", j.id AS "jobId"
-    FROM dashboard_jobs j JOIN runner_leases l ON l.github_job_id=j.github_job_id
-    WHERE j.id=${payload.jobId} AND l.worker_id=${workerId} AND l.state NOT IN ('reaped','failed')`;
+  const [job] = await q(db).workerLogJob.execute({ jobId: payload.jobId, workerId }) as Array<{ organizationId: string; runId: string; jobId: string }>;
   if (!job) return false;
   if (payload.stepId !== null) {
-    const [step] = await db`SELECT id FROM dashboard_job_steps
-      WHERE organization_id=${job.organizationId} AND run_id=${job.runId} AND job_id=${job.jobId} AND id=${payload.stepId}`;
+    const [step] = await q(db).workerLogStep.execute({ organizationId: job.organizationId, runId: job.runId, jobId: job.jobId, stepId: payload.stepId });
     if (!step) return false;
-    await db`INSERT INTO dashboard_step_log_chunks (organization_id,run_id,job_id,step_id,sequence,content,occurred_at)
-      VALUES (${job.organizationId},${job.runId},${job.jobId},${payload.stepId},${payload.sequence},${payload.content},${payload.occurredAt})
-      ON CONFLICT (organization_id,run_id,job_id,step_id,sequence) DO NOTHING`;
+    await q(db).workerStepLogChunk.execute({ organizationId: job.organizationId, runId: job.runId, jobId: job.jobId, stepId: payload.stepId, sequence: payload.sequence, content: payload.content, occurredAt: payload.occurredAt });
   } else {
-    await db`INSERT INTO dashboard_log_chunks (organization_id,run_id,job_id,sequence,content,occurred_at)
-      VALUES (${job.organizationId},${job.runId},${job.jobId},${payload.sequence},${payload.content},${payload.occurredAt})
-      ON CONFLICT (organization_id,run_id,job_id,sequence) DO NOTHING`;
+    await q(db).workerLogChunk.execute({ organizationId: job.organizationId, runId: job.runId, jobId: job.jobId, sequence: payload.sequence, content: payload.content, occurredAt: payload.occurredAt });
   }
   return true;
 }

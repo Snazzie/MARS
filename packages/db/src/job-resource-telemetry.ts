@@ -1,9 +1,38 @@
 import { WorkerEvent, WorkerEventPayload, type JobResourceSample } from "@mars/contracts";
+import { and, asc, eq, gte, inArray, sql } from "drizzle-orm";
+import { defineQueries } from "./prepared.ts";
+import * as schema from "./drizzle-schema.ts";
 import type { DatabaseClient } from "./index.ts";
-
 export type JobResourceSampleResult = "stored" | "duplicate" | "ignored" | "rejected";
 export type JobResourceTelemetryDb = DatabaseClient;
 const LEASE_HEARTBEAT_TTL_MS = 10 * 60_000;
+
+const telemetryQueries = defineQueries((db) => ({
+  lease: db.select({ organizationId: schema.dashboardJobs.organizationId, runId: schema.dashboardJobs.runId, state: schema.runnerLeases.state })
+    .from(schema.runnerLeases).innerJoin(schema.dashboardJobs, eq(schema.dashboardJobs.githubJobId, schema.runnerLeases.githubJobId))
+    .where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.workerId, sql.placeholder("workerId")), eq(schema.dashboardJobs.id, sql.placeholder("jobId"))))
+    .limit(1).prepare("job_resource_telemetry_lease"),
+  insert: db.insert(schema.dashboardJobResourceSamples).values({
+    organizationId: sql.placeholder("organizationId"), runId: sql.placeholder("runId"), jobId: sql.placeholder("jobId"),
+    leaseId: sql.placeholder("leaseId"), occurredAt: sql.placeholder("occurredAt"), cpuUsagePercent: sql.placeholder("cpuUsagePercent"),
+    cpuTimeMs: sql.placeholder("cpuTimeMs"), memoryWorkingSetBytes: sql.placeholder("memoryWorkingSetBytes"),
+    memoryLimitBytes: sql.placeholder("memoryLimitBytes"), diskUsageBytes: sql.placeholder("diskUsageBytes"),
+  }).onConflictDoNothing().returning({ occurredAt: schema.dashboardJobResourceSamples.occurredAt }).prepare("job_resource_telemetry_insert"),
+  renew: db.update(schema.runnerLeases).set({ expiresAt: sql`GREATEST(${schema.runnerLeases.expiresAt}, ${sql.placeholder("expiresAt")})`, updatedAt: sql`now()` })
+    .where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.workerId, sql.placeholder("workerId")), inArray(schema.runnerLeases.state, ["online", "busy"])))
+    .prepare("job_resource_telemetry_renew"),
+  list: db.select({
+    organizationId: schema.dashboardJobResourceSamples.organizationId, runId: schema.dashboardJobResourceSamples.runId,
+    jobId: schema.dashboardJobResourceSamples.jobId, leaseId: schema.dashboardJobResourceSamples.leaseId,
+    occurredAt: schema.dashboardJobResourceSamples.occurredAt, cpuUsagePercent: schema.dashboardJobResourceSamples.cpuUsagePercent,
+    cpuTimeMs: schema.dashboardJobResourceSamples.cpuTimeMs, memoryWorkingSetBytes: schema.dashboardJobResourceSamples.memoryWorkingSetBytes,
+    memoryLimitBytes: schema.dashboardJobResourceSamples.memoryLimitBytes, diskUsageBytes: schema.dashboardJobResourceSamples.diskUsageBytes,
+  }).from(schema.dashboardJobResourceSamples)
+    .where(and(eq(schema.dashboardJobResourceSamples.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardJobResourceSamples.runId, sql.placeholder("runId")),
+      eq(schema.dashboardJobResourceSamples.jobId, sql.placeholder("jobId")), sql`(${sql.placeholder("after")}::timestamptz IS NULL OR ${schema.dashboardJobResourceSamples.occurredAt} > ${sql.placeholder("after")}::timestamptz)`,
+      gte(schema.dashboardJobResourceSamples.occurredAt, sql`now() - interval '7 days'`)))
+    .orderBy(asc(schema.dashboardJobResourceSamples.occurredAt)).limit(sql.placeholder("limit")).prepare("job_resource_telemetry_list"),
+}));
 
 export async function persistJobResourceSample(db: JobResourceTelemetryDb, workerId: string, input: unknown, now = Date.now()): Promise<JobResourceSampleResult> {
   const event = WorkerEvent.safeParse(input);
@@ -14,38 +43,19 @@ export async function persistJobResourceSample(db: JobResourceTelemetryDb, worke
   const occurredMs = Date.parse(sample.occurredAt);
   if (!Number.isFinite(occurredMs) || occurredMs > now + 30_000) return "rejected";
   if (occurredMs < now - 24 * 60 * 60_000) return "ignored";
-  const [lease] = await db<{ organizationId: string; runId: string; state: string }[]>`
-    SELECT j.organization_id AS "organizationId", j.run_id AS "runId", l.state
-    FROM runner_leases l JOIN dashboard_jobs j ON j.github_job_id=l.github_job_id
-    WHERE l.id=${sample.leaseId} AND l.worker_id=${workerId} AND j.id=${sample.jobId}
-    LIMIT 1
-  `;
+  const [lease] = await telemetryQueries(db).lease.execute({ leaseId: sample.leaseId, workerId, jobId: sample.jobId }) as { organizationId: string; runId: string; state: string }[];
   if (!lease) return "rejected";
   if (lease.state === "completed" || lease.state === "failed" || lease.state === "reaped" || lease.state === "expired") return "ignored";
-  const inserted = await db<{ occurredAt: string }[]>`
-    INSERT INTO dashboard_job_resource_samples
-      (organization_id,run_id,job_id,lease_id,occurred_at,cpu_usage_percent,cpu_time_ms,memory_working_set_bytes,memory_limit_bytes,disk_usage_bytes)
-    VALUES (${lease.organizationId},${lease.runId},${sample.jobId},${sample.leaseId},${sample.occurredAt},${sample.cpuUsagePercent},${sample.cpuTimeMs},${sample.memoryWorkingSetBytes},${sample.memoryLimitBytes},${sample.diskUsageBytes ?? null})
-    ON CONFLICT (organization_id,job_id,occurred_at) DO NOTHING
-    RETURNING occurred_at AS "occurredAt"
-  `;
+  const inserted = await telemetryQueries(db).insert.execute({ organizationId: lease.organizationId, runId: lease.runId, jobId: sample.jobId, leaseId: sample.leaseId, occurredAt: sample.occurredAt, cpuUsagePercent: sample.cpuUsagePercent, cpuTimeMs: sample.cpuTimeMs, memoryWorkingSetBytes: sample.memoryWorkingSetBytes, memoryLimitBytes: sample.memoryLimitBytes, diskUsageBytes: sample.diskUsageBytes ?? null });
   if (inserted[0] && occurredMs >= now - LEASE_HEARTBEAT_TTL_MS) {
-    await db`UPDATE runner_leases SET expires_at=GREATEST(expires_at,${new Date(now + LEASE_HEARTBEAT_TTL_MS).toISOString()}),updated_at=now()
-      WHERE id=${sample.leaseId} AND worker_id=${workerId}
-        AND state IN ('online','busy')`;
+    await telemetryQueries(db).renew.execute({ expiresAt: new Date(now + LEASE_HEARTBEAT_TTL_MS).toISOString(), leaseId: sample.leaseId, workerId });
   }
   return inserted[0] ? "stored" : "duplicate";
 }
 
 export async function listJobResourceSamples(db: JobResourceTelemetryDb, organizationId: string, runId: string, jobId: string, after: string | null = null, limit = 100): Promise<{ items: JobResourceSample[]; nextCursor: string | null }> {
   const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
-  const rows = await db<Record<string, unknown>[]>`
-    SELECT organization_id AS "organizationId",run_id AS "runId",job_id AS "jobId",lease_id AS "leaseId",occurred_at AS "occurredAt",cpu_usage_percent AS "cpuUsagePercent",cpu_time_ms AS "cpuTimeMs",memory_working_set_bytes AS "memoryWorkingSetBytes",memory_limit_bytes AS "memoryLimitBytes",disk_usage_bytes AS "diskUsageBytes"
-    FROM dashboard_job_resource_samples
-    WHERE organization_id=${organizationId} AND run_id=${runId} AND job_id=${jobId} AND (${after}::timestamptz IS NULL OR occurred_at > ${after}::timestamptz)
-      AND occurred_at >= now() - interval '7 days'
-    ORDER BY occurred_at ASC LIMIT ${safeLimit + 1}
-  `;
-  const items = rows.slice(0, safeLimit).map(row => ({ ...row, cpuUsagePercent: Number(row.cpuUsagePercent), cpuTimeMs: Number(row.cpuTimeMs), memoryWorkingSetBytes: Number(row.memoryWorkingSetBytes), memoryLimitBytes: Number(row.memoryLimitBytes), diskUsageBytes: row.diskUsageBytes == null ? null : Number(row.diskUsageBytes), occurredAt: row.occurredAt instanceof Date ? row.occurredAt.toISOString() : String(row.occurredAt) })) as JobResourceSample[];
+  const rows = await telemetryQueries(db).list.execute({ organizationId, runId, jobId, after, limit: safeLimit + 1 });
+  const items = rows.slice(0, safeLimit).map(row => ({ ...row, cpuUsagePercent: Number(row.cpuUsagePercent), cpuTimeMs: Number(row.cpuTimeMs), memoryWorkingSetBytes: Number(row.memoryWorkingSetBytes), memoryLimitBytes: Number(row.memoryLimitBytes), diskUsageBytes: row.diskUsageBytes == null ? null : Number(row.diskUsageBytes), occurredAt: new Date(row.occurredAt).toISOString() })) as JobResourceSample[];
   return { items, nextCursor: rows.length > safeLimit ? items.at(-1)?.occurredAt ?? null : null };
 }

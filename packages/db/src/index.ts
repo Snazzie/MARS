@@ -1,28 +1,49 @@
-import postgres, { type Sql as PostgresSql } from "postgres";
+import postgres, { type Sql as PostgresSql, type TransactionSql } from "postgres";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import { sql as drizzleSql } from "drizzle-orm";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { TransactionRollbackError } from "drizzle-orm";
+import type { PgTransactionConfig } from "drizzle-orm/pg-core";
+import { initializeQueries } from "./prepared.ts";
 import * as schema from "./drizzle-schema.ts";
 
 export type RawDatabaseClient = PostgresSql<{}>;
-export type DatabaseClient = RawDatabaseClient & Partial<PostgresJsDatabase<typeof schema>> & { $client?: RawDatabaseClient };
-export type Sql<_ = {}> = DatabaseClient;
-type DrizzleDatabase = PostgresJsDatabase<typeof schema>;
+type DrizzleDatabase = Omit<PostgresJsDatabase<typeof schema>, "query" | "transaction">;
+export type DatabaseClient = DrizzleDatabase & {
+  $client: RawDatabaseClient;
+  transaction<T>(callback: (tx: DatabaseClient) => Promise<T>, config?: PgTransactionConfig): Promise<T>;
+  rollback(): never;
+};
 
-type QueryTag = <T extends readonly unknown[]>(strings: TemplateStringsArray, ...values: readonly unknown[]) => Promise<T>;
-
-function wrapDatabase(orm: DrizzleDatabase, raw: RawDatabaseClient): DatabaseClient {
-  const callable = function query<T extends readonly unknown[]>(strings: TemplateStringsArray, ...values: readonly unknown[]): Promise<T> {
-    return orm.execute(drizzleSql(strings, ...values)) as unknown as Promise<T>;
-  } as QueryTag & Record<string, unknown>;
-  const proxy = new Proxy(callable, {
-    get(_target, property) {
-      if (property === "$client") return raw;
-      if (property === "end" || property === "json" || property === "unsafe") return raw[property as keyof RawDatabaseClient];
-      if (property === "begin") return (callback: (tx: DatabaseClient) => Promise<unknown>) => orm.transaction(async tx => callback(wrapDatabase(tx as unknown as DrizzleDatabase, raw)));
-      return (orm as unknown as Record<PropertyKey, unknown>)[property];
+/** Prepared Drizzle statements retain this client, which routes execution to the active transaction. */
+export function createDbFromClient(raw: RawDatabaseClient): DatabaseClient {
+  const transactions = new AsyncLocalStorage<TransactionSql<{}>>();
+  const routed = new Proxy(raw, {
+    get(target, property) {
+      if (property === "unsafe") return (...args: Parameters<RawDatabaseClient["unsafe"]>) => {
+        const client = transactions.getStore() ?? target;
+        return client.unsafe(...args);
+      };
+      return Reflect.get(target, property);
     },
   });
-  return proxy as unknown as DatabaseClient;
+  const db = drizzle(routed, { schema }) as unknown as DatabaseClient;
+  Object.defineProperty(db, "$client", { get: () => transactions.getStore() ?? raw });
+  db.rollback = () => { throw new TransactionRollbackError(); };
+  db.transaction = async (callback, config) => {
+    const current = transactions.getStore();
+    if (current) {
+      if (config) throw new Error("Nested transaction configuration is unsupported");
+      return current.savepoint((tx) => transactions.run(tx, () => callback(db))) as ReturnType<typeof callback>;
+    }
+    const options = [
+      config?.isolationLevel ? `isolation level ${config.isolationLevel}` : "",
+      config?.accessMode ?? "",
+      config?.deferrable === undefined ? "" : config.deferrable ? "deferrable" : "not deferrable",
+    ].filter(Boolean).join(" ");
+    return raw.begin(options, (tx) => transactions.run(tx, () => callback(db))) as ReturnType<typeof callback>;
+  };
+  initializeQueries(db as unknown as PostgresJsDatabase<typeof schema>);
+  return db;
 }
 
 const defaultConnectionFactory = (url: string): RawDatabaseClient => postgres(url, { max: 1, prepare: false });
@@ -95,11 +116,12 @@ export async function ensureDatabase(databaseUrl: string, options: EnsureDatabas
 
 export function createDb(url: string): DatabaseClient {
   const raw = postgres(url, { max: 10, prepare: false });
-  return wrapDatabase(drizzle(raw, { schema }), raw);
+  return createDbFromClient(raw);
 }
 
 export { migrateDatabase } from "./migrate.ts";
-export * from "./json.ts";
+export { defineQueries } from "./prepared.ts";
+export { schema };
 export * from "./dashboard.ts";
 export * from "./github-runner-cost.ts";
 export * from "./worker-cache.ts";

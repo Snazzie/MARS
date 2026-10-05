@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { DatabaseClient } from "@mars/db";
+import { preparedTestDatabase } from "../../../packages/db/src/prepared-test-fixture.ts";
 import { retryFailedGithubJobs } from "./job-retry.ts";
 
 type Row = { id: string; organizationId: string; githubRunId: number; runAttempt: number; githubJobId: number; requestedLabels: string[]; fullName: string; installationId: number };
@@ -13,18 +13,18 @@ function fixture() {
   let eligible = true;
   let responseStatus = 201;
   const requests: Request[] = [];
-  const sql = async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    if (strings[0]?.includes("SELECT r.id")) return eligible && runStatus === "completed" && claimed !== rows[0]!.runAttempt && ["failure", "timed_out"].includes(jobConclusion) ? rows : [];
-    if (strings[0]?.includes("UPDATE dashboard_runs")) {
-      if (claimed === values[2] || !eligible || runStatus !== "completed" || rows[0]!.runAttempt !== values[2]) return [];
-      claimed = Number(values[2]);
+  const db = preparedTestDatabase((name, values) => {
+    if (name === "github_job_retry_candidates") return eligible && runStatus === "completed" && claimed !== rows[0]!.runAttempt && ["failure", "timed_out"].includes(jobConclusion) ? rows : [];
+    if (name === "github_job_retry_claim") {
+      if (claimed === rows[0]!.runAttempt || !eligible || runStatus !== "completed" || rows[0]!.runAttempt !== values.runAttempt) return [];
+      claimed = Number(values.runAttempt);
       return [{ id: rows[0]!.id }];
     }
-    throw new Error(`Unexpected SQL ${strings[0]}`);
-  };
+    return [];
+  });
   const deps = {
-    db: sql as unknown as DatabaseClient,
-    installationToken: async () => "installation-token",
+    db,
+    installationToken: async () => "test-installation-token",
     githubFetchForInstallation: () => async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init);
       requests.push(request);

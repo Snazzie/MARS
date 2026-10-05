@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { DatabaseClient } from "@mars/db";
+import { preparedTestDatabase } from "../../../packages/db/src/prepared-test-fixture.ts";
 import { cleanGithubRunners } from "./github-runner-cleanup.ts";
 
 const runnerName = "BEAST-windows-x64-099a553b-1518-4bb0-9c11-9d40df674988";
@@ -9,16 +9,15 @@ const repository = { repository: "SpeedHQ/RaceIQ", installationId: 157587463, qu
 function fixture(options: { tracked?: boolean; active?: boolean; deleteStatus?: number; runners?: unknown[]; inspectionStatus?: number }) {
   const deleted: number[] = [];
   const cleared: string[] = [];
-  const db = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const sql = strings.join(" ");
-    if (sql.includes('l.runner_id AS "runnerId"')) return options.tracked ? [{ leaseId: "lease", runnerId: 42, ...repository }] : [];
-    if (sql.startsWith("SELECT r.full_name AS repository")) return [repository];
-    if (sql.startsWith("SELECT name, id FROM workers")) return [{ name: "BEAST", id: "worker" }];
-    if (sql.startsWith("SELECT l.id FROM runner_leases")) return options.active ? [{ id: "active" }] : [];
-    if (sql.startsWith("SELECT id FROM runner_leases")) return [];
-    if (sql.startsWith("UPDATE runner_leases")) { cleared.push(String(values[0])); return []; }
-    throw new Error(`Unexpected query: ${sql}`);
-  }) as unknown as DatabaseClient;
+  const db = preparedTestDatabase((name, values) => {
+    if (name === "github_runner_cleanup_tracked") return options.tracked ? [{ leaseId: "lease", runnerId: 42, workerName: "BEAST", ...repository }] : [];
+    if (name === "github_runner_cleanup_repositories") return [repository];
+    if (name === "github_runner_cleanup_workers") return [{ name: "BEAST", id: "worker" }];
+    if (name === "github_runner_cleanup_active") return options.active ? [{ id: "active" }] : [];
+    if (name === "github_runner_cleanup_owned") return [];
+    if (name === "github_runner_cleanup_clear") { cleared.push(String(values.leaseId)); return []; }
+    return [];
+  });
   const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (init?.method === "DELETE") {

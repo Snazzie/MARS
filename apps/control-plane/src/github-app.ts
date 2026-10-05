@@ -1,7 +1,8 @@
 import { createHash, createPrivateKey, createSign, randomBytes, randomUUID } from "node:crypto";
-import type { Sql } from "@mars/db";
+import { and, desc, eq, inArray, isNull, ne, notInArray, or, sql } from "drizzle-orm";
+import { defineQueries, schema, type DatabaseClient } from "@mars/db";
 import type { SecretBox } from "./auth.ts";
-import { applyWorkflowMutation, discoverWorkflowFiles, previewWorkflowMutation, resolveWorkflowJob, type WorkflowFilePreview, type WorkflowMutation } from "./workflow-pr.ts";
+import { applyWorkflowMutation, discoverWorkflowFiles, previewWorkflowMutation, resolveWorkflowJob, type WorkflowMutation } from "./workflow-pr.ts";
 import { browserLocation } from "./http-origin.ts";
 type SetupState = { purpose: "oauth" | "manifest" | "install" | "organization_install"; userId: string | null; organizationId: string | null; idempotencyKey: string | null; encryptedState?: string; encryptedPkceVerifier?: string; expiresAt: number; consumedAt?: number };
 type Installation = { organizationId: string; githubInstallationId: number; state: "pending" | "approved" | "suspended"; repositorySelection: "all" | "selected" | null; githubAccountId?: number };
@@ -9,17 +10,47 @@ type Repository = { id: string; installationId: number; organizationId?: string;
 type AppConfig = { id: number; slug: string; clientId?: string; pem: string; clientSecret: string; webhookSecret: string };
 type Organization = { githubOrgId: number; githubAccountType?: "User" | "Organization"; login?: string };
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-type SqlDatabase = Sql<{}>;
+type SqlDatabase = DatabaseClient;
 type MemoryMembership = { organizationId: string; userId: string; role: "owner" | "member" };
 type MemoryDatabase = { setupStates: Map<string, SetupState>; installations: Map<number, Installation>; repositories: Map<string, Repository>; appConfig?: AppConfig; organizations?: Map<string, Organization>; memberships?: Map<string, MemoryMembership> };
 type Database = SqlDatabase | MemoryDatabase;
 
-type SetupRow = { purpose: SetupState["purpose"]; user_id: string | null; organization_id: string | null; idempotency_key: string | null; encrypted_state: string | null; encrypted_pkce_verifier: string | null; expires_at: Date | string; consumed_at: Date | string | null };
 const API = "https://api.github.com";
-const isSql = (db: Database): db is SqlDatabase => typeof db === "function";
+const isSql = (db: Database): db is SqlDatabase => typeof db === "object" && db !== null && "select" in db;
 const nowMs = (value: Date | string | number) => value instanceof Date ? value.getTime() : typeof value === "string" ? Date.parse(value) : value;
 const visibilityOf = (repo: { private?: unknown; visibility?: unknown }): Repository["visibility"] => repo.visibility === "private" || repo.visibility === "internal" || repo.visibility === "public" ? repo.visibility : repo.private === true ? "private" : "public";
 
+const stateFields = { purpose: schema.githubSetupStates.purpose, userId: schema.githubSetupStates.userId, organizationId: schema.githubSetupStates.organizationId, idempotencyKey: schema.githubSetupStates.idempotencyKey, encryptedState: schema.githubSetupStates.encryptedState, encryptedPkceVerifier: schema.githubSetupStates.encryptedPkceVerifier, expiresAt: schema.githubSetupStates.expiresAt, consumedAt: schema.githubSetupStates.consumedAt };
+const queries = defineQueries((db) => ({
+  findState: db.select(stateFields).from(schema.githubSetupStates).where(eq(schema.githubSetupStates.stateHash, sql`decode(${sql.placeholder("stateHash")},'hex')`)).prepare("github_app_state_find"),
+  saveState: db.insert(schema.githubSetupStates).values({ stateHash: sql`decode(${sql.placeholder("stateHash")},'hex')`, purpose: sql.placeholder("purpose"), userId: sql.placeholder("userId"), organizationId: sql.placeholder("organizationId"), idempotencyKey: sql.placeholder("idempotencyKey"), encryptedState: sql.placeholder("encryptedState"), encryptedPkceVerifier: sql.placeholder("encryptedPkceVerifier"), expiresAt: sql`to_timestamp(${sql.placeholder("expiresAt")} / 1000.0)` }).onConflictDoUpdate({ target: schema.githubSetupStates.stateHash, set: { purpose: sql`${sql.placeholder("purpose")}`, userId: sql`${sql.placeholder("userId")}`, organizationId: sql`${sql.placeholder("organizationId")}`, idempotencyKey: sql`${sql.placeholder("idempotencyKey")}`, encryptedState: sql`${sql.placeholder("encryptedState")}`, encryptedPkceVerifier: sql`${sql.placeholder("encryptedPkceVerifier")}`, expiresAt: sql`to_timestamp(${sql.placeholder("expiresAt")} / 1000.0)` } }).prepare("github_app_state_save"),
+  consumeSetup: db.update(schema.githubSetupStates).set({ consumedAt: sql`now()` }).where(and(eq(schema.githubSetupStates.stateHash, sql`decode(${sql.placeholder("stateHash")},'hex')`), eq(schema.githubSetupStates.purpose, sql.placeholder("purpose")), sql`${schema.githubSetupStates.expiresAt}>now()`, isNull(schema.githubSetupStates.consumedAt), or(eq(schema.githubSetupStates.userId, sql.placeholder("userId")), sql`${sql.placeholder("allowSetup")}::boolean`))).returning(stateFields).prepare("github_app_state_consume"),
+  manifestState: db.select(stateFields).from(schema.githubSetupStates).where(and(eq(schema.githubSetupStates.purpose, "manifest"), eq(schema.githubSetupStates.idempotencyKey, sql.placeholder("idempotencyKey")), isNull(schema.githubSetupStates.consumedAt), sql`${schema.githubSetupStates.expiresAt}>now()`, or(eq(schema.githubSetupStates.userId, sql.placeholder("userId")), sql`${sql.placeholder("allowSetup")}::boolean`), or(eq(schema.githubSetupStates.organizationId, sql.placeholder("organizationId")), sql`${sql.placeholder("allowSetup")}::boolean`))).prepare("github_app_manifest_state"),
+  unboundState: db.select(stateFields).from(schema.githubSetupStates).where(and(eq(schema.githubSetupStates.purpose, "organization_install"), eq(schema.githubSetupStates.userId, sql.placeholder("userId")), isNull(schema.githubSetupStates.organizationId), eq(schema.githubSetupStates.idempotencyKey, sql.placeholder("idempotencyKey")), isNull(schema.githubSetupStates.consumedAt), sql`${schema.githubSetupStates.expiresAt}>now()`)).prepare("github_app_unbound_state"),
+  installState: db.select(stateFields).from(schema.githubSetupStates).where(and(eq(schema.githubSetupStates.purpose, sql.placeholder("purpose")), eq(schema.githubSetupStates.userId, sql.placeholder("userId")), eq(schema.githubSetupStates.organizationId, sql.placeholder("organizationId")), eq(schema.githubSetupStates.idempotencyKey, sql.placeholder("idempotencyKey")), isNull(schema.githubSetupStates.consumedAt), sql`${schema.githubSetupStates.expiresAt}>now()`)).prepare("github_app_install_state"),
+  getConfig: db.select({ appId: schema.githubAppConfig.appId, slug: schema.githubAppConfig.slug, clientId: schema.githubAppConfig.clientId, pem: schema.githubAppConfig.encryptedPem, clientSecret: schema.githubAppConfig.encryptedClientSecret, webhookSecret: schema.githubAppConfig.encryptedWebhookSecret }).from(schema.githubAppConfig).where(eq(schema.githubAppConfig.singleton, true)).prepare("github_app_config_get"),
+  saveConfig: db.insert(schema.githubAppConfig).values({ singleton: true, appId: sql.placeholder("appId"), slug: sql.placeholder("slug"), clientId: sql.placeholder("clientId"), encryptedPem: sql.placeholder("pem"), encryptedClientSecret: sql.placeholder("clientSecret"), encryptedWebhookSecret: sql.placeholder("webhookSecret") }).onConflictDoUpdate({ target: schema.githubAppConfig.singleton, set: { appId: sql`${sql.placeholder("appId")}`, slug: sql`${sql.placeholder("slug")}`, clientId: sql`${sql.placeholder("clientId")}`, encryptedPem: sql`${sql.placeholder("pem")}`, encryptedClientSecret: sql`${sql.placeholder("clientSecret")}`, encryptedWebhookSecret: sql`${sql.placeholder("webhookSecret")}`, updatedAt: sql`now()` } }).prepare("github_app_config_save"),
+  latestInstallation: db.select({ githubInstallationId: schema.dashboardInstallations.githubInstallationId }).from(schema.dashboardInstallations).where(and(eq(schema.dashboardInstallations.organizationId, sql.placeholder("organizationId")), ne(schema.dashboardInstallations.state, "suspended"))).orderBy(desc(schema.dashboardInstallations.createdAt)).limit(1).prepare("github_app_latest_installation"),
+  usableInstallation: db.select({ id: schema.dashboardInstallations.id }).from(schema.dashboardInstallations).where(and(eq(schema.dashboardInstallations.organizationId, sql.placeholder("organizationId")), inArray(schema.dashboardInstallations.repositorySelection, ["all", "selected"]), sql`exists (select 1 from dashboard_repositories r where r.installation_id=${schema.dashboardInstallations.id} and r.available=true)`)).orderBy(desc(schema.dashboardInstallations.createdAt)).limit(1).prepare("github_app_usable_installation"),
+  linkOnboarding: db.update(schema.systemOnboarding).set({ organizationId: sql`${sql.placeholder("organizationId")}` }).where(and(eq(schema.systemOnboarding.singleton, true), eq(schema.systemOnboarding.adminUserId, sql.placeholder("userId")))).returning({ organizationId: schema.systemOnboarding.organizationId }).prepare("github_app_link_onboarding"),
+  organizationAccount: db.select({ id: schema.organizations.githubOrgId, type: schema.organizations.githubAccountType }).from(schema.organizations).where(eq(schema.organizations.id, sql.placeholder("organizationId"))).prepare("github_app_organization_account"),
+  findGithubAccount: db.select({ id: schema.organizations.id, login: schema.organizations.login }).from(schema.organizations).where(and(eq(schema.organizations.githubOrgId, sql.placeholder("githubAccountId")), eq(schema.organizations.githubAccountType, sql.placeholder("accountType")))).limit(1).prepare("github_app_find_account"),
+  createOrganization: db.insert(schema.organizations).values({ githubOrgId: sql.placeholder("githubAccountId"), login: sql.placeholder("login"), githubAccountType: sql.placeholder("accountType") }).onConflictDoUpdate({ target: schema.organizations.githubOrgId, set: { login: sql`${sql.placeholder("login")}` }, setWhere: eq(schema.organizations.githubAccountType, sql.placeholder("accountType")) }).returning({ id: schema.organizations.id }).prepare("github_app_create_organization"),
+  createMembership: db.insert(schema.memberships).values({ organizationId: sql.placeholder("organizationId"), userId: sql.placeholder("userId"), role: "owner" }).onConflictDoUpdate({ target: [schema.memberships.organizationId, schema.memberships.userId], set: { role: "owner" } }).prepare("github_app_create_membership"),
+  saveInstallation: db.insert(schema.dashboardInstallations).values({ organizationId: sql.placeholder("organizationId"), githubInstallationId: sql.placeholder("installationId"), state: sql.placeholder("state"), repositorySelection: sql.placeholder("repositorySelection"), githubAccountId: sql.placeholder("githubAccountId") }).onConflictDoUpdate({ target: [schema.dashboardInstallations.organizationId, schema.dashboardInstallations.githubInstallationId], set: { state: sql`${sql.placeholder("state")}`, repositorySelection: sql`${sql.placeholder("repositorySelection")}`, githubAccountId: sql`${sql.placeholder("githubAccountId")}` } }).returning({ id: schema.dashboardInstallations.id }).prepare("github_app_save_installation"),
+  saveRepository: db.insert(schema.dashboardRepositories).values({ organizationId: sql.placeholder("organizationId"), installationId: sql.placeholder("installationId"), githubRepositoryId: sql.placeholder("repositoryId"), name: sql.placeholder("name"), fullName: sql.placeholder("fullName"), visibility: sql.placeholder("visibility"), available: sql.placeholder("available") }).onConflictDoUpdate({ target: [schema.dashboardRepositories.organizationId, schema.dashboardRepositories.githubRepositoryId], set: { installationId: sql`${sql.placeholder("installationId")}`, visibility: sql`${sql.placeholder("visibility")}`, available: sql`${sql.placeholder("available")}`, fullName: sql`${sql.placeholder("fullName")}`, name: sql`${sql.placeholder("name")}` } }).prepare("github_app_save_repository"),
+  completeOnboarding: db.update(schema.systemOnboarding).set({ organizationId: sql`${sql.placeholder("organizationId")}` }).where(and(eq(schema.systemOnboarding.singleton, true), eq(schema.systemOnboarding.adminUserId, sql.placeholder("userId")))).prepare("github_app_complete_onboarding"),
+  refreshInstallation: db.select({ githubInstallationId: schema.dashboardInstallations.githubInstallationId }).from(schema.dashboardInstallations).where(and(eq(schema.dashboardInstallations.organizationId, sql.placeholder("organizationId")), ne(schema.dashboardInstallations.state, "suspended"))).orderBy(desc(schema.dashboardInstallations.createdAt)).limit(1).prepare("github_app_refresh_installation"),
+  reconcileLookup: db.select({ id: schema.dashboardInstallations.id, organizationId: schema.dashboardInstallations.organizationId, state: schema.dashboardInstallations.state, repositorySelection: schema.dashboardInstallations.repositorySelection }).from(schema.dashboardInstallations).where(eq(schema.dashboardInstallations.githubInstallationId, sql.placeholder("installationId"))).prepare("github_app_reconcile_lookup"),
+  snapshotRepositories: db.update(schema.dashboardRepositories).set({ available: false }).where(and(eq(schema.dashboardRepositories.installationId, sql.placeholder("installationId")), sql`${schema.dashboardRepositories.githubRepositoryId} NOT IN (SELECT value::bigint FROM jsonb_array_elements_text(${sql.placeholder("repositoryIds")}::jsonb))`)).prepare("github_app_snapshot_repositories"),
+  suspendInstallation: db.update(schema.dashboardInstallations).set({ state: "suspended" }).where(eq(schema.dashboardInstallations.id, sql.placeholder("installationId"))).prepare("github_app_suspend_installation"),
+  disableInstallationRepos: db.update(schema.dashboardRepositories).set({ available: false }).where(eq(schema.dashboardRepositories.installationId, sql.placeholder("installationId"))).prepare("github_app_disable_installation_repositories"),
+  setRepositorySelection: db.update(schema.dashboardInstallations).set({ repositorySelection: sql`${sql.placeholder("repositorySelection")}` }).where(eq(schema.dashboardInstallations.id, sql.placeholder("installationId"))).prepare("github_app_set_repository_selection"),
+  removeRepository: db.update(schema.dashboardRepositories).set({ available: false }).where(and(eq(schema.dashboardRepositories.installationId, sql.placeholder("installationId")), eq(schema.dashboardRepositories.githubRepositoryId, sql.placeholder("repositoryId")))).prepare("github_app_remove_repository"),
+  updateInstallationState: db.update(schema.dashboardInstallations).set({ state: sql`case when ${schema.dashboardInstallations.state}='suspended' then ${schema.dashboardInstallations.state} when ${schema.dashboardInstallations.repositorySelection} in ('all','selected') and exists (select 1 from dashboard_repositories r where r.installation_id=${schema.dashboardInstallations.id} and r.available=true) then 'approved' else 'pending' end` }).where(eq(schema.dashboardInstallations.id, sql.placeholder("installationId"))).prepare("github_app_update_installation_state"),
+  workflowRepository: db.select({ installationId: schema.dashboardInstallations.githubInstallationId, fullName: schema.dashboardRepositories.fullName, labels: sql`(select p.labels from runner_pools p where p.organization_id is null and p.enabled=true order by p.name limit 1)` }).from(schema.dashboardRepositories).innerJoin(schema.dashboardInstallations, eq(schema.dashboardInstallations.id, schema.dashboardRepositories.installationId)).where(and(eq(schema.dashboardRepositories.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardRepositories.id, sql.placeholder("repositoryId")), eq(schema.dashboardRepositories.available, true), eq(schema.dashboardInstallations.state, "approved"))).limit(1).prepare("github_app_workflow_repository"),
+  markRepositoryUnavailable: db.update(schema.dashboardRepositories).set({ available: false }).where(and(eq(schema.dashboardRepositories.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardRepositories.id, sql.placeholder("repositoryId")))).prepare("github_app_mark_repository_unavailable"),
+}));
 type WorkflowRepo = { installationId: number; fullName: string; defaultBranch: string; headSha: string; labels: string[] };
 type InstallationToken = { token: string; expiresAt: number };
 export class GitHubAppService {
@@ -49,14 +80,14 @@ export class GitHubAppService {
 
   private async findState(raw: string): Promise<SetupState | null> {
     if (!isSql(this.db)) return this.db.setupStates.get(this.stateKey(raw)) ?? this.db.setupStates.get(raw) ?? null;
-    const rows = await this.db<SetupRow[]>`SELECT purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at FROM github_setup_states WHERE state_hash=decode(${this.stateKey(raw)},'hex')`;
+    const rows = await queries(this.db).findState.execute({ stateHash: this.stateKey(raw) });
     const row = rows[0];
-    return row ? { purpose: row.purpose, userId: row.user_id, organizationId: row.organization_id, idempotencyKey: row.idempotency_key, encryptedState: row.encrypted_state ?? undefined, encryptedPkceVerifier: row.encrypted_pkce_verifier ?? undefined, expiresAt: nowMs(row.expires_at), consumedAt: row.consumed_at ? nowMs(row.consumed_at) : undefined } : null;
+    return row ? { purpose: row.purpose as SetupState["purpose"], userId: row.userId, organizationId: row.organizationId, idempotencyKey: row.idempotencyKey, encryptedState: row.encryptedState ?? undefined, encryptedPkceVerifier: row.encryptedPkceVerifier ?? undefined, expiresAt: nowMs(row.expiresAt), consumedAt: row.consumedAt ? nowMs(row.consumedAt) : undefined } : null;
   }
 
   private async saveState(raw: string, value: SetupState): Promise<void> {
     if (!isSql(this.db)) { this.db.setupStates.set(this.stateKey(raw), value); return; }
-    await this.db`INSERT INTO github_setup_states (state_hash,purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at) VALUES (decode(${this.stateKey(raw)},'hex'),${value.purpose},${value.userId === "setup" ? null : value.userId},${value.organizationId === "setup" ? null : value.organizationId},${value.idempotencyKey},${value.encryptedState ?? null},${value.encryptedPkceVerifier ?? null},to_timestamp(${value.expiresAt / 1000})) ON CONFLICT (state_hash) DO UPDATE SET purpose=excluded.purpose,user_id=excluded.user_id,organization_id=excluded.organization_id,idempotency_key=excluded.idempotency_key,encrypted_state=excluded.encrypted_state,encrypted_pkce_verifier=excluded.encrypted_pkce_verifier,expires_at=excluded.expires_at,consumed_at=NULL`;
+    await queries(this.db).saveState.execute({ stateHash: this.stateKey(raw), purpose: value.purpose, userId: value.userId === "setup" ? null : value.userId, organizationId: value.organizationId === "setup" ? null : value.organizationId, idempotencyKey: value.idempotencyKey, encryptedState: value.encryptedState ?? null, encryptedPkceVerifier: value.encryptedPkceVerifier ?? null, expiresAt: value.expiresAt });
   }
 
   private async consume(raw: string, userId: string, purpose: SetupState["purpose"]): Promise<SetupState> {
@@ -66,24 +97,22 @@ export class GitHubAppService {
       state.consumedAt = Date.now();
       return state;
     }
-    const rows = userId === "setup"
-      ? await this.db<SetupRow[]>`UPDATE github_setup_states SET consumed_at=now() WHERE state_hash=decode(${this.stateKey(raw)},'hex') AND purpose=${purpose} AND consumed_at IS NULL AND expires_at>now() RETURNING purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at`
-      : await this.db<SetupRow[]>`UPDATE github_setup_states SET consumed_at=now() WHERE state_hash=decode(${this.stateKey(raw)},'hex') AND purpose=${purpose} AND user_id=${userId} AND consumed_at IS NULL AND expires_at>now() RETURNING purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at`;
+    const rows = await queries(this.db).consumeSetup.execute({ stateHash: this.stateKey(raw), purpose, userId: userId === "setup" ? null : userId, allowSetup: userId === "setup" });
     const row = rows[0];
     if (!row) throw new Error("setup_state_expired");
-    return { purpose: row.purpose, userId: row.user_id, organizationId: row.organization_id, idempotencyKey: row.idempotency_key, encryptedState: row.encrypted_state ?? undefined, encryptedPkceVerifier: row.encrypted_pkce_verifier ?? undefined, expiresAt: nowMs(row.expires_at), consumedAt: nowMs(row.consumed_at as Date | string) };
+    return { purpose: row.purpose as SetupState["purpose"], userId: row.userId, organizationId: row.organizationId, idempotencyKey: row.idempotencyKey, encryptedState: row.encryptedState ?? undefined, encryptedPkceVerifier: row.encryptedPkceVerifier ?? undefined, expiresAt: nowMs(row.expiresAt), consumedAt: nowMs(row.consumedAt as string) };
   }
 
   private async getConfig(): Promise<AppConfig | null> {
     if (!isSql(this.db)) return this.db.appConfig ?? null;
-    const rows = await this.db<Array<{ app_id: number; slug: string; client_id: string | null; encrypted_pem: string; encrypted_client_secret: string; encrypted_webhook_secret: string }>>`SELECT app_id,slug,client_id,encrypted_pem,encrypted_client_secret,encrypted_webhook_secret FROM github_app_config WHERE singleton=true`;
+    const rows = await queries(this.db).getConfig.execute();
     const row = rows[0];
-    return row ? { id: Number(row.app_id), slug: row.slug, clientId: row.client_id ?? undefined, pem: row.encrypted_pem, clientSecret: row.encrypted_client_secret, webhookSecret: row.encrypted_webhook_secret } : null;
+    return row ? { id: Number(row.appId), slug: row.slug, clientId: row.clientId ?? undefined, pem: row.pem, clientSecret: row.clientSecret, webhookSecret: row.webhookSecret } : null;
   }
 
   private async saveConfig(config: AppConfig): Promise<void> {
     if (!isSql(this.db)) { this.db.appConfig = config; return; }
-    await this.db`INSERT INTO github_app_config (singleton,app_id,slug,client_id,encrypted_pem,encrypted_client_secret,encrypted_webhook_secret) VALUES (true,${config.id},${config.slug},${config.clientId ?? null},${config.pem},${config.clientSecret},${config.webhookSecret}) ON CONFLICT (singleton) DO UPDATE SET app_id=excluded.app_id,slug=excluded.slug,client_id=excluded.client_id,encrypted_pem=excluded.encrypted_pem,encrypted_client_secret=excluded.encrypted_client_secret,encrypted_webhook_secret=excluded.encrypted_webhook_secret,updated_at=now()`;
+    await queries(this.db).saveConfig.execute({ appId: config.id, slug: config.slug, clientId: config.clientId ?? null, pem: config.pem, clientSecret: config.clientSecret, webhookSecret: config.webhookSecret });
   }
 
   private async githubResponse(path: string, init: RequestInit = {}, jwt?: string): Promise<Response> {
@@ -105,11 +134,9 @@ export class GitHubAppService {
     if (!isSql(this.db)) {
       for (const state of this.db.setupStates.values()) if (state.purpose === "manifest" && (userId === "setup" || state.userId === userId) && (organizationId === "setup" || state.organizationId === organizationId) && state.idempotencyKey === idempotencyKey && !state.consumedAt && state.expiresAt > Date.now()) return { action: `https://github.com/settings/apps/new?state=${this.box.decrypt(state.encryptedState!)}`, manifest: this.box.decrypt(state.encryptedPkceVerifier!) };
     } else {
-      const rows = userId === "setup"
-        ? await this.db<SetupRow[]>`SELECT purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at FROM github_setup_states WHERE purpose='manifest' AND idempotency_key=${idempotencyKey} AND consumed_at IS NULL AND expires_at>now()`
-        : await this.db<SetupRow[]>`SELECT purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at FROM github_setup_states WHERE purpose='manifest' AND user_id=${userId} AND organization_id=${organizationId} AND idempotency_key=${idempotencyKey} AND consumed_at IS NULL AND expires_at>now()`;
+      const rows = await queries(this.db).manifestState.execute({ idempotencyKey, userId, organizationId, allowSetup: userId === "setup" });
       const state = rows[0];
-      if (state?.encrypted_state && state.encrypted_pkce_verifier) return { action: `https://github.com/settings/apps/new?state=${this.box.decrypt(state.encrypted_state)}`, manifest: this.box.decrypt(state.encrypted_pkce_verifier) };
+      if (state?.encryptedState && state.encryptedPkceVerifier) return { action: `https://github.com/settings/apps/new?state=${this.box.decrypt(state.encryptedState)}`, manifest: this.box.decrypt(state.encryptedPkceVerifier) };
     }
     const origin = this.publicOrigin();
     if (!origin) throw new Error("setup_required");
@@ -127,8 +154,8 @@ export class GitHubAppService {
   async uninstallOrganization(organizationId: string): Promise<void> {
     let installationId: number | null = null;
     if (isSql(this.db)) {
-      const rows = await this.db<Array<{ github_installation_id: number }>>`SELECT github_installation_id FROM dashboard_installations WHERE organization_id=${organizationId} AND state <> 'suspended' ORDER BY created_at DESC LIMIT 1`;
-      installationId = rows[0] ? Number(rows[0].github_installation_id) : null;
+      const rows = await queries(this.db).latestInstallation.execute({ organizationId });
+      installationId = rows[0] ? Number(rows[0].githubInstallationId) : null;
     } else {
       const installation = [...this.db.installations.values()].find((value) => value.organizationId === organizationId && value.state !== "suspended");
       installationId = installation?.githubInstallationId ?? null;
@@ -146,9 +173,9 @@ export class GitHubAppService {
     const config = await this.getConfig();
     if (!config) throw new Error("github_app_unconfigured");
     if (isSql(this.db)) {
-      const rows = await this.db<SetupRow[]>`SELECT purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at FROM github_setup_states WHERE purpose='organization_install' AND user_id=${userId} AND organization_id IS NULL AND idempotency_key=${idempotencyKey} AND consumed_at IS NULL AND expires_at>now()`;
+      const rows = await queries(this.db).unboundState.execute({ userId, idempotencyKey });
       const state = rows[0];
-      if (state?.encrypted_state) return { location: `https://github.com/apps/${config.slug}/installations/new`, installCookie: this.box.decrypt(state.encrypted_state) };
+      if (state?.encryptedState) return { location: `https://github.com/apps/${config.slug}/installations/new`, installCookie: this.box.decrypt(state.encryptedState) };
     } else {
       for (const state of this.db.setupStates.values()) {
         if (state.purpose === "organization_install" && state.userId === userId && state.organizationId === null && state.idempotencyKey === idempotencyKey && !state.consumedAt && state.expiresAt > Date.now()) {
@@ -166,27 +193,16 @@ export class GitHubAppService {
     if (!config) throw new Error("github_app_unconfigured");
     const slug = config.slug;
     if (isSql(this.db)) {
-      const installations = await this.db<Array<{ id: string }>>`
-        SELECT i.id
-        FROM dashboard_installations i
-        WHERE i.organization_id=${organizationId}
-          AND i.repository_selection IN ('all','selected')
-          AND EXISTS (
-            SELECT 1 FROM dashboard_repositories r
-            WHERE r.installation_id=i.id AND r.available=true
-          )
-        ORDER BY i.created_at DESC
-        LIMIT 1
-      `;
+      const installations = await queries(this.db).usableInstallation.execute({ organizationId });
       if (installations[0]) {
         if (!bindOnboarding) throw new Error("github_organization_already_connected");
-        const linked = await this.db`UPDATE system_onboarding SET organization_id=${organizationId} WHERE singleton=true AND admin_user_id=${userId} RETURNING organization_id`;
+        const linked = await queries(this.db).linkOnboarding.execute({ organizationId, userId });
         const origin = this.publicOrigin();
         if (linked[0] && origin) return { location: browserLocation(origin, "/onboarding") };
       }
-      const rows = await this.db<SetupRow[]>`SELECT purpose,user_id,organization_id,idempotency_key,encrypted_state,encrypted_pkce_verifier,expires_at,consumed_at FROM github_setup_states WHERE purpose=${purpose} AND user_id=${userId} AND organization_id=${organizationId} AND idempotency_key=${idempotencyKey} AND consumed_at IS NULL AND expires_at>now()`;
+      const rows = await queries(this.db).installState.execute({ purpose, userId, organizationId, idempotencyKey });
       const state = rows[0];
-      if (state?.encrypted_state) return { location: `https://github.com/apps/${slug}/installations/new`, installCookie: this.box.decrypt(state.encrypted_state) };
+      if (state?.encryptedState) return { location: `https://github.com/apps/${slug}/installations/new`, installCookie: this.box.decrypt(state.encryptedState) };
     } else {
       for (const state of this.db.setupStates.values()) if (state.purpose === purpose && state.userId === userId && state.organizationId === organizationId && state.idempotencyKey === idempotencyKey && !state.consumedAt && state.expiresAt > Date.now()) return { location: `https://github.com/apps/${slug}/installations/new`, installCookie: this.box.decrypt(state.encryptedState!) };
     }
@@ -251,8 +267,8 @@ export class GitHubAppService {
       const organization = this.db.organizations?.get(organizationId);
       return organization ? { id: organization.githubOrgId, type: organization.githubAccountType ?? "Organization" } : null;
     }
-    const rows = await this.db<Array<{ github_org_id: number; github_account_type?: "User" | "Organization" }>>`SELECT github_org_id, github_account_type FROM organizations WHERE id=${organizationId}`;
-    return rows[0] ? { id: Number(rows[0].github_org_id), type: rows[0].github_account_type ?? "Organization" } : null;
+    const rows = await queries(this.db).organizationAccount.execute({ organizationId });
+    return rows[0] ? { id: Number(rows[0].id), type: rows[0].type as "User" | "Organization" } : null;
   }
   private async findGithubAccount(githubAccountId: number, accountType: "User" | "Organization"): Promise<{ id: string; login: string } | null> {
     if (!isSql(this.db)) {
@@ -263,7 +279,7 @@ export class GitHubAppService {
       }
       return null;
     }
-    const rows = await this.db<Array<{ id: string; login: string }>>`SELECT id, login FROM organizations WHERE github_org_id=${githubAccountId} AND github_account_type=${accountType} LIMIT 1`;
+    const rows = await queries(this.db).findGithubAccount.execute({ githubAccountId, accountType });
     return rows[0] ? { id: rows[0].id, login: rows[0].login } : null;
   }
 
@@ -277,10 +293,10 @@ export class GitHubAppService {
       this.db.memberships.set(`${organizationId}:${userId}`, { organizationId, userId, role: "owner" });
       return organizationId;
     }
-    const rows = await this.db<Array<{ id: string }>>`INSERT INTO organizations (github_org_id,login,github_account_type) VALUES (${accountId},${login},${accountType}) ON CONFLICT (github_org_id) DO UPDATE SET login=excluded.login WHERE organizations.github_account_type=excluded.github_account_type RETURNING id`;
+    const rows = await queries(this.db).createOrganization.execute({ githubAccountId: accountId, login, accountType });
     const organizationId = rows[0]?.id;
     if (!organizationId) throw new Error("github_installation_persist_failed");
-    await this.db`INSERT INTO memberships (organization_id,user_id,role) VALUES (${organizationId},${userId},'owner') ON CONFLICT (organization_id,user_id) DO UPDATE SET role='owner'`;
+    await queries(this.db).createMembership.execute({ organizationId, userId });
     return organizationId;
   }
 
@@ -290,11 +306,11 @@ export class GitHubAppService {
       for (const repo of repos) this.db.repositories.set(repo.id, { ...repo, organizationId });
       return String(installationId);
     }
-    return this.db.begin(async (tx) => {
-      const rows = await tx<Array<{ id: string }>>`INSERT INTO dashboard_installations (organization_id,github_installation_id,state,repository_selection,github_account_id) VALUES (${organizationId},${installationId},${state},${repositorySelection},${githubAccountId}) ON CONFLICT (organization_id,github_installation_id) DO UPDATE SET state=excluded.state,repository_selection=excluded.repository_selection,github_account_id=excluded.github_account_id RETURNING id`;
+    return this.db.transaction(async (tx) => {
+      const rows = await queries(tx).saveInstallation.execute({ organizationId, installationId, state, repositorySelection, githubAccountId });
       const installationRow = rows[0];
       if (!installationRow) throw new Error("github_installation_persist_failed");
-      for (const repo of repos) await tx`INSERT INTO dashboard_repositories (organization_id,installation_id,github_repository_id,name,full_name,visibility,available) VALUES (${organizationId},${installationRow.id},${Number(repo.id)},${repo.fullName.split("/").at(-1) ?? repo.fullName},${repo.fullName},${repo.visibility},${repo.available}) ON CONFLICT (organization_id,github_repository_id) DO UPDATE SET installation_id=excluded.installation_id,visibility=excluded.visibility,available=excluded.available,full_name=excluded.full_name,name=excluded.name`;
+      for (const repo of repos) await queries(tx).saveRepository.execute({ organizationId, installationId: installationRow.id, repositoryId: Number(repo.id), name: repo.fullName.split("/").at(-1) ?? repo.fullName, fullName: repo.fullName, visibility: repo.visibility, available: repo.available });
       return installationRow.id;
     });
   }
@@ -328,7 +344,7 @@ export class GitHubAppService {
     await this.persistInstallation(organizationId, installationId, hasAllowed ? "approved" : "pending", repositorySelection, accountId, repos);
     const setup = await this.consume(installCookie, userId, pending.purpose);
     const onboarding = setup.purpose === "install" || setup.organizationId === null;
-    if (onboarding && isSql(this.db)) await this.db`UPDATE system_onboarding SET organization_id=${organizationId} WHERE singleton=true AND admin_user_id=${userId}`;
+    if (onboarding && isSql(this.db)) await queries(this.db).completeOnboarding.execute({ organizationId, userId });
     if (hasAllowed) return onboarding;
     throw new Error("repository_selection_required");
   }
@@ -336,14 +352,8 @@ export class GitHubAppService {
   async refreshInstallationRepositories(organizationId: string): Promise<void> {
     let installationId: number | null = null;
     if (isSql(this.db)) {
-      const rows = await this.db<Array<{ github_installation_id: number }>>`
-        SELECT github_installation_id
-        FROM dashboard_installations
-        WHERE organization_id=${organizationId} AND state <> 'suspended'
-        ORDER BY created_at DESC
-        LIMIT 1
-      `;
-      installationId = rows[0] ? Number(rows[0].github_installation_id) : null;
+      const rows = await queries(this.db).refreshInstallation.execute({ organizationId });
+      installationId = rows[0] ? Number(rows[0].githubInstallationId) : null;
     } else {
       const row = [...this.db.installations.entries()].find(([, installation]) => installation.organizationId === organizationId && installation.state !== "suspended");
       installationId = row?.[0] ?? null;
@@ -395,31 +405,19 @@ export class GitHubAppService {
       }
       return;
     }
-    const installations = await this.db<Array<{ id: string; organization_id: string; state: string; repository_selection: "all" | "selected" | null }>>`SELECT id,organization_id,state,repository_selection FROM dashboard_installations WHERE github_installation_id=${id}`;
+    const installations = await queries(this.db).reconcileLookup.execute({ installationId: id });
     const installation = installations[0];
     if (!installation) return;
     const fullSnapshot = data.repositories !== undefined;
-    if (fullSnapshot) {
-      const snapshotIds = data.repositories!.map((repo) => repo.id);
-      await this.db`UPDATE dashboard_repositories SET available=false WHERE installation_id=${installation.id} AND github_repository_id != ALL(${snapshotIds})`;
-    }
+    if (fullSnapshot) await queries(this.db).snapshotRepositories.execute({ installationId: installation.id, repositoryIds: JSON.stringify(data.repositories!.map((repo) => repo.id)) });
     if (["suspend", "suspended", "deleted", "uninstalled"].includes(data.action ?? "")) {
-      await this.db`UPDATE dashboard_installations SET state='suspended' WHERE id=${installation.id}`;
-      if (["deleted", "uninstalled"].includes(data.action ?? "")) await this.db`UPDATE dashboard_repositories SET available=false WHERE installation_id=${installation.id}`;
+      await queries(this.db).suspendInstallation.execute({ installationId: installation.id });
+      if (["deleted", "uninstalled"].includes(data.action ?? "")) await queries(this.db).disableInstallationRepos.execute({ installationId: installation.id });
     }
-    if (data.repository_selection) await this.db`UPDATE dashboard_installations SET repository_selection=${data.repository_selection} WHERE id=${installation.id}`;
-    for (const repo of data.repositories_removed ?? []) await this.db`UPDATE dashboard_repositories SET available=false WHERE installation_id=${installation.id} AND github_repository_id=${repo.id}`;
-    for (const raw of data.repositories_added ?? data.repositories ?? []) {
-      await this.db`INSERT INTO dashboard_repositories (organization_id,installation_id,github_repository_id,name,full_name,visibility,available) VALUES (${installation.organization_id},${installation.id},${raw.id},${raw.full_name.split("/").at(-1) ?? raw.full_name},${raw.full_name},${visibilityOf(raw)},true) ON CONFLICT (organization_id,github_repository_id) DO UPDATE SET installation_id=excluded.installation_id,available=true,visibility=excluded.visibility,full_name=excluded.full_name,name=excluded.name`;
-    }
-    await this.db`UPDATE dashboard_installations i SET state=CASE
-      WHEN i.state='suspended' THEN i.state
-      WHEN i.repository_selection IN ('all','selected') AND EXISTS (
-        SELECT 1 FROM dashboard_repositories r
-        WHERE r.installation_id=i.id AND r.available=true
-      ) THEN 'approved'
-      ELSE 'pending'
-    END WHERE i.id=${installation.id}`;
+    if (data.repository_selection) await queries(this.db).setRepositorySelection.execute({ installationId: installation.id, repositorySelection: data.repository_selection });
+    for (const repo of data.repositories_removed ?? []) await queries(this.db).removeRepository.execute({ installationId: installation.id, repositoryId: repo.id });
+    for (const raw of data.repositories_added ?? data.repositories ?? []) await queries(this.db).saveRepository.execute({ organizationId: installation.organizationId, installationId: installation.id, repositoryId: raw.id, name: raw.full_name.split("/").at(-1) ?? raw.full_name, fullName: raw.full_name, visibility: visibilityOf(raw), available: true });
+    await queries(this.db).updateInstallationState.execute({ installationId: installation.id });
   }
   private async fetchInstallationToken(installationId: number): Promise<string> {
     const response = await this.gh(`/app/installations/${installationId}/access_tokens`, { method: "POST" }, await this.appJwt());
@@ -478,16 +476,12 @@ export class GitHubAppService {
       if (!repo || !installation || repo.organizationId !== organizationId || !repo.available || installation.state !== "approved") throw new Error("github_repository_unavailable");
       return { installationId: installation.githubInstallationId, fullName: repo.fullName, defaultBranch: "main", headSha: "", labels: [] };
     }
-    const rows = await this.db<Array<{ installation_id: number; full_name: string; labels: unknown; default_branch?: string; head_sha?: string }>>`
-      SELECT i.github_installation_id AS installation_id, r.full_name,
-        (SELECT p.labels FROM runner_pools p WHERE p.organization_id IS NULL AND p.enabled=true ORDER BY p.name LIMIT 1) AS labels
-      FROM dashboard_repositories r JOIN dashboard_installations i ON i.id=r.installation_id
-      WHERE r.organization_id=${organizationId} AND r.id=${repositoryId} AND r.available=true AND i.state='approved' LIMIT 1`;
+    const rows = await queries(this.db).workflowRepository.execute({ organizationId, repositoryId });
     const row = rows[0];
     if (!row) throw new Error("github_repository_unavailable");
     const labels = Array.isArray(row.labels) ? row.labels.filter((label): label is string => typeof label === "string") : typeof row.labels === "string" ? (JSON.parse(row.labels) as unknown[]).filter((label): label is string => typeof label === "string") : [];
     if (!labels.length) throw new Error("github_runner_pool_missing");
-    return { installationId: Number(row.installation_id), fullName: row.full_name, defaultBranch: row.default_branch ?? "", headSha: row.head_sha ?? "", labels };
+    return { installationId: Number(row.installationId), fullName: row.fullName, defaultBranch: "", headSha: "", labels };
   }
 
   private async listRepositoryWorkflowsWithToken(owner: string, repo: string, token: string): Promise<{ defaultBranch: string; files: Array<{ path: string; sha: string; content: string }> }> {
@@ -521,7 +515,7 @@ export class GitHubAppService {
 
   private async markRepositoryUnavailable(organizationId: string, repositoryId: string): Promise<void> {
     if (isSql(this.db)) {
-      await this.db`UPDATE dashboard_repositories SET available=false WHERE organization_id=${organizationId} AND id=${repositoryId}`;
+      await queries(this.db).markRepositoryUnavailable.execute({ organizationId, repositoryId });
       return;
     }
     const repository = this.db.repositories.get(repositoryId);

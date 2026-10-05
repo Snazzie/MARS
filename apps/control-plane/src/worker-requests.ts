@@ -1,10 +1,48 @@
-import type { Sql } from "@mars/db";
+import type { DatabaseClient } from "@mars/db";
+import { defineQueries, schema } from "@mars/db";
+import { and, eq, inArray, or, isNull, count, sql } from "drizzle-orm";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerDoctorData, WorkerRunnerCachePurgePayload, validateWorkerGuestPlatforms, selectedRuntimeDriver, CURRENT_WORKER_CONTRACT_VERSION, parseWorkerContractVersion, type GuestPlatform, type RuntimeDriverName } from "@mars/contracts";
 import { z } from "zod";
-import { jsonParameter } from "@mars/db";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { fingerprint } from "./workers.ts";
+
+const queries = defineQueries(db => ({
+  advisoryLock: db.select({ locked: sql`pg_advisory_xact_lock(hashtext(${sql.placeholder("key")}))` }).from(sql`(SELECT 1) AS singleton`).prepare("worker_request_advisory_lock"),
+  bootstrapActive: db.select({ codeHash: schema.workerBootstrapCredentials.codeHash, consumedAt: schema.workerBootstrapCredentials.consumedAt }).from(schema.workerBootstrapCredentials).where(and(eq(schema.workerBootstrapCredentials.singleton, true), isNull(schema.workerBootstrapCredentials.consumedAt))).for("update").prepare("worker_request_bootstrap_active"),
+  bootstrapConsumed: db.select({ codeHash: schema.workerBootstrapCredentials.codeHash, consumedAt: schema.workerBootstrapCredentials.consumedAt }).from(schema.workerBootstrapCredentials).where(and(eq(schema.workerBootstrapCredentials.singleton, true), sql`${schema.workerBootstrapCredentials.consumedAt} is not null`)).for("update").prepare("worker_request_bootstrap_consumed"),
+  identityRows: db.select({ id: schema.workers.id, vmUuid: schema.workers.vmUuid, machineUuid: schema.workers.machineUuid, fingerprint: schema.workers.fingerprint, encryptionPublicKey: schema.workers.encryptionPublicKey, admissionState: schema.workers.admissionState, enrollmentCodeHash: schema.workers.enrollmentCodeHash, enrollmentAuthenticatedAt: schema.workers.enrollmentAuthenticatedAt }).from(schema.workers).where(and(inArray(schema.workers.admissionState, ["pending", "adopted"]), or(eq(schema.workers.vmUuid, sql.placeholder("vmUuid")), eq(schema.workers.machineUuid, sql.placeholder("machineUuid")), eq(schema.workers.fingerprint, sql.placeholder("fingerprint"))))).for("update").prepare("worker_request_identity_rows"),
+  consumeBootstrap: db.update(schema.workerBootstrapCredentials).set({ consumedAt: sql`now()` }).where(and(eq(schema.workerBootstrapCredentials.singleton, true), isNull(schema.workerBootstrapCredentials.consumedAt))).prepare("worker_request_consume"),
+  touchReplay: db.update(schema.workers).set({ name: sql`${sql.placeholder("name")}`, lastRequestedAt: sql`now()`, releaseVersion: sql`${sql.placeholder("releaseVersion")}`, contractVersion: sql`${sql.placeholder("contractVersion")}`, doctor: sql`${sql.placeholder("telemetry")}::jsonb`, doctorObservedAt: sql`now()` }).where(and(eq(schema.workers.id, sql.placeholder("id")), eq(schema.workers.admissionState, "pending"), isNull(schema.workers.enrollmentAuthenticatedAt))).prepare("worker_request_touch_replay"),
+  updateIdentity: db.update(schema.workers).set({ name: sql`${sql.placeholder("name")}`, lastRequestedAt: sql`now()`, machineUuid: sql`${sql.placeholder("machineUuid")}`, encryptionPublicKey: sql`${sql.placeholder("encryptionPublicKey")}`, enrollmentCodeHash: sql`${sql.placeholder("candidate")}`, releaseVersion: sql`${sql.placeholder("releaseVersion")}`, contractVersion: sql`${sql.placeholder("contractVersion")}`, doctor: sql`${sql.placeholder("telemetry")}::jsonb`, doctorObservedAt: sql`now()` }).where(and(eq(schema.workers.id, sql.placeholder("id")), eq(schema.workers.admissionState, "pending"), isNull(schema.workers.enrollmentAuthenticatedAt))).prepare("worker_request_update_identity"),
+  createWorker: db.insert(schema.workers).values({ name: sql.placeholder("name"), platform: sql.placeholder("platform"), releaseVersion: sql.placeholder("releaseVersion"), contractVersion: sql.placeholder("contractVersion"), guestPlatforms: sql`${sql.placeholder("guestPlatforms")}::jsonb`, admissionState: "pending", publicKey: sql.placeholder("publicKey"), encryptionPublicKey: sql.placeholder("encryptionPublicKey"), fingerprint: sql.placeholder("fingerprint"), vmUuid: sql.placeholder("vmUuid"), machineUuid: sql.placeholder("machineUuid"), enrollmentCodeHash: sql.placeholder("candidate"), limits: null, doctor: sql`${sql.placeholder("telemetry")}::jsonb`, lastRequestedAt: sql`now()`, doctorObservedAt: sql`now()` }).returning({ id: schema.workers.id }).prepare("worker_request_create"),
+  audit: db.insert(schema.auditEvents).values({ actor: sql.placeholder("actor"), type: sql.placeholder("type"), payload: sql`${sql.placeholder("payload")}::jsonb` }).prepare("worker_request_audit"),
+  approve: db.update(schema.workers).set({ limits: sql`${sql.placeholder("limits")}::jsonb`, admissionState: "adopted", configurationState: "unconfigured" }).where(and(eq(schema.workers.id, sql.placeholder("workerId")), eq(schema.workers.admissionState, "pending"))).returning({ id: schema.workers.id }).prepare("worker_request_approve"),
+  workerForConfigure: db.select({ id: schema.workers.id, doctor: schema.workers.doctor, doctorObservedAt: schema.workers.doctorObservedAt, admissionState: schema.workers.admissionState, platform: schema.workers.platform, guestPlatforms: schema.workers.guestPlatforms, draining: schema.workers.draining, contractVersion: schema.workers.contractVersion, desiredConfiguration: schema.workers.desiredConfiguration }).from(schema.workers).where(eq(schema.workers.id, sql.placeholder("workerId"))).for("update").prepare("worker_request_configure_lock"),
+  activeLeaseCount: db.select({ count: sql<number>`count(*)::int` }).from(schema.runnerLeases).where(and(eq(schema.runnerLeases.workerId, sql.placeholder("workerId")), sql`${schema.runnerLeases.state} not in ('completed','reaped','failed')`)).prepare("worker_request_active_lease_count"),
+  setWorkerConfiguration: db.update(schema.workers).set({ limits: sql`${sql.placeholder("runtime")}::jsonb`, guestPlatforms: sql`${sql.placeholder("guestPlatforms")}::jsonb`, desiredConfiguration: sql`${sql.placeholder("desired")}::jsonb`, admissionState: "adopted", configurationState: "applying", configurationRevision: sql`${sql.placeholder("revision")}`, configurationCommandId: sql`${sql.placeholder("commandId")}` }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("worker_request_set_configuration"),
+  insertCommand: db.insert(schema.commands).values({ id: sql.placeholder("commandId"), version: 1, type: sql.placeholder("type"), workerId: sql.placeholder("workerId"), leaseId: null, occurredAt: sql`now()`, payload: sql`${sql.placeholder("payload")}::jsonb` }).prepare("worker_request_insert_command"),
+  mutationPrior: db.select({ response: schema.workerMutations.response }).from(schema.workerMutations).where(and(eq(schema.workerMutations.workerId, sql.placeholder("workerId")), eq(schema.workerMutations.idempotencyKey, sql.placeholder("idempotencyKey")))).prepare("worker_request_mutation_prior"),
+  mutationInsert: db.insert(schema.workerMutations).values({ workerId: sql.placeholder("workerId"), idempotencyKey: sql.placeholder("idempotencyKey"), response: sql`${sql.placeholder("response")}::jsonb` }).prepare("worker_request_mutation_insert"),
+  cacheWorkerLock: db.select({ id: schema.workers.id, admissionState: schema.workers.admissionState }).from(schema.workers).where(eq(schema.workers.id, sql.placeholder("workerId"))).for("update").prepare("worker_request_cache_worker_lock"),
+  auditGeneric: db.insert(schema.auditEvents).values({ actor: sql.placeholder("actor"), type: sql.placeholder("type"), payload: sql`${sql.placeholder("payload")}::jsonb` }).prepare("worker_request_generic_audit"),
+  appliedConfig: db.select({ configurationRevision: schema.workers.configurationRevision, configurationCommandId: schema.workers.configurationCommandId, desiredConfiguration: schema.workers.desiredConfiguration }).from(schema.workers).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("worker_request_applied_config"),
+  priorConfigureCommand: db.select({ id: schema.commands.id }).from(schema.commands).where(and(eq(schema.commands.id, sql.placeholder("commandId")), eq(schema.commands.workerId, sql.placeholder("workerId")), eq(schema.commands.type, "worker.configure"))).prepare("worker_request_prior_config_command"),
+  setConfigurationError: db.update(schema.workers).set({ configurationState: "error" }).where(and(eq(schema.workers.id, sql.placeholder("workerId")), eq(schema.workers.configurationCommandId, sql.placeholder("commandId")), eq(schema.workers.configurationRevision, sql.placeholder("revision")))).returning({ id: schema.workers.id }).prepare("worker_request_config_error"),
+  configurationReady: db.update(schema.workers).set({ configurationState: "ready", appliedConfigurationRevision: schema.workers.configurationRevision, configurationAppliedAt: sql`now()` }).where(and(eq(schema.workers.id, sql.placeholder("workerId")), eq(schema.workers.configurationCommandId, sql.placeholder("commandId")), eq(schema.workers.configurationRevision, sql.placeholder("revision")))).returning({ id: schema.workers.id }).prepare("worker_request_config_ready"),
+  cacheStatusDisable: db.update(schema.workerCacheStatus).set({ ready: false, runnerCacheEnabled: false, runnerCacheObservedAt: sql`now()` }).where(eq(schema.workerCacheStatus.workerId, sql.placeholder("workerId"))).prepare("worker_request_disable_cache"),
+  workerConnectLock: db.select({ desiredConfiguration: schema.workers.desiredConfiguration, configurationRevision: schema.workers.configurationRevision, appliedConfigurationRevision: schema.workers.appliedConfigurationRevision, configurationCommandId: schema.workers.configurationCommandId, configurationState: schema.workers.configurationState }).from(schema.workers).where(eq(schema.workers.id, sql.placeholder("workerId"))).for("update").prepare("worker_request_connect_lock"),
+  commandsPendingConfig: db.select({ id: schema.commands.id, payload: schema.commands.payload }).from(schema.commands).where(and(eq(schema.commands.workerId, sql.placeholder("workerId")), eq(schema.commands.type, "worker.configure"), inArray(schema.commands.state, ["pending", "sent"]))).orderBy(sql`${schema.commands.occurredAt} desc`).prepare("worker_request_pending_config"),
+  updateConfigurationCommandState: db.update(schema.commands).set({ state: sql`${sql.placeholder("state")}` }).where(and(eq(schema.commands.workerId, sql.placeholder("workerId")), eq(schema.commands.type, "worker.configure"), inArray(schema.commands.state, ["pending", "sent"]))).prepare("worker_request_configuration_command_state"),
+  auditConfigure: db.insert(schema.auditEvents).values({ actor: sql.placeholder("actor"), type: sql.placeholder("type"), payload: sql`${sql.placeholder("payload")}::jsonb` }).prepare("worker_request_audit_configure"),
+  reject: db.update(schema.workers).set({ admissionState: "rejected", configurationState: "unconfigured" }).where(and(eq(schema.workers.id, sql.placeholder("workerId")), inArray(schema.workers.admissionState, ["pending", "adopted"]))).returning({ id: schema.workers.id }).prepare("worker_request_reject"),
+  rejectOnboarding: db.update(schema.systemOnboarding).set({ workerId: null }).where(and(eq(schema.systemOnboarding.singleton, true), eq(schema.systemOnboarding.workerId, sql.placeholder("workerId")))).prepare("worker_request_reject_onboarding"),
+  connectUnconfigured: db.update(schema.workers).set({ configurationState: "unconfigured", configurationCommandId: null }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("worker_request_connect_unconfigured"),
+  connectError: db.update(schema.workers).set({ configurationState: "error" }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("worker_request_connect_error"),
+  connectApplying: db.update(schema.workers).set({ configurationState: "applying", configurationRevision: sql`${sql.placeholder("revision")}` }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("worker_request_connect_applying"),
+  connectReuseCommand: db.update(schema.workers).set({ configurationState: "applying", configurationRevision: sql`${sql.placeholder("revision")}`, configurationCommandId: sql`${sql.placeholder("commandId")}` }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("worker_request_connect_reuse"),
+  connectNewCommand: db.update(schema.workers).set({ configurationState: "applying", configurationRevision: sql`${sql.placeholder("revision")}`, configurationCommandId: sql`${sql.placeholder("commandId")}` }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("worker_request_connect_new"),
+}));
 
 export class WorkerRequestError extends Error {
   constructor(public readonly code: "invalid_bootstrap" | "identity_conflict", public readonly status = code === "identity_conflict" ? 409 : 401) { super(code); }
@@ -21,71 +59,55 @@ export function parseWorkerBootstrapRequest(input: unknown): WorkerBootstrapRequ
 export function parsePendingWorkerRequest(input: unknown): PendingWorkerRequest { return PendingWorkerRequest.parse(input); }
 export function parseApproveWorkerRequest(input: unknown): ApproveWorkerRequest { return ApproveWorkerRequest.parse(input); }
 
-export async function requestPendingWorker(db: Sql<{}>, input: z.input<typeof WorkerBootstrapRequest>, source?: string, limiter?: RequestLimiter, credentialOverride?: { codeHash: Buffer; reusable: true }): Promise<WorkerRequestResult> {
+export async function requestPendingWorker(db: DatabaseClient, input: z.input<typeof WorkerBootstrapRequest>, source?: string, limiter?: RequestLimiter, credentialOverride?: { codeHash: Buffer; reusable: true }): Promise<WorkerRequestResult> {
   const parsed = WorkerBootstrapRequest.parse(input);
   if (source && limiter && !limiter.allow(source)) throw new WorkerRequestError("invalid_bootstrap");
   const fp = fingerprint(parsed.publicKey);
   const guestPlatforms: GuestPlatform[] = parsed.platform === "windows-arm64" ? ["linux-arm64"] : parsed.platform === "windows-x64" ? ["windows-x64"] : [parsed.platform];
   const lockKeys = [`machine:${parsed.machineUuid}`, `vm:${parsed.vmUuid}`, `fingerprint:${fp}`].sort();
-  const outcome = await db.begin(async tx => {
+  const outcome = await db.transaction(async tx => {
+    const q = queries(tx);
     const telemetry = { doctor: parsed.doctor, capacity: parsed.capacity };
-    for (const key of lockKeys) await tx`select pg_advisory_xact_lock(hashtext(${`mars:worker:${key}`}))`;
+    for (const key of lockKeys) await q.advisoryLock.execute({ key: `mars:worker:${key}` });
     const candidate = createHash("sha256").update(Buffer.from(parsed.code, "base64url")).digest();
-    const [activeCredential] = credentialOverride ? [credentialOverride] : await tx<{ codeHash: Buffer; consumedAt: string | Date | null }[]>`select code_hash as "codeHash", consumed_at as "consumedAt" from worker_bootstrap_credentials where singleton=true and consumed_at is null for update`;
-    const [credential] = activeCredential ? [activeCredential] : await tx<{ codeHash: Buffer; consumedAt: string | Date | null }[]>`select code_hash as "codeHash", consumed_at as "consumedAt" from worker_bootstrap_credentials where singleton=true and consumed_at is not null for update`;
+    const [activeCredential] = credentialOverride ? [credentialOverride] : await q.bootstrapActive.execute();
+    const [credential] = activeCredential ? [activeCredential] : await q.bootstrapConsumed.execute();
     const codeMatches = credential && credential.codeHash.length === candidate.length && timingSafeEqual(credential.codeHash, candidate);
     if (!codeMatches) return { conflict: false as const, invalid: true as const };
-    const rows = await tx<{
-      id: string;
-      vmUuid: string | null;
-      machineUuid: string | null;
-      fingerprint: string | null;
-      encryptionPublicKey: string | null;
-      admissionState: string;
-      enrollmentCodeHash: Buffer | null;
-      enrollmentAuthenticatedAt: string | Date | null;
-    }[]>`select id, vm_uuid as "vmUuid", machine_uuid as "machineUuid", fingerprint, encryption_public_key as "encryptionPublicKey", admission_state as "admissionState", enrollment_code_hash as "enrollmentCodeHash", enrollment_authenticated_at as "enrollmentAuthenticatedAt" from workers where admission_state in ('pending','adopted') and (vm_uuid=${parsed.vmUuid} or machine_uuid=${parsed.machineUuid} or fingerprint=${fp}) for update`;
-    const exactIdentity = rows.find(row =>
-      matchesWorkerIdentity(row, parsed, fp)
-      && row.encryptionPublicKey === parsed.encryptionPublicKey,
-    );
+    const rows = await q.identityRows.execute({ vmUuid: parsed.vmUuid, machineUuid: parsed.machineUuid, fingerprint: fp });
+    const exactIdentity = rows.find(row => matchesWorkerIdentity(row, parsed, fp) && row.encryptionPublicKey === parsed.encryptionPublicKey);
     if (!credentialOverride && credential && "consumedAt" in credential && credential.consumedAt) {
-      const replay = exactIdentity
-        && exactIdentity.admissionState === "pending"
-        && !exactIdentity.enrollmentAuthenticatedAt
-        && exactIdentity.enrollmentCodeHash
-        && exactIdentity.enrollmentCodeHash.length === candidate.length
-        && timingSafeEqual(exactIdentity.enrollmentCodeHash, candidate);
+      const replay = exactIdentity && exactIdentity.admissionState === "pending" && !exactIdentity.enrollmentAuthenticatedAt && exactIdentity.enrollmentCodeHash && exactIdentity.enrollmentCodeHash.length === candidate.length && timingSafeEqual(exactIdentity.enrollmentCodeHash, candidate);
       if (!exactIdentity || !replay) return { conflict: true as const, invalid: false as const };
-      await tx`update workers set name=${parsed.computerName}, last_requested_at=now(), release_version=${parsed.releaseVersion}, contract_version=${parsed.contractVersion}, doctor=${jsonParameter(tx, telemetry)}::jsonb, doctor_observed_at=now() where id=${exactIdentity.id} and admission_state='pending' and enrollment_authenticated_at is null`;
+      await q.touchReplay.execute({ id: exactIdentity.id, name: parsed.computerName, releaseVersion: parsed.releaseVersion, contractVersion: parsed.contractVersion, telemetry: JSON.stringify(telemetry) });
       return { status: "existing" as const, workerId: exactIdentity.id };
     }
     if (exactIdentity && exactIdentity.admissionState === "pending" && !exactIdentity.enrollmentAuthenticatedAt) {
-      if (!credentialOverride) await tx`update worker_bootstrap_credentials set consumed_at=now() where singleton=true and consumed_at is null`;
-      await tx`update workers set name=${parsed.computerName}, last_requested_at=now(), machine_uuid=${parsed.machineUuid}, encryption_public_key=${parsed.encryptionPublicKey}, enrollment_code_hash=${candidate}, release_version=${parsed.releaseVersion}, contract_version=${parsed.contractVersion}, doctor=${jsonParameter(tx, telemetry)}::jsonb, doctor_observed_at=now() where id=${exactIdentity.id} and admission_state='pending' and enrollment_authenticated_at is null`;
+      if (!credentialOverride) await q.consumeBootstrap.execute();
+      await q.updateIdentity.execute({ id: exactIdentity.id, name: parsed.computerName, machineUuid: parsed.machineUuid, encryptionPublicKey: parsed.encryptionPublicKey, candidate, releaseVersion: parsed.releaseVersion, contractVersion: parsed.contractVersion, telemetry: JSON.stringify(telemetry) });
       return { status: "existing" as const, workerId: exactIdentity.id };
     }
     if (rows.length) return { conflict: true as const, invalid: false as const };
-    if (!credentialOverride) await tx`update worker_bootstrap_credentials set consumed_at=now() where singleton=true and consumed_at is null`;
-    const [created] = await tx<{ id: string }[]>`insert into workers (name,platform,release_version,contract_version,guest_platforms,admission_state,public_key,encryption_public_key,fingerprint,vm_uuid,machine_uuid,enrollment_code_hash,limits,doctor,last_requested_at,doctor_observed_at) values (${parsed.computerName},${parsed.platform},${parsed.releaseVersion},${parsed.contractVersion},${jsonParameter(tx, guestPlatforms)}::jsonb,'pending',${parsed.publicKey},${parsed.encryptionPublicKey},${fp},${parsed.vmUuid},${parsed.machineUuid},${candidate},null,${jsonParameter(tx, telemetry)}::jsonb,now(),now()) returning id`;
-    await tx`insert into audit_events (actor,type,payload) values ('worker','worker.requested',${jsonParameter(tx, { workerId: created.id, vmUuid: parsed.vmUuid, fingerprint: fp, guestPlatforms })}::jsonb)`;
-    return { status: "created" as const, workerId: created.id };
+    if (!credentialOverride) await q.consumeBootstrap.execute();
+    const [created] = await q.createWorker.execute({ name: parsed.computerName, platform: parsed.platform, releaseVersion: parsed.releaseVersion, contractVersion: parsed.contractVersion, guestPlatforms: JSON.stringify(guestPlatforms), publicKey: parsed.publicKey, encryptionPublicKey: parsed.encryptionPublicKey, fingerprint: fp, vmUuid: parsed.vmUuid, machineUuid: parsed.machineUuid, candidate, telemetry: JSON.stringify(telemetry) });
+    await q.audit.execute({ actor: "worker", type: "worker.requested", payload: JSON.stringify({ workerId: created!.id, vmUuid: parsed.vmUuid, fingerprint: fp, guestPlatforms }) });
+    return { status: "created" as const, workerId: created!.id };
   });
   if ("invalid" in outcome && outcome.invalid) throw new WorkerRequestError("invalid_bootstrap");
   if ("conflict" in outcome && outcome.conflict) {
-    await db`insert into audit_events (actor,type,payload) values ('worker','worker.request.identity_conflict',${jsonParameter(db, { vmUuid: parsed.vmUuid, fingerprint: fp })}::jsonb)`;
+    await queries(db).audit.execute({ actor: "worker", type: "worker.request.identity_conflict", payload: JSON.stringify({ vmUuid: parsed.vmUuid, fingerprint: fp }) });
     throw new WorkerRequestError("identity_conflict");
   }
   if (source && limiter) limiter.clear(source);
   return outcome;
 }
 
-export async function approvePendingWorker(db: Sql<{}>, workerId: string, input: ApproveWorkerRequest, adminId: string): Promise<void> {
+export async function approvePendingWorker(db: DatabaseClient, workerId: string, input: ApproveWorkerRequest, adminId: string): Promise<void> {
   const parsed = ApproveWorkerRequest.parse(input);
-  await db.begin(async tx => {
-    const rows = await tx`update workers set limits=${jsonParameter(tx, parsed.limits)}::jsonb, admission_state='adopted', configuration_state='unconfigured' where id=${workerId} and admission_state='pending' returning id`;
+  await db.transaction(async tx => {
+    const rows = await queries(tx).approve.execute({ workerId, limits: JSON.stringify(parsed.limits) });
     if (rows.length !== 1) throw new Error("worker approval conflict");
-    await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.approved',${jsonParameter(tx, { workerId, limits: parsed.limits })}::jsonb)`;
+    await queries(tx).audit.execute({ actor: adminId, type: "worker.approved", payload: JSON.stringify({ workerId, limits: parsed.limits }) });
   });
 }
 export type WorkerConfigurationInput = {
@@ -105,21 +127,23 @@ function compareContractVersions(left: string, right: string): number {
     return -1;
   }
 }
-export async function configurePendingWorker(db: Sql<{}>, workerId: string, configuration: WorkerConfigurationInput, adminId: string, dispatcher?: WorkerCommandDispatcher, idempotencyKey?: string): Promise<{ revision: string; fingerprint: string; commandId?: string }> {
+export async function configurePendingWorker(db: DatabaseClient, workerId: string, configuration: WorkerConfigurationInput, adminId: string, dispatcher?: WorkerCommandDispatcher, idempotencyKey?: string): Promise<{ revision: string; fingerprint: string; commandId?: string }> {
   const parsed = WorkerConfiguration.parse({ ...configuration, guestPlatforms: configuration.guestPlatforms ?? ["macos-arm64"] });
   const revision = createHash("sha256").update(canonical(parsed)).digest("hex");
   const fp = createHash("sha256").update(`${workerId}:${revision}`).digest("hex");
   const commandId = randomUUID();
   const payload: WorkerConfigurePayload = { workerId, appliance: parsed.appliance, runtime: parsed.runtime, guestPlatforms: parsed.guestPlatforms, selectedDriver: parsed.selectedDriver, cache: parsed.cache, revision, fingerprint: fp };
-  const response = await db.begin(async tx => {
+  const response = await db.transaction(async tx => {
+    const q = queries(tx);
     if (idempotencyKey) {
-      await tx`select pg_advisory_xact_lock(hashtext(${`mars:configure:${workerId}:${idempotencyKey}`}))`;
-      const prior = await tx<{ response: { revision: string; fingerprint: string; commandId?: string } | null }[]>`select response from worker_mutations where worker_id=${workerId} and idempotency_key=${idempotencyKey}`;
-      if (prior[0]?.response) return prior[0].response;
+      await q.advisoryLock.execute({ key: `mars:configure:${workerId}:${idempotencyKey}` });
+      const prior = await q.mutationPrior.execute({ workerId, idempotencyKey });
+      if (prior[0]?.response) return prior[0].response as { revision: string; fingerprint: string; commandId?: string };
     }
-    const rows = await tx<{ id: string; doctor: unknown; doctorObservedAt: string | Date | null; admissionState: string; platform: GuestPlatform; guestPlatforms: GuestPlatform[]; draining: boolean; contractVersion: string | null; desiredConfiguration: unknown }[]>`select id, doctor, doctor_observed_at as "doctorObservedAt", admission_state as "admissionState", platform, guest_platforms as "guestPlatforms", draining, contract_version as "contractVersion", desired_configuration as "desiredConfiguration" from workers where id=${workerId} for update`;
-    const row = rows[0]; if (!row || !["pending", "adopted"].includes(row.admissionState)) throw new Error("worker configuration conflict");
-    if (!validateWorkerGuestPlatforms(row.platform, parsed.guestPlatforms) || parsed.guestPlatforms.some(guest => selectedRuntimeDriver(row.platform, guest, parsed.selectedDriver) !== parsed.selectedDriver)) throw new Error("worker driver is incompatible with host or guest platform");
+    const [row] = await q.workerForConfigure.execute({ workerId });
+    if (!row || !["pending", "adopted"].includes(row.admissionState)) throw new Error("worker configuration conflict");
+    const platform = row.platform as GuestPlatform;
+    if (!validateWorkerGuestPlatforms(platform, parsed.guestPlatforms) || parsed.guestPlatforms.some(guest => selectedRuntimeDriver(platform, guest, parsed.selectedDriver) !== parsed.selectedDriver)) throw new Error("worker driver is incompatible with host or guest platform");
     const doctorInput = typeof row.doctor === "string" ? (() => { try { return JSON.parse(row.doctor); } catch { return null; } })() : row.doctor;
     const doctorReport = doctorInput && typeof doctorInput === "object" && "doctor" in doctorInput ? doctorInput.doctor : null;
     const doctor = WorkerDoctorData.safeParse(doctorReport);
@@ -134,14 +158,14 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, conf
     const prior = WorkerConfiguration.safeParse(priorInput);
     const priorDriver = prior.success ? prior.data.selectedDriver : null;
     if (row.admissionState === "adopted" && prior.success && (canonical(priorPlatforms) !== canonical(parsed.guestPlatforms) || priorDriver !== parsed.selectedDriver)) {
-      const [{ count }] = await tx<{ count: number }[]>`select count(*)::int as count from runner_leases where worker_id=${workerId} and state not in ('completed','reaped','failed')`;
-      if (!row.draining || Number(count) !== 0) throw new Error("worker driver or guest platform configuration requires drained worker");
+      const [{ count: activeCount }] = await q.activeLeaseCount.execute({ workerId });
+      if (!row.draining || Number(activeCount) !== 0) throw new Error("worker driver or guest platform configuration requires drained worker");
     }
-    await tx`update workers set limits=${jsonParameter(tx, parsed.runtime)}::jsonb, guest_platforms=${jsonParameter(tx, parsed.guestPlatforms)}::jsonb, desired_configuration=${jsonParameter(tx, parsed)}::jsonb, admission_state='adopted', configuration_state='applying', configuration_revision=${revision}, configuration_command_id=${commandId} where id=${workerId}`;
-    await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,'worker.configure',${workerId},null,now(),${jsonParameter(tx, payload)}::jsonb)`;
-    await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.configured',${jsonParameter(tx, { workerId, revision, fingerprint: fp, guestPlatforms: parsed.guestPlatforms })}::jsonb)`;
+    await q.setWorkerConfiguration.execute({ workerId, runtime: JSON.stringify(parsed.runtime), guestPlatforms: JSON.stringify(parsed.guestPlatforms), desired: JSON.stringify(parsed), revision, commandId });
+    await q.insertCommand.execute({ commandId, type: "worker.configure", workerId, payload: JSON.stringify(payload) });
+    await q.audit.execute({ actor: adminId, type: "worker.configured", payload: JSON.stringify({ workerId, revision, fingerprint: fp, guestPlatforms: parsed.guestPlatforms }) });
     const result = { revision, fingerprint: fp, commandId };
-    if (idempotencyKey) await tx`insert into worker_mutations (worker_id,idempotency_key,response) values (${workerId},${idempotencyKey},${jsonParameter(tx, result)}::jsonb)`;
+    if (idempotencyKey) await q.mutationInsert.execute({ workerId, idempotencyKey, response: JSON.stringify(result) });
     return result;
   });
   if (response.commandId !== commandId) return response;
@@ -150,121 +174,127 @@ export async function configurePendingWorker(db: Sql<{}>, workerId: string, conf
 }
 export type WorkerRunnerCachePurgeResult = { workerId: string; commandId: string };
 export async function purgeWorkerRunnerCache(
-  db: Sql<{}>,
+  db: DatabaseClient,
   workerId: string,
   adminId: string,
   dispatcher?: Pick<WorkerCommandDispatcher, "replayConnected">,
   idempotencyKey?: string,
 ): Promise<WorkerRunnerCachePurgeResult> {
   const commandId = randomUUID();
-  const response = await db.begin(async tx => {
+  const response = await db.transaction(async tx => {
+    const q = queries(tx);
     if (idempotencyKey) {
-      await tx`select pg_advisory_xact_lock(hashtext(${`mars:runner-cache-purge:${workerId}:${idempotencyKey}`}))`;
-      const prior = await tx<{ response: WorkerRunnerCachePurgeResult | null }[]>`select response from worker_mutations where worker_id=${workerId} and idempotency_key=${idempotencyKey}`;
-      if (prior[0]?.response) return { result: prior[0].response, created: false };
+      await q.advisoryLock.execute({ key: `mars:runner-cache-purge:${workerId}:${idempotencyKey}` });
+      const prior = await q.mutationPrior.execute({ workerId, idempotencyKey });
+      if (prior[0]?.response) return { result: prior[0].response as WorkerRunnerCachePurgeResult, created: false };
     }
-    const [worker] = await tx<{ id: string; admissionState: string }[]>`select id,admission_state as "admissionState" from workers where id=${workerId} for update`;
+    const [worker] = await q.cacheWorkerLock.execute({ workerId });
     if (!worker || !["pending", "adopted"].includes(worker.admissionState)) throw new Error("worker purge conflict");
     const payload = WorkerRunnerCachePurgePayload.parse({ workerId });
-    await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,'worker.runner_cache_purge',${workerId},null,now(),${jsonParameter(tx, payload)}::jsonb)`;
-    await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.runner_cache_purge_requested',${jsonParameter(tx, { workerId, commandId })}::jsonb)`;
+    await q.insertCommand.execute({ commandId, type: "worker.runner_cache_purge", workerId, payload: JSON.stringify(payload) });
+    await q.audit.execute({ actor: adminId, type: "worker.runner_cache_purge_requested", payload: JSON.stringify({ workerId, commandId }) });
     const result = { workerId, commandId };
-    if (idempotencyKey) await tx`insert into worker_mutations (worker_id,idempotency_key,response) values (${workerId},${idempotencyKey},${jsonParameter(tx, result)}::jsonb)`;
+    if (idempotencyKey) await q.mutationInsert.execute({ workerId, idempotencyKey, response: JSON.stringify(result) });
     return { result, created: true };
   });
   if (response.created) await dispatcher?.replayConnected(workerId);
   return response.result;
 }
 
-export async function applyWorkerConfigurationAcknowledgement(db: Sql<{}>, event: { workerId: string; payload: unknown }): Promise<boolean | "stale"> {
+export async function applyWorkerConfigurationAcknowledgement(db: DatabaseClient, event: { workerId: string; payload: unknown }): Promise<boolean | "stale"> {
   const input = event.payload as Record<string, unknown>;
   const observed = WorkerObservedConfiguration.safeParse(input?.observed);
   const commandId = typeof input?.commandId === "string" ? input.commandId : "";
   const revision = typeof input?.revision === "string" ? input.revision : "";
-  const [worker] = await db<{ configurationRevision: string | null; configurationCommandId: string | null; desiredConfiguration: unknown }[]>`select configuration_revision as "configurationRevision", configuration_command_id as "configurationCommandId", desired_configuration as "desiredConfiguration" from workers where id=${event.workerId}`;
+  const q = queries(db);
+  const [worker] = await q.appliedConfig.execute({ workerId: event.workerId });
   let desiredInput = worker?.desiredConfiguration;
   if (typeof desiredInput === "string") {
     try { desiredInput = JSON.parse(desiredInput); } catch { desiredInput = null; }
   }
   const desired = WorkerConfiguration.safeParse(desiredInput);
   if (worker && (worker.configurationCommandId !== commandId || worker.configurationRevision !== revision)) {
-    const [previous] = await db<{ id: string }[]>`select id from commands where id=${commandId} and worker_id=${event.workerId} and type='worker.configure'`;
+    const [previous] = await q.priorConfigureCommand.execute({ commandId, workerId: event.workerId });
     return previous ? "stale" : false;
   }
   const exact = observed.success && desired.success && worker?.configurationCommandId === commandId && worker.configurationRevision === revision && canonical(observed.data) === canonical(desired.data);
   if (!exact) {
-    if (worker?.configurationCommandId === commandId && worker.configurationRevision === revision) await db`update workers set configuration_state='error' where id=${event.workerId} and configuration_command_id=${commandId} and configuration_revision=${revision}`;
+    if (worker?.configurationCommandId === commandId && worker.configurationRevision === revision) await q.setConfigurationError.execute({ workerId: event.workerId, commandId, revision });
     return false;
   }
-  return db.begin(async tx => {
-    const updated = await tx`update workers set configuration_state='ready',applied_configuration_revision=configuration_revision,configuration_applied_at=now() where id=${event.workerId} and configuration_command_id=${commandId} and configuration_revision=${revision} returning id`;
+  return db.transaction(async tx => {
+    const q = queries(tx);
+    const updated = await q.configurationReady.execute({ workerId: event.workerId, commandId, revision });
     if (!updated[0]) return false;
-    if (!observed.data.cache.runnerCacheEnabled) {
-      await tx`update worker_cache_status set ready=false,runner_cache_enabled=false,runner_cache_observed_at=now() where worker_id=${event.workerId}`;
-    }
-    await tx`insert into audit_events (actor,type,payload) values ('worker','worker.configuration_applied',${jsonParameter(tx, { workerId: event.workerId, commandId, revision })}::jsonb)`;
+    if (!observed.data.cache.runnerCacheEnabled) await q.cacheStatusDisable.execute({ workerId: event.workerId });
+    await q.audit.execute({ actor: "worker", type: "worker.configuration_applied", payload: JSON.stringify({ workerId: event.workerId, commandId, revision }) });
     return true;
   });
 }
+
 const WorkerConfigureFailure = z.object({ commandId: z.string().uuid(), workerId: z.string().uuid(), revision: z.string().regex(/^[a-f0-9]{64}$/), reason: z.string().min(1).max(1000) }).strict();
-export async function applyWorkerConfigurationFailure(db: Sql<{}>, event: { workerId: string; payload: unknown }): Promise<boolean | "stale"> {
+export async function applyWorkerConfigurationFailure(db: DatabaseClient, event: { workerId: string; payload: unknown }): Promise<boolean | "stale"> {
   const payload = WorkerConfigureFailure.safeParse(event.payload);
   if (!payload.success || payload.data.workerId !== event.workerId) return false;
-  return db.begin(async tx => {
-    const rows = await tx<{ id: string }[]>`update workers set configuration_state='error' where id=${event.workerId} and configuration_command_id=${payload.data.commandId} and configuration_revision=${payload.data.revision} returning id`;
+  return db.transaction(async tx => {
+    const q = queries(tx);
+    const rows = await q.setConfigurationError.execute({ workerId: event.workerId, commandId: payload.data.commandId, revision: payload.data.revision });
     if (!rows[0]) {
-      const [previous] = await tx<{ id: string }[]>`select id from commands where id=${payload.data.commandId} and worker_id=${event.workerId} and type='worker.configure'`;
+      const [previous] = await q.priorConfigureCommand.execute({ commandId: payload.data.commandId, workerId: event.workerId });
       return previous ? "stale" : false;
     }
-    await tx`insert into audit_events (actor,type,payload) values ('worker','worker.configuration_failed',${jsonParameter(tx, { workerId: event.workerId, commandId: payload.data.commandId, revision: payload.data.revision, reason: payload.data.reason })}::jsonb)`;
+    await q.audit.execute({ actor: "worker", type: "worker.configuration_failed", payload: JSON.stringify({ workerId: event.workerId, commandId: payload.data.commandId, revision: payload.data.revision, reason: payload.data.reason }) });
     return true;
   });
 }
-export async function reconcileWorkerConfigurationOnConnect(db: Sql<{}>, workerId: string, sameProcess = false): Promise<{ state: "unconfigured" | "applying" | "ready" | "error"; commandId: string | null }> {
-  return db.begin(async tx => {
-    const [worker] = await tx<{ desiredConfiguration: unknown; configurationRevision: string | null; appliedConfigurationRevision: string | null; configurationCommandId: string | null; configurationState: string }[]>`select desired_configuration AS "desiredConfiguration", configuration_revision AS "configurationRevision", applied_configuration_revision AS "appliedConfigurationRevision", configuration_command_id AS "configurationCommandId", configuration_state AS "configurationState" from workers where id=${workerId} for update`;
+export async function reconcileWorkerConfigurationOnConnect(db: DatabaseClient, workerId: string, sameProcess = false): Promise<{ state: "unconfigured" | "applying" | "ready" | "error"; commandId: string | null }> {
+  return db.transaction(async tx => {
+    const q = queries(tx);
+    const [worker] = await q.workerConnectLock.execute({ workerId });
     if (!worker) throw new Error("worker configuration unavailable");
     let desiredInput = worker.desiredConfiguration;
     if (typeof desiredInput === "string") {
       try { desiredInput = JSON.parse(desiredInput); } catch { desiredInput = null; }
     }
-    if (desiredInput === null || desiredInput === undefined) {
-      await tx`update workers set configuration_state='unconfigured', configuration_command_id=null where id=${workerId}`;
+    if (desiredInput == null) {
+      await q.connectUnconfigured.execute({ workerId });
       return { state: "unconfigured", commandId: null };
     }
     const parsedDesired = WorkerConfiguration.safeParse(desiredInput);
     if (!parsedDesired.success) {
-      await tx`update workers set configuration_state='error' where id=${workerId}`;
+      await q.connectError.execute({ workerId });
       return { state: "error", commandId: null };
     }
     const desired = parsedDesired.data;
     const revision = worker.configurationRevision ?? createHash("sha256").update(canonical(desired)).digest("hex");
-    if (sameProcess && worker.configurationState === "ready" && worker.configurationRevision && worker.configurationRevision === worker.appliedConfigurationRevision) {
-      return { state: "ready", commandId: worker.configurationCommandId };
-    }
-    if (worker.appliedConfigurationRevision === revision) {
-      await tx`update workers set configuration_state='applying', configuration_revision=${revision} where id=${workerId}`;
-    }
-    const pending = await tx<{ id: string; payload: unknown }[]>`select id,payload from commands where worker_id=${workerId} and type='worker.configure' and state in ('pending','sent') order by occurred_at desc`;
+    if (sameProcess && worker.configurationState === "ready" && worker.configurationRevision && worker.configurationRevision === worker.appliedConfigurationRevision) return { state: "ready", commandId: worker.configurationCommandId };
+    if (worker.appliedConfigurationRevision === revision) await q.connectApplying.execute({ workerId, revision });
+    const pending = await q.commandsPendingConfig.execute({ workerId });
     const reusable = pending.find(command => {
       let payload = command.payload;
-      if (typeof payload === "string") {
-        try { payload = JSON.parse(payload); } catch { return false; }
-      }
+      if (typeof payload === "string") { try { payload = JSON.parse(payload); } catch { return false; } }
       const parsed = WorkerConfigurePayload.safeParse(payload);
       return parsed.success && parsed.data.revision === revision;
     });
     if (reusable) {
-      await tx`update workers set configuration_state='applying', configuration_revision=${revision}, configuration_command_id=${reusable.id} where id=${workerId}`;
+      await q.connectReuseCommand.execute({ workerId, revision, commandId: reusable.id });
       return { state: "applying", commandId: reusable.id };
     }
     const commandId = randomUUID();
-    const fingerprint = createHash("sha256").update(`${workerId}:${revision}`).digest("hex");
-    const payload: WorkerConfigurePayload = { workerId, appliance: desired.appliance, runtime: desired.runtime, guestPlatforms: desired.guestPlatforms, selectedDriver: desired.selectedDriver, cache: desired.cache, revision, fingerprint };
-    await tx`update commands set state='failed' where worker_id=${workerId} and type='worker.configure' and state in ('pending','sent')`;
-    await tx`insert into commands (id,version,type,worker_id,lease_id,occurred_at,payload) values (${commandId},1,${"worker.configure"},${workerId},null,now(),${jsonParameter(tx, payload)}::jsonb)`;
-    await tx`update workers set configuration_state='applying', configuration_revision=${revision}, configuration_command_id=${commandId} where id=${workerId}`;
+    const fingerprintValue = createHash("sha256").update(`${workerId}:${revision}`).digest("hex");
+    const payload: WorkerConfigurePayload = { workerId, appliance: desired.appliance, runtime: desired.runtime, guestPlatforms: desired.guestPlatforms, selectedDriver: desired.selectedDriver, cache: desired.cache, revision, fingerprint: fingerprintValue };
+    await q.updateConfigurationCommandState.execute({ workerId, state: "failed" });
+    await q.insertCommand.execute({ commandId, type: "worker.configure", workerId, payload: JSON.stringify(payload) });
+    await q.connectNewCommand.execute({ workerId, revision, commandId });
     return { state: "applying", commandId };
   });
 }
-export async function rejectPendingWorker(db: Sql<{}>, workerId: string, adminId: string): Promise<void> { await db.begin(async tx => { const rows = await tx`update workers set admission_state='rejected', configuration_state='unconfigured' where id=${workerId} and admission_state in ('pending','adopted') returning id`; if (rows.length !== 1) throw new Error("worker rejection conflict"); await tx`update system_onboarding set worker_id=null where singleton=true and worker_id=${workerId}`; await tx`insert into audit_events (actor,type,payload) values (${adminId},'worker.rejected',${jsonParameter(tx, { workerId })}::jsonb)`; }); }
+export async function rejectPendingWorker(db: DatabaseClient, workerId: string, adminId: string): Promise<void> {
+  await db.transaction(async tx => {
+    const q = queries(tx);
+    const rows = await q.reject.execute({ workerId });
+    if (rows.length !== 1) throw new Error("worker rejection conflict");
+    await q.rejectOnboarding.execute({ workerId });
+    await q.audit.execute({ actor: adminId, type: "worker.rejected", payload: JSON.stringify({ workerId }) });
+  });
+}

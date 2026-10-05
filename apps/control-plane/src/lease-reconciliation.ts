@@ -1,8 +1,58 @@
-import type { DatabaseClient } from "@mars/db";
-import { jsonParameter } from "@mars/db";
+import { and, eq, inArray, isNotNull, lte, notInArray, or, sql } from "drizzle-orm";
+import { defineQueries, schema, type DatabaseClient } from "@mars/db";
 import { applyGithubJobSnapshot, markGithubJobMissing, type GithubJobSnapshot } from "./runs.ts";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { isGithubRateLimitError } from "./github-rate-limit.ts";
+
+const queries = defineQueries(db => ({
+  markTerminal: db.update(schema.runnerLeases).set({
+    state: sql`${sql.placeholder("state")}`,
+    terminalResult: sql`${sql.placeholder("terminalResult")}::jsonb`,
+    cleanupState: "pending",
+    updatedAt: sql`now()`,
+  }).where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.nonce, sql.placeholder("nonce")), notInArray(schema.runnerLeases.state, ["completed", "failed", "reaped"]))).prepare("lease_reconciliation_mark_terminal"),
+  missingActive: db.update(schema.runnerLeases).set({
+    state: "failed", cleanupState: "pending", terminalResult: sql`${sql.placeholder("terminalResult")}::jsonb`, updatedAt: sql`now()`,
+  }).where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.nonce, sql.placeholder("nonce")), notInArray(schema.runnerLeases.state, ["completed", "failed", "reaped"]))).returning({ id: schema.runnerLeases.id }).prepare("lease_reconciliation_missing_active"),
+  startupFailure: db.update(schema.runnerLeases).set({
+    state: "failed", cleanupState: "pending", terminalResult: sql`${sql.placeholder("terminalResult")}::jsonb`, updatedAt: sql`now()`,
+  }).where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.nonce, sql.placeholder("nonce")), inArray(schema.runnerLeases.state, ["reserved", "requested", "dispatched", "provisioning", "sandbox_ready"]))).returning({ id: schema.runnerLeases.id }).prepare("lease_reconciliation_startup_failure"),
+  staleLeases: db.select({
+    leaseId: schema.runnerLeases.id, organizationId: schema.runnerLeases.organizationId, workerId: schema.runnerLeases.workerId,
+    nonce: schema.runnerLeases.nonce, leaseState: schema.runnerLeases.state,
+    leaseExpired: sql<boolean>`${schema.runnerLeases.expiresAt} < now()`,
+    githubJobId: schema.runnerLeases.githubJobId,
+    githubRunId: schema.dashboardRuns.githubRunId, githubRunAttempt: schema.dashboardRuns.runAttempt,
+    jobStatus: schema.dashboardJobs.status, jobConclusion: schema.dashboardJobs.conclusion,
+    githubRepositoryId: schema.dashboardRepositories.githubRepositoryId, repositoryName: schema.dashboardRepositories.name,
+    repositoryFullName: schema.dashboardRepositories.fullName, installationId: schema.dashboardInstallations.githubInstallationId,
+  }).from(schema.runnerLeases)
+    .innerJoin(schema.dashboardJobs, and(eq(schema.dashboardJobs.organizationId, schema.runnerLeases.organizationId), eq(schema.dashboardJobs.githubJobId, schema.runnerLeases.githubJobId)))
+    .innerJoin(schema.dashboardRuns, and(eq(schema.dashboardRuns.organizationId, schema.dashboardJobs.organizationId), eq(schema.dashboardRuns.id, schema.dashboardJobs.runId)))
+    .innerJoin(schema.dashboardRepositories, and(eq(schema.dashboardRepositories.organizationId, schema.dashboardRuns.organizationId), eq(schema.dashboardRepositories.id, schema.dashboardRuns.repositoryId)))
+    .innerJoin(schema.dashboardInstallations, and(eq(schema.dashboardInstallations.organizationId, schema.dashboardRepositories.organizationId), eq(schema.dashboardInstallations.id, schema.dashboardRepositories.installationId)))
+    .where(and(isNotNull(schema.runnerLeases.githubJobId), or(eq(schema.runnerLeases.state, "sandbox_ready"), and(sql`${schema.runnerLeases.expiresAt} < now()`, notInArray(schema.runnerLeases.state, ["completed", "failed", "reaped"])))))
+    .orderBy(schema.runnerLeases.expiresAt).limit(100).prepare("lease_reconciliation_stale_leases"),
+  inventory: db.update(schema.runnerLeases).set({
+    state: sql`case when ${schema.runnerLeases.state} in ('completed','failed') then 'reaped' else 'failed' end`,
+    terminalResult: sql`case when ${schema.runnerLeases.state} in ('completed','failed') then ${schema.runnerLeases.terminalResult} else ${sql.placeholder("terminalResult")}::jsonb end`,
+    cleanupState: sql`case when ${schema.runnerLeases.state} in ('completed','failed') then 'completed' else 'pending' end`,
+    updatedAt: sql`now()`,
+  }).where(and(eq(schema.runnerLeases.workerId, sql.placeholder("workerId")),
+    or(inArray(schema.runnerLeases.state, ["dispatched", "provisioning", "sandbox_ready", "online", "busy"]), and(inArray(schema.runnerLeases.state, ["completed", "failed"]), inArray(schema.runnerLeases.cleanupState, ["pending", "failed"]))),
+    lte(schema.runnerLeases.updatedAt, sql.placeholder("inventoryObservedAt")),
+    sql`not exists (select 1 from jsonb_array_elements_text(${sql.placeholder("activeLeaseIds")}::jsonb) as active(id) where active.id::uuid = ${schema.runnerLeases.id})`))
+    .returning({ id: schema.runnerLeases.id }).prepare("lease_reconciliation_inventory"),
+  inventoryEmpty: db.update(schema.runnerLeases).set({
+    state: sql`case when ${schema.runnerLeases.state} in ('completed','failed') then 'reaped' else 'failed' end`,
+    terminalResult: sql`case when ${schema.runnerLeases.state} in ('completed','failed') then ${schema.runnerLeases.terminalResult} else ${sql.placeholder("terminalResult")}::jsonb end`,
+    cleanupState: sql`case when ${schema.runnerLeases.state} in ('completed','failed') then 'completed' else 'pending' end`,
+    updatedAt: sql`now()`,
+  }).where(and(eq(schema.runnerLeases.workerId, sql.placeholder("workerId")),
+    or(inArray(schema.runnerLeases.state, ["dispatched", "provisioning", "sandbox_ready", "online", "busy"]), and(inArray(schema.runnerLeases.state, ["completed", "failed"]), inArray(schema.runnerLeases.cleanupState, ["pending", "failed"]))),
+    lte(schema.runnerLeases.updatedAt, sql.placeholder("inventoryObservedAt"))))
+    .returning({ id: schema.runnerLeases.id }).prepare("lease_reconciliation_inventory_empty"),
+}));
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -47,100 +97,40 @@ export function terminalLeaseState(job: Pick<GithubJobSnapshot, "conclusion">): 
 }
 async function markTerminalLease(deps: StaleLeaseReconciliationDeps, row: StaleLeaseRow, conclusion: string | null): Promise<void> {
   const state = terminalLeaseState({ conclusion });
-  await deps.db`UPDATE runner_leases SET state=${state}, terminal_result=${jsonParameter(deps.db, { reason: "github_reconciled", conclusion })}::jsonb, cleanup_state='pending', updated_at=now() WHERE id=${row.leaseId} AND nonce=${row.nonce} AND state NOT IN ('completed','failed','reaped')`;
+  await queries(deps.db).markTerminal.execute({ state, terminalResult: JSON.stringify({ reason: "github_reconciled", conclusion }), leaseId: row.leaseId, nonce: row.nonce });
 }
 export async function reconcileWorkerInventory(db: DatabaseClient, workerId: string, activeLeaseIds: readonly string[], inventoryObservedAt = new Date().toISOString()): Promise<number> {
   const ids = [...new Set(activeLeaseIds)];
-  const terminalResult = jsonParameter(db, { reason: "worker_inventory_missing" });
+  const args = { workerId, inventoryObservedAt, terminalResult: JSON.stringify({ reason: "worker_inventory_missing" }) };
+  const statements = queries(db);
   const rows = ids.length === 0
-    ? await db<Array<{ id: string }>>`
-        UPDATE runner_leases
-        SET state=CASE WHEN state IN ('completed','failed') THEN 'reaped' ELSE 'failed' END,
-          terminal_result=CASE WHEN state IN ('completed','failed') THEN terminal_result ELSE ${terminalResult}::jsonb END,
-          cleanup_state=CASE WHEN state IN ('completed','failed') THEN 'completed' ELSE 'pending' END,
-          updated_at=now()
-        WHERE worker_id=${workerId}
-          AND (
-            state IN ('dispatched','provisioning','sandbox_ready','online','busy')
-            OR (state IN ('completed','failed') AND cleanup_state IN ('pending','failed'))
-          )
-          AND updated_at<=${inventoryObservedAt}
-        RETURNING id
-      `
-    : await db<Array<{ id: string }>>`
-        UPDATE runner_leases
-        SET state=CASE WHEN state IN ('completed','failed') THEN 'reaped' ELSE 'failed' END,
-          terminal_result=CASE WHEN state IN ('completed','failed') THEN terminal_result ELSE ${terminalResult}::jsonb END,
-          cleanup_state=CASE WHEN state IN ('completed','failed') THEN 'completed' ELSE 'pending' END,
-          updated_at=now()
-        WHERE worker_id=${workerId}
-          AND (
-            state IN ('dispatched','provisioning','sandbox_ready','online','busy')
-            OR (state IN ('completed','failed') AND cleanup_state IN ('pending','failed'))
-          )
-          AND updated_at<=${inventoryObservedAt}
-          AND NOT EXISTS (
-            SELECT 1
-            FROM jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb) AS active(id)
-            WHERE active.id::uuid = runner_leases.id
-          )
-        RETURNING id
-      `;
+    ? await statements.inventoryEmpty.execute(args)
+    : await statements.inventory.execute({ ...args, activeLeaseIds: JSON.stringify(ids) });
   return rows.length;
 }
 async function markMissingLease(deps: StaleLeaseReconciliationDeps, row: StaleLeaseRow): Promise<boolean> {
-  return deps.db.begin(async tx => {
+  return deps.db.transaction(async tx => {
     await markGithubJobMissing(tx as unknown as DatabaseClient, {
       organizationId: row.organizationId,
       githubJobId: Number(row.githubJobId),
       observedAt: new Date().toISOString(),
     });
-    const updated = await tx`
-      UPDATE runner_leases
-      SET state='failed',
-          cleanup_state='pending',
-          terminal_result=${jsonParameter(tx, { reason: "github_job_not_found" })}::jsonb,
-          updated_at=now()
-      WHERE id=${row.leaseId} AND nonce=${row.nonce}
-        AND state NOT IN ('completed','failed','reaped')
-      RETURNING id`;
+    const updated = await queries(tx as unknown as DatabaseClient).missingActive.execute({
+      leaseId: row.leaseId, nonce: row.nonce, terminalResult: JSON.stringify({ reason: "github_job_not_found" }),
+    });
     return Boolean(updated[0]);
   });
 }
 
 async function failStartupLease(deps: StaleLeaseReconciliationDeps, row: StaleLeaseRow): Promise<boolean> {
-  const updated = await deps.db`
-    UPDATE runner_leases
-    SET state='failed',
-        cleanup_state='pending',
-        terminal_result=${jsonParameter(deps.db, { reason: "startup_timeout" })}::jsonb,
-        updated_at=now()
-    WHERE id=${row.leaseId} AND nonce=${row.nonce}
-      AND state IN ('reserved','requested','dispatched','provisioning','sandbox_ready')
-    RETURNING id`;
+  const updated = await queries(deps.db).startupFailure.execute({
+    leaseId: row.leaseId, nonce: row.nonce, terminalResult: JSON.stringify({ reason: "startup_timeout" }),
+  });
   return Boolean(updated[0]);
 }
+
 export async function reconcileExpiredLeasesWithGithub(deps: StaleLeaseReconciliationDeps): Promise<StaleLeaseReconciliationReport> {
-  const rows = await deps.db<StaleLeaseRow[]>`
-    SELECT l.id AS "leaseId", l.organization_id AS "organizationId", l.worker_id AS "workerId", l.nonce,
-      l.state AS "leaseState", l.expires_at < now() AS "leaseExpired",
-      l.github_job_id AS "githubJobId", r.github_run_id AS "githubRunId", r.run_attempt AS "githubRunAttempt",
-      j.status AS "jobStatus", j.conclusion AS "jobConclusion",
-      repo.github_repository_id AS "githubRepositoryId", repo.name AS "repositoryName",
-      repo.full_name AS "repositoryFullName", i.github_installation_id AS "installationId"
-    FROM runner_leases l
-    JOIN dashboard_jobs j ON j.organization_id=l.organization_id AND j.github_job_id=l.github_job_id
-    JOIN dashboard_runs r ON r.organization_id=j.organization_id AND r.id=j.run_id
-    JOIN dashboard_repositories repo ON repo.organization_id=r.organization_id AND repo.id=r.repository_id
-    JOIN dashboard_installations i ON i.organization_id=repo.organization_id AND i.id=repo.installation_id
-    WHERE l.github_job_id IS NOT NULL
-      AND (
-        l.state='sandbox_ready'
-        OR (l.expires_at < now() AND l.state NOT IN ('completed','failed','reaped'))
-      )
-    ORDER BY l.expires_at
-    LIMIT 100
-  `;
+  const rows = await queries(deps.db).staleLeases.execute() as StaleLeaseRow[];
   const report: StaleLeaseReconciliationReport = { inspected: rows.length, completed: 0, released: 0, stillActive: 0, skipped: 0 };
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index]!;

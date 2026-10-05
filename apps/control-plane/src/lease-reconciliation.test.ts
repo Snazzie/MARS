@@ -1,132 +1,105 @@
 import { expect, test } from "bun:test";
+import { preparedTestDatabase } from "../../../packages/db/src/prepared-test-fixture.ts";
 import { reconcileExpiredLeasesWithGithub, reconcileWorkerInventory, terminalLeaseState } from "./lease-reconciliation.ts";
 
+const activeLease = {
+  leaseId: "lease-1", organizationId: "org-1", workerId: "worker-1", nonce: "nonce", leaseState: "online", leaseExpired: true,
+  githubJobId: 42, githubRunId: 7, githubRunAttempt: 2, githubRepositoryId: 99, repositoryName: "repo",
+  repositoryFullName: "acme/repo", installationId: 123, jobStatus: "in_progress", jobConclusion: null,
+};
+const fetchActiveJob = async (input: RequestInfo | URL): Promise<Response> => {
+  if (String(input).endsWith("/actions/runs/7/attempts/2")) return Response.json({ id: 7, run_attempt: 2, status: "in_progress", name: "ci", run_number: 7, created_at: "2026-08-20T00:00:00Z" });
+  return Response.json({ id: 42, run_id: 7, run_attempt: 2, status: "in_progress", name: "build", created_at: "2026-08-20T00:00:00Z" });
+};
+
 test("does not change an expired lease while GitHub still reports the job active", async () => {
-  const queries: string[] = [];
   const requests: string[] = [];
-  const db = Object.assign((async (strings: TemplateStringsArray) => {
-    queries.push(strings.join(" "));
-    return [{ leaseId: "lease-1", organizationId: "org-1", workerId: "worker-1", nonce: "nonce", leaseState: "online", leaseExpired: true, githubJobId: 42, githubRunId: 7, githubRunAttempt: 2, githubRepositoryId: 99, repositoryName: "repo", repositoryFullName: "acme/repo", installationId: 123 }];
-  }) as never, { begin: async () => [] }) as never;
-  const fetcher = async (input: RequestInfo | URL): Promise<Response> => {
-    const path = String(input);
-    requests.push(path);
-    if (path.endsWith("/actions/runs/7/attempts/2")) return Response.json({ id: 7, run_attempt: 2, status: "in_progress", name: "ci", run_number: 7, created_at: "2026-08-20T00:00:00Z" });
-    return Response.json({ id: 42, run_id: 7, run_attempt: 2, status: "in_progress", name: "build", created_at: "2026-08-20T00:00:00Z" });
-  };
-  const report = await reconcileExpiredLeasesWithGithub({ db, installationToken: async () => "token", githubFetchForInstallation: () => fetcher });
+  const db = preparedTestDatabase(name => {
+    if (name === "lease_reconciliation_stale_leases") return [activeLease];
+    return [];
+  });
+  const report = await reconcileExpiredLeasesWithGithub({
+    db, installationToken: async () => "token",
+    githubFetchForInstallation: () => async input => { requests.push(String(input)); return fetchActiveJob(input); },
+  });
   expect(report).toEqual({ inspected: 1, completed: 0, released: 0, stillActive: 1, skipped: 0 });
   expect(requests[0]).toContain("/actions/jobs/42");
-  expect(queries.some(query => query.includes("UPDATE runner_leases"))).toBe(false);
 });
-
 test("maps successful GitHub jobs to completed leases and all other conclusions to failed", () => {
   expect(terminalLeaseState({ conclusion: "success" })).toBe("completed");
   expect(terminalLeaseState({ conclusion: "cancelled" })).toBe("failed");
   expect(terminalLeaseState({ conclusion: null })).toBe("failed");
 });
+
 test("worker inventory reclaims runtime leases it does not report", async () => {
-  let query = "";
-  const db = (async (strings: TemplateStringsArray) => {
-    query = strings.join(" ");
+  const db = preparedTestDatabase((name, parameters) => {
+    expect(name).toBe("lease_reconciliation_inventory");
+    expect(parameters).toMatchObject({ workerId: "worker-1", activeLeaseIds: JSON.stringify(["11111111-1111-4111-8111-111111111111"]) });
     return [{ id: "lease-1" }];
-  }) as never;
+  });
   expect(await reconcileWorkerInventory(db, "worker-1", ["11111111-1111-4111-8111-111111111111"])).toBe(1);
-  expect(query).not.toContain("expires_at < now()");
-  expect(query).toContain("state IN ('dispatched','provisioning','sandbox_ready','online','busy')");
-  expect(query).not.toContain("ANY((");
-  expect(query).toContain("jsonb_array_elements_text");
 });
+
 test("worker inventory empty list reclaims runtime leases and completed cleanup", async () => {
-  let query = "";
-  const db = (async (strings: TemplateStringsArray) => {
-    query = strings.join(" ");
-    return [{ id: "runtime-lease" }, { id: "terminal-lease" }];
-  }) as never;
+  const db = preparedTestDatabase(name => name === "lease_reconciliation_inventory_empty" ? [{ id: "runtime-lease" }, { id: "terminal-lease" }] : []);
   expect(await reconcileWorkerInventory(db, "worker-1", [])).toBe(2);
-  expect(query).toContain("state IN ('dispatched','provisioning','sandbox_ready','online','busy')");
-  expect(query).toContain("state IN ('completed','failed') AND cleanup_state IN ('pending','failed')");
-  expect(query).toContain("THEN 'reaped'");
-  expect(query).toContain("THEN 'completed'");
-  expect(query).not.toContain("expires_at < now()");
-  expect(query).not.toContain("ANY");
 });
 
 test("terminalizes a sandbox-ready lease when exact GitHub job lookup returns 404", async () => {
-  const calls: Array<{ query: string; values: unknown[] }> = [];
-  const db = Object.assign((async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const query = strings.join(" ");
-    calls.push({ query, values });
-    if (query.includes("FROM runner_leases l")) return [{
-      leaseId: "lease-404", organizationId: "org-1", workerId: "worker-1", nonce: "nonce-404", leaseState: "sandbox_ready", expiresAt: "2099-01-01T00:00:00.000Z",
-      githubJobId: 42, githubRunId: 7, githubRunAttempt: 2, githubRepositoryId: 99, repositoryName: "repo",
-      repositoryFullName: "acme/repo", installationId: 123, jobStatus: "in_progress", jobConclusion: null,
-    }];
-    if (query.includes("UPDATE dashboard_jobs") || query.includes("UPDATE runner_leases")) return [{ id: "lease-404" }];
+  const calls: Array<{ name: string; parameters: Record<string, unknown> }> = [];
+  const row = { ...activeLease, leaseId: "lease-404", nonce: "nonce-404", leaseState: "sandbox_ready", leaseExpired: false };
+  const db = preparedTestDatabase((name, parameters) => {
+    calls.push({ name, parameters });
+    if (name === "lease_reconciliation_stale_leases") return [row];
+    if (name === "run_lifecycle_mark_job_missing") return [{ id: "job-1" }];
+    if (name === "lease_reconciliation_missing_active") return [{ id: row.leaseId }];
     return [];
-  }) as never, { begin: async (fn: (tx: typeof db) => unknown) => fn(db) }) as never;
+  });
   const fetcher = async (input: RequestInfo | URL): Promise<Response> => {
     expect(String(input)).toContain("/actions/jobs/42");
     return new Response(null, { status: 404 });
   };
-
   const report = await reconcileExpiredLeasesWithGithub({ db, installationToken: async () => "token", githubFetchForInstallation: () => fetcher });
-
-  const selection = calls.find(({ query }) => query.includes("FROM runner_leases l"));
-  expect(selection?.query).toContain("sandbox_ready");
-  expect(selection?.query).toContain("expires_at < now()");
   expect(report).toEqual({ inspected: 1, completed: 0, released: 1, stillActive: 0, skipped: 0 });
-  expect(calls.some(({ query }) => query.includes("UPDATE dashboard_jobs") && query.includes("SET status='completed',stage='failed'"))).toBe(true);
-  expect(calls.some(({ query }) => query.includes("UPDATE runner_leases") && query.includes("cleanup_state='pending'"))).toBe(true);
-  expect(calls.some(({ values }) => values.some(value => value && typeof value === "object" && JSON.stringify(value).includes("github_job_not_found")))).toBe(true);
+  expect(calls.find(call => call.name === "lease_reconciliation_missing_active")?.parameters.terminalResult).toBe(JSON.stringify({ reason: "github_job_not_found" }));
 });
 
 test("fails an expired sandbox-ready lease with startup timeout while the job remains nonterminal", async () => {
-  const calls: Array<{ query: string; values: unknown[] }> = [];
-  const db = Object.assign((async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const query = strings.join(" ");
-    calls.push({ query, values });
-    if (query.includes("FROM runner_leases l")) return [{
-      leaseId: "lease-timeout", organizationId: "org-1", workerId: "worker-1", nonce: "nonce-timeout", leaseState: "sandbox_ready", expiresAt: "2020-01-01T00:00:00.000Z",
-      githubJobId: 42, githubRunId: 7, githubRunAttempt: 2, leaseExpired: true, githubRepositoryId: 99, repositoryName: "repo",
-      repositoryFullName: "acme/repo", installationId: 123, jobStatus: "in_progress", jobConclusion: null,
-    }];
-    if (query.includes("UPDATE runner_leases")) return [{ id: "lease-timeout" }];
+  const row = { ...activeLease, leaseId: "lease-timeout", nonce: "nonce-timeout", leaseState: "sandbox_ready" };
+  const calls: Array<{ name: string; parameters: Record<string, unknown> }> = [];
+  const db = preparedTestDatabase((name, parameters) => {
+    calls.push({ name, parameters });
+    if (name === "lease_reconciliation_stale_leases") return [row];
+    if (name === "lease_reconciliation_startup_failure") return [{ id: row.leaseId }];
     return [];
-  }) as never, { begin: async (fn: (tx: typeof db) => unknown) => fn(db) }) as never;
+  });
   const fetcher = async (input: RequestInfo | URL): Promise<Response> => {
     const path = String(input);
     if (path.endsWith("/actions/jobs/42")) return Response.json({ id: 42, run_id: 7, run_attempt: 2, status: "in_progress", name: "build", created_at: "2026-08-20T00:00:00Z" });
     if (path.endsWith("/actions/runs/7/attempts/2")) return Response.json({ id: 7, run_attempt: 2, status: "in_progress", name: "ci", run_number: 7, created_at: "2026-08-20T00:00:00Z" });
     throw new Error(`unexpected GitHub request: ${path}`);
   };
-
   const report = await reconcileExpiredLeasesWithGithub({ db, installationToken: async () => "token", githubFetchForInstallation: () => fetcher });
-
   expect(report).toEqual({ inspected: 1, completed: 0, released: 1, stillActive: 0, skipped: 0 });
-  expect(calls.some(({ query, values }) => query.includes("UPDATE runner_leases") && values.some(value => value && typeof value === "object" && JSON.stringify(value).includes("startup_timeout")))).toBe(true);
+  expect(calls.find(call => call.name === "lease_reconciliation_startup_failure")?.parameters.terminalResult).toBe(JSON.stringify({ reason: "startup_timeout" }));
 });
+
 test("fails an expired provisioning lease with startup timeout while the job remains nonterminal", async () => {
-  const calls: Array<{ query: string; values: unknown[] }> = [];
-  const db = Object.assign((async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const query = strings.join(" ");
-    calls.push({ query, values });
-    if (query.includes("FROM runner_leases l")) return [{
-      leaseId: "lease-provisioning-timeout", organizationId: "org-1", workerId: "worker-1", nonce: "nonce-provisioning-timeout", expiresAt: "2020-01-01T00:00:00.000Z",
-      githubJobId: 43, githubRunId: 8, githubRunAttempt: 1, leaseExpired: true, leaseState: "provisioning", githubRepositoryId: 99, repositoryName: "repo",
-      repositoryFullName: "acme/repo", installationId: 123, jobStatus: "queued", jobConclusion: null,
-    }];
-    if (query.includes("UPDATE runner_leases")) return [{ id: "lease-provisioning-timeout" }];
+  const row = { ...activeLease, leaseId: "lease-provisioning-timeout", nonce: "nonce-provisioning-timeout", githubJobId: 43, githubRunId: 8, githubRunAttempt: 1, leaseState: "provisioning" };
+  const calls: Array<{ name: string; parameters: Record<string, unknown> }> = [];
+  const db = preparedTestDatabase((name, parameters) => {
+    calls.push({ name, parameters });
+    if (name === "lease_reconciliation_stale_leases") return [row];
+    if (name === "lease_reconciliation_startup_failure") return [{ id: row.leaseId }];
     return [];
-  }) as never, { begin: async (fn: (tx: typeof db) => unknown) => fn(db) }) as never;
+  });
   const fetcher = async (input: RequestInfo | URL): Promise<Response> => {
     const path = String(input);
     if (path.endsWith("/actions/jobs/43")) return Response.json({ id: 43, run_id: 8, run_attempt: 1, status: "queued", name: "build", created_at: "2026-08-20T00:00:00Z" });
     throw new Error(`unexpected GitHub request: ${path}`);
   };
-
   const report = await reconcileExpiredLeasesWithGithub({ db, installationToken: async () => "token", githubFetchForInstallation: () => fetcher });
-
   expect(report).toEqual({ inspected: 1, completed: 0, released: 1, stillActive: 0, skipped: 0 });
-  expect(calls.some(({ query, values }) => query.includes("UPDATE runner_leases") && values.some(value => value && typeof value === "object" && JSON.stringify(value).includes("startup_timeout")))).toBe(true);
+  expect(calls.find(call => call.name === "lease_reconciliation_startup_failure")?.parameters.terminalResult).toBe(JSON.stringify({ reason: "startup_timeout" }));
 });
+

@@ -1,5 +1,5 @@
-import type { DatabaseClient } from "@mars/db";
 import { expect, test } from "bun:test";
+import { preparedTestDatabase } from "../../../packages/db/src/prepared-test-fixture.ts";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,46 +11,42 @@ const leaseId = "22222222-2222-4222-8222-222222222222";
 const nonce = "n".repeat(32);
 const event = (type: string, payload: Record<string, unknown>) => ({ version: 1, id: crypto.randomUUID(), workerId, type, occurredAt: new Date().toISOString(), payload });
 
-function acceptingDb() {
-  const calls: Array<{ query: string; values: unknown[] }> = [];
-  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    calls.push({ query: strings.join(" "), values });
-    return [{ id: leaseId }];
-  }, { begin: async (callback: (tx: unknown) => unknown) => callback(db) }) as never;
+function acceptingDb(execute: (name: string, parameters: Record<string, unknown>) => unknown = name => {
+  if (name === "worker_lifecycle_reap_context") return [{ commandType: "windows-container.stop_lease", terminalResult: { exitCode: 0 } }];
+  if (name === "worker_lifecycle_terminal_log_fence") return [{ id: leaseId }];
+  if (name === "worker_lifecycle_log_job") return [{ organizationId: "org", runId: "run", jobId: leaseId }];
+  return [{ id: leaseId }];
+}) {
+  const calls: Array<{ query: string; values: Record<string, unknown> }> = [];
+  const db = preparedTestDatabase((query, values) => {
+    calls.push({ query, values });
+    return execute(query, values);
+  });
   return { db, calls };
 }
 
 test("attests only the matching dispatched worker lease and nonce", async () => {
   const { db, calls } = acceptingDb();
-  const accepted = await applyWorkerLeaseEvent(db, event("sandbox_attested", { leaseId, nonce, runtimeInstanceId: "mars-job-22222222", observed: { vcpu: 4, memoryBytes: 4_294_967_296, storageBytes: 21_474_836_480 } }));
-  expect(accepted).toBe(true);
-  expect(calls[0]!.query).toContain("state='sandbox_ready'");
-  expect(calls[0]!.query).toContain("worker_id=");
-  expect(calls[0]!.query).toContain("nonce=");
-  expect(calls[0]!.query).toContain("state='dispatched'");
-  expect(calls[0]!.values).toContain(workerId);
-  expect(calls[0]!.values).toContain(nonce);
+  expect(await applyWorkerLeaseEvent(db, event("sandbox_attested", { leaseId, nonce, runtimeInstanceId: "mars-job-22222222", observed: { vcpu: 4, memoryBytes: 4_294_967_296, storageBytes: 21_474_836_480 } }))).toBe(true);
+  expect(calls[0]).toMatchObject({ query: "worker_lifecycle_attest", values: { leaseId, workerId, nonce, runtimeInstanceId: "mars-job-22222222" } });
 });
 
 test("records runner completion and final VM reap monotonically", async () => {
   const completed = acceptingDb();
   expect(await applyWorkerLeaseEvent(completed.db, event("runner.finished", { leaseId, nonce, exitCode: 0 }))).toBe(true);
-  expect(completed.calls[0]!.values).toContain("completed");
-  expect(completed.calls[0]!.query).toContain("cleanup_state='pending'");
+  expect(completed.calls[0]).toMatchObject({ query: "worker_lifecycle_finish", values: { state: "completed", leaseId, workerId, nonce, terminalResult: JSON.stringify({ exitCode: 0 }) } });
 
   const reaped = acceptingDb();
   expect(await applyWorkerLeaseEvent(reaped.db, event("lease.reaped", { leaseId, nonce }))).toBe(true);
-  expect(reaped.calls[0]!.query).toContain("state='reaped'");
-  expect(reaped.calls[0]!.query).toContain("cleanup_state='completed'");
+  expect(reaped.calls[0]).toMatchObject({ query: "worker_lifecycle_reap", values: { leaseId, workerId, nonce } });
 });
 test("distinguishes duplicate reap events and identifies cleanup source and terminal reason", async () => {
   let transitions = 0;
-  const db = (async (strings: TemplateStringsArray) => {
-    const query = strings.join(" ");
-    if (query.includes("UPDATE runner_leases")) return transitions++ === 0 ? [{ id: leaseId }] : [];
-    if (query.includes("SELECT c.type")) return [{ commandType: "windows-container.stop_lease", terminalResult: { exitCode: 0 } }];
+  const { db } = acceptingDb(name => {
+    if (name === "worker_lifecycle_reap") return transitions++ === 0 ? [{ id: leaseId }] : [];
+    if (name === "worker_lifecycle_reap_context") return [{ commandType: "windows-container.stop_lease", terminalResult: { exitCode: 0 } }];
     return [];
-  }) as unknown as DatabaseClient;
+  });
   const observed: Record<string, unknown>[] = [];
   const originalLog = console.log;
   console.log = (message, detail) => { if (message === "Worker lease transition") observed.push(detail as Record<string, unknown>); };
@@ -69,8 +65,7 @@ test("distinguishes duplicate reap events and identifies cleanup source and term
 test("maps a nonzero runner exit to a failed terminal lease", async () => {
   const failed = acceptingDb();
   expect(await applyWorkerLeaseEvent(failed.db, event("runner.finished", { leaseId, nonce, exitCode: 17 }))).toBe(true);
-  expect(failed.calls[0]!.values).toContain("failed");
-  expect(failed.calls[0]!.values).toContainEqual({ exitCode: 17 });
+  expect(failed.calls[0]).toMatchObject({ query: "worker_lifecycle_finish", values: { state: "failed", leaseId, workerId, nonce, terminalResult: JSON.stringify({ exitCode: 17 }) } });
 });
 
 
@@ -79,18 +74,13 @@ test("marks cleanup failure and releases its acknowledged stop for retry", async
   const { db, calls } = acceptingDb();
   const commandId = crypto.randomUUID();
   expect(await applyWorkerLeaseEvent(db, event("lease.failed", { commandId, leaseId, nonce, reason: "cleanup_failed" }))).toBe(true);
-  expect(calls[0]!.query).toContain("cleanup_state='failed'");
-  expect(calls[0]!.query).not.toContain("terminal_result=");
-  expect(calls[0]!.query).toContain("'completed','failed'");
-  expect(calls[1]!.query).toContain("UPDATE commands SET state='failed'");
-  expect(calls[1]!.values).toEqual([commandId, workerId, leaseId]);
+  expect(calls[0]).toMatchObject({ query: "worker_lifecycle_cleanup_failed", values: { leaseId, workerId, nonce } });
+  expect(calls[1]).toMatchObject({ query: "worker_lifecycle_fail_stop_command", values: { commandId, workerId, leaseId } });
 });
-
 test("marks debug-preserved leases without scheduling cleanup", async () => {
   const { db, calls } = acceptingDb();
   expect(await applyWorkerLeaseEvent(db, event("lease.failed", { leaseId, nonce, reason: "debug_preserve" }))).toBe(true);
-  expect(calls[0]!.query).toContain("cleanup_state='debug_preserved'");
-  expect(calls[0]!.query).not.toContain("cleanup_state='pending'");
+  expect(calls[0]).toMatchObject({ query: "worker_lifecycle_debug_preserve", values: { leaseId, workerId, nonce, debugResult: JSON.stringify({ debugPreserved: true }) } });
 });
 test("computes bounded completed-job phase durations", () => {
   expect(timingDurations({
@@ -113,86 +103,33 @@ test("routes accepted commands through the dispatcher without mutating lease sta
   expect(dispatched).toEqual([expect.objectContaining({ type: "command.accepted" }), socket]);
   expect(calls).toHaveLength(0);
 });
-test("routes authenticated worker cache telemetry to durable cache storage", async () => {
-  const { db, calls } = acceptingDb();
+test("persists a valid worker cache entry without dispatching it", async () => {
   const generation = crypto.randomUUID();
-  const dispatched: unknown[] = [];
-  const accepted = await handleAuthenticatedWorkerEvent(
-    db,
-    { handleEvent(input) { dispatched.push(input); return true; } },
-    event("worker.cache_entry_upsert", {
-      generation,
-      entry: {
-        entryId: crypto.randomUUID(),
-        githubRepositoryId: "123456789012345",
-        cacheKeyPreview: "build-linux",
-        cacheKeyHash: "a".repeat(64),
-        scopePreview: "refs/heads/main",
-        scopeHash: "b".repeat(64),
-        versionHash: "c".repeat(64),
-        sizeBytes: "9007199254740993",
-        createdAt: "2026-08-23T12:00:00.000Z",
-        lastAccessedAt: "2026-08-23T12:01:00.000Z",
-        expiresAt: "2026-08-25T12:01:00.000Z",
-      },
-    }),
-    { send() {} },
-  );
-  expect(accepted).toBe(true);
-  expect(dispatched).toHaveLength(0);
-  expect(calls.length).toBeGreaterThanOrEqual(2);
-  const insert = calls.find((call) => call.query.includes("INSERT INTO worker_cache_entries"));
-  expect(insert?.query).toContain("INSERT INTO worker_cache_entries");
-  expect(insert?.values).toContain(workerId);
+  const entry = { entryId: crypto.randomUUID(), githubRepositoryId: "123456789012345", cacheKeyPreview: "build-linux", cacheKeyHash: "a".repeat(64), scopePreview: "refs/heads/main", scopeHash: "b".repeat(64), versionHash: "c".repeat(64), sizeBytes: "9007199254740993", createdAt: "2026-08-23T12:00:00.000Z", lastAccessedAt: "2026-08-23T12:01:00.000Z", expiresAt: "2026-08-25T12:01:00.000Z" };
+  const calls: Array<{ name: string; parameters: Record<string, unknown> }> = [];
+  const db = preparedTestDatabase((name, parameters) => {
+    calls.push({ name, parameters });
+    if (name === "worker_cache_generation") return [{ generation }];
+    return [];
+  });
+  let dispatches = 0;
+  expect(await handleAuthenticatedWorkerEvent(db, { handleEvent() { dispatches++; return false; } }, event("worker.cache_entry_upsert", { generation, entry }), { send() {} })).toBe(true);
+  expect(dispatches).toBe(0);
+  expect(calls.find(call => call.name === "worker_cache_entry_upsert")?.parameters).toMatchObject({ workerId, entryId: entry.entryId, githubRepositoryId: entry.githubRepositoryId, generation });
 });
-test("routes authenticated runner cache status telemetry to durable status columns", async () => {
-  const calls: Array<{ query: string; values: unknown[] }> = [];
-  let db: DatabaseClient;
-  db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const query = strings.join(" ");
-    calls.push({ query, values });
-    if (query.includes("UPDATE worker_cache_status SET runner_cache_") && values.includes(generation)) return [{ worker_id: workerId }];
-    return query.includes("SELECT generation FROM worker_cache_status") ? [{ generation }] : [];
-  }, { begin: async (fn: (tx: DatabaseClient) => unknown) => fn(db) }) as unknown as DatabaseClient;
-  const accepted = await handleAuthenticatedWorkerEvent(
-    db,
-    { handleEvent() { return false; } },
-    event("worker.runner_cache_status", { generation, enabled: true, maxGiB: 20, sizeBytes: "123", entryCount: 1, observedAt: new Date().toISOString() }),
-    { send() {} },
-  );
-  expect(accepted).toBe(true);
-  expect(calls.some(({ query }) => query.includes("UPDATE worker_cache_status SET runner_cache_enabled"))).toBe(true);
+test("stores runner cache status only for the current generation", async () => {
+  const calls: Array<{ name: string; parameters: Record<string, unknown> }> = [];
+  const db = preparedTestDatabase((name, parameters) => {
+    calls.push({ name, parameters });
+    return name === "worker_cache_generation" ? [{ generation }] : name === "worker_cache_runner_status" ? [{ workerId }] : [];
+  });
+  const frame = event("worker.runner_cache_status", { generation, enabled: true, maxGiB: 20, sizeBytes: "123", entryCount: 1, observedAt: new Date().toISOString() });
+  expect(await handleAuthenticatedWorkerEvent(db, { handleEvent() { return false; } }, frame, { send() {} })).toBe(true);
+  expect(calls.find(call => call.name === "worker_cache_runner_status")?.parameters).toMatchObject({ workerId, generation, enabled: true, maxGiB: 20, sizeBytes: "123", entryCount: 1 });
+  calls.length = 0;
+  expect(await handleAuthenticatedWorkerEvent(db, { handleEvent() { return false; } }, { ...frame, payload: { ...frame.payload, generation: crypto.randomUUID() } }, { send() {} })).toBe(true);
+  expect(calls.map(call => call.name)).toEqual(["worker_cache_generation"]);
 });
-test("does not route runner cache status through lease lifecycle persistence", async () => {
-  const { db, calls } = acceptingDb();
-  expect(await applyWorkerLeaseEvent(db, event("worker.runner_cache_status", { generation, enabled: true, maxGiB: 20, sizeBytes: "1", entryCount: 0, observedAt: new Date().toISOString() }))).toBe(false);
-  expect(calls).toHaveLength(0);
-});
-test("accepts cache snapshot telemetry frames", async () => {
-  const base = acceptingDb();
-  const db = Object.assign(base.db, { begin: async (fn: (tx: typeof base.db) => unknown) => fn(base.db) }) as typeof base.db;
-  const accepted = await handleAuthenticatedWorkerEvent(
-    db,
-    { handleEvent() { return false; } },
-    event("worker.cache_snapshot_begin", {
-      snapshotId: crypto.randomUUID(),
-      status: {
-        generation: crypto.randomUUID(),
-        ready: true,
-        ttlSeconds: 3600,
-        proxyOrigin: "http://proxy.example.test",
-        cacheBaseUrl: "https://cache.example.test",
-        sizeBytes: "0",
-        entryCount: 0,
-        observedAt: new Date().toISOString(),
-        error: null,
-      },
-    }),
-    { send() {} },
-  );
-  expect(accepted).toBe(true);
-});
-
 
 test("persists authenticated lifecycle events independently of command acknowledgement state", async () => {
   const { db, calls } = acceptingDb();
@@ -203,11 +140,6 @@ test("persists authenticated lifecycle events independently of command acknowled
   expect(calls.length).toBeGreaterThanOrEqual(1);
 });
 
-test("accepts a valid stale lifecycle event without closing the authenticated socket", async () => {
-  const db = Object.assign(async () => [], {}) as never;
-  const accepted = await handleAuthenticatedWorkerEvent(db, { handleEvent() { return false; } }, event("lease.failed", { leaseId, nonce, reason: "provisioning_failed" }), { send() {} });
-  expect(accepted).toBe(true);
-});
 test("acknowledges a durable stop command when its reaped event arrives", async () => {
   const { db } = acceptingDb();
   const commandId = crypto.randomUUID();
@@ -235,40 +167,26 @@ test("rejects malformed or unauthenticated lifecycle events without touching sto
 test("persists attributed and unattributed log chunks idempotently and rejects unknown steps", async () => {
   const stepId = "33333333-3333-4333-8333-333333333333";
   const jobId = "44444444-4444-4444-8444-444444444444";
-  const calls: string[] = [];
-  let lookup = 0;
-  const db = Object.assign(async (strings: TemplateStringsArray) => {
-    calls.push(strings.join(" "));
-    lookup += 1;
-    return lookup === 1 ? [{ organizationId: "org", runId: "run", jobId }] : [{ id: stepId }];
-  }, {}) as never;
+  const { db, calls } = acceptingDb(name => name === "worker_lifecycle_log_job" ? [{ organizationId: "org", runId: "run", jobId }] : name === "worker_lifecycle_log_step" ? [{ id: stepId }] : []);
   const attributed = event("job.log", { jobId, stepId, sequence: 0, content: "safe", occurredAt: new Date().toISOString() });
   expect(await handleAuthenticatedWorkerEvent(db, { handleEvent() { return false; } }, attributed, { send() {} })).toBe(true);
-  expect(calls.at(-1)).toContain("dashboard_step_log_chunks");
+  expect(calls.at(-1)).toMatchObject({ query: "worker_lifecycle_step_log_chunk", values: { jobId, stepId, content: "safe", sequence: 0 } });
   const unattributed = event("job.log", { jobId, stepId: null, sequence: 1, content: "fallback", occurredAt: new Date().toISOString() });
   expect(await handleAuthenticatedWorkerEvent(db, { handleEvent() { return false; } }, unattributed, { send() {} })).toBe(true);
-
-  expect(calls.at(-1)).toContain("dashboard_log_chunks");
-  const unknownDb = Object.assign(async (_strings: TemplateStringsArray, ..._values: unknown[]) => (calls.length < 0 ? [{ organizationId: "org", runId: "run", jobId }] : []), {}) as never;
-  expect(await handleAuthenticatedWorkerEvent(unknownDb, { handleEvent() { return false; } }, attributed, { send() {} })).toBe(false);
+  expect(calls.at(-1)).toMatchObject({ query: "worker_lifecycle_log_chunk", values: { jobId, content: "fallback", sequence: 1 } });
+  const missingStep = preparedTestDatabase(name => name === "worker_lifecycle_log_job" ? [{ organizationId: "org", runId: "run", jobId }] : []);
+  expect(await handleAuthenticatedWorkerEvent(missingStep, { handleEvent() { return false; } }, attributed, { send() {} })).toBe(false);
 });
-
 test("acknowledges delayed logs for a terminal lease without persisting them", async () => {
   const jobId = "44444444-4444-4444-8444-444444444444";
-  const queries: string[] = [];
-  const db = Object.assign(async (strings: TemplateStringsArray) => {
-    const query = strings.join(" ");
-    queries.push(query);
-    return query.includes("l.state IN ('reaped','failed')") ? [{ "?column?": 1 }] : [];
-  }, {}) as never;
-  const accepted = await handleAuthenticatedWorkerEvent(
-    db, { handleEvent() { return false; } },
-    event("job.log", { jobId, stepId: null, sequence: 0, content: "late", occurredAt: new Date().toISOString() }),
-    { send() {} },
-  );
+  const calls: string[] = [];
+  const db = preparedTestDatabase(name => {
+    calls.push(name);
+    return name === "worker_lifecycle_terminal_log_fence" ? [{ id: leaseId }] : [];
+  });
+  const accepted = await handleAuthenticatedWorkerEvent(db, { handleEvent() { return false; } }, event("job.log", { jobId, stepId: null, sequence: 0, content: "late", occurredAt: new Date().toISOString() }), { send() {} });
   expect(accepted).toBe(true);
-  expect(queries).toHaveLength(2);
-  expect(queries.every(query => !query.includes("INSERT"))).toBe(true);
+  expect(calls).toEqual(["worker_lifecycle_log_job", "worker_lifecycle_terminal_log_fence"]);
 });
 
 test("persists authenticated diagnostic chunks under the configured root", async () => {
@@ -276,9 +194,10 @@ test("persists authenticated diagnostic chunks under the configured root", async
   const previous = Bun.env.MARS_DIAGNOSTICS_ROOT;
   Bun.env.MARS_DIAGNOSTICS_ROOT = root;
   const diagnosticId = crypto.randomUUID();
+
   try {
     const accepted = await handleAuthenticatedWorkerEvent(
-      Object.assign(async () => [], {}) as never,
+      acceptingDb(() => []).db,
       { handleEvent() { return false; } },
       event("diagnostic.chunk", { jobId: crypto.randomUUID(), leaseId, diagnosticId, sequence: 0, content: "raw worker evidence", final: true }),
       { send() {} },

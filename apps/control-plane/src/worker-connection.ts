@@ -1,6 +1,15 @@
 import type { DatabaseClient } from "@mars/db";
+import { defineQueries, schema } from "@mars/db";
+import { eq, sql } from "drizzle-orm";
 import type { AuthenticatedWorkerSocket, WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { reconcileWorkerConfigurationOnConnect } from "./worker-requests.ts";
+
+const queries = defineQueries(db => ({
+  authenticateWithKey: db.update(schema.workers).set({ encryptionPublicKey: sql`coalesce(${schema.workers.encryptionPublicKey}, ${sql.placeholder("encryptionPublicKey")})`, enrollmentAuthenticatedAt: sql`now()`, enrollmentCodeHash: null }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("worker_connection_authenticate_key"),
+  authenticate: db.update(schema.workers).set({ enrollmentAuthenticatedAt: sql`now()`, enrollmentCodeHash: null }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("worker_connection_authenticate"),
+  heartbeat: db.update(schema.workers).set({ lastHeartbeatAt: sql`now()` }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("worker_connection_heartbeat"),
+  online: db.update(schema.workers).set({ connectionState: "online" }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("worker_connection_online"),
+}));
 
 export async function activateAuthenticatedWorkerConnection<Socket extends AuthenticatedWorkerSocket>(input: {
   db: DatabaseClient;
@@ -18,16 +27,16 @@ export async function activateAuthenticatedWorkerConnection<Socket extends Authe
   await (input.reconcile ?? reconcileWorkerConfigurationOnConnect)(input.db, input.workerId, input.sameProcess);
   if (input.isCurrent && !input.isCurrent()) return false;
   if (input.encryptionPublicKey) {
-    await input.db`update workers set encryption_public_key=COALESCE(encryption_public_key,${input.encryptionPublicKey}), enrollment_authenticated_at=now(), enrollment_code_hash=null where id=${input.workerId} and enrollment_authenticated_at is null`;
+    await queries(input.db).authenticateWithKey.execute({ workerId: input.workerId, encryptionPublicKey: input.encryptionPublicKey });
   } else {
-    await input.db`update workers set enrollment_authenticated_at=now(), enrollment_code_hash=null where id=${input.workerId} and enrollment_authenticated_at is null`;
+    await queries(input.db).authenticate.execute({ workerId: input.workerId });
   }
-  await input.db`update workers set last_heartbeat_at=now() where id=${input.workerId}`;
+  await queries(input.db).heartbeat.execute({ workerId: input.workerId });
   if (input.isCurrent && !input.isCurrent()) return false;
   if (input.activate && !input.activate()) return false;
   input.markAuthenticated();
   input.workerSockets.set(input.workerId, input.socket);
   input.dispatcher.register(input.workerId, input.socket);
-  await input.db`update workers set connection_state='online' where id=${input.workerId}`;
+  await queries(input.db).online.execute({ workerId: input.workerId });
   return true;
 }

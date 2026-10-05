@@ -7,5 +7,5 @@ const db = createDb(databaseUrl);
 try {
   await migrateDatabase(db);
 } finally {
-  await db.end({ timeout: 5 });
+  await db.$client.end({ timeout: 5 });
 }

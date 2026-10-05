@@ -1,4 +1,30 @@
-import type { DatabaseClient } from "@mars/db";
+import { and, eq, inArray, isNotNull, notInArray, or, sql } from "drizzle-orm";
+import { defineQueries, schema, type DatabaseClient } from "@mars/db";
+
+const queries = defineQueries(db => ({
+  candidates: db.select({
+    leaseId: schema.runnerLeases.id, workerId: schema.runnerLeases.workerId, workerName: schema.workers.name, nonce: schema.runnerLeases.nonce,
+    cleanupType: sql<CleanupLease["cleanupType"]>`(select case
+      when ${schema.commands.type}='linux-vm.create_lease' then 'linux-vm.stop_lease'
+      when ${schema.commands.type}='linux-container.create_lease' then 'linux-container.stop_lease'
+      when ${schema.commands.type}='windows-container.create_lease' then 'windows-container.stop_lease'
+      when ${schema.commands.type}='hyperv.create_lease' then 'hyperv.stop_lease'
+      when ${schema.commands.type}='tart.create_lease' then 'tart.stop_lease'
+    end from ${schema.commands} where ${schema.commands.leaseId}=${schema.runnerLeases.id}
+      and ${inArray(schema.commands.type, ["linux-vm.create_lease", "linux-container.create_lease", "windows-container.create_lease", "hyperv.create_lease", "tart.create_lease"])}
+      order by ${schema.commands.occurredAt} asc limit 1)`,
+  }).from(schema.runnerLeases).leftJoin(schema.workers, eq(schema.workers.id, schema.runnerLeases.workerId))
+    .where(and(inArray(schema.runnerLeases.state, ["completed", "failed"]), inArray(schema.runnerLeases.cleanupState, ["pending", "failed"]),
+      sql`not exists (select 1 from ${schema.commands} where ${schema.commands.leaseId}=${schema.runnerLeases.id}
+        and ${inArray(schema.commands.type, ["linux-vm.stop_lease", "linux-container.stop_lease", "tart.stop_lease", "windows-container.stop_lease", "hyperv.stop_lease"])}
+        and ${schema.commands.payload}->>'nonce'=${schema.runnerLeases.nonce}
+        and ${inArray(schema.commands.state, ["pending", "sent", "acknowledged"])})`))
+    .limit(100).prepare("lease_cleanup_candidates"),
+  reap: db.update(schema.runnerLeases).set({ state: "reaped", cleanupState: "completed", updatedAt: sql`now()` })
+    .where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.nonce, sql.placeholder("nonce")),
+      inArray(schema.runnerLeases.state, ["completed", "failed"]), inArray(schema.runnerLeases.cleanupState, ["pending", "failed"])))
+    .returning({ id: schema.runnerLeases.id }).prepare("lease_cleanup_reap"),
+}));
 
 type CleanupLease = { leaseId: string; workerId: string; workerName?: string; nonce: string; cleanupType?: "linux-vm.stop_lease" | "linux-container.stop_lease" | "tart.stop_lease" | "windows-container.stop_lease" | "hyperv.stop_lease" };
 export type LeaseCleanupReport = { dispatched: number; skipped: number; failed: number };
@@ -8,37 +34,11 @@ export async function reapPendingLeases(input: {
   dispatch: (command: { type: string; workerId: string; leaseId: string; payload: Record<string, unknown> }) => Promise<unknown>;
   workerConnected: (workerId: string) => boolean;
 }): Promise<LeaseCleanupReport> {
-  const leases = await input.db<CleanupLease[]>`SELECT l.id AS "leaseId", l.worker_id AS "workerId", w.name AS "workerName", l.nonce,
-      COALESCE((
-        SELECT CASE
-          WHEN c.type='linux-vm.create_lease' THEN 'linux-vm.stop_lease'
-          WHEN c.type='linux-container.create_lease' THEN 'linux-container.stop_lease'
-          WHEN c.type='windows-container.create_lease' THEN 'windows-container.stop_lease'
-          WHEN c.type='hyperv.create_lease' THEN 'hyperv.stop_lease'
-          WHEN c.type='tart.create_lease' THEN 'tart.stop_lease'
-        END
-        FROM commands c
-        WHERE c.lease_id=l.id AND c.type IN ('linux-vm.create_lease','linux-container.create_lease','windows-container.create_lease','hyperv.create_lease','tart.create_lease')
-        ORDER BY c.occurred_at ASC LIMIT 1
-      )) AS "cleanupType"
-    FROM runner_leases l LEFT JOIN workers w ON w.id=l.worker_id
-    WHERE l.state IN ('completed','failed')
-      AND l.cleanup_state IN ('pending','failed')
-      AND NOT EXISTS (
-        SELECT 1 FROM commands c
-        WHERE c.lease_id=l.id AND c.type IN ('linux-vm.stop_lease','linux-container.stop_lease','tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease')
-          AND c.payload->>'nonce'=l.nonce
-          AND c.state IN ('pending','sent','acknowledged')
-      )
-    LIMIT 100`;
+  const leases = await queries(input.db).candidates.execute() as CleanupLease[];
   const report: LeaseCleanupReport = { dispatched: 0, skipped: 0, failed: 0 };
   for (const lease of leases) {
     if (!lease.cleanupType) {
-      const reaped = await input.db`UPDATE runner_leases SET state='reaped', cleanup_state='completed', updated_at=now()
-        WHERE id=${lease.leaseId} AND nonce=${lease.nonce}
-          AND state IN ('completed','failed')
-          AND cleanup_state IN ('pending','failed')
-        RETURNING id`;
+      const reaped = await queries(input.db).reap.execute({ leaseId: lease.leaseId, nonce: lease.nonce });
       if (!reaped[0]) report.skipped += 1;
       continue;
     }

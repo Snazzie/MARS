@@ -1,8 +1,8 @@
 import { SecretBox } from "../auth.ts";
 import type { ControlPlaneHttpDeps } from "./types.ts";
 import type { WorkerReleaseManifest } from "@mars/contracts";
+import { preparedTestDatabase } from "../../../../packages/db/src/prepared-test-fixture.ts";
 
-const fakeDb = (() => []) as unknown as ControlPlaneHttpDeps["db"];
 const testHash = "a".repeat(64);
 const testAsset = (name: string) => ({ url: `https://release.test/${name}`, sha256: testHash });
 const testReleaseManifest: WorkerReleaseManifest = {
@@ -66,7 +66,7 @@ export function fakeHttpDeps(overrides: TestOverrides = {}): ControlPlaneHttpDep
   const publicOrigin = legacy.baseUrl ?? "https://control-plane.test";
   const browserOrigin = legacy.browserBaseUrl ?? publicOrigin;
   return {
-    db: fakeDb,
+    db: overrides.db ?? preparedTestDatabase(() => []),
     setup: { ...fakeSetup, publicOrigin: () => publicOrigin },
     workerConnectionOrigins: () => [publicOrigin],
     browserOrigin: () => browserOrigin,

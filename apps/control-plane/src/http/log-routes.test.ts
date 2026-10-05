@@ -1,12 +1,13 @@
 import { expect, test } from "bun:test";
 import { createControlPlaneApp } from "./app.ts";
 import { fakeHttpDeps } from "./test-deps.ts";
+import { preparedTestDatabase } from "../../../../packages/db/src/prepared-test-fixture.ts";
 
 const workerId = "11111111-1111-4111-8111-111111111111";
 const admin = { id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true };
 const member = { ...admin, id: "member", login: "member", isGlobalAdmin: false };
 
-const workerDb = Object.assign(async (strings: TemplateStringsArray) => strings.join(" ").includes("SELECT id FROM workers") ? [{ id: workerId }] : [], {}) as never;
+const workerDb = preparedTestDatabase(name => name === "route_worker" ? [{ id: workerId }] : []);
 
 test("control-plane logs require global administrator access and preserve filters", async () => {
   const source = {

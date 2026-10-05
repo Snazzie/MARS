@@ -1,3 +1,4 @@
+import { preparedTestDatabase } from "../../../packages/db/src/prepared-test-fixture.ts";
 import { describe, expect, test } from "bun:test";
 import { createControlPlaneApp } from "./http/app.ts";
 import { fakeHttpDeps } from "./http/test-deps.ts";
@@ -28,12 +29,11 @@ describe("onboarding HTTP contract", () => {
   test("repository verification remains blocked until an imported repository is available", async () => {
     const organizationId = "00000000-0000-4000-8000-000000000002";
     let refreshes = 0;
-    const db = (async (strings: TemplateStringsArray) => {
-      const query = strings.join(" ");
-      if (query.includes('organization_id AS "organizationId"') && !query.includes("count(DISTINCT r.id)")) return [{ organizationId }];
-      if (query.includes("count(DISTINCT r.id)")) return refreshes >= 2 ? [{ organizationId, repositoryCount: 1 }] : [];
+    const db = preparedTestDatabase(name => {
+      if (name === "onboarding_repository_organization") return [{ organizationId }];
+      if (name === "onboarding_verified_repositories") return refreshes >= 2 ? [{ organizationId, repositoryCount: 1 }] : [];
       return [];
-    }) as never;
+    });
     const app = createControlPlaneApp(fakeHttpDeps({
       db,
       currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
@@ -56,18 +56,18 @@ describe("onboarding HTTP contract", () => {
     const poolId = "00000000-0000-4000-8000-000000000003";
     const repositoryId = "00000000-0000-4000-8000-000000000004";
     const installationId = "00000000-0000-4000-8000-000000000005";
-    const db = (async (strings: TemplateStringsArray) => {
-      const query = strings.join(" ");
-      const normalized = query.toLowerCase();
-      if (query.includes('so.admin_user_id AS "adminUserId"')) return [{ adminUserId: "admin", workerId, organizationId, completedAt: null, workerAdmissionState: "adopted", workerConfigurationState: "ready", githubReady: true, verificationRepositoryId: null, verificationPoolId: null, verificationWorkflowPath: null, verificationGithubRunId: null, verificationStartedAt: null, verificationError: null }];
-      if (query.includes("FROM workers w JOIN system_onboarding")) return [{ id: workerId, name: "windows-worker", platform: "windows-x64", guestPlatforms: ["windows-x64"], admissionState: "adopted", connectionState: "online", configurationState: "ready", desiredConfiguration: { selectedDriver: "windows-hyperv-container" }, configurationRevision: "a".repeat(64), appliedConfigurationRevision: "a".repeat(64), doctorObservedAt: new Date(), publicKey: "public", fingerprint: "fingerprint", vmUuid: workerId, machineUuid: workerId, doctor: { doctor: { capabilities: [{ driver: "windows-hyperv-container", guestPlatform: "windows-x64", imageDigest: `sha256:${"a".repeat(64)}`, ready: true, remediation: null }] }, capacity: { actualVcpu: 4, actualMemoryBytes: 8_589_934_592, actualStorageBytes: 42_949_672_960, freeVcpu: 4, freeMemoryBytes: 8_589_934_592, freeStorageBytes: 42_949_672_960 } }, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_294_967_296, maxStorageBytesPerPod: 21_474_836_480, maxConcurrentPods: 1 } }];
-      if (query.includes("SELECT organization_id AS")) return [{ organizationId }];
-      if (query.includes("FROM dashboard_installations WHERE")) return [{ id: installationId, githubInstallationId: 42, state: "approved", repositorySelection: "all" }];
-      if (query.includes("FROM dashboard_repositories WHERE")) return [{ id: repositoryId, organizationId, name: "private", fullName: "acme/private", visibility: "private", available: true, installationId, discoveryError: null, discoveryRetryAt: null }];
-      if (query.includes("FROM runner_pools") && normalized.includes("p.organization_id is null")) return [{ id: poolId, organizationId: null, workerId: null, workerName: "Shared fleet", name: "default", platform: "windows-x64", driver: "windows-hyperv-container", imageDigest: `sha256:${"a".repeat(64)}`, resources: { vcpu: 2, memoryBytes: 2_147_483_648, storageBytes: 10_737_418_240, concurrency: 1 }, cpuMode: "shared", labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64", enabled: true, active: 0 }];
-      if (query.includes("INSERT INTO dashboard_mutations")) return [{ idempotency_key: "verify-1" }];
+    const db = preparedTestDatabase(name => {
+      if (name === "onboarding_status") return [{ adminUserId: "admin", workerId, organizationId, completedAt: null, publicBaseUrl: null, originConfigured: true, githubAppConfigured: true, workerAdmissionState: "adopted", workerConfigurationState: "ready", githubReady: true }];
+      if (name === "onboarding_selected_worker") return [{ id: workerId, name: "windows-worker", platform: "windows-x64", guestPlatforms: ["windows-x64"], admissionState: "adopted", connectionState: "online", configurationState: "ready", desiredConfiguration: { selectedDriver: "windows-hyperv-container" }, configurationRevision: "a".repeat(64), appliedConfigurationRevision: "a".repeat(64), doctorObservedAt: new Date(), publicKey: "public", fingerprint: "fingerprint", vmUuid: workerId, machineUuid: workerId, doctor: { doctor: { capabilities: [{ driver: "windows-hyperv-container", guestPlatform: "windows-x64", imageDigest: `sha256:${"a".repeat(64)}`, ready: true, remediation: null }] }, capacity: { actualVcpu: 4, actualMemoryBytes: 8_589_934_592, actualStorageBytes: 42_949_672_960, freeVcpu: 4, freeMemoryBytes: 8_589_934_592, freeStorageBytes: 42_949_672_960 } }, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_294_967_296, maxStorageBytesPerPod: 21_474_836_480, maxConcurrentPods: 1 } }];
+      if (name === "onboarding_state") return [{ organizationId }];
+      if (name === "onboarding_installation") return [{ id: installationId, githubInstallationId: 42, state: "approved", repositorySelection: "all" }];
+      if (name === "onboarding_repositories") return [{ id: repositoryId, organizationId, name: "private", fullName: "acme/private", visibility: "private", available: true, installationId, discoveryError: null, discoveryRetryAt: null }];
+      if (name === "onboarding_pools") return [{ id: poolId, organizationId: null, workerId: null, workerName: "Shared fleet", name: "default", platform: "windows-x64", driver: "windows-hyperv-container", imageDigest: `sha256:${"a".repeat(64)}`, resources: { vcpu: 2, memoryBytes: 2_147_483_648, storageBytes: 10_737_418_240, concurrency: 1 }, cpuMode: "shared", labels: ["mars-windows-x64"], triggerLabel: "mars-windows-x64", enabled: true, active: 0 }];
+      if (name === "onboarding_app_configured") return [{ configured: true }];
+      if (name === "dashboard_mutation" || name === "route_insert_mutation") return [{ idempotencyKey: "verify-1" }];
+      if (name === "dashboard_invalidate") return [];
       return [];
-    }) as never;
+    });
     const app = createControlPlaneApp(fakeHttpDeps({
       db,
       currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
@@ -91,15 +91,14 @@ describe("onboarding HTTP contract", () => {
     const organizationId = "00000000-0000-4000-8000-000000000002";
     const installationId = "00000000-0000-4000-8000-000000000003";
     const containerDigest = `sha256:${"a".repeat(64)}`;
-    const db = (async (strings: TemplateStringsArray) => {
-      const query = strings.join(" ");
-      if (query.includes('so.admin_user_id AS "adminUserId"')) return [{ adminUserId: "admin", workerId, organizationId, completedAt: null, workerAdmissionState: "adopted", workerConfigurationState: "ready", githubReady: true }];
-      if (query.includes("FROM workers w JOIN system_onboarding")) return [{ id: workerId, name: "windows-worker", platform: "windows-x64", guestPlatforms: ["windows-x64"], admissionState: "adopted", connectionState: "online", configurationState: "ready", publicKey: "public", fingerprint: "fingerprint", vmUuid: workerId, machineUuid: workerId, doctor: { doctor: {}, capacity: { actualVcpu: 4, actualMemoryBytes: 8_589_934_592, actualStorageBytes: 42_949_672_960, freeVcpu: 4, freeMemoryBytes: 8_589_934_592, freeStorageBytes: 42_949_672_960 } }, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_294_967_296, maxStorageBytesPerPod: 21_474_836_480, maxConcurrentPods: 1 }, configurationRevision: "a".repeat(64) }];
-      if (query.includes("SELECT organization_id AS")) return [{ organizationId }];
-      if (query.includes("FROM dashboard_installations WHERE")) return [{ id: installationId, githubInstallationId: 42, state: "approved", repositorySelection: "all" }];
-      if (query.includes("FROM github_app_config")) return [{}];
+    const db = preparedTestDatabase(name => {
+      if (name === "onboarding_status") return [{ adminUserId: "admin", workerId, organizationId, completedAt: null, publicBaseUrl: null, originConfigured: true, githubAppConfigured: true, workerAdmissionState: "adopted", workerConfigurationState: "ready", githubReady: true }];
+      if (name === "onboarding_selected_worker") return [{ id: workerId, name: "windows-worker", platform: "windows-x64", guestPlatforms: ["windows-x64"], admissionState: "adopted", connectionState: "online", configurationState: "ready", publicKey: "public", fingerprint: "fingerprint", vmUuid: workerId, machineUuid: workerId, doctor: { doctor: {}, capacity: { actualVcpu: 4, actualMemoryBytes: 8_589_934_592, actualStorageBytes: 42_949_672_960, freeVcpu: 4, freeMemoryBytes: 8_589_934_592, freeStorageBytes: 42_949_672_960 } }, limits: { maxVcpuPerPod: 2, maxMemoryBytesPerPod: 4_294_967_296, maxStorageBytesPerPod: 21_474_836_480, maxConcurrentPods: 1 }, configurationRevision: "a".repeat(64), appliedConfigurationRevision: "a".repeat(64), desiredConfiguration: { selectedDriver: "windows-hyperv-container" }, doctorObservedAt: new Date() }];
+      if (name === "onboarding_state") return [{ organizationId }];
+      if (name === "onboarding_installation") return [{ id: installationId, githubInstallationId: 42, state: "approved", repositorySelection: "all" }];
+      if (name === "onboarding_app_configured") return [{ configured: true }];
       return [];
-    }) as never;
+    });
     const response = await createControlPlaneApp(fakeHttpDeps({
       db,
       currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),

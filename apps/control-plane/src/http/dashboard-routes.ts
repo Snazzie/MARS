@@ -1,8 +1,50 @@
 import { Hono, type Context } from "hono";
+import { and, desc, eq, isNull, ne, notInArray, or, sql } from "drizzle-orm";
+import { defineQueries, schema } from "@mars/db";
+const routeQueries = defineQueries(db => ({
+  membership: db.select({ allowed: sql`1` }).from(schema.memberships).where(and(eq(schema.memberships.userId, sql.placeholder("userId")), eq(schema.memberships.organizationId, sql.placeholder("organizationId")))).prepare("route_membership"),
+  worker: db.select({ id: schema.workers.id }).from(schema.workers).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("route_worker"),
+  purgeWorker: db.select({ id: schema.workers.id, admissionState: schema.workers.admissionState }).from(schema.workers).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("route_purge_worker"),
+  preserveLeases: db.update(schema.workers).set({ preserveLeases: sql`${sql.placeholder("enabled")}` }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("route_preserve_leases"),
+  requeuePreservedLeases: db.update(schema.runnerLeases).set({ cleanupState: "pending" }).where(and(eq(schema.runnerLeases.workerId, sql.placeholder("workerId")), eq(schema.runnerLeases.state, "failed"), eq(schema.runnerLeases.cleanupState, "debug_preserved"))).prepare("route_requeue_preserved_leases"),
+  rejectWorker: db.update(schema.workers).set({ admissionState: "rejected" }).where(and(eq(schema.workers.id, sql.placeholder("workerId")), eq(schema.workers.admissionState, "pending"))).prepare("route_reject_worker"),
+  drainWorker: db.update(schema.workers).set({ draining: true }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("route_drain_worker"),
+  resumeWorker: db.update(schema.workers).set({ draining: false }).where(and(eq(schema.workers.id, sql.placeholder("workerId")), eq(schema.workers.admissionState, "adopted"), eq(schema.workers.configurationState, "ready"))).prepare("route_resume_worker"),
+  activeWorkerLease: db.select({ id: schema.runnerLeases.id }).from(schema.runnerLeases).where(and(eq(schema.runnerLeases.workerId, sql.placeholder("workerId")), notInArray(schema.runnerLeases.state, ["reaped", "failed", "expired", "completed"]))).limit(1).prepare("route_active_worker_lease"),
+  removeWorkerDrain: db.update(schema.workers).set({ draining: true }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("route_remove_worker_drain"),
+  removeWorkerPools: db.update(schema.runnerPools).set({ enabled: false }).where(eq(schema.runnerPools.workerId, sql.placeholder("workerId"))).prepare("route_remove_worker_pools"),
+  removeWorkerRevoke: db.update(schema.workers).set({ admissionState: "revoked" }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("route_remove_worker_revoke"),
+  removeWorkerAudit: db.insert(schema.auditEvents).values({ actor: sql.placeholder("actor"), type: "worker.removed", payload: sql`${sql.placeholder("payload")}::jsonb` }).prepare("route_remove_worker_audit"),
+  poolWorker: db.select({ platform: schema.workers.platform, contractVersion: schema.workers.contractVersion, limits: schema.workers.limits, guestPlatforms: schema.workers.guestPlatforms, admissionState: schema.workers.admissionState, configurationState: schema.workers.configurationState, configurationRevision: schema.workers.configurationRevision, appliedConfigurationRevision: schema.workers.appliedConfigurationRevision, desiredConfiguration: schema.workers.desiredConfiguration, lastDoctorAt: schema.workers.doctorObservedAt, doctor: schema.workers.doctor }).from(schema.workers).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("route_pool_worker"),
+  globalPoolDuplicate: db.select({ id: schema.runnerPools.id }).from(schema.runnerPools).where(and(isNull(schema.runnerPools.organizationId), or(eq(schema.runnerPools.name, sql.placeholder("name")), eq(schema.runnerPools.triggerLabel, sql.placeholder("triggerLabel"))))).limit(1).prepare("route_global_pool_duplicate"),
+  globalPoolDuplicateOther: db.select({ id: schema.runnerPools.id }).from(schema.runnerPools).where(and(isNull(schema.runnerPools.organizationId), ne(schema.runnerPools.id, sql.placeholder("poolId")), or(eq(schema.runnerPools.name, sql.placeholder("name")), eq(schema.runnerPools.triggerLabel, sql.placeholder("triggerLabel"))))).limit(1).prepare("route_global_pool_duplicate_other"),
+  globalPoolCreate: db.insert(schema.runnerPools).values({ organizationId: null, workerId: null, name: sql.placeholder("name"), platform: sql.placeholder("platform"), driver: sql.placeholder("driver"), imageDigest: sql.placeholder("imageDigest"), resources: sql.placeholder("resources"), cpuMode: sql.placeholder("cpuMode"), labels: sql.placeholder("labels"), triggerLabel: sql.placeholder("triggerLabel"), enabled: sql.placeholder("enabled") }).returning({ id: schema.runnerPools.id }).prepare("route_global_pool_create"),
+  globalPoolEditInfo: db.select({ id: schema.runnerPools.id, enabled: schema.runnerPools.enabled, active: sql<number>`(${db.select({ count: sql<number>`count(*)::int` }).from(schema.runnerLeases).where(and(eq(schema.runnerLeases.poolId, schema.runnerPools.id), ne(schema.runnerLeases.state, "reaped")))})` }).from(schema.runnerPools).where(and(eq(schema.runnerPools.id, sql.placeholder("poolId")), isNull(schema.runnerPools.organizationId))).prepare("route_global_pool_edit_info"),
+  globalPoolUpdate: db.update(schema.runnerPools).set({ name: sql`${sql.placeholder("name")}`, platform: sql`${sql.placeholder("platform")}`, driver: sql`${sql.placeholder("driver")}`, imageDigest: sql`${sql.placeholder("imageDigest")}`, resources: sql`${sql.placeholder("resources")}::jsonb`, cpuMode: sql`${sql.placeholder("cpuMode")}`, labels: sql`${sql.placeholder("labels")}::jsonb`, triggerLabel: sql`${sql.placeholder("triggerLabel")}` }).where(and(eq(schema.runnerPools.id, sql.placeholder("poolId")), isNull(schema.runnerPools.organizationId))).prepare("route_global_pool_update"),
+  globalPoolDelete: db.delete(schema.runnerPools).where(and(eq(schema.runnerPools.id, sql.placeholder("poolId")), isNull(schema.runnerPools.organizationId))).prepare("route_global_pool_delete"),
+  globalPoolInfo: db.select({ id: schema.runnerPools.id, platform: schema.runnerPools.platform, driver: schema.runnerPools.driver, imageDigest: schema.runnerPools.imageDigest, cpuMode: schema.runnerPools.cpuMode, resources: schema.runnerPools.resources }).from(schema.runnerPools).where(and(eq(schema.runnerPools.id, sql.placeholder("poolId")), isNull(schema.runnerPools.organizationId))).prepare("route_global_pool_info"),
+  enableWorkers: db.select({ id: schema.workers.id, platform: schema.workers.platform, limits: schema.workers.limits, contractVersion: schema.workers.contractVersion }).from(schema.workers).where(sql`${schema.workers.admissionState}='adopted' AND ${schema.workers.configurationState}='ready' AND ${schema.workers.configurationRevision}=${schema.workers.appliedConfigurationRevision} AND ${schema.workers.draining}=false AND ${schema.workers.lastHeartbeatAt}>now()-interval '60 seconds' AND ${schema.workers.doctorObservedAt}>now()-interval '60 seconds' AND ${sql.placeholder("platform")}=ANY(SELECT jsonb_array_elements_text(${schema.workers.guestPlatforms})) AND ${sql.placeholder("driver")}=${schema.workers.desiredConfiguration}->>'selectedDriver' AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(CASE WHEN jsonb_typeof(${schema.workers.doctor}->'doctor')='object' THEN ${schema.workers.doctor}->'doctor' ELSE ${schema.workers.doctor} END->'capabilities')='array' THEN CASE WHEN jsonb_typeof(${schema.workers.doctor}->'doctor')='object' THEN ${schema.workers.doctor}->'doctor' ELSE ${schema.workers.doctor} END->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=${sql.placeholder("driver")} AND capability->>'guestPlatform'=${sql.placeholder("platform")} AND capability->>'ready'='true')`).prepare("route_enable_workers"),
+  globalPoolSetEnabled: db.update(schema.runnerPools).set({ enabled: sql`${sql.placeholder("enabled")}` }).where(and(eq(schema.runnerPools.id, sql.placeholder("poolId")), isNull(schema.runnerPools.organizationId))).prepare("route_global_pool_set_enabled"),
+  organizationPoolWorker: db.select({ platform: schema.workers.platform, contractVersion: schema.workers.contractVersion, guestPlatforms: schema.workers.guestPlatforms, admissionState: schema.workers.admissionState, configurationState: schema.workers.configurationState, configurationRevision: schema.workers.configurationRevision, appliedConfigurationRevision: schema.workers.appliedConfigurationRevision, desiredConfiguration: schema.workers.desiredConfiguration, lastDoctorAt: schema.workers.doctorObservedAt, draining: schema.workers.draining, limits: schema.workers.limits, doctor: schema.workers.doctor }).from(schema.workers).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("route_org_pool_worker"),
+  orgPoolDuplicate: db.select({ id: schema.runnerPools.id, name: schema.runnerPools.name, triggerLabel: schema.runnerPools.triggerLabel, enabled: schema.runnerPools.enabled, cpuMode: schema.runnerPools.cpuMode, resources: schema.runnerPools.resources }).from(schema.runnerPools).where(and(isNull(schema.runnerPools.organizationId), or(eq(schema.runnerPools.name, sql.placeholder("name")), eq(schema.runnerPools.triggerLabel, sql.placeholder("triggerLabel"))))).prepare("route_org_pool_duplicate"),
+  orgPoolExisting: db.select({ id: schema.runnerPools.id, enabled: schema.runnerPools.enabled, cpuMode: schema.runnerPools.cpuMode, resources: schema.runnerPools.resources }).from(schema.runnerPools).where(and(eq(schema.runnerPools.id, sql.placeholder("poolId")), isNull(schema.runnerPools.organizationId))).prepare("route_org_pool_existing"),
+  poolActiveLease: db.select({ id: schema.runnerLeases.id }).from(schema.runnerLeases).where(and(eq(schema.runnerLeases.poolId, sql.placeholder("poolId")), ne(schema.runnerLeases.state, "reaped"))).limit(1).prepare("route_pool_active_lease"),
+  orgPoolUpdate: db.update(schema.runnerPools).set({ workerId: null, platform: sql`${sql.placeholder("platform")}`, driver: sql`${sql.placeholder("driver")}`, imageDigest: sql`${sql.placeholder("imageDigest")}`, resources: sql`${sql.placeholder("resources")}::jsonb`, cpuMode: sql`${sql.placeholder("cpuMode")}`, labels: sql`${sql.placeholder("labels")}::jsonb`, name: sql`${sql.placeholder("name")}`, triggerLabel: sql`${sql.placeholder("triggerLabel")}`, enabled: true }).where(eq(schema.runnerPools.id, sql.placeholder("poolId"))).prepare("route_org_pool_update"),
+  orgPoolCreate: db.insert(schema.runnerPools).values({ organizationId: null, workerId: null, name: sql.placeholder("name"), platform: sql.placeholder("platform"), driver: sql.placeholder("driver"), imageDigest: sql.placeholder("imageDigest"), resources: sql.placeholder("resources"), cpuMode: sql.placeholder("cpuMode"), labels: sql.placeholder("labels"), triggerLabel: sql.placeholder("triggerLabel"), enabled: true }).returning({ id: schema.runnerPools.id }).prepare("route_org_pool_create"),
+  poolAudit: db.insert(schema.auditEvents).values({ organizationId: null, actor: sql.placeholder("actor"), type: "pool.created", payload: sql`${sql.placeholder("payload")}::jsonb` }).prepare("route_pool_audit"),
+  orgPoolSetEnabled: db.update(schema.runnerPools).set({ enabled: sql`${sql.placeholder("enabled")}` }).where(and(eq(schema.runnerPools.organizationId, sql.placeholder("organizationId")), eq(schema.runnerPools.id, sql.placeholder("poolId")))).prepare("route_org_pool_set_enabled"),
+  githubConnection: db.select({ login: schema.organizations.login, githubAccountType: schema.organizations.githubAccountType, githubInstallationId: schema.dashboardInstallations.githubInstallationId }).from(schema.organizations).leftJoin(schema.dashboardInstallations, and(eq(schema.dashboardInstallations.organizationId, schema.organizations.id), ne(schema.dashboardInstallations.state, "suspended"))).where(eq(schema.organizations.id, sql.placeholder("organizationId"))).orderBy(sql`${schema.dashboardInstallations.createdAt} DESC NULLS LAST`).limit(1).prepare("route_github_connection"),
+  githubInstallation: db.select({ githubInstallationId: schema.dashboardInstallations.githubInstallationId }).from(schema.dashboardInstallations).where(and(eq(schema.dashboardInstallations.organizationId, sql.placeholder("organizationId")), ne(schema.dashboardInstallations.state, "suspended"))).orderBy(desc(schema.dashboardInstallations.createdAt)).limit(1).prepare("route_github_installation"),
+  githubLocation: db.select({ login: schema.organizations.login, githubAccountType: schema.organizations.githubAccountType, githubInstallationId: schema.dashboardInstallations.githubInstallationId }).from(schema.organizations).innerJoin(schema.dashboardInstallations, eq(schema.dashboardInstallations.organizationId, schema.organizations.id)).where(eq(schema.organizations.id, sql.placeholder("organizationId"))).orderBy(desc(schema.dashboardInstallations.createdAt)).limit(1).prepare("route_github_location"),
+  githubRepositoryLocation: db.select({ login: schema.organizations.login, githubAccountType: schema.organizations.githubAccountType, githubInstallationId: schema.dashboardInstallations.githubInstallationId }).from(schema.organizations).innerJoin(schema.dashboardRepositories, eq(schema.dashboardRepositories.organizationId, schema.organizations.id)).innerJoin(schema.dashboardInstallations, eq(schema.dashboardInstallations.id, schema.dashboardRepositories.installationId)).where(and(eq(schema.organizations.id, sql.placeholder("organizationId")), eq(schema.dashboardRepositories.id, sql.placeholder("repositoryId")), eq(schema.dashboardRepositories.available, true), ne(schema.dashboardInstallations.state, "suspended"))).prepare("route_github_repository_location"),
+  insertMutation: db.insert(schema.dashboardMutations).values({ organizationId: sql.placeholder("organizationId"), idempotencyKey: sql.placeholder("key") }).onConflictDoNothing().returning({ idempotencyKey: schema.dashboardMutations.idempotencyKey }).prepare("route_insert_mutation"),
+  priorMutation: db.select({ response: schema.dashboardMutations.response }).from(schema.dashboardMutations).where(and(eq(schema.dashboardMutations.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardMutations.idempotencyKey, sql.placeholder("key")))).prepare("route_prior_mutation"),
+  saveMutationResponse: db.update(schema.dashboardMutations).set({ response: sql`${sql.placeholder("response")}::jsonb` }).where(and(eq(schema.dashboardMutations.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardMutations.idempotencyKey, sql.placeholder("key")))).prepare("route_save_mutation_response"),
+}));
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
-import { listOrganizations, listAllOrganizations, getOverview, getAllOverview, getGithubRunnerCostCenter, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, jsonParameter, listJobTimingHistory, getJobTimingAggregates, listJobResourceTrends, JobResourceTrendInputError, listJobResourceSamples, listWorkerCacheEntries, decodeWorkerCacheCursor, getWorkerHealth, getJobLabelRecommendation, selectRoutingLabel } from "@mars/db";
+import { listOrganizations, listAllOrganizations, getOverview, getAllOverview, getGithubRunnerCostCenter, listRepositories, listAllRepositories, listRuns, listAllRuns, getRunDetail, listLogChunks, listStepLogChunks, listWorkers, listAllWorkers, getWorkerDetail, listPools, listAllPools, listGlobalPools, dashboardMutation, invalidateDashboard, completeOnboardingIfReady, queueRepositoryDiscoveryRecheck, listJobTimingHistory, getJobTimingAggregates, listJobResourceTrends, JobResourceTrendInputError, listJobResourceSamples, listWorkerCacheEntries, decodeWorkerCacheCursor, getWorkerHealth, getJobLabelRecommendation, selectRoutingLabel } from "@mars/db";
 import { adoptWorker, renameWorker } from "../workers.ts";
 import { configurePendingWorker, purgeWorkerRunnerCache } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
@@ -12,6 +54,7 @@ import { WorkerDispatchError } from "../worker-dispatch.ts";
 import { WorkerReleaseCatalogUnavailable } from "../worker-release.ts";
 import { workerPoolEvidence } from "../worker-evidence.ts";
 import { getLiveDispatchPools } from "../job-reconciler.ts";
+const jsonNumber = (value: unknown, key: string): number => value !== null && typeof value === "object" && key in value ? Number((value as Record<string, unknown>)[key]) : Number.NaN;
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
@@ -70,10 +113,10 @@ function error(c: any, status: number, code: string, message: string, details?: 
 function githubWorkflowPermissionError(c: Context<ControlPlaneEnv>) { return error(c, 409, "github_app_permissions_missing", "GitHub App needs Contents and Pull requests write permissions. Update and approve the app permissions, then refresh."); }
 function parseQuery(c: any) { const parsed = querySchema.safeParse(c.req.query()); return parsed.success ? parsed.data : error(c, 400, "invalid_query", "Invalid query parameters", { issues: parsed.error.issues }); }
 function requireMutation(c: any) { return c.req.header("idempotency-key")?.trim() ? null : error(c, 400, "missing_idempotency_key", "Idempotency-Key is required"); }
-async function member(db: any, user: any, organizationId: string) { if (user.isGlobalAdmin) return true; const [row] = await db`SELECT 1 FROM memberships WHERE user_id=${user.id} AND organization_id=${organizationId}`; return Boolean(row); }
+async function member(db: any, user: any, organizationId: string) { if (user.isGlobalAdmin) return true; const [row] = await routeQueries(db).membership.execute({ userId: user.id, organizationId }); return Boolean(row); }
 async function guard(c: any, deps: ControlPlaneHttpDeps, organizationId: string) { return await member(deps.db, c.get("user"), organizationId) ? null : error(c, 404, "not_found", "Resource not found"); }
 function githubInstallationLocation(row: { login?: unknown; githubInstallationId?: unknown; githubAccountType?: unknown }) {
-  if (!Number.isSafeInteger(Number(row.githubInstallationId))) return null;
+  if (row.githubInstallationId == null || !Number.isSafeInteger(Number(row.githubInstallationId))) return null;
   const installationId = Number(row.githubInstallationId);
   if (row.githubAccountType === "User") return `https://github.com/settings/installations/${installationId}`;
   if (typeof row.login !== "string" || !row.login) return null;
@@ -95,7 +138,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const query = workerLogQuerySchema.safeParse(c.req.query());
     if (!query.success) return error(c, 400, "invalid_log_query", "Invalid log query", { issues: query.error.issues });
     const workerId = c.req.param("workerId");
-    const [worker] = await deps.db`SELECT id FROM workers WHERE id=${workerId}`;
+    const [worker] = await routeQueries(deps.db).worker.execute({ workerId });
     if (!worker) return error(c, 404, "not_found", "Resource not found");
     const requestId = randomUUID();
     try {
@@ -326,7 +369,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const idem = requireMutation(c); if (idem) return idem;
     if (!deps.workerDispatcher) return error(c, 503, "worker_dispatch_unavailable", "Worker command dispatch is unavailable");
     const workerId = c.req.param("workerId");
-    const [worker] = await deps.db`SELECT id,admission_state AS "admissionState" FROM workers WHERE id=${workerId}`;
+    const [worker] = await routeQueries(deps.db).purgeWorker.execute({ workerId });
     if (!worker) return error(c, 404, "not_found", "Resource not found");
     if (!["pending", "adopted"].includes(worker.admissionState)) return error(c, 409, "worker_not_ready", "Worker is not available");
     const result = await purgeWorkerRunnerCache(deps.db, workerId, c.get("user").id, deps.workerDispatcher, c.req.header("idempotency-key")!.trim());
@@ -352,8 +395,8 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const idem = requireMutation(c); if (idem) return idem;
     const key = c.req.header("idempotency-key")!;
     if (organizationId !== "all" && !(await dashboardMutation(deps.db, organizationId, key))) return c.json(WorkerDetail.parse(await getWorkerDetail(deps.db, organizationId, workerId)));
-    await deps.db`UPDATE workers SET preserve_leases=${body.enabled} WHERE id=${workerId}`;
-    if (!body.enabled) await deps.db`UPDATE runner_leases SET cleanup_state='pending' WHERE worker_id=${workerId} AND state='failed' AND cleanup_state='debug_preserved'`;
+    await routeQueries(deps.db).preserveLeases.execute({ enabled: body.enabled, workerId });
+    if (!body.enabled) await routeQueries(deps.db).requeuePreservedLeases.execute({ workerId });
     await deps.workerDispatcher.dispatch({ type: "worker.set_lease_preservation", workerId, leaseId: null, payload: { enabled: body.enabled } });
     if (organizationId !== "all") await invalidateDashboard(deps.db, organizationId, ["workers", workerId]);
     return c.json(WorkerDetail.parse(await getWorkerDetail(deps.db, organizationId, workerId)));
@@ -379,23 +422,23 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!value) return error(c, 404, "not_found", "Resource not found");
     mutationSchema.parse(await c.req.json().catch(() => ({})));
     if (action === "adopt") await adoptWorker(deps.db, id, c.get("user").id);
-    else if (action === "reject") await deps.db`UPDATE workers SET admission_state='rejected' WHERE id=${id} AND admission_state='pending'`;
+    else if (action === "reject") await routeQueries(deps.db).rejectWorker.execute({ workerId: id });
     else if (action === "drain") {
       // Drain only removes the worker from scheduling. Existing leases must
       // finish normally; failing them here strands otherwise healthy jobs and
       // makes the UI contract ("active work completes") false.
-      await deps.db`UPDATE workers SET draining=true WHERE id=${id}`;
+      await routeQueries(deps.db).drainWorker.execute({ workerId: id });
     } else if (action === "resume") {
       if (value.admissionState !== "adopted" || value.configurationState !== "ready") return error(c, 409, "worker_not_ready", "Worker must be adopted and configured before resume");
-      await deps.db`UPDATE workers SET draining=false WHERE id=${id} AND admission_state='adopted' AND configuration_state='ready'`;
+      await routeQueries(deps.db).resumeWorker.execute({ workerId: id });
     } else {
-      const [active] = await deps.db`SELECT id FROM runner_leases WHERE worker_id=${id} AND state NOT IN ('reaped','failed','expired','completed') LIMIT 1`;
+      const [active] = await routeQueries(deps.db).activeWorkerLease.execute({ workerId: id });
       if (active) return error(c, 409, "worker_has_active_leases", "Worker has active leases; wait for reaping before removal");
-      await deps.db.begin(async tx => {
-        await tx`UPDATE workers SET draining=true WHERE id=${id}`;
-        await tx`UPDATE runner_pools SET enabled=false WHERE worker_id=${id}`;
-        await tx`UPDATE workers SET admission_state='revoked' WHERE id=${id}`;
-        await tx`INSERT INTO audit_events (actor,type,payload) VALUES (${c.get("user").id},'worker.removed',${jsonParameter(tx, { workerId: id })}::jsonb)`;
+      await deps.db.transaction(async tx => {
+        await routeQueries(tx).removeWorkerDrain.execute({ workerId: id });
+        await routeQueries(tx).removeWorkerPools.execute({ workerId: id });
+        await routeQueries(tx).removeWorkerRevoke.execute({ workerId: id });
+        await routeQueries(tx).removeWorkerAudit.execute({ actor: c.get("user").id, payload: JSON.stringify({ workerId: id }) });
       });
     }
     await deps.onWorkerChanged(id);
@@ -407,11 +450,11 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     return c.json(CursorPage(PoolSummary).parse(await listGlobalPools(deps.db, q.limit, q.cursor ?? null)));
   }));
   const poolWorker = async (body: z.infer<typeof CreatePoolRequest>): Promise<{ driver: string } | { error: "not_found" | "worker_not_ready" | "worker_runtime_not_ready" | "worker_guest_platform_unsupported" | "runtime_unsupported" | "exclusive_requires_concurrency_one" | "exclusive_worker_unsupported" }> => {
-    const [worker] = await deps.db`SELECT platform,contract_version AS "contractVersion",limits,guest_platforms AS "guestPlatforms",admission_state AS "admissionState",configuration_state AS "configurationState",configuration_revision AS "configurationRevision",applied_configuration_revision AS "appliedConfigurationRevision",desired_configuration AS "desiredConfiguration",doctor_observed_at AS "lastDoctorAt",doctor FROM workers WHERE id=${body.workerId}`;
+    const [worker] = await routeQueries(deps.db).poolWorker.execute({ workerId: body.workerId });
     if (!worker) return { error: "not_found" as const };
     if (worker.admissionState !== "adopted" || worker.configurationState !== "ready" || worker.configurationRevision !== worker.appliedConfigurationRevision || !worker.lastDoctorAt || Date.now() - new Date(String(worker.lastDoctorAt)).getTime() >= 60_000) return { error: "worker_not_ready" as const };
     if (body.cpuMode === "exclusive" && !supportsExclusiveCpuPlacement(String(worker.contractVersion ?? ""))) return { error: "exclusive_worker_unsupported" };
-    if (body.cpuMode === "exclusive" && !String(worker.platform).startsWith("linux-") && (body.resources.concurrency !== 1 || Number(worker.limits?.maxConcurrentPods) !== 1)) return { error: "exclusive_requires_concurrency_one" };
+    if (body.cpuMode === "exclusive" && !String(worker.platform).startsWith("linux-") && (body.resources.concurrency !== 1 || jsonNumber(worker.limits, "maxConcurrentPods") !== 1)) return { error: "exclusive_requires_concurrency_one" };
     if (!(Array.isArray(worker.guestPlatforms) ? worker.guestPlatforms : [worker.platform]).includes(body.guestPlatform)) return { error: "worker_guest_platform_unsupported" as const };
     const desired = typeof worker.desiredConfiguration === "string" ? JSON.parse(worker.desiredConfiguration) : worker.desiredConfiguration;
     const driver = desired?.selectedDriver;
@@ -429,10 +472,10 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (body.poolId) return error(c, 400, "invalid_request", "Use the pool update endpoint to edit an existing pool");
     const selected = await poolWorker(body);
     if ("error" in selected) return selected.error === "not_found" ? error(c, 404, "not_found", "Worker not found") : error(c, 422, selected.error, selected.error === "exclusive_requires_concurrency_one" ? "Windows/macOS exclusive pools require pool concurrency 1 and worker runtime.maxConcurrentPods 1" : selected.error === "exclusive_worker_unsupported" ? "Exclusive pools require worker contract 0.4.0 or newer" : selected.error === "worker_not_ready" ? "Worker configuration has not been reconciled" : selected.error === "worker_runtime_not_ready" ? "Worker runtime host evidence is not ready" : "Worker does not support the requested guest platform");
-    const [duplicate] = await deps.db`SELECT id FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel}) LIMIT 1`;
+    const [duplicate] = await routeQueries(deps.db).globalPoolDuplicate.execute({ name: body.name, triggerLabel: body.triggerLabel });
     if (duplicate) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
-    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,cpu_mode,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${body.guestPlatform},${selected.driver},${body.imageDigest},${jsonParameter(deps.db, body.resources)}::jsonb,${body.cpuMode},${jsonParameter(deps.db, [body.triggerLabel])}::jsonb,${body.triggerLabel},false) RETURNING id`;
-    await deps.db`INSERT INTO audit_events (organization_id,actor,type,payload) VALUES (NULL,${c.get("user").id},'pool.created',${jsonParameter(deps.db, { poolId: pool.id, workerId: body.workerId, guestPlatform: body.guestPlatform, triggerLabel: body.triggerLabel, scope: "control-plane" })}::jsonb)`;
+    const [pool] = await routeQueries(deps.db).globalPoolCreate.execute({ name: body.name, platform: body.guestPlatform, driver: selected.driver, imageDigest: body.imageDigest, resources: body.resources, cpuMode: body.cpuMode, labels: [body.triggerLabel], triggerLabel: body.triggerLabel, enabled: false });
+    await routeQueries(deps.db).poolAudit.execute({ actor: c.get("user").id, payload: JSON.stringify({ poolId: pool.id, workerId: body.workerId, guestPlatform: body.guestPlatform, triggerLabel: body.triggerLabel, scope: "control-plane" }) });
     return c.json({ id: String(pool.id), labels: [body.triggerLabel] });
   }));
   app.put("/api/pools/:poolId", safe(async (c) => {
@@ -440,24 +483,24 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const idem = requireMutation(c); if (idem) return idem;
     const poolId = c.req.param("poolId");
     const body = CreatePoolRequest.parse({ ...await c.req.json(), poolId });
-    const [existing] = await deps.db`SELECT p.id,p.enabled,(SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.state <> 'reaped') AS active FROM runner_pools p WHERE p.id=${poolId} AND p.organization_id IS NULL`;
+    const [existing] = await routeQueries(deps.db).globalPoolEditInfo.execute({ poolId });
     if (!existing) return error(c, 404, "not_found", "Pool not found");
     if (existing.enabled || Number(existing.active) !== 0) return error(c, 409, "pool_in_use", "Disable the pool and wait for active leases to be reaped before editing");
     const selected = await poolWorker(body);
     if ("error" in selected) return error(c, selected.error === "not_found" ? 404 : 422, selected.error, selected.error === "exclusive_requires_concurrency_one" ? "Windows/macOS exclusive pools require pool concurrency 1 and worker runtime.maxConcurrentPods 1" : selected.error === "exclusive_worker_unsupported" ? "Exclusive pools require worker contract 0.4.0 or newer" : selected.error === "not_found" ? "Worker not found" : selected.error === "worker_runtime_not_ready" ? "Worker runtime host evidence is not ready" : "Worker is not compatible with this pool");
-    const [duplicate] = await deps.db`SELECT id FROM runner_pools WHERE organization_id IS NULL AND id<>${poolId} AND (name=${body.name} OR trigger_label=${body.triggerLabel}) LIMIT 1`;
+    const [duplicate] = await routeQueries(deps.db).globalPoolDuplicateOther.execute({ poolId, name: body.name, triggerLabel: body.triggerLabel });
     if (duplicate) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
-    await deps.db`UPDATE runner_pools SET name=${body.name},platform=${body.guestPlatform},driver=${selected.driver},image_digest=${body.imageDigest},resources=${jsonParameter(deps.db, body.resources)}::jsonb,cpu_mode=${body.cpuMode},labels=${jsonParameter(deps.db, [body.triggerLabel])}::jsonb,trigger_label=${body.triggerLabel} WHERE id=${poolId} AND organization_id IS NULL`;
+    await routeQueries(deps.db).globalPoolUpdate.execute({ poolId, name: body.name, platform: body.guestPlatform, driver: selected.driver, imageDigest: body.imageDigest, resources: JSON.stringify(body.resources), cpuMode: body.cpuMode, labels: JSON.stringify([body.triggerLabel]), triggerLabel: body.triggerLabel });
     return c.json({ id: poolId, labels: [body.triggerLabel] });
   }));
   app.delete("/api/pools/:poolId", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const idem = requireMutation(c); if (idem) return idem;
     const poolId = c.req.param("poolId");
-    const [pool] = await deps.db`SELECT p.id,p.enabled,(SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.state <> 'reaped') AS active FROM runner_pools p WHERE p.id=${poolId} AND p.organization_id IS NULL`;
+    const [pool] = await routeQueries(deps.db).globalPoolEditInfo.execute({ poolId });
     if (!pool) return error(c, 404, "not_found", "Pool not found");
     if (pool.enabled || Number(pool.active) !== 0) return error(c, 409, "pool_in_use", "Disable the pool and wait for active leases to be reaped before deleting");
-    await deps.db`DELETE FROM runner_pools WHERE id=${poolId} AND organization_id IS NULL`;
+    await routeQueries(deps.db).globalPoolDelete.execute({ poolId });
     return c.json({ ok: true });
   }));
   app.post("/api/pools/:poolId/:action", safe(async (c) => {
@@ -466,15 +509,15 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!["enable", "disable"].includes(action)) return error(c, 404, "not_found", "Resource not found");
     const idem = requireMutation(c); if (idem) return idem;
     const poolId = c.req.param("poolId");
-    const [pool] = await deps.db`SELECT id,platform,driver,image_digest AS "imageDigest",cpu_mode AS "cpuMode",resources FROM runner_pools WHERE id=${poolId} AND organization_id IS NULL`;
+    const [pool] = await routeQueries(deps.db).globalPoolInfo.execute({ poolId });
     if (!pool) return error(c, 404, "not_found", "Pool not found");
     if (action === "enable") {
-      const readyWorkers = await deps.db`SELECT w.id,w.platform,w.limits,w.contract_version AS "contractVersion" FROM workers w CROSS JOIN LATERAL (SELECT CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END AS evidence) e WHERE w.admission_state='adopted' AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false AND w.last_heartbeat_at>now()-interval '60 seconds' AND w.doctor_observed_at>now()-interval '60 seconds' AND ${pool.platform}=ANY(SELECT jsonb_array_elements_text(w.guest_platforms)) AND ${pool.driver}=w.desired_configuration->>'selectedDriver' AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.evidence->'capabilities')='array' THEN e.evidence->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=${pool.driver} AND capability->>'guestPlatform'=${pool.platform} AND capability->>'ready'='true')`;
-      const ready = readyWorkers.find(worker => (!deps.workerConnected || deps.workerConnected(String(worker.id))) && (pool.cpuMode !== "exclusive" || supportsExclusiveCpuPlacement(String(worker.contractVersion ?? "")) && (String(worker.platform).startsWith("linux-") || Number(pool.resources?.concurrency) === 1 && Number(worker.limits?.maxConcurrentPods) === 1)));
-      if (!ready && pool.cpuMode === "exclusive" && readyWorkers.some(worker => !String(worker.platform).startsWith("linux-") && (Number(pool.resources?.concurrency) !== 1 || Number(worker.limits?.maxConcurrentPods) !== 1))) return error(c, 422, "exclusive_requires_concurrency_one", "Windows/macOS exclusive pools require pool concurrency 1 and worker runtime.maxConcurrentPods 1");
+      const readyWorkers = await routeQueries(deps.db).enableWorkers.execute({ platform: pool.platform, driver: pool.driver });
+      const ready = readyWorkers.find(worker => (!deps.workerConnected || deps.workerConnected(String(worker.id))) && (pool.cpuMode !== "exclusive" || supportsExclusiveCpuPlacement(String(worker.contractVersion ?? "")) && (String(worker.platform).startsWith("linux-") || jsonNumber(pool.resources, "concurrency") === 1 && jsonNumber(worker.limits, "maxConcurrentPods") === 1)));
+      if (!ready && pool.cpuMode === "exclusive" && readyWorkers.some(worker => !String(worker.platform).startsWith("linux-") && (jsonNumber(pool.resources, "concurrency") !== 1 || jsonNumber(worker.limits, "maxConcurrentPods") !== 1))) return error(c, 422, "exclusive_requires_concurrency_one", "Windows/macOS exclusive pools require pool concurrency 1 and worker runtime.maxConcurrentPods 1");
       if (!ready) return error(c, 409, "no_compatible_ready_worker", "No compatible ready worker is connected for this pool");
     }
-    await deps.db`UPDATE runner_pools SET enabled=${action === "enable"} WHERE id=${poolId} AND organization_id IS NULL`;
+    await routeQueries(deps.db).globalPoolSetEnabled.execute({ enabled: action === "enable", poolId });
     return c.json({ ok: true });
   }));
   app.post("/api/organizations/:organizationId/pools", safe(async (c) => {
@@ -483,11 +526,11 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     const idem = requireMutation(c); if (idem) return idem;
     const body = CreatePoolRequest.parse(await c.req.json());
-    const [w] = await deps.db`SELECT platform,contract_version AS "contractVersion",guest_platforms AS "guestPlatforms",admission_state AS "admissionState",configuration_state AS "configurationState",configuration_revision AS "configurationRevision",applied_configuration_revision AS "appliedConfigurationRevision",desired_configuration AS "desiredConfiguration",doctor_observed_at AS "lastDoctorAt",draining,limits,doctor FROM workers WHERE id=${body.workerId}`;
+    const [w] = await routeQueries(deps.db).organizationPoolWorker.execute({ workerId: body.workerId });
     if (!w || (w.platform === "linux-x64" && body.guestPlatform === "linux-x64")) return error(c, 422, "runtime_unsupported", "Linux-host x64 runners are not available in this release");
     if (w.admissionState !== "adopted" || (deps.workerConnected ? !deps.workerConnected(body.workerId) : false) || w.configurationState !== "ready" || w.configurationRevision !== w.appliedConfigurationRevision || w.draining || !w.lastDoctorAt || Date.now() - new Date(String(w.lastDoctorAt)).getTime() >= 60_000) return error(c, 422, "worker_not_ready", "Worker is not ready");
     if (body.cpuMode === "exclusive" && !supportsExclusiveCpuPlacement(String(w.contractVersion ?? ""))) return error(c, 422, "exclusive_worker_unsupported", "Exclusive pools require worker contract 0.4.0 or newer");
-    if (body.cpuMode === "exclusive" && !String(w.platform).startsWith("linux-") && (body.resources.concurrency !== 1 || Number(w.limits?.maxConcurrentPods) !== 1)) return error(c, 422, "exclusive_requires_concurrency_one", "Windows/macOS exclusive pools require pool concurrency 1 and worker runtime.maxConcurrentPods 1");
+    if (body.cpuMode === "exclusive" && !String(w.platform).startsWith("linux-") && (body.resources.concurrency !== 1 || jsonNumber(w.limits, "maxConcurrentPods") !== 1)) return error(c, 422, "exclusive_requires_concurrency_one", "Windows/macOS exclusive pools require pool concurrency 1 and worker runtime.maxConcurrentPods 1");
     if (!(Array.isArray(w.guestPlatforms) ? w.guestPlatforms : [w.platform]).includes(body.guestPlatform)) return error(c, 422, "worker_guest_platform_unsupported", "Worker does not support the requested guest platform");
     const desired = typeof w.desiredConfiguration === "string" ? JSON.parse(w.desiredConfiguration) : w.desiredConfiguration;
     const driver = desired?.selectedDriver;
@@ -495,17 +538,17 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const evidence = workerPoolEvidence(w.doctor, driver, body.guestPlatform);
     if (!evidence.ready) return error(c, 422, "worker_runtime_not_ready", "Worker runtime host evidence is not ready");
     const labels = [body.triggerLabel];
-    const [duplicate] = await deps.db`SELECT id,name,trigger_label AS "triggerLabel",enabled,cpu_mode AS "cpuMode",resources FROM runner_pools WHERE organization_id IS NULL AND (name=${body.name} OR trigger_label=${body.triggerLabel})`;
+    const [duplicate] = await routeQueries(deps.db).orgPoolDuplicate.execute({ name: body.name, triggerLabel: body.triggerLabel });
     if (body.poolId) {
-      const [existing] = await deps.db`SELECT id,enabled,cpu_mode AS "cpuMode",resources FROM runner_pools WHERE id=${body.poolId} AND organization_id IS NULL`;
+      const [existing] = await routeQueries(deps.db).orgPoolExisting.execute({ poolId: body.poolId });
       if (!existing) return error(c, 404, "not_found", "Resource not found");
       if (existing.enabled) return error(c, 409, "pool_in_use", "Disable the pool before editing");
       if (existing.cpuMode !== body.cpuMode || JSON.stringify(existing.resources) !== JSON.stringify(body.resources)) {
-        const [active] = await deps.db`SELECT id FROM runner_leases WHERE pool_id=${body.poolId} AND state <> 'reaped' LIMIT 1`;
+        const [active] = await routeQueries(deps.db).poolActiveLease.execute({ poolId: body.poolId });
         if (active) return error(c, 409, "pool_in_use", "Wait for every lease to be reaped before changing mode or resources");
       }
       if (duplicate && String(duplicate.id) !== body.poolId) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
-      await deps.db`UPDATE runner_pools SET worker_id=NULL,platform=${body.guestPlatform},driver=${driver},image_digest=${body.imageDigest},resources=${jsonParameter(deps.db, body.resources)},cpu_mode=${body.cpuMode},labels=${jsonParameter(deps.db, labels)},name=${body.name},trigger_label=${body.triggerLabel},enabled=true WHERE id=${body.poolId}`;
+      await routeQueries(deps.db).orgPoolUpdate.execute({ poolId: body.poolId, platform: body.guestPlatform, driver, imageDigest: body.imageDigest, resources: JSON.stringify(body.resources), cpuMode: body.cpuMode, labels: JSON.stringify(labels), name: body.name, triggerLabel: body.triggerLabel });
       await invalidateDashboard(deps.db, org, ["pools", "onboarding"]);
       return c.json({ id: body.poolId, labels });
     }
@@ -513,18 +556,18 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
       if (duplicate.name !== body.name || duplicate.triggerLabel !== body.triggerLabel) return error(c, 409, "pool_conflict", "Pool name or trigger label already exists");
       if (duplicate.enabled) return error(c, 409, "pool_in_use", "Disable the pool before editing");
       if (duplicate.cpuMode !== body.cpuMode || JSON.stringify(duplicate.resources) !== JSON.stringify(body.resources)) {
-        const [active] = await deps.db`SELECT id FROM runner_leases WHERE pool_id=${duplicate.id} AND state <> 'reaped' LIMIT 1`;
+        const [active] = await routeQueries(deps.db).poolActiveLease.execute({ poolId: duplicate.id });
         if (active) return error(c, 409, "pool_in_use", "Wait for every lease to be reaped before changing mode or resources");
       }
-      await deps.db`UPDATE runner_pools SET worker_id=NULL,platform=${body.guestPlatform},driver=${driver},image_digest=${body.imageDigest},resources=${jsonParameter(deps.db, body.resources)}::jsonb,cpu_mode=${body.cpuMode},labels=${jsonParameter(deps.db, labels)}::jsonb,enabled=true WHERE id=${duplicate.id}`;
+      await routeQueries(deps.db).orgPoolUpdate.execute({ poolId: duplicate.id, platform: body.guestPlatform, driver, imageDigest: body.imageDigest, resources: JSON.stringify(body.resources), cpuMode: body.cpuMode, labels: JSON.stringify(labels), name: body.name, triggerLabel: body.triggerLabel });
       await completeOnboardingIfReady(deps.db);
       await invalidateDashboard(deps.db, org, ["pools", "onboarding"]);
       return c.json({ id: String(duplicate.id), labels });
     }
     const key = c.req.header("idempotency-key")!;
     if (!(await dashboardMutation(deps.db, org, key))) return c.json({ ok: true });
-    const [pool] = await deps.db`INSERT INTO runner_pools (organization_id,worker_id,name,platform,driver,image_digest,resources,cpu_mode,labels,trigger_label,enabled) VALUES (NULL,NULL,${body.name},${body.guestPlatform},${driver},${body.imageDigest},${jsonParameter(deps.db, body.resources)}::jsonb,${body.cpuMode},${jsonParameter(deps.db, labels)}::jsonb,${body.triggerLabel},true) RETURNING id`;
-    await deps.db`INSERT INTO audit_events (organization_id,actor,type,payload) VALUES (NULL,${c.get("user").id},'pool.created',${jsonParameter(deps.db, { poolId: pool.id, workerId: body.workerId, guestPlatform: body.guestPlatform, triggerLabel: body.triggerLabel, scope: "control-plane" })}::jsonb)`;
+    const [pool] = await routeQueries(deps.db).orgPoolCreate.execute({ name: body.name, platform: body.guestPlatform, driver, imageDigest: body.imageDigest, resources: body.resources, cpuMode: body.cpuMode, labels, triggerLabel: body.triggerLabel });
+    await routeQueries(deps.db).poolAudit.execute({ actor: c.get("user").id, payload: JSON.stringify({ poolId: pool.id, workerId: body.workerId, guestPlatform: body.guestPlatform, triggerLabel: body.triggerLabel, scope: "control-plane" }) });
     await completeOnboardingIfReady(deps.db);
     await invalidateDashboard(deps.db, org, ["pools", "onboarding"]);
     return c.json({ id: pool.id, labels });
@@ -537,15 +580,15 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const idem = requireMutation(c); if (idem) return idem;
     const key = c.req.header("idempotency-key")!;
     if (!(await dashboardMutation(deps.db, org, key))) return c.json({ ok: true });
-    await deps.db`UPDATE runner_pools SET enabled=${action === "enable"} WHERE organization_id=${org} AND id=${c.req.param("poolId")}`;
+    await routeQueries(deps.db).orgPoolSetEnabled.execute({ organizationId: org, poolId: c.req.param("poolId"), enabled: action === "enable" });
     await invalidateDashboard(deps.db, org, ["pools"]); return c.json({ ok: true });
   }));
   app.get("/api/organizations/:organizationId/github/connection", safe(async (c) => {
     const org = c.req.param("organizationId");
     const denied = await guard(c, deps, org); if (denied) return denied;
-    const [installation] = await deps.db`SELECT o.login, o.github_account_type AS "githubAccountType", i.github_installation_id AS "githubInstallationId" FROM organizations o LEFT JOIN dashboard_installations i ON i.organization_id=o.id AND i.state <> 'suspended' WHERE o.id=${org} ORDER BY i.created_at DESC NULLS LAST LIMIT 1`;
+    const [installation] = await routeQueries(deps.db).githubConnection.execute({ organizationId: org });
     c.header("Cache-Control", "no-store");
-    if (!installation || !Number.isSafeInteger(Number(installation.githubInstallationId))) return c.json(GithubConnectionSummary.parse({ connected: false }));
+    if (!installation || installation.githubInstallationId == null || !Number.isSafeInteger(Number(installation.githubInstallationId))) return c.json(GithubConnectionSummary.parse({ connected: false }));
     const summary: Record<string, unknown> = { connected: true };
     if (typeof installation.login === "string" && installation.login) summary.login = installation.login;
     if (installation.githubAccountType === "User" || installation.githubAccountType === "Organization") summary.accountType = installation.githubAccountType;
@@ -557,8 +600,8 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   app.get("/api/organizations/:organizationId/github/rate-limit", safe(async (c) => {
     const org = c.req.param("organizationId");
     const denied = await guard(c, deps, org); if (denied) return denied;
-    const [installation] = await deps.db`SELECT i.github_installation_id AS "githubInstallationId" FROM dashboard_installations i WHERE i.organization_id=${org} AND i.state <> 'suspended' ORDER BY i.created_at DESC LIMIT 1`;
-    if (!installation || !Number.isSafeInteger(Number(installation.githubInstallationId))) return error(c, 404, "not_found", "GitHub installation not found");
+    const [installation] = await routeQueries(deps.db).githubInstallation.execute({ organizationId: org });
+    if (!installation || installation.githubInstallationId == null || !Number.isSafeInteger(Number(installation.githubInstallationId))) return error(c, 404, "not_found", "GitHub installation not found");
     if (!deps.githubApp) return error(c, 503, "github_app_unconfigured", "GitHub App is not configured");
     try {
       const stats = await deps.githubApp.getInstallationRateLimit(Number(installation.githubInstallationId));
@@ -575,7 +618,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   app.get("/api/organizations/:organizationId/github/settings", safe(async (c) => {
     const org = c.req.param("organizationId");
     const denied = await guard(c, deps, org); if (denied) return denied;
-    const [installation] = await deps.db`SELECT o.login, o.github_account_type AS "githubAccountType", i.github_installation_id AS "githubInstallationId" FROM organizations o JOIN dashboard_installations i ON i.organization_id=o.id WHERE o.id=${org} ORDER BY i.created_at DESC LIMIT 1`;
+    const [installation] = await routeQueries(deps.db).githubLocation.execute({ organizationId: org });
     const location = githubInstallationLocation(installation ?? {});
     return location ? c.json({ location }) : error(c, 404, "not_found", "GitHub installation not found");
   }));
@@ -597,7 +640,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   app.get("/api/organizations/:organizationId/repositories/:repositoryId/github/settings", safe(async (c) => {
     const org = c.req.param("organizationId");
     const denied = await guard(c, deps, org); if (denied) return denied;
-    const [installation] = await deps.db`SELECT o.login, o.github_account_type AS "githubAccountType", i.github_installation_id AS "githubInstallationId" FROM organizations o JOIN dashboard_repositories r ON r.organization_id=o.id JOIN dashboard_installations i ON i.id=r.installation_id WHERE o.id=${org} AND r.id=${c.req.param("repositoryId")} AND r.available=true AND i.state <> 'suspended'`;
+    const [installation] = await routeQueries(deps.db).githubRepositoryLocation.execute({ organizationId: org, repositoryId: c.req.param("repositoryId") });
     const location = githubInstallationLocation(installation ?? {});
     return location ? c.json({ location }) : error(c, 404, "not_found", "GitHub repository installation not found");
   }));
@@ -685,11 +728,11 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const body = RunnerWorkflowPrRequest.parse(await c.req.json());
     if ((body.selectedPath === undefined) !== (body.selectedJobId === undefined)) return error(c, 422, "workflow_invalid", "Focused workflow selection requires selectedPath and selectedJobId");
     const key = c.req.header("idempotency-key")!;
-    const inserted = await deps.db`INSERT INTO dashboard_mutations (organization_id,idempotency_key) VALUES (${org},${key}) ON CONFLICT DO NOTHING RETURNING idempotency_key`;
-    if (!inserted.length) { const [prior] = await deps.db`SELECT response FROM dashboard_mutations WHERE organization_id=${org} AND idempotency_key=${key}`; if (prior?.response) return c.json(RunnerWorkflowPrResult.parse(prior.response)); return error(c, 409, "mutation_in_progress", "Mutation is already in progress"); }
+    const inserted = await routeQueries(deps.db).insertMutation.execute({ organizationId: org, key });
+    if (!inserted.length) { const [prior] = await routeQueries(deps.db).priorMutation.execute({ organizationId: org, key }); if (prior?.response) return c.json(RunnerWorkflowPrResult.parse(prior.response)); return error(c, 409, "mutation_in_progress", "Mutation is already in progress"); }
     try {
       const result = RunnerWorkflowPrResult.parse(await deps.githubApp.createRepositoryRunnerPr({ ...body, organizationId: org, repositoryId: c.req.param("repositoryId") }));
-      await deps.db`UPDATE dashboard_mutations SET response=${jsonParameter(deps.db, result)}::jsonb WHERE organization_id=${org} AND idempotency_key=${key}`;
+      await routeQueries(deps.db).saveMutationResponse.execute({ organizationId: org, key, response: JSON.stringify(result) });
       return c.json(result);
     } catch (cause) {
       const code = cause instanceof Error ? cause.message : "";

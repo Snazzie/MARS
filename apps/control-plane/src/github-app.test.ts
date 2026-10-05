@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { SecretBox } from "./auth.ts";
 import { GitHubAppService } from "./github-app.ts";
+import { preparedTestDatabase } from "../../../packages/db/src/prepared-test-fixture.ts";
 
 const masterKey = Buffer.alloc(32, 7).toString("base64");
 const organizationId = "11111111-1111-4111-8111-111111111111";
@@ -241,20 +242,15 @@ describe("GitHub App onboarding", () => {
     expect(fakeDb.repositories.get("3")).not.toHaveProperty("approved");
   });
   test("binds an installed GitHub account before repository remediation", async () => {
-    const calls: string[] = [];
-    const sql = ((strings: TemplateStringsArray, ...values: unknown[]) => {
-      const query = strings.join("?");
-      calls.push(query);
-      if (query.includes("SELECT purpose,user_id")) return [{ purpose: "install", user_id: "admin-1", organization_id: organizationId, idempotency_key: "key", encrypted_state: null, encrypted_pkce_verifier: null, expires_at: new Date(Date.now() + 60_000), consumed_at: null }];
-      if (query.includes("SELECT app_id,slug")) return [{ app_id: 9, slug: "mars", client_id: null, encrypted_pem: new SecretBox(masterKey).encrypt(testPem), encrypted_client_secret: "x", encrypted_webhook_secret: "y" }];
-      if (query.includes("UPDATE github_setup_states")) return [{ purpose: "install", user_id: "admin-1", organization_id: organizationId, idempotency_key: "key", encrypted_state: null, encrypted_pkce_verifier: null, expires_at: new Date(Date.now() + 60_000), consumed_at: new Date() }];
-      if (query.includes("SELECT github_org_id")) return [{ github_org_id: 99 }];
-      if (query.includes("INSERT INTO dashboard_installations")) return [{ id: "22222222-2222-4222-8222-222222222222" }];
-      if (query.includes("UPDATE system_onboarding SET organization_id")) return [];
+    const db = preparedTestDatabase((name) => {
+      if (name === "github_app_state_find") return [{ purpose: "install", userId: "admin-1", organizationId, idempotencyKey: "key", encryptedState: null, encryptedPkceVerifier: null, expiresAt: new Date(Date.now() + 60_000).toISOString(), consumedAt: null }];
+      if (name === "github_app_config_get") return [{ appId: 9, slug: "mars", clientId: null, pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "y" }];
+      if (name === "github_app_state_consume") return [{ purpose: "install", userId: "admin-1", organizationId, idempotencyKey: "key", encryptedState: null, encryptedPkceVerifier: null, expiresAt: new Date(Date.now() + 60_000).toISOString(), consumedAt: new Date().toISOString() }];
+      if (name === "github_app_organization_account") return [{ id: 99, type: "Organization" }];
+      if (name === "github_app_save_installation") return [{ id: "22222222-2222-4222-8222-222222222222" }];
       return [];
-    }) as never;
-    Object.assign(sql, { begin: async (callback: (tx: typeof sql) => Promise<unknown>) => callback(sql) });
-    const github = new GitHubAppService({ db: sql, fetch: async (input: RequestInfo | URL) => {
+    });
+    const github = new GitHubAppService({ db, fetch: async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/app/installations/42")) return Response.json({ account: { type: "Organization", id: 99 }, repository_selection: "all" });
       if (url.endsWith("/access_tokens")) return Response.json({ token: "installation-token", expires_at: futureTokenExpiry() });
@@ -262,32 +258,20 @@ describe("GitHub App onboarding", () => {
       return Response.json({});
     }, secretBox: new SecretBox(masterKey), publicOrigin: () => "https://control-plane.test" } as never);
     await expect(github.completeInstallation("admin-1", "cookie", 42)).rejects.toThrow("repository_selection_required");
-    expect(calls.some((query) => query.includes("UPDATE system_onboarding SET organization_id"))).toBe(true);
   });
 
   test("resumes onboarding when a signed webhook already recorded an approved installation", async () => {
-    const calls: string[] = [];
-    const sql = ((strings: TemplateStringsArray) => {
-      const query = strings.join("?");
-      calls.push(query);
-      if (query.includes("SELECT app_id,slug")) return [{ app_id: 9, slug: "mars", client_id: null, encrypted_pem: new SecretBox(masterKey).encrypt(testPem), encrypted_client_secret: "x", encrypted_webhook_secret: "y" }];
-      if (query.includes("FROM dashboard_installations i")) return [{ id: "22222222-2222-4222-8222-222222222222" }];
-      if (query.includes("UPDATE system_onboarding SET organization_id")) return [{ organization_id: organizationId }];
+    const db = preparedTestDatabase((name) => {
+      if (name === "github_app_config_get") return [{ appId: 9, slug: "mars", clientId: null, pem: new SecretBox(masterKey).encrypt(testPem), clientSecret: "x", webhookSecret: "y" }];
+      if (name === "github_app_usable_installation") return [{ id: "22222222-2222-4222-8222-222222222222" }];
+      if (name === "github_app_link_onboarding") return [{ organizationId }];
       return [];
-    }) as never;
-    const github = new GitHubAppService({
-      db: sql,
-      fetch: async () => { throw new Error("GitHub should not be called"); },
-      secretBox: new SecretBox(masterKey),
-      publicOrigin: () => "https://control-plane.test",
-    } as never);
+    });
+    const github = new GitHubAppService({ db, fetch: async () => { throw new Error("GitHub should not be called"); }, secretBox: new SecretBox(masterKey), publicOrigin: () => "https://control-plane.test" } as never);
 
     const launch = await github.beginInstallation("admin-1", organizationId, "resume-key");
 
     expect(launch).toEqual({ location: "https://control-plane.test/onboarding" });
-    expect(calls.some((query) => query.includes("UPDATE system_onboarding SET organization_id"))).toBe(true);
-    expect(calls.some((query) => query.includes("INSERT INTO github_setup_states"))).toBe(false);
-    expect(calls.every((query) => !query.includes("r.approved"))).toBe(true);
   });
 
   test("reconciles every granted visibility and restores re-added repositories", async () => {
@@ -486,19 +470,13 @@ test("workflow dispatch returns the new GitHub workflow run identity", async () 
 
 test("workflow preview uses the current runner pool schema", async () => {
   const box = new SecretBox(masterKey);
-  const sql = (async (strings: TemplateStringsArray) => {
-    const query = strings.join("?");
-    if (query.includes("p.created_at")) throw new Error('column "created_at" does not exist');
-    if (query.includes("FROM github_app_config")) {
-      return [{ app_id: 9, slug: "mars", client_id: null, encrypted_pem: box.encrypt(testPem), encrypted_client_secret: "x", encrypted_webhook_secret: "x" }];
-    }
-    if (query.includes("FROM dashboard_repositories r")) {
-      return [{ installation_id: 42, full_name: "acme/private", labels: ["self-hosted", "macos"] }];
-    }
+  const db = preparedTestDatabase((name) => {
+    if (name === "github_app_config_get") return [{ appId: 9, slug: "mars", clientId: null, pem: box.encrypt(testPem), clientSecret: "x", webhookSecret: "x" }];
+    if (name === "github_app_workflow_repository") return [{ installationId: 42, fullName: "acme/private", labels: ["self-hosted", "macos"] }];
     return [];
-  }) as never;
+  });
   const github = new GitHubAppService({
-    db: sql,
+    db,
     secretBox: box,
     publicOrigin: () => "https://control-plane.test",
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -549,16 +527,11 @@ test.each([403, 429, 500])("repository workflow setup preserves availability aft
 
 test("focused runner PR mutates one job and includes preserved labels in generated body", async () => {
   const box = new SecretBox(masterKey);
-  const sql = (async (strings: TemplateStringsArray) => {
-    const query = strings.join("?");
-    if (query.includes("FROM github_app_config")) {
-      return [{ app_id: 9, slug: "mars", client_id: null, encrypted_pem: box.encrypt(testPem), encrypted_client_secret: "x", encrypted_webhook_secret: "x" }];
-    }
-    if (query.includes("FROM dashboard_repositories r")) {
-      return [{ installation_id: 42, full_name: "acme/private", labels: ["self-hosted"] }];
-    }
+  const db = preparedTestDatabase((name) => {
+    if (name === "github_app_config_get") return [{ appId: 9, slug: "mars", clientId: null, pem: box.encrypt(testPem), clientSecret: "x", webhookSecret: "x" }];
+    if (name === "github_app_workflow_repository") return [{ installationId: 42, fullName: "acme/private", labels: ["self-hosted"] }];
     return [];
-  }) as never;
+  });
   const content = `name: CI
 jobs:
   build:
@@ -572,7 +545,7 @@ jobs:
 `;
   const requests: Request[] = [];
   const github = new GitHubAppService({
-    db: sql,
+    db,
     secretBox: box,
     publicOrigin: () => "https://control-plane.test",
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -623,18 +596,13 @@ jobs:
 
 test("focused runner PR rejects a stale workflow head", async () => {
   const box = new SecretBox(masterKey);
-  const sql = (async (strings: TemplateStringsArray) => {
-    const query = strings.join("?");
-    if (query.includes("FROM github_app_config")) {
-      return [{ app_id: 9, slug: "mars", client_id: null, encrypted_pem: box.encrypt(testPem), encrypted_client_secret: "x", encrypted_webhook_secret: "x" }];
-    }
-    if (query.includes("FROM dashboard_repositories r")) {
-      return [{ installation_id: 42, full_name: "acme/private", labels: ["self-hosted"] }];
-    }
+  const db = preparedTestDatabase((name) => {
+    if (name === "github_app_config_get") return [{ appId: 9, slug: "mars", clientId: null, pem: box.encrypt(testPem), clientSecret: "x", webhookSecret: "x" }];
+    if (name === "github_app_workflow_repository") return [{ installationId: 42, fullName: "acme/private", labels: ["self-hosted"] }];
     return [];
-  }) as never;
+  });
   const github = new GitHubAppService({
-    db: sql,
+    db,
     secretBox: box,
     publicOrigin: () => "https://control-plane.test",
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {

@@ -1,6 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { WorkerCommand, WorkerEvent } from "@mars/contracts";
 import type { DatabaseClient } from "@mars/db";
+import { defineQueries, schema } from "@mars/db";
+import { and, asc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+
+const queries = defineQueries(db => ({
+  replayable: db.select({ id: schema.commands.id, version: schema.commands.version, type: schema.commands.type, workerId: schema.commands.workerId, leaseId: schema.commands.leaseId, occurredAt: schema.commands.occurredAt, payload: schema.commands.payload })
+    .from(schema.commands).leftJoin(schema.runnerLeases, eq(schema.runnerLeases.id, schema.commands.leaseId))
+    .where(and(eq(schema.commands.workerId, sql.placeholder("workerId")), inArray(schema.commands.state, ["pending", "sent"]),
+      sql`(${schema.commands.type} <> 'worker.configure' or ${schema.commands.id} = (select ${schema.workers.configurationCommandId} from ${schema.workers} where ${schema.workers.id} = ${sql.placeholder("workerId")}))`,
+      or(isNull(schema.commands.leaseId), and(inArray(schema.commands.type, ["linux-vm.create_lease", "linux-container.create_lease", "tart.create_lease", "windows-container.create_lease", "hyperv.create_lease"]), isNotNull(schema.runnerLeases.id), inArray(schema.runnerLeases.state, ["reserved", "requested", "dispatched", "provisioning"]), sql`${schema.runnerLeases.expiresAt} > now()`), and(inArray(schema.commands.type, ["linux-vm.stop_lease", "linux-container.stop_lease", "tart.stop_lease", "windows-container.stop_lease", "hyperv.stop_lease"]), isNotNull(schema.runnerLeases.id), inArray(schema.runnerLeases.state, ["completed", "failed"]), sql`not exists (select 1 from ${schema.commands} newer where newer.lease_id = ${schema.commands.leaseId} and newer.type in ('linux-vm.stop_lease','linux-container.stop_lease','tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease') and newer.state in ('pending','sent') and (newer.occurred_at > ${schema.commands.occurredAt} or (newer.occurred_at = ${schema.commands.occurredAt} and newer.id > ${schema.commands.id})))`)))
+    ).orderBy(asc(schema.commands.occurredAt), asc(schema.commands.id)).prepare("worker_dispatch_replayable"),
+}));
 
 export interface AuthenticatedWorkerSocket { readonly data?: { actor?: string; workerName?: string }; send(data: string): void; close?(code?: number, reason?: string): void; }
 export interface WorkerCommandStore {
@@ -17,30 +28,9 @@ export function normalizeTimestamp(value: unknown): unknown {
   return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : value;
 }
 type Pending = { command: WorkerCommand; resolve: (event: WorkerEvent) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
+
 export async function listReplayableWorkerCommands(db: DatabaseClient, workerId: string): Promise<WorkerCommand[]> {
-  const rows = await db`SELECT c.id,c.version,c.type,c.worker_id AS "workerId",c.lease_id AS "leaseId",c.occurred_at AS "occurredAt",c.payload
-    FROM commands c LEFT JOIN runner_leases l ON l.id=c.lease_id
-    WHERE c.worker_id=${workerId} AND c.state IN ('pending','sent')
-      AND (c.type <> 'worker.configure' OR c.id=(SELECT configuration_command_id FROM workers WHERE id=${workerId}))
-      AND (
-        c.lease_id IS NULL
-        OR (
-          c.type IN ('linux-vm.create_lease','linux-container.create_lease','tart.create_lease','windows-container.create_lease','hyperv.create_lease')
-          AND l.id IS NOT NULL AND l.state IN ('reserved','requested','dispatched','provisioning') AND l.expires_at>now()
-        )
-        OR (
-          c.type IN ('linux-vm.stop_lease','linux-container.stop_lease','tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease')
-          AND l.id IS NOT NULL AND l.state IN ('completed','failed')
-          AND NOT EXISTS (
-            SELECT 1 FROM commands newer
-            WHERE newer.lease_id=c.lease_id
-              AND newer.type IN ('linux-vm.stop_lease','linux-container.stop_lease','tart.stop_lease','windows-container.stop_lease','hyperv.stop_lease')
-              AND newer.state IN ('pending','sent')
-              AND (newer.occurred_at>c.occurred_at OR (newer.occurred_at=c.occurred_at AND newer.id>c.id))
-          )
-        )
-      )
-    ORDER BY c.occurred_at ASC,c.id ASC`;
+  const rows = await queries(db).replayable.execute({ workerId });
   return rows.map(row => WorkerCommand.parse({
     ...row,
     payload: typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload,

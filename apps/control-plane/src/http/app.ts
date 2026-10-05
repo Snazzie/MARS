@@ -1,3 +1,9 @@
+import { sql } from "drizzle-orm";
+import { defineQueries } from "@mars/db";
+
+const appQueries = defineQueries((db) => ({
+  ready: db.select({ ok: sql`1` }).from(sql`(SELECT 1) AS singleton`).prepare("http_ready"),
+}));
 import { createMiddleware } from "hono/factory";
 import { Hono } from "hono";
 import { registerStaticRoutes } from "./static-routes.ts";
@@ -32,7 +38,7 @@ export function createControlPlaneApp(deps: ControlPlaneHttpDeps) {
   app.get("/api/readyz", async (c) => {
     const health = deps.health();
     try {
-      await deps.db`SELECT 1`;
+      await appQueries(deps.db).ready.execute();
     } catch {
       return c.json({ ok: false, checks: { database: false, discovery: !health.discovery.stale }, ...health }, 503);
     }

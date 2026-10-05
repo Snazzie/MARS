@@ -1,31 +1,71 @@
 import type { JobTimingAggregate, JobTimingSnapshot } from "@mars/contracts";
+import { and, asc, desc, sql } from "drizzle-orm";
+import { defineQueries } from "./prepared.ts";
+import * as schema from "./drizzle-schema.ts";
 import type { DatabaseClient } from "./index.ts";
-
 export type JobTimingSnapshotInput = Omit<JobTimingSnapshot, "createdAt"> & { createdAt?: string };
 export type JobTimingDb = DatabaseClient;
 
+const timingQueries = defineQueries((db) => {
+  const t = schema.dashboardJobTimingSnapshots;
+  const membershipScope = sql`((${sql.placeholder("isAll")}::boolean AND ${t.organizationId} IN (SELECT ${schema.memberships.organizationId} FROM ${schema.memberships} WHERE ${schema.memberships.userId}=${sql.placeholder("userId")}::uuid)) OR (NOT ${sql.placeholder("isAll")}::boolean AND ${t.organizationId}=${sql.placeholder("organizationId")}::uuid))`;
+  const historyFilter = and(
+    membershipScope,
+    sql`(${sql.placeholder("from")}::timestamptz IS NULL OR ${t.completedAt} >= ${sql.placeholder("from")}::timestamptz)`,
+    sql`(${sql.placeholder("to")}::timestamptz IS NULL OR ${t.completedAt} < ${sql.placeholder("to")}::timestamptz)`,
+    sql`(${sql.placeholder("repositoryId")}::uuid IS NULL OR ${t.repositoryId}=${sql.placeholder("repositoryId")}::uuid)`,
+    sql`(${sql.placeholder("workflow")}::text IS NULL OR ${t.workflowName}=${sql.placeholder("workflow")})`,
+    sql`(${sql.placeholder("jobName")}::text IS NULL OR ${t.jobName}=${sql.placeholder("jobName")})`,
+    sql`(${sql.placeholder("platform")}::text IS NULL OR ${t.platform}=${sql.placeholder("platform")})`,
+    sql`(${sql.placeholder("driver")}::text IS NULL OR ${t.driver}=${sql.placeholder("driver")})`,
+    sql`(${sql.placeholder("vcpu")}::bigint IS NULL OR ${t.requestedVcpu}=${sql.placeholder("vcpu")})`,
+    sql`(${sql.placeholder("concurrency")}::bigint IS NULL OR ${t.effectiveConcurrency}=${sql.placeholder("concurrency")})`,
+    sql`(${sql.placeholder("outcome")}::text IS NULL OR ${t.outcome}=${sql.placeholder("outcome")})`,
+    sql`(${sql.placeholder("cursor")}::timestamptz IS NULL OR (${t.completedAt}, ${t.jobId}) < (${sql.placeholder("cursor")}::timestamptz, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid))`,
+  );
+  const aggregateFilter = and(membershipScope,
+    sql`(${sql.placeholder("from")}::timestamptz IS NULL OR ${t.completedAt} >= ${sql.placeholder("from")}::timestamptz)`,
+    sql`(${sql.placeholder("to")}::timestamptz IS NULL OR ${t.completedAt} < ${sql.placeholder("to")}::timestamptz)`,
+    sql`(${sql.placeholder("platform")}::text IS NULL OR ${t.platform}=${sql.placeholder("platform")})`);
+  return {
+    insert: db.insert(t).values({
+      organizationId: sql.placeholder("organizationId"), jobId: sql.placeholder("jobId"), runId: sql.placeholder("runId"), repositoryId: sql.placeholder("repositoryId"),
+      githubJobId: sql.placeholder("githubJobId"), repositoryName: sql.placeholder("repositoryName"), workflowName: sql.placeholder("workflowName"), jobName: sql.placeholder("jobName"),
+      workerId: sql.placeholder("workerId"), platform: sql.placeholder("platform"), driver: sql.placeholder("driver"), runtimeBoundary: sql.placeholder("runtimeBoundary"),
+      poolId: sql.placeholder("poolId"), artifactDigest: sql.placeholder("artifactDigest"), outcome: sql.placeholder("outcome"), completedAt: sql.placeholder("completedAt"),
+      queuedAt: sql.placeholder("queuedAt"), startedAt: sql.placeholder("startedAt"), queueDurationMs: sql.placeholder("queueDurationMs"), startupDurationMs: sql.placeholder("startupDurationMs"),
+      executionDurationMs: sql.placeholder("executionDurationMs"), cleanupDurationMs: sql.placeholder("cleanupDurationMs"), totalDurationMs: sql.placeholder("totalDurationMs"),
+      requestedVcpu: sql.placeholder("requestedVcpu"), requestedMemoryBytes: sql.placeholder("requestedMemoryBytes"), requestedStorageBytes: sql.placeholder("requestedStorageBytes"),
+      requestedConcurrency: sql.placeholder("requestedConcurrency"), observedVcpu: sql.placeholder("observedVcpu"), observedMemoryBytes: sql.placeholder("observedMemoryBytes"),
+      observedStorageBytes: sql.placeholder("observedStorageBytes"), effectiveConcurrency: sql.placeholder("effectiveConcurrency"), telemetryState: sql.placeholder("telemetryState"),
+      telemetrySampleCount: sql.placeholder("telemetrySampleCount"), cpuAveragePercent: sql.placeholder("cpuAveragePercent"), cpuP50Percent: sql.placeholder("cpuP50Percent"),
+      cpuP95Percent: sql.placeholder("cpuP95Percent"), cpuPeakPercent: sql.placeholder("cpuPeakPercent"), cpuTimeMs: sql.placeholder("cpuTimeMs"),
+      memoryAverageBytes: sql.placeholder("memoryAverageBytes"), memoryPeakBytes: sql.placeholder("memoryPeakBytes"), createdAt: sql.placeholder("createdAt"),
+    }).onConflictDoNothing().returning({ jobId: t.jobId }).prepare("job_timing_insert"),
+    history: db.select({
+      organizationId: t.organizationId, jobId: t.jobId, runId: t.runId, repositoryId: t.repositoryId, githubJobId: t.githubJobId,
+      repositoryName: t.repositoryName, workflowName: t.workflowName, jobName: t.jobName, workerId: t.workerId, platform: t.platform,
+      driver: t.driver, runtimeBoundary: t.runtimeBoundary, poolId: t.poolId, artifactDigest: t.artifactDigest, outcome: t.outcome,
+      completedAt: t.completedAt, queuedAt: t.queuedAt, startedAt: t.startedAt, queueDurationMs: t.queueDurationMs,
+      startupDurationMs: t.startupDurationMs, executionDurationMs: t.executionDurationMs, cleanupDurationMs: t.cleanupDurationMs, totalDurationMs: t.totalDurationMs,
+      requestedVcpu: t.requestedVcpu, requestedMemoryBytes: t.requestedMemoryBytes, requestedStorageBytes: t.requestedStorageBytes,
+      requestedConcurrency: t.requestedConcurrency, observedVcpu: t.observedVcpu, observedMemoryBytes: t.observedMemoryBytes, observedStorageBytes: t.observedStorageBytes,
+      effectiveConcurrency: t.effectiveConcurrency, telemetryState: t.telemetryState, telemetrySampleCount: t.telemetrySampleCount,
+      cpuAveragePercent: t.cpuAveragePercent, cpuP50Percent: t.cpuP50Percent, cpuP95Percent: t.cpuP95Percent, cpuPeakPercent: t.cpuPeakPercent,
+      cpuTimeMs: t.cpuTimeMs, memoryAverageBytes: t.memoryAverageBytes, memoryPeakBytes: t.memoryPeakBytes, createdAt: t.createdAt,
+    }).from(t).where(historyFilter).orderBy(desc(t.completedAt), desc(t.jobId)).limit(sql.placeholder("limit")).prepare("job_timing_history"),
+    aggregates: db.select({
+      groupPlatform: t.platform, sampleCount: sql<number>`count(*)::int`, minMs: sql<number>`min(${t.executionDurationMs})::bigint`,
+      maxMs: sql<number>`max(${t.executionDurationMs})::bigint`, p50Ms: sql<number>`percentile_cont(0.5) WITHIN GROUP (ORDER BY ${t.executionDurationMs})::bigint`,
+      p95Ms: sql<number>`percentile_cont(0.95) WITHIN GROUP (ORDER BY ${t.executionDurationMs})::bigint`,
+    }).from(t).where(aggregateFilter).groupBy(t.platform).orderBy(asc(t.platform)).prepare("job_timing_aggregates"),
+  };
+});
+
 export async function recordJobTimingSnapshot(db: JobTimingDb, input: JobTimingSnapshotInput): Promise<boolean> {
-  const [row] = await db<{ jobId: string }[]>`
-    INSERT INTO dashboard_job_timing_snapshots (
-      organization_id, job_id, run_id, repository_id, github_job_id,
-      repository_name, workflow_name, job_name, worker_id, platform, driver, runtime_boundary,
-      pool_id, artifact_digest, outcome, completed_at, queued_at, started_at,
-      queue_duration_ms, startup_duration_ms, execution_duration_ms, cleanup_duration_ms, total_duration_ms,
-      requested_vcpu, requested_memory_bytes, requested_storage_bytes, requested_concurrency,
-      observed_vcpu, observed_memory_bytes, observed_storage_bytes, effective_concurrency,
-      telemetry_state, telemetry_sample_count, cpu_average_percent, cpu_p50_percent, cpu_p95_percent, cpu_peak_percent, cpu_time_ms, memory_average_bytes, memory_peak_bytes, created_at
-    ) VALUES (
-      ${input.organizationId}, ${input.jobId}, ${input.runId}, ${input.repositoryId}, ${input.githubJobId},
-      ${input.repositoryName}, ${input.workflowName}, ${input.jobName}, ${input.workerId}, ${input.platform}, ${input.driver}, ${input.runtimeBoundary},
-      ${input.poolId}, ${input.artifactDigest}, ${input.outcome}, ${input.completedAt}, ${input.queuedAt}, ${input.startedAt},
-      ${input.queueDurationMs}, ${input.startupDurationMs}, ${input.executionDurationMs}, ${input.cleanupDurationMs}, ${input.totalDurationMs},
-      ${input.requestedVcpu}, ${input.requestedMemoryBytes}, ${input.requestedStorageBytes}, ${input.requestedConcurrency},
-      ${input.observedVcpu}, ${input.observedMemoryBytes}, ${input.observedStorageBytes}, ${input.effectiveConcurrency},
-      ${input.telemetryState}, ${input.telemetrySampleCount}, ${input.cpuAveragePercent}, ${input.cpuP50Percent}, ${input.cpuP95Percent}, ${input.cpuPeakPercent}, ${input.cpuTimeMs}, ${input.memoryAverageBytes}, ${input.memoryPeakBytes}, ${input.createdAt ?? new Date().toISOString()}
-    )
-    ON CONFLICT (organization_id, job_id) DO NOTHING
-    RETURNING job_id AS "jobId"
-  `;
+  const [row] = await timingQueries(db).insert.execute({
+    ...input, createdAt: input.createdAt ?? new Date().toISOString(),
+  });
   return Boolean(row);
 }
 export type JobTimingHistoryQuery = {
@@ -84,54 +124,21 @@ function normalizeTiming(row: Record<string, unknown>): JobTimingSnapshot {
 }
 export async function listJobTimingHistory(db: JobTimingDb, organizationId: string, query: JobTimingHistoryQuery = {}, userId?: string): Promise<{ items: JobTimingSnapshot[]; nextCursor: string | null }> {
   const limit = Math.max(1, Math.min(100, Math.floor(query.limit ?? 50)));
-  const rows = await db<Record<string, unknown>[]>`
-    SELECT organization_id AS "organizationId", job_id AS "jobId", run_id AS "runId", repository_id AS "repositoryId",
-      github_job_id AS "githubJobId", repository_name AS "repositoryName", workflow_name AS "workflowName", job_name AS "jobName",
-      worker_id AS "workerId", platform, driver, runtime_boundary AS "runtimeBoundary", pool_id AS "poolId", artifact_digest AS "artifactDigest",
-      outcome, completed_at AS "completedAt", queued_at AS "queuedAt", started_at AS "startedAt",
-      queue_duration_ms AS "queueDurationMs", startup_duration_ms AS "startupDurationMs",
-      execution_duration_ms AS "executionDurationMs", cleanup_duration_ms AS "cleanupDurationMs", total_duration_ms AS "totalDurationMs",
-      requested_vcpu AS "requestedVcpu", requested_memory_bytes AS "requestedMemoryBytes", requested_storage_bytes AS "requestedStorageBytes",
-      requested_concurrency AS "requestedConcurrency", observed_vcpu AS "observedVcpu", observed_memory_bytes AS "observedMemoryBytes",
-      observed_storage_bytes AS "observedStorageBytes", effective_concurrency AS "effectiveConcurrency",
-      telemetry_state AS "telemetryState", telemetry_sample_count AS "telemetrySampleCount", cpu_average_percent AS "cpuAveragePercent", cpu_p50_percent AS "cpuP50Percent", cpu_p95_percent AS "cpuP95Percent", cpu_peak_percent AS "cpuPeakPercent", cpu_time_ms AS "cpuTimeMs", memory_average_bytes AS "memoryAverageBytes", memory_peak_bytes AS "memoryPeakBytes", created_at AS "createdAt"
-    WHERE (
-      (${organizationId === "all"} AND organization_id IN (SELECT organization_id FROM memberships WHERE user_id=${userId ?? null}))
-      OR (${organizationId !== "all"} AND organization_id=${organizationId === "all" ? null : organizationId}::uuid)
-    )
-      AND (${query.from ?? null}::timestamptz IS NULL OR completed_at >= ${query.from ?? null}::timestamptz)
-      AND (${query.to ?? null}::timestamptz IS NULL OR completed_at < ${query.to ?? null}::timestamptz)
-      AND (${query.repositoryId ?? null}::uuid IS NULL OR repository_id=${query.repositoryId ?? null})
-      AND (${query.workflow ?? null}::text IS NULL OR workflow_name=${query.workflow ?? null})
-      AND (${query.jobName ?? null}::text IS NULL OR job_name=${query.jobName ?? null})
-      AND (${query.platform ?? null}::text IS NULL OR platform=${query.platform ?? null})
-      AND (${query.driver ?? null}::text IS NULL OR driver=${query.driver ?? null})
-      AND (${query.vcpu ?? null}::bigint IS NULL OR requested_vcpu=${query.vcpu ?? null})
-      AND (${query.concurrency ?? null}::bigint IS NULL OR effective_concurrency=${query.concurrency ?? null})
-      AND (${query.outcome ?? null}::text IS NULL OR outcome=${query.outcome ?? null})
-      AND (${decodeCursor(query.cursor)}::timestamptz IS NULL OR (completed_at, job_id) < (${decodeCursor(query.cursor)}::timestamptz, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid))
-    ORDER BY completed_at DESC, job_id DESC
-    LIMIT ${limit + 1}
-  `;
+  const cursor = decodeCursor(query.cursor);
+  const rows = await timingQueries(db).history.execute({
+    isAll: organizationId === "all", organizationId: organizationId === "all" ? null : organizationId, userId: userId ?? null,
+    from: query.from ?? null, to: query.to ?? null, repositoryId: query.repositoryId ?? null, workflow: query.workflow ?? null,
+    jobName: query.jobName ?? null, platform: query.platform ?? null, driver: query.driver ?? null, vcpu: query.vcpu ?? null,
+    concurrency: query.concurrency ?? null, outcome: query.outcome ?? null, cursor, limit: limit + 1,
+  }) as Record<string, unknown>[];
   const items = rows.slice(0, limit).map(normalizeTiming);
   return { items, nextCursor: rows.length > limit ? encodeCursor(items.at(-1)?.completedAt ?? "") : null };
 }
 
 export async function getJobTimingAggregates(db: JobTimingDb, organizationId: string, query: Omit<JobTimingHistoryQuery, "cursor" | "limit"> = {}, userId?: string): Promise<JobTimingAggregate[]> {
-  const rows = await db<Record<string, unknown>[]>`
-    SELECT platform AS "groupPlatform", count(*)::int AS "sampleCount",
-      min(execution_duration_ms)::bigint AS "minMs", max(execution_duration_ms)::bigint AS "maxMs",
-      percentile_cont(0.5) WITHIN GROUP (ORDER BY execution_duration_ms)::bigint AS "p50Ms",
-      percentile_cont(0.95) WITHIN GROUP (ORDER BY execution_duration_ms)::bigint AS "p95Ms"
-    FROM dashboard_job_timing_snapshots
-    WHERE (
-      (${organizationId === "all"} AND organization_id IN (SELECT organization_id FROM memberships WHERE user_id=${userId ?? null}))
-      OR (${organizationId !== "all"} AND organization_id=${organizationId === "all" ? null : organizationId}::uuid)
-    )
-      AND (${query.from ?? null}::timestamptz IS NULL OR completed_at >= ${query.from ?? null}::timestamptz)
-      AND (${query.to ?? null}::timestamptz IS NULL OR completed_at < ${query.to ?? null}::timestamptz)
-      AND (${query.platform ?? null}::text IS NULL OR platform=${query.platform ?? null})
-    GROUP BY platform ORDER BY platform
-  `;
+  const rows = await timingQueries(db).aggregates.execute({
+    isAll: organizationId === "all", organizationId: organizationId === "all" ? null : organizationId, userId: userId ?? null,
+    from: query.from ?? null, to: query.to ?? null, platform: query.platform ?? null,
+  }) as Record<string, unknown>[];
   return rows.map(row => ({ group: { platform: String(row.groupPlatform) }, sampleCount: asNumber(row.sampleCount), minMs: asNumber(row.minMs), maxMs: asNumber(row.maxMs), p50Ms: asNumber(row.p50Ms), p95Ms: asNumber(row.p95Ms) }));
 }

@@ -1,6 +1,28 @@
+import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
+import { defineQueries, schema, type DatabaseClient } from "@mars/db";
 import { parseJobRunnerLabels } from "@mars/contracts";
-import type { DatabaseClient } from "@mars/db";
 import { GithubJobsClient } from "./github-jobs.ts";
+
+const queries = defineQueries(db => ({
+  candidates: db.select({
+    id: schema.dashboardRuns.id,
+    organizationId: schema.dashboardRuns.organizationId,
+    githubRunId: schema.dashboardRuns.githubRunId,
+    runAttempt: schema.dashboardRuns.runAttempt,
+    githubJobId: schema.dashboardJobs.githubJobId,
+    requestedLabels: schema.dashboardJobs.requestedLabels,
+    fullName: schema.dashboardRepositories.fullName,
+    installationId: schema.dashboardInstallations.githubInstallationId,
+  }).from(schema.dashboardRuns)
+    .innerJoin(schema.dashboardRepositories, and(eq(schema.dashboardRepositories.id, schema.dashboardRuns.repositoryId), eq(schema.dashboardRepositories.organizationId, schema.dashboardRuns.organizationId), eq(schema.dashboardRepositories.available, true)))
+    .innerJoin(schema.dashboardInstallations, and(eq(schema.dashboardInstallations.id, schema.dashboardRepositories.installationId), eq(schema.dashboardInstallations.organizationId, schema.dashboardRuns.organizationId), eq(schema.dashboardInstallations.state, "approved")))
+    .innerJoin(schema.dashboardJobs, and(eq(schema.dashboardJobs.runId, schema.dashboardRuns.id), eq(schema.dashboardJobs.organizationId, schema.dashboardRuns.organizationId), eq(schema.dashboardJobs.runAttempt, schema.dashboardRuns.runAttempt)))
+    .where(and(eq(schema.dashboardRuns.status, "completed"), gt(schema.dashboardRuns.completedAt, schema.dashboardRuns.retryEligibleSince), sql`${schema.dashboardRuns.retryRequestedAttempt} IS DISTINCT FROM ${schema.dashboardRuns.runAttempt}`, eq(schema.dashboardJobs.status, "completed"), inArray(schema.dashboardJobs.conclusion, ["failure", "timed_out"])))
+    .orderBy(asc(schema.dashboardRuns.id), asc(schema.dashboardJobs.githubJobId)).prepare("github_job_retry_candidates"),
+  claim: db.update(schema.dashboardRuns).set({ retryRequestedAttempt: sql`${schema.dashboardRuns.runAttempt}` })
+    .where(and(eq(schema.dashboardRuns.id, sql.placeholder("id")), eq(schema.dashboardRuns.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardRuns.runAttempt, sql.placeholder("runAttempt")), eq(schema.dashboardRuns.status, "completed"), gt(schema.dashboardRuns.completedAt, schema.dashboardRuns.retryEligibleSince), sql`${schema.dashboardRuns.retryRequestedAttempt} IS DISTINCT FROM ${schema.dashboardRuns.runAttempt}`))
+    .returning({ id: schema.dashboardRuns.id }).prepare("github_job_retry_claim"),
+}));
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type RetryDeps = {
@@ -24,20 +46,8 @@ const retryDirective = (labels: readonly string[]): string | undefined => labels
 
 /** Claim before POST: GitHub has no idempotency key for job reruns. */
 export async function retryFailedGithubJobs(deps: RetryDeps): Promise<{ requested: number; skipped: number; failed: number }> {
-  const rows = await deps.db`
-    SELECT r.id, r.organization_id AS "organizationId", r.github_run_id AS "githubRunId",
-      r.run_attempt AS "runAttempt", j.github_job_id AS "githubJobId",
-      j.requested_labels AS "requestedLabels", repo.full_name AS "fullName",
-      i.github_installation_id AS "installationId"
-    FROM dashboard_runs r
-    JOIN dashboard_repositories repo ON repo.id=r.repository_id AND repo.organization_id=r.organization_id AND repo.available=true
-    JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=r.organization_id AND i.state='approved'
-    JOIN dashboard_jobs j ON j.run_id=r.id AND j.organization_id=r.organization_id AND j.run_attempt=r.run_attempt
-    WHERE r.status='completed' AND r.completed_at > r.retry_eligible_since
-      AND r.retry_requested_attempt IS DISTINCT FROM r.run_attempt
-      AND j.status='completed' AND j.conclusion IN ('failure', 'timed_out')
-    ORDER BY r.id, j.github_job_id
-  ` as Candidate[];
+  const prepared = queries(deps.db);
+  const rows = await prepared.candidates.execute() as Candidate[];
   const report = { requested: 0, skipped: 0, failed: 0 };
   const seen = new Set<string>();
   for (const row of rows) {
@@ -59,13 +69,7 @@ export async function retryFailedGithubJobs(deps: RetryDeps): Promise<{ requeste
         || job.status !== "completed" || (job.conclusion !== "failure" && job.conclusion !== "timed_out")
         || latest?.maxRetries !== parsed.maxRetries || retryDirective(job.labels) !== retryDirective(labels)
         || deps.installationBlocked?.(Number(row.installationId))) { report.skipped++; continue; }
-      const claimed = await deps.db`
-        UPDATE dashboard_runs SET retry_requested_attempt=run_attempt
-        WHERE id=${row.id} AND organization_id=${row.organizationId} AND run_attempt=${row.runAttempt}
-          AND status='completed' AND completed_at > retry_eligible_since
-          AND retry_requested_attempt IS DISTINCT FROM run_attempt
-        RETURNING id
-      `;
+      const claimed = await prepared.claim.execute({ id: row.id, organizationId: row.organizationId, runAttempt: row.runAttempt });
       if (!claimed.length) { report.skipped++; continue; }
       await client.rerunJob(owner, repo, Number(row.githubJobId));
       report.requested++;

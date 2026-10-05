@@ -12,11 +12,12 @@ const defaultMigrationRunner: MigrationRunner = async sql => {
   await drizzleMigrate(drizzle(sql), { migrationsFolder });
 };
 
-export async function migrateDatabase(db: DatabaseClient, options: MigrateDatabaseOptions = {}): Promise<void> {
-  const raw = db.$client ?? db;
+export async function migrateDatabase(db: DatabaseClient | RawDatabaseClient, options: MigrateDatabaseOptions = {}): Promise<void> {
+  // Catalog inspection and repair DDL intentionally use the migration driver's raw connection.
+  const raw = "$client" in db ? db.$client : db;
   await (options.runMigrations ?? defaultMigrationRunner)(raw);
 
-  const [{ tableExists }] = await db<{ tableExists: boolean }[]>`
+  const [{ tableExists }] = await raw<{ tableExists: boolean }[]>`
     SELECT EXISTS (
       SELECT 1
       FROM information_schema.tables
@@ -25,14 +26,14 @@ export async function migrateDatabase(db: DatabaseClient, options: MigrateDataba
   `;
   if (!tableExists) return;
 
-  const columns = await db<{ columnName: string; isNullable: string }[]>`
+  const columns = await raw<{ columnName: string; isNullable: string }[]>`
     SELECT column_name AS "columnName", is_nullable AS "isNullable"
     FROM information_schema.columns
     WHERE table_schema = 'public'
       AND table_name = 'dashboard_job_timing_snapshots'
       AND column_name = 'worker_id'
   `;
-  const indexes = await db<{ indexName: string }[]>`
+  const indexes = await raw<{ indexName: string }[]>`
     SELECT indexname AS "indexName"
     FROM pg_indexes
     WHERE schemaname = 'public'
@@ -41,7 +42,7 @@ export async function migrateDatabase(db: DatabaseClient, options: MigrateDataba
   `;
   if (columns[0]?.isNullable === "NO" && indexes.length > 0) return;
 
-  await db.begin(async tx => {
+  await raw.begin(async tx => {
     await tx`SELECT pg_advisory_xact_lock(hashtext('mars:migrate:job-timing-worker'))`;
     await tx`ALTER TABLE dashboard_job_timing_snapshots ADD COLUMN IF NOT EXISTS worker_id uuid`;
     await tx`

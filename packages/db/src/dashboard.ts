@@ -1,7 +1,9 @@
 import type { DatabaseClient } from "./index.ts";
 import { CapacitySnapshot, ConnectionState, ConfigurationState, PoolSummary, RuntimeDriverName, RuntimePlatform, RuntimeTerminationEvidence, WorkerContainerStatus, WorkerDoctor, WorkerDisconnectEvidence, WorkerLimits, WorkerState, GuestPlatform, WorkerCacheSummary, WorkerHealth } from "@mars/contracts";
 import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, OverviewTimeseriesPoint, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail } from "@mars/contracts";
-import { jsonParameter } from "./json.ts";
+import { defineQueries } from "./prepared.ts";
+import * as schema from "./drizzle-schema.ts";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { getGithubRunnerCostSavings } from "./github-runner-cost.ts";
 export type DashboardDb = DatabaseClient;
 export type RunTransition = { status: RunSummary["status"]; conclusion: RunSummary["conclusion"]; startedAt?: string | null; completedAt?: string | null };
@@ -22,11 +24,36 @@ export function cursorBoundary<T extends { id: string }>(items: T[], cursor: str
   return { items: page, nextCursor: start + page.length < items.length && page.length ? page.at(-1)!.id : null };
 }
 
+const organizationQueries = defineQueries((db) => ({
+  list: db.select({
+    id: schema.organizations.id,
+    name: schema.organizations.login,
+    login: schema.organizations.login,
+    role: schema.memberships.role,
+    repositoryCount: sql<number>`(SELECT count(*)::int FROM ${schema.dashboardRepositories} r WHERE r.organization_id=${schema.organizations.id})`,
+    workerCount: sql<number>`(SELECT count(DISTINCT p.worker_id)::int FROM ${schema.runnerPools} p WHERE p.organization_id=${schema.organizations.id})`,
+  }).from(schema.organizations)
+    .innerJoin(schema.memberships, eq(schema.memberships.organizationId, schema.organizations.id))
+    .where(and(eq(schema.memberships.userId, sql.placeholder("userId")), sql`EXISTS (SELECT 1 FROM ${schema.dashboardInstallations} i WHERE i.organization_id=${schema.organizations.id} AND i.state IN ('pending','approved'))`))
+    .orderBy(asc(schema.organizations.login)).prepare("dashboard_list_organizations"),
+  listAll: db.select({
+    id: schema.organizations.id,
+    name: schema.organizations.login,
+    login: schema.organizations.login,
+    role: sql<string>`COALESCE(${schema.memberships.role}, 'admin')`,
+    repositoryCount: sql<number>`(SELECT count(*)::int FROM ${schema.dashboardRepositories} r WHERE r.organization_id=${schema.organizations.id})`,
+    workerCount: sql<number>`(SELECT count(DISTINCT p.worker_id)::int FROM ${schema.runnerPools} p WHERE p.organization_id=${schema.organizations.id})`,
+  }).from(schema.organizations)
+    .leftJoin(schema.memberships, and(eq(schema.memberships.organizationId, schema.organizations.id), eq(schema.memberships.userId, sql.placeholder("userId"))))
+    .where(sql`EXISTS (SELECT 1 FROM ${schema.dashboardInstallations} i WHERE i.organization_id=${schema.organizations.id} AND i.state IN ('pending','approved'))`)
+    .orderBy(asc(schema.organizations.login)).prepare("dashboard_list_all_organizations"),
+}));
+
 export async function listOrganizations(db: DashboardDb, userId: string): Promise<OrganizationSummary[]> {
-  return await db<OrganizationSummary[]>`SELECT o.id, o.login AS name, o.login, m.role, (SELECT count(*)::int FROM dashboard_repositories r WHERE r.organization_id=o.id) AS "repositoryCount", (SELECT count(DISTINCT p.worker_id)::int FROM runner_pools p WHERE p.organization_id=o.id) AS "workerCount" FROM organizations o JOIN memberships m ON m.organization_id=o.id WHERE m.user_id=${userId} AND EXISTS (SELECT 1 FROM dashboard_installations i WHERE i.organization_id=o.id AND i.state IN ('pending','approved')) ORDER BY o.login`;
+  return await organizationQueries(db).list.execute({ userId }) as OrganizationSummary[];
 }
 export async function listAllOrganizations(db: DashboardDb, userId: string): Promise<OrganizationSummary[]> {
-  return await db<OrganizationSummary[]>`SELECT o.id, o.login AS name, o.login, COALESCE(m.role, 'admin') AS role, (SELECT count(*)::int FROM dashboard_repositories r WHERE r.organization_id=o.id) AS "repositoryCount", (SELECT count(DISTINCT p.worker_id)::int FROM runner_pools p WHERE p.organization_id=o.id) AS "workerCount" FROM organizations o LEFT JOIN memberships m ON m.organization_id=o.id AND m.user_id=${userId} WHERE EXISTS (SELECT 1 FROM dashboard_installations i WHERE i.organization_id=o.id AND i.state IN ('pending','approved')) ORDER BY o.login`;
+  return await organizationQueries(db).listAll.execute({ userId }) as OrganizationSummary[];
 }
 function normalizeOverviewTimeseries(rows: Array<Record<string, unknown>>): OverviewTimeseriesPoint[] {
   return rows.map((row) => {
@@ -36,19 +63,47 @@ function normalizeOverviewTimeseries(rows: Array<Record<string, unknown>>): Over
   });
 }
 
+const timeseriesQueries = defineQueries((db) => ({
+  series: db.select({
+    bucket: sql<Date>`bucket`,
+    pending: sql<number>`count(${schema.dashboardJobs.id}) FILTER (WHERE ${schema.dashboardJobs.queuedAt}<=bucket AND (${schema.dashboardJobs.startedAt} IS NULL OR ${schema.dashboardJobs.startedAt}>bucket) AND (${schema.dashboardJobs.completedAt} IS NULL OR ${schema.dashboardJobs.completedAt}>bucket))::int`,
+    running: sql<number>`count(${schema.dashboardJobs.id}) FILTER (WHERE ${schema.dashboardJobs.startedAt} IS NOT NULL AND ${schema.dashboardJobs.startedAt}<=bucket AND (${schema.dashboardJobs.completedAt} IS NULL OR ${schema.dashboardJobs.completedAt}>bucket))::int`,
+  }).from(sql`generate_series(date_trunc(CASE ${sql.placeholder("period")} WHEN '24h' THEN 'hour' ELSE 'day' END, now() - CASE ${sql.placeholder("period")} WHEN '24h' THEN interval '24 hours' WHEN '7d' THEN interval '7 days' ELSE interval '30 days' END), date_trunc(CASE ${sql.placeholder("period")} WHEN '24h' THEN 'hour' ELSE 'day' END, now()), CASE ${sql.placeholder("period")} WHEN '24h' THEN interval '1 hour' ELSE interval '1 day' END) AS bucket`)
+    .leftJoin(schema.dashboardJobs, and(
+      sql`true`,
+      sql`(${sql.placeholder("userId")}::text IS NULL OR EXISTS (SELECT 1 FROM ${schema.memberships} m WHERE m.organization_id=${schema.dashboardJobs.organizationId} AND m.user_id=${sql.placeholder("userId")}))`,
+      sql`(${sql.placeholder("userId")}::text IS NOT NULL OR ${schema.dashboardJobs.organizationId}=${sql.placeholder("organizationId")})`,
+    )).groupBy(sql`bucket`).orderBy(asc(sql`bucket`)).prepare("dashboard_overview_timeseries"),
+  current: db.select({
+    bucket: sql<Date>`now()`,
+    pending: sql<number>`count(*) FILTER (WHERE ${schema.dashboardJobs.status}='queued')::int`,
+    running: sql<number>`count(*) FILTER (WHERE ${schema.dashboardJobs.status}='in_progress')::int`,
+  }).from(schema.dashboardJobs).where(and(
+    sql`(${sql.placeholder("userId")}::text IS NULL OR EXISTS (SELECT 1 FROM ${schema.memberships} m WHERE m.organization_id=${schema.dashboardJobs.organizationId} AND m.user_id=${sql.placeholder("userId")}))`,
+    sql`(${sql.placeholder("userId")}::text IS NOT NULL OR ${schema.dashboardJobs.organizationId}=${sql.placeholder("organizationId")})`,
+  )).prepare("dashboard_overview_timeseries_current"),
+}));
 async function getOverviewTimeseries(db: DashboardDb, period: OverviewDto["period"], organizationId: string, userId?: string): Promise<OverviewTimeseriesPoint[]> {
-  const membership = userId
-    ? db<Record<string, unknown>[]>`WITH buckets AS (SELECT generate_series(date_trunc(CASE ${period} WHEN '24h' THEN 'hour' ELSE 'day' END, now() - CASE ${period} WHEN '24h' THEN interval '24 hours' WHEN '7d' THEN interval '7 days' ELSE interval '30 days' END), date_trunc(CASE ${period} WHEN '24h' THEN 'hour' ELSE 'day' END, now()), CASE ${period} WHEN '24h' THEN interval '1 hour' ELSE interval '1 day' END) AS bucket), jobs AS (SELECT j.* FROM dashboard_jobs j JOIN dashboard_runs r ON r.id=j.run_id JOIN memberships m ON m.organization_id=j.organization_id AND m.user_id=${userId}) SELECT b.bucket,count(j.id) FILTER (WHERE j.queued_at<=b.bucket AND (j.started_at IS NULL OR j.started_at>b.bucket) AND (j.completed_at IS NULL OR j.completed_at>b.bucket))::int AS pending,count(j.id) FILTER (WHERE j.started_at IS NOT NULL AND j.started_at<=b.bucket AND (j.completed_at IS NULL OR j.completed_at>b.bucket))::int AS running FROM buckets b LEFT JOIN jobs j ON true GROUP BY b.bucket ORDER BY b.bucket`
-    : db<Record<string, unknown>[]>`WITH buckets AS (SELECT generate_series(date_trunc(CASE ${period} WHEN '24h' THEN 'hour' ELSE 'day' END, now() - CASE ${period} WHEN '24h' THEN interval '24 hours' WHEN '7d' THEN interval '7 days' ELSE interval '30 days' END), date_trunc(CASE ${period} WHEN '24h' THEN 'hour' ELSE 'day' END, now()), CASE ${period} WHEN '24h' THEN interval '1 hour' ELSE interval '1 day' END) AS bucket), jobs AS (SELECT * FROM dashboard_jobs WHERE organization_id=${organizationId}) SELECT b.bucket,count(j.id) FILTER (WHERE j.queued_at<=b.bucket AND (j.started_at IS NULL OR j.started_at>b.bucket) AND (j.completed_at IS NULL OR j.completed_at>b.bucket))::int AS pending,count(j.id) FILTER (WHERE j.started_at IS NOT NULL AND j.started_at<=b.bucket AND (j.completed_at IS NULL OR j.completed_at>b.bucket))::int AS running FROM buckets b LEFT JOIN jobs j ON true GROUP BY b.bucket ORDER BY b.bucket`;
-  const rows = await membership;
-  const currentRows = userId
-    ? await db<Record<string, unknown>[]>`SELECT now() AS bucket, count(*) FILTER (WHERE j.status='queued')::int AS pending, count(*) FILTER (WHERE j.status='in_progress')::int AS running FROM dashboard_jobs j JOIN memberships m ON m.organization_id=j.organization_id AND m.user_id=${userId}`
-    : await db<Record<string, unknown>[]>`SELECT now() AS bucket, count(*) FILTER (WHERE status='queued')::int AS pending, count(*) FILTER (WHERE status='in_progress')::int AS running FROM dashboard_jobs WHERE organization_id=${organizationId}`;
+  const parameters = { period, organizationId, userId: userId ?? null };
+  const rows = await timeseriesQueries(db).series.execute(parameters) as Record<string, unknown>[];
+  const currentRows = await timeseriesQueries(db).current.execute(parameters) as Record<string, unknown>[];
   const current = currentRows[0];
   const currentIsReal = current && (current.bucket instanceof Date || (typeof current.bucket === "string" && !Number.isNaN(Date.parse(current.bucket))));
   return normalizeOverviewTimeseries([...rows, ...(currentIsReal ? [current] : [])]);
 }
 type OverviewJobOutcome = NonNullable<OverviewDto["jobOutcomes"]>[number];
+const outcomesQuery = defineQueries((db) => ({
+  aggregate: db.select({
+    outcome: sql<string>`CASE WHEN ${schema.dashboardJobs.status}='queued' THEN 'queued' WHEN ${schema.dashboardJobs.status}='in_progress' THEN 'running' ELSE CASE WHEN ${schema.dashboardJobs.conclusion}='success' THEN 'completed' ELSE 'failed' END END`.as("outcome"),
+    platform: sql<string>`CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(${schema.dashboardJobs.requestedLabels})='array' THEN ${schema.dashboardJobs.requestedLabels} ELSE '[]'::jsonb END) label WHERE lower(label) LIKE '%macos%') THEN 'macos' WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(${schema.dashboardJobs.requestedLabels})='array' THEN ${schema.dashboardJobs.requestedLabels} ELSE '[]'::jsonb END) label WHERE lower(label) LIKE '%ubuntu%' OR lower(label) LIKE '%linux%') THEN 'ubuntu' WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(${schema.dashboardJobs.requestedLabels})='array' THEN ${schema.dashboardJobs.requestedLabels} ELSE '[]'::jsonb END) label WHERE lower(label) LIKE '%windows%') THEN 'windows' ELSE 'other' END`.as("platform"),
+    count: sql<number>`count(*)::int`,
+  }).from(schema.dashboardJobs)
+    .where(and(
+      sql`(${sql.placeholder("userId")}::text IS NULL OR EXISTS (SELECT 1 FROM ${schema.memberships} m WHERE m.organization_id=${schema.dashboardJobs.organizationId} AND m.user_id=${sql.placeholder("userId")}))`,
+      sql`(${sql.placeholder("userId")}::text IS NOT NULL OR ${schema.dashboardJobs.organizationId}=${sql.placeholder("organizationId")})`,
+      sql`(${schema.dashboardJobs.status} IN ('queued','in_progress') OR ${schema.dashboardJobs.queuedAt} >= now() - CASE ${sql.placeholder("period")} WHEN '24h' THEN interval '24 hours' WHEN '7d' THEN interval '7 days' ELSE interval '30 days' END)`,
+    )).groupBy(sql`outcome, platform`).prepare("dashboard_overview_job_outcomes"),
+}));
 const overviewOutcomeOrder: OverviewJobOutcome["outcome"][] = ["queued", "running", "completed", "failed"];
 const overviewPlatformOrder: (keyof OverviewJobOutcome["platforms"])[] = ["macos", "ubuntu", "windows", "other"];
 function normalizeOverviewJobOutcomes(rows: Array<Record<string, unknown>>): OverviewJobOutcome[] {
@@ -63,50 +118,150 @@ function normalizeOverviewJobOutcomes(rows: Array<Record<string, unknown>>): Ove
   return overviewOutcomeOrder.map((outcome) => ({ outcome, platforms: cells.get(outcome)! }));
 }
 async function getOverviewJobOutcomes(db: DashboardDb, organizationId: string, period: OverviewDto["period"], userId?: string): Promise<OverviewJobOutcome[]> {
-  const rows = userId
-    ? await db<Record<string, unknown>[]>`SELECT CASE WHEN j.status='queued' THEN 'queued' WHEN j.status='in_progress' THEN 'running' ELSE CASE WHEN j.conclusion='success' THEN 'completed' ELSE 'failed' END END AS outcome, CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(j.requested_labels)='array' THEN j.requested_labels ELSE '[]'::jsonb END) label WHERE lower(label) LIKE '%macos%') THEN 'macos' WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(j.requested_labels)='array' THEN j.requested_labels ELSE '[]'::jsonb END) label WHERE lower(label) LIKE '%ubuntu%' OR lower(label) LIKE '%linux%') THEN 'ubuntu' WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(j.requested_labels)='array' THEN j.requested_labels ELSE '[]'::jsonb END) label WHERE lower(label) LIKE '%windows%') THEN 'windows' ELSE 'other' END AS platform, count(*)::int AS count FROM dashboard_jobs j JOIN memberships m ON m.organization_id=j.organization_id AND m.user_id=${userId} WHERE (j.status IN ('queued','in_progress') OR j.queued_at >= now() - ${periodSql(period)}::interval) GROUP BY outcome, platform`
-    : await db<Record<string, unknown>[]>`SELECT CASE WHEN status='queued' THEN 'queued' WHEN status='in_progress' THEN 'running' ELSE CASE WHEN conclusion='success' THEN 'completed' ELSE 'failed' END END AS outcome, CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(requested_labels)='array' THEN requested_labels ELSE '[]'::jsonb END) label WHERE lower(label) LIKE '%macos%') THEN 'macos' WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(requested_labels)='array' THEN requested_labels ELSE '[]'::jsonb END) label WHERE lower(label) LIKE '%ubuntu%' OR lower(label) LIKE '%linux%') THEN 'ubuntu' WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(requested_labels)='array' THEN requested_labels ELSE '[]'::jsonb END) label WHERE lower(label) LIKE '%windows%') THEN 'windows' ELSE 'other' END AS platform, count(*)::int AS count FROM dashboard_jobs WHERE organization_id=${organizationId} AND (status IN ('queued','in_progress') OR queued_at >= now() - ${periodSql(period)}::interval) GROUP BY outcome, platform`;
+  const rows = await outcomesQuery(db).aggregate.execute({ organizationId, period, userId: userId ?? null }) as Record<string, unknown>[];
   return normalizeOverviewJobOutcomes(rows);
 }
-const periodSql = (period: OverviewDto["period"]) => period === "24h" ? "24 hours" : period === "7d" ? "7 days" : "30 days";
 const overviewUtilization = (running: number, concurrency: number) => ({ vcpu: 0, memory: 0, storage: 0, pods: concurrency > 0 ? Math.min(1, running / concurrency) : 0 });
+const runningContainerQueries = defineQueries((db) => ({
+  list: db.select({
+    id: schema.runnerLeases.id,
+    organizationId: schema.runnerLeases.organizationId,
+    jobId: schema.dashboardJobs.id,
+    runId: schema.dashboardJobs.runId,
+    jobName: schema.dashboardJobs.name,
+    repositoryName: schema.dashboardRepositories.fullName,
+    workflowName: schema.dashboardRuns.workflowName,
+    workerName: schema.workers.name,
+    runtime: schema.runnerPools.driver,
+    startedAt: sql<Date>`COALESCE(${schema.runnerLeases.updatedAt},${schema.dashboardJobs.startedAt},${schema.runnerLeases.createdAt})`,
+    cpuUsagePercent: sql<number | null>`(SELECT s.cpu_usage_percent FROM ${schema.dashboardJobResourceSamples} s WHERE s.organization_id=${schema.dashboardJobs.organizationId} AND s.job_id=${schema.dashboardJobs.id} AND s.lease_id=${schema.runnerLeases.id} ORDER BY s.occurred_at DESC LIMIT 1)`,
+    memoryWorkingSetBytes: sql<string | null>`(SELECT s.memory_working_set_bytes::text FROM ${schema.dashboardJobResourceSamples} s WHERE s.organization_id=${schema.dashboardJobs.organizationId} AND s.job_id=${schema.dashboardJobs.id} AND s.lease_id=${schema.runnerLeases.id} ORDER BY s.occurred_at DESC LIMIT 1)`,
+    memoryLimitBytes: sql<string | null>`(SELECT s.memory_limit_bytes::text FROM ${schema.dashboardJobResourceSamples} s WHERE s.organization_id=${schema.dashboardJobs.organizationId} AND s.job_id=${schema.dashboardJobs.id} AND s.lease_id=${schema.runnerLeases.id} ORDER BY s.occurred_at DESC LIMIT 1)`,
+    diskUsageBytes: sql<string | null>`(SELECT s.disk_usage_bytes::text FROM ${schema.dashboardJobResourceSamples} s WHERE s.organization_id=${schema.dashboardJobs.organizationId} AND s.job_id=${schema.dashboardJobs.id} AND s.lease_id=${schema.runnerLeases.id} ORDER BY s.occurred_at DESC LIMIT 1)`,
+    allocatedStorageBytes: sql<number>`COALESCE((${schema.runnerLeases.requested}->>'storageBytes')::bigint,(${schema.dashboardJobs.requested}->>'storageBytes')::bigint,(${schema.runnerPools.resources}->>'storageBytes')::bigint,0)`,
+    sampledAt: sql<Date | null>`(SELECT s.occurred_at FROM ${schema.dashboardJobResourceSamples} s WHERE s.organization_id=${schema.dashboardJobs.organizationId} AND s.job_id=${schema.dashboardJobs.id} AND s.lease_id=${schema.runnerLeases.id} ORDER BY s.occurred_at DESC LIMIT 1)`,
+  }).from(schema.runnerLeases)
+    .innerJoin(schema.dashboardJobs, and(eq(schema.dashboardJobs.organizationId, schema.runnerLeases.organizationId), eq(schema.dashboardJobs.githubJobId, schema.runnerLeases.githubJobId)))
+    .innerJoin(schema.dashboardRuns, and(eq(schema.dashboardRuns.organizationId, schema.dashboardJobs.organizationId), eq(schema.dashboardRuns.id, schema.dashboardJobs.runId)))
+    .innerJoin(schema.dashboardRepositories, and(eq(schema.dashboardRepositories.organizationId, schema.dashboardRuns.organizationId), eq(schema.dashboardRepositories.id, schema.dashboardRuns.repositoryId)))
+    .innerJoin(schema.workers, eq(schema.workers.id, schema.runnerLeases.workerId))
+    .innerJoin(schema.runnerPools, eq(schema.runnerPools.id, schema.runnerLeases.poolId))
+    .where(and(
+      sql`${schema.runnerLeases.state} IN ('sandbox_ready','online','busy')`,
+      eq(schema.dashboardJobs.status, "in_progress"),
+      isNull(schema.dashboardJobs.completedAt),
+      sql`(${sql.placeholder("userId")}::text IS NOT NULL OR ${schema.runnerLeases.organizationId}=${sql.placeholder("organizationId")})`,
+      sql`(${sql.placeholder("userId")}::text IS NULL OR EXISTS (SELECT 1 FROM ${schema.memberships} m WHERE m.organization_id=${schema.runnerLeases.organizationId} AND m.user_id=${sql.placeholder("userId")}))`,
+    )).orderBy(desc(sql`COALESCE(${schema.runnerLeases.updatedAt},${schema.dashboardJobs.startedAt},${schema.runnerLeases.createdAt})`), desc(schema.runnerLeases.id))
+    .prepare("dashboard_overview_running_containers"),
+}));
 async function getOverviewRunningContainers(db: DashboardDb, organizationId: string, userId?: string): Promise<NonNullable<OverviewDto["runningContainers"]>> {
-  const rows = userId
-    ? await db<Record<string, unknown>[]>`SELECT l.id,r.organization_id AS "organizationId",j.id AS "jobId",j.run_id AS "runId",j.name AS "jobName",r.full_name AS "repositoryName",dr.workflow_name AS "workflowName",w.name AS "workerName",p.driver AS runtime,COALESCE(l.updated_at,j.started_at,l.created_at) AS "startedAt",s.cpu_usage_percent AS "cpuUsagePercent",s.memory_working_set_bytes AS "memoryWorkingSetBytes",s.memory_limit_bytes AS "memoryLimitBytes",s.disk_usage_bytes AS "diskUsageBytes",COALESCE((l.requested->>'storageBytes')::bigint,(j.requested->>'storageBytes')::bigint,(p.resources->>'storageBytes')::bigint,0) AS "allocatedStorageBytes",s.occurred_at AS "sampledAt" FROM runner_leases l JOIN memberships m ON m.organization_id=l.organization_id AND m.user_id=${userId} JOIN dashboard_jobs j ON j.organization_id=l.organization_id AND j.github_job_id=l.github_job_id JOIN dashboard_runs dr ON dr.organization_id=j.organization_id AND dr.id=j.run_id JOIN dashboard_repositories r ON r.organization_id=dr.organization_id AND r.id=dr.repository_id JOIN workers w ON w.id=l.worker_id JOIN runner_pools p ON p.id=l.pool_id LEFT JOIN LATERAL (SELECT cpu_usage_percent,memory_working_set_bytes,memory_limit_bytes,disk_usage_bytes,occurred_at FROM dashboard_job_resource_samples WHERE organization_id=j.organization_id AND job_id=j.id AND lease_id=l.id ORDER BY occurred_at DESC LIMIT 1) s ON true WHERE l.state IN ('sandbox_ready','online','busy') AND j.status='in_progress' AND j.completed_at IS NULL ORDER BY COALESCE(l.updated_at,j.started_at,l.created_at) DESC,l.id DESC`
-    : await db<Record<string, unknown>[]>`SELECT l.id,r.organization_id AS "organizationId",j.id AS "jobId",j.run_id AS "runId",j.name AS "jobName",r.full_name AS "repositoryName",dr.workflow_name AS "workflowName",w.name AS "workerName",p.driver AS runtime,COALESCE(l.updated_at,j.started_at,l.created_at) AS "startedAt",s.cpu_usage_percent AS "cpuUsagePercent",s.memory_working_set_bytes AS "memoryWorkingSetBytes",s.memory_limit_bytes AS "memoryLimitBytes",s.disk_usage_bytes AS "diskUsageBytes",COALESCE((l.requested->>'storageBytes')::bigint,(j.requested->>'storageBytes')::bigint,(p.resources->>'storageBytes')::bigint,0) AS "allocatedStorageBytes",s.occurred_at AS "sampledAt" FROM runner_leases l JOIN dashboard_jobs j ON j.organization_id=l.organization_id AND j.github_job_id=l.github_job_id JOIN dashboard_runs dr ON dr.organization_id=j.organization_id AND dr.id=j.run_id JOIN dashboard_repositories r ON r.organization_id=dr.organization_id AND r.id=dr.repository_id JOIN workers w ON w.id=l.worker_id JOIN runner_pools p ON p.id=l.pool_id LEFT JOIN LATERAL (SELECT cpu_usage_percent,memory_working_set_bytes,memory_limit_bytes,disk_usage_bytes,occurred_at FROM dashboard_job_resource_samples WHERE organization_id=j.organization_id AND job_id=j.id AND lease_id=l.id ORDER BY occurred_at DESC LIMIT 1) s ON true WHERE l.organization_id=${organizationId} AND l.state IN ('sandbox_ready','online','busy') AND j.status='in_progress' AND j.completed_at IS NULL ORDER BY COALESCE(l.updated_at,j.started_at,l.created_at) DESC,l.id DESC`;
+  const rows = await runningContainerQueries(db).list.execute({ organizationId, userId: userId ?? null }) as Record<string, unknown>[];
   return rows.map((row) => ({
     id: String(row.id), organizationId: String(row.organizationId), jobId: String(row.jobId), runId: String(row.runId), jobName: String(row.jobName), repositoryName: String(row.repositoryName), workflowName: String(row.workflowName), workerName: String(row.workerName), runtime: String(row.runtime), startedAt: normalizeTimestamp(row.startedAt)!, sampledAt: row.sampledAt == null ? null : normalizeTimestamp(row.sampledAt), cpuUsagePercent: row.cpuUsagePercent == null ? null : Number(row.cpuUsagePercent), memoryWorkingSetBytes: row.memoryWorkingSetBytes == null ? null : Number(row.memoryWorkingSetBytes), memoryLimitBytes: row.memoryLimitBytes == null ? null : Number(row.memoryLimitBytes), diskUsageBytes: row.diskUsageBytes == null ? null : Number(row.diskUsageBytes), allocatedStorageBytes: Number(row.allocatedStorageBytes ?? 0),
   }));
 }
+const overviewQueries = defineQueries((db) => {
+  const claimedLease = db.select({ id: schema.runnerLeases.id }).from(schema.runnerLeases).where(and(
+    eq(schema.runnerLeases.organizationId, schema.dashboardJobs.organizationId),
+    eq(schema.runnerLeases.githubJobId, schema.dashboardJobs.githubJobId),
+    or(inArray(schema.runnerLeases.state, ["reserved", "requested", "dispatched", "provisioning", "sandbox_ready", "online", "busy"]), inArray(schema.runnerLeases.cleanupState, ["pending", "failed"])),
+  ));
+  const queued = sql<number>`count(*) FILTER (WHERE ${schema.dashboardJobs.status}='queued' AND NOT EXISTS (${claimedLease}))::int`;
+  return {
+  queueReasons: db.select({
+    code: sql<"eligible" | "run_not_dispatchable" | "repository_unavailable" | "installation_not_approved">`CASE WHEN ${schema.dashboardRuns.status} NOT IN ('queued','in_progress') THEN 'run_not_dispatchable' WHEN ${schema.dashboardRepositories.available} IS DISTINCT FROM true THEN 'repository_unavailable' WHEN ${schema.dashboardInstallations.state} IS DISTINCT FROM 'approved' THEN 'installation_not_approved' ELSE 'eligible' END`.as("code"),
+    count: sql<number>`count(*)::int`,
+  }).from(schema.dashboardJobs)
+    .innerJoin(schema.dashboardRuns, eq(schema.dashboardRuns.id, schema.dashboardJobs.runId))
+    .leftJoin(schema.dashboardRepositories, and(eq(schema.dashboardRepositories.id, schema.dashboardRuns.repositoryId), eq(schema.dashboardRepositories.organizationId, schema.dashboardRuns.organizationId)))
+    .leftJoin(schema.dashboardInstallations, and(eq(schema.dashboardInstallations.id, schema.dashboardRepositories.installationId), eq(schema.dashboardInstallations.organizationId, schema.dashboardRuns.organizationId)))
+    .where(and(eq(schema.dashboardJobs.status, "queued"),
+      sql`(${sql.placeholder("organizationId")}::uuid IS NULL OR ${schema.dashboardJobs.organizationId}=${sql.placeholder("organizationId")}::uuid)`,
+      sql`(${sql.placeholder("userId")}::text IS NULL OR EXISTS (SELECT 1 FROM ${schema.memberships} m WHERE m.organization_id=${schema.dashboardJobs.organizationId} AND m.user_id=${sql.placeholder("userId")}))`,
+      sql`NOT EXISTS (SELECT 1 FROM ${schema.runnerLeases} ql WHERE ql.organization_id=${schema.dashboardJobs.organizationId} AND ql.github_job_id=${schema.dashboardJobs.githubJobId} AND (ql.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy') OR ql.cleanup_state IN ('pending','failed')))`
+    )).groupBy(sql`code`).prepare("dashboard_overview_queue_reasons"),
+  organization: db.select({
+    organizationId: sql<string>`${sql.placeholder("organizationId")}::text`,
+    period: sql<OverviewDto["period"]>`${sql.placeholder("period")}::text`,
+    queued,
+    running: sql<number>`(SELECT count(*)::int FROM ${schema.runnerLeases} l JOIN ${schema.dashboardJobs} active_j ON active_j.organization_id=l.organization_id AND active_j.github_job_id=l.github_job_id WHERE active_j.organization_id=${sql.placeholder("organizationId")} AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy'))`,
+    completed: sql<number>`count(*) FILTER (WHERE ${schema.dashboardJobs.status}='completed' AND ${schema.dashboardJobs.conclusion}='success')::int`,
+    failed: sql<number>`count(*) FILTER (WHERE ${schema.dashboardJobs.status}='completed' AND ${schema.dashboardJobs.conclusion}<>'success')::int`,
+    queueP50Ms: sql<number>`0::int`,
+    queueP95Ms: sql<number>`0::int`,
+    durationP50Ms: sql<number>`0::int`,
+    durationP95Ms: sql<number>`0::int`,
+    concurrency: sql<number>`COALESCE((SELECT sum((p.resources->>'concurrency')::int)::int FROM ${schema.runnerPools} p WHERE p.enabled AND (p.organization_id=${sql.placeholder("organizationId")} OR p.organization_id IS NULL)),0)::int`,
+  }).from(schema.dashboardJobs).where(eq(schema.dashboardJobs.organizationId, sql.placeholder("organizationId"))).prepare("dashboard_overview"),
+  all: db.select({
+    organizationId: sql<string>`'all'`,
+    period: sql<OverviewDto["period"]>`${sql.placeholder("period")}::text`,
+    queued,
+    running: sql<number>`(SELECT count(*)::int FROM ${schema.runnerLeases} l JOIN ${schema.dashboardJobs} active_j ON active_j.organization_id=l.organization_id AND active_j.github_job_id=l.github_job_id JOIN ${schema.memberships} am ON am.organization_id=active_j.organization_id AND am.user_id=${sql.placeholder("userId")} WHERE l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy'))`,
+    completed: sql<number>`count(*) FILTER (WHERE ${schema.dashboardJobs.status}='completed' AND ${schema.dashboardJobs.conclusion}='success')::int`,
+    failed: sql<number>`count(*) FILTER (WHERE ${schema.dashboardJobs.status}='completed' AND ${schema.dashboardJobs.conclusion}<>'success')::int`,
+    queueP50Ms: sql<number>`0::int`,
+    queueP95Ms: sql<number>`0::int`,
+    durationP50Ms: sql<number>`0::int`,
+    durationP95Ms: sql<number>`0::int`,
+    concurrency: sql<number>`COALESCE((SELECT sum((p.resources->>'concurrency')::int)::int FROM ${schema.runnerPools} p LEFT JOIN ${schema.memberships} pm ON pm.organization_id=p.organization_id AND pm.user_id=${sql.placeholder("userId")} WHERE p.enabled AND (p.organization_id IS NULL OR pm.user_id IS NOT NULL)),0)::int`,
+  }).from(schema.dashboardJobs).innerJoin(schema.memberships, and(eq(schema.memberships.organizationId, schema.dashboardJobs.organizationId), eq(schema.memberships.userId, sql.placeholder("userId"))))
+    .prepare("dashboard_all_overview"),
+  };
+});
 async function getOverviewQueueReasons(db: DashboardDb, organizationId: string | null, userId: string | null): Promise<NonNullable<OverviewDto["queueReasons"]>> {
-  const rows = await db<{ code: "eligible" | "run_not_dispatchable" | "repository_unavailable" | "installation_not_approved"; count: number }[]>`
-    SELECT CASE
-      WHEN r.status NOT IN ('queued','in_progress') THEN 'run_not_dispatchable'
-      WHEN repo.available IS DISTINCT FROM true THEN 'repository_unavailable'
-      WHEN i.state IS DISTINCT FROM 'approved' THEN 'installation_not_approved'
-      ELSE 'eligible'
-    END AS code, count(*)::int AS count
-    FROM dashboard_jobs j
-    JOIN dashboard_runs r ON r.id=j.run_id
-    LEFT JOIN dashboard_repositories repo ON repo.id=r.repository_id AND repo.organization_id=r.organization_id
-    LEFT JOIN dashboard_installations i ON i.id=repo.installation_id AND i.organization_id=r.organization_id
-    WHERE j.status='queued'
-      AND (${organizationId}::uuid IS NULL OR j.organization_id=${organizationId}::uuid)
-      AND (${userId}::text IS NULL OR EXISTS (SELECT 1 FROM memberships m WHERE m.organization_id=j.organization_id AND m.user_id=${userId}))
-      AND NOT EXISTS (SELECT 1 FROM runner_leases ql WHERE ql.organization_id=j.organization_id AND ql.github_job_id=j.github_job_id
-        AND (ql.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy') OR ql.cleanup_state IN ('pending','failed')))
-    GROUP BY code`;
+  const rows = await overviewQueries(db).queueReasons.execute({ organizationId, userId }) as Array<{ code: "eligible" | "run_not_dispatchable" | "repository_unavailable" | "installation_not_approved"; count: number }>;
   return rows.map(({ code, count }) => ({ code, count: Number(count) }));
 }
 
 export async function getOverview(db: DashboardDb, organizationId: string, period: OverviewDto["period"]): Promise<OverviewDto> {
-  const [row] = await db<OverviewDto[]>`SELECT ${organizationId}::text AS "organizationId", ${period}::text AS period, count(*) FILTER (WHERE j.status='queued' AND NOT EXISTS (SELECT 1 FROM runner_leases ql WHERE ql.organization_id=j.organization_id AND ql.github_job_id=j.github_job_id AND (ql.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy') OR ql.cleanup_state IN ('pending','failed'))))::int AS queued, (SELECT count(*)::int FROM runner_leases l JOIN dashboard_jobs active_j ON active_j.organization_id=l.organization_id AND active_j.github_job_id=l.github_job_id WHERE active_j.organization_id=${organizationId} AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')) AS running, count(*) FILTER (WHERE j.status='completed' AND j.conclusion='success')::int AS completed, count(*) FILTER (WHERE j.status='completed' AND j.conclusion <> 'success')::int AS failed, 0::int AS "queueP50Ms", 0::int AS "queueP95Ms", 0::int AS "durationP50Ms", 0::int AS "durationP95Ms", COALESCE((SELECT sum((p.resources->>'concurrency')::int)::int FROM runner_pools p WHERE p.enabled AND (p.organization_id=${organizationId} OR p.organization_id IS NULL)),0)::int AS concurrency FROM dashboard_jobs j WHERE j.organization_id=${organizationId}`;
+  const [row] = await overviewQueries(db).organization.execute({ organizationId, period }) as OverviewDto[];
   return { ...row, queueReasons: await getOverviewQueueReasons(db, organizationId, null), utilization: overviewUtilization(row.running, row.concurrency), costSavings: await getGithubRunnerCostSavings(db, organizationId, period), timeseries: await getOverviewTimeseries(db, period, organizationId), jobOutcomes: await getOverviewJobOutcomes(db, organizationId, period), runningContainers: await getOverviewRunningContainers(db, organizationId) };
 }
 export async function getAllOverview(db: DashboardDb, userId: string, period: OverviewDto["period"]): Promise<OverviewDto> {
-  const [row] = await db<OverviewDto[]>`SELECT 'all' AS "organizationId", ${period}::text AS period, count(*) FILTER (WHERE j.status='queued' AND NOT EXISTS (SELECT 1 FROM runner_leases ql WHERE ql.organization_id=j.organization_id AND ql.github_job_id=j.github_job_id AND (ql.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy') OR ql.cleanup_state IN ('pending','failed'))))::int AS queued, (SELECT count(*)::int FROM runner_leases l JOIN dashboard_jobs active_j ON active_j.organization_id=l.organization_id AND active_j.github_job_id=l.github_job_id JOIN memberships am ON am.organization_id=active_j.organization_id AND am.user_id=${userId} WHERE l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')) AS running, count(*) FILTER (WHERE j.status='completed' AND j.conclusion='success')::int AS completed, count(*) FILTER (WHERE j.status='completed' AND j.conclusion <> 'success')::int AS failed, 0::int AS "queueP50Ms", 0::int AS "queueP95Ms", 0::int AS "durationP50Ms", 0::int AS "durationP95Ms", COALESCE((SELECT sum((p.resources->>'concurrency')::int)::int FROM runner_pools p LEFT JOIN memberships pm ON pm.organization_id=p.organization_id AND pm.user_id=${userId} WHERE p.enabled AND (p.organization_id IS NULL OR pm.user_id IS NOT NULL)),0)::int AS concurrency FROM dashboard_jobs j JOIN memberships m ON m.organization_id=j.organization_id AND m.user_id=${userId}`;
+  const [row] = await overviewQueries(db).all.execute({ userId, period }) as OverviewDto[];
   return { ...row, organizationId: "all", queueReasons: await getOverviewQueueReasons(db, null, userId), utilization: overviewUtilization(row.running, row.concurrency), costSavings: await getGithubRunnerCostSavings(db, "all", period, userId), timeseries: await getOverviewTimeseries(db, period, "all", userId), jobOutcomes: await getOverviewJobOutcomes(db, "all", period, userId), runningContainers: await getOverviewRunningContainers(db, "all", userId) };
 }
+
+const repositoryQueries = defineQueries((db) => ({
+  organization: db.select({
+    id: schema.dashboardRepositories.id,
+    organizationId: schema.dashboardRepositories.organizationId,
+    name: schema.dashboardRepositories.name,
+    fullName: schema.dashboardRepositories.fullName,
+    visibility: schema.dashboardRepositories.visibility,
+    available: schema.dashboardRepositories.available,
+    installationId: schema.dashboardRepositories.installationId,
+    discoveryState: sql<string>`CASE WHEN ${schema.dashboardRepositories.discoveryError}='github_403' AND ${schema.dashboardRepositories.discoveryRetryAt}>now() THEN 'paused' WHEN ${schema.dashboardRepositories.discoveryError}='github_rate_limited' AND ${schema.dashboardRepositories.discoveryRetryAt}>now() THEN 'rate_limited' WHEN ${schema.dashboardRepositories.discoveryError} IN ('github_403','github_rate_limited') AND ${schema.dashboardRepositories.discoveryRetryAt}<=now() THEN 'queued' ELSE 'active' END`,
+    discoveryRetryAt: schema.dashboardRepositories.discoveryRetryAt,
+  }).from(schema.dashboardRepositories)
+    .innerJoin(schema.dashboardInstallations, and(eq(schema.dashboardInstallations.organizationId, schema.dashboardRepositories.organizationId), eq(schema.dashboardInstallations.id, schema.dashboardRepositories.installationId)))
+    .where(and(eq(schema.dashboardRepositories.organizationId, sql.placeholder("organizationId")), sql`(${sql.placeholder("cursor")}::uuid IS NULL OR (${schema.dashboardRepositories.fullName},${schema.dashboardRepositories.id}) > (SELECT c.full_name,c.id FROM dashboard_repositories c WHERE c.id=${sql.placeholder("cursor")}::uuid))`,
+      sql`(${sql.placeholder("search")}='' OR lower(${schema.dashboardRepositories.fullName}) LIKE lower(${sql.placeholder("pattern")}))`,
+      sql`(${sql.placeholder("availability")}::boolean IS NULL OR ${schema.dashboardRepositories.available}=${sql.placeholder("availability")})`,
+      sql`(${sql.placeholder("visibility")}='' OR ${schema.dashboardRepositories.visibility}=${sql.placeholder("visibility")})`))
+    .orderBy(asc(schema.dashboardRepositories.fullName), asc(schema.dashboardRepositories.id)).limit(sql.placeholder("limit")).prepare("dashboard_list_repositories"),
+  all: db.select({
+    id: schema.dashboardRepositories.id,
+    organizationId: schema.dashboardRepositories.organizationId,
+    name: schema.dashboardRepositories.name,
+    fullName: schema.dashboardRepositories.fullName,
+    visibility: schema.dashboardRepositories.visibility,
+    available: schema.dashboardRepositories.available,
+    installationId: schema.dashboardRepositories.installationId,
+    discoveryState: sql<string>`CASE WHEN ${schema.dashboardRepositories.discoveryError}='github_403' AND ${schema.dashboardRepositories.discoveryRetryAt}>now() THEN 'paused' WHEN ${schema.dashboardRepositories.discoveryError}='github_rate_limited' AND ${schema.dashboardRepositories.discoveryRetryAt}>now() THEN 'rate_limited' WHEN ${schema.dashboardRepositories.discoveryError} IN ('github_403','github_rate_limited') AND ${schema.dashboardRepositories.discoveryRetryAt}<=now() THEN 'queued' ELSE 'active' END`,
+    discoveryRetryAt: schema.dashboardRepositories.discoveryRetryAt,
+  }).from(schema.dashboardRepositories)
+    .innerJoin(schema.memberships, and(eq(schema.memberships.organizationId, schema.dashboardRepositories.organizationId), eq(schema.memberships.userId, sql.placeholder("userId"))))
+    .innerJoin(schema.dashboardInstallations, and(eq(schema.dashboardInstallations.organizationId, schema.dashboardRepositories.organizationId), eq(schema.dashboardInstallations.id, schema.dashboardRepositories.installationId)))
+    .where(and(sql`(${sql.placeholder("cursor")}::uuid IS NULL OR (${schema.dashboardRepositories.fullName},${schema.dashboardRepositories.id}) > (SELECT c.full_name,c.id FROM dashboard_repositories c WHERE c.id=${sql.placeholder("cursor")}::uuid))`,
+      sql`(${sql.placeholder("search")}='' OR lower(${schema.dashboardRepositories.fullName}) LIKE lower(${sql.placeholder("pattern")}))`,
+      sql`(${sql.placeholder("availability")}::boolean IS NULL OR ${schema.dashboardRepositories.available}=${sql.placeholder("availability")})`,
+      sql`(${sql.placeholder("visibility")}='' OR ${schema.dashboardRepositories.visibility}=${sql.placeholder("visibility")})`))
+    .orderBy(asc(schema.dashboardRepositories.fullName), asc(schema.dashboardRepositories.id)).limit(sql.placeholder("limit")).prepare("dashboard_list_all_repositories"),
+}));
+
 export async function listRepositories(
   db: DashboardDb,
   organizationId: string,
@@ -115,25 +270,10 @@ export async function listRepositories(
   filters: { search?: string; availability?: boolean; visibility?: string } = {},
 ): Promise<CursorPage<RepositorySummary>> {
   const search = filters.search?.trim() ?? "";
-  const availability = filters.availability ?? null;
-  const visibility = filters.visibility ?? "";
-  const rows = await db<Record<string, unknown>[]>`
-    SELECT r.id, r.organization_id AS "organizationId", r.name, r.full_name AS "fullName",
-      r.visibility, r.available, r.installation_id AS "installationId",
-      CASE WHEN r.discovery_error='github_403' AND r.discovery_retry_at>now() THEN 'paused'
-        WHEN r.discovery_error='github_rate_limited' AND r.discovery_retry_at>now() THEN 'rate_limited'
-        WHEN r.discovery_error IN ('github_403','github_rate_limited') AND r.discovery_retry_at<=now() THEN 'queued'
-        ELSE 'active' END AS "discoveryState",
-      r.discovery_retry_at AS "discoveryRetryAt"
-    FROM dashboard_repositories r
-    JOIN dashboard_installations i ON i.organization_id=r.organization_id AND i.id=r.installation_id
-    LEFT JOIN dashboard_repositories cursor ON cursor.id=${cursor}::uuid
-    WHERE r.organization_id=${organizationId}
-      AND (cursor.id IS NULL OR (r.full_name,r.id)>(cursor.full_name,cursor.id))
-      AND (${search}='' OR lower(r.full_name) LIKE lower(${"%" + search + "%"}))
-      AND (${availability}::boolean IS NULL OR r.available=${availability})
-      AND (${visibility}='' OR r.visibility=${visibility})
-    ORDER BY r.full_name,r.id LIMIT ${limit + 1}`;
+  const rows = await repositoryQueries(db).organization.execute({
+    organizationId, cursor, search, pattern: `%${search}%`, availability: filters.availability ?? null,
+    visibility: filters.visibility ?? "", limit: limit + 1,
+  }) as Record<string, unknown>[];
   const items = rows.slice(0, limit).map(normalizeRepository);
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }
@@ -166,138 +306,131 @@ function normalizeRunSummary(row: Record<string, unknown>): RunSummary {
     allocationState: row.allocationState === "mars" || (row.allocationState == null && row.runtimeBoundary != null) ? "mars" : "external",
   } as RunSummary;
 }
+const runRuntimeBoundary = sql<string | null>`COALESCE(${schema.dashboardRuns.runtimeBoundary}, (SELECT CASE pool.driver WHEN 'tart-vm' THEN 'Tart VM' WHEN 'kata-k3s' THEN 'Kata VM-backed container' WHEN 'windows-hyperv' THEN 'Hyper-V isolated container' WHEN 'windows-process-container' THEN 'Process-isolated Windows container' WHEN 'linux-docker-container' THEN 'Docker Linux container' END FROM ${schema.dashboardJobs} j JOIN ${schema.runnerLeases} l ON l.github_job_id=j.github_job_id JOIN ${schema.runnerPools} pool ON pool.id=l.pool_id WHERE j.run_id=${schema.dashboardRuns.id} ORDER BY l.created_at DESC LIMIT 1))`;
+const runProjection = () => ({
+  id: schema.dashboardRuns.id,
+  organizationId: schema.dashboardRuns.organizationId,
+  repositoryId: schema.dashboardRuns.repositoryId,
+  repositoryName: schema.dashboardRepositories.name,
+  fullName: schema.dashboardRepositories.fullName,
+  runNumber: schema.dashboardRuns.runNumber,
+  workflowName: schema.dashboardRuns.workflowName,
+  event: schema.dashboardRuns.event,
+  branch: schema.dashboardRuns.branch,
+  commitSha: schema.dashboardRuns.commitSha,
+  actorLogin: schema.dashboardRuns.actorLogin,
+  status: schema.dashboardRuns.status,
+  conclusion: schema.dashboardRuns.conclusion,
+  queuedAt: schema.dashboardRuns.queuedAt,
+  startedAt: schema.dashboardRuns.startedAt,
+  completedAt: schema.dashboardRuns.completedAt,
+  durationMs: sql<number>`0::bigint`,
+  runtimeBoundary: runRuntimeBoundary,
+  allocationState: sql<string>`CASE WHEN EXISTS (SELECT 1 FROM ${schema.dashboardJobs} allocation_job WHERE allocation_job.organization_id=${schema.dashboardRuns.organizationId} AND allocation_job.run_id=${schema.dashboardRuns.id} AND ((jsonb_typeof(allocation_job.requested_labels)='array' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(allocation_job.requested_labels) allocation_label WHERE lower(allocation_label) LIKE 'mars-%')) OR (jsonb_typeof(allocation_job.requested_labels)='string' AND lower(allocation_job.requested_labels #>> '{}') LIKE '%"mars-%'))) THEN 'mars' ELSE 'external' END`,
+});
+const runSearch = sql`(${sql.placeholder("search")}='' OR strpos(lower(concat_ws(' ', ${schema.dashboardRepositories.fullName}, ${schema.dashboardRuns.workflowName}, ${schema.dashboardRuns.branch}, ${schema.dashboardRuns.actorLogin}, ${schema.dashboardRuns.commitSha}, COALESCE(${schema.dashboardRuns.conclusion},replace(${schema.dashboardRuns.status},'_',' ')), ${runRuntimeBoundary})), lower(${sql.placeholder("search")}))>0)`;
+const runQueries = defineQueries((db) => ({
+  organization: db.select(runProjection()).from(schema.dashboardRuns)
+    .innerJoin(schema.dashboardRepositories, and(eq(schema.dashboardRepositories.organizationId, schema.dashboardRuns.organizationId), eq(schema.dashboardRepositories.id, schema.dashboardRuns.repositoryId)))
+    .where(and(eq(schema.dashboardRuns.organizationId, sql.placeholder("organizationId")),
+      sql`(${sql.placeholder("cursor")}::uuid IS NULL OR (${schema.dashboardRuns.queuedAt},${schema.dashboardRuns.id}) < (SELECT c.queued_at,c.id FROM dashboard_runs c WHERE c.id=${sql.placeholder("cursor")}::uuid))`,
+      sql`(${sql.placeholder("from")}::timestamptz IS NULL OR ${schema.dashboardRuns.queuedAt}>=${sql.placeholder("from")}::timestamptz)`,
+      sql`(${sql.placeholder("runner")}='all' OR (CASE WHEN EXISTS (SELECT 1 FROM ${schema.dashboardJobs} allocation_job WHERE allocation_job.organization_id=${schema.dashboardRuns.organizationId} AND allocation_job.run_id=${schema.dashboardRuns.id} AND ((jsonb_typeof(allocation_job.requested_labels)='array' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(allocation_job.requested_labels) allocation_label WHERE lower(allocation_label) LIKE 'mars-%')) OR (jsonb_typeof(allocation_job.requested_labels)='string' AND lower(allocation_job.requested_labels #>> '{}') LIKE '%"mars-%'))) THEN 'mars' ELSE 'external' END)=${sql.placeholder("runner")})`,
+      runSearch))
+    .orderBy(desc(schema.dashboardRuns.queuedAt), desc(schema.dashboardRuns.id)).limit(sql.placeholder("limit")).prepare("dashboard_list_runs"),
+  all: db.select(runProjection()).from(schema.dashboardRuns)
+    .innerJoin(schema.memberships, and(eq(schema.memberships.organizationId, schema.dashboardRuns.organizationId), eq(schema.memberships.userId, sql.placeholder("userId"))))
+    .innerJoin(schema.dashboardRepositories, and(eq(schema.dashboardRepositories.organizationId, schema.dashboardRuns.organizationId), eq(schema.dashboardRepositories.id, schema.dashboardRuns.repositoryId)))
+    .where(and(
+      sql`(${sql.placeholder("cursor")}::uuid IS NULL OR (${schema.dashboardRuns.queuedAt},${schema.dashboardRuns.id}) < (SELECT c.queued_at,c.id FROM dashboard_runs c WHERE c.id=${sql.placeholder("cursor")}::uuid))`,
+      sql`(${sql.placeholder("from")}::timestamptz IS NULL OR ${schema.dashboardRuns.queuedAt}>=${sql.placeholder("from")}::timestamptz)`,
+      sql`(${sql.placeholder("runner")}='all' OR (CASE WHEN EXISTS (SELECT 1 FROM ${schema.dashboardJobs} allocation_job WHERE allocation_job.organization_id=${schema.dashboardRuns.organizationId} AND allocation_job.run_id=${schema.dashboardRuns.id} AND ((jsonb_typeof(allocation_job.requested_labels)='array' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(allocation_job.requested_labels) allocation_label WHERE lower(allocation_label) LIKE 'mars-%')) OR (jsonb_typeof(allocation_job.requested_labels)='string' AND lower(allocation_job.requested_labels #>> '{}') LIKE '%"mars-%'))) THEN 'mars' ELSE 'external' END)=${sql.placeholder("runner")})`,
+      runSearch))
+    .orderBy(desc(schema.dashboardRuns.queuedAt), desc(schema.dashboardRuns.id)).limit(sql.placeholder("limit")).prepare("dashboard_list_all_runs"),
+}));
 export async function listRuns(db: DashboardDb, organizationId: string, limit = 50, cursor: string | null = null, search = "", filters: { from?: string; runner?: "all" | "mars" | "external" } = {}): Promise<CursorPage<RunSummary>> {
-  const from = filters.from ?? null;
-  const runner = filters.runner ?? "all";
-  const rows = await db<Record<string, unknown>[]>`
-    WITH matching_runs AS (
-      SELECT r.id, r.organization_id AS "organizationId", r.repository_id AS "repositoryId",
-        p.name AS "repositoryName", p.full_name AS "fullName", r.run_number AS "runNumber",
-        r.workflow_name AS "workflowName", r.event, r.branch, r.commit_sha AS "commitSha",
-        r.actor_login AS "actorLogin", r.status, r.conclusion, r.queued_at AS "queuedAt",
-        r.started_at AS "startedAt", r.completed_at AS "completedAt", 0::bigint AS "durationMs",
-        COALESCE(r.runtime_boundary, (
-          SELECT CASE pool.driver WHEN 'tart-vm' THEN 'Tart VM' WHEN 'kata-k3s' THEN 'Kata VM-backed container'
-            WHEN 'windows-hyperv' THEN 'Hyper-V isolated container' WHEN 'windows-process-container' THEN 'Process-isolated Windows container'
-            WHEN 'linux-docker-container' THEN 'Docker Linux container' END
-          FROM dashboard_jobs j JOIN runner_leases l ON l.github_job_id=j.github_job_id JOIN runner_pools pool ON pool.id=l.pool_id
-          WHERE j.run_id=r.id ORDER BY l.created_at DESC LIMIT 1
-        )) AS "runtimeBoundary",
-        CASE WHEN EXISTS (
-          SELECT 1 FROM dashboard_jobs allocation_job WHERE allocation_job.organization_id=r.organization_id AND allocation_job.run_id=r.id
-            AND ((jsonb_typeof(allocation_job.requested_labels)='array' AND EXISTS (
-              SELECT 1 FROM jsonb_array_elements_text(allocation_job.requested_labels) allocation_label WHERE lower(allocation_label) LIKE 'mars-%'
-            )) OR (jsonb_typeof(allocation_job.requested_labels)='string' AND lower(allocation_job.requested_labels #>> '{}') LIKE '%"mars-%'))
-        ) THEN 'mars' ELSE 'external' END AS "allocationState"
-      FROM dashboard_runs r JOIN dashboard_repositories p ON p.organization_id=r.organization_id AND p.id=r.repository_id
-      LEFT JOIN dashboard_runs cursor_run ON cursor_run.id=${cursor}::uuid
-      WHERE r.organization_id=${organizationId}
-        AND (cursor_run.id IS NULL OR (r.queued_at,r.id)<(cursor_run.queued_at,cursor_run.id))
-        AND (${from}::timestamptz IS NULL OR r.queued_at>=${from}::timestamptz)
-    )
-    SELECT id, "organizationId", "repositoryId", "repositoryName", "runNumber", "workflowName", event, branch, "commitSha",
-      "actorLogin", status, conclusion, "queuedAt", "startedAt", "completedAt", "durationMs", "runtimeBoundary", "allocationState"
-    FROM matching_runs
-    WHERE (${runner}='all' OR "allocationState"=${runner})
-      AND (${search}='' OR strpos(lower(concat_ws(' ', "fullName", "workflowName", branch, "actorLogin", "commitSha", COALESCE(conclusion, replace(status, '_', ' ')), "runtimeBoundary")), lower(${search}))>0)
-    ORDER BY "queuedAt" DESC, id DESC LIMIT ${limit + 1}`;
+  const rows = await runQueries(db).organization.execute({ organizationId, cursor, from: filters.from ?? null, runner: filters.runner ?? "all", search, limit: limit + 1 }) as Record<string, unknown>[];
   const items = rows.slice(0, limit).map(normalizeRunSummary);
   return { items, nextCursor: rows.length > limit ? items.at(-1)!.id : null };
 }
-export async function listAllRepositories(
-  db: DashboardDb,
-  userId: string,
-  limit = 50,
-  cursor: string | null = null,
-  filters: { search?: string; availability?: boolean; visibility?: string } = {},
-): Promise<CursorPage<RepositorySummary>> {
+export async function listAllRepositories(db: DashboardDb, userId: string, limit = 50, cursor: string | null = null, filters: { search?: string; availability?: boolean; visibility?: string } = {}): Promise<CursorPage<RepositorySummary>> {
   const search = filters.search?.trim() ?? "";
-  const availability = filters.availability ?? null;
-  const visibility = filters.visibility ?? "";
-  const rows = await db<Record<string, unknown>[]>`
-    SELECT r.id, r.organization_id AS "organizationId", r.name, r.full_name AS "fullName",
-      r.visibility, r.available, r.installation_id AS "installationId",
-      CASE WHEN r.discovery_error='github_403' AND r.discovery_retry_at>now() THEN 'paused'
-        WHEN r.discovery_error='github_rate_limited' AND r.discovery_retry_at>now() THEN 'rate_limited'
-        WHEN r.discovery_error IN ('github_403','github_rate_limited') AND r.discovery_retry_at<=now() THEN 'queued'
-        ELSE 'active' END AS "discoveryState",
-      r.discovery_retry_at AS "discoveryRetryAt"
-    FROM dashboard_repositories r
-    JOIN memberships m ON m.organization_id=r.organization_id AND m.user_id=${userId}
-    JOIN dashboard_installations i ON i.organization_id=r.organization_id AND i.id=r.installation_id
-    LEFT JOIN dashboard_repositories cursor ON cursor.id=${cursor}::uuid
-    WHERE (cursor.id IS NULL OR (r.full_name,r.id)>(cursor.full_name,cursor.id))
-      AND (${search}='' OR lower(r.full_name) LIKE lower(${"%" + search + "%"}))
-      AND (${availability}::boolean IS NULL OR r.available=${availability})
-      AND (${visibility}='' OR r.visibility=${visibility})
-    ORDER BY r.full_name,r.id LIMIT ${limit + 1}`;
+  const rows = await repositoryQueries(db).all.execute({
+    userId, cursor, search, pattern: `%${search}%`, availability: filters.availability ?? null,
+    visibility: filters.visibility ?? "", limit: limit + 1,
+  }) as Record<string, unknown>[];
   const items = rows.slice(0, limit).map(normalizeRepository);
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }
 export async function listAllRuns(db: DashboardDb, userId: string, limit = 50, cursor: string | null = null, search = "", filters: { from?: string; runner?: "all" | "mars" | "external" } = {}): Promise<CursorPage<RunSummary>> {
-  const from = filters.from ?? null;
-  const runner = filters.runner ?? "all";
-  const rows = await db<Record<string, unknown>[]>`
-    WITH matching_runs AS (
-      SELECT r.id, r.organization_id AS "organizationId", r.repository_id AS "repositoryId",
-        p.name AS "repositoryName", p.full_name AS "fullName", r.run_number AS "runNumber",
-        r.workflow_name AS "workflowName", r.event, r.branch, r.commit_sha AS "commitSha",
-        r.actor_login AS "actorLogin", r.status, r.conclusion, r.queued_at AS "queuedAt",
-        r.started_at AS "startedAt", r.completed_at AS "completedAt", 0::bigint AS "durationMs",
-        COALESCE(r.runtime_boundary, (
-          SELECT CASE pool.driver WHEN 'tart-vm' THEN 'Tart VM' WHEN 'kata-k3s' THEN 'Kata VM-backed container'
-            WHEN 'windows-hyperv' THEN 'Hyper-V isolated container' WHEN 'windows-process-container' THEN 'Process-isolated Windows container'
-            WHEN 'linux-docker-container' THEN 'Docker Linux container' END
-          FROM dashboard_jobs j JOIN runner_leases l ON l.github_job_id=j.github_job_id JOIN runner_pools pool ON pool.id=l.pool_id
-          WHERE j.run_id=r.id ORDER BY l.created_at DESC LIMIT 1
-        )) AS "runtimeBoundary",
-        CASE WHEN EXISTS (
-          SELECT 1 FROM dashboard_jobs allocation_job WHERE allocation_job.organization_id=r.organization_id AND allocation_job.run_id=r.id
-            AND ((jsonb_typeof(allocation_job.requested_labels)='array' AND EXISTS (
-              SELECT 1 FROM jsonb_array_elements_text(allocation_job.requested_labels) allocation_label WHERE lower(allocation_label) LIKE 'mars-%'
-            )) OR (jsonb_typeof(allocation_job.requested_labels)='string' AND lower(allocation_job.requested_labels #>> '{}') LIKE '%"mars-%'))
-        ) THEN 'mars' ELSE 'external' END AS "allocationState"
-      FROM dashboard_runs r JOIN memberships m ON m.organization_id=r.organization_id AND m.user_id=${userId}
-      JOIN dashboard_repositories p ON p.organization_id=r.organization_id AND p.id=r.repository_id
-      LEFT JOIN dashboard_runs cursor_run ON cursor_run.id=${cursor}::uuid
-      WHERE (cursor_run.id IS NULL OR (r.queued_at,r.id)<(cursor_run.queued_at,cursor_run.id))
-        AND (${from}::timestamptz IS NULL OR r.queued_at>=${from}::timestamptz)
-    )
-    SELECT id, "organizationId", "repositoryId", "repositoryName", "runNumber", "workflowName", event, branch, "commitSha",
-      "actorLogin", status, conclusion, "queuedAt", "startedAt", "completedAt", "durationMs", "runtimeBoundary", "allocationState"
-    FROM matching_runs
-    WHERE (${runner}='all' OR "allocationState"=${runner})
-      AND (${search}='' OR strpos(lower(concat_ws(' ', "fullName", "workflowName", branch, "actorLogin", "commitSha", COALESCE(conclusion, replace(status, '_', ' ')), "runtimeBoundary")), lower(${search}))>0)
-    ORDER BY "queuedAt" DESC, id DESC LIMIT ${limit + 1}`;
+  const rows = await runQueries(db).all.execute({ userId, cursor, from: filters.from ?? null, runner: filters.runner ?? "all", search, limit: limit + 1 }) as Record<string, unknown>[];
   const items = rows.slice(0, limit).map(normalizeRunSummary);
   return { items, nextCursor: rows.length > limit ? items.at(-1)!.id : null };
 }
-export async function listAllPools(db: DashboardDb, userId: string, limit = 50): Promise<CursorPage<PoolSummary>> { const rows = await db<Record<string, unknown>[]>`SELECT p.id,p.organization_id AS "organizationId",p.worker_id AS "workerId",w.name AS "workerName",p.name,p.platform,p.driver,p.image_digest AS "imageDigest",p.resources,p.cpu_mode AS "cpuMode",p.labels,p.trigger_label AS "triggerLabel",p.enabled,0::int AS active FROM runner_pools p JOIN memberships m ON m.organization_id=p.organization_id AND m.user_id=${userId} JOIN workers w ON w.id=p.worker_id ORDER BY p.name LIMIT ${limit + 1}`; const items = rows.slice(0, limit).map(normalizePool); return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null }; }
+export async function listAllPools(db: DashboardDb, userId: string, limit = 50): Promise<CursorPage<PoolSummary>> {
+  const rows = await poolQueries(db).all.execute({ userId, limit: limit + 1 }) as Record<string, unknown>[];
+  const items = rows.slice(0, limit).map(normalizePool);
+  return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
+}
+const runDetailQueries = defineQueries((db) => ({
+  jobs: db.select({
+    id: schema.dashboardJobs.id,
+    name: schema.dashboardJobs.name,
+    status: schema.dashboardJobs.status,
+    conclusion: schema.dashboardJobs.conclusion,
+    stage: schema.dashboardJobs.stage,
+    runnerName: schema.dashboardJobs.runnerName,
+    logsState: schema.dashboardJobs.logsState,
+    requested: schema.dashboardJobs.requested,
+    requestedLabels: schema.dashboardJobs.requestedLabels,
+    observed: schema.dashboardJobs.observed,
+    queuedAt: schema.dashboardJobs.queuedAt,
+    startedAt: schema.dashboardJobs.startedAt,
+    completedAt: schema.dashboardJobs.completedAt,
+    terminalResult: sql<unknown>`(${db.select({ terminalResult: schema.runnerLeases.terminalResult }).from(schema.runnerLeases).where(eq(schema.runnerLeases.githubJobId, schema.dashboardJobs.githubJobId)).orderBy(desc(schema.runnerLeases.updatedAt)).limit(1)})`,
+  }).from(schema.dashboardJobs).where(and(
+    eq(schema.dashboardJobs.organizationId, sql.placeholder("organizationId")),
+    eq(schema.dashboardJobs.runId, sql.placeholder("runId")),
+    sql`${schema.dashboardJobs.runAttempt}=(SELECT run_attempt FROM ${schema.dashboardRuns} WHERE organization_id=${sql.placeholder("organizationId")} AND id=${sql.placeholder("runId")})`,
+  )).orderBy(asc(schema.dashboardJobs.id)).prepare("dashboard_run_detail_jobs"),
+  steps: db.select({
+    id: schema.dashboardJobSteps.id,
+    jobId: schema.dashboardJobSteps.jobId,
+    name: schema.dashboardJobSteps.name,
+    number: schema.dashboardJobSteps.number,
+    status: schema.dashboardJobSteps.status,
+    conclusion: schema.dashboardJobSteps.conclusion,
+    queuedAt: schema.dashboardJobSteps.queuedAt,
+    startedAt: schema.dashboardJobSteps.startedAt,
+    completedAt: schema.dashboardJobSteps.completedAt,
+    durationMs: schema.dashboardJobSteps.durationMs,
+  }).from(schema.dashboardJobSteps).where(and(
+    eq(schema.dashboardJobSteps.organizationId, sql.placeholder("organizationId")),
+    eq(schema.dashboardJobSteps.runId, sql.placeholder("runId")),
+    sql`${schema.dashboardJobSteps.jobId} IN (SELECT j.id FROM ${schema.dashboardJobs} j JOIN ${schema.dashboardRuns} r ON r.organization_id=j.organization_id AND r.id=j.run_id WHERE j.organization_id=${sql.placeholder("organizationId")} AND j.run_id=${sql.placeholder("runId")} AND j.run_attempt=r.run_attempt)`,
+  )).orderBy(asc(schema.dashboardJobSteps.jobId), asc(schema.dashboardJobSteps.number), asc(schema.dashboardJobSteps.id)).prepare("dashboard_run_detail_steps"),
+  edges: db.select({ from: schema.dashboardActionEdges.fromJobId, to: schema.dashboardActionEdges.toJobId })
+    .from(schema.dashboardActionEdges).where(and(
+      eq(schema.dashboardActionEdges.organizationId, sql.placeholder("organizationId")),
+      eq(schema.dashboardActionEdges.runId, sql.placeholder("runId")),
+      sql`EXISTS (SELECT 1 FROM ${schema.dashboardJobs} source JOIN ${schema.dashboardRuns} r ON r.organization_id=source.organization_id AND r.id=source.run_id WHERE source.organization_id=${schema.dashboardActionEdges.organizationId} AND source.id=${schema.dashboardActionEdges.fromJobId} AND source.run_attempt=r.run_attempt)`,
+      sql`EXISTS (SELECT 1 FROM ${schema.dashboardJobs} target JOIN ${schema.dashboardRuns} r ON r.organization_id=target.organization_id AND r.id=target.run_id WHERE target.organization_id=${schema.dashboardActionEdges.organizationId} AND target.id=${schema.dashboardActionEdges.toJobId} AND target.run_attempt=r.run_attempt)`,
+    )).orderBy(asc(schema.dashboardActionEdges.fromJobId), asc(schema.dashboardActionEdges.toJobId)).prepare("dashboard_run_detail_edges"),
+  stages: db.select({
+    stage: schema.dashboardRunStages.stage,
+    startedAt: schema.dashboardRunStages.startedAt,
+    completedAt: schema.dashboardRunStages.completedAt,
+    durationMs: sql<number>`COALESCE(EXTRACT(EPOCH FROM (${schema.dashboardRunStages.completedAt}-${schema.dashboardRunStages.startedAt}))*1000,0)::bigint`,
+  }).from(schema.dashboardRunStages).where(and(eq(schema.dashboardRunStages.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardRunStages.runId, sql.placeholder("runId"))))
+    .orderBy(asc(schema.dashboardRunStages.startedAt)).prepare("dashboard_run_detail_stages"),
+}));
+
 export async function getRunDetail(db: DashboardDb, organizationId: string, runId: string): Promise<RunDetail | null> {
   const run = (await listRuns(db, organizationId, 1000)).items.find((item) => item.id === runId);
   if (!run) return null;
-  const jobRows = await db<Record<string, unknown>[]>`
-    SELECT id,name,status,conclusion,stage,runner_name AS "runnerName",logs_state AS "logsState",
-      requested,requested_labels AS "requestedLabels",observed,queued_at AS "queuedAt",
-      started_at AS "startedAt",completed_at AS "completedAt",
-      (SELECT terminal_result FROM runner_leases WHERE github_job_id=dashboard_jobs.github_job_id ORDER BY updated_at DESC LIMIT 1) AS "terminalResult"
-    FROM dashboard_jobs
-    WHERE organization_id=${organizationId} AND run_id=${runId}
-      AND run_attempt=(SELECT run_attempt FROM dashboard_runs WHERE organization_id=${organizationId} AND id=${runId})
-    ORDER BY id
-  `;
-  const stepRows = await db<Record<string, unknown>[]>`
-    SELECT id,job_id AS "jobId",name,number,status,conclusion,queued_at AS "queuedAt",
-      started_at AS "startedAt",completed_at AS "completedAt",duration_ms AS "durationMs"
-    FROM dashboard_job_steps
-    WHERE organization_id=${organizationId} AND run_id=${runId}
-      AND job_id IN (
-        SELECT j.id FROM dashboard_jobs j
-        JOIN dashboard_runs r ON r.organization_id=j.organization_id AND r.id=j.run_id
-        WHERE j.organization_id=${organizationId} AND j.run_id=${runId} AND j.run_attempt=r.run_attempt
-      )
-    ORDER BY job_id,number,id
-  `;
+  const queryParams = { organizationId, runId };
+  const jobRows = await runDetailQueries(db).jobs.execute(queryParams) as Record<string, unknown>[];
+  const stepRows = await runDetailQueries(db).steps.execute(queryParams) as Record<string, unknown>[];
   const stepsByJob = new Map<string, RunJob["steps"]>();
   for (const row of stepRows) {
     const jobId = String(row.jobId);
@@ -346,21 +479,8 @@ export async function getRunDetail(db: DashboardDb, organizationId: string, runI
       steps: stepsByJob.get(String(row.id)) ?? [],
     };
   });
-  const edges = await db<ActionGraph["edges"]>`
-    SELECT e.from_job_id AS "from",e.to_job_id AS "to"
-    FROM dashboard_action_edges e
-    JOIN dashboard_jobs source ON source.organization_id=e.organization_id AND source.id=e.from_job_id
-    JOIN dashboard_jobs target ON target.organization_id=e.organization_id AND target.id=e.to_job_id
-    JOIN dashboard_runs r ON r.organization_id=e.organization_id AND r.id=e.run_id
-    WHERE e.organization_id=${organizationId} AND e.run_id=${runId}
-      AND source.run_attempt=r.run_attempt AND target.run_attempt=r.run_attempt
-    ORDER BY e.from_job_id,e.to_job_id
-  `;
-  const stageRows = await db<Record<string, unknown>[]>`
-    SELECT stage,started_at AS "startedAt",completed_at AS "completedAt",
-      COALESCE(EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000,0)::bigint AS "durationMs"
-    FROM dashboard_run_stages WHERE organization_id=${organizationId} AND run_id=${runId} ORDER BY started_at
-  `;
+  const edges = await runDetailQueries(db).edges.execute(queryParams) as ActionGraph["edges"];
+  const stageRows = await runDetailQueries(db).stages.execute(queryParams) as Record<string, unknown>[];
   const stages = stageRows.map((row): RunStageRecord => ({
     stage: row.stage as RunStageRecord["stage"],
     startedAt: normalizeTimestamp(row.startedAt)!,
@@ -388,13 +508,46 @@ export async function getRunDetail(db: DashboardDb, organizationId: string, runI
     },
   };
 }
+const logQueries = defineQueries((db) => ({
+  step: db.select({
+    organizationId: schema.dashboardStepLogChunks.organizationId,
+    runId: schema.dashboardStepLogChunks.runId,
+    jobId: schema.dashboardStepLogChunks.jobId,
+    sequence: schema.dashboardStepLogChunks.sequence,
+    content: schema.dashboardStepLogChunks.content,
+    hasMore: sql<boolean>`false`,
+    occurredAt: schema.dashboardStepLogChunks.occurredAt,
+  }).from(schema.dashboardStepLogChunks)
+    .where(and(eq(schema.dashboardStepLogChunks.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardStepLogChunks.runId, sql.placeholder("runId")), eq(schema.dashboardStepLogChunks.jobId, sql.placeholder("jobId")), eq(schema.dashboardStepLogChunks.stepId, sql.placeholder("stepId")), gt(schema.dashboardStepLogChunks.sequence, sql.placeholder("after"))))
+    .orderBy(asc(schema.dashboardStepLogChunks.sequence)).limit(sql.placeholder("limit")).prepare("dashboard_step_log_chunks"),
+  job: db.select({
+    organizationId: schema.dashboardLogChunks.organizationId,
+    runId: schema.dashboardLogChunks.runId,
+    jobId: schema.dashboardLogChunks.jobId,
+    sequence: schema.dashboardLogChunks.sequence,
+    content: schema.dashboardLogChunks.content,
+    hasMore: sql<boolean>`false`,
+    occurredAt: schema.dashboardLogChunks.occurredAt,
+  }).from(schema.dashboardLogChunks)
+    .where(and(eq(schema.dashboardLogChunks.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardLogChunks.runId, sql.placeholder("runId")), eq(schema.dashboardLogChunks.jobId, sql.placeholder("jobId")), gt(schema.dashboardLogChunks.sequence, sql.placeholder("after"))))
+    .orderBy(asc(schema.dashboardLogChunks.sequence)).limit(sql.placeholder("limit")).prepare("dashboard_log_chunks"),
+}));
+const mapLogChunks = (rows: LogChunk[], limit: number) => ({
+  items: rows.slice(0, limit).map((x) => ({ ...x, sequence: Number(x.sequence), hasMore: rows.length > limit, occurredAt: normalizeTimestamp(x.occurredAt)! })),
+  nextCursor: rows.length > limit ? String(rows[limit - 1].sequence) : null,
+});
 export async function listStepLogChunks(db: DashboardDb, organizationId: string, runId: string, jobId: string, stepId: string, after = -1, limit = 100): Promise<CursorPage<LogChunk>> {
   const safeLimit = Math.max(0, Math.min(1000, Math.floor(limit)));
   if (safeLimit === 0) return { items: [], nextCursor: null };
-  const rows = await db<LogChunk[]>`SELECT organization_id AS "organizationId", run_id AS "runId", job_id AS "jobId", sequence, content, false AS "hasMore", occurred_at AS "occurredAt" FROM dashboard_step_log_chunks WHERE organization_id=${organizationId} AND run_id=${runId} AND job_id=${jobId} AND step_id=${stepId} AND sequence>${after} ORDER BY sequence LIMIT ${safeLimit + 1}`;
-  return { items: rows.slice(0, safeLimit).map(x => ({ ...x, sequence: Number(x.sequence), hasMore: rows.length > safeLimit, occurredAt: normalizeTimestamp(x.occurredAt)! })), nextCursor: rows.length > safeLimit ? String(rows[safeLimit - 1].sequence) : null };
+  const rows = await logQueries(db).step.execute({ organizationId, runId, jobId, stepId, after, limit: safeLimit + 1 }) as LogChunk[];
+  return mapLogChunks(rows, safeLimit);
 }
-export async function listLogChunks(db: DashboardDb, organizationId: string, runId: string, jobId: string, after = -1, limit = 100): Promise<CursorPage<LogChunk>> { const rows = await db<LogChunk[]>`SELECT organization_id AS "organizationId", run_id AS "runId", job_id AS "jobId", sequence, content, false AS "hasMore", occurred_at AS "occurredAt" FROM dashboard_log_chunks WHERE organization_id=${organizationId} AND run_id=${runId} AND job_id=${jobId} AND sequence>${after} ORDER BY sequence LIMIT ${limit + 1}`; return { items: rows.slice(0, limit).map(x => ({ ...x, sequence: Number(x.sequence), hasMore: rows.length > limit, occurredAt: normalizeTimestamp(x.occurredAt)! })), nextCursor: rows.length > limit ? String(rows[limit - 1].sequence) : null }; }
+export async function listLogChunks(db: DashboardDb, organizationId: string, runId: string, jobId: string, after = -1, limit = 100): Promise<CursorPage<LogChunk>> {
+  const safeLimit = Math.max(0, Math.min(1000, Math.floor(limit)));
+  if (safeLimit === 0) return { items: [], nextCursor: null };
+  const rows = await logQueries(db).job.execute({ organizationId, runId, jobId, after, limit: safeLimit + 1 }) as LogChunk[];
+  return mapLogChunks(rows, safeLimit);
+}
 function jsonValue(value: unknown): unknown {
   if (typeof value !== "string") return value;
   try { return JSON.parse(value); } catch { return value; }
@@ -515,6 +668,57 @@ function healthJobId(value: unknown): number | null {
   const id = healthNumber(value, -1);
   return Number.isSafeInteger(id) && id >= 0 ? id : null;
 }
+const workerHealthQueries = defineQueries((db) => ({
+  worker: db.select({
+    id: schema.workers.id,
+    platform: schema.workers.platform,
+    connectionState: schema.workers.connectionState,
+    lastHeartbeatAt: schema.workers.lastHeartbeatAt,
+    lastDoctorAt: schema.workers.doctorObservedAt,
+    doctor: schema.workers.doctor,
+    limits: schema.workers.limits,
+    desiredConfiguration: schema.workers.desiredConfiguration,
+    configurationState: schema.workers.configurationState,
+    configurationFailureReason: sql<string | null>`CASE WHEN ${schema.workers.configurationState}='error' THEN (SELECT a.payload->>'reason' FROM ${schema.auditEvents} a WHERE a.type='worker.configuration_failed' AND a.payload->>'workerId'=${schema.workers.id}::text AND a.payload->>'commandId'=${schema.workers.configurationCommandId}::text AND a.payload->>'revision'=${schema.workers.configurationRevision} ORDER BY a.created_at DESC LIMIT 1) ELSE NULL END`,
+    observedAt: sql<Date>`now()`,
+    heartbeatAgeSeconds: sql<number>`GREATEST(0,EXTRACT(EPOCH FROM (now()-${schema.workers.lastHeartbeatAt})))::int`,
+    doctorAgeSeconds: sql<number>`GREATEST(0,EXTRACT(EPOCH FROM (now()-${schema.workers.doctorObservedAt})))::int`,
+    cacheGeneration: schema.workerCacheStatus.generation,
+    cacheReady: schema.workerCacheStatus.ready,
+    cacheTtlSeconds: schema.workerCacheStatus.ttlSeconds,
+    cacheSizeBytes: sql<string | null>`${schema.workerCacheStatus.sizeBytes}::text`,
+    cacheEntryCount: schema.workerCacheStatus.entryCount,
+    runnerCacheEnabled: schema.workerCacheStatus.runnerCacheEnabled,
+    runnerCacheMaxGiB: schema.workerCacheStatus.runnerCacheMaxGiB,
+    runnerCacheSizeBytes: sql<string | null>`${schema.workerCacheStatus.runnerCacheSizeBytes}::text`,
+    runnerCacheEntryCount: schema.workerCacheStatus.runnerCacheEntryCount,
+    cacheObservedAt: schema.workerCacheStatus.observedAt,
+    runnerCacheObservedAt: schema.workerCacheStatus.runnerCacheObservedAt,
+    cacheError: schema.workerCacheStatus.error,
+  }).from(schema.workers).leftJoin(schema.workerCacheStatus, eq(schema.workerCacheStatus.workerId, schema.workers.id))
+    .where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("dashboard_get_worker_health"),
+  leases: db.select({
+    leaseId: schema.runnerLeases.id,
+    jobId: schema.runnerLeases.githubJobId,
+    repositoryFullName: schema.dashboardRepositories.fullName,
+    repositoryName: schema.dashboardRepositories.name,
+    state: schema.runnerLeases.state,
+    startedAt: sql<Date>`COALESCE(${schema.runnerLeases.updatedAt},${schema.runnerLeases.createdAt})`,
+    ageSeconds: sql<number>`GREATEST(0,EXTRACT(EPOCH FROM (now()-COALESCE(${schema.runnerLeases.updatedAt},${schema.runnerLeases.createdAt}))))::int`,
+    requested: schema.runnerLeases.requested,
+    sampleCpuUsagePercent: sql<number | null>`(SELECT s.cpu_usage_percent FROM ${schema.dashboardJobResourceSamples} s JOIN ${schema.dashboardJobs} j ON j.organization_id=s.organization_id AND j.id=s.job_id WHERE j.github_job_id=${schema.runnerLeases.githubJobId} AND s.lease_id=${schema.runnerLeases.id} ORDER BY s.occurred_at DESC LIMIT 1)`,
+    sampleMemoryWorkingSetBytes: sql<string | null>`(SELECT s.memory_working_set_bytes::text FROM ${schema.dashboardJobResourceSamples} s JOIN ${schema.dashboardJobs} j ON j.organization_id=s.organization_id AND j.id=s.job_id WHERE j.github_job_id=${schema.runnerLeases.githubJobId} AND s.lease_id=${schema.runnerLeases.id} ORDER BY s.occurred_at DESC LIMIT 1)`,
+    sampleMemoryLimitBytes: sql<string | null>`(SELECT s.memory_limit_bytes::text FROM ${schema.dashboardJobResourceSamples} s JOIN ${schema.dashboardJobs} j ON j.organization_id=s.organization_id AND j.id=s.job_id WHERE j.github_job_id=${schema.runnerLeases.githubJobId} AND s.lease_id=${schema.runnerLeases.id} ORDER BY s.occurred_at DESC LIMIT 1)`,
+    sampleDiskUsageBytes: sql<string | null>`(SELECT s.disk_usage_bytes::text FROM ${schema.dashboardJobResourceSamples} s JOIN ${schema.dashboardJobs} j ON j.organization_id=s.organization_id AND j.id=s.job_id WHERE j.github_job_id=${schema.runnerLeases.githubJobId} AND s.lease_id=${schema.runnerLeases.id} ORDER BY s.occurred_at DESC LIMIT 1)`,
+    sampledAt: sql<Date | null>`(SELECT s.occurred_at FROM ${schema.dashboardJobResourceSamples} s JOIN ${schema.dashboardJobs} j ON j.organization_id=s.organization_id AND j.id=s.job_id WHERE j.github_job_id=${schema.runnerLeases.githubJobId} AND s.lease_id=${schema.runnerLeases.id} ORDER BY s.occurred_at DESC LIMIT 1)`,
+  }).from(schema.runnerLeases)
+    .leftJoin(schema.dashboardJobs, eq(schema.dashboardJobs.githubJobId, schema.runnerLeases.githubJobId))
+    .leftJoin(schema.dashboardRuns, eq(schema.dashboardRuns.id, schema.dashboardJobs.runId))
+    .leftJoin(schema.dashboardRepositories, eq(schema.dashboardRepositories.id, schema.dashboardRuns.repositoryId))
+    .where(and(eq(schema.runnerLeases.workerId, sql.placeholder("workerId")), sql`${schema.runnerLeases.state} IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')`))
+    .orderBy(asc(schema.runnerLeases.createdAt), asc(schema.runnerLeases.id)).prepare("dashboard_worker_health_leases"),
+}));
+
 function healthContainers(value: unknown): WorkerHealth["containers"] {
   const parsed = jsonValue(value);
   const wrapper = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
@@ -537,58 +741,11 @@ function healthContainers(value: unknown): WorkerHealth["containers"] {
 
 
 export async function getWorkerHealth(db: DashboardDb, workerId: string, workerConnected: (workerId: string) => boolean): Promise<WorkerHealth | null> {
-  const [worker] = await db<Record<string, unknown>[]>`
-    SELECT w.id,w.platform,w.connection_state AS "connectionState",w.last_heartbeat_at AS "lastHeartbeatAt",
-      w.doctor_observed_at AS "lastDoctorAt",w.doctor,w.limits,w.desired_configuration AS "desiredConfiguration",
-      w.configuration_state AS "configurationState",
-      CASE WHEN w.configuration_state='error' THEN (
-        SELECT a.payload->>'reason' FROM audit_events a
-        WHERE a.type='worker.configuration_failed'
-          AND a.payload->>'workerId'=w.id::text
-          AND a.payload->>'commandId'=w.configuration_command_id::text
-          AND a.payload->>'revision'=w.configuration_revision
-        ORDER BY a.created_at DESC LIMIT 1
-      ) ELSE NULL END AS "configurationFailureReason",
-      now() AS "observedAt",
-      GREATEST(0,EXTRACT(EPOCH FROM (now()-w.last_heartbeat_at)))::int AS "heartbeatAgeSeconds",
-      GREATEST(0,EXTRACT(EPOCH FROM (now()-w.doctor_observed_at)))::int AS "doctorAgeSeconds",
-      s.generation AS "cacheGeneration",s.ready AS "cacheReady",s.ttl_seconds AS "cacheTtlSeconds",
-      s.size_bytes::text AS "cacheSizeBytes",s.entry_count AS "cacheEntryCount",
-      s.runner_cache_enabled AS "runnerCacheEnabled",s.runner_cache_max_gib AS "runnerCacheMaxGiB",
-      s.runner_cache_size_bytes::text AS "runnerCacheSizeBytes",s.runner_cache_entry_count AS "runnerCacheEntryCount",
-      s.observed_at AS "cacheObservedAt",s.runner_cache_observed_at AS "runnerCacheObservedAt",s.error AS "cacheError"
-    FROM workers w
-    LEFT JOIN worker_cache_status s ON s.worker_id=w.id
-    WHERE w.id=${workerId}
-  `;
+  const [worker] = await workerHealthQueries(db).worker.execute({ workerId }) as Record<string, unknown>[];
   if (!worker) return null;
   const observedAt = normalizeTimestamp(worker.observedAt);
   const capacity = healthCapacitySource(worker.doctor);
-  const leases = await db<Record<string, unknown>[]>`
-    SELECT l.id AS "leaseId",l.github_job_id AS "jobId",r.full_name AS "repositoryFullName",
-      r.name AS "repositoryName",l.state,
-      COALESCE(l.updated_at,l.created_at) AS "startedAt",
-      GREATEST(0,EXTRACT(EPOCH FROM (now()-COALESCE(l.updated_at,l.created_at))))::int AS "ageSeconds",
-      l.requested,
-      s.cpu_usage_percent AS "sampleCpuUsagePercent",
-      s.memory_working_set_bytes AS "sampleMemoryWorkingSetBytes",
-      s.memory_limit_bytes AS "sampleMemoryLimitBytes",
-      s.disk_usage_bytes AS "sampleDiskUsageBytes",
-      s.occurred_at AS "sampledAt"
-    FROM runner_leases l
-    LEFT JOIN dashboard_jobs j ON j.github_job_id=l.github_job_id
-    LEFT JOIN LATERAL (
-      SELECT cpu_usage_percent,memory_working_set_bytes,memory_limit_bytes,disk_usage_bytes,occurred_at
-      FROM dashboard_job_resource_samples
-      WHERE organization_id=j.organization_id AND job_id=j.id AND lease_id=l.id
-      ORDER BY occurred_at DESC LIMIT 1
-    ) s ON true
-    LEFT JOIN dashboard_runs dr ON dr.id=j.run_id
-    LEFT JOIN dashboard_repositories r ON r.id=dr.repository_id
-    WHERE l.worker_id=${workerId}
-      AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')
-    ORDER BY l.created_at,l.id
-  `;
+  const leases = await workerHealthQueries(db).leases.execute({ workerId }) as Record<string, unknown>[];
   const requests = leases.map((row) => healthRequested(row.requested));
   const actualCpu = healthCapacityMetric(capacity, "vcpu", "actualVcpu", "actualVcpu").actual;
   const freeCpu = healthCapacityMetric(capacity, "vcpu", "freeVcpu", "freeVcpu").free;
@@ -713,32 +870,180 @@ function normalizeWorker(row: Record<string, unknown>, workerConnected?: (worker
   };
   return worker;
 }
+const workerProjection = () => ({
+  id: schema.workers.id,
+  organizationId: sql<string | null>`NULL::uuid`,
+  name: schema.workers.name,
+  platform: schema.workers.platform,
+  releaseVersion: schema.workers.releaseVersion,
+  contractVersion: schema.workers.contractVersion,
+  guestPlatforms: schema.workers.guestPlatforms,
+  admissionState: schema.workers.admissionState,
+  connectionState: schema.workers.connectionState,
+  configurationState: schema.workers.configurationState,
+  configurationRevision: schema.workers.configurationRevision,
+  appliedConfigurationRevision: schema.workers.appliedConfigurationRevision,
+  configurationAppliedAt: schema.workers.configurationAppliedAt,
+  lastHeartbeatAt: schema.workers.lastHeartbeatAt,
+  lastDoctorAt: schema.workers.doctorObservedAt,
+  fingerprint: schema.workers.fingerprint,
+  limits: schema.workers.limits,
+  doctor: schema.workers.doctor,
+  desiredConfiguration: schema.workers.desiredConfiguration,
+  preserveLeases: schema.workers.preserveLeases,
+  cacheTtlSeconds: schema.workerCacheStatus.ttlSeconds,
+  cacheReady: schema.workerCacheStatus.ready,
+  cacheProxyOrigin: schema.workerCacheStatus.proxyOrigin,
+  cacheBaseUrl: schema.workerCacheStatus.cacheBaseUrl,
+  cacheSizeBytes: schema.workerCacheStatus.sizeBytes,
+  cacheEntryCount: schema.workerCacheStatus.entryCount,
+  runnerCacheEnabled: schema.workerCacheStatus.runnerCacheEnabled,
+  runnerCacheMaxGiB: schema.workerCacheStatus.runnerCacheMaxGiB,
+  runnerCacheSizeBytes: schema.workerCacheStatus.runnerCacheSizeBytes,
+  runnerCacheEntryCount: schema.workerCacheStatus.runnerCacheEntryCount,
+  cacheObservedAt: schema.workerCacheStatus.observedAt,
+  cacheRunnerCacheObservedAt: schema.workerCacheStatus.runnerCacheObservedAt,
+  cacheError: schema.workerCacheStatus.error,
+  activeSandboxes: sql<number>`(SELECT count(*)::int FROM ${schema.runnerLeases} l WHERE l.worker_id=${schema.workers.id} AND l.state NOT IN ('completed','reaped','failed','expired'))`,
+  draining: schema.workers.draining,
+});
+const workerQueries = defineQueries((db) => ({
+  organization: db.select(workerProjection()).from(schema.workers).leftJoin(schema.workerCacheStatus, eq(schema.workerCacheStatus.workerId, schema.workers.id))
+    .where(inArray(schema.workers.id, db.select({ workerId: schema.runnerPools.workerId }).from(schema.runnerPools).where(eq(schema.runnerPools.organizationId, sql.placeholder("organizationId")))))
+    .orderBy(asc(schema.workers.name)).limit(sql.placeholder("limit")).prepare("dashboard_list_workers"),
+  all: db.select(workerProjection()).from(schema.workers).leftJoin(schema.workerCacheStatus, eq(schema.workerCacheStatus.workerId, schema.workers.id))
+    .where(sql`(${sql.placeholder("includeInactive")} OR ${schema.workers.admissionState} NOT IN ('rejected','revoked'))`)
+    .orderBy(asc(schema.workers.name)).limit(sql.placeholder("limit")).prepare("dashboard_list_all_workers"),
+}));
 export async function listWorkers(db: DashboardDb, organizationId: string, limit = 50, workerConnected?: (workerId: string) => boolean): Promise<CursorPage<WorkerDetail>> {
-  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.release_version AS "releaseVersion",w.contract_version AS "contractVersion",w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.desired_configuration AS "desiredConfiguration",w.preserve_leases AS "preserveLeases",s.ttl_seconds AS "cacheTtlSeconds",s.ready AS "cacheReady",s.proxy_origin AS "cacheProxyOrigin",s.cache_base_url AS "cacheBaseUrl",s.size_bytes AS "cacheSizeBytes",s.entry_count AS "cacheEntryCount",s.runner_cache_enabled AS "runnerCacheEnabled",s.runner_cache_max_gib AS "runnerCacheMaxGiB",s.runner_cache_size_bytes AS "runnerCacheSizeBytes",s.runner_cache_entry_count AS "runnerCacheEntryCount",s.observed_at AS "cacheObservedAt",s.runner_cache_observed_at AS "cacheRunnerCacheObservedAt",s.error AS "cacheError",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w LEFT JOIN worker_cache_status s ON s.worker_id=w.id WHERE w.organization_id=${organizationId} ORDER BY w.name LIMIT ${limit + 1}`;
+  const rows = await workerQueries(db).organization.execute({ organizationId, limit: limit + 1 }) as Record<string, unknown>[];
   const items = rows.slice(0, limit).map(row => normalizeWorker(row, workerConnected));
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }
 export async function listAllWorkers(db: DashboardDb, userId: string, limit = 50, includeInactive = false, workerConnected?: (workerId: string) => boolean): Promise<CursorPage<WorkerDetail>> {
-  const rows = await db<Record<string, unknown>[]>`SELECT w.id,NULL::uuid AS "organizationId",w.name,w.platform,w.release_version AS "releaseVersion",w.contract_version AS "contractVersion",w.guest_platforms AS "guestPlatforms",w.admission_state AS "admissionState",w.connection_state AS "connectionState",w.configuration_state AS "configurationState",w.configuration_revision AS "configurationRevision",w.applied_configuration_revision AS "appliedConfigurationRevision",w.configuration_applied_at AS "configurationAppliedAt",w.last_heartbeat_at AS "lastHeartbeatAt",w.doctor_observed_at AS "lastDoctorAt",w.fingerprint,w.limits,w.doctor,w.desired_configuration AS "desiredConfiguration",w.preserve_leases AS "preserveLeases",s.ttl_seconds AS "cacheTtlSeconds",s.ready AS "cacheReady",s.proxy_origin AS "cacheProxyOrigin",s.cache_base_url AS "cacheBaseUrl",s.size_bytes AS "cacheSizeBytes",s.entry_count AS "cacheEntryCount",s.runner_cache_enabled AS "runnerCacheEnabled",s.runner_cache_max_gib AS "runnerCacheMaxGiB",s.runner_cache_size_bytes AS "runnerCacheSizeBytes",s.runner_cache_entry_count AS "runnerCacheEntryCount",s.observed_at AS "cacheObservedAt",s.runner_cache_observed_at AS "cacheRunnerCacheObservedAt",s.error AS "cacheError",(SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS "activeSandboxes",w.draining FROM workers w LEFT JOIN worker_cache_status s ON s.worker_id=w.id WHERE (${includeInactive} OR w.admission_state NOT IN ('rejected','revoked')) ORDER BY w.name LIMIT ${limit + 1}`;
+  const rows = await workerQueries(db).all.execute({ includeInactive, limit: limit + 1 }) as Record<string, unknown>[];
   const items = rows.slice(0, limit).map(row => normalizeWorker(row, workerConnected));
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }
 export async function getWorkerDetail(db: DashboardDb, organizationId: string, workerId: string, workerConnected?: (workerId: string) => boolean): Promise<WorkerDetail | null> { const page = organizationId === "all" ? await listAllWorkers(db, "", 1000, true, workerConnected) : await listWorkers(db, organizationId, 1000, workerConnected); return page.items.find(worker => worker.id === workerId) ?? null; }
-export async function recordRunTransition(db: DashboardDb, organizationId: string, runId: string, transition: RunTransition): Promise<void> { await db`UPDATE dashboard_runs SET status=${transition.status}, conclusion=${transition.conclusion}, started_at=COALESCE(${transition.startedAt ?? null}, started_at), completed_at=COALESCE(${transition.completedAt ?? null}, completed_at) WHERE organization_id=${organizationId} AND id=${runId} AND status <> 'completed' AND (status='queued' OR ${transition.status} <> 'queued')`; }
-export async function recordRunStage(db: DashboardDb, organizationId: string, runId: string, stage: RunStage): Promise<void> { await db`INSERT INTO dashboard_run_stages (organization_id,run_id,stage) VALUES (${organizationId},${runId},${stage}) ON CONFLICT DO NOTHING`; }
+const mutationQueries = defineQueries((db) => ({
+  transition: db.update(schema.dashboardRuns).set({
+    status: sql`${sql.placeholder("status")}`,
+    conclusion: sql`${sql.placeholder("conclusion")}`,
+    startedAt: sql`COALESCE(${sql.placeholder("startedAt")}, ${schema.dashboardRuns.startedAt})`,
+    completedAt: sql`COALESCE(${sql.placeholder("completedAt")}, ${schema.dashboardRuns.completedAt})`,
+  }).where(and(eq(schema.dashboardRuns.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardRuns.id, sql.placeholder("runId")), sql`${schema.dashboardRuns.status} <> 'completed'`, or(eq(schema.dashboardRuns.status, "queued"), sql`${sql.placeholder("status")} <> 'queued'`))).prepare("dashboard_record_run_transition"),
+  stage: db.insert(schema.dashboardRunStages).values({
+    organizationId: sql.placeholder("organizationId"),
+    runId: sql.placeholder("runId"),
+    stage: sql.placeholder("stage"),
+  }).onConflictDoNothing().prepare("dashboard_record_run_stage"),
+  mutation: db.insert(schema.dashboardMutations).values({
+    organizationId: sql.placeholder("organizationId"),
+    idempotencyKey: sql.placeholder("key"),
+  }).onConflictDoNothing().returning({ idempotencyKey: schema.dashboardMutations.idempotencyKey }).prepare("dashboard_mutation"),
+  invalidate: db.insert(schema.dashboardOutboxInvalidations).select(
+    db.select({
+      id: sql<string>`gen_random_uuid()`.as("id"),
+      organizationId: sql<string>`(${sql.placeholder("organizationId")}::uuid)`.as("organization_id"),
+      sequence: sql<number>`COALESCE(MAX(${schema.dashboardOutboxInvalidations.sequence}),0)+1`.as("sequence"),
+      keys: sql`${sql.placeholder("keys")}::jsonb`.as("keys"),
+      occurredAt: sql<string>`now()`.as("occurred_at"),
+    }).from(schema.dashboardOutboxInvalidations).where(eq(schema.dashboardOutboxInvalidations.organizationId, sql.placeholder("organizationId"))),
+  ).prepare("dashboard_invalidate"),
+  recheckRepository: db.select({
+    paused: sql<boolean>`${schema.dashboardRepositories.discoveryError} IN ('github_403','github_rate_limited') AND ${schema.dashboardRepositories.discoveryRetryAt}>now()`,
+  }).from(schema.dashboardRepositories)
+    .innerJoin(schema.dashboardInstallations, and(eq(schema.dashboardInstallations.id, schema.dashboardRepositories.installationId), eq(schema.dashboardInstallations.organizationId, schema.dashboardRepositories.organizationId)))
+    .where(and(eq(schema.dashboardRepositories.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardRepositories.id, sql.placeholder("repositoryId")), eq(schema.dashboardRepositories.available, true), eq(schema.dashboardInstallations.state, "approved")))
+    .for("update", { of: schema.dashboardRepositories }).prepare("dashboard_repository_recheck_lock"),
+  priorMutation: db.select({ idempotencyKey: schema.dashboardMutations.idempotencyKey }).from(schema.dashboardMutations)
+    .where(and(eq(schema.dashboardMutations.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardMutations.idempotencyKey, sql.placeholder("key"))))
+    .limit(1).prepare("dashboard_repository_recheck_prior"),
+  markRepository: db.update(schema.dashboardRepositories).set({ discoveryRetryAt: sql`now()` })
+    .where(and(eq(schema.dashboardRepositories.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardRepositories.id, sql.placeholder("repositoryId"))))
+    .prepare("dashboard_repository_recheck_update"),
+}));
+export async function recordRunTransition(db: DashboardDb, organizationId: string, runId: string, transition: RunTransition): Promise<void> {
+  await mutationQueries(db).transition.execute({ organizationId, runId, status: transition.status, conclusion: transition.conclusion, startedAt: transition.startedAt ?? null, completedAt: transition.completedAt ?? null });
+}
+const poolQueries = defineQueries((db) => ({
+  organization: db.select({
+    id: schema.runnerPools.id,
+    organizationId: schema.runnerPools.organizationId,
+    workerId: schema.runnerPools.workerId,
+    workerName: schema.workers.name,
+    name: schema.runnerPools.name,
+    platform: schema.runnerPools.platform,
+    driver: schema.runnerPools.driver,
+    imageDigest: schema.runnerPools.imageDigest,
+    resources: schema.runnerPools.resources,
+    cpuMode: schema.runnerPools.cpuMode,
+    labels: schema.runnerPools.labels,
+    triggerLabel: schema.runnerPools.triggerLabel,
+    enabled: schema.runnerPools.enabled,
+    active: sql<number>`0`,
+  }).from(schema.runnerPools).innerJoin(schema.workers, eq(schema.workers.id, schema.runnerPools.workerId))
+    .where(eq(schema.runnerPools.organizationId, sql.placeholder("organizationId"))).orderBy(asc(schema.runnerPools.name))
+    .limit(sql.placeholder("limit")).prepare("dashboard_list_pools"),
+  global: db.select({
+    id: schema.runnerPools.id,
+    organizationId: sql<string | null>`NULL::uuid`,
+    workerId: sql<string | null>`NULL::uuid`,
+    workerName: sql<string>`'Shared fleet'`,
+    name: schema.runnerPools.name,
+    platform: schema.runnerPools.platform,
+    driver: schema.runnerPools.driver,
+    imageDigest: schema.runnerPools.imageDigest,
+    resources: schema.runnerPools.resources,
+    cpuMode: schema.runnerPools.cpuMode,
+    labels: schema.runnerPools.labels,
+    triggerLabel: schema.runnerPools.triggerLabel,
+    enabled: schema.runnerPools.enabled,
+    active: sql<number>`(${db.select({ count: sql<number>`count(*)::int` }).from(schema.runnerLeases).where(and(eq(schema.runnerLeases.poolId, schema.runnerPools.id), notInArray(schema.runnerLeases.state, ["completed", "reaped", "failed", "expired"])))})`,
+  }).from(schema.runnerPools)
+    .where(and(isNull(schema.runnerPools.organizationId), or(sql`${sql.placeholder("cursor")}::uuid IS NULL`, lt(schema.runnerPools.id, sql.placeholder("cursor")))))
+    .orderBy(desc(schema.runnerPools.id)).limit(sql.placeholder("limit")).prepare("dashboard_list_global_pools"),
+  all: db.select({
+    id: schema.runnerPools.id,
+    organizationId: schema.runnerPools.organizationId,
+    workerId: schema.runnerPools.workerId,
+    workerName: schema.workers.name,
+    name: schema.runnerPools.name,
+    platform: schema.runnerPools.platform,
+    driver: schema.runnerPools.driver,
+    imageDigest: schema.runnerPools.imageDigest,
+    resources: schema.runnerPools.resources,
+    cpuMode: schema.runnerPools.cpuMode,
+    labels: schema.runnerPools.labels,
+    triggerLabel: schema.runnerPools.triggerLabel,
+    enabled: schema.runnerPools.enabled,
+    active: sql<number>`0`,
+  }).from(schema.runnerPools).innerJoin(schema.memberships, and(eq(schema.memberships.organizationId, schema.runnerPools.organizationId), eq(schema.memberships.userId, sql.placeholder("userId"))))
+    .innerJoin(schema.workers, eq(schema.workers.id, schema.runnerPools.workerId)).orderBy(asc(schema.runnerPools.name))
+    .limit(sql.placeholder("limit")).prepare("dashboard_list_all_pools"),
+}));
+export async function recordRunStage(db: DashboardDb, organizationId: string, runId: string, stage: RunStage): Promise<void> {
+  await mutationQueries(db).stage.execute({ organizationId, runId, stage });
+}
+export async function dashboardMutation(db: DashboardDb, organizationId: string, key: string): Promise<boolean> {
+  const rows = await mutationQueries(db).mutation.execute({ organizationId, key });
+  return rows.length > 0;
+}
+export async function invalidateDashboard(db: DashboardDb, organizationId: string, keys: string[]): Promise<void> {
+  await mutationQueries(db).invalidate.execute({ organizationId, keys: JSON.stringify(keys) });
+}
 function normalizePool(row: Record<string, unknown>): PoolSummary { return PoolSummary.parse({ ...row, resources: jsonValue(row.resources), labels: jsonValue(row.labels), active: numberValue(row.active, 0) }); }
 export async function listPools(db: DashboardDb, organizationId: string, limit = 50): Promise<CursorPage<PoolSummary>> {
-  const rows = await db<Record<string, unknown>[]>`SELECT p.id,p.organization_id AS "organizationId",p.worker_id AS "workerId",w.name AS "workerName",p.name,p.platform,p.driver,p.image_digest AS "imageDigest",p.resources,p.cpu_mode AS "cpuMode",p.labels,p.trigger_label AS "triggerLabel",p.enabled,0::int AS active FROM runner_pools p JOIN workers w ON w.id=p.worker_id WHERE p.organization_id=${organizationId} ORDER BY p.name LIMIT ${limit + 1}`;
+  const rows = await poolQueries(db).organization.execute({ organizationId, limit: limit + 1 }) as Record<string, unknown>[];
   const items = rows.slice(0, limit).map(normalizePool);
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }
 export async function listGlobalPools(db: DashboardDb, limit = 50, cursor: string | null = null): Promise<CursorPage<PoolSummary>> {
-  const rows = await db<Record<string, unknown>[]>`SELECT p.id,NULL::uuid AS "organizationId",NULL::uuid AS "workerId",'Shared fleet' AS "workerName",p.name,p.platform,p.driver,p.image_digest AS "imageDigest",p.resources,p.cpu_mode AS "cpuMode",p.labels,p.trigger_label AS "triggerLabel",p.enabled,(SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.state NOT IN ('completed','reaped','failed','expired')) AS active FROM runner_pools p WHERE p.organization_id IS NULL AND (${cursor}::uuid IS NULL OR p.id < ${cursor}::uuid) ORDER BY p.id DESC LIMIT ${limit + 1}`;
+  const rows = await poolQueries(db).global.execute({ cursor, limit: limit + 1 }) as Record<string, unknown>[];
   const items = rows.slice(0, limit).map(normalizePool);
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }
-export async function dashboardMutation(db: DashboardDb, organizationId: string, key: string): Promise<boolean> { const rows = await db`INSERT INTO dashboard_mutations (organization_id,idempotency_key) VALUES (${organizationId},${key}) ON CONFLICT DO NOTHING RETURNING idempotency_key`; return rows.length > 0; }
-export async function invalidateDashboard(db: DashboardDb, organizationId: string, keys: string[]): Promise<void> { await db`INSERT INTO dashboard_outbox_invalidations (organization_id,sequence,keys) SELECT ${organizationId},COALESCE(MAX(sequence),0)+1,${jsonParameter(db, keys)}::jsonb FROM dashboard_outbox_invalidations WHERE organization_id=${organizationId}`; }
 
 export type QueueRepositoryDiscoveryRecheckResult = "queued" | "not_found" | "not_paused";
 
@@ -749,35 +1054,17 @@ export async function queueRepositoryDiscoveryRecheck(
   idempotencyKey: string,
 ): Promise<QueueRepositoryDiscoveryRecheckResult> {
   const mutationKey = `repository-discovery-recheck:${repositoryId}:${idempotencyKey}`;
-  return db.begin(async (tx) => {
-    const [repository] = await tx`
-      SELECT r.discovery_error IN ('github_403','github_rate_limited') AND r.discovery_retry_at>now() AS paused
-      FROM dashboard_repositories r
-      JOIN dashboard_installations i
-        ON i.id=r.installation_id AND i.organization_id=r.organization_id
-      WHERE r.organization_id=${organizationId} AND r.id=${repositoryId}
-        AND r.available=true AND i.state='approved'
-      FOR UPDATE OF r
-    `;
-    const [prior] = await tx`
-      SELECT 1 FROM dashboard_mutations
-      WHERE organization_id=${organizationId} AND idempotency_key=${mutationKey}
-    `;
+  return db.transaction(async (tx) => {
+    const [repository] = await mutationQueries(tx).recheckRepository.execute({ organizationId, repositoryId });
+    const [prior] = await mutationQueries(tx).priorMutation.execute({ organizationId, key: mutationKey });
     if (prior) return "queued";
     if (!repository) return "not_found";
     if (repository.paused !== true) return "not_paused";
 
-    const inserted = await tx`
-      INSERT INTO dashboard_mutations (organization_id,idempotency_key)
-      VALUES (${organizationId},${mutationKey})
-      ON CONFLICT DO NOTHING RETURNING idempotency_key
-    `;
+    const inserted = await mutationQueries(tx).mutation.execute({ organizationId, key: mutationKey });
     if (!inserted.length) return "queued";
 
-    await tx`
-      UPDATE dashboard_repositories SET discovery_retry_at=now()
-      WHERE organization_id=${organizationId} AND id=${repositoryId}
-    `;
+    await mutationQueries(tx).markRepository.execute({ organizationId, repositoryId });
     return "queued";
   });
 }

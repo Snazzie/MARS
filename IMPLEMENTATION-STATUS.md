@@ -32,4 +32,6 @@ A protected `control-plane-staging` environment, public GHCR package, clean Linu
 
 ## Database ownership
 
-Drizzle ORM owns the PostgreSQL runtime client, generated schema, relations, and checked-in migrations. Existing query modules execute through the Drizzle-backed database client while preserving their SQL semantics and result contracts.
+Drizzle ORM owns the PostgreSQL runtime client, generated schema, relations, and checked-in migrations. Application persistence uses explicit `select`, `insert`, `update`, and `delete` builders—not relational `db.query.*` or a callable raw-SQL adapter. Module-level `defineQueries` families compile once per database client during startup; request paths only execute cached statements with placeholders. Transactions retain that client identity while routing execution to the current transaction/savepoint connection. Raw PostgreSQL access is reserved for migrations, administrative operations, and test fixtures.
+
+PostgreSQL-specific JSONB, aggregate/window, advisory-lock, and other expressions remain intentional `sql` fragments inside these builders. PostgreSQL migrations and test/admin fixtures retain raw SQL. Worker-local Bun SQLite action/package caches are a separate subsystem and are not part of this PostgreSQL cutover.

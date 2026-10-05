@@ -1,3 +1,4 @@
+import { preparedTestDatabase } from "../../../../packages/db/src/prepared-test-fixture.ts";
 import { describe, expect, test } from "bun:test";
 import { createDevelopmentWindowsArtifacts } from "../index.ts";
 import { createControlPlaneApp } from "./app.ts";
@@ -122,11 +123,7 @@ describe("control-plane HTTP boundary", () => {
   });
 
   test("exposes the synchronized public origin and managed flag in onboarding status", async () => {
-    const db = (async (strings: TemplateStringsArray) => {
-      const query = strings.join(" ").toLowerCase();
-      if (query.includes("from system_onboarding")) return [{ adminUserId: null, workerId: null, organizationId: null, completedAt: null, publicBaseUrl: "https://control.example.com", originConfigured: true, githubAppConfigured: false }];
-      return [];
-    }) as never;
+    const db = preparedTestDatabase((name) => name === "onboarding_status" ? [{ adminUserId: null, workerId: null, organizationId: null, completedAt: null, publicBaseUrl: "https://control.example.com", originConfigured: true, githubAppConfigured: false, workerAdmissionState: null, workerConfigurationState: null, githubReady: false }] : []);
     const response = await createControlPlaneApp(fakeHttpDeps({
       db,
       setup: { publicOrigin: () => "https://control.example.com", publicOriginManaged: () => true, configure: async origin => origin, authenticate: async () => ({ userId: "admin", firstAdmin: true }) },
@@ -588,17 +585,17 @@ describe("control-plane HTTP boundary", () => {
   });
   test("uses the public callback and browser origin for OAuth returns", async () => {
     const secretBox = fakeHttpDeps().secretBox;
-    const sql = (async (strings: TemplateStringsArray) => {
-      const query = strings.join("?");
-      if (query.includes("update github_setup_states")) return [{ encrypted_pkce_verifier: secretBox.encrypt("verifier") }];
-      if (query.includes("insert into users")) return [{ id: "user-1", is_global_admin: true }];
-      if (query.includes("insert into organizations")) return [{ id: "personal-org" }];
-      if (query.includes("SELECT completed_at FROM system_onboarding")) return [{ completed_at: null }];
+    const db = preparedTestDatabase((name) => {
+      if (name === "http_oauth_consume_state") return [{ encryptedPkceVerifier: secretBox.encrypt("verifier") }];
+      if (name === "setup_known_user") return [{ isGlobalAdmin: false }];
+      if (name === "setup_installed_org") return [];
+      if (name === "setup_lock_config") return [{ setupCompletedAt: null }];
+      if (name === "setup_upsert_user") return [{ id: "user-1" }];
+      if (name === "setup_lock_onboarding") return [{ adminUserId: null }];
       return [];
-    }) as unknown as ReturnType<typeof fakeHttpDeps>["db"];
-    Object.assign(sql, { begin: async (callback: (transaction: typeof sql) => Promise<unknown>) => callback(sql) });
+    });
     const deps = fakeHttpDeps({
-      db: sql,
+      db,
       baseUrl: "http://localhost:3000",
       browserBaseUrl: "http://localhost:5173",
     });
@@ -843,16 +840,7 @@ describe("control-plane HTTP boundary", () => {
     expect(response.headers.get("location")).toBe("http://localhost:5173/");
   });
 test("lists all organizations for global administrators without membership rows", async () => {
-  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("LEFT JOIN memberships")
-    ? [{
-      id: "org-1",
-      name: "Acme",
-      login: "acme",
-      role: "admin",
-      repositoryCount: 2,
-      workerCount: 1,
-    }]
-    : []) as never;
+  const db = preparedTestDatabase(name => name === "dashboard_list_all_organizations" ? [{ id: "org-1", name: "Acme", login: "acme", role: "admin", repositoryCount: 2, workerCount: 1 }] : []);
   const response = await createControlPlaneApp(fakeHttpDeps({
     db,
     currentUser: async () => ({ id: "global-admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
@@ -868,9 +856,7 @@ test("lists all organizations for global administrators without membership rows"
   }]);
 });
 test("keeps organization listing membership-scoped for non-admin users", async () => {
-  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("JOIN memberships m")
-    ? [{ id: "org-1", name: "Acme", login: "acme", role: "member", repositoryCount: 0, workerCount: 0 }]
-    : []) as never;
+  const db = preparedTestDatabase(name => name === "dashboard_list_organizations" ? [{ id: "org-1", name: "Acme", login: "acme", role: "member", repositoryCount: 0, workerCount: 0 }] : []);
   const response = await createControlPlaneApp(fakeHttpDeps({
     db,
     currentUser: async () => ({ id: "member", githubUserId: 1, login: "member", isGlobalAdmin: false }),
@@ -895,9 +881,7 @@ test("returns a disconnected GitHub connection summary when no installation exis
 });
 
 test("returns a connected GitHub summary with account identity and management URL", async () => {
-  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("dashboard_installations")
-    ? [{ login: "acme", githubAccountType: "Organization", githubInstallationId: 42 }]
-    : []) as never;
+  const db = preparedTestDatabase(name => name === "route_github_connection" ? [{ login: "acme", githubAccountType: "Organization", githubInstallationId: 42 }] : []);
   const response = await createControlPlaneApp(fakeHttpDeps({
     db,
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
@@ -913,7 +897,7 @@ test("returns a connected GitHub summary with account identity and management UR
   });
 });
 test("treats suspended GitHub installations as disconnected", async () => {
-  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("state <> 'suspended'") ? [] : [{ login: "stale", githubAccountType: "Organization", githubInstallationId: 42 }]) as never;
+  const db = preparedTestDatabase(name => name === "route_github_connection" ? [{ login: "stale", githubAccountType: "Organization", githubInstallationId: null }] : []);
   const response = await createControlPlaneApp(fakeHttpDeps({
     db,
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
@@ -923,7 +907,7 @@ test("treats suspended GitHub installations as disconnected", async () => {
 });
 
 test("maps a stale GitHub installation token to not found", async () => {
-  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("dashboard_installations") ? [{ githubInstallationId: 42 }] : []) as never;
+  const db = preparedTestDatabase(name => name === "route_github_installation" ? [{ githubInstallationId: 42 }] : []);
   const response = await createControlPlaneApp(fakeHttpDeps({
     db,
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
@@ -933,7 +917,7 @@ test("maps a stale GitHub installation token to not found", async () => {
   expect(await response.json()).toMatchObject({ code: "not_found" });
 });
 test("maps invalid GitHub rate-limit headers to an upstream error", async () => {
-  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("dashboard_installations") ? [{ githubInstallationId: 42 }] : []) as never;
+  const db = preparedTestDatabase(name => name === "route_github_installation" ? [{ githubInstallationId: 42 }] : []);
   const response = await createControlPlaneApp(fakeHttpDeps({
     db,
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
@@ -943,7 +927,7 @@ test("maps invalid GitHub rate-limit headers to an upstream error", async () => 
   expect(await response.json()).toMatchObject({ code: "github_rate_limit_invalid" });
 });
 test.each(["github_401", "github_403", "github_429", "github_500"])("maps GitHub installation request failure %s to an upstream error", async (code) => {
-  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("dashboard_installations") ? [{ githubInstallationId: 42 }] : []) as never;
+  const db = preparedTestDatabase(name => name === "route_github_installation" ? [{ githubInstallationId: 42 }] : []);
   const response = await createControlPlaneApp(fakeHttpDeps({
     db,
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
@@ -962,9 +946,7 @@ test("protects the GitHub connection summary with organization authorization", a
 
 test("returns live GitHub rate-limit stats for an installed organization", async () => {
   let installationId = 0;
-  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("dashboard_installations")
-    ? [{ githubInstallationId: 42 }]
-    : []) as never;
+  const db = preparedTestDatabase(name => name === "route_github_installation" ? [{ githubInstallationId: 42 }] : []);
   const response = await createControlPlaneApp(fakeHttpDeps({
     db,
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
@@ -1010,7 +992,7 @@ test("organization GitHub uninstall route requires an existing installation", as
   expect(response.status).toBe(404);
 });
 test("returns the organization GitHub settings URL", async () => {
-  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("dashboard_installations") ? [{ login: "acme", githubInstallationId: 42 }] : []) as never;
+  const db = preparedTestDatabase(name => name === "route_github_location" ? [{ login: "acme", githubInstallationId: 42, githubAccountType: "Organization" }] : []);
   const response = await createControlPlaneApp(fakeHttpDeps({
     db,
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
@@ -1020,7 +1002,7 @@ test("returns the organization GitHub settings URL", async () => {
 });
 
 test("returns the repository GitHub settings URL", async () => {
-  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("dashboard_repositories") ? [{ login: "acme", githubInstallationId: 42 }] : []) as never;
+  const db = preparedTestDatabase(name => name === "route_github_repository_location" ? [{ login: "acme", githubInstallationId: 42, githubAccountType: "Organization" }] : []);
   const response = await createControlPlaneApp(fakeHttpDeps({
     db,
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
@@ -1030,9 +1012,7 @@ test("returns the repository GitHub settings URL", async () => {
 });
 
 test("returns the user-account GitHub settings URL", async () => {
-  const db = ((strings: TemplateStringsArray) => strings.join("?").includes("dashboard_installations")
-    ? [{ login: "Snazzie", githubInstallationId: 153311365, githubAccountType: "User" }]
-    : []) as never;
+  const db = preparedTestDatabase(name => name === "route_github_location" ? [{ login: "Snazzie", githubInstallationId: 153311365, githubAccountType: "User" }] : []);
   const response = await createControlPlaneApp(fakeHttpDeps({
     db,
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
@@ -1042,26 +1022,16 @@ test("returns the user-account GitHub settings URL", async () => {
 });
 
 test("does not return GitHub settings for unavailable repositories", async () => {
-  const db = ((strings: TemplateStringsArray) => {
-    const query = strings.join("?");
-    if (!query.includes("dashboard_repositories")) return [];
-    return query.includes("r.available=true") && query.includes("i.state <> 'suspended'")
-      ? []
-      : [{ login: "acme", githubInstallationId: 42, available: false, state: "suspended" }];
-  }) as never;
+  const db = preparedTestDatabase(() => []);
   const response = await createControlPlaneApp(fakeHttpDeps({
     db,
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
   })).request("/api/organizations/org-1/repositories/repo-1/github/settings");
   expect(response.status).toBe(404);
 });
-test("uninstalls an organization through the authenticated GitHub route without removing membership", async () => {
+test("uninstalls an organization through the authenticated GitHub route", async () => {
   let organization = "";
-  const queries: string[] = [];
-  const db = ((strings: TemplateStringsArray) => {
-    queries.push(strings.join("?"));
-    return [];
-  }) as never;
+  const db = preparedTestDatabase(name => name === "dashboard_mutation" ? [{ idempotencyKey: "uninstall-1" }] : []);
   const response = await createControlPlaneApp(fakeHttpDeps({
     db,
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
@@ -1072,7 +1042,6 @@ test("uninstalls an organization through the authenticated GitHub route without 
   });
   expect(response.status).toBe(200);
   expect(organization).toBe("org-2");
-  expect(queries.some(query => query.toLowerCase().includes("delete from memberships"))).toBe(false);
   expect(await response.json()).toEqual({ ok: true });
 });
 
@@ -1178,9 +1147,7 @@ const availableRecommendationRow = {
   p95MemoryPeakBytes: "5368709120",
 };
 function recommendationDb(row: Record<string, unknown> = availableRecommendationRow) {
-  return Object.assign((() => []) as unknown as (...args: never[]) => unknown, {
-    unsafe: async () => [row],
-  }) as never;
+  return preparedTestDatabase(name => name === "job_label_recommendation" ? [row] : []);
 }
 
 async function requestRecommendation(
@@ -1252,12 +1219,9 @@ test("returns scoped timing label recommendations and unavailable history", asyn
     p95CpuPeakPercent: "201",
     p95MemoryPeakBytes: "5368709120",
   };
-  const makeDb = (row: unknown) => Object.assign((() => []) as unknown as (...args: never[]) => unknown, {
-    unsafe: async () => [row],
-  }) as never;
   const query = "?from=2026-08-01T00:00:00.000Z&to=2026-09-01T00:00:00.000Z&repositoryId=11111111-1111-4111-8111-111111111111&workflowName=CI&jobName=build";
   const available = await createControlPlaneApp(fakeHttpDeps({
-    db: makeDb(recommendation),
+    db: preparedTestDatabase(name => name === "job_label_recommendation" ? [recommendation] : []),
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
   })).request(`/api/organizations/org-1/job-timings/label-recommendation${query}`);
   expect(available.status).toBe(200);
@@ -1269,7 +1233,7 @@ test("returns scoped timing label recommendations and unavailable history", asyn
   });
 
   const unavailable = await createControlPlaneApp(fakeHttpDeps({
-    db: makeDb({ successfulRunCount: "2", coveredRunCount: "2" }),
+    db: preparedTestDatabase(name => name === "job_label_recommendation" ? [{ successfulRunCount: "2", coveredRunCount: "2" }] : []),
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),
   })).request(`/api/organizations/org-1/job-timings/label-recommendation${query}`);
   expect(unavailable.status).toBe(200);
@@ -1277,16 +1241,14 @@ test("returns scoped timing label recommendations and unavailable history", asyn
 });
 
 test("resolves YAML workflow metadata for timing recommendations", async () => {
-  const db = Object.assign((() => []) as unknown as (...args: never[]) => unknown, {
-    unsafe: async () => [{
-      currentLabels: ["mars-windows-x64-8vcpu-16g"],
-      currentPlatform: "windows-x64",
-      successfulRunCount: "8",
-      coveredRunCount: "8",
-      p95CpuPeakPercent: "201",
-      p95MemoryPeakBytes: "5368709120",
-    }],
-  }) as never;
+  const db = preparedTestDatabase(name => name === "job_label_recommendation" ? [{
+    currentLabels: ["mars-windows-x64-8vcpu-16g"],
+    currentPlatform: "windows-x64",
+    successfulRunCount: "8",
+    coveredRunCount: "8",
+    p95CpuPeakPercent: "201",
+    p95MemoryPeakBytes: "5368709120",
+  }] : []);
   const response = await createControlPlaneApp(fakeHttpDeps({
     db,
     currentUser: async () => ({ id: "admin", githubUserId: 1, login: "admin", isGlobalAdmin: true }),

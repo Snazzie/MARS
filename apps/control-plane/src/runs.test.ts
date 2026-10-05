@@ -1,155 +1,122 @@
 import { expect, test } from "bun:test";
+import { preparedTestDatabase } from "../../../packages/db/src/prepared-test-fixture.ts";
 import { applyGithubJobSnapshot, applyWorkflowJobWebhook, configureRunLifecycle, markGithubJobMissing, stageDurationMs, type GithubJobSnapshot, type GithubRunSnapshot, type GithubStepSnapshot } from "./runs.ts";
-import { runQueuedJobReconciliation } from "./job-reconciler.ts";
 
 type Row = Record<string, unknown>;
 function makeStatefulSql() {
-  const installations = [{ id: "installation", organization_id: "org" }];
+  const installations = [{ id: "installation", organizationId: "org" }];
   const repositories = [{ id: "repository" }];
   const runs = new Map<string, Row>();
   const jobs = new Map<string, Row>();
   const steps = new Map<string, Row>();
-  const queries: string[] = [];
-  const execute = (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const text = strings.join(" ");
-    queries.push(text);
-    if (text.includes("SELECT id,organization_id FROM dashboard_installations")) return installations;
-    if (text.includes("SELECT id FROM dashboard_repositories")) return repositories;
-    if (text.trimStart().startsWith("UPDATE dashboard_runs SET status=CASE WHEN started_at IS NULL")) {
-      const current = runs.get(`${values[0]}:${values[1]}`);
-      if (current && current.run_attempt === values[2] && current.status === "completed" && !jobs.has(`${values[3]}:${values[4]}`)) {
+  let repositoryAvailable = true;
+  const sql = preparedTestDatabase((name, values) => {
+    if (name === "run_lifecycle_installation") return installations;
+    if (name === "run_lifecycle_repository") return repositoryAvailable ? repositories : [];
+    if (name === "run_lifecycle_mark_job_missing") {
+      const current = jobs.get(`${values.organizationId}:${values.githubJobId}`);
+      if (!current || current.status === "completed") return [];
+      Object.assign(current, { status: "completed", stage: "failed", conclusion: "cancelled", completed_at: values.observedAt });
+      return [{ id: current.id }];
+    }
+    if (name === "run_lifecycle_revive_run") {
+      const current = runs.get(`${values.organizationId}:${values.githubRunId}`);
+      if (current && current.run_attempt === values.runAttempt && current.status === "completed" && !jobs.has(`${values.organizationId}:${values.githubJobId}`)) {
         Object.assign(current, { status: current.started_at ? "in_progress" : "queued", conclusion: null, completed_at: null });
       }
       return [];
     }
-    if (text.startsWith("UPDATE dashboard_runs SET status='queued'")) {
-      const current = [...runs.values()].find((run) => run.organization_id === values[0] && values.includes(run.github_run_id));
-      const requestedAttempt = text.includes("run_attempt") ? values.find((value) => typeof value === "number" && value > 0 && !runs.has(`${values[0]}:${value}`)) : undefined;
-      const guardedNonterminal = text.includes("status <> 'completed'");
-      const guardedTerminal = text.includes("status='completed'");
-      if (current && (requestedAttempt === undefined || current.run_attempt === requestedAttempt) && values.includes("queued") && (!guardedNonterminal || current.status !== "completed") && (!guardedTerminal || current.status === "completed")) {
-        Object.assign(current, { status: "queued", conclusion: null, started_at: null, completed_at: null });
+    if (name === "run_lifecycle_invalidate_graph") return [];
+    if (name === "run_lifecycle_reset_queued_run" || name === "run_lifecycle_reset_active_run") {
+      const current = runs.get(`${values.organizationId}:${values.githubRunId}`);
+      if (current && current.run_attempt === values.runAttempt && current.status === "completed") {
+        Object.assign(current, name.endsWith("queued_run")
+          ? { status: "queued", conclusion: null, queued_at: values.queuedAt, started_at: null, completed_at: null }
+          : { status: values.status, conclusion: values.conclusion, queued_at: values.queuedAt, started_at: values.startedAt, completed_at: values.completedAt });
       }
       return [];
     }
-    if (text.startsWith("UPDATE dashboard_jobs SET status='queued'")) {
-      const current = [...jobs.values()].find((job) => job.organization_id === values[0] && values.includes(job.github_job_id));
-      const requestedAttempt = text.includes("run_attempt") ? values.find((value) => typeof value === "number" && value > 0 && !jobs.has(`${values[0]}:${value}`)) : undefined;
-      const guardedNonterminal = text.includes("status <> 'completed'");
-      if (current && (requestedAttempt === undefined || current.run_attempt === requestedAttempt) && (!guardedNonterminal || current.status !== "completed")) Object.assign(current, { status: "queued", conclusion: null, stage: "queued", started_at: null, completed_at: null });
+    if (name === "run_lifecycle_reset_queued_job" || name === "run_lifecycle_reset_active_job") {
+      const current = jobs.get(`${values.organizationId}:${values.githubJobId}`);
+      if (current && current.run_attempt === values.runAttempt && current.status === "completed") {
+        Object.assign(current, name.endsWith("queued_job")
+          ? { status: "queued", conclusion: null, stage: "queued", queued_at: values.queuedAt, started_at: null, completed_at: null }
+          : { status: values.status, conclusion: values.conclusion, stage: values.stage, queued_at: values.queuedAt, started_at: values.startedAt, completed_at: values.completedAt });
+      }
       return [];
     }
-    if (text.startsWith("INSERT INTO dashboard_runs")) {
-      const attemptQualified = text.includes("run_attempt");
-      const key = `${values[0]}:${values[2]}`;
-      const runAttempt = attemptQualified ? Number(values[3]) : 1;
+    if (name === "run_lifecycle_upsert_run") {
+      const key = `${values.organizationId}:${values.githubRunId}`;
       const incoming = {
-        organization_id: values[0],
-        repository_id: values[1],
-        id: `run-${values[2]}`,
-        github_run_id: values[2],
-        run_attempt: runAttempt,
-        status: values[attemptQualified ? 10 : 9],
-        conclusion: values[attemptQualified ? 11 : 10],
-        queued_at: values[attemptQualified ? 12 : 11],
-        started_at: values[attemptQualified ? 13 : 12],
-        completed_at: values[attemptQualified ? 14 : 13],
+        organization_id: values.organizationId, repository_id: values.repositoryId, id: `run-${values.githubRunId}`, github_run_id: values.githubRunId,
+        run_attempt: values.runAttempt, status: values.status, conclusion: values.conclusion, queued_at: values.queuedAt, started_at: values.startedAt, completed_at: values.completedAt,
       };
       const current = runs.get(key);
-      if (!current) runs.set(key, incoming);
-      else if (runAttempt > Number(current.run_attempt)) {
-        Object.assign(current, incoming);
-      } else if (runAttempt < Number(current.run_attempt) && !text.slice(text.indexOf("status=CASE"), text.indexOf(",conclusion=CASE")).includes("EXCLUDED.run_attempt=dashboard_runs.run_attempt AND")) {
-        Object.assign(current, incoming);
-      } else if (runAttempt === Number(current.run_attempt)) {
-        const authoritativeRepair = text.includes("EXCLUDED.status<>'completed'") && values.includes(true);
-        if (authoritativeRepair && incoming.status !== "completed") Object.assign(current, { status: incoming.status, conclusion: incoming.conclusion, queued_at: incoming.queued_at, started_at: incoming.started_at, completed_at: incoming.completed_at });
+      if (!current || Number(values.runAttempt) > Number(current.run_attempt)) runs.set(key, incoming);
+      else if (Number(values.runAttempt) === Number(current.run_attempt)) {
+        const authoritativeRepair = values.authoritative === true && values.status !== "completed";
+        if (authoritativeRepair) Object.assign(current, incoming);
         else {
           const wasTerminal = current.status === "completed";
-          if (!wasTerminal && (incoming.status === "completed" || current.status === "queued" && incoming.status === "in_progress")) current.status = incoming.status;
-          current.conclusion ??= incoming.conclusion;
-          current.queued_at = [current.queued_at, incoming.queued_at].sort()[0];
-          current.started_at = current.started_at && incoming.started_at ? [current.started_at, incoming.started_at].sort()[0] : current.started_at ?? incoming.started_at;
-          if (!wasTerminal && (!current.completed_at || incoming.completed_at && String(incoming.completed_at) > String(current.completed_at))) current.completed_at = incoming.completed_at;
+          if (!wasTerminal && (values.status === "completed" || current.status === "queued" && values.status === "in_progress")) current.status = values.status;
+          current.conclusion ??= values.conclusion;
+          current.queued_at = [current.queued_at, values.queuedAt].sort()[0];
+          current.started_at = current.started_at && values.startedAt ? [current.started_at, values.startedAt].sort()[0] : current.started_at ?? values.startedAt;
+          if (!wasTerminal && (!current.completed_at || values.completedAt && String(values.completedAt) > String(current.completed_at))) current.completed_at = values.completedAt;
         }
       }
-      return [runs.get(key)!];
+      return [{ id: runs.get(key)!.id }];
     }
-    if (text.startsWith("UPDATE dashboard_jobs SET status='completed'")) {
-      const runId = values.find((value) => typeof value === "number" && runs.has(`${values[0]}:${value}`));
-      const runRecord = values.find((value) => typeof value === "string" && [...runs.values()].some((run) => run.organization_id === values[0] && run.id === value));
-      const runKey = runRecord ?? (runId === undefined ? undefined : `run-${runId}`);
-      const scopedAttempt = text.includes("run_attempt") ? values.find((value) => typeof value === "number" && value > 0 && value !== runId && !runs.has(`${values[0]}:${value}`)) : undefined;
+    if (name === "run_lifecycle_complete_jobs") {
       for (const current of jobs.values()) {
-        if (current.organization_id !== values[0] || current.run_id !== runKey || scopedAttempt !== undefined && current.run_attempt !== scopedAttempt || current.status === "completed") continue;
-        Object.assign(current, { status: "completed", conclusion: current.conclusion ?? values.find((value) => typeof value === "string" && ["success", "failure", "cancelled"].includes(value)) ?? null, completed_at: current.completed_at ?? values.find((value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value)) ?? null });
+        if (current.organization_id !== values.organizationId || current.run_id !== values.runId || current.run_attempt !== values.runAttempt || current.status === "completed") continue;
+        Object.assign(current, { status: "completed", conclusion: current.conclusion ?? values.conclusion, completed_at: current.completed_at ?? values.completedAt });
       }
       return [];
     }
-    if (text.startsWith("INSERT INTO dashboard_jobs")) {
-      const attemptQualified = text.includes("run_attempt");
-      const jobIdIndex = attemptQualified ? 3 : 2;
-      const statusIndex = attemptQualified ? 5 : 4;
-      const key = `${values[0]}:${values[jobIdIndex]}`;
-      const runAttempt = attemptQualified ? Number(values[2]) : 1;
+    if (name === "run_lifecycle_upsert_job") {
+      const key = `${values.organizationId}:${values.githubJobId}`;
       const incoming = {
-        organization_id: values[0],
-        run_id: values[1],
-        id: `job-${values[jobIdIndex]}`,
-        github_job_id: values[jobIdIndex],
-        run_attempt: runAttempt,
-        name: values[attemptQualified ? 4 : 3],
-        status: values[statusIndex],
-        conclusion: values[attemptQualified ? 6 : 5],
-        stage: values[attemptQualified ? 7 : 6],
-        runner_name: values[attemptQualified ? 8 : 7],
-        requested_labels: values[attemptQualified ? 9 : 8],
-        queued_at: values[attemptQualified ? 10 : 9],
-        started_at: values[attemptQualified ? 11 : 10],
-        completed_at: values[attemptQualified ? 12 : 11],
+        organization_id: values.organizationId, run_id: values.runId, id: `job-${values.githubJobId}`, github_job_id: values.githubJobId,
+        run_attempt: values.runAttempt, name: values.name, status: values.status, conclusion: values.conclusion, stage: values.stage,
+        runner_name: values.runnerName, requested_labels: values.labels, queued_at: values.queuedAt, started_at: values.startedAt, completed_at: values.completedAt,
       };
       const current = jobs.get(key);
-      if (!current) jobs.set(key, incoming);
-      else if (runAttempt > Number(current.run_attempt)) {
-        Object.assign(current, incoming);
-      } else if (runAttempt < Number(current.run_attempt) && !text.slice(text.indexOf("status=CASE"), text.indexOf(",conclusion=CASE")).includes("EXCLUDED.run_attempt=dashboard_jobs.run_attempt AND")) {
-        Object.assign(current, incoming);
-      } else if (runAttempt === Number(current.run_attempt)) {
-        const authoritativeRepair = text.includes("EXCLUDED.status<>'completed'") && values.includes(true);
-        if (authoritativeRepair && incoming.status !== "completed") Object.assign(current, { status: incoming.status, conclusion: incoming.conclusion, stage: incoming.stage, queued_at: incoming.queued_at, started_at: incoming.started_at, completed_at: incoming.completed_at });
+      if (!current || Number(values.runAttempt) > Number(current.run_attempt)) jobs.set(key, incoming);
+      else if (Number(values.runAttempt) === Number(current.run_attempt)) {
+        if (values.authoritative === true && values.status !== "completed") Object.assign(current, incoming);
         else {
-          if (current.status !== "completed" && (incoming.status === "completed" || current.status === "queued" && incoming.status === "in_progress")) current.status = incoming.status;
-          current.conclusion ??= incoming.conclusion;
-          current.runner_name = incoming.runner_name ?? current.runner_name;
-          current.queued_at = [current.queued_at, incoming.queued_at].sort()[0];
-          current.started_at = current.started_at && incoming.started_at ? [current.started_at, incoming.started_at].sort()[0] : current.started_at ?? incoming.started_at;
-          current.completed_at ??= incoming.completed_at;
+          if (current.status !== "completed" && (values.status === "completed" || current.status === "queued" && values.status === "in_progress")) current.status = values.status;
+          current.conclusion ??= values.conclusion;
+          current.runner_name = values.runnerName ?? current.runner_name;
+          current.queued_at = [current.queued_at, values.queuedAt].sort()[0];
+          current.started_at = current.started_at && values.startedAt ? [current.started_at, values.startedAt].sort()[0] : current.started_at ?? values.startedAt;
+          current.completed_at ??= values.completedAt;
         }
       }
-      return [jobs.get(key)!];
+      return [{ id: jobs.get(key)!.id }];
     }
-    if (text.startsWith("INSERT INTO dashboard_job_steps")) {
-      const key = `${values[0]}:${values[1]}:${values[2]}:${values[5]}`;
-      const incoming = { organization_id: values[0], run_id: values[1], job_id: values[2], id: values[3], name: values[4], number: values[5], status: values[6], conclusion: values[7], queued_at: values[8], started_at: values[9], completed_at: values[10], duration_ms: values[11] };
+    if (name === "run_lifecycle_upsert_step") {
+      const key = `${values.organizationId}:${values.runId}:${values.jobId}:${values.number}`;
+      const incoming = { organization_id: values.organizationId, run_id: values.runId, job_id: values.jobId, id: values.id, name: values.name, number: values.number, status: values.status, conclusion: values.conclusion, queued_at: values.queuedAt, started_at: values.startedAt, completed_at: values.completedAt, duration_ms: values.durationMs };
       const current = steps.get(key);
       if (!current) steps.set(key, incoming);
       else {
-        if (String(current.id) === String(current.number) && String(incoming.id) !== String(incoming.number)) current.id = incoming.id;
-        if (current.status !== "completed" && (incoming.status === "completed" || (current.status === "queued" && incoming.status === "in_progress"))) current.status = incoming.status;
-        current.conclusion ??= incoming.conclusion;
-        current.queued_at = [current.queued_at, incoming.queued_at].sort()[0];
-        const preservedStarted = current.started_at && incoming.started_at ? [current.started_at, incoming.started_at].sort()[0] : current.started_at ?? incoming.started_at;
-        const preservedCompleted = current.completed_at ?? incoming.completed_at;
-        current.duration_ms = Math.max(Number(current.duration_ms ?? 0), Number(incoming.duration_ms ?? 0), preservedStarted && preservedCompleted ? Date.parse(String(preservedCompleted)) - Date.parse(String(preservedStarted)) : 0);
-        current.started_at = preservedStarted;
-        current.completed_at = preservedCompleted;
+        if (!String(current.id).includes("-")) current.id = values.id;
+        if (current.status !== "completed" && (values.status === "completed" || current.status === "queued" && values.status === "in_progress")) current.status = values.status;
+        current.conclusion ??= values.conclusion;
+        current.queued_at = [current.queued_at, values.queuedAt].sort()[0];
+        const started = current.started_at && values.startedAt ? [current.started_at, values.startedAt].sort()[0] : current.started_at ?? values.startedAt;
+        const completed = current.completed_at ?? values.completedAt;
+        current.duration_ms = Math.max(Number(current.duration_ms ?? 0), Number(values.durationMs ?? 0), started && completed ? Date.parse(String(completed)) - Date.parse(String(started)) : 0);
+        current.started_at = started;
+        current.completed_at = completed;
       }
-      return [steps.get(key)!];
+      return [];
     }
     return [];
-  };
-  const sql = Object.assign(execute, { begin: async <T>(callback: (tx: typeof execute) => Promise<T>) => callback(execute) });
-  return { sql, runs, jobs, steps, queries };
+  });
+  return { sql, runs, jobs, steps, set repositoryAvailable(value: boolean) { repositoryAvailable = value; } };
 }
 
 const queuedAt = "2026-08-13T00:00:00Z";
@@ -158,13 +125,12 @@ const step: GithubStepSnapshot = { id: null, number: 1, name: "build", status: "
 const job: GithubJobSnapshot = { id: 99, runId: run.id, runAttempt: 1, name: "macos", status: "queued", conclusion: null, labels: [" self-hosted ", "macOS", "self-hosted"], runnerName: null, queuedAt, startedAt: null, completedAt: null, steps: [step] };
 
  test("REST and webhook updates execute one monotonic state machine", async () => {
-  const fake = makeStatefulSql(); configureRunLifecycle(fake.sql as never);
+  const fake = makeStatefulSql(); configureRunLifecycle(fake.sql);
   const repository = { id: 123, name: "repo", fullName: "acme/repo" };
   expect(await applyGithubJobSnapshot({ installationId: 5, repository, run, job })).toBe(true);
   expect(fake.runs.get("org:42")?.status).toBe("queued");
   expect(await applyWorkflowJobWebhook({ installation: { id: 5 }, repository: { id: 123, name: "repo", full_name: "acme/repo" }, sender: { login: "octocat" }, action: "queued", workflow_job: { id: 99, run_id: 42, run_attempt: 1, run_number: 7, name: "macos", status: "queued", created_at: queuedAt, workflow_name: "CI", head_branch: "main", head_sha: "abc", event: "push", labels: job.labels, steps: [{ number: 1, name: "build", status: "queued" }] } })).toBe(true);
   const key = "org:99"; expect(fake.runs.get("org:42")?.status).toBe("queued"); expect(fake.jobs.get(key)?.status).toBe("queued"); expect(fake.jobs.get(key)?.started_at).toBeNull(); expect(fake.jobs.get(key)?.requested_labels).toEqual(["self-hosted", "macos"]); expect(fake.steps.size).toBe(1);
-  expect(fake.queries.find((query) => query.startsWith("INSERT INTO dashboard_jobs"))).toContain("'::jsonb, ::jsonb,");
   const started = { ...run, status: "in_progress" as const, startedAt: "2026-08-13T00:02:00Z" }; const runningJob = { ...job, status: "in_progress" as const, startedAt: started.startedAt, runnerName: "runner" }; await applyGithubJobSnapshot({ installationId: 5, repository, run: started, job: runningJob });
   expect(fake.runs.get("org:42")?.status).toBe("in_progress"); expect(fake.runs.get("org:42")?.started_at).toBe(started.startedAt);
   const completed = { ...started, status: "completed" as const, conclusion: "success", completedAt: "2026-08-13T00:04:00Z" }; const doneJob = { ...runningJob, status: "completed" as const, conclusion: "success", completedAt: completed.completedAt, steps: [{ ...step, id: null, status: "completed" as const, conclusion: "success", startedAt: started.startedAt, completedAt: completed.completedAt, durationMs: 120_000 }] }; await applyGithubJobSnapshot({ installationId: 5, repository, run: completed, job: doneJob });
@@ -175,7 +141,7 @@ const job: GithubJobSnapshot = { id: 99, runId: run.id, runAttempt: 1, name: "ma
 });
 test("stale completion from an older attempt cannot terminalize a rerun", async () => {
   const fake = makeStatefulSql();
-  configureRunLifecycle(fake.sql as never);
+  configureRunLifecycle(fake.sql);
   const repository = { id: 123, name: "repo", fullName: "acme/repo" };
   const attempt1Run = { ...run, status: "completed" as const, conclusion: "failure", completedAt: "2026-08-22T10:31:17Z" };
   const attempt1Job = { ...job, id: 900, status: "completed" as const, conclusion: "failure", completedAt: attempt1Run.completedAt };
@@ -185,13 +151,11 @@ test("stale completion from an older attempt cannot terminalize a rerun", async 
   await applyGithubJobSnapshot({ installationId: 5, repository, run: attempt2Run, job: attempt2Job, authoritative: true });
   await applyGithubJobSnapshot({ installationId: 5, repository, run: attempt1Run, job: attempt1Job });
   expect(fake.runs.get("org:42")).toMatchObject({ run_attempt: 2, status: "queued", conclusion: null, completed_at: null });
-  expect(fake.queries.find((query) => query.startsWith("INSERT INTO dashboard_runs"))).toContain("EXCLUDED.run_attempt=dashboard_runs.run_attempt AND (EXCLUDED.status='completed'");
-  expect(fake.queries.find((query) => query.startsWith("INSERT INTO dashboard_jobs"))).toContain("EXCLUDED.run_attempt=dashboard_jobs.run_attempt AND (EXCLUDED.status='completed'");
   expect(fake.jobs.get("org:97018978327")).toMatchObject({ run_attempt: 2, status: "queued", conclusion: null, completed_at: null });
 });
 test("lower-attempt snapshots preserve newer concrete state", async () => {
   const fake = makeStatefulSql();
-  configureRunLifecycle(fake.sql as never);
+  configureRunLifecycle(fake.sql);
   const repository = { id: 123, name: "repo", fullName: "acme/repo" };
   const newerRun = { ...run, runAttempt: 2, queuedAt: "2026-08-22T10:31:46Z" };
   const newerJob = { ...job, runAttempt: 2, queuedAt: newerRun.queuedAt };
@@ -205,7 +169,7 @@ test("lower-attempt snapshots preserve newer concrete state", async () => {
 
 test("authoritative same-attempt queued REST state repairs a locally terminal job", async () => {
   const fake = makeStatefulSql();
-  configureRunLifecycle(fake.sql as never);
+  configureRunLifecycle(fake.sql);
   const repository = { id: 123, name: "repo", fullName: "acme/repo" };
   const completedRun = { ...run, status: "completed" as const, conclusion: "failure", completedAt: "2026-08-22T10:31:17Z" };
   const completedJob = { ...job, status: "completed" as const, conclusion: "failure", completedAt: completedRun.completedAt };
@@ -217,7 +181,7 @@ test("authoritative same-attempt queued REST state repairs a locally terminal jo
 
 test("a newly queued webhook job reopens an erroneously terminal parent without replaying old jobs", async () => {
   const fake = makeStatefulSql();
-  configureRunLifecycle(fake.sql as never);
+  configureRunLifecycle(fake.sql);
   const repository = { id: 123, name: "repo", fullName: "acme/repo" };
   await applyGithubJobSnapshot({ installationId: 5, repository, run, job });
   const storedRun = fake.runs.get("org:42")!;
@@ -238,7 +202,7 @@ test("a newly queued webhook job reopens an erroneously terminal parent without 
 
 test("a completed workflow_job webhook does not terminalize a queued sibling", async () => {
   const fake = makeStatefulSql();
-  configureRunLifecycle(fake.sql as never);
+  configureRunLifecycle(fake.sql);
   const repository = { id: 123, name: "repo", fullName: "acme/repo" };
   const attempt2Run = { ...run, runAttempt: 2 };
   const sibling = { ...job, id: 1001, runAttempt: 2 };
@@ -252,49 +216,25 @@ test("a completed workflow_job webhook does not terminalize a queued sibling", a
 
 test("an omitted job does not complete its parent before GitHub reports the run completed", async () => {
   let jobStatus = "queued";
-  let runStatus = "in_progress";
-  const sql = (async (strings: TemplateStringsArray) => {
-    if (strings.join(" ").includes("UPDATE dashboard_jobs") && jobStatus === "queued") {
+  const database = preparedTestDatabase(name => {
+    if (name === "run_lifecycle_mark_job_missing" && jobStatus === "queued") {
       jobStatus = "completed";
       return [{ id: "job-99" }];
     }
-    if (strings.join(" ").includes("UPDATE dashboard_runs")) runStatus = "completed";
     return [];
-  }) as never;
-  expect(await markGithubJobMissing(sql, { organizationId: "org", githubJobId: 99, observedAt: queuedAt })).toBe(true);
-  expect({ jobStatus, runStatus }).toEqual({ jobStatus: "completed", runStatus: "in_progress" });
-  expect(await markGithubJobMissing(sql, { organizationId: "org", githubJobId: 99, observedAt: queuedAt })).toBe(false);
+  });
+  expect(await markGithubJobMissing(database, { organizationId: "org", githubJobId: 99, observedAt: queuedAt })).toBe(true);
+  expect(jobStatus).toBe("completed");
+  expect(await markGithubJobMissing(database, { organizationId: "org", githubJobId: 99, observedAt: queuedAt })).toBe(false);
 });
 test("step duration is monotonic-compatible for terminal timestamps", () => expect(stageDurationMs({ startedAt: "2026-08-13T00:01:00Z", completedAt: "2026-08-13T00:02:00Z" })).toBe(60_000));
 test("strict webhook step validation remains enforced", async () => { await expect(applyWorkflowJobWebhook({ installation: { id: 5 }, repository: { id: 123 }, workflow_job: { id: 99, run_id: 42, status: "queued", steps: [{ number: 0 }] } })).rejects.toThrow("github_payload_invalid"); });
 
-test("webhook ingestion and reconciliation authorize available repositories on active installations", async () => {
+test("does not ingest jobs when the repository is unavailable", async () => {
   const fake = makeStatefulSql();
-  configureRunLifecycle(fake.sql as never);
-  await applyGithubJobSnapshot({ installationId: 5, repository: { id: 123, name: "repo", fullName: "acme/repo" }, run, job });
-  const ingestionQuery = fake.queries.find((query) => query.includes("SELECT id FROM dashboard_repositories")) ?? "";
-  expect(ingestionQuery).toContain("available=true");
-  expect(ingestionQuery).not.toContain("approved=true");
-
-  let reconciliationQuery = "";
-  const db = (async (strings: TemplateStringsArray) => {
-    reconciliationQuery = strings.join(" ");
-    return [];
-  }) as never;
-  await runQueuedJobReconciliation({
-    db,
-    contractVersion: "0.1.0",
-    installationToken: async () => "token",
-    githubFetchForInstallation: () => fetch,
-    dispatcher: { dispatch: async () => ({}) } as never,
-    repositoryFullName: "acme/repo",
-  });
-  expect(reconciliationQuery).toContain("repo.available=true");
-  expect(reconciliationQuery).toContain("repo.full_name=");
-  expect(reconciliationQuery).toContain("ORDER BY j.queued_at ASC, j.github_job_id ASC");
-  expect(reconciliationQuery).toContain("i.state='approved'");
-  expect(reconciliationQuery).toContain("AND NOT EXISTS (");
-  expect(reconciliationQuery).toContain("l.github_job_id=j.github_job_id");
-  expect(reconciliationQuery).toContain("l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')");
-  expect(reconciliationQuery).not.toContain("repo.approved");
+  fake.repositoryAvailable = false;
+  configureRunLifecycle(fake.sql);
+  expect(await applyGithubJobSnapshot({ installationId: 5, repository: { id: 123, name: "repo", fullName: "acme/repo" }, run, job })).toBe(false);
+  expect(fake.runs.size).toBe(0);
+  expect(fake.jobs.size).toBe(0);
 });

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { preparedTestDatabase } from "../../../packages/db/src/prepared-test-fixture.ts";
 import { ApproveWorkerRequest, PendingWorkerRequest, WorkerBootstrapRequest, WorkerConfiguration } from "@mars/contracts";
 import { createRequestLimiter, hasMachineIdentity, matchesWorkerIdentity, purgeWorkerRunnerCache, WorkerRequestError } from "./worker-requests.ts";
 import { pendingWorkerDto } from "./http/worker-routes.ts";
@@ -136,40 +137,38 @@ test("invalid bootstrap attempts are limited per trusted source and successful r
 });
 describe("durable runner cache purge", () => {
   const workerId = "cbb0e9d8-23ff-480e-8465-408197c0c2d2";
-  const makeDb = (prior: { workerId: string; commandId: string } | null = null) => {
-    const queries: string[] = [];
-    type FakeQuery = {
-      (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown[]>;
-      begin<T>(fn: (tx: FakeQuery) => Promise<T>): Promise<T>;
-    };
-    const query = (async (strings: TemplateStringsArray) => {
-      const text = strings.join(" ");
-      queries.push(text);
-      if (text.includes("select response from worker_mutations")) return prior ? [{ response: prior }] : [];
-      if (text.includes("select id,admission_state")) return [{ id: workerId, admissionState: "adopted" }];
+  const makeDb = (prior: { workerId: string; commandId: string } | null = null, admissionState = "adopted") => {
+    const writes: string[] = [];
+    const db = preparedTestDatabase((name, params) => {
+      if (name === "worker_request_mutation_prior") return prior ? [{ response: prior }] : [];
+      if (name === "worker_request_cache_worker_lock") return [{ id: workerId, admissionState }];
+      if (name === "worker_request_insert_command") writes.push(String(params.type));
+      if (name === "worker_request_audit") writes.push(String(params.type));
+      if (name === "worker_request_mutation_insert") writes.push("mutation");
       return [];
-    }) as FakeQuery;
-    query.begin = async <T>(fn: (tx: FakeQuery) => Promise<T>) => fn(query);
-    return { db: query as never, queries };
+    });
+    return { db, writes };
   };
   test("persists an authenticated no-lease purge command and audit event", async () => {
-    const { db, queries } = makeDb();
+    const { db, writes } = makeDb();
     const replayed: string[] = [];
     const result = await purgeWorkerRunnerCache(db, workerId, "admin", { replayConnected: async id => { replayed.push(id); } }, "purge-once");
     expect(result.workerId).toBe(workerId);
     expect(result.commandId).toMatch(/^[0-9a-f-]{36}$/);
     expect(replayed).toEqual([workerId]);
-    expect(queries.some(query => query.includes("'worker.runner_cache_purge'"))).toBe(true);
-    expect(queries.some(query => query.includes("'worker.runner_cache_purge_requested'"))).toBe(true);
-    expect(queries.some(query => query.includes("worker_mutations"))).toBe(true);
+    expect(writes).toEqual(["worker.runner_cache_purge", "worker.runner_cache_purge_requested", "mutation"]);
   });
 
   test("returns an idempotent command without replaying or inserting it again", async () => {
     const prior = { workerId, commandId: "b430a582-a516-48a6-abb9-72c1af04a8c3" };
-    const { db, queries } = makeDb(prior);
+    const { db, writes } = makeDb(prior);
     const replayed: string[] = [];
     await expect(purgeWorkerRunnerCache(db, workerId, "admin", { replayConnected: async id => { replayed.push(id); } }, "purge-once")).resolves.toEqual(prior);
     expect(replayed).toEqual([]);
-    expect(queries.some(query => query.includes("insert into commands"))).toBe(false);
+    expect(writes).toEqual([]);
+  });
+  test("rejects purging workers outside pending or adopted admission", async () => {
+    const { db } = makeDb(null, "rejected");
+    await expect(purgeWorkerRunnerCache(db, workerId, "admin", undefined, "purge-once")).rejects.toThrow("worker purge conflict");
   });
 });

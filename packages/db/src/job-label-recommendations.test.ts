@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { DatabaseClient } from "./index.ts";
+import { preparedTestDatabase } from "./prepared-test-fixture.ts";
 import {
   buildOptimizedLabels,
   getJobLabelRecommendation,
@@ -8,19 +8,13 @@ import {
 } from "./job-label-recommendations.ts";
 import { JobLabelRecommendation, JobLabelRecommendationQuery } from "@mars/contracts";
 
-type RecordedCall = { sql: string; values: unknown[] };
-type FakeDatabase = DatabaseClient & { calls: RecordedCall[] };
-
-function fakeDatabase(rows: unknown[]): FakeDatabase {
-  const calls: RecordedCall[] = [];
-  const execute = (sql: string, values: unknown[]) => {
-    calls.push({ sql, values });
-    return Promise.resolve(rows);
-  };
-  const db = ((strings: TemplateStringsArray, ...values: unknown[]) => execute(strings.join("?"), values)) as unknown as FakeDatabase;
-  db.unsafe = execute as FakeDatabase["unsafe"];
-  db.calls = calls;
-  return db;
+function fakeDatabase(rows: unknown[]) {
+  const calls: Array<{ name: string; parameters: Record<string, unknown> }> = [];
+  const db = preparedTestDatabase((name, parameters) => {
+    calls.push({ name, parameters });
+    return rows;
+  });
+  return { db, calls };
 }
 
 const query = {
@@ -71,16 +65,16 @@ describe("resource label recommendation policy", () => {
   });
   test("recognizes versioned Ubuntu routes as Linux x64 routing labels", () => {
     for (const version of ["22", "24", "26"]) {
-      expect(selectRoutingLabel([`mars-any-x64-2vcpu-4g`, `mars-ubuntu-${version}-4vcpu-8g`], "linux-x64")?.route).toBe(`mars-ubuntu-${version}`);
+      expect(selectRoutingLabel(["mars-any-x64-2vcpu-4g", `mars-ubuntu-${version}-4vcpu-8g`], "linux-x64")?.route).toBe(`mars-ubuntu-${version}`);
       expect(selectRoutingLabel([`mars-ubuntu-${version}-4vcpu-8g`], "windows-x64")).toBeNull();
     }
   });
 });
 
 describe("getJobLabelRecommendation", () => {
-  test("normalizes SQL numerics and scopes successful selected snapshots", async () => {
-    const db = fakeDatabase([{
-      currentLabels: '["mars-windows-x64-8vcpu-16g","mars-macos-arm64-2vcpu-4g"]',
+  test("normalizes persisted telemetry and recommends resources for the current platform", async () => {
+    const { db } = fakeDatabase([{
+      currentLabels: ["mars-windows-x64-8vcpu-16g", "mars-macos-arm64-2vcpu-4g"],
       currentPlatform: "windows-x64",
       successfulRunCount: "8",
       coveredRunCount: "8",
@@ -100,19 +94,10 @@ describe("getJobLabelRecommendation", () => {
       telemetryCoveragePercent: 100,
       reason: null,
     });
-    expect(db.calls).toHaveLength(1);
-    expect(db.calls[0]?.sql).toContain("successful AS");
-    expect(db.calls[0]?.sql).toContain("LEFT JOIN latest");
-    expect(db.calls[0]?.sql).toContain("round(");
-    expect(db.calls[0]?.sql).toContain("FROM dashboard_job_timing_snapshots");
-    expect(db.calls[0]?.sql).toContain("outcome='success'");
-    expect(db.calls[0]?.sql).toContain("percentile_cont(0.95)");
-    expect(db.calls[0]?.sql).toContain("memberships");
-    expect(db.calls[0]?.values).toEqual(["org-1", query.from, query.to, query.repositoryId, query.workflowName, query.jobName, "user-1"]);
   });
 
-  test("returns an unavailable response without treating missing telemetry as zero", async () => {
-    const db = fakeDatabase([{
+  test("returns unavailable when sample coverage is below the established threshold", async () => {
+    const { db } = fakeDatabase([{
       currentLabels: ["mars-windows-x64-4vcpu-8g"],
       currentPlatform: "windows-x64",
       successfulRunCount: "8",
@@ -127,15 +112,27 @@ describe("getJobLabelRecommendation", () => {
     expect(result.recommendedVcpu).toBeNull();
     expect(result.recommendedMemoryGiB).toBeNull();
   });
+
+  test("returns a neutral result when the scoped query has no samples", async () => {
+    const { db } = fakeDatabase([]);
+    expect(await getJobLabelRecommendation(db, "org-1", query)).toMatchObject({
+      status: "unavailable",
+      currentLabels: [],
+      successfulRunCount: 0,
+      telemetryCoveragePercent: 0,
+      reason: "insufficient_history",
+    });
+  });
 });
 
-
 test("recommendation contracts are strict and represent multi-core CPU percentiles", () => {
-  const value: JobLabelRecommendation = {
-    status: "available",
+  const value = {
+    status: "available" as const,
     currentLabels: ["mars-windows-x64-8vcpu-16g"],
     currentRoutingLabel: "mars-windows-x64-8vcpu-16g",
     currentPlatform: "windows-x64",
+    workflowPath: null,
+    workflowJobId: null,
     recommendedVcpu: 3,
     recommendedMemoryGiB: 7,
     p95CpuPeakPercent: 201,

@@ -1,6 +1,7 @@
 import type { Server, ServerWebSocket } from "bun";
 import { WorkerConfiguredPayload, WorkerDoctorReport, WorkerEvent, sanitizeDiagnosticText } from "@mars/contracts";
-import { jsonParameter, type DashboardDb } from "@mars/db";
+import { and, eq, sql } from "drizzle-orm";
+import { defineQueries, schema, type DatabaseClient } from "@mars/db";
 import { canSubscribeToOrganization, loadBrowserInvalidations } from "./browser-invalidations.ts";
 import { reconcileWorkerInventory } from "./lease-reconciliation.ts";
 import { verifyWorkerSignature } from "./workers.ts";
@@ -15,6 +16,20 @@ type WorkerSocketData = { actor: "worker"; workerId: string; workerName?: string
 type BrowserSocketData = { actor: "browser"; organizationId: string; cursor: number };
 export type ControlPlaneSocketData = WorkerSocketData | BrowserSocketData;
 type GatewayServer = Server<ControlPlaneSocketData>;
+
+const queries = defineQueries((db) => ({
+  disconnect: db.update(schema.workers).set({ connectionState: "offline", doctor: sql`COALESCE(${schema.workers.doctor}, '{}'::jsonb) || ${sql.placeholder("lastDisconnect")}::jsonb` }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("gateway_disconnect"),
+  authenticate: db.select({ name: schema.workers.name, publicKey: schema.workers.publicKey, encryptionPublicKey: schema.workers.encryptionPublicKey, admissionState: schema.workers.admissionState }).from(schema.workers).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("gateway_authenticate"),
+  armMigrationDrain: db.update(schema.workers).set({ platform: "windows-arm64", guestPlatforms: sql`${sql.placeholder("guestPlatforms")}::jsonb`, configurationState: "unconfigured", desiredConfiguration: null, configurationRevision: null, configurationCommandId: null, appliedConfigurationRevision: null, configurationAppliedAt: null, draining: true }).where(and(eq(schema.workers.id, sql.placeholder("workerId")), eq(schema.workers.platform, "windows-x64"))).prepare("gateway_arm_migration_drain"),
+  doctor: db.update(schema.workers).set({
+    doctor: sql`${sql.placeholder("doctor")}::jsonb || CASE WHEN ${schema.workers.doctor} ? 'lastDisconnect' THEN jsonb_build_object('lastDisconnect', ${schema.workers.doctor}->'lastDisconnect') ELSE '{}'::jsonb END`,
+    releaseVersion: sql`${sql.placeholder("releaseVersion")}`,
+    contractVersion: sql`${sql.placeholder("contractVersion")}`,
+    doctorObservedAt: sql`now()`,
+    lastHeartbeatAt: sql`now()`,
+  }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("gateway_doctor"),
+  heartbeat: db.update(schema.workers).set({ lastHeartbeatAt: sql`now()` }).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("gateway_heartbeat"),
+}));
 export const WORKER_HEARTBEAT_INTERVAL_MS = 10_000;
 export const WORKER_HEARTBEAT_TIMEOUT_MS = 30_000;
 type ScheduleTimeout = (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
@@ -67,7 +82,7 @@ export function enqueueWorkerMessage(
 
 
 type GatewayOptions = {
-  db: DashboardDb;
+  db: DatabaseClient;
   httpFetch(request: Request): Promise<Response>;
   current(request: Request): Promise<{ id: string; githubUserId: number; login: string; isGlobalAdmin: boolean } | null>;
   requestSource(request: Request, server: GatewayServer): string;
@@ -152,7 +167,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           workerSockets.delete(ws.data.workerId);
           if (ws.data.connectionEpoch === workerConnectionEpochs.get(ws.data.workerId)) workerConnectionEpochs.delete(ws.data.workerId);
           const lastDisconnect = { occurredAt: new Date().toISOString(), code, reason: sanitizeDiagnosticText(String(reason), 200) };
-          void options.db`update workers set connection_state='offline',doctor=COALESCE(doctor,'{}'::jsonb) || ${jsonParameter(options.db, { lastDisconnect })}::jsonb where id=${ws.data.workerId}`.catch(error => console.error("Worker disconnect persistence failed", { workerId: ws.data.actor === "worker" ? ws.data.workerId : null, workerName: ws.data.actor === "worker" ? ws.data.workerName : undefined, error }));
+          void queries(options.db).disconnect.execute({ workerId: ws.data.workerId, lastDisconnect: JSON.stringify({ lastDisconnect }) }).catch(error => console.error("Worker disconnect persistence failed", { workerId: ws.data.actor === "worker" ? ws.data.workerId : null, workerName: ws.data.actor === "worker" ? ws.data.workerName : undefined, error }));
           sendWorkerStatus(browserSockets, ws.data.workerId, "offline");
         }
       }
@@ -183,10 +198,10 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         const epoch = ws.data.connectionEpoch;
         if (!epoch || ws.data.closed) return ws.close(4001, "superseded");
         if (!ws.data.challenge) return ws.close(1008, "worker authentication failed");
-        const [worker] = await options.db`select name,public_key,encryption_public_key,admission_state from workers where id=${ws.data.workerId}`;
+        const [worker] = await queries(options.db).authenticate.execute({ workerId: ws.data.workerId });
         const canonical = Buffer.from(`${ws.data.challenge.toString("base64url")}\n${ws.data.workerId}\n${frame.encryptionPublicKey}`);
-        if (!worker || !verifyWorkerSignature(worker.public_key, canonical, decodeWorkerSignature(frame.signature))) return ws.close(1008, "worker authentication failed");
-        if (worker.encryption_public_key && worker.encryption_public_key !== frame.encryptionPublicKey) return ws.close(1008, "worker encryption key mismatch");
+        if (!worker?.publicKey || !verifyWorkerSignature(worker.publicKey, canonical, decodeWorkerSignature(frame.signature))) return ws.close(1008, "worker authentication failed");
+        if (worker.encryptionPublicKey && worker.encryptionPublicKey !== frame.encryptionPublicKey) return ws.close(1008, "worker encryption key mismatch");
         workerData.workerName = worker.name;
         const processId = typeof frame.processId === "string" && /^[0-9a-f-]{36}$/.test(frame.processId) ? frame.processId : null;
         const activated = await activateAuthenticatedWorkerConnection({
@@ -215,7 +230,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         await sendWorkerAuthenticationFrames({
           socket: ws,
           workerId: ws.data.workerId,
-          admissionState: worker.admission_state,
+          admissionState: worker.admissionState,
           dispatcher: options.dispatcher,
         });
         armHeartbeatDeadline(ws, epoch);
@@ -230,9 +245,9 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         if (doctorPayload.hostPlatform === "windows-arm64") {
           // The original Windows worker enrolled ARM64 hosts as x64. Retire the old
           // configuration before changing platform so x64 pools cannot schedule it.
-          await options.db`update workers set platform='windows-arm64', guest_platforms=${jsonParameter(options.db, ["linux-arm64"])}::jsonb, configuration_state='unconfigured', desired_configuration=null, configuration_revision=null, configuration_command_id=null, applied_configuration_revision=null, configuration_applied_at=null, draining=true where id=${ws.data.workerId} and platform='windows-x64'`;
+          await queries(options.db).armMigrationDrain.execute({ workerId: ws.data.workerId, guestPlatforms: JSON.stringify(["linux-arm64"]) });
         }
-        await options.db`update workers set doctor=${jsonParameter(options.db, doctorPayload)}::jsonb || CASE WHEN doctor ? 'lastDisconnect' THEN jsonb_build_object('lastDisconnect',doctor->'lastDisconnect') ELSE '{}'::jsonb END, release_version=${doctorPayload.releaseVersion}, contract_version=${doctorPayload.contractVersion}, doctor_observed_at=now(), last_heartbeat_at=now() where id=${ws.data.workerId}`;
+        await queries(options.db).doctor.execute({ workerId: ws.data.workerId, doctor: JSON.stringify(doctorPayload), releaseVersion: doctorPayload.releaseVersion, contractVersion: doctorPayload.contractVersion });
         void options.triggerReconciliation();
         if (doctorPayload.doctor.activeLeases && doctorPayload.doctor.inventoryObservedAt) {
           await reconcileWorkerInventory(options.db, ws.data.workerId, doctorPayload.doctor.activeLeases, doctorPayload.doctor.inventoryObservedAt);
@@ -242,7 +257,7 @@ export function createControlPlaneGateway(options: GatewayOptions) {
       } else if (frame.type === "pong" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch) {
         clearTimeout(workerData.heartbeatDeadlineTimer);
         workerData.heartbeatDeadlineTimer = undefined;
-        await options.db`update workers set last_heartbeat_at=now() where id=${ws.data.workerId}`;
+        await queries(options.db).heartbeat.execute({ workerId: ws.data.workerId });
         clearTimeout(workerData.heartbeatTimer);
         const epoch = workerData.connectionEpoch;
         if (epoch === undefined) return;
@@ -335,8 +350,8 @@ export function createControlPlaneGateway(options: GatewayOptions) {
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket" && url.pathname === "/api/v1/workers/connect") {
       const workerId = url.searchParams.get("workerId");
       if (!workerId) return json({ error: "workerId required" }, 400);
-      const [worker] = await options.db`select admission_state from workers where id=${workerId}`;
-      if (!worker || worker.admission_state === "revoked" || worker.admission_state === "rejected") return json({ code: "worker_unavailable", message: "Worker is unknown or revoked" }, 403);
+      const [worker] = await queries(options.db).authenticate.execute({ workerId });
+      if (!worker || worker.admissionState === "revoked" || worker.admissionState === "rejected") return json({ code: "worker_unavailable", message: "Worker is unknown or revoked" }, 403);
       const connectionEpoch = ++nextWorkerConnectionEpoch;
       if (server.upgrade(request, { data: { actor: "worker", workerId, authenticated: false, closed: false, connectionEpoch } })) return undefined;
       return json({ error: "websocket upgrade failed" }, 400);

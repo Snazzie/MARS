@@ -1,5 +1,54 @@
-import type { DatabaseClient } from "@mars/db";
-import { jsonParameter, reserveRoutingSlot } from "@mars/db";
+import { defineQueries, reserveRoutingSlot, schema, type DatabaseClient } from "@mars/db";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
+const queries = defineQueries(db => ({
+  livePools: db.select({
+    poolId: schema.runnerPools.id, poolName: schema.runnerPools.name, platform: schema.runnerPools.platform, driver: schema.runnerPools.driver, imageDigest: schema.runnerPools.imageDigest,
+    enabled: schema.runnerPools.enabled, resources: schema.runnerPools.resources, workerId: schema.workers.id, workerName: schema.workers.name,
+    admissionState: schema.workers.admissionState, connectionState: schema.workers.connectionState, configurationState: schema.workers.configurationState,
+    configurationRevision: schema.workers.configurationRevision, appliedConfigurationRevision: schema.workers.appliedConfigurationRevision, draining: schema.workers.draining,
+    lastHeartbeatAt: schema.workers.lastHeartbeatAt, doctorObservedAt: schema.workers.doctorObservedAt, doctor: schema.workers.doctor,
+    active: sql`(select count(*)::int from runner_leases l where l.pool_id=${schema.runnerPools.id} and l.worker_id=${schema.workers.id} and l.state in ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy'))`,
+  }).from(schema.runnerPools).leftJoin(schema.workers, and(or(isNull(schema.runnerPools.workerId), eq(schema.runnerPools.workerId, schema.workers.id)), sql`${schema.runnerPools.platform}=any(select jsonb_array_elements_text(case when jsonb_typeof(${schema.workers.guestPlatforms})='array' then ${schema.workers.guestPlatforms} else (${schema.workers.guestPlatforms} #>> '{}')::jsonb end))`, sql`${schema.runnerPools.driver}=${schema.workers.desiredConfiguration}->>'selectedDriver'`))
+    .where(sql`${schema.runnerPools.organizationId} is null or ${schema.runnerPools.organizationId} in (select id::uuid from jsonb_array_elements_text(${sql.placeholder("organizationIds")}::jsonb) visible(id))`)
+    .orderBy(schema.runnerPools.name, schema.runnerPools.id, schema.workers.name).prepare("job_reconciler_live_pools"),
+  queued: db.select({
+    jobId: schema.dashboardJobs.githubJobId, runId: schema.dashboardRuns.id, githubRunId: schema.dashboardRuns.githubRunId, runAttempt: schema.dashboardRuns.runAttempt,
+    runStatus: schema.dashboardRuns.status, repositoryId: schema.dashboardRuns.repositoryId, organizationId: schema.dashboardRuns.organizationId, installationId: schema.dashboardInstallations.githubInstallationId,
+    githubRepositoryId: schema.dashboardRepositories.githubRepositoryId, repository: schema.dashboardRepositories.fullName, jobName: schema.dashboardJobs.name, labels: schema.dashboardJobs.requestedLabels,
+    lastFailedWorkerId: sql`case when ${schema.runnerLeases.state}='reaped' and ${schema.runnerLeases.terminalResult}->>'exitCode' is not null and ${schema.runnerLeases.terminalResult}->>'exitCode'<>'0' then ${schema.runnerLeases.workerId} end`,
+    leasePreserved: sql`(${schema.runnerLeases.cleanupState}='debug_preserved')`,
+  }).from(schema.dashboardJobs).innerJoin(schema.dashboardRuns, eq(schema.dashboardRuns.id, schema.dashboardJobs.runId))
+    .innerJoin(schema.dashboardRepositories, and(eq(schema.dashboardRepositories.id, schema.dashboardRuns.repositoryId), eq(schema.dashboardRepositories.organizationId, schema.dashboardRuns.organizationId), eq(schema.dashboardRepositories.available, true)))
+    .innerJoin(schema.dashboardInstallations, and(eq(schema.dashboardInstallations.id, schema.dashboardRepositories.installationId), eq(schema.dashboardInstallations.organizationId, schema.dashboardRuns.organizationId), eq(schema.dashboardInstallations.state, "approved")))
+    .leftJoin(schema.runnerLeases, eq(schema.runnerLeases.githubJobId, schema.dashboardJobs.githubJobId))
+    .where(and(eq(schema.dashboardJobs.status, "queued"), sql`not exists (select 1 from runner_leases l where l.github_job_id=${schema.dashboardJobs.githubJobId} and (l.state in ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy') or l.cleanup_state in ('pending','failed')))`, or(eq(sql.placeholder("repositoryFullName"), ""), eq(schema.dashboardRepositories.fullName, sql.placeholder("repositoryFullName")))))
+    .orderBy(schema.dashboardJobs.queuedAt, schema.dashboardJobs.githubJobId).for("update", { of: schema.dashboardJobs, skipLocked: true }).prepare("job_reconciler_queued"),
+  candidateRows: db.select({
+    poolId: schema.runnerPools.id, poolName: schema.runnerPools.name, organizationId: schema.runnerPools.organizationId, poolWorkerId: schema.runnerPools.workerId,
+    workerId: schema.workers.id, workerName: schema.workers.name, hostPlatform: schema.workers.platform, contractVersion: schema.workers.contractVersion, cpuMode: schema.runnerPools.cpuMode,
+    enabled: schema.runnerPools.enabled, platform: schema.runnerPools.platform, driver: schema.runnerPools.driver, imageDigest: schema.runnerPools.imageDigest, resources: schema.runnerPools.resources, labels: schema.runnerPools.labels, triggerLabel: schema.runnerPools.triggerLabel,
+    admissionState: schema.workers.admissionState, connectionState: schema.workers.connectionState, configurationState: schema.workers.configurationState, configurationRevision: schema.workers.configurationRevision, appliedConfigurationRevision: schema.workers.appliedConfigurationRevision,
+    limits: schema.workers.limits, doctor: schema.workers.doctor, encryptionPublicKey: schema.workers.encryptionPublicKey,
+    unreapedLeases: sql`(select count(*)::int from runner_leases l where l.worker_id=${schema.workers.id} and l.state<>'reaped')`,
+    modeConflict: sql`exists(select 1 from runner_leases l where l.worker_id=${schema.workers.id} and l.state<>'reaped' and l.cpu_mode<>${schema.runnerPools.cpuMode})`,
+    claimedCpuIds: sql`coalesce((select jsonb_agg(cpu.value::int) from runner_leases l cross join lateral jsonb_array_elements_text(coalesce(l.cpu_ids,'[]'::jsonb)) cpu(value) where l.worker_id=${schema.workers.id} and l.state<>'reaped'),'[]'::jsonb)`,
+    active: sql`(select count(*)::int from runner_leases l where l.pool_id=${schema.runnerPools.id} and l.worker_id=${schema.workers.id} and l.state in ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy'))`,
+  }).from(schema.runnerPools).innerJoin(schema.workers, and(
+    or(isNull(schema.runnerPools.workerId), eq(schema.runnerPools.workerId, schema.workers.id)),
+    sql`${schema.runnerPools.platform}=any(select jsonb_array_elements_text(case when jsonb_typeof(${schema.workers.guestPlatforms})='array' then ${schema.workers.guestPlatforms} else (${schema.workers.guestPlatforms} #>> '{}')::jsonb end))`,
+    sql`${schema.runnerPools.driver}=${schema.workers.desiredConfiguration}->>'selectedDriver'`,
+    sql`exists(select 1 from jsonb_array_elements(case when jsonb_typeof(case when jsonb_typeof(${schema.workers.doctor}->'doctor')='object' then ${schema.workers.doctor}->'doctor' else ${schema.workers.doctor} end->'capabilities')='array' then case when jsonb_typeof(${schema.workers.doctor}->'doctor')='object' then ${schema.workers.doctor}->'doctor' else ${schema.workers.doctor} end->'capabilities' else '[]'::jsonb end) capability where capability->>'driver'=${schema.runnerPools.driver} and capability->>'guestPlatform'=${schema.runnerPools.platform} and capability->>'ready'='true')`,
+  ))
+    .where(and(eq(schema.runnerPools.enabled, true), eq(schema.workers.configurationState, "ready"), eq(schema.workers.configurationRevision, schema.workers.appliedConfigurationRevision), eq(schema.workers.draining, false), sql`${schema.workers.lastHeartbeatAt}>now()-interval '60 seconds'`, sql`${schema.workers.doctorObservedAt}>now()-interval '60 seconds'`)).prepare("job_reconciler_candidates"),
+  excludedPools: db.select({ poolId: schema.runnerPools.id, poolName: schema.runnerPools.name, platform: schema.runnerPools.platform, driver: schema.runnerPools.driver, imageDigest: schema.runnerPools.imageDigest, enabled: schema.runnerPools.enabled, labels: schema.runnerPools.labels, triggerLabel: schema.runnerPools.triggerLabel, workerId: schema.workers.id, workerName: schema.workers.name, admissionState: schema.workers.admissionState, connectionState: schema.workers.connectionState, configurationState: schema.workers.configurationState, configurationRevision: schema.workers.configurationRevision, appliedConfigurationRevision: schema.workers.appliedConfigurationRevision, draining: schema.workers.draining, lastHeartbeatAt: schema.workers.lastHeartbeatAt, doctorObservedAt: schema.workers.doctorObservedAt, doctor: schema.workers.doctor })
+    .from(schema.runnerPools).leftJoin(schema.workers, and(or(isNull(schema.runnerPools.workerId), eq(schema.runnerPools.workerId, schema.workers.id)), sql`${schema.runnerPools.platform}=any(select jsonb_array_elements_text(case when jsonb_typeof(${schema.workers.guestPlatforms})='array' then ${schema.workers.guestPlatforms} else (${schema.workers.guestPlatforms} #>> '{}')::jsonb end))`, sql`${schema.runnerPools.driver}=${schema.workers.desiredConfiguration}->>'selectedDriver'`))
+    .where(sql`${schema.runnerPools.organizationId} is null or ${schema.runnerPools.organizationId}=${sql.placeholder("organizationId")}::uuid`).orderBy(schema.runnerPools.name, schema.runnerPools.id, schema.workers.name).prepare("job_reconciler_excluded_pools"),
+  updateLabels: db.update(schema.dashboardJobs).set({ requestedLabels: sql`${sql.placeholder("labels")}::jsonb` }).where(and(eq(schema.dashboardJobs.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardJobs.githubJobId, sql.placeholder("jobId")), eq(schema.dashboardJobs.runAttempt, sql.placeholder("runAttempt")))).prepare("job_reconciler_labels"),
+  recordRunner: db.update(schema.runnerLeases).set({ runnerId: sql`${sql.placeholder("runnerId")}`, runnerName: sql`${sql.placeholder("runnerName")}`, updatedAt: sql`now()` }).where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.state, "reserved"))).returning({ id: schema.runnerLeases.id }).prepare("job_reconciler_record_runner"),
+  jobId: db.select({ id: schema.dashboardJobs.id }).from(schema.dashboardJobs).where(eq(schema.dashboardJobs.githubJobId, sql.placeholder("jobId"))).prepare("job_reconciler_job_id"),
+  dispatched: db.update(schema.runnerLeases).set({ state: "dispatched", updatedAt: sql`now()` }).where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), eq(schema.runnerLeases.state, "reserved"))).returning({ id: schema.runnerLeases.id }).prepare("job_reconciler_dispatched"),
+  release: db.update(schema.runnerLeases).set({ state: "failed", cleanupState: "pending", updatedAt: sql`now()` }).where(and(eq(schema.runnerLeases.id, sql.placeholder("leaseId")), inArray(schema.runnerLeases.state, ["reserved", "dispatched"]))).prepare("job_reconciler_release"),
+}));
 import { PoolResources as PoolResourcesSchema, RuntimeDriverName, parseJobRunnerLabels, type PoolResources as PoolResourcesValue, type RuntimeDriverName as RuntimeDriverNameValue, type RunnerJitConfig, type LeaseBootstrapEnvelope } from "@mars/contracts";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { GithubJobsClient } from "./github-jobs.ts";
@@ -77,21 +126,7 @@ export function excludedPoolReason(row: Record<string, unknown>, now = Date.now(
 }
 
 export async function getLiveDispatchPools(db: DatabaseClient, organizationIds: readonly string[], workerConnected?: (workerId: string) => boolean): Promise<DispatchPoolDetail[]> {
-  const rows = await db`
-    SELECT p.id AS "poolId", p.name AS "poolName", p.platform, p.driver, p.image_digest AS "imageDigest",
-      p.enabled, p.resources, w.id AS "workerId", w.name AS "workerName",
-      w.admission_state AS "admissionState", w.connection_state AS "connectionState",
-      w.configuration_state AS "configurationState", w.configuration_revision AS "configurationRevision",
-      w.applied_configuration_revision AS "appliedConfigurationRevision", w.draining,
-      w.last_heartbeat_at AS "lastHeartbeatAt", w.doctor_observed_at AS "doctorObservedAt", w.doctor,
-      (SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.worker_id=w.id
-        AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')) AS active
-    FROM runner_pools p
-    LEFT JOIN workers w ON (p.worker_id IS NULL OR p.worker_id=w.id)
-      AND p.platform = ANY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(w.guest_platforms)='array' THEN w.guest_platforms ELSE (w.guest_platforms #>> '{}')::jsonb END))
-      AND p.driver=w.desired_configuration->>'selectedDriver'
-    WHERE p.organization_id IS NULL OR p.organization_id IN (SELECT id::uuid FROM jsonb_array_elements_text(${JSON.stringify(organizationIds)}::jsonb) AS visible(id))
-    ORDER BY p.name,p.id,w.name`;
+  const rows = await queries(db).livePools.execute({ organizationIds: JSON.stringify(organizationIds) });
   const now = Date.now();
   return rows.map(row => {
     const workerId = row.workerId ? String(row.workerId) : null;
@@ -107,30 +142,7 @@ export async function getLiveDispatchPools(db: DatabaseClient, organizationIds: 
 }
 
 export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): Promise<ReconcileReport> {
-  const queuedRows = await deps.db`
-    SELECT j.github_job_id AS "jobId", r.id AS "runId", r.github_run_id AS "githubRunId", r.run_attempt AS "runAttempt",
-      r.status AS "runStatus", r.repository_id AS "repositoryId", r.organization_id AS "organizationId", i.github_installation_id AS "installationId",
-      repo.github_repository_id AS "githubRepositoryId", repo.full_name AS repository, j.name AS "jobName", j.requested_labels AS labels,
-      CASE WHEN prior.state='reaped' AND prior.terminal_result->>'exitCode' IS NOT NULL
-        AND prior.terminal_result->>'exitCode' <> '0' THEN prior.worker_id END AS "lastFailedWorkerId",
-      (prior.cleanup_state='debug_preserved') AS "leasePreserved"
-    FROM dashboard_jobs j
-    JOIN dashboard_runs r ON r.id=j.run_id
-    JOIN dashboard_repositories repo ON repo.id=r.repository_id
-      AND repo.organization_id=r.organization_id AND repo.available=true
-    JOIN dashboard_installations i ON i.id=repo.installation_id
-      AND i.organization_id=r.organization_id AND i.state='approved'
-    LEFT JOIN runner_leases prior ON prior.github_job_id=j.github_job_id
-    WHERE j.status='queued'
-      AND NOT EXISTS (
-        SELECT 1 FROM runner_leases l
-        WHERE l.github_job_id=j.github_job_id
-          AND (l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')
-            OR l.cleanup_state IN ('pending','failed'))
-      )
-      AND (${deps.repositoryFullName ?? ""}='' OR repo.full_name=${deps.repositoryFullName ?? ""})
-    ORDER BY j.queued_at ASC, j.github_job_id ASC
-    FOR UPDATE OF j SKIP LOCKED`;
+  const queuedRows = await queries(deps.db).queued.execute({ repositoryFullName: deps.repositoryFullName ?? "" });
   deps.onQueueSize?.(queuedRows.length);
   if (!queuedRows.length) return { reserved: 0, deferred: 0, skipped: 0, failed: 0 };
 
@@ -146,39 +158,11 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     return client;
   };
   const blockedInstallations = new Set<number>();
-  const candidateRows = await deps.db`
-    SELECT p.id AS "poolId", p.name AS "poolName", p.organization_id AS "organizationId", p.worker_id AS "poolWorkerId",
-      w.id AS "workerId", w.name AS "workerName", w.platform AS "hostPlatform", w.contract_version AS "contractVersion", p.cpu_mode AS "cpuMode", p.enabled, p.platform, p.driver, p.image_digest AS "imageDigest", p.resources, p.labels, p.trigger_label AS "triggerLabel",
-      w.admission_state AS "admissionState", w.connection_state AS "connectionState", w.configuration_state AS "configurationState",
-      w.configuration_revision AS "configurationRevision", w.applied_configuration_revision AS "appliedConfigurationRevision",
-      w.limits, w.doctor, w.encryption_public_key AS "encryptionPublicKey",
-      (SELECT count(*)::int FROM runner_leases l WHERE l.worker_id=w.id AND l.state <> 'reaped') AS "unreapedLeases",
-      EXISTS (SELECT 1 FROM runner_leases l WHERE l.worker_id=w.id AND l.state <> 'reaped' AND l.cpu_mode <> p.cpu_mode) AS "modeConflict",
-      COALESCE((SELECT jsonb_agg(cpu.value::int) FROM runner_leases l CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(l.cpu_ids,'[]'::jsonb)) AS cpu(value) WHERE l.worker_id=w.id AND l.state <> 'reaped'), '[]'::jsonb) AS "claimedCpuIds",
-      (SELECT count(*)::int FROM runner_leases l WHERE l.pool_id=p.id AND l.worker_id=w.id
-        AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy')) AS active
-    FROM runner_pools p
-    JOIN workers w ON (p.worker_id IS NULL OR p.worker_id=w.id) AND p.platform = ANY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(w.guest_platforms)='array' THEN w.guest_platforms ELSE (w.guest_platforms #>> '{}')::jsonb END))
-      AND p.driver = w.desired_configuration->>'selectedDriver'
-      AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END->'capabilities')='array' THEN CASE WHEN jsonb_typeof(w.doctor->'doctor')='object' THEN w.doctor->'doctor' ELSE w.doctor END->'capabilities' ELSE '[]'::jsonb END) capability WHERE capability->>'driver'=p.driver AND capability->>'guestPlatform'=p.platform AND capability->>'ready'='true')
-    WHERE p.enabled=true AND w.configuration_state='ready' AND w.configuration_revision=w.applied_configuration_revision AND w.draining=false
-      AND w.last_heartbeat_at > now()-interval '60 seconds'
-      AND w.doctor_observed_at > now()-interval '60 seconds'`;
+  const candidateRows = await queries(deps.db).candidateRows.execute();
   const excludedPools = new Map<string, Array<DispatchPoolDetail & { labels: string[]; triggerLabel: string | null }>>();
   if (deps.onDecision) {
     for (const organizationId of new Set(queuedRows.map(row => String(row.organizationId)))) {
-      const pools = await deps.db`
-        SELECT p.id AS "poolId", p.name AS "poolName", p.platform, p.driver, p.image_digest AS "imageDigest", p.enabled, p.labels, p.trigger_label AS "triggerLabel",
-          w.id AS "workerId", w.name AS "workerName", w.admission_state AS "admissionState",
-          w.connection_state AS "connectionState", w.configuration_state AS "configurationState",
-          w.configuration_revision AS "configurationRevision", w.applied_configuration_revision AS "appliedConfigurationRevision",
-          w.draining, w.last_heartbeat_at AS "lastHeartbeatAt", w.doctor_observed_at AS "doctorObservedAt", w.doctor
-        FROM runner_pools p
-        LEFT JOIN workers w ON (p.worker_id IS NULL OR p.worker_id=w.id)
-          AND p.platform = ANY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(w.guest_platforms)='array' THEN w.guest_platforms ELSE (w.guest_platforms #>> '{}')::jsonb END))
-          AND p.driver = w.desired_configuration->>'selectedDriver'
-        WHERE p.organization_id IS NULL OR p.organization_id=${organizationId}::uuid
-        ORDER BY p.name, p.id, w.name`;
+      const pools = await queries(deps.db).excludedPools.execute({ organizationId });
       excludedPools.set(organizationId, pools
         .filter(pool => !candidateRows.some(row => String(row.poolId) === String(pool.poolId) && String(row.workerId) === String(pool.workerId)))
         .map(pool => ({
@@ -292,7 +276,7 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
         const githubLabels = normalizedLabels(githubJob.labels);
         const requestedLabels = normalizedLabels(stringArray(row.labels));
         if (githubLabels.length !== requestedLabels.length || githubLabels.some((label, index) => label !== requestedLabels[index])) {
-          await deps.db`UPDATE dashboard_jobs SET requested_labels=${jsonParameter(deps.db, githubLabels)}::jsonb WHERE organization_id=${String(row.organizationId)} AND github_job_id=${job.jobId} AND run_attempt=${Number(row.runAttempt)}`;
+          await queries(deps.db).updateLabels.execute({ labels: JSON.stringify(githubLabels), organizationId: String(row.organizationId), jobId: job.jobId, runAttempt: Number(row.runAttempt) });
           return false;
         }
         return true;
@@ -319,19 +303,19 @@ export async function runQueuedJobReconciliation(deps: JobReconciliationDeps): P
     },
     dispatch: async (reservation, jit) => {
       if (jit.runnerId !== undefined) {
-        const [stored] = await deps.db`UPDATE runner_leases SET runner_id=${jit.runnerId}, runner_name=${jit.runnerName}, updated_at=now() WHERE id=${reservation.id} AND state='reserved' RETURNING id`;
+        const [stored] = await queries(deps.db).recordRunner.execute({ runnerId: jit.runnerId, runnerName: jit.runnerName, leaseId: reservation.id });
         if (!stored) throw new Error("lease_not_reserved");
       }
       const target = workerByPool.get(`${reservation.poolId}:${reservation.workerId}`);
       if (!target?.encryptionPublicKey) throw new Error("worker_encryption_key_missing");
       if (!target.imageDigest) throw new Error("worker_image_missing");
-      const [dashboardJob] = await deps.db`SELECT id FROM dashboard_jobs WHERE github_job_id=${reservation.jobId ?? -1}`;
+      const [dashboardJob] = await queries(deps.db).jobId.execute({ jobId: reservation.jobId ?? -1 });
       const envelope: LeaseBootstrapEnvelope = { leaseId: reservation.id, jobId: String(dashboardJob?.id ?? reservation.id), nonce: reservation.nonce, guestPlatform: target.guestPlatform as LeaseBootstrapEnvelope["guestPlatform"], contractVersion: deps.contractVersion, encodedJitConfig: jit.encodedJitConfig, expiresAt: reservation.expiresAt, imageDigest: target.imageDigest, resources: reservation.requested, cpuMode: reservation.cpuMode, ...(reservation.cpuIds === null ? {} : { cpuIds: reservation.cpuIds }) };
-      const [claimed] = await deps.db`UPDATE runner_leases SET state='dispatched', updated_at=now() WHERE id=${reservation.id} AND state='reserved' RETURNING id`;
+      const [claimed] = await queries(deps.db).dispatched.execute({ leaseId: reservation.id });
       if (!claimed) throw new Error("lease_not_reserved");
       await dispatchLeaseBootstrap(deps.dispatcher, { ...envelope, driver: target.driver, workerId: target.workerId, workerEncryptionPublicKey: target.encryptionPublicKey });
     },
-    release: async (reservation) => { await deps.db`UPDATE runner_leases SET state='failed', cleanup_state='pending', updated_at=now() WHERE id=${reservation.id} AND state IN ('reserved','dispatched')`; },
+    release: async (reservation) => { await queries(deps.db).release.execute({ leaseId: reservation.id }); },
   });
   return reconciled;
 }

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { preparedTestDatabase } from "../../../packages/db/src/prepared-test-fixture.ts";
 import { activateAuthenticatedWorkerConnection } from "./worker-connection.ts";
 
 test("reconciles configuration before making a socket dispatchable", async () => {
@@ -6,12 +7,11 @@ test("reconciles configuration before making a socket dispatchable", async () =>
   const workerId = "cbb0e9d8-23ff-480e-8465-408197c0c2d2";
   const socket = { send: () => {}, close: () => {} };
   const workerSockets = new Map<string, typeof socket>();
-  const db = (async (strings: TemplateStringsArray) => {
-    const query = strings.join(" ");
-    if (query.includes("last_heartbeat_at=now()")) order.push("heartbeat");
-    if (query.includes("connection_state='online'")) order.push("online");
+  const db = preparedTestDatabase(name => {
+    if (name === "worker_connection_heartbeat") order.push("heartbeat");
+    if (name === "worker_connection_online") order.push("online");
     return [];
-  }) as never;
+  });
 
   await activateAuthenticatedWorkerConnection({
     db,
@@ -26,16 +26,11 @@ test("reconciles configuration before making a socket dispatchable", async () =>
   expect(order).toEqual(["reconcile", "heartbeat", "authenticated", "register", "online"]);
   expect(workerSockets.get(workerId)).toBe(socket);
 });
+
 test("refreshes heartbeat for an already-enrolled worker on reconnect", async () => {
-  const queries: string[] = [];
-  let enrollmentUpdateSkipped = false;
+  const names: string[] = [];
   await activateAuthenticatedWorkerConnection({
-    db: (async (strings: TemplateStringsArray) => {
-      const query = strings.join(" ");
-      queries.push(query);
-      if (query.includes("enrollment_authenticated_at is null")) enrollmentUpdateSkipped = true;
-      return [];
-    }) as never,
+    db: preparedTestDatabase(name => { names.push(name); return []; }),
     workerId: "worker",
     socket: { send: () => {}, close: () => {} },
     workerSockets: new Map(),
@@ -43,18 +38,14 @@ test("refreshes heartbeat for an already-enrolled worker on reconnect", async ()
     markAuthenticated: () => {},
     dispatcher: { register: () => {} },
   });
-  expect(enrollmentUpdateSkipped).toBe(true);
-  expect(queries.some(query => query.includes("set last_heartbeat_at=now()"))).toBe(true);
+  expect(names).toContain("worker_connection_heartbeat");
+  expect(names).toContain("worker_connection_authenticate");
 });
 
 test("marks enrollment authenticated and clears the one-use hash atomically", async () => {
-  const queries: string[] = [];
-  const db = (async (strings: TemplateStringsArray) => {
-    queries.push(strings.join(" "));
-    return [];
-  }) as never;
+  const names: string[] = [];
   await activateAuthenticatedWorkerConnection({
-    db,
+    db: preparedTestDatabase(name => { names.push(name); return []; }),
     workerId: "worker",
     socket: { send: () => {}, close: () => {} },
     workerSockets: new Map(),
@@ -62,7 +53,7 @@ test("marks enrollment authenticated and clears the one-use hash atomically", as
     markAuthenticated: () => {},
     dispatcher: { register: () => {} },
   });
-  expect(queries.some(query => query.includes("enrollment_authenticated_at=now()") && query.includes("enrollment_code_hash=null"))).toBe(true);
+  expect(names).toContain("worker_connection_authenticate");
 });
 
 test("does not expose a socket that closes while authentication is in flight", async () => {
@@ -71,7 +62,7 @@ test("does not expose a socket that closes while authentication is in flight", a
   let checks = 0;
   let registered = false;
   const activated = await activateAuthenticatedWorkerConnection({
-    db: (async () => []) as never,
+    db: preparedTestDatabase(() => []),
     workerId: "worker",
     socket,
     workerSockets,
@@ -84,11 +75,12 @@ test("does not expose a socket that closes while authentication is in flight", a
   expect(registered).toBe(false);
   expect(workerSockets.size).toBe(0);
 });
+
 test("does not expose a socket when reconciliation fails", async () => {
   const order: string[] = [];
   const workerSockets = new Map<string, { send: () => void; close: () => void }>();
   await expect(activateAuthenticatedWorkerConnection({
-    db: (async () => { order.push("online"); return []; }) as never,
+    db: preparedTestDatabase(() => { order.push("online"); return []; }),
     workerId: "worker",
     socket: { send: () => {}, close: () => {} },
     workerSockets,

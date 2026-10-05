@@ -1,3 +1,12 @@
+import { and, eq, isNull, gt, sql } from "drizzle-orm";
+import { defineQueries, schema } from "@mars/db";
+
+const authRouteQueries = defineQueries((db) => ({
+  outstandingOAuth: db.select({ count: sql<number>`count(*)::int` }).from(schema.githubSetupStates).where(and(eq(schema.githubSetupStates.purpose, "oauth"), isNull(schema.githubSetupStates.consumedAt), gt(schema.githubSetupStates.expiresAt, sql`now()`))).prepare("http_oauth_outstanding"),
+  insertOAuthState: db.insert(schema.githubSetupStates).values({ stateHash: sql`decode(${sql.placeholder("stateHash")},'hex')`, purpose: "oauth", encryptedPkceVerifier: sql.placeholder("verifier"), expiresAt: sql`now()+interval '10 minutes'` }).prepare("http_oauth_insert_state"),
+  consumeOAuthState: db.update(schema.githubSetupStates).set({ consumedAt: sql`now()` }).where(and(eq(schema.githubSetupStates.stateHash, sql`decode(${sql.placeholder("stateHash")},'hex')`), eq(schema.githubSetupStates.purpose, "oauth"), isNull(schema.githubSetupStates.consumedAt), gt(schema.githubSetupStates.expiresAt, sql`now()`))).returning({ encryptedPkceVerifier: schema.githubSetupStates.encryptedPkceVerifier }).prepare("http_oauth_consume_state"),
+  onboarding: db.select({ completedAt: schema.systemOnboarding.completedAt }).from(schema.systemOnboarding).where(eq(schema.systemOnboarding.singleton, true)).prepare("http_auth_onboarding"),
+}));
 import { Hono } from "hono";
 import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { createPkce, githubAuthorizeUrl, exchangeOAuth } from "../github.ts";
@@ -45,10 +54,10 @@ export function registerAuthRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlan
     }
     const client = deps.requestSource(c.req.raw);
     if (!allowOAuthStart(client)) return c.json({ code: "oauth_rate_limited", message: "Too many sign-in attempts" }, 429);
-    const [outstanding] = await deps.db`SELECT count(*)::int AS count FROM github_setup_states WHERE purpose='oauth' AND consumed_at IS NULL AND expires_at>now()`;
+    const [outstanding] = await authRouteQueries(deps.db).outstandingOAuth.execute();
     if (Number(outstanding?.count ?? 0) >= 500) return c.json({ code: "oauth_rate_limited", message: "Sign-in is temporarily busy" }, 429);
     const flow = createPkce();
-    await deps.db`insert into github_setup_states(state_hash,purpose,encrypted_pkce_verifier,expires_at) values (${sha256(flow.state)},'oauth',${deps.secretBox.encrypt(flow.verifier)},now()+interval '10 minutes')`;
+    await authRouteQueries(deps.db).insertOAuthState.execute({ stateHash: sha256(flow.state).toString("hex"), verifier: deps.secretBox.encrypt(flow.verifier) });
     const returnTo = localReturnTo(c.req.query("returnTo"));
     if (returnTo) c.header("Set-Cookie", `oauth_return_to=${encodeURIComponent(returnTo)}; ${cookieAttributes(origin, "/api/auth", 600)}`, { append: true });
     c.header("Set-Cookie", `oauth_state=${flow.state}; ${cookieAttributes(origin, "/api/auth", 600)}`, { append: true });
@@ -61,10 +70,10 @@ export function registerAuthRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlan
     const state = c.req.query("state") ?? "", cookie = c.req.header("Cookie");
     if (!state || cookieValue(cookie, "oauth_state") !== state) return c.json({ error: "invalid oauth state" }, 400);
     const encodedReturnTo = cookieValue(cookie, "oauth_return_to"), returnTo = decodeReturnTo(encodedReturnTo);
-    const rows = await deps.db`update github_setup_states set consumed_at=now() where state_hash=${sha256(state)} and purpose='oauth' and consumed_at is null and expires_at>now() returning encrypted_pkce_verifier`;
-    const row = rows[0] as { encrypted_pkce_verifier?: string } | undefined;
-    if (!row?.encrypted_pkce_verifier) return c.json({ error: "invalid oauth state" }, 400);
-    const flow = { state, verifier: deps.secretBox.decrypt(row.encrypted_pkce_verifier), createdAt: Date.now() };
+    const rows = await authRouteQueries(deps.db).consumeOAuthState.execute({ stateHash: sha256(state).toString("hex") });
+    const row = rows[0] as { encryptedPkceVerifier?: string } | undefined;
+    if (!row?.encryptedPkceVerifier) return c.json({ error: "invalid oauth state" }, 400);
+    const flow = { state, verifier: deps.secretBox.decrypt(row.encryptedPkceVerifier), createdAt: Date.now() };
     const user = await exchangeOAuth(c.req.query("code") ?? "", flow, credentials.clientId, credentials.clientSecret, origin);
     let authentication: { userId: string; firstAdmin: boolean };
     try { authentication = await deps.setup.authenticate(user); }
@@ -77,9 +86,9 @@ export function registerAuthRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPlan
       throw error;
     }
     const userId = authentication.userId;
-    const [onboarding] = await deps.db`SELECT completed_at FROM system_onboarding WHERE singleton=true`;
+    const [onboarding] = await authRouteQueries(deps.db).onboarding.execute();
     c.header("Set-Cookie", `mars_session=${await createSession(deps.db, userId)}; ${cookieAttributes(origin, "/", 604800)}`);
     if (encodedReturnTo) c.header("Set-Cookie", `oauth_return_to=; ${cookieAttributes(origin, "/api/auth", 0)}`, { append: true });
-    return c.redirect(browserLocation(deps.browserOrigin() ?? origin, returnTo ?? (onboarding?.completed_at ? "/" : "/onboarding")), 302);
+    return c.redirect(browserLocation(deps.browserOrigin() ?? origin, returnTo ?? (onboarding?.completedAt ? "/" : "/onboarding")), 302);
   });
 }

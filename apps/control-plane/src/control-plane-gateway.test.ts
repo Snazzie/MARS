@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { createControlPlaneGateway, enqueueWorkerMessage, scheduleWorkerHeartbeatDeadline, scheduleWorkerPing, sendWorkerAuthenticationFrames, sendWorkerStatus } from "./control-plane-gateway.ts";
+import { preparedTestDatabase } from "../../../packages/db/src/prepared-test-fixture.ts";
 
 test("schedules worker heartbeat pings without sending immediately", () => {
   let sendCount = 0;
@@ -101,7 +102,7 @@ test("records the rejected worker frame and disconnect context without logging f
   console.warn = (...args) => warnings.push(args);
   try {
     const gateway = createControlPlaneGateway({
-      db: (() => []) as never,
+      db: preparedTestDatabase(() => []),
       httpFetch: async () => new Response(),
       current: async () => null,
       requestSource: () => "test",

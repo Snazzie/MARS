@@ -1,5 +1,16 @@
 import { expect, test } from "bun:test";
 import { calculateGithubExternalCostCenter, calculateGithubRunnerCostCenter, calculateGithubRunnerCostSavings, getGithubRunnerCostCenter, getGithubRunnerCostSavings, AZURE_VM_RATE_SCHEDULES, GITHUB_HOSTED_RATE_SCHEDULES, type GithubRunnerRateSchedule } from "./github-runner-cost.ts";
+import { preparedTestDatabase } from "./prepared-test-fixture.ts";
+
+function fakeDb(results: Record<string, Record<string, unknown>[]>) {
+  const calls: { name: string; params: Record<string, unknown> }[] = [];
+  const db = preparedTestDatabase((name, params) => {
+    calls.push({ name, params });
+    return results[name] ?? [];
+  });
+  return { db, calls };
+}
+
 
 test("calculator selects closest compatible same-platform runner with integer arithmetic", () => {
   const result = calculateGithubRunnerCostSavings([
@@ -13,14 +24,7 @@ test("GitHub Ubuntu rates price Linux ARM64 jobs at the matching vCPU tier", () 
   const result = calculateGithubRunnerCostCenter([
     { organizationId: "org", repositoryId: "repo", repositoryName: "app", usageDate: "2026-01-02", platform: "linux-arm64", requestedVcpu: 3, jobCount: 1, billableMinutes: 10 },
   ]);
-  expect(result.breakdown[0]).toMatchObject({
-    platform: "linux-arm64",
-    githubRunnerSku: "linux_4_core",
-    githubRunnerVcpu: 4,
-    pricedMinutes: 10,
-    unpricedMinutes: 0,
-    estimatedSavingsMicros: 120_000,
-  });
+  expect(result.breakdown[0]).toMatchObject({ platform: "linux-arm64", githubRunnerSku: "linux_4_core", githubRunnerVcpu: 4, pricedMinutes: 10, unpricedMinutes: 0, estimatedSavingsMicros: 120_000 });
 });
 
 test("dated schedules change rates exactly on effective date", () => {
@@ -73,33 +77,25 @@ test("external calculator estimates detected hosted jobs without affecting Mars 
   expect(result.externalBreakdown[0]).toMatchObject({ githubRunnerSku: "linux_4_core", estimatedCostMicros: 36_000 });
 });
 
-test("cost center query preserves repository/date/platform/vcpu grouping and membership scope", async () => {
-  const queries: string[] = [];
-  const db = (async (strings: TemplateStringsArray) => {
-    queries.push(strings.join(" "));
-    return [{ organizationId: "org-1", repositoryId: "repo-1", repositoryName: "app", usageDate: "2026-01-02", platform: "windows-x64", requestedVcpu: 3, jobCount: 1, billableMinutes: 2 }];
-  }) as never;
+test("cost center query returns grouped pricing and retains aggregate user scope", async () => {
+  const { db, calls } = fakeDb({
+    github_runner_cost_center: [{ organizationId: "org-1", repositoryId: "repo-1", repositoryName: "app", usageDate: "2026-01-02", platform: "windows-x64", requestedVcpu: 3, jobCount: 1, billableMinutes: 2 }],
+  });
   const result = await getGithubRunnerCostCenter(db, "all", "7d", "user-1");
   expect(result.breakdown[0]?.githubRunnerSku).toBe("windows_4_core");
   expect(result).not.toHaveProperty("pricingProvider");
-  expect(queries[0]).toContain("COUNT(*)");
-  expect(queries[0]).toContain("GREATEST(1, CEIL(execution_duration_ms / 60000.0))");
-  expect(queries[0]).toContain("repository_id, repository_name");
-  expect(queries[0]).toContain("memberships WHERE user_id");
-  expect(queries[0]).not.toContain("queue_duration_ms");
-  expect(queries[0]).not.toContain("total_duration_ms");
+  expect(calls.filter((call) => call.name === "github_runner_cost_center")).toHaveLength(1);
+  expect(calls.find((call) => call.name === "github_runner_cost_center")?.params).toMatchObject({ isAll: true, userId: "user-1", period: "7 days" });
+  expect(calls.find((call) => call.name === "github_runner_external_cost_center")?.params).toMatchObject({ isAll: true, userId: "user-1", organizationId: null });
 });
 
-test("query groups rounded completed Mars snapshots and constrains aggregate membership", async () => {
-  const queries: string[] = [];
-  const db = (async (strings: TemplateStringsArray) => {
-    queries.push(strings.join(" "));
-    return [{ usageDate: "2026-01-02", platform: "windows-x64", requestedVcpu: 2, billableMinutes: 4 }];
-  }) as never;
+test("cost savings query returns rounded completed Mars usage within aggregate membership scope", async () => {
+  const { db, calls } = fakeDb({
+    github_runner_cost_savings: [{ usageDate: "2026-01-02", platform: "windows-x64", requestedVcpu: 2, billableMinutes: 4 }],
+  });
   const result = await getGithubRunnerCostSavings(db, "all", "7d", "user-1");
   expect(result.estimatedSavingsMicros).toBe(40_000);
-  expect(queries[0]).toContain("GREATEST(1, CEIL(execution_duration_ms / 60000.0))");
-  expect(queries[0]).toContain("FROM dashboard_job_timing_snapshots");
-  expect(queries[0]).toContain("memberships WHERE user_id");
-  expect(queries[0]).toContain("GROUP BY (completed_at AT TIME ZONE 'UTC')::date, platform, requested_vcpu");
+  expect(calls).toHaveLength(1);
+  expect(calls[0]?.name).toBe("github_runner_cost_savings");
+  expect(calls[0]?.params).toMatchObject({ period: "7 days", isAll: true, userId: "user-1", organizationId: null });
 });
