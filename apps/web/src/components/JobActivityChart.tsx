@@ -12,7 +12,7 @@ export function JobActivityChart({ points }: { points: readonly OverviewTimeseri
   const rows = useMemo<ActivityRow[]>(() => points.flatMap((point) => [{ bucket: point.bucket, series: "Pending", value: point.pending }, { bucket: point.bucket, series: "Running", value: point.running }]), [points]);
   const definition = useMemo(() => defineChart({
     marks: [lineY(rows, { x: "bucket", y: "value", z: "series", color: "series", points: true })],
-    x: { scale: () => scalePoint<string>().padding(0.4) },
+    x: { scale: () => scalePoint<string>().padding(0.4), axis: { ticks: { format: (bucket: string) => new Date(bucket).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric" }) } } },
     y: { scale: scaleLinear, nice: true, grid: true, axis: { label: "Jobs" } },
     focus: "group-x",
     tooltip: { use: tooltip, anchor: "group-center", placement: ["top", "right", "left", "bottom"], sort: "color-domain" },
@@ -20,5 +20,5 @@ export function JobActivityChart({ points }: { points: readonly OverviewTimeseri
   }), [rows]);
   if (!points.length) return <p className="chart-empty">No job activity in this window.</p>;
   const summary = points.map((point) => `${point.bucket}: pending ${point.pending}, running ${point.running}`).join("; ");
-  return <div className="chart-frame" role="img" aria-label={`Pending jobs and Running jobs. ${summary}`}><Chart definition={definition} height={220} ariaLabel="Pending jobs and Running jobs" /></div>;
+  return <div className="chart-frame" role="img" aria-label={`Pending jobs and Running jobs. ${summary}`}><Chart definition={definition} height={180} ariaLabel="Pending jobs and Running jobs" /></div>;
 }

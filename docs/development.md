@@ -76,8 +76,10 @@ Dashboard recovery and navigation:
   Charts represent the loaded matching runs, not the complete history.
 - Overview uses a compact header and dispatcher card, with six summary metrics
   in one row on wide screens, three columns on tablets, and two on phones.
-  Pool checks and previous-pass diagnostics remain expandable; charts stack
-  on narrow screens.
+  Current pool checks stay visible in compact wrapping cards. Scheduling and
+  previous-pass diagnostics share a collapsed disclosure; health warnings and
+  queue exclusions remain visible. The three overview charts use 180px plots
+  and share one row on wide screens, stacking on narrow screens.
 - Overview Queue p50/p95 use observed job pickup minus queued time, with pickup
   inside the selected reporting period. Duration p50/p95 use completed minus
   started time for completed jobs in that period, including failed jobs. Missing

@@ -47,5 +47,5 @@ export function TimeToStartChart({ points, period }: { points: readonly Overview
   }), [rows, points, period]);
   if (!rows.length) return <p className="chart-empty">No jobs started in this window.</p>;
   const summary = points.map(point => `${point.bucket}: ${point.sampleCount} starts${point.p50Ms === null || point.p95Ms === null ? ", no samples" : `, p50 ${formatDuration(point.p50Ms)}, p95 ${formatDuration(point.p95Ms)}`}`).join("; ");
-  return <div className="chart-frame" role="img" aria-label={`Time to start: queued to running. ${summary}`}><Chart definition={definition} height={260} ariaLabel="Time to start p50 and p95 over time" /></div>;
+  return <div className="chart-frame" role="img" aria-label={`Time to start: queued to running. ${summary}`}><Chart definition={definition} height={180} ariaLabel="Time to start p50 and p95 over time" /></div>;
 }

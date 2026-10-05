@@ -38,5 +38,5 @@ export function OutcomeBars({ outcomes, label = "Job outcomes" }: { outcomes: re
   }), [rows]);
   if (!total) return <p className="chart-empty">No outcomes recorded yet.</p>;
   const summary = outcomeOrder.flatMap((outcome) => platformOrder.map(({ key }) => `${outcomeLabels[outcome]} ${platformLabels[key]}: ${outcomes.find((item) => item.outcome === outcome)?.platforms[key] ?? 0}`)).join(", ");
-  return <div className="chart-frame outcome-chart" role="img" aria-label={`${label}. ${summary}`}><Chart definition={definition} height={260} ariaLabel={label} /></div>;
+  return <div className="chart-frame outcome-chart" role="img" aria-label={`${label}. ${summary}`}><Chart definition={definition} height={180} ariaLabel={label} /></div>;
 }
