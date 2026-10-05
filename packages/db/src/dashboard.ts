@@ -83,7 +83,7 @@ const timeseriesQueries = defineQueries((db) => ({
     sql`(${sql.placeholder("userId")}::text IS NOT NULL OR ${schema.dashboardJobs.organizationId}=${sql.placeholder("organizationId")})`,
   )).prepare("dashboard_overview_timeseries_current"),
 }));
-async function getOverviewTimeseries(db: DashboardDb, period: OverviewDto["period"], organizationId: string, userId?: string): Promise<OverviewTimeseriesPoint[]> {
+async function getOverviewTimeseries(db: DashboardDb, period: OverviewDto["period"], organizationId: string | null, userId?: string): Promise<OverviewTimeseriesPoint[]> {
   const parameters = { period, organizationId, userId: userId ?? null };
   const rows = await timeseriesQueries(db).series.execute(parameters) as Record<string, unknown>[];
   const currentRows = await timeseriesQueries(db).current.execute(parameters) as Record<string, unknown>[];
@@ -117,7 +117,7 @@ function normalizeOverviewJobOutcomes(rows: Array<Record<string, unknown>>): Ove
   }
   return overviewOutcomeOrder.map((outcome) => ({ outcome, platforms: cells.get(outcome)! }));
 }
-async function getOverviewJobOutcomes(db: DashboardDb, organizationId: string, period: OverviewDto["period"], userId?: string): Promise<OverviewJobOutcome[]> {
+async function getOverviewJobOutcomes(db: DashboardDb, organizationId: string | null, period: OverviewDto["period"], userId?: string): Promise<OverviewJobOutcome[]> {
   const rows = await outcomesQuery(db).aggregate.execute({ organizationId, period, userId: userId ?? null }) as Record<string, unknown>[];
   return normalizeOverviewJobOutcomes(rows);
 }
@@ -155,7 +155,7 @@ const runningContainerQueries = defineQueries((db) => ({
     )).orderBy(desc(sql`COALESCE(${schema.runnerLeases.updatedAt},${schema.dashboardJobs.startedAt},${schema.runnerLeases.createdAt})`), desc(schema.runnerLeases.id))
     .prepare("dashboard_overview_running_containers"),
 }));
-async function getOverviewRunningContainers(db: DashboardDb, organizationId: string, userId?: string): Promise<NonNullable<OverviewDto["runningContainers"]>> {
+async function getOverviewRunningContainers(db: DashboardDb, organizationId: string | null, userId?: string): Promise<NonNullable<OverviewDto["runningContainers"]>> {
   const rows = await runningContainerQueries(db).list.execute({ organizationId, userId: userId ?? null }) as Record<string, unknown>[];
   return rows.map((row) => ({
     id: String(row.id), organizationId: String(row.organizationId), jobId: String(row.jobId), runId: String(row.runId), jobName: String(row.jobName), repositoryName: String(row.repositoryName), workflowName: String(row.workflowName), workerName: String(row.workerName), runtime: String(row.runtime), startedAt: normalizeTimestamp(row.startedAt)!, sampledAt: row.sampledAt == null ? null : normalizeTimestamp(row.sampledAt), cpuUsagePercent: row.cpuUsagePercent == null ? null : Number(row.cpuUsagePercent), memoryWorkingSetBytes: row.memoryWorkingSetBytes == null ? null : Number(row.memoryWorkingSetBytes), memoryLimitBytes: row.memoryLimitBytes == null ? null : Number(row.memoryLimitBytes), diskUsageBytes: row.diskUsageBytes == null ? null : Number(row.diskUsageBytes), allocatedStorageBytes: Number(row.allocatedStorageBytes ?? 0),
@@ -221,7 +221,7 @@ export async function getOverview(db: DashboardDb, organizationId: string, perio
 }
 export async function getAllOverview(db: DashboardDb, userId: string, period: OverviewDto["period"]): Promise<OverviewDto> {
   const [row] = await overviewQueries(db).all.execute({ userId, period }) as OverviewDto[];
-  return { ...row, organizationId: "all", queueReasons: await getOverviewQueueReasons(db, null, userId), utilization: overviewUtilization(row.running, row.concurrency), costSavings: await getGithubRunnerCostSavings(db, "all", period, userId), timeseries: await getOverviewTimeseries(db, period, "all", userId), jobOutcomes: await getOverviewJobOutcomes(db, "all", period, userId), runningContainers: await getOverviewRunningContainers(db, "all", userId) };
+  return { ...row, organizationId: "all", queueReasons: await getOverviewQueueReasons(db, null, userId), utilization: overviewUtilization(row.running, row.concurrency), costSavings: await getGithubRunnerCostSavings(db, "all", period, userId), timeseries: await getOverviewTimeseries(db, period, null, userId), jobOutcomes: await getOverviewJobOutcomes(db, null, period, userId), runningContainers: await getOverviewRunningContainers(db, null, userId) };
 }
 
 const repositoryQueries = defineQueries((db) => ({

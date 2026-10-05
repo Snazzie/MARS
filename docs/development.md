@@ -394,6 +394,10 @@ functions, and advisory locks) may use `sql` fragments inside these fixed
 builders. Schema migrations retain raw SQL. Worker-local Bun SQLite caches are
 outside this PostgreSQL migration.
 
+All-workspace Overview keeps `"all"` in the response only. Timeseries, outcomes,
+and running-container queries bind a null organization UUID and scope rows by
+the signed-in user's memberships; an `OR` guard cannot make `"all"` a valid UUID.
+
 Run PostgreSQL-backed persistence regressions against a migrated, disposable test
 database:
 
@@ -406,6 +410,12 @@ fixtures roll back or delete their own rows; runner-completion fixtures roll bac
 Coverage includes transaction isolation, rollback/savepoints, membership-scoped
 resource trends, queued-job pickup, command replay, successful/failed runner exits,
 duplicate exits, cleanup, dispatch eligibility, and GitHub completion ordering.
+
+Run the Overview scope regression with
+`MARS_E2E_DATABASE_URL=<url> bun test packages/db/src/dashboard.integration.test.ts`.
+It compares aggregate and single-workspace results across all reporting periods
+and verifies that nonmember jobs stay excluded. Its temporary tables disappear
+when the fixture transaction ends.
 
 ### Container failure evidence and memory resilience
 
