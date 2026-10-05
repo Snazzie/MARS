@@ -74,6 +74,11 @@ Dashboard recovery and navigation:
 - Runs search, queued-time ranges, and runner ownership are filtered on the server
   before pagination, including All workspaces. Clear filters resets all three controls.
   Charts represent the loaded matching runs, not the complete history.
+- Overview Queue p50/p95 use observed job pickup minus queued time, with pickup
+  inside the selected reporting period. Duration p50/p95 use completed minus
+  started time for completed jobs in that period, including failed jobs. Missing
+  or reversed timestamp pairs are excluded; no samples returns zero. All workspaces
+  aggregates only organizations where the current user has membership.
 - Job and step logs retain all loaded chunks. Search covers loaded output; steps with
   unsearched or partially loaded logs stay available to expand and load more output.
 - Pool create/edit and delete dialogs support Escape, modal focus, and focus restoration.

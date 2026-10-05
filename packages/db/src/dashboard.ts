@@ -168,6 +168,19 @@ const overviewQueries = defineQueries((db) => {
     or(inArray(schema.runnerLeases.state, ["reserved", "requested", "dispatched", "provisioning", "sandbox_ready", "online", "busy"]), inArray(schema.runnerLeases.cleanupState, ["pending", "failed"])),
   ));
   const queued = sql<number>`count(*) FILTER (WHERE ${schema.dashboardJobs.status}='queued' AND NOT EXISTS (${claimedLease}))::int`;
+  const periodStart = sql`now() - CASE ${sql.placeholder("period")} WHEN '24h' THEN interval '24 hours' WHEN '7d' THEN interval '7 days' ELSE interval '30 days' END`;
+  // Queue samples end at pickup; runtime samples end at completion. In-flight
+  // jobs contribute only their observed queue wait, never a partial runtime.
+  const queueSample = sql`${schema.dashboardJobs.startedAt} BETWEEN ${periodStart} AND now() AND ${schema.dashboardJobs.startedAt} >= ${schema.dashboardJobs.queuedAt}`;
+  const durationSample = sql`${schema.dashboardJobs.status}='completed' AND ${schema.dashboardJobs.completedAt} BETWEEN ${periodStart} AND now() AND ${schema.dashboardJobs.completedAt} >= ${schema.dashboardJobs.startedAt}`;
+  const queueWaitMs = sql`EXTRACT(EPOCH FROM (${schema.dashboardJobs.startedAt} - ${schema.dashboardJobs.queuedAt})) * 1000`;
+  const runtimeMs = sql`EXTRACT(EPOCH FROM (${schema.dashboardJobs.completedAt} - ${schema.dashboardJobs.startedAt})) * 1000`;
+  const timingPercentiles = {
+    queueP50Ms: sql<number>`COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY ${queueWaitMs}) FILTER (WHERE ${queueSample}),0)::bigint`.mapWith(Number),
+    queueP95Ms: sql<number>`COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY ${queueWaitMs}) FILTER (WHERE ${queueSample}),0)::bigint`.mapWith(Number),
+    durationP50Ms: sql<number>`COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY ${runtimeMs}) FILTER (WHERE ${durationSample}),0)::bigint`.mapWith(Number),
+    durationP95Ms: sql<number>`COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY ${runtimeMs}) FILTER (WHERE ${durationSample}),0)::bigint`.mapWith(Number),
+  };
   return {
   queueReasons: db.select({
     code: sql<"eligible" | "run_not_dispatchable" | "repository_unavailable" | "installation_not_approved">`CASE WHEN ${schema.dashboardRuns.status} NOT IN ('queued','in_progress') THEN 'run_not_dispatchable' WHEN ${schema.dashboardRepositories.available} IS DISTINCT FROM true THEN 'repository_unavailable' WHEN ${schema.dashboardInstallations.state} IS DISTINCT FROM 'approved' THEN 'installation_not_approved' ELSE 'eligible' END`.as("code"),
@@ -188,10 +201,7 @@ const overviewQueries = defineQueries((db) => {
     running: sql<number>`(SELECT count(*)::int FROM ${schema.runnerLeases} l JOIN ${schema.dashboardJobs} active_j ON active_j.organization_id=l.organization_id AND active_j.github_job_id=l.github_job_id WHERE active_j.organization_id=${sql.placeholder("organizationId")} AND l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy'))`,
     completed: sql<number>`count(*) FILTER (WHERE ${schema.dashboardJobs.status}='completed' AND ${schema.dashboardJobs.conclusion}='success')::int`,
     failed: sql<number>`count(*) FILTER (WHERE ${schema.dashboardJobs.status}='completed' AND ${schema.dashboardJobs.conclusion}<>'success')::int`,
-    queueP50Ms: sql<number>`0::int`,
-    queueP95Ms: sql<number>`0::int`,
-    durationP50Ms: sql<number>`0::int`,
-    durationP95Ms: sql<number>`0::int`,
+    ...timingPercentiles,
     concurrency: sql<number>`COALESCE((SELECT sum((p.resources->>'concurrency')::int)::int FROM ${schema.runnerPools} p WHERE p.enabled AND (p.organization_id=${sql.placeholder("organizationId")} OR p.organization_id IS NULL)),0)::int`,
   }).from(schema.dashboardJobs).where(eq(schema.dashboardJobs.organizationId, sql.placeholder("organizationId"))).prepare("dashboard_overview"),
   all: db.select({
@@ -201,10 +211,7 @@ const overviewQueries = defineQueries((db) => {
     running: sql<number>`(SELECT count(*)::int FROM ${schema.runnerLeases} l JOIN ${schema.dashboardJobs} active_j ON active_j.organization_id=l.organization_id AND active_j.github_job_id=l.github_job_id JOIN ${schema.memberships} am ON am.organization_id=active_j.organization_id AND am.user_id=${sql.placeholder("userId")} WHERE l.state IN ('reserved','requested','dispatched','provisioning','sandbox_ready','online','busy'))`,
     completed: sql<number>`count(*) FILTER (WHERE ${schema.dashboardJobs.status}='completed' AND ${schema.dashboardJobs.conclusion}='success')::int`,
     failed: sql<number>`count(*) FILTER (WHERE ${schema.dashboardJobs.status}='completed' AND ${schema.dashboardJobs.conclusion}<>'success')::int`,
-    queueP50Ms: sql<number>`0::int`,
-    queueP95Ms: sql<number>`0::int`,
-    durationP50Ms: sql<number>`0::int`,
-    durationP95Ms: sql<number>`0::int`,
+    ...timingPercentiles,
     concurrency: sql<number>`COALESCE((SELECT sum((p.resources->>'concurrency')::int)::int FROM ${schema.runnerPools} p LEFT JOIN ${schema.memberships} pm ON pm.organization_id=p.organization_id AND pm.user_id=${sql.placeholder("userId")} WHERE p.enabled AND (p.organization_id IS NULL OR pm.user_id IS NOT NULL)),0)::int`,
   }).from(schema.dashboardJobs).innerJoin(schema.memberships, and(eq(schema.memberships.organizationId, schema.dashboardJobs.organizationId), eq(schema.memberships.userId, sql.placeholder("userId"))))
     .prepare("dashboard_all_overview"),
