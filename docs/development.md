@@ -74,6 +74,10 @@ Dashboard recovery and navigation:
 - Runs search, queued-time ranges, and runner ownership are filtered on the server
   before pagination, including All workspaces. Clear filters resets all three controls.
   Charts represent the loaded matching runs, not the complete history.
+- Overview uses a compact header and dispatcher card, with six summary metrics
+  in one row on wide screens, three columns on tablets, and two on phones.
+  Pool checks and previous-pass diagnostics remain expandable; charts stack
+  on narrow screens.
 - Overview Queue p50/p95 use observed job pickup minus queued time, with pickup
   inside the selected reporting period. Duration p50/p95 use completed minus
   started time for completed jobs in that period, including failed jobs. Missing
