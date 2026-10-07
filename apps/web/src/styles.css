@@ -3,6 +3,31 @@
 @import "@astryxdesign/theme-neutral/theme.css";
 @import "@xyflow/react/dist/style.css";
 
+@import "tailwindcss";
+
+@theme inline {
+  --color-canvas: var(--ui-canvas);
+  --color-surface: var(--ui-surface);
+  --color-surface-raised: var(--ui-surface-raised);
+  --color-text: var(--ui-text);
+  --color-text-muted: var(--ui-text-muted);
+  --color-text-subtle: var(--ui-text-subtle);
+  --color-primary: var(--ui-primary);
+  --color-success: var(--ui-success);
+  --color-warning: var(--ui-warning);
+  --color-danger: var(--ui-danger);
+  --color-info: var(--ui-info);
+  --color-chart-blue: var(--ui-chart-blue);
+  --color-chart-orange: var(--ui-chart-orange);
+  --color-chart-purple: var(--ui-chart-purple);
+  --color-chart-green: var(--ui-chart-green);
+  --color-chart-partial: var(--ui-chart-partial);
+  --color-log-surface: var(--ui-log-surface);
+  --color-log-text: var(--ui-log-text);
+}
+
+@source "./";
+
 html[data-theme="default"], html[data-theme="martian"] {
   font-synthesis: none;
   --radius: 10px;
@@ -1324,8 +1349,8 @@ a:active {
 .control-plane-log-line{white-space:pre-wrap;overflow-wrap:anywhere}
 .control-plane-log-line time{color:color-mix(in srgb,var(--ui-log-text) 70%,transparent)}
 .control-plane-log-level{display:inline-block;min-width:5ch;text-transform:uppercase}
-.control-plane-log-error .control-plane-log-level{color:#ff8b9a}
-.control-plane-log-warn .control-plane-log-level{color:#ffb454}
+.control-plane-log-error .control-plane-log-level{color:var(--ui-danger)}
+.control-plane-log-warn .control-plane-log-level{color:var(--ui-warning)}
 
 .overview-header{align-items:center;gap:16px;margin-bottom:16px}
 .overview-header .eyebrow{margin-bottom:6px}
@@ -1453,3 +1478,12 @@ a:active {
 .pool-editor fieldset { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0; padding: 14px; border: 1px solid var(--ui-border); border-radius: 6px; }
 .pool-editor legend { padding: 0 6px; }
 @media (max-width: 700px) { .pool-editor fieldset { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.status-failure,
+.status-offline {
+  background: var(--ui-danger-subtle);
+}
+
+.status-in_progress {
+  background: var(--ui-info-subtle);
+}

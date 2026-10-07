@@ -1,0 +1,5 @@
+# Web UI theme and class audit
+
+Run `bun run inventory` from `apps/web` to regenerate `apps/web/class-inventory.json`. The report extracts static class strings and template segments from JSX/TS expressions, plus class selectors in test `querySelector`/`querySelectorAll` calls; it maps references to source files, lists authored CSS selectors with line references, identifies React Flow integration selectors, and reports dynamic prefixes, unmatched markup classes, and unused selector candidates. The inventory is generated from source rather than maintained as a pinned test fixture. Unused candidates are not removed without checking runtime-derived classes and integration use.
+
+Run `bun run verify:theme` from `apps/web` to reject CSS/TSX color literals outside the `default` and `martian` palette declarations; comments and URL values are ignored. Tailwind CSS v4 is processed by its CLI as part of the production `build`; Bun's CSS bundler does not expand Tailwind directives. Tailwind imports follow the existing Astryx and React Flow imports and precede semantic application rules; Tailwind theme aliases reference the existing `--ui-*` palette variables.

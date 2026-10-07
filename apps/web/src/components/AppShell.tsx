@@ -51,7 +51,7 @@ export function AppShell() {
   }, [mobileMenuOpen]);
 
   return (
-    <div className="console-frame">
+    <div className="console-frame text-text">
       <ContextHelp label={currentHelp.label}>{currentHelp.text}</ContextHelp>
       <aside className="rail">
         <div className="brand-lockup"><img className="brand-mark" src="/mars-icon.svg" alt="" /><span>MARS</span></div>
