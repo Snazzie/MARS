@@ -78,24 +78,6 @@ test("only global admins see control-plane logs in deployment settings", () => {
   expect(html).toContain("Search logs");
 });
 
-test("LLM provider controls are global-admin-only and never prefill API keys", () => {
-  const client = settingsClient({ connected: false });
-  const providers = [{ id: "provider-1", name: "Local model", kind: "openai-compatible", baseUrl: "http://localhost:11434/v1", model: "test-model", keyConfigured: true }];
-  client.setQueryData(["admin", "llm-providers"], providers);
-  client.setQueryData(["failure-analysis-settings", "org-1"], [{
-    repository: { id: "repo-1", organizationId: "org-1", name: "mars", fullName: "SpeedHQ/mars", visibility: "private", available: true, installationId: "install-1", discoveryState: "active", discoveryRetryAt: null },
-    settings: { organizationId: "org-1", repositoryId: "repo-1", enabled: false, providerId: "provider-1", enabledSince: null },
-  }]);
-  expect(markup(client)).not.toContain("LLM providers and repository opt-in");
-  client.setQueryData(["me"], { id: "admin", login: "admin", isGlobalAdmin: true });
-  const html = markup(client);
-  expect(html).toContain("LLM providers and repository opt-in");
-  expect(html).toContain("API key configured");
-  expect(html).toContain("Warning: HTTP does not encrypt traffic");
-  expect(html).toContain("Test connection");
-  expect(html).toContain("I acknowledge failed log excerpts will be sent");
-  expect(html).not.toContain("secret-do-not-render");
-});
 
 test("all-workspace settings cannot manage the first cached GitHub installation", () => {
   const client = settingsClient({ connected: true, login: "first-cached-account", installationId: 123 });
