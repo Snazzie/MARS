@@ -1,3 +1,4 @@
+import { enqueuePipelineFailureAnalysis } from "./pipeline-failure-analysis.ts";
 import { defineQueries, schema, type DatabaseClient } from "@mars/db";
 import { and, asc, desc, eq, gt, gte, isNull, isNotNull, lte, lt, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -313,6 +314,7 @@ async function discoverRepository(deps: DiscoveryDeps, row: Record<string, unkno
       discovered += reconciled.discovered;
       updated += reconciled.updated;
       await syncRunActionGraph(deps, client, owner, repo, row, run, listing.items);
+      await enqueuePipelineFailureAnalysis({ db: deps.db, organizationId: String(row.organizationId), repositoryId: String(row.repositoryId), run, jobs: listing.items });
     }
   }
   if (completed.newestCheckpoint !== null) {

@@ -405,6 +405,73 @@ export const dashboardJobs = pgTable("dashboard_jobs", {
 	unique("dashboard_jobs_organization_id_github_job_id_key").on(table.organizationId, table.githubJobId),
 	check("dashboard_jobs_run_attempt_check", sql`run_attempt > 0`),
 ]);
+export const llmProviders = pgTable("llm_providers", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	name: text().notNull(),
+	kind: text().notNull(),
+	baseUrl: text("base_url").notNull(),
+	model: text().notNull(),
+	encryptedApiKey: text("encrypted_api_key"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [check("llm_providers_kind_check", sql`kind = ANY (ARRAY['openai-compatible'::text, 'anthropic'::text])`)]);
+
+export const repositoryFailureAnalysisSettings = pgTable("repository_failure_analysis_settings", {
+	organizationId: uuid("organization_id").notNull(),
+	repositoryId: uuid("repository_id").primaryKey().notNull(),
+	providerId: uuid("provider_id"),
+	enabled: boolean().default(false).notNull(),
+	enabledSince: timestamp("enabled_since", { withTimezone: true, mode: 'string' }),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	foreignKey({ columns: [table.organizationId, table.repositoryId], foreignColumns: [dashboardRepositories.organizationId, dashboardRepositories.id], name: "repository_failure_analysis_settings_repository_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.providerId], foreignColumns: [llmProviders.id], name: "repository_failure_analysis_settings_provider_fkey" }).onDelete("restrict"),
+	check("repository_failure_analysis_settings_enabled_provider_check", sql`NOT enabled OR provider_id IS NOT NULL`),
+]);
+
+export const pipelineFailureAnalyses = pgTable("pipeline_failure_analyses", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	organizationId: uuid("organization_id").notNull(),
+	repositoryId: uuid("repository_id").notNull(),
+	runId: uuid("run_id").notNull(),
+	githubRunId: bigint("github_run_id", { mode: "number" }).notNull(),
+	runAttempt: integer("run_attempt").notNull(),
+	providerId: uuid("provider_id"),
+	providerKind: text("provider_kind").notNull(),
+	providerName: text("provider_name").notNull(),
+	model: text().notNull(),
+	source: jsonb().notNull(),
+	state: text().notNull(),
+	result: jsonb(),
+	errorCode: text("error_code"),
+	startedAt: timestamp("started_at", { withTimezone: true, mode: 'string' }),
+	finishedAt: timestamp("finished_at", { withTimezone: true, mode: 'string' }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	unique("pipeline_failure_analyses_attempt_key").on(table.organizationId, table.repositoryId, table.githubRunId, table.runAttempt),
+	foreignKey({ columns: [table.organizationId, table.runId], foreignColumns: [dashboardRuns.organizationId, dashboardRuns.id], name: "pipeline_failure_analyses_run_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.organizationId, table.repositoryId], foreignColumns: [dashboardRepositories.organizationId, dashboardRepositories.id], name: "pipeline_failure_analyses_repository_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.providerId], foreignColumns: [llmProviders.id], name: "pipeline_failure_analyses_provider_fkey" }).onDelete("set null"),
+	check("pipeline_failure_analyses_attempt_check", sql`run_attempt > 0`),
+	check("pipeline_failure_analyses_state_check", sql`state = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'skipped'::text])`),
+]);
+
+export const pipelineAnalysisComments = pgTable("pipeline_analysis_comments", {
+	analysisId: uuid("analysis_id").notNull(),
+	prNumber: bigint("pr_number", { mode: "number" }).notNull(),
+	state: text().notNull(),
+	commentId: bigint("comment_id", { mode: "number" }),
+	commentUrl: text("comment_url"),
+	errorCode: text("error_code"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	primaryKey({ columns: [table.analysisId, table.prNumber], name: "pipeline_analysis_comments_pkey" }),
+	foreignKey({ columns: [table.analysisId], foreignColumns: [pipelineFailureAnalyses.id], name: "pipeline_analysis_comments_analysis_fkey" }).onDelete("cascade"),
+	check("pipeline_analysis_comments_state_check", sql`state = ANY (ARRAY['pending'::text, 'publishing'::text, 'published'::text, 'failed'::text, 'unknown'::text])`),
+]);
+
 
 export const dashboardActionEdges = pgTable("dashboard_action_edges", {
 	organizationId: uuid("organization_id").notNull(),

@@ -31,7 +31,26 @@ export function RunDetailPage() {
     queryKey: ["org", detailOrganizationId, "run", runId],
     queryFn: () => getRun(detailOrganizationId, runId),
     enabled: Boolean(detailOrganizationId && runId && detailOrganizationId !== "all"),
+    refetchInterval: (current) => {
+      const data = current.state.data;
+      if (!data || typeof document === "undefined" || document.visibilityState !== "visible") return false;
+      const analysis = data.failureAnalysis;
+      const waiting = !analysis && data.failureAnalysisEnabled === true
+        && (data.conclusion === "failure" || data.conclusion === "timed_out");
+      const analysisPending = analysis?.state === "pending" || analysis?.state === "running";
+      const commentsPending = analysis?.comments.some((comment) => comment.state === "pending" || comment.state === "publishing" || comment.state === "unknown");
+      return waiting || analysisPending || commentsPending ? 5_000 : false;
+    },
   });
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const refreshVisibility = () => {
+      if (document.visibilityState === "visible") void query.refetch();
+    };
+    document.addEventListener("visibilitychange", refreshVisibility);
+    return () => document.removeEventListener("visibilitychange", refreshVisibility);
+  }, [query.refetch]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined" || !query.data) return;

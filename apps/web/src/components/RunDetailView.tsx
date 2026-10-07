@@ -87,6 +87,32 @@ function RuntimeNotice({ job }: { job: RunJob }) {
 }
 
 
+function FailureAnalysisPanel({ data }: { data: RunDetail }) {
+  if (data.conclusion !== "failure" && data.conclusion !== "timed_out") return null;
+  const analysis = data.failureAnalysis;
+  return <section className="detail-panel" aria-labelledby="failure-analysis-title">
+    <h2 id="failure-analysis-title">Failure analysis</h2>
+    {!analysis ? <p>{data.failureAnalysisEnabled ? "Awaiting failure analysis" : "Automatic failure analysis is not enabled."}</p> : <>
+      <p className="detail-meta">Status: {analysis.state.replaceAll("_", " ")}</p>
+      <p className="detail-meta">Provider: {analysis.providerName} · {analysis.model}</p>
+      {analysis.result && <>
+        <p>{analysis.result.summary}</p>
+        {analysis.result.failures.map((failure, index) => <article className="job-panel" key={`${failure.jobId}-${failure.stepNumber ?? "job"}-${index}`}>
+          <h3>Job {failure.jobId}{failure.stepNumber == null ? "" : ` · Step ${failure.stepNumber}`}</h3>
+          <p>{failure.explanation}</p>
+          {failure.evidence.length > 0 && <><h4>Evidence</h4><ul>{failure.evidence.map((excerpt, evidenceIndex) => <li key={evidenceIndex}><pre>{excerpt}</pre></li>)}</ul></>}
+          <h4>Potential fix</h4><p>{failure.suggestedFix}</p>
+        </article>)}
+      </>}
+      {analysis.errorCode && <p>Analysis unavailable: {analysis.errorCode.replaceAll("_", " ")}</p>}
+      {analysis.state === "skipped" && <p>Analysis skipped: {analysis.errorCode?.replaceAll("_", " ") ?? "not applicable"}.</p>}
+      {analysis.comments.length > 0 ? <div><h3>Pull request feedback</h3><ul>{analysis.comments.map((comment) => <li key={comment.prNumber}>
+        PR #{comment.prNumber}: {comment.state.replaceAll("_", " ")}{comment.commentUrl ? <> — <a href={comment.commentUrl} target="_blank" rel="noreferrer">View comment</a></> : ""}{comment.errorCode ? ` (${comment.errorCode.replaceAll("_", " ")})` : ""}
+      </li>)}</ul></div> : analysis.state === "completed" && <p>No associated pull request.</p>}
+    </>}
+  </section>;
+}
+
 export function RunDetailView({ data, organizationId }: { data: RunDetail; organizationId: string }) {
   const [selectedTab, setSelectedTab] = useState<"graph" | "metrics">("graph");
   const [selectedJobId, setSelectedJobId] = useState<string | null>(() => {
@@ -103,6 +129,7 @@ export function RunDetailView({ data, organizationId }: { data: RunDetail; organ
   const stageDurations = detail.stageDurations;
   const status = statusLabel(data);
   const selectedJob = data.jobs.find((job) => job.id === selectedJobId) ?? null;
+
   return <div className="run-detail-grid">
     <section className="detail-panel" aria-labelledby="run-detail-title">
       <nav className="detail-breadcrumb" aria-label="Workflow breadcrumb"><a href="/runs">Runs</a><span aria-hidden="true">/</span><span>{data.workflowName}</span></nav>
@@ -111,6 +138,7 @@ export function RunDetailView({ data, organizationId }: { data: RunDetail; organ
       <dl className="detail-facts"><div><dt>Started</dt><dd>{facts.started}</dd></div><div><dt>Repository</dt><dd>{facts.repository}</dd></div><div><dt>Runner</dt><dd>{facts.runner}</dd></div><div><dt>Duration</dt><dd>{facts.duration}</dd></div><div><dt>Current stage</dt><dd>{detail.currentStage ?? "Not reported"}</dd></div><div><dt>Retry count</dt><dd>{detail.retryCount ?? 0}</dd></div><div><dt>Lease cleanup</dt><dd>{detail.leaseCleanupState ?? "Not reported"}</dd></div></dl>
       {detail.schedulerReason && <p className="detail-meta">Scheduler block: {detail.schedulerReason}</p>}
     </section>
+    <FailureAnalysisPanel data={data} />
     <div className="detail-tabs">
       <div className="detail-tab-list" role="tablist" aria-label="Run detail views" onKeyDown={(event) => {
         let next: "graph" | "metrics";

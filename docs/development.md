@@ -96,6 +96,16 @@ Dashboard recovery and navigation:
   Invalid pool fields show inline feedback; uppercase SHA-256 hex is normalized on save.
 - Run-detail tabs support Left/Right arrows, Home, and End.
 
+Pipeline failure analysis is configured in **Settings** by a global administrator.
+Provider profiles are deployment-wide; use an API-root URL and model ID. Local
+OpenAI-compatible servers must be reachable from the control-plane host/container,
+not the browser. HTTP endpoints are permitted for local setups but expose prompts
+and responses in transit; use HTTPS for cloud providers. A repository opt-in
+acknowledges that bounded failed-job log excerpts are sent to the selected
+provider and that evidence-grounded AI suggestions may be published to associated
+pull requests by the installed MARS GitHub App. Only newly completed failures
+after opt-in are analyzed; no historical backfill or automatic retry is performed.
+
 Run `bun run dev:worker` on Windows x64/ARM64, Apple Silicon macOS, or Linux
 x64/ARM64. It chooses the existing worker runtime for the host; the worker
 reports its actual runtime capabilities to the control plane. Host-specific

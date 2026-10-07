@@ -1,21 +1,133 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   beginOrganizationGithubInstall,
+  deleteLlmProvider,
   getControlPlaneLogs,
   getGithubConnection,
   getGithubOrganizationSettings,
   getGithubRateLimit,
+  getLlmProviders,
   getMe,
   getOrganizations,
+  getRepositories,
+  getRepositoryFailureAnalysisSettings,
   logout,
   refreshGithubConnection,
+  saveLlmProvider,
+  saveRepositoryFailureAnalysisSettings,
+  testLlmProvider,
   uninstallOrganizationGithub,
 } from "../api.ts";
 import type { ControlPlaneLogLevel } from "../api.ts";
 import { useTheme, themeOptions } from "../theme.ts";
 import { useOrganization } from "../organization.ts";
 
+
+async function getAllRepositories(organizationId: string) {
+  const items = [];
+  let cursor: string | null = null;
+  do {
+    const page = await getRepositories(organizationId, { cursor, limit: 100 });
+    items.push(...page.items);
+    cursor = page.nextCursor;
+  } while (cursor);
+  return Promise.all(items.map(async (repository) => ({
+    repository,
+    settings: await getRepositoryFailureAnalysisSettings(organizationId, repository.id),
+  })));
+}
+
+function LlmSettings({ organizations }: { organizations: Array<{ id: string; login: string }> }) {
+  const client = useQueryClient();
+  const providers = useQuery({ queryKey: ["admin", "llm-providers"], queryFn: getLlmProviders, staleTime: 30_000 });
+  const repositories = useQueries({ queries: organizations.map((organization) => ({
+    queryKey: ["failure-analysis-settings", organization.id],
+    queryFn: () => getAllRepositories(organization.id),
+  })) });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [kind, setKind] = useState<"openai-compatible" | "anthropic">("openai-compatible");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [model, setModel] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [clearKey, setClearKey] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [acknowledged, setAcknowledged] = useState<Record<string, boolean>>({});
+  const providerRows = providers.data ?? [];
+  const invalidate = () => {
+    void client.invalidateQueries({ queryKey: ["admin", "llm-providers"] });
+    void Promise.all(organizations.map((organization) => client.invalidateQueries({ queryKey: ["failure-analysis-settings", organization.id] })));
+  };
+  const [saving, setSaving] = useState(false);
+  const remove = useMutation({ mutationFn: deleteLlmProvider, onSuccess: invalidate, onError: (reason) => setError(githubError(reason, "Unable to delete provider.")) });
+  const test = useMutation({ mutationFn: testLlmProvider, onError: (reason) => setError(githubError(reason, "Provider test failed.")) });
+  const updateSetting = useMutation({
+    mutationFn: ({ organizationId, repositoryId, enabled, providerId }: { organizationId: string; repositoryId: string; enabled: boolean; providerId: string | null }) =>
+      saveRepositoryFailureAnalysisSettings(organizationId, repositoryId, { enabled, providerId }),
+    onSuccess: invalidate,
+    onError: (reason) => setError(githubError(reason, "Unable to save repository settings.")),
+  });
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setError(null); setSaving(true);
+    try {
+      await saveLlmProvider({ ...(editingId ? { id: editingId } : {}), name, kind, baseUrl, model, ...(apiKey ? { apiKey } : clearKey ? { apiKey: null } : {}) });
+      setApiKey(""); setClearKey(false); setEditingId(null); setName(""); setBaseUrl(""); setModel(""); invalidate();
+    } catch (reason) { setError(githubError(reason, "Unable to save provider.")); }
+    finally { setSaving(false); }
+  };
+  const edit = (provider: typeof providerRows[number]) => {
+    setEditingId(provider.id); setName(provider.name); setKind(provider.kind);
+    setBaseUrl(provider.baseUrl); setModel(provider.model); setApiKey(""); setClearKey(false);
+  };
+  return <section className="settings-deployment" aria-labelledby="llm-settings-title">
+    <div className="panel-heading"><div><p className="eyebrow">Failure analysis</p><h2 id="llm-settings-title">LLM providers and repository opt-in</h2></div></div>
+    <p className="form-help">Provider keys are sent only from the control plane. Local endpoints must be reachable from that host/container.</p>
+    {providers.error && <p className="form-error" role="alert">{githubError(providers.error, "Unable to load LLM providers.")}</p>}
+    {providerRows.map((provider) => <article className="settings-github-card" key={provider.id}>
+      <h3>{provider.name}</h3><p>{provider.kind} · {provider.baseUrl} · {provider.model}</p>
+      <p>{provider.keyConfigured ? "API key configured" : "No API key configured"}</p>
+      {provider.baseUrl.startsWith("http://") && <p className="form-error">Warning: HTTP does not encrypt traffic to this provider.</p>}
+      <div className="settings-actions"><button className="button secondary" type="button" onClick={() => edit(provider)}>Edit</button>
+        <button className="button secondary" type="button" onClick={() => test.mutate(provider.id)} disabled={test.isPending}>{test.isPending ? "Testing…" : "Test connection"}</button>
+        <button className="button secondary" type="button" onClick={() => remove.mutate(provider.id)} disabled={remove.isPending}>Delete</button></div>
+    </article>)}
+    <form onSubmit={submit} className="settings-github-card">
+      <h3>{editingId ? "Edit provider" : "Add provider"}</h3>
+      <label>Profile name<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
+      <label>Provider kind<select value={kind} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="openai-compatible">OpenAI-compatible</option><option value="anthropic">Anthropic</option></select></label>
+      <label>API root<input required type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="http://localhost:11434/v1" /></label>
+      {baseUrl.startsWith("http://") && <p className="form-error">Warning: HTTP traffic is not encrypted.</p>}
+      <label>Model ID<input required value={model} onChange={(event) => setModel(event.target.value)} /></label>
+      <label>API key<input type="password" autoComplete="new-password" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setClearKey(false); }} placeholder={editingId ? "Leave blank to keep current key" : "Optional for OpenAI-compatible local servers"} /></label>
+      {editingId && <label><input type="checkbox" checked={clearKey} onChange={(event) => { setClearKey(event.target.checked); setApiKey(""); }} /> Clear configured API key</label>}
+      <div className="settings-actions"><button className="button" type="submit" disabled={saving}>{saving ? "Saving…" : "Save provider"}</button>{editingId && <button className="button secondary" type="button" onClick={() => { setEditingId(null); setApiKey(""); setClearKey(false); setName(""); setBaseUrl(""); setModel(""); }}>Cancel</button>}</div>
+    </form>
+    {error && <p role="alert" className="form-error">{error}</p>}
+    {test.data && <p role="status">Provider connection succeeded.</p>}
+    <h3>Repository opt-in</h3>
+    {repositories.map((query, index) => <section key={organizations[index].id} className="settings-github-card">
+      <h4>{organizations[index].login}</h4>
+      {query.isLoading && <p role="status">Loading repositories…</p>}
+      {query.error && <p role="alert" className="form-error">Unable to load repository settings: {githubError(query.error, "Try again.")}</p>}
+      {query.data?.map(({ repository, settings }) => {
+        const key = `${organizations[index].id}:${repository.id}`;
+        return <div key={key}>
+          <label><input type="checkbox" checked={settings.enabled} disabled={updateSetting.isPending || (!settings.enabled && (!settings.providerId || providerRows.length === 0))} onChange={(event) => {
+            const enabled = event.target.checked;
+            if (enabled && !acknowledged[key]) return;
+            updateSetting.mutate({ organizationId: organizations[index].id, repositoryId: repository.id, enabled, providerId: settings.providerId });
+          }} /> {repository.fullName ?? repository.name}</label>
+          <label>Analysis provider<select value={settings.providerId ?? ""} disabled={updateSetting.isPending} onChange={(event) => updateSetting.mutate({ organizationId: organizations[index].id, repositoryId: repository.id, enabled: settings.enabled, providerId: event.target.value || null })}>
+            <option value="">Select profile</option>{providerRows.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
+          </select></label>
+          {!settings.enabled && <label><input type="checkbox" checked={acknowledged[key] ?? false} onChange={(event) => setAcknowledged({ ...acknowledged, [key]: event.target.checked })} /> I acknowledge failed log excerpts will be sent to the selected endpoint and generated feedback posted on associated pull requests.</label>}
+          {settings.enabled && !settings.providerId && <p className="form-error">Select a saved profile before enabling analysis.</p>}
+        </div>;
+      })}
+    </section>)}
+  </section>;
+}
 
 function number(value: number) {
   return value.toLocaleString("en-US");
@@ -162,7 +274,7 @@ export function SettingsPage() {
         </section>
         </>}
       </section>
-      {me.data?.isGlobalAdmin && <ControlPlaneLogs />}
+      {me.data?.isGlobalAdmin && <><LlmSettings organizations={organizations} /><ControlPlaneLogs /></>}
     </>
   );
 }

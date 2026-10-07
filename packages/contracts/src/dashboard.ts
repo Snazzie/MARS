@@ -145,7 +145,7 @@ export const CostCenterDto = dto(strict({
 export type CostCenterDto = z.output<typeof CostCenterDto>;
 export const RepositorySummary = dto(strict({ id, organizationId, name: z.string().min(1), fullName: z.string().min(1), visibility: z.enum(["private", "internal", "public"]), available: z.boolean(), installationId: id, discoveryState: z.enum(["active", "paused", "rate_limited", "queued"]), discoveryRetryAt: timestamp.nullable() }));
 export type RepositorySummary = z.infer<typeof RepositorySummary>;
-const runSummaryShape = { id, organizationId, repositoryId: id, repositoryName: z.string().min(1), runNumber: positiveSafe, workflowName: z.string().min(1), event: z.string().min(1), branch: z.string().min(1), commitSha: z.string().regex(/^[0-9a-f]{7,64}$/i), actorLogin: z.string().min(1), status: z.enum(["queued", "in_progress", "completed"]), conclusion: z.enum(["success", "failure", "cancelled", "skipped", "neutral"]).nullable(), queuedAt: timestamp, startedAt: timestamp.nullable(), completedAt: timestamp.nullable(), durationMs: positiveSafe.or(z.literal(0)), runtimeBoundary: z.enum(["Kata VM-backed container", "Hyper-V isolated container", "Process-isolated Windows container", "Docker Linux container", "Tart VM"]).nullable(), allocationState: z.enum(["mars", "external"]).optional() };
+const runSummaryShape = { id, organizationId, repositoryId: id, repositoryName: z.string().min(1), runNumber: positiveSafe, runAttempt: positiveSafe, workflowName: z.string().min(1), event: z.string().min(1), branch: z.string().min(1), commitSha: z.string().regex(/^[0-9a-f]{7,64}$/i), actorLogin: z.string().min(1), status: z.enum(["queued", "in_progress", "completed"]), conclusion: z.enum(["success", "failure", "timed_out", "cancelled", "skipped", "neutral"]).nullable(), queuedAt: timestamp, startedAt: timestamp.nullable(), completedAt: timestamp.nullable(), durationMs: positiveSafe.or(z.literal(0)), runtimeBoundary: z.enum(["Kata VM-backed container", "Hyper-V isolated container", "Process-isolated Windows container", "Docker Linux container", "Tart VM"]).nullable(), allocationState: z.enum(["mars", "external"]).optional() };
 export const RunSummary = dto(strict(runSummaryShape));
 export type RunSummary = z.infer<typeof RunSummary>;
 export const CreatePoolRequest = dto(strict({ poolId: id.optional(), workerId: id, name: z.string().min(1), guestPlatform: GuestPlatform.default("macos-arm64"), resources, cpuMode: CpuMode.default("shared"), triggerLabel: RunnerTriggerLabel, imageDigest: z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/) }));
@@ -165,9 +165,64 @@ export const ActionGraph = dto(strict({
   edges: z.array(strict({ from: id, to: id })),
 }));
 export type ActionGraph = z.infer<typeof ActionGraph>;
+export const LlmProviderKind = z.enum(["openai-compatible", "anthropic"]);
+export type LlmProviderKind = z.infer<typeof LlmProviderKind>;
+export const LlmProviderSummary = dto(strict({
+  id,
+  name: z.string().min(1),
+  kind: LlmProviderKind,
+  baseUrl: z.string().url(),
+  model: z.string().min(1),
+  keyConfigured: z.boolean(),
+}));
+export type LlmProviderSummary = z.infer<typeof LlmProviderSummary>;
+export const LlmProviderSaveRequest = strict({
+  name: z.string().min(1),
+  kind: LlmProviderKind,
+  baseUrl: z.string().url(),
+  model: z.string().min(1),
+  apiKey: z.string().min(1).nullable().optional(),
+});
+export type LlmProviderSaveRequest = z.infer<typeof LlmProviderSaveRequest>;
+export const RepositoryFailureAnalysisSettings = dto(strict({
+  organizationId: id,
+  repositoryId: id,
+  enabled: z.boolean(),
+  providerId: id.nullable(),
+  enabledSince: timestamp.nullable(),
+}));
+export type RepositoryFailureAnalysisSettings = z.infer<typeof RepositoryFailureAnalysisSettings>;
+export const PipelineAnalysisResult = dto(strict({
+  summary: z.string().max(2000),
+  failures: z.array(strict({
+    jobId: positiveSafe,
+    stepNumber: z.number().int().positive().nullable(),
+    explanation: z.string().max(2000),
+    evidence: z.array(z.string().max(500)).max(3),
+    suggestedFix: z.string().max(2000),
+  })).max(20),
+}));
+export type PipelineAnalysisResult = z.infer<typeof PipelineAnalysisResult>;
+export const PipelineFailureAnalysis = dto(strict({
+  id,
+  runAttempt: positiveSafe,
+  state: z.enum(["pending", "running", "completed", "failed", "skipped"]),
+  providerName: z.string().min(1),
+  model: z.string().min(1),
+  result: PipelineAnalysisResult.nullable(),
+  errorCode: z.string().min(1).nullable(),
+  comments: z.array(strict({
+    prNumber: positiveSafe,
+    state: z.enum(["pending", "publishing", "published", "failed", "unknown"]),
+    commentUrl: z.string().url().nullable(),
+    errorCode: z.string().min(1).nullable(),
+  })),
+}));
+export type PipelineFailureAnalysis = z.infer<typeof PipelineFailureAnalysis>;
+
 export const RunStageRecord = dto(strict({ stage: RunStage, startedAt: timestamp, completedAt: timestamp.nullable(), durationMs: positiveSafe.or(z.literal(0)) }));
 export type RunStageRecord = z.infer<typeof RunStageRecord>;
-export const RunDetail = dto(strict({ ...runSummaryShape, jobs: z.array(RunJob), stages: z.array(RunStageRecord), actionGraph: ActionGraph }));
+export const RunDetail = dto(strict({ ...runSummaryShape, jobs: z.array(RunJob), stages: z.array(RunStageRecord), actionGraph: ActionGraph, failureAnalysis: PipelineFailureAnalysis.nullable().optional(), failureAnalysisEnabled: z.boolean().optional() }));
 export type RunDetail = z.infer<typeof RunDetail>;
 const timingDuration = positiveSafe.or(z.literal(0));
 const timingOutcome = z.enum(["success", "failure", "cancelled", "skipped", "neutral"]);

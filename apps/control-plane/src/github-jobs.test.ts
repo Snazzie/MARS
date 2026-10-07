@@ -142,3 +142,44 @@ test("rejects runner diagnostics with unknown busy state or mismatched identity"
     await expect(client.getRunner("acme", "project", 42)).rejects.toThrow("github_payload_invalid");
   }
 });
+
+test("resolves PRs from run metadata and verifies commit fallback against repository and head SHA", async () => {
+  const requests: Request[] = [];
+  const client = new GithubJobsClient({ token: async () => "installation-token", fetch: async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    if (request.url.endsWith("/actions/runs/1")) return Response.json({ head_sha: "sha-run", pull_requests: [] });
+    if (request.url.endsWith("/commits/sha-run/pulls")) return Response.json([
+      { number: 4, base: { repo: { id: 20 } }, head: { sha: "sha-run" } },
+      { number: 5, base: { repo: { id: 21 } }, head: { sha: "sha-run" } },
+      { number: 6, base: { repo: { id: 20 } }, head: { sha: "other" } },
+    ]);
+    return Response.json({ id: 20 });
+  } });
+  expect(await client.listRunPullRequests("acme", "project", 1)).toEqual([{ number: 4, baseRepositoryId: 20 }]);
+  expect(requests.map(request => request.url)).toEqual([
+    "https://api.github.com/repos/acme/project/actions/runs/1",
+    "https://api.github.com/repos/acme/project/commits/sha-run/pulls",
+    "https://api.github.com/repos/acme/project",
+  ]);
+});
+
+test("lists paged PR comments and creates comments with the installation token", async () => {
+  const requests: Request[] = [];
+  const client = new GithubJobsClient({ token: async () => "installation-token", fetch: async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    if (request.method === "POST") return Response.json({ id: 9, html_url: "https://github.com/acme/project/pull/4#issuecomment-9", performed_via_github_app: { id: 77 } }, { status: 201 });
+    return Response.json([{ id: 8, html_url: "https://github.com/acme/project/pull/4#issuecomment-8", body: "marker", performed_via_github_app: { id: 77 } }]);
+  } });
+  expect(await client.listPullRequestComments("acme", "project", 4, 2)).toEqual([
+    { id: 8, url: "https://github.com/acme/project/pull/4#issuecomment-8", body: "marker", appId: 77 },
+  ]);
+  expect(await client.createPullRequestComment("acme", "project", 4, "feedback")).toEqual({
+    id: 9, url: "https://github.com/acme/project/pull/4#issuecomment-9", appId: 77,
+  });
+  expect(requests[0]?.url).toBe("https://api.github.com/repos/acme/project/issues/4/comments?per_page=100&page=2");
+  expect(requests[1]?.method).toBe("POST");
+  expect(await requests[1]?.json()).toEqual({ body: "feedback" });
+  expect(requests.every(request => request.headers.get("authorization") === "Bearer installation-token")).toBe(true);
+});

@@ -1,6 +1,6 @@
 import type { DatabaseClient } from "./index.ts";
 import { CapacitySnapshot, ConnectionState, ConfigurationState, PoolSummary, RuntimeDriverName, RuntimePlatform, RuntimeTerminationEvidence, WorkerContainerStatus, WorkerDoctor, WorkerDisconnectEvidence, WorkerLimits, WorkerState, GuestPlatform, WorkerCacheSummary, WorkerHealth } from "@mars/contracts";
-import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, OverviewTimeseriesPoint, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail } from "@mars/contracts";
+import type { ActionGraph, CursorPage, LogChunk, OrganizationSummary, OverviewDto, OverviewTimeseriesPoint, PipelineFailureAnalysis, RepositorySummary, RunDetail, RunJob, RunStage, RunStageRecord, RunSummary, WorkerDetail } from "@mars/contracts";
 import { defineQueries } from "./prepared.ts";
 import * as schema from "./drizzle-schema.ts";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
@@ -346,6 +346,7 @@ const runProjection = () => ({
   repositoryId: schema.dashboardRuns.repositoryId,
   repositoryName: schema.dashboardRepositories.name,
   runNumber: schema.dashboardRuns.runNumber,
+  runAttempt: schema.dashboardRuns.runAttempt,
   workflowName: schema.dashboardRuns.workflowName,
   event: schema.dashboardRuns.event,
   branch: schema.dashboardRuns.branch,
@@ -405,6 +406,30 @@ export async function listAllPools(db: DashboardDb, userId: string, limit = 50):
   return { items, nextCursor: rows.length > limit ? String(items.at(-1)?.id) : null };
 }
 const runDetailQueries = defineQueries((db) => ({
+  failureAnalysis: db.select({
+    id: schema.pipelineFailureAnalyses.id,
+    runAttempt: schema.pipelineFailureAnalyses.runAttempt,
+    state: schema.pipelineFailureAnalyses.state,
+    providerName: schema.pipelineFailureAnalyses.providerName,
+    model: schema.pipelineFailureAnalyses.model,
+    result: schema.pipelineFailureAnalyses.result,
+    errorCode: schema.pipelineFailureAnalyses.errorCode,
+  }).from(schema.pipelineFailureAnalyses).where(and(
+    eq(schema.pipelineFailureAnalyses.organizationId, sql.placeholder("organizationId")),
+    eq(schema.pipelineFailureAnalyses.runId, sql.placeholder("runId")),
+    eq(schema.pipelineFailureAnalyses.runAttempt, sql.placeholder("runAttempt")),
+  )).limit(1).prepare("dashboard_run_detail_failure_analysis"),
+  failureAnalysisComments: db.select({
+    prNumber: schema.pipelineAnalysisComments.prNumber,
+    state: schema.pipelineAnalysisComments.state,
+    commentUrl: schema.pipelineAnalysisComments.commentUrl,
+    errorCode: schema.pipelineAnalysisComments.errorCode,
+  }).from(schema.pipelineAnalysisComments).where(eq(schema.pipelineAnalysisComments.analysisId, sql.placeholder("analysisId")))
+    .orderBy(asc(schema.pipelineAnalysisComments.prNumber)).prepare("dashboard_run_detail_failure_analysis_comments"),
+  failureAnalysisEnabled: db.select({ enabled: schema.repositoryFailureAnalysisSettings.enabled }).from(schema.repositoryFailureAnalysisSettings).where(and(
+    eq(schema.repositoryFailureAnalysisSettings.organizationId, sql.placeholder("organizationId")),
+    eq(schema.repositoryFailureAnalysisSettings.repositoryId, sql.placeholder("repositoryId")),
+  )).limit(1).prepare("dashboard_run_detail_failure_analysis_enabled"),
   jobs: db.select({
     id: schema.dashboardJobs.id,
     name: schema.dashboardJobs.name,
@@ -456,6 +481,7 @@ const runDetailQueries = defineQueries((db) => ({
   }).from(schema.dashboardRunStages).where(and(eq(schema.dashboardRunStages.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardRunStages.runId, sql.placeholder("runId"))))
     .orderBy(asc(schema.dashboardRunStages.startedAt)).prepare("dashboard_run_detail_stages"),
 }));
+
 
 export async function getRunDetail(db: DashboardDb, organizationId: string, runId: string): Promise<RunDetail | null> {
   const run = (await listRuns(db, organizationId, 1000)).items.find((item) => item.id === runId);
@@ -519,6 +545,26 @@ export async function getRunDetail(db: DashboardDb, organizationId: string, runI
     completedAt: normalizeTimestamp(row.completedAt),
     durationMs: Math.max(0, Number(row.durationMs) || 0),
   }));
+  const runAttempt = run.runAttempt;
+  const failureAnalysisRows = await runDetailQueries(db).failureAnalysis.execute({ ...queryParams, runAttempt }) as Record<string, unknown>[];
+  const failureAnalysisEnabledRows = await runDetailQueries(db).failureAnalysisEnabled.execute({ organizationId, repositoryId: run.repositoryId }) as Record<string, unknown>[];
+  const failureAnalysisRow = failureAnalysisRows[0];
+  const failureAnalysisComments = failureAnalysisRow ? await runDetailQueries(db).failureAnalysisComments.execute({ analysisId: String(failureAnalysisRow.id) }) as Record<string, unknown>[] : [];
+  const failureAnalysis: PipelineFailureAnalysis | null = failureAnalysisRow ? {
+    id: String(failureAnalysisRow.id),
+    runAttempt: Number(failureAnalysisRow.runAttempt),
+    state: failureAnalysisRow.state as PipelineFailureAnalysis["state"],
+    providerName: String(failureAnalysisRow.providerName),
+    model: String(failureAnalysisRow.model),
+    result: failureAnalysisRow.result == null ? null : failureAnalysisRow.result as PipelineFailureAnalysis["result"],
+    errorCode: failureAnalysisRow.errorCode == null ? null : String(failureAnalysisRow.errorCode),
+    comments: failureAnalysisComments.map((comment) => ({
+      prNumber: Number(comment.prNumber),
+      state: comment.state as PipelineFailureAnalysis["comments"][number]["state"],
+      commentUrl: comment.commentUrl == null ? null : String(comment.commentUrl),
+      errorCode: comment.errorCode == null ? null : String(comment.errorCode),
+    })),
+  } : null;
   return {
     ...run,
     jobs,
@@ -538,6 +584,8 @@ export async function getRunDetail(db: DashboardDb, organizationId: string, runI
       }),
       edges,
     },
+    failureAnalysis,
+    failureAnalysisEnabled: failureAnalysisEnabledRows[0]?.enabled === true,
   };
 }
 const logQueries = defineQueries((db) => ({

@@ -14,6 +14,10 @@ const positiveSafeInteger = (value: unknown): number => {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) throw new Error("github_payload_invalid");
   return value;
 };
+export type GithubPullRequestReference = { number: number; baseRepositoryId: number };
+export type GithubPullRequestComment = { id: number; url: string; body: string; appId: number | null };
+export type CreatedGithubPullRequestComment = { id: number; url: string; appId: number | null };
+
 const labelsValue = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 const parseSteps = (value: unknown, fallbackQueuedAt: string): GithubStepSnapshot[] => {
   if (value === undefined) return [];
@@ -51,6 +55,62 @@ export class GithubJobsClient {
     }
     const value: unknown = emptyResponse || response.status === 204 ? {} : await response.json();
     return value && typeof value === "object" ? value as Record<string, unknown> : {};
+  }
+  private async requestArray(path: string, init: RequestInit = {}): Promise<unknown[]> {
+    const headers = new Headers(init.headers);
+    headers.set("accept", "application/vnd.github+json"); headers.set("content-type", "application/json"); headers.set("x-github-api-version", "2026-03-10"); headers.set("authorization", `Bearer ${await this.token()}`);
+    const response = await this.fetcher(`${this.apiBase}${path}`, { ...init, headers });
+    if (!response.ok) {
+      const body: unknown = await response.json().catch(() => null);
+      const message = body && typeof body === "object" && "message" in body ? nullableString(body.message) : null;
+      console.error(`GitHub jobs request failed: ${response.status} ${path}`, { message });
+      throw new Error(`github_${response.status}`, { cause: message });
+    }
+    const value: unknown = response.status === 204 ? [] : await response.json();
+    if (!Array.isArray(value)) throw new Error("github_payload_invalid");
+    return value;
+  }
+  async listRunPullRequests(owner: string, repo: string, runId: number): Promise<GithubPullRequestReference[]> {
+    const repositoryPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    const run = await this.request(`${repositoryPath}/actions/runs/${runId}`);
+    const headSha = nullableString(run.head_sha);
+    const parse = (raw: unknown): GithubPullRequestReference => {
+      if (!raw || typeof raw !== "object") throw new Error("github_payload_invalid");
+      const item = raw as Record<string, unknown>;
+      const base = item.base && typeof item.base === "object" ? item.base as Record<string, unknown> : {};
+      const number = positiveSafeInteger(item.number);
+      const baseRepositoryId = positiveSafeInteger((base.repo as Record<string, unknown> | undefined)?.id);
+      return { number, baseRepositoryId };
+    };
+    if (Array.isArray(run.pull_requests) && run.pull_requests.length) return run.pull_requests.map(parse);
+    if (!headSha) return [];
+    const commit = await this.requestArray(`${repositoryPath}/commits/${encodeURIComponent(headSha)}/pulls`);
+    const repository = await this.request(repositoryPath);
+    const repositoryId = positiveSafeInteger(repository.id);
+    const verified = commit.flatMap(raw => {
+      if (!raw || typeof raw !== "object") return [];
+      const item = raw as Record<string, unknown>;
+      const head = item.head && typeof item.head === "object" ? item.head as Record<string, unknown> : {};
+      const reference = parse(raw);
+      return head.sha === headSha && reference.baseRepositoryId === repositoryId ? [reference] : [];
+    });
+    return [...new Map(verified.map(item => [item.number, item])).values()];
+  }
+  async listPullRequestComments(owner: string, repo: string, prNumber: number, page: number): Promise<GithubPullRequestComment[]> {
+    const values = await this.requestArray(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${positiveSafeInteger(prNumber)}/comments?per_page=100&page=${positiveSafeInteger(page)}`);
+    return values.map(raw => {
+      if (!raw || typeof raw !== "object") throw new Error("github_payload_invalid");
+      const item = raw as Record<string, unknown>;
+      const app = item.performed_via_github_app && typeof item.performed_via_github_app === "object" ? item.performed_via_github_app as Record<string, unknown> : null;
+      if (typeof item.html_url !== "string" || typeof item.body !== "string") throw new Error("github_payload_invalid");
+      return { id: positiveSafeInteger(item.id), url: item.html_url, body: item.body, appId: app && typeof app.id === "number" && Number.isSafeInteger(app.id) ? app.id : null };
+    });
+  }
+  async createPullRequestComment(owner: string, repo: string, prNumber: number, body: string): Promise<CreatedGithubPullRequestComment> {
+    const item = await this.request(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${positiveSafeInteger(prNumber)}/comments`, { method: "POST", body: JSON.stringify({ body }) });
+    const app = item.performed_via_github_app && typeof item.performed_via_github_app === "object" ? item.performed_via_github_app as Record<string, unknown> : null;
+    if (typeof item.html_url !== "string") throw new Error("github_payload_invalid");
+    return { id: positiveSafeInteger(item.id), url: item.html_url, appId: app && typeof app.id === "number" && Number.isSafeInteger(app.id) ? app.id : null };
   }
   private async requestText(path: string, maxBytes: number): Promise<string> {
     const headers = new Headers();

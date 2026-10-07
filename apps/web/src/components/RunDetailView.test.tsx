@@ -33,6 +33,7 @@ const detail: RunDetail = {
   repositoryId: "repo-1",
   repositoryName: "acme/mars",
   runNumber: 42,
+  runAttempt: 1,
   workflowName: "macos-smoke.yml",
   event: "workflow_dispatch",
   branch: "main",

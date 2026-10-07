@@ -9,6 +9,7 @@ const run = (overrides: Partial<RunSummary> = {}): RunSummary => ({
   repositoryId: "repo-1",
   repositoryName: "mars",
   runNumber: 11,
+  runAttempt: 1,
   workflowName: "macOS runner smoke",
   event: "workflow_dispatch",
   branch: "main",

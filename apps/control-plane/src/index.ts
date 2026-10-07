@@ -1,3 +1,5 @@
+import { processPipelineFailureAnalyses } from "./pipeline-failure-analysis.ts";
+import { LlmProvidersService, type LlmProviderConfig } from "./llm-providers.ts";
 import { and, asc, eq, ne, inArray, sql } from "drizzle-orm";
 import { defineQueries, schema, completeOnboardingIfReady, createDb, ensureDatabase, migrateDatabase, type DashboardDb } from "@mars/db";
 import { CURRENT_WORKER_CONTRACT_VERSION, WorkerReleaseOciDigest, sanitizeDiagnosticText, type WorkerBuildImagePayload, type WorkerCommand, type WorkerReleaseManifest } from "@mars/contracts";
@@ -37,6 +39,13 @@ const startupQueries = defineQueries(db => ({
   markCommandSent: db.update(schema.commands).set({ state: "sent" }).where(and(eq(schema.commands.id, sql.placeholder("id")), eq(schema.commands.state, "pending"))).prepare("control_plane_command_sent"),
   acknowledgeCommand: db.update(schema.commands).set({ state: "acknowledged" }).where(and(eq(schema.commands.id, sql.placeholder("id")), inArray(schema.commands.state, ["pending", "sent"]))).prepare("control_plane_command_acknowledged"),
   offlineWorkers: db.update(schema.workers).set({ connectionState: "offline" }).where(ne(schema.workers.connectionState, "offline")).prepare("control_plane_workers_offline"),
+  llmList: db.select().from(schema.llmProviders).orderBy(asc(schema.llmProviders.name)).prepare("control_plane_llm_list"),
+  llmGet: db.select().from(schema.llmProviders).where(eq(schema.llmProviders.id, sql.placeholder("id"))).prepare("control_plane_llm_get"),
+  llmInsert: db.insert(schema.llmProviders).values({ name: sql.placeholder("name"), kind: sql.placeholder("kind"), baseUrl: sql.placeholder("baseUrl"), model: sql.placeholder("model"), encryptedApiKey: sql.placeholder("encryptedApiKey") }).returning().prepare("control_plane_llm_insert"),
+  llmUpdate: db.update(schema.llmProviders).set({ name: sql`${sql.placeholder("name")}`, kind: sql`${sql.placeholder("kind")}`, baseUrl: sql`${sql.placeholder("baseUrl")}`, model: sql`${sql.placeholder("model")}`, encryptedApiKey: sql`${sql.placeholder("encryptedApiKey")}`, updatedAt: sql`now()` }).where(eq(schema.llmProviders.id, sql.placeholder("id"))).returning().prepare("control_plane_llm_update"),
+  llmDelete: db.delete(schema.llmProviders).where(eq(schema.llmProviders.id, sql.placeholder("id"))).returning({ id: schema.llmProviders.id }).prepare("control_plane_llm_delete"),
+  llmUseCount: db.select({ count: sql<number>`count(*)::int` }).from(schema.repositoryFailureAnalysisSettings).where(eq(schema.repositoryFailureAnalysisSettings.providerId, sql.placeholder("id"))).prepare("control_plane_llm_use_count"),
+  githubAppId: db.select({ appId: schema.githubAppConfig.appId }).from(schema.githubAppConfig).where(eq(schema.githubAppConfig.singleton, true)).prepare("control_plane_github_app_id"),
 }));
 
 export function formatJobReconciliationReport(report: ReconcileReport): string | undefined {
@@ -472,6 +481,23 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
     return [...new Set([canonical, ...configuredWorkerOrigins].filter((origin): origin is string => Boolean(origin)))];
   };
   const secretBox = options.secretBox ?? new SecretBox(initialized.masterKey);
+  const llmProviders = new LlmProvidersService(secretBox, {
+    list: async () => await startupQueries(db).llmList.execute({}) as unknown as LlmProviderConfig[],
+    get: async (id) => ((await startupQueries(db).llmGet.execute({ id }))[0] as unknown as LlmProviderConfig | undefined) ?? null,
+    save: async (input, id) => {
+      const values = { name: input.name, kind: input.kind, baseUrl: input.baseUrl, model: input.model, encryptedApiKey: input.encryptedApiKey ?? null };
+      const rows = id ? await startupQueries(db).llmUpdate.execute({ ...values, id }) : await startupQueries(db).llmInsert.execute(values);
+      return rows[0] as unknown as LlmProviderConfig;
+    },
+    delete: async (id) => {
+      const [provider] = await startupQueries(db).llmGet.execute({ id });
+      if (!provider) throw new Error("llm_provider_not_found");
+      const [{ count }] = await startupQueries(db).llmUseCount.execute({ id });
+      if (count) throw new Error("llm_provider_in_use");
+      const rows = await startupQueries(db).llmDelete.execute({ id });
+      if (!rows.length) throw new Error("llm_provider_not_found");
+    },
+  });
   const devToken = !production ? Bun.env.MARS_DEV_TOKEN?.trim() : undefined;
   const workerUpgradeService = new WorkerUpgradeService(workerReleaseCatalog, secretBox);
   const current = options.currentUser ?? (async (request: Request) => {
@@ -504,7 +530,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const dispatchHealth = new DispatchHealthMonitor(reconciliationIntervalMs);
   const githubApp = options.githubApp ?? new GitHubAppService({ db, secretBox, publicOrigin: initialized.setup.publicOrigin, webhookOrigin: () => configuredWebhookOrigin });
   const githubRateLimits = new GithubRateLimitGate();
-  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, secretBox, githubApp, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, developmentWindowsArtifacts, developmentLinuxArtifacts, developmentLinuxArm64Artifacts, developmentMacosArtifacts, windowsContainerBuild, windowsContainerArtifacts, workerInstallerRoot, workerJoin: options.workerJoin, devWindowsImageBuild: options.devWindowsImageBuild ? () => options.devWindowsImageBuild!(windowsContainerBuild, initialized.setup.publicOrigin() ?? configuredPublicOrigin ?? null) : undefined, disableWorkerBootstrapManagement: options.disableWorkerBootstrapManagement, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerChanged: () => ensureDefaultPools(db, env.DEFAULT_IMAGES), health: () => ({ buildId: controlPlaneBuildId(), startedAt, discovery: discoveryHealth.snapshot() }), dispatchHealth: organizationIds => dispatchHealth.snapshot(organizationIds), controlPlaneLogs: options.controlPlaneLogs });
+  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, secretBox, githubApp, llmProviders, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, workerReleaseCatalog, workerUpgradeService, developmentWindowsArtifacts, developmentLinuxArtifacts, developmentLinuxArm64Artifacts, developmentMacosArtifacts, windowsContainerBuild, windowsContainerArtifacts, workerInstallerRoot, workerJoin: options.workerJoin, devWindowsImageBuild: options.devWindowsImageBuild ? () => options.devWindowsImageBuild!(windowsContainerBuild, initialized.setup.publicOrigin() ?? configuredPublicOrigin ?? null) : undefined, disableWorkerBootstrapManagement: options.disableWorkerBootstrapManagement, controlPlaneLogs: options.controlPlaneLogs, workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerChanged: workerId => dispatcher.replayConnected(workerId), health: () => ({ buildId: controlPlaneBuildId(), startedAt, discovery: discoveryHealth.snapshot() }), dispatchHealth: organizationIds => dispatchHealth.snapshot(organizationIds) });
   let triggerReconciliation = () => Promise.resolve();
   const gateway = createControlPlaneGateway({ db, httpFetch: async request => await httpApp.fetch(request), current, requestSource: (request, activeServer) => { requestSources.set(request, activeServer.requestIP(request)?.address ?? "unknown"); return requestSources.get(request) ?? "unknown"; }, dispatcher, refreshDefaultPools: () => ensureDefaultPools(db, env.DEFAULT_IMAGES), triggerReconciliation: () => triggerReconciliation(), requestId: () => crypto.randomUUID() });
   let server!: Server<ControlPlaneSocketData>;
@@ -608,6 +634,20 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
         });
         if (cleanup.deleted || cleanup.failed) console.log("GitHub runner cleanup", cleanup);
       } catch (error) { console.error("GitHub runner cleanup failed", error); }
+    }, 15_000, false);
+    startReconciliationScheduler(async () => {
+      try {
+        const [app] = await startupQueries(db).githubAppId.execute({});
+        await processPipelineFailureAnalyses({
+          db,
+          secretBox,
+          generatePipelineAnalysis: input => llmProviders.analyze(input.provider, input.context),
+          installationToken: installationId => githubApp.getInstallationToken(installationId),
+          githubFetchForInstallation: installationId => githubRateLimits.scopedFetch(installationId, "background") as unknown as typeof fetch,
+          installationBlocked: installationId => githubRateLimits.isBackgroundBlocked(installationId),
+          githubAppId: app?.appId == null ? undefined : Number(app.appId),
+        });
+      } catch (error) { console.error("Pipeline failure analysis processing failed", error); }
     }, 15_000, false);
     triggerReconciliation = reconciliationScheduler.trigger;
     const runRetention = async () => { try { console.log("Retention pruner", await pruneExpiredData(db)); } catch (error) { console.error("Retention pruning failed", error); } };

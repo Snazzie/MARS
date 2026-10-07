@@ -1,3 +1,4 @@
+import type { LlmProviderService } from "../llm-providers.ts";
 import type { DashboardDb } from "@mars/db";
 import type { SessionUser, SecretBox } from "../auth.ts";
 import type { ControlPlaneSetup } from "../control-plane-setup.ts";
@@ -111,6 +112,7 @@ export type ControlPlaneHttpDeps = {
   setup: ControlPlaneSetup;
   browserOrigin(): string | null;
   secretBox: SecretBox;
+  llmProviders?: LlmProviderService;
   githubApp?: GitHubAppService;
   defaultJobImages: Partial<Record<"linux-x64" | "linux-arm64" | "windows-x64" | "macos-arm64", string>> & { ubuntuVersion?: "22" | "24" | "26" };
   workerReleaseManifest?: WorkerReleaseManifest;

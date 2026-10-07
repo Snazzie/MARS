@@ -36,6 +36,9 @@ import {
   RunnerWorkflowPreview,
   RunnerWorkflowPrRequest,
   RunnerWorkflowPrResult,
+  LlmProviderSummary,
+  LlmProviderSaveRequest,
+  RepositoryFailureAnalysisSettings,
 } from "@mars/contracts";
 import {
   DashboardBootstrapReveal,
@@ -490,3 +493,26 @@ export const previewRunnerWorkflowPr = (organizationId: string, repositoryId: st
 export type RunnerWorkflowPrInput = Omit<RunnerWorkflowPrRequest, "selectedPaths"> & { selectedPaths?: RunnerWorkflowPrRequest["selectedPaths"] };
 export const createRunnerWorkflowPr = (organizationId: string, repositoryId: string, input: RunnerWorkflowPrInput) =>
   request(`/api/organizations/${organizationId}/repositories/${repositoryId}/runner-workflows/pr`, RunnerWorkflowPrResult, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify(input) });
+export const getLlmProviders = () =>
+  request("/api/admin/llm/providers", z.array(LlmProviderSummary), { cache: "no-store" });
+export const saveLlmProvider = (input: LlmProviderSaveRequest & { id?: string }) => {
+  const { id, ...body } = input;
+  return request(id ? `/api/admin/llm/providers/${encodeURIComponent(id)}` : "/api/admin/llm/providers", LlmProviderSummary, {
+    method: id ? "PUT" : "POST",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+};
+export const deleteLlmProvider = (providerId: string) =>
+  request(`/api/admin/llm/providers/${encodeURIComponent(providerId)}`, DashboardOkResponse, { method: "DELETE", cache: "no-store" });
+export const testLlmProvider = (providerId: string) =>
+  request(`/api/admin/llm/providers/${encodeURIComponent(providerId)}/test`, z.object({ ok: z.literal(true) }).strict(), {
+    method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" }, body: "{}",
+  });
+export const getRepositoryFailureAnalysisSettings = (organizationId: string, repositoryId: string) =>
+  request(`/api/organizations/${encodeURIComponent(organizationId)}/repositories/${encodeURIComponent(repositoryId)}/failure-analysis`, RepositoryFailureAnalysisSettings, { cache: "no-store" });
+export const saveRepositoryFailureAnalysisSettings = (organizationId: string, repositoryId: string, input: { enabled: boolean; providerId: string | null }) =>
+  request(`/api/organizations/${encodeURIComponent(organizationId)}/repositories/${encodeURIComponent(repositoryId)}/failure-analysis`, RepositoryFailureAnalysisSettings, {
+    method: "PUT", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
