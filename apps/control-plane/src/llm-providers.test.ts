@@ -59,3 +59,37 @@ test("encrypts saved API keys and never returns key material in provider summari
   expect(box.decrypt(stored[0]!.encryptedApiKey!)).toBe("cloud-secret");
   expect(summary).toEqual({ id: "provider-1", name: "cloud", kind: "openai-compatible", baseUrl: "https://api.example.test/v1", model: "model", keyConfigured: true });
 });
+
+test("blank API roots save concrete provider defaults", async () => {
+  const box = new SecretBox(Buffer.alloc(32, 5).toString("base64"));
+  const service = new LlmProvidersService(box, {
+    list: async () => [], get: async () => null, delete: async () => {},
+    save: async (input) => ({ ...input, id: "provider-1" }),
+  });
+  expect((await service.save({ name: "local", kind: "openai-compatible", baseUrl: "  ", model: "model" })).baseUrl).toBe("http://localhost:11434/v1");
+  expect((await service.save({ name: "cloud", kind: "anthropic", baseUrl: "", model: "model", apiKey: "key" })).baseUrl).toBe("https://api.anthropic.com/v1");
+});
+
+test("model lookup deduplicates results and never sends a retained key to a changed root", async () => {
+  const box = new SecretBox(Buffer.alloc(32, 5).toString("base64"));
+  const authorization: Array<string | null> = [];
+  const service = new LlmProvidersService(box, {
+    list: async () => [],
+    get: async () => ({ name: "local", kind: "openai-compatible", baseUrl: "http://localhost:11434/v1", model: "model", encryptedApiKey: box.encrypt("saved-secret") }),
+    save: async (input) => input, delete: async () => {},
+  }, async (_input, init) => {
+    authorization.push(new Headers(init?.headers).get("authorization"));
+    return Response.json({ data: [{ id: "model-b" }, { id: "model-a" }, { id: "model-b" }] });
+  });
+  expect(await service.models({ baseUrl: "", providerId: "profile" })).toEqual(["model-a", "model-b"]);
+  await service.models({ baseUrl: "http://localhost:1234/v1", providerId: "profile" });
+  await service.models({ baseUrl: "", providerId: "profile", apiKey: null });
+  expect(authorization).toEqual(["Bearer saved-secret", null, null]);
+});
+
+test("model lookup rejects malformed listings without exposing provider response bodies", async () => {
+  const service = new LlmProvidersService(new SecretBox(Buffer.alloc(32, 5).toString("base64")), {
+    list: async () => [], get: async () => null, save: async (input) => input, delete: async () => {},
+  }, async () => new Response("secret internal provider error"));
+  await expect(service.models({ baseUrl: "" })).rejects.toThrow("llm_invalid_response");
+});

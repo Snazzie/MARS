@@ -1,7 +1,8 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { deleteLlmProvider, getLlmProviders, getMe, getOrganizations, getRepositories, getRepositoryFailureAnalysisSettings, saveLlmProvider, saveRepositoryFailureAnalysisSettings, testLlmProvider } from "../api.ts";
+import { deleteLlmProvider, getLlmProviders, getLlmProviderModels, getMe, getOrganizations, getRepositories, getRepositoryFailureAnalysisSettings, saveLlmProvider, saveRepositoryFailureAnalysisSettings, testLlmProvider } from "../api.ts";
 import { QueryState } from "../components/StateView.tsx";
+import { LlmProviderDefaultApiRoots } from "@mars/contracts";
 
 async function getAllRepositories(organizationId: string) {
   const items = [];
@@ -40,6 +41,24 @@ function AiSettings() {
   const [error, setError] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [modelLookupRevision, setModelLookupRevision] = useState(0);
+  const effectiveBaseUrl = baseUrl.trim() || LlmProviderDefaultApiRoots[kind];
+  useEffect(() => {
+    setAvailableModels([]); setModelsError(null); setModelsLoading(false);
+    if (!formOpen || kind !== "openai-compatible") return;
+    const controller = new AbortController();
+    setModelsLoading(true);
+    const timer = setTimeout(() => {
+      void getLlmProviderModels({ baseUrl, ...(editingId ? { providerId: editingId } : {}), ...(apiKey ? { apiKey } : clearKey ? { apiKey: null } : {}) }, controller.signal)
+        .then(({ models }) => { if (!controller.signal.aborted) setAvailableModels(models); })
+        .catch((reason) => { if (!controller.signal.aborted) setModelsError(errorMessage(reason, "Unable to list models. Enter a model ID manually.")); })
+        .finally(() => { if (!controller.signal.aborted) setModelsLoading(false); });
+    }, 400);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [formOpen, kind, baseUrl, apiKey, clearKey, editingId, modelLookupRevision]);
   const providerRows = providers.data ?? [];
   const invalidate = () => {
     void client.invalidateQueries({ queryKey: ["admin", "llm-providers"] });
@@ -85,12 +104,20 @@ function AiSettings() {
         <div className="ai-form-grid">
           <label>Profile name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="Local development" /></label>
           <label>Provider type<select value={kind} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="openai-compatible">OpenAI-compatible</option><option value="anthropic">Anthropic</option></select></label>
-          <label>API root<input required type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder={kind === "anthropic" ? "https://api.anthropic.com/v1" : "http://localhost:11434/v1"} /></label>
-          <label>Model ID<input required value={model} onChange={(event) => setModel(event.target.value)} placeholder="Exact model ID from your provider" /></label>
+          <label>API root<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder={LlmProviderDefaultApiRoots[kind]} /><span className="form-help">Leave blank to use {LlmProviderDefaultApiRoots[kind]}.</span></label>
+          <label>Model ID<input required list={kind === "openai-compatible" ? "ai-available-models" : undefined} value={model} onChange={(event) => setModel(event.target.value)} placeholder="Select an available model or enter its ID" /><datalist id="ai-available-models">{availableModels.map((id) => <option key={id} value={id} />)}</datalist></label>
           <label className="ai-form-wide">API key<input type="password" autoComplete="new-password" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setClearKey(false); }} placeholder={editingId ? "Leave blank to keep current key" : kind === "anthropic" ? "Required for Anthropic" : "Optional for local servers"} /></label>
         </div>
+        {kind === "openai-compatible" && <div className="ai-model-lookup">
+          <div className="settings-actions"><button className="button secondary" type="button" disabled={modelsLoading} onClick={() => setModelLookupRevision((value) => value + 1)}>{modelsLoading ? "Loading models…" : "Refresh models"}</button>
+            {availableModels.length > 0 && <label className="ai-provider-select">Available models<select value={availableModels.includes(model) ? model : ""} onChange={(event) => setModel(event.target.value)}><option value="">Choose a model</option>{availableModels.map((id) => <option key={id} value={id}>{id}</option>)}</select></label>}
+          </div>
+          {modelsLoading && <p className="form-help" role="status">Looking up models from the control plane…</p>}
+          {modelsError && <p className="form-help" role="status">{modelsError} You can still enter the model ID manually.</p>}
+          {!modelsLoading && !modelsError && availableModels.length === 0 && <p className="form-help">No models reported by this endpoint. Enter a model ID manually.</p>}
+        </div>}
         <p className="form-help">Local endpoints must be reachable from the control-plane host or container, not your browser.</p>
-        {baseUrl.startsWith("http://") && <p className="ai-warning">Warning: HTTP traffic is not encrypted.</p>}
+        {effectiveBaseUrl.startsWith("http://") && <p className="ai-warning">Warning: HTTP traffic is not encrypted.</p>}
         {editingId && <label className="ai-checkbox"><input type="checkbox" checked={clearKey} onChange={(event) => { setClearKey(event.target.checked); setApiKey(""); }} />Clear configured API key</label>}
         <div className="settings-actions"><button className="button" type="submit" disabled={saving}>{saving ? "Saving…" : "Save provider"}</button><button className="button secondary" type="button" disabled={saving} onClick={resetForm}>Cancel</button></div>
       </form>}

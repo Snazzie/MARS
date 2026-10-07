@@ -14,7 +14,8 @@ const navigationLinks = [
   ["/workers", "Workers", "04"],
   ["/pools", "Pools", "05"],
 ] as const;
-const links = [...navigationLinks, ["/ai-settings", "AI Settings", "06"], ["/settings", "Settings", "07"]] as const;
+const settingsLinks = [["/settings", "General", "01"], ["/settings/ai", "AI", "02"]] as const;
+const links = [...navigationLinks, ...settingsLinks] as const;
 const helpByRoute: Record<(typeof links)[number][0], { label: string; text: string }> = {
   "/": { label: "About overview health", text: "What: workload outcomes and control-plane freshness for the selected workspace. How: change the time window to inspect trends. Fix: open Workers when capacity or runtime health is degraded, then Runs for individual failures." },
   "/runs": { label: "About run history", text: "What: GitHub workflow jobs observed by Mars. How: filter by repository, branch, actor, status, or conclusion and open a run for jobs, stages, and logs. Fix: use the linked GitHub run when cancellation or rerun is required." },
@@ -22,7 +23,7 @@ const helpByRoute: Record<(typeof links)[number][0], { label: string; text: stri
   "/workers": { label: "About worker readiness", text: "What: enrollment, connection, configuration, doctor checks, and free capacity. How: adopt a pending host, configure its supported runtime, then wait for the applied revision. Fix: follow the reported remediation and drain before removal." },
   "/pools": { label: "About shared pools", text: "What: global routing labels backed by compatible ready workers. How: keep labels canonical and only enable a pool after coverage is ready. Fix: disable the pool and wait for active leases before editing or deleting it." },
   "/settings": { label: "About deployment settings", text: "What: appearance, signed-in access, GitHub connections, and API quota. How: select a workspace before managing its GitHub installation. Fix: retry failed connection checks or manage repository access in GitHub." },
-  "/ai-settings": { label: "About AI settings", text: "Connect a local or cloud model provider, then opt repositories into failure analysis. Failed log excerpts are sent to the selected endpoint and advisory feedback is posted by the installed MARS App. Only global administrators can change this configuration." },
+  "/settings/ai": { label: "About AI settings", text: "Connect a local or cloud model provider, then opt repositories into failure analysis. Failed log excerpts are sent to the selected endpoint and advisory feedback is posted by the installed MARS App. Only global administrators can change this configuration." },
 };
 export function AppShell() {
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -34,10 +35,12 @@ export function AppShell() {
   const { organizationId, setOrganizationId } = useOrganization(organizations.data);
   useDashboardInvalidations(organizationId);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const inSettings = location === "/settings" || location.startsWith("/settings/");
+  const contextLinks = inSettings ? settingsLinks.filter(([to]) => to !== "/settings/ai" || me.data?.isGlobalAdmin) : navigationLinks;
   const state = me.isLoading || organizations.isLoading || me.error || organizations.error
     ? <QueryState error={me.error ?? organizations.error} isLoading={me.isLoading || organizations.isLoading} retry={() => { void me.refetch(); void organizations.refetch(); }} operationLabel="workspace data" />
     : null;
-  const currentLink = links.find(([to]) => to === location) ?? links.find(([to]) => location.startsWith(`${to}/`)) ?? links[0];
+  const currentLink = links.find(([to]) => to === location) ?? [...links].reverse().find(([to]) => location.startsWith(`${to}/`)) ?? links[0];
   const currentHelp = helpByRoute[currentLink[0]];
   useEffect(() => { setMobileMenuOpen(false); }, [location]);
   useEffect(() => {
@@ -56,22 +59,22 @@ export function AppShell() {
       <ContextHelp label={currentHelp.label}>{currentHelp.text}</ContextHelp>
       <aside className="rail">
         <div className="brand-lockup"><img className="brand-mark" src="/mars-icon.svg" alt="" /><span>MARS</span></div>
-        <p className="rail-caption">Runner operations / 01</p>
+        <p className="rail-caption">{inSettings ? "Deployment settings" : "Runner operations / 01"}</p>
         <label className="rail-org-picker">Workspace
           <select aria-label="Select workspace" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
             <option value="all">All workspaces</option>
             {organizations.data?.map((organization) => <option key={organization.id} value={organization.id}>{organization.login}</option>)}
           </select>
         </label>
-          <nav aria-label="Primary navigation">
-            <p className="nav-label">Navigate</p>
-            {navigationLinks.map(([to, label, number]) => (
-              <Link key={to} to={to} className="nav-link" activeProps={{ className: "nav-link is-active" }}>
+          <nav aria-label={inSettings ? "Settings navigation" : "Primary navigation"}>
+            <p className="nav-label">{inSettings ? "Settings" : "Navigate"}</p>
+            {contextLinks.map(([to, label, number]) => (
+              <Link key={to} to={to} activeOptions={{ exact: to === "/settings" }} className="nav-link" activeProps={{ className: "nav-link is-active" }}>
                 <span className="nav-number">{number}</span><span>{label}</span>
               </Link>
             ))}
           </nav>
-          <div className="rail-settings">{me.data?.isGlobalAdmin && <Link to="/ai-settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>AI Settings</span></Link>}<Link to="/settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>Settings</span></Link></div>
+          <div className="rail-settings">{inSettings ? <Link to="/" className="nav-link"><span>Back to dashboard</span></Link> : <Link to="/settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>Settings</span></Link>}</div>
         <div className="rail-footer" role="status" aria-live="polite"><span className={`online-dot ${health.data ? "" : "is-offline"}`} />Control plane <strong>{health.isLoading ? "checking" : health.data ? "connected" : "unreachable"}</strong>{health.data?.discovery.stale && <small> Discovery stale</small>}</div>
       </aside>
       <div className="console-body">
@@ -92,8 +95,8 @@ export function AppShell() {
             </label>
           </div>
           {mobileMenuOpen && <nav ref={mobileNavigationRef} id="mobile-navigation" className="mobile-navigation" aria-label="Mobile navigation">
-              {navigationLinks.map(([to, label, navNumber]) => <Link key={to} to={to} className="nav-link" activeProps={{ className: "nav-link is-active" }}><span className="nav-number">{navNumber}</span><span>{label}</span></Link>)}
-              <div className="mobile-settings-nav">{me.data?.isGlobalAdmin && <Link to="/ai-settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>AI Settings</span></Link>}<Link to="/settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>Settings</span></Link></div>
+              {contextLinks.map(([to, label, navNumber]) => <Link key={to} to={to} activeOptions={{ exact: to === "/settings" }} className="nav-link" activeProps={{ className: "nav-link is-active" }}><span className="nav-number">{navNumber}</span><span>{label}</span></Link>)}
+              <div className="mobile-settings-nav">{inSettings ? <Link to="/" className="nav-link"><span>Back to dashboard</span></Link> : <Link to="/settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>Settings</span></Link>}</div>
           </nav>}
         </header>
         <main id="main-content" className="workspace" data-path={location}>

@@ -12,7 +12,6 @@ import { Route as rootRouteImport } from './file-routes/__root'
 import { Route as AuthenticatedRouteImport } from './file-routes/_authenticated'
 import { Route as OnboardingRouteImport } from './file-routes/onboarding'
 import { Route as AuthenticatedIndexRouteImport } from './file-routes/_authenticated/index'
-import { Route as AuthenticatedAiSettingsRouteImport } from './file-routes/_authenticated/ai-settings'
 import { Route as AuthenticatedCostCenterRouteImport } from './file-routes/_authenticated/cost-center'
 import { Route as AuthenticatedPoolsRouteImport } from './file-routes/_authenticated/pools'
 import { Route as AuthenticatedRepositoriesRouteImport } from './file-routes/_authenticated/repositories'
@@ -22,6 +21,7 @@ import { Route as AuthenticatedWorkersRouteImport } from './file-routes/_authent
 import { Route as AuthenticatedRunsIndexRouteImport } from './file-routes/_authenticated/runs/index'
 import { Route as AuthenticatedRunsRunIdRouteImport } from './file-routes/_authenticated/runs/$runId'
 import { Route as AuthenticatedRunsTimingRouteImport } from './file-routes/_authenticated/runs.timing'
+import { Route as AuthenticatedSettingsAiRouteImport } from './file-routes/_authenticated/settings_.ai'
 import { Route as AuthenticatedWorkersIndexRouteImport } from './file-routes/_authenticated/workers/index'
 import { Route as AuthenticatedWorkersWorkerIdRouteImport } from './file-routes/_authenticated/workers/$workerId'
 
@@ -37,11 +37,6 @@ const OnboardingRoute = OnboardingRouteImport.update({
 const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
-const AuthenticatedAiSettingsRoute = AuthenticatedAiSettingsRouteImport.update({
-  id: '/ai-settings',
-  path: '/ai-settings',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
 const AuthenticatedCostCenterRoute = AuthenticatedCostCenterRouteImport.update({
@@ -90,6 +85,11 @@ const AuthenticatedRunsTimingRoute = AuthenticatedRunsTimingRouteImport.update({
   path: '/timing',
   getParentRoute: () => AuthenticatedRunsRoute,
 } as any)
+const AuthenticatedSettingsAiRoute = AuthenticatedSettingsAiRouteImport.update({
+  id: '/settings_/ai',
+  path: '/settings/ai',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthenticatedWorkersIndexRoute =
   AuthenticatedWorkersIndexRouteImport.update({
     id: '/',
@@ -106,7 +106,6 @@ const AuthenticatedWorkersWorkerIdRoute =
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
   '/onboarding': typeof OnboardingRoute
-  '/ai-settings': typeof AuthenticatedAiSettingsRoute
   '/cost-center': typeof AuthenticatedCostCenterRoute
   '/pools': typeof AuthenticatedPoolsRoute
   '/repositories': typeof AuthenticatedRepositoriesRoute
@@ -115,13 +114,13 @@ export interface FileRoutesByFullPath {
   '/workers': typeof AuthenticatedWorkersRouteWithChildren
   '/runs/$runId': typeof AuthenticatedRunsRunIdRoute
   '/runs/timing': typeof AuthenticatedRunsTimingRoute
+  '/settings/ai': typeof AuthenticatedSettingsAiRoute
   '/workers/$workerId': typeof AuthenticatedWorkersWorkerIdRoute
   '/runs/': typeof AuthenticatedRunsIndexRoute
   '/workers/': typeof AuthenticatedWorkersIndexRoute
 }
 export interface FileRoutesByTo {
   '/onboarding': typeof OnboardingRoute
-  '/ai-settings': typeof AuthenticatedAiSettingsRoute
   '/cost-center': typeof AuthenticatedCostCenterRoute
   '/pools': typeof AuthenticatedPoolsRoute
   '/repositories': typeof AuthenticatedRepositoriesRoute
@@ -129,6 +128,7 @@ export interface FileRoutesByTo {
   '/': typeof AuthenticatedIndexRoute
   '/runs/$runId': typeof AuthenticatedRunsRunIdRoute
   '/runs/timing': typeof AuthenticatedRunsTimingRoute
+  '/settings/ai': typeof AuthenticatedSettingsAiRoute
   '/workers/$workerId': typeof AuthenticatedWorkersWorkerIdRoute
   '/runs': typeof AuthenticatedRunsIndexRoute
   '/workers': typeof AuthenticatedWorkersIndexRoute
@@ -137,7 +137,6 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/onboarding': typeof OnboardingRoute
-  '/_authenticated/ai-settings': typeof AuthenticatedAiSettingsRoute
   '/_authenticated/cost-center': typeof AuthenticatedCostCenterRoute
   '/_authenticated/pools': typeof AuthenticatedPoolsRoute
   '/_authenticated/repositories': typeof AuthenticatedRepositoriesRoute
@@ -147,6 +146,7 @@ export interface FileRoutesById {
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/runs/$runId': typeof AuthenticatedRunsRunIdRoute
   '/_authenticated/runs/timing': typeof AuthenticatedRunsTimingRoute
+  '/_authenticated/settings_/ai': typeof AuthenticatedSettingsAiRoute
   '/_authenticated/workers/$workerId': typeof AuthenticatedWorkersWorkerIdRoute
   '/_authenticated/runs/': typeof AuthenticatedRunsIndexRoute
   '/_authenticated/workers/': typeof AuthenticatedWorkersIndexRoute
@@ -156,7 +156,6 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/onboarding'
-    | '/ai-settings'
     | '/cost-center'
     | '/pools'
     | '/repositories'
@@ -165,13 +164,13 @@ export interface FileRouteTypes {
     | '/workers'
     | '/runs/$runId'
     | '/runs/timing'
+    | '/settings/ai'
     | '/workers/$workerId'
     | '/runs/'
     | '/workers/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/onboarding'
-    | '/ai-settings'
     | '/cost-center'
     | '/pools'
     | '/repositories'
@@ -179,6 +178,7 @@ export interface FileRouteTypes {
     | '/'
     | '/runs/$runId'
     | '/runs/timing'
+    | '/settings/ai'
     | '/workers/$workerId'
     | '/runs'
     | '/workers'
@@ -186,7 +186,6 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_authenticated'
     | '/onboarding'
-    | '/_authenticated/ai-settings'
     | '/_authenticated/cost-center'
     | '/_authenticated/pools'
     | '/_authenticated/repositories'
@@ -196,6 +195,7 @@ export interface FileRouteTypes {
     | '/_authenticated/'
     | '/_authenticated/runs/$runId'
     | '/_authenticated/runs/timing'
+    | '/_authenticated/settings_/ai'
     | '/_authenticated/workers/$workerId'
     | '/_authenticated/runs/'
     | '/_authenticated/workers/'
@@ -227,13 +227,6 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof AuthenticatedIndexRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/ai-settings': {
-      id: '/_authenticated/ai-settings'
-      path: '/ai-settings'
-      fullPath: '/ai-settings'
-      preLoaderRoute: typeof AuthenticatedAiSettingsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/cost-center': {
@@ -299,6 +292,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRunsTimingRouteImport
       parentRoute: typeof AuthenticatedRunsRoute
     }
+    '/_authenticated/settings_/ai': {
+      id: '/_authenticated/settings_/ai'
+      path: '/settings/ai'
+      fullPath: '/settings/ai'
+      preLoaderRoute: typeof AuthenticatedSettingsAiRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/workers/': {
       id: '/_authenticated/workers/'
       path: '/'
@@ -345,7 +345,6 @@ const AuthenticatedWorkersRouteWithChildren =
   AuthenticatedWorkersRoute._addFileChildren(AuthenticatedWorkersRouteChildren)
 
 interface AuthenticatedRouteChildren {
-  AuthenticatedAiSettingsRoute: typeof AuthenticatedAiSettingsRoute
   AuthenticatedCostCenterRoute: typeof AuthenticatedCostCenterRoute
   AuthenticatedPoolsRoute: typeof AuthenticatedPoolsRoute
   AuthenticatedRepositoriesRoute: typeof AuthenticatedRepositoriesRoute
@@ -353,10 +352,10 @@ interface AuthenticatedRouteChildren {
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
   AuthenticatedWorkersRoute: typeof AuthenticatedWorkersRouteWithChildren
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
+  AuthenticatedSettingsAiRoute: typeof AuthenticatedSettingsAiRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
-  AuthenticatedAiSettingsRoute: AuthenticatedAiSettingsRoute,
   AuthenticatedCostCenterRoute: AuthenticatedCostCenterRoute,
   AuthenticatedPoolsRoute: AuthenticatedPoolsRoute,
   AuthenticatedRepositoriesRoute: AuthenticatedRepositoriesRoute,
@@ -364,6 +363,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
   AuthenticatedWorkersRoute: AuthenticatedWorkersRouteWithChildren,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
+  AuthenticatedSettingsAiRoute: AuthenticatedSettingsAiRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { defineQueries, schema } from "@mars/db";
+import { LlmProviderModelLookupRequest } from "@mars/contracts";
 const routeQueries = defineQueries(db => ({
   membership: db.select({ allowed: sql`1` }).from(schema.memberships).where(and(eq(schema.memberships.userId, sql.placeholder("userId")), eq(schema.memberships.organizationId, sql.placeholder("organizationId")))).prepare("route_membership"),
   worker: db.select({ id: schema.workers.id }).from(schema.workers).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("route_worker"),
@@ -135,17 +136,29 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!deps.llmProviders) return providerUnavailable(c);
     return c.json(await deps.llmProviders.list(), 200, { "cache-control": "no-store" });
   }));
+  app.post("/api/admin/llm/providers/models", safe(async (c) => {
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    if (!deps.llmProviders) return providerUnavailable(c);
+    const input = LlmProviderModelLookupRequest.parse(await c.req.json());
+    try { return c.json({ models: await deps.llmProviders.models(input) }, 200, { "cache-control": "no-store" }); }
+    catch (cause) {
+      if (cause instanceof Error && cause.message === "llm_provider_not_found") return error(c, 404, "not_found", "Provider not found");
+      if (cause instanceof Error && cause.message === "llm_invalid_provider_url") return error(c, 400, cause.message, "Provider API root is invalid");
+      if (cause instanceof Error && /^llm_/.test(cause.message)) return error(c, 502, cause.message, "Unable to list models. Enter a model ID manually or check the provider connection.");
+      throw cause;
+    }
+  }));
   app.post("/api/admin/llm/providers", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     if (!deps.llmProviders) return providerUnavailable(c);
-    const body = z.object({ name: z.string().trim().min(1).max(200), kind: z.enum(["openai-compatible", "anthropic"]), baseUrl: z.string().url(), model: z.string().trim().min(1).max(200), apiKey: z.string().nullable().optional() }).strict().parse(await c.req.json());
+    const body = z.object({ name: z.string().trim().min(1).max(200), kind: z.enum(["openai-compatible", "anthropic"]), baseUrl: z.string().trim().pipe(z.string().url().or(z.literal(""))), model: z.string().trim().min(1).max(200), apiKey: z.string().nullable().optional() }).strict().parse(await c.req.json());
     try { return c.json(await deps.llmProviders.save(body), 201, { "cache-control": "no-store" }); }
     catch (cause) { if (cause instanceof Error && ["llm_auth_failed", "llm_invalid_provider_url"].includes(cause.message)) return error(c, 400, cause.message, "Provider configuration is invalid"); throw cause; }
   }));
   app.put("/api/admin/llm/providers/:providerId", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     if (!deps.llmProviders) return providerUnavailable(c);
-    const body = z.object({ name: z.string().trim().min(1).max(200), kind: z.enum(["openai-compatible", "anthropic"]), baseUrl: z.string().url(), model: z.string().trim().min(1).max(200), apiKey: z.string().nullable().optional() }).strict().parse(await c.req.json());
+    const body = z.object({ name: z.string().trim().min(1).max(200), kind: z.enum(["openai-compatible", "anthropic"]), baseUrl: z.string().trim().pipe(z.string().url().or(z.literal(""))), model: z.string().trim().min(1).max(200), apiKey: z.string().nullable().optional() }).strict().parse(await c.req.json());
     try { return c.json(await deps.llmProviders.save(body, c.req.param("providerId")), 200, { "cache-control": "no-store" }); }
     catch (cause) { if (cause instanceof Error && cause.message === "llm_provider_not_found") return error(c, 404, "not_found", "Provider not found"); if (cause instanceof Error && ["llm_auth_failed", "llm_invalid_provider_url"].includes(cause.message)) return error(c, 400, cause.message, "Provider configuration is invalid"); throw cause; }
   }));

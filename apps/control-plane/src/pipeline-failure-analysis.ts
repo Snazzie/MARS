@@ -1,5 +1,6 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, exists, sql } from "drizzle-orm";
 import { defineQueries, schema, type DatabaseClient } from "@mars/db";
+import { alias } from "drizzle-orm/pg-core";
 import type { SecretBox } from "./auth.ts";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { attributeGithubJobLog } from "./github-job-logs.ts";
@@ -13,14 +14,23 @@ const queries = defineQueries(db => {
   const r = schema.dashboardRuns, repo = schema.dashboardRepositories, settings = schema.repositoryFailureAnalysisSettings;
   const jobs = schema.dashboardJobs, steps = schema.dashboardJobSteps;
   const p = sql.placeholder;
+  const newer = alias(r, "newer_analysis_run");
+  const superseded = exists(db.select({ id: newer.id }).from(newer).where(and(
+    eq(newer.organizationId, a.organizationId), eq(newer.repositoryId, a.repositoryId),
+    eq(newer.githubRunId, a.githubRunId), sql`${newer.runAttempt} > ${a.runAttempt}`,
+  )));
   return {
     enqueueContext: db.select({ runId: r.id, workflowName: r.workflowName, runNumber: r.runNumber, event: r.event, branch: r.branch, commitSha: r.commitSha, actorLogin: r.actorLogin, queuedAt: r.queuedAt, startedAt: r.startedAt, completedAt: r.completedAt, installationId: repo.installationId, githubRepositoryId: repo.githubRepositoryId, fullName: repo.fullName, available: repo.available, installState: schema.dashboardInstallations.state, enabled: settings.enabled, enabledSince: settings.enabledSince, providerId: schema.llmProviders.id, providerName: schema.llmProviders.name, providerKind: schema.llmProviders.kind, model: schema.llmProviders.model })
       .from(r).innerJoin(repo, and(eq(repo.id, r.repositoryId), eq(repo.organizationId, r.organizationId))).innerJoin(schema.dashboardInstallations, and(eq(schema.dashboardInstallations.id, repo.installationId), eq(schema.dashboardInstallations.organizationId, repo.organizationId)))
       .innerJoin(settings, and(eq(settings.organizationId, r.organizationId), eq(settings.repositoryId, repo.id))).leftJoin(schema.llmProviders, eq(schema.llmProviders.id, settings.providerId))
       .where(and(eq(r.organizationId, p("organizationId")), eq(r.repositoryId, p("repositoryId")), eq(r.githubRunId, p("githubRunId")), eq(r.runAttempt, p("runAttempt")))).limit(1).prepare("pipeline_analysis_enqueue_context"),
     insert: db.insert(a).values({ organizationId: p("organizationId"), repositoryId: p("repositoryId"), runId: p("runId"), githubRunId: p("githubRunId"), runAttempt: p("runAttempt"), providerId: p("providerId"), providerKind: p("providerKind"), providerName: p("providerName"), model: p("model"), source: p("source"), state: p("state"), errorCode: p("errorCode") }).onConflictDoNothing().returning({ id: a.id }).prepare("pipeline_analysis_enqueue"),
+    finalize: db.update(a).set({ source: p("source"), state: sql`${p("state")}`, errorCode: sql`${p("errorCode")}`, updatedAt: sql`now()` }).where(and(eq(a.organizationId, p("organizationId")), eq(a.repositoryId, p("repositoryId")), eq(a.githubRunId, p("githubRunId")), eq(a.runAttempt, p("runAttempt")), eq(a.state, "pending"))).prepare("pipeline_analysis_finalize"),
+    cancelSuperseded: db.update(a).set({ state: "skipped", errorCode: "analysis_superseded", finishedAt: sql`now()`, updatedAt: sql`now()` }).where(and(eq(a.state, "pending"), superseded)).prepare("pipeline_analysis_cancel_superseded"),
+    superseded: db.select({ id: a.id }).from(a).where(and(eq(a.id, p("id")), superseded)).limit(1).prepare("pipeline_analysis_superseded"),
+    cancelNonfailed: db.update(a).set({ state: "skipped", errorCode: "analysis_run_not_failed", finishedAt: sql`now()`, updatedAt: sql`now()` }).where(and(eq(a.state, "pending"), exists(db.select({ id: r.id }).from(r).where(and(eq(r.id, a.runId), eq(r.runAttempt, a.runAttempt), eq(r.status, "completed"), sql`${r.conclusion} NOT IN ('failure','timed_out')`))))).prepare("pipeline_analysis_cancel_nonfailed"),
     stale: db.update(a).set({ state: "failed", errorCode: "analysis_interrupted", finishedAt: sql`now()`, updatedAt: sql`now()` }).where(and(eq(a.state, "running"), sql`${a.startedAt} < now()-interval '5 minutes'`)).prepare("pipeline_analysis_stale"),
-    claim: db.select({ id: a.id }).from(a).where(eq(a.state, "pending")).orderBy(asc(a.createdAt)).limit(1).for("update", { skipLocked: true }).prepare("pipeline_analysis_claim"),
+    claim: db.select({ id: a.id }).from(a).where(and(eq(a.state, "pending"), sql`(${a.source}->>'ready') IS DISTINCT FROM 'false'`, sql`NOT ${superseded}`)).orderBy(asc(a.createdAt)).limit(1).for("update", { skipLocked: true }).prepare("pipeline_analysis_claim"),
     claimUpdate: db.update(a).set({ state: "running", startedAt: sql`now()`, updatedAt: sql`now()`, errorCode: null }).where(and(eq(a.id, p("id")), eq(a.state, "pending"))).returning({ id: a.id }).prepare("pipeline_analysis_claim_update"),
     analysis: db.select({ id: a.id, organizationId: a.organizationId, repositoryId: a.repositoryId, runId: a.runId, githubRunId: a.githubRunId, runAttempt: a.runAttempt, providerId: a.providerId, providerKind: a.providerKind, providerName: a.providerName, model: a.model, source: a.source, state: a.state, result: a.result, installationId: repo.installationId, githubRepositoryId: repo.githubRepositoryId, fullName: repo.fullName, available: repo.available, installState: schema.dashboardInstallations.state, enabled: settings.enabled, providerIdCurrent: schema.llmProviders.id, providerKindCurrent: schema.llmProviders.kind, providerBaseUrl: schema.llmProviders.baseUrl, encryptedApiKey: schema.llmProviders.encryptedApiKey })
       .from(a).innerJoin(repo, and(eq(repo.id, a.repositoryId), eq(repo.organizationId, a.organizationId))).innerJoin(schema.dashboardInstallations, and(eq(schema.dashboardInstallations.id, repo.installationId), eq(schema.dashboardInstallations.organizationId, repo.organizationId))).leftJoin(settings, and(eq(settings.organizationId, a.organizationId), eq(settings.repositoryId, repo.id))).leftJoin(schema.llmProviders, eq(schema.llmProviders.id, settings.providerId))
@@ -28,7 +38,7 @@ const queries = defineQueries(db => {
     localJobs: db.select({ id: jobs.id, githubJobId: jobs.githubJobId, runAttempt: jobs.runAttempt, name: jobs.name, logsState: jobs.logsState, logsVersion: jobs.logsVersion, conclusion: jobs.conclusion }).from(jobs).where(and(eq(jobs.organizationId, p("organizationId")), eq(jobs.runId, p("runId")), eq(jobs.runAttempt, p("runAttempt")), eq(jobs.githubJobId, p("jobId")))).limit(1).prepare("pipeline_analysis_local_job"),
     localSteps: db.select({ number: steps.number, name: steps.name, conclusion: steps.conclusion, status: steps.status, content: schema.dashboardStepLogChunks.content, sequence: schema.dashboardStepLogChunks.sequence }).from(steps).innerJoin(schema.dashboardStepLogChunks, and(eq(schema.dashboardStepLogChunks.organizationId, steps.organizationId), eq(schema.dashboardStepLogChunks.runId, steps.runId), eq(schema.dashboardStepLogChunks.jobId, steps.jobId), eq(schema.dashboardStepLogChunks.stepId, steps.id))).where(and(eq(steps.organizationId, p("organizationId")), eq(steps.runId, p("runId")), eq(steps.jobId, p("jobId")))).orderBy(asc(steps.number), asc(schema.dashboardStepLogChunks.sequence)).prepare("pipeline_analysis_local_steps"),
     localJobLogs: db.select({ content: schema.dashboardLogChunks.content, sequence: schema.dashboardLogChunks.sequence }).from(schema.dashboardLogChunks).where(and(eq(schema.dashboardLogChunks.organizationId, p("organizationId")), eq(schema.dashboardLogChunks.runId, p("runId")), eq(schema.dashboardLogChunks.jobId, p("jobId")))).orderBy(asc(schema.dashboardLogChunks.sequence)).prepare("pipeline_analysis_local_job_logs"),
-    complete: db.update(a).set({ state: "completed", result: sql`${p("result")}::jsonb`, errorCode: null, finishedAt: sql`now()`, updatedAt: sql`now()` }).where(and(eq(a.id, p("id")), eq(a.state, "running"))).prepare("pipeline_analysis_complete"),
+    complete: db.update(a).set({ state: "completed", result: p("result"), errorCode: null, finishedAt: sql`now()`, updatedAt: sql`now()` }).where(and(eq(a.id, p("id")), eq(a.state, "running"))).prepare("pipeline_analysis_complete"),
     fail: db.update(a).set({ state: "failed", errorCode: sql`${p("errorCode")}`, finishedAt: sql`now()`, updatedAt: sql`now()` }).where(and(eq(a.id, p("id")), eq(a.state, "running"))).prepare("pipeline_analysis_fail"),
     skip: db.update(a).set({ state: "skipped", errorCode: sql`${p("errorCode")}`, finishedAt: sql`now()`, updatedAt: sql`now()` }).where(and(eq(a.id, p("id")), eq(a.state, "running"))).prepare("pipeline_analysis_skip"),
     comments: db.select({ prNumber: c.prNumber, state: c.state }).from(c).where(eq(c.analysisId, p("analysisId"))).orderBy(asc(c.prNumber)).prepare("pipeline_analysis_comments_list"),
@@ -70,18 +80,38 @@ function compact(text: string, maxBytes: number): { text: string; truncated: boo
 }
 function sourceObject(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 
-export async function enqueuePipelineFailureAnalysis(input: { db: DatabaseClient; organizationId: string; repositoryId: string; run: GithubRunSnapshot; jobs: GithubJobSnapshot[] }): Promise<void> {
-  if (input.run.status !== "completed" || (input.run.conclusion !== "failure" && input.run.conclusion !== "timed_out")) return;
+export async function enqueuePipelineFailureAnalysis(input: { db: DatabaseClient; organizationId: string; repositoryId: string; run: GithubRunSnapshot; jobs: GithubJobSnapshot[]; completeSnapshot?: boolean }): Promise<void> {
+  const failedJobs = input.jobs.filter(job => job.status === "completed" && (job.conclusion === "failure" || job.conclusion === "timed_out"));
+  const ready = input.completeSnapshot !== false && input.run.status === "completed" && ["failure", "timed_out"].includes(String(input.run.conclusion));
+  if (!ready && (failedJobs.length === 0 || input.run.status === "completed" && !["failure", "timed_out"].includes(String(input.run.conclusion)))) return;
   if (input.jobs.some(job => job.runId !== input.run.id || job.runAttempt !== input.run.runAttempt)) throw new Error("pipeline_analysis_attempt_mismatch");
   const [context] = await queries(input.db).enqueueContext.execute({ organizationId: input.organizationId, repositoryId: input.repositoryId, githubRunId: input.run.id, runAttempt: input.run.runAttempt });
   if (!context || !context.enabled || !context.available || context.installState !== "approved" || !context.providerId || !context.providerName || !context.providerKind || !context.model) return;
-  if (context.enabledSince && (!input.run.completedAt || !Number.isFinite(Date.parse(input.run.completedAt)) || Date.parse(input.run.completedAt) < Date.parse(context.enabledSince))) return;
-  const failedJobs = input.jobs.filter(job => job.status === "completed" && (job.conclusion === "failure" || job.conclusion === "timed_out"));
+  if (context.enabledSince) {
+    const observedAt = ready ? input.run.completedAt : failedJobs.reduce<string | null>((latest, job) => job.completedAt && (!latest || job.completedAt > latest) ? job.completedAt : latest, null);
+    if (!observedAt || !Number.isFinite(Date.parse(observedAt)) || Date.parse(observedAt) < Date.parse(context.enabledSince)) return;
+  }
   const source = {
+    ready,
     run: { id: input.run.id, attempt: input.run.runAttempt, number: input.run.runNumber, workflowName: input.run.workflowName, workflowPath: input.run.workflowPath ?? null, event: input.run.event, branch: input.run.branch, commitSha: input.run.commitSha, actorLogin: input.run.actorLogin, conclusion: input.run.conclusion, queuedAt: input.run.queuedAt, startedAt: input.run.startedAt, completedAt: input.run.completedAt, repositoryFullName: context.fullName, githubRepositoryId: Number(context.githubRepositoryId) },
     failedJobs: failedJobs.map(job => ({ jobId: job.id, runId: job.runId, runAttempt: job.runAttempt, name: job.name, conclusion: job.conclusion, completedAt: job.completedAt, steps: job.steps.filter(step => step.status === "completed" && (step.conclusion === "failure" || step.conclusion === "timed_out")).map(step => ({ stepNumber: step.number, name: step.name, conclusion: step.conclusion, status: step.status })) })),
   };
   await queries(input.db).insert.execute({ organizationId: input.organizationId, repositoryId: input.repositoryId, runId: String(context.runId), githubRunId: input.run.id, runAttempt: input.run.runAttempt, providerId: String(context.providerId), providerKind: String(context.providerKind), providerName: String(context.providerName), model: String(context.model), source, state: failedJobs.length ? "pending" : "skipped", errorCode: failedJobs.length ? null : "analysis_no_failed_jobs" });
+  if (ready) await queries(input.db).finalize.execute({ organizationId: input.organizationId, repositoryId: input.repositoryId, githubRunId: input.run.id, runAttempt: input.run.runAttempt, source, state: failedJobs.length ? "pending" : "skipped", errorCode: failedJobs.length ? null : "analysis_no_failed_jobs" });
+}
+
+async function hasNewerGithubRun(client: GithubJobsClient, owner: string, repo: string, analysis: Record<string, unknown>): Promise<boolean> {
+  const captured = sourceObject(sourceObject(analysis.source).run);
+  const capturedTime = Date.parse(String(captured.queuedAt));
+  for (let page = 1; ; page++) {
+    const listing = await client.listRuns(owner, repo, undefined, page);
+    for (const run of listing.runs) {
+      if (run.id === Number(analysis.githubRunId) && run.runAttempt > Number(analysis.runAttempt)) return true;
+      const sameWorkflow = captured.workflowPath && run.workflowPath ? captured.workflowPath === run.workflowPath : captured.workflowName === run.workflowName;
+      if (sameWorkflow && run.branch === captured.branch && run.runNumber > Number(captured.number)) return true;
+    }
+    if (listing.runs.length < 100 || listing.runs.some(run => Date.parse(run.queuedAt) < capturedTime)) return false;
+  }
 }
 
 async function capturedContext(db: DatabaseClient, analysis: Record<string, unknown>, deps: PipelineFailureAnalysisDeps, client: GithubJobsClient, owner: string, repoName: string): Promise<PipelineAnalysisContext> {
@@ -197,6 +227,10 @@ async function publish(deps: PipelineFailureAnalysisDeps, analysis: Record<strin
         if (comments.length < 100) break;
       }
       if (found) { await queries(deps.db).commentState.execute({ analysisId: String(analysis.id), prNumber: pr.number, expectedState: "publishing", state: "published", commentId: found.id, commentUrl: found.url, errorCode: null }); continue; }
+      if ((await queries(deps.db).superseded.execute({ id: String(analysis.id) })).length || await hasNewerGithubRun(client, owner, repo, analysis)) {
+        await queries(deps.db).commentState.execute({ analysisId: String(analysis.id), prNumber: pr.number, expectedState: "publishing", state: "failed", commentId: null, commentUrl: null, errorCode: "analysis_superseded" });
+        continue;
+      }
       const body = renderComment(result, source, marker);
       try {
         const created = await client.createPullRequestComment(owner, repo, pr.number, body);
@@ -241,6 +275,8 @@ async function adoptUnknownComments(deps: PipelineFailureAnalysisDeps): Promise<
 export async function processPipelineFailureAnalyses(deps: PipelineFailureAnalysisDeps): Promise<void> {
   const statements = queries(deps.db);
   await statements.stale.execute({});
+  await statements.cancelSuperseded.execute({});
+  await statements.cancelNonfailed.execute({});
   await statements.unknownComments.execute({});
   await adoptUnknownComments(deps);
   const id = await deps.db.transaction(async tx => {
@@ -263,8 +299,11 @@ export async function processPipelineFailureAnalyses(deps: PipelineFailureAnalys
   if (!owner || !repoName) { await statements.fail.execute({ id, errorCode: "analysis_repository_invalid" }); return; }
   const client = new GithubJobsClient({ token: () => deps.installationToken(installationId), fetch: deps.githubFetchForInstallation(installationId) });
   try {
+    if ((await statements.superseded.execute({ id })).length || await hasNewerGithubRun(client, owner, repoName, analysis as Record<string, unknown>)) { await statements.skip.execute({ id, errorCode: "analysis_superseded" }); return; }
     const context = await capturedContext(deps.db, analysis as Record<string, unknown>, deps, client, owner, repoName);
+    if ((await statements.superseded.execute({ id })).length) { await statements.skip.execute({ id, errorCode: "analysis_superseded" }); return; }
     const result = await deps.generatePipelineAnalysis({ provider, context, secretBox: deps.secretBox });
+    if ((await statements.superseded.execute({ id })).length || await hasNewerGithubRun(client, owner, repoName, analysis as Record<string, unknown>)) { await statements.skip.execute({ id, errorCode: "analysis_superseded" }); return; }
     await statements.complete.execute({ id, result });
     await publish(deps, analysis as Record<string, unknown>, client, fullName, result);
   } catch (error) {

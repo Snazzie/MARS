@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
+import { LlmProvidersService } from "../llm-providers.ts";
+import { SecretBox } from "../auth.ts";
 
 const app = createControlPlaneApp(fakeHttpDeps());
 
@@ -2282,3 +2284,21 @@ describe("Linux and macOS platform artifact sources", () => {
     }));
     expect((await memberEndpoint.request("/api/workers/container-recipes/windows-x64")).status).toBe(403);
   });
+
+test("model lookup requires global admin and rejects credential-bearing endpoint URLs", async () => {
+  const service = new LlmProvidersService(new SecretBox(Buffer.alloc(32, 5).toString("base64")), {
+    list: async () => [], get: async () => null, save: async input => input, delete: async () => {},
+  }, async () => Response.json({ data: [{ id: "local-model" }] }));
+  const endpoint = (isGlobalAdmin: boolean) => createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "operator", githubUserId: 1, login: "operator", isGlobalAdmin }), llmProviders: service,
+  }));
+  const lookup = (isGlobalAdmin: boolean, baseUrl: string) => endpoint(isGlobalAdmin).request("/api/admin/llm/providers/models", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ baseUrl }) });
+  expect((await lookup(false, "")).status).toBe(403);
+  const invalid = await lookup(true, "https://user:password@example.test/v1");
+  expect(invalid.status).toBe(400);
+  expect(await invalid.json()).toMatchObject({ code: "llm_invalid_provider_url" });
+  const valid = await lookup(true, "");
+  expect(valid.status).toBe(200);
+  expect(valid.headers.get("cache-control")).toBe("no-store");
+  expect(await valid.json()).toEqual({ models: ["local-model"] });
+});

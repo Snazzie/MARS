@@ -38,6 +38,8 @@ import {
   RunnerWorkflowPrResult,
   LlmProviderSummary,
   LlmProviderSaveRequest,
+  LlmProviderModelLookupRequest,
+  LlmProviderModels,
   RepositoryFailureAnalysisSettings,
 } from "@mars/contracts";
 import {
@@ -504,6 +506,10 @@ export const saveLlmProvider = (input: LlmProviderSaveRequest & { id?: string })
     body: JSON.stringify(body),
   });
 };
+export const getLlmProviderModels = (input: LlmProviderModelLookupRequest, signal?: AbortSignal) =>
+  request("/api/admin/llm/providers/models", LlmProviderModels, {
+    method: "POST", cache: "no-store", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
 export const deleteLlmProvider = (providerId: string) =>
   request(`/api/admin/llm/providers/${encodeURIComponent(providerId)}`, DashboardOkResponse, { method: "DELETE", cache: "no-store" });
 export const testLlmProvider = (providerId: string) =>

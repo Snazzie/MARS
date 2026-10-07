@@ -6,6 +6,7 @@ export type GithubStepSnapshot = { id: string | null; number: number; name: stri
 export type GithubRunSnapshot = { id:number; runAttempt:number; runNumber:number; workflowName:string; workflowPath?:string|null; event:string; branch:string; commitSha:string; actorLogin:string; status:"queued"|"in_progress"|"completed"; conclusion:string|null; queuedAt:string; startedAt:string|null; completedAt:string|null };
 export type GithubJobSnapshot = { id:number; runId:number; runAttempt:number; name:string; status:"queued"|"in_progress"|"completed"; conclusion:string|null; labels:string[]; runnerName:string|null; queuedAt:string; startedAt:string|null; completedAt:string|null; steps: GithubStepSnapshot[] };
 export type WorkflowJobPayload = { action?: string; installation?: { id?: number }; repository?: { id?: number; name?: string; full_name?: string; private?: boolean }; organization?: { id?: number; login?: string }; sender?: { login?: string }; workflow_job?: { id?: number; run_id?: number; run_attempt?: number; run_number?: number; name?: string; status?: string; conclusion?: string | null; started_at?: string | null; completed_at?: string | null; created_at?: string; runner_name?: string | null; workflow_name?: string; head_branch?: string; head_sha?: string; labels?: string[]; event?: string; steps?: Array<Record<string, unknown>> } };
+import { enqueuePipelineFailureAnalysis } from "./pipeline-failure-analysis.ts";
 let database: DatabaseClient | undefined;
 export function configureRunLifecycle(sql: DatabaseClient): void { database = sql; }
 function db(): DatabaseClient { if (!database) throw new Error("run lifecycle database is not configured"); return database; }
@@ -109,8 +110,8 @@ export async function applyGithubJobSnapshot(input: { installationId:number; rep
   const labels = [...new Set(input.job.labels.map(x => x.trim().toLowerCase()).filter(Boolean))];
   const runStatus = input.run.status, jobStatus = input.job.status, stage = runStatus === "completed" || jobStatus === "completed" ? (input.job.conclusion === "success" ? "completed" : "failed") : jobStatus === "in_progress" ? "running" : "queued";
   const authoritative = input.authoritative === true;
-  const prepared = queries(sql);
-  const result = await sql.transaction(async () => {
+  const result = await sql.transaction(async tx => {
+    const prepared = queries(tx as unknown as DatabaseClient);
     const [installation] = await prepared.installation.execute({ installationId: input.installationId });
     if (!installation) {
       if (jobStatus === "queued") console.warn("Queued GitHub job not ingested", { installationId: input.installationId, repository: input.repository.fullName, runId: input.run.id, jobId: input.job.id, reason: "installation_not_approved" });
@@ -159,6 +160,7 @@ export async function applyGithubJobSnapshot(input: { installationId:number; rep
         conclusion: step.conclusion, queuedAt: step.queuedAt, startedAt: step.startedAt, completedAt: step.completedAt, durationMs: step.durationMs,
       });
     }
+    await enqueuePipelineFailureAnalysis({ db: tx as unknown as DatabaseClient, organizationId: String(installation.organizationId), repositoryId: String(repository.id), run: input.run, jobs: [input.job], completeSnapshot: false });
     return true;
   });
   return result;

@@ -167,6 +167,17 @@ export const ActionGraph = dto(strict({
 export type ActionGraph = z.infer<typeof ActionGraph>;
 export const LlmProviderKind = z.enum(["openai-compatible", "anthropic"]);
 export type LlmProviderKind = z.infer<typeof LlmProviderKind>;
+export const LlmProviderDefaultApiRoots = {
+  "openai-compatible": "http://localhost:11434/v1",
+  anthropic: "https://api.anthropic.com/v1",
+} as const;
+export const LlmProviderModelLookupRequest = strict({
+  baseUrl: z.string().trim().pipe(z.string().url().or(z.literal(""))),
+  providerId: id.optional(),
+  apiKey: z.string().min(1).nullable().optional(),
+});
+export type LlmProviderModelLookupRequest = z.infer<typeof LlmProviderModelLookupRequest>;
+export const LlmProviderModels = dto(strict({ models: z.array(z.string().min(1).max(200)).max(1000) }));
 export const LlmProviderSummary = dto(strict({
   id,
   name: z.string().min(1),
@@ -179,7 +190,7 @@ export type LlmProviderSummary = z.infer<typeof LlmProviderSummary>;
 export const LlmProviderSaveRequest = strict({
   name: z.string().min(1),
   kind: LlmProviderKind,
-  baseUrl: z.string().url(),
+  baseUrl: z.string().trim().pipe(z.string().url().or(z.literal(""))),
   model: z.string().min(1),
   apiKey: z.string().min(1).nullable().optional(),
 });
