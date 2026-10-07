@@ -4,6 +4,20 @@ import { deleteLlmProvider, getLlmProviders, getLlmProviderModels, getMe, getOrg
 import { QueryState } from "../components/StateView.tsx";
 import { LlmProviderDefaultApiRoots } from "@mars/contracts";
 
+const providerTypes = {
+  "lm-studio": { label: "LM Studio", kind: "openai-compatible", baseUrl: "http://localhost:1234/v1" },
+  ollama: { label: "Ollama", kind: "openai-compatible", baseUrl: LlmProviderDefaultApiRoots["openai-compatible"] },
+  "openai-compatible": { label: "OpenAI-compatible", kind: "openai-compatible", baseUrl: "https://api.openai.com/v1" },
+  anthropic: { label: "Anthropic", kind: "anthropic", baseUrl: LlmProviderDefaultApiRoots.anthropic },
+} as const;
+type ProviderType = keyof typeof providerTypes;
+
+function providerTypeFor(provider: { kind: "openai-compatible" | "anthropic"; baseUrl: string }): ProviderType {
+  if (provider.kind === "anthropic") return "anthropic";
+  const port = new URL(provider.baseUrl).port;
+  return port === "1234" ? "lm-studio" : port === "11434" ? "ollama" : "openai-compatible";
+}
+
 async function getAllRepositories(organizationId: string) {
   const items = [];
   let cursor: string | null = null;
@@ -33,7 +47,8 @@ function AiSettings() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [kind, setKind] = useState<"openai-compatible" | "anthropic">("openai-compatible");
+  const [providerType, setProviderType] = useState<ProviderType>("lm-studio");
+  const { kind, baseUrl: defaultBaseUrl } = providerTypes[providerType];
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -45,27 +60,27 @@ function AiSettings() {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [modelLookupRevision, setModelLookupRevision] = useState(0);
-  const effectiveBaseUrl = baseUrl.trim() || LlmProviderDefaultApiRoots[kind];
+  const effectiveBaseUrl = baseUrl.trim() || defaultBaseUrl;
   useEffect(() => {
     setAvailableModels([]); setModelsError(null); setModelsLoading(false);
     if (!formOpen || kind !== "openai-compatible") return;
     const controller = new AbortController();
     setModelsLoading(true);
     const timer = setTimeout(() => {
-      void getLlmProviderModels({ baseUrl, ...(editingId ? { providerId: editingId } : {}), ...(apiKey ? { apiKey } : clearKey ? { apiKey: null } : {}) }, controller.signal)
+      void getLlmProviderModels({ baseUrl: effectiveBaseUrl, ...(editingId ? { providerId: editingId } : {}), ...(apiKey ? { apiKey } : clearKey ? { apiKey: null } : {}) }, controller.signal)
         .then(({ models }) => { if (!controller.signal.aborted) setAvailableModels(models); })
         .catch((reason) => { if (!controller.signal.aborted) setModelsError(errorMessage(reason, "Unable to list models. Enter a model ID manually.")); })
         .finally(() => { if (!controller.signal.aborted) setModelsLoading(false); });
     }, 400);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [formOpen, kind, baseUrl, apiKey, clearKey, editingId, modelLookupRevision]);
+  }, [formOpen, providerType, kind, effectiveBaseUrl, apiKey, clearKey, editingId, modelLookupRevision]);
   const providerRows = providers.data ?? [];
   const invalidate = () => {
     void client.invalidateQueries({ queryKey: ["admin", "llm-providers"] });
     void Promise.all(organizations.map((organization) => client.invalidateQueries({ queryKey: ["failure-analysis-settings", organization.id] })));
   };
   const resetForm = () => {
-    setFormOpen(false); setEditingId(null); setName(""); setKind("openai-compatible"); setBaseUrl(""); setModel(""); setApiKey(""); setClearKey(false);
+    setFormOpen(false); setEditingId(null); setName(""); setProviderType("lm-studio"); setBaseUrl(""); setModel(""); setApiKey(""); setClearKey(false);
   };
   const remove = useMutation({ mutationFn: deleteLlmProvider, onSuccess: invalidate, onError: (reason) => setError(errorMessage(reason, "Unable to delete provider.")) });
   const test = useMutation({ mutationFn: testLlmProvider, onError: (reason) => setError(errorMessage(reason, "Provider test failed.")) });
@@ -77,7 +92,7 @@ function AiSettings() {
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setError(null); setSaving(true);
     try {
-      await saveLlmProvider({ ...(editingId ? { id: editingId } : {}), name, kind, baseUrl, model, ...(apiKey ? { apiKey } : clearKey ? { apiKey: null } : {}) });
+      await saveLlmProvider({ ...(editingId ? { id: editingId } : {}), name, kind, baseUrl: effectiveBaseUrl, model, ...(apiKey ? { apiKey } : clearKey ? { apiKey: null } : {}) });
       resetForm(); invalidate();
     } catch (reason) { setError(errorMessage(reason, "Unable to save provider.")); }
     finally { setSaving(false); }
@@ -92,19 +107,19 @@ function AiSettings() {
       {providers.error && <p className="form-error" role="alert">{errorMessage(providers.error, "Unable to load providers.")} <button className="button secondary" onClick={() => void providers.refetch()}>Retry</button></p>}
       {!providers.isLoading && !providers.error && providerRows.length === 0 && <div className="ai-empty"><h3>No providers connected</h3><p>Add an OpenAI-compatible or Anthropic profile to get started. Local servers can run without an API key.</p></div>}
       <div className="ai-provider-grid">{providerRows.map((provider) => <article className="ai-provider-card" key={provider.id}>
-        <div className="panel-heading"><h3>{provider.name}</h3><span className="ai-badge">{provider.kind === "anthropic" ? "Anthropic" : "OpenAI-compatible"}</span></div>
+        <div className="panel-heading"><h3>{provider.name}</h3><span className="ai-badge">{providerTypes[providerTypeFor(provider)].label}</span></div>
         <dl className="ai-provider-details"><div><dt>Model</dt><dd>{provider.model}</dd></div><div><dt>API root</dt><dd>{provider.baseUrl}</dd></div></dl>
         <p className="form-help">{provider.keyConfigured ? "API key configured" : "No API key configured"}</p>
         {provider.baseUrl.startsWith("http://") && <p className="ai-warning">Warning: HTTP does not encrypt traffic to this provider.</p>}
         {test.variables === provider.id && test.isSuccess && <p role="status" className="ai-success">Connection verified.</p>}
-        <div className="settings-actions"><button className="button secondary" type="button" disabled={saving} onClick={() => { setEditingId(provider.id); setName(provider.name); setKind(provider.kind); setBaseUrl(provider.baseUrl); setModel(provider.model); setApiKey(""); setClearKey(false); setFormOpen(true); }}>Edit</button><button className="button secondary" type="button" onClick={() => { setError(null); test.mutate(provider.id); }} disabled={test.isPending}>{test.isPending && test.variables === provider.id ? "Testing…" : "Test connection"}</button><button className="button secondary" type="button" onClick={() => { setError(null); remove.mutate(provider.id); }} disabled={remove.isPending || saving}>Delete</button></div>
+        <div className="settings-actions"><button className="button secondary" type="button" disabled={saving} onClick={() => { setEditingId(provider.id); setName(provider.name); setProviderType(providerTypeFor(provider)); setBaseUrl(provider.baseUrl); setModel(provider.model); setApiKey(""); setClearKey(false); setFormOpen(true); }}>Edit</button><button className="button secondary" type="button" onClick={() => { setError(null); test.mutate(provider.id); }} disabled={test.isPending}>{test.isPending && test.variables === provider.id ? "Testing…" : "Test connection"}</button><button className="button secondary" type="button" onClick={() => { setError(null); remove.mutate(provider.id); }} disabled={remove.isPending || saving}>Delete</button></div>
       </article>)}</div>
       {formOpen && <form onSubmit={submit} className="ai-provider-form" aria-labelledby="ai-provider-form-title">
         <h3 id="ai-provider-form-title">{editingId ? "Edit provider" : "Add provider"}</h3>
         <div className="ai-form-grid">
           <label>Profile name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="Local development" /></label>
-          <label>Provider type<select value={kind} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="openai-compatible">OpenAI-compatible</option><option value="anthropic">Anthropic</option></select></label>
-          <label>API root<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder={LlmProviderDefaultApiRoots[kind]} /><span className="form-help">Leave blank to use {LlmProviderDefaultApiRoots[kind]}.</span></label>
+          <label>Provider type<select value={providerType} onChange={(event) => { setProviderType(event.target.value as ProviderType); setBaseUrl(""); setModel(""); setApiKey(""); setClearKey(!!editingId); }}>{Object.entries(providerTypes).map(([value, provider]) => <option key={value} value={value}>{provider.label}</option>)}</select></label>
+          <label>API root<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder={defaultBaseUrl} /><span className="form-help">Leave blank to use {defaultBaseUrl}.</span></label>
           <label>Model ID<input required list={kind === "openai-compatible" ? "ai-available-models" : undefined} value={model} onChange={(event) => setModel(event.target.value)} placeholder="Select an available model or enter its ID" /><datalist id="ai-available-models">{availableModels.map((id) => <option key={id} value={id} />)}</datalist></label>
           <label className="ai-form-wide">API key<input type="password" autoComplete="new-password" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setClearKey(false); }} placeholder={editingId ? "Leave blank to keep current key" : kind === "anthropic" ? "Required for Anthropic" : "Optional for local servers"} /></label>
         </div>
@@ -114,6 +129,8 @@ function AiSettings() {
           </div>
           {modelsLoading && <p className="form-help" role="status">Looking up models from the control plane…</p>}
           {modelsError && <p className="form-help" role="status">{modelsError} You can still enter the model ID manually.</p>}
+          {modelsError && providerType === "lm-studio" && <p className="form-help">In LM Studio, open Developer and start the local server (default port 1234). If MARS runs on another host, enable “Serve on Local Network” and enter this machine’s reachable address instead of localhost.</p>}
+          {modelsError && providerType === "ollama" && <p className="form-help">Start Ollama’s API server (default port 11434). If MARS runs on another host, configure Ollama to listen on a reachable network address and use that address instead of localhost.</p>}
           {!modelsLoading && !modelsError && availableModels.length === 0 && <p className="form-help">No models reported by this endpoint. Enter a model ID manually.</p>}
         </div>}
         <p className="form-help">Local endpoints must be reachable from the control-plane host or container, not your browser.</p>
