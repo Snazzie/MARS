@@ -52,7 +52,6 @@ export function createControlPlaneApp(deps: ControlPlaneHttpDeps) {
   registerAuthRoutes(app, deps);
   registerGithubRoutes(app, deps);
   registerOnboardingRoutes(app, deps);
-  registerStaticRoutes(app, deps);
   app.get("/api/me", requireSession(deps), (c) => c.json(c.get("user")));
   const protectedApi = new Hono<ControlPlaneEnv>();
   protectedApi.use("/api/organizations", requireSession(deps));
@@ -65,6 +64,7 @@ export function createControlPlaneApp(deps: ControlPlaneHttpDeps) {
   registerDashboardRoutes(protectedApi, deps);
   registerWorkerRoutes(app, deps);
   app.route("/", protectedApi);
+  registerStaticRoutes(app, deps);
   app.notFound((c) => c.req.path.startsWith("/api/") ? c.json({ code: "not_found", message: "Resource not found", requestId: deps.requestId() }, 404) : c.text("Not found", 404));
   app.onError((cause, c) => {
     console.error(cause);

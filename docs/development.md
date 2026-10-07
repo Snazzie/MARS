@@ -66,6 +66,10 @@ process logs; fix the error and save again to rebuild.
 
 Dashboard recovery and navigation:
 
+- Dashboard URLs support direct navigation and refresh, including nested paths
+  and trailing slashes; visiting `/` first is not required. The control plane
+  serves the client shell after API routes. Missing `/api` endpoints and asset
+  files still return errors rather than dashboard HTML.
 - Authenticated setup-status failures show a retry control rather than a blank page.
 - Settings keeps the normal navigation and workspace picker. Select a concrete GitHub
   workspace before managing its installation; no installation is chosen automatically

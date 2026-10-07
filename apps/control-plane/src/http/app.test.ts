@@ -93,7 +93,6 @@ describe("control-plane HTTP boundary", () => {
         staleAfterMs: 60_000,
       },
     });
-    expect((await app.request("/healthz")).status).toBe(404);
   });
   test("serves dashboard assets with executable content types", async () => {
     const root = await mkdtemp(join(tmpdir(), "mars-web-"));
@@ -644,6 +643,33 @@ describe("control-plane HTTP boundary", () => {
     for (const path of ["/settings", "/workers", "/pools", "/repositories", "/runs", "/onboarding", "/cost-center"]) {
       expect((await app.request(path)).status).toBe(200);
     }
+  });
+
+  test("serves the client shell for arbitrary deep links and trailing slashes", async () => {
+    const root = await app.request("/");
+    const shell = await root.text();
+    for (const path of ["/settings/", "/runs/123/?organizationId=workspace", "/repositories/new/nested", "/future-dashboard-route"]) {
+      const response = await app.request(path);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+      expect(response.headers.get("cache-control")).toBe("no-cache");
+      expect(await response.text()).toBe(shell);
+    }
+  });
+
+  test("client fallback preserves API errors and missing asset responses", async () => {
+    for (const path of ["/api", "/api/not-a-route", "/api/not-a-route/"]) {
+      const response = await app.request(path);
+      expect(response.status).toBe(404);
+      expect(await response.text()).not.toContain("<!doctype html>");
+    }
+    for (const path of ["/missing.js", "/assets/missing.css", "/assets/missing.svg"]) {
+      const response = await app.request(path);
+      expect(response.status).toBe(404);
+      expect(await response.text()).toBe("Not found");
+    }
+    expect((await app.request("/api/me")).status).toBe(401);
+    expect((await app.request("/future-dashboard-route", { method: "POST" })).status).toBe(404);
   });
 });
   test("requires authentication for GitHub App manifest launch", async () => {
