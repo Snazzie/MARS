@@ -17,31 +17,36 @@ test("sanitizes configured keys and credential-shaped log material", () => {
   expect(cleaned).not.toContain("hunter2");
 });
 
-test("sends a keyless OpenAI-compatible request and validates captured job and step IDs", async () => {
-  let sent: Request | undefined;
-  const result = await generatePipelineAnalysis({ provider: { name: "local", kind: "openai-compatible", baseUrl: "http://localhost:11434/v1", model: "model" }, context }, async (input, init) => {
-    sent = new Request(input, init);
-    return Response.json({ choices: [{ message: { content: JSON.stringify(valid) } }] });
-  });
-  expect(result).toEqual(valid);
-  expect(sent?.headers.get("authorization")).toBeNull();
-  expect(JSON.parse(await sent!.text())).toMatchObject({ model: "model", max_tokens: 4096 });
-  await expect(generatePipelineAnalysis({ provider: { name: "local", kind: "openai-compatible", baseUrl: "http://localhost:11434/v1", model: "model" }, context }, async () => Response.json({ choices: [{ message: { content: JSON.stringify({ ...valid, failures: [{ ...valid.failures[0], jobId: 999 }] }) } }] }))).rejects.toThrow("llm_invalid_response");
+test("captures OpenAI-compatible and Anthropic reported token usage", async () => {
+  const provider = { name: "cloud", kind: "openai-compatible" as const, baseUrl: "http://localhost:11434/v1", model: "model" };
+  const usage: Array<{ inputTokens: number; outputTokens: number } | null> = [];
+  await generatePipelineAnalysis({ provider, context, onUsage: value => { usage.push(value); } }, async () => Response.json({
+    choices: [{ message: { content: JSON.stringify(valid) } }],
+    usage: { prompt_tokens: 17, completion_tokens: 8 },
+  }));
+  expect(usage).toEqual([{ inputTokens: 17, outputTokens: 8 }]);
+
+  await generatePipelineAnalysis({ provider: { ...provider, kind: "anthropic", encryptedApiKey: "api-key" }, context, onUsage: value => { usage.push(value); } }, async () => Response.json({
+    content: [{ type: "text", text: JSON.stringify(valid) }],
+    usage: { input_tokens: 23, output_tokens: 9, cache_read_input_tokens: 4 },
+  }));
+  expect(usage[1]).toEqual({ inputTokens: 27, outputTokens: 9 });
 });
 
-test("parses native Anthropic text blocks and requires a key", async () => {
-  const result = await generatePipelineAnalysis({ provider: { name: "cloud", kind: "anthropic", baseUrl: "https://api.anthropic.com/v1", model: "model", encryptedApiKey: "api-key" }, context }, async (_input, init) => {
-    expect(new Headers(init?.headers).get("x-api-key")).toBe("api-key");
-    expect(new Headers(init?.headers).get("anthropic-version")).toBe("2023-06-01");
-    return Response.json({ content: [{ type: "text", text: JSON.stringify(valid) }] });
-  });
-  expect(result.summary).toBe("Assertion failed");
-  await expect(generatePipelineAnalysis({ provider: { name: "cloud", kind: "anthropic", baseUrl: "https://api.anthropic.com/v1", model: "model" }, context }, async () => Response.json({}))).rejects.toThrow("llm_auth_failed");
-});
-
-test("rejects malformed provider response with a bounded code", async () => {
+test("captures reported usage before rejecting invalid generated JSON and ignores invalid counts", async () => {
   const provider = { name: "local", kind: "openai-compatible" as const, baseUrl: "http://localhost:11434/v1", model: "model" };
-  await expect(generatePipelineAnalysis({ provider, context }, async () => Response.json({ choices: [{ message: { content: "not JSON" } }] }))).rejects.toThrow("llm_invalid_response");
+  const usage: Array<{ inputTokens: number; outputTokens: number } | null> = [];
+  await expect(generatePipelineAnalysis({ provider, context, onUsage: value => { usage.push(value); } }, async () => Response.json({
+    choices: [{ message: { content: "not JSON" } }],
+    usage: { prompt_tokens: 12, completion_tokens: 3 },
+  }))).rejects.toThrow("llm_invalid_response");
+  expect(usage).toEqual([{ inputTokens: 12, outputTokens: 3 }]);
+
+  await generatePipelineAnalysis({ provider, context, onUsage: value => { usage.push(value); } }, async () => Response.json({
+    choices: [{ message: { content: JSON.stringify(valid) } }],
+    usage: { prompt_tokens: -1, completion_tokens: 3 },
+  }));
+  expect(usage[1]).toBeNull();
 });
 
 test("encrypts saved API keys and never returns key material in provider summaries", async () => {

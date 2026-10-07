@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
-import { createDb, schema, type DatabaseClient } from "@mars/db";
+import { createDb, schema, getAiTokenUsage, type DatabaseClient } from "@mars/db";
 import { eq } from "drizzle-orm";
 import { SecretBox } from "./auth.ts";
 import { applyGithubJobSnapshot, applyWorkflowJobWebhook, configureRunLifecycle, type GithubRunSnapshot, type GithubJobSnapshot } from "./runs.ts";
 import { enqueuePipelineFailureAnalysis, processPipelineFailureAnalyses, type PipelineFailureAnalysisDeps } from "./pipeline-failure-analysis.ts";
+import { generatePipelineAnalysis } from "./llm-providers.ts";
 
 const integration = Bun.env.MARS_E2E_DATABASE_URL ? test : test.skip;
 const org = "10000000-0000-4000-8000-000000000001";
@@ -130,4 +131,20 @@ integration("a newer run during comment lookup prevents posting obsolete PR feed
   await processPipelineFailureAnalyses(deps);
   expect(posts).toBe(0);
   expect((await db.select().from(schema.pipelineAnalysisComments))[0]).toMatchObject({ state: "failed", errorCode: "analysis_superseded", commentId: null });
+}));
+
+integration("failed generated analysis retains reported usage and queued pricing snapshots", () => fixture(async db => {
+  await db.update(schema.llmProviders).set({ baseUrl: "https://cloud.example/v1", inputUsdPerMillionTokens: 2, outputUsdPerMillionTokens: 10 }).where(eq(schema.llmProviders.id, provider));
+  await applyGithubJobSnapshot({ installationId: 1, repository: { id: 8, name: "repo", fullName: "acme/repo" }, run, job: failedJob(), authoritative: true });
+  await enqueuePipelineFailureAnalysis({ db, organizationId: org, repositoryId: repo, run, jobs: [failedJob()] });
+  await db.update(schema.llmProviders).set({ inputUsdPerMillionTokens: 99, outputUsdPerMillionTokens: 99 }).where(eq(schema.llmProviders.id, provider));
+  const deps = worker(db, []);
+  deps.generatePipelineAnalysis = input => generatePipelineAnalysis(input, async () => Response.json({
+    choices: [{ message: { content: "invalid generated analysis" } }],
+    usage: { prompt_tokens: 1000, completion_tokens: 200 },
+  }));
+  await processPipelineFailureAnalyses(deps);
+  const [analysis] = await db.select().from(schema.pipelineFailureAnalyses);
+  expect(analysis).toMatchObject({ state: "failed", errorCode: "llm_invalid_response", inputTokens: 1000, outputTokens: 200, inputUsdPerMillionTokens: 2, outputUsdPerMillionTokens: 10 });
+  expect(await getAiTokenUsage(db)).toMatchObject({ inputTokens: 1000, outputTokens: 200, reportedRequests: 1, unreportedRequests: 0, estimatedCostUsd: 0.004 });
 }));

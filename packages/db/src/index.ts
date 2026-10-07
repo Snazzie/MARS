@@ -131,3 +131,4 @@ export * from "./job-resource-trends.ts";
 export * from "./job-label-recommendations.ts";
 export * from "./onboarding.ts";
 export * from "./leases.ts";
+export { aggregateAiTokenUsage } from "./ai-token-usage.ts";

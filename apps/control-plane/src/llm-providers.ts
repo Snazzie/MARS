@@ -23,8 +23,11 @@ export interface LlmProviderConfig {
   kind: LlmProviderKind;
   baseUrl: string;
   model: string;
+  inputUsdPerMillionTokens?: number | null;
+  outputUsdPerMillionTokens?: number | null;
   encryptedApiKey?: string | null;
 }
+export interface PipelineAnalysisUsage { inputTokens: number; outputTokens: number }
 export interface PipelineAnalysisContext {
   run: Record<string, unknown>;
   failedJobs: Array<{ jobId: number; steps?: Array<{ stepNumber: number; name?: string; conclusion?: string; excerpt?: string }>; excerpt?: string; [key: string]: unknown }>;
@@ -34,6 +37,8 @@ export interface LlmProviderProfileInput {
   kind: LlmProviderKind;
   baseUrl: string;
   model: string;
+  inputUsdPerMillionTokens?: number | null;
+  outputUsdPerMillionTokens?: number | null;
   apiKey?: string | null;
 }
 export interface LlmProviderSummary extends Omit<LlmProviderConfig, "encryptedApiKey"> {
@@ -95,6 +100,23 @@ async function readCappedResponse(response: Response): Promise<string> {
   return new TextDecoder().decode(bytes);
 }
 
+function providerUsage(kind: LlmProviderKind, payload: unknown): PipelineAnalysisUsage | null {
+  if (!payload || typeof payload !== "object") return null;
+  const usage = (payload as Record<string, unknown>).usage;
+  if (!usage || typeof usage !== "object") return null;
+  const values = usage as Record<string, unknown>;
+  const count = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+  const baseInput = kind === "anthropic" ? values.input_tokens : values.prompt_tokens;
+  const cachedRead = kind === "anthropic" ? values.cache_read_input_tokens ?? 0 : 0;
+  const cachedWrite = kind === "anthropic" ? values.cache_creation_input_tokens ?? 0 : 0;
+  const output = kind === "anthropic" ? values.output_tokens : values.completion_tokens;
+  if (!count(baseInput) || !count(cachedRead) || !count(cachedWrite) || !count(output)) return null;
+  const input = baseInput + cachedRead + cachedWrite;
+  return Number.isSafeInteger(input) && Number.isSafeInteger(output) && (input as number) >= 0 && (output as number) >= 0
+    ? { inputTokens: input as number, outputTokens: output as number }
+    : null;
+}
+
 function responseContent(kind: LlmProviderKind, payload: unknown): string {
   if (!payload || typeof payload !== "object") throw new Error("llm_invalid_response");
   const p = payload as Record<string, unknown>;
@@ -131,6 +153,8 @@ export async function generatePipelineAnalysis(input: {
   provider: LlmProviderConfig;
   context: PipelineAnalysisContext;
   secretBox?: SecretBox;
+  onRequest?: () => void | Promise<void>;
+  onUsage?: (usage: PipelineAnalysisUsage | null) => void | Promise<void>;
 }, fetcher: Fetcher = fetch): Promise<PipelineAnalysisResult> {
   const provider = input.provider;
   const root = validateProviderApiRoot(provider.baseUrl);
@@ -151,13 +175,15 @@ export async function generatePipelineAnalysis(input: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
+    await input.onRequest?.();
     const response = await fetcher(endpoint, { method: "POST", headers, body: JSON.stringify(body), signal: controller.signal, redirect: "error" });
     if (!response.ok) throw new Error(errorCode(response.status));
     const raw = await readCappedResponse(response);
     let payload: unknown;
     try { payload = JSON.parse(raw); } catch { throw new Error("llm_invalid_response"); }
+    await input.onUsage?.(providerUsage(provider.kind, payload));
     const content = responseContent(provider.kind, payload);
-    const result = parseResult(sanitizeProviderText(content, apiKey));
+    const result = parseResult(content);
     const validJobIds = new Set(input.context.failedJobs.map((job) => job.jobId));
     if (result.failures.some((failure) => !validJobIds.has(failure.jobId))) throw new Error("llm_invalid_response");
     for (const failure of result.failures) {
@@ -191,7 +217,12 @@ export class LlmProvidersService {
     else if (input.apiKey !== undefined) encryptedApiKey = input.apiKey ? this.secretBox.encrypt(input.apiKey) : existing?.encryptedApiKey ?? null;
     if (normalized.kind === "anthropic" && !encryptedApiKey) throw new Error("llm_auth_failed");
     const { apiKey: _apiKey, ...safeInput } = normalized;
-    const saved = await this.store.save({ ...safeInput, encryptedApiKey }, id);
+    const localProvider = normalized.kind === "openai-compatible" && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(normalized.baseUrl).hostname);
+    const saved = await this.store.save({
+      ...safeInput,
+      ...(localProvider ? { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 } : {}),
+      encryptedApiKey,
+    }, id);
     const { encryptedApiKey: _encrypted, ...summary } = saved;
     return { ...summary, keyConfigured: !!_encrypted };
   }
@@ -229,7 +260,7 @@ export class LlmProvidersService {
     const provider = await this.config(id);
     await generatePipelineAnalysis({ provider, secretBox: this.secretBox, context: { run: { workflow: "Synthetic connection test", conclusion: "failure", attempt: 1 }, failedJobs: [{ jobId: 1, name: "Synthetic failed job", conclusion: "failure", excerpt: "Synthetic test evidence; no repository logs." }] } }, this.fetcher);
   }
-  async analyze(provider: LlmProviderConfig, context: PipelineAnalysisContext): Promise<PipelineAnalysisResult> {
-    return generatePipelineAnalysis({ provider, context, secretBox: this.secretBox }, this.fetcher);
+  async analyze(provider: LlmProviderConfig, context: PipelineAnalysisContext, onUsage?: (usage: PipelineAnalysisUsage | null) => void | Promise<void>, onRequest?: () => void | Promise<void>): Promise<PipelineAnalysisResult> {
+    return generatePipelineAnalysis({ provider, context, secretBox: this.secretBox, onUsage, onRequest }, this.fetcher);
   }
 }

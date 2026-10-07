@@ -41,8 +41,8 @@ const startupQueries = defineQueries(db => ({
   offlineWorkers: db.update(schema.workers).set({ connectionState: "offline" }).where(ne(schema.workers.connectionState, "offline")).prepare("control_plane_workers_offline"),
   llmList: db.select().from(schema.llmProviders).orderBy(asc(schema.llmProviders.name)).prepare("control_plane_llm_list"),
   llmGet: db.select().from(schema.llmProviders).where(eq(schema.llmProviders.id, sql.placeholder("id"))).prepare("control_plane_llm_get"),
-  llmInsert: db.insert(schema.llmProviders).values({ name: sql.placeholder("name"), kind: sql.placeholder("kind"), baseUrl: sql.placeholder("baseUrl"), model: sql.placeholder("model"), encryptedApiKey: sql.placeholder("encryptedApiKey") }).returning().prepare("control_plane_llm_insert"),
-  llmUpdate: db.update(schema.llmProviders).set({ name: sql`${sql.placeholder("name")}`, kind: sql`${sql.placeholder("kind")}`, baseUrl: sql`${sql.placeholder("baseUrl")}`, model: sql`${sql.placeholder("model")}`, encryptedApiKey: sql`${sql.placeholder("encryptedApiKey")}`, updatedAt: sql`now()` }).where(eq(schema.llmProviders.id, sql.placeholder("id"))).returning().prepare("control_plane_llm_update"),
+  llmInsert: db.insert(schema.llmProviders).values({ name: sql.placeholder("name"), kind: sql.placeholder("kind"), baseUrl: sql.placeholder("baseUrl"), model: sql.placeholder("model"), inputUsdPerMillionTokens: sql.placeholder("inputUsdPerMillionTokens"), outputUsdPerMillionTokens: sql.placeholder("outputUsdPerMillionTokens"), encryptedApiKey: sql.placeholder("encryptedApiKey") }).returning().prepare("control_plane_llm_insert"),
+  llmUpdate: db.update(schema.llmProviders).set({ name: sql`${sql.placeholder("name")}`, kind: sql`${sql.placeholder("kind")}`, baseUrl: sql`${sql.placeholder("baseUrl")}`, model: sql`${sql.placeholder("model")}`, inputUsdPerMillionTokens: sql`${sql.placeholder("inputUsdPerMillionTokens")}`, outputUsdPerMillionTokens: sql`${sql.placeholder("outputUsdPerMillionTokens")}`, encryptedApiKey: sql`${sql.placeholder("encryptedApiKey")}`, updatedAt: sql`now()` }).where(eq(schema.llmProviders.id, sql.placeholder("id"))).returning().prepare("control_plane_llm_update"),
   llmDelete: db.delete(schema.llmProviders).where(eq(schema.llmProviders.id, sql.placeholder("id"))).returning({ id: schema.llmProviders.id }).prepare("control_plane_llm_delete"),
   llmUseCount: db.select({ count: sql<number>`count(*)::int` }).from(schema.repositoryFailureAnalysisSettings).where(eq(schema.repositoryFailureAnalysisSettings.providerId, sql.placeholder("id"))).prepare("control_plane_llm_use_count"),
   githubAppId: db.select({ appId: schema.githubAppConfig.appId }).from(schema.githubAppConfig).where(eq(schema.githubAppConfig.singleton, true)).prepare("control_plane_github_app_id"),
@@ -485,8 +485,8 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
     list: async () => await startupQueries(db).llmList.execute({}) as unknown as LlmProviderConfig[],
     get: async (id) => ((await startupQueries(db).llmGet.execute({ id }))[0] as unknown as LlmProviderConfig | undefined) ?? null,
     save: async (input, id) => {
-      const values = { name: input.name, kind: input.kind, baseUrl: input.baseUrl, model: input.model, encryptedApiKey: input.encryptedApiKey ?? null };
-      const rows = id ? await startupQueries(db).llmUpdate.execute({ ...values, id }) : await startupQueries(db).llmInsert.execute(values);
+      const values = { name: input.name, kind: input.kind, baseUrl: input.baseUrl, model: input.model, inputUsdPerMillionTokens: input.inputUsdPerMillionTokens ?? null, outputUsdPerMillionTokens: input.outputUsdPerMillionTokens ?? null, encryptedApiKey: input.encryptedApiKey ?? null };
+      const rows = id ? await startupQueries(db).llmUpdate.execute({ id, ...values }) : await startupQueries(db).llmInsert.execute(values);
       return rows[0] as unknown as LlmProviderConfig;
     },
     delete: async (id) => {
@@ -641,7 +641,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
         await processPipelineFailureAnalyses({
           db,
           secretBox,
-          generatePipelineAnalysis: input => llmProviders.analyze(input.provider, input.context),
+          generatePipelineAnalysis: input => llmProviders.analyze(input.provider, input.context, input.onUsage, input.onRequest),
           installationToken: installationId => githubApp.getInstallationToken(installationId),
           githubFetchForInstallation: installationId => githubRateLimits.scopedFetch(installationId, "background") as unknown as typeof fetch,
           installationBlocked: installationId => githubRateLimits.isBackgroundBlocked(installationId),

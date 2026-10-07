@@ -167,6 +167,8 @@ export const ActionGraph = dto(strict({
 export type ActionGraph = z.infer<typeof ActionGraph>;
 export const LlmProviderKind = z.enum(["openai-compatible", "anthropic"]);
 export type LlmProviderKind = z.infer<typeof LlmProviderKind>;
+const tokenCount = z.number().int().nonnegative().safe();
+const tokenPrice = z.number().nonnegative().finite().max(99_999_999);
 export const LlmProviderDefaultApiRoots = {
   "openai-compatible": "http://localhost:11434/v1",
   anthropic: "https://api.anthropic.com/v1",
@@ -178,23 +180,44 @@ export const LlmProviderModelLookupRequest = strict({
 });
 export type LlmProviderModelLookupRequest = z.infer<typeof LlmProviderModelLookupRequest>;
 export const LlmProviderModels = dto(strict({ models: z.array(z.string().min(1).max(200)).max(1000) }));
-export const LlmProviderSummary = dto(strict({
+export const LlmProviderSummary = strict({
   id,
   name: z.string().min(1),
   kind: LlmProviderKind,
   baseUrl: z.string().url(),
   model: z.string().min(1),
+  inputUsdPerMillionTokens: tokenPrice.nullable(),
+  outputUsdPerMillionTokens: tokenPrice.nullable(),
   keyConfigured: z.boolean(),
-}));
+});
 export type LlmProviderSummary = z.infer<typeof LlmProviderSummary>;
 export const LlmProviderSaveRequest = strict({
   name: z.string().min(1),
   kind: LlmProviderKind,
   baseUrl: z.string().trim().pipe(z.string().url().or(z.literal(""))),
   model: z.string().min(1),
+  inputUsdPerMillionTokens: tokenPrice.nullable().optional(),
+  outputUsdPerMillionTokens: tokenPrice.nullable().optional(),
   apiKey: z.string().min(1).nullable().optional(),
 });
 export type LlmProviderSaveRequest = z.infer<typeof LlmProviderSaveRequest>;
+
+export const AiTokenUsage = strict({
+  points: z.array(strict({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    inputTokens: tokenCount,
+    outputTokens: tokenCount,
+    estimatedCostUsd: z.number().nonnegative().finite().nullable(),
+  })),
+  inputTokens: tokenCount,
+  outputTokens: tokenCount,
+  reportedRequests: tokenCount,
+  unreportedRequests: tokenCount,
+  estimatedCostUsd: z.number().nonnegative().finite().nullable(),
+  unpricedRequests: tokenCount,
+});
+export type AiTokenUsage = z.infer<typeof AiTokenUsage>;
+
 export const RepositoryFailureAnalysisSettings = dto(strict({
   organizationId: id,
   repositoryId: id,

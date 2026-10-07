@@ -40,6 +40,7 @@ import {
   LlmProviderSaveRequest,
   LlmProviderModelLookupRequest,
   LlmProviderModels,
+  AiTokenUsage,
   RepositoryFailureAnalysisSettings,
 } from "@mars/contracts";
 import {
@@ -58,6 +59,9 @@ import {
   DashboardPoolCreateResponse,
 } from "@mars/contracts";
 import { z } from "zod";
+export const getLlmTokenUsage = () =>
+  request("/api/admin/llm/usage", AiTokenUsage, { cache: "no-store" });
+
 
 export type ApiResult<T> = { data: T; status: number };
 

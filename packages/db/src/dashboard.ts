@@ -5,8 +5,32 @@ import { defineQueries } from "./prepared.ts";
 import * as schema from "./drizzle-schema.ts";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { getGithubRunnerCostSavings } from "./github-runner-cost.ts";
+import type { AiTokenUsage } from "@mars/contracts";
+import { aggregateAiTokenUsage, type PipelineFailureAnalysisUsageRow } from "./ai-token-usage.ts";
 export type DashboardDb = DatabaseClient;
 export type RunTransition = { status: RunSummary["status"]; conclusion: RunSummary["conclusion"]; startedAt?: string | null; completedAt?: string | null };
+const aiTokenUsageQueries = defineQueries(db => ({
+  rows: db.select({
+    calledAt: schema.pipelineFailureAnalyses.providerCalledAt,
+    inputTokens: schema.pipelineFailureAnalyses.inputTokens,
+    outputTokens: schema.pipelineFailureAnalyses.outputTokens,
+    inputUsdPerMillionTokens: schema.pipelineFailureAnalyses.inputUsdPerMillionTokens,
+    outputUsdPerMillionTokens: schema.pipelineFailureAnalyses.outputUsdPerMillionTokens,
+  }).from(schema.pipelineFailureAnalyses)
+    .where(sql`${schema.pipelineFailureAnalyses.providerCalledAt} >= (${sql.placeholder("from")}::date::timestamp AT TIME ZONE 'UTC') AND ${schema.pipelineFailureAnalyses.providerCalledAt} < ((${sql.placeholder("to")}::date + 1)::timestamp AT TIME ZONE 'UTC')`)
+    .prepare("dashboard_ai_token_usage"),
+}));
+
+export async function getAiTokenUsage(db: DashboardDb, now = new Date()): Promise<AiTokenUsage> {
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const from = new Date(today);
+  from.setUTCDate(from.getUTCDate() - 29);
+  const rows = await aiTokenUsageQueries(db).rows.execute({
+    from: from.toISOString().slice(0, 10),
+    to: today.toISOString().slice(0, 10),
+  });
+  return aggregateAiTokenUsage((rows ?? []) as PipelineFailureAnalysisUsageRow[], now);
+}
 const statusOrder: Record<RunSummary["status"], number> = { queued: 0, in_progress: 1, completed: 2 };
 const terminalConclusions = new Set(["success", "failure", "cancelled", "skipped", "neutral"]);
 export function monotonicTransition(current: RunTransition, next: RunTransition): RunTransition {
