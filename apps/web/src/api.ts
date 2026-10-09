@@ -17,6 +17,7 @@ import {
   RepositorySummary,
   RunDetail,
   RunSummary,
+  PipelineAnalysisWork,
   JobTimingSnapshot,
   JobResourceSample,
   JobResourceTrendResponse,
@@ -178,6 +179,11 @@ export function getRuns(organizationId: string, { cursor, search = "", limit = 5
   if (from) query.set("from", from);
   if (runner !== "all") query.set("runner", runner);
   return request(`/api/organizations/${organizationId}/runs?${query}`, CursorPage(RunSummary));
+}
+export function getPipelineAnalysisWork(organizationId: string, cursor?: string | null) {
+  const query = new URLSearchParams({ limit: "50" });
+  if (cursor) query.set("cursor", cursor);
+  return request(`/api/organizations/${organizationId}/ai-work?${query}`, CursorPage(PipelineAnalysisWork), { cache: "no-store" });
 }
 export function getJobTimingHistory(organizationId: string, params: { cursor?: string | null; from?: string; to?: string; platform?: string; vcpu?: number; concurrency?: number; limit?: number } = {}) {
   const query = new URLSearchParams({ limit: String(params.limit ?? 50) });

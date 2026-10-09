@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { createDb, getAllOverview, getOverview } from "./index.ts";
+import { listPipelineAnalysisWork } from "./dashboard.ts";
 
 const databaseUrl = Bun.env.MARS_E2E_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
@@ -98,6 +99,50 @@ integration("overview percentiles use valid observed timings within the reportin
       expect(metrics(await getAllOverview(tx, "20000000-0000-4000-8000-000000000002", "24h"))).toEqual(empty);
       const nonmember = await getAllOverview(tx, "20000000-0000-4000-8000-000000000002", "24h");
       expect(nonmember.timeToStart.every(point => point.sampleCount === 0 && point.p50Ms === null && point.p95Ms === null)).toBe(true);
+    });
+  } finally {
+    await db.$client.end({ timeout: 1 });
+  }
+});
+
+integration("AI work queue preserves attempt identity, paginates tied enqueue times, and excludes terminal and nonmember work", async () => {
+  const db = createDb(databaseUrl!);
+  const org = "10000000-0000-4000-8000-000000000001", otherOrg = "10000000-0000-4000-8000-000000000002";
+  const user = "20000000-0000-4000-8000-000000000001";
+  const run = "30000000-0000-4000-8000-000000000001", otherRun = "30000000-0000-4000-8000-000000000002";
+  const repo = "40000000-0000-4000-8000-000000000001", otherRepo = "40000000-0000-4000-8000-000000000002";
+  const queued = "50000000-0000-4000-8000-000000000001", running = "50000000-0000-4000-8000-000000000002";
+  try {
+    await db.transaction(async tx => {
+      for (const table of ["memberships", "dashboard_repositories", "dashboard_runs", "pipeline_failure_analyses"]) {
+        await tx.$client.unsafe(`CREATE TEMP TABLE ${table} (LIKE public.${table} INCLUDING DEFAULTS) ON COMMIT DROP`);
+      }
+      await tx.$client.unsafe("INSERT INTO memberships (organization_id,user_id,role) VALUES ($1,$2,'member')", [org, user]);
+      for (const [organizationId, repositoryId, runId] of [[org, repo, run], [otherOrg, otherRepo, otherRun]]) {
+        await tx.$client.unsafe("INSERT INTO dashboard_repositories (id,organization_id,installation_id,github_repository_id,name,full_name) VALUES ($1,$2,gen_random_uuid(),1,'project','acme/project')", [repositoryId, organizationId]);
+        await tx.$client.unsafe("INSERT INTO dashboard_runs (id,organization_id,repository_id,github_run_id,run_number,run_attempt,workflow_name,event,branch,commit_sha,actor_login,status,queued_at) VALUES ($1,$2,$3,1,99,3,'Renamed CI','push','main','abcdef123','actor','completed',now())", [runId, organizationId, repositoryId]);
+      }
+      const insert = async (id: string, state: string, organizationId = org, repositoryId = repo, runId = run) => {
+        await tx.$client.unsafe("INSERT INTO pipeline_failure_analyses (id,organization_id,repository_id,run_id,github_run_id,run_attempt,provider_kind,provider_name,model,source,state,created_at,started_at) VALUES ($1,$2,$3,$4,1,2,'openai-compatible','Local model','model-id',$5::jsonb,$6,'2026-10-09T00:00:00Z',CASE WHEN $6='running' THEN '2026-10-09T00:00:05Z'::timestamptz END)", [id, organizationId, repositoryId, runId, JSON.stringify({ run: { number: 42, workflowName: "Captured CI" } }), state]);
+      };
+      await insert(queued, "pending");
+      await insert(running, "running");
+      for (const state of ["completed", "failed", "skipped"]) await insert(crypto.randomUUID(), state);
+      await insert(crypto.randomUUID(), "pending", otherOrg, otherRepo, otherRun);
+      const first = await listPipelineAnalysisWork(tx, { userId: user }, 1);
+      expect(first.nextCursor).toBe(queued);
+      expect(first.items).toEqual([{
+        id: queued, organizationId: org, repositoryId: repo, repositoryName: "acme/project", runId: run,
+        runNumber: 42, runAttempt: 2, workflowName: "Captured CI", state: "pending", providerName: "Local model", model: "model-id",
+        queuedAt: "2026-10-09T00:00:00.000Z", startedAt: null,
+      }]);
+      const second = await listPipelineAnalysisWork(tx, { userId: user }, 1, first.nextCursor);
+      expect(second.items.map(item => [item.id, item.state, item.startedAt])).toEqual([[running, "running", "2026-10-09T00:00:05.000Z"]]);
+      expect(second.nextCursor).toBeNull();
+      expect((await listPipelineAnalysisWork(tx, { organizationId: org })).items.map(item => item.id)).toEqual([queued, running]);
+      expect((await listPipelineAnalysisWork(tx, { userId: crypto.randomUUID() })).items).toEqual([]);
+      await tx.$client.unsafe("UPDATE pipeline_failure_analyses SET state='completed' WHERE id=$1", [queued]);
+      expect((await listPipelineAnalysisWork(tx, { userId: user })).items.map(item => item.id)).toEqual([running]);
     });
   } finally {
     await db.$client.end({ timeout: 1 });

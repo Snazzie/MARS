@@ -78,12 +78,20 @@ Dashboard recovery and navigation:
 - Runs search, queued-time ranges, and runner ownership are filtered on the server
   before pagination, including All workspaces. Clear filters resets all three controls.
   Charts represent the loaded matching runs, not the complete history.
-- Overview uses a compact header and dispatcher card, with six summary metrics
-  in one row on wide screens, three columns on tablets, and two on phones.
-  Current pool checks stay visible in compact wrapping cards. Scheduling and
-  previous-pass diagnostics share a collapsed disclosure; health warnings and
-  queue exclusions remain visible. The three overview charts use 180px plots
-  and share one row on wide screens, stacking on narrow screens.
+- Runs and Overview show an AI run queue for pending and running failure analyses,
+  oldest first, with captured run attempt, repository, provider/model, and run links.
+  It follows workspace scope (All workspaces includes memberships only), independently
+  of run-history filters and reporting windows. It refreshes every five seconds while
+  visible, removes terminal work, and offers pagination in a bounded scrolling panel.
+- Overview starts with time-window controls and the dispatcher card, without the
+  introductory title block or Live workload panel. Six summary metrics use one row
+  on wide screens, three columns on tablets, and two on phones.
+  Qualify now / awaiting dispatch is one metric: eligible jobs / total queued jobs.
+  Current pool checks show pool name and readiness; hover for platform, worker,
+  and diagnostic reason. Rows are keyboard-focusable with accessible descriptions.
+  Scheduling and previous-pass diagnostics share a collapsed disclosure; health
+  warnings and queue exclusions remain visible. The three overview charts use
+  180px plots and share one row on wide screens, stacking on narrow screens.
 - Overview Queue p50/p95 use observed job pickup minus queued time, with pickup
   inside the selected reporting period. Duration p50/p95 use completed minus
   started time for completed jobs in that period, including failed jobs. Missing

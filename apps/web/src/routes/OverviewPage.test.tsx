@@ -7,18 +7,17 @@ import { formatMinutes, formatUsdMicros } from "../format.ts";
 import { ControlPlaneStatus } from "./OverviewPage.tsx";
 const load = { running: 2, concurrency: 8, utilization: { pods: .25, vcpu: .2, memory: .1, storage: .1 } };
 
-test("load and queue remain visible when dispatcher telemetry is unavailable", () => {
+test("merged qualification metric retains eligible and total queued counts independently", () => {
   const window = new Window();
-  for (const concurrency of [8, 0]) {
-    window.document.body.innerHTML = renderToStaticMarkup(<ControlPlaneStatus status={undefined} load={{ ...load, concurrency }} awaiting={4} />);
-    const metrics = Array.from(window.document.querySelectorAll("dl > div"));
-    const currentLoad = metrics.find(metric => metric.querySelector("dt")?.textContent === "Current load");
-    const awaiting = metrics.find(metric => metric.querySelector("dt")?.textContent === "Awaiting dispatch");
-    expect(currentLoad?.querySelector("dd")?.textContent).toBe(`2 / ${concurrency || "—"}`);
-    expect(currentLoad?.textContent).toContain("25% slot utilization");
-    expect(awaiting?.querySelector("dd")?.textContent).toBe("4");
-  }
+  window.document.body.innerHTML = renderToStaticMarkup(<ControlPlaneStatus load={load} awaiting={7} queueReasons={[{ code: "eligible", count: 3 }]} status={{
+    state: "healthy", lastReconciledAt: null, queued: 0, reserved: 0, reasons: [],
+  }} />);
+  const values = Array.from(window.document.querySelectorAll(".dispatch-metrics dd")).map(node => node.textContent);
+  expect(values).toEqual(["2 / 8", "3 / 7", "— / —"]);
+  window.document.body.innerHTML = renderToStaticMarkup(<ControlPlaneStatus status={undefined} load={{ ...load, concurrency: 0 }} awaiting={7} />);
+  expect(Array.from(window.document.querySelectorAll(".dispatch-metrics dd")).map(node => node.textContent)).toEqual(["2 / —", "— / 7"]);
 });
+
 
 test("period control exposes all supported reporting windows", () => {
   const markup = renderToStaticMarkup(<ReportingPeriodControl value="24h" onChange={() => {}} label="Overview time window" />);

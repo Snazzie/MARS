@@ -2374,3 +2374,15 @@ test("provider create, list, update, and delete return their public response con
   expect(remaining.status).toBe(200);
   expect(await remaining.json()).toEqual([]);
 });
+
+test("AI work is authenticated and inaccessible workspace work returns not found", async () => {
+  expect((await createControlPlaneApp(fakeHttpDeps()).request("/api/organizations/org/ai-work")).status).toBe(401);
+  const memberApp = createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "member", githubUserId: 1, login: "member", isGlobalAdmin: false }),
+    db: preparedTestDatabase(() => []),
+  }));
+  expect((await memberApp.request("/api/organizations/not-a-member/ai-work")).status).toBe(404);
+  for (const query of ["?cursor=invalid", "?limit=0", "?limit=101", "?state=completed"]) {
+    expect((await memberApp.request(`/api/organizations/all/ai-work${query}`)).status).toBe(400);
+  }
+});

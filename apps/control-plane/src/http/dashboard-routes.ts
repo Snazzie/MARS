@@ -4,6 +4,8 @@ import { defineQueries, schema } from "@mars/db";
 import { AiTokenUsage, GlobalFailureAnalysisSaveRequest, LlmProviderSaveRequest } from "@mars/contracts";
 import { LlmProviderModelLookupRequest } from "@mars/contracts";
 import { getAiTokenUsage } from "@mars/db";
+import { listPipelineAnalysisWork } from "@mars/db";
+import { PipelineAnalysisWork } from "@mars/contracts";
 const routeQueries = defineQueries(db => ({
   membership: db.select({ allowed: sql`1` }).from(schema.memberships).where(and(eq(schema.memberships.userId, sql.placeholder("userId")), eq(schema.memberships.organizationId, sql.placeholder("organizationId")))).prepare("route_membership"),
   worker: db.select({ id: schema.workers.id }).from(schema.workers).where(eq(schema.workers.id, sql.placeholder("workerId"))).prepare("route_worker"),
@@ -298,6 +300,20 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const denied = await guard(c, deps, org);
     if (denied) return denied;
     return c.json(CursorPage(RunSummary).parse(await listRuns(deps.db, org, q.limit, q.cursor ?? null, q.search, filters)));
+  }));
+  app.get("/api/organizations/:organizationId/ai-work", safe(async (c) => {
+    const org = c.req.param("organizationId");
+    const parsed = z.object({
+      limit: z.coerce.number().int().min(1).max(100).default(50),
+      cursor: z.string().uuid().optional(),
+    }).strict().safeParse(c.req.query());
+    if (!parsed.success) return error(c, 400, "invalid_query", "Invalid AI work query", { issues: parsed.error.issues });
+    if (org !== "all") {
+      const denied = await guard(c, deps, org);
+      if (denied) return denied;
+    }
+    const scope = org === "all" ? { userId: c.get("user").id } : { organizationId: org };
+    return c.json(CursorPage(PipelineAnalysisWork).parse(await listPipelineAnalysisWork(deps.db, scope, parsed.data.limit, parsed.data.cursor ?? null)), 200, { "cache-control": "no-store" });
   }));
   app.get("/api/organizations/:organizationId/job-timings", safe(async (c) => {
     const org = c.req.param("organizationId");

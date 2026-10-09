@@ -335,6 +335,7 @@ test("run listing normalizes PostgreSQL bigint and timestamp values", async () =
     repositoryId: "repo-1",
     repositoryName: "repo",
     runNumber: "42",
+    runAttempt: 1,
     workflowName: "ci",
     event: "push",
     branch: "main",
@@ -348,8 +349,7 @@ test("run listing normalizes PostgreSQL bigint and timestamp values", async () =
     durationMs: "1000",
     runtimeBoundary: null,
   }] });
-  const run = (await listRuns(db, "org-1")).items[0];
-  expect(() => RunSummary.parse(run)).not.toThrow();
+  const run = RunSummary.parse((await listRuns(db, "org-1")).items[0]);
   expect(run).toMatchObject({
     runNumber: 42,
     queuedAt: "2026-08-13T10:00:00.000Z",
@@ -400,15 +400,14 @@ test("run detail returns complete jobs and ordered steps", async () => {
     { id: dependentJobId, name: "test", status: "completed", conclusion: "success", stage: "completed", runnerName: "runner", logsState: "ingested", requestedLabels: ["self-hosted", "windows", "x64"], queuedAt: timestamp, startedAt: new Date("2026-08-13T10:00:02.000Z"), completedAt: new Date("2026-08-13T10:00:04.000Z"), requested: { vcpu: 2, memoryBytes: 4_294_967_296, storageBytes: 10_737_418_240, concurrency: 1 }, observed: null },
   ];
   const db = dashboardDb({
-    dashboard_list_runs: [{ id: runId, organizationId, repositoryId, repositoryName: "repo", runNumber: "42", workflowName: "ci", event: "push", branch: "main", commitSha: "abcdef1", actorLogin: "acme", status: "completed", conclusion: "success", queuedAt: timestamp, startedAt: new Date("2026-08-13T10:00:01.000Z"), completedAt: new Date("2026-08-13T10:00:02.000Z"), durationMs: "1000", runtimeBoundary: null, allocationState: "external" }],
+    dashboard_list_runs: [{ id: runId, organizationId, repositoryId, repositoryName: "repo", runNumber: "42", runAttempt: 1, workflowName: "ci", event: "push", branch: "main", commitSha: "abcdef1", actorLogin: "acme", status: "completed", conclusion: "success", queuedAt: timestamp, startedAt: new Date("2026-08-13T10:00:01.000Z"), completedAt: new Date("2026-08-13T10:00:02.000Z"), durationMs: "1000", runtimeBoundary: null, allocationState: "external" }],
     dashboard_run_detail_jobs: jobRows,
     dashboard_run_detail_steps: [{ id: stepId, jobId, name: "test", number: 1, status: "completed", conclusion: "success", queuedAt: timestamp, startedAt: new Date("2026-08-13T10:00:01.000Z"), completedAt: new Date("2026-08-13T10:00:02.000Z"), durationMs: "1000" }],
     dashboard_run_detail_edges: [{ from: jobId, to: dependentJobId }],
     dashboard_run_detail_stages: [],
   });
 
-  const detail = await getRunDetail(db, organizationId, runId);
-  expect(() => RunDetail.parse(detail)).not.toThrow();
+  const detail = RunDetail.parse(await getRunDetail(db, organizationId, runId));
   expect(detail?.jobs[0]).toMatchObject({
     logsState: "pending",
     requestedLabels: ["self-hosted", "windows", "x64"],

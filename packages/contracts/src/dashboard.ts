@@ -145,6 +145,14 @@ export const CostCenterDto = dto(strict({
 export type CostCenterDto = z.output<typeof CostCenterDto>;
 export const RepositorySummary = dto(strict({ id, organizationId, name: z.string().min(1), fullName: z.string().min(1), visibility: z.enum(["private", "internal", "public"]), available: z.boolean(), installationId: id, discoveryState: z.enum(["active", "paused", "rate_limited", "queued"]), discoveryRetryAt: timestamp.nullable() }));
 export type RepositorySummary = z.infer<typeof RepositorySummary>;
+export const PipelineAnalysisWork = dto(strict({
+  id, organizationId, repositoryId: id, repositoryName: z.string().min(1),
+  runId: id, runNumber: positiveSafe, runAttempt: positiveSafe,
+  workflowName: z.string().min(1), state: z.enum(["pending", "running"]),
+  providerName: z.string().min(1), model: z.string().min(1),
+  queuedAt: timestamp, startedAt: timestamp.nullable(),
+}));
+export type PipelineAnalysisWork = z.infer<typeof PipelineAnalysisWork>;
 const runSummaryShape = { id, organizationId, repositoryId: id, repositoryName: z.string().min(1), runNumber: positiveSafe, runAttempt: positiveSafe, workflowName: z.string().min(1), event: z.string().min(1), branch: z.string().min(1), commitSha: z.string().regex(/^[0-9a-f]{7,64}$/i), actorLogin: z.string().min(1), status: z.enum(["queued", "in_progress", "completed"]), conclusion: z.enum(["success", "failure", "timed_out", "cancelled", "skipped", "neutral"]).nullable(), queuedAt: timestamp, startedAt: timestamp.nullable(), completedAt: timestamp.nullable(), durationMs: positiveSafe.or(z.literal(0)), runtimeBoundary: z.enum(["Kata VM-backed container", "Hyper-V isolated container", "Process-isolated Windows container", "Docker Linux container", "Tart VM"]).nullable(), allocationState: z.enum(["mars", "external"]).optional() };
 export const RunSummary = dto(strict(runSummaryShape));
 export type RunSummary = z.infer<typeof RunSummary>;

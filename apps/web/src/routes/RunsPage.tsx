@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { getRuns } from "../api.ts";
 import { QueryState } from "../components/StateView.tsx";
 import { RunHistory, type RunHistoryFilters, type RunHistoryRange } from "../components/RunHistory.tsx";
+import { AiRunQueue } from "../components/AiRunQueue.tsx";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
 
 const rangeMs: Record<Exclude<RunHistoryRange, "all">, number> = { "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000, "12h": 43_200_000, "1d": 86_400_000, "2d": 172_800_000 };
@@ -44,6 +45,7 @@ export function RunsPage() {
       </div>
       <Link className="button secondary" to="/runs/timing">Timing history</Link>
     </header>
+    <AiRunQueue organizationId={organizationId} />
     <QueryState error={query.error} isLoading={query.isLoading} retry={() => void query.refetch()} operationLabel="run history" />
     <RunHistory runs={runs} filters={filters} onFiltersChange={setFilters} resultsAvailable={!query.isLoading && !query.error} />
     {query.hasNextPage && <button type="button" className="button secondary load-more" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage}>{query.isFetchingNextPage ? "Loading…" : "Load more runs"}</button>}
