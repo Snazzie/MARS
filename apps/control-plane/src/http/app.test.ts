@@ -9,7 +9,7 @@ import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { LlmProvidersService, type LlmProviderConfig } from "../llm-providers.ts";
-import { LlmProviderSummary } from "@mars/contracts";
+import { DashboardOkResponse, LlmProviderSummary } from "@mars/contracts";
 import { SecretBox } from "../auth.ts";
 
 const app = createControlPlaneApp(fakeHttpDeps());
@@ -2330,17 +2330,18 @@ test("model lookup requires global admin and rejects credential-bearing endpoint
   expect(await valid.json()).toEqual({ models: ["local-model"] });
 });
 
-test("provider create, list, and update return strict public summaries from database rows", async () => {
+test("provider create, list, update, and delete return their public response contracts", async () => {
   let stored: LlmProviderConfig & { id: string; createdAt: string; updatedAt: string } = {
     id: "provider-1", name: "lm studio", kind: "openai-compatible",
     baseUrl: "http://localhost:1234/v1", model: "google/gemma-4-12b-qat",
     encryptedApiKey: null, createdAt: "2026-10-09T00:00:00Z", updatedAt: "2026-10-09T00:00:00Z",
   };
+  let deleted = false;
   const service = new LlmProvidersService(new SecretBox(Buffer.alloc(32, 5).toString("base64")), {
-    list: async () => [stored],
+    list: async () => deleted ? [] : [stored],
     get: async () => stored,
     save: async input => { stored = { ...stored, ...input }; return stored; },
-    delete: async () => {},
+    delete: async () => { deleted = true; },
   });
   const endpoint = createControlPlaneApp(fakeHttpDeps({
     currentUser: async () => ({ id: "operator", githubUserId: 1, login: "operator", isGlobalAdmin: true }),
@@ -2365,4 +2366,11 @@ test("provider create, list, and update return strict public summaries from data
     expect(summary).toEqual(method === "PUT" ? { ...expected, name: "renamed", keyConfigured: true } : expected);
     expect(JSON.stringify(payload)).not.toContain("private-key");
   }
+  const deletion = await endpoint.request("/api/admin/llm/providers/provider-1", { method: "DELETE" });
+  expect(deletion.status).toBe(200);
+  expect(deletion.headers.get("cache-control")).toBe("no-store");
+  expect(DashboardOkResponse.parse(await deletion.json())).toEqual({ ok: true });
+  const remaining = await endpoint.request("/api/admin/llm/providers");
+  expect(remaining.status).toBe(200);
+  expect(await remaining.json()).toEqual([]);
 });

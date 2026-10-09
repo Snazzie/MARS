@@ -5,6 +5,9 @@ import { SecretBox } from "./auth.ts";
 import { applyGithubJobSnapshot, applyWorkflowJobWebhook, configureRunLifecycle, type GithubRunSnapshot, type GithubJobSnapshot } from "./runs.ts";
 import { enqueuePipelineFailureAnalysis, processPipelineFailureAnalyses, type PipelineFailureAnalysisDeps } from "./pipeline-failure-analysis.ts";
 import { generatePipelineAnalysis } from "./llm-providers.ts";
+import { createControlPlaneApp } from "./http/app.ts";
+import { fakeHttpDeps } from "./http/test-deps.ts";
+import { GlobalFailureAnalysisSettings } from "@mars/contracts";
 
 const integration = Bun.env.MARS_E2E_DATABASE_URL ? test : test.skip;
 const org = "10000000-0000-4000-8000-000000000001";
@@ -19,7 +22,7 @@ async function fixture(work: (db: DatabaseClient) => Promise<void>) {
   try {
     await db.transaction(async tx => {
       // Connection-local copies preserve PostgreSQL constraints without touching application data.
-      for (const table of ["dashboard_installations", "dashboard_repositories", "dashboard_runs", "dashboard_jobs", "dashboard_job_steps", "dashboard_step_log_chunks", "dashboard_log_chunks", "llm_providers", "repository_failure_analysis_settings", "pipeline_failure_analyses", "pipeline_analysis_comments"]) {
+      for (const table of ["dashboard_installations", "dashboard_repositories", "dashboard_runs", "dashboard_jobs", "dashboard_job_steps", "dashboard_step_log_chunks", "dashboard_log_chunks", "llm_providers", "global_failure_analysis_settings", "repository_failure_analysis_settings", "pipeline_failure_analyses", "pipeline_analysis_comments"]) {
         await tx.$client.unsafe(`CREATE TEMP TABLE ${table} (LIKE public.${table} INCLUDING DEFAULTS INCLUDING INDEXES INCLUDING CONSTRAINTS) ON COMMIT DROP`);
       }
       await tx.insert(schema.dashboardInstallations).values({ id: installation, organizationId: org, githubInstallationId: 1, state: "approved" });
@@ -147,4 +150,62 @@ integration("failed generated analysis retains reported usage and queued pricing
   const [analysis] = await db.select().from(schema.pipelineFailureAnalyses);
   expect(analysis).toMatchObject({ state: "failed", errorCode: "llm_invalid_response", inputTokens: 1000, outputTokens: 200, inputUsdPerMillionTokens: 2, outputUsdPerMillionTokens: 10 });
   expect(await getAiTokenUsage(db)).toMatchObject({ inputTokens: 1000, outputTokens: 200, reportedRequests: 1, unreportedRequests: 0, estimatedCostUsd: 0.004 });
+}));
+
+integration.each([
+  { enableAll: true, individual: false, available: true, expected: true },
+  { enableAll: true, individual: null, available: true, expected: true },
+  { enableAll: false, individual: true, available: true, expected: true },
+  { enableAll: false, individual: false, available: true, expected: false },
+  { enableAll: false, individual: null, available: true, expected: false },
+  { enableAll: true, individual: false, available: false, expected: false },
+])("blanket enable $enableAll short circuits individual $individual while preserving availability $available", ({ enableAll, individual, available, expected }) => fixture(async db => {
+  if (individual === null) await db.delete(schema.repositoryFailureAnalysisSettings);
+  else await db.update(schema.repositoryFailureAnalysisSettings).set({ enabled: individual });
+  await db.update(schema.dashboardRepositories).set({ available }).where(eq(schema.dashboardRepositories.id, repo));
+  await db.insert(schema.globalFailureAnalysisSettings).values({ enableAll, providerId: provider, enabledSince: enableAll ? "2026-10-06T00:00:00Z" : null });
+  const before = await db.select().from(schema.repositoryFailureAnalysisSettings);
+  await applyGithubJobSnapshot({ installationId: 1, repository: { id: 8, name: "repo", fullName: "acme/repo" }, run, job: failedJob(), authoritative: true });
+  await enqueuePipelineFailureAnalysis({ db, organizationId: org, repositoryId: repo, run, jobs: [failedJob()] });
+  const calls: number[] = [];
+  await processPipelineFailureAnalyses(worker(db, calls));
+  expect(calls).toEqual(expected ? [9001] : []);
+  expect(await db.select().from(schema.repositoryFailureAnalysisSettings)).toEqual(before);
+}));
+
+integration("blanket toggle persists independently and disabling restores individual selections", () => fixture(async db => {
+  await db.update(schema.repositoryFailureAnalysisSettings).set({ enabled: false, enabledSince: null });
+  const before = await db.select().from(schema.repositoryFailureAnalysisSettings);
+  const endpoint = createControlPlaneApp(fakeHttpDeps({
+    db,
+    currentUser: async () => ({ id: "operator", githubUserId: 1, login: "operator", isGlobalAdmin: true }),
+  }));
+  const path = "/api/admin/llm/failure-analysis";
+  const initial = await endpoint.request(path);
+  expect(GlobalFailureAnalysisSettings.parse(await initial.json())).toEqual({ enableAll: false, providerId: null, enabledSince: null });
+  const missingProvider = await endpoint.request(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enableAll: true, providerId: null }) });
+  expect(missingProvider.status).toBe(400);
+  const enabled = await endpoint.request(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enableAll: true, providerId: provider }) });
+  expect(enabled.status).toBe(200);
+  const saved = GlobalFailureAnalysisSettings.parse(await enabled.json());
+  expect(saved.enableAll).toBe(true);
+  expect(saved.providerId).toBe(provider);
+  expect(Date.parse(saved.enabledSince!)).toBeGreaterThan(Date.now() - 10_000);
+  const repeated = await endpoint.request(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enableAll: true, providerId: provider }) });
+  expect(GlobalFailureAnalysisSettings.parse(await repeated.json()).enabledSince).toBe(saved.enabledSince);
+  const fetched = await endpoint.request(path);
+  expect(GlobalFailureAnalysisSettings.parse(await fetched.json())).toEqual(saved);
+  expect(await db.select().from(schema.repositoryFailureAnalysisSettings)).toEqual(before);
+  const disabled = await endpoint.request(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enableAll: false, providerId: provider }) });
+  expect(GlobalFailureAnalysisSettings.parse(await disabled.json())).toEqual({ enableAll: false, providerId: provider, enabledSince: null });
+  expect(await db.select().from(schema.repositoryFailureAnalysisSettings)).toEqual(before);
+  await applyGithubJobSnapshot({ installationId: 1, repository: { id: 8, name: "repo", fullName: "acme/repo" }, run, job: failedJob(), authoritative: true });
+  expect(await db.select().from(schema.pipelineFailureAnalyses)).toEqual([]);
+}));
+
+integration("blanket enable does not analyze failures completed before it was enabled", () => fixture(async db => {
+  await db.delete(schema.repositoryFailureAnalysisSettings);
+  await db.insert(schema.globalFailureAnalysisSettings).values({ enableAll: true, providerId: provider, enabledSince: "2026-10-08T00:00:00Z" });
+  await applyGithubJobSnapshot({ installationId: 1, repository: { id: 8, name: "repo", fullName: "acme/repo" }, run, job: failedJob(), authoritative: true });
+  expect(await db.select().from(schema.pipelineFailureAnalyses)).toEqual([]);
 }));

@@ -450,10 +450,10 @@ const runDetailQueries = defineQueries((db) => ({
     errorCode: schema.pipelineAnalysisComments.errorCode,
   }).from(schema.pipelineAnalysisComments).where(eq(schema.pipelineAnalysisComments.analysisId, sql.placeholder("analysisId")))
     .orderBy(asc(schema.pipelineAnalysisComments.prNumber)).prepare("dashboard_run_detail_failure_analysis_comments"),
-  failureAnalysisEnabled: db.select({ enabled: schema.repositoryFailureAnalysisSettings.enabled }).from(schema.repositoryFailureAnalysisSettings).where(and(
-    eq(schema.repositoryFailureAnalysisSettings.organizationId, sql.placeholder("organizationId")),
-    eq(schema.repositoryFailureAnalysisSettings.repositoryId, sql.placeholder("repositoryId")),
-  )).limit(1).prepare("dashboard_run_detail_failure_analysis_enabled"),
+  failureAnalysisEnabled: db.select({ enabled: sql<boolean>`COALESCE(${schema.repositoryFailureAnalysisSettings.enabled}, false) OR EXISTS (SELECT 1 FROM ${schema.globalFailureAnalysisSettings} WHERE ${schema.globalFailureAnalysisSettings.singleton}=true AND ${schema.globalFailureAnalysisSettings.enableAll}=true)` }).from(schema.dashboardRepositories).leftJoin(schema.repositoryFailureAnalysisSettings, and(
+    eq(schema.repositoryFailureAnalysisSettings.organizationId, schema.dashboardRepositories.organizationId),
+    eq(schema.repositoryFailureAnalysisSettings.repositoryId, schema.dashboardRepositories.id),
+  )).where(and(eq(schema.dashboardRepositories.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardRepositories.id, sql.placeholder("repositoryId")))).limit(1).prepare("dashboard_run_detail_failure_analysis_enabled"),
   jobs: db.select({
     id: schema.dashboardJobs.id,
     name: schema.dashboardJobs.name,

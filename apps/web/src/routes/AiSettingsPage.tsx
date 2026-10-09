@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { deleteLlmProvider, getLlmProviders, getLlmProviderModels, getMe, getOrganizations, getRepositories, getRepositoryFailureAnalysisSettings, saveLlmProvider, saveRepositoryFailureAnalysisSettings, testLlmProvider } from "../api.ts";
+import { deleteLlmProvider, getGlobalFailureAnalysisSettings, getLlmProviders, getLlmProviderModels, getMe, getOrganizations, getRepositories, getRepositoryFailureAnalysisSettings, saveGlobalFailureAnalysisSettings, saveLlmProvider, saveRepositoryFailureAnalysisSettings, testLlmProvider } from "../api.ts";
 import { QueryState } from "../components/StateView.tsx";
 import { AiTokenUsage } from "../components/AiTokenUsage.tsx";
 import { LlmProviderDefaultApiRoots } from "@mars/contracts";
@@ -44,6 +44,8 @@ function AiSettings() {
   const organizationsQuery = useQuery({ queryKey: ["organizations"], queryFn: getOrganizations });
   const organizations = organizationsQuery.data ?? [];
   const providers = useQuery({ queryKey: ["admin", "llm-providers"], queryFn: getLlmProviders, staleTime: 30_000 });
+  const globalSettings = useQuery({ queryKey: ["admin", "failure-analysis"], queryFn: getGlobalFailureAnalysisSettings });
+  const enableAll = globalSettings.data?.enableAll ?? false;
   const repositories = useQueries({ queries: organizations.map((organization) => ({ queryKey: ["failure-analysis-settings", organization.id], queryFn: () => getAllRepositories(organization.id) })) });
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -81,6 +83,7 @@ function AiSettings() {
   const providerRows = providers.data ?? [];
   const invalidate = () => {
     void client.invalidateQueries({ queryKey: ["admin", "llm-providers"] });
+    void client.invalidateQueries({ queryKey: ["admin", "failure-analysis"] });
     void Promise.all(organizations.map((organization) => client.invalidateQueries({ queryKey: ["failure-analysis-settings", organization.id] })));
   };
   const resetForm = () => {
@@ -96,19 +99,25 @@ function AiSettings() {
   });
   const repositoryRows = repositories.flatMap((query, index) => (query.data ?? []).map((row) => ({ ...row, organizationId: organizations[index].id, workspace: organizations[index].login })));
   const selectedProviderIds = new Set(repositoryRows.map(({ settings }) => settings.providerId));
-  const sharedProviderId = selectedProviderIds.size === 1 ? [...selectedProviderIds][0] ?? "" : "";
+  const sharedProviderId = globalSettings.data?.providerId ?? (selectedProviderIds.size === 1 ? [...selectedProviderIds][0] ?? "" : "");
   const updateRepositories = useMutation({
-    mutationFn: async ({ providerId, enableAll }: { providerId: string; enableAll?: boolean }) => {
+    mutationFn: async ({ providerId }: { providerId: string }) => {
+      await saveGlobalFailureAnalysisSettings({ enableAll, providerId });
       const results = await Promise.allSettled(repositoryRows.map(({ repository, settings, organizationId }) =>
-        saveRepositoryFailureAnalysisSettings(organizationId, repository.id, { providerId, enabled: enableAll && repository.available ? true : settings.enabled })));
+        saveRepositoryFailureAnalysisSettings(organizationId, repository.id, { providerId, enabled: settings.enabled })));
       const failures = results.filter((result) => result.status === "rejected");
       if (failures.length) throw new Error(`${failures.length} repository updates failed. Some changes may have saved; retry to apply the same provider to all repositories.`);
     },
     onSettled: invalidate,
     onError: (reason) => setError(errorMessage(reason, "Unable to update repositories.")),
   });
-  const accessBlocked = updateSetting.isPending || updateRepositories.isPending || providers.isFetching || !!providers.error || organizationsQuery.isFetching || !!organizationsQuery.error || repositories.some((query) => query.isFetching || !!query.error);
-  const providerReady = !!sharedProviderId && providerRows.some((provider) => provider.id === sharedProviderId) && repositoryRows.every(({ settings }) => settings.providerId === sharedProviderId);
+  const updateGlobalSetting = useMutation({
+    mutationFn: (enabled: boolean) => saveGlobalFailureAnalysisSettings({ enableAll: enabled, providerId: sharedProviderId || null }),
+    onSuccess: invalidate,
+    onError: (reason) => setError(errorMessage(reason, "Unable to save Enable all.")),
+  });
+  const accessBlocked = updateSetting.isPending || updateRepositories.isPending || updateGlobalSetting.isPending || globalSettings.isFetching || !!globalSettings.error || providers.isFetching || !!providers.error || organizationsQuery.isFetching || !!organizationsQuery.error || repositories.some((query) => query.isFetching || !!query.error);
+  const providerReady = !!sharedProviderId && providerRows.some((provider) => provider.id === sharedProviderId);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setError(null); setSaving(true);
     try {
@@ -167,11 +176,12 @@ function AiSettings() {
     <section className="ai-section" aria-labelledby="ai-repositories-title">
       <div><p className="eyebrow">02 / Enable</p><h2 id="ai-repositories-title">Repository access</h2><p className="form-help">All repositories use the same provider and model. Only newly completed failures are analyzed; successful runs are unchanged.</p></div>
       <div className="settings-actions">
-        <label className="ai-provider-select">Analysis provider for all repositories<select value={sharedProviderId} disabled={accessBlocked || repositoryRows.length === 0} onChange={(event) => { setError(null); setAcknowledged(false); updateRepositories.mutate({ providerId: event.target.value }); }}><option value="" disabled>Select profile</option>{providerRows.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} — {provider.model}</option>)}</select></label>
-        <button className="button" type="button" disabled={accessBlocked || !providerReady || !acknowledged || !repositoryRows.some(({ repository, settings }) => repository.available && !settings.enabled)} onClick={() => { setError(null); updateRepositories.mutate({ providerId: sharedProviderId, enableAll: true }); }}>Enable all</button>
+        <label className="ai-provider-select">Analysis provider for all repositories<select value={sharedProviderId} disabled={accessBlocked} onChange={(event) => { setError(null); setAcknowledged(false); updateRepositories.mutate({ providerId: event.target.value }); }}><option value="" disabled>Select profile</option>{providerRows.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} — {provider.model}</option>)}</select></label>
+        <label className="ai-checkbox"><input type="checkbox" checked={enableAll} disabled={accessBlocked || (!enableAll && (!providerReady || !acknowledged))} onChange={(event) => { setError(null); updateGlobalSetting.mutate(event.target.checked); }} />Enable all</label>
       </div>
       {selectedProviderIds.size > 1 && <p className="ai-warning">Repositories currently use different providers. Select one profile to apply it to all repositories.</p>}
       <label className="ai-checkbox ai-consent"><input type="checkbox" checked={acknowledged} disabled={accessBlocked || !providerReady} onChange={(event) => setAcknowledged(event.target.checked)} />I acknowledge failed log excerpts will be sent to the selected endpoint and generated feedback posted on associated pull requests.</label>
+      <QueryState isLoading={globalSettings.isLoading} error={globalSettings.error} retry={() => void globalSettings.refetch()} operationLabel="Enable all settings" />
       <QueryState isLoading={organizationsQuery.isLoading} error={organizationsQuery.error} retry={() => void organizationsQuery.refetch()} operationLabel="workspaces" />
       {!organizationsQuery.isLoading && !organizationsQuery.error && organizations.length === 0 && <p className="ai-empty">No accessible workspaces. Connect a GitHub installation in Settings first.</p>}
       {repositories.map((query, index) => <QueryState key={organizations[index].id} isLoading={query.isLoading} error={query.error} retry={() => void query.refetch()} operationLabel={`${organizations[index].login} repositories`} />)}
@@ -180,12 +190,12 @@ function AiSettings() {
         <tbody>{repositoryRows.map(({ repository, settings, organizationId, workspace }) => <tr key={`${organizationId}:${repository.id}`}>
           <th scope="row">{repository.fullName ?? repository.name}</th>
           <td>{workspace}</td>
-          <td>{repository.available ? settings.enabled ? "Enabled" : "Disabled" : "Unavailable"}</td>
+          <td>{repository.available ? enableAll ? "Enabled by Enable all" : settings.enabled ? "Enabled" : "Disabled" : "Unavailable"}</td>
           <td><label className="ai-checkbox"><input type="checkbox" checked={settings.enabled} disabled={accessBlocked || (!settings.enabled && (!repository.available || !providerReady || !acknowledged))} onChange={(event) => { setError(null); updateSetting.mutate({ organizationId, repositoryId: repository.id, enabled: event.target.checked, providerId: settings.enabled ? settings.providerId : sharedProviderId }); }} /><span className="sr-only">Enable analysis for {repository.fullName ?? repository.name}</span></label></td>
         </tr>)}</tbody>
       </table></div>
       {!accessBlocked && organizations.length > 0 && repositoryRows.length === 0 && <p className="form-help">No repositories available.</p>}
-      <p className="form-help">Enable all applies to currently available repositories. Unavailable repositories are not newly enabled.</p>
+      <p className="form-help">Enable all overrides individual selections for every available repository, including newly discovered repositories. It does not change their checkboxes. Turn it off to use the individual selections again.</p>
     </section>
     <AiTokenUsage />
   </div>;

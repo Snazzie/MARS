@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { defineQueries, schema } from "@mars/db";
-import { AiTokenUsage, LlmProviderSaveRequest } from "@mars/contracts";
+import { AiTokenUsage, GlobalFailureAnalysisSaveRequest, LlmProviderSaveRequest } from "@mars/contracts";
 import { LlmProviderModelLookupRequest } from "@mars/contracts";
 import { getAiTokenUsage } from "@mars/db";
 const routeQueries = defineQueries(db => ({
@@ -43,6 +43,8 @@ const routeQueries = defineQueries(db => ({
   insertMutation: db.insert(schema.dashboardMutations).values({ organizationId: sql.placeholder("organizationId"), idempotencyKey: sql.placeholder("key") }).onConflictDoNothing().returning({ idempotencyKey: schema.dashboardMutations.idempotencyKey }).prepare("route_insert_mutation"),
   priorMutation: db.select({ response: schema.dashboardMutations.response }).from(schema.dashboardMutations).where(and(eq(schema.dashboardMutations.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardMutations.idempotencyKey, sql.placeholder("key")))).prepare("route_prior_mutation"),
   saveMutationResponse: db.update(schema.dashboardMutations).set({ response: sql`${sql.placeholder("response")}::jsonb` }).where(and(eq(schema.dashboardMutations.organizationId, sql.placeholder("organizationId")), eq(schema.dashboardMutations.idempotencyKey, sql.placeholder("key")))).prepare("route_save_mutation_response"),
+  globalFailureAnalysisSettings: db.select({ enableAll: schema.globalFailureAnalysisSettings.enableAll, providerId: schema.globalFailureAnalysisSettings.providerId, enabledSince: schema.globalFailureAnalysisSettings.enabledSince }).from(schema.globalFailureAnalysisSettings).where(eq(schema.globalFailureAnalysisSettings.singleton, true)).prepare("route_global_failure_analysis_settings"),
+  globalFailureAnalysisUpsert: db.insert(schema.globalFailureAnalysisSettings).values({ singleton: true, enableAll: sql.placeholder("enableAll"), providerId: sql.placeholder("providerId"), enabledSince: sql`${sql.placeholder("enabledSince")}` }).onConflictDoUpdate({ target: schema.globalFailureAnalysisSettings.singleton, set: { enableAll: sql`${sql.placeholder("enableAll")}`, providerId: sql`${sql.placeholder("providerId")}`, enabledSince: sql`${sql.placeholder("enabledSince")}` } }).returning({ enableAll: schema.globalFailureAnalysisSettings.enableAll, providerId: schema.globalFailureAnalysisSettings.providerId, enabledSince: schema.globalFailureAnalysisSettings.enabledSince }).prepare("route_global_failure_analysis_upsert"),
   failureAnalysisRepository: db.select({ id: schema.dashboardRepositories.id }).from(schema.dashboardRepositories).where(and(eq(schema.dashboardRepositories.id, sql.placeholder("repositoryId")), eq(schema.dashboardRepositories.organizationId, sql.placeholder("organizationId")))).limit(1).prepare("route_failure_analysis_repository"),
   failureAnalysisSettings: db.select({ enabled: schema.repositoryFailureAnalysisSettings.enabled, providerId: schema.repositoryFailureAnalysisSettings.providerId, enabledSince: schema.repositoryFailureAnalysisSettings.enabledSince }).from(schema.repositoryFailureAnalysisSettings).where(eq(schema.repositoryFailureAnalysisSettings.repositoryId, sql.placeholder("repositoryId"))).limit(1).prepare("route_failure_analysis_settings"),
   failureAnalysisProvider: db.select({ id: schema.llmProviders.id }).from(schema.llmProviders).where(eq(schema.llmProviders.id, sql.placeholder("providerId"))).limit(1).prepare("route_failure_analysis_provider"),
@@ -171,7 +173,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
   app.delete("/api/admin/llm/providers/:providerId", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     if (!deps.llmProviders) return providerUnavailable(c);
-    try { await deps.llmProviders.delete(c.req.param("providerId")); return c.body(null, 204, { "cache-control": "no-store" }); }
+    try { await deps.llmProviders.delete(c.req.param("providerId")); return c.json({ ok: true }, 200, { "cache-control": "no-store" }); }
     catch (cause) { if (cause instanceof Error && cause.message === "llm_provider_not_found") return error(c, 404, "not_found", "Provider not found"); if (cause instanceof Error && cause.message === "llm_provider_in_use") return error(c, 409, "llm_provider_in_use", "Provider is selected by a repository"); throw cause; }
   }));
   app.post("/api/admin/llm/providers/:providerId/test", safe(async (c) => {
@@ -179,6 +181,22 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!deps.llmProviders) return providerUnavailable(c);
     try { await deps.llmProviders.test(c.req.param("providerId")); return c.json({ ok: true }, 200, { "cache-control": "no-store" }); }
     catch (cause) { if (cause instanceof Error && cause.message === "llm_provider_not_found") return error(c, 404, "not_found", "Provider not found"); if (cause instanceof Error && /^llm_/.test(cause.message)) return error(c, 502, cause.message, "Provider test failed"); throw cause; }
+  }));
+  app.get("/api/admin/llm/failure-analysis", safe(async (c) => {
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    const [settings] = await routeQueries(deps.db).globalFailureAnalysisSettings.execute({});
+    return c.json({ enableAll: settings?.enableAll ?? false, providerId: settings?.providerId ?? null, enabledSince: settings?.enabledSince ? new Date(settings.enabledSince).toISOString() : null }, 200, { "cache-control": "no-store" });
+  }));
+  app.put("/api/admin/llm/failure-analysis", safe(async (c) => {
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    const body = GlobalFailureAnalysisSaveRequest.parse(await c.req.json());
+    if (body.enableAll && !body.providerId) return error(c, 400, "invalid_request", "Enable all requires a provider");
+    const queries = routeQueries(deps.db);
+    if (body.providerId && !(await queries.failureAnalysisProvider.execute({ providerId: body.providerId })).length) return error(c, 400, "invalid_request", "Provider does not exist");
+    const [previous] = await queries.globalFailureAnalysisSettings.execute({});
+    const enabledSince = body.enableAll ? (previous?.enableAll ? previous.enabledSince : new Date().toISOString()) : null;
+    const [saved] = await queries.globalFailureAnalysisUpsert.execute({ ...body, enabledSince });
+    return c.json({ ...saved, enabledSince: saved.enabledSince ? new Date(saved.enabledSince).toISOString() : null }, 200, { "cache-control": "no-store" });
   }));
   app.get("/api/organizations/:organizationId/repositories/:repositoryId/failure-analysis", safe(async (c) => {
     const organizationId = c.req.param("organizationId");
@@ -188,7 +206,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const [repository] = await queries.failureAnalysisRepository.execute({ organizationId, repositoryId });
     if (!repository) return error(c, 404, "not_found", "Resource not found");
     const [settings] = await queries.failureAnalysisSettings.execute({ repositoryId });
-    return c.json({ organizationId, repositoryId, enabled: settings?.enabled ?? false, providerId: settings?.providerId ?? null, enabledSince: settings?.enabledSince ?? null }, 200, { "cache-control": "no-store" });
+    return c.json({ organizationId, repositoryId, enabled: settings?.enabled ?? false, providerId: settings?.providerId ?? null, enabledSince: settings?.enabledSince ? new Date(settings.enabledSince).toISOString() : null }, 200, { "cache-control": "no-store" });
   }));
   app.put("/api/organizations/:organizationId/repositories/:repositoryId/failure-analysis", safe(async (c) => {
     const organizationId = c.req.param("organizationId");
@@ -204,7 +222,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const [previous] = await queries.failureAnalysisSettings.execute({ repositoryId });
     const enabledSince = body.enabled ? (previous?.enabled ? previous.enabledSince : new Date().toISOString()) : null;
     const [saved] = await queries.failureAnalysisUpsert.execute({ organizationId, repositoryId, enabled: body.enabled, providerId: body.providerId, enabledSince });
-    return c.json({ organizationId, repositoryId, enabled: saved.enabled, providerId: saved.providerId, enabledSince: saved.enabledSince }, 200, { "cache-control": "no-store" });
+    return c.json({ organizationId, repositoryId, enabled: saved.enabled, providerId: saved.providerId, enabledSince: saved.enabledSince ? new Date(saved.enabledSince).toISOString() : null }, 200, { "cache-control": "no-store" });
   }));
   app.get("/api/admin/logs", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");

@@ -42,6 +42,8 @@ import {
   LlmProviderModels,
   AiTokenUsage,
   RepositoryFailureAnalysisSettings,
+  GlobalFailureAnalysisSettings,
+  GlobalFailureAnalysisSaveRequest,
 } from "@mars/contracts";
 import {
   DashboardBootstrapReveal,
@@ -519,6 +521,12 @@ export const deleteLlmProvider = (providerId: string) =>
 export const testLlmProvider = (providerId: string) =>
   request(`/api/admin/llm/providers/${encodeURIComponent(providerId)}/test`, z.object({ ok: z.literal(true) }).strict(), {
     method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" }, body: "{}",
+  });
+export const getGlobalFailureAnalysisSettings = () =>
+  request("/api/admin/llm/failure-analysis", GlobalFailureAnalysisSettings, { cache: "no-store" });
+export const saveGlobalFailureAnalysisSettings = (input: GlobalFailureAnalysisSaveRequest) =>
+  request("/api/admin/llm/failure-analysis", GlobalFailureAnalysisSettings, {
+    method: "PUT", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
   });
 export const getRepositoryFailureAnalysisSettings = (organizationId: string, repositoryId: string) =>
   request(`/api/organizations/${encodeURIComponent(organizationId)}/repositories/${encodeURIComponent(repositoryId)}/failure-analysis`, RepositoryFailureAnalysisSettings, { cache: "no-store" });

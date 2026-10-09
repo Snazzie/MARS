@@ -64,6 +64,13 @@
       "when": 1791412141575,
       "tag": "0008_sweet_zombie",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791571531315,
+      "tag": "0009_sticky_risque",
+      "breakpoints": true
     }
   ]
 }

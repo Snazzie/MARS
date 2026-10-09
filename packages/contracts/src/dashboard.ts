@@ -218,6 +218,18 @@ export const AiTokenUsage = strict({
 });
 export type AiTokenUsage = z.infer<typeof AiTokenUsage>;
 
+export const GlobalFailureAnalysisSettings = dto(strict({
+  enableAll: z.boolean(),
+  providerId: id.nullable(),
+  enabledSince: timestamp.nullable(),
+}));
+export type GlobalFailureAnalysisSettings = z.infer<typeof GlobalFailureAnalysisSettings>;
+export const GlobalFailureAnalysisSaveRequest = strict({
+  enableAll: z.boolean(),
+  providerId: id.nullable(),
+});
+export type GlobalFailureAnalysisSaveRequest = z.infer<typeof GlobalFailureAnalysisSaveRequest>;
+
 export const RepositoryFailureAnalysisSettings = dto(strict({
   organizationId: id,
   repositoryId: id,
