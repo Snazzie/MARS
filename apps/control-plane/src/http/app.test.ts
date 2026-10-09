@@ -2382,7 +2382,7 @@ test("AI work is authenticated and inaccessible workspace work returns not found
     db: preparedTestDatabase(() => []),
   }));
   expect((await memberApp.request("/api/organizations/not-a-member/ai-work")).status).toBe(404);
-  for (const query of ["?cursor=invalid", "?limit=0", "?limit=101", "?state=completed"]) {
+  for (const query of ["?cursor=invalid", "?limit=0", "?limit=101", "?state=completed", "?view=unknown"]) {
     expect((await memberApp.request(`/api/organizations/all/ai-work${query}`)).status).toBe(400);
   }
 });

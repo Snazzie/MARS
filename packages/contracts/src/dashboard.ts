@@ -145,12 +145,21 @@ export const CostCenterDto = dto(strict({
 export type CostCenterDto = z.output<typeof CostCenterDto>;
 export const RepositorySummary = dto(strict({ id, organizationId, name: z.string().min(1), fullName: z.string().min(1), visibility: z.enum(["private", "internal", "public"]), available: z.boolean(), installationId: id, discoveryState: z.enum(["active", "paused", "rate_limited", "queued"]), discoveryRetryAt: timestamp.nullable() }));
 export type RepositorySummary = z.infer<typeof RepositorySummary>;
+const pipelineAnalysisState = z.enum(["pending", "running", "completed", "failed", "skipped"]);
+export const PipelineAnalysisMetrics = dto(strict({
+  queuedAt: timestamp, startedAt: timestamp.nullable(), finishedAt: timestamp.nullable(),
+  providerCalledAt: timestamp.nullable(),
+  queueWaitMs: nonnegativeSafe.nullable(), durationMs: nonnegativeSafe.nullable(),
+  usage: strict({ input: nonnegativeSafe.nullable(), output: nonnegativeSafe.nullable(), total: nonnegativeSafe.nullable() }),
+  estimatedCostUsd: z.number().nonnegative().finite().nullable(),
+}));
+export type PipelineAnalysisMetrics = z.infer<typeof PipelineAnalysisMetrics>;
 export const PipelineAnalysisWork = dto(strict({
   id, organizationId, repositoryId: id, repositoryName: z.string().min(1),
   runId: id, runNumber: positiveSafe, runAttempt: positiveSafe,
-  workflowName: z.string().min(1), state: z.enum(["pending", "running"]),
+  workflowName: z.string().min(1), state: pipelineAnalysisState,
   providerName: z.string().min(1), model: z.string().min(1),
-  queuedAt: timestamp, startedAt: timestamp.nullable(),
+  metrics: PipelineAnalysisMetrics, errorCode: z.string().min(1).nullable(),
 }));
 export type PipelineAnalysisWork = z.infer<typeof PipelineAnalysisWork>;
 const runSummaryShape = { id, organizationId, repositoryId: id, repositoryName: z.string().min(1), runNumber: positiveSafe, runAttempt: positiveSafe, workflowName: z.string().min(1), event: z.string().min(1), branch: z.string().min(1), commitSha: z.string().regex(/^[0-9a-f]{7,64}$/i), actorLogin: z.string().min(1), status: z.enum(["queued", "in_progress", "completed"]), conclusion: z.enum(["success", "failure", "timed_out", "cancelled", "skipped", "neutral"]).nullable(), queuedAt: timestamp, startedAt: timestamp.nullable(), completedAt: timestamp.nullable(), durationMs: positiveSafe.or(z.literal(0)), runtimeBoundary: z.enum(["Kata VM-backed container", "Hyper-V isolated container", "Process-isolated Windows container", "Docker Linux container", "Tart VM"]).nullable(), allocationState: z.enum(["mars", "external"]).optional() };
@@ -260,11 +269,12 @@ export type PipelineAnalysisResult = z.infer<typeof PipelineAnalysisResult>;
 export const PipelineFailureAnalysis = dto(strict({
   id,
   runAttempt: positiveSafe,
-  state: z.enum(["pending", "running", "completed", "failed", "skipped"]),
+  state: pipelineAnalysisState,
   providerName: z.string().min(1),
   model: z.string().min(1),
   result: PipelineAnalysisResult.nullable(),
   errorCode: z.string().min(1).nullable(),
+  metrics: PipelineAnalysisMetrics,
   comments: z.array(strict({
     prNumber: positiveSafe,
     state: z.enum(["pending", "publishing", "published", "failed", "unknown"]),

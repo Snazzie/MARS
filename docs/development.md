@@ -80,9 +80,23 @@ Dashboard recovery and navigation:
   Charts represent the loaded matching runs, not the complete history.
 - Runs and Overview show an AI run queue for pending and running failure analyses,
   oldest first, with captured run attempt, repository, provider/model, and run links.
-  It follows workspace scope (All workspaces includes memberships only), independently
-  of run-history filters and reporting windows. It refreshes every five seconds while
-  visible, removes terminal work, and offers pagination in a bounded scrolling panel.
+  **Recent runs** lists completed, failed, and skipped analyses newest-enqueued first,
+  retaining each attempt's metrics after it leaves the queue. Both views follow workspace
+  scope (All workspaces includes memberships only), independently of run-history filters
+  and reporting windows. They refresh every five seconds while visible and paginate in
+  a bounded scrolling panel.
+- Each AI run and its current-attempt failure-analysis detail show total/input/output
+  tokens, estimated USD spend, time to start, and time taken. Usage comes from the
+  provider response; estimates use the per-analysis pricing snapshot, not today's
+  provider configuration or an invoice. Missing usage or pricing is unavailable,
+  not zero; explicitly zero-priced local calls can show $0.00 without reported usage.
+  Time to start measures enqueue to worker claim, including evidence-readiness waiting.
+  It advances while queued and freezes on claim. Time taken measures claim to analysis
+  completion, including log retrieval/model work but excluding PR publishing; it advances
+  while running and freezes on completion or failure. Work skipped before claim shows
+  Not started and its wait, never an invented processing time. Historical missing or
+  reversed timing evidence remains unavailable. Existing analysis timestamps/usage are
+  reused; no schema migration or paid-call replay is required.
 - Overview starts with time-window controls and the dispatcher card, without the
   introductory title block or Live workload panel. Six summary metrics use one row
   on wide screens, three columns on tablets, and two on phones.

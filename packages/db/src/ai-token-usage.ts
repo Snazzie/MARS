@@ -1,4 +1,5 @@
 import type { AiTokenUsage } from "@mars/contracts";
+import type { PipelineAnalysisMetrics } from "@mars/contracts";
 
 export interface PipelineFailureAnalysisUsageRow {
   calledAt: string | Date | null;
@@ -12,6 +13,45 @@ function safeSum(target: number, value: number): number {
   const sum = target + value;
   if (!Number.isSafeInteger(sum)) throw new Error("AI token totals exceed safe integer range");
   return sum;
+}
+
+function reportedCount(value: number | null): number | null {
+  return Number.isSafeInteger(value) && value! >= 0 ? value : null;
+}
+
+export function estimateAiRequestCost(row: PipelineFailureAnalysisUsageRow): number | null {
+  const inputPrice = row.inputUsdPerMillionTokens, outputPrice = row.outputUsdPerMillionTokens;
+  if (inputPrice === null || outputPrice === null || !Number.isFinite(inputPrice) || !Number.isFinite(outputPrice) || inputPrice < 0 || outputPrice < 0) return null;
+  if (inputPrice === 0 && outputPrice === 0) return 0;
+  const input = reportedCount(row.inputTokens), output = reportedCount(row.outputTokens);
+  if (input === null || output === null) return null;
+  const cost = input * inputPrice / 1_000_000 + output * outputPrice / 1_000_000;
+  return Number.isFinite(cost) ? cost : null;
+}
+
+export interface PipelineAnalysisMetricsRow extends PipelineFailureAnalysisUsageRow {
+  state: string;
+  queuedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export function getPipelineAnalysisMetrics(row: PipelineAnalysisMetricsRow, now = Date.now()): PipelineAnalysisMetrics {
+  const interval = (start: string | null, end: string | number | null): number | null => {
+    if (start === null || end === null) return null;
+    const value = (typeof end === "number" ? end : Date.parse(end)) - Date.parse(start);
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  };
+  const input = reportedCount(row.inputTokens), output = reportedCount(row.outputTokens);
+  const total = input === null || output === null || !Number.isSafeInteger(input + output) ? null : input + output;
+  return {
+    queuedAt: row.queuedAt, startedAt: row.startedAt, finishedAt: row.finishedAt,
+    providerCalledAt: row.calledAt instanceof Date ? row.calledAt.toISOString() : row.calledAt,
+    queueWaitMs: interval(row.queuedAt, row.startedAt ?? row.finishedAt ?? (row.state === "pending" ? now : null)),
+    durationMs: interval(row.startedAt, row.finishedAt ?? (row.state === "running" ? now : null)),
+    usage: { input, output, total },
+    estimatedCostUsd: row.calledAt === null ? null : estimateAiRequestCost(row),
+  };
 }
 
 export function aggregateAiTokenUsage(rows: readonly PipelineFailureAnalysisUsageRow[], now = new Date()): AiTokenUsage {
@@ -49,8 +89,8 @@ export function aggregateAiTokenUsage(rows: readonly PipelineFailureAnalysisUsag
     outputTokens = safeSum(outputTokens, output);
     point.inputTokens = safeSum(point.inputTokens, input);
     point.outputTokens = safeSum(point.outputTokens, output);
-    if (Number.isFinite(row.inputUsdPerMillionTokens) && row.inputUsdPerMillionTokens! >= 0 && Number.isFinite(row.outputUsdPerMillionTokens) && row.outputUsdPerMillionTokens! >= 0) {
-      const cost = input * row.inputUsdPerMillionTokens! / 1_000_000 + output * row.outputUsdPerMillionTokens! / 1_000_000;
+    const cost = estimateAiRequestCost(row);
+    if (cost !== null) {
       point.estimatedCostUsd += cost;
       estimatedCostUsd += cost;
     } else {

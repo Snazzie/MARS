@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { aggregateAiTokenUsage, type PipelineFailureAnalysisUsageRow } from "./ai-token-usage.ts";
+import { aggregateAiTokenUsage, getPipelineAnalysisMetrics, type PipelineAnalysisMetricsRow, type PipelineFailureAnalysisUsageRow } from "./ai-token-usage.ts";
 
 const now = new Date("2026-10-07T15:00:00Z");
 const row = (changes: Partial<PipelineFailureAnalysisUsageRow> = {}): PipelineFailureAnalysisUsageRow => ({
@@ -37,4 +37,34 @@ test("rates snapshotted on different calls contribute independently", () => {
   const usage = aggregateAiTokenUsage([row(), row({ inputUsdPerMillionTokens: 4, outputUsdPerMillionTokens: 20 })], now);
   expect(usage.estimatedCostUsd).toBe(9);
   expect(usage.points.at(-1)?.estimatedCostUsd).toBe(9);
+});
+
+const analysis = (changes: Partial<PipelineAnalysisMetricsRow> = {}): PipelineAnalysisMetricsRow => ({
+  ...row(), state: "completed", queuedAt: "2026-10-07T01:00:00.000Z",
+  startedAt: "2026-10-07T01:00:05.000Z", finishedAt: "2026-10-07T01:00:25.000Z", ...changes,
+});
+
+test("analysis queue wait and processing time advance only while their phase is active", () => {
+  const now = Date.parse("2026-10-07T01:00:20.000Z");
+  expect(getPipelineAnalysisMetrics(analysis({ state: "pending", startedAt: null, finishedAt: null, calledAt: null, inputTokens: null, outputTokens: null }), now)).toMatchObject({
+    queueWaitMs: 20_000, durationMs: null, estimatedCostUsd: null, usage: { input: null, output: null, total: null },
+  });
+  expect(getPipelineAnalysisMetrics(analysis({ state: "running", finishedAt: null }), now)).toMatchObject({ queueWaitMs: 5_000, durationMs: 15_000 });
+  const completed = getPipelineAnalysisMetrics(analysis(), now + 60_000);
+  expect(completed).toMatchObject({ queueWaitMs: 5_000, durationMs: 20_000, usage: { input: 1_000_000, output: 100_000, total: 1_100_000 }, estimatedCostUsd: 3 });
+  expect(getPipelineAnalysisMetrics(analysis(), now + 120_000)).toEqual(completed);
+  expect(getPipelineAnalysisMetrics(analysis({ state: "failed" }), now)).toMatchObject({ estimatedCostUsd: 3, durationMs: 20_000 });
+});
+
+test("missing usage and captured pricing do not masquerade as zero spend", () => {
+  expect(getPipelineAnalysisMetrics(analysis({ inputTokens: null, outputTokens: null }))).toMatchObject({ usage: { input: null, output: null, total: null }, estimatedCostUsd: null });
+  expect(getPipelineAnalysisMetrics(analysis({ inputUsdPerMillionTokens: null }))).toMatchObject({ usage: { total: 1_100_000 }, estimatedCostUsd: null });
+  expect(getPipelineAnalysisMetrics(analysis({ inputTokens: null, outputTokens: null, inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 }))).toMatchObject({ usage: { total: null }, estimatedCostUsd: 0 });
+});
+
+test("skips without a worker claim and incomplete or reversed timestamps do not invent processing time", () => {
+  expect(getPipelineAnalysisMetrics(analysis({ state: "skipped", startedAt: null, calledAt: null, inputTokens: null, outputTokens: null }))).toMatchObject({ queueWaitMs: 25_000, durationMs: null, estimatedCostUsd: null });
+  expect(getPipelineAnalysisMetrics(analysis({ finishedAt: null }))).toMatchObject({ queueWaitMs: 5_000, durationMs: null });
+  expect(getPipelineAnalysisMetrics(analysis({ startedAt: "2026-10-07T00:59:59.000Z", finishedAt: "2026-10-07T00:59:58.000Z" }))).toMatchObject({ queueWaitMs: null, durationMs: null });
+  expect(getPipelineAnalysisMetrics(analysis({ inputTokens: -1 }))).toMatchObject({ usage: { input: null, total: null }, estimatedCostUsd: null });
 });

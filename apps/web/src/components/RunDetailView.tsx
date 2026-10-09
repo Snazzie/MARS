@@ -5,6 +5,7 @@ import { ActionGraph } from "./ActionGraph.tsx";
 import { LogViewer } from "./LogViewer.tsx";
 import { RunTelemetry, formatDuration, lifecycleMetrics } from "./RunTelemetry.tsx";
 import { RunTimeline } from "./RunTimeline.tsx";
+import { AiAnalysisMetrics } from "./AiAnalysisMetrics.tsx";
 type RunDetailFacts = { started: string; repository: string; runner: string; duration: string };
 
 export function jobDetailHref(runId: string, organizationId: string, jobId: string): string {
@@ -95,6 +96,7 @@ function FailureAnalysisPanel({ data }: { data: RunDetail }) {
     {!analysis ? <p>{data.failureAnalysisEnabled ? "Awaiting failure analysis" : "Automatic failure analysis is not enabled."}</p> : <>
       <p className="detail-meta">Status: {analysis.state.replaceAll("_", " ")}</p>
       <p className="detail-meta">Provider: {analysis.providerName} · {analysis.model}</p>
+      <AiAnalysisMetrics metrics={analysis.metrics} />
       {analysis.result && <>
         <p>{analysis.result.summary}</p>
         {analysis.result.failures.map((failure, index) => <article className="job-panel" key={`${failure.jobId}-${failure.stepNumber ?? "job"}-${index}`}>

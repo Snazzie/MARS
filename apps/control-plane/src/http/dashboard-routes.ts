@@ -306,6 +306,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const parsed = z.object({
       limit: z.coerce.number().int().min(1).max(100).default(50),
       cursor: z.string().uuid().optional(),
+      view: z.enum(["queue", "history"]).default("queue"),
     }).strict().safeParse(c.req.query());
     if (!parsed.success) return error(c, 400, "invalid_query", "Invalid AI work query", { issues: parsed.error.issues });
     if (org !== "all") {
@@ -313,7 +314,7 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
       if (denied) return denied;
     }
     const scope = org === "all" ? { userId: c.get("user").id } : { organizationId: org };
-    return c.json(CursorPage(PipelineAnalysisWork).parse(await listPipelineAnalysisWork(deps.db, scope, parsed.data.limit, parsed.data.cursor ?? null)), 200, { "cache-control": "no-store" });
+    return c.json(CursorPage(PipelineAnalysisWork).parse(await listPipelineAnalysisWork(deps.db, scope, parsed.data.limit, parsed.data.cursor ?? null, parsed.data.view)), 200, { "cache-control": "no-store" });
   }));
   app.get("/api/organizations/:organizationId/job-timings", safe(async (c) => {
     const org = c.req.param("organizationId");

@@ -180,8 +180,8 @@ export function getRuns(organizationId: string, { cursor, search = "", limit = 5
   if (runner !== "all") query.set("runner", runner);
   return request(`/api/organizations/${organizationId}/runs?${query}`, CursorPage(RunSummary));
 }
-export function getPipelineAnalysisWork(organizationId: string, cursor?: string | null) {
-  const query = new URLSearchParams({ limit: "50" });
+export function getPipelineAnalysisWork(organizationId: string, cursor?: string | null, view: "queue" | "history" = "queue") {
+  const query = new URLSearchParams({ limit: "50", view });
   if (cursor) query.set("cursor", cursor);
   return request(`/api/organizations/${organizationId}/ai-work?${query}`, CursorPage(PipelineAnalysisWork), { cache: "no-store" });
 }

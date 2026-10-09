@@ -6,7 +6,7 @@ import * as schema from "./drizzle-schema.ts";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { getGithubRunnerCostSavings } from "./github-runner-cost.ts";
 import type { AiTokenUsage } from "@mars/contracts";
-import { aggregateAiTokenUsage, type PipelineFailureAnalysisUsageRow } from "./ai-token-usage.ts";
+import { aggregateAiTokenUsage, getPipelineAnalysisMetrics, type PipelineFailureAnalysisUsageRow } from "./ai-token-usage.ts";
 import type { PipelineAnalysisWork } from "@mars/contracts";
 export type DashboardDb = DatabaseClient;
 export type RunTransition = { status: RunSummary["status"]; conclusion: RunSummary["conclusion"]; startedAt?: string | null; completedAt?: string | null };
@@ -425,6 +425,23 @@ export async function listAllRuns(db: DashboardDb, userId: string, limit = 50, c
   const items = rows.slice(0, limit).map(normalizeRunSummary);
   return { items, nextCursor: rows.length > limit ? items.at(-1)!.id : null };
 }
+function analysisMetricsProjection() {
+  const a = schema.pipelineFailureAnalyses;
+  return {
+    queuedAt: a.createdAt, startedAt: a.startedAt, finishedAt: a.finishedAt, providerCalledAt: a.providerCalledAt,
+    inputTokens: a.inputTokens, outputTokens: a.outputTokens,
+    inputUsdPerMillionTokens: a.inputUsdPerMillionTokens, outputUsdPerMillionTokens: a.outputUsdPerMillionTokens,
+  };
+}
+function analysisMetrics(row: Record<string, unknown>, now: number) {
+  const numeric = (value: unknown): number | null => value == null ? null : Number(value);
+  return getPipelineAnalysisMetrics({
+    state: String(row.state), queuedAt: normalizeTimestamp(row.queuedAt)!,
+    startedAt: normalizeTimestamp(row.startedAt), finishedAt: normalizeTimestamp(row.finishedAt), calledAt: normalizeTimestamp(row.providerCalledAt),
+    inputTokens: numeric(row.inputTokens), outputTokens: numeric(row.outputTokens),
+    inputUsdPerMillionTokens: numeric(row.inputUsdPerMillionTokens), outputUsdPerMillionTokens: numeric(row.outputUsdPerMillionTokens),
+  }, now);
+}
 const analysisWorkQueries = defineQueries(db => {
   const a = schema.pipelineFailureAnalyses, r = schema.dashboardRuns, repo = schema.dashboardRepositories;
   const projection = {
@@ -433,29 +450,39 @@ const analysisWorkQueries = defineQueries(db => {
     runNumber: sql<number>`COALESCE((${a.source}->'run'->>'number')::bigint, ${r.runNumber})`,
     workflowName: sql<string>`COALESCE(${a.source}->'run'->>'workflowName', ${r.workflowName})`,
     state: a.state, providerName: a.providerName, model: a.model,
-    queuedAt: a.createdAt, startedAt: a.startedAt,
+    errorCode: a.errorCode, ...analysisMetricsProjection(),
   };
-  const active = inArray(a.state, ["pending", "running"]);
-  const afterCursor = sql`(${sql.placeholder("cursor")}::uuid IS NULL OR (${a.createdAt},${a.id}) > (SELECT c.created_at,c.id FROM pipeline_failure_analyses c WHERE c.id=${sql.placeholder("cursor")}::uuid))`;
+  const selected = sql`((${sql.placeholder("view")}='queue' AND ${a.state} IN ('pending','running')) OR (${sql.placeholder("view")}='history' AND ${a.state} IN ('completed','failed','skipped')))`;
+  const afterCursor = sql`(${sql.placeholder("cursor")}::uuid IS NULL OR CASE WHEN ${sql.placeholder("view")}='queue' THEN (${a.createdAt},${a.id}) > (SELECT c.created_at,c.id FROM pipeline_failure_analyses c WHERE c.id=${sql.placeholder("cursor")}::uuid) ELSE (${a.createdAt},${a.id}) < (SELECT c.created_at,c.id FROM pipeline_failure_analyses c WHERE c.id=${sql.placeholder("cursor")}::uuid) END)`;
+  const ordering = [
+    asc(sql`CASE WHEN ${sql.placeholder("view")}='queue' THEN ${a.createdAt} END`),
+    asc(sql`CASE WHEN ${sql.placeholder("view")}='queue' THEN ${a.id} END`),
+    desc(sql`CASE WHEN ${sql.placeholder("view")}='history' THEN ${a.createdAt} END`),
+    desc(sql`CASE WHEN ${sql.placeholder("view")}='history' THEN ${a.id} END`),
+  ];
   const runJoin = and(eq(r.organizationId, a.organizationId), eq(r.repositoryId, a.repositoryId), eq(r.id, a.runId));
   const repoJoin = and(eq(repo.organizationId, a.organizationId), eq(repo.id, a.repositoryId));
   return {
     organization: db.select(projection).from(a).innerJoin(r, runJoin).innerJoin(repo, repoJoin)
-      .where(and(eq(a.organizationId, sql.placeholder("organizationId")), active, afterCursor))
-      .orderBy(asc(a.createdAt), asc(a.id)).limit(sql.placeholder("limit")).prepare("dashboard_analysis_work"),
+      .where(and(eq(a.organizationId, sql.placeholder("organizationId")), selected, afterCursor))
+      .orderBy(...ordering).limit(sql.placeholder("limit")).prepare("dashboard_analysis_work"),
     all: db.select(projection).from(a).innerJoin(r, runJoin).innerJoin(repo, repoJoin)
       .innerJoin(schema.memberships, and(eq(schema.memberships.organizationId, a.organizationId), eq(schema.memberships.userId, sql.placeholder("userId"))))
-      .where(and(active, afterCursor))
-      .orderBy(asc(a.createdAt), asc(a.id)).limit(sql.placeholder("limit")).prepare("dashboard_all_analysis_work"),
+      .where(and(selected, afterCursor))
+      .orderBy(...ordering).limit(sql.placeholder("limit")).prepare("dashboard_all_analysis_work"),
   };
 });
-export async function listPipelineAnalysisWork(db: DashboardDb, scope: { organizationId: string } | { userId: string }, limit = 50, cursor: string | null = null): Promise<CursorPage<PipelineAnalysisWork>> {
+export async function listPipelineAnalysisWork(db: DashboardDb, scope: { organizationId: string } | { userId: string }, limit = 50, cursor: string | null = null, view: "queue" | "history" = "queue"): Promise<CursorPage<PipelineAnalysisWork>> {
   const queries = analysisWorkQueries(db);
-  const rows = await ("organizationId" in scope ? queries.organization : queries.all).execute({ ...scope, limit: limit + 1, cursor }) as Record<string, unknown>[];
-  const items = rows.slice(0, limit).map(row => ({
-    ...row, runNumber: Number(row.runNumber), runAttempt: Number(row.runAttempt),
-    queuedAt: normalizeTimestamp(row.queuedAt)!, startedAt: normalizeTimestamp(row.startedAt),
-  })) as PipelineAnalysisWork[];
+  const rows = await ("organizationId" in scope ? queries.organization : queries.all).execute({ ...scope, limit: limit + 1, cursor, view }) as Record<string, unknown>[];
+  const now = Date.now();
+  const items = rows.slice(0, limit).map((row): PipelineAnalysisWork => ({
+    id: String(row.id), organizationId: String(row.organizationId), repositoryId: String(row.repositoryId),
+    repositoryName: String(row.repositoryName), runId: String(row.runId),
+    runNumber: Number(row.runNumber), runAttempt: Number(row.runAttempt), workflowName: String(row.workflowName),
+    state: row.state as PipelineAnalysisWork["state"], providerName: String(row.providerName), model: String(row.model),
+    errorCode: row.errorCode == null ? null : String(row.errorCode), metrics: analysisMetrics(row, now),
+  }));
   return { items, nextCursor: rows.length > limit ? items.at(-1)!.id : null };
 }
 export async function listAllPools(db: DashboardDb, userId: string, limit = 50): Promise<CursorPage<PoolSummary>> {
@@ -472,6 +499,7 @@ const runDetailQueries = defineQueries((db) => ({
     model: schema.pipelineFailureAnalyses.model,
     result: schema.pipelineFailureAnalyses.result,
     errorCode: schema.pipelineFailureAnalyses.errorCode,
+    ...analysisMetricsProjection(),
   }).from(schema.pipelineFailureAnalyses).where(and(
     eq(schema.pipelineFailureAnalyses.organizationId, sql.placeholder("organizationId")),
     eq(schema.pipelineFailureAnalyses.runId, sql.placeholder("runId")),
@@ -616,6 +644,7 @@ export async function getRunDetail(db: DashboardDb, organizationId: string, runI
     model: String(failureAnalysisRow.model),
     result: failureAnalysisRow.result == null ? null : failureAnalysisRow.result as PipelineFailureAnalysis["result"],
     errorCode: failureAnalysisRow.errorCode == null ? null : String(failureAnalysisRow.errorCode),
+    metrics: analysisMetrics(failureAnalysisRow, Date.now()),
     comments: failureAnalysisComments.map((comment) => ({
       prNumber: Number(comment.prNumber),
       state: comment.state as PipelineFailureAnalysis["comments"][number]["state"],
