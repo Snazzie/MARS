@@ -1520,6 +1520,8 @@ a:active {
 .ai-token-usage-totals>div{padding:18px;background:var(--ui-surface);border:1px solid var(--ui-border);border-radius:var(--radius)}
 .ai-token-usage-totals dt{font-size:.8rem;color:var(--ui-text-muted)}
 .ai-token-usage-totals dd{font-size:1.5rem;margin:8px 0 0}
+.overview-ai-usage{margin:16px 0;padding:20px;background:var(--ui-surface);border:1px solid var(--ui-border);border-radius:var(--radius)}
+.overview-ai-usage h2{font-size:1rem}
 .ai-provider-select{max-width:420px}
 .ai-consent{color:var(--ui-text-muted);max-width:760px}
 .ai-empty{border:1px dashed var(--ui-border);border-radius:var(--radius);padding:24px;color:var(--ui-text-muted);line-height:1.6}

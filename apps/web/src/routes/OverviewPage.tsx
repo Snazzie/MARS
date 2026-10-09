@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { getOverview } from "../api.ts";
+import { getMe, getOverview } from "../api.ts";
 import { QueryState } from "../components/StateView.tsx";
 import { OutcomeBars } from "../components/OutcomeBars.tsx";
 import { JobActivityChart } from "../components/JobActivityChart.tsx";
 import { TimeToStartChart } from "../components/TimeToStartChart.tsx";
 import { useOrganizationFromRoute } from "./useOrganization.ts";
 import { AiRunQueue } from "../components/AiRunQueue.tsx";
+import { AiTokenUsage } from "../components/AiTokenUsage.tsx";
 import { ReportingPeriodControl } from "../components/ReportingPeriodControl.tsx";
 import { GithubRunnerCostDisclosure } from "../components/GithubRunnerCostDisclosure.tsx";
 import { formatMinutes, formatUsdMicros } from "../format.ts";
@@ -123,5 +124,6 @@ export function OverviewPage() {
   const { organizationId } = useOrganizationFromRoute();
   const [period, setPeriod] = useState<OverviewPeriod>("24h");
   const query = useQuery(overviewQueryOptions(organizationId, period));
-  return <><h1 className="sr-only">Overview</h1><div className="overview-actions overview-toolbar"><ReportingPeriodControl value={period} onChange={setPeriod} label="Overview time window" /><Link className="button" to="/runs">Open run ledger <span>↗</span></Link></div><QueryState error={query.error} isLoading={query.isLoading} retry={() => void query.refetch()} operationLabel="overview telemetry" />{query.data && <OverviewContent data={query.data} period={period} />}<AiRunQueue organizationId={organizationId} /></>;
+  const me = useQuery({ queryKey: ["me"], queryFn: getMe });
+  return <><h1 className="sr-only">Overview</h1><div className="overview-actions overview-toolbar"><ReportingPeriodControl value={period} onChange={setPeriod} label="Overview time window" /><Link className="button" to="/runs">Open run ledger <span>↗</span></Link></div><QueryState error={query.error} isLoading={query.isLoading} retry={() => void query.refetch()} operationLabel="overview telemetry" />{query.data && <OverviewContent data={query.data} period={period} />}{me.data?.isGlobalAdmin && <AiTokenUsage overview />}<AiRunQueue organizationId={organizationId} /></>;
 }
