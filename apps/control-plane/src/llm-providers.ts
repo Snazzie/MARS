@@ -200,6 +200,19 @@ export async function generatePipelineAnalysis(input: {
   } finally { clearTimeout(timeout); }
 }
 
+function providerSummary(provider: LlmProviderConfig): LlmProviderSummary {
+  return {
+    id: provider.id,
+    name: provider.name,
+    kind: provider.kind,
+    baseUrl: provider.baseUrl,
+    model: provider.model,
+    inputUsdPerMillionTokens: provider.inputUsdPerMillionTokens ?? null,
+    outputUsdPerMillionTokens: provider.outputUsdPerMillionTokens ?? null,
+    keyConfigured: !!provider.encryptedApiKey,
+  };
+}
+
 export class LlmProvidersService {
   constructor(private readonly secretBox: SecretBox, private readonly store: {
     list(): Promise<Array<LlmProviderConfig>>;
@@ -207,7 +220,7 @@ export class LlmProvidersService {
     save(input: LlmProviderProfileInput & { encryptedApiKey?: string | null }, id?: string): Promise<LlmProviderConfig>;
     delete(id: string): Promise<void>;
   }, private readonly fetcher: Fetcher = fetch) {}
-  async list(): Promise<LlmProviderSummary[]> { return (await this.store.list()).map(({ encryptedApiKey, ...provider }) => ({ ...provider, keyConfigured: !!encryptedApiKey })); }
+  async list(): Promise<LlmProviderSummary[]> { return (await this.store.list()).map(providerSummary); }
   async save(input: LlmProviderProfileInput, id?: string): Promise<LlmProviderSummary> {
     const normalized = { ...input, baseUrl: validateProviderApiRoot(input.baseUrl.trim() || LlmProviderDefaultApiRoots[input.kind]) };
     const existing = id ? await this.store.get(id) : null;
@@ -223,8 +236,7 @@ export class LlmProvidersService {
       ...(localProvider ? { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 } : {}),
       encryptedApiKey,
     }, id);
-    const { encryptedApiKey: _encrypted, ...summary } = saved;
-    return { ...summary, keyConfigured: !!_encrypted };
+    return providerSummary(saved);
   }
   async delete(id: string): Promise<void> { await this.store.delete(id); }
   async config(id: string): Promise<LlmProviderConfig> {

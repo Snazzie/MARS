@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
-import { LlmProvidersService } from "../llm-providers.ts";
+import { LlmProvidersService, type LlmProviderConfig } from "../llm-providers.ts";
+import { LlmProviderSummary } from "@mars/contracts";
 import { SecretBox } from "../auth.ts";
 
 const app = createControlPlaneApp(fakeHttpDeps());
@@ -2327,4 +2328,41 @@ test("model lookup requires global admin and rejects credential-bearing endpoint
   expect(valid.status).toBe(200);
   expect(valid.headers.get("cache-control")).toBe("no-store");
   expect(await valid.json()).toEqual({ models: ["local-model"] });
+});
+
+test("provider create, list, and update return strict public summaries from database rows", async () => {
+  let stored: LlmProviderConfig & { id: string; createdAt: string; updatedAt: string } = {
+    id: "provider-1", name: "lm studio", kind: "openai-compatible",
+    baseUrl: "http://localhost:1234/v1", model: "google/gemma-4-12b-qat",
+    encryptedApiKey: null, createdAt: "2026-10-09T00:00:00Z", updatedAt: "2026-10-09T00:00:00Z",
+  };
+  const service = new LlmProvidersService(new SecretBox(Buffer.alloc(32, 5).toString("base64")), {
+    list: async () => [stored],
+    get: async () => stored,
+    save: async input => { stored = { ...stored, ...input }; return stored; },
+    delete: async () => {},
+  });
+  const endpoint = createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "operator", githubUserId: 1, login: "operator", isGlobalAdmin: true }),
+    llmProviders: service,
+  }));
+  const input = { name: stored.name, kind: stored.kind, baseUrl: stored.baseUrl, model: stored.model };
+  const expected = {
+    id: stored.id, ...input, inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0, keyConfigured: false,
+  };
+  for (const [method, path, body, status] of [
+    ["POST", "/api/admin/llm/providers", input, 201],
+    ["GET", "/api/admin/llm/providers", undefined, 200],
+    ["PUT", "/api/admin/llm/providers/provider-1", { ...input, name: "renamed", apiKey: "private-key" }, 200],
+  ] as const) {
+    const response = await endpoint.request(path, {
+      method, ...(body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
+    });
+    expect(response.status).toBe(status);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const payload = await response.json();
+    const summary = LlmProviderSummary.parse(method === "GET" ? payload[0] : payload);
+    expect(summary).toEqual(method === "PUT" ? { ...expected, name: "renamed", keyConfigured: true } : expected);
+    expect(JSON.stringify(payload)).not.toContain("private-key");
+  }
 });

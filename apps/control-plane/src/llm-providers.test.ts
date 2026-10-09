@@ -62,7 +62,9 @@ test("encrypts saved API keys and never returns key material in provider summari
   const summary = await service.save({ name: "cloud", kind: "openai-compatible", baseUrl: "https://api.example.test/v1", model: "model", apiKey: "cloud-secret" });
   expect(stored[0]?.encryptedApiKey).not.toBe("cloud-secret");
   expect(box.decrypt(stored[0]!.encryptedApiKey!)).toBe("cloud-secret");
-  expect(summary).toEqual({ id: "provider-1", name: "cloud", kind: "openai-compatible", baseUrl: "https://api.example.test/v1", model: "model", keyConfigured: true });
+  expect(summary.keyConfigured).toBe(true);
+  expect(summary).not.toHaveProperty("encryptedApiKey");
+  expect(JSON.stringify(summary)).not.toContain("cloud-secret");
 });
 
 test("blank API roots save concrete provider defaults", async () => {
