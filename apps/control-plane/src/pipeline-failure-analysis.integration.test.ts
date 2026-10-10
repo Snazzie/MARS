@@ -38,7 +38,10 @@ async function fixture(work: (db: DatabaseClient) => Promise<void>) {
 function worker(db: DatabaseClient, calls: number[]): PipelineFailureAnalysisDeps {
   return {
     db, secretBox: new SecretBox(Buffer.alloc(32, 5).toString("base64")), githubAppId: 1,
-    installationToken: async () => "installation-token",
+    installationToken: async installationId => {
+      if (installationId !== 1) throw new Error("github_404");
+      return "installation-token";
+    },
     githubFetchForInstallation: () => (async (input) => {
       const path = new URL(String(input)).pathname;
       if (path.endsWith("/logs")) return new Response("AssertionError: expected 2 but got 3\n");
