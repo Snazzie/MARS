@@ -291,8 +291,11 @@ updating the tray integration.
 
 The Windows worker publishes running-lease counts separately in
 `lease-pickup.json.inventory.json`, so doctor reports cannot overwrite tray pause
-preferences. Tray reads allow atomic file replacement on Windows. Failed tray
-saves show an error instead of silently ignoring the action.
+preferences. Tray reads allow atomic file replacement on Windows. The worker
+retries transient Windows replacement errors (`EPERM`, `EACCES`, `EBUSY`) five
+times over 620 ms while readers release their handles; persistent failures are
+still reported, leave the previous file intact, and clean up the temporary file.
+Failed tray saves show an error instead of silently ignoring the action.
 
 The worker detail and fleet/pool views include the reported local pickup pause.
 Online adopted workers refresh every five seconds, so tray changes appear without

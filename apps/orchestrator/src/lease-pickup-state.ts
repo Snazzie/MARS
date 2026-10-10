@@ -42,7 +42,17 @@ function writePickupFile(path: string, content: string): Promise<void> {
     try {
       await writeFile(temporary, content, { flag: "wx", mode: 0o600 });
       await chmod(temporary, 0o600);
-      await rename(temporary, path);
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await rename(temporary, path);
+          break;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          // Windows readers can briefly prevent replacement, even with delete sharing.
+          if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(code ?? "") || attempt >= 5) throw error;
+          await Bun.sleep(20 * 2 ** attempt);
+        }
+      }
     } catch (error) {
       await Bun.file(temporary).delete().catch(() => {});
       throw error;
