@@ -2,7 +2,7 @@ import { PrReviewResult, LlmProviderDefaultApiRoots, type LlmProviderModelLookup
 import { z } from "zod";
 import type { SecretBox } from "./auth.ts";
 
-type Fetcher = (input: RequestInfo | URL, init?: RequestInit & { timeout?: number }) => Promise<Response>;
+type Fetcher = (input: RequestInfo | URL, init?: RequestInit & { timeout?: number | false }) => Promise<Response>;
 
 export const PipelineAnalysisResult = z.object({
   summary: z.string().max(2000),
@@ -217,7 +217,8 @@ async function requestProvider(input: {
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     await input.onRequest?.();
-    const response = await fetcher(endpoint, { method: "POST", headers, body: JSON.stringify(body), signal: controller.signal, timeout: TIMEOUT_MS, redirect: "error" });
+    // The whole-request abort owns the deadline, including response-body reads.
+    const response = await fetcher(endpoint, { method: "POST", headers, body: JSON.stringify(body), signal: controller.signal, timeout: false, redirect: "error" });
     if (!response.ok) throw new Error(errorCode(response.status));
     const raw = await readCappedResponse(response);
     let payload: unknown;

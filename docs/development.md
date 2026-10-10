@@ -173,8 +173,9 @@ the processor exposes no repository mutation APIs. Each publication is one
 commit-pinned batch; interrupted/unknown publication outcomes are reconciled by the
 App-owned marker, bot identity, and commit ID and are never blindly reposted.
 
-Generation requests have a 10-minute whole-request deadline and a matching
-Bun socket-idle deadline; running analyses are considered interrupted after
+Generation requests have a 10-minute whole-request deadline, including response
+body reads. Bun's separate socket-idle timer is disabled for generation so the
+abort controller owns that bound; running analyses are considered interrupted after
 15 minutes, leaving time for context/model loading. Unknown GitHub publication
 recovery remains at five minutes. Use a configured model that
 returns final structured JSON within the generation limit; reasoning-only output
