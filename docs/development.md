@@ -159,6 +159,11 @@ The global control requires a selected provider and source-sharing acknowledgeme
 overrides local PR selections for all available, approved repositories (including
 newly discovered ones), and preserves their individual settings. Turn it off to use
 local opt-ins again; turn it off before changing the global PR provider.
+The PR source-sharing acknowledgement is retained within the current browser tab
+across navigation and reloads. It is scoped to the operator, configured provider
+endpoints/models, and repository/global provider selections. Changing these requires
+fresh acknowledgement; closing the tab ends the saved acknowledgement. If browser
+storage is unavailable, acknowledgement lasts only until the page remounts.
 Enabling is prospective and does not backfill open PRs.
 Eligible opened, reopened, ready-for-review, and synchronized revisions
 may be reviewed; drafts, closed PRs, and description-only changes are not reviewed.

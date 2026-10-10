@@ -49,10 +49,10 @@ export function AiSettingsPage() {
   const me = useQuery({ queryKey: ["me"], queryFn: getMe });
   if (me.isLoading || me.error) return <QueryState isLoading={me.isLoading} error={me.error} retry={() => void me.refetch()} operationLabel="AI settings access" />;
   if (!me.data?.isGlobalAdmin) return <section className="ai-settings"><header className="page-header"><p className="eyebrow">Deployment configuration</p><h1>AI Settings</h1><p>Only global administrators can manage AI providers and repository access.</p></header></section>;
-  return <AiSettings />;
+  return <AiSettings operatorId={me.data.id} />;
 }
 
-function AiSettings() {
+function AiSettings({ operatorId }: { operatorId: string }) {
   const client = useQueryClient();
   const organizationsQuery = useQuery({ queryKey: ["organizations"], queryFn: getOrganizations });
   const organizations = organizationsQuery.data ?? [];
@@ -76,7 +76,10 @@ function AiSettings() {
   const [clearKey, setClearKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
-  const [prAcknowledged, setPrAcknowledged] = useState(false);
+  const prConsentStorageKey = `mars.pr-review-consent.${operatorId}`;
+  const [prConsentScope, setPrConsentScope] = useState<string | null>(() => {
+    try { return sessionStorage.getItem(prConsentStorageKey); } catch { return null; }
+  });
   const [saving, setSaving] = useState(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -148,6 +151,23 @@ function AiSettings() {
   const accessBlocked = updateSetting.isPending || updateRepositories.isPending || updateGlobalSetting.isPending || updateGlobalPrSetting.isPending || globalSettings.isFetching || !!globalSettings.error || globalPrSettings.isFetching || !!globalPrSettings.error || providers.isFetching || !!providers.error || organizationsQuery.isFetching || !!organizationsQuery.error || repositories.some((query) => query.isFetching || !!query.error);
   const providerReady = !!sharedProviderId && providerRows.some((provider) => provider.id === sharedProviderId);
   const globalPrProviderReady = !!globalPrProviderId && providerRows.some((provider) => provider.id === globalPrProviderId);
+  const currentPrConsentScope = providers.data && globalPrSettings.data && organizationsQuery.data && repositories.every(query => query.data)
+    ? JSON.stringify([
+      operatorId,
+      providerRows.map(provider => [provider.id, provider.kind, provider.baseUrl, provider.model]).sort(),
+      globalPrProviderId,
+      repositoryRows.map(row => [row.repository.id, row.prReview.providerId]).sort(),
+    ])
+    : null;
+  const prAcknowledged = currentPrConsentScope !== null && prConsentScope === currentPrConsentScope;
+  const setPrAcknowledged = (checked: boolean) => {
+    const scope = checked ? currentPrConsentScope : null;
+    setPrConsentScope(scope);
+    try {
+      if (scope === null) sessionStorage.removeItem(prConsentStorageKey);
+      else sessionStorage.setItem(prConsentStorageKey, scope);
+    } catch { /* Consent remains usable when browser storage is unavailable. */ }
+  };
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setError(null); setSaving(true);
     try {
