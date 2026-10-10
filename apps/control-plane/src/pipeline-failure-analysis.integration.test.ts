@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createDb, schema, getAiTokenUsage, type DatabaseClient } from "@mars/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { SecretBox } from "./auth.ts";
 import { applyGithubJobSnapshot, applyWorkflowJobWebhook, configureRunLifecycle, type GithubRunSnapshot, type GithubJobSnapshot } from "./runs.ts";
 import { enqueuePipelineFailureAnalysis, processPipelineFailureAnalyses, type PipelineFailureAnalysisDeps } from "./pipeline-failure-analysis.ts";
@@ -232,6 +232,18 @@ integration("blanket toggle persists independently and disabling restores indivi
   expect(await db.select().from(schema.repositoryFailureAnalysisSettings)).toEqual(before);
   await applyGithubJobSnapshot({ installationId: 1, repository: { id: 8, name: "repo", fullName: "acme/repo" }, run, job: failedJob(), authoritative: true });
   expect(await db.select().from(schema.pipelineFailureAnalyses)).toEqual([]);
+}));
+
+integration.each([8, 16])("%s-minute CI generation survives the request window but expires after its grace period", minutes => fixture(async db => {
+  await applyGithubJobSnapshot({ installationId: 1, repository: { id: 8, name: "repo", fullName: "acme/repo" }, run, job: failedJob(), authoritative: true });
+  await enqueuePipelineFailureAnalysis({ db, organizationId: org, repositoryId: repo, run, jobs: [failedJob()] });
+  await db.update(schema.pipelineFailureAnalyses).set({ state: "running", startedAt: sql`now()-${minutes}::int * interval '1 minute'`, providerCalledAt: sql`now()-${minutes}::int * interval '1 minute'` });
+  const calls: number[] = [];
+  await processPipelineFailureAnalyses(worker(db, calls));
+  const [analysis] = await db.select().from(schema.pipelineFailureAnalyses);
+  expect(analysis).toMatchObject({ state: minutes === 8 ? "running" : "failed", errorCode: minutes === 8 ? null : "analysis_interrupted" });
+  expect(calls).toEqual([]);
+  expect(await db.select().from(schema.pipelineAnalysisComments)).toEqual([]);
 }));
 
 integration("blanket enable does not analyze failures completed before it was enabled", () => fixture(async db => {

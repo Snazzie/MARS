@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { createDb, getAiTokenUsage, schema, type DatabaseClient } from "@mars/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { SecretBox } from "./auth.ts";
 import { handlePrReviewWebhook, processPrReviews, type PrReviewDeps } from "./pr-review.ts";
 import { collectPrReviewContext } from "./pr-review-context.ts";
@@ -163,7 +163,7 @@ integration("out-of-order event payload cannot resurrect an older head and comma
 integration("interrupted analysis fails visibly without model spend", () => fixture(async db => {
   const { deps, observed, event } = scenario(db);
   await handlePrReviewWebhook(deps, "issue_comment", event, "initial");
-  await db.update(schema.prReviews).set({ analysisState: "running", startedAt: "2020-01-01T00:00:00Z" });
+  await db.update(schema.prReviews).set({ analysisState: "running", startedAt: sql`now()-interval '16 minutes'` });
   await processPrReviews(deps);
   expect((await db.select().from(schema.prReviews))[0]).toMatchObject({ analysisState: "failed", errorCode: "pr_review_interrupted" });
   expect(observed.modelCalls).toBe(0); expect(observed.posts).toEqual([]);
@@ -291,4 +291,14 @@ integration("historical PR and CI usage share the inclusive 30-day UTC window", 
   expect(usage).toMatchObject({ inputTokens: 2_000_000, outputTokens: 1_100_000, reportedRequests: 2, unreportedRequests: 0, estimatedCostUsd: 6 });
   expect(usage.points[0]).toEqual({ date: "2026-09-08", inputTokens: 2_000_000, outputTokens: 1_100_000, estimatedCostUsd: 6 });
   expect(usage.points.at(-1)).toEqual({ date: "2026-10-07", inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0 });
+}));
+
+integration("an eight-minute PR generation survives another processor sweep without duplicate work", () => fixture(async db => {
+  const { deps, observed, event } = scenario(db);
+  await handlePrReviewWebhook(deps, "issue_comment", event, "initial");
+  await db.update(schema.prReviews).set({ analysisState: "running", startedAt: sql`now()-interval '8 minutes'`, providerCalledAt: sql`now()-interval '8 minutes'` });
+  await processPrReviews(deps);
+  expect((await db.select().from(schema.prReviews))[0]).toMatchObject({ analysisState: "running", errorCode: null, publicationState: "pending" });
+  expect(observed.modelCalls).toBe(0);
+  expect(observed.posts).toEqual([]);
 }));

@@ -173,11 +173,18 @@ the processor exposes no repository mutation APIs. Each publication is one
 commit-pinned batch; interrupted/unknown publication outcomes are reconciled by the
 App-owned marker, bot identity, and commit ID and are never blindly reposted.
 
-Generation requests have a 90-second deadline. Use a configured model that returns
-final structured JSON within that limit; reasoning-only output is not a completed
-review or diagnostic. Failed attempts remain visible. `/review` cannot rerun the
-same captured revision, including a failed attempt; an author-driven new revision
-is required for another analysis.
+Generation requests have a 10-minute whole-request deadline and a matching
+Bun socket-idle deadline; running analyses are considered interrupted after
+15 minutes, leaving time for context/model loading. Unknown GitHub publication
+recovery remains at five minutes. Use a configured model that
+returns final structured JSON within the generation limit; reasoning-only output
+is not a completed review or diagnostic. Failed attempts remain visible.
+`/review` cannot rerun the same captured revision, including failed attempts;
+an author-driven new revision is required for another analysis.
+
+Drain running analyses before rolling back to shorter generation/interruption
+limits. Failed attempts and published history remain durable; a rollback must not
+force another request for an already attempted PR revision.
 
 Schema rollout is additive (`0011_blue_centennial`): run `packages/db`'s
 `db:migrate` before starting the control plane. Rolling back the application does
